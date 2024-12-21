@@ -1,4 +1,85 @@
 import numpy as np
+import numpy as np
+import os
+
+def load_parameters(path,
+                    theta_initial_var,
+                    gamma_var,
+                    Gamma_var,
+                    chi_var,
+                    zs_var,
+                    zb_var,
+                    debye_x_var,
+                    debye_y_var,
+                    corto_detector_var,
+                    sigma_mosaic_var,
+                    gamma_mosaic_var,
+                    eta_var):
+    """
+    Load parameters from a .npy file and update the given Tkinter variables.
+    """
+    if os.path.exists(path):
+        params = np.load(path, allow_pickle=True).item()
+        theta_initial_var.set(params['theta_initial'])
+        gamma_var.set(params['gamma'])
+        Gamma_var.set(params['Gamma'])
+        chi_var.set(params['chi'])
+        zs_var.set(params['zs'])
+        zb_var.set(params['zb'])
+        debye_x_var.set(params['debye_x'])
+        debye_y_var.set(params['debye_y'])
+        corto_detector_var.set(params['corto_detector'])
+        sigma_mosaic_var.set(params['sigma_mosaic'])
+        gamma_mosaic_var.set(params['gamma_mosaic'])
+        eta_var.set(params['eta'])
+        return "Parameters loaded from parameters.npy"
+    else:
+        return "No parameters.npy file found to load."
+
+
+def save_all_parameters(
+    filepath,
+    theta_initial_var,
+    gamma_var,
+    Gamma_var,
+    chi_var,
+    zs_var,
+    zb_var,
+    debye_x_var,
+    debye_y_var,
+    corto_detector_var,
+    sigma_mosaic_var,
+    gamma_mosaic_var,
+    eta_var
+):
+    """
+    Gathers all parameters and saves them to a file.
+
+    Args:
+        filepath (str): The file path where the parameters will be saved.
+        theta_initial_var, gamma_var, Gamma_var, etc.: Tkinter DoubleVar objects for the parameters.
+    """
+    try:
+        # Gather parameters
+        parameters = {
+            'theta_initial': theta_initial_var.get(),
+            'gamma': gamma_var.get(),
+            'Gamma': Gamma_var.get(),
+            'chi': chi_var.get(),
+            'zs': zs_var.get(),
+            'zb': zb_var.get(),
+            'debye_x': debye_x_var.get(),
+            'debye_y': debye_y_var.get(),
+            'corto_detector': corto_detector_var.get(),
+            'sigma_mosaic': sigma_mosaic_var.get(),
+            'gamma_mosaic': gamma_mosaic_var.get(),
+            'eta': eta_var.get(),
+        }
+        # Save to file
+        np.save(filepath, parameters)
+        print(f"Parameters saved successfully to {filepath}")
+    except Exception as e:
+        print(f"Failed to save parameters: {e}")
 
 def load_background_image(file_path):
     with open(file_path, 'r') as file:

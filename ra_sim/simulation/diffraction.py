@@ -25,15 +25,6 @@ def compute_d(gz, gr):
     return d
 
 @njit
-def mapping(image, image_size, is_real, Mv, center, x_det, y_det):
-    if is_real and not np.isnan(Mv):
-        if not np.isnan(x_det) and not np.isnan(y_det):
-            pixel_x = int(round(x_det / (100e-6) + center[1]))
-            pixel_y = 3000-int(round(y_det / (100e-6) + center[0]))
-            if 0 <= pixel_x < image_size and 0 <= pixel_y < image_size:
-                image[pixel_y, pixel_x] += Mv  # Use Mv directly
-
-@njit
 def solve_q(k_x, k_y, k_z, gz, k, gr):
     # Always return a 2x2 NumPy array: [[Qx1, Qy1], [Qx2, Qy2]]
     # If no solution is found, fill with np.nan.
@@ -138,7 +129,17 @@ def calculate_phi(
     u_ref = np.array([0.0, 0.0, -1.0])
 
     theta_range = np.arange(theta_initial, theta_final, step)
-    
+        # Initialize maxima tracking:
+    # For each reflection calculation, we track two potential maxima 
+    # (one for each solution sign). Initialize them to something invalid.
+    max_intensity_sign0 = -1.0
+    max_x_sign0 = np.nan
+    max_y_sign0 = np.nan
+
+    max_intensity_sign1 = -1.0
+    max_x_sign1 = np.nan
+    max_y_sign1 = np.nan
+
     for theta_i in theta_range:
         
         rad_theta_i = np.radians(theta_i)
@@ -282,12 +283,27 @@ def calculate_phi(
                     * np.exp(-gz**2 * debye_x**2)
                     * np.exp(-gr**2 * debye_y**2)
                 )
+                
+                # If real scattering, map to image and track maxima
+                if is_real and not np.isnan(Mv):
+                    pixel_x = int(round(x_det/(100e-6) + center[1]))
+                    pixel_y = 3000 - int(round(y_det/(100e-6) + center[0]))
+                    if 0 <= pixel_x < image_size and 0 <= pixel_y < image_size:
+                        image[pixel_y, pixel_x] += Mv
 
-                # Map the intensity to the image
-                mapping(image, image_size, is_real, Mv, center, x_det, y_det)
+                        # Track maxima for this sign
+                        if sign == 0 and image[pixel_y, pixel_x] > max_intensity_sign0:
+                            max_intensity_sign0 = image[pixel_y, pixel_x]
+                            max_x_sign0 = pixel_x
+                            max_y_sign0 = pixel_y
+                        elif sign == 1 and image[pixel_y, pixel_x] > max_intensity_sign1:
+                            max_intensity_sign1 = image[pixel_y, pixel_x]
+                            max_x_sign1 = pixel_x
+                            max_y_sign1 = pixel_y
 
-
-
+    # Return the maxima for this reflection
+    return (max_x_sign0, max_y_sign0, max_intensity_sign0,
+            max_x_sign1, max_y_sign1, max_intensity_sign1)
 
 @njit(parallel=True, fastmath=True)
 def process_peaks_parallel(
@@ -345,11 +361,14 @@ def process_peaks_parallel(
     # Precompute sample position
     P0 = np.array([0.0, 0.0, -zs])
 
-    # Loop over all Miller indices
+
+    max_positions = np.empty((len(miller), 6), dtype=np.float64)
+    # Each row: [max_x0, max_y0, max_val0, max_x1, max_y1, max_val1]
     for i in prange(len(miller)):
         H, K, L = miller[i]
         intensity = intensities[i]
-        calculate_phi(
+
+        (mx0, my0, mv0, mx1, my1, mv1) = calculate_phi(
             H, K, L, av, cv, lambda_, image, image_size,
             gamma_rad, Gamma_rad, chi_rad, psi_rad,
             zs, zb, n2,
@@ -361,146 +380,13 @@ def process_peaks_parallel(
             k, R_x_detector, R_z_detector, n_det_rot, Detector_Pos, e1_det, e2_det,
             R_z_R_y, R_ZY_n, P0, unit_x
         )
-    return image  # Return the full image
 
+        max_positions[i, 0] = mx0
+        max_positions[i, 1] = my0
+        max_positions[i, 2] = mv0
+        max_positions[i, 3] = mx1
+        max_positions[i, 4] = my1
+        max_positions[i, 5] = mv1
 
-def compute_bragg_peak_position(H, K, L, av, cv, lambda_,
-                                gamma_rad, Gamma_rad, chi_rad, psi_rad,
-                                zs, zb, n2, debye_x, debye_y, center,
-                                theta_initial, k, R_x_detector, R_z_detector, n_det_rot, Detector_Pos, e1_det, e2_det,
-                                R_z_R_y, R_ZY_n, P0):
+    return image, max_positions
 
-    # For simplicity, set beta = 0, kappa = 0, delta_theta_i_spot = 0, delta_phi_i_spot = 0
-    beta = 0
-    kappa = 0
-    delta_theta_i_spot = 0
-    delta_phi_i_spot = 0
-
-    # Convert theta_initial to radians
-    rad_theta_i = np.radians(theta_initial)
-
-    # Compute sample rotation due to theta_i
-    R_x = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, np.cos(rad_theta_i), -np.sin(rad_theta_i)],
-        [0.0, np.sin(rad_theta_i), np.cos(rad_theta_i)]
-    ])
-    R_sample = R_x @ R_z_R_y
-    n = R_x @ R_ZY_n
-    n /= np.linalg.norm(n)
-    P0_rot = R_x @ P0
-    P0_rot[0] = 0.0
-
-    # Handle special case when H=K=0
-    if H == 0 and K == 0:
-        # Compute G vector components
-        Gz = 2 * np.pi * L / cv
-        Gr = 0.0
-
-        # Since Gr=0, gr=0
-        gz = Gz
-        gr = 0.0
-    else:
-        # G vector components
-        gz, gr = G(H, K, L, av, cv, beta, kappa)
-
-    # Beam start position
-    x = 0.0  # beam_x_array
-    y = 0.0  # beam_y_array
-    beam_start = np.array([x, -20e-3, -zb + y])
-
-    # Incident beam vector components
-    k_xi = np.cos(delta_theta_i_spot) * np.sin(delta_phi_i_spot)
-    k_yi = np.cos(delta_theta_i_spot) * np.cos(delta_phi_i_spot)
-    k_zi = np.sin(delta_theta_i_spot)
-
-    # Incident beam vector
-    k_vec = np.array([k_xi, k_yi, k_zi])
-    k_vec /= np.linalg.norm(k_vec)
-
-    # Compute dot product with normal vector
-    kn_dot = np.dot(k_vec, n)
-
-    # Intersection with the sample plane
-    Intersection_Point_Plane, t = intersect_line_plane(beam_start, k_vec, P0_rot, n)
-    if Intersection_Point_Plane is None:
-        return None, None  # Beam does not intersect the sample plane
-
-    # Compute incident angles
-    th_i_prime = (np.pi / 2) - np.arccos(kn_dot)
-    projected_incident_beam = k_vec - kn_dot * n
-    projected_incident_beam_norm = np.linalg.norm(projected_incident_beam)
-
-    if projected_incident_beam_norm != 0.0:
-        projected_incident_beam /= projected_incident_beam_norm
-    else:
-        projected_incident_beam = np.array([0.0, 0.0, 0.0])
-
-    # Compute phi_i_prime
-    u_ref = np.array([0.0, 0.0, -1.0])
-    e1 = np.cross(n, u_ref)
-    e1_norm = np.linalg.norm(e1)
-    if e1_norm != 0.0:
-        e1 /= e1_norm
-    else:
-        return None, None  # Cannot compute e1
-
-    e2 = np.cross(n, e1)
-
-    p1 = np.dot(projected_incident_beam, e1)
-    p2 = np.dot(projected_incident_beam, e2)
-    phi_i_prime = (np.pi / 2) - np.arctan2(p2, p1)
-
-    # Compute scattered wavevector components
-    k_x = k * np.cos(th_i_prime) * np.sin(phi_i_prime)
-    k_y = k * np.cos(th_i_prime) * np.cos(phi_i_prime)
-    k_z = k * np.sin(th_i_prime)
-
-    if k_x == 0.0:
-        k_x += 1e-10  # Avoid division by zero
-
-    # Solve for Q vectors
-    All_Q = solve_q(k_x, k_y, k_z, gz, k, gr)
-
-    # Loop over possible solutions
-    for sign in range(len(All_Q)):
-        Qx, Qy = All_Q[sign]
-        if np.iscomplex(Qx) or np.iscomplex(Qy):
-            continue  # Skip complex solutions
-
-        # Compute transmitted wavevector components
-        k_tx_prime = Qx + k_x
-        k_ty_prime = Qy + k_y
-        k_tz_prime = gz + k_z
-
-        # Compute scattering angle
-        k_r = np.sqrt(k_tx_prime**2 + k_ty_prime**2)
-        tth = np.arctan2(k_tz_prime, k_r)
-        if tth < 0.0:
-            continue  # Negative scattering angle
-
-        # Compute final wavevector
-        kf = np.array([k_tx_prime, k_ty_prime, k_tz_prime])
-        kf /= np.linalg.norm(kf)
-
-        # Rotate final wavevector to sample coordinates
-        kf_prime = R_sample @ kf
-
-        # Intersection with the detector plane
-        Intersection_Point_Detector, s = intersect_line_plane(
-            Intersection_Point_Plane, kf_prime, Detector_Pos, n_det_rot
-        )
-        if Intersection_Point_Detector is None:
-            continue  # Beam does not intersect the detector plane
-
-        # Compute detector coordinates
-        Plane_to_Detector = Intersection_Point_Detector - Detector_Pos
-        x_det = np.dot(Plane_to_Detector, e1_det)
-        y_det = np.dot(Plane_to_Detector, e2_det) + zb
-
-        # Check if the scattered beam is in the forward direction
-        is_real = kf_prime[1] >= 0.0
-        if is_real:
-            return x_det, y_det
-
-    return None, None
