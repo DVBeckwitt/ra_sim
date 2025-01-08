@@ -253,11 +253,9 @@ def calculate_phi(
 
                 # Compute final wavevector
                 kf = np.array([k_tx_prime, k_ty_prime, k_tz_prime])
-                kf /= np.linalg.norm(kf)
 
                 # Rotate final wavevector to sample coordinates
                 kf_prime = R_sample @ kf
-                kf_prime /= np.linalg.norm(kf_prime)
 
                 # Intersection with the detector plane
                 Intersection_Point_Detector, s = intersect_line_plane(
@@ -269,7 +267,7 @@ def calculate_phi(
                 # Compute detector coordinates
                 Plane_to_Detector = Intersection_Point_Detector - Detector_Pos
                 x_det = np.dot(Plane_to_Detector, e1_det)
-                y_det = np.dot(Plane_to_Detector, e2_det) + zb
+                y_det = np.dot(Plane_to_Detector, e2_det) 
 
                 # Check if the scattered beam is in the forward direction
                 is_real = kf_prime[1] >= 0.0
@@ -336,7 +334,10 @@ def process_peaks_parallel(
     ])
     n_det_rot = R_z_detector @ (R_x_detector @ n_detector)
     n_det_rot /= np.linalg.norm(n_det_rot)
-    Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0])
+
+    Detector_Pos = np.array([0, Distance_CoR_to_Detector, 0])
+
+
     e1_det = unit_x - np.dot(unit_x, n_det_rot) * n_det_rot
     e1_det /= np.linalg.norm(e1_det)
     e2_det = -np.cross(n_det_rot, e1_det)

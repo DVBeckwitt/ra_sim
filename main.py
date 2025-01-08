@@ -45,11 +45,8 @@ from ra_sim.simulation.diffraction import process_peaks_parallel
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.fitting.optimization import (
-    process_data,
-    optimization_complete,
-    objective_function_bayesian,
-    compute_cost,
-    run_optimization
+    run_optimization_positions_geometry,  # geometry-only
+    run_optimization_mosaic             # mosaic-only
 )
 
 # Load background images
@@ -175,6 +172,10 @@ bragg_miller_indices = []
 background_image_1 = Open_ASC(file_path_1)
 background_image_2 = Open_ASC(file_path_2)
 
+
+# load blobs temporarily for testing from npy (later will add feature)
+measured_peaks = np.load(r"C:\Users\Kenpo\Downloads\blobs.npy", allow_pickle=True)
+
 current_background_image = background_image_1
 background_images = [background_image_1, background_image_2]
 current_background_index = 0
@@ -199,18 +200,11 @@ canvas = FigureCanvasTkAgg(fig, master=fig_frame)
 canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 canvas.draw()
 
-# Now proceed with other code that relies on fig_frame being available.
 
 
 # Add sliders and controls in root
 slider_frame = ttk.Frame(root, padding=10)
 slider_frame.pack(side=tk.LEFT, fill=tk.Y)
-
-theta_label = ttk.Label(slider_frame, text="Theta Initial")
-theta_label.pack(pady=5)
-theta_var = tk.DoubleVar(value=5.0)
-theta_scale = ttk.Scale(slider_frame, from_=0, to=20, variable=theta_var, orient=tk.HORIZONTAL)
-theta_scale.pack(fill=tk.X, padx=5)
 
 
 # Display the background image first
@@ -268,30 +262,38 @@ plt.xlabel('X (pixels)')
 plt.ylabel('Y (pixels)')
 
 
-
 def update():
     global inset_ax, legend_handle, colorbar_handle
     global bragg_positions, bragg_miller_indices, bragg_pixel_positions
     global updated_image_global
-
-    # Get current slider values for optimized parameters
+    
+    
+    # We'll store just one "best sign" peak per reflection in these:
+    global peak_positions, peak_millers
+    peak_positions = []
+    peak_millers   = []
+    global peak_intensities
+    peak_intensities = []
+    # 1) Read current slider values
     gamma_updated = round(gamma_var.get(), 3)
     Gamma_updated = round(Gamma_var.get(), 3)
-    chi_updated = round(chi_var.get(), 3)
-    zs_updated = round(zs_var.get(), 6)
-    zb_updated = round(zb_var.get(), 6)
-
-    # Fixed parameters
+    chi_updated   = round(chi_var.get(), 3)
+    zs_updated    = round(zs_var.get(), 6)
+    zb_updated    = round(zb_var.get(), 6)
+    a_updated = a_var.get()   # lattice constant a
+    c_updated = c_var.get()   # lattice constant c
+    # Some additional parameters:
     theta_initial_updated = round(theta_initial_var.get(), 2)
-    debye_x_updated = round(debye_x_var.get(), 3)
-    debye_y_updated = round(debye_y_var.get(), 3)
-    corto_detector_updated = round(corto_detector_var.get(), 2)
+    debye_x_updated       = round(debye_x_var.get(), 3)
+    debye_y_updated       = round(debye_y_var.get(), 3)
+    corto_detector_updated= round(corto_detector_var.get(), 2)
 
-    # current sigma_mosaic and gamma_mosaic
-    current_sigma_mosaic = (sigma_mosaic_var.get())
-    current_gamma_mosaic = (gamma_mosaic_var.get())
-    current_eta = eta_var.get()
-    # Regenerate the random profiles with updated parameters
+    # Mosaic parameters from mosaic sliders
+    current_sigma_mosaic = sigma_mosaic_var.get()
+    current_gamma_mosaic = gamma_mosaic_var.get()
+    current_eta          = eta_var.get()
+
+    # 2) Regenerate random profiles
     (beam_x_array, beam_y_array, beam_intensity_array,
      beta_array, kappa_array, mosaic_intensity_array,
      theta_array, phi_array, divergence_intensity_array) = generate_random_profiles(
@@ -303,14 +305,13 @@ def update():
          current_eta
     )
 
-    # Define unit_x and n_detector
+    # 3) Call process_peaks_parallel for the new diffraction image
     unit_x = np.array([1.0, 0.0, 0.0])
     n_detector = np.array([0.0, 1.0, 0.0])
 
-    # Proceed with updating the image
-    updated_image,max_positions = process_peaks_parallel(
-        miller, intensities, image_size, av, cv, lambda_, np.zeros((image_size, image_size)),
-        Distance_CoR_to_Detector, gamma_updated, Gamma_updated, chi_updated, psi,
+    updated_image, max_positions = process_peaks_parallel(
+        miller, intensities, image_size, a_updated, c_updated, lambda_, np.zeros((image_size, image_size)),
+        corto_detector_updated, gamma_updated, Gamma_updated, chi_updated, psi,
         zs_updated, zb_updated, n2,
         beam_x_array, beam_y_array, beam_intensity_array,
         beta_array, kappa_array, mosaic_intensity_array,
@@ -319,135 +320,72 @@ def update():
         theta_initial_updated, theta_initial_updated + 0.1, 0.1,
         unit_x, n_detector
     )
-    
-    # Update the displayed image
-    image_display.set_data(updated_image)
-    
-    #ax.set_ylim(1600,0)
 
-        # Set the new vmax from vmax_var
+    # 4) Build single-peak arrays "peak_positions" and "peak_millers"
+    import math
+    for i in range(len(miller)):
+        H, K, L = miller[i]               # reflection
+        mx0, my0, mv0, mx1, my1, mv1 = max_positions[i, :]
+
+        import math
+
+        mx0, my0, mv0, mx1, my1, mv1 = max_positions[i]  # from process_peaks_parallel
+
+        # Always store sign=0
+        if not (math.isnan(mx0) or math.isnan(my0)):
+            peak_positions.append((int(round(mx0)), int(round(my0))))
+            peak_intensities.append(mv0)
+            peak_millers.append((H, K, L))  # or label the sign if you like
+
+        # Always store sign=1
+        if not (math.isnan(mx1) or math.isnan(my1)):
+            peak_positions.append((int(round(mx1)), int(round(my1))))
+            peak_intensities.append(mv1)
+            peak_millers.append((H, K, L))
+
+    # 5) Update the displayed diffraction image in the GUI
+    image_display.set_data(updated_image)
+
+    # Update color scale
     current_vmax = vmax_var.get()
     image_display.set_clim(vmax=current_vmax)
-    # Remove the previous colorbar if it exists
+
+    # Remove old colorbar if it exists
     if colorbar_handle:
         colorbar_handle.remove()
-    
-    # Remove previous legend if it exists
+
+    # Remove old legend if it exists
     if legend_handle:
         legend_handle.remove()
-    
-    # Add a new legend (replace this with your actual labels)
+
+    # Add a new legend
     legend_handle = ax.legend(['Simulated Diffraction Pattern'], loc='upper left', fontsize='small')
-    
-    # Compute χ² between the simulated image and the reference image
+
+    # 6) Compute χ² between the simulated image and the reference background
     try:
-        # Normalize the images for better comparison (prevent division by zero)
         if np.max(updated_image) > 0:
-            updated_image_normalized = updated_image / np.max(updated_image)
+            updated_image_norm = updated_image / np.max(updated_image)
         else:
-            updated_image_normalized = updated_image
-            
+            updated_image_norm = updated_image
+
         if np.max(current_background_image) > 0:
-            reference_image_normalized = current_background_image / np.max(current_background_image)
+            reference_norm = current_background_image / np.max(current_background_image)
         else:
-            reference_image_normalized = current_background_image
+            reference_norm = current_background_image
 
-        # Compute the chi-squared value
-        chi_squared_value = mean_squared_error(reference_image_normalized, updated_image_normalized) * updated_image.size
-
-        # Update the chi-squared label in the GUI
+        chi_squared_value = mean_squared_error(reference_norm, updated_image_norm) * updated_image.size
         chi_square_label.config(text=f"Chi-Squared: {chi_squared_value:.2e}")
 
     except Exception as e:
-        # Handle any exceptions in chi-squared calculation
         chi_square_label.config(text=f"Chi-Squared: Error - {e}")
-    
-    # Now, compute Bragg peak positions
-    bragg_positions = []
-    bragg_miller_indices = []
 
-    # Precompute necessary parameters (same as in the process_peaks_parallel function)
-    gamma_rad = np.radians(gamma_updated)
-    Gamma_rad = np.radians(Gamma_updated)
-    chi_rad = np.radians(chi_updated)
-    psi_rad = np.radians(psi)
-
-    k = 2 * np.pi / lambda_
-
-    # Precompute detector geometry
-    R_x_detector = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, np.cos(gamma_rad), np.sin(gamma_rad)],
-        [0.0, -np.sin(gamma_rad), np.cos(gamma_rad)]
-    ])
-    R_z_detector = np.array([
-        [np.cos(Gamma_rad), np.sin(Gamma_rad), 0.0],
-        [-np.sin(Gamma_rad), np.cos(Gamma_rad), 0.0],
-        [0.0, 0.0, 1.0]
-    ])
-    n_detector = np.array([0.0, 1.0, 0.0])
-    n_det_rot = R_z_detector @ (R_x_detector @ n_detector)
-    n_det_rot /= np.linalg.norm(n_det_rot)
-    Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0])
-    unit_x = np.array([1.0, 0.0, 0.0])
-    e1_det = unit_x - np.dot(unit_x, n_det_rot) * n_det_rot
-    e1_det /= np.linalg.norm(e1_det)
-    e2_det = -np.cross(n_det_rot, e1_det)
-    e2_det /= np.linalg.norm(e2_det)
-
-    # Precompute sample rotation matrices
-    R_y = np.array([
-        [np.cos(chi_rad), 0.0, np.sin(chi_rad)],
-        [0.0, 1.0, 0.0],
-        [-np.sin(chi_rad), 0.0, np.cos(chi_rad)]
-    ])
-    R_z = np.array([
-        [np.cos(psi_rad), np.sin(psi_rad), 0.0],
-        [-np.sin(psi_rad), np.cos(psi_rad), 0.0],
-        [0.0, 0.0, 1.0]
-    ])
-    R_z_R_y = R_z @ R_y
-    n1 = np.array([0.0, 0.0, 1.0])
-    R_ZY_n = R_z_R_y @ n1
-    R_ZY_n /= np.linalg.norm(R_ZY_n)
-
-    # Precompute sample position
-    P0 = np.array([0.0, 0.0, -zs_updated])
-
-    bragg_pixel_positions = []
-
-    for i in range(len(miller)):
-        H, K, L = miller[i]
-        mx0, my0, mv0, mx1, my1, mv1 = max_positions[i, :]
-
-        # Check first solution (sign0)
-        if not np.isnan(mx0) and not np.isnan(my0) and mv0 > 0:
-            # Convert from pixel coordinates to detector coordinates
-            x_det = (mx0 - center[1]) * (100e-6)
-            y_det = (3000 - my0 - center[0]) * (100e-6)
-
-            # Store results
-            bragg_positions.append((x_det, y_det))
-            bragg_miller_indices.append((H, K, L))
-            bragg_pixel_positions.append((int(round(mx0)), int(round(my0))))
-
-        # Check second solution (sign1)
-        if not np.isnan(mx1) and not np.isnan(my1) and mv1 > 0:
-            # Convert from pixel coordinates to detector coordinates
-            x_det = (mx1 - center[1]) * (100e-6)
-            y_det = (3000 - my1 - center[0]) * (100e-6)
-
-            # Store results
-            bragg_positions.append((x_det, y_det))
-            bragg_miller_indices.append((H, K, L))
-            bragg_pixel_positions.append((int(round(mx1)), int(round(my1))))
-
+    # 7) Keep a copy of the updated image if needed
     updated_image_global = updated_image
-    image_display.set_data(updated_image)
-    image_display.set_clim(vmax=vmax_var.get())
+
+    # Redraw the canvas
     canvas.draw_idle()
 
-    
+
 # --- Slider Creation ---
 
 theta_initial_var, theta_initial_scale = create_slider('Theta Initial', 5.0, 20.0, 6.0, 0.01, parent=slider_frame, update_callback=update)
@@ -458,10 +396,13 @@ zs_var, zs_scale = create_slider('Zs', 0.0, 5e-3, 0.0, 0.0001, parent=slider_fra
 zb_var, zb_scale = create_slider('Zb', 0.0, 5e-3, 0.0, 0.0001, parent=slider_frame, update_callback=update)
 debye_x_var, debye_x_scale = create_slider('Debye Qz', 0.0, 1, 0.0, 0.001, parent=slider_frame, update_callback=update)
 debye_y_var, debye_y_scale = create_slider('Debye Qr', 0.0, 1, 0.0, 0.001, parent=slider_frame, update_callback=update)
-corto_detector_var, corto_detector_scale = create_slider('CortoDetector', 0.0, 100e-3, Distance_CoR_to_Detector, 0.001, parent=slider_frame, update_callback=update)
+corto_detector_var, corto_detector_scale = create_slider('CortoDetector', 0.0, 100e-3, Distance_CoR_to_Detector, 0.1e-3, parent=slider_frame, update_callback=update)
 sigma_mosaic_var, sigma_mosaic_scale = create_slider('Sigma Mosaic (deg)', 0.0, 5.0, np.degrees(sigma_mosaic), 0.01, parent=slider_frame, update_callback=update)
 gamma_mosaic_var, gamma_mosaic_scale = create_slider('Gamma Mosaic (deg)', 0.0, 5.0, np.degrees(gamma_mosaic), 0.01, parent=slider_frame, update_callback=update)
 eta_var, eta_scale = create_slider('Eta (fraction)', 0.0, 1.0, eta, 0.001, parent=slider_frame, update_callback=update)
+a_var, a_scale = create_slider('a (Å)', 3.5, 8, av, 0.01, parent=slider_frame, update_callback=update)
+c_var, c_scale = create_slider('c (Å)', 20.0, 40.0, cv, 0.01, parent=slider_frame, update_callback=update)
+
 
 # Call the new function with all required parameters
 (beam_x_array, beam_y_array, beam_intensity_array,
@@ -511,103 +452,81 @@ initial_params = {
     'sigma_mosaic_deg': sigma_mosaic_var.get(),
     'gamma_mosaic_deg': gamma_mosaic_var.get()
 }
-
-
-def perform_fit():
-    # Start the optimization in a separate thread if needed
-    optimization_thread = threading.Thread(
-        target=run_optimization,
-        daemon=True,
-        kwargs={
-            'fit_button': fit_button,
-            'progress_label': progress_label,
-            'chi_scale': chi_scale,
-            'zs_scale': zs_scale,
-            'zb_scale': zb_scale,
-            'eta_var': eta_var,
-            'sigma_mosaic_var': sigma_mosaic_var,
-            'gamma_mosaic_var': gamma_mosaic_var,
-            'chi_var': chi_var,
-            'zs_var': zs_var,
-            'zb_var': zb_var,
-            'gamma_var': gamma_var,
-            'Gamma_var': Gamma_var,
-            'theta_initial_var': theta_initial_var,
-            'debye_x_var': debye_x_var,
-            'debye_y_var': debye_y_var,
-            'corto_detector_var': corto_detector_var,
-            'simulate_diffraction': simulate_diffraction,
-            'miller': miller,
-            'intensities': intensities,
-            'image_size': image_size,
-            'av': av,
-            'cv': cv,
-            'lambda_': lambda_,
-            'psi': psi,
-            'n2': n2,
-            'center': center,
-            'num_samples': num_samples,
-            'divergence_sigma': divergence_sigma,
-            'bw_sigma': bw_sigma,
-            'ai_initial': ai_initial,
-            'process_data': process_data,
-            'compute_cost': compute_cost,
-            'reference_profiles': reference_profiles,
-            'objective_function_bayesian': objective_function_bayesian
-        }
+fit_button_geometry = ttk.Button(
+    root,
+    text="Optimize Geometry Only",
+    command=lambda: run_optimization_positions_geometry(
+        fit_button=fit_button_geometry,
+        progress_label=progress_label_geometry,
+        miller=miller,
+        intensities=intensities,
+        image_size=image_size,
+        av=av,
+        cv=cv,
+        lambda_=lambda_,
+        psi=psi,
+        n2=n2,
+        center=center,
+        measured_peaks=measured_peaks,
+        mosaic_sigma_const=sigma_mosaic_var.get(),
+        mosaic_gamma_const=gamma_mosaic_var.get(),
+        mosaic_eta_const=eta_var.get(),
+        gamma_var=gamma_var,
+        Gamma_var=Gamma_var,
+        dist_var=corto_detector_var,
+        theta_i_var=theta_initial_var,
+        zs_var=zs_var,
+        zb_var=zb_var,
+        chi_var=chi_var,
+        a_var=a_var,     # pass the actual slider DoubleVar
+        c_var=c_var,     # pass the actual slider DoubleVar
+        update_gui=update
     )
-    optimization_thread.start()
+)
 
-# Function to handle when optimization fails
-def optimization_failed(exception):
-    fit_button.config(state=tk.NORMAL)
-    traceback_str = ''.join(traceback.format_exception(None, exception, exception.__traceback__))
-    progress_label.config(text=f"Optimization failed with exception:\n{traceback_str}")
 
-def perform_fit():
-    optimization_thread = threading.Thread(
-        target=run_optimization,
-        daemon=True,
-        kwargs={
-            'fit_button': fit_button,
-            'progress_label': progress_label,
-            'chi_scale': chi_scale,
-            'zs_scale': zs_scale,
-            'zb_scale': zb_scale,
-            'eta_var': eta_var,
-            'sigma_mosaic_var': sigma_mosaic_var,
-            'gamma_mosaic_var': gamma_mosaic_var,
-            'chi_var': chi_var,
-            'zs_var': zs_var,
-            'zb_var': zb_var,
-            'gamma_var': gamma_var,
-            'Gamma_var': Gamma_var,
-            'theta_initial_var': theta_initial_var,
-            'debye_x_var': debye_x_var,
-            'debye_y_var': debye_y_var,
-            'corto_detector_var': corto_detector_var,
-            'simulate_diffraction': simulate_diffraction,
-            'miller': miller,
-            'intensities': intensities,
-            'image_size': image_size,
-            'av': av,
-            'cv': cv,
-            'lambda_': lambda_,
-            'psi': psi,
-            'n2': n2,
-            'center': center,
-            'num_samples': num_samples,
-            'divergence_sigma': divergence_sigma,
-            'bw_sigma': bw_sigma,
-            'ai_initial': ai_initial,
-            'process_data': process_data,
-            'compute_cost': compute_cost,
-            'reference_profiles': reference_profiles,
-            'objective_function_bayesian': objective_function_bayesian
-        }
+fit_button_geometry.pack(side=tk.LEFT, padx=5)
+
+
+
+fit_button_geometry.pack(side=tk.LEFT, padx=5)
+
+fit_button_mosaic = ttk.Button(
+    root,
+    text="Optimize Mosaic Only",
+    command=lambda: run_optimization_mosaic(
+        fit_button=fit_button_mosaic,
+        progress_label=progress_label_mosaic,
+        # fix geometry from slider values (not static):
+        gamma_const=gamma_var.get(),
+        Gamma_const=Gamma_var.get(),
+        dist_const=corto_detector_var.get(),
+        theta_i_const=theta_initial_var.get(),
+        zs_const=zs_var.get(),
+        zb_const=zb_var.get(),
+
+        # data
+        miller=miller,
+        intensities=intensities,
+        image_size=image_size,
+        av=av,
+        cv=cv,
+        lambda_=lambda_,
+        psi=psi,
+        n2=n2,
+        center=center,
+        measured_peaks=measured_peaks
     )
-    optimization_thread.start()
+)
 
+
+fit_button_mosaic.pack(side=tk.LEFT, padx=5)
+
+progress_label_geometry = ttk.Label(root, text="")
+progress_label_geometry.pack(side=tk.LEFT, padx=5)
+
+progress_label_mosaic = ttk.Label(root, text="")
+progress_label_mosaic.pack(side=tk.LEFT, padx=5)
 
 
 # --- Background Management Functions ---
@@ -662,13 +581,6 @@ def reset_to_defaults():
     # Update the figure with default values
     update()
 
-optimizer = BayesianOptimization(
-    f=lambda chi, zs, zb, eta, sigma_mosaic_deg, gamma_mosaic_deg: 
-        objective_function_bayesian(None, None, chi, zs, zb, eta, sigma_mosaic_deg, gamma_mosaic_deg),
-    pbounds=pbounds,
-    random_state=42,
-    verbose=2
-)
 
 # Create a frame below the figure for the vmax slider
 vmax_frame = ttk.Frame(fig_frame)
@@ -695,9 +607,6 @@ param_button_frame.pack(pady=5, fill=tk.X)
 vmax_slider = ttk.Scale(vmax_frame, from_=1e4, to=1e8, orient=tk.HORIZONTAL, variable=vmax_var, command=vmax_slider_command)
 vmax_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-# Create the Fit button
-fit_button = ttk.Button(slider_frame, text="Perform Fit", command=perform_fit)
-fit_button.pack(pady=10)
 
 # Frame for reset & error display
 bottom_frame = ttk.Frame(slider_frame, padding=5)
@@ -777,6 +686,9 @@ azimuthal_button = ttk.Button(
 
 azimuthal_button.pack(side=tk.LEFT, padx=5)
 
+# Create a label to show the progress or final message
+progress_label_positions = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
+progress_label_positions.pack(side=tk.LEFT, padx=5)
 save_button = ttk.Button(
     top_frame,
     text="Save Params",
@@ -793,11 +705,13 @@ save_button = ttk.Button(
         corto_detector_var,
         sigma_mosaic_var,
         gamma_mosaic_var,
-        eta_var
+        eta_var,
+        a_var,  # new
+        c_var   # new
     )
 )
-save_button.pack(side=tk.LEFT, padx=5)
 
+save_button.pack(side=tk.LEFT, padx=5)
 
 load_button = ttk.Button(
     top_frame,
@@ -805,7 +719,7 @@ load_button = ttk.Button(
     command=lambda: (
         progress_label.config(
             text=load_parameters(
-                r"C:\users\kenpo\OneDrive\Research\Uniaxially Twisted Project\UniTwist2D\subroutines\parameters.npy",
+                r"C:\Users\Kenpo\parameters.npy",
                 theta_initial_var,
                 gamma_var,
                 Gamma_var,
@@ -817,14 +731,16 @@ load_button = ttk.Button(
                 corto_detector_var,
                 sigma_mosaic_var,
                 gamma_mosaic_var,
-                eta_var
+                eta_var,
+                a_var,  # <-- new
+                c_var   # <-- new
             )
         ),
         update()
     )
 )
-
 load_button.pack(side=tk.LEFT, padx=5)
+
 
 progress_label = ttk.Label(top_frame, text="", font=("Helvetica", 8))
 progress_label.pack(side=tk.LEFT, padx=5)
@@ -847,32 +763,40 @@ control_frame.pack(side=tk.RIGHT, fill=tk.Y)
 control_frame.pack_propagate(False)
 
 def on_click(event):
-    global bragg_positions, bragg_miller_indices, bragg_pixel_positions
-    x_pixel = event.xdata
-    y_pixel = event.ydata
-    if x_pixel is None or y_pixel is None:
-        return  # Clicked outside the axes
+    global peak_positions, peak_millers, peak_intensities
+    
+    x_click = event.xdata
+    y_click = event.ydata
+    if x_click is None or y_click is None:
+        return  # clicked outside the axes
 
-    x_pixel = int(round(x_pixel))
-    y_pixel = int(round(y_pixel))
+    x_click = int(round(x_click))
+    y_click = int(round(y_click))
 
-    # Compute distances to Bragg peaks in pixel units
+    # 1) Find nearest single-peak pixel among "peak_positions"
     distances = []
-    for (pixel_x_b, pixel_y_b) in bragg_pixel_positions:
-        dx = x_pixel - pixel_x_b
-        dy = y_pixel - pixel_y_b
-        dist = np.sqrt(dx**2 + dy**2)
-        distances.append(dist)
-
+    for (px, py) in peak_positions:
+        dx = x_click - px
+        dy = y_click - py
+        distances.append(np.sqrt(dx*dx + dy*dy))
     distances = np.array(distances)
-    min_index = np.argmin(distances)
-    min_distance = distances[min_index]
-    H, K, L = bragg_miller_indices[min_index]
-    # Display the Miller indices
-    info_text = f"Nearest Bragg peak:\nH={H}, K={K}, L={L}\nDistance: {min_distance:.2f} pixels"
+    min_index = int(np.argmin(distances))
+
+    # 2) Retrieve data for that reflection
+    (H, K, L) = peak_millers[min_index]
+    best_intensity = peak_intensities[min_index]
+    best_px, best_py = peak_positions[min_index]
+
+    info_text = (
+        f"Nearest reflection:\n"
+        f"H={H}, K={K}, L={L}\n"
+        f"Pixel coords: ({best_px}, {best_py})\n"
+        f"Sim. intensity: {best_intensity:.1f}"
+    )
+
     print(info_text)
-    # Update the info_label in the GUI
     info_label.config(text=info_text)
+
 
 
 

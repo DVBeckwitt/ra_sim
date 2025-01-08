@@ -61,7 +61,7 @@ def detect_blobs(source,notblob=None, isblob = None, labels = None, min_sigma=10
         # its a .jpg so import it 
         image = Image.open(source)
     # Rotate the image rotate_times * 90 degrees
-    # Note: np.rot90 rotates counterclockwise, if you need clockwise rotation
+    # Note: np.rot90 rotates counterclockwise``, if you need clockwise rotation
     # use rotate_times = -<number> or adjust accordingly.
     image = np.rot90(image, rotate_times)
     # take the log of all the pixel values
@@ -82,7 +82,7 @@ def detect_blobs(source,notblob=None, isblob = None, labels = None, min_sigma=10
         threshold=threshold
     )
 
-    # If notblob is not None, remove blobs that are too close to the edges
+    # If notblob is not None, remove the unwanted blobs
     if notblob is not None:
 
         blobs = np.delete(blobs, notblob, axis=0)
@@ -93,7 +93,7 @@ def detect_blobs(source,notblob=None, isblob = None, labels = None, min_sigma=10
         isblob = np.array(isblob, dtype=int)
         blobs = blobs[isblob]
 
-    if labels is not None and isblob is None:
+    if labels is not None and isblob is not None:
         # Now associate each detected blob with its corresponding label
         labeled_blobs = []
         for blob, label in zip(blobs, labels):
@@ -132,7 +132,6 @@ def detect_blobs(source,notblob=None, isblob = None, labels = None, min_sigma=10
         plt.show()
 
     return labeled_blobs
-
 
 
 def setup_azimuthal_integrator(parameters):

@@ -14,12 +14,13 @@ def load_parameters(path,
                     corto_detector_var,
                     sigma_mosaic_var,
                     gamma_mosaic_var,
-                    eta_var):
-    """
-    Load parameters from a .npy file and update the given Tkinter variables.
-    """
+                    eta_var,
+                    a_var,              # new
+                    c_var):             # new
     if os.path.exists(path):
         params = np.load(path, allow_pickle=True).item()
+        
+        # Set all the old parameters
         theta_initial_var.set(params['theta_initial'])
         gamma_var.set(params['gamma'])
         Gamma_var.set(params['Gamma'])
@@ -32,10 +33,14 @@ def load_parameters(path,
         sigma_mosaic_var.set(params['sigma_mosaic'])
         gamma_mosaic_var.set(params['gamma_mosaic'])
         eta_var.set(params['eta'])
+
+        # Set the new lattice parameters
+        a_var.set(params['a'])    # or 'a_lattice' if you prefer
+        c_var.set(params['c'])
+
         return "Parameters loaded from parameters.npy"
     else:
         return "No parameters.npy file found to load."
-
 
 def save_all_parameters(
     filepath,
@@ -50,36 +55,30 @@ def save_all_parameters(
     corto_detector_var,
     sigma_mosaic_var,
     gamma_mosaic_var,
-    eta_var
+    eta_var,
+    a_var,
+    c_var
 ):
-    """
-    Gathers all parameters and saves them to a file.
+    parameters = {
+        'theta_initial':  theta_initial_var.get(),
+        'gamma':          gamma_var.get(),
+        'Gamma':          Gamma_var.get(),
+        'chi':            chi_var.get(),
+        'zs':             zs_var.get(),
+        'zb':             zb_var.get(),
+        'debye_x':        debye_x_var.get(),
+        'debye_y':        debye_y_var.get(),
+        'corto_detector': corto_detector_var.get(),
+        'sigma_mosaic':   sigma_mosaic_var.get(),
+        'gamma_mosaic':   gamma_mosaic_var.get(),
+        'eta':            eta_var.get(),
+        'a':              a_var.get(),
+        'c':              c_var.get()
+    }
+    np.save(filepath, parameters)
+    print(f"Parameters saved successfully to {filepath}")
 
-    Args:
-        filepath (str): The file path where the parameters will be saved.
-        theta_initial_var, gamma_var, Gamma_var, etc.: Tkinter DoubleVar objects for the parameters.
-    """
-    try:
-        # Gather parameters
-        parameters = {
-            'theta_initial': theta_initial_var.get(),
-            'gamma': gamma_var.get(),
-            'Gamma': Gamma_var.get(),
-            'chi': chi_var.get(),
-            'zs': zs_var.get(),
-            'zb': zb_var.get(),
-            'debye_x': debye_x_var.get(),
-            'debye_y': debye_y_var.get(),
-            'corto_detector': corto_detector_var.get(),
-            'sigma_mosaic': sigma_mosaic_var.get(),
-            'gamma_mosaic': gamma_mosaic_var.get(),
-            'eta': eta_var.get(),
-        }
-        # Save to file
-        np.save(filepath, parameters)
-        print(f"Parameters saved successfully to {filepath}")
-    except Exception as e:
-        print(f"Failed to save parameters: {e}")
+
 
 def load_background_image(file_path):
     with open(file_path, 'r') as file:
@@ -90,53 +89,54 @@ def load_background_image(file_path):
         image = flattened_pixels.reshape((3000, 3000))
     return image
 
-
 def load_and_format_reference_profiles(input_filename):
-    # Load the data from the .npy file
-    data = np.load(input_filename, allow_pickle=True).item()
+    """
+    Loads the new .npy file produced by process_data(...) and
+    creates a simpler dictionary for each region:
+      {
+        region_name: {
+          "Radial (2θ)": np.array(...),
+          "Radial Intensity": np.array(...),
+          "Azimuthal φ": np.array(...),
+          "Azimuthal Intensity": np.array(...),
+          "FittedParams": { ... }  # optional
+        },
+        ...
+      }
+    """
 
-    # Extract relevant arrays
-    radial_region = np.array(data['Radial']['Region'])
-    radial_theta = np.array(data['Radial']['Radial (2θ)'])
-    radial_intensity = np.array(data['Radial']['Intensity'])
+    raw_data = np.load(input_filename, allow_pickle=True).item()
+    # raw_data should have keys: "Regions", "MainData", "Regions_of_Interest"
 
-    azimuthal_region = np.array(data['Azimuthal']['Region'])
-    azimuthal_phi = np.array(data['Azimuthal']['Azimuthal Angle (φ)'])
-    azimuthal_intensity = np.array(data['Azimuthal']['Azimuthal Intensity'])
-
-    # Identify unique regions
-    unique_regions = np.unique(radial_region)
-
+    # A dictionary to store the reformatted results
     reference_profiles = {}
 
-    # For each unique region, gather the radial and azimuthal data
-    for region in unique_regions:
-        # Radial data for this region
-        mask_rad = (radial_region == region)
-        region_radial_theta = radial_theta[mask_rad]
-        region_radial_intensity = radial_intensity[mask_rad]
+    # 1) Pull out the "Regions" dictionary from raw_data
+    regions_dict = raw_data.get("Regions", {})
 
-        # Sort by 2θ if needed
-        sort_idx_rad = np.argsort(region_radial_theta)
-        region_radial_theta = region_radial_theta[sort_idx_rad]
-        region_radial_intensity = region_radial_intensity[sort_idx_rad]
+    for region_name, region_info in regions_dict.items():
+        # region_info should have "Radial", "Azimuthal", and "FittedParams"
+        radial_dict = region_info.get("Radial", {})
+        azimuthal_dict = region_info.get("Azimuthal", {})
+        fitted_params = region_info.get("FittedParams", {})
 
-        # Azimuthal data for this region
-        mask_az = (azimuthal_region == region)
-        region_azimuthal_phi = azimuthal_phi[mask_az]
-        region_azimuthal_int = azimuthal_intensity[mask_az]
+        # Extract arrays from radial_dict
+        # "2θ" is a list, convert to np.array
+        radial_2theta = np.array(radial_dict.get("2θ", []), dtype=float)
+        radial_intensity = np.array(radial_dict.get("Intensity", []), dtype=float)
 
-        # Sort by φ if needed
-        sort_idx_az = np.argsort(region_azimuthal_phi)
-        region_azimuthal_phi = region_azimuthal_phi[sort_idx_az]
-        region_azimuthal_int = region_azimuthal_int[sort_idx_az]
+        # Extract arrays from azimuthal_dict
+        azimuthal_phi = np.array(azimuthal_dict.get("φ", []), dtype=float)
+        azimuthal_intensity = np.array(azimuthal_dict.get("Intensity", []), dtype=float)
 
-        # Store in the desired dictionary format
-        reference_profiles[region] = {
-            'Radial (2θ)': region_radial_theta,
-            'Intensity': region_radial_intensity,
-            'Azimuthal Angle (φ)': region_azimuthal_phi,
-            'Azimuthal Intensity': region_azimuthal_int
+        # Build your consolidated entry
+        reference_profiles[region_name] = {
+            "Radial (2θ)": radial_2theta,
+            "Radial Intensity": radial_intensity,
+            "Azimuthal φ": azimuthal_phi,
+            "Azimuthal Intensity": azimuthal_intensity,
+            # Optionally store the fitted parameters too
+            "FittedParams": fitted_params
         }
 
     return reference_profiles

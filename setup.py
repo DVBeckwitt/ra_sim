@@ -8,7 +8,7 @@ if os.path.isfile("README.md"):
         long_description = f.read()
 
 setup(
-    name='ra_sim',  # Update this to your package name
+    name='ra_sim',
     version='0.1.0',
     packages=find_packages(),
     author='Your Name',
@@ -20,7 +20,7 @@ setup(
     keywords=['XRD', 'diffraction', 'image processing', 'crystallography'],
     url='https://github.com/YourUsername/myxrdanalysis',  # Update to your project URL
 
-    # Include your runtime dependencies here
+    # These are the runtime dependencies for your package:
     install_requires=[
         'numpy>=1.18.0',
         'matplotlib>=3.0.0',
@@ -31,10 +31,14 @@ setup(
         'pandas>=1.0.0',
         'numba>=0.50.0',
         'spglib>=1.9.0',
-        'bayesian-optimization>=1.2.0', # for Bayesian optimization if needed
+        'bayesian-optimization>=1.2.0',
         'tifffile>=2020.9.3',
         'docopt>=0.6.2',
-        'logbook>=1.5.3'
+        'logbook>=1.5.3',
+        'scikit-image>=0.17.0',  # For skimage.feature, skimage.metrics, etc.
+        'Pillow>=7.0.0',         # For PIL-based image I/O
+        'ipython>=7.0.0',        # For IPython.display
+        'jupyter>=1.0.0',        # Needed if using pyFAI.gui.jupyter
     ],
 
     classifiers=[
