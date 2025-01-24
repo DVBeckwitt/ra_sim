@@ -1,4 +1,4 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.2
 Name: ra_sim
 Version: 0.1.0
 Summary: A Python package for simulating and analyzing XRD patterns
@@ -31,3 +31,17 @@ Requires-Dist: bayesian-optimization>=1.2.0
 Requires-Dist: tifffile>=2020.9.3
 Requires-Dist: docopt>=0.6.2
 Requires-Dist: logbook>=1.5.3
+Requires-Dist: scikit-image>=0.17.0
+Requires-Dist: Pillow>=7.0.0
+Requires-Dist: ipython>=7.0.0
+Requires-Dist: jupyter>=1.0.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

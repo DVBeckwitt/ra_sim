@@ -4,6 +4,7 @@ from pyFAI.azimuthalIntegrator import AzimuthalIntegrator
 import json
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.StructureFactor.StructureFactor  import calculate_structure_factor
+from skimage import exposure
 
 import numpy as np
 import itertools
@@ -22,58 +23,102 @@ import math
 from skimage import feature, color
 import matplotlib.pyplot as plt
 
-def detect_blobs(source,notblob=None, isblob = None, labels = None, min_sigma=10, max_sigma=20, num_sigma=5, threshold=0.1, rotate_times=3, plot=False):
+import math
+import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
+from skimage import feature, color
+
+def detect_blobs(
+    source,
+    notblob=None,
+    groups=None,
+    min_sigma=10,
+    max_sigma=20,
+    num_sigma=5,
+    threshold=0.1,
+    rotate_times=3,
+    plot=False
+):
     """
     Detect blobs from either a filename (.asc) or a numpy array.
-    
-    If `source` is a string that ends with '.asc', it will be treated as a file path.
-    If `source` is a numpy array, it will be treated as image data directly.
 
     Args:
         source (str or np.ndarray): 
-            - If str and ends with .asc: path to an .asc file containing pixel data.
+            - If str and ends with '.asc': path to an .asc file containing pixel data.
             - If np.ndarray: a 2D array representing the image.
-        min_sigma (float): Minimum sigma for Gaussian kernel for blob detection.
-        max_sigma (float): Maximum sigma for Gaussian kernel for blob detection.
-        num_sigma (int): Number of intermediate sigma values.
-        threshold (float): Lower bound for scale space maxima.
-        rotate_times (int): Number of times to rotate the image by 90 degrees counterclockwise.
-        plot (bool): If True, displays the detected blobs.
+        notblob (list[int] or None):
+            Indices of blobs to remove after detection.
+        groups (list[tuple[list[int], str]] or None):
+            A list of (blob_indices, label_str) pairs, e.g. [([0,1], "0,1,5"), ([2,3], "1,0,10"), ...].
+            If provided, only those blob indices are kept, and each index is labeled with its associated label_str.
+        min_sigma (float):
+            Minimum sigma for the Gaussian kernel for blob detection.
+        max_sigma (float):
+            Maximum sigma for the Gaussian kernel for blob detection.
+        num_sigma (int):
+            Number of intermediate sigma values for multiscale detection.
+        threshold (float):
+            Lower bound for scale-space maxima.
+        rotate_times (int):
+            Number of 90-degree counterclockwise rotations to apply to the image.
+        plot (bool):
+            If True, displays the detected blobs.
 
     Returns:
-        np.ndarray: An array of detected blobs with shape (n_blobs, 3), each row:
-                    (y, x, sigma).
+        list of dict:
+            Each element is a dictionary with keys {'label', 'x', 'y', 'sigma', 'confidence'}.
     """
+    # --------------------------------------------------------------------------
+    # 1. Flatten groups into isblob, labels if provided
+    # --------------------------------------------------------------------------
+    isblob, labels = None, None
+    if groups:
+        isblob, labels = [], []
+        for blob_indices, label_str in groups:
+            for idx in blob_indices:
+                isblob.append(idx)
+                labels.append(label_str)
 
+    # --------------------------------------------------------------------------
+    # 2. Load the image (from .asc or other format)
+    # --------------------------------------------------------------------------
     if isinstance(source, str) and source.lower().endswith('.asc'):
         with open(source, 'r') as file:
             lines = file.readlines()
-
-        # Lines after the 6th line contain pixel values
-        pixel_lines = lines[6:]
-        # Convert each line to a list of integers
+        pixel_lines = lines[6:]  # Lines after the 6th line contain pixel data
         pixels = [list(map(int, line.split())) for line in pixel_lines]
         flattened_pixels = np.array(pixels).flatten()
         background_image = flattened_pixels.reshape((3000, 3000))
         image = np.array(background_image, dtype=np.int32)
-
     else:
-        # its a .jpg so import it 
+        # Otherwise assume 'source' is a valid image path or a PIL-supported format
         image = Image.open(source)
-    # Rotate the image rotate_times * 90 degrees
-    # Note: np.rot90 rotates counterclockwise``, if you need clockwise rotation
-    # use rotate_times = -<number> or adjust accordingly.
-    image = np.rot90(image, rotate_times)
-    # take the log of all the pixel values
-    image = np.log(image)
-    # If the image is 2D, it's already grayscale. If it is somehow 3D (RGB),
-    # convert to grayscale. Usually, .asc will produce a 2D array.
+        image = np.array(image)
+
+    # --------------------------------------------------------------------------
+    # 3. Preprocess: rotate + log transform + grayscale (if needed)
+    # --------------------------------------------------------------------------
+    image = np.rot90(image, k=rotate_times)  # Rotate the image
+    
+    # Ensure no zero or negative values before log
+    image[image < 1] = 1
+    image = np.log(image)  # simple log transform
+
+    # If the image is color, convert to grayscale
     if image.ndim == 3:
         processed_image = color.rgb2gray(image)
     else:
         processed_image = image
 
-    # Perform blob detection on the processed_image
+    # Rescale to use the full data type range
+    processed_image = exposure.rescale_intensity(
+        processed_image, in_range='image', out_range='dtype'
+    )
+
+    # --------------------------------------------------------------------------
+    # 4. Detect blobs with Laplacian of Gaussian
+    # --------------------------------------------------------------------------
     blobs = feature.blob_log(
         processed_image,
         min_sigma=min_sigma,
@@ -81,53 +126,85 @@ def detect_blobs(source,notblob=None, isblob = None, labels = None, min_sigma=10
         num_sigma=num_sigma,
         threshold=threshold
     )
+    # blobs has shape (n_blobs, 3) where each row is (y, x, sigma)
 
-    # If notblob is not None, remove the unwanted blobs
+    # --------------------------------------------------------------------------
+    # 5. Filter out or keep only certain blobs
+    # --------------------------------------------------------------------------
     if notblob is not None:
-
+        # Remove the unwanted blob indices
         blobs = np.delete(blobs, notblob, axis=0)
-        
-   # If isblob is provided, keep only those indices
     elif isblob is not None:
-        # Make sure isblob is an integer array/list
+        # Keep only the specified blob indices
         isblob = np.array(isblob, dtype=int)
         blobs = blobs[isblob]
 
-    if labels is not None and isblob is not None:
-        # Now associate each detected blob with its corresponding label
-        labeled_blobs = []
-        for blob, label in zip(blobs, labels):
-            y, x, sigma = blob
-            labeled_blobs.append({
-                'label': label,
-                'x': x,
-                'y': y,
-                'sigma': sigma
-            })
-    else: 
-        labeled_blobs = []
-        for i, blob in enumerate(blobs):
-            y, x, sigma = blob
-            labeled_blobs.append({
-                'label': i,
-                'x': x,
-                'y': y,
-                'sigma': sigma
-            })
+    # --------------------------------------------------------------------------
+    # 5b. Compute "confidence" for each blob
+    # --------------------------------------------------------------------------
+    # We'll define "confidence" = pixel intensity at (y, x) in processed_image
+    # Round the blob coordinates to nearest int in case they are floats.
+    blob_conf_list = []
+    for (y, x, sigma) in blobs:
+        yy = int(round(y))
+        xx = int(round(x))
+        # Make sure we're within bounds
+        if 0 <= yy < processed_image.shape[0] and 0 <= xx < processed_image.shape[1]:
+            confidence = processed_image[yy, xx]
+        else:
+            confidence = 0
+        blob_conf_list.append([y, x, sigma, confidence])
+    blob_conf_array = np.array(blob_conf_list)  # shape (n, 4)
 
-    # If plot is True, visualize the blobs
+    # --------------------------------------------------------------------------
+    # 5c. Sort by confidence DESCENDING, keep top N
+    # --------------------------------------------------------------------------
+    N = 30
+    if len(blob_conf_array) > N:
+        sorted_indices = np.argsort(blob_conf_array[:, 3])[::-1]  # sort by 4th col (confidence)
+        top20 = sorted_indices[:N]
+        blob_conf_array = blob_conf_array[top20]
+
+    # --------------------------------------------------------------------------
+    # 6. Label the detected blobs
+    # --------------------------------------------------------------------------
+    labeled_blobs = []
+    for i, row in enumerate(blob_conf_array):
+        y, x, sigma, confidence = row
+        if labels is not None and i < len(labels):
+            label_str = labels[i]
+        else:
+            label_str = i  # fallback to an integer label
+
+        labeled_blobs.append({
+            'label': label_str,
+            'x': x,
+            'y': y,
+            'sigma': sigma,
+            'confidence': confidence,
+        })
+
+    # --------------------------------------------------------------------------
+    # 7. Plot the results if requested
+    # --------------------------------------------------------------------------
     if plot:
         fig, ax = plt.subplots()
         ax.imshow(processed_image, cmap='gray')
-        for i, blob in enumerate(blobs):
-            y, x, sigma = blob
+
+        for blob_data in labeled_blobs:
+            y = blob_data['y']
+            x = blob_data['x']
+            sigma = blob_data['sigma']
+            label_str = blob_data['label']
+
             r = sigma * math.sqrt(2)
-            c = plt.Circle((x, y), r, color='red', linewidth=0.5, fill=False)
-            ax.add_patch(c)
-            if labels is not None:
-                ax.text(x + 5, y + 5, f"{labels[i]}", color='yellow', fontsize=8)
-            else:   
-                ax.text(x + 5, y + 5, f"{i}", color='yellow', fontsize=8)
+            circ = plt.Circle((x, y), r, color='red', linewidth=0.5, fill=False)
+            ax.add_patch(circ)
+
+            ax.text(
+                x + 5, y + 5, str(label_str), 
+                color='yellow', fontsize=8
+            )
 
         plt.show()
 
