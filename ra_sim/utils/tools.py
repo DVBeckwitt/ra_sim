@@ -1,6 +1,6 @@
 import numpy as np
 import pyFAI
-from pyFAI.azimuthalIntegrator import AzimuthalIntegrator   
+from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 import json
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.StructureFactor.StructureFactor  import calculate_structure_factor
@@ -253,7 +253,6 @@ def miller_generator(max_miller, av, cv, lambda_, atoms, data, occ):
     return miller, intensities
 
 import matplotlib.pyplot as plt
-from pyFAI.azimuthalIntegrator import AzimuthalIntegrator
 import numpy as np
 
 def view_azimuthal_radial(simulated_image, center, detector_params):

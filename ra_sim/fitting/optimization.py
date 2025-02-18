@@ -7,6 +7,7 @@ import traceback
 from collections import defaultdict
 from scipy.optimize import minimize, least_squares
 import pandas as pd
+import scipy.optimize as opt  # if not already imported
 
 ###############################################################################
 # DEBUG LOGGING
@@ -104,7 +105,7 @@ def simulate_diffraction_positions(
     psi,
     n2,
     center,
-    num_samples=1000,
+    num_samples=5000,
     divergence_sigma=0.0,
     bw_sigma=0.0
 ):
@@ -345,7 +346,6 @@ def geometry_residuals_local(
 ###############################################################################
 # LOCAL GEOMETRY OPTIMIZATION
 ###############################################################################
-
 def run_optimization_positions_geometry_local(
     fit_button,
     progress_label,
@@ -375,7 +375,8 @@ def run_optimization_positions_geometry_local(
     center_y_var,
     update_gui
 ):
-    import seaborn as sns
+    import traceback
+    from scipy.optimize import minimize, differential_evolution, least_squares
 
     try:
         fit_button.config(state='disabled')
@@ -387,7 +388,7 @@ def run_optimization_positions_geometry_local(
                   f"zs={zs_var.get()}, zb={zb_var.get()}, chi={chi_var.get()}, a={a_var.get()}, c={c_var.get()}, "
                   f"center=({center_x_var.get()}, {center_y_var.get()})")
 
-        # STEP 1) L-BFGS-B
+        # STEP 0: Define the starting point and bounds.
         x0 = [
             gamma_var.get(),
             Gamma_var.get(),
@@ -402,6 +403,21 @@ def run_optimization_positions_geometry_local(
             center_y_var.get()
         ]
 
+        bounds = [
+            (-4.0, 4.0),    # gamma
+            (-4.0, 4.0),    # Gamma
+            (72e-3, 78e-3), # dist
+            (5.0, 7.0),     # theta_i
+            (-2e-3, 2e-3),  # zs
+            (-2e-3, 2e-3),  # zb
+            (-0.1, 0.1),    # chi
+            (4.0, 4.5),     # a
+            (27.0, 29.0),   # c
+            (center[0], center[0]),  # center x (fixed)
+            (center[1], center[1])   # center y (fixed)
+        ]
+
+        # Define the cost function (wrapper around compute_peak_position_error_geometry_local)
         def cost_function(x):
             (gamma_val, Gamma_val, dist_val, theta_i_val, zs_val, zb_val,
              chi_val, a_val, c_val, cx_val, cy_val) = x
@@ -415,29 +431,44 @@ def run_optimization_positions_geometry_local(
             )
             return cst
 
-        # Bounds for L-BFGS-B
-        bounds = [
-            (-4.0, 4.0),  # gamma
-            (-4.0, 4.0),  # Gamma
-            (72e-3, 78e-3),  # dist
-            (5.0, 7.0), # theta_i
-            (-2e-3, 2e-3),
-            (-2e-3, 2e-3),
-            (-0.3, 0.3), # chi
-            (4.0, 4.5), # a
-            (27.0, 29.0), # c
-            (center[0], center[0]),
-            (center[1], center[1])
-        ]
+        # STEP 1: Global search using differential evolution.
+        debug_log("[run_optimization_positions_geometry_local] Starting global optimization (Differential Evolution).")
+        global_result = differential_evolution(
+            cost_function,
+            bounds,
+            strategy='best1bin',
+            maxiter=200,
+            popsize=15,
+            disp=False
+        )
+        debug_log(f"  Differential Evolution result: success={global_result.success}, message='{global_result.message}'")
+        # Use global_result.x as the new starting point if successful.
+        if global_result.success:
+            x0_global = global_result.x
+        else:
+            x0_global = x0
 
-        debug_log("[run_optimization_positions_geometry_local] Starting L-BFGS-B.")
-        res_lbfgs = minimize(
+        # STEP 2: Local optimization using L-BFGS-B.
+        debug_log("[run_optimization_positions_geometry_local] Starting local optimization (L-BFGS-B) from global optimum.")
+
+        # Define the minimizer kwargs (still using L-BFGS-B)
+        minimizer_kwargs = {
+            "method": "L-BFGS-B",
+            "bounds": bounds,
+            "options": {"maxiter": 1000}
+        }
+
+        # Use basin hopping to perturb around x0.
+        res_basinhopping = opt.basinhopping(
             cost_function,
             x0,
-            method='L-BFGS-B',
-            bounds=bounds,
-            options={'maxiter': 1000}
+            minimizer_kwargs=minimizer_kwargs,
+            stepsize=0.1,   # small step size to stay local
+            niter=50        # number of iterations for the hopping
         )
+
+        # Get the best result from basin hopping.
+        res_lbfgs = res_basinhopping.lowest_optimization_result
 
         debug_log(f"  L-BFGS-B result: success={res_lbfgs.success}, message='{res_lbfgs.message}'")
         debug_log(f"  L-BFGS-B final cost={res_lbfgs.fun:.6g}, final x={res_lbfgs.x}")
@@ -447,7 +478,7 @@ def run_optimization_positions_geometry_local(
             best_params = x0
         else:
             best_params = res_lbfgs.x
-            # Update the GUI
+            # Update the GUI variables
             gamma_var.set(best_params[0])
             Gamma_var.set(best_params[1])
             dist_var.set(best_params[2])
@@ -467,7 +498,7 @@ def run_optimization_positions_geometry_local(
             f"Best Loss (L-BFGS-B) = {res_lbfgs.fun:.6g}"
         )
 
-        # STEP 2) Levenberg–Marquardt
+        # STEP 3: Further refinement with Levenberg–Marquardt.
         debug_log("[run_optimization_positions_geometry_local] Starting Levenberg–Marquardt from L-BFGS-B result.")
         def marquardt_residuals(x):
             return geometry_residuals_local(
@@ -487,7 +518,7 @@ def run_optimization_positions_geometry_local(
         res_marq = least_squares(
             marquardt_residuals,
             best_params,
-            method='lm'
+            method='dogbox'
         )
 
         if not res_marq.success:
@@ -495,7 +526,7 @@ def run_optimization_positions_geometry_local(
             debug_log(f"  Marquardt => Not success. {res_marq.message}")
         else:
             marq_params = res_marq.x
-            # Update sliders
+            # Update the GUI with refined parameters
             gamma_var.set(marq_params[0])
             Gamma_var.set(marq_params[1])
             dist_var.set(marq_params[2])
@@ -519,10 +550,10 @@ def run_optimization_positions_geometry_local(
             )
             debug_log(f"  Marquardt => success. Final param={marq_params} final cost={final_cost:.6g}")
 
-        # Combine messages
         progress_label.config(text=msg_lbfgs + "\n" + msg_mq)
 
     except Exception as e:
+        import traceback
         tb_str = ''.join(traceback.format_exception(None, e, e.__traceback__))
         progress_label.config(text=f"Geometry optimization failed:\n{tb_str}")
         debug_log(f"[run_optimization_positions_geometry_local] EXCEPTION: {tb_str}")
@@ -530,11 +561,8 @@ def run_optimization_positions_geometry_local(
         fit_button.config(state='normal')
 
 
-###############################################################################
-# MOSAIC-ONLY: local optimization
-###############################################################################
 
-def compute_peak_position_error_mosaic_local(
+def mosaic_1d_cost_function(
     mosaic_sigma_val,
     mosaic_gamma_val,
     mosaic_eta_val,
@@ -545,57 +573,72 @@ def compute_peak_position_error_mosaic_local(
     theta_i_const,
     zs_const,
     zb_const,
-    center,
+    chi_const,
+    a_const,
+    c_const,
+    center_xy,
+    # global settings
     miller,
     intensities,
     image_size,
-    av,
-    cv,
     lambda_,
     psi,
     n2,
-    measured_peaks
+    # 1D integration sliders
+    rmin,
+    rmax,
+    amin_deg,
+    amax_deg,
+    # background image
+    background_image,
+    # mosaic profiles cache or generation parameters
+    num_samples,
+    divergence_sigma,
+    bw_sigma,
+    # JIT integration methods
+    radial_integration_func,
+    azimuthal_integration_func
 ):
-    from math import isnan
-    from ra_sim.simulation.simulation import simulate_diffraction
-
-    debug_log(f"[compute_peak_position_error_mosaic_local] mosaic_sigma={mosaic_sigma_val:.4f}, "
-              f"mosaic_gamma={mosaic_gamma_val:.4f}, mosaic_eta={mosaic_eta_val:.4f}")
-
-    # Build measured dictionary
-    measured_dict = build_measured_dict(measured_peaks)
-    miller_sub, intensities_sub = filter_reflections(miller, intensities, measured_dict)
-    if len(miller_sub) == 0:
-        debug_log("  => No overlapping reflections => cost=1e9 (mosaic only).")
-        return 1e9
-
-    # For mosaic only, we fix geometry and vary mosaic parameters => simulate
+    """
+    Builds a simulated 2D pattern using *fixed* geometry and the
+    given mosaic parameters (sigma, gamma, eta). Then integrates
+    that pattern in the radial & azimuthal range indicated by
+    [rmin, rmax] and [amin_deg, amax_deg].
+    
+    Compares with the same integrated slice of background_image
+    and returns a scalar cost (sum of squared differences).
+    """
+    import numpy as np
     from ra_sim.simulation.mosaic_profiles import generate_random_profiles
     from ra_sim.simulation.diffraction import process_peaks_parallel
-    # We'll do the direct approach:
-    try:
-        # We'll replicate the important lines from simulate_diffraction_positions but with fixed geometry
-        (beam_x_array, beam_y_array, beam_intensity_array,
-         beta_array, kappa_array, mosaic_intensity_array,
-         theta_array, phi_array, divergence_intensity_array) = generate_random_profiles(
-             num_samples=1000,
-             divergence_sigma=0.0,
-             bw_sigma=0.0,
-             sigma_mosaic_deg=mosaic_sigma_val,
-             gamma_mosaic_deg=mosaic_gamma_val,
-             eta=mosaic_eta_val
-        )
 
-        empty_image = np.zeros((image_size, image_size), dtype=np.float64)
-        simulated_image, max_positions = process_peaks_parallel(
-            miller_sub, intensities_sub,
+    # 1) Generate the mosaic + beam profiles
+    (beam_x_array, beam_y_array, beam_intensity_array,
+     beta_array, kappa_array, mosaic_intensity_array,
+     theta_array, phi_array, divergence_intensity_array) = generate_random_profiles(
+         num_samples=num_samples,
+         divergence_sigma=divergence_sigma,
+         bw_sigma=bw_sigma,
+         sigma_mosaic_deg=mosaic_sigma_val,
+         gamma_mosaic_deg=mosaic_gamma_val,
+         eta=mosaic_eta_val
+     )
+
+    # 2) Simulate 2D diffraction image (fixed geometry)
+    simulated_image = np.zeros((image_size, image_size), dtype=np.float64)
+    try:
+        process_peaks_parallel(
+            miller,
+            intensities,
             image_size,
-            av, cv, lambda_,
-            empty_image,
+            a_const,
+            c_const,
+            lambda_,
+            simulated_image,          # fill in
             dist_const,
             gamma_const,
             Gamma_const,
-            0.0,  # chi
+            chi_const,
             psi,
             zs_const,
             zb_const,
@@ -609,151 +652,198 @@ def compute_peak_position_error_mosaic_local(
             theta_array,
             phi_array,
             divergence_intensity_array,
-            debye_x=0.0,
+            debye_x=0.0,      # or your slider if you prefer
             debye_y=0.0,
-            center=center,
+            center=center_xy,
             theta_initial=theta_i_const,
-            theta_final=(theta_i_const + 0.1),
+            theta_final=theta_i_const + 0.1,
             step=0.1,
             unit_x=np.array([1.0, 0.0, 0.0]),
             n_detector=np.array([0.0, 1.0, 0.0])
         )
-    except Exception as e:
-        debug_log(f"  => mosaic simulation error => returning 1e9. {e}")
+    except Exception:
+        # On error, return a large cost
         return 1e9
 
-    # Evaluate cost
-    errors = []
-    for i, (H, K, L) in enumerate(miller_sub):
-        mx0, my0, mv0, mx1, my1, mv1 = max_positions[i]
-        meas_list = measured_dict.get((H, K, L), [])
-        if len(meas_list) == 0:
-            # no measured data => let's skip or penalize
-            errors.append(1e9)
-            continue
+    # 3) Get radial/azimuthal integration of simulated image
+    amin_rad = np.deg2rad(amin_deg)
+    amax_rad = np.deg2rad(amax_deg)
 
-        # Among all measured points, pick the best
-        best_local = 1e12
-        for meas in meas_list:
-            x_m = meas['x']
-            y_m = meas['y']
-            dist_sq_0 = (mx0 - x_m)**2 + (my0 - y_m)**2 if not isnan(mx0) else 1e12
-            dist_sq_1 = (mx1 - x_m)**2 + (my1 - y_m)**2 if not isnan(mx1) else 1e12
-            best_local = min(best_local, dist_sq_0, dist_sq_1)
-        errors.append(best_local)
+    # Radial integration
+    sim_r, sim_radial = radial_integration_func(
+        simulated_image,
+        center_xy[0],
+        center_xy[1],
+        rmin,
+        rmax,
+        amin_rad,
+        amax_rad
+    )
+    # Azimuthal integration
+    sim_ang, sim_az = azimuthal_integration_func(
+        simulated_image,
+        center_xy[0],
+        center_xy[1],
+        rmin,
+        rmax,
+        amin_rad,
+        amax_rad,
+        nbins=360  # or 1000, etc.
+    )
 
-    if len(errors) == 0:
-        debug_log("  => empty error list => cost=1e9")
+    # 4) Get radial/azimuthal integration of background image (same range)
+    if background_image is None or background_image.shape != simulated_image.shape:
+        # If no valid background, large cost
         return 1e9
-    cost_val = np.mean(errors)
-    debug_log(f"  => mosaic cost= {cost_val:.6g} over {len(errors)} reflections.")
+
+    bg_r, bg_radial = radial_integration_func(
+        background_image,
+        center_xy[0],
+        center_xy[1],
+        rmin,
+        rmax,
+        amin_rad,
+        amax_rad
+    )
+    bg_ang, bg_az = azimuthal_integration_func(
+        background_image,
+        center_xy[0],
+        center_xy[1],
+        rmin,
+        rmax,
+        amin_rad,
+        amax_rad,
+        nbins=360
+    )
+
+    # 5) Match up arrays for difference (naive approach: assume same bin edges)
+    #    If their shapes differ, you should handle interpolation or smaller arrays
+    if len(sim_radial) != len(bg_radial) or len(sim_az) != len(bg_az):
+        return 1e9  # or handle differently
+
+    # 6) Compute cost: sum of squared differences (radial + az)
+    #    You can weight them differently or do just radial, etc.
+    #    This example uses a simple combined sum of squares.
+    diff_radial = sim_radial - bg_radial
+    diff_az = sim_az - bg_az
+
+    cost_val = np.sum(diff_radial**2) + np.sum(diff_az**2)
     return cost_val
 
-
-def run_optimization_mosaic_local(
+def run_optimization_mosaic_1d_local(
     fit_button,
     progress_label,
+    # fixed geometry
     gamma_const,
     Gamma_const,
     dist_const,
     theta_i_const,
     zs_const,
     zb_const,
+    chi_const,
+    a_const,
+    c_const,
+    center_xy,
+    # global
     miller,
     intensities,
     image_size,
-    av,
-    cv,
     lambda_,
     psi,
     n2,
-    center,
-    measured_peaks,
+    # radial/azimuthal sliders
+    rmin,
+    rmax,
+    amin_deg,
+    amax_deg,
+    # background
+    background_image,
+    # mosaic variables (tkinter Var)
     mosaic_sigma_var,
     mosaic_gamma_var,
     mosaic_eta_var,
+    # other
+    num_samples,
+    divergence_sigma,
+    bw_sigma,
+    radial_integration_func,
+    azimuthal_integration_func,
     update_gui
 ):
     """
-    Fix geometry, vary mosaic parameters with a local solver.
+    Similar to your geometry fits: fix geometry, then do a local optimization
+    of mosaic_sigma, mosaic_gamma, and eta by matching the 1D integrated 
+    simulation to the 1D integrated region of background_image.
     """
     try:
         fit_button.config(state='disabled')
-        progress_label.config(text="Local mosaic optimization in progress...")
-        debug_log("\n[run_optimization_mosaic_local] Called. Starting mosaic-only opt.")
-        debug_log(f"Initial guess: sigma={mosaic_sigma_var.get()}, gamma={mosaic_gamma_var.get()}, eta={mosaic_eta_var.get()}")
+        progress_label.config(text="1D Mosaic Optimization in progress...")
 
-        # 1) initial guess from the sliders
-        x0 = [
-            mosaic_sigma_var.get(),
-            mosaic_gamma_var.get(),
-            mosaic_eta_var.get()
-        ]
+        import numpy as np
+        from scipy.optimize import minimize
 
-        def cost_function_mosaic(x):
-            m_sigma, m_gamma, m_eta = x
-            cst = compute_peak_position_error_mosaic_local(
-                mosaic_sigma_val=m_sigma,
-                mosaic_gamma_val=m_gamma,
-                mosaic_eta_val=m_eta,
+        def cost_wrapper(x):
+            # x = [sigma_mosaic, gamma_mosaic, eta]
+            return mosaic_1d_cost_function(
+                mosaic_sigma_val=x[0],
+                mosaic_gamma_val=x[1],
+                mosaic_eta_val=x[2],
                 gamma_const=gamma_const,
                 Gamma_const=Gamma_const,
                 dist_const=dist_const,
                 theta_i_const=theta_i_const,
                 zs_const=zs_const,
                 zb_const=zb_const,
-                center=center,
+                chi_const=chi_const,
+                a_const=a_const,
+                c_const=c_const,
+                center_xy=center_xy,
                 miller=miller,
                 intensities=intensities,
                 image_size=image_size,
-                av=av,
-                cv=cv,
                 lambda_=lambda_,
                 psi=psi,
                 n2=n2,
-                measured_peaks=measured_peaks
+                rmin=rmin,
+                rmax=rmax,
+                amin_deg=amin_deg,
+                amax_deg=amax_deg,
+                background_image=background_image,
+                num_samples=num_samples,
+                divergence_sigma=divergence_sigma,
+                bw_sigma=bw_sigma,
+                radial_integration_func=radial_integration_func,
+                azimuthal_integration_func=azimuthal_integration_func
             )
-            return cst
+        
+        # Get starting guess from the sliders
+        x0 = [mosaic_sigma_var.get(), mosaic_gamma_var.get(), mosaic_eta_var.get()]
 
-        # 2) bounds
-        bounds = [
-            (0.0,  5.0),  # mosaic sigma deg
-            (0.0,  5.0),  # mosaic gamma deg
-            (0.0,  1.0),  # mosaic eta fraction
-        ]
+        # Bounds: you can tweak these
+        bounds = [(0.0, 5.0),  # sigma deg
+                  (0.0, 5.0),  # gamma deg
+                  (0.0, 1.0)]  # eta fraction
 
-        # 3) minimize
-        res = minimize(
-            cost_function_mosaic,
-            x0,
-            method='L-BFGS-B',
-            bounds=bounds,
-            options={'maxiter': 200}
-        )
-
-        debug_log(f"[run_optimization_mosaic_local] L-BFGS-B => success={res.success}, message='{res.message}'")
-        debug_log(f"  final cost={res.fun:.6g}, final x={res.x}")
-
-        best_params = res.x
-        best_loss = res.fun
-
-        # 4) set slider values
-        mosaic_sigma_var.set(best_params[0])
-        mosaic_gamma_var.set(best_params[1])
-        mosaic_eta_var.set(best_params[2])
-        update_gui()
-
-        msg = (
-            f"Local mosaic optimization done.\n"
-            f"Status = {res.message}, success={res.success}\n"
-            f"Best Loss: {best_loss:.5f}\n"
-            f"mosaic_sigma= {best_params[0]:.3f} deg, mosaic_gamma= {best_params[1]:.3f} deg, mosaic_eta= {best_params[2]:.3f}"
-        )
+        res = minimize(cost_wrapper, x0, method='L-BFGS-B', bounds=bounds, options={'maxiter': 200})
+        
+        if res.success:
+            best_sigma, best_gamma, best_eta = res.x
+            mosaic_sigma_var.set(best_sigma)
+            mosaic_gamma_var.set(best_gamma)
+            mosaic_eta_var.set(best_eta)
+            update_gui()
+            msg = (f"1D Mosaic Optimization DONE\n"
+                   f"status={res.message}, success={res.success}\n"
+                   f"sigma={best_sigma:.3f}, gamma={best_gamma:.3f}, eta={best_eta:.3f}\n"
+                   f"final cost={res.fun:.5g}")
+        else:
+            msg = f"1D Mosaic Optimization FAILED: {res.message}"
+        
         progress_label.config(text=msg)
 
     except Exception as e:
+        import traceback
         tb_str = ''.join(traceback.format_exception(None, e, e.__traceback__))
-        progress_label.config(text=f"Mosaic optimization failed:\n{tb_str}")
-        debug_log(f"[run_optimization_mosaic_local] EXCEPTION: {tb_str}")
+        progress_label.config(text=f"[1D Mosaic Fit] Exception:\n{tb_str}")
     finally:
         fit_button.config(state='normal')
