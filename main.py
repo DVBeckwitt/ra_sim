@@ -22,7 +22,7 @@ from ra_sim.io.data_loading import (
 from ra_sim.StructureFactor.AtomicCoordinates import get_Atomic_Coordinates
 from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction import process_peaks_parallel, dump_debug_log
+from ra_sim.simulation.diffraction import process_peaks_parallel
 
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
@@ -1741,6 +1741,8 @@ def run_debug_simulation():
     Run the debug version of the simulation with current slider/parameter values,
     then dump the debug log.
     """
+    from ra_sim.simulation.diffraction_debug import process_peaks_parallel_debug, dump_debug_log
+
     # 1) Gather the current GUI slider values
     gamma_val  = gamma_var.get()
     Gamma_val  = Gamma_var.get()
@@ -1774,9 +1776,9 @@ def run_debug_simulation():
 
     # 2) Create a fresh buffer for the simulation
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-    debug_array = initialize_debug_arrays()
+
     # 3) Run the debug version of the parallel code
-    image_out, maxpos, qdata, qcount = process_peaks_parallel(
+    image_out, maxpos, qdata, qcount = process_peaks_parallel_debug(
         miller,
         intensities,
         image_size,
@@ -1811,9 +1813,6 @@ def run_debug_simulation():
         np.array([0.0, 1.0, 0.0]),
         save_flag=0   # or 1 if you also want Q-data,
     )
-
-    # 4) Dump the debug log to ~/Downloads/ewald_debug_log.txt
-    dump_debug_log()
 
     # 5) Update a GUI label to inform the user
     progress_label.config(text="Debug simulation complete. Log saved.")
