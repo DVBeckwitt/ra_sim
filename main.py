@@ -1,3 +1,4 @@
+# ==================== main.py ====================
 import numpy as np
 import sympy as sp
 import matplotlib
@@ -453,7 +454,6 @@ last_1d_integration_data = {
 last_res2_background = None
 last_res2_sim = None
 
-
 def update_mosaic_cache():
     """
     Rebuild random mosaic profiles if mosaic sliders changed.
@@ -465,34 +465,21 @@ def update_mosaic_cache():
 
     (beam_x_array,
      beam_y_array,
-     beam_intensity_array,
-     beta_array,
-     kappa_array,
-     mosaic_intensity_array,
      theta_array,
      phi_array,
-     divergence_intensity_array,
      wavelength_array) = generate_random_profiles(
          num_samples=num_samples,
          divergence_sigma=divergence_sigma,
          bw_sigma=bw_sigma,
-         sigma_mosaic_deg=sigma_mosaic_deg,
-         gamma_mosaic_deg=gamma_mosaic_deg,
-         eta=eta_val,
          lambda0=lambda_,     # nominal wavelength (Å)
-         Bandwidth=bandwidth  # e.g. 0.007 for ±0.7%
+         bandwidth=bandwidth  # e.g. 0.007 for ±0.7%
      )
 
     profile_cache = {
         "beam_x_array": beam_x_array,
         "beam_y_array": beam_y_array,
-        "beam_intensity_array": beam_intensity_array,
-        "beta_array": beta_array,
-        "kappa_array": kappa_array,
-        "mosaic_intensity_array": mosaic_intensity_array,
         "theta_array": theta_array,
         "phi_array": phi_array,
-        "divergence_intensity_array": divergence_intensity_array,
         "wavelength_array": wavelength_array,  # store new bandpass array
         "sigma_mosaic_deg": sigma_mosaic_deg,
         "gamma_mosaic_deg": gamma_mosaic_deg,
@@ -647,20 +634,22 @@ def do_update():
     update_pending = None
 
     # ---------------------------------------------------------------------
-    # Retrieve current slider/parameter values
-    gamma_updated      = gamma_var.get()
-    Gamma_updated      = Gamma_var.get()
-    chi_updated        = chi_var.get()
-    zs_updated         = zs_var.get()
-    zb_updated         = zb_var.get()
-    a_updated          = a_var.get()
-    c_updated          = c_var.get()
-    theta_init_up      = theta_initial_var.get()
-    debye_x_updated    = debye_x_var.get()
-    debye_y_updated    = debye_y_var.get()
-    corto_det_up       = corto_detector_var.get()
-    center_x_up        = center_x_var.get()
-    center_y_up        = center_y_var.get()
+    # Retrieve current slider/parameter values and cast to float
+    # so that Numba's np.radians(...) doesn't see a Python list
+    # ---------------------------------------------------------------------
+    gamma_updated      = float(gamma_var.get())
+    Gamma_updated      = float(Gamma_var.get())
+    chi_updated        = float(chi_var.get())
+    zs_updated         = float(zs_var.get())
+    zb_updated         = float(zb_var.get())
+    a_updated          = float(a_var.get())
+    c_updated          = float(c_var.get())
+    theta_init_up      = float(theta_initial_var.get())
+    debye_x_updated    = float(debye_x_var.get())
+    debye_y_updated    = float(debye_y_var.get())
+    corto_det_up       = float(corto_detector_var.get())
+    center_x_up        = float(center_x_var.get())
+    center_y_up        = float(center_y_var.get())
 
     # Update beam center marker on the main image display
     center_marker.set_xdata([center_y_up])
@@ -687,6 +676,7 @@ def do_update():
 
     # ---------------------------------------------------------------------
     # Check if simulation parameters have changed; if so, re-run simulation
+    # ---------------------------------------------------------------------
     new_sim_sig = get_sim_signature(
         gamma_updated, Gamma_updated, chi_updated,
         zs_updated, zb_updated, debye_x_updated, debye_y_updated,
@@ -704,7 +694,7 @@ def do_update():
         # Create a new simulation buffer image and update using the peak processing routine
         sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
-        # Now we pass mosaic_params["wavelength_i_array"] into process_peaks_parallel
+        # Pass mosaic_params["wavelength_i_array"] into process_peaks_parallel
         updated_image, max_positions_local, _, _ = process_peaks_parallel(
             miller, intensities, image_size,
             a_updated, c_updated, lambda_, sim_buffer, corto_det_up,
@@ -712,13 +702,11 @@ def do_update():
             zs_updated, zb_updated, n2,
             mosaic_params["beam_x_array"],
             mosaic_params["beam_y_array"],
-            mosaic_params["beam_i_array"],
-            mosaic_params["beta_array"],
-            mosaic_params["kappa_array"],
-            mosaic_params["mosaic_i_array"],
             mosaic_params["theta_array"],
             mosaic_params["phi_array"],
-            mosaic_params["div_i_array"],
+            mosaic_params["sigma_mosaic_deg"],
+            mosaic_params["gamma_mosaic_deg"],
+            mosaic_params["eta"],
             mosaic_params["wavelength_i_array"],  # <--- pass the array
             debye_x_updated, debye_y_updated,
             [center_x_up, center_y_up],
@@ -742,6 +730,7 @@ def do_update():
 
     # ---------------------------------------------------------------------
     # Update main simulation image display using normalization relative to background
+    # ---------------------------------------------------------------------
     disp_image = scale_image_for_display(unscaled_image_global)
     global_image_buffer[:] = disp_image
     image_display.set_clim(vmin=0, vmax=vmax_var.get())
@@ -764,6 +753,7 @@ def do_update():
 
     # ---------------------------------------------------------------------
     # Set up pyFAI integrator for caking (2D integration)
+    # ---------------------------------------------------------------------
     ai = pyFAI.integrator.azimuthal.AzimuthalIntegrator(
         dist=corto_det_up,
         poni1=center_x_up * 100e-6,
@@ -944,6 +934,7 @@ def do_update():
 
         # -------------------------------
         # 2D Caked Display: Overlay simulation and background images
+        # -------------------------------
         if show_caked_2d_var.get():
             sim_alpha = 0.5 if background_visible else 1.0
             ax.clear()
@@ -1024,7 +1015,6 @@ def do_update():
         ax.set_ylim(center_default[0], 0)
         ax.set_title("Original Image")
         canvas.draw_idle()
-
 
 # --------------------------
 # Create mosaic-based sliders
@@ -1574,14 +1564,12 @@ def save_q_space_representation():
         n2,
         mosaic_params["beam_x_array"],
         mosaic_params["beam_y_array"],
-        mosaic_params["beam_i_array"],
-        mosaic_params["beta_array"],
-        mosaic_params["kappa_array"],
-        mosaic_params["mosaic_i_array"],
         mosaic_params["theta_array"],
         mosaic_params["phi_array"],
-        mosaic_params["div_i_array"],
-        mosaic_params["wavelength_i_array"],  # pass bandpass array
+        mosaic_params["sigma_mosaic_deg"],
+        mosaic_params["gamma_mosaic_deg"],
+        mosaic_params["eta"],
+        mosaic_params["wavelength_i_array"],  # <--- pass the array
         debye_x_var.get(),
         debye_y_var.get(),
         [center_x_var.get(), center_y_var.get()],
@@ -1629,35 +1617,30 @@ def run_debug_simulation():
     """
     from ra_sim.simulation.diffraction_debug import process_peaks_parallel_debug, dump_debug_log
 
-    # 1) Gather current GUI slider values
-    gamma_val  = gamma_var.get()
-    Gamma_val  = Gamma_var.get()
-    chi_val    = chi_var.get()
-    zs_val     = zs_var.get()
-    zb_val     = zb_var.get()
-    a_val      = a_var.get()
-    c_val      = c_var.get()
-    theta_val  = theta_initial_var.get()
-    debye_x_val= debye_x_var.get()
-    debye_y_val= debye_y_var.get()
-    corto_val  = corto_detector_var.get()
-    center_x_val = center_x_var.get()
-    center_y_val = center_y_var.get()
+    # 1) Gather current GUI slider values, cast to float
+    gamma_val   = float(gamma_var.get())
+    Gamma_val   = float(Gamma_var.get())
+    chi_val     = float(chi_var.get())
+    zs_val      = float(zs_var.get())
+    zb_val      = float(zb_var.get())
+    a_val       = float(a_var.get())
+    c_val       = float(c_var.get())
+    theta_val   = float(theta_initial_var.get())
+    debye_x_val = float(debye_x_var.get())
+    debye_y_val = float(debye_y_var.get())
+    corto_val   = float(corto_detector_var.get())
+    center_x_val= float(center_x_var.get())
+    center_y_val= float(center_y_var.get())
 
     mosaic_params = {
         "beam_x_array":     profile_cache.get("beam_x_array", []),
         "beam_y_array":     profile_cache.get("beam_y_array", []),
-        "beam_i_array":     profile_cache.get("beam_intensity_array", []),
-        "beta_array":       profile_cache.get("beta_array", []),
-        "kappa_array":      profile_cache.get("kappa_array", []),
-        "mosaic_i_array":   profile_cache.get("mosaic_intensity_array", []),
         "theta_array":      profile_cache.get("theta_array", []),
         "phi_array":        profile_cache.get("phi_array", []),
-        "div_i_array":      profile_cache.get("divergence_intensity_array", []),
-        "wavelength_i_array": profile_cache.get("wavelength_array", []),
         "sigma_mosaic_deg": sigma_mosaic_var.get(),
         "gamma_mosaic_deg": gamma_mosaic_var.get(),
-        "eta":              eta_var.get()
+        "eta":              eta_var.get(),
+        "wave_i_array":     profile_cache.get("wavelength_array", [])
     }
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
