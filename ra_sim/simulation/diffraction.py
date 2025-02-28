@@ -263,6 +263,7 @@ def calculate_phi(
         # 3) intersect incoming beam with sample plane
         P0_rot = R_x @ P0
         P0_rot[0] = 0.0
+        
         I_plane, t_plane = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
         if I_plane is None or t_plane < 0.0:
             continue
