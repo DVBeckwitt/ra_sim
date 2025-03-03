@@ -89,7 +89,7 @@ center_default = [
 ]
 
 mx = 19
-num_samples = 5000
+num_samples = 1000
 
 av = 4.14
 bv = av
@@ -717,14 +717,25 @@ def do_update():
         # For each Miller index, record peak positions (if detected)
         for i, (H, K, L) in enumerate(miller):
             mx0, my0, mv0, mx1, my1, mv1 = max_positions_local[i, :]
-            if not np.isnan(mx0) and not np.isnan(my0):
+            if np.isfinite(mx0) and np.isfinite(my0):
                 peak_positions.append((int(round(mx0)), int(round(my0))))
                 peak_intensities.append(mv0)
                 peak_millers.append((H, K, L))
-            if not np.isnan(mx1) and not np.isnan(my1):
+            else:
+                # Use a sentinel (e.g., (-1,-1)) if invalid
+                peak_positions.append((-1, -1))
+                peak_intensities.append(mv0)
+                peak_millers.append((H, K, L))
+                
+            if np.isfinite(mx1) and np.isfinite(my1):
                 peak_positions.append((int(round(mx1)), int(round(my1))))
                 peak_intensities.append(mv1)
                 peak_millers.append((H, K, L))
+            else:
+                peak_positions.append((-1, -1))
+                peak_intensities.append(mv1)
+                peak_millers.append((H, K, L))
+
 
         unscaled_image_global = updated_image
 
