@@ -2,82 +2,153 @@ import numpy as np
 from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp
 
-@njit
-def binary_search(cdf, target):
-    """
-    Returns the index where target <= cdf[index] using binary search.
-    """
-    lo = 0
-    hi = cdf.size - 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if cdf[mid] < target:
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return lo
+import numpy as np
+from numba import njit
 
 @njit
-def sample_mosaic_angles_combined(eta, sigma_rad, gamma_rad, N=100, grid_points=1000):
+def pseudo_voigt_1d(r, eta, sigma, gamma):
     """
-    Combined function that computes mosaic constants, evaluates the 2D pseudo-Voigt
-    profile on a grid of angles, and samples N mosaic angles. All angles are in radians.
+    Returns the value of the 1D pseudo-Voigt function at radius r:
+        f(r) = (1 - eta)*Gauss(r) + eta*Lorentz(r)
 
-    Parameters:
-      eta       : weight for the Lorentzian part.
-      sigma_rad : Gaussian sigma in radians.
-      gamma_rad : Lorentzian half-width in radians.
-      N         : number of mosaic angles to sample.
-      grid_points: number of points for discretizing the distribution.
+    where:
+      Gauss(r) = (1 / (sqrt(2*pi)*sigma)) * exp(-r^2/(2*sigma^2))
+      Lorentz(r) = (1/pi) * [ gamma / (r^2 + gamma^2) ]
 
+    Note: 'sigma' and 'gamma' are interpreted as the 'width' parameters
+          for the Gaussian and Lorentzian, respectively.
+    """
+    # Gaussian part
+    gauss = (1.0 / (np.sqrt(2.0*np.pi)*sigma)) * np.exp(-0.5*(r*r)/(sigma*sigma))
+    # Lorentzian part
+    lorentz = (1.0/np.pi) * (gamma / (r*r + gamma*gamma))
+
+    return (1.0 - eta)*gauss + eta*lorentz
+
+import numpy as np
+from numba import njit
+from math import sin, cos, sqrt, pi, exp
+
+@njit
+def pseudo_voigt_1d(r, eta, sigma, gamma):
+    """
+    Returns the value of the 1D pseudo-Voigt function at radius r:
+        f(r) = (1 - eta)*Gauss(r) + eta*Lorentz(r)
+    where:
+      Gauss(r) = (1 / (sqrt(2*pi)*sigma)) * exp(-r^2/(2*sigma^2))
+      Lorentz(r) = (1/pi) * (gamma / (r^2 + gamma^2))
+    """
+    gauss = (1.0 / (sqrt(2.0*pi)*sigma)) * exp(-0.5*(r*r)/(sigma*sigma))
+    lorentz = (1.0/pi) * (gamma / (r*r + gamma*gamma))
+    return (1.0 - eta)*gauss + eta*lorentz
+
+@njit
+def sample_mosaic_angles_separable(eta, sigma_rad, gamma_rad, N=10000, grid_points=100000):
+    """
+    Samples (beta, kappa) pairs from a radially symmetric pseudo-Voigt:
+       f(r) = (1-eta)*Gauss(r) + eta*Lorentz(r),  with  r = sqrt(beta^2 + kappa^2).
+
+    Steps:
+      1) Build an r-grid up to ~5*(max(sigma_rad, gamma_rad)).
+      2) Compute the PDF in radial form: p(r) = 2*pi*r * f(r).
+      3) Construct the cumulative distribution (CDF).
+      4) For each sample:
+         - Draw u ~ Uniform(0,1) and invert the CDF to find r_i.
+         - Draw phi ~ Uniform(0,2*pi).
+         - Set beta = r_i*cos(phi) and kappa = r_i*sin(phi).
+         - Compute the corresponding rotation matrices:
+               R_x(beta) = [[1,      0,       0],
+                            [0, cos(beta), -sin(beta)],
+                            [0, sin(beta),  cos(beta)]]
+               R_y(kappa)= [[ cos(kappa), 0, sin(kappa)],
+                            [     0,      1,     0     ],
+                            [-sin(kappa), 0, cos(kappa)]]
+         - Overall rotation: R = R_y @ R_x.
     Returns:
-      samples : array of N sampled mosaic angles in radians.
+      beta_samples (N,), kappa_samples (N,), and R_out (N,3,3)
     """
-    # Calculate pseudo-Voigt constants
-    G2D_const = 1.0 / (2.0 * pi * sigma_rad * sigma_rad)
-    G2D_exp   = 1.0 / (2.0 * sigma_rad * sigma_rad)
-    L2D_const = 1.0 / (2.0 * pi)
+    # 1) Define maximum radius and grid spacing.
+    r_max = 5.0 * max(sigma_rad, gamma_rad)
+    dr = r_max / (grid_points - 1)
     
-    # Determine the grid maximum (10× the larger of sigma_rad or gamma_rad)
-    max_alpha = 10.0 * (sigma_rad if sigma_rad > gamma_rad else gamma_rad)
-    grid = np.linspace(0.0, max_alpha, grid_points)
-    
-    # Evaluate the pseudo-Voigt PDF on the grid
+    # 2) Build the radial grid and compute PDF
+    r_vals = np.linspace(0.0, r_max, grid_points)
     pdf = np.empty(grid_points, dtype=np.float64)
-    total = 0.0
     for i in range(grid_points):
-        alpha = grid[i]
-        r = sqrt(2.0) * abs(alpha)
-        g_val = G2D_const * exp(-r*r * G2D_exp)
-        denom = (r*r + gamma_rad*gamma_rad)**1.5
-        l_val = L2D_const * (gamma_rad / denom)
-        val = (1.0 - eta) * g_val + eta * l_val
-        pdf[i] = val
-        total += val
+        r = r_vals[i]
+        f_r = pseudo_voigt_1d(r, eta, sigma_rad, gamma_rad)
+        pdf[i] = 2.0 * pi * r * f_r  # Include 2*pi*r for 2D polar integration
 
-    # Normalize the PDF so that the sum equals 1
-    for i in range(grid_points):
-        pdf[i] /= total
-
-    # Compute the cumulative distribution function (CDF)
+    # 3) Build the CDF using a trapezoidal sum
     cdf = np.empty(grid_points, dtype=np.float64)
-    cdf[0] = pdf[0]
+    cdf[0] = pdf[0] * dr
     for i in range(1, grid_points):
-        cdf[i] = cdf[i-1] + pdf[i]
+        cdf[i] = cdf[i-1] + 0.5*(pdf[i] + pdf[i-1]) * dr
+    # Normalize CDF
+    total = cdf[grid_points - 1]
+    for i in range(grid_points):
+        cdf[i] /= total
 
-    # Sample N angles using the CDF and binary search
-    samples = np.empty(N, dtype=np.float64)
+    # Allocate arrays for beta, kappa and rotation matrices.
+    beta_samples = np.empty(N, dtype=np.float64)
+    kappa_samples = np.empty(N, dtype=np.float64)
+    R_out = np.empty((N, 3, 3), dtype=np.float64)
+    
+    # 4) For each sample, sample r and phi, then compute beta, kappa and R.
     for i in range(N):
-        rnd = np.random.random()
-        idx = binary_search(cdf, rnd)
-        sample_val = grid[idx]
-        # Randomly assign a positive or negative sign for symmetry about zero
-        if np.random.random() > 0.5:
-            samples[i] = sample_val
+        # Sample radius using inverse CDF (binary search)
+        u = np.random.random()
+        left = 0
+        right = grid_points - 1
+        while right - left > 1:
+            mid = (left + right) // 2
+            if cdf[mid] >= u:
+                right = mid
+            else:
+                left = mid
+        if left == right:
+            r_sample = r_vals[left]
         else:
-            samples[i] = -sample_val
+            denom = cdf[right] - cdf[left]
+            if denom < 1e-14:
+                r_sample = r_vals[left]
+            else:
+                t = (u - cdf[left]) / denom
+                r_sample = r_vals[left] + t*(r_vals[right] - r_vals[left])
+                
+        # Sample angle uniformly in [0, 2*pi)
+        phi = 2.0 * pi * np.random.random()
+        
+        # Compute mosaic angles beta and kappa
+        beta_samples[i] = r_sample * cos(phi)
+        kappa_samples[i] = r_sample * sin(phi)
+        
+        # Compute rotation matrices for each sample.
+        beta = beta_samples[i]
+        kappa = kappa_samples[i]
+        
+        # R_x(beta)
+        cosb = cos(beta)
+        sinb = sin(beta)
+        R_x = np.empty((3, 3), dtype=np.float64)
+        R_x[0, 0] = 1.0;  R_x[0, 1] = 0.0;   R_x[0, 2] = 0.0
+        R_x[1, 0] = 0.0;  R_x[1, 1] = cosb;  R_x[1, 2] = -sinb
+        R_x[2, 0] = 0.0;  R_x[2, 1] = sinb;  R_x[2, 2] = cosb
+        
+        # R_y(kappa)
+        cosk = cos(kappa)
+        sink = sin(kappa)
+        R_y = np.empty((3, 3), dtype=np.float64)
+        R_y[0, 0] = cosk;  R_y[0, 1] = 0.0;  R_y[0, 2] = sink
+        R_y[1, 0] = 0.0;   R_y[1, 1] = 1.0;  R_y[1, 2] = 0.0
+        R_y[2, 0] = -sink; R_y[2, 1] = 0.0;  R_y[2, 2] = cosk
+        
+        # Overall rotation R = R_y @ R_x
+        # (Using np.dot for compatibility within Numba.)
+        R = np.dot(R_y, R_x)
+        R_out[i, :, :] = R
 
-    return samples
+    return  R_out
 
 
 @njit
@@ -146,55 +217,75 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
 
     return intersects, valid
 
-import numpy as np
-from numba import njit
-
 @njit
-def solve_q(k_in, k, gz0, gr0, G,mos_sampling, eps=1e-14):
+def solve_q(k_in, k, gz0, gr0, G, R, eps=1e-14):
     """
-    Returns an array of shape (num_steps, 2, 3) with
-    positive and negative (qx, qy, qz) solutions for each gz.
-
-    Parameters
-    ----------
-    k_in : tuple or list of float
-        (k_x, k_y, k_z) wavevector components.
-    k : float
-        Magnitude of the wavevector.
-    gz0 : float
-        Initial/maximum gz value for stepping.
-    gr0 : float
-        Some radial parameter gr0 used in solution calculation.
-    G : float
-        The magnitude sqrt(gr0^2 + gz0^2).
-    num_steps : int, optional
-        Number of discretized steps from 0 to gz0. Default 100.
-    eps : float, optional
-        Tolerance for ignoring negative or near-zero discriminant. Default 1e-14.
-
-    Returns
-    -------
-    solutions : numpy.ndarray
-        Shape (num_steps, 2, 3), where for each step `idx`:
-        - solutions[idx, 0, :] = (qx_positive, qy_positive, gz)
-        - solutions[idx, 1, :] = (qx_negative, qy_negative, gz)
+    Returns an array of shape (N, 2, 3) with positive and negative (qx, qy, qz)
+    solutions for each mosaic sample, where N = beta_samples.size.
+    
+    Here the ideal mosaic vector is defined as G_ideal = [0, gr0, gz0].
+    We form the overall rotation by applying:
+    
+         R = R_y(kappa) @ R_x(beta)
+         
+    where
+         R_x(beta) = [[1,      0,       0],
+                      [0, cos(beta), -sin(beta)],
+                      [0, sin(beta),  cos(beta)]]
+    
+         R_y(kappa) = [[ cos(kappa), 0, sin(kappa)],
+                      [     0,      1,     0     ],
+                      [-sin(kappa), 0, cos(kappa)]]
+    
+    Then, the rotated mosaic vector is:
+    
+         G_rot = R_y(kappa) @ R_x(beta) @ G_ideal.
+         
+    We then extract:
+         gr = sqrt((G_rot[0])^2 + (G_rot[1])^2)
+         gz = G_rot[2]
+         
+    These gr and gz are then used in the q-solution formulas.
     """
     k_x, k_y, k_z = k_in
+    N_samples = R.shape[0]
+    solutions = np.zeros((N_samples, 2, 3), dtype=np.float64)
     
-    # Compute arrays for gz and gr from mosaic sampling
-    gz_arr = gr0 * np.cos(mos_sampling) - gz0 * np.sin(mos_sampling)
-    gr_arr = gr0 * np.sin(mos_sampling) + gz0 * np.cos(mos_sampling)
-    
-    solutions = np.zeros((gz_arr.size, 2, 3), dtype=np.float64)
-    
-    for idx in range(gz_arr.size):
-        gz = gz_arr[idx]
-        gr = gr_arr[idx]
-        qx_positive =  (-k_x*(gr**2 + gz**2 + 2*gz*k_z - k**2 + k_x**2 + k_y**2 + k_z**2) - k_y*sqrt(-gr**4 - 2*gr**2*gz**2 - 4*gr**2*gz*k_z + 2*gr**2*k**2 + 2*gr**2*k_x**2 + 2*gr**2*k_y**2 - 2*gr**2*k_z**2 - gz**4 - 4*gz**3*k_z + 2*gz**2*k**2 - 2*gz**2*k_x**2 - 2*gz**2*k_y**2 - 6*gz**2*k_z**2 + 4*gz*k**2*k_z - 4*gz*k_x**2*k_z - 4*gz*k_y**2*k_z - 4*gz*k_z**3 - k**4 + 2*k**2*k_x**2 + 2*k**2*k_y**2 + 2*k**2*k_z**2 - k_x**4 - 2*k_x**2*k_y**2 - 2*k_x**2*k_z**2 - k_y**4 - 2*k_y**2*k_z**2 - k_z**4))/(2*(k_x**2 + k_y**2))
-        qy_positive =  (-gr**2 - gz**2 - 2*gz*k_z + k**2 - k_x**2 - 2*k_x*qx_positive - k_y**2 - k_z**2)/(2*k_y)
-        qx_negative =  (-k_x*(gr**2 + gz**2 + 2*gz*k_z - k**2 + k_x**2 + k_y**2 + k_z**2) + k_y*sqrt(-gr**4 - 2*gr**2*gz**2 - 4*gr**2*gz*k_z + 2*gr**2*k**2 + 2*gr**2*k_x**2 + 2*gr**2*k_y**2 - 2*gr**2*k_z**2 - gz**4 - 4*gz**3*k_z + 2*gz**2*k**2 - 2*gz**2*k_x**2 - 2*gz**2*k_y**2 - 6*gz**2*k_z**2 + 4*gz*k**2*k_z - 4*gz*k_x**2*k_z - 4*gz*k_y**2*k_z - 4*gz*k_z**3 - k**4 + 2*k**2*k_x**2 + 2*k**2*k_y**2 + 2*k**2*k_z**2 - k_x**4 - 2*k_x**2*k_y**2 - 2*k_x**2*k_z**2 - k_y**4 - 2*k_y**2*k_z**2 - k_z**4))/(2*(k_x**2 + k_y**2))
-        qy_negative =  (-gr**2 - gz**2 - 2*gz*k_z + k**2 - k_x**2 - 2*k_x*qx_negative - k_y**2 - k_z**2)/(2*k_y)
+    # Ideal mosaic vector (assumed to be along y for the in-plane component)
+    G_ideal = np.array([0.0, gr0, gz0])
 
+    k_x_sq = k_x*k_x
+    k_y_sq = k_y*k_y
+    k_z_sq = k_z*k_z
+    k_sq = k*k
+    k_r_squared = (k_x*k_x + k_y*k_y)
+    # Loop over each mosaic sample.
+    for idx in range(N_samples):
+
+        # Rotate G_ideal.
+        G_rot0 = R[idx, 0, 0]*G_ideal[0] + R[idx, 0, 1]*G_ideal[1] + R[idx, 0, 2]*G_ideal[2]
+        G_rot1 = R[idx, 1, 0]*G_ideal[0] + R[idx, 1, 1]*G_ideal[1] + R[idx, 1, 2]*G_ideal[2]
+        G_rot2 = R[idx, 2, 0]*G_ideal[0] + R[idx, 2, 1]*G_ideal[1] + R[idx, 2, 2]*G_ideal[2]
+
+        # Extract new in-plane (gr) and vertical (gz) components.
+        gr = sqrt(G_rot0*G_rot0 + G_rot1*G_rot1)
+        gz = G_rot2
+        gz_sq = gz*gz
+        gr_sq = gr*gr
+        
+        term1 = -k_x*(gr_sq + gz_sq + 2*gz*k_z - k_sq + k_x_sq + k_y_sq + k_z_sq)
+        term2 = k_y*sqrt(-gr**4 - 2*gr_sq*gz_sq - 4*gr_sq*gz*k_z + 2*gr_sq*k_sq + 2*gr_sq*k_x_sq + 2*gr_sq*k_y_sq - 2*gr_sq*k_z_sq - gz**4 - 4*gz**3*k_z + 2*gz_sq*k_sq - 2*gz_sq*k_x_sq - 2*gz_sq*k_y_sq - 6*gz_sq*k_z_sq + 4*gz*k_sq*k_z - 4*gz*k_x_sq*k_z - 4*gz*k_y_sq*k_z - 4*gz*k_z**3 - k**4 + 2*k_sq*k_x_sq + 2*k_sq*k_y_sq + 2*k_sq*k_z_sq - k_x**4 - 2*k_x_sq*k_y_sq - 2*k_x_sq*k_z_sq - k_y**4 - 2*k_y_sq*k_z_sq - k_z**4)
+        
+        qy_term1 = -gr_sq - gz_sq - 2*gz*k_z + k_sq - k_x_sq - k_y_sq - k_z_sq
+        
+        qx_bottom = (2*(k_r_squared))
+        qy_bottom = (2*k_y)
+        qx_positive =   (term1 - term2)/ qx_bottom
+        qx_negative =  (term1 + term2)/qx_bottom
+
+        qy_positive =  (qy_term1 - 2*k_x * qx_positive )/qy_bottom
+        qy_negative =  (qy_term1 - 2*k_x * qx_negative )/qy_bottom
+        
         solutions[idx, 0, 0] = qx_positive
         solutions[idx, 0, 1] = qy_positive
         solutions[idx, 0, 2] = gz
@@ -214,7 +305,7 @@ def calculate_phi(
     beam_x_array, beam_y_array,
     theta_array, phi_array,
     reflection_intensity,
-    mos_sampling,
+    Mosaic_Rotation,
     debye_x, debye_y,
     center,
     theta_initial_deg,
@@ -240,6 +331,8 @@ def calculate_phi(
     gz0 = 2.0*np.pi * (L/cv)
     gr0 = 4.0*np.pi/av * sqrt((H*H + H*K + K*K)/3.0)
     G = np.sqrt(gr0**2 + gz0**2)
+    n2 = 1
+    
     # Track maximum intensities
     max_I_sign0 = -1.0
     max_x_sign0 = np.nan
@@ -267,8 +360,6 @@ def calculate_phi(
     P0_rot = R_sample @ P0
     P0_rot[0] = 0 
     
-    row_center = center[0]
-    col_center = center[1]
     n_samp = beam_x_array.size
 
     # Build coordinate axes e1_temp, e2_temp on sample surface
@@ -354,7 +445,7 @@ def calculate_phi(
 
         # Solve for q
         k_in_crystal = np.array([k_x_scat, k_y_scat, k_z_scat])
-        All_Q = solve_q(k_in_crystal, k_scat, gz0, gr0, G,mos_sampling)
+        All_Q = solve_q(k_in_crystal, k_scat, gz0, gr0, G, Mosaic_Rotation)
         All_Q_flat = All_Q.reshape((-1, 3))  # => shape (2*num_steps,3)
 
         # For each solution i_sol, compute final wave, intersect with detector
@@ -432,7 +523,6 @@ def calculate_phi(
                 q_data[i_peaks_index, idx, 2] = Qz
                 q_data[i_peaks_index, idx, 3] = val
                 # mosaic angle => i_sol//2
-                q_data[i_peaks_index, idx, 4] = mos_sampling[i_sol // 2]
                 q_count[i_peaks_index] += 1
 
     return (
@@ -472,8 +562,7 @@ def process_peaks_parallel(
     sigma_rad = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
 
-
-    mos_sampling = sample_mosaic_angles_combined(eta_pv, sigma_rad, gamma_rad, N=100, grid_points=1000)
+    Mosaic_Rotation = sample_mosaic_angles_separable(eta_pv, sigma_rad, gamma_rad_m, N=2000, grid_points=10000)
 
     # Detector-plane transformations
     cg = cos(gamma_rad); sg = sin(gamma_rad)
@@ -575,7 +664,7 @@ def process_peaks_parallel(
             zs, zb, n2,
             beam_x_array, beam_y_array,
             theta_array, phi_array,
-            reflI,mos_sampling,
+            reflI,Mosaic_Rotation,
             debye_x, debye_y,
             center,
             theta_initial_deg,
