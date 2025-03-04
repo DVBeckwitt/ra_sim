@@ -88,7 +88,7 @@ center_default = [
 ]
 
 mx = 19
-num_samples = 1000
+num_samples = 100
 
 av = 4.14
 bv = av
@@ -1058,10 +1058,11 @@ def save_q_space_representation():
         "theta_array":  profile_cache.get("theta_array", []),
         "phi_array":    profile_cache.get("phi_array", []),
         "wavelength_i_array": profile_cache.get("wavelength_array", []),
-        "sigma_mosaic_deg": sigma_mosaic_var.get(),
-        "gamma_mosaic_deg": gamma_mosaic_var.get(),
-        "eta": eta_var.get()
+        "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
+        "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
+        "eta": profile_cache.get("eta", 0.0)
     }
+
 
     image_result, max_positions_local, q_data, q_count = process_peaks_parallel(
         miller,
@@ -1122,14 +1123,14 @@ save_1d_grid_button = ttk.Button(
     command=save_1d_permutations
 )
 save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
-
 def run_debug_simulation():
     """
-    Run the debug version of the simulation with current slider/param values,
+    Run the debug version of the simulation with current slider/parameter values,
     then dump the debug log to CSV.
     """
     from ra_sim.simulation.diffraction_debug import process_peaks_parallel_debug, dump_debug_log
 
+    # Get current parameter values from the sliders
     gamma_val = float(gamma_var.get())
     Gamma_val = float(Gamma_var.get())
     chi_val   = float(chi_var.get())
@@ -1144,17 +1145,22 @@ def run_debug_simulation():
     cx_val    = float(center_x_var.get())
     cy_val    = float(center_y_var.get())
 
+    # Build mosaic_params including all necessary keys
     mosaic_params = {
         "beam_x_array": profile_cache.get("beam_x_array", []),
         "beam_y_array": profile_cache.get("beam_y_array", []),
         "theta_array":  profile_cache.get("theta_array", []),
         "phi_array":    profile_cache.get("phi_array", []),
-        "wavelength_i_array": profile_cache.get("wavelength_array", [])
+        "wavelength_i_array": profile_cache.get("wavelength_array", []),
+        "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
+        "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
+        "eta": profile_cache.get("eta", 0.0)
     }
 
+    # Create a simulation buffer
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
-    # In run_debug_simulation():
+    # Call the debug version of the peak processing function
     image_out, maxpos, qdata, qcount = process_peaks_parallel_debug(
         miller,
         intensities,
@@ -1175,9 +1181,9 @@ def run_debug_simulation():
         mosaic_params["beam_y_array"],
         mosaic_params["theta_array"],
         mosaic_params["phi_array"],
-        sigma_mosaic_var.get(),     # <-- mosaic sigma
-        gamma_mosaic_var.get(),     # <-- mosaic gamma
-        eta_var.get(),              # <-- mosaic eta
+        mosaic_params["sigma_mosaic_deg"],
+        mosaic_params["gamma_mosaic_deg"],
+        mosaic_params["eta"],
         mosaic_params["wavelength_i_array"],
         dx_val,
         dy_val,
@@ -1185,12 +1191,13 @@ def run_debug_simulation():
         theta_val,
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
-        save_flag=0
+        save_flag=1
     )
 
-
+    # Dump the debug log to CSV
     dump_debug_log()
     progress_label.config(text="Debug simulation complete. Log saved.")
+
 
 debug_button = ttk.Button(
     text="Run Debug Simulation",

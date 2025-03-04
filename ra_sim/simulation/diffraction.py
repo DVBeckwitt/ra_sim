@@ -150,6 +150,70 @@ def sample_mosaic_angles_separable(eta, sigma_rad, gamma_rad, N=10000, grid_poin
 
     return  R_out
 
+from numba import njit
+import numpy as np
+from math import sin, cos, sqrt, pi
+
+@njit
+def grid_mosaic_rotations(sigma_rad, gamma_rad, step_deg=0.1):
+    # Determine maximum misorientation (in radians)
+    r_max = 5.0 * (sigma_rad if sigma_rad >= gamma_rad else gamma_rad)
+    r_max_deg = r_max * 180.0 / pi
+
+    # Create grid arrays in degrees
+    beta_vals_deg = np.arange(-r_max_deg, r_max_deg + step_deg, step_deg)
+    kappa_vals_deg = np.arange(-r_max_deg, r_max_deg + step_deg, step_deg)
+    n_beta = beta_vals_deg.shape[0]
+    n_kappa = kappa_vals_deg.shape[0]
+
+    # First pass: count valid grid points (those within r_max, with beta, kappa converted to radians)
+    count = 0
+    for i in range(n_beta):
+        beta = beta_vals_deg[i] * pi / 180.0
+        for j in range(n_kappa):
+            kappa = kappa_vals_deg[j] * pi / 180.0
+            if sqrt(beta*beta + kappa*kappa) <= r_max:
+                count += 1
+
+    # Preallocate output arrays.
+    beta_grid = np.empty(count, dtype=np.float64)
+    kappa_grid = np.empty(count, dtype=np.float64)
+    rotations = np.empty((count, 3, 3), dtype=np.float64)
+
+    idx = 0
+    for i in range(n_beta):
+        beta_d = beta_vals_deg[i]
+        beta = beta_d * pi / 180.0
+        for j in range(n_kappa):
+            kappa_d = kappa_vals_deg[j]
+            kappa = kappa_d * pi / 180.0
+            if sqrt(beta*beta + kappa*kappa) <= r_max:
+                beta_grid[idx] = beta
+                kappa_grid[idx] = kappa
+
+                # Compute rotation matrix about x-axis, R_x(beta)
+                cosb = cos(beta)
+                sinb = sin(beta)
+                R_x = np.empty((3, 3), dtype=np.float64)
+                R_x[0, 0] = 1.0;  R_x[0, 1] = 0.0;  R_x[0, 2] = 0.0
+                R_x[1, 0] = 0.0;  R_x[1, 1] = cosb; R_x[1, 2] = -sinb
+                R_x[2, 0] = 0.0;  R_x[2, 1] = sinb; R_x[2, 2] = cosb
+
+                # Compute rotation matrix about y-axis, R_y(kappa)
+                cosk = cos(kappa)
+                sink = sin(kappa)
+                R_y = np.empty((3, 3), dtype=np.float64)
+                R_y[0, 0] = cosk;  R_y[0, 1] = 0.0;  R_y[0, 2] = sink
+                R_y[1, 0] = 0.0;   R_y[1, 1] = 1.0;  R_y[1, 2] = 0.0
+                R_y[2, 0] = -sink; R_y[2, 1] = 0.0;  R_y[2, 2] = cosk
+
+                # Overall rotation: R = R_y @ R_x (using np.dot)
+                R = np.dot(R_y, R_x)
+                rotations[idx, :, :] = R
+                idx += 1
+
+    return rotations
+
 
 @njit
 def intersect_line_plane(P0, k_vec, P_plane, n_plane):
@@ -253,12 +317,22 @@ def solve_q(k_in, k, gz0, gr0, G, R, eps=1e-14):
     
     # Ideal mosaic vector (assumed to be along y for the in-plane component)
     G_ideal = np.array([0.0, gr0, gz0])
+    if k_y <= 0:
+        solutions.fill(np.nan)
+        return solutions
 
+
+    
     k_x_sq = k_x*k_x
     k_y_sq = k_y*k_y
     k_z_sq = k_z*k_z
     k_sq = k*k
     k_r_squared = (k_x*k_x + k_y*k_y)
+    
+    if k_r_squared <= 0:
+        solutions.fill(np.nan)
+        return solutions
+    
     # Loop over each mosaic sample.
     for idx in range(N_samples):
 
@@ -272,9 +346,18 @@ def solve_q(k_in, k, gz0, gr0, G, R, eps=1e-14):
         gz = G_rot2
         gz_sq = gz*gz
         gr_sq = gr*gr
-        
+        sqrt_term = -gr**4 - 2*gr_sq*gz_sq - 4*gr_sq*gz*k_z + 2*gr_sq*k_sq + 2*gr_sq*k_x_sq + 2*gr_sq*k_y_sq - 2*gr_sq*k_z_sq - gz**4 - 4*gz**3*k_z + 2*gz_sq*k_sq - 2*gz_sq*k_x_sq - 2*gz_sq*k_y_sq - 6*gz_sq*k_z_sq + 4*gz*k_sq*k_z - 4*gz*k_x_sq*k_z - 4*gz*k_y_sq*k_z - 4*gz*k_z**3 - k**4 + 2*k_sq*k_x_sq + 2*k_sq*k_y_sq + 2*k_sq*k_z_sq - k_x**4 - 2*k_x_sq*k_y_sq - 2*k_x_sq*k_z_sq - k_y**4 - 2*k_y_sq*k_z_sq - k_z**4
+        if sqrt_term < 0:
+            solutions[idx, 0, 0] = np.nan
+            solutions[idx, 0, 1] = np.nan
+            solutions[idx, 0, 2] = np.nan
+            solutions[idx, 1, 0] = np.nan
+            solutions[idx, 1, 1] = np.nan
+            solutions[idx, 1, 2] = np.nan
+            return solutions
+            
         term1 = -k_x*(gr_sq + gz_sq + 2*gz*k_z - k_sq + k_x_sq + k_y_sq + k_z_sq)
-        term2 = k_y*sqrt(-gr**4 - 2*gr_sq*gz_sq - 4*gr_sq*gz*k_z + 2*gr_sq*k_sq + 2*gr_sq*k_x_sq + 2*gr_sq*k_y_sq - 2*gr_sq*k_z_sq - gz**4 - 4*gz**3*k_z + 2*gz_sq*k_sq - 2*gz_sq*k_x_sq - 2*gz_sq*k_y_sq - 6*gz_sq*k_z_sq + 4*gz*k_sq*k_z - 4*gz*k_x_sq*k_z - 4*gz*k_y_sq*k_z - 4*gz*k_z**3 - k**4 + 2*k_sq*k_x_sq + 2*k_sq*k_y_sq + 2*k_sq*k_z_sq - k_x**4 - 2*k_x_sq*k_y_sq - 2*k_x_sq*k_z_sq - k_y**4 - 2*k_y_sq*k_z_sq - k_z**4)
+        term2 = k_y*sqrt(sqrt_term)
         
         qy_term1 = -gr_sq - gz_sq - 2*gz*k_z + k_sq - k_x_sq - k_y_sq - k_z_sq
         
@@ -453,7 +536,8 @@ def calculate_phi(
             Qx = All_Q_flat[i_sol, 0]
             Qy = All_Q_flat[i_sol, 1]
             Qz = All_Q_flat[i_sol, 2]
-
+            if Qx is np.nan or Qy is np.nan or Qz is np.nan:
+                continue
             # Create the total scattered wave in lab
             k_tx_prime = Qx + k_x_scat
             k_ty_prime = Qy + k_y_scat
@@ -562,7 +646,7 @@ def process_peaks_parallel(
     sigma_rad = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
 
-    Mosaic_Rotation = sample_mosaic_angles_separable(eta_pv, sigma_rad, gamma_rad_m, N=2000, grid_points=10000)
+    Mosaic_Rotation = grid_mosaic_rotations(sigma_rad, gamma_rad_m)
 
     # Detector-plane transformations
     cg = cos(gamma_rad); sg = sin(gamma_rad)
