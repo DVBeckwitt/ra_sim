@@ -1,174 +1,175 @@
 import numpy as np
 from numba import njit, prange
-from math import sin, cos, sqrt, pi, exp
-
-import numpy as np
-from numba import njit
-
-@njit
-def pseudo_voigt_1d(r, eta, sigma, gamma):
-    """
-    Returns the value of the 1D pseudo-Voigt function at radius r:
-        f(r) = (1 - eta)*Gauss(r) + eta*Lorentz(r)
-
-    where:
-      Gauss(r) = (1 / (sqrt(2*pi)*sigma)) * exp(-r^2/(2*sigma^2))
-      Lorentz(r) = (1/pi) * [ gamma / (r^2 + gamma^2) ]
-
-    Note: 'sigma' and 'gamma' are interpreted as the 'width' parameters
-          for the Gaussian and Lorentzian, respectively.
-    """
-    # Gaussian part
-    gauss = (1.0 / (np.sqrt(2.0*np.pi)*sigma)) * np.exp(-0.5*(r*r)/(sigma*sigma))
-    # Lorentzian part
-    lorentz = (1.0/np.pi) * (gamma / (r*r + gamma*gamma))
-
-    return (1.0 - eta)*gauss + eta*lorentz
-
+from math import sin, cos, sqrt, pi, exp, acos
 import numpy as np
 from numba import njit
 from math import sin, cos, sqrt, pi, exp
 
 @njit
-def pseudo_voigt_1d(r, eta, sigma, gamma):
-    """
-    Returns the value of the 1D pseudo-Voigt function at radius r:
-        f(r) = (1 - eta)*Gauss(r) + eta*Lorentz(r)
-    where:
-      Gauss(r) = (1 / (sqrt(2*pi)*sigma)) * exp(-r^2/(2*sigma^2))
-      Lorentz(r) = (1/pi) * (gamma / (r^2 + gamma^2))
-    """
-    gauss = (1.0 / (sqrt(2.0*pi)*sigma)) * exp(-0.5*(r*r)/(sigma*sigma))
-    lorentz = (1.0/pi) * (gamma / (r*r + gamma*gamma))
-    return (1.0 - eta)*gauss + eta*lorentz
+def rotation_matrix_y_numba(theta):
+    """Return the 3×3 rotation matrix about the y-axis (Numba-friendly)."""
+    return np.array([
+        [cos(theta),  0.0, sin(theta)],
+        [0.0,         1.0, 0.0       ],
+        [-sin(theta), 0.0, cos(theta)]
+    ])
 
 @njit
-def sample_mosaic_angles_separable(eta, sigma_rad, gamma_rad, N=10000, grid_points=1e10):
+def rotation_matrix_z_numba(phi):
+    """Return the 3×3 rotation matrix about the z-axis (Numba-friendly)."""
+    return np.array([
+        [ cos(phi), -sin(phi), 0.0],
+        [ sin(phi),  cos(phi), 0.0],
+        [ 0.0,       0.0,      1.0]
+    ])
+
+@njit
+def rotate_G(G, sigma, N=100, M=100, n_phi=100):
     """
-    Samples (beta, kappa) pairs from a radially symmetric pseudo-Voigt:
-       f(r) = (1-eta)*Gauss(r) + eta*Lorentz(r),  with  r = sqrt(beta^2 + kappa^2).
+    Reproduces the exact logic of the old code to generate a big array of all
+    ring-points, base-points, original ring, and G itself.
 
-    Steps:
-      1) Build an r-grid up to ~5*(max(sigma_rad, gamma_rad)).
-      2) Compute the PDF in radial form: p(r) = 2*pi*r * f(r).
-      3) Construct the cumulative distribution (CDF).
-      4) For each sample:
-         - Draw u ~ Uniform(0,1) and invert the CDF to find r_i.
-         - Draw phi ~ Uniform(0,2*pi).
-         - Set beta = r_i*cos(phi) and kappa = r_i*sin(phi).
-         - Compute the corresponding rotation matrices:
-               R_x(beta) = [[1,      0,       0],
-                            [0, cos(beta), -sin(beta)],
-                            [0, sin(beta),  cos(beta)]]
-               R_y(kappa)= [[ cos(kappa), 0, sin(kappa)],
-                            [     0,      1,     0     ],
-                            [-sin(kappa), 0, cos(kappa)]]
-         - Overall rotation: R = R_y @ R_x.
-    Returns:
-      beta_samples (N,), kappa_samples (N,), and R_out (N,3,3)
+    Returns an array of shape:
+        (N*M*n_phi + N*M + n_phi + 1, 3)
+
+    Steps matching the old logic:
+      1) Sample theta ~ N(0, sigma)  [N total].
+      2) Sample phi_offsets ~ uniform in [0,2π)  [M total].
+      3) Define a fine phi_range ~ [0,2π]  [n_phi points, with endpoint=True].
+      4) Build rotation matrices, ring basis, etc.
+      5) Compute ring_points and base_points.
+      6) Flatten + concatenate with original_ring and single G.
     """
-    # 1) Define maximum radius and grid spacing.
-    r_max = 5.0 * max(sigma_rad, gamma_rad)
-    dr = r_max / (grid_points - 1)
-    
-    # 2) Build the radial grid and compute PDF
-    r_vals = np.linspace(0.0, r_max, grid_points)
-    pdf = np.empty(grid_points, dtype=np.float64)
-    for i in range(grid_points):
-        r = r_vals[i]
-        f_r = pseudo_voigt_1d(r, eta, sigma_rad, gamma_rad)
-        pdf[i] = 2.0 * pi * r * f_r  # Include 2*pi*r for 2D polar integration
+    # ------------------------------------------------------
+    # 1) Sample thetas from Gaussian, 2) phi_offsets uniform
+    # ------------------------------------------------------
+    theta_samples = np.random.normal(0.0, sigma, N)
 
-    # 3) Build the CDF using a trapezoidal sum
-    cdf = np.empty(grid_points, dtype=np.float64)
-    cdf[0] = pdf[0] * dr
-    for i in range(1, grid_points):
-        cdf[i] = cdf[i-1] + 0.5*(pdf[i] + pdf[i-1]) * dr
-    # Normalize CDF
-    total = cdf[grid_points - 1]
-    for i in range(grid_points):
-        cdf[i] /= total
+    # Manually build M offsets in [0,2π), ignoring endpoint:
+    phi_offsets = np.empty(M, dtype=np.float64)
+    for i in range(M):
+        phi_offsets[i] = 2.0*pi*i / M
 
-    # Allocate arrays for beta, kappa and rotation matrices.
-    beta_samples = np.empty(N, dtype=np.float64)
-    kappa_samples = np.empty(N, dtype=np.float64)
-    R_out = np.empty((N, 3, 3), dtype=np.float64)
-    
-    # 4) For each sample, sample r and phi, then compute beta, kappa and R.
+    # For the "fine ring" we do want to include endpoint => n_phi points from 0..2π:
+    # e.g. if n_phi=100, it includes the last point 2π exactly.
+    phi_range = np.empty(n_phi, dtype=np.float64)
+    if n_phi > 1:
+        step = 2.0*pi / (n_phi - 1)
+        for i in range(n_phi):
+            phi_range[i] = step * i
+    else:
+        # trivial case, just 1 point at 0.0
+        phi_range[0] = 0.0
+
+    # -------------------------------------
+    # 3) Precompute rotation matrices
+    # -------------------------------------
+    # R_y_all => shape (N, 3, 3)
+    R_y_all = np.empty((N, 3, 3), dtype=np.float64)
     for i in range(N):
-        # Sample radius using inverse CDF (binary search)
-        u = np.random.random()
-        left = 0
-        right = grid_points - 1
-        while right - left > 1:
-            mid = (left + right) // 2
-            if cdf[mid] >= u:
-                right = mid
-            else:
-                left = mid
-        if left == right:
-            r_sample = r_vals[left]
-        else:
-            denom = cdf[right] - cdf[left]
-            if denom < 1e-14:
-                r_sample = r_vals[left]
-            else:
-                t = (u - cdf[left]) / denom
-                r_sample = r_vals[left] + t*(r_vals[right] - r_vals[left])
-                
-        # Sample angle uniformly in [0, 2*pi)
-        phi = 2.0 * pi * np.random.random()
-        
-        # Compute mosaic angles beta and kappa
-        beta_samples[i] = r_sample * cos(phi)
-        kappa_samples[i] = r_sample * sin(phi)
-        
-        # Compute rotation matrices for each sample.
-        beta = beta_samples[i]
-        kappa = kappa_samples[i]
-        
-        # R_x(beta)
-        cosb = cos(beta)
-        sinb = sin(beta)
-        R_x = np.empty((3, 3), dtype=np.float64)
-        R_x[0, 0] = 1.0;  R_x[0, 1] = 0.0;   R_x[0, 2] = 0.0
-        R_x[1, 0] = 0.0;  R_x[1, 1] = cosb;  R_x[1, 2] = -sinb
-        R_x[2, 0] = 0.0;  R_x[2, 1] = sinb;  R_x[2, 2] = cosb
-        
-        # R_y(kappa)
-        cosk = cos(kappa)
-        sink = sin(kappa)
-        R_y = np.empty((3, 3), dtype=np.float64)
-        R_y[0, 0] = cosk;  R_y[0, 1] = 0.0;  R_y[0, 2] = sink
-        R_y[1, 0] = 0.0;   R_y[1, 1] = 1.0;  R_y[1, 2] = 0.0
-        R_y[2, 0] = -sink; R_y[2, 1] = 0.0;  R_y[2, 2] = cosk
-        
-        # Overall rotation R = R_y @ R_x
-        # (Using np.dot for compatibility within Numba.)
-        R = np.dot(R_y, R_x)
-        R_out[i, :, :] = R
+        R_y_all[i] = rotation_matrix_y_numba(theta_samples[i])
 
-    return  R_out
+    # Rz_offset_all => shape (M, 3, 3)
+    Rz_offset_all = np.empty((M, 3, 3), dtype=np.float64)
+    for j in range(M):
+        Rz_offset_all[j] = rotation_matrix_z_numba(phi_offsets[j])
+
+    # ring_basis => shape (n_phi, 3)
+    ring_basis = np.empty((n_phi, 3), dtype=np.float64)
+    for k in range(n_phi):
+        Rz_k = rotation_matrix_z_numba(phi_range[k])
+        ring_basis[k] = Rz_k @ G
+
+    # ---------------------------------------------------------
+    # 4) Build combined transformations & compute ring points
+    #    T[i,j] = Rz_offset_all[j] @ R_y_all[i]
+    # ---------------------------------------------------------
+    # ring_points => shape (N, M, n_phi, 3)
+    ring_points = np.empty((N, M, n_phi, 3), dtype=np.float64)
+    # base_points => shape (N, M, 3)
+    base_points = np.empty((N, M, 3), dtype=np.float64)
+
+    for i in range(N):
+        for j in range(M):
+            # T_ij = Rz_offset_all[j] @ R_y_all[i]
+            # We'll apply T_ij to ring_basis and to G.
+            # Because we can't store or multiply big arrays inline with einsum under Numba,
+            # we do explicit loops:
+            T_ij = Rz_offset_all[j] @ R_y_all[i]
+
+            # ring_points for each phi
+            for k in range(n_phi):
+                ring_points[i, j, k, :] = T_ij @ ring_basis[k]
+            # base_point for (i,j)
+            base_points[i, j, :] = T_ij @ G
+
+    # -----------------------------------------------------
+    # 5) Flatten & combine [ring_points, base_points, original_ring, G]
+    # -----------------------------------------------------
+    # ring_points_flat => (N*M*n_phi, 3)
+    ring_points_flat = np.empty((N*M*n_phi, 3), dtype=np.float64)
+    idx = 0
+    for i in range(N):
+        for j in range(M):
+            for k in range(n_phi):
+                ring_points_flat[idx, :] = ring_points[i, j, k, :]
+                idx += 1
+
+    # base_points_flat => (N*M, 3)
+    base_points_flat = np.empty((N*M, 3), dtype=np.float64)
+    idx = 0
+    for i in range(N):
+        for j in range(M):
+            base_points_flat[idx, :] = base_points[i, j, :]
+            idx += 1
+
+    # original_ring => shape (n_phi, 3)
+    original_ring = np.empty((n_phi, 3), dtype=np.float64)
+    for k in range(n_phi):
+        Rz_k = rotation_matrix_z_numba(phi_range[k])
+        original_ring[k] = Rz_k @ G
+
+    # Single G => shape (1, 3)
+    G_array = G.reshape(1, 3)
+
+    # total # of rows in final big_array
+    total_rows = (N*M*n_phi) + (N*M) + n_phi + 1
+    big_array = np.empty((total_rows, 3), dtype=np.float64)
+
+    # Fill big_array
+    idx = 0
+    # 1) ring_points_flat
+    for r in range(N*M*n_phi):
+        big_array[idx, :] = ring_points_flat[r, :]
+        idx += 1
+    # 2) base_points_flat
+    for r in range(N*M):
+        big_array[idx, :] = base_points_flat[r, :]
+        idx += 1
+    # 3) original_ring
+    for r in range(n_phi):
+        big_array[idx, :] = original_ring[r, :]
+        idx += 1
+    # 4) single G
+    big_array[idx, :] = G_array[0, :]
+
+    return big_array
 
 
+
+##############################################################################
+# 3) Intersect line-plane (unchanged)
+##############################################################################
 @njit
 def intersect_line_plane(P0, k_vec, P_plane, n_plane):
-    """
-    Intersect a parametric line (P0 + t*k_vec) with plane (P_plane, n_plane).
-    Returns (ix, iy, iz, valid_bool).
-
-    If no intersection or t<0 => valid_bool=False and we put NaNs for ix,iy,iz.
-    Otherwise, returns the intersection coords plus valid_bool=True.
-    """
     denom = k_vec[0]*n_plane[0] + k_vec[1]*n_plane[1] + k_vec[2]*n_plane[2]
     if abs(denom) < 1e-14:
         return (np.nan, np.nan, np.nan, False)
 
-    num = ((P_plane[0] - P0[0]) * n_plane[0] +
-           (P_plane[1] - P0[1]) * n_plane[1] +
-           (P_plane[2] - P0[2]) * n_plane[2])
-    t = num / denom
-
+    num = ((P_plane[0] - P0[0]) * n_plane[0]
+         + (P_plane[1] - P0[1]) * n_plane[1]
+         + (P_plane[2] - P0[2]) * n_plane[2])
+    t = num/denom
     if t < 0.0:
         return (np.nan, np.nan, np.nan, False)
 
@@ -179,195 +180,118 @@ def intersect_line_plane(P0, k_vec, P_plane, n_plane):
 
 @njit
 def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
-    """
-    Batch version: for each direction directions[i,:], compute intersection
-    with plane. Returns (intersects, valid_mask).
-
-    intersects.shape = (N, 3), valid_mask.shape = (N,).
-    If no intersection or t<0 => mask=False and that row in intersects=NaN.
-    """
-    N = directions.shape[0]
-    intersects = np.full((N, 3), np.nan, dtype=np.float64)
-    valid = np.zeros(N, dtype=np.bool_)
-
-    for i in range(N):
-        kx = directions[i, 0]
-        ky = directions[i, 1]
-        kz = directions[i, 2]
-
+    Ndir = directions.shape[0]
+    intersects = np.full((Ndir,3), np.nan, dtype=np.float64)
+    valid = np.zeros(Ndir, dtype=np.bool_)
+    for i in range(Ndir):
+        kx = directions[i,0]
+        ky = directions[i,1]
+        kz = directions[i,2]
         dot_dn = kx*plane_n[0] + ky*plane_n[1] + kz*plane_n[2]
         if abs(dot_dn) < 1e-14:
             continue
 
-        num = ((plane_pt[0] - start_pt[0]) * plane_n[0] +
-               (plane_pt[1] - start_pt[1]) * plane_n[1] +
-               (plane_pt[2] - start_pt[2]) * plane_n[2])
-        t = num / dot_dn
+        num = ((plane_pt[0]-start_pt[0])*plane_n[0]
+             + (plane_pt[1]-start_pt[1])*plane_n[1]
+             + (plane_pt[2]-start_pt[2])*plane_n[2])
+        t = num/dot_dn
         if t < 0.0:
             continue
 
         ix = start_pt[0] + t*kx
         iy = start_pt[1] + t*ky
         iz = start_pt[2] + t*kz
-
-        intersects[i, 0] = ix
-        intersects[i, 1] = iy
-        intersects[i, 2] = iz
+        intersects[i,0] = ix
+        intersects[i,1] = iy
+        intersects[i,2] = iz
         valid[i] = True
-
     return intersects, valid
 
-
+##############################################################################
+# 4) solve_q
+##############################################################################
 @njit
-def solve_q(k_in, k, gz0, gr0, g, R_mats, eps=1e-14):
+def solve_q(k_in, k, g, G_rotated, eps=1e-14):
     """
-    Solve the intersection of two spheres:
-      1) Bragg sphere:  qx^2 + qy^2 + qz^2 = |G|^2   [where qz = rotated Gz]
-      2) Ewald sphere: (qx + kx)^2 + (qy + ky)^2 + (qz + kz)^2 = k^2
-
-    For each mosaic sample i:
-      - We rotate the nominal G_ideal = [0.0, gr0, gz0] by R_mats[i].
-      - Then qz = G_rot_z.
-      - The in-plane circle radius is: R^2 = |G_ideal|^2 - qz^2
-      - Solve for qx, qy from circle-line intersection:
-          qx^2 + qy^2 = R^2
-          qx*kx + qy*ky = alpha0 - (qz*kz)
-
-    Args:
-      k_in   : (3,) array [kx, ky, kz]
-      k      : scalar magnitude of the incident wavevector
-      gz0, gr0, g : not all directly used (g is kept for interface if needed)
-      R_mats : shape (N, 3, 3) array of rotation matrices
-      eps    : small numeric tolerance
-
-    Returns:
-      solutions : shape (N, 2, 3). For each i, the first index is
-                  the "+" solution, second index is the "-" solution.
-                  If no real solution, they remain NaN.
+    For each mosaic sample i (each row in G_rotated):
+    returns shape (N,2,3).
     """
-
     kx, ky, kz = k_in
-    N_samples = R_mats.shape[0]
+    Gx = G_rotated[:,0]
+    Gy = G_rotated[:,1]
+    qz = G_rotated[:,2]
 
-    # Prepare output array (NaN by default)
-    solutions = np.full((N_samples, 2, 3), np.nan, dtype=np.float64)
+    N_samples = G_rotated.shape[0]
+    solutions = np.empty((N_samples,2,3), dtype=np.float64)
 
-    # Nominal G vector before rotation
-    G_ideal = np.array([0.0, gr0, gz0], dtype=np.float64)
+    G_ideal_sq = Gx*Gx + Gy*Gy + qz*qz
 
-    # -- 1) Magnitude of G_ideal^2:  (g_r^2) = gr0^2 + gz0^2 (assuming G_ideal has no x-component)
-    G_ideal_sq = G_ideal[1]*G_ideal[1] + G_ideal[2]*G_ideal[2]  # gr0^2 + gz0^2
+    kx2 = kx*kx
+    ky2 = ky*ky
+    kz2 = kz*kz
 
-    # -- 2) Precompute squares for k_in
-    kx2 = kx * kx
-    ky2 = ky * ky
-    kz2 = kz * kz
+    alpha0 = 0.5*(k*k - G_ideal_sq - (kx2+ky2+kz2))
+    L = kx2+ky2
 
-    # -- 3) alpha0 is the part of the "difference-of-spheres" that doesn't depend on qz
-    #    Ewald sphere minus Bragg sphere => 
-    #       2*(qx*kx + qy*ky + qz*kz) + (kx^2 + ky^2 + kz^2) = k^2 - |G|^2
-    #    =>  qx*kx + qy*ky + qz*kz = (k^2 - |G|^2 - (kx^2 + ky^2 + kz^2))/2 = alpha0
-    #    Then alpha = alpha0 - qz*kz for the 2D plane constraint
-    alpha0 = 0.5 * (k*k - G_ideal_sq - (kx2 + ky2 + kz2))
-
-    # -- 4) k_in-plane^2
-    L = kx2 + ky2
-
-    # -- 5) If ky = 0, handle that corner case separately
-    #        We'll define a small helper function for that. 
-    #        If ky=0 for all samples, no need to do it repeatedly.
-
-    if abs(ky) < eps:
-        # Corner-case logic for all i. We'll do a simple fallback:
-        # qx = alpha / kx  => from the line eq qx*kx = alpha
-        # then qy^2 = R^2 - qx^2
-        # R^2 = G_ideal_sq - qz^2
-        # alpha = alpha0 - qz*kz
-        # We'll just do it in the loop. 
+    if abs(ky)<eps:
         for i in range(N_samples):
-            # Rotate G_ideal => G_rot
-            G_rot = R_mats[i] @ G_ideal
-            qz = G_rot[2]
-            # circle radius^2
-            R_sq = G_ideal_sq - qz*qz
-            if R_sq < eps:
-                # no real solutions in-plane
+            R_sq = G_ideal_sq[i] - qz[i]*qz[i]
+            if R_sq<eps:
+                solutions[i,0,:] = np.nan
+                solutions[i,1,:] = np.nan
                 continue
-
-            # alpha = alpha0 - qz*kz
-            alpha = alpha0 - qz*kz
-
-            if abs(kx) < eps:
-                # Then line eq is 0 => alpha => alpha must be ~0. Possibly no solution or infinite solutions
-                # We'll just skip or keep NaN
+            alpha = alpha0[i] - qz[i]*kz
+            if abs(kx)<eps:
+                solutions[i,0,:] = np.nan
+                solutions[i,1,:] = np.nan
                 continue
-            
-            # Solve for qx, then check if qy^2 is positive
-            qx0 = alpha / kx
+            qx0 = alpha/kx
             tmp = R_sq - qx0*qx0
-            if tmp < 0:
+            if tmp<0:
+                solutions[i,0,:] = np.nan
+                solutions[i,1,:] = np.nan
                 continue
-            sqrt_tmp = np.sqrt(tmp)
+            sqrt_tmp = sqrt(tmp)
             solutions[i,0,0] = qx0
             solutions[i,0,1] = +sqrt_tmp
-            solutions[i,0,2] = qz
-
+            solutions[i,0,2] = qz[i]
             solutions[i,1,0] = qx0
             solutions[i,1,1] = -sqrt_tmp
-            solutions[i,1,2] = qz
-
+            solutions[i,1,2] = qz[i]
         return solutions
 
-    # -- 6) Otherwise, define r = kx/ky once. 
-    r = kx / ky
-
-    # -- 7) Loop over each sample
+    r = kx/ky
     for i in range(N_samples):
-        # Rotate G_ideal => G_rot
-        G_rot = R_mats[i] @ G_ideal
-        # qz = rotated z
-        qz = G_rot[2]
-
-        # The in-plane circle radius^2: R^2 = |G_ideal|^2 - qz^2
-        R_sq = G_ideal_sq - qz*qz
-        if R_sq < eps:
-            # no real in-plane circle
+        R_sq = G_ideal_sq[i] - qz[i]*qz[i]
+        if R_sq<eps:
+            solutions[i,0,:] = np.nan
+            solutions[i,1,:] = np.nan
             continue
-
-        # alpha = alpha0 - (qz * kz)
-        alpha = alpha0 - qz*kz
-
-        # Discriminant for circle-line intersection:
-        # disc = R^2 * (kx^2 + ky^2) - alpha^2 = R_sq * L - alpha^2
-        disc = R_sq * L - alpha*alpha
-        if disc < 0:
-            # no real solutions
+        alpha = alpha0[i] - qz[i]*kz
+        disc = R_sq*L - alpha*alpha
+        if disc<0:
+            solutions[i,0,:] = np.nan
+            solutions[i,1,:] = np.nan
             continue
+        sqrt_disc = sqrt(disc)
+        denom = ky*(r*r +1.0)
+        qxp = (alpha*r + sqrt_disc)/denom
+        qxm = (alpha*r - sqrt_disc)/denom
+        qyp = (alpha - kx*qxp)/ky
+        qym = (alpha - kx*qxm)/ky
 
-        sqrt_disc = np.sqrt(disc)
-
-        # Denominator in qx formula: ky*(r^2 + 1)
-        denom = ky * (r*r + 1.0)
-
-        # Two possible qx solutions:
-        qxp = (alpha*r + sqrt_disc) / denom
-        qxm = (alpha*r - sqrt_disc) / denom
-
-        # Then qy = (alpha - kx*qx) / ky
-        qyp = (alpha - kx*qxp) / ky
-        qym = (alpha - kx*qxm) / ky
-
-        # Store solutions
         solutions[i,0,0] = qxp
         solutions[i,0,1] = qyp
-        solutions[i,0,2] = qz
-
+        solutions[i,0,2] = qz[i]
         solutions[i,1,0] = qxm
         solutions[i,1,1] = qym
-        solutions[i,1,2] = qz
+        solutions[i,1,2] = qz[i]
 
     return solutions
 
+##############################################################################
+# 5) calculate_phi
+##############################################################################
 @njit
 def calculate_phi(
     H, K, L, av, cv,
@@ -378,80 +302,61 @@ def calculate_phi(
     beam_x_array, beam_y_array,
     theta_array, phi_array,
     reflection_intensity,
-    Mosaic_Rotation,
+    Mosaic_Rotation,  # shape (N*M, 3)
     debye_x, debye_y,
     center,
     theta_initial_deg,
     R_x_detector, R_z_detector, n_det_rot, Detector_Pos,
     e1_det, e2_det,
-    R_z_R_y,         # combined rotation for sample
-    R_ZY_n,          # sample-plane normal in sample coords
+    R_z_R_y,
+    R_ZY_n,
     P0, unit_x,
     save_flag, q_data, q_count, i_peaks_index
 ):
-    """
-    For a single reflection (H,K,L), we do:
-      1) Build G in crystal coords => (gr0, 0, gz0).
-      2) Rotate the sample by theta_initial => R_x @ R_z_R_y => R_sample.
-      3) For each beam sample, compute wavevector with partial refraction.
-      4) Solve q from solve_q => for each solution i_sol, compute scattered wave,
-         intersect with the detector plane, and accumulate intensity.
+    gz0 = 2.0*pi*(L/cv)
+    gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
+    G   = sqrt(gr0*gr0 + gz0*gz0)
+    n2  = 1
 
-    Returns (max_I_sign0, max_x_sign0, max_y_sign0,
-             max_I_sign1, max_x_sign1, max_y_sign1).
-    """
-
-    gz0 = 2.0*np.pi * (L/cv)
-    gr0 = 4.0*np.pi/av * sqrt((H*H + H*K + K*K)/3.0)
-    G = np.sqrt(gr0**2 + gz0**2)
-    n2 = 1
-    
-    # Track maximum intensities
     max_I_sign0 = -1.0
     max_x_sign0 = np.nan
     max_y_sign0 = np.nan
     max_I_sign1 = -1.0
     max_x_sign1 = np.nan
     max_y_sign1 = np.nan
-    
-    # Create rotation for the chosen theta_initial
+
     rad_theta_i = theta_initial_deg*(pi/180.0)
-    
-    
     R_x = np.array([
-        [1.0, 0.0,            0.0],
-        [0.0, cos(rad_theta_i), -sin(rad_theta_i)],
-        [0.0, sin(rad_theta_i),  cos(rad_theta_i)]
+        [1.0,              0.0,                0.0],
+        [0.0,  cos(rad_theta_i), -sin(rad_theta_i)],
+        [0.0,  sin(rad_theta_i),  cos(rad_theta_i)]
     ])
     R_sample = R_x @ R_z_R_y
 
-    # Sample-plane normal in lab
     n_surf = R_x @ R_ZY_n
-    n_surf /= np.linalg.norm(n_surf)
+    n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
 
-    # Rotated sample-plane offset
     P0_rot = R_sample @ P0
-    P0_rot[0] = 0 
-    
+    P0_rot[0] = 0.0
+
     n_samp = beam_x_array.size
 
-    # Build coordinate axes e1_temp, e2_temp on sample surface
-    u_ref = np.array([0.0, 0.0, -1.0])
+    u_ref = np.array([0.0,0.0,-1.0])
     e1_temp = np.cross(n_surf, u_ref)
-    e1_norm = np.linalg.norm(e1_temp)
-    if e1_norm < 1e-12:
-        alt_refs = [
-            np.array([1.0, 0.0, 0.0]),
-            np.array([0.0, 1.0, 0.0]),
-            np.array([0.0, 0.0, 1.0])
+    e1_norm = sqrt(e1_temp[0]*e1_temp[0] + e1_temp[1]*e1_temp[1] + e1_temp[2]*e1_temp[2])
+    if e1_norm<1e-12:
+        alt_refs= [
+            np.array([1.0,0.0,0.0]),
+            np.array([0.0,1.0,0.0]),
+            np.array([0.0,0.0,1.0])
         ]
-        success = False
-        for alt_ref in alt_refs:
-            cross_tmp = np.cross(n_surf, alt_ref)
-            cross_norm_tmp = np.linalg.norm(cross_tmp)
-            if cross_norm_tmp > 1e-12:
-                e1_temp = cross_tmp / cross_norm_tmp
-                success = True
+        success=False
+        for ar in alt_refs:
+            cross_tmp = np.cross(n_surf, ar)
+            cross_norm_tmp = sqrt(cross_tmp[0]*cross_tmp[0] + cross_tmp[1]*cross_tmp[1] + cross_tmp[2]*cross_tmp[2])
+            if cross_norm_tmp>1e-12:
+                e1_temp = cross_tmp/cross_norm_tmp
+                success=True
                 break
         if not success:
             return (max_x_sign0, max_y_sign0, max_I_sign0,
@@ -461,10 +366,9 @@ def calculate_phi(
 
     e2_temp = np.cross(n_surf, e1_temp)
 
-    # Main beam-sampling loop
     for i_samp in prange(n_samp):
         lam_samp = wavelength_array[i_samp]
-        k_mag = 2.0 * np.pi / lam_samp
+        k_mag = 2.0*pi / lam_samp
 
         bx = beam_x_array[i_samp]
         by = beam_y_array[i_samp]
@@ -472,84 +376,62 @@ def calculate_phi(
 
         dtheta = theta_array[i_samp]
         dphi   = phi_array[i_samp]
-
-        # Incoming wave in lab
         k_in = np.array([
             cos(dtheta)*sin(dphi),
             cos(dtheta)*cos(dphi),
             sin(dtheta)
         ], dtype=np.float64)
 
-        # Intersect the beam with the sample plane
         ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
         if not valid_int:
-            # No valid intersection with sample plane
             continue
 
         I_plane = np.array([ix, iy, iz])
-
-        # Incident angle relative to sample normal
         kn_dot = k_in[0]*n_surf[0] + k_in[1]*n_surf[1] + k_in[2]*n_surf[2]
-        th_i_prime = (pi/2.0) - np.arccos(kn_dot)
+        th_i_prime = (pi/2.0) - acos(kn_dot)
 
-        # Project onto sample surface to get azimuth
         projected_incident = k_in - kn_dot*n_surf
-        proj_len = np.linalg.norm(projected_incident)
-        if proj_len > 1e-12:
-            projected_incident /= proj_len
+        pln = sqrt(projected_incident[0]**2 + projected_incident[1]**2 + projected_incident[2]**2)
+        if pln>1e-12:
+            projected_incident/=pln
         else:
-            projected_incident[:] = 0.0
+            projected_incident[:]=0.0
 
-        p1 = (projected_incident[0]*e1_temp[0]
-              + projected_incident[1]*e1_temp[1]
-              + projected_incident[2]*e1_temp[2])
-        p2 = (projected_incident[0]*e2_temp[0]
-              + projected_incident[1]*e2_temp[1]
-              + projected_incident[2]*e2_temp[2])
-
+        p1 = projected_incident[0]*e1_temp[0] + projected_incident[1]*e1_temp[1] + projected_incident[2]*e1_temp[2]
+        p2 = projected_incident[0]*e2_temp[0] + projected_incident[1]*e2_temp[1] + projected_incident[2]*e2_temp[2]
         phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
-        th_t = np.arccos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
+        th_t = acos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
 
-        # Build the scattered wave entering the crystal
-        k_scat = k_mag * sqrt(np.real(n2**2))
+        k_scat = k_mag*sqrt(np.real(n2)*np.real(n2))
         k_x_scat = k_scat*cos(th_t)*sin(phi_i_prime)
         k_y_scat = k_scat*cos(th_t)*cos(phi_i_prime)
         k_z_scat = k_scat*sin(th_t)
+        k_in_crystal= np.array([k_x_scat, k_y_scat, k_z_scat])
 
-        # Solve for q
-        k_in_crystal = np.array([k_x_scat, k_y_scat, k_z_scat])
-        All_Q = solve_q(k_in_crystal, k_scat, gz0, gr0, G, Mosaic_Rotation)
-        All_Q_flat = All_Q.reshape((-1, 3))  # => shape (2*num_steps,3)
+        All_Q = solve_q(k_in_crystal, k_scat, G, Mosaic_Rotation)
+        All_Q_flat = All_Q.reshape((-1,3))
 
-        # For each solution i_sol, compute final wave, intersect with detector
         for i_sol in range(All_Q_flat.shape[0]):
-            Qx = All_Q_flat[i_sol, 0]
-            Qy = All_Q_flat[i_sol, 1]
-            Qz = All_Q_flat[i_sol, 2]
-            if Qx is np.nan or Qy is np.nan or Qz is np.nan:
+            Qx, Qy, Qz = All_Q_flat[i_sol]
+            if np.isnan(Qx) or np.isnan(Qy) or np.isnan(Qz):
                 continue
-            # Create the total scattered wave in lab
             k_tx_prime = Qx + k_x_scat
             k_ty_prime = Qy + k_y_scat
             k_tz_prime = Qz + k_z_scat
 
-            # Check scattering angles
-            kr = sqrt(k_tx_prime**2 + k_ty_prime**2)
-            if abs(kr) < 1e-12:
-                twotheta_t = 0.0
+            kr = sqrt(k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime)
+            if kr<1e-12:
+                twotheta_t=0.0
             else:
-                twotheta_t = np.arctan(k_tz_prime / kr)
+                twotheta_t= np.arctan(k_tz_prime/kr)
 
-            # Build final scattered wave
-            phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+            phi_f= np.arctan2(k_tx_prime, k_ty_prime)
             k_tx_f = k_scat*cos(twotheta_t)*sin(phi_f)
             k_ty_f = k_scat*cos(twotheta_t)*cos(phi_f)
-            real_k_tz_f = k_scat*sin(twotheta_t)
-
-            kf = np.array([k_tx_f, k_ty_f, real_k_tz_f])
+            real_k_tz_f= k_scat*sin(twotheta_t)
+            kf= np.array([k_tx_f, k_ty_f, real_k_tz_f])
             kf_prime = R_sample @ kf
 
-            # Now intersect from I_plane in direction kf_prime to the detector plane
             dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
             if not valid_det:
                 continue
@@ -557,53 +439,44 @@ def calculate_phi(
             plane_to_det = np.array([dx - Detector_Pos[0],
                                      dy - Detector_Pos[1],
                                      dz - Detector_Pos[2]], dtype=np.float64)
+            x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
+            y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
 
-            x_det = (plane_to_det[0]*e1_det[0]
-                     + plane_to_det[1]*e1_det[1]
-                     + plane_to_det[2]*e1_det[2])
-            y_det = (plane_to_det[0]*e2_det[0]
-                     + plane_to_det[1]*e2_det[1]
-                     + plane_to_det[2]*e2_det[2])
-
-            rpx = int(round(center[0] - y_det / 100e-6))
-            cpx = int(round(center[1] + x_det / 100e-6))
-            if not (0 <= rpx < image_size and 0 <= cpx < image_size):
+            rpx = int(round(center[0] - y_det/100e-6))
+            cpx = int(round(center[1] + x_det/100e-6))
+            if not(0<=rpx<image_size and 0<=cpx<image_size):
                 continue
 
-            val = (
-                reflection_intensity 
-                * np.exp(-Qz**2 * debye_x**2)
-                * np.exp(-(Qx**2 + Qy**2)*debye_y**2)
-            )
-            image[rpx, cpx] += val
+            val = reflection_intensity * \
+                  exp(-Qz*Qz * debye_x*debye_x)* \
+                  exp(-(Qx*Qx + Qy*Qy)* debye_y*debye_y)
+            image[rpx, cpx]+= val
 
-            # Track maxima
-            if i_sol % 2 == 0:
-                if image[rpx, cpx] > max_I_sign0:
-                    max_I_sign0 = image[rpx, cpx]
-                    max_x_sign0 = cpx
-                    max_y_sign0 = rpx
+            if i_sol%2==0:
+                if image[rpx,cpx]>max_I_sign0:
+                    max_I_sign0= image[rpx,cpx]
+                    max_x_sign0= cpx
+                    max_y_sign0= rpx
             else:
-                if image[rpx, cpx] > max_I_sign1:
-                    max_I_sign1 = image[rpx, cpx]
-                    max_x_sign1 = cpx
-                    max_y_sign1 = rpx
+                if image[rpx,cpx]>max_I_sign1:
+                    max_I_sign1= image[rpx,cpx]
+                    max_x_sign1= cpx
+                    max_y_sign1= rpx
 
-            # Optionally store Q-data
-            if save_flag == 1 and q_count[i_peaks_index] < q_data.shape[1]:
+            if save_flag==1 and q_count[i_peaks_index]< q_data.shape[1]:
                 idx = q_count[i_peaks_index]
-                q_data[i_peaks_index, idx, 0] = Qx
-                q_data[i_peaks_index, idx, 1] = Qy
-                q_data[i_peaks_index, idx, 2] = Qz
-                q_data[i_peaks_index, idx, 3] = val
-                # mosaic angle => i_sol//2
-                q_count[i_peaks_index] += 1
+                q_data[i_peaks_index, idx,0] = Qx
+                q_data[i_peaks_index, idx,1] = Qy
+                q_data[i_peaks_index, idx,2] = Qz
+                q_data[i_peaks_index, idx,3] = val
+                q_count[i_peaks_index]+=1
 
-    return (
-        max_I_sign0, max_x_sign0, max_y_sign0,
-        max_I_sign1, max_x_sign1, max_y_sign1
-    )
+    return (max_I_sign0, max_x_sign0, max_y_sign0,
+            max_I_sign1, max_x_sign1, max_y_sign1)
 
+##############################################################################
+# 6) process_peaks_parallel
+##############################################################################
 @njit(parallel=True, fastmath=True)
 def process_peaks_parallel(
     miller, intensities, image_size,
@@ -619,29 +492,18 @@ def process_peaks_parallel(
     unit_x, n_detector,
     save_flag
 ):
-    """
-    1) Convert angles => gamma_rad, Gamma_rad, chi_rad, psi_rad
-    2) Build mosaic distribution => mosaic_angles, mosaic_intens
-    3) Build detector transformations => R_x_det, R_z_det => n_det_rot, etc.
-    4) Build sample orientation => R_y, R_z => R_z_R_y
-    5) Loop over reflections => call calculate_phi
-    6) Return final image, plus q_data if save_flag=1
-    """
     gamma_rad = gamma_deg*(pi/180.0)
     Gamma_rad = Gamma_deg*(pi/180.0)
     chi_rad   = chi_deg*(pi/180.0)
     psi_rad   = psi_deg*(pi/180.0)
 
-    # Build mosaic distribution
-    sigma_rad = sigma_pv_deg*(pi/180.0)
-    gamma_rad_m = gamma_pv_deg*(pi/180.0)
-
-    Mosaic_Rotation = sample_mosaic_angles_separable(eta_pv, sigma_rad, gamma_rad_m, N = 1000, grid_points= 100000)
+    sigma_rad   = sigma_pv_deg*(pi/180.0)
+    gamma_rad_m = gamma_pv_deg*(pi/180.0)  # not used in example
+    # (eta_pv is also not used in rotate_G but could be used if wanted)
 
     # Detector-plane transformations
     cg = cos(gamma_rad); sg = sin(gamma_rad)
     cG = cos(Gamma_rad); sG = sin(Gamma_rad)
-
     R_x_det = np.array([
         [1.0, 0.0, 0.0],
         [0.0, cg,  sg],
@@ -650,41 +512,33 @@ def process_peaks_parallel(
     R_z_det = np.array([
         [ cG, sG, 0.0],
         [-sG, cG, 0.0],
-        [ 0.0, 0.0,1.0]
+        [ 0.0, 0.0, 1.0]
     ])
-
-    nd_temp = R_x_det @ n_detector
+    nd_temp   = R_x_det @ n_detector
     n_det_rot = R_z_det @ nd_temp
-    nd_len = sqrt(n_det_rot[0]*n_det_rot[0]
-                  + n_det_rot[1]*n_det_rot[1]
-                  + n_det_rot[2]*n_det_rot[2])
-    n_det_rot /= nd_len
+    nd_len    = sqrt(n_det_rot[0]*n_det_rot[0] + n_det_rot[1]*n_det_rot[1] + n_det_rot[2]*n_det_rot[2])
+    n_det_rot/= nd_len
 
     Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0], dtype=np.float64)
 
-    # define e1_det => projection of unit_x onto plane orthonormal to n_det_rot
-    dot_e1 = (unit_x[0]*n_det_rot[0]
-              + unit_x[1]*n_det_rot[1]
-              + unit_x[2]*n_det_rot[2])
+    dot_e1 = unit_x[0]*n_det_rot[0] + unit_x[1]*n_det_rot[1] + unit_x[2]*n_det_rot[2]
     e1_det = unit_x - dot_e1*n_det_rot
     e1_len = sqrt(e1_det[0]**2 + e1_det[1]**2 + e1_det[2]**2)
-    if e1_len < 1e-14:
-        e1_det = np.array([1.0,0.0,0.0])
+    if e1_len<1e-14:
+        e1_det= np.array([1.0,0.0,0.0])
     else:
-        e1_det /= e1_len
+        e1_det/= e1_len
 
-    # define e2_det => cross(-n_det_rot, e1_det)
-    tmpx = n_det_rot[1]* e1_det[2] - n_det_rot[2]* e1_det[1]
-    tmpy = n_det_rot[2]* e1_det[0] - n_det_rot[0]* e1_det[2]
-    tmpz = n_det_rot[0]* e1_det[1] - n_det_rot[1]* e1_det[0]
-    e2_det = np.array([-tmpx, -tmpy, -tmpz], dtype=np.float64)
+    tmpx= n_det_rot[1]* e1_det[2] - n_det_rot[2]* e1_det[1]
+    tmpy= n_det_rot[2]* e1_det[0] - n_det_rot[0]* e1_det[2]
+    tmpz= n_det_rot[0]* e1_det[1] - n_det_rot[1]* e1_det[0]
+    e2_det= np.array([-tmpx, -tmpy, -tmpz], dtype=np.float64)
     e2_len= sqrt(e2_det[0]**2 + e2_det[1]**2 + e2_det[2]**2)
     if e2_len<1e-14:
         e2_det= np.array([0.0,1.0,0.0])
     else:
         e2_det/= e2_len
 
-    # Sample orientation => build R_y, R_z => R_z_R_y
     c_chi = cos(chi_rad); s_chi = sin(chi_rad)
     R_y = np.array([
         [ c_chi, 0.0,   s_chi],
@@ -699,46 +553,47 @@ def process_peaks_parallel(
     ])
     R_z_R_y= R_z @ R_y
 
-    # sample-plane normal in sample coords => R_ZY_n
-    n1 = np.array([0.0,0.0,1.0], dtype=np.float64)
-    R_ZY_n = R_z_R_y @ n1
-    nzy_len = sqrt(R_ZY_n[0]**2 + R_ZY_n[1]**2 + R_ZY_n[2]**2)
-    R_ZY_n /= nzy_len
+    n1= np.array([0.0,0.0,1.0], dtype=np.float64)
+    R_ZY_n= R_z_R_y @ n1
+    nzy_len= sqrt(R_ZY_n[0]*R_ZY_n[0]+ R_ZY_n[1]*R_ZY_n[1]+ R_ZY_n[2]*R_ZY_n[2])
+    R_ZY_n/= nzy_len
 
-    # sample plane offset => P0
-    P0 = np.array([0.0,0.0,-zs], dtype=np.float64)
+    P0= np.array([0.0,0.0,-zs], dtype=np.float64)
 
     num_peaks= miller.shape[0]
-    max_solutions= 2000000
+    max_solutions=2000000
 
     if save_flag==1:
-        q_data= np.full((num_peaks,max_solutions,5), np.nan, dtype= np.float64)
-        q_count= np.zeros(num_peaks, dtype= np.int64)
+        q_data= np.full((num_peaks,max_solutions,5), np.nan, dtype=np.float64)
+        q_count= np.zeros(num_peaks, dtype=np.int64)
     else:
-        q_data= np.zeros((1,1,5), dtype= np.float64)
-        q_count= np.zeros(1, dtype= np.int64)
+        q_data= np.zeros((1,1,5), dtype=np.float64)
+        q_count= np.zeros(1, dtype=np.int64)
 
-    max_positions= np.empty((num_peaks,6), dtype= np.float64)
+    max_positions= np.empty((num_peaks,6), dtype=np.float64)
 
-    # Main reflection loop
     for i_pk in prange(num_peaks):
         H= miller[i_pk,0]
         K= miller[i_pk,1]
         L= miller[i_pk,2]
         reflI= intensities[i_pk]
 
-        # call calculate_phi for this reflection
-        (mx0,my0,mv0,
-         mx1,my1,mv1) = calculate_phi(
-            H, K, L,
-            av, cv,
+        gz0 = 2.0*pi*(L/cv)
+        gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
+        G_ideal = np.array([0.0, gr0, gz0], dtype=np.float64)
+
+        # Build mosaic distribution => shape (N*M, 3)
+        Mosaic_Rotation = rotate_G(G_ideal, sigma_rad, N=20, M=20, n_phi=20)
+
+        (mx0,my0,mv0, mx1,my1,mv1) = calculate_phi(
+            H, K, L, av, cv,
             wavelength_array,
             image, image_size,
             gamma_rad, Gamma_rad, chi_rad, psi_rad,
             zs, zb, n2,
             beam_x_array, beam_y_array,
             theta_array, phi_array,
-            reflI,Mosaic_Rotation,
+            reflI, Mosaic_Rotation,
             debye_x, debye_y,
             center,
             theta_initial_deg,
@@ -746,11 +601,11 @@ def process_peaks_parallel(
             e1_det, e2_det,
             R_z_R_y,
             R_ZY_n,
-            P0, unit_x,
+            P0, 
+            unit_x,
             save_flag, q_data, q_count, i_pk
         )
 
-        # store maximum positions
         max_positions[i_pk,0] = mx0
         max_positions[i_pk,1] = my0
         max_positions[i_pk,2] = mv0

@@ -468,7 +468,7 @@ def process_peaks_parallel_debug(
     sigma_rad = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
 
-    Mosaic_Rotation = sample_mosaic_angles_separable(eta_pv, sigma_rad, gamma_rad_m, N=1000, grid_points=100000)
+    Mosaic_Rotation = sample_mosaic_angles_separable(eta_pv, sigma_rad, gamma_rad_m, N=1000)
 
     cg = cos(gamma_rad); sg = sin(gamma_rad)
     cG = cos(Gamma_rad); sG = sin(Gamma_rad)

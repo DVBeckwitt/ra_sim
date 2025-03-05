@@ -81,6 +81,8 @@ lambda_ = wave_m * 1e10  # Convert meters -> Å
 # Detector and geometry
 image_size = 3000
 
+num_samples = 1000
+
 # Approximate beam center (row, column)
 center_default = [
     3000 - (poni2 / (100e-6)),
@@ -88,7 +90,6 @@ center_default = [
 ]
 
 mx = 19
-num_samples = 100
 
 av = 4.14
 bv = av
