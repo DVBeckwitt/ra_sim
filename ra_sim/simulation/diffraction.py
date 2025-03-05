@@ -43,7 +43,7 @@ def pseudo_voigt_1d(r, eta, sigma, gamma):
     return (1.0 - eta)*gauss + eta*lorentz
 
 @njit
-def sample_mosaic_angles_separable(eta, sigma_rad, gamma_rad, N=10000, grid_points=100000):
+def sample_mosaic_angles_separable(eta, sigma_rad, gamma_rad, N=10000, grid_points=1e10):
     """
     Samples (beta, kappa) pairs from a radially symmetric pseudo-Voigt:
        f(r) = (1-eta)*Gauss(r) + eta*Lorentz(r),  with  r = sqrt(beta^2 + kappa^2).
@@ -150,70 +150,6 @@ def sample_mosaic_angles_separable(eta, sigma_rad, gamma_rad, N=10000, grid_poin
 
     return  R_out
 
-from numba import njit
-import numpy as np
-from math import sin, cos, sqrt, pi
-
-@njit
-def grid_mosaic_rotations(sigma_rad, gamma_rad, step_deg=0.1):
-    # Determine maximum misorientation (in radians)
-    r_max = 5.0 * (sigma_rad if sigma_rad >= gamma_rad else gamma_rad)
-    r_max_deg = r_max * 180.0 / pi
-
-    # Create grid arrays in degrees
-    beta_vals_deg = np.arange(-r_max_deg, r_max_deg + step_deg, step_deg)
-    kappa_vals_deg = np.arange(-r_max_deg, r_max_deg + step_deg, step_deg)
-    n_beta = beta_vals_deg.shape[0]
-    n_kappa = kappa_vals_deg.shape[0]
-
-    # First pass: count valid grid points (those within r_max, with beta, kappa converted to radians)
-    count = 0
-    for i in range(n_beta):
-        beta = beta_vals_deg[i] * pi / 180.0
-        for j in range(n_kappa):
-            kappa = kappa_vals_deg[j] * pi / 180.0
-            if sqrt(beta*beta + kappa*kappa) <= r_max:
-                count += 1
-
-    # Preallocate output arrays.
-    beta_grid = np.empty(count, dtype=np.float64)
-    kappa_grid = np.empty(count, dtype=np.float64)
-    rotations = np.empty((count, 3, 3), dtype=np.float64)
-
-    idx = 0
-    for i in range(n_beta):
-        beta_d = beta_vals_deg[i]
-        beta = beta_d * pi / 180.0
-        for j in range(n_kappa):
-            kappa_d = kappa_vals_deg[j]
-            kappa = kappa_d * pi / 180.0
-            if sqrt(beta*beta + kappa*kappa) <= r_max:
-                beta_grid[idx] = beta
-                kappa_grid[idx] = kappa
-
-                # Compute rotation matrix about x-axis, R_x(beta)
-                cosb = cos(beta)
-                sinb = sin(beta)
-                R_x = np.empty((3, 3), dtype=np.float64)
-                R_x[0, 0] = 1.0;  R_x[0, 1] = 0.0;  R_x[0, 2] = 0.0
-                R_x[1, 0] = 0.0;  R_x[1, 1] = cosb; R_x[1, 2] = -sinb
-                R_x[2, 0] = 0.0;  R_x[2, 1] = sinb; R_x[2, 2] = cosb
-
-                # Compute rotation matrix about y-axis, R_y(kappa)
-                cosk = cos(kappa)
-                sink = sin(kappa)
-                R_y = np.empty((3, 3), dtype=np.float64)
-                R_y[0, 0] = cosk;  R_y[0, 1] = 0.0;  R_y[0, 2] = sink
-                R_y[1, 0] = 0.0;   R_y[1, 1] = 1.0;  R_y[1, 2] = 0.0
-                R_y[2, 0] = -sink; R_y[2, 1] = 0.0;  R_y[2, 2] = cosk
-
-                # Overall rotation: R = R_y @ R_x (using np.dot)
-                R = np.dot(R_y, R_x)
-                rotations[idx, :, :] = R
-                idx += 1
-
-    return rotations
-
 
 @njit
 def intersect_line_plane(P0, k_vec, P_plane, n_plane):
@@ -281,100 +217,154 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
 
     return intersects, valid
 
+
 @njit
-def solve_q(k_in, k, gz0, gr0, G, R, eps=1e-14):
+def solve_q(k_in, k, gz0, gr0, g, R_mats, eps=1e-14):
     """
-    Returns an array of shape (N, 2, 3) with positive and negative (qx, qy, qz)
-    solutions for each mosaic sample, where N = beta_samples.size.
-    
-    Here the ideal mosaic vector is defined as G_ideal = [0, gr0, gz0].
-    We form the overall rotation by applying:
-    
-         R = R_y(kappa) @ R_x(beta)
-         
-    where
-         R_x(beta) = [[1,      0,       0],
-                      [0, cos(beta), -sin(beta)],
-                      [0, sin(beta),  cos(beta)]]
-    
-         R_y(kappa) = [[ cos(kappa), 0, sin(kappa)],
-                      [     0,      1,     0     ],
-                      [-sin(kappa), 0, cos(kappa)]]
-    
-    Then, the rotated mosaic vector is:
-    
-         G_rot = R_y(kappa) @ R_x(beta) @ G_ideal.
-         
-    We then extract:
-         gr = sqrt((G_rot[0])^2 + (G_rot[1])^2)
-         gz = G_rot[2]
-         
-    These gr and gz are then used in the q-solution formulas.
+    Solve the intersection of two spheres:
+      1) Bragg sphere:  qx^2 + qy^2 + qz^2 = |G|^2   [where qz = rotated Gz]
+      2) Ewald sphere: (qx + kx)^2 + (qy + ky)^2 + (qz + kz)^2 = k^2
+
+    For each mosaic sample i:
+      - We rotate the nominal G_ideal = [0.0, gr0, gz0] by R_mats[i].
+      - Then qz = G_rot_z.
+      - The in-plane circle radius is: R^2 = |G_ideal|^2 - qz^2
+      - Solve for qx, qy from circle-line intersection:
+          qx^2 + qy^2 = R^2
+          qx*kx + qy*ky = alpha0 - (qz*kz)
+
+    Args:
+      k_in   : (3,) array [kx, ky, kz]
+      k      : scalar magnitude of the incident wavevector
+      gz0, gr0, g : not all directly used (g is kept for interface if needed)
+      R_mats : shape (N, 3, 3) array of rotation matrices
+      eps    : small numeric tolerance
+
+    Returns:
+      solutions : shape (N, 2, 3). For each i, the first index is
+                  the "+" solution, second index is the "-" solution.
+                  If no real solution, they remain NaN.
     """
-    k_x, k_y, k_z = k_in
-    N_samples = R.shape[0]
-    solutions = np.zeros((N_samples, 2, 3), dtype=np.float64)
-    
-    # Ideal mosaic vector (assumed to be along y for the in-plane component)
-    G_ideal = np.array([0.0, gr0, gz0])
-    if k_y <= 0:
-        solutions.fill(np.nan)
-        return solutions
 
+    kx, ky, kz = k_in
+    N_samples = R_mats.shape[0]
 
-    
-    k_x_sq = k_x*k_x
-    k_y_sq = k_y*k_y
-    k_z_sq = k_z*k_z
-    k_sq = k*k
-    k_r_squared = (k_x*k_x + k_y*k_y)
-    
-    if k_r_squared <= 0:
-        solutions.fill(np.nan)
-        return solutions
-    
-    # Loop over each mosaic sample.
-    for idx in range(N_samples):
+    # Prepare output array (NaN by default)
+    solutions = np.full((N_samples, 2, 3), np.nan, dtype=np.float64)
 
-        # Rotate G_ideal.
-        G_rot0 = R[idx, 0, 0]*G_ideal[0] + R[idx, 0, 1]*G_ideal[1] + R[idx, 0, 2]*G_ideal[2]
-        G_rot1 = R[idx, 1, 0]*G_ideal[0] + R[idx, 1, 1]*G_ideal[1] + R[idx, 1, 2]*G_ideal[2]
-        G_rot2 = R[idx, 2, 0]*G_ideal[0] + R[idx, 2, 1]*G_ideal[1] + R[idx, 2, 2]*G_ideal[2]
+    # Nominal G vector before rotation
+    G_ideal = np.array([0.0, gr0, gz0], dtype=np.float64)
 
-        # Extract new in-plane (gr) and vertical (gz) components.
-        gr = sqrt(G_rot0*G_rot0 + G_rot1*G_rot1)
-        gz = G_rot2
-        gz_sq = gz*gz
-        gr_sq = gr*gr
-        sqrt_term = -gr**4 - 2*gr_sq*gz_sq - 4*gr_sq*gz*k_z + 2*gr_sq*k_sq + 2*gr_sq*k_x_sq + 2*gr_sq*k_y_sq - 2*gr_sq*k_z_sq - gz**4 - 4*gz**3*k_z + 2*gz_sq*k_sq - 2*gz_sq*k_x_sq - 2*gz_sq*k_y_sq - 6*gz_sq*k_z_sq + 4*gz*k_sq*k_z - 4*gz*k_x_sq*k_z - 4*gz*k_y_sq*k_z - 4*gz*k_z**3 - k**4 + 2*k_sq*k_x_sq + 2*k_sq*k_y_sq + 2*k_sq*k_z_sq - k_x**4 - 2*k_x_sq*k_y_sq - 2*k_x_sq*k_z_sq - k_y**4 - 2*k_y_sq*k_z_sq - k_z**4
-        if sqrt_term < 0:
-            solutions[idx, 0, 0] = np.nan
-            solutions[idx, 0, 1] = np.nan
-            solutions[idx, 0, 2] = np.nan
-            solutions[idx, 1, 0] = np.nan
-            solutions[idx, 1, 1] = np.nan
-            solutions[idx, 1, 2] = np.nan
-            return solutions
+    # -- 1) Magnitude of G_ideal^2:  (g_r^2) = gr0^2 + gz0^2 (assuming G_ideal has no x-component)
+    G_ideal_sq = G_ideal[1]*G_ideal[1] + G_ideal[2]*G_ideal[2]  # gr0^2 + gz0^2
+
+    # -- 2) Precompute squares for k_in
+    kx2 = kx * kx
+    ky2 = ky * ky
+    kz2 = kz * kz
+
+    # -- 3) alpha0 is the part of the "difference-of-spheres" that doesn't depend on qz
+    #    Ewald sphere minus Bragg sphere => 
+    #       2*(qx*kx + qy*ky + qz*kz) + (kx^2 + ky^2 + kz^2) = k^2 - |G|^2
+    #    =>  qx*kx + qy*ky + qz*kz = (k^2 - |G|^2 - (kx^2 + ky^2 + kz^2))/2 = alpha0
+    #    Then alpha = alpha0 - qz*kz for the 2D plane constraint
+    alpha0 = 0.5 * (k*k - G_ideal_sq - (kx2 + ky2 + kz2))
+
+    # -- 4) k_in-plane^2
+    L = kx2 + ky2
+
+    # -- 5) If ky = 0, handle that corner case separately
+    #        We'll define a small helper function for that. 
+    #        If ky=0 for all samples, no need to do it repeatedly.
+
+    if abs(ky) < eps:
+        # Corner-case logic for all i. We'll do a simple fallback:
+        # qx = alpha / kx  => from the line eq qx*kx = alpha
+        # then qy^2 = R^2 - qx^2
+        # R^2 = G_ideal_sq - qz^2
+        # alpha = alpha0 - qz*kz
+        # We'll just do it in the loop. 
+        for i in range(N_samples):
+            # Rotate G_ideal => G_rot
+            G_rot = R_mats[i] @ G_ideal
+            qz = G_rot[2]
+            # circle radius^2
+            R_sq = G_ideal_sq - qz*qz
+            if R_sq < eps:
+                # no real solutions in-plane
+                continue
+
+            # alpha = alpha0 - qz*kz
+            alpha = alpha0 - qz*kz
+
+            if abs(kx) < eps:
+                # Then line eq is 0 => alpha => alpha must be ~0. Possibly no solution or infinite solutions
+                # We'll just skip or keep NaN
+                continue
             
-        term1 = -k_x*(gr_sq + gz_sq + 2*gz*k_z - k_sq + k_x_sq + k_y_sq + k_z_sq)
-        term2 = k_y*sqrt(sqrt_term)
-        
-        qy_term1 = -gr_sq - gz_sq - 2*gz*k_z + k_sq - k_x_sq - k_y_sq - k_z_sq
-        
-        qx_bottom = (2*(k_r_squared))
-        qy_bottom = (2*k_y)
-        qx_positive =   (term1 - term2)/ qx_bottom
-        qx_negative =  (term1 + term2)/qx_bottom
+            # Solve for qx, then check if qy^2 is positive
+            qx0 = alpha / kx
+            tmp = R_sq - qx0*qx0
+            if tmp < 0:
+                continue
+            sqrt_tmp = np.sqrt(tmp)
+            solutions[i,0,0] = qx0
+            solutions[i,0,1] = +sqrt_tmp
+            solutions[i,0,2] = qz
 
-        qy_positive =  (qy_term1 - 2*k_x * qx_positive )/qy_bottom
-        qy_negative =  (qy_term1 - 2*k_x * qx_negative )/qy_bottom
-        
-        solutions[idx, 0, 0] = qx_positive
-        solutions[idx, 0, 1] = qy_positive
-        solutions[idx, 0, 2] = gz
-        solutions[idx, 1, 0] = qx_negative
-        solutions[idx, 1, 1] = qy_negative
-        solutions[idx, 1, 2] = gz
+            solutions[i,1,0] = qx0
+            solutions[i,1,1] = -sqrt_tmp
+            solutions[i,1,2] = qz
+
+        return solutions
+
+    # -- 6) Otherwise, define r = kx/ky once. 
+    r = kx / ky
+
+    # -- 7) Loop over each sample
+    for i in range(N_samples):
+        # Rotate G_ideal => G_rot
+        G_rot = R_mats[i] @ G_ideal
+        # qz = rotated z
+        qz = G_rot[2]
+
+        # The in-plane circle radius^2: R^2 = |G_ideal|^2 - qz^2
+        R_sq = G_ideal_sq - qz*qz
+        if R_sq < eps:
+            # no real in-plane circle
+            continue
+
+        # alpha = alpha0 - (qz * kz)
+        alpha = alpha0 - qz*kz
+
+        # Discriminant for circle-line intersection:
+        # disc = R^2 * (kx^2 + ky^2) - alpha^2 = R_sq * L - alpha^2
+        disc = R_sq * L - alpha*alpha
+        if disc < 0:
+            # no real solutions
+            continue
+
+        sqrt_disc = np.sqrt(disc)
+
+        # Denominator in qx formula: ky*(r^2 + 1)
+        denom = ky * (r*r + 1.0)
+
+        # Two possible qx solutions:
+        qxp = (alpha*r + sqrt_disc) / denom
+        qxm = (alpha*r - sqrt_disc) / denom
+
+        # Then qy = (alpha - kx*qx) / ky
+        qyp = (alpha - kx*qxp) / ky
+        qym = (alpha - kx*qxm) / ky
+
+        # Store solutions
+        solutions[i,0,0] = qxp
+        solutions[i,0,1] = qyp
+        solutions[i,0,2] = qz
+
+        solutions[i,1,0] = qxm
+        solutions[i,1,1] = qym
+        solutions[i,1,2] = qz
 
     return solutions
 
@@ -646,7 +636,7 @@ def process_peaks_parallel(
     sigma_rad = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
 
-    Mosaic_Rotation = grid_mosaic_rotations(sigma_rad, gamma_rad_m)
+    Mosaic_Rotation = sample_mosaic_angles_separable(eta_pv, sigma_rad, gamma_rad_m, N = 1000, grid_points= 100000)
 
     # Detector-plane transformations
     cg = cos(gamma_rad); sg = sin(gamma_rad)
