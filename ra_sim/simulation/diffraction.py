@@ -6,155 +6,71 @@ from numba import njit
 from math import sin, cos, sqrt, pi, exp
 
 @njit
-def rotation_matrix_y_numba(theta):
-    """Return the 3×3 rotation matrix about the y-axis (Numba-friendly)."""
-    return np.array([
-        [cos(theta),  0.0, sin(theta)],
-        [0.0,         1.0, 0.0       ],
-        [-sin(theta), 0.0, cos(theta)]
-    ])
-
-@njit
-def rotation_matrix_z_numba(phi):
-    """Return the 3×3 rotation matrix about the z-axis (Numba-friendly)."""
-    return np.array([
-        [ cos(phi), -sin(phi), 0.0],
-        [ sin(phi),  cos(phi), 0.0],
-        [ 0.0,       0.0,      1.0]
-    ])
-
-@njit
-def rotate_G(G, sigma, N=100, M=100, n_phi=100):
+def compute_intensity_jit(Q, G_vec, sigma):
     """
-    Reproduces the exact logic of the old code to generate a big array of all
-    ring-points, base-points, original ring, and G itself.
-
-    Returns an array of shape:
-        (N*M*n_phi + N*M + n_phi + 1, 3)
-
-    Steps matching the old logic:
-      1) Sample theta ~ N(0, sigma)  [N total].
-      2) Sample phi_offsets ~ uniform in [0,2π)  [M total].
-      3) Define a fine phi_range ~ [0,2π]  [n_phi points, with endpoint=True].
-      4) Build rotation matrices, ring basis, etc.
-      5) Compute ring_points and base_points.
-      6) Flatten + concatenate with original_ring and single G.
+    A numba-friendly version of your compute_intensity function.
+    (Assumes sigma is already in radians, or else adapt accordingly.)
     """
-    # ------------------------------------------------------
-    # 1) Sample thetas from Gaussian, 2) phi_offsets uniform
-    # ------------------------------------------------------
-    theta_samples = np.random.normal(0.0, sigma, N)
-
-    # Manually build M offsets in [0,2π), ignoring endpoint:
-    phi_offsets = np.empty(M, dtype=np.float64)
-    for i in range(M):
-        phi_offsets[i] = 2.0*pi*i / M
-
-    # For the "fine ring" we do want to include endpoint => n_phi points from 0..2π:
-    # e.g. if n_phi=100, it includes the last point 2π exactly.
-    phi_range = np.empty(n_phi, dtype=np.float64)
-    if n_phi > 1:
-        step = 2.0*pi / (n_phi - 1)
-        for i in range(n_phi):
-            phi_range[i] = step * i
+    # Norm of G defines the Bragg-sphere radius.
+    # If G is nearly vertical (x≈y≈0), do the "cap" method;
+    # else do the "horizontal band" method.
+    R = 0.0
+    for i in range(3):
+        R += G_vec[i]*G_vec[i]
+    R = sqrt(R)
+    
+    # Check if G is vertical
+    eps = 1e-8
+    if abs(G_vec[0])<eps and abs(G_vec[1])<eps:
+        # CAP METHOD: 
+        # alpha = angle between G and Q
+        #   = arccos( (G/||G||)⋅(Q/||G||) )  but Q also has length ~||G|| at intersection
+        # Safer to normalize both:
+        Gnorm = 1.0 / R if R>eps else 1.0
+        Qlen = 0.0
+        for i in range(3):
+            Qlen += Q[i]*Q[i]
+        Qlen = sqrt(Qlen)
+        Qnorm = 1.0 / Qlen if Qlen>eps else 1.0
+        dot_ = 0.0
+        for i in range(3):
+            dot_ += (G_vec[i]*Gnorm)*(Q[i]*Qnorm)
+        if dot_>1.0: 
+            dot_=1.0
+        elif dot_<-1.0:
+            dot_=-1.0
+        alpha = acos(dot_)
+        intensity = np.exp( - (alpha*alpha)/(2.0*sigma*sigma) )
     else:
-        # trivial case, just 1 point at 0.0
-        phi_range[0] = 0.0
+        # HORIZONTAL BAND:
+        # v_prime = arccos(Qz / R)
+        # v_center= arccos(Gz / R)
+        # I = exp(-((v'-v_center)^2)/(2*sigma^2))
+        v_prime = 0.0
+        v_center = 0.0
+        # Qz
+        Qz = Q[2]
+        Gz = G_vec[2]
 
-    # -------------------------------------
-    # 3) Precompute rotation matrices
-    # -------------------------------------
-    # R_y_all => shape (N, 3, 3)
-    R_y_all = np.empty((N, 3, 3), dtype=np.float64)
-    for i in range(N):
-        R_y_all[i] = rotation_matrix_y_numba(theta_samples[i])
+        # guard for dividing by zero:
+        if R<eps:
+            return 0.0
 
-    # Rz_offset_all => shape (M, 3, 3)
-    Rz_offset_all = np.empty((M, 3, 3), dtype=np.float64)
-    for j in range(M):
-        Rz_offset_all[j] = rotation_matrix_z_numba(phi_offsets[j])
+        # clamp ratio to [-1,1]
+        ratioQ = Qz/R
+        if ratioQ>1.0:  ratioQ=1.0
+        if ratioQ<-1.0: ratioQ=-1.0
+        v_prime = acos(ratioQ)
 
-    # ring_basis => shape (n_phi, 3)
-    ring_basis = np.empty((n_phi, 3), dtype=np.float64)
-    for k in range(n_phi):
-        Rz_k = rotation_matrix_z_numba(phi_range[k])
-        ring_basis[k] = Rz_k @ G
+        ratioG = Gz/R
+        if ratioG>1.0:  ratioG=1.0
+        if ratioG<-1.0: ratioG=-1.0
+        v_center = acos(ratioG)
 
-    # ---------------------------------------------------------
-    # 4) Build combined transformations & compute ring points
-    #    T[i,j] = Rz_offset_all[j] @ R_y_all[i]
-    # ---------------------------------------------------------
-    # ring_points => shape (N, M, n_phi, 3)
-    ring_points = np.empty((N, M, n_phi, 3), dtype=np.float64)
-    # base_points => shape (N, M, 3)
-    base_points = np.empty((N, M, 3), dtype=np.float64)
+        dv = (v_prime - v_center)
+        intensity = np.exp( - (dv*dv)/(2.0*sigma*sigma) )
 
-    for i in range(N):
-        for j in range(M):
-            # T_ij = Rz_offset_all[j] @ R_y_all[i]
-            # We'll apply T_ij to ring_basis and to G.
-            # Because we can't store or multiply big arrays inline with einsum under Numba,
-            # we do explicit loops:
-            T_ij = Rz_offset_all[j] @ R_y_all[i]
-
-            # ring_points for each phi
-            for k in range(n_phi):
-                ring_points[i, j, k, :] = T_ij @ ring_basis[k]
-            # base_point for (i,j)
-            base_points[i, j, :] = T_ij @ G
-
-    # -----------------------------------------------------
-    # 5) Flatten & combine [ring_points, base_points, original_ring, G]
-    # -----------------------------------------------------
-    # ring_points_flat => (N*M*n_phi, 3)
-    ring_points_flat = np.empty((N*M*n_phi, 3), dtype=np.float64)
-    idx = 0
-    for i in range(N):
-        for j in range(M):
-            for k in range(n_phi):
-                ring_points_flat[idx, :] = ring_points[i, j, k, :]
-                idx += 1
-
-    # base_points_flat => (N*M, 3)
-    base_points_flat = np.empty((N*M, 3), dtype=np.float64)
-    idx = 0
-    for i in range(N):
-        for j in range(M):
-            base_points_flat[idx, :] = base_points[i, j, :]
-            idx += 1
-
-    # original_ring => shape (n_phi, 3)
-    original_ring = np.empty((n_phi, 3), dtype=np.float64)
-    for k in range(n_phi):
-        Rz_k = rotation_matrix_z_numba(phi_range[k])
-        original_ring[k] = Rz_k @ G
-
-    # Single G => shape (1, 3)
-    G_array = G.reshape(1, 3)
-
-    # total # of rows in final big_array
-    total_rows = (N*M*n_phi) + (N*M) + n_phi + 1
-    big_array = np.empty((total_rows, 3), dtype=np.float64)
-
-    # Fill big_array
-    idx = 0
-    # 1) ring_points_flat
-    for r in range(N*M*n_phi):
-        big_array[idx, :] = ring_points_flat[r, :]
-        idx += 1
-    # 2) base_points_flat
-    for r in range(N*M):
-        big_array[idx, :] = base_points_flat[r, :]
-        idx += 1
-    # 3) original_ring
-    for r in range(n_phi):
-        big_array[idx, :] = original_ring[r, :]
-        idx += 1
-    # 4) single G
-    big_array[idx, :] = G_array[0, :]
-
-    return big_array
-
+    return intensity
 
 
 ##############################################################################
@@ -207,88 +123,126 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
         valid[i] = True
     return intersects, valid
 
-##############################################################################
-# 4) solve_q
-##############################################################################
+import numpy as np
+from math import sin, cos, sqrt, pi
+from numba import njit
+
 @njit
-def solve_q(k_in, k, g, G_rotated, eps=1e-14):
+def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=10000):
     """
-    For each mosaic sample i (each row in G_rotated):
-    returns shape (N,2,3).
+    Directly sample the intersection circle in Q-space for points with Qz > 0.
+    
+    The intersection is defined by:
+      1) ||Q|| = ||G_vec||     (Bragg sphere)
+      2) ||Q - A|| = k_scat,     where A = -k_in_crystal (Ewald sphere)
+    
+    This function computes the circle center and radius via the difference-of-spheres
+    approach, then samples it uniformly in theta, but only retains points with Qz > 0.
+    Returns an array of shape (n,4) with each row [Qx, Qy, Qz, intensity].
     """
-    kx, ky, kz = k_in
-    Gx = G_rotated[:,0]
-    Gy = G_rotated[:,1]
-    qz = G_rotated[:,2]
+    # 1) Compute bragg radius = ||G_vec||
+    bragg_rad_sq = 0.0
+    for i in range(3):
+        bragg_rad_sq += G_vec[i]*G_vec[i]
+    if bragg_rad_sq < 1e-14:
+        return np.zeros((0,4), dtype=np.float64)
+    bragg_rad = sqrt(bragg_rad_sq)
+    
+    # 2) Define A = -k_in_crystal and rA = k_scat (Ewald sphere).
+    Ax = -k_in_crystal[0]
+    Ay = -k_in_crystal[1]
+    Az = -k_in_crystal[2]
+    rA = k_scat
+    
+    # Norm of A.
+    A_sq = Ax*Ax + Ay*Ay + Az*Az
+    if A_sq < 1e-14:
+        return np.zeros((0,4), dtype=np.float64)
+    A_len = sqrt(A_sq)
+    
+    # 3) Use the difference-of-spheres condition.
+    # The two spheres are:
+    #    ||Q||^2 = bragg_rad_sq      and
+    #    ||Q - A||^2 = rA^2.
+    # Expanding the second gives:
+    #    Q·A = (bragg_rad_sq + A_sq - rA^2) / 2.
+    # Dividing by A_len, we set:
+    c = (bragg_rad_sq + A_sq - rA*rA) / (2.0*A_len)
+    
+    # 4) Circle radius in Q-space: R = sqrt(bragg_rad_sq - c^2)
+    circle_r_sq = bragg_rad_sq - c*c
+    if circle_r_sq < 0.0:
+        return np.zeros((0,4), dtype=np.float64)
+    circle_r = sqrt(circle_r_sq)
+    
+    # 5) Circle center: O = c * A_hat.
+    Ax_hat = Ax / A_len
+    Ay_hat = Ay / A_len
+    Az_hat = Az / A_len
+    
+    Ox = c * Ax_hat
+    Oy = c * Ay_hat
+    Oz = c * Az_hat
+    
+    # 6) Build an orthonormal basis (e1, e2) perpendicular to A_hat.
+    ax, ay, az = 1.0, 0.0, 0.0
+    dot_aA = ax*Ax_hat + ay*Ay_hat + az*Az_hat
+    if abs(dot_aA) > 0.9999:
+        ax, ay, az = 0.0, 1.0, 0.0
+        dot_aA = ax*Ax_hat + ay*Ay_hat + az*Az_hat
 
-    N_samples = G_rotated.shape[0]
-    solutions = np.empty((N_samples,2,3), dtype=np.float64)
+    aox = ax - dot_aA*Ax_hat
+    aoy = ay - dot_aA*Ay_hat
+    aoz = az - dot_aA*Az_hat
+    ao_len = sqrt(aox*aox + aoy*aoy + aoz*aoz)
+    if ao_len < 1e-14:
+        return np.zeros((0,4), dtype=np.float64)
+    e1x = aox / ao_len
+    e1y = aoy / ao_len
+    e1z = aoz / ao_len
 
-    G_ideal_sq = Gx*Gx + Gy*Gy + qz*qz
+    # e2 = A_hat x e1
+    e2x = Az_hat*e1y - Ay_hat*e1z
+    e2y = Ax_hat*e1z - Az_hat*e1x
+    e2z = Ay_hat*e1x - Ax_hat*e1y
+    e2_len = sqrt(e2x*e2x + e2y*e2y + e2z*e2z)
+    if e2_len < 1e-14:
+        return np.zeros((0,4), dtype=np.float64)
+    e2x /= e2_len
+    e2y /= e2_len
+    e2z /= e2_len
 
-    kx2 = kx*kx
-    ky2 = ky*ky
-    kz2 = kz*kz
+    # 7) First pass: Count how many sample points lie above Qz = 0.
+    count = 0
+    for i in range(N_steps):
+        theta = 2.0*pi*(i/float(N_steps))
+        cth = cos(theta)
+        sth = sin(theta)
+        Qz = Oz + circle_r*(cth*e1z + sth*e2z)
+        if Qz > 0.0:
+            count += 1
 
-    alpha0 = 0.5*(k*k - G_ideal_sq - (kx2+ky2+kz2))
-    L = kx2+ky2
+    # Allocate output array for valid points.
+    out = np.zeros((count, 4), dtype=np.float64)
+    
+    # Second pass: Fill the output only with points where Qz > 0.
+    idx = 0
+    for i in range(N_steps):
+        theta = 2.0*pi*(i/float(N_steps))
+        cth = cos(theta)
+        sth = sin(theta)
+        Qx = Ox + circle_r*(cth*e1x + sth*e2x)
+        Qy = Oy + circle_r*(cth*e1y + sth*e2y)
+        Qz = Oz + circle_r*(cth*e1z + sth*e2z)
+        if Qz > 0.0:
+            Ival = compute_intensity_jit(np.array([Qx, Qy, Qz]), G_vec, sigma)
+            out[idx, 0] = Qx
+            out[idx, 1] = Qy
+            out[idx, 2] = Qz
+            out[idx, 3] = Ival
+            idx += 1
 
-    if abs(ky)<eps:
-        for i in range(N_samples):
-            R_sq = G_ideal_sq[i] - qz[i]*qz[i]
-            if R_sq<eps:
-                solutions[i,0,:] = np.nan
-                solutions[i,1,:] = np.nan
-                continue
-            alpha = alpha0[i] - qz[i]*kz
-            if abs(kx)<eps:
-                solutions[i,0,:] = np.nan
-                solutions[i,1,:] = np.nan
-                continue
-            qx0 = alpha/kx
-            tmp = R_sq - qx0*qx0
-            if tmp<0:
-                solutions[i,0,:] = np.nan
-                solutions[i,1,:] = np.nan
-                continue
-            sqrt_tmp = sqrt(tmp)
-            solutions[i,0,0] = qx0
-            solutions[i,0,1] = +sqrt_tmp
-            solutions[i,0,2] = qz[i]
-            solutions[i,1,0] = qx0
-            solutions[i,1,1] = -sqrt_tmp
-            solutions[i,1,2] = qz[i]
-        return solutions
-
-    r = kx/ky
-    for i in range(N_samples):
-        R_sq = G_ideal_sq[i] - qz[i]*qz[i]
-        if R_sq<eps:
-            solutions[i,0,:] = np.nan
-            solutions[i,1,:] = np.nan
-            continue
-        alpha = alpha0[i] - qz[i]*kz
-        disc = R_sq*L - alpha*alpha
-        if disc<0:
-            solutions[i,0,:] = np.nan
-            solutions[i,1,:] = np.nan
-            continue
-        sqrt_disc = sqrt(disc)
-        denom = ky*(r*r +1.0)
-        qxp = (alpha*r + sqrt_disc)/denom
-        qxm = (alpha*r - sqrt_disc)/denom
-        qyp = (alpha - kx*qxp)/ky
-        qym = (alpha - kx*qxm)/ky
-
-        solutions[i,0,0] = qxp
-        solutions[i,0,1] = qyp
-        solutions[i,0,2] = qz[i]
-        solutions[i,1,0] = qxm
-        solutions[i,1,1] = qym
-        solutions[i,1,2] = qz[i]
-
-    return solutions
-
+    return out
 ##############################################################################
 # 5) calculate_phi
 ##############################################################################
@@ -302,7 +256,7 @@ def calculate_phi(
     beam_x_array, beam_y_array,
     theta_array, phi_array,
     reflection_intensity,
-    Mosaic_Rotation,  # shape (N*M, 3)
+    sigma_rad, gamma_rad_m, eta_pv,
     debye_x, debye_y,
     center,
     theta_initial_deg,
@@ -317,7 +271,7 @@ def calculate_phi(
     gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
     G   = sqrt(gr0*gr0 + gz0*gz0)
     n2  = 1
-
+    G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
     max_I_sign0 = -1.0
     max_x_sign0 = np.nan
     max_y_sign0 = np.nan
@@ -408,28 +362,29 @@ def calculate_phi(
         k_z_scat = k_scat*sin(th_t)
         k_in_crystal= np.array([k_x_scat, k_y_scat, k_z_scat])
 
-        All_Q = solve_q(k_in_crystal, k_scat, G, Mosaic_Rotation)
-        All_Q_flat = All_Q.reshape((-1,3))
+        All_Q = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad)
+        for i_sol in range(All_Q.shape[0]):
+            Qx = All_Q[i_sol, 0]
+            Qy = All_Q[i_sol, 1]
+            Qz = All_Q[i_sol, 2]
+            I_Q = All_Q[i_sol, 3]  # the computed intensity from solve_q
 
-        for i_sol in range(All_Q_flat.shape[0]):
-            Qx, Qy, Qz = All_Q_flat[i_sol]
-            if np.isnan(Qx) or np.isnan(Qy) or np.isnan(Qz):
-                continue
+            # Continue with the rest of your processing:
             k_tx_prime = Qx + k_x_scat
             k_ty_prime = Qy + k_y_scat
             k_tz_prime = Qz + k_z_scat
 
             kr = sqrt(k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime)
-            if kr<1e-12:
-                twotheta_t=0.0
+            if kr < 1e-12:
+                twotheta_t = 0.0
             else:
-                twotheta_t= np.arctan(k_tz_prime/kr)
+                twotheta_t = np.arctan(k_tz_prime/kr)
 
-            phi_f= np.arctan2(k_tx_prime, k_ty_prime)
+            phi_f = np.arctan2(k_tx_prime, k_ty_prime)
             k_tx_f = k_scat*cos(twotheta_t)*sin(phi_f)
             k_ty_f = k_scat*cos(twotheta_t)*cos(phi_f)
-            real_k_tz_f= k_scat*sin(twotheta_t)
-            kf= np.array([k_tx_f, k_ty_f, real_k_tz_f])
+            real_k_tz_f = k_scat*sin(twotheta_t)
+            kf = np.array([k_tx_f, k_ty_f, real_k_tz_f])
             kf_prime = R_sample @ kf
 
             dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
@@ -437,19 +392,22 @@ def calculate_phi(
                 continue
 
             plane_to_det = np.array([dx - Detector_Pos[0],
-                                     dy - Detector_Pos[1],
-                                     dz - Detector_Pos[2]], dtype=np.float64)
+                                    dy - Detector_Pos[1],
+                                    dz - Detector_Pos[2]], dtype=np.float64)
             x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
             y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
 
             rpx = int(round(center[0] - y_det/100e-6))
             cpx = int(round(center[1] + x_det/100e-6))
-            if not(0<=rpx<image_size and 0<=cpx<image_size):
+            if not (0 <= rpx < image_size and 0 <= cpx < image_size):
                 continue
 
-            val = reflection_intensity * \
-                  exp(-Qz*Qz * debye_x*debye_x)* \
-                  exp(-(Qx*Qx + Qy*Qy)* debye_y*debye_y)
+            # Multiply the reflection_intensity by the intensity from Q (I_Q) 
+            # and by the Debye-Waller factors.
+            val = reflection_intensity * I_Q * \
+                exp(-Qz*Qz * debye_x*debye_x) * \
+                exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y)
+            image[rpx, cpx] += val
             image[rpx, cpx]+= val
 
             if i_sol%2==0:
@@ -582,9 +540,6 @@ def process_peaks_parallel(
         gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
         G_ideal = np.array([0.0, gr0, gz0], dtype=np.float64)
 
-        # Build mosaic distribution => shape (N*M, 3)
-        Mosaic_Rotation = rotate_G(G_ideal, sigma_rad, N=20, M=20, n_phi=20)
-
         (mx0,my0,mv0, mx1,my1,mv1) = calculate_phi(
             H, K, L, av, cv,
             wavelength_array,
@@ -593,7 +548,7 @@ def process_peaks_parallel(
             zs, zb, n2,
             beam_x_array, beam_y_array,
             theta_array, phi_array,
-            reflI, Mosaic_Rotation,
+            reflI, sigma_rad, gamma_rad_m, eta_pv,
             debye_x, debye_y,
             center,
             theta_initial_deg,
