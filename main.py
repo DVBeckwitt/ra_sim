@@ -38,6 +38,7 @@ import os
 import spglib
 import OSC_Reader
 from OSC_Reader import read_osc
+import math
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
@@ -59,14 +60,14 @@ bg2 = np.load(r"C:\Users\Kenpo\Downloads\background_10d.npy")
 bg3 = np.load(r"C:\Users\Kenpo\Downloads\background_15d.npy")
 bg4 = np.load(r"C:\Users\Kenpo\Downloads\background_30d.npy")
 
-# Rotate and subtract dark image from the loaded files
+# Rotate and subtract dark image
 files = [file1, file2, file3, file4]
 bg_data_list = [bg1, bg2, bg3, bg4]
 for i in range(len(files)):
     files[i] = np.rot90(files[i], k=3) - BI
 background_images = files
 
-# Parse geometry from a .poni file
+# Parse geometry
 poni_file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Analysis\Bi2Se3\geometry.poni"
 parameters = parse_poni_file(poni_file_path)
 
@@ -76,26 +77,22 @@ gamma_initial = parameters.get("Rot2", 0.0)
 poni1 = parameters.get("Poni1", 0.0)
 poni2 = parameters.get("Poni2", 0.0)
 wave_m = parameters.get("Wavelength", 1e-10)
-lambda_ = wave_m * 1e10  # Convert meters -> Å
+lambda_ = wave_m * 1e10  # Convert m -> Å
 
-# Detector and geometry
 image_size = 3000
+num_samples = 3000
 
-num_samples = 1000
-
-# Approximate beam center (row, column)
+# Approximate beam center
 center_default = [
     3000 - (poni2 / (100e-6)),
     3000 - (poni1 / (100e-6))
 ]
 
 mx = 19
-
 av = 4.14
 bv = av
 cv = 28.63600
 
-import math
 fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
 divergence_sigma = math.radians(0.05 * fwhm2sigma)
 sigma_mosaic = math.radians(0.8 * fwhm2sigma)
@@ -129,7 +126,6 @@ data = np.load(
     r"C:\Users\Kenpo\OneDrive\Research\Uniaxially Twisted Project\UniTwist2D\repo\AFF.npy",
     allow_pickle=True
 )
-import sympy as sp
 q = sp.Symbol('q')
 Pbsol = sp.lambdify(q, data[0], modules='numpy')
 Isol = sp.lambdify(q, data[1], modules='numpy')
@@ -137,9 +133,10 @@ data = [Pbsol, Isol]
 
 occ = np.array([1, 1, 1])
 cell_params, atoms = get_Atomic_Coordinates(positions, space_group_operations, atomic_labels)
+from ra_sim.utils.tools import miller_generator
 miller, intensities = miller_generator(mx, av, cv, lambda_, atoms, data, occ)
 
-# Zero out a beamstop region near center
+# Zero out beamstop region near center
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 half_size = 40
@@ -217,7 +214,7 @@ background_display = ax.imshow(
 
 colorbar_main = fig.colorbar(image_display, ax=ax, label='Intensity', shrink=0.6, pad=0.02)
 
-# Additional colorbar axis for caked 2D
+# Additional colorbar axis for caked 2D (not used in basic 1D, but reserved)
 caked_cbar_ax = fig.add_axes([0.92, 0.1, 0.02, 0.8])
 caked_cbar_ax.set_visible(False)
 caked_colorbar = fig.colorbar(image_display, cax=caked_cbar_ax)
@@ -413,15 +410,6 @@ def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
 
     return intensity_vs_2theta, intensity_vs_phi, azimuth_sub, radial_filtered
 
-def tth_phi_to_pixel(tth_deg, phi_deg, dist_m, px_size_m, center_row, center_col):
-    import math
-    tth_rad = math.radians(tth_deg)
-    phi_rad = math.radians(phi_deg)
-    r_pixels = (dist_m / px_size_m) * math.tan(tth_rad)
-    x = center_col + r_pixels * math.cos(phi_rad)
-    y = center_row + r_pixels * math.sin(phi_rad)
-    return x, y
-
 profile_cache = {}
 last_1d_integration_data = {
     "radials_sim": None,
@@ -432,6 +420,8 @@ last_1d_integration_data = {
     "intensities_2theta_bg": None,
     "azimuths_bg": None,
     "intensities_azimuth_bg": None,
+    # The final 2D simulated image
+    "simulated_2d_image": None
 }
 
 last_res2_background = None
@@ -442,10 +432,6 @@ def update_mosaic_cache():
     Regenerate random mosaic profiles if mosaic sliders changed.
     """
     global profile_cache
-    sigma_mosaic_deg_val = sigma_mosaic_var.get()
-    gamma_mosaic_deg_val = gamma_mosaic_var.get()
-    eta_val = eta_var.get()
-
     (beam_x_array,
      beam_y_array,
      theta_array,
@@ -464,9 +450,9 @@ def update_mosaic_cache():
         "theta_array": theta_array,
         "phi_array": phi_array,
         "wavelength_array": wavelength_array,
-        "sigma_mosaic_deg": sigma_mosaic_deg_val,
-        "gamma_mosaic_deg": gamma_mosaic_deg_val,
-        "eta": eta_val
+        "sigma_mosaic_deg": sigma_mosaic_var.get(),
+        "gamma_mosaic_deg": gamma_mosaic_var.get(),
+        "eta": eta_var.get()
     }
 
 def on_mosaic_slider_change(*args):
@@ -475,8 +461,8 @@ def on_mosaic_slider_change(*args):
 
 line_rmin, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
 line_rmax, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
-line_amin, = ax.plot([], [], color='cyan',  linestyle='-', linewidth=2, zorder=5)
-line_amax, = ax.plot([], [], color='cyan',  linestyle='-', linewidth=2, zorder=5)
+line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
+line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 
 update_pending = None
 def schedule_update():
@@ -494,120 +480,12 @@ last_bg_signature = None
 last_sim_signature = None
 last_simulation_signature = None
 
-def get_bg_signature(ai, bg_image):
-    return (
-        round(ai.dist, 6),
-        round(ai.poni1, 6),
-        round(ai.poni2, 6),
-        round(ai.rot1, 6),
-        round(ai.rot2, 6),
-        round(ai.rot3, 6),
-        round(ai.wavelength, 9),
-        id(bg_image)
-    )
-
-def get_sim_signature(
-    gamma_val,
-    Gamma_val,
-    chi_val,
-    zs_val,
-    zb_val,
-    debye_x_val,
-    debye_y_val,
-    a_val,
-    c_val,
-    theta_init_val,
-    center_x_val,
-    center_y_val,
-    mosaic_dict
-):
-    return (
-        round(gamma_val, 6),
-        round(Gamma_val, 6),
-        round(chi_val, 6),
-        round(zs_val, 9),
-        round(zb_val, 9),
-        round(debye_x_val, 6),
-        round(debye_y_val, 6),
-        round(a_val, 6),
-        round(c_val, 6),
-        round(theta_init_val, 6),
-        round(center_x_val, 3),
-        round(center_y_val, 3),
-        round(mosaic_dict["sigma_mosaic_deg"], 6),
-        round(mosaic_dict["gamma_mosaic_deg"], 6),
-        round(mosaic_dict["eta"], 6)
-    )
-
-def scale_image_for_display(unscaled_img):
-    if unscaled_img is None:
-        return np.zeros((image_size, image_size), dtype=np.float64)
-    disp_img = unscaled_img.copy()
-    if current_background_image is not None:
-        max_bg = np.max(current_background_image)
-        max_sim = np.max(disp_img)
-        if (max_bg > 0) and (max_sim > 0):
-            disp_img *= (max_bg / max_sim)
-    return disp_img
-
-_transform_cache = {}
-
-@numba.njit(parallel=True)
-def compute_transform_grid(phi_vals, th_vals, gamma, Gamma, distance_m):
-    n_phi = phi_vals.size
-    n_th  = th_vals.size
-
-    cos_g = np.cos(gamma)
-    sin_g = np.sin(gamma)
-    cos_G = np.cos(Gamma)
-    sin_G = np.sin(Gamma)
-
-    T_phi = np.empty((n_phi, n_th), dtype=np.float64)
-    T_r   = np.empty((n_phi, n_th), dtype=np.float64)
-
-    for i in numba.prange(n_phi):
-        phi = phi_vals[i]
-        sin_phi = np.sin(phi)
-        cos_phi = np.cos(phi)
-        for j in range(n_th):
-            th = th_vals[j]
-            sin_th = np.sin(th)
-            cos_th = np.cos(th)
-
-            denom = ((cos_g * sin_G * sin_phi - sin_g * cos_phi) * sin_th
-                     + cos_G * cos_g * cos_th)
-            lead = distance_m * sin_th / denom
-
-            T_x = lead * (sin_phi * cos_g - cos_phi * sin_g * sin_G)
-            T_z = lead * (cos_G * cos_phi)
-
-            T_phi[i, j] = np.arctan2(T_z, T_x)
-            T_r[i, j]   = np.sqrt(T_x*T_x + T_z*T_z)
-
-    return T_phi, T_r
-
-def get_transformation_matrices(gamma, Gamma, distance_m, radial, azimuthal):
-    key = (
-        float(gamma),
-        float(Gamma),
-        float(distance_m),
-        radial.shape,
-        azimuthal.shape,
-        hash(radial.tobytes()),
-        hash(azimuthal.tobytes())
-    )
-    if key in _transform_cache:
-        return _transform_cache[key]
-
-    T_phi, T_r = compute_transform_grid(azimuthal, radial, gamma, Gamma, distance_m)
-    _transform_cache[key] = (T_phi, T_r)
-    return T_phi, T_r
-
-legend_handle = None
-
+###############################################################################
+#                              MAIN UPDATE
+###############################################################################
 def do_update():
-    global update_pending, last_res2_sim, last_res2_background
-    global unscaled_image_global, last_simulation_signature
+    global update_pending, last_simulation_signature
+    global unscaled_image_global, background_visible
 
     update_pending = None
 
@@ -629,7 +507,6 @@ def do_update():
     center_marker.set_ydata([center_x_up])
     center_marker.set_visible(True)
 
-    # Build mosaic_params with only arrays the new method uses
     mosaic_params = {
         "beam_x_array":  profile_cache.get("beam_x_array", []),
         "beam_y_array":  profile_cache.get("beam_y_array", []),
@@ -641,13 +518,26 @@ def do_update():
         "eta": eta_var.get()
     }
 
-    new_sim_sig = get_sim_signature(
-        gamma_updated, Gamma_updated, chi_updated,
-        zs_updated, zb_updated, debye_x_updated, debye_y_updated,
-        a_updated, c_updated, theta_init_up, center_x_up, center_y_up,
-        mosaic_params
-    )
+    def get_sim_signature():
+        return (
+            round(gamma_updated, 6),
+            round(Gamma_updated, 6),
+            round(chi_updated, 6),
+            round(zs_updated, 9),
+            round(zb_updated, 9),
+            round(debye_x_updated, 6),
+            round(debye_y_updated, 6),
+            round(a_updated, 6),
+            round(c_updated, 6),
+            round(theta_init_up, 6),
+            round(center_x_up, 3),
+            round(center_y_up, 3),
+            round(mosaic_params["sigma_mosaic_deg"], 6),
+            round(mosaic_params["gamma_mosaic_deg"], 6),
+            round(mosaic_params["eta"], 6)
+        )
 
+    new_sim_sig = get_sim_signature()
     global peak_positions, peak_millers, peak_intensities
     if new_sim_sig != last_simulation_signature:
         last_simulation_signature = new_sim_sig
@@ -678,6 +568,7 @@ def do_update():
             np.array([0.0, 1.0, 0.0]),
             save_flag=0
         )
+
         for i, (H, K, L) in enumerate(miller):
             mx0, my0, mv0, mx1, my1, mv1 = max_positions_local[i, :]
             if np.isfinite(mx0) and np.isfinite(my0):
@@ -698,13 +589,34 @@ def do_update():
                 peak_intensities.append(mv1)
                 peak_millers.append((H, K, L))
 
+        # Store the unscaled image globally
         unscaled_image_global = updated_image
+
+    def scale_image_for_display(unscaled_img):
+        if unscaled_img is None:
+            return np.zeros((image_size, image_size), dtype=np.float64)
+        disp_img = unscaled_img.copy()
+        if current_background_image is not None:
+            max_bg = np.max(current_background_image)
+            max_sim = np.max(disp_img)
+            if (max_bg > 0) and (max_sim > 0):
+                disp_img *= (max_bg / max_sim)
+        return disp_img
 
     disp_image = scale_image_for_display(unscaled_image_global)
     global_image_buffer[:] = disp_image
+
     image_display.set_clim(vmin=0, vmax=vmax_var.get())
     image_display.set_data(global_image_buffer)
 
+    # Toggle background display
+    background_display.set_visible(background_visible)
+    if background_visible:
+        background_display.set_data(current_background_image)
+    else:
+        background_display.set_data(np.zeros_like(current_background_image))
+
+    # Attempt a simple "chi-squared" measure
     try:
         norm_sim = (global_image_buffer / np.max(global_image_buffer)
                     if np.max(global_image_buffer) > 0 else global_image_buffer)
@@ -718,6 +630,82 @@ def do_update():
             chi_square_label.config(text="Chi-Squared: N/A")
     except Exception as e:
         chi_square_label.config(text=f"Chi-Squared: Error - {e}")
+
+    # Store the unscaled image globally in last_1d_integration_data unconditionally:
+    last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
+
+    # --- 1D Integration (only if show_1d_var is True) ---
+    if show_1d_var.get() and unscaled_image_global is not None:
+        # Create a pyFAI AzimuthalIntegrator with current geometry
+        ai = pyFAI.AzimuthalIntegrator(
+            dist=corto_det_up,
+            poni1=(center_x_up)*100e-6,
+            poni2=(center_y_up)*100e-6,
+            rot1=np.deg2rad(Gamma_updated),
+            rot2=np.deg2rad(gamma_updated),
+            rot3=0.0,
+            wavelength=wave_m
+        )
+        # Integrate the simulated image
+        sim_res2 = caking(unscaled_image_global, ai)
+        i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
+            sim_res2,
+            tth_min_var.get(),
+            tth_max_var.get(),
+            phi_min_var.get(),
+            phi_max_var.get()
+        )
+        # Integrate the background
+        bg_res2 = caking(current_background_image, ai) if background_visible else None
+        if bg_res2 is not None:
+            i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
+                bg_res2,
+                tth_min_var.get(),
+                tth_max_var.get(),
+                phi_min_var.get(),
+                phi_max_var.get()
+            )
+        else:
+            i2t_bg, i_phi_bg, az_bg, rad_bg = ([], [], [], [])
+
+        # Update line plots
+        line_1d_rad.set_data(rad_sim, i2t_sim)
+        line_1d_rad_bg.set_data(rad_bg, i2t_bg)
+        line_1d_az.set_data(az_sim, i_phi_sim)
+        line_1d_az_bg.set_data(az_bg, i2t_bg)
+
+        # Store results for optional future uses
+        last_1d_integration_data["radials_sim"] = rad_sim
+        last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
+        last_1d_integration_data["azimuths_sim"] = az_sim
+        last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
+        last_1d_integration_data["radials_bg"] = rad_bg
+        last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
+        last_1d_integration_data["azimuths_bg"] = az_bg
+        last_1d_integration_data["intensities_azimuth_bg"] = i_phi_bg
+
+        if log_radial_var.get():
+            ax_1d_radial.set_yscale('log')
+        else:
+            ax_1d_radial.set_yscale('linear')
+
+        if log_azimuth_var.get():
+            ax_1d_azim.set_yscale('log')
+        else:
+            ax_1d_azim.set_yscale('linear')
+
+        ax_1d_radial.relim()
+        ax_1d_radial.autoscale_view()
+        ax_1d_azim.relim()
+        ax_1d_azim.autoscale_view()
+        canvas_1d.draw_idle()
+    else:
+        # Hide lines if we aren't showing 1D
+        line_1d_rad.set_data([], [])
+        line_1d_rad_bg.set_data([], [])
+        line_1d_az.set_data([], [])
+        line_1d_az_bg.set_data([], [])
+        canvas_1d.draw_idle()
 
     canvas.draw_idle()
 
@@ -823,8 +811,6 @@ azimuthal_button = ttk.Button(
     )
 )
 azimuthal_button.pack(side=tk.TOP, padx=5, pady=2)
-
-from ra_sim.io.data_loading import save_all_parameters, load_parameters
 
 progress_label_positions = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
 progress_label_positions.pack(side=tk.BOTTOM, padx=5)
@@ -988,12 +974,10 @@ log_radial_var = tk.BooleanVar(value=False)
 log_azimuth_var = tk.BooleanVar(value=False)
 
 def toggle_log_radial():
-    # Implementation if desired
-    pass
+    schedule_update()
 
 def toggle_log_azimuth():
-    # Implementation if desired
-    pass
+    schedule_update()
 
 check_log_radial = ttk.Checkbutton(
     text="Log Radial",
@@ -1010,13 +994,45 @@ check_log_azimuth = ttk.Checkbutton(
 check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
 
 def save_1d_snapshot():
+    """
+    Save only the final 2D simulated image as a .npy file.
+    """
     file_path = filedialog.asksaveasfilename(
+        initialdir=r"C:\Users\Kenpo\Downloads",
         defaultextension=".npy",
         filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")]
     )
+    print("Dialog returned file_path:", file_path)  # Debug print
+    
     if not file_path:
+        progress_label.config(text="No file path selected.")
         return
-    np.save(file_path, {}, allow_pickle=True)
+    
+    # Append extension if missing
+    if not file_path.lower().endswith(".npy"):
+        file_path += ".npy"
+        print("Appended .npy to file path ->", file_path)
+    
+    sim_img = last_1d_integration_data.get("simulated_2d_image")
+    if sim_img is None:
+        progress_label.config(text="No simulated image available to save!")
+        return
+
+    sim_img = np.asarray(sim_img, dtype=np.float64)
+
+    try:
+        # Test-write an empty file
+        with open(file_path, 'wb') as test_f:
+            pass
+        print(f"Empty file successfully created: {file_path}")
+        
+        # Now actually save the simulated image
+        np.save(file_path, sim_img, allow_pickle=False)
+        progress_label.config(text=f"Saved simulated image to {file_path}")
+        print(f"Saved simulated image to {file_path}")
+    except Exception as e:
+        progress_label.config(text=f"Error saving simulated image: {e}")
+        print("Error saving simulated image:", e)
 
 snapshot_button = ttk.Button(
     text="Save 1D Snapshot",
@@ -1063,7 +1079,6 @@ def save_q_space_representation():
         "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": profile_cache.get("eta", 0.0)
     }
-
 
     image_result, max_positions_local, q_data, q_count = process_peaks_parallel(
         miller,
@@ -1116,7 +1131,6 @@ save_q_button = ttk.Button(
 save_q_button.pack(side=tk.TOP, padx=5, pady=2)
 
 def save_1d_permutations():
-    # Implementation for specialized 1D saving
     pass
 
 save_1d_grid_button = ttk.Button(
@@ -1124,14 +1138,10 @@ save_1d_grid_button = ttk.Button(
     command=save_1d_permutations
 )
 save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
+
 def run_debug_simulation():
-    """
-    Run the debug version of the simulation with current slider/parameter values,
-    then dump the debug log to CSV.
-    """
     from ra_sim.simulation.diffraction_debug import process_peaks_parallel_debug, dump_debug_log
 
-    # Get current parameter values from the sliders
     gamma_val = float(gamma_var.get())
     Gamma_val = float(Gamma_var.get())
     chi_val   = float(chi_var.get())
@@ -1146,7 +1156,6 @@ def run_debug_simulation():
     cx_val    = float(center_x_var.get())
     cy_val    = float(center_y_var.get())
 
-    # Build mosaic_params including all necessary keys
     mosaic_params = {
         "beam_x_array": profile_cache.get("beam_x_array", []),
         "beam_y_array": profile_cache.get("beam_y_array", []),
@@ -1158,10 +1167,7 @@ def run_debug_simulation():
         "eta": profile_cache.get("eta", 0.0)
     }
 
-    # Create a simulation buffer
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-
-    # Call the debug version of the peak processing function
     image_out, maxpos, qdata, qcount = process_peaks_parallel_debug(
         miller,
         intensities,
@@ -1195,10 +1201,8 @@ def run_debug_simulation():
         save_flag=1
     )
 
-    # Dump the debug log to CSV
     dump_debug_log()
     progress_label.config(text="Debug simulation complete. Log saved.")
-
 
 debug_button = ttk.Button(
     text="Run Debug Simulation",
@@ -1206,9 +1210,6 @@ debug_button = ttk.Button(
 )
 debug_button.pack(side=tk.TOP, padx=5, pady=2)
 
-# --------------------------
-# Sliders for mosaic + geometry
-# --------------------------
 def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=False):
     var, scale = create_slider(
         label_str,

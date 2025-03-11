@@ -20,7 +20,7 @@ def compute_intensity_jit(Q, G_vec, sigma):
     R = sqrt(R)
     
     # Check if G is vertical
-    eps = 1e-8
+    eps = 0.1
     if abs(G_vec[0])<eps and abs(G_vec[1])<eps:
         # CAP METHOD: 
         # alpha = angle between G and Q
@@ -128,7 +128,7 @@ from math import sin, cos, sqrt, pi
 from numba import njit
 
 @njit
-def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=10000):
+def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=1000):
     """
     Directly sample the intersection circle in Q-space for points with Qz > 0.
     
