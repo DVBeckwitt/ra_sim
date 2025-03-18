@@ -80,11 +80,11 @@ wave_m = parameters.get("Wavelength", 1e-10)
 lambda_ = wave_m * 1e10  # Convert m -> Å
 
 image_size = 3000
-num_samples = 3000
+num_samples = 200
 
 # Approximate beam center
 center_default = [
-    3000 - (poni2 / (100e-6)),
+    (poni2 / (100e-6)),
     3000 - (poni1 / (100e-6))
 ]
 
@@ -95,6 +95,7 @@ cv = 28.63600
 
 fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
 divergence_sigma = math.radians(0.05 * fwhm2sigma)
+
 sigma_mosaic = math.radians(0.8 * fwhm2sigma)
 gamma_mosaic = math.radians(0.7 * fwhm2sigma)
 eta = 0.0
@@ -140,6 +141,7 @@ miller, intensities = miller_generator(mx, av, cv, lambda_, atoms, data, occ)
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 half_size = 40
+
 for bg in background_images:
     rmin = max(0, row_center - half_size)
     rmax = min(bg.shape[0], row_center + half_size)
@@ -228,6 +230,7 @@ center_marker, = ax.plot(
     markersize=5,
     zorder=2
 )
+
 ax.set_xlim(0, image_size)
 ax.set_ylim(row_center, 0)
 plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
@@ -236,7 +239,10 @@ plt.xlabel('X (pixels)')
 plt.ylabel('Y (pixels)')
 canvas.draw()
 
-vmax_label = ttk.Label(vmax_frame, text="Max Value")
+# ---------------------------------------------------------------------------
+# NEW: Separate "vmax" for caked 2D image, plus "vmin" for caked
+# ---------------------------------------------------------------------------
+vmax_label = ttk.Label(vmax_frame, text="Max Value (Normal)")
 vmax_label.pack(side=tk.LEFT, padx=5)
 
 vmax_var = tk.DoubleVar(value=defaults['vmax'])
@@ -249,12 +255,57 @@ def vmax_slider_command(val):
 vmax_slider = ttk.Scale(
     vmax_frame,
     from_=0,
-    to=2000,
+    to=3000,
     orient=tk.HORIZONTAL,
     variable=vmax_var,
     command=vmax_slider_command
 )
 vmax_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+# Frame for caked vmin/vmax
+caked_vrange_frame = ttk.Frame(fig_frame)
+caked_vrange_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+# NEW: separate vmin_caked slider
+vmin_caked_label = ttk.Label(caked_vrange_frame, text="vmin (Caked)")
+vmin_caked_label.pack(side=tk.LEFT, padx=5)
+
+vmin_caked_var = tk.DoubleVar(value=0.0)
+def vmin_caked_slider_command(val):
+    v = float(val)
+    vmin_caked_var.set(v)
+    schedule_update()
+
+vmin_caked_slider = ttk.Scale(
+    caked_vrange_frame,
+    from_=0,
+    to=1000,
+    orient=tk.HORIZONTAL,
+    variable=vmin_caked_var,
+    command=vmin_caked_slider_command
+)
+vmin_caked_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+# NEW: separate vmax_caked slider
+vmax_caked_label = ttk.Label(caked_vrange_frame, text="vmax (Caked)")
+vmax_caked_label.pack(side=tk.LEFT, padx=5)
+
+vmax_caked_var = tk.DoubleVar(value=2000.0)
+def vmax_caked_slider_command(val):
+    v = float(val)
+    vmax_caked_var.set(v)
+    schedule_update()
+
+vmax_caked_slider = ttk.Scale(
+    caked_vrange_frame,
+    from_=0,
+    to=5000,
+    orient=tk.HORIZONTAL,
+    variable=vmax_caked_var,
+    command=vmax_caked_slider_command
+)
+vmax_caked_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+# ---------------------------------------------------------------------------
 
 slider_frame = ttk.Frame(root, padding=10)
 slider_frame.pack(side=tk.LEFT, fill=tk.Y)
@@ -505,7 +556,7 @@ def do_update():
 
     center_marker.set_xdata([center_y_up])
     center_marker.set_ydata([center_x_up])
-    center_marker.set_visible(True)
+    center_marker.set_visible(False)
 
     mosaic_params = {
         "beam_x_array":  profile_cache.get("beam_x_array", []),
@@ -606,7 +657,16 @@ def do_update():
     disp_image = scale_image_for_display(unscaled_image_global)
     global_image_buffer[:] = disp_image
 
-    image_display.set_clim(vmin=0, vmax=vmax_var.get())
+    # UPDATED FOR CAKED VMIN/VMAX LOGIC
+    if show_caked_2d_var.get() and unscaled_image_global is not None:
+        # We'll override the normal color scale with the caked range
+        # The actual "raw" caked image is computed below, but for consistency
+        # we set the display range here. The 'image_display' is re-used.
+        image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
+    else:
+        # Normal diffraction pattern: use vmin=0, the single existing slider for vmax
+        image_display.set_clim(0, vmax_var.get())
+
     image_display.set_data(global_image_buffer)
 
     # Toggle background display
@@ -616,7 +676,6 @@ def do_update():
     else:
         background_display.set_data(np.zeros_like(current_background_image))
 
-    # Attempt a simple "chi-squared" measure
     try:
         norm_sim = (global_image_buffer / np.max(global_image_buffer)
                     if np.max(global_image_buffer) > 0 else global_image_buffer)
@@ -631,22 +690,47 @@ def do_update():
     except Exception as e:
         chi_square_label.config(text=f"Chi-Squared: Error - {e}")
 
-    # Store the unscaled image globally in last_1d_integration_data unconditionally:
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
 
-    # --- 1D Integration (only if show_1d_var is True) ---
+    ai = pyFAI.AzimuthalIntegrator(
+        dist=corto_det_up,
+        poni1=center_x_up * 100e-6,
+        poni2=center_y_up * 100e-6,
+        rot1=np.deg2rad(Gamma_updated),
+        rot2=np.deg2rad(gamma_updated),
+        rot3=0.0,
+        wavelength=wave_m,
+        pixel1=100e-6,
+        pixel2=100e-6
+    )
+
+    if show_caked_2d_var.get() and unscaled_image_global is not None:
+        # Perform caking on the simulated 2D image
+        sim_res2 = caking(unscaled_image_global, ai)
+        caked_img = sim_res2.intensity
+
+        image_display.set_data(caked_img)
+        # Now apply the caked vmin, vmax
+        image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
+        ax.set_title('2D Caked Integration')
+
+        # Hide or ignore the background display when caked image is shown
+        background_display.set_visible(False)
+    else:
+        # Show the normal simulated diffraction image
+        if unscaled_image_global is not None:
+            disp_image = scale_image_for_display(unscaled_image_global)
+            image_display.set_data(disp_image)
+        else:
+            image_display.set_data(np.zeros((image_size, image_size)))
+
+        # Normal color range
+        image_display.set_clim(0, vmax_var.get())
+        ax.set_title('Simulated Diffraction Pattern')
+        background_display.set_visible(background_visible)
+
+    # Optionally do 1D integration
     if show_1d_var.get() and unscaled_image_global is not None:
-        # Create a pyFAI AzimuthalIntegrator with current geometry
-        ai = pyFAI.AzimuthalIntegrator(
-            dist=corto_det_up,
-            poni1=(center_x_up)*100e-6,
-            poni2=(center_y_up)*100e-6,
-            rot1=np.deg2rad(Gamma_updated),
-            rot2=np.deg2rad(gamma_updated),
-            rot3=0.0,
-            wavelength=wave_m
-        )
-        # Integrate the simulated image
         sim_res2 = caking(unscaled_image_global, ai)
         i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
             sim_res2,
@@ -655,9 +739,11 @@ def do_update():
             phi_min_var.get(),
             phi_max_var.get()
         )
-        # Integrate the background
-        bg_res2 = caking(current_background_image, ai) if background_visible else None
-        if bg_res2 is not None:
+        line_1d_rad.set_data(rad_sim, i2t_sim)
+        line_1d_az.set_data(az_sim, i_phi_sim)
+
+        if background_visible and current_background_image is not None:
+            bg_res2 = caking(current_background_image, ai)
             i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
                 bg_res2,
                 tth_min_var.get(),
@@ -665,34 +751,14 @@ def do_update():
                 phi_min_var.get(),
                 phi_max_var.get()
             )
+            line_1d_rad_bg.set_data(rad_bg, i2t_bg)
+            line_1d_az_bg.set_data(az_bg, i_phi_bg)
         else:
-            i2t_bg, i_phi_bg, az_bg, rad_bg = ([], [], [], [])
+            line_1d_rad_bg.set_data([], [])
+            line_1d_az_bg.set_data([], [])
 
-        # Update line plots
-        line_1d_rad.set_data(rad_sim, i2t_sim)
-        line_1d_rad_bg.set_data(rad_bg, i2t_bg)
-        line_1d_az.set_data(az_sim, i_phi_sim)
-        line_1d_az_bg.set_data(az_bg, i2t_bg)
-
-        # Store results for optional future uses
-        last_1d_integration_data["radials_sim"] = rad_sim
-        last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
-        last_1d_integration_data["azimuths_sim"] = az_sim
-        last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
-        last_1d_integration_data["radials_bg"] = rad_bg
-        last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
-        last_1d_integration_data["azimuths_bg"] = az_bg
-        last_1d_integration_data["intensities_azimuth_bg"] = i_phi_bg
-
-        if log_radial_var.get():
-            ax_1d_radial.set_yscale('log')
-        else:
-            ax_1d_radial.set_yscale('linear')
-
-        if log_azimuth_var.get():
-            ax_1d_azim.set_yscale('log')
-        else:
-            ax_1d_azim.set_yscale('linear')
+        ax_1d_radial.set_yscale('log' if log_radial_var.get() else 'linear')
+        ax_1d_azim.set_yscale('log' if log_azimuth_var.get() else 'linear')
 
         ax_1d_radial.relim()
         ax_1d_radial.autoscale_view()
@@ -700,14 +766,29 @@ def do_update():
         ax_1d_azim.autoscale_view()
         canvas_1d.draw_idle()
     else:
-        # Hide lines if we aren't showing 1D
         line_1d_rad.set_data([], [])
-        line_1d_rad_bg.set_data([], [])
         line_1d_az.set_data([], [])
+        line_1d_rad_bg.set_data([], [])
         line_1d_az_bg.set_data([], [])
         canvas_1d.draw_idle()
 
     canvas.draw_idle()
+
+    try:
+        if background_visible and current_background_image is not None:
+            norm_sim = (unscaled_image_global / np.max(unscaled_image_global)
+                        if np.max(unscaled_image_global) > 0 else unscaled_image_global)
+            norm_bg = (current_background_image / np.max(current_background_image)
+                       if np.max(current_background_image) > 0 else current_background_image)
+            if norm_bg is not None and norm_bg.shape == norm_sim.shape:
+                chi_sq_val = mean_squared_error(norm_bg, norm_sim) * norm_sim.size
+                chi_square_label.config(text=f"Chi-Squared: {chi_sq_val:.2e}")
+            else:
+                chi_square_label.config(text="Chi-Squared: N/A")
+        else:
+            chi_square_label.config(text="Chi-Squared: N/A")
+    except Exception as e:
+        chi_square_label.config(text=f"Chi-Squared Error: {e}")
 
 def toggle_background():
     global background_visible
@@ -745,6 +826,10 @@ def reset_to_defaults():
     phi_max_var.set(105.0)
     show_1d_var.set(False)
     show_caked_2d_var.set(False)
+    # NEW: Reset caked vmin/vmax
+    vmin_caked_var.set(0.0)
+    vmax_caked_var.set(2000.0)
+
     update_mosaic_cache()
     global last_simulation_signature
     last_simulation_signature = None
@@ -1008,7 +1093,6 @@ def save_1d_snapshot():
         progress_label.config(text="No file path selected.")
         return
     
-    # Append extension if missing
     if not file_path.lower().endswith(".npy"):
         file_path += ".npy"
         print("Appended .npy to file path ->", file_path)
@@ -1021,12 +1105,10 @@ def save_1d_snapshot():
     sim_img = np.asarray(sim_img, dtype=np.float64)
 
     try:
-        # Test-write an empty file
         with open(file_path, 'wb') as test_f:
             pass
         print(f"Empty file successfully created: {file_path}")
         
-        # Now actually save the simulated image
         np.save(file_path, sim_img, allow_pickle=False)
         progress_label.config(text=f"Saved simulated image to {file_path}")
         print(f"Saved simulated image to {file_path}")
@@ -1223,7 +1305,7 @@ def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=Fals
     return var, scale
 
 theta_initial_var, theta_initial_scale = make_slider(
-    'Theta Initial', 5.0, 20.0, defaults['theta_initial'], 0.0001, left_col
+    'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, left_col
 )
 gamma_var, gamma_scale = make_slider(
     'Gamma', -4, 4, defaults['gamma'], 0.001, left_col

@@ -1,94 +1,95 @@
 import numpy as np
 from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
-import numpy as np
-from numba import njit
-from math import sin, cos, sqrt, pi, exp
 
 @njit
-def compute_intensity_jit(Q, G_vec, sigma):
+def compute_intensity_array(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
     """
-    A numba-friendly version of your compute_intensity function.
-    (Assumes sigma is already in radians, or else adapt accordingly.)
+    Vectorized version: compute intensities on a sphere or ring defined by G_vec,
+    replacing the pure Gaussian with a pseudo-Voigt profile:
+
+        PV(theta) = (1 - eta_pv)*exp(-(theta^2)/(2*sigma^2)) 
+                    + eta_pv/(1 + (theta/gamma_pv)^2)
+
+    Parameters
+    ----------
+    Qx, Qy, Qz : ndarray
+        Arrays of coordinates in reciprocal space.
+    G_vec : array_like
+        3-component reference vector (reciprocal-lattice vector).
+    sigma : float
+        Gaussian width parameter (radians).
+    gamma_pv : float
+        Lorentzian half-width parameter (radians).
+    eta_pv : float
+        Mixing fraction in [0,1] for pseudo-Voigt.
+
+    Returns
+    -------
+    intensities : ndarray
+        Same shape as Qx (and Qy, Qz), with the computed intensities.
     """
-    # Norm of G defines the Bragg-sphere radius.
-    # If G is nearly vertical (x≈y≈0), do the "cap" method;
-    # else do the "horizontal band" method.
-    R = 0.0
-    for i in range(3):
-        R += G_vec[i]*G_vec[i]
-    R = sqrt(R)
-    
-    # Check if G is vertical
     eps = 0.1
-    if abs(G_vec[0])<eps and abs(G_vec[1])<eps:
-        # CAP METHOD: 
-        # alpha = angle between G and Q
-        #   = arccos( (G/||G||)⋅(Q/||G||) )  but Q also has length ~||G|| at intersection
-        # Safer to normalize both:
-        Gnorm = 1.0 / R if R>eps else 1.0
-        Qlen = 0.0
-        for i in range(3):
-            Qlen += Q[i]*Q[i]
-        Qlen = sqrt(Qlen)
-        Qnorm = 1.0 / Qlen if Qlen>eps else 1.0
-        dot_ = 0.0
-        for i in range(3):
-            dot_ += (G_vec[i]*Gnorm)*(Q[i]*Qnorm)
-        if dot_>1.0: 
-            dot_=1.0
-        elif dot_<-1.0:
-            dot_=-1.0
-        alpha = acos(dot_)
-        intensity = np.exp( - (alpha*alpha)/(2.0*sigma*sigma) )
+    R = sqrt(G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2])
+    if R < 1e-14:
+        # If |G| is too small, return zeros
+        return np.zeros_like(Qx)
+
+    Gx, Gy, Gz = G_vec[0], G_vec[1], G_vec[2]
+    # Check if G is nearly vertical, i.e. small x,y
+    is_vertical = (abs(Gx) < eps and abs(Gy) < eps)
+
+    intensities = np.zeros_like(Qx)
+    if is_vertical:
+        # "Cap" method
+        Gnorm = 1.0 / R
+        Qnorm = 1.0 / np.sqrt(Qx*Qx + Qy*Qy + Qz*Qz + 1e-30)
+        dot_ = (Gx*Gnorm)*(Qx*Qnorm) + (Gy*Gnorm)*(Qy*Qnorm) + (Gz*Gnorm)*(Qz*Qnorm)
+        dot_clamped = np.minimum(np.maximum(dot_, -1.0), 1.0)
+        alpha = np.arccos(dot_clamped)
+
+        # Gaussian part
+        gauss_val = np.exp(- (alpha*alpha)/(2.0*sigma*sigma))
+        # Lorentzian part
+        lor_val   = 1.0 / (1.0 + (alpha/gamma_pv)**2)
+        # Combine as pseudo-Voigt
+        intensities = (1.0 - eta_pv)*gauss_val + eta_pv*lor_val
+
     else:
-        # HORIZONTAL BAND:
-        # v_prime = arccos(Qz / R)
-        # v_center= arccos(Gz / R)
-        # I = exp(-((v'-v_center)^2)/(2*sigma^2))
-        v_prime = 0.0
-        v_center = 0.0
-        # Qz
-        Qz = Q[2]
-        Gz = G_vec[2]
+        # "Horizontal band" method
+        ratioQ = Qz / R
+        ratioQ = np.minimum(np.maximum(ratioQ, -1.0), 1.0)
+        v_prime = np.arccos(ratioQ)
 
-        # guard for dividing by zero:
-        if R<eps:
-            return 0.0
-
-        # clamp ratio to [-1,1]
-        ratioQ = Qz/R
-        if ratioQ>1.0:  ratioQ=1.0
-        if ratioQ<-1.0: ratioQ=-1.0
-        v_prime = acos(ratioQ)
-
-        ratioG = Gz/R
-        if ratioG>1.0:  ratioG=1.0
-        if ratioG<-1.0: ratioG=-1.0
+        ratioG = Gz / R
+        ratioG = max(min(ratioG, 1.0), -1.0)
         v_center = acos(ratioG)
+        dv = v_prime - v_center
 
-        dv = (v_prime - v_center)
-        intensity = np.exp( - (dv*dv)/(2.0*sigma*sigma) )
+        # Gaussian part
+        gauss_val = np.exp(- (dv*dv)/(2.0*sigma*sigma))
+        # Lorentzian part
+        lor_val   = 1.0 / (1.0 + (dv/gamma_pv)**2)
+        # Combine as pseudo-Voigt
+        intensities = (1.0 - eta_pv)*gauss_val + eta_pv*lor_val
 
-    return intensity
+    return intensities
 
 
 ##############################################################################
-# 3) Intersect line-plane (unchanged)
+# 3) intersect_line_plane, batch
 ##############################################################################
 @njit
 def intersect_line_plane(P0, k_vec, P_plane, n_plane):
     denom = k_vec[0]*n_plane[0] + k_vec[1]*n_plane[1] + k_vec[2]*n_plane[2]
     if abs(denom) < 1e-14:
         return (np.nan, np.nan, np.nan, False)
-
-    num = ((P_plane[0] - P0[0]) * n_plane[0]
-         + (P_plane[1] - P0[1]) * n_plane[1]
-         + (P_plane[2] - P0[2]) * n_plane[2])
-    t = num/denom
+    num = ((P_plane[0] - P0[0]) * n_plane[0] +
+           (P_plane[1] - P0[1]) * n_plane[1] +
+           (P_plane[2] - P0[2]) * n_plane[2])
+    t = num / denom
     if t < 0.0:
         return (np.nan, np.nan, np.nan, False)
-
     ix = P0[0] + t*k_vec[0]
     iy = P0[1] + t*k_vec[1]
     iz = P0[2] + t*k_vec[2]
@@ -106,14 +107,12 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
         dot_dn = kx*plane_n[0] + ky*plane_n[1] + kz*plane_n[2]
         if abs(dot_dn) < 1e-14:
             continue
-
-        num = ((plane_pt[0]-start_pt[0])*plane_n[0]
-             + (plane_pt[1]-start_pt[1])*plane_n[1]
-             + (plane_pt[2]-start_pt[2])*plane_n[2])
+        num = ((plane_pt[0]-start_pt[0])*plane_n[0] +
+               (plane_pt[1]-start_pt[1])*plane_n[1] +
+               (plane_pt[2]-start_pt[2])*plane_n[2])
         t = num/dot_dn
         if t < 0.0:
             continue
-
         ix = start_pt[0] + t*kx
         iy = start_pt[1] + t*ky
         iz = start_pt[2] + t*kz
@@ -123,68 +122,44 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
         valid[i] = True
     return intersects, valid
 
-import numpy as np
-from math import sin, cos, sqrt, pi
-from numba import njit
-
+##############################################################################
+# 4) solve_q
+##############################################################################
 @njit
-def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=1000):
+def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, N_steps=10000):
     """
-    Directly sample the intersection circle in Q-space for points with Qz > 0.
-    
-    The intersection is defined by:
-      1) ||Q|| = ||G_vec||     (Bragg sphere)
-      2) ||Q - A|| = k_scat,     where A = -k_in_crystal (Ewald sphere)
-    
-    This function computes the circle center and radius via the difference-of-spheres
-    approach, then samples it uniformly in theta, but only retains points with Qz > 0.
-    Returns an array of shape (n,4) with each row [Qx, Qy, Qz, intensity].
+    Create angle array using np.arange to avoid endpoint keyword in linspace:
+        theta = [0, 1, 2, ..., N_steps-1] * (2π / N_steps)
+    which is effectively the same as linspace(0, 2π, N_steps, endpoint=False).
     """
-    # 1) Compute bragg radius = ||G_vec||
-    bragg_rad_sq = 0.0
-    for i in range(3):
-        bragg_rad_sq += G_vec[i]*G_vec[i]
-    if bragg_rad_sq < 1e-14:
+    G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
+    if G_sq < 1e-14:
         return np.zeros((0,4), dtype=np.float64)
-    bragg_rad = sqrt(bragg_rad_sq)
-    
-    # 2) Define A = -k_in_crystal and rA = k_scat (Ewald sphere).
+
     Ax = -k_in_crystal[0]
     Ay = -k_in_crystal[1]
     Az = -k_in_crystal[2]
     rA = k_scat
-    
-    # Norm of A.
     A_sq = Ax*Ax + Ay*Ay + Az*Az
     if A_sq < 1e-14:
         return np.zeros((0,4), dtype=np.float64)
     A_len = sqrt(A_sq)
-    
-    # 3) Use the difference-of-spheres condition.
-    # The two spheres are:
-    #    ||Q||^2 = bragg_rad_sq      and
-    #    ||Q - A||^2 = rA^2.
-    # Expanding the second gives:
-    #    Q·A = (bragg_rad_sq + A_sq - rA^2) / 2.
-    # Dividing by A_len, we set:
-    c = (bragg_rad_sq + A_sq - rA*rA) / (2.0*A_len)
-    
-    # 4) Circle radius in Q-space: R = sqrt(bragg_rad_sq - c^2)
-    circle_r_sq = bragg_rad_sq - c*c
+
+    c = (G_sq + A_sq - rA*rA) / (2.0*A_len)
+    circle_r_sq = G_sq - c*c
     if circle_r_sq < 0.0:
         return np.zeros((0,4), dtype=np.float64)
     circle_r = sqrt(circle_r_sq)
-    
-    # 5) Circle center: O = c * A_hat.
+
     Ax_hat = Ax / A_len
     Ay_hat = Ay / A_len
     Az_hat = Az / A_len
-    
+
     Ox = c * Ax_hat
     Oy = c * Ay_hat
     Oz = c * Az_hat
-    
-    # 6) Build an orthonormal basis (e1, e2) perpendicular to A_hat.
+
+    # Build e1,e2
     ax, ay, az = 1.0, 0.0, 0.0
     dot_aA = ax*Ax_hat + ay*Ay_hat + az*Az_hat
     if abs(dot_aA) > 0.9999:
@@ -201,7 +176,6 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=1000):
     e1y = aoy / ao_len
     e1z = aoz / ao_len
 
-    # e2 = A_hat x e1
     e2x = Az_hat*e1y - Ay_hat*e1z
     e2y = Ax_hat*e1z - Az_hat*e1x
     e2z = Ay_hat*e1x - Ax_hat*e1y
@@ -212,37 +186,32 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=1000):
     e2y /= e2_len
     e2z /= e2_len
 
-    # 7) First pass: Count how many sample points lie above Qz = 0.
-    count = 0
-    for i in range(N_steps):
-        theta = 2.0*pi*(i/float(N_steps))
-        cth = cos(theta)
-        sth = sin(theta)
-        Qz = Oz + circle_r*(cth*e1z + sth*e2z)
-        if Qz > 0.0:
-            count += 1
+    # Angle array without 'endpoint' param
+    arr_idx = np.arange(N_steps, dtype=np.float64)
+    theta_arr = arr_idx * (2.0*pi / N_steps)  # 0 <= theta < 2π
 
-    # Allocate output array for valid points.
-    out = np.zeros((count, 4), dtype=np.float64)
-    
-    # Second pass: Fill the output only with points where Qz > 0.
-    idx = 0
-    for i in range(N_steps):
-        theta = 2.0*pi*(i/float(N_steps))
-        cth = cos(theta)
-        sth = sin(theta)
-        Qx = Ox + circle_r*(cth*e1x + sth*e2x)
-        Qy = Oy + circle_r*(cth*e1y + sth*e2y)
-        Qz = Oz + circle_r*(cth*e1z + sth*e2z)
-        if Qz > 0.0:
-            Ival = compute_intensity_jit(np.array([Qx, Qy, Qz]), G_vec, sigma)
-            out[idx, 0] = Qx
-            out[idx, 1] = Qy
-            out[idx, 2] = Qz
-            out[idx, 3] = Ival
-            idx += 1
+    cth = np.cos(theta_arr)
+    sth = np.sin(theta_arr)
+
+    # Q array
+    Qx_arr = Ox + circle_r*(cth*e1x + sth*e2x)
+    Qy_arr = Oy + circle_r*(cth*e1y + sth*e2y)
+    Qz_arr = Oz + circle_r*(cth*e1z + sth*e2z)
+
+    all_int = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv)
+    intensity_cutoff = exp(-100.0)  # ~2σ
+    mask = (Qz_arr > 0.0) & (all_int > intensity_cutoff)
+    valid_idx = np.nonzero(mask)[0]
+
+    out = np.zeros((valid_idx.size,4), dtype=np.float64)
+    out[:,0] = Qx_arr[valid_idx]
+    out[:,1] = Qy_arr[valid_idx]
+    out[:,2] = Qz_arr[valid_idx]
+    out[:,3] = all_int[valid_idx]
 
     return out
+
+
 ##############################################################################
 # 5) calculate_phi
 ##############################################################################
@@ -256,7 +225,7 @@ def calculate_phi(
     beam_x_array, beam_y_array,
     theta_array, phi_array,
     reflection_intensity,
-    sigma_rad, gamma_rad_m, eta_pv,
+    sigma_rad, gamma_pv, eta_pv,
     debye_x, debye_y,
     center,
     theta_initial_deg,
@@ -269,9 +238,30 @@ def calculate_phi(
 ):
     gz0 = 2.0*pi*(L/cv)
     gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
-    G   = sqrt(gr0*gr0 + gz0*gz0)
-    n2  = 1
     G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
+
+    # Constants (in given units)
+    rho_Bi = 9.807  # g/cm^3
+    rho_Se = 4.81   # g/cm^3
+
+    # Attenuation coefficients in cm^-1
+    mu_Bi = 237.8 * rho_Bi      # for Bi
+    mu_Se = 81.16 * rho_Se      # for Se
+
+    # Molar masses in g/mol
+    M_Bi = 208.98
+    M_Se = 78.96
+
+    # Formula mass for Bi2Se3
+    M_Bi2Se3 = 2 * M_Bi + 3 * M_Se  # g/mol
+
+    # Compute weighted linear attenuation in cm^-1
+    mu_Bi2Se3_cm = ((2 * M_Bi) * mu_Bi + (3 * M_Se) * mu_Se) / M_Bi2Se3
+
+    # Convert cm^-1 to m^-1
+    mu_Bi2Se3 = mu_Bi2Se3_cm * 100
+
+    thickness_m = 50e-9 # meters
     max_I_sign0 = -1.0
     max_x_sign0 = np.nan
     max_y_sign0 = np.nan
@@ -288,29 +278,29 @@ def calculate_phi(
     R_sample = R_x @ R_z_R_y
 
     n_surf = R_x @ R_ZY_n
-    n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
+    n_surf /= sqrt(n_surf[0]**2 + n_surf[1]**2 + n_surf[2]**2)
 
     P0_rot = R_sample @ P0
     P0_rot[0] = 0.0
 
     n_samp = beam_x_array.size
 
-    u_ref = np.array([0.0,0.0,-1.0])
+    u_ref = np.array([0.0, 0.0, -1.0])
     e1_temp = np.cross(n_surf, u_ref)
     e1_norm = sqrt(e1_temp[0]*e1_temp[0] + e1_temp[1]*e1_temp[1] + e1_temp[2]*e1_temp[2])
-    if e1_norm<1e-12:
-        alt_refs= [
+    if e1_norm < 1e-12:
+        alt_refs = [
             np.array([1.0,0.0,0.0]),
             np.array([0.0,1.0,0.0]),
             np.array([0.0,0.0,1.0])
         ]
-        success=False
+        success = False
         for ar in alt_refs:
             cross_tmp = np.cross(n_surf, ar)
             cross_norm_tmp = sqrt(cross_tmp[0]*cross_tmp[0] + cross_tmp[1]*cross_tmp[1] + cross_tmp[2]*cross_tmp[2])
-            if cross_norm_tmp>1e-12:
-                e1_temp = cross_tmp/cross_norm_tmp
-                success=True
+            if cross_norm_tmp > 1e-12:
+                e1_temp = cross_tmp / cross_norm_tmp
+                success = True
                 break
         if not success:
             return (max_x_sign0, max_y_sign0, max_I_sign0,
@@ -346,30 +336,31 @@ def calculate_phi(
 
         projected_incident = k_in - kn_dot*n_surf
         pln = sqrt(projected_incident[0]**2 + projected_incident[1]**2 + projected_incident[2]**2)
-        if pln>1e-12:
-            projected_incident/=pln
+        if pln > 1e-12:
+            projected_incident /= pln
         else:
-            projected_incident[:]=0.0
+            projected_incident[:] = 0.0
 
         p1 = projected_incident[0]*e1_temp[0] + projected_incident[1]*e1_temp[1] + projected_incident[2]*e1_temp[2]
         p2 = projected_incident[0]*e2_temp[0] + projected_incident[1]*e2_temp[1] + projected_incident[2]*e2_temp[2]
         phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
-        th_t = acos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
 
+        th_t = acos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
+        d1 = 1/ np.cos(th_t)
+        
         k_scat = k_mag*sqrt(np.real(n2)*np.real(n2))
         k_x_scat = k_scat*cos(th_t)*sin(phi_i_prime)
         k_y_scat = k_scat*cos(th_t)*cos(phi_i_prime)
         k_z_scat = k_scat*sin(th_t)
-        k_in_crystal= np.array([k_x_scat, k_y_scat, k_z_scat])
+        k_in_crystal = np.array([k_x_scat, k_y_scat, k_z_scat])
 
-        All_Q = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad)
+        All_Q = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv)
         for i_sol in range(All_Q.shape[0]):
             Qx = All_Q[i_sol, 0]
             Qy = All_Q[i_sol, 1]
             Qz = All_Q[i_sol, 2]
-            I_Q = All_Q[i_sol, 3]  # the computed intensity from solve_q
+            I_Q = All_Q[i_sol, 3]
 
-            # Continue with the rest of your processing:
             k_tx_prime = Qx + k_x_scat
             k_ty_prime = Qy + k_y_scat
             k_tz_prime = Qz + k_z_scat
@@ -379,7 +370,12 @@ def calculate_phi(
                 twotheta_t = 0.0
             else:
                 twotheta_t = np.arctan(k_tz_prime/kr)
-
+            d2 = 1/np.cos(twotheta_t)
+            
+            d = thickness_m*(d1 + d2)
+            
+            att = np.exp(-mu_Bi2Se3 * d)
+            
             phi_f = np.arctan2(k_tx_prime, k_ty_prime)
             k_tx_f = k_scat*cos(twotheta_t)*sin(phi_f)
             k_ty_f = k_scat*cos(twotheta_t)*cos(phi_f)
@@ -392,8 +388,8 @@ def calculate_phi(
                 continue
 
             plane_to_det = np.array([dx - Detector_Pos[0],
-                                    dy - Detector_Pos[1],
-                                    dz - Detector_Pos[2]], dtype=np.float64)
+                                     dy - Detector_Pos[1],
+                                     dz - Detector_Pos[2]], dtype=np.float64)
             x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
             y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
 
@@ -401,26 +397,26 @@ def calculate_phi(
             cpx = int(round(center[1] + x_det/100e-6))
             if not (0 <= rpx < image_size and 0 <= cpx < image_size):
                 continue
+            val = (reflection_intensity * I_Q * att
+                   * exp(-Qz*Qz * debye_x*debye_x)
+                   * exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y))
 
-            # Multiply the reflection_intensity by the intensity from Q (I_Q) 
-            # and by the Debye-Waller factors.
-            val = reflection_intensity * I_Q * \
-                exp(-Qz*Qz * debye_x*debye_x) * \
-                exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y)
+            # Accumulate (twice, as in your original code)
             image[rpx, cpx] += val
-            image[rpx, cpx]+= val
+            image[rpx, cpx] += val
 
-            if i_sol%2==0:
-                if image[rpx,cpx]>max_I_sign0:
-                    max_I_sign0= image[rpx,cpx]
-                    max_x_sign0= cpx
-                    max_y_sign0= rpx
+            if (i_sol % 2) == 0:
+                if image[rpx,cpx] > max_I_sign0:
+                    max_I_sign0 = image[rpx,cpx]
+                    max_x_sign0 = cpx
+                    max_y_sign0 = rpx
             else:
-                if image[rpx,cpx]>max_I_sign1:
-                    max_I_sign1= image[rpx,cpx]
-                    max_x_sign1= cpx
-                    max_y_sign1= rpx
+                if image[rpx,cpx] > max_I_sign1:
+                    max_I_sign1 = image[rpx,cpx]
+                    max_x_sign1 = cpx
+                    max_y_sign1 = rpx
 
+            # Save Q-data if requested
             if save_flag==1 and q_count[i_peaks_index]< q_data.shape[1]:
                 idx = q_count[i_peaks_index]
                 q_data[i_peaks_index, idx,0] = Qx
@@ -456,10 +452,8 @@ def process_peaks_parallel(
     psi_rad   = psi_deg*(pi/180.0)
 
     sigma_rad   = sigma_pv_deg*(pi/180.0)
-    gamma_rad_m = gamma_pv_deg*(pi/180.0)  # not used in example
-    # (eta_pv is also not used in rotate_G but could be used if wanted)
+    gamma_rad_m = gamma_pv_deg*(pi/180.0)
 
-    # Detector-plane transformations
     cg = cos(gamma_rad); sg = sin(gamma_rad)
     cG = cos(Gamma_rad); sG = sin(Gamma_rad)
     R_x_det = np.array([
@@ -474,7 +468,7 @@ def process_peaks_parallel(
     ])
     nd_temp   = R_x_det @ n_detector
     n_det_rot = R_z_det @ nd_temp
-    nd_len    = sqrt(n_det_rot[0]*n_det_rot[0] + n_det_rot[1]*n_det_rot[1] + n_det_rot[2]*n_det_rot[2])
+    nd_len    = sqrt(n_det_rot[0]**2 + n_det_rot[1]**2 + n_det_rot[2]**2)
     n_det_rot/= nd_len
 
     Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0], dtype=np.float64)
@@ -482,20 +476,20 @@ def process_peaks_parallel(
     dot_e1 = unit_x[0]*n_det_rot[0] + unit_x[1]*n_det_rot[1] + unit_x[2]*n_det_rot[2]
     e1_det = unit_x - dot_e1*n_det_rot
     e1_len = sqrt(e1_det[0]**2 + e1_det[1]**2 + e1_det[2]**2)
-    if e1_len<1e-14:
-        e1_det= np.array([1.0,0.0,0.0])
+    if e1_len < 1e-14:
+        e1_det = np.array([1.0, 0.0, 0.0])
     else:
-        e1_det/= e1_len
+        e1_det /= e1_len
 
-    tmpx= n_det_rot[1]* e1_det[2] - n_det_rot[2]* e1_det[1]
-    tmpy= n_det_rot[2]* e1_det[0] - n_det_rot[0]* e1_det[2]
-    tmpz= n_det_rot[0]* e1_det[1] - n_det_rot[1]* e1_det[0]
-    e2_det= np.array([-tmpx, -tmpy, -tmpz], dtype=np.float64)
-    e2_len= sqrt(e2_det[0]**2 + e2_det[1]**2 + e2_det[2]**2)
-    if e2_len<1e-14:
-        e2_det= np.array([0.0,1.0,0.0])
+    tmpx = n_det_rot[1]* e1_det[2] - n_det_rot[2]* e1_det[1]
+    tmpy = n_det_rot[2]* e1_det[0] - n_det_rot[0]* e1_det[2]
+    tmpz = n_det_rot[0]* e1_det[1] - n_det_rot[1]* e1_det[0]
+    e2_det = np.array([-tmpx, -tmpy, -tmpz], dtype=np.float64)
+    e2_len = sqrt(e2_det[0]**2 + e2_det[1]**2 + e2_det[2]**2)
+    if e2_len < 1e-14:
+        e2_det = np.array([0.0,1.0,0.0])
     else:
-        e2_det/= e2_len
+        e2_det /= e2_len
 
     c_chi = cos(chi_rad); s_chi = sin(chi_rad)
     R_y = np.array([
@@ -511,18 +505,17 @@ def process_peaks_parallel(
     ])
     R_z_R_y= R_z @ R_y
 
-    n1= np.array([0.0,0.0,1.0], dtype=np.float64)
+    n1= np.array([0.0, 0.0, 1.0], dtype=np.float64)
     R_ZY_n= R_z_R_y @ n1
-    nzy_len= sqrt(R_ZY_n[0]*R_ZY_n[0]+ R_ZY_n[1]*R_ZY_n[1]+ R_ZY_n[2]*R_ZY_n[2])
+    nzy_len= sqrt(R_ZY_n[0]**2 + R_ZY_n[1]**2 + R_ZY_n[2]**2)
     R_ZY_n/= nzy_len
 
-    P0= np.array([0.0,0.0,-zs], dtype=np.float64)
-
+    P0= np.array([0.0, 0.0, -zs], dtype=np.float64)
     num_peaks= miller.shape[0]
-    max_solutions=2000000
 
+    max_solutions= 2000000
     if save_flag==1:
-        q_data= np.full((num_peaks,max_solutions,5), np.nan, dtype=np.float64)
+        q_data= np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
         q_count= np.zeros(num_peaks, dtype=np.int64)
     else:
         q_data= np.zeros((1,1,5), dtype=np.float64)
