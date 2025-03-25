@@ -6,8 +6,8 @@ def calculate_structure_factor(h, k, l, atoms, data, occ):
     F_hkl = 0 + 0j  # Initialize complex number for structure factor
 
     # Substitute q into equation data[0] and data[1]
-    f_Bi = data[0](np.sqrt(h**2 + k**2 + l**2))
-    f_Se = data[1](np.sqrt(h**2 + k**2 + l**2))
+    f_Bi = data[0](np.sqrt(h**2 + k**2 + l**2)) - 4.23706 + 8.83640j
+    f_Se = data[1](np.sqrt(h**2 + k**2 + l**2)) - 0.787865 + 1.13462j
 
     # Precompute 2j * np.pi
     two_pi_j = 2j * np.pi

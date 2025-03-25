@@ -232,25 +232,111 @@ def setup_azimuthal_integrator(parameters):
     )
     return ai
 
+#!/usr/bin/env python
+"""
+Generate Miller indices from 0 to mx and filter them by twoθ and intensity,
+using the scattering calculations from Dans_Diffraction.
 
-def miller_generator(max_miller, av, cv, lambda_, atoms, data, occ):
-    # Generate Miller Indices
-    Raw_Miller = [p for p in itertools.product(range(max_miller + 1), repeat=3)]  # Now includes 0 to mx, inclusive
-    # Filter Miller indices based on 2theta condition and structure factor intensity
+For each (h, k, l) in the set defined by 0 ≤ h,k,l ≤ mx, this code:
+  - Computes d-spacing and twoθ using Bragg’s law.
+  - Retrieves the intensity via xtl.Scatter.intensity.
+  - Keeps only those reflections that lie within the twoθ_range
+    and whose intensity is above intensity_threshold.
+
+Finally, the filtered Miller indices and intensities are printed.
+  
+Usage:
+  python miller_generator.py
+"""
+
+import itertools
+import numpy as np
+import math
+import Dans_Diffraction as dif
+
+def d_spacing(h, k, l, xtl):
+    """
+    Calculate the d-spacing for Miller indices (h, k, l) based on the crystal lattice.
+    This example assumes a hexagonal system:
+      1/d² = (4/3)*((h² + h*k + k²)/a²) + (l²/c²)
+    """
+    a = xtl.Cell.a
+    c = xtl.Cell.c
+    try:
+        d_inv_sq = (4.0/3.0)*((h**2 + h*k + k**2) / a**2) + (l**2 / c**2)
+        if d_inv_sq <= 0:
+            return None
+        return 1.0 / math.sqrt(d_inv_sq)
+    except Exception:
+        return None
+
+def two_theta(d, lambda_):
+    """
+    Calculate the Bragg angle (2θ in degrees) from d-spacing and wavelength using Bragg's law:
+         λ = 2 d sinθ   =>   2θ = 2 * arcsin(λ/(2d))
+    """
+    if d is None or d <= 0:
+        return None
+    sin_theta = lambda_ / (2*d)
+    if sin_theta > 1 or sin_theta < -1:
+        return None
+    theta = math.degrees(math.asin(sin_theta))
+    return 2 * theta
+
+def miller_generator(mx, cif_file, lambda_, energy=8.0, intensity_threshold=1.0, two_theta_range=(0,70)):
+    """
+    Iterate over all Miller indices (h, k, l) with each index from 0 to mx.
+    For each reflection, calculate twoθ and the structure factor intensity.
+    Only reflections with twoθ within the specified range and with intensity above
+    the intensity_threshold are kept.
+    
+    Parameters:
+      mx: Maximum Miller index (each of h, k, l goes from 0 to mx).
+      cif_file: Path to the CIF file.
+      lambda_: X-ray wavelength (e.g., 1.54 Å for Cu Kα).
+      energy: Scattering energy (keV).
+      intensity_threshold: Minimum intensity for a reflection to be kept.
+      two_theta_range: Tuple (min, max) defining the allowed range of twoθ (in degrees).
+    
+    Returns:
+      miller: NumPy array of shape (N,3) with the accepted Miller indices.
+      intensities: NumPy array of shape (N,) with the corresponding intensities.
+    """
+    # Generate the set of all Miller indices (0 to mx inclusive).
+    raw_miller = list(itertools.product(range(mx + 1), repeat=3))
+    
+    # Load the crystal from the CIF file and set up scattering.
+    xtl = dif.Crystal(cif_file)
+    xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=energy)
+    # Use positive (integer) hkl values (no multiplicity factor).
+    xtl.Scatter.integer_hkl = True
+    
     miller = []
     intensities = []
-    for h, k, l in Raw_Miller:
-        D = d_spacing(h, k, l, av, cv)
-        two_theta_value = two_theta(D, lambda_)
-        if two_theta_value is not None and 0 <= two_theta_value <= 70:
-            intensity = calculate_structure_factor(h, k, l, atoms, data, occ)
-            if intensity > 1:  # Arbitrary threshold for small intensity
-                miller.append((h, k, l))
-                intensities.append(intensity)
-    miller = np.array(miller, dtype = np.int32)
-    intensities = np.array(intensities, dtype = np.float64)
-
+    
+    for h, k, l in raw_miller:
+        d = d_spacing(h, k, l, xtl)
+        tth = two_theta(d, lambda_)
+        if tth is None:
+            continue
+        if not (two_theta_range[0] <= tth <= two_theta_range[1]):
+            continue
+        # Calculate the intensity using Dans_Diffraction's scatter routine.
+        intensity_val = xtl.Scatter.intensity([h, k, l])
+        try:
+            intensity_val = float(intensity_val)
+        except Exception:
+            continue
+        if intensity_val <= intensity_threshold:
+            continue
+        
+        miller.append((h, k, l))
+        intensities.append(intensity_val)
+    
+    miller = np.array(miller, dtype=np.int32)
+    intensities = np.array(intensities, dtype=np.float64)
     return miller, intensities
+
 
 import matplotlib.pyplot as plt
 import numpy as np

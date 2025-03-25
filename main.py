@@ -132,10 +132,28 @@ Pbsol = sp.lambdify(q, data[0], modules='numpy')
 Isol = sp.lambdify(q, data[1], modules='numpy')
 data = [Pbsol, Isol]
 
-occ = np.array([1, 1, 1])
-cell_params, atoms = get_Atomic_Coordinates(positions, space_group_operations, atomic_labels)
 from ra_sim.utils.tools import miller_generator
-miller, intensities = miller_generator(mx, av, cv, lambda_, atoms, data, occ)
+
+
+cif_file = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Analysis\Bi2Se3\Bi2Se3.cif"
+lambda_ = 1.54   # X-ray wavelength in Å (e.g., Cu Kα)
+energy = 6.62607e-34 * 2.99792458e8 / (lambda_*1e-10) / (1.602176634e-19)    # keV
+intensity_threshold = 1.0
+two_theta_range = (0, 70)
+
+miller, intensities = miller_generator(mx, cif_file, lambda_, energy, intensity_threshold, two_theta_range)
+
+import pandas as pd
+
+# Create a Pandas DataFrame from the reflection data.
+df = pd.DataFrame(miller, columns=['h', 'k', 'l'])
+df['Intensity'] = intensities
+    
+# # Save to the Downloads directory
+download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+excel_path = os.path.join(download_dir, "miller_intensities.xlsx")
+df.to_excel(excel_path, index=False)
+print(f"Excel file saved at {excel_path}")
 
 # Zero out beamstop region near center
 row_center = int(center_default[0])
