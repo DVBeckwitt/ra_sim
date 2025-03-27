@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
 
-from ra_sim.utils.calculations import IndexofRefraction, fresnel_transmission
+from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
 from ra_sim.utils.tools import miller_generator, view_azimuthal_radial, detect_blobs
 from ra_sim.io.data_loading import (
@@ -80,7 +80,7 @@ wave_m = parameters.get("Wavelength", 1e-10)
 lambda_ = wave_m * 1e10  # Convert m -> Å
 
 image_size = 3000
-num_samples = 200
+num_samples = 3000
 
 # Approximate beam center
 center_default = [
@@ -143,17 +143,17 @@ two_theta_range = (0, 70)
 
 miller, intensities = miller_generator(mx, cif_file, lambda_, energy, intensity_threshold, two_theta_range)
 
-import pandas as pd
+# import pandas as pd
 
-# Create a Pandas DataFrame from the reflection data.
-df = pd.DataFrame(miller, columns=['h', 'k', 'l'])
-df['Intensity'] = intensities
+# # Create a Pandas DataFrame from the reflection data.
+# df = pd.DataFrame(miller, columns=['h', 'k', 'l'])
+# df['Intensity'] = intensities
     
-# # Save to the Downloads directory
-download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-excel_path = os.path.join(download_dir, "miller_intensities.xlsx")
-df.to_excel(excel_path, index=False)
-print(f"Excel file saved at {excel_path}")
+# # # Save to the Downloads directory
+# download_dir = os.path.join(os.path.expanduser("~"), "Downloads")bv
+# excel_path = os.path.join(download_dir, "miller_intensities.xlsx")
+# df.to_excel(excel_path, index=False)
+# print(f"Excel file saved at {excel_path}")
 
 # Zero out beamstop region near center
 row_center = int(center_default[0])

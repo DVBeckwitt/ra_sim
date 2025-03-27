@@ -5,6 +5,8 @@ import json
 import matplotlib.pyplot as plt
 # import njit
 from numba import njit
+import math
+import numba
 
 
 # Function to calculate d-spacing for hexagonal crystals
@@ -34,52 +36,79 @@ def IoR(lambda_, rho_e, r, mu):
 
 @njit
 def IndexofRefraction():
+    """
+    Computes the X-ray index of refraction n = 1 - delta + i beta
+    for Bi2Se3 at a given wavelength using the correct mixture rule.
+    """
+    # Classical electron radius
+    r_e = 2.8179403267e-15  # m
 
-    r_e = 2.8179403267e-15
-    lambda_ = 1.54e-10  # 1.54 Å in meters
-    
-    rho_Bi = 9.807       # g/cm^3
-    rho_Se = 4.81        # g/cm^3
-    mu_Bi  = 237.8* rho_Bi  # (cm^2/g) * (g/cm^3) = cm^-1
-    mu_Se  = 81.16 * rho_Se  # cm^-1
-
-    # Molar masses
-    M_Bi = 208.98
-    M_Se = 78.96
-    # Bi2Se3 formula mass
-    M_Bi2Se3 = 2.0*M_Bi + 3.0*M_Se  # g/mol
-
-    # Weighted linear attenuation
-    mu_Bi2Se3 = (
-        (2.0*M_Bi)*mu_Bi + (3.0*M_Se)*mu_Se
-    ) / M_Bi2Se3  # still in cm^-1
-
-    # Convert cm^-1 to m^-1
-    mu_Bi2Se3_m = mu_Bi2Se3 * 1.0e2
-
-    # Density in g/cm^3 => convert to g/m^3
-    rho_g_m3 = 6.82e6   # was 6.82 g/cm^3 => 6.82e6 g/m^3
+    # Wavelength in meters (example: Cu K-alpha ~1.54 Å)
+    lambda_ = 1.54e-10
 
     # Avogadro's number
     N_A = 6.022e23
 
-    # Volume (m^3) per mole
-    V_mol = M_Bi2Se3 / rho_g_m3  # g/mol / (g/m^3) = m^3/mol
+    # Atomic masses (g/mol)
+    M_Bi = 208.98
+    M_Se = 78.96
 
-    # *** Multiply by total electrons (Z_total = 268) per formula ***
-    Z_total = 2*83 + 3*34  # 166 + 102 = 268
-    rho_e =  Z_total * (N_A / V_mol)  # e/m^3
+    # Formula mass of Bi2Se3 (g/mol)
+    M_Bi2Se3 = 2.0 * M_Bi + 3.0 * M_Se
 
-    # Compute delta, beta
-    delta, beta = IoR(lambda_, rho_e, r_e, mu_Bi2Se3_m)
+    # Mass fractions of Bi and Se in Bi2Se3
+    w_Bi = (2.0 * M_Bi) / M_Bi2Se3
+    w_Se = (3.0 * M_Se) / M_Bi2Se3
 
-    # Refractive index
-    n = 1.0 - delta + 1.0j*beta
+    # >>> 1) Mass attenuation coefficients (MAC) in cm^2/g at this wavelength
+
+    mu_mass_Bi = 237.8   # cm^2/g
+    mu_mass_Se = 81.16   # cm^2/g
+
+    # >>> 2) Compound density in g/cm^3 (approx. 6.82 for Bi2Se3)
+    rho_Bi2Se3 = 6.82    # g/cm^3
+
+    # >>> 3) Compute the linear attenuation coefficient for Bi2Se3 in cm^-1
+    #        mixture rule: mu_compound = rho * [ w_Bi * mu_mass_Bi + w_Se * mu_mass_Se ]
+    mu_Bi2Se3_cm = rho_Bi2Se3 * (w_Bi * mu_mass_Bi + w_Se * mu_mass_Se)
+
+    # Convert to m^-1
+    mu_Bi2Se3 = mu_Bi2Se3_cm * 1.0e2
+
+    # >>> 4) Compute electron density rho_e for Bi2Se3
+    #        Number of electrons: Z_Bi = 83, Z_Se = 34
+    #        Z_total = 2*83 + 3*34 = 268 e/formula
+    Z_Bi = 83
+    Z_Se = 34
+    Z_total = 2.0 * Z_Bi + 3.0 * Z_Se  # 268
+
+    # Convert compound density from g/cm^3 to g/m^3
+    rho_g_m3 = rho_Bi2Se3 * 1.0e6
+
+    # Molar volume in m^3/mol for Bi2Se3
+    V_mol = M_Bi2Se3 / rho_g_m3
+
+    # Number of formula units per m^3
+    n_formulas = 1.0 / V_mol  # mol/m^3
+
+    # Number of electrons per m^3
+    rho_e = Z_total * (n_formulas * N_A)
+
+    # >>> 5) Compute delta and beta
+    # delta = (r_e * lambda^2 * rho_e)/(2*pi)
+    # beta  = (mu * lambda)/(4*pi)
+    delta = (r_e * lambda_**2 * rho_e) / (2.0 * math.pi)
+    beta  = (mu_Bi2Se3 * lambda_) / (4.0 * math.pi)
+
+    # >>> 6) Complex refractive index
+    n = 1.0 - delta + 1.0j * beta
     return n
+
 import math
 import numba
+from numba import njit
 
-@numba.njit
+@njit
 def complex_sqrt(z):
     """
     Compute the principal square root of a complex number z
@@ -92,47 +121,61 @@ def complex_sqrt(z):
     return complex(sqrt_r * math.cos(half_phi),
                    sqrt_r * math.sin(half_phi))
 
-@numba.njit
-def fresnel_transmission(alpha, n, pol_s=True):
+@njit
+def fresnel_transmission(grazing_angle, refractive_index, s_polarization=True, direction="in"):
     """
-    Fresnel transmission amplitude for a grazing-incidence wave
-    from vacuum (n0=1) into a medium with complex index n,
-    where alpha is the angle from the SAMPLE SURFACE (not the normal).
-
+    Calculate the Fresnel amplitude transmission coefficient for an interface
+    between vacuum (n0 = 1) and a medium (complex index 'refractive_index').
+    
+    The angle 'grazing_angle' is measured from the sample surface 
+    (0 => beam parallel to the surface). The parameter 'direction' can be:
+      - "in"  : vacuum -> medium  (t_i)
+      - "out" : medium -> vacuum  (t_f)
+      
     Args:
-        alpha : float
-            Grazing angle in radians from the surface plane
-            (small alpha => beam nearly parallel to surface).
-        n : complex
-            Complex refractive index (1 - delta + i*beta).
-        pol_s : bool
-            True => s-polarization (TE). False => p-polarization (TM).
-
+        grazing_angle (float): Grazing angle (radians) from the surface plane.
+        refractive_index (complex): Medium’s complex refractive index (1 - delta + i*beta).
+        s_polarization (bool): True => s-polarization (TE), False => p-polarization (TM).
+        direction (str): "in" or "out" for incoming or outgoing transmission.
+        
     Returns:
-        t_amp : complex
-            The complex Fresnel transmission amplitude.
-            (For intensity transmission, use abs(t_amp)**2)
+        complex: The complex amplitude transmission coefficient.
+                 Use abs(...)**2 to get intensity transmission.
     """
-    # Normal component in vacuum is sin(alpha), since alpha is from the surface.
-    k_z0 = math.sin(alpha) + 0j  # make it complex
+    # Validate direction
+    direction = direction.lower()
+    if direction not in ("in", "out"):
+        raise ValueError("direction must be 'in' or 'out'.")
 
-    # k_z1 = sqrt(n^2 - cos^2(alpha)) in the medium
-    cos_a = math.cos(alpha)
-    z = n*n - cos_a*cos_a
-    k_z1 = complex_sqrt(z)
+    # k_z0 = normal component in vacuum = sin(grazing_angle)
+    k_z0 = math.sin(grazing_angle) + 0j
+    # k_z1 = normal component in medium = sqrt(n^2 - cos^2(grazing_angle))
+    cos_angle = math.cos(grazing_angle)
+    k_z1 = complex_sqrt(refractive_index * refractive_index - cos_angle * cos_angle)
 
-    if pol_s:
-        # s-polarization:
-        # t_s = 2 k_z0 / (k_z0 + k_z1)
-        numerator = 2.0 * k_z0
-        denominator = k_z0 + k_z1
+    if direction == "in":
+        # Vacuum -> Medium
+        if s_polarization:
+            # s-pol: t_s = 2 k_z0 / (k_z0 + k_z1)
+            numerator = 2.0 * k_z0
+            denominator = k_z0 + k_z1
+        else:
+            # p-pol: t_p = 2 n^2 k_z0 / (n^2 k_z0 + k_z1)
+            numerator = 2.0 * refractive_index * refractive_index * k_z0
+            denominator = refractive_index * refractive_index * k_z0 + k_z1
     else:
-        # p-polarization:
-        # t_p = 2 n^2 k_z0 / (n^2 k_z0 + k_z1)
-        numerator = 2.0 * n*n * k_z0
-        denominator = n*n * k_z0 + k_z1
+        # direction == "out" => Medium -> Vacuum
+        if s_polarization:
+            # s-pol: t_s = 2 k_z1 / (k_z1 + k_z0)
+            numerator = 2.0 * k_z1
+            denominator = k_z1 + k_z0
+        else:
+            # p-pol: t_p = 2 n^2 k_z1 / (n^2 k_z1 + k_z0)
+            numerator = 2.0 * refractive_index * refractive_index * k_z1
+            denominator = refractive_index * refractive_index * k_z1 + k_z0
 
+    # Avoid division by near-zero
     if abs(denominator) < 1e-30:
         return 0j
-    
+
     return numerator / denominator
