@@ -161,91 +161,125 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
 
     return (out_Qx, out_Qy, out_Qz)
 
-
-# =============================================================================
-# 4) GENERATING THE PDF GRID FOR MOSAIC DISTRIBUTION
-# =============================================================================
-
 @njit
-def compute_intensity_array(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
+def compute_intensity_array(Qx, Qy, Qz,
+                            G_vec,
+                            sigma,
+                            gamma_pv,
+                            eta_pv,
+                            H, K,
+                            dphi, dtheta):
     """
-    Evaluate the mosaic distribution (pseudo-Voigt shape) around G_vec at each
-    (Qx, Qy, Qz). This function is used to build or sample from the mosaic PDF.
-
-    Physically:
-      - 'sigma' ~ Gaussian width,
-      - 'gamma_pv' ~ Lorentzian half-width,
-      - 'eta_pv' ~ mixture fraction in [0,1].
-
-    Returns the mosaic intensity at each Q, used as pdf_3d in Generate_PDF_Grid.
+    Evaluate the mosaic distribution (pseudo-Voigt shape) around G_vec for each (Qx, Qy, Qz).
+    For H==0 and K==0 (the cap method) the intensities are normalized so that the
+    discretized integral over the sphere equals 1.
     """
-    eps = 0.1
-    R = sqrt(G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2])
-    if R < 1e-14:
+    Gx, Gy, Gz = G_vec[0], G_vec[1], G_vec[2]
+    G_mag = np.sqrt(Gx*Gx + Gy*Gy + Gz*Gz)
+    if G_mag < 1e-14:
         return np.zeros_like(Qx)
-
-    Gx, Gy, Gz = G_vec
-    is_vertical = (abs(Gx) < eps and abs(Gy) < eps)
-
+    
     intensities = np.zeros_like(Qx)
-    if is_vertical:
-        # "Cap" method -> treat G ~ vertical so alpha is angle from dot(G, Q).
-        Gnorm = 1.0 / R
-        Qnorm = 1.0 / np.sqrt(Qx*Qx + Qy*Qy + Qz*Qz + 1e-30)
-        dot_ = (Gx*Gnorm)*(Qx*Qnorm) + (Gy*Gnorm)*(Qy*Qnorm) + (Gz*Gnorm)*(Qz*Qnorm)
+    
+    # Magnitude of each Q point on the sphere
+    Q_mag = np.sqrt(Qx*Qx + Qy*Qy + Qz*Qz)
+    Q_mag_safe = np.maximum(Q_mag, 1e-14)
+    # Qr: projection of Q onto the x-y plane
+    Qr = np.sqrt(Qx*Qx + Qy*Qy)
+
+    if H == 0 and K == 0:
+        # ----------------------------------------------------------------
+        #                    *** CAP METHOD ***
+        # ----------------------------------------------------------------
+        # 1) Compute angle alpha between Q and G
+        Gnorm = 1.0 / G_mag
+        Qnorm = 1.0 / Q_mag_safe
+        dot_ = (Gx * Gnorm) * (Qx * Qnorm) + (Gy * Gnorm) * (Qy * Qnorm) + (Gz * Gnorm) * (Qz * Qnorm)
         dot_clamped = np.minimum(np.maximum(dot_, -1.0), 1.0)
         alpha = np.arccos(dot_clamped)
 
-        gauss_val = np.exp(- (alpha*alpha)/(2.0*sigma*sigma))
-        lor_val   = 1.0 / (1.0 + (alpha/gamma_pv)**2)
-        intensities = (1.0 - eta_pv)*gauss_val + eta_pv*lor_val
+        # 2) True amplitude factors for 1D Pseudo-Voigt
+        A_gauss = 1.0 / (sigma * np.sqrt(2.0 * np.pi))
+        A_lor   = 1.0 / (np.pi * gamma_pv)
+
+        # 3) Evaluate the Gaussian and Lorentz components
+        gauss_val = A_gauss * np.exp(-0.5 * (alpha / sigma)**2)
+        lor_val   = A_lor   / (1.0 + (alpha / gamma_pv)**2)
+
+        # 4) Combine into a pseudo-Voigt profile.
+        intensities = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
+
+        # 5) Normalize so that the integrated intensity equals 1.
+        phi_vals = np.arccos(np.minimum(np.maximum(Qz / Q_mag_safe, -1.0), 1.0))
+        sin_phi_vals = np.sin(phi_vals)
+        total = np.sum(intensities * sin_phi_vals) * dphi * dtheta
+        if total > 1e-14:
+            intensities /= total
 
     else:
-        # "Horizontal band" method -> treat G not vertical, define v_prime from Qz
-        ratioQ = Qz / R
-        ratioQ = np.minimum(np.maximum(ratioQ, -1.0), 1.0)
-        v_prime = np.arccos(ratioQ)
+        # ----------------------------------------------------------------
+        #                    *** BAND METHOD ***
+        # ----------------------------------------------------------------
+        ratioQ = Qz / Q_mag_safe
+        ratioQ_clamped = np.minimum(np.maximum(ratioQ, -1.0), 1.0)
+        v_prime = np.arccos(ratioQ_clamped)
 
-        ratioG = Gz / R
-        ratioG = max(min(ratioG, 1.0), -1.0)
-        v_center = acos(ratioG)
-        dv = v_prime - v_center
+        ratioG = Gz / G_mag
+        ratioG_clamped = np.minimum(np.maximum(ratioG, -1.0), 1.0)
+        v_center = np.acos(ratioG_clamped)
 
-        gauss_val = np.exp(- (dv*dv)/(2.0*sigma*sigma))
-        lor_val   = 1.0 / (1.0 + (dv/gamma_pv)**2)
-        intensities = (1.0 - eta_pv)*gauss_val + eta_pv*lor_val
+        dv = np.abs(v_prime - v_center)
+
+        # Evaluate the Gaussian and Lorentzian components.
+        gauss_val = np.exp(- (dv*dv) / (2.0 * sigma * sigma))
+        lor_val   = 1.0 / (1.0 + (dv / gamma_pv)**2)
+        intensities = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
+        
+        # A heuristic weighting for the ring.
+        R = np.max(Q_mag_safe)
+        f = Qr / Q_mag_safe
+        t = (1 - np.cos(np.pi * f)) / 2
+        weight = 1.0 + (2.0 * np.pi * R - 1.0) * t
+        intensities /= weight
+        
+        # --- Normalization step ---
+        phi_vals = np.arccos(np.minimum(np.maximum(Qz / Q_mag_safe, -1.0), 1.0))
+        sin_phi_vals = np.sin(phi_vals)
+        total = np.sum(intensities * sin_phi_vals) * dphi * dtheta
+        if total > 1e-14:
+            intensities /= total
 
     return intensities
 
 @njit
 def Generate_PDF_Grid(
     G_vec,
-    sigma, gamma_pv, eta_pv,
-    Qrange=0.1,   # half-width in Q around G_vec
-    n_grid=31,    # reduced grid size for speed
-    n_samples=1000  # fewer random picks
+    sigma, gamma_pv, eta_pv, H,K ,
+    Qrange=0.1,   # default value; will be overridden if dynamic_Qrange is True
+    n_grid=51,    # grid resolution
+    n_samples=10000,  # number of samples
+    dynamic_Qrange=True,  # new flag to control dynamic Qrange selection
+    multiplier=3.0       # factor to extend the half-width (adjust as needed)
 ):
-    """
-    Build a 3D grid in reciprocal space around G_vec, evaluate the mosaic PDF,
-    then sample from it to produce random Q points.
+    # Compute effective FWHM in angle (radians)
+    # For a Gaussian, FWHM = 2.35482*sigma
+    # For a Lorentzian, FWHM = 2*gamma_pv
+    fwhm_gauss = 2.35482 * sigma
+    fwhm_lorentz = 2.0 * gamma_pv
+    effective_fwhm = (1 - eta_pv) * fwhm_gauss + eta_pv * fwhm_lorentz
+    
+    # Use half of the effective FWHM as the angular half-width
+    effective_angle_half_width = effective_fwhm / 2.0
+    
+    # Convert the angular half-width into Q-space using |G_vec|
+    G_mag = sqrt(G_vec[0]**2 + G_vec[1]**2 + G_vec[2]**2)
+    effective_Q_half_width = G_mag * effective_angle_half_width
+    
+    # If dynamic Qrange is enabled, override the Qrange value
+    if dynamic_Qrange:
+        Qrange = multiplier * effective_Q_half_width
 
-    G_vec : array_like
-        The reciprocal-lattice vector for the reflection of interest.
-    sigma, gamma_pv, eta_pv : floats
-        Pseudo-Voigt parameters for mosaic distribution.
-    Qrange : float
-        Range in Q-space around G_vec to form the 3D box [-Qrange, +Qrange].
-    n_grid : int
-        Grid resolution in each dimension (x, y, z).
-    n_samples : int
-        Number of random Q draws from the distribution.
-
-    Returns
-    -------
-    Q_grid : ndarray of shape (n_samples, 3)
-        The random Q points [Qx, Qy, Qz] forming the mosaic distribution
-        around G_vec.
-    """
+    # Build grid in reciprocal space centered around G_vec
     Gx, Gy, Gz = G_vec
     qx_vals = np.linspace(Gx - Qrange, Gx + Qrange, n_grid)
     qy_vals = np.linspace(Gy - Qrange, Gy + Qrange, n_grid)
@@ -255,7 +289,7 @@ def Generate_PDF_Grid(
     Qx_grid, Qy_grid, Qz_grid = custom_meshgrid(qx_vals, qy_vals, qz_vals)
 
     # 2) Evaluate mosaic distribution => pdf_3d
-    pdf_3d = compute_intensity_array(Qx_grid, Qy_grid, Qz_grid, G_vec, sigma, gamma_pv, eta_pv)
+    pdf_3d = compute_intensity_array(Qx_grid, Qy_grid, Qz_grid, G_vec, sigma, gamma_pv, eta_pv, H,K)
 
     # 3) Sample from this 3D pdf
     Qx_s, Qy_s, Qz_s = sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples)
@@ -339,54 +373,6 @@ def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, 
     return total_int / n_samples
 
 
-# -----------------------------------------------------------------------------
-# The next function "compute_intensity_array" is re-declared. 
-# Typically you'd define it once, but we keep it for completeness.
-# -----------------------------------------------------------------------------
-@njit
-def compute_intensity_array(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
-    """
-    Another copy of the mosaic distribution function. 
-    Typically you'd define it once, but it's repeated here 
-    presumably for demonstration or reuse. 
-    Physically the same as the one above.
-    """
-    eps = 0.1
-    R = sqrt(G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2])
-    if R < 1e-14:
-        return np.zeros_like(Qx)
-
-    Gx, Gy, Gz = G_vec
-    is_vertical = (abs(Gx) < eps and abs(Gy) < eps)
-
-    intensities = np.zeros_like(Qx)
-    if is_vertical:
-        Gnorm = 1.0 / R
-        Qnorm = 1.0 / np.sqrt(Qx*Qx + Qy*Qy + Qz*Qz + 1e-30)
-        dot_ = (Gx*Gnorm)*(Qx*Qnorm) + (Gy*Gnorm)*(Qy*Qnorm) + (Gz*Gnorm)*(Qz*Qnorm)
-        dot_clamped = np.minimum(np.maximum(dot_, -1.0), 1.0)
-        alpha = np.arccos(dot_clamped)
-
-        gauss_val = np.exp(- (alpha*alpha)/(2.0*sigma*sigma))
-        lor_val   = 1.0 / (1.0 + (alpha/gamma_pv)**2)
-        intensities = (1.0 - eta_pv)*gauss_val + eta_pv*lor_val
-
-    else:
-        ratioQ = Qz / R
-        ratioQ = np.minimum(np.maximum(ratioQ, -1.0), 1.0)
-        v_prime = np.arccos(ratioQ)
-
-        ratioG = Gz / R
-        ratioG = max(min(ratioG, 1.0), -1.0)
-        v_center = acos(ratioG)
-        dv = v_prime - v_center
-
-        gauss_val = np.exp(- (dv*dv)/(2.0*sigma*sigma))
-        lor_val   = 1.0 / (1.0 + (dv/gamma_pv)**2)
-        intensities = (1.0 - eta_pv)*gauss_val + eta_pv*lor_val
-
-    return intensities
-
 
 # =============================================================================
 # 3) INTERSECT_LINE_PLANE, BATCH
@@ -464,13 +450,13 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
 # =============================================================================
 
 @njit
-def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, N_steps=10000):
+def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H,K, L,N_steps=1000):
     """
     Build a 'circle' in reciprocal space for the reflection G_vec, i.e. the
     set of Q that satisfies |Q|=|G| or an intersection with Ewald sphere, then
     filter by mosaic distribution compute_intensity_array.
 
-    Physically:
+    Physically: 
       - We param by angle from 0..2π,
       - Circle radius circle_r,
       - Then for each Q on that circle, compute mosaic weighting all_int.
@@ -494,10 +480,11 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, N_steps=10000)
     A_len = sqrt(A_sq)
 
     c = (G_sq + A_sq - rA*rA) / (2.0*A_len)
+    # Compute circle parameters
     circle_r_sq = G_sq - c*c
     if circle_r_sq < 0.0:
         return np.zeros((0,4), dtype=np.float64)
-    circle_r = sqrt(circle_r_sq)
+    circle_r = np.sqrt(circle_r_sq)
 
     Ax_hat = Ax / A_len
     Ay_hat = Ay / A_len
@@ -507,17 +494,16 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, N_steps=10000)
     Oy = c * Ay_hat
     Oz = c * Az_hat
 
-    # Build e1,e2 orthonormal to Ax_hat
+    # Build two orthonormal vectors (e1, e2) in the plane perpendicular to Ax_hat.
     ax, ay, az = 1.0, 0.0, 0.0
     dot_aA = ax*Ax_hat + ay*Ay_hat + az*Az_hat
     if abs(dot_aA) > 0.9999:
         ax, ay, az = 0.0, 1.0, 0.0
         dot_aA = ax*Ax_hat + ay*Ay_hat + az*Az_hat
-
     aox = ax - dot_aA*Ax_hat
     aoy = ay - dot_aA*Ay_hat
     aoz = az - dot_aA*Az_hat
-    ao_len = sqrt(aox*aox + aoy*aoy + aoz*aoz)
+    ao_len = np.sqrt(aox*aox + aoy*aoy + aoz*aoz)
     if ao_len < 1e-14:
         return np.zeros((0,4), dtype=np.float64)
     e1x = aox / ao_len
@@ -527,41 +513,64 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, N_steps=10000)
     e2x = Az_hat*e1y - Ay_hat*e1z
     e2y = Ax_hat*e1z - Az_hat*e1x
     e2z = Ay_hat*e1x - Ax_hat*e1y
-    e2_len = sqrt(e2x*e2x + e2y*e2y + e2z*e2z)
+    e2_len = np.sqrt(e2x*e2x + e2y*e2y + e2z*e2z)
     if e2_len < 1e-14:
         return np.zeros((0,4), dtype=np.float64)
     e2x /= e2_len
     e2y /= e2_len
     e2z /= e2_len
 
-    # Parametric angle from 0..2π
-    arr_idx = np.arange(N_steps, dtype=np.float64)
-    theta_arr = arr_idx * (2.0*pi / N_steps)
-
+    # Parameterize the circle
+    dtheta = 2.0*np.pi / N_steps
+    theta_arr = dtheta * np.arange(N_steps)
     cth = np.cos(theta_arr)
     sth = np.sin(theta_arr)
-
-    # Q array on the circle
     Qx_arr = Ox + circle_r*(cth*e1x + sth*e2x)
     Qy_arr = Oy + circle_r*(cth*e1y + sth*e2y)
     Qz_arr = Oz + circle_r*(cth*e1z + sth*e2z)
 
-    # Evaluate mosaic distribution
-    all_int = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv)
+    # Compute dtheta from the parametrization
+    dtheta = 2.0 * np.pi / N_steps
 
-    # Intensity cutoff
-    intensity_cutoff = exp(-100.0)
+    # Estimate an effective φ from the Q points.
+    Q_mag_sample = np.sqrt(Qx_arr[0]*Qx_arr[0] + Qy_arr[0]*Qy_arr[0] + Qz_arr[0]*Qz_arr[0])
+    phi_vals = np.empty(N_steps, dtype=np.float64)
+    for i in range(N_steps):
+        # Clamp Qz/Q_mag to [-1,1] to avoid numerical issues.
+        ratio = Qz_arr[i] / Q_mag_sample
+        if ratio > 1.0:
+            ratio = 1.0
+        elif ratio < -1.0:
+            ratio = -1.0
+        phi_vals[i] = np.arccos(ratio)
+    phi0 = 0.0
+    for i in range(N_steps):
+        phi0 += phi_vals[i]
+    phi0 /= N_steps
+
+    # Now, equate the area element sin(φ0) dφ_eff with the circle arc length (circle_r * dθ)
+    if np.sin(phi0) < 1e-12:
+        dphi_eff = 0.0  # or some fallback value
+    else:
+        dphi_eff = circle_r * dtheta / np.sin(phi0)
+
+    # Now call compute_intensity_array with the effective dphi and dtheta.
+    all_int = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv, H, K, dphi_eff, dtheta)
+
+    # Apply any intensity cutoff and construct the output.
+    intensity_cutoff = np.exp(-100.0)
     mask = (Qz_arr > 0.0) & (all_int > intensity_cutoff)
     valid_idx = np.nonzero(mask)[0]
 
-    out = np.zeros((valid_idx.size,4), dtype=np.float64)
-    out[:,0] = Qx_arr[valid_idx]
-    out[:,1] = Qy_arr[valid_idx]
-    out[:,2] = Qz_arr[valid_idx]
-    out[:,3] = all_int[valid_idx]
+    out = np.zeros((valid_idx.size, 4), dtype=np.float64)
+    for i in range(valid_idx.size):
+        idx = valid_idx[i]
+        out[i, 0] = Qx_arr[idx]
+        out[i, 1] = Qy_arr[idx]
+        out[i, 2] = Qz_arr[idx]
+        out[i, 3] = all_int[idx]
 
     return out
-
 
 # =============================================================================
 # 5) CALCULATE_PHI
@@ -608,14 +617,14 @@ def calculate_phi(
     gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
     G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
 
-    # Build a random mosaic distribution around G_vec
-    Q_grid = Generate_PDF_Grid(
-        G_vec,
-        sigma_rad, gamma_pv, eta_pv,
-        Qrange=1,   # half-width in Q around G_vec
-        n_grid=51,  # grid resolution
-        n_samples=2000
-    )
+    # # Build a random mosaic distribution around G_vec
+    # Q_grid = Generate_PDF_Grid(
+    #     G_vec,
+    #     sigma_rad, gamma_pv, eta_pv,
+    #     Qrange=1,   # half-width in Q around G_vec
+    #     n_grid=51,  # grid resolution
+    #     n_samples=2000
+    # )
 
     max_I_sign0 = -1.0
     max_x_sign0 = np.nan
@@ -623,9 +632,9 @@ def calculate_phi(
     max_I_sign1 = -1.0
     max_x_sign1 = np.nan
     max_y_sign1 = np.nan
-    thickness = 500.0  # film thickness in Å
+    #thickness = 500.0  # film thickness in Å
 
-    N = int(thickness/cv)  # Number of layers (approx)
+    #N = int(thickness/cv)  # Number of layers (approx)
 
     # Build a sample rotation from "theta_initial_deg"
     rad_theta_i = theta_initial_deg*(pi/180.0)
@@ -682,6 +691,7 @@ def calculate_phi(
 
         dtheta = theta_array[i_samp]
         dphi   = phi_array[i_samp]
+        
         k_in = np.array([
             cos(dtheta)*sin(dphi),
             cos(dtheta)*cos(dphi),
@@ -723,18 +733,18 @@ def calculate_phi(
         bt = np.imag(n2)**2 * k_mag**2
 
         re_k_z = - np.sqrt((np.sqrt(at*at + bt*bt) + at)/2.0)
-        im_k_z =   np.sqrt((np.sqrt(at*at + bt*bt) - at)/2.0)
+        #im_k_z =   np.sqrt((np.sqrt(at*at + bt*bt) - at)/2.0)
 
         k_in_crystal = np.array([k_x_scat, k_y_scat, re_k_z])
 
         # Incoherent mosaic average
-        incoherent = incoherent_averaging(Q_grid, N, cv, thickness,
-                                          re_k_z, im_k_z, k_in_crystal,
-                                          k_mag, n2, bt)
-        Ti = fresnel_transmission(th_t, n2)
+        #incoherent = incoherent_averaging(Q_grid, N, cv, thickness,
+        #                                  re_k_z, im_k_z, k_in_crystal,
+        #                                  k_mag, n2, bt)
+        #Ti = fresnel_transmission(th_t, n2)
         
         # solve_q approach for reflection geometry
-        All_Q = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv)
+        All_Q = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv, H,K,L)
         for i_sol in range(All_Q.shape[0]):
             Qx = All_Q[i_sol, 0]
             Qy = All_Q[i_sol, 1]
@@ -756,7 +766,7 @@ def calculate_phi(
             k_tx_f = k_scat*cos(twotheta_t)*sin(phi_f)
             k_ty_f = k_scat*cos(twotheta_t)*cos(phi_f)
             k_tz_f = k_scat*sin(twotheta_t)
-            Tf = fresnel_transmission(th_t, n2, direction="out")
+            #Tf = fresnel_transmission(th_t, n2, direction="out")
 
             kf = np.array([k_tx_f, k_ty_f, k_tz_f])
             kf_prime = R_sample @ kf
@@ -781,7 +791,7 @@ def calculate_phi(
             #  2) I_Q -> partial mosaic weighting from solve_q circle
             #  3) incoherent -> the mosaic average from Q_grid
             #  4) exponent dampings -> Debye or extra broadening
-            val = (reflection_intensity * I_Q * incoherent * (abs(Ti)**2) + (abs(Tf)**2)
+            val = (reflection_intensity * I_Q #* incoherent * (abs(Ti)**2) + (abs(Tf)**2)
                 * exp(-Qz*Qz * debye_x*debye_x)
                 * exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y))
 

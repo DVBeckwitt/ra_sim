@@ -9636,3 +9636,383 @@ compute_peak_position_error_geometry_local called with gamma=2.0443, Gamma=2.153
   Marquardt => success. Final param=[ 2.00000000e+00  2.08700000e+00  7.67000000e-02  6.00000000e+00
  -6.00000000e-04 -6.00000000e-04  4.30000000e-02  4.14000000e+00
   2.86360000e+01  1.52680300e+03  1.36839371e+03] final cost=5e+11
+[run_optimization_positions_geometry_local] start
+Traceback (most recent call last):
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1337, in _calculate_population_energies
+    calc_energies = list(
+        self._mapwrapper(self.func, parameters_pop[0:S])
+    )
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 657, in __call__
+    return self.f(x, *self.args)
+           ~~~~~~^^^^^^^^^^^^^^^
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 202, in obj_glob
+    return compute_peak_position_error_geometry_local(
+        *x,
+    ...<4 lines>...
+        measured_peaks=measured_peaks
+    )
+TypeError: compute_peak_position_error_geometry_local() got multiple values for argument 'center'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 211, in run_optimization_positions_geometry_local
+    res_de = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 440, in wrapper
+    return fun(*args, **kwargs)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 501, in differential_evolution
+    ret = solver.solve()
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1176, in solve
+    self._calculate_population_energies(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.population[self.feasible]))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1344, in _calculate_population_energies
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from e
+RuntimeError: The map-like callable must be of the form f(func, iterable), returning a sequence of numbers the same length as 'iterable'
+
+[run_optimization_positions_geometry_local] start
+Traceback (most recent call last):
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1337, in _calculate_population_energies
+    calc_energies = list(
+        self._mapwrapper(self.func, parameters_pop[0:S])
+    )
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 657, in __call__
+    return self.f(x, *self.args)
+           ~~~~~~^^^^^^^^^^^^^^^
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 202, in obj_glob
+    return compute_peak_position_error_geometry_local(
+        *x,
+    ...<4 lines>...
+        measured_peaks=measured_peaks
+    )
+TypeError: compute_peak_position_error_geometry_local() got multiple values for argument 'center'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 211, in run_optimization_positions_geometry_local
+    res_de = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 440, in wrapper
+    return fun(*args, **kwargs)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 501, in differential_evolution
+    ret = solver.solve()
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1176, in solve
+    self._calculate_population_energies(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.population[self.feasible]))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1344, in _calculate_population_energies
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from e
+RuntimeError: The map-like callable must be of the form f(func, iterable), returning a sequence of numbers the same length as 'iterable'
+
+[run_optimization_positions_geometry_local] start
+Traceback (most recent call last):
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1337, in _calculate_population_energies
+    calc_energies = list(
+        self._mapwrapper(self.func, parameters_pop[0:S])
+    )
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 657, in __call__
+    return self.f(x, *self.args)
+           ~~~~~~^^^^^^^^^^^^^^^
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 202, in obj_glob
+    return compute_peak_position_error_geometry_local(
+        *x,
+    ...<4 lines>...
+        measured_peaks=measured_peaks
+    )
+TypeError: compute_peak_position_error_geometry_local() got multiple values for argument 'center'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 211, in run_optimization_positions_geometry_local
+    res_de = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 440, in wrapper
+    return fun(*args, **kwargs)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 501, in differential_evolution
+    ret = solver.solve()
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1176, in solve
+    self._calculate_population_energies(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.population[self.feasible]))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1344, in _calculate_population_energies
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from e
+RuntimeError: The map-like callable must be of the form f(func, iterable), returning a sequence of numbers the same length as 'iterable'
+
+[run_optimization_positions_geometry_local] start
+Traceback (most recent call last):
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1337, in _calculate_population_energies
+    calc_energies = list(
+        self._mapwrapper(self.func, parameters_pop[0:S])
+    )
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 657, in __call__
+    return self.f(x, *self.args)
+           ~~~~~~^^^^^^^^^^^^^^^
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 202, in obj_glob
+    return compute_peak_position_error_geometry_local(
+        *x,
+    ...<4 lines>...
+        measured_peaks=measured_peaks
+    )
+TypeError: compute_peak_position_error_geometry_local() got multiple values for argument 'center'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 211, in run_optimization_positions_geometry_local
+    res_de = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 440, in wrapper
+    return fun(*args, **kwargs)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 501, in differential_evolution
+    ret = solver.solve()
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1176, in solve
+    self._calculate_population_energies(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.population[self.feasible]))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1344, in _calculate_population_energies
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from e
+RuntimeError: The map-like callable must be of the form f(func, iterable), returning a sequence of numbers the same length as 'iterable'
+
+[run_optimization_positions_geometry_local] start
+Traceback (most recent call last):
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1337, in _calculate_population_energies
+    calc_energies = list(
+        self._mapwrapper(self.func, parameters_pop[0:S])
+    )
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 657, in __call__
+    return self.f(x, *self.args)
+           ~~~~~~^^^^^^^^^^^^^^^
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 202, in obj_glob
+    return compute_peak_position_error_geometry_local(
+        *x,
+    ...<4 lines>...
+        measured_peaks=measured_peaks
+    )
+TypeError: compute_peak_position_error_geometry_local() got multiple values for argument 'center'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 211, in run_optimization_positions_geometry_local
+    res_de = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 440, in wrapper
+    return fun(*args, **kwargs)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 501, in differential_evolution
+    ret = solver.solve()
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1176, in solve
+    self._calculate_population_energies(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.population[self.feasible]))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1344, in _calculate_population_energies
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from e
+RuntimeError: The map-like callable must be of the form f(func, iterable), returning a sequence of numbers the same length as 'iterable'
+
+[run_optimization_positions_geometry_local] start
+Traceback (most recent call last):
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1337, in _calculate_population_energies
+    calc_energies = list(
+        self._mapwrapper(self.func, parameters_pop[0:S])
+    )
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 657, in __call__
+    return self.f(x, *self.args)
+           ~~~~~~^^^^^^^^^^^^^^^
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 202, in obj_glob
+    return compute_peak_position_error_geometry_local(
+        *x,
+    ...<4 lines>...
+        measured_peaks=measured_peaks
+    )
+TypeError: compute_peak_position_error_geometry_local() got multiple values for argument 'center'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 211, in run_optimization_positions_geometry_local
+    res_de = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 440, in wrapper
+    return fun(*args, **kwargs)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 501, in differential_evolution
+    ret = solver.solve()
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1176, in solve
+    self._calculate_population_energies(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.population[self.feasible]))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1344, in _calculate_population_energies
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from e
+RuntimeError: The map-like callable must be of the form f(func, iterable), returning a sequence of numbers the same length as 'iterable'
+
+[run_optimization_positions_geometry_local] start
+Traceback (most recent call last):
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1337, in _calculate_population_energies
+    calc_energies = list(
+        self._mapwrapper(self.func, parameters_pop[0:S])
+    )
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 657, in __call__
+    return self.f(x, *self.args)
+           ~~~~~~^^^^^^^^^^^^^^^
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 202, in obj_glob
+    return compute_peak_position_error_geometry_local(
+        *x,
+    ...<4 lines>...
+        measured_peaks=measured_peaks
+    )
+TypeError: compute_peak_position_error_geometry_local() got multiple values for argument 'center'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\Kenpo\OneDrive\Documents\GitHub\ra_sim\ra_sim\fitting\optimization.py", line 211, in run_optimization_positions_geometry_local
+    res_de = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\_lib\_util.py", line 440, in wrapper
+    return fun(*args, **kwargs)
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 501, in differential_evolution
+    ret = solver.solve()
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1176, in solve
+    self._calculate_population_energies(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.population[self.feasible]))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kenpo\AppData\Local\Programs\Python\Python313\Lib\site-packages\scipy\optimize\_differentialevolution.py", line 1344, in _calculate_population_energies
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from e
+RuntimeError: The map-like callable must be of the form f(func, iterable), returning a sequence of numbers the same length as 'iterable'
+
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] kept 9 unique HKLs
+[build_measured_dict] input peaks: 16
+[build_measured_dict] unique groups: 9
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs
+[build_measured_dict] 16 peaks in
+[build_measured_dict] 9 unique HKLs

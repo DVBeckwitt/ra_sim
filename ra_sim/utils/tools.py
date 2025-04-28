@@ -283,59 +283,169 @@ def two_theta(d, lambda_):
     theta = math.degrees(math.asin(sin_theta))
     return 2 * theta
 
-def miller_generator(mx, cif_file, lambda_, energy=8.0, intensity_threshold=1.0, two_theta_range=(0,70)):
+
+def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
+                     intensity_threshold=1.0, two_theta_range=(0,70)):
     """
-    Iterate over all Miller indices (h, k, l) with each index from 0 to mx.
-    For each reflection, calculate twoθ and the structure factor intensity.
-    Only reflections with twoθ within the specified range and with intensity above
-    the intensity_threshold are kept.
+    Generate Miller indices, compute 2θ and intensities, group reflections,
+    and normalize intensities. This version updates the occupancy values in the
+    atom-site loop by writing a temporary CIF file with the new occupancies.
+    
+    The occupancy modification uses the given occupancy array: if occ is a list 
+    (or tuple) and its length matches the number of occupancy entries in the CIF, 
+    each occupancy is multiplied by the corresponding occ value; otherwise, occ[0]
+    (or occ if a single number) is used uniformly.
     
     Parameters:
-      mx: Maximum Miller index (each of h, k, l goes from 0 to mx).
-      cif_file: Path to the CIF file.
-      lambda_: X-ray wavelength (e.g., 1.54 Å for Cu Kα).
-      energy: Scattering energy (keV).
-      intensity_threshold: Minimum intensity for a reflection to be kept.
-      two_theta_range: Tuple (min, max) defining the allowed range of twoθ (in degrees).
+      mx                 : maximum index bound (h,k: -mx+1...mx-1, l: 1...mx-1)
+      cif_file           : path to the CIF file
+      occ                : occupancy multiplier(s); if list and its length equals that of the occupancy
+                           entries in the CIF, each is applied individually, otherwise the first element is used uniformly.
+      lambda_            : X-ray wavelength in Å.
+      energy             : energy in keV (default 8.047)
+      intensity_threshold: minimum intensity to keep a reflection.
+      two_theta_range    : allowed 2θ range (degrees)
     
     Returns:
-      miller: NumPy array of shape (N,3) with the accepted Miller indices.
-      intensities: NumPy array of shape (N,) with the corresponding intensities.
+      miller:       (N, 3) array of representative Miller indices.
+      intensities:  (N,) array of normalized intensities.
+      degeneracy:   (N,) array of multiplicities.
+      details:      list of length N; each element is a list of tuples ((h,k,l), normalized intensity)
+                    for the reflections in that group.
     """
-    # Generate the set of all Miller indices (0 to mx inclusive).
-    raw_miller = list(itertools.product(range(mx + 1), repeat=3))
-    
-    # Load the crystal from the CIF file and set up scattering.
-    xtl = dif.Crystal(cif_file)
+    from collections import defaultdict
+    import numpy as np, os, math, tempfile
+    import Dans_Diffraction as dif  # your diffraction module
+    import CifFile  # from PyCifRW
+
+    # Generate candidate Miller indices.
+    raw_miller = [
+        (h, k, l)
+        for h in range(-mx+1, mx)
+        for k in range(-mx+1, mx)
+        for l in range(1, mx)
+    ]
+
+    # --------------- Use PyCifRW to update occupancies -------------------
+    cf = CifFile.ReadCif(cif_file)
+    block_name = list(cf.keys())[0]
+    block = cf[block_name]
+    # Get the occupancy values; expect a list.
+    occupancies = block.get("_atom_site_occupancy")
+    if occupancies is None:
+        raise ValueError("Occupancy tag '_atom_site_occupancy' not found in CIF block.")
+
+    # Determine whether to update each occupancy individually or uniformly.
+    if isinstance(occ, (list, tuple)):
+        # If length matches the number of occupancies, apply elementwise multiplication.
+        if len(occ) == len(occupancies):
+            for i in range(len(occupancies)):
+                try:
+                    original = float(occupancies[i])
+                    multiplier = float(occ[i])
+                except Exception as e:
+                    raise ValueError(f"Error converting occupancy value '{occupancies[i]}' or occ[{i}]='{occ[i]}' to float: {e}")
+                occupancies[i] = str(original * multiplier)
+        else:
+            # Use the first element of occ uniformly.
+            factor = float(occ[0])
+            for i in range(len(occupancies)):
+                try:
+                    original = float(occupancies[i])
+                except Exception as e:
+                    raise ValueError(f"Error converting occupancy value '{occupancies[i]}' to float: {e}")
+                occupancies[i] = str(original * factor)
+    else:
+        # occ is a single value.
+        factor = float(occ)
+        for i in range(len(occupancies)):
+            try:
+                original = float(occupancies[i])
+            except Exception as e:
+                raise ValueError(f"Error converting occupancy value '{occupancies[i]}' to float: {e}")
+            occupancies[i] = str(original * factor)
+    # ---------------------------------------------------------------------
+
+    # Write the updated CIF to a temporary file.
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False)
+    tmp.close()  # Close the file to allow writing via PyCifRW.
+    # If your version of PyCifRW provides a WriteCif function, you can use it.
+    # Otherwise, use the WriteOut method on the CIF object.
+    try:
+        CifFile.WriteCif(cf, tmp.name)
+    except AttributeError:
+        # Fall back to WriteOut() if WriteCif isn't available.
+        with open(tmp.name, "w") as f:
+            f.write(cf.WriteOut())
+
+    # Load the crystal using the temporary CIF file.
+    xtl = dif.Crystal(tmp.name)
+    # Optionally, remove the temporary file later if desired:
+    # os.remove(tmp.name)
+    # ---------------------------------------------------------------------
+
+    print("Space group:", xtl.Symmetry.spacegroup)
+    print("Sym ops:", xtl.Symmetry.symmetry_operations)
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
     xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=energy)
-    # Use positive (integer) hkl values (no multiplicity factor).
     xtl.Scatter.integer_hkl = True
-    
-    miller = []
-    intensities = []
-    
-    for h, k, l in raw_miller:
+
+    groups = defaultdict(list)  # For reflections with (h,k) ≠ (0,0)
+    zeros = []                  # For (0,0,l) reflections
+
+    for (h, k, l) in raw_miller:
         d = d_spacing(h, k, l, xtl)
         tth = two_theta(d, lambda_)
-        if tth is None:
+        if tth is None or not (two_theta_range[0] <= tth <= two_theta_range[1]):
             continue
-        if not (two_theta_range[0] <= tth <= two_theta_range[1]):
-            continue
-        # Calculate the intensity using Dans_Diffraction's scatter routine.
         intensity_val = xtl.Scatter.intensity([h, k, l])
         try:
             intensity_val = float(intensity_val)
         except Exception:
             continue
-        if intensity_val <= intensity_threshold:
+        if intensity_val < intensity_threshold:
             continue
-        
-        miller.append((h, k, l))
-        intensities.append(intensity_val)
+        if h == 0 and k == 0:
+            zeros.append(((h, k, l), intensity_val))
+        else:
+            key = (h*h + k*k, l)
+            groups[key].append(((h, k, l), intensity_val))
     
-    miller = np.array(miller, dtype=np.int32)
-    intensities = np.array(intensities, dtype=np.float64)
-    return miller, intensities
+    grouped_results = []
+    for key, items in groups.items():
+        rep_miller = items[0][0]
+        multiplicity = len(items)
+        total_intensity = sum(item[1] for item in items)
+        details_list = [(hk, intensity) for (hk, intensity) in items]
+        grouped_results.append((rep_miller, total_intensity, multiplicity, details_list))
+    zeros_group = [
+        (((h, k, l)), intensity, 1, [((h, k, l), intensity)])
+        for ((h, k, l), intensity) in zeros
+    ]
+    combined = grouped_results + zeros_group
+    if not combined:
+        return (np.empty((0, 3), dtype=np.int32),
+                np.empty((0,), dtype=np.float64),
+                np.empty((0,), dtype=np.int32),
+                [])
+    max_total_intensity = max(item[1] for item in combined)
+    normalized_combined = []
+    for rep_miller, total_intensity, multiplicity, details_list in combined:
+        normalized_total = round(total_intensity * 100 / max_total_intensity, 2)
+        normalized_details = [
+            (hk, round(indiv_intensity * 100 / max_total_intensity, 2))
+            for hk, indiv_intensity in details_list
+        ]
+        normalized_combined.append((rep_miller, normalized_total, multiplicity, normalized_details))
+    
+    miller_arr = np.array([item[0] for item in normalized_combined], dtype=np.int32)
+    intensities_arr = np.array([item[1] for item in normalized_combined], dtype=np.float64)
+    degeneracy_arr = np.array([item[2] for item in normalized_combined], dtype=np.int32)
+    normalized_details = [item[3] for item in normalized_combined]
+    
+    return miller_arr, intensities_arr, degeneracy_arr, normalized_details
+
 
 
 import matplotlib.pyplot as plt

@@ -19,8 +19,8 @@ from ra_sim.io.data_loading import (
     save_all_parameters,
     load_parameters
 )
-from ra_sim.StructureFactor.AtomicCoordinates import get_Atomic_Coordinates
-from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
+from ra_sim.fitting.optimization import simulate_and_compare_hkl
+
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_peaks_parallel
 from ra_sim.simulation.diffraction_debug import (
@@ -29,10 +29,7 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
-from ra_sim.fitting.optimization import (
-    run_optimization_positions_geometry_local,
-    run_optimization_mosaic_1d_local
-)
+
 import numba
 import os
 import spglib
@@ -50,7 +47,8 @@ DEBUG_ENABLED = False
 file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\darkImg.osc"
 BI = read_osc(file_path)  # Dark (background) image
 
-file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Varying\Images\Bi2Se3_6d_5m.osc")
+#file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Varying\Images\Bi2Se3_6d_5m.osc")
+file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_5m_5d.osc")
 file2 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_10d_5m.osc")
 file3 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_15d_5m.osc")
 file4 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Varying\Images\Bi2Se3_30d_2m.osc")
@@ -65,10 +63,11 @@ files = [file1, file2, file3, file4]
 bg_data_list = [bg1, bg2, bg3, bg4]
 for i in range(len(files)):
     files[i] = np.rot90(files[i], k=3) - BI
+
 background_images = files
 
 # Parse geometry
-poni_file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Analysis\Bi2Se3\geometry.poni"
+poni_file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\geometry.poni"
 parameters = parse_poni_file(poni_file_path)
 
 Distance_CoR_to_Detector = parameters.get("Dist", 0.075)
@@ -80,7 +79,7 @@ wave_m = parameters.get("Wavelength", 1e-10)
 lambda_ = wave_m * 1e10  # Convert m -> Å
 
 image_size = 3000
-num_samples = 3000
+num_samples = 1000
 
 # Approximate beam center
 center_default = [
@@ -89,9 +88,6 @@ center_default = [
 ]
 
 mx = 19
-av = 4.14
-bv = av
-cv = 28.63600
 
 fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
 divergence_sigma = math.radians(0.05 * fwhm2sigma)
@@ -104,7 +100,7 @@ theta_initial = 6.0
 chi = 0.0
 psi = 0.0
 zb = 0.0
-bw_sigma = 0.25e-3 * fwhm2sigma
+bw_sigma = 0.05e-3 * fwhm2sigma
 zs = 0.0
 debye_x = 0.0
 debye_y = 0.0
@@ -112,48 +108,130 @@ n2 = IndexofRefraction()
 
 bandwidth = 0.7 / 100  # 0.7%
 
-# Lattice & atomic details
-lattice = [[av, 0, 0], [0, bv, 0], [0, 0, cv]]
-positions = np.array([
-    [0.00000, 0.00000, 0.40080],  # Bi
-    [0.00000, 0.00000, 0.00000],  # Se1
-    [0.00000, 0.00000, 0.21170]   # Se2
-])
-numbers = [83, 34, 34]
-atomic_labels = ['Bi', 'Se1', 'Se2']
-space_group_operations = spglib.get_symmetry_from_database(458)
+# NOTE: We define the default occupancy for each site:
+occ = [1.0, 1.0, 1.0]
 
-data = np.load(
-    r"C:\Users\Kenpo\OneDrive\Research\Uniaxially Twisted Project\UniTwist2D\repo\AFF.npy",
-    allow_pickle=True
-)
-q = sp.Symbol('q')
-Pbsol = sp.lambdify(q, data[0], modules='numpy')
-Isol = sp.lambdify(q, data[1], modules='numpy')
-data = [Pbsol, Isol]
+# Parameters and file paths.
+cif_file = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\Bi2Se3\Bi2Se3_test.cif"
+from collections import defaultdict
+import numpy as np, os, math, tempfile
+import Dans_Diffraction as dif  # your diffraction module
+import CifFile  # from PyCifRW
+import re
 
-from ra_sim.utils.tools import miller_generator
+# read with PyCifRW
+cf    = CifFile.ReadCif(cif_file)
+blk   = cf[list(cf.keys())[0]]
 
+# pull the raw text
+a_text = blk["_cell_length_a"]
+b_text = blk["_cell_length_b"]
+c_text = blk["_cell_length_c"]
 
-cif_file = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Analysis\Bi2Se3\Bi2Se3.cif"
+# strip the '(uncertainty)' and cast
+def parse_cif_num(txt):
+    # match leading numeric part, e.g. '4.14070' out of '4.14070(3)'
+    m = re.match(r"[-+0-9\.Ee]+", txt)
+    if not m:
+        raise ValueError(f"Can't parse '{txt}' as a number")
+    return float(m.group(0))
+
+av = parse_cif_num(a_text)
+bv = parse_cif_num(b_text)
+cv = parse_cif_num(c_text)
+    
 lambda_ = 1.54   # X-ray wavelength in Å (e.g., Cu Kα)
 energy = 6.62607e-34 * 2.99792458e8 / (lambda_*1e-10) / (1.602176634e-19)    # keV
 intensity_threshold = 1.0
 two_theta_range = (0, 70)
 
-miller, intensities = miller_generator(mx, cif_file, lambda_, energy, intensity_threshold, two_theta_range)
+# ---------------------------------------------------------------------------
+# Generate miller indices & intensities from the .cif file at script start.
+# This will be dynamically updated once we add occupancy sliders.
+# ---------------------------------------------------------------------------
+miller, intensities, degeneracy, details = miller_generator(
+    mx,
+    cif_file,
+    occ,
+    lambda_,
+    energy,
+    intensity_threshold,
+    two_theta_range
+)
 
-# import pandas as pd
+import pandas as pd
+# Create the Summary DataFrame.
+df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
+df_summary['Intensity'] = intensities
+df_summary['Degeneracy'] = degeneracy
+df_summary['Details'] = [f"See Details Sheet - Group {i+1}" for i in range(len(df_summary))]
 
-# # Create a Pandas DataFrame from the reflection data.
-# df = pd.DataFrame(miller, columns=['h', 'k', 'l'])
-# df['Intensity'] = intensities
+# Create the Details DataFrame by flattening the details list.
+details_list = []
+for i, group_details in enumerate(details):
+    for hkl, indiv_intensity in group_details:
+        details_list.append({
+            'Group': i+1,
+            'h': hkl[0],
+            'k': hkl[1],
+            'l': hkl[2],
+            'Individual Intensity': indiv_intensity
+        })
+
+df_details = pd.DataFrame(details_list)
+
+# Save the initial intensities to Excel in the user's Downloads folder.
+download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+excel_path = os.path.join(download_dir, "miller_intensities.xlsx")
+
+with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+    df_summary.to_excel(writer, sheet_name='Summary', index=False)
+    df_details.to_excel(writer, sheet_name='Details', index=False)
     
-# # # Save to the Downloads directory
-# download_dir = os.path.join(os.path.expanduser("~"), "Downloads")bv
-# excel_path = os.path.join(download_dir, "miller_intensities.xlsx")
-# df.to_excel(excel_path, index=False)
-# print(f"Excel file saved at {excel_path}")
+    workbook  = writer.book
+    summary_sheet = writer.sheets['Summary']
+    details_sheet = writer.sheets['Details']
+    
+    header_format = workbook.add_format({
+        'bold': True,
+        'text_wrap': True,
+        'valign': 'vcenter',
+        'align': 'center',
+        'fg_color': '#4F81BD',
+        'font_color': '#FFFFFF',
+        'border': 1
+    })
+    for col_num, col_name in enumerate(df_summary.columns):
+        summary_sheet.write(0, col_num, col_name, header_format)
+        summary_sheet.set_column(col_num, col_num, 18)
+    
+    header_format_details = workbook.add_format({
+        'bold': True,
+        'text_wrap': True,
+        'valign': 'vcenter',
+        'align': 'center',
+        'fg_color': '#4BACC6',
+        'font_color': '#FFFFFF',
+        'border': 1
+    })
+    for col_num, col_name in enumerate(df_details.columns):
+        details_sheet.write(0, col_num, col_name, header_format_details)
+        details_sheet.set_column(col_num, col_num, 18)
+    
+    last_row = len(df_summary) + 1
+    summary_sheet.conditional_format(f'D2:D{last_row}', {
+        'type': '3_color_scale',
+        'min_color': '#FFFFFF',
+        'mid_color': '#FFEB84',
+        'max_color': '#FF0000'
+    })
+    
+    zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
+    for row in range(1, len(df_details) + 1):
+        if row % 2 == 1:
+            details_sheet.set_row(row, cell_format=zebra_format)
+
+print(f"Excel file saved at {excel_path}")
 
 # Zero out beamstop region near center
 row_center = int(center_default[0])
@@ -193,6 +271,9 @@ defaults = {
     'center_y': center_default[1]
 }
 
+###############################################################################
+#                                  TK SETUP
+###############################################################################
 root = tk.Tk()
 root.title("Controls and Sliders")
 
@@ -223,6 +304,7 @@ image_display = ax.imshow(
     zorder=1,
     origin='upper'
 )
+
 background_display = ax.imshow(
     current_background_image,
     cmap='turbo',
@@ -231,6 +313,20 @@ background_display = ax.imshow(
     zorder=0,
     origin='upper'
 )
+# ---------------------------------------------------------------------------
+#  helper – returns a fully populated, *consistent* mosaic_params dict
+# ---------------------------------------------------------------------------
+def build_mosaic_params():
+    return {
+        "beam_x_array":       profile_cache["beam_x_array"],
+        "beam_y_array":       profile_cache["beam_y_array"],
+        "theta_array":        profile_cache["theta_array"],
+        "phi_array":          profile_cache["phi_array"],
+        "wavelength_array":   profile_cache["wavelength_array"],   #  <<< name fixed
+        "sigma_mosaic_deg":   sigma_mosaic_var.get(),
+        "gamma_mosaic_deg":   gamma_mosaic_var.get(),
+        "eta":                eta_var.get(),
+    }
 
 colorbar_main = fig.colorbar(image_display, ax=ax, label='Intensity', shrink=0.6, pad=0.02)
 
@@ -243,7 +339,7 @@ caked_colorbar.ax.set_visible(False)
 
 center_marker, = ax.plot(
     center_default[1],
-    3000 - center_default[0],
+    center_default[0],
     'ro',
     markersize=5,
     zorder=2
@@ -257,8 +353,61 @@ plt.xlabel('X (pixels)')
 plt.ylabel('Y (pixels)')
 canvas.draw()
 
+# -----------------------------------------------------------
+# 1)  Highlight‑marker that we can move each click
+# -----------------------------------------------------------
+selected_peak_marker, = ax.plot([], [], 'ys',  # yellow square outline
+                               markersize=8, markerfacecolor='none',
+                               linewidth=1.5, zorder=6)
+selected_peak_marker.set_visible(False)
+
+# -----------------------------------------------------------
+# 2)  Mouse‑click handler
+# -----------------------------------------------------------
+def on_canvas_click(event):
+    if event.inaxes is not ax or event.xdata is None:
+        return                               # click was outside the image
+    if not peak_positions:                   # no simulation yet
+        progress_label_positions.config(text="Run a simulation first.")
+        return
+
+    # (x,y) from Matplotlib → integer detector pixels
+    cx, cy = int(round(event.xdata)), int(round(event.ydata))
+
+    # Find nearest stored peak
+    best_i, best_d2 = -1, float("inf")
+    for i, (px, py) in enumerate(peak_positions):
+        if px < 0:              # invalid entries kept as (-1,-1)
+            continue
+        d2 = (px - cx)**2 + (py - cy)**2
+        if d2 < best_d2:
+            best_i, best_d2 = i, d2
+
+    if best_i == -1:
+        progress_label_positions.config(text="No peaks on screen.")
+        return
+
+    # Update GUI
+    px, py      = peak_positions[best_i]
+    H,K,L       = peak_millers[best_i]
+    I           = peak_intensities[best_i]
+    selected_peak_marker.set_data([px], [py])
+    selected_peak_marker.set_visible(True)
+
+    progress_label_positions.config(
+        text=f"Nearest peak: HKL=({H} {K} {L})  "
+             f"pixel=({px},{py})  Δ={best_d2**0.5:.1f}px  I={I:.2g}"
+    )
+    canvas.draw_idle()
+
+# -----------------------------------------------------------
+# 3)  Bind the handler
+# -----------------------------------------------------------
+canvas.mpl_connect('button_press_event', on_canvas_click)
+
+
 # ---------------------------------------------------------------------------
-# NEW: Separate "vmax" for caked 2D image, plus "vmin" for caked
+# Separate "vmax" for normal 2D vs. caked 2D images
 # ---------------------------------------------------------------------------
 vmax_label = ttk.Label(vmax_frame, text="Max Value (Normal)")
 vmax_label.pack(side=tk.LEFT, padx=5)
@@ -280,11 +429,10 @@ vmax_slider = ttk.Scale(
 )
 vmax_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-# Frame for caked vmin/vmax
+# Frame for caked vrange
 caked_vrange_frame = ttk.Frame(fig_frame)
 caked_vrange_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
-# NEW: separate vmin_caked slider
 vmin_caked_label = ttk.Label(caked_vrange_frame, text="vmin (Caked)")
 vmin_caked_label.pack(side=tk.LEFT, padx=5)
 
@@ -304,7 +452,6 @@ vmin_caked_slider = ttk.Scale(
 )
 vmin_caked_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-# NEW: separate vmax_caked slider
 vmax_caked_label = ttk.Label(caked_vrange_frame, text="vmax (Caked)")
 vmax_caked_label.pack(side=tk.LEFT, padx=5)
 
@@ -323,7 +470,6 @@ vmax_caked_slider = ttk.Scale(
     command=vmax_caked_slider_command
 )
 vmax_caked_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-# ---------------------------------------------------------------------------
 
 slider_frame = ttk.Frame(root, padding=10)
 slider_frame.pack(side=tk.LEFT, fill=tk.Y)
@@ -489,7 +635,6 @@ last_1d_integration_data = {
     "intensities_2theta_bg": None,
     "azimuths_bg": None,
     "intensities_azimuth_bg": None,
-    # The final 2D simulated image
     "simulated_2d_image": None
 }
 
@@ -548,6 +693,8 @@ prev_background_visible = True
 last_bg_signature = None
 last_sim_signature = None
 last_simulation_signature = None
+stored_max_positions_local = None
+stored_sim_image = None
 
 ###############################################################################
 #                              MAIN UPDATE
@@ -555,6 +702,7 @@ last_simulation_signature = None
 def do_update():
     global update_pending, last_simulation_signature
     global unscaled_image_global, background_visible
+    global stored_max_positions_local, stored_sim_image  
 
     update_pending = None
 
@@ -576,16 +724,8 @@ def do_update():
     center_marker.set_ydata([center_x_up])
     center_marker.set_visible(False)
 
-    mosaic_params = {
-        "beam_x_array":  profile_cache.get("beam_x_array", []),
-        "beam_y_array":  profile_cache.get("beam_y_array", []),
-        "theta_array":   profile_cache.get("theta_array", []),
-        "phi_array":     profile_cache.get("phi_array", []),
-        "wavelength_i_array": profile_cache.get("wavelength_array", []),
-        "sigma_mosaic_deg": sigma_mosaic_var.get(),
-        "gamma_mosaic_deg": gamma_mosaic_var.get(),
-        "eta": eta_var.get()
-    }
+    mosaic_params = build_mosaic_params()
+
 
     def get_sim_signature():
         return (
@@ -606,6 +746,11 @@ def do_update():
             round(mosaic_params["eta"], 6)
         )
 
+    # 1 – place near other globals
+
+    # … inside do_update() …
+    global stored_max_positions_local        # <- add
+
     new_sim_sig = get_sim_signature()
     global peak_positions, peak_millers, peak_intensities
     if new_sim_sig != last_simulation_signature:
@@ -616,6 +761,7 @@ def do_update():
 
         sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
+        # Re-use the globally updated miller, intensities from occupancy changes:
         updated_image, max_positions_local, _, _ = process_peaks_parallel(
             miller, intensities, image_size,
             a_updated, c_updated, lambda_,
@@ -629,7 +775,7 @@ def do_update():
             mosaic_params["sigma_mosaic_deg"],
             mosaic_params["gamma_mosaic_deg"],
             mosaic_params["eta"],
-            mosaic_params["wavelength_i_array"],
+            mosaic_params["wavelength_array"],
             debye_x_updated, debye_y_updated,
             [center_x_up, center_y_up],
             theta_init_up,
@@ -637,26 +783,42 @@ def do_update():
             np.array([0.0, 1.0, 0.0]),
             save_flag=0
         )
+        stored_max_positions_local = max_positions_local     # cache it
+        stored_sim_image           = updated_image           # cache it
+    else:
+        # fall back to the cached arrays
+        if stored_max_positions_local is None:
+            # first run after programme start – force a simulation
+            last_simulation_signature = None
+            return do_update()          # re-enter with computation path
+        max_positions_local = stored_max_positions_local
+        updated_image       = stored_sim_image
+    
+    
+    for i, (H, K, L) in enumerate(miller):
+        # Unpack as (intensity0, x0, y0, intensity1, x1, y1)
+        I0, x0, y0, I1, x1, y1 = max_positions_local[i, :]
 
-        for i, (H, K, L) in enumerate(miller):
-            mx0, my0, mv0, mx1, my1, mv1 = max_positions_local[i, :]
-            if np.isfinite(mx0) and np.isfinite(my0):
-                peak_positions.append((int(round(mx0)), int(round(my0))))
-                peak_intensities.append(mv0)
-                peak_millers.append((H, K, L))
-            else:
-                peak_positions.append((-1, -1))
-                peak_intensities.append(mv0)
-                peak_millers.append((H, K, L))
+        # First reflection
+        if np.isfinite(x0) and np.isfinite(y0):
+            peak_positions.append((int(round(x0)), int(round(y0))))
+            peak_intensities.append(I0)
+            peak_millers.append((H, K, L))
+        else:
+            peak_positions.append((-1, -1))
+            peak_intensities.append(I0)
+            peak_millers.append((H, K, L))
 
-            if np.isfinite(mx1) and np.isfinite(my1):
-                peak_positions.append((int(round(mx1)), int(round(my1))))
-                peak_intensities.append(mv1)
-                peak_millers.append((H, K, L))
-            else:
-                peak_positions.append((-1, -1))
-                peak_intensities.append(mv1)
-                peak_millers.append((H, K, L))
+        # Second reflection
+        if np.isfinite(x1) and np.isfinite(y1):
+            peak_positions.append((int(round(x1)), int(round(y1))))
+            peak_intensities.append(I1)
+            peak_millers.append((H, K, L))
+        else:
+            peak_positions.append((-1, -1))
+            peak_intensities.append(I1)
+            peak_millers.append((H, K, L))
+
 
         # Store the unscaled image globally
         unscaled_image_global = updated_image
@@ -675,19 +837,14 @@ def do_update():
     disp_image = scale_image_for_display(unscaled_image_global)
     global_image_buffer[:] = disp_image
 
-    # UPDATED FOR CAKED VMIN/VMAX LOGIC
+    # Check if we show caked 2D
     if show_caked_2d_var.get() and unscaled_image_global is not None:
-        # We'll override the normal color scale with the caked range
-        # The actual "raw" caked image is computed below, but for consistency
-        # we set the display range here. The 'image_display' is re-used.
         image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
     else:
-        # Normal diffraction pattern: use vmin=0, the single existing slider for vmax
         image_display.set_clim(0, vmax_var.get())
 
     image_display.set_data(global_image_buffer)
 
-    # Toggle background display
     background_display.set_visible(background_visible)
     if background_visible:
         background_display.set_data(current_background_image)
@@ -709,6 +866,7 @@ def do_update():
         chi_square_label.config(text=f"Chi-Squared: Error - {e}")
 
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
+    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
     ai = pyFAI.AzimuthalIntegrator(
         dist=corto_det_up,
@@ -722,32 +880,25 @@ def do_update():
         pixel2=100e-6
     )
 
+    # Caked 2D or normal 2D?
     if show_caked_2d_var.get() and unscaled_image_global is not None:
-        # Perform caking on the simulated 2D image
         sim_res2 = caking(unscaled_image_global, ai)
         caked_img = sim_res2.intensity
-
         image_display.set_data(caked_img)
-        # Now apply the caked vmin, vmax
         image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
         ax.set_title('2D Caked Integration')
-
-        # Hide or ignore the background display when caked image is shown
         background_display.set_visible(False)
     else:
-        # Show the normal simulated diffraction image
         if unscaled_image_global is not None:
             disp_image = scale_image_for_display(unscaled_image_global)
             image_display.set_data(disp_image)
         else:
             image_display.set_data(np.zeros((image_size, image_size)))
-
-        # Normal color range
         image_display.set_clim(0, vmax_var.get())
         ax.set_title('Simulated Diffraction Pattern')
         background_display.set_visible(background_visible)
-
-    # Optionally do 1D integration
+        
+    # 1D integration
     if show_1d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
         i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
@@ -844,9 +995,13 @@ def reset_to_defaults():
     phi_max_var.set(105.0)
     show_1d_var.set(False)
     show_caked_2d_var.set(False)
-    # NEW: Reset caked vmin/vmax
     vmin_caked_var.set(0.0)
     vmax_caked_var.set(2000.0)
+
+    # ALSO reset occupancies to default
+    occ_var1.set(1.0)
+    occ_var2.set(0.5)
+    occ_var3.set(0.5)
 
     update_mosaic_cache()
     global last_simulation_signature
@@ -979,77 +1134,238 @@ load_button = ttk.Button(
     )
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
+from pathlib import Path
+from ra_sim.fitting.optimization import simulate_and_compare_hkl, fit_geometry_parameters
 
-fit_button_mosaic_1d = ttk.Button(
-    text="Optimize Mosaic (1D)",
-    command=lambda: run_optimization_mosaic_1d_local(
-        fit_button=fit_button_mosaic_1d,
-        progress_label=progress_label_positions,
-        gamma_const=gamma_var.get(),
-        Gamma_const=Gamma_var.get(),
-        dist_const=corto_detector_var.get(),
-        theta_i_const=theta_initial_var.get(),
-        zs_const=zs_var.get(),
-        zb_const=zb_var.get(),
-        chi_const=chi_var.get(),
-        a_const=a_var.get(),
-        c_const=c_var.get(),
-        center_xy=[center_x_var.get(), center_y_var.get()],
-        miller=miller,
-        intensities=intensities,
-        image_size=image_size,
-        lambda_=lambda_,
-        psi=psi,
-        n2=n2,
-        rmin=tth_min_var.get(),
-        rmax=tth_max_var.get(),
-        amin_deg=phi_min_var.get(),
-        amax_deg=phi_max_var.get(),
-        background_image=current_background_image,
-        mosaic_sigma_var=sigma_mosaic_var,
-        mosaic_gamma_var=gamma_mosaic_var,
-        mosaic_eta_var=eta_var,
-        num_samples=num_samples,
-        divergence_sigma=divergence_sigma,
-        bw_sigma=bw_sigma,
-        update_gui=do_update
+# Frame for selecting which geometry params to fit
+fit_frame = ttk.LabelFrame(root, text="Fit geometry parameters")
+fit_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+fit_zb_var    = tk.BooleanVar(value=True)
+fit_zs_var    = tk.BooleanVar(value=True)
+fit_theta_var = tk.BooleanVar(value=True)  # theta_initial
+fit_chi_var   = tk.BooleanVar(value=True)
+
+ttk.Checkbutton(fit_frame, text="zb",    variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="zs",    variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
+
+
+def on_fit_geometry_click():
+    # Assemble params dict (must include all keys used by simulate_and_compare_hkl)
+    params = {
+        'av': a_var.get(),
+        'cv': c_var.get(),
+        'lambda_': lambda_,
+        'psi': psi,
+        'zs': zs_var.get(),
+        'zb': zb_var.get(),
+        'chi': chi_var.get(),
+        'n2': n2,
+        'beam_x_array': profile_cache['beam_x_array'],
+        'beam_y_array': profile_cache['beam_y_array'],
+        'theta_array': profile_cache['theta_array'],
+        'phi_array': profile_cache['phi_array'],
+        'sigma_mosaic_deg': sigma_mosaic_var.get(),
+        'gamma_mosaic_deg': gamma_mosaic_var.get(),
+        'eta': eta_var.get(),
+        'wavelength_array': profile_cache['wavelength_array'],
+        'debye_x': debye_x_var.get(),
+        'debye_y': debye_y_var.get(),
+        'center': [center_x_var.get(), center_y_var.get()],
+        'theta_initial': theta_initial_var.get(),
+        'uv1': np.array([1.0,0.0,0.0]),
+        'uv2': np.array([0.0,1.0,0.0]),
+        'corto_detector': corto_detector_var.get(),
+        'gamma': gamma_var.get(),
+        'Gamma': Gamma_var.get(),
+    }
+
+    # Build list of parameters to fit
+    var_names = []
+    if fit_zb_var.get():    var_names.append('zb')
+    if fit_zs_var.get():    var_names.append('zs')
+    if fit_theta_var.get(): var_names.append('theta_initial')
+    if fit_chi_var.get():   var_names.append('chi')
+
+    if not var_names:
+        progress_label_geometry.config(text="No parameters selected!")
+        return
+
+    # Run least-squares fit (infinite tol → pure HKL matching)
+    result = fit_geometry_parameters(
+        miller, intensities, image_size,
+        params, measured_peaks,
+        var_names,
+        pixel_tol=float('inf')
     )
-)
-fit_button_mosaic_1d.pack(side=tk.TOP, padx=5, pady=2)
+
+    # Update sliders with fitted values
+    for name, val in zip(var_names, result.x):
+        if name == 'zb':            zb_var.set(val)
+        elif name == 'zs':          zs_var.set(val)
+        elif name == 'theta_initial': theta_initial_var.set(val)
+        elif name == 'chi':         chi_var.set(val)
+
+    # Redraw the figure with new geometry
+    schedule_update()
+
+    # Show summary
+    rms = np.sqrt(np.mean(result.fun**2)) if result.fun.size else 0.0
+    txt = "Fit complete:\n"
+    txt += "\n".join(f"{n} = {v:.4f}" for n, v in zip(var_names, result.x))
+    txt += f"\nRMS residual = {rms:.2f} px"
+    progress_label_geometry.config(text=txt)
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # χ² minimisation (unchanged)
+    result = fit_geometry_parameters(
+        miller, intensities, image_size,
+        params, measured_peaks,
+        var_names,
+        pixel_tol=float('inf')
+    )
+    # ─────────────────────────────────────────────────────────────────────
+    # write the fitted values back into the sliders (unchanged)
+    for name, val in zip(var_names, result.x):
+        if   name == 'zb':            zb_var.set(val)
+        elif name == 'zs':            zs_var.set(val)
+        elif name == 'theta_initial': theta_initial_var.set(val)
+        elif name == 'chi':           chi_var.set(val)
+
+    schedule_update()         # causes a new simulation & redraw
+    # ─────────────────────────────────────────────────────────────────────
+    # ❶  RE-RUN THE COMPARISON WITH THE *FITTED* PARAMETERS
+    #     (this picks up the brand-new slider values)
+    fitted_params = dict(params)       # shallow copy
+    fitted_params.update({
+        'zb'            : zb_var.get(),
+        'zs'            : zs_var.get(),
+        'theta_initial' : theta_initial_var.get(),
+        'chi'           : chi_var.get(),
+    })
+
+    (D, label_match, pixel_match, match_matrix,
+     sim_coords, sim_millers,
+     meas_coords, meas_millers) = simulate_and_compare_hkl(
+        miller, intensities,            # same reflections
+        image_size,
+        fitted_params,                  #   ↖ fitted geometry!
+        measured_peaks,
+        pixel_tol=float('inf')          # keep *all* simulated peaks
+    )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # ❷  BUILD A UNIFIED LIST OF RECORDS
+    export_recs = []
+
+    #   ▸ simulated peaks
+    for hkl, (x, y) in zip(sim_millers, sim_coords):
+        export_recs.append({
+            'source' : 'sim',
+            'hkl'    : tuple(int(v) for v in hkl),
+            'x'      : int(x),
+            'y'      : int(y),
+        })
+
+    #   ▸ measured peaks  (stored exactly as in blobs.npy)
+    for hkl, (x, y) in zip(meas_millers, meas_coords):
+        export_recs.append({
+            'source' : 'meas',
+            'hkl'    : tuple(int(v) for v in hkl),
+            'x'      : int(x),
+            'y'      : int(y),
+        })
+
+    # ─────────────────────────────────────────────────────────────────────
+    # ❸  SAVE AUTOMATICALLY INTO  ~/Downloads/
+    from pathlib import Path
+    from datetime import datetime
+
+    download_dir = Path.home() / "Downloads"
+    download_dir.mkdir(exist_ok=True)          # just in case
+
+    stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_path  = download_dir / f"matched_peaks_{stamp}.npy"
+
+    np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
+
+    progress_label_geometry.config(
+        text=(progress_label_geometry.cget('text')
+            + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}')
+    )
+    # ─────────────────────────────────────────────────────────────────────
+
+def on_fit_geometry_click():
+    # first, reconstruct the same mosaic_params dict you use in do_update()
+    mosaic_params = build_mosaic_params()
+
+
+    # assemble the params dict with exactly the keys the optimizer expects
+    params = {
+        'a':                  a_var.get(),
+        'c':                  c_var.get(),
+        'lambda':             lambda_,          # not 'lambda_'
+        'psi':                psi,
+        'zs':                 zs_var.get(),
+        'zb':                 zb_var.get(),
+        'chi':                chi_var.get(),
+        'n2':                 n2,
+        'mosaic_params':      mosaic_params,
+        'debye_x':            debye_x_var.get(),
+        'debye_y':            debye_y_var.get(),
+        'center':             [center_x_var.get(), center_y_var.get()],
+        'theta_initial':      theta_initial_var.get(),
+        'uv1':                np.array([1.0,0.0,0.0]),
+        'uv2':                np.array([0.0,1.0,0.0]),
+        'corto_detector':     corto_detector_var.get(),
+        'gamma':              gamma_var.get(),
+        'Gamma':              Gamma_var.get(),
+    }
+
+    # build the list of which of those to vary
+    var_names = []
+    if fit_zb_var.get():    var_names.append('zb')
+    if fit_zs_var.get():    var_names.append('zs')
+    if fit_theta_var.get(): var_names.append('theta_initial')
+    if fit_chi_var.get():   var_names.append('chi')
+    if not var_names:
+        progress_label_geometry.config(text="No parameters selected!")
+        return
+
+    # now call the fitter
+    result = fit_geometry_parameters(
+        miller, intensities, image_size,
+        params,
+        measured_peaks,
+        var_names,
+        pixel_tol=float('inf')
+    )
+
+    # unpack fitted values back onto the sliders
+    for name, val in zip(var_names, result.x):
+        if name == 'zb':            zb_var.set(val)
+        elif name == 'zs':          zs_var.set(val)
+        elif name == 'theta_initial': theta_initial_var.set(val)
+        elif name == 'chi':         chi_var.set(val)
+
+    # redraw with the new geometry
+    schedule_update()
+
+    rms = np.sqrt(np.mean(result.fun**2)) if result.fun.size else 0.0
+    txt = "Fit complete:\n" + \
+          "\n".join(f"{n} = {v:.4f}" for n,v in zip(var_names, result.x)) + \
+          f"\nRMS residual = {rms:.2f} px"
+    progress_label_geometry.config(text=txt)
 
 fit_button_geometry = ttk.Button(
-    text="Optimize Geometry Only",
-    command=lambda: run_optimization_positions_geometry_local(
-        fit_button=fit_button_geometry,
-        progress_label=progress_label_geometry,
-        miller=miller,
-        intensities=intensities,
-        image_size=image_size,
-        av=a_var.get(),
-        cv=c_var.get(),
-        lambda_=lambda_,
-        psi=psi,
-        n2=n2,
-        center=[center_x_var.get(), center_y_var.get()],
-        measured_peaks=measured_peaks,
-        mosaic_sigma_const=sigma_mosaic_var.get(),
-        mosaic_gamma_const=gamma_mosaic_var.get(),
-        mosaic_eta_const=eta_var.get(),
-        gamma_var=gamma_var,
-        Gamma_var=Gamma_var,
-        dist_var=corto_detector_var,
-        theta_i_var=theta_initial_var,
-        zs_var=zs_var,
-        zb_var=zb_var,
-        chi_var=chi_var,
-        a_var=a_var,
-        c_var=c_var,
-        center_x_var=center_x_var,
-        center_y_var=center_y_var,
-        update_gui=do_update
-    )
+    root,
+    text="Fit Positions & Geometry",
+    command=on_fit_geometry_click
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
+fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
 
 show_1d_var = tk.BooleanVar(value=False)
 def toggle_1d_plots():
@@ -1105,15 +1421,12 @@ def save_1d_snapshot():
         defaultextension=".npy",
         filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")]
     )
-    print("Dialog returned file_path:", file_path)  # Debug print
-    
     if not file_path:
         progress_label.config(text="No file path selected.")
         return
     
     if not file_path.lower().endswith(".npy"):
         file_path += ".npy"
-        print("Appended .npy to file path ->", file_path)
     
     sim_img = last_1d_integration_data.get("simulated_2d_image")
     if sim_img is None:
@@ -1121,18 +1434,11 @@ def save_1d_snapshot():
         return
 
     sim_img = np.asarray(sim_img, dtype=np.float64)
-
     try:
-        with open(file_path, 'wb') as test_f:
-            pass
-        print(f"Empty file successfully created: {file_path}")
-        
         np.save(file_path, sim_img, allow_pickle=False)
         progress_label.config(text=f"Saved simulated image to {file_path}")
-        print(f"Saved simulated image to {file_path}")
     except Exception as e:
         progress_label.config(text=f"Error saving simulated image: {e}")
-        print("Error saving simulated image:", e)
 
 snapshot_button = ttk.Button(
     text="Save 1D Snapshot",
@@ -1169,12 +1475,13 @@ def save_q_space_representation():
     }
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+    
     mosaic_params = {
         "beam_x_array": profile_cache.get("beam_x_array", []),
         "beam_y_array": profile_cache.get("beam_y_array", []),
         "theta_array":  profile_cache.get("theta_array", []),
         "phi_array":    profile_cache.get("phi_array", []),
-        "wavelength_i_array": profile_cache.get("wavelength_array", []),
+        "wavelength_array": profile_cache.get("wavelength_array", []),
         "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": profile_cache.get("eta", 0.0)
@@ -1203,7 +1510,7 @@ def save_q_space_representation():
         mosaic_params["sigma_mosaic_deg"],
         mosaic_params["gamma_mosaic_deg"],
         mosaic_params["eta"],
-        mosaic_params["wavelength_i_array"],
+        mosaic_params["wavelength_array"],
         debye_x_var.get(),
         debye_y_var.get(),
         [center_x_var.get(), center_y_var.get()],
@@ -1261,7 +1568,7 @@ def run_debug_simulation():
         "beam_y_array": profile_cache.get("beam_y_array", []),
         "theta_array":  profile_cache.get("theta_array", []),
         "phi_array":    profile_cache.get("phi_array", []),
-        "wavelength_i_array": profile_cache.get("wavelength_array", []),
+        "wavelength_array": profile_cache.get("wavelength_array", []),
         "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": profile_cache.get("eta", 0.0)
@@ -1291,7 +1598,7 @@ def run_debug_simulation():
         mosaic_params["sigma_mosaic_deg"],
         mosaic_params["gamma_mosaic_deg"],
         mosaic_params["eta"],
-        mosaic_params["wavelength_i_array"],
+        mosaic_params["wavelength_array"],
         dx_val,
         dy_val,
         [cx_val, cy_val],
@@ -1382,6 +1689,144 @@ center_y_var, center_y_scale = make_slider(
 )
 
 vmax_slider.config(command=vmax_slider_command)
+# ---------------------------------------------------------------------------
+#  OCCUPANCY SLIDERS: Sliders for occ[0], occ[1], occ[2]
+# ---------------------------------------------------------------------------
+occ_var1 = tk.DoubleVar(value=1.0)
+occ_var2 = tk.DoubleVar(value=1.0)
+occ_var3 = tk.DoubleVar(value=1.0)
+
+def update_occupancies(*args):
+    """
+    Re-run miller_generator with updated occupancies,
+    then force the simulation to recalc.
+    """
+    global miller, intensities, degeneracy, details
+    global df_summary, df_details
+    global last_simulation_signature
+
+    # Grab new occupancy values from the variables (they may have been updated via the slider or Entry)
+    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
+
+    # Re-run miller_generator with updated occupancies.
+    miller, intensities, degeneracy, details = miller_generator(
+        mx,
+        cif_file,
+        new_occ,
+        lambda_,
+        energy,
+        intensity_threshold,
+        two_theta_range
+    )
+
+    # (Re-)build the summary DataFrame.
+    df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
+    df_summary['Intensity'] = intensities
+    df_summary['Degeneracy'] = degeneracy
+    df_summary['Details'] = [f"See Details Sheet - Group {i+1}" for i in range(len(df_summary))]
+
+    # Re-build the details DataFrame.
+    details_list = []
+    for i, group_details in enumerate(details):
+        for hkl, indiv_intensity in group_details:
+            details_list.append({
+                'Group': i+1,
+                'h': hkl[0],
+                'k': hkl[1],
+                'l': hkl[2],
+                'Individual Intensity': indiv_intensity
+            })
+    df_details = pd.DataFrame(details_list)
+
+    # Reset the simulation signature so the next update is forced.
+    last_simulation_signature = None
+    schedule_update()
+
+# Existing occupancy slider for site 1.
+ttk.Label(right_col, text="Occupancy Site 1").pack(padx=5, pady=2)
+occ_scale1 = ttk.Scale(
+    right_col,
+    from_=0.0,
+    to=1.0,
+    orient=tk.HORIZONTAL,
+    variable=occ_var1,
+    command=update_occupancies
+)
+occ_scale1.pack(fill=tk.X, padx=5, pady=2)
+
+# Existing occupancy slider for site 2.
+ttk.Label(right_col, text="Occupancy Site 2").pack(padx=5, pady=2)
+occ_scale2 = ttk.Scale(
+    right_col,
+    from_=0.0,
+    to=1.0,
+    orient=tk.HORIZONTAL,
+    variable=occ_var2,
+    command=update_occupancies
+)
+occ_scale2.pack(fill=tk.X, padx=5, pady=2)
+
+# Existing occupancy slider for site 3.
+ttk.Label(right_col, text="Occupancy Site 3").pack(padx=5, pady=2)
+occ_scale3 = ttk.Scale(
+    right_col,
+    from_=0.0,
+    to=1.0,
+    orient=tk.HORIZONTAL,
+    variable=occ_var3,
+    command=update_occupancies
+)
+occ_scale3.pack(fill=tk.X, padx=5, pady=2)
+
+# --- Add numeric input fields and a Force Update button ---
+occ_entry_frame = ttk.Frame(right_col)
+occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
+
+# Occupancy input for Site 1.
+ttk.Label(occ_entry_frame, text="Input Occupancy Site 1:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+occ_entry1 = ttk.Entry(occ_entry_frame, textvariable=occ_var1, width=5)
+occ_entry1.grid(row=0, column=1, padx=5, pady=2)
+
+# Occupancy input for Site 2.
+ttk.Label(occ_entry_frame, text="Input Occupancy Site 2:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+occ_entry2 = ttk.Entry(occ_entry_frame, textvariable=occ_var2, width=5)
+occ_entry2.grid(row=1, column=1, padx=5, pady=2)
+
+# Occupancy input for Site 3.
+ttk.Label(occ_entry_frame, text="Input Occupancy Site 3:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+occ_entry3 = ttk.Entry(occ_entry_frame, textvariable=occ_var3, width=5)
+occ_entry3.grid(row=2, column=1, padx=5, pady=2)
+
+# Button to force a full update (re-read occupancies and recalc everything).
+force_update_button = ttk.Button(occ_entry_frame, text="Force Update", command=update_occupancies)
+force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
+
+# ---------------------------------------------------------------------------
+
+params_file_path = r"C:\Users\Kenpo\parameters.npy"
+if os.path.exists(params_file_path):
+    load_parameters(
+        params_file_path,
+        theta_initial_var,
+        gamma_var,
+        Gamma_var,
+        chi_var,
+        zs_var,
+        zb_var,
+        debye_x_var,
+        debye_y_var,
+        corto_detector_var,
+        sigma_mosaic_var,
+        gamma_mosaic_var,
+        eta_var,
+        a_var,
+        c_var,
+        center_x_var,
+        center_y_var
+    )
+    print("Loaded saved profile from", params_file_path)
+else:
+    print("No saved profile found; using default parameters.")
 
 # Initialize everything
 update_mosaic_cache()

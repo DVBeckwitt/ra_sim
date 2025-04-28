@@ -23,6 +23,7 @@ ra_sim/io/data_loading.py
 ra_sim/io/file_parsing.py
 ra_sim/simulation/__init__.py
 ra_sim/simulation/diffraction.py
+ra_sim/simulation/diffraction_debug.py
 ra_sim/simulation/geometry.py
 ra_sim/simulation/mosaic_profiles.py
 ra_sim/simulation/simulation.py
