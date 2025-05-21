@@ -15,7 +15,6 @@ ra_sim/fitting/objective.py
 ra_sim/fitting/optimization.py
 ra_sim/gui/__init__.py
 ra_sim/gui/main_app.py
-ra_sim/gui/plotting.py
 ra_sim/gui/sliders.py
 ra_sim/gui/update.py
 ra_sim/io/__init__.py

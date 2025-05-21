@@ -1,5 +1,3 @@
-# optimizer.py
-
 import numpy as np
 from scipy.optimize import least_squares, differential_evolution
 
@@ -8,20 +6,19 @@ from ra_sim.simulation.diffraction import process_peaks_parallel
 
 def build_measured_dict(measured_peaks):
     """
-    Convert a list of measured‐peak dicts into a mapping
-    from (h,k,l) → list of (x,y) positions.
+    Convert a list of measured-peak dicts into a mapping
+    from (h,k,l) -> list of (x,y) positions.
     """
     measured_dict = {}
     for p in measured_peaks:
-        # support both {'label': 'h,k,l', 'x':…, 'y':…} and direct tuple formats
         if isinstance(p, dict) and 'label' in p:
             h, k, l = map(int, p['label'].split(','))
             x, y = float(p['x']), float(p['y'])
         else:
-            # assume p is tuple/list like (h,k,l,x,y)
             h, k, l, x, y = p
         measured_dict.setdefault((h, k, l), []).append((x, y))
     return measured_dict
+
 
 def simulate_and_compare_hkl(
     miller, intensities, image_size,
@@ -33,13 +30,10 @@ def simulate_and_compare_hkl(
     of the same HKL, returning arrays of distances and coords.
     """
     measured_dict = build_measured_dict(measured_peaks)
-
-    # Prepare the simulation buffer
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
-    # Unpack geometry & mosaic parameters from params dict
+    # Unpack geometry & mosaic parameters
     a = params['a']; c = params['c']
-
     dist = params['corto_detector']
     gamma = params['gamma']; Gamma = params['Gamma']
     chi   = params['chi']; psi = params.get('psi', 0.0)
@@ -50,13 +44,14 @@ def simulate_and_compare_hkl(
     theta_initial = params['theta_initial']
 
     mosaic = params['mosaic_params']
-    wavelength = (mosaic.get('wavelength_array') or
-               mosaic.get('wavelength_i_array'))
-    
-    # Full‐pattern simulation
+    wavelength_array = mosaic.get('wavelength_array')
+    if wavelength_array is None:
+        wavelength_array = mosaic.get('wavelength_i_array')
+
+    # Full-pattern simulation
     updated_image, maxpos, _, _ = process_peaks_parallel(
         miller, intensities, image_size,
-        a, c, wavelength,
+        a, c, wavelength_array,
         sim_buffer, dist,
         gamma, Gamma, chi, psi,
         zs, zb, n2,
@@ -67,7 +62,7 @@ def simulate_and_compare_hkl(
         mosaic['sigma_mosaic_deg'],
         mosaic['gamma_mosaic_deg'],
         mosaic['eta'],
-        mosaic['wavelength_array'],
+        wavelength_array,
         debye_x, debye_y,
         center, theta_initial,
         np.array([1.0, 0.0, 0.0]),
@@ -79,17 +74,14 @@ def simulate_and_compare_hkl(
     sim_coords = []
     meas_coords = []
 
-    # For each HKL, test both peaks
     for i, (H, K, L) in enumerate(miller):
         if (H, K, L) not in measured_dict:
             continue
         candidates = measured_dict[(H, K, L)]
         I0, x0, y0, I1, x1, y1 = maxpos[i]
-
         for x, y in ((x0, y0), (x1, y1)):
             if not np.isfinite(x) or not np.isfinite(y):
                 continue
-            # find nearest measured
             ds = [np.hypot(x - mx, y - my) for mx, my in candidates]
             idx = int(np.argmin(ds))
             d = ds[idx]
@@ -100,6 +92,7 @@ def simulate_and_compare_hkl(
 
     return np.array(distances), sim_coords, meas_coords
 
+
 def compute_peak_position_error_geometry_local(
     gamma, Gamma, dist, theta_initial, zs, zb, chi, a, c,
     center_x, center_y, measured_peaks,
@@ -107,10 +100,8 @@ def compute_peak_position_error_geometry_local(
     psi, debye_x, debye_y, wavelength, pixel_tol=np.inf
 ):
     """
-    Objective function for differential evolution: returns
-    the 1D array of distances for all matched peaks.
+    Objective for DE: returns the 1D array of distances for all matched peaks.
     """
-    
     params = {
         'gamma': gamma,
         'Gamma': Gamma,
@@ -129,95 +120,74 @@ def compute_peak_position_error_geometry_local(
         'debye_y': debye_y,
         'mosaic_params': mosaic_params
     }
-
     D, _, _ = simulate_and_compare_hkl(
         miller, intensities, image_size,
         params, measured_peaks, pixel_tol
     )
     return D
 
+
 def fit_geometry_parameters(
     miller, intensities, image_size,
     params, measured_peaks, var_names, pixel_tol=np.inf
 ):
     """
-    Least‐squares fit for a subset of geometry parameters.
+    Least-squares fit for a subset of geometry parameters.
     var_names is a list of keys in `params` to optimize.
     """
-
-    # Pack everything else needed into `common_args`
-    common_args = {
-        'miller': miller,
-        'intensities': intensities,
-        'image_size': image_size,
-        'mosaic_params': params['mosaic_params'],
-        'n2': params['n2'],
-        'psi': params.get('psi', 0.0),
-        'debye_x': params['debye_x'],
-        'debye_y': params['debye_y'],
-        'wavelength': params['lambda'],
-        'pixel_tol': pixel_tol,
-        'measured_peaks': measured_peaks
-    }
-
     def cost_fn(x):
-        # update only the var_names in params
         local = params.copy()
         for name, v in zip(var_names, x):
             local[name] = v
-
-        # unpack args for compute_peak_position_error
         args = [
-            local['gamma'],
-            local['Gamma'],
-            local['corto_detector'],
-            local['theta_initial'],
-            local['zs'],
-            local['zb'],
-            local['chi'],
-            local['a'],
-            local['c'],
-            local['center'][0],
-            local['center'][1],
+            local['gamma'], local['Gamma'], local['corto_detector'],
+            local['theta_initial'], local['zs'], local['zb'],
+            local['chi'], local['a'], local['c'],
+            local['center'][0], local['center'][1]
         ]
         D = compute_peak_position_error_geometry_local(
-            *args, **common_args
+            *args,
+            measured_peaks=measured_peaks,
+            miller=miller,
+            intensities=intensities,
+            image_size=image_size,
+            mosaic_params=params['mosaic_params'],
+            n2=params['n2'],
+            psi=params.get('psi', 0.0),
+            debye_x=params['debye_x'],
+            debye_y=params['debye_y'],
+            wavelength=params['lambda'],
+            pixel_tol=pixel_tol
         )
         return D
 
     x0 = [params[name] for name in var_names]
-    assert set(var_names) <= set(params), f"Unknown parameter(s): {set(var_names)-set(params)}"
-
     res = least_squares(cost_fn, x0)
     return res
+
 
 def run_optimization_positions_geometry_local(
     miller, intensities, image_size,
     initial_params, bounds, measured_peaks
 ):
     """
-    Global optimization (Differential Evolution) over all geometry
-    parameters plus beam center. `bounds` is a list of (min, max)
-    for each of [gamma, Gamma, dist, theta_initial,
+    Global optimization (Differential Evolution) over geometry + beam center.
+    bounds is list of (min,max) for [gamma, Gamma, dist, theta_i,
     zs, zb, chi, a, c, center_x, center_y].
     """
-    common_args = {
-        'miller': miller,
-        'intensities': intensities,
-        'image_size': image_size,
-        'mosaic_params': initial_params['mosaic_params'],
-        'n2': initial_params['n2'],
-        'psi': initial_params.get('psi', 0.0),
-        'debye_x': initial_params['debye_x'],
-        'debye_y': initial_params['debye_y'],
-        'wavelength': initial_params['lambda'],
-        'pixel_tol': np.inf,
-        'measured_peaks': measured_peaks
-    }
-
     def obj_glob(x):
-        # x = [gamma, Gamma, dist, theta_init, zs, zb, chi, a, c, cx, cy]
-        return np.sum(compute_peak_position_error_geometry_local(*x, **common_args))
-
+        return np.sum(compute_peak_position_error_geometry_local(
+            x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8],
+            x[9], x[10],
+            measured_peaks,
+            miller, intensities, image_size,
+            initial_params['mosaic_params'],
+            initial_params['n2'],
+            initial_params.get('psi', 0.0),
+            initial_params['debye_x'],
+            initial_params['debye_y'],
+            initial_params['lambda'],
+            pixel_tol=np.inf
+        ))
     res = differential_evolution(obj_glob, bounds, maxiter=200, popsize=15)
     return res

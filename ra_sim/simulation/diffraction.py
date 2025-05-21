@@ -161,6 +161,12 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
 
     return (out_Qx, out_Qy, out_Qz)
 
+from numba import njit
+import numpy as np
+
+from numba import njit
+import numpy as np
+
 @njit
 def compute_intensity_array(Qx, Qy, Qz,
                             G_vec,
@@ -170,86 +176,89 @@ def compute_intensity_array(Qx, Qy, Qz,
                             H, K,
                             dphi, dtheta):
     """
-    Evaluate the mosaic distribution (pseudo-Voigt shape) around G_vec for each (Qx, Qy, Qz).
-    For H==0 and K==0 (the cap method) the intensities are normalized so that the
-    discretized integral over the sphere equals 1.
+    Compute the pseudo-Voigt mosaic distribution around G_vec for each (Qx, Qy, Qz).
+    Gaussian and Lorentzian components are individually normalized, so their
+    mixture preserves unit total area without additional normalization.
+
+    Parameters
+    ----------
+    Qx, Qy, Qz : array-like
+        Coordinates of Q vectors.
+    G_vec : length-3 array
+        The reciprocal-space vector for the reflection.
+    sigma : float
+        Gaussian width (rad).
+    gamma_pv : float
+        Lorentzian half-width at half-maximum (rad).
+    eta_pv : float
+        Mixing parameter (0=Gaussian, 1=Lorentzian).
+    H, K : int
+        Miller indices to choose the cap vs band method.
+    dphi, dtheta : float
+        Angular steps (unused here since profiles are normalized).
+
+    Returns
+    -------
+    intensities : array-like
+        Pseudo-Voigt intensities, same shape as Qx.
     """
+    # Unpack G and compute magnitudes
     Gx, Gy, Gz = G_vec[0], G_vec[1], G_vec[2]
     G_mag = np.sqrt(Gx*Gx + Gy*Gy + Gz*Gz)
     if G_mag < 1e-14:
         return np.zeros_like(Qx)
-    
-    intensities = np.zeros_like(Qx)
-    
-    # Magnitude of each Q point on the sphere
+
     Q_mag = np.sqrt(Qx*Qx + Qy*Qy + Qz*Qz)
     Q_mag_safe = np.maximum(Q_mag, 1e-14)
-    # Qr: projection of Q onto the x-y plane
     Qr = np.sqrt(Qx*Qx + Qy*Qy)
 
+    # Amplitude factors for normalized 1D profiles
+    A_gauss = 1.0 / (sigma * np.sqrt(2.0 * np.pi))
+    A_lor   = 1.0 / (np.pi * gamma_pv)
+
+    intensities = np.zeros_like(Qx)
+
     if H == 0 and K == 0:
-        # ----------------------------------------------------------------
-        #                    *** CAP METHOD ***
-        # ----------------------------------------------------------------
-        # 1) Compute angle alpha between Q and G
+        # --- CAP method (full-cone around G) ---
         Gnorm = 1.0 / G_mag
         Qnorm = 1.0 / Q_mag_safe
-        dot_ = (Gx * Gnorm) * (Qx * Qnorm) + (Gy * Gnorm) * (Qy * Qnorm) + (Gz * Gnorm) * (Qz * Qnorm)
+        dot_ = (Gx*Gnorm)*(Qx*Qnorm) + (Gy*Gnorm)*(Qy*Qnorm) + (Gz*Gnorm)*(Qz*Qnorm)
         dot_clamped = np.minimum(np.maximum(dot_, -1.0), 1.0)
         alpha = np.arccos(dot_clamped)
 
-        # 2) True amplitude factors for 1D Pseudo-Voigt
-        A_gauss = 1.0 / (sigma * np.sqrt(2.0 * np.pi))
-        A_lor   = 1.0 / (np.pi * gamma_pv)
-
-        # 3) Evaluate the Gaussian and Lorentz components
+        # Gaussian and Lorentzian contributions
         gauss_val = A_gauss * np.exp(-0.5 * (alpha / sigma)**2)
         lor_val   = A_lor   / (1.0 + (alpha / gamma_pv)**2)
 
-        # 4) Combine into a pseudo-Voigt profile.
+        # Weighted sum: preserves total = 1
         intensities = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
 
-        # 5) Normalize so that the integrated intensity equals 1.
-        phi_vals = np.arccos(np.minimum(np.maximum(Qz / Q_mag_safe, -1.0), 1.0))
-        sin_phi_vals = np.sin(phi_vals)
-        total = np.sum(intensities * sin_phi_vals) * dphi * dtheta
-        if total > 1e-14:
-            intensities /= total
-
     else:
-        # ----------------------------------------------------------------
-        #                    *** BAND METHOD ***
-        # ----------------------------------------------------------------
+        # --- BAND method (ring around G_z axis) ---
         ratioQ = Qz / Q_mag_safe
         ratioQ_clamped = np.minimum(np.maximum(ratioQ, -1.0), 1.0)
         v_prime = np.arccos(ratioQ_clamped)
 
         ratioG = Gz / G_mag
         ratioG_clamped = np.minimum(np.maximum(ratioG, -1.0), 1.0)
-        v_center = np.acos(ratioG_clamped)
+        v_center = np.arccos(ratioG_clamped)
 
         dv = np.abs(v_prime - v_center)
 
-        # Evaluate the Gaussian and Lorentzian components.
-        gauss_val = np.exp(- (dv*dv) / (2.0 * sigma * sigma))
-        lor_val   = 1.0 / (1.0 + (dv / gamma_pv)**2)
+        # Gaussian and Lorentzian contributions
+        gauss_val = A_gauss * np.exp(-0.5 * (dv / sigma)**2)
+        lor_val   = A_lor   / (1.0 + (dv / gamma_pv)**2)
         intensities = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
-        
-        # A heuristic weighting for the ring.
+
+        # Heuristic weighting along the ring
         R = np.max(Q_mag_safe)
         f = Qr / Q_mag_safe
-        t = (1 - np.cos(np.pi * f)) / 2
+        t = (1.0 - np.cos(np.pi * f)) / 2.0
         weight = 1.0 + (2.0 * np.pi * R - 1.0) * t
-        intensities /= weight
-        
-        # --- Normalization step ---
-        phi_vals = np.arccos(np.minimum(np.maximum(Qz / Q_mag_safe, -1.0), 1.0))
-        sin_phi_vals = np.sin(phi_vals)
-        total = np.sum(intensities * sin_phi_vals) * dphi * dtheta
-        if total > 1e-14:
-            intensities /= total
+        intensities = intensities / weight
 
     return intensities
+
 
 @njit
 def Generate_PDF_Grid(
@@ -559,7 +568,7 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H,K, L,N_steps
 
     # Apply any intensity cutoff and construct the output.
     intensity_cutoff = np.exp(-100.0)
-    mask = (Qz_arr > 0.0) & (all_int > intensity_cutoff)
+    mask = mask = (all_int > intensity_cutoff)
     valid_idx = np.nonzero(mask)[0]
 
     out = np.zeros((valid_idx.size, 4), dtype=np.float64)

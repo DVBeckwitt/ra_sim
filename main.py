@@ -37,6 +37,17 @@ import OSC_Reader
 from OSC_Reader import read_osc
 import math
 
+# ── put this near the other imports ─────────────────────────────
+from matplotlib import cm
+from matplotlib.colors import ListedColormap
+
+turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
+turbo_rgba = turbo(np.linspace(0, 1, 256))
+turbo_rgba[0] = [1.0, 1.0, 1.0, 1.0]       # make the 0-bin white
+turbo_white0 = ListedColormap(turbo_rgba, name='turbo_white0')
+turbo_white0.set_bad('white')              # NaNs will also show white
+
+
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
 DEBUG_ENABLED = False
@@ -106,7 +117,7 @@ debye_x = 0.0
 debye_y = 0.0
 n2 = IndexofRefraction()
 
-bandwidth = 0.7 / 100  # 0.7%
+bandwidth = 0.7 / 100  # 0.7%   
 
 # NOTE: We define the default occupancy for each site:
 occ = [1.0, 1.0, 1.0]
@@ -295,15 +306,17 @@ canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 unscaled_image_global = None
 
+# ── replace the original imshow call ────────────────────────────
 image_display = ax.imshow(
     global_image_buffer,
-    cmap='turbo',
+    cmap=turbo_white0,     # ← use the custom map
     vmin=0,
     vmax=1000,
     alpha=0.5,
     zorder=1,
     origin='upper'
 )
+
 
 background_display = ax.imshow(
     current_background_image,
@@ -959,10 +972,14 @@ def do_update():
     except Exception as e:
         chi_square_label.config(text=f"Chi-Squared Error: {e}")
 
+# ── after you’ve updated background_visible in toggle_background() ──
 def toggle_background():
     global background_visible
     background_visible = not background_visible
+    # ↓ force opaque if the background is hidden, 0.5 otherwise
+    image_display.set_alpha(0.5 if background_visible else 1.0)
     schedule_update()
+
 
 def switch_background():
     global current_background_index, current_background_image
