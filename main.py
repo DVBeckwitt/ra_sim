@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
+
+"""Main application entry point for running the Tk based GUI."""
+
+import math
+import os
+import tkinter as tk
+from tkinter import filedialog, ttk
+
 import numpy as np
 import sympy as sp
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import cm
+from matplotlib.colors import ListedColormap
 import pyFAI
-import scipy.optimize
 from scipy.optimize import differential_evolution, least_squares
 from skimage.metrics import mean_squared_error
-import tkinter as tk
-from tkinter import ttk
-from tkinter import filedialog
+import spglib
+import OSC_Reader
+from OSC_Reader import read_osc
+import numba
 
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
@@ -17,29 +27,17 @@ from ra_sim.utils.tools import miller_generator, view_azimuthal_radial, detect_b
 from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
     save_all_parameters,
-    load_parameters
+    load_parameters,
 )
 from ra_sim.fitting.optimization import simulate_and_compare_hkl
-
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_peaks_parallel
 from ra_sim.simulation.diffraction_debug import (
     process_peaks_parallel_debug,
-    dump_debug_log
+    dump_debug_log,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
-
-import numba
-import os
-import spglib
-import OSC_Reader
-from OSC_Reader import read_osc
-import math
-
-# ── put this near the other imports ─────────────────────────────
-from matplotlib import cm
-from matplotlib.colors import ListedColormap
 
 turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
 turbo_rgba = turbo(np.linspace(0, 1, 256))
@@ -1818,34 +1816,38 @@ occ_entry3.grid(row=2, column=1, padx=5, pady=2)
 force_update_button = ttk.Button(occ_entry_frame, text="Force Update", command=update_occupancies)
 force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
 
-# ---------------------------------------------------------------------------
+def main():
+    """Entry point for running the GUI application."""
 
-params_file_path = r"C:\Users\Kenpo\parameters.npy"
-if os.path.exists(params_file_path):
-    load_parameters(
-        params_file_path,
-        theta_initial_var,
-        gamma_var,
-        Gamma_var,
-        chi_var,
-        zs_var,
-        zb_var,
-        debye_x_var,
-        debye_y_var,
-        corto_detector_var,
-        sigma_mosaic_var,
-        gamma_mosaic_var,
-        eta_var,
-        a_var,
-        c_var,
-        center_x_var,
-        center_y_var
-    )
-    print("Loaded saved profile from", params_file_path)
-else:
-    print("No saved profile found; using default parameters.")
+    params_file_path = r"C:\Users\Kenpo\parameters.npy"
+    if os.path.exists(params_file_path):
+        load_parameters(
+            params_file_path,
+            theta_initial_var,
+            gamma_var,
+            Gamma_var,
+            chi_var,
+            zs_var,
+            zb_var,
+            debye_x_var,
+            debye_y_var,
+            corto_detector_var,
+            sigma_mosaic_var,
+            gamma_mosaic_var,
+            eta_var,
+            a_var,
+            c_var,
+            center_x_var,
+            center_y_var
+        )
+        print("Loaded saved profile from", params_file_path)
+    else:
+        print("No saved profile found; using default parameters.")
 
-# Initialize everything
-update_mosaic_cache()
-do_update()
-root.mainloop()
+    update_mosaic_cache()
+    do_update()
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
