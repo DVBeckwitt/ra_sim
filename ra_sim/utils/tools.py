@@ -1,33 +1,10 @@
+import math
 import numpy as np
-import pyFAI
+import matplotlib.pyplot as plt
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-import json
-from ra_sim.utils.calculations import d_spacing, two_theta
-from ra_sim.StructureFactor.StructureFactor  import calculate_structure_factor
-from skimage import exposure
-
-import numpy as np
-import itertools
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import io, feature, color
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import io, feature, color
 from PIL import Image
+from skimage import color, exposure, feature
 
-import numpy as np
-import math
-from skimage import feature, color
-import matplotlib.pyplot as plt
-
-import math
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
-from skimage import feature, color
 
 def detect_blobs(
     source,
@@ -211,26 +188,6 @@ def detect_blobs(
     return labeled_blobs
 
 
-def setup_azimuthal_integrator(parameters):
-    # Parse the detector configuration from the JSON-like structure
-    detector_config = json.loads(parameters['Detector_config'])
-    pixel1 = float(detector_config['pixel1'])
-    pixel2 = float(detector_config['pixel2'])
-    max_shape = list(map(int, detector_config['max_shape']))  # Convert max_shape elements to integers
-
-    # Initialize the AzimuthalIntegrator
-    ai = pyFAI.azimuthalIntegrator.AzimuthalIntegrator(
-        dist=parameters['Distance'],
-        poni1=parameters['Poni1'],
-        poni2=  parameters['Poni2'],
-        pixel1= pixel1,
-        pixel2= pixel2,
-        rot1= -parameters['Rot1']* 180/np.pi,
-        rot2= -parameters['Rot2']*180/np.pi,
-        rot3= parameters['Rot3'],
-        wavelength=parameters['Wavelength']
-    )
-    return ai
 
 #!/usr/bin/env python
 """
@@ -249,10 +206,6 @@ Usage:
   python miller_generator.py
 """
 
-import itertools
-import numpy as np
-import math
-import Dans_Diffraction as dif
 
 def d_spacing(h, k, l, xtl):
     """
@@ -314,7 +267,7 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
                     for the reflections in that group.
     """
     from collections import defaultdict
-    import numpy as np, os, math, tempfile
+    import numpy as np, tempfile
     import Dans_Diffraction as dif  # your diffraction module
     import CifFile  # from PyCifRW
 
@@ -448,8 +401,6 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
 
 
 
-import matplotlib.pyplot as plt
-import numpy as np
 
 def view_azimuthal_radial(simulated_image, center, detector_params):
     """

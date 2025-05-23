@@ -1,10 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
 
-# sliders.py
-import tkinter as tk
-from tkinter import ttk
-
 def create_slider(label, min_val, max_val, initial_val, step_size, parent, update_callback):
     frame = ttk.Frame(parent)
     frame.pack(pady=5, fill=tk.X)

@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.pyplot as plt
 import numpy as np
 
 # Import from ra_sim package modules
@@ -12,7 +11,7 @@ from ra_sim.io.data_loading import load_background_image
 from ra_sim.simulation.geometry import setup_azimuthal_integrator
 from ra_sim.simulation.diffraction import simulate_diffraction_pattern
 from ra_sim.simulation.mosaic_profiles import sample_pseudo_voigt_2d
-from ra_sim.utils.constants import av, cv, q_c
+from ra_sim.utils.constants import av, cv
 
 def main():
     root = tk.Tk()
@@ -29,7 +28,7 @@ def main():
 
     # Setup figure
     fig, ax = setup_figure()
-    img = ax.imshow(bg_image, cmap='turbo', vmin=0, vmax=1e3)
+    ax.imshow(bg_image, cmap='turbo', vmin=0, vmax=1e3)
 
     canvas = FigureCanvasTkAgg(fig, master=root)
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)

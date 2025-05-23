@@ -3,7 +3,6 @@ import numpy as np
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 
 from ra_sim.simulation.diffraction import process_peaks_parallel
-from ra_sim.utils.calculations import IndexofRefraction, fresnel_transmission
 
 # Load background images
 def simulate_diffraction(theta_initial, gamma, Gamma, chi, zs, zb, debye_x_value, debye_y_value, corto_detector_value, miller, intensities, image_size, 

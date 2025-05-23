@@ -1,6 +1,4 @@
-import json
 import numpy as np
-from ra_sim.utils.tools import detect_blobs
 
 def parse_poni_file(file_path):
     # Dictionary to hold the values

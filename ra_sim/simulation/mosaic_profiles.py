@@ -1,7 +1,5 @@
 
 import numpy as np
-from numba import njit, int64, float64, prange
-import matplotlib.pyplot as plt
 
 
 def sample_2d_gaussian(n, sigma):

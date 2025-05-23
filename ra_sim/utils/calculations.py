@@ -1,12 +1,6 @@
 import numpy as np
-import pyFAI
-from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-import json
-import matplotlib.pyplot as plt
-# import njit
 from numba import njit
 import math
-import numba
 
 
 # Function to calculate d-spacing for hexagonal crystals
@@ -104,8 +98,6 @@ def IndexofRefraction():
     n = 1.0 - delta + 1.0j * beta
     return n
 
-import math
-import numba
 from numba import njit
 
 @njit

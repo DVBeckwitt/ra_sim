@@ -1,7 +1,6 @@
 import numpy as np
 from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
-from ra_sim.utils.calculations import fresnel_transmission
 
 
 # =============================================================================
@@ -160,12 +159,6 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
         out_Qz[i] = Qz_grid[ix, iy, iz]
 
     return (out_Qx, out_Qy, out_Qz)
-
-from numba import njit
-import numpy as np
-
-from numba import njit
-import numpy as np
 
 @njit
 def compute_intensity_array(Qx, Qy, Qz,

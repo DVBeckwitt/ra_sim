@@ -8,34 +8,23 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 import numpy as np
-import sympy as sp
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
 import pyFAI
-from scipy.optimize import differential_evolution, least_squares
 from skimage.metrics import mean_squared_error
-import spglib
-import OSC_Reader
 from OSC_Reader import read_osc
-import numba
 
 from ra_sim.utils.calculations import IndexofRefraction
-from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
-from ra_sim.utils.tools import miller_generator, view_azimuthal_radial, detect_blobs
+from ra_sim.io.file_parsing import parse_poni_file
+from ra_sim.utils.tools import miller_generator, view_azimuthal_radial
 from ra_sim.io.data_loading import (
-    load_and_format_reference_profiles,
     save_all_parameters,
     load_parameters,
 )
-from ra_sim.fitting.optimization import simulate_and_compare_hkl
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_peaks_parallel
-from ra_sim.simulation.diffraction_debug import (
-    process_peaks_parallel_debug,
-    dump_debug_log,
-)
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 
@@ -122,9 +111,7 @@ occ = [1.0, 1.0, 1.0]
 
 # Parameters and file paths.
 cif_file = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\Bi2Se3\Bi2Se3_test.cif"
-from collections import defaultdict
-import numpy as np, os, math, tempfile
-import Dans_Diffraction as dif  # your diffraction module
+import numpy as np, math
 import CifFile  # from PyCifRW
 import re
 
@@ -607,8 +594,6 @@ phi_max_slider = ttk.Scale(
 phi_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 ttk.Label(phi_max_container, textvariable=phi_max_label_var, width=5).pack(side=tk.LEFT, padx=5)
 
-from collections import namedtuple
-
 def caking(data, ai):
     return ai.integrate2d(
         data,
@@ -877,8 +862,6 @@ def do_update():
         chi_square_label.config(text=f"Chi-Squared: Error - {e}")
 
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
-    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-
     ai = pyFAI.AzimuthalIntegrator(
         dist=corto_det_up,
         poni1=center_x_up * 100e-6,
@@ -1149,8 +1132,7 @@ load_button = ttk.Button(
     )
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
-from pathlib import Path
-from ra_sim.fitting.optimization import simulate_and_compare_hkl, fit_geometry_parameters
+from ra_sim.fitting.optimization import fit_geometry_parameters
 
 # Frame for selecting which geometry params to fit
 fit_frame = ttk.LabelFrame(root, text="Fit geometry parameters")
@@ -1164,153 +1146,6 @@ fit_chi_var   = tk.BooleanVar(value=True)
 ttk.Checkbutton(fit_frame, text="zb",    variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="zs",    variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
-
-
-def on_fit_geometry_click():
-    # Assemble params dict (must include all keys used by simulate_and_compare_hkl)
-    params = {
-        'av': a_var.get(),
-        'cv': c_var.get(),
-        'lambda_': lambda_,
-        'psi': psi,
-        'zs': zs_var.get(),
-        'zb': zb_var.get(),
-        'chi': chi_var.get(),
-        'n2': n2,
-        'beam_x_array': profile_cache['beam_x_array'],
-        'beam_y_array': profile_cache['beam_y_array'],
-        'theta_array': profile_cache['theta_array'],
-        'phi_array': profile_cache['phi_array'],
-        'sigma_mosaic_deg': sigma_mosaic_var.get(),
-        'gamma_mosaic_deg': gamma_mosaic_var.get(),
-        'eta': eta_var.get(),
-        'wavelength_array': profile_cache['wavelength_array'],
-        'debye_x': debye_x_var.get(),
-        'debye_y': debye_y_var.get(),
-        'center': [center_x_var.get(), center_y_var.get()],
-        'theta_initial': theta_initial_var.get(),
-        'uv1': np.array([1.0,0.0,0.0]),
-        'uv2': np.array([0.0,1.0,0.0]),
-        'corto_detector': corto_detector_var.get(),
-        'gamma': gamma_var.get(),
-        'Gamma': Gamma_var.get(),
-    }
-
-    # Build list of parameters to fit
-    var_names = []
-    if fit_zb_var.get():    var_names.append('zb')
-    if fit_zs_var.get():    var_names.append('zs')
-    if fit_theta_var.get(): var_names.append('theta_initial')
-    if fit_chi_var.get():   var_names.append('chi')
-
-    if not var_names:
-        progress_label_geometry.config(text="No parameters selected!")
-        return
-
-    # Run least-squares fit (infinite tol → pure HKL matching)
-    result = fit_geometry_parameters(
-        miller, intensities, image_size,
-        params, measured_peaks,
-        var_names,
-        pixel_tol=float('inf')
-    )
-
-    # Update sliders with fitted values
-    for name, val in zip(var_names, result.x):
-        if name == 'zb':            zb_var.set(val)
-        elif name == 'zs':          zs_var.set(val)
-        elif name == 'theta_initial': theta_initial_var.set(val)
-        elif name == 'chi':         chi_var.set(val)
-
-    # Redraw the figure with new geometry
-    schedule_update()
-
-    # Show summary
-    rms = np.sqrt(np.mean(result.fun**2)) if result.fun.size else 0.0
-    txt = "Fit complete:\n"
-    txt += "\n".join(f"{n} = {v:.4f}" for n, v in zip(var_names, result.x))
-    txt += f"\nRMS residual = {rms:.2f} px"
-    progress_label_geometry.config(text=txt)
-    
-    # ─────────────────────────────────────────────────────────────────────
-    # χ² minimisation (unchanged)
-    result = fit_geometry_parameters(
-        miller, intensities, image_size,
-        params, measured_peaks,
-        var_names,
-        pixel_tol=float('inf')
-    )
-    # ─────────────────────────────────────────────────────────────────────
-    # write the fitted values back into the sliders (unchanged)
-    for name, val in zip(var_names, result.x):
-        if   name == 'zb':            zb_var.set(val)
-        elif name == 'zs':            zs_var.set(val)
-        elif name == 'theta_initial': theta_initial_var.set(val)
-        elif name == 'chi':           chi_var.set(val)
-
-    schedule_update()         # causes a new simulation & redraw
-    # ─────────────────────────────────────────────────────────────────────
-    # ❶  RE-RUN THE COMPARISON WITH THE *FITTED* PARAMETERS
-    #     (this picks up the brand-new slider values)
-    fitted_params = dict(params)       # shallow copy
-    fitted_params.update({
-        'zb'            : zb_var.get(),
-        'zs'            : zs_var.get(),
-        'theta_initial' : theta_initial_var.get(),
-        'chi'           : chi_var.get(),
-    })
-
-    (D, label_match, pixel_match, match_matrix,
-     sim_coords, sim_millers,
-     meas_coords, meas_millers) = simulate_and_compare_hkl(
-        miller, intensities,            # same reflections
-        image_size,
-        fitted_params,                  #   ↖ fitted geometry!
-        measured_peaks,
-        pixel_tol=float('inf')          # keep *all* simulated peaks
-    )
-
-    # ─────────────────────────────────────────────────────────────────────
-    # ❷  BUILD A UNIFIED LIST OF RECORDS
-    export_recs = []
-
-    #   ▸ simulated peaks
-    for hkl, (x, y) in zip(sim_millers, sim_coords):
-        export_recs.append({
-            'source' : 'sim',
-            'hkl'    : tuple(int(v) for v in hkl),
-            'x'      : int(x),
-            'y'      : int(y),
-        })
-
-    #   ▸ measured peaks  (stored exactly as in blobs.npy)
-    for hkl, (x, y) in zip(meas_millers, meas_coords):
-        export_recs.append({
-            'source' : 'meas',
-            'hkl'    : tuple(int(v) for v in hkl),
-            'x'      : int(x),
-            'y'      : int(y),
-        })
-
-    # ─────────────────────────────────────────────────────────────────────
-    # ❸  SAVE AUTOMATICALLY INTO  ~/Downloads/
-    from pathlib import Path
-    from datetime import datetime
-
-    download_dir = Path.home() / "Downloads"
-    download_dir.mkdir(exist_ok=True)          # just in case
-
-    stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path  = download_dir / f"matched_peaks_{stamp}.npy"
-
-    np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
-
-    progress_label_geometry.config(
-        text=(progress_label_geometry.cget('text')
-            + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}')
-    )
-    # ─────────────────────────────────────────────────────────────────────
 
 def on_fit_geometry_click():
     # first, reconstruct the same mosaic_params dict you use in do_update()

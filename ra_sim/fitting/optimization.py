@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.optimize import least_squares, differential_evolution
 
-from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_peaks_parallel
 
 def build_measured_dict(measured_peaks):
