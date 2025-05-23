@@ -1,6 +1,15 @@
+"""Tools for simulating x-ray diffraction from layered mosaics.
+
+The functions below are mostly Numba accelerated and implement pieces of the
+kinematical scattering formalism used throughout the package.  In particular
+`process_peaks_parallel` drives the full image simulation for a set of Bragg
+reflections.  Helper utilities build reciprocal-space grids, draw random points
+from a mosaic distribution and compute finite thickness interference.
+"""
+
 import numpy as np
 from numba import njit, prange
-from math import sin, cos, sqrt, pi, exp, acos
+from math import sin, cos, sqrt, pi, acos
 from ra_sim.utils.calculations import fresnel_transmission
 
 
@@ -161,12 +170,6 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
 
     return (out_Qx, out_Qy, out_Qz)
 
-from numba import njit
-import numpy as np
-
-from numba import njit
-import numpy as np
-
 @njit
 def compute_intensity_array(Qx, Qy, Qz,
                             G_vec,
@@ -175,10 +178,12 @@ def compute_intensity_array(Qx, Qy, Qz,
                             eta_pv,
                             H, K,
                             dphi, dtheta):
-    """
-    Compute the pseudo-Voigt mosaic distribution around G_vec for each (Qx, Qy, Qz).
-    Gaussian and Lorentzian components are individually normalized, so their
-    mixture preserves unit total area without additional normalization.
+    """Evaluate the mosaic spread around ``G_vec``.
+
+    Each point of ``(Qx, Qy, Qz)`` is weighted according to a pseudo-Voigt
+    distribution describing the mosaic orientation distribution of the sample.
+    The Gaussian and Lorentzian components are individually normalized so the
+    mixture integrates to unity without further scaling.
 
     Parameters
     ----------
@@ -261,7 +266,7 @@ def compute_intensity_array(Qx, Qy, Qz,
 
 
 @njit
-def Generate_PDF_Grid(
+def generate_pdf_grid(
     G_vec,
     sigma, gamma_pv, eta_pv, H,K ,
     Qrange=0.1,   # default value; will be overridden if dynamic_Qrange is True
@@ -270,6 +275,28 @@ def Generate_PDF_Grid(
     dynamic_Qrange=True,  # new flag to control dynamic Qrange selection
     multiplier=3.0       # factor to extend the half-width (adjust as needed)
 ):
+    """Draw random Q values around ``G_vec`` following a pseudo-Voigt mosaic.
+
+    Parameters
+    ----------
+    G_vec : array_like
+        Reciprocal lattice vector of the reflection.
+    sigma, gamma_pv, eta_pv : float
+        Parameters of the pseudo-Voigt mosaic distribution (radians).
+    H, K : int
+        Miller indices used by :func:`compute_intensity_array` to choose the
+        cap vs band formulation.
+    Qrange : float, optional
+        Half width of the Q grid.  Ignored if ``dynamic_Qrange`` is ``True``.
+    n_grid : int, optional
+        Resolution of the intermediate grid.
+    n_samples : int, optional
+        Number of samples to return from the distribution.
+    dynamic_Qrange : bool, optional
+        Adapt ``Qrange`` to the effective full width of the mosaic profile.
+    multiplier : float, optional
+        Scale factor applied when ``dynamic_Qrange`` is ``True``.
+    """
     # Compute effective FWHM in angle (radians)
     # For a Gaussian, FWHM = 2.35482*sigma
     # For a Lorentzian, FWHM = 2*gamma_pv
@@ -281,7 +308,7 @@ def Generate_PDF_Grid(
     effective_angle_half_width = effective_fwhm / 2.0
     
     # Convert the angular half-width into Q-space using |G_vec|
-    G_mag = sqrt(G_vec[0]**2 + G_vec[1]**2 + G_vec[2]**2)
+    G_mag = np.sqrt(G_vec[0]**2 + G_vec[1]**2 + G_vec[2]**2)
     effective_Q_half_width = G_mag * effective_angle_half_width
     
     # If dynamic Qrange is enabled, override the Qrange value
@@ -312,7 +339,7 @@ def Generate_PDF_Grid(
 # =============================================================================
 
 @njit
-def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, k_mag, n2, bt):
+def incoherent_averaging(Q_grid, N, c, re_k_z, im_k_z, k_in_crystal, k_mag, n2, bt):
     """
     For a mosaic-sampled Q_grid, compute the average finite-stack interference
     by building Qz_complex for each sample and calling attenuation.
@@ -331,8 +358,6 @@ def incoherent_averaging(Q_grid, N, c, thickness, re_k_z, im_k_z, k_in_crystal, 
         Number of layers in the finite stack.
     c : float
         Single-layer thickness.
-    thickness : float
-        Full film thickness (not always used explicitly if N*c is thickness).
     re_k_z, im_k_z : float
         Real and imaginary parts of the incident wavevector's z-component.
     k_in_crystal : array_like (3,)
@@ -486,7 +511,7 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H,K, L,N_steps
     A_sq = Ax*Ax + Ay*Ay + Az*Az
     if A_sq < 1e-14:
         return np.zeros((0,4), dtype=np.float64)
-    A_len = sqrt(A_sq)
+    A_len = np.sqrt(A_sq)
 
     c = (G_sq + A_sq - rA*rA) / (2.0*A_len)
     # Compute circle parameters
@@ -568,7 +593,7 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H,K, L,N_steps
 
     # Apply any intensity cutoff and construct the output.
     intensity_cutoff = np.exp(-100.0)
-    mask = mask = (all_int > intensity_cutoff)
+    mask = all_int > intensity_cutoff
     valid_idx = np.nonzero(mask)[0]
 
     out = np.zeros((valid_idx.size, 4), dtype=np.float64)
@@ -623,11 +648,11 @@ def calculate_phi(
         Some record of the maximum intensities / positions for debugging or reference.
     """
     gz0 = 2.0*pi*(L/cv)
-    gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
+    gr0 = 4.0*pi/av * np.sqrt((H*H + H*K + K*K)/3.0)
     G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
 
     # # Build a random mosaic distribution around G_vec
-    # Q_grid = Generate_PDF_Grid(
+    # Q_grid = generate_pdf_grid(
     #     G_vec,
     #     sigma_rad, gamma_pv, eta_pv,
     #     Qrange=1,   # half-width in Q around G_vec
@@ -655,7 +680,7 @@ def calculate_phi(
     R_sample = R_x @ R_z_R_y
 
     n_surf = R_x @ R_ZY_n
-    n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
+    n_surf /= np.sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
 
     P0_rot = R_sample @ P0
     P0_rot[0] = 0.0
@@ -665,7 +690,7 @@ def calculate_phi(
     # Build a local reference for the beam incidence
     u_ref = np.array([0.0, 0.0, -1.0])
     e1_temp = np.cross(n_surf, u_ref)
-    e1_norm = sqrt(e1_temp[0]*e1_temp[0] + e1_temp[1]*e1_temp[1] + e1_temp[2]*e1_temp[2])
+    e1_norm = np.sqrt(e1_temp[0]*e1_temp[0] + e1_temp[1]*e1_temp[1] + e1_temp[2]*e1_temp[2])
     if e1_norm < 1e-12:
         # fallback if cross is degenerate
         alt_refs = [
@@ -676,7 +701,7 @@ def calculate_phi(
         success = False
         for ar in alt_refs:
             cross_tmp = np.cross(n_surf, ar)
-            cross_norm_tmp = sqrt(cross_tmp[0]*cross_tmp[0] + cross_tmp[1]*cross_tmp[1] + cross_tmp[2]*cross_tmp[2])
+            cross_norm_tmp = np.sqrt(cross_tmp[0]*cross_tmp[0] + cross_tmp[1]*cross_tmp[1] + cross_tmp[2]*cross_tmp[2])
             if cross_norm_tmp > 1e-12:
                 e1_temp = cross_tmp / cross_norm_tmp
                 success = True
@@ -717,7 +742,7 @@ def calculate_phi(
         th_i_prime = (pi/2.0) - acos(kn_dot)
 
         projected_incident = k_in - kn_dot*n_surf
-        pln = sqrt(projected_incident[0]*projected_incident[0]
+        pln = np.sqrt(projected_incident[0]*projected_incident[0]
                  + projected_incident[1]*projected_incident[1]
                  + projected_incident[2]*projected_incident[2])
         if pln > 1e-12:
@@ -732,7 +757,7 @@ def calculate_phi(
         th_t = acos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
         
         # k_scat is magnitude of the scattering wave in the crystal
-        k_scat = k_mag*sqrt(np.real(n2)*np.real(n2))
+        k_scat = k_mag*np.sqrt(np.real(n2)*np.real(n2))
 
         k_x_scat = k_scat*cos(th_t)*sin(phi_i_prime)
         k_y_scat = k_scat*cos(th_t)*cos(phi_i_prime)
@@ -764,7 +789,7 @@ def calculate_phi(
             k_ty_prime = Qy + k_y_scat
             k_tz_prime = Qz + re_k_z
 
-            kr = sqrt(k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime)
+            kr = np.sqrt(k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime)
             if kr < 1e-12:
                 twotheta_t = 0.0
             else:
@@ -804,7 +829,6 @@ def calculate_phi(
                 * exp(-Qz*Qz * debye_x*debye_x)
                 * exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y))
 
-            image[rpx, cpx] += val
             image[rpx, cpx] += val
 
             # Track maxima for debug
@@ -891,14 +915,14 @@ def process_peaks_parallel(
     ])
     nd_temp   = R_x_det @ n_detector
     n_det_rot = R_z_det @ nd_temp
-    nd_len    = sqrt(n_det_rot[0]*n_det_rot[0] + n_det_rot[1]*n_det_rot[1] + n_det_rot[2]*n_det_rot[2])
+    nd_len    = np.sqrt(n_det_rot[0]*n_det_rot[0] + n_det_rot[1]*n_det_rot[1] + n_det_rot[2]*n_det_rot[2])
     n_det_rot/= nd_len
 
     Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0], dtype=np.float64)
 
     dot_e1 = unit_x[0]*n_det_rot[0] + unit_x[1]*n_det_rot[1] + unit_x[2]*n_det_rot[2]
     e1_det = unit_x - dot_e1*n_det_rot
-    e1_len = sqrt(e1_det[0]*e1_det[0] + e1_det[1]*e1_det[1] + e1_det[2]*e1_det[2])
+    e1_len = np.sqrt(e1_det[0]*e1_det[0] + e1_det[1]*e1_det[1] + e1_det[2]*e1_det[2])
     if e1_len < 1e-14:
         e1_det = np.array([1.0, 0.0, 0.0])
     else:
@@ -908,7 +932,7 @@ def process_peaks_parallel(
     tmpy = n_det_rot[2]* e1_det[0] - n_det_rot[0]* e1_det[2]
     tmpz = n_det_rot[0]* e1_det[1] - n_det_rot[1]* e1_det[0]
     e2_det = np.array([-tmpx, -tmpy, -tmpz], dtype=np.float64)
-    e2_len = sqrt(e2_det[0]*e2_det[0] + e2_det[1]*e2_det[1] + e2_det[2]*e2_det[2])
+    e2_len = np.sqrt(e2_det[0]*e2_det[0] + e2_det[1]*e2_det[1] + e2_det[2]*e2_det[2])
     if e2_len < 1e-14:
         e2_det = np.array([0.0,1.0,0.0])
     else:
@@ -930,7 +954,7 @@ def process_peaks_parallel(
 
     n1= np.array([0.0, 0.0, 1.0], dtype=np.float64)
     R_ZY_n= R_z_R_y @ n1
-    nzy_len= sqrt(R_ZY_n[0]*R_ZY_n[0] + R_ZY_n[1]*R_ZY_n[1] + R_ZY_n[2]*R_ZY_n[2])
+    nzy_len= np.sqrt(R_ZY_n[0]*R_ZY_n[0] + R_ZY_n[1]*R_ZY_n[1] + R_ZY_n[2]*R_ZY_n[2])
     R_ZY_n/= nzy_len
 
     P0= np.array([0.0, 0.0, -zs], dtype=np.float64)
