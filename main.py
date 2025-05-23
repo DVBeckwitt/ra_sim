@@ -311,7 +311,7 @@ def main():
     # ── replace the original imshow call ────────────────────────────
     image_display = ax.imshow(
         global_image_buffer,
-        cmap=turbo_white0,     # ← use the custom map
+        cmap='turbo' if background_visible else turbo_white0,
         vmin=0,
         vmax=1000,
         alpha=0.5,
@@ -858,6 +858,11 @@ def main():
         else:
             image_display.set_clim(0, vmax_var.get())
     
+        if background_visible:
+            image_display.set_cmap('turbo')
+        else:
+            image_display.set_cmap(turbo_white0)
+
         image_display.set_data(global_image_buffer)
     
         background_display.set_visible(background_visible)
@@ -980,6 +985,10 @@ def main():
         background_visible = not background_visible
         # ↓ force opaque if the background is hidden, 0.5 otherwise
         image_display.set_alpha(0.5 if background_visible else 1.0)
+        if background_visible:
+            image_display.set_cmap('turbo')
+        else:
+            image_display.set_cmap(turbo_white0)
         schedule_update()
     
     
