@@ -1,5 +1,4 @@
 import numpy as np
-import yaml
 import os
 
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
@@ -10,17 +9,43 @@ here = os.path.dirname(__file__)
 
 
 def main():
-    with open(os.path.join(here, "defaults.yaml"), "r") as f:
-        params = yaml.safe_load(f)
+    params = {
+        "miller": np.array([[0, 0, 3], [0, 0, 6]], dtype=np.int64),
+        "intensities": np.array([100.0, 200.0], dtype=np.float64),
+        "image_size": 256,
+        "av": 4.14,
+        "cv": 28.64,
+        "lambda": 1.54,
+        "distance": 0.075,
+        "gamma_deg": 0.0,
+        "Gamma_deg": 0.0,
+        "chi_deg": 0.0,
+        "psi_deg": 0.0,
+        "zs": 0.0,
+        "zb": 0.0,
+        "num_samples": 100,
+        "divergence_sigma": 0.000436332,
+        "bw_sigma": 5.0e-05,
+        "sigma_mosaic_deg": 0.8,
+        "gamma_mosaic_deg": 0.7,
+        "eta": 0.0,
+        "wavelength_bandwidth": 0.007,
+        "center": np.array([128.0, 128.0], dtype=np.float64),
+        "debye_x": 0.0,
+        "debye_y": 0.0,
+        "theta_initial_deg": 6.0,
+    }
 
     n2 = IndexofRefraction()
 
-    beam_x, beam_y, theta_arr, phi_arr, wavelength_array = generate_random_profiles(
-        params["num_samples"],
-        params["divergence_sigma"],
-        params["bw_sigma"],
-        params["lambda"],
-        params["wavelength_bandwidth"],
+    beam_x, beam_y, theta_arr, phi_arr, wavelength_array = (
+        generate_random_profiles(
+            params["num_samples"],
+            params["divergence_sigma"],
+            params["bw_sigma"],
+            params["lambda"],
+            params["wavelength_bandwidth"],
+        )
     )
 
     image = np.zeros((params["image_size"], params["image_size"]), dtype=np.float64)
