@@ -1,13 +1,16 @@
 import numpy as np
 import yaml
+import os
 
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_peaks_parallel
 from ra_sim.utils.calculations import IndexofRefraction
 
+here = os.path.dirname(__file__)
+
 
 def main():
-    with open("defaults.yaml", "r") as f:
+    with open(os.path.join(here, "defaults.yaml"), "r") as f:
         params = yaml.safe_load(f)
 
     n2 = IndexofRefraction()
@@ -41,7 +44,7 @@ def main():
         save_flag=1,
     )
 
-    np.save("results.npy", {
+    np.save(os.path.join(here, "results.npy"), {
         "image": image_out,
         "max_positions": max_positions,
         "q_data": q_data,
