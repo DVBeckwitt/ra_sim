@@ -1,0 +1,10 @@
+{
+  "cif_file": "path/to/structure.cif",
+  "poni_file": "path/to/geometry.poni",
+  "blob_file": "path/to/blobs.npy",
+  "zb": 0.0,
+  "zs": 0.0,
+  "chi": 0.0,
+  "theta_initial": 7.0,
+  "random_seed": 1234
+}

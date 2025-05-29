@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-import math, re, io, warnings
+import math, re, io, warnings, json, argparse, logging
 from pathlib import Path
 from functools import partial
 from contextlib import redirect_stdout, redirect_stderr
@@ -24,6 +24,9 @@ import matplotlib.pyplot as plt
 from scipy.signal   import find_peaks, savgol_filter
 from scipy.optimize import least_squares
 from numpy.linalg    import inv
+
+logging.basicConfig(level=logging.INFO)
+
 
 # third‑party crystallography utilities (project‑specific)
 from CifFile                           import ReadCif
@@ -38,6 +41,7 @@ from ra_sim.io.file_parsing            import parse_poni_file
 # ════════════════════════════════════════════════════════════════
 
 def parse_geometry(poni_path: Path) -> dict:
+    """Return a minimal geometry dict parsed from a PONI file."""
     p = parse_poni_file(poni_path)
     return {
         "dist":       p.get("Dist", 0.075),  # m
@@ -50,11 +54,14 @@ def parse_geometry(poni_path: Path) -> dict:
 
 
 def parse_cif(cif_path: Path) -> tuple[float, float]:
+    """Extract lattice constants ``a`` and ``c`` from a CIF file."""
     cf    = ReadCif(str(cif_path))
     block = cf[next(iter(cf.keys()))]
+
     def _num(txt: str) -> float:
         m = re.match(r"[-+0-9\.Ee]+", str(txt))
         return float(m.group(0)) if m else math.nan
+
     return _num(block["_cell_length_a"]), _num(block["_cell_length_c"])
 
 # ════════════════════════════════════════════════════════════════
@@ -79,7 +86,12 @@ def run_simulation(
     sigma_mosaic_deg: float = 0.8,
     gamma_mosaic_deg: float = 0.3,
     bandwidth_frac: float = 0.7 / 100,
+    seed: int | None = None,
 ):
+    """Run a single diffraction simulation and return the image and hit tables."""
+    if seed is not None:
+        np.random.seed(seed)
+
     a_v, c_v = parse_cif(cif_path)
     lam      = geometry["wavelength"] * 1e10  # Å
     energy   = 6.62607015e-34 * 2.99792458e8 / (lam * 1e-10) / 1.602176634e-19
@@ -122,6 +134,7 @@ def run_simulation(
 # ════════════════════════════════════════════════════════════════
 
 def detect_peaks(hit_tables, smooth_win=11, prominence_frac=0.05):
+    """Return a DataFrame of peak coordinates from process_peaks_parallel output."""
     rows = []
     for hits in hit_tables:
         arr = np.asarray(hits)
@@ -149,6 +162,7 @@ def detect_peaks(hit_tables, smooth_win=11, prominence_frac=0.05):
 
 
 def load_blobs(blob_path: Path) -> pd.DataFrame:
+    """Load previously detected blob positions from ``numpy`` serialized data."""
     data = np.load(blob_path, allow_pickle=True)
     rows = []
     for e in data:
@@ -158,32 +172,48 @@ def load_blobs(blob_path: Path) -> pd.DataFrame:
 
 
 def compute_shared(sim_df: pd.DataFrame, blob_df: pd.DataFrame):
-    for d in (sim_df, blob_df):
-        d[["|H|", "|K|", "|L|"]] = d[["H", "K", "L"]].abs()
-    keys = set(zip(sim_df["|H|"], sim_df["|K|"], sim_df["|L|"]))
+    """Return rows from ``sim_df`` and ``blob_df`` that share HKL values."""
+    sim = sim_df.assign(**{"|H|": sim_df["H"].abs(),
+                           "|K|": sim_df["K"].abs(),
+                           "|L|": sim_df["L"].abs()})
+    blob = blob_df.assign(**{"|H|": blob_df["H"].abs(),
+                            "|K|": blob_df["K"].abs(),
+                            "|L|": blob_df["L"].abs()})
+    keys = set(zip(sim["|H|"], sim["|K|"], sim["|L|"]))
     mask = lambda df: df[df[["|H|", "|K|", "|L|"]].apply(tuple, axis=1).isin(keys)]
-    return mask(sim_df), mask(blob_df)
+    return mask(sim), mask(blob)
+
+
+def load_config(path: Path) -> dict:
+    """Load optimisation settings from a JSON configuration file."""
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
 
 # ════════════════════════════════════════════════════════════════
 # 4. Residuals for LM
 # ════════════════════════════════════════════════════════════════
 
-def residuals(params, *, cif_file, blob_df_fixed, geometry, allowed_keys, sigma_px):
+def residuals(params, *, cif_file, blob_df_fixed, geometry, allowed_keys, sigma_px, seed=None):
+    """Residual function for LM optimisation."""
     hole = io.StringIO()
     with redirect_stdout(hole), redirect_stderr(hole), warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
         try:
             img, hits = run_simulation(
                 cif_file, geometry, params[0], params[1], params[3], params[2],
-                allowed_keys=allowed_keys
+                allowed_keys=allowed_keys, seed=seed
             )
             sim_df      = detect_peaks(hits)
             sim_sh, bl_sh = compute_shared(sim_df, blob_df_fixed)
             if sim_sh.empty or bl_sh.empty:
                 return np.full(4, 1e4)
-            diffs = (sim_sh[["x_pix", "y_pix"]].values - bl_sh[["x_pix", "y_pix"]].values).ravel()
+            diffs = (
+                sim_sh[["x_pix", "y_pix"]].values -
+                bl_sh[["x_pix", "y_pix"]].values
+            ).ravel()
             return diffs / sigma_px
-        except Exception:
+        except Exception as exc:
+            logging.error("Residual computation failed", exc_info=exc)
             return np.full(4, 1e4)
 
 # ════════════════════════════════════════════════════════════════
@@ -191,36 +221,115 @@ def residuals(params, *, cif_file, blob_df_fixed, geometry, allowed_keys, sigma_
 # ════════════════════════════════════════════════════════════════
 
 def main():
-    # ---- file paths --------------------------------------------------
-    cif_file  = Path(r"C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/Bi2Se3/Bi2Se3_test.cif")
-    poni_file = Path(r"C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/geometry.poni")
-    blob_file = Path(r"C:/Users/Kenpo/OneDrive/Documents/GitHub/blobs.npy")
+    """Command line entry point for the optimisation script."""
+    parser = argparse.ArgumentParser(description="Run geometry optimisation")
+    parser.add_argument("--config", type=Path, help="JSON config file")
+    parser.add_argument("--cif-file", type=Path)
+    parser.add_argument("--poni-file", type=Path)
+    parser.add_argument("--blob-file", type=Path)
+    parser.add_argument("--zb", type=float)
+    parser.add_argument("--zs", type=float)
+    parser.add_argument("--chi", type=float)
+    parser.add_argument("--theta-initial", type=float)
+    parser.add_argument("--seed", type=int)
+    args = parser.parse_args()
+
+    cfg = load_config(args.config) if args.config else {}
+
+    def get(name, default=None):
+        val = getattr(args, name.replace('-', '_'))
+        return val if val is not None else cfg.get(name, default)
+
+    cif_file = Path(get("cif_file"))
+    poni_file = Path(get("poni_file"))
+    blob_file = Path(get("blob_file"))
+    seed = get("random_seed") if get("random_seed") is not None else args.seed
+
+    zb = float(get("zb", 0.0))
+    zs = float(get("zs", 0.0))
+    chi = float(get("chi", 0.0))
+    theta_initial = float(get("theta_initial", 7.0))
 
     geometry = parse_geometry(poni_file)
 
     # blobs and allowed HKL set ---------------------------------------
     blob_df = load_blobs(blob_file)
-    blob_df[["|H|", "|K|", "|L|"]] = blob_df[["H", "K", "L"]].abs()
+    blob_df = blob_df.assign(
+        **{"|H|": blob_df["H"].abs(),
+           "|K|": blob_df["K"].abs(),
+           "|L|": blob_df["L"].abs()}
+    )
     allowed_keys = set(zip(blob_df["|H|"], blob_df["|K|"], blob_df["|L|"]))
 
     # initial guess ----------------------------------------------------
-    p0 = np.array([0.0, 0.0, 0.0, 7.0])  # zb, zs, chi, θ0
+    p0 = np.array([zb, zs, chi, theta_initial])
 
-    res_fun = partial(
-        residuals,
-        cif_file=cif_file,
-        blob_df_fixed=blob_df,
-        geometry=geometry,
-        allowed_keys=allowed_keys,
-        sigma_px=1.0,
+    # ---------- simulation setup for library optimisation ----------
+    a_v, c_v = parse_cif(cif_file)
+    lam      = geometry["wavelength"] * 1e10  # Å
+    energy   = 6.62607015e-34 * 2.99792458e8 / (lam * 1e-10) / 1.602176634e-19
+    miller, intens, *_ = miller_generator(
+        19, str(cif_file), [1.0, 1.0, 1.0], lam, energy, 1.0, (0, 70)
+    )
+    mask = [tuple(map(abs, hkl)) in allowed_keys for hkl in miller]
+    miller = miller[mask]
+    intens = intens[mask]
+
+    fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
+    div_sigma  = math.radians(0.05) * fwhm2sigma
+    bw_sigma   = 0.05e-3 * fwhm2sigma
+    bx, by, thetas, phis, lams = generate_random_profiles(
+        500, div_sigma, bw_sigma, lam, 0.7 / 100
+    )
+    mosaic_params = dict(
+        beam_x_array=bx,
+        beam_y_array=by,
+        theta_array=thetas,
+        phi_array=phis,
+        wavelength_array=lams,
+        sigma_mosaic_deg=0.8,
+        gamma_mosaic_deg=0.3,
+        eta=0.05,
     )
 
+    n2 = IndexofRefraction()
+    params = dict(
+        a=a_v,
+        c=c_v,
+        lambda=lam,
+        corto_detector=geometry["dist"],
+        gamma=geometry["rot2"],
+        Gamma=geometry["rot1"],
+        chi=chi,
+        theta_initial=theta_initial,
+        zb=zb,
+        zs=zs,
+        center=(geometry["poni2"] / 100e-6, 3000 - geometry["poni1"] / 100e-6),
+        mosaic_params=mosaic_params,
+        n2=n2,
+        psi=0.0,
+        debye_x=0.0,
+        debye_y=0.0,
+    )
+
+    measured_peaks = [
+        {"label": f"{r.H},{r.K},{r.L}", "x": r.x_pix, "y": r.y_pix}
+        for r in blob_df.itertuples()
+    ]
+
+    from ra_sim.fitting.optimization import fit_geometry_parameters
+
     print("Starting Levenberg–Marquardt refinement …")
-    lsq = least_squares(res_fun, p0, method="lm", jac="3-point", max_nfev=400)
+    lsq = fit_geometry_parameters(
+        miller, intens, 3000,
+        params, measured_peaks,
+        ["zb", "zs", "chi", "theta_initial"],
+        pixel_tol=float("inf"),
+    )
 
     # best‑fit results --------------------------------------------------
     p_opt = lsq.x
-    m, n = lsq.fun.size, p_opt.size
+    m, n = len(measured_peaks) * 2, p_opt.size
     cov  = inv(lsq.jac.T @ lsq.jac) * (2 * lsq.cost) / (m - n)
     sigma = np.sqrt(np.diag(cov))
 
@@ -252,7 +361,7 @@ def main():
     # refined parameters
     img_ref, hits_ref = run_simulation(
         cif_file, geometry, p_opt[0], p_opt[1], p_opt[3], p_opt[2],
-        allowed_keys=allowed_keys
+        allowed_keys=allowed_keys, seed=seed
     )
     sim_df_ref = detect_peaks(hits_ref)
     sim_sh_ref, blob_sh = compute_shared(sim_df_ref, blob_df)
@@ -260,7 +369,7 @@ def main():
     # initial guess parameters
     img_init, hits_init = run_simulation(
         cif_file, geometry, p0[0], p0[1], p0[3], p0[2],
-        allowed_keys=allowed_keys
+        allowed_keys=allowed_keys, seed=seed
     )
     sim_df_init = detect_peaks(hits_init)
     sim_sh_init, _ = compute_shared(sim_df_init, blob_df)
