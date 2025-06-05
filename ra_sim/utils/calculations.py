@@ -11,7 +11,11 @@ from numba import njit
 import math
 import numba
 
-_IOR_YAML = Path(__file__).resolve().parents[1] / "ior_params.yaml"
+# ``ior_params.yaml`` lives at the repository root. ``calculations.py`` sits
+# inside ``ra_sim/utils`` so we need to go two directories up to reach the
+# repository root before appending the file name.  Using ``parents[2]`` keeps
+# the path correct even if ``ra_sim`` is installed as a package.
+_IOR_YAML = Path(__file__).resolve().parents[2] / "ior_params.yaml"
 with open(_IOR_YAML, "r", encoding="utf-8") as fh:
     _IOR_PARAMS = yaml.safe_load(fh)
 
