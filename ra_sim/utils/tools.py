@@ -1,33 +1,18 @@
+"""Utility helpers for blob detection and analysis."""
+
+import itertools
+import json
+import math
+from PIL import Image
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pyFAI
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-import json
+from skimage import color, exposure, feature, io
+
+from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.utils.calculations import d_spacing, two_theta
-from ra_sim.StructureFactor.StructureFactor  import calculate_structure_factor
-from skimage import exposure
-
-import numpy as np
-import itertools
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import io, feature, color
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import io, feature, color
-from PIL import Image
-
-import numpy as np
-import math
-from skimage import feature, color
-import matplotlib.pyplot as plt
-
-import math
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
-from skimage import feature, color
 
 def detect_blobs(
     source,

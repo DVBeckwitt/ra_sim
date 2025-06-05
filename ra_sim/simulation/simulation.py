@@ -1,3 +1,5 @@
+"""High-level orchestration of full diffraction simulations."""
+
 import numpy as np
 
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles

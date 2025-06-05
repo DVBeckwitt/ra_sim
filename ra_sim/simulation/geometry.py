@@ -1,3 +1,5 @@
+"""Geometry helpers for configuring pyFAI integrators."""
+
 import json
 import numpy as np
 from pyFAI.azimuthalIntegrator import AzimuthalIntegrator

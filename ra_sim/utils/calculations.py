@@ -1,3 +1,5 @@
+"""Numerical helper functions used by the simulator."""
+
 import numpy as np
 import pyFAI
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator

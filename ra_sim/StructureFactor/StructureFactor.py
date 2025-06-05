@@ -1,3 +1,5 @@
+"""Calculations related to X-ray structure factors."""
+
 import numpy as np
 from numba import njit
 

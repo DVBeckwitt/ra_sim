@@ -1,3 +1,5 @@
+"""Light-weight GUI components built with Tkinter."""
+
 import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg

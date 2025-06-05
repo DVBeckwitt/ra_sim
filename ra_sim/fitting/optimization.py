@@ -1,3 +1,5 @@
+"""Optimization routines for fitting simulated data to experiments."""
+
 import numpy as np
 from scipy.optimize import least_squares, differential_evolution
 
