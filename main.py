@@ -4,6 +4,11 @@
 
 import math
 import os
+import re
+import tempfile
+from collections import defaultdict, namedtuple
+from datetime import datetime
+from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, ttk
 
@@ -14,12 +19,16 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
 import pyFAI
+from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from scipy.optimize import differential_evolution, least_squares
 from skimage.metrics import mean_squared_error
 import spglib
 import OSC_Reader
 from OSC_Reader import read_osc
 import numba
+import pandas as pd
+import Dans_Diffraction as dif
+import CifFile
 
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
@@ -29,7 +38,10 @@ from ra_sim.io.data_loading import (
     save_all_parameters,
     load_parameters,
 )
-from ra_sim.fitting.optimization import simulate_and_compare_hkl
+from ra_sim.fitting.optimization import (
+    simulate_and_compare_hkl,
+    fit_geometry_parameters,
+)
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_peaks_parallel
 from ra_sim.simulation.diffraction_debug import (
@@ -125,11 +137,6 @@ occ = [1.0, 1.0, 1.0]
 
 # Parameters and file paths.
 cif_file = get_path("cif_file")
-from collections import defaultdict
-import numpy as np, os, math, tempfile
-import Dans_Diffraction as dif  # your diffraction module
-import CifFile  # from PyCifRW
-import re
 
 # read with PyCifRW
 cf    = CifFile.ReadCif(cif_file)
@@ -170,8 +177,7 @@ miller, intensities, degeneracy, details = miller_generator(
     intensity_threshold,
     two_theta_range
 )
-
-import pandas as pd
+# Generate miller indices & intensities from the .cif file at script start.
 # Create the Summary DataFrame.
 df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
 df_summary['Intensity'] = intensities
@@ -610,8 +616,6 @@ phi_max_slider = ttk.Scale(
 phi_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 ttk.Label(phi_max_container, textvariable=phi_max_label_var, width=5).pack(side=tk.LEFT, padx=5)
 
-from collections import namedtuple
-
 def caking(data, ai):
     return ai.integrate2d(
         data,
@@ -874,7 +878,6 @@ def do_update():
         chi_square_label.config(text=f"Chi-Squared: Error - {e}")
 
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
-    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
     ai = pyFAI.AzimuthalIntegrator(
         dist=corto_det_up,
@@ -1146,8 +1149,6 @@ load_button = ttk.Button(
     )
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
-from pathlib import Path
-from ra_sim.fitting.optimization import simulate_and_compare_hkl, fit_geometry_parameters
 
 # Frame for selecting which geometry params to fit
 fit_frame = ttk.LabelFrame(root, text="Fit geometry parameters")
@@ -1292,8 +1293,6 @@ def on_fit_geometry_click():
 
     # ─────────────────────────────────────────────────────────────────────
     # ❸  SAVE AUTOMATICALLY INTO  ~/Downloads/
-    from pathlib import Path
-    from datetime import datetime
 
     download_dir = Path.home() / "Downloads"
     download_dir.mkdir(exist_ok=True)          # just in case
@@ -1559,7 +1558,6 @@ save_1d_grid_button = ttk.Button(
 save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
 
 def run_debug_simulation():
-    from ra_sim.simulation.diffraction_debug import process_peaks_parallel_debug, dump_debug_log
 
     gamma_val = float(gamma_var.get())
     Gamma_val = float(Gamma_var.get())

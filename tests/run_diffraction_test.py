@@ -154,8 +154,6 @@ turbo_white0 = ListedColormap(turbo_rgba, name='turbo_white0'); turbo_white0.set
 
 # ───────────── Optional save ─────────────
 # ───────────── Save everything together ─────────────
-from pathlib import Path
-from datetime import datetime
 
 def _detach(x):
     "deep-copy arrays so they are pickle-safe; pack lists as object arrays"
@@ -166,7 +164,6 @@ def _detach(x):
     return x                    # fall-back (shouldn’t happen)
 
 # ─── choose a *constant* filename instead of a timestamp ─────────────
-from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent
 out        = script_dir / "simulation.npz"     # ← no date component
