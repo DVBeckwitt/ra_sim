@@ -28,7 +28,7 @@ from ra_sim.utils.tools                import miller_generator
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing            import parse_poni_file
-from ra_sim.path_config                import get_path
+from ra_sim.path_config                import get_path, get_dir
 
 # ════════════════════════════════════════════════════════════════
 # 1. Parsing helpers
@@ -255,7 +255,8 @@ def main():
     poni_file = Path(get_path("test_poni_file"))
     blob_file = Path(get_path("test_blob_file"))
     DET_SIZE = 3000
-    FIG_OUT  = Path(get_path("overlay_output"))
+    overlay_dir = get_dir("overlay_dir")
+    FIG_OUT = overlay_dir / "overlay.png"
     geometry = parse_geometry(poni_file)
     blob_df  = load_blobs(blob_file)
     blob_df[["|H|","|K|","|L|"]]=blob_df[["H","K","L"]].abs()

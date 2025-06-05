@@ -65,7 +65,7 @@ DEBUG_ENABLED = False
 ###############################################################################
 #                          DATA & PARAMETER SETUP
 ###############################################################################
-from ra_sim.path_config import get_path
+from ra_sim.path_config import get_path, get_dir
 
 file_path = get_path("dark_image")
 BI = read_osc(file_path)  # Dark (background) image
@@ -198,9 +198,9 @@ for i, group_details in enumerate(details):
 
 df_details = pd.DataFrame(details_list)
 
-# Save the initial intensities to Excel in the user's Downloads folder.
-download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-excel_path = os.path.join(download_dir, "miller_intensities.xlsx")
+# Save the initial intensities to Excel in the configured downloads directory.
+download_dir = get_dir("downloads")
+excel_path = download_dir / "miller_intensities.xlsx"
 
 with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
     df_summary.to_excel(writer, sheet_name='Summary', index=False)
@@ -1292,10 +1292,9 @@ def on_fit_geometry_click():
         })
 
     # ─────────────────────────────────────────────────────────────────────
-    # ❸  SAVE AUTOMATICALLY INTO  ~/Downloads/
+    # ❸  SAVE AUTOMATICALLY INTO configured downloads directory
 
-    download_dir = Path.home() / "Downloads"
-    download_dir.mkdir(exist_ok=True)          # just in case
+    download_dir = get_dir("downloads")
 
     stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_path  = download_dir / f"matched_peaks_{stamp}.npy"
@@ -1428,7 +1427,7 @@ def save_1d_snapshot():
     Save only the final 2D simulated image as a .npy file.
     """
     file_path = filedialog.asksaveasfilename(
-        initialdir=get_path("file_dialog_dir"),
+        initialdir=get_dir("file_dialog_dir"),
         defaultextension=".npy",
         filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")]
     )

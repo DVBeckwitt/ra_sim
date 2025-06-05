@@ -1,0 +1,5 @@
+downloads: "~/Downloads"
+overlay_dir: "~/.cache/ra_sim/overlays"
+debug_log_dir: "~/.cache/ra_sim/logs"
+file_dialog_dir: "~/.local/share/ra_sim"
+temp_root: "~/.cache/ra_sim"

@@ -13,6 +13,7 @@ from skimage import color, exposure, feature, io
 
 from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.utils.calculations import d_spacing, two_theta
+from ra_sim.path_config import get_temp_dir
 
 def detect_blobs(
     source,
@@ -322,8 +323,10 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
             occupancies[i] = str(original * factor)
     # ---------------------------------------------------------------------
 
-    # Write the updated CIF to a temporary file.
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False)
+    # Write the updated CIF to a temporary file within our temp directory.
+    tmp_dir = get_temp_dir()
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False,
+                                      dir=str(tmp_dir))
     tmp.close()  # Close the file to allow writing via PyCifRW.
     # If your version of PyCifRW provides a WriteCif function, you can use it.
     # Otherwise, use the WriteOut method on the CIF object.

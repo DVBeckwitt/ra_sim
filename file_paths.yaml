@@ -17,7 +17,7 @@ gui_geometry_poni: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL_4_12_24/Ana
 gui_background_image: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL_4_12_24/Analysis/Bi2Se3/In-Plane/3/Bi2Se3_6d_5m.asc"
 
 # Simulation debug log
-debug_log_csv: "~/Downloads/mosaic_full_debug_log.csv"
+debug_log_csv: "~/.cache/ra_sim/logs/mosaic_full_debug_log.csv"
 
 # Test scripts
 test_cif_file: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/Bi2Se3/Bi2Se3_test.cif"
