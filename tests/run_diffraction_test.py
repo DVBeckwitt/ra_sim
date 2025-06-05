@@ -20,6 +20,7 @@ from ra_sim.utils.tools          import miller_generator
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing      import parse_poni_file
+from ra_sim.path_config          import get_path
 import io, contextlib
 from CifFile import ReadCif
 
@@ -31,8 +32,8 @@ def silent_ReadCif(path):
     return cf
 
 # ───────────── file locations ─────────────
-CIF_FILE  = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\Bi2Se3\Bi2Se3_test.cif"
-PONI_FILE = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\geometry.poni"
+CIF_FILE  = get_path("test_cif_file")
+PONI_FILE = get_path("test_poni_file")
 
 # ───────────── geometry & wavelength ─────────────
 poni  = parse_poni_file(PONI_FILE)

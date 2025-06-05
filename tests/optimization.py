@@ -28,6 +28,7 @@ from ra_sim.utils.tools                import miller_generator
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing            import parse_poni_file
+from ra_sim.path_config                import get_path
 
 # ════════════════════════════════════════════════════════════════
 # 1. Parsing helpers
@@ -250,11 +251,11 @@ def plot_shared_overlay(
 # ════════════════════════════════════════════════════════════════
 def main():
     # ── file paths ───────────────────────────────────────────────
-    cif_file  = Path(r"C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/Bi2Se3/Bi2Se3_test.cif")
-    poni_file = Path(r"C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/geometry.poni")
-    blob_file = Path(r"C:/Users/Kenpo/OneDrive/Documents/GitHub/blobs.npy")
+    cif_file  = Path(get_path("test_cif_file"))
+    poni_file = Path(get_path("test_poni_file"))
+    blob_file = Path(get_path("test_blob_file"))
     DET_SIZE = 3000
-    FIG_OUT  = Path(r"C:\Users\Kenpo\Downloads\overlay.png")
+    FIG_OUT  = Path(get_path("overlay_output"))
     geometry = parse_geometry(poni_file)
     blob_df  = load_blobs(blob_file)
     blob_df[["|H|","|K|","|L|"]]=blob_df[["H","K","L"]].abs()
