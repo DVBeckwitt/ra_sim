@@ -668,9 +668,11 @@ def calculate_phi(
         [0.0,  cos(rad_theta_i), -sin(rad_theta_i)],
         [0.0,  sin(rad_theta_i),  cos(rad_theta_i)]
     ])
-    R_sample = R_x @ R_z_R_y
+    # Apply the initial pitch after the chi/psi rotations so that varying
+    # theta_i results in a simple rotation about the lab X axis.
+    R_sample = R_z_R_y @ R_x
 
-    n_surf = R_x @ R_ZY_n
+    n_surf = R_sample @ np.array([0.0, 0.0, 1.0])
     n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
 
     P0_rot = R_sample @ P0
