@@ -3,7 +3,7 @@
 import numpy as np
 import spglib
 
-def get_Atomic_Coordinates(positions, space_group_operations, atomic_labels, cell_params):
+def get_atomic_coordinates(lattice, positions, numbers, space_group_operations, atomic_labels, cell_params):
     # Apply space group symmetry operations to generate all atomic fractional coordinates
     all_positions = []
     all_labels = []
@@ -42,7 +42,7 @@ def get_Atomic_Coordinates(positions, space_group_operations, atomic_labels, cel
     return (a, b, c, alpha, beta, gamma), atoms
 
 def write_xtl(lattice, positions, numbers, space_group_operations, atomic_labels, cell_params, filename="output.xtl"):
-    (a, b, c, alpha, beta, gamma), atoms = get_Atomic_Coordinates(lattice, positions, numbers, space_group_operations, atomic_labels, cell_params)
+    (a, b, c, alpha, beta, gamma), atoms = get_atomic_coordinates(lattice, positions, numbers, space_group_operations, atomic_labels, cell_params)
     
     # Define the dtype for the structured array
     atom_dtype = np.dtype([
