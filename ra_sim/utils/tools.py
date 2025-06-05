@@ -239,35 +239,6 @@ import numpy as np
 import math
 import Dans_Diffraction as dif
 
-def d_spacing(h, k, l, xtl):
-    """
-    Calculate the d-spacing for Miller indices (h, k, l) based on the crystal lattice.
-    This example assumes a hexagonal system:
-      1/d² = (4/3)*((h² + h*k + k²)/a²) + (l²/c²)
-    """
-    a = xtl.Cell.a
-    c = xtl.Cell.c
-    try:
-        d_inv_sq = (4.0/3.0)*((h**2 + h*k + k**2) / a**2) + (l**2 / c**2)
-        if d_inv_sq <= 0:
-            return None
-        return 1.0 / math.sqrt(d_inv_sq)
-    except Exception:
-        return None
-
-def two_theta(d, lambda_):
-    """
-    Calculate the Bragg angle (2θ in degrees) from d-spacing and wavelength using Bragg's law:
-         λ = 2 d sinθ   =>   2θ = 2 * arcsin(λ/(2d))
-    """
-    if d is None or d <= 0:
-        return None
-    sin_theta = lambda_ / (2*d)
-    if sin_theta > 1 or sin_theta < -1:
-        return None
-    theta = math.degrees(math.asin(sin_theta))
-    return 2 * theta
-
 
 def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
                      intensity_threshold=1.0, two_theta_range=(0,70)):
@@ -380,7 +351,7 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     zeros = []                  # For (0,0,l) reflections
 
     for (h, k, l) in raw_miller:
-        d = d_spacing(h, k, l, xtl)
+        d = d_spacing(h, k, l, xtl.Cell.a, xtl.Cell.c)
         tth = two_theta(d, lambda_)
         if tth is None or not (two_theta_range[0] <= tth <= two_theta_range[1]):
             continue
