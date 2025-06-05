@@ -413,8 +413,14 @@ def intersect_line_plane(P0, k_vec, P_plane, n_plane):
          + (P_plane[1] - P0[1]) * n_plane[1]
          + (P_plane[2] - P0[2]) * n_plane[2])
     t = num / denom
-    if t < 0.0:
+    # Numerical precision can yield tiny negative values for *t* when the ray
+    # should intersect exactly on the plane.  Allow a small tolerance so these
+    # near-zero cases are not discarded which previously produced missing bands
+    # on the detector when the beam was almost parallel to the sample plane.
+    if t < -1e-9:
         return (np.nan, np.nan, np.nan, False)
+    if t < 0.0:
+        t = 0.0
     ix = P0[0] + t*k_vec[0]
     iy = P0[1] + t*k_vec[1]
     iz = P0[2] + t*k_vec[2]
@@ -459,8 +465,10 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
              + (plane_pt[1]-start_pt[1])*plane_n[1]
              + (plane_pt[2]-start_pt[2])*plane_n[2])
         t = num/dot_dn
-        if t < 0.0:
+        if t < -1e-9:
             continue
+        if t < 0.0:
+            t = 0.0
         ix = start_pt[0] + t*kx
         iy = start_pt[1] + t*ky
         iz = start_pt[2] + t*kz
