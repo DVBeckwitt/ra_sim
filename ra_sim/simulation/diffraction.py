@@ -165,9 +165,6 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
 from numba import njit
 import numpy as np
 
-from numba import njit
-import numpy as np
-
 @njit
 def compute_intensity_array(Qx, Qy, Qz,
                             G_vec,

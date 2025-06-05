@@ -1,0 +1,10 @@
+{
+  "cif_file": "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/Bi2Se3/Bi2Se3_test.cif",
+  "poni_file": "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/geometry.poni",
+  "blob_file": "C:/Users/Kenpo/OneDrive/Documents/GitHub/blobs.npy",
+  "zb": 0.0,
+  "zs": 0.0,
+  "chi": 0.0,
+  "theta_initial": 7.0,
+  "random_seed": 1234
+}

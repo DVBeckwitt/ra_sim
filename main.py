@@ -56,8 +56,8 @@ DEBUG_ENABLED = False
 file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\darkImg.osc"
 BI = read_osc(file_path)  # Dark (background) image
 
-#file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Varying\Images\Bi2Se3_6d_5m.osc")
-file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_5m_5d.osc")
+file1 = read_osc(r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\B_4deg_2m.osc")
+#file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_5m_5d.osc")
 file2 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_10d_5m.osc")
 file3 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_15d_5m.osc")
 file4 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Varying\Images\Bi2Se3_30d_2m.osc")
@@ -76,7 +76,7 @@ files = [file1, file2, file3, file4]
 background_images = files
 
 # Parse geometry
-poni_file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\geometry.poni"
+poni_file_path = r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\geometry.poni"
 parameters = parse_poni_file(poni_file_path)
 
 Distance_CoR_to_Detector = parameters.get("Dist", 0.075)
@@ -121,7 +121,7 @@ bandwidth = 0.7 / 100  # 0.7%
 occ = [1.0, 1.0, 1.0]
 
 # Parameters and file paths.
-cif_file = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\Bi2Se3\Bi2Se3_test.cif"
+cif_file = r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\PbI2.cif"
 from collections import defaultdict
 import numpy as np, os, math, tempfile
 import Dans_Diffraction as dif  # your diffraction module
