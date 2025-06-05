@@ -1,3 +1,5 @@
+"""Core diffraction routines used by the simulator."""
+
 import numpy as np
 from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp, acos

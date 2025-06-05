@@ -1,4 +1,7 @@
+"""Objective functions used by the optimization routines."""
+
 import numpy as np
+
 
 def compute_cost(integrated_data, reference_profiles):
     # Example simplified code to compute a mean squared error

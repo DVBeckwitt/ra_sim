@@ -1,3 +1,5 @@
+"""Small GUI helpers for update dialogs."""
+
 import tkinter as tk
 from tkinter import ttk
 

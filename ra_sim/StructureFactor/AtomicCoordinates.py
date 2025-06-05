@@ -1,3 +1,5 @@
+"""Utilities for expanding atomic coordinates via symmetry operations."""
+
 import numpy as np
 import spglib
 

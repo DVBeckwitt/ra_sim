@@ -1,3 +1,5 @@
+"""Parsing helpers for detector configuration and blob files."""
+
 import json
 import numpy as np
 from ra_sim.utils.tools import detect_blobs
