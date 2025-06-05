@@ -406,7 +406,7 @@ def intersect_line_plane(P0, k_vec, P_plane, n_plane):
         dist = ((P0[0] - P_plane[0]) * n_plane[0]
               + (P0[1] - P_plane[1]) * n_plane[1]
               + (P0[2] - P_plane[2]) * n_plane[2])
-        if abs(dist) < 1e-9:
+        if abs(dist) < 1e-6:
             return (P0[0], P0[1], P0[2], True)
         return (np.nan, np.nan, np.nan, False)
     num = ((P_plane[0] - P0[0]) * n_plane[0]
@@ -449,7 +449,7 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
         kz = directions[i,2]
         dot_dn = kx*plane_n[0] + ky*plane_n[1] + kz*plane_n[2]
         if abs(dot_dn) < 1e-14:
-            if abs(dist) < 1e-9:
+            if abs(dist) < 1e-6:
                 intersects[i,0] = start_pt[0]
                 intersects[i,1] = start_pt[1]
                 intersects[i,2] = start_pt[2]
