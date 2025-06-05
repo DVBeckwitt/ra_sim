@@ -5,10 +5,26 @@ import pyFAI
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 import json
 import matplotlib.pyplot as plt
-# import njit
+from pathlib import Path
+import yaml
 from numba import njit
 import math
 import numba
+
+_IOR_YAML = Path(__file__).resolve().parents[1] / "ior_params.yaml"
+with open(_IOR_YAML, "r", encoding="utf-8") as fh:
+    _IOR_PARAMS = yaml.safe_load(fh)
+
+R_E = float(_IOR_PARAMS["classical_electron_radius"])
+LAMBDA_DEFAULT = float(_IOR_PARAMS["default_wavelength"])
+N_A = float(_IOR_PARAMS["avogadro_number"])
+M_BI = float(_IOR_PARAMS["atomic_masses"]["Bi"])
+M_SE = float(_IOR_PARAMS["atomic_masses"]["Se"])
+MU_MASS_BI = float(_IOR_PARAMS["mass_attenuation_coefficients"]["Bi"])
+MU_MASS_SE = float(_IOR_PARAMS["mass_attenuation_coefficients"]["Se"])
+RHO_BI2SE3 = float(_IOR_PARAMS["compound_density"])
+Z_BI = int(_IOR_PARAMS["atomic_numbers"]["Bi"])
+Z_SE = int(_IOR_PARAMS["atomic_numbers"]["Se"])
 
 
 # Function to calculate d-spacing for hexagonal crystals
@@ -38,77 +54,30 @@ def IoR(lambda_, rho_e, r, mu):
 
 @njit
 def IndexofRefraction():
-    """
-    Computes the X-ray index of refraction n = 1 - delta + i beta
-    for Bi2Se3 at a given wavelength using the correct mixture rule.
-    """
-    # Classical electron radius
-    r_e = 2.8179403267e-15  # m
-
-    # Wavelength in meters (example: Cu K-alpha ~1.54 Å)
-    lambda_ = 1.54e-10
-
-    # Avogadro's number
-    N_A = 6.022e23
-
-    # Atomic masses (g/mol)
-    M_Bi = 208.98
-    M_Se = 78.96
-
+    """Return the complex X-ray index of refraction for Bi2Se3."""
     # Formula mass of Bi2Se3 (g/mol)
-    M_Bi2Se3 = 2.0 * M_Bi + 3.0 * M_Se
+    M_Bi2Se3 = 2.0 * M_BI + 3.0 * M_SE
 
     # Mass fractions of Bi and Se in Bi2Se3
-    w_Bi = (2.0 * M_Bi) / M_Bi2Se3
-    w_Se = (3.0 * M_Se) / M_Bi2Se3
+    w_Bi = (2.0 * M_BI) / M_Bi2Se3
+    w_Se = (3.0 * M_SE) / M_Bi2Se3
 
-    # >>> 1) Mass attenuation coefficients (MAC) in cm^2/g at this wavelength
-
-    mu_mass_Bi = 237.8   # cm^2/g
-    mu_mass_Se = 81.16   # cm^2/g
-
-    # >>> 2) Compound density in g/cm^3 (approx. 6.82 for Bi2Se3)
-    rho_Bi2Se3 = 6.82    # g/cm^3
-
-    # >>> 3) Compute the linear attenuation coefficient for Bi2Se3 in cm^-1
-    #        mixture rule: mu_compound = rho * [ w_Bi * mu_mass_Bi + w_Se * mu_mass_Se ]
-    mu_Bi2Se3_cm = rho_Bi2Se3 * (w_Bi * mu_mass_Bi + w_Se * mu_mass_Se)
-
-    # Convert to m^-1
+    # Linear attenuation coefficient (m^-1)
+    mu_Bi2Se3_cm = RHO_BI2SE3 * (w_Bi * MU_MASS_BI + w_Se * MU_MASS_SE)
     mu_Bi2Se3 = mu_Bi2Se3_cm * 1.0e2
 
-    # >>> 4) Compute electron density rho_e for Bi2Se3
-    #        Number of electrons: Z_Bi = 83, Z_Se = 34
-    #        Z_total = 2*83 + 3*34 = 268 e/formula
-    Z_Bi = 83
-    Z_Se = 34
-    Z_total = 2.0 * Z_Bi + 3.0 * Z_Se  # 268
-
-    # Convert compound density from g/cm^3 to g/m^3
-    rho_g_m3 = rho_Bi2Se3 * 1.0e6
-
-    # Molar volume in m^3/mol for Bi2Se3
+    # Electron density (m^-3)
+    Z_total = 2.0 * Z_BI + 3.0 * Z_SE
+    rho_g_m3 = RHO_BI2SE3 * 1.0e6
     V_mol = M_Bi2Se3 / rho_g_m3
-
-    # Number of formula units per m^3
-    n_formulas = 1.0 / V_mol  # mol/m^3
-
-    # Number of electrons per m^3
+    n_formulas = 1.0 / V_mol
     rho_e = Z_total * (n_formulas * N_A)
 
-    # >>> 5) Compute delta and beta
-    # delta = (r_e * lambda^2 * rho_e)/(2*pi)
-    # beta  = (mu * lambda)/(4*pi)
-    delta = (r_e * lambda_**2 * rho_e) / (2.0 * math.pi)
-    beta  = (mu_Bi2Se3 * lambda_) / (4.0 * math.pi)
+    # delta and beta
+    delta = (R_E * LAMBDA_DEFAULT ** 2 * rho_e) / (2.0 * math.pi)
+    beta = (mu_Bi2Se3 * LAMBDA_DEFAULT) / (4.0 * math.pi)
 
-    # >>> 6) Complex refractive index
-    n = 1.0 - delta + 1.0j * beta
-    return n
-
-import math
-import numba
-from numba import njit
+    return 1.0 - delta + 1.0j * beta
 
 @njit
 def complex_sqrt(z):
