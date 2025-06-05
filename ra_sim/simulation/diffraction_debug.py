@@ -1,6 +1,7 @@
 import os
 import csv
 import datetime
+from ra_sim.path_config import get_path
 import numpy as np
 from math import sin, cos, sqrt, pi, exp, acos
 
@@ -14,7 +15,7 @@ def dump_debug_log():
     Writes the global debug log to ~/Downloads/mosaic_full_debug_log.csv,
     ensuring columns like 'IntersectionDetector', 'EventType', 'Qx', 'Qy', etc. exist.
     """
-    filename = os.path.expanduser("~/Downloads/mosaic_full_debug_log.csv")
+    filename = get_path("debug_log_csv")
     now_str = datetime.datetime.now().isoformat()
 
     fieldnames = [

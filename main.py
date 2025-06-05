@@ -53,14 +53,17 @@ DEBUG_ENABLED = False
 ###############################################################################
 #                          DATA & PARAMETER SETUP
 ###############################################################################
-file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\darkImg.osc"
+from ra_sim.path_config import get_path
+
+file_path = get_path("dark_image")
 BI = read_osc(file_path)  # Dark (background) image
 
-file1 = read_osc(r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\B_4deg_2m.osc")
+osc_files = get_path("osc_files")
+file1 = read_osc(osc_files[0])
 #file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_5m_5d.osc")
-file2 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_10d_5m.osc")
-file3 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_15d_5m.osc")
-file4 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Varying\Images\Bi2Se3_30d_2m.osc")
+file2 = read_osc(osc_files[1])
+file3 = read_osc(osc_files[2])
+file4 = read_osc(osc_files[3])
 
 #bg1 = np.load(r"C:\Users\Kenpo\Downloads\background_6d.npy")
 #bg2 = np.load(r"C:\Users\Kenpo\Downloads\background_10d.npy")
@@ -76,7 +79,7 @@ files = [file1, file2, file3, file4]
 background_images = files
 
 # Parse geometry
-poni_file_path = r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\geometry.poni"
+poni_file_path = get_path("geometry_poni")
 parameters = parse_poni_file(poni_file_path)
 
 Distance_CoR_to_Detector = parameters.get("Dist", 0.075)
@@ -121,7 +124,7 @@ bandwidth = 0.7 / 100  # 0.7%
 occ = [1.0, 1.0, 1.0]
 
 # Parameters and file paths.
-cif_file = r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\PbI2.cif"
+cif_file = get_path("cif_file")
 from collections import defaultdict
 import numpy as np, os, math, tempfile
 import Dans_Diffraction as dif  # your diffraction module
@@ -258,7 +261,7 @@ current_background_image = background_images[0]
 current_background_index = 0
 background_visible = True
 
-measured_peaks = np.load(r"C:\Users\Kenpo\OneDrive\Documents\GitHub\blobs.npy", allow_pickle=True)
+measured_peaks = np.load(get_path("measured_peaks"), allow_pickle=True)
 
 defaults = {
     'theta_initial': 5.0,
@@ -1094,7 +1097,7 @@ chi_square_label.pack(side=tk.BOTTOM, padx=5)
 save_button = ttk.Button(
     text="Save Params",
     command=lambda: save_all_parameters(
-        r"C:\Users\Kenpo\parameters.npy",
+        get_path("parameters_file"),
         theta_initial_var,
         gamma_var,
         Gamma_var,
@@ -1120,7 +1123,7 @@ load_button = ttk.Button(
     command=lambda: (
         progress_label.config(
             text=load_parameters(
-                r"C:\Users\Kenpo\parameters.npy",
+                get_path("parameters_file"),
                 theta_initial_var,
                 gamma_var,
                 Gamma_var,
@@ -1426,7 +1429,7 @@ def save_1d_snapshot():
     Save only the final 2D simulated image as a .npy file.
     """
     file_path = filedialog.asksaveasfilename(
-        initialdir=r"C:\Users\Kenpo\Downloads",
+        initialdir=get_path("file_dialog_dir"),
         defaultextension=".npy",
         filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")]
     )
@@ -1813,7 +1816,7 @@ force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
 def main():
     """Entry point for running the GUI application."""
 
-    params_file_path = r"C:\Users\Kenpo\parameters.npy"
+    params_file_path = get_path("parameters_file")
     if os.path.exists(params_file_path):
         load_parameters(
             params_file_path,
