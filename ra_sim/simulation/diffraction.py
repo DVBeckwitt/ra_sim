@@ -506,9 +506,8 @@ def solve_q(
     status = 0
     G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
     if G_sq < 1e-14:
-        if return_status:
-            return np.zeros((0, 4), dtype=np.float64), -1
-        return np.zeros((0, 4), dtype=np.float64)
+        status = -1
+        return np.zeros((0, 4), dtype=np.float64), status
 
     Ax = -k_in_crystal[0]
     Ay = -k_in_crystal[1]
@@ -516,18 +515,16 @@ def solve_q(
     rA = k_scat
     A_sq = Ax*Ax + Ay*Ay + Az*Az
     if A_sq < 1e-14:
-        if return_status:
-            return np.zeros((0, 4), dtype=np.float64), -2
-        return np.zeros((0, 4), dtype=np.float64)
+        status = -2
+        return np.zeros((0, 4), dtype=np.float64), status
     A_len = sqrt(A_sq)
 
     c = (G_sq + A_sq - rA*rA) / (2.0*A_len)
     # Compute circle parameters
     circle_r_sq = G_sq - c*c
     if circle_r_sq < 0.0:
-        if return_status:
-            return np.zeros((0, 4), dtype=np.float64), -3
-        return np.zeros((0, 4), dtype=np.float64)
+        status = -3
+        return np.zeros((0, 4), dtype=np.float64), status
     circle_r = np.sqrt(circle_r_sq)
 
     Ax_hat = Ax / A_len
@@ -549,9 +546,8 @@ def solve_q(
     aoz = az - dot_aA*Az_hat
     ao_len = np.sqrt(aox*aox + aoy*aoy + aoz*aoz)
     if ao_len < 1e-14:
-        if return_status:
-            return np.zeros((0, 4), dtype=np.float64), -4
-        return np.zeros((0, 4), dtype=np.float64)
+        status = -4
+        return np.zeros((0, 4), dtype=np.float64), status
     e1x = aox / ao_len
     e1y = aoy / ao_len
     e1z = aoz / ao_len
@@ -561,9 +557,8 @@ def solve_q(
     e2z = Ay_hat*e1x - Ax_hat*e1y
     e2_len = np.sqrt(e2x*e2x + e2y*e2y + e2z*e2z)
     if e2_len < 1e-14:
-        if return_status:
-            return np.zeros((0, 4), dtype=np.float64), -5
-        return np.zeros((0, 4), dtype=np.float64)
+        status = -5
+        return np.zeros((0, 4), dtype=np.float64), status
     e2x /= e2_len
     e2y /= e2_len
     e2z /= e2_len
@@ -618,9 +613,8 @@ def solve_q(
         out[i, 2] = Qz_arr[idx]
         out[i, 3] = all_int[idx]
 
-    if return_status:
-        return out, 0
-    return out
+    status = 0
+    return out, status
 
 # =============================================================================
 # 5) CALCULATE_PHI
@@ -803,11 +797,9 @@ def calculate_phi(
         #Ti = fresnel_transmission(th_t, n2)
         
         # solve_q approach for reflection geometry
+        All_Q, stat = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv, H, K, L, 1000)
         if record_status:
-            All_Q, stat = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv, H, K, L, 1000, True)
             statuses[i_samp] = stat
-        else:
-            All_Q = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv, H, K, L)
         for i_sol in range(All_Q.shape[0]):
             Qx = All_Q[i_sol, 0]
             Qy = All_Q[i_sol, 1]
@@ -884,8 +876,9 @@ def calculate_phi(
                 q_count[i_peaks_index]+=1
 
     if record_status:
-        return pixel_hits[:n_hits], statuses          # shape (N_hits, 4)
-    return pixel_hits[:n_hits]          # shape (N_hits, 4)
+        return pixel_hits[:n_hits], statuses
+    else:
+        return pixel_hits[:n_hits], np.empty(0, dtype=np.int64)
 
 
 
@@ -1001,9 +994,8 @@ def process_peaks_parallel(
     else:
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
-    hit_tables = List.empty_list(types.float64[:, ::1])   # a list of 2-D float64 views
-    if record_status:
-        all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
+    hit_tables = List.empty_list(types.float64[:, ::1])
+    all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
 
     # prange over each reflection
     for i_pk in prange(num_peaks):
@@ -1013,7 +1005,7 @@ def process_peaks_parallel(
         reflI= intensities[i_pk]
 
         # We'll do a reflection-level call to calculate_phi
-        result = calculate_phi(
+        pixel_hits, status_arr = calculate_phi(
             H, K, L, av, cv,
             wavelength_array,
             image, image_size,
@@ -1035,22 +1027,9 @@ def process_peaks_parallel(
             record_status
         )
         if record_status:
-            pixel_hits, status_arr = result
             all_status[i_pk, :] = status_arr
-        else:
-            pixel_hits = result
         hit_tables.append(pixel_hits)
-    # If we recorded Q-data, we return it
-    if save_flag==1:
-        if record_status:
-            return image, hit_tables, q_data, q_count, all_status
-        else:
-            return image, hit_tables, q_data, q_count
-    else:
-        if record_status:
-            return image, hit_tables, all_status
-        else:
-            return image, hit_tables, None, None
+    return image, hit_tables, q_data, q_count, all_status
 
 
 def debug_detector_paths(
