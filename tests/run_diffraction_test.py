@@ -18,7 +18,7 @@ import CifFile
 from ra_sim.utils.calculations   import IndexofRefraction
 from ra_sim.utils.tools          import miller_generator
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction     import process_peaks_parallel
+from ra_sim.simulation.diffraction     import process_peaks_parallel, debug_detector_paths
 from ra_sim.io.file_parsing      import parse_poni_file
 from ra_sim.path_config          import get_path
 import io, contextlib
@@ -136,7 +136,20 @@ image, hit_tables, q_data, q_count = process_peaks_parallel(
     np.array([1.0,0.0,0.0]),
     np.array([0.0,1.0,0.0]),
     save_flag=0
-    
+
+)
+
+# ───────────── additional geometry debug info ─────────────
+debug_info = debug_detector_paths(
+    mosaic_params["beam_x_array"],
+    mosaic_params["beam_y_array"],
+    mosaic_params["theta_array"],
+    mosaic_params["phi_array"],
+    theta_initial, chi, psi,
+    zb, zs,
+    dist, rot1, rot2,
+    np.array([0.0,1.0,0.0]),
+    np.array([1.0,0.0,0.0])
 )
 
 
@@ -184,6 +197,8 @@ for i, tbl in enumerate(hit_tables):                # ← works with numba List
 if q_data is not None:
     arrays["q_data"]  = _detach(q_data)
     arrays["q_count"] = _detach(q_count)
+
+arrays["debug_info"] = _detach(debug_info)
 
 # finally write the .npz
 np.savez(script_dir / "simulation.npz", **arrays)

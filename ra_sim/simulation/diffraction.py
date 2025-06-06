@@ -1009,3 +1009,124 @@ def process_peaks_parallel(
         return image, hit_tables, q_data, q_count
     else:
         return image, hit_tables, None, None
+
+
+def debug_detector_paths(
+    beam_x_array, beam_y_array, theta_array, phi_array,
+    theta_initial_deg, chi_deg, psi_deg,
+    zb, zs,
+    Distance_CoR_to_Detector, gamma_deg, Gamma_deg,
+    n_detector=np.array([0.0, 1.0, 0.0]),
+    unit_x=np.array([1.0, 0.0, 0.0])
+):
+    """Trace specular reflection paths for debugging.
+
+    For each beam sample, this returns whether the incoming ray intersects the
+    sample plane and whether its specular reflection would intersect the
+    detector plane.  The function is purely for debugging geometry issues and is
+    not JIT compiled.
+
+    Parameters
+    ----------
+    beam_x_array, beam_y_array, theta_array, phi_array : array-like
+        Sampled beam parameters as used in :func:`process_peaks_parallel`.
+    theta_initial_deg : float
+        Sample tilt around the x-axis.
+    chi_deg, psi_deg : float
+        Additional sample rotations around y and z.
+    zb, zs : float
+        Beam and sample offsets used in the main simulation.
+    Distance_CoR_to_Detector, gamma_deg, Gamma_deg : float
+        Detector geometry parameters.
+
+    Returns
+    -------
+    out : ndarray of shape (N,4)
+        Columns contain (theta, phi, hit_sample, hit_detector).
+    """
+    gamma_rad = np.radians(gamma_deg)
+    Gamma_rad = np.radians(Gamma_deg)
+    chi_rad   = np.radians(chi_deg)
+    psi_rad   = np.radians(psi_deg)
+    rad_theta_i = np.radians(theta_initial_deg)
+
+    cg = np.cos(gamma_rad); sg = np.sin(gamma_rad)
+    cG = np.cos(Gamma_rad); sG = np.sin(Gamma_rad)
+    R_x_det = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, cg,  sg],
+        [0.0,-sg,  cg]
+    ])
+    R_z_det = np.array([
+        [ cG, sG, 0.0],
+        [-sG, cG, 0.0],
+        [ 0.0, 0.0, 1.0]
+    ])
+    nd_temp   = R_x_det @ n_detector
+    n_det_rot = R_z_det @ nd_temp
+    n_det_rot /= np.linalg.norm(n_det_rot)
+    Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0])
+
+    c_chi = np.cos(chi_rad); s_chi = np.sin(chi_rad)
+    R_y = np.array([
+        [ c_chi, 0.0,   s_chi],
+        [ 0.0,   1.0,   0.0],
+        [-s_chi, 0.0, c_chi]
+    ])
+    c_psi= np.cos(psi_rad); s_psi= np.sin(psi_rad)
+    R_z = np.array([
+        [ c_psi, s_psi, 0.0],
+        [-s_psi, c_psi, 0.0],
+        [ 0.0,   0.0,   1.0]
+    ])
+    R_z_R_y = R_z @ R_y
+
+    ct = np.cos(rad_theta_i); st = np.sin(rad_theta_i)
+    R_x = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, ct, -st],
+        [0.0, st,  ct]
+    ])
+    R_sample = R_x @ R_z_R_y
+
+    n_surf = R_x @ (R_z_R_y @ np.array([0.0, 0.0, 1.0]))
+    n_surf /= np.linalg.norm(n_surf)
+
+    P0 = np.array([0.0, 0.0, -zs])
+    P0_rot = R_sample @ P0
+    P0_rot[0] = 0.0
+
+    N = len(theta_array)
+    out = np.zeros((N, 4), dtype=np.float64)
+
+    for i in range(N):
+        dtheta = theta_array[i]
+        dphi   = phi_array[i]
+        bx = beam_x_array[i]
+        by = beam_y_array[i]
+
+        k_in = np.array([
+            np.cos(dtheta)*np.sin(dphi),
+            np.cos(dtheta)*np.cos(dphi),
+            np.sin(dtheta)
+        ])
+
+        beam_start = np.array([bx, -20e-3, -zb + by])
+        ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
+
+        hit_sample = 1.0 if valid_int else 0.0
+        if not valid_int:
+            out[i] = [dtheta, dphi, 0.0, 0.0]
+            continue
+
+        I_plane = np.array([ix, iy, iz])
+        dot_kn = k_in[0]*n_surf[0] + k_in[1]*n_surf[1] + k_in[2]*n_surf[2]
+        k_spec = k_in - 2.0*dot_kn*n_surf
+
+        dx, dy, dz, valid_det = intersect_line_plane(I_plane, k_spec, Detector_Pos, n_det_rot)
+        hit_det = 1.0 if valid_det else 0.0
+
+        out[i] = [dtheta, dphi, hit_sample, hit_det]
+
+    return out
+
