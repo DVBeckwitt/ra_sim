@@ -486,7 +486,7 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
 @njit
 def solve_q(
     k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H, K, L,
-    N_steps=1000, return_status=False
+    N_steps=1000
 ):
     """
     Build a 'circle' in reciprocal space for the reflection G_vec, i.e. the
@@ -500,8 +500,10 @@ def solve_q(
 
     Returns
     -------
-    out : shape (M,4)
+    out : ndarray of shape (M,4)
         For the valid points, columns = (Qx, Qy, Qz, mosaic_intensity).
+    status : int
+        0 for success or a negative code indicating the failure reason.
     """
     status = 0
     G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
