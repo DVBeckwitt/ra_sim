@@ -8,6 +8,7 @@ import numpy as np
 
 # Import from ra_sim package modules
 from ra_sim.gui.plotting import setup_figure
+import time
 from ra_sim.gui.sliders import create_slider
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.io.data_loading import load_background_image
@@ -33,6 +34,16 @@ def main():
     # Setup figure
     fig, ax = setup_figure()
     img = ax.imshow(bg_image, cmap='turbo', vmin=0, vmax=1e3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    energy_ax = fig.add_axes([0.65, 0.65, 0.3, 0.3])
+    energy_ax.set_xlabel("Time (s)")
+    energy_ax.set_ylabel("Energy (keV)")
+    energy_line, = energy_ax.plot([], [], 'b-')
+    time_vals = []
+    energy_vals = []
+    start_time = time.time()
 
     canvas = FigureCanvasTkAgg(fig, master=root)
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -52,6 +63,12 @@ def main():
     eta_var, _ = create_slider(slider_frame, "Eta (fraction)", 0.0, 1.0, 0.08, 0.001)
     sigma_mosaic_var, _ = create_slider(slider_frame, "Sigma Mosaic (deg)", 0.0, 5.0, 3.0, 0.01)
     gamma_mosaic_var, _ = create_slider(slider_frame, "Gamma Mosaic (deg)", 0.0, 5.0, 0.7, 0.01)
+    speed_var, _ = create_slider(slider_frame, "Speed", 0.01, 0.5, 0.2, 0.01)
+
+    # initial plot update to populate energy subplot
+    def initial_update():
+        update_plot()
+    root.after(100, initial_update)
 
     # Generate random profiles
     def generate_random_profiles():
@@ -80,9 +97,7 @@ def main():
                (theta_array, phi_array, np.ones(num_samples))
 
     def update_plot(val=None):
-        """
-        Update the plot dynamically based on slider values.
-        """
+        """Update the plot and energy history."""
         # Retrieve slider values
         theta_initial = theta_initial_var.get()
         gamma = gamma_var.get()
@@ -90,6 +105,7 @@ def main():
         chi = chi_var.get()
         zs = zs_var.get()
         zb = zb_var.get()
+        speed = speed_var.get()
 
         # Generate random profiles
         beam_arrays, mosaic_arrays, divergence_arrays = generate_random_profiles()
@@ -119,10 +135,21 @@ def main():
         # Update the plot
         ax.clear()
         ax.imshow(simulated_image, cmap='turbo', vmin=0, vmax=1e5)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        t = time.time() - start_time
+        energy_val = 12.3984 / (ai.wavelength * 1e10 + speed * t)
+        time_vals.append(t)
+        energy_vals.append(energy_val)
+        energy_line.set_data(time_vals, energy_vals)
+        energy_ax.relim()
+        energy_ax.autoscale_view()
+
         canvas.draw_idle()
 
     # Link sliders to the update function
-    for var in [theta_initial_var, gamma_var, Gamma_var, chi_var, zs_var, zb_var, eta_var, sigma_mosaic_var, gamma_mosaic_var]:
+    for var in [theta_initial_var, gamma_var, Gamma_var, chi_var, zs_var, zb_var, eta_var, sigma_mosaic_var, gamma_mosaic_var, speed_var]:
         var.trace_add("write", update_plot)
 
     # Launch the main GUI loop
