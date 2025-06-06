@@ -290,7 +290,11 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     # Get the occupancy values; expect a list.
     occupancies = block.get("_atom_site_occupancy")
     if occupancies is None:
-        raise ValueError("Occupancy tag '_atom_site_occupancy' not found in CIF block.")
+        labels = block.get("_atom_site_label")
+        if isinstance(labels, list):
+            occupancies = ["1.0"] * len(labels)
+        else:
+            occupancies = ["1.0"]
 
     # Determine whether to update each occupancy individually or uniformly.
     if isinstance(occ, (list, tuple)):
