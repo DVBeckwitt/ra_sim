@@ -22,6 +22,7 @@ with np.load(NPZ_PATH, allow_pickle=True) as data:
         dbg = data["debug_info"]
     except KeyError:
         raise SystemExit("debug_info entry not found in npz file")
+    solve_status = data["solve_status"] if "solve_status" in data else None
 
 theta = np.rad2deg(dbg[:, 0])
 phi = np.rad2deg(dbg[:, 1])
@@ -37,6 +38,12 @@ print(f"hit sample:    {n_hit_sample} ({n_hit_sample/n_total:.1%})")
 print(f"hit detector:  {n_hit_det} ({n_hit_det/n_total:.1%})")
 print(f"missed sample: {n_total - n_hit_sample}")
 print(f"missed detector after sample hit: {n_hit_sample - n_hit_det}")
+
+if solve_status is not None:
+    unique, counts = np.unique(solve_status, return_counts=True)
+    print("solve_q status codes:")
+    for u, c in zip(unique, counts):
+        print(f"  {int(u)}: {c}")
 
 # classify for scatter plot
 cls = np.full(n_total, 0)

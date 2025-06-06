@@ -20,8 +20,8 @@ gui_background_image: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL_4_12_24/
 debug_log_csv: "~/.cache/ra_sim/logs/mosaic_full_debug_log.csv"
 
 # Test scripts
-test_cif_file: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/Bi2Se3/Bi2Se3_test.cif"
-test_poni_file: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Analysis/geometry.poni"
+test_cif_file: tests/local_test.cif
+test_poni_file: tests/local_geometry.poni
 test_blob_file: "C:/Users/Kenpo/OneDrive/Documents/GitHub/blobs.npy"
 overlay_output: "C:/Users/Kenpo/Downloads/overlay.png"
 file_dialog_dir: "C:/Users/Kenpo/Downloads"
