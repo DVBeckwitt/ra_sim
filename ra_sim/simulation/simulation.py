@@ -30,7 +30,7 @@ def simulate_diffraction(theta_initial, gamma, Gamma, chi, zs, zb, debye_x_value
     unit_x = np.array([1.0, 0.0, 0.0])
     n_detector = np.array([0.0, 1.0, 0.0])
     
-    simulated_image = process_peaks_parallel(
+    simulated_image, *_ = process_peaks_parallel(
         miller, intensities, image_size, av, cv, lambda_, np.zeros((image_size, image_size)),
         corto_detector_value, gamma, Gamma, chi, psi, zs, zb, n2,
         beam_x_array, beam_y_array, beam_intensity_array,

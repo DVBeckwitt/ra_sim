@@ -780,7 +780,7 @@ def do_update():
         sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
         # Re-use the globally updated miller, intensities from occupancy changes:
-        updated_image, max_positions_local, _, _, _ = process_peaks_parallel(
+        updated_image, max_positions_local, _, _, _, _ = process_peaks_parallel(
             miller, intensities, image_size,
             a_updated, c_updated, lambda_,
             sim_buffer, corto_det_up,
@@ -1497,7 +1497,7 @@ def save_q_space_representation():
         "eta": profile_cache.get("eta", 0.0)
     }
 
-    image_result, max_positions_local, q_data, q_count, _ = process_peaks_parallel(
+    image_result, max_positions_local, q_data, q_count, _, _ = process_peaks_parallel(
         miller,
         intensities,
         image_size,
