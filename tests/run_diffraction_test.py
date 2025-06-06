@@ -115,7 +115,7 @@ mosaic_params = dict(
 sim_buffer = np.zeros((IMAGE_SIZE, IMAGE_SIZE), np.float64)
 
 # grab *all* outputs
-image, hit_tables, q_data, q_count = process_peaks_parallel(
+image, hit_tables, q_data, q_count, solve_status = process_peaks_parallel(
     miller, intens, IMAGE_SIZE,
     a_v, c_v, λ,
     sim_buffer,
@@ -135,7 +135,8 @@ image, hit_tables, q_data, q_count = process_peaks_parallel(
     theta_initial,
     np.array([1.0,0.0,0.0]),
     np.array([0.0,1.0,0.0]),
-    save_flag=0
+    save_flag=0,
+    record_status=True
 
 )
 
@@ -199,6 +200,7 @@ if q_data is not None:
     arrays["q_count"] = _detach(q_count)
 
 arrays["debug_info"] = _detach(debug_info)
+arrays["solve_status"] = _detach(solve_status)
 
 # finally write the .npz
 np.savez(script_dir / "simulation.npz", **arrays)
