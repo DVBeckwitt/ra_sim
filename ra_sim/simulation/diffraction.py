@@ -657,8 +657,12 @@ def calculate_phi(
 
     Returns
     -------
-    max_I_sign0, max_x_sign0, max_y_sign0, max_I_sign1, max_x_sign1, max_y_sign1
-        Some record of the maximum intensities / positions for debugging or reference.
+    pixel_hits : ndarray
+        Record of peak intensities and pixel positions for the best beam sample.
+    statuses : ndarray
+        ``solve_q`` status codes when ``record_status`` is True.
+    missed_kf : ndarray
+        Outgoing wavevectors that failed to intersect the detector plane.
     """
     gz0 = 2.0*pi*(L/cv)
     gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
@@ -676,7 +680,9 @@ def calculate_phi(
 
     max_hits = n_samp * 2          # 2 solutions per beam sample ≫ safe
     pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
+    missed_kf = np.empty((max_hits, 3), dtype=np.float64)
     n_hits = 0                     # running counter
+    n_missed = 0
     if record_status:
         statuses = np.zeros(n_samp, dtype=np.int64)
 
@@ -832,6 +838,11 @@ def calculate_phi(
 
             dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
             if not valid_det:
+                if n_missed < max_hits:
+                    missed_kf[n_missed, 0] = kf_prime[0]
+                    missed_kf[n_missed, 1] = kf_prime[1]
+                    missed_kf[n_missed, 2] = kf_prime[2]
+                    n_missed += 1
                 continue
 
             plane_to_det = np.array([dx - Detector_Pos[0],
@@ -878,9 +889,9 @@ def calculate_phi(
                 q_count[i_peaks_index]+=1
 
     if record_status:
-        return pixel_hits[:n_hits], statuses
+        return pixel_hits[:n_hits], statuses, missed_kf[:n_missed]
     else:
-        return pixel_hits[:n_hits], np.empty(0, dtype=np.int64)
+        return pixel_hits[:n_hits], np.empty(0, dtype=np.int64), missed_kf[:n_missed]
 
 
 
@@ -997,6 +1008,7 @@ def process_peaks_parallel(
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
     hit_tables = List.empty_list(types.float64[:, ::1])
+    miss_tables = List.empty_list(types.float64[:, ::1])
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
 
     # prange over each reflection
@@ -1007,7 +1019,7 @@ def process_peaks_parallel(
         reflI= intensities[i_pk]
 
         # We'll do a reflection-level call to calculate_phi
-        pixel_hits, status_arr = calculate_phi(
+        pixel_hits, status_arr, missed_arr = calculate_phi(
             H, K, L, av, cv,
             wavelength_array,
             image, image_size,
@@ -1031,7 +1043,8 @@ def process_peaks_parallel(
         if record_status:
             all_status[i_pk, :] = status_arr
         hit_tables.append(pixel_hits)
-    return image, hit_tables, q_data, q_count, all_status
+        miss_tables.append(missed_arr)
+    return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
 def debug_detector_paths(
@@ -1152,4 +1165,5 @@ def debug_detector_paths(
         out[i] = [dtheta, dphi, hit_sample, hit_det]
 
     return out
+
 

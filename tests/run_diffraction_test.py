@@ -18,7 +18,7 @@ import CifFile
 from ra_sim.utils.calculations   import IndexofRefraction
 from ra_sim.utils.tools          import miller_generator
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction     import process_peaks_parallel, debug_detector_paths
+from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing      import parse_poni_file
 from ra_sim.path_config          import get_path
 import io, contextlib
@@ -115,7 +115,7 @@ mosaic_params = dict(
 sim_buffer = np.zeros((IMAGE_SIZE, IMAGE_SIZE), np.float64)
 
 # grab *all* outputs
-image, hit_tables, q_data, q_count, solve_status = process_peaks_parallel(
+image, hit_tables, q_data, q_count, solve_status, miss_tables = process_peaks_parallel(
     miller, intens, IMAGE_SIZE,
     a_v, c_v, λ,
     sim_buffer,
@@ -141,17 +141,7 @@ image, hit_tables, q_data, q_count, solve_status = process_peaks_parallel(
 )
 
 # ───────────── additional geometry debug info ─────────────
-debug_info = debug_detector_paths(
-    mosaic_params["beam_x_array"],
-    mosaic_params["beam_y_array"],
-    mosaic_params["theta_array"],
-    mosaic_params["phi_array"],
-    theta_initial, chi, psi,
-    zb, zs,
-    dist, rot1, rot2,
-    np.array([0.0,1.0,0.0]),
-    np.array([1.0,0.0,0.0])
-)
+debug_info = miss_tables[0]
 
 
 # ───────────── Display ─────────────

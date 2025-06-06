@@ -51,7 +51,7 @@ def simulate_and_compare_hkl(
         wavelength_array = mosaic.get('wavelength_i_array')
 
     # Full-pattern simulation
-    updated_image, maxpos, _, _ = process_peaks_parallel(
+    updated_image, maxpos, _, _, _ = process_peaks_parallel(
         miller, intensities, image_size,
         a, c, wavelength_array,
         sim_buffer, dist,
