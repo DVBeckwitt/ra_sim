@@ -9,6 +9,7 @@ osc_files:
   - "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL_4_12_24/Varying/Images/Bi2Se3_30d_2m.osc"
 geometry_poni: "C:/Users/Kenpo/OneDrive - University of Missouri/David and Paul/PbI2/Catalog/3.18.24/geometry.poni"
 cif_file: "C:/Users/Kenpo/OneDrive - University of Missouri/David and Paul/PbI2/Catalog/3.18.24/PbI2.cif"
+cif_file2: "tests/local_test2.cif"
 measured_peaks: "C:/Users/Kenpo/OneDrive/Documents/GitHub/blobs.npy"
 parameters_file: "C:/Users/Kenpo/parameters.npy"
 
