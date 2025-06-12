@@ -211,8 +211,13 @@ if has_second_cif:
     details = [details_dict1.get(tuple(h), details_dict2.get(tuple(h), [])) for h in miller]
 
     weight = 0.5
-    intensities = weight * intensities_cif1 + (1.0 - weight) * intensities_cif2
-else:
+    amp1 = np.sqrt(intensities_cif1)
+    amp2 = np.sqrt(intensities_cif2)
+    intensities = (weight * amp1 + (1.0 - weight) * amp2) ** 2
+    max_I = intensities.max() if intensities.size else 0.0
+    if max_I > 0:
+        intensities = intensities * (100.0 / max_I)
+
     miller = miller1
     intensities_cif1 = intens1
     intensities_cif2 = np.zeros_like(intensities_cif1)
@@ -1752,7 +1757,13 @@ if has_second_cif:
         """Recompute intensities using the current CIF weight."""
         global intensities, df_summary, last_simulation_signature
         w = weight_var.get()
-        intensities = w * intensities_cif1 + (1.0 - w) * intensities_cif2
+        amp1 = np.sqrt(intensities_cif1)
+        amp2 = np.sqrt(intensities_cif2)
+        intensities = (w * amp1 + (1.0 - w) * amp2) ** 2
+        max_I = intensities.max() if intensities.size else 0.0
+        if max_I > 0:
+            intensities = intensities * (100.0 / max_I)
+
         df_summary['Intensity'] = intensities
         last_simulation_signature = None
         schedule_update()
@@ -1809,7 +1820,14 @@ def update_occupancies(*args):
         int2 = {tuple(h): v for h, v in zip(m2, i2)}
         intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
         intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in miller])
-        intensities = weight_var.get() * intensities_cif1 + (1.0 - weight_var.get()) * intensities_cif2
+        w = weight_var.get()
+        amp1 = np.sqrt(intensities_cif1)
+        amp2 = np.sqrt(intensities_cif2)
+        intensities = (w * amp1 + (1.0 - w) * amp2) ** 2
+        max_I = intensities.max() if intensities.size else 0.0
+        if max_I > 0:
+            intensities = intensities * (100.0 / max_I)
+
         degeneracy = np.array([d1.get(tuple(h), d2.get(tuple(h), 1)) for h in miller], dtype=np.int32)
         details = [det1.get(tuple(h), det2.get(tuple(h), [])) for h in miller]
     else:
