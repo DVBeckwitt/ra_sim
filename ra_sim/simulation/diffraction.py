@@ -663,6 +663,9 @@ def calculate_phi(
         ``solve_q`` status codes when ``record_status`` is True.
     missed_kf : ndarray
         Outgoing wavevectors that failed to intersect the detector plane.
+    sol_debug : ndarray
+        Debug table recording ``[i_samp, i_sol, hit_flag, cpx, rpx, Qx, Qy, Qz]``
+        for every solution from ``solve_q``.
     """
     gz0 = 2.0*pi*(L/cv)
     gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
@@ -681,8 +684,10 @@ def calculate_phi(
     max_hits = n_samp * 2          # 2 solutions per beam sample ≫ safe
     pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
     missed_kf = np.empty((max_hits, 3), dtype=np.float64)
+    sol_debug = np.empty((max_hits, 8), dtype=np.float64)
     n_hits = 0                     # running counter
     n_missed = 0
+    n_sol_dbg = 0
     if record_status:
         statuses = np.zeros(n_samp, dtype=np.int64)
 
@@ -814,6 +819,15 @@ def calculate_phi(
             Qz = All_Q[i_sol, 2]
             I_Q = All_Q[i_sol, 3]
             if I_Q < 1e-5:
+                sol_debug[n_sol_dbg, 0] = i_samp
+                sol_debug[n_sol_dbg, 1] = i_sol
+                sol_debug[n_sol_dbg, 2] = 0.0
+                sol_debug[n_sol_dbg, 3] = np.nan
+                sol_debug[n_sol_dbg, 4] = np.nan
+                sol_debug[n_sol_dbg, 5] = Qx
+                sol_debug[n_sol_dbg, 6] = Qy
+                sol_debug[n_sol_dbg, 7] = Qz
+                n_sol_dbg += 1
                 continue
             
             k_tx_prime = Qx + k_x_scat
@@ -843,6 +857,15 @@ def calculate_phi(
                     missed_kf[n_missed, 1] = kf_prime[1]
                     missed_kf[n_missed, 2] = kf_prime[2]
                     n_missed += 1
+                sol_debug[n_sol_dbg, 0] = i_samp
+                sol_debug[n_sol_dbg, 1] = i_sol
+                sol_debug[n_sol_dbg, 2] = 0.0
+                sol_debug[n_sol_dbg, 3] = np.nan
+                sol_debug[n_sol_dbg, 4] = np.nan
+                sol_debug[n_sol_dbg, 5] = Qx
+                sol_debug[n_sol_dbg, 6] = Qy
+                sol_debug[n_sol_dbg, 7] = Qz
+                n_sol_dbg += 1
                 continue
 
             plane_to_det = np.array([dx - Detector_Pos[0],
@@ -854,6 +877,15 @@ def calculate_phi(
             rpx = int(round(center[0] - y_det/100e-6))
             cpx = int(round(center[1] + x_det/100e-6))
             if not (0 <= rpx < image_size and 0 <= cpx < image_size):
+                sol_debug[n_sol_dbg, 0] = i_samp
+                sol_debug[n_sol_dbg, 1] = i_sol
+                sol_debug[n_sol_dbg, 2] = 0.0
+                sol_debug[n_sol_dbg, 3] = np.nan
+                sol_debug[n_sol_dbg, 4] = np.nan
+                sol_debug[n_sol_dbg, 5] = Qx
+                sol_debug[n_sol_dbg, 6] = Qy
+                sol_debug[n_sol_dbg, 7] = Qz
+                n_sol_dbg += 1
                 continue
 
             # Combine:
@@ -876,8 +908,18 @@ def calculate_phi(
                     pixel_hits[n_hits, 4] = H
                     pixel_hits[n_hits, 5] = K
                     pixel_hits[n_hits, 6] = L
-                    
+
                     n_hits += 1
+
+            sol_debug[n_sol_dbg, 0] = i_samp
+            sol_debug[n_sol_dbg, 1] = i_sol
+            sol_debug[n_sol_dbg, 2] = 1.0
+            sol_debug[n_sol_dbg, 3] = cpx
+            sol_debug[n_sol_dbg, 4] = rpx
+            sol_debug[n_sol_dbg, 5] = Qx
+            sol_debug[n_sol_dbg, 6] = Qy
+            sol_debug[n_sol_dbg, 7] = Qz
+            n_sol_dbg += 1
                 
             # Optionally store Q-data
             if save_flag==1 and q_count[i_peaks_index]< q_data.shape[1]:
@@ -889,9 +931,9 @@ def calculate_phi(
                 q_count[i_peaks_index]+=1
 
     if record_status:
-        return pixel_hits[:n_hits], statuses, missed_kf[:n_missed]
+        return pixel_hits[:n_hits], statuses, missed_kf[:n_missed], sol_debug[:n_sol_dbg]
     else:
-        return pixel_hits[:n_hits], np.empty(0, dtype=np.int64), missed_kf[:n_missed]
+        return pixel_hits[:n_hits], np.empty(0, dtype=np.int64), missed_kf[:n_missed], sol_debug[:n_sol_dbg]
 
 
 
@@ -929,8 +971,21 @@ def process_peaks_parallel(
 
     Returns
     -------
-    If save_flag==1, also returns q_data, q_count with detailed Q sampling info.
-    Otherwise, returns just the updated image and max_positions for each reflection.
+    image : ndarray
+        The simulated diffraction image.
+    hit_tables : List of ndarrays
+        Per-reflection list of pixel hits for the best beam sample.
+    q_data, q_count : ndarrays
+        Detailed Q sampling information when ``save_flag`` is 1, otherwise
+        placeholder arrays.
+    all_status : ndarray
+        ``solve_q`` status codes for every beam sample when ``record_status`` is
+        True.
+    miss_tables : List of ndarrays
+        Outgoing wavevectors that failed to intersect the detector.
+    sol_tables : List of ndarrays
+        For debugging, each entry records ``[i_samp, i_sol, hit_flag, cpx, rpx,
+        Qx, Qy, Qz]`` for every solution of ``solve_q``.
     """
     gamma_rad = gamma_deg*(pi/180.0)
     Gamma_rad = Gamma_deg*(pi/180.0)
@@ -1009,6 +1064,7 @@ def process_peaks_parallel(
         q_count= np.zeros(1, dtype=np.int64)
     hit_tables = List.empty_list(types.float64[:, ::1])
     miss_tables = List.empty_list(types.float64[:, ::1])
+    sol_tables  = List.empty_list(types.float64[:, ::1])
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
 
     # prange over each reflection
@@ -1019,7 +1075,7 @@ def process_peaks_parallel(
         reflI= intensities[i_pk]
 
         # We'll do a reflection-level call to calculate_phi
-        pixel_hits, status_arr, missed_arr = calculate_phi(
+        pixel_hits, status_arr, missed_arr, sol_dbg = calculate_phi(
             H, K, L, av, cv,
             wavelength_array,
             image, image_size,
@@ -1044,7 +1100,8 @@ def process_peaks_parallel(
             all_status[i_pk, :] = status_arr
         hit_tables.append(pixel_hits)
         miss_tables.append(missed_arr)
-    return image, hit_tables, q_data, q_count, all_status, miss_tables
+        sol_tables.append(sol_dbg)
+    return image, hit_tables, q_data, q_count, all_status, miss_tables, sol_tables
 
 
 def debug_detector_paths(

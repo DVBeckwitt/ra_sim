@@ -115,7 +115,7 @@ mosaic_params = dict(
 sim_buffer = np.zeros((IMAGE_SIZE, IMAGE_SIZE), np.float64)
 
 # grab *all* outputs
-image, hit_tables, q_data, q_count, solve_status, miss_tables = process_peaks_parallel(
+image, hit_tables, q_data, q_count, solve_status, miss_tables, sol_tables = process_peaks_parallel(
     miller, intens, IMAGE_SIZE,
     a_v, c_v, λ,
     sim_buffer,
@@ -141,7 +141,7 @@ image, hit_tables, q_data, q_count, solve_status, miss_tables = process_peaks_pa
 )
 
 # ───────────── additional geometry debug info ─────────────
-debug_info = miss_tables[0]
+debug_info = sol_tables[0]
 
 
 # ───────────── Display ─────────────
@@ -183,6 +183,13 @@ arrays = {
 # add every hit-table as its own entry
 for i, tbl in enumerate(hit_tables):                # ← works with numba List
     arrays[f"hits_peak_{i}"] = _detach(tbl)
+
+# also store missed and solution tables for debugging
+for i, tbl in enumerate(miss_tables):
+    arrays[f"missed_peak_{i}"] = _detach(tbl)
+
+for i, tbl in enumerate(sol_tables):
+    arrays[f"sol_debug_{i}"] = _detach(tbl)
 
 # optional extras
 if q_data is not None:
