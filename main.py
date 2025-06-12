@@ -137,7 +137,10 @@ occ = [1.0, 1.0, 1.0]
 
 # Parameters and file paths.
 cif_file = get_path("cif_file")
-cif_file2 = get_path("cif_file2")
+try:
+    cif_file2 = get_path("cif_file2")
+except KeyError:
+    cif_file2 = None
 
 # read with PyCifRW
 cf    = CifFile.ReadCif(cif_file)
@@ -177,35 +180,46 @@ miller1, intens1, degeneracy1, details1 = miller_generator(
     intensity_threshold,
     two_theta_range,
 )
-miller2, intens2, degeneracy2, details2 = miller_generator(
-    mx,
-    cif_file2,
-    occ,
-    lambda_,
-    energy,
-    intensity_threshold,
-    two_theta_range,
-)
 
-# Build a unified Miller list
-union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
-miller = np.array(sorted(union_set), dtype=np.int32)
+has_second_cif = bool(cif_file2)
+if has_second_cif:
+    miller2, intens2, degeneracy2, details2 = miller_generator(
+        mx,
+        cif_file2,
+        occ,
+        lambda_,
+        energy,
+        intensity_threshold,
+        two_theta_range,
+    )
 
-int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
-int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
-deg_dict1 = {tuple(h): d for h, d in zip(miller1, degeneracy1)}
-deg_dict2 = {tuple(h): d for h, d in zip(miller2, degeneracy2)}
-details_dict1 = {tuple(miller1[i]): details1[i] for i in range(len(miller1))}
-details_dict2 = {tuple(miller2[i]): details2[i] for i in range(len(miller2))}
+    union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
+    miller = np.array(sorted(union_set), dtype=np.int32)
 
-intensities_cif1 = np.array([int1_dict.get(tuple(h), 0.0) for h in miller])
-intensities_cif2 = np.array([int2_dict.get(tuple(h), 0.0) for h in miller])
-degeneracy = np.array([deg_dict1.get(tuple(h), deg_dict2.get(tuple(h), 1)) for h in miller], dtype=np.int32)
-details = [details_dict1.get(tuple(h), details_dict2.get(tuple(h), [])) for h in miller]
+    int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
+    int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
+    deg_dict1 = {tuple(h): d for h, d in zip(miller1, degeneracy1)}
+    deg_dict2 = {tuple(h): d for h, d in zip(miller2, degeneracy2)}
+    details_dict1 = {tuple(miller1[i]): details1[i] for i in range(len(miller1))}
+    details_dict2 = {tuple(miller2[i]): details2[i] for i in range(len(miller2))}
 
-# Initial weight (updated by slider later)
-weight = 0.5
-intensities = weight * intensities_cif1 + (1.0 - weight) * intensities_cif2
+    intensities_cif1 = np.array([int1_dict.get(tuple(h), 0.0) for h in miller])
+    intensities_cif2 = np.array([int2_dict.get(tuple(h), 0.0) for h in miller])
+    degeneracy = np.array(
+        [deg_dict1.get(tuple(h), deg_dict2.get(tuple(h), 1)) for h in miller], dtype=np.int32
+    )
+    details = [details_dict1.get(tuple(h), details_dict2.get(tuple(h), [])) for h in miller]
+
+    weight = 0.5
+    intensities = weight * intensities_cif1 + (1.0 - weight) * intensities_cif2
+else:
+    miller = miller1
+    intensities_cif1 = intens1
+    intensities_cif2 = np.zeros_like(intensities_cif1)
+    degeneracy = degeneracy1
+    details = details1
+    weight = 1.0
+    intensities = intensities_cif1.copy()
 
 # Create the Summary DataFrame.
 # Create the Summary DataFrame.
@@ -1727,21 +1741,25 @@ center_y_var, center_y_scale = make_slider(
     right_col
 )
 
-# Slider controlling contribution of the first CIF file
-weight_var, weight_scale = make_slider(
-    'CIF1 Weight', 0.0, 1.0, 0.5, 0.01, right_col
-)
+# Slider controlling contribution of the first CIF file, only if a second CIF
+# was provided.
+if has_second_cif:
+    weight_var, weight_scale = make_slider(
+        'CIF1 Weight', 0.0, 1.0, weight, 0.01, right_col
+    )
 
-def update_weight(*args):
-    """Recompute intensities using the current CIF weight."""
-    global intensities, df_summary, last_simulation_signature
-    w = weight_var.get()
-    intensities = w * intensities_cif1 + (1.0 - w) * intensities_cif2
-    df_summary['Intensity'] = intensities
-    last_simulation_signature = None
-    schedule_update()
+    def update_weight(*args):
+        """Recompute intensities using the current CIF weight."""
+        global intensities, df_summary, last_simulation_signature
+        w = weight_var.get()
+        intensities = w * intensities_cif1 + (1.0 - w) * intensities_cif2
+        df_summary['Intensity'] = intensities
+        last_simulation_signature = None
+        schedule_update()
 
-weight_var.trace_add('write', update_weight)
+    weight_var.trace_add('write', update_weight)
+else:
+    weight_var = tk.DoubleVar(value=1.0)
 
 vmax_slider.config(command=vmax_slider_command)
 # ---------------------------------------------------------------------------
@@ -1763,7 +1781,6 @@ def update_occupancies(*args):
     # Grab new occupancy values from the variables (they may have been updated via the slider or Entry)
     new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
 
-    # Re-run miller_generator for both CIF files with updated occupancies.
     global intensities_cif1, intensities_cif2
     m1, i1, d1, det1 = miller_generator(
         mx,
@@ -1774,25 +1791,34 @@ def update_occupancies(*args):
         intensity_threshold,
         two_theta_range,
     )
-    m2, i2, d2, det2 = miller_generator(
-        mx,
-        cif_file2,
-        new_occ,
-        lambda_,
-        energy,
-        intensity_threshold,
-        two_theta_range,
-    )
 
-    union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
-    miller = np.array(sorted(union), dtype=np.int32)
-    int1 = {tuple(h): v for h, v in zip(m1, i1)}
-    int2 = {tuple(h): v for h, v in zip(m2, i2)}
-    intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
-    intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in miller])
-    intensities = weight_var.get() * intensities_cif1 + (1.0 - weight_var.get()) * intensities_cif2
-    degeneracy = np.array([d1.get(tuple(h), d2.get(tuple(h), 1)) for h in miller], dtype=np.int32)
-    details = [det1.get(tuple(h), det2.get(tuple(h), [])) for h in miller]
+    if has_second_cif:
+        m2, i2, d2, det2 = miller_generator(
+            mx,
+            cif_file2,
+            new_occ,
+            lambda_,
+            energy,
+            intensity_threshold,
+            two_theta_range,
+        )
+
+        union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
+        miller = np.array(sorted(union), dtype=np.int32)
+        int1 = {tuple(h): v for h, v in zip(m1, i1)}
+        int2 = {tuple(h): v for h, v in zip(m2, i2)}
+        intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
+        intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in miller])
+        intensities = weight_var.get() * intensities_cif1 + (1.0 - weight_var.get()) * intensities_cif2
+        degeneracy = np.array([d1.get(tuple(h), d2.get(tuple(h), 1)) for h in miller], dtype=np.int32)
+        details = [det1.get(tuple(h), det2.get(tuple(h), [])) for h in miller]
+    else:
+        miller = m1
+        intensities_cif1 = i1
+        intensities_cif2 = np.zeros_like(intensities_cif1)
+        intensities = intensities_cif1
+        degeneracy = d1
+        details = det1
 
     # (Re-)build the summary DataFrame.
     df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
