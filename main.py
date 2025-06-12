@@ -217,7 +217,7 @@ if has_second_cif:
     max_I = intensities.max() if intensities.size else 0.0
     if max_I > 0:
         intensities = intensities * (100.0 / max_I)
-else:
+
     miller = miller1
     intensities_cif1 = intens1
     intensities_cif2 = np.zeros_like(intensities_cif1)
@@ -1763,6 +1763,7 @@ if has_second_cif:
         max_I = intensities.max() if intensities.size else 0.0
         if max_I > 0:
             intensities = intensities * (100.0 / max_I)
+
         df_summary['Intensity'] = intensities
         last_simulation_signature = None
         schedule_update()
@@ -1826,6 +1827,7 @@ def update_occupancies(*args):
         max_I = intensities.max() if intensities.size else 0.0
         if max_I > 0:
             intensities = intensities * (100.0 / max_I)
+
         degeneracy = np.array([d1.get(tuple(h), d2.get(tuple(h), 1)) for h in miller], dtype=np.int32)
         details = [det1.get(tuple(h), det2.get(tuple(h), [])) for h in miller]
     else:
