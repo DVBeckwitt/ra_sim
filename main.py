@@ -162,6 +162,17 @@ def parse_cif_num(txt):
 av = parse_cif_num(a_text)
 bv = parse_cif_num(b_text)
 cv = parse_cif_num(c_text)
+
+if cif_file2:
+    cf2  = CifFile.ReadCif(cif_file2)
+    blk2 = cf2[list(cf2.keys())[0]]
+    a2_text = blk2.get("_cell_length_a")
+    c2_text = blk2.get("_cell_length_c")
+    av2 = parse_cif_num(a2_text) if a2_text else av
+    cv2 = parse_cif_num(c2_text) if c2_text else cv
+else:
+    av2 = None
+    cv2 = None
     
 lambda_ = 1.54   # X-ray wavelength in Å (e.g., Cu Kα)
 energy = 6.62607e-34 * 2.99792458e8 / (lambda_*1e-10) / (1.602176634e-19)    # keV
@@ -220,6 +231,10 @@ if has_second_cif:
     max_I = intensities.max() if intensities.size else 0.0
     if max_I > 0:
         intensities = intensities * (100.0 / max_I)
+    miller1_sim = miller1
+    intensities1_sim = intens1
+    miller2_sim = miller2
+    intensities2_sim = intens2
 else:
     miller = miller1
     intensities_cif1 = intens1
@@ -229,6 +244,16 @@ else:
     weight1 = 1.0
     weight2 = 0.0
     intensities = intensities_cif1.copy()
+    miller1_sim = miller1
+    intensities1_sim = intens1
+    miller2_sim = np.empty((0,3), dtype=np.int32)
+    intensities2_sim = np.empty((0,), dtype=np.float64)
+
+# Save simulation data for later use
+SIM_MILLER1 = miller1_sim
+SIM_INTENS1 = intensities1_sim
+SIM_MILLER2 = miller2_sim
+SIM_INTENS2 = intensities2_sim
 
 # Create the Summary DataFrame.
 # Create the Summary DataFrame.
@@ -773,7 +798,9 @@ stored_sim_image = None
 def do_update():
     global update_pending, last_simulation_signature
     global unscaled_image_global, background_visible
-    global stored_max_positions_local, stored_sim_image  
+    global stored_max_positions_local, stored_sim_image
+    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
+    global av2, cv2
 
     update_pending = None
 
@@ -830,32 +857,43 @@ def do_update():
         peak_millers.clear()
         peak_intensities.clear()
 
-        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+        def run_one(miller_arr, intens_arr, a_val, c_val):
+            buf = np.zeros((image_size, image_size), dtype=np.float64)
+            return process_peaks_parallel(
+                miller_arr, intens_arr, image_size,
+                a_val, c_val, lambda_,
+                buf, corto_det_up,
+                gamma_updated, Gamma_updated, chi_updated, psi,
+                zs_updated, zb_updated, n2,
+                mosaic_params["beam_x_array"],
+                mosaic_params["beam_y_array"],
+                mosaic_params["theta_array"],
+                mosaic_params["phi_array"],
+                mosaic_params["sigma_mosaic_deg"],
+                mosaic_params["gamma_mosaic_deg"],
+                mosaic_params["eta"],
+                mosaic_params["wavelength_array"],
+                debye_x_updated, debye_y_updated,
+                [center_x_up, center_y_up],
+                theta_init_up,
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.0, 1.0, 0.0]),
+                save_flag=0
+            )
 
-        # Re-use the globally updated miller, intensities from occupancy changes:
-        updated_image, max_positions_local, _, _, _, _ = process_peaks_parallel(
-            miller, intensities, image_size,
-            a_updated, c_updated, lambda_,
-            sim_buffer, corto_det_up,
-            gamma_updated, Gamma_updated, chi_updated, psi,
-            zs_updated, zb_updated, n2,
-            mosaic_params["beam_x_array"],
-            mosaic_params["beam_y_array"],
-            mosaic_params["theta_array"],
-            mosaic_params["phi_array"],
-            mosaic_params["sigma_mosaic_deg"],
-            mosaic_params["gamma_mosaic_deg"],
-            mosaic_params["eta"],
-            mosaic_params["wavelength_array"],
-            debye_x_updated, debye_y_updated,
-            [center_x_up, center_y_up],
-            theta_init_up,
-            np.array([1.0, 0.0, 0.0]),
-            np.array([0.0, 1.0, 0.0]),
-            save_flag=0
-        )
-        stored_max_positions_local = max_positions_local     # cache it
-        stored_sim_image           = updated_image           # cache it
+        img1, maxpos1, _, _, _, _ = run_one(SIM_MILLER1, SIM_INTENS1, a_updated, c_updated)
+        if SIM_MILLER2.size > 0:
+            img2, maxpos2, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
+        else:
+            img2 = np.zeros_like(img1)
+            maxpos2 = []
+
+        w1 = weight1_var.get()
+        w2 = weight2_var.get()
+        updated_image = w1 * img1 + w2 * img2
+        max_positions_local = list(maxpos1) + list(maxpos2)
+        stored_max_positions_local = max_positions_local
+        stored_sim_image = updated_image
     else:
         # fall back to the cached arrays
         if stored_max_positions_local is None:
@@ -1796,6 +1834,7 @@ def update_occupancies(*args):
     global miller, intensities, degeneracy, details
     global df_summary, df_details
     global last_simulation_signature
+    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
 
     # Grab new occupancy values from the variables (they may have been updated via the slider or Entry)
     new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
@@ -1835,6 +1874,11 @@ def update_occupancies(*args):
         if max_I > 0:
             intensities = intensities * (100.0 / max_I)
 
+        SIM_MILLER1 = m1
+        SIM_INTENS1 = i1
+        SIM_MILLER2 = m2
+        SIM_INTENS2 = i2
+
         degeneracy = np.array(
             [d1.get(tuple(h), 0) + d2.get(tuple(h), 0) for h in miller],
             dtype=np.int32,
@@ -1850,6 +1894,11 @@ def update_occupancies(*args):
         intensities = intensities_cif1
         degeneracy = d1
         details = det1
+
+        SIM_MILLER1 = m1
+        SIM_INTENS1 = i1
+        SIM_MILLER2 = np.empty((0,3), dtype=np.int32)
+        SIM_INTENS2 = np.empty((0,), dtype=np.float64)
 
     # (Re-)build the summary DataFrame.
     df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
