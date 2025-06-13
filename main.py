@@ -206,9 +206,13 @@ if has_second_cif:
     intensities_cif1 = np.array([int1_dict.get(tuple(h), 0.0) for h in miller])
     intensities_cif2 = np.array([int2_dict.get(tuple(h), 0.0) for h in miller])
     degeneracy = np.array(
-        [deg_dict1.get(tuple(h), deg_dict2.get(tuple(h), 1)) for h in miller], dtype=np.int32
+        [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
+        dtype=np.int32,
     )
-    details = [details_dict1.get(tuple(h), details_dict2.get(tuple(h), [])) for h in miller]
+    details = [
+        details_dict1.get(tuple(h), []) + details_dict2.get(tuple(h), [])
+        for h in miller
+    ]
 
     weight1 = 0.5
     weight2 = 0.5
@@ -1831,8 +1835,14 @@ def update_occupancies(*args):
         if max_I > 0:
             intensities = intensities * (100.0 / max_I)
 
-        degeneracy = np.array([d1.get(tuple(h), d2.get(tuple(h), 1)) for h in miller], dtype=np.int32)
-        details = [det1.get(tuple(h), det2.get(tuple(h), [])) for h in miller]
+        degeneracy = np.array(
+            [d1.get(tuple(h), 0) + d2.get(tuple(h), 0) for h in miller],
+            dtype=np.int32,
+        )
+        details = [
+            det1.get(tuple(h), []) + det2.get(tuple(h), [])
+            for h in miller
+        ]
     else:
         miller = m1
         intensities_cif1 = i1
