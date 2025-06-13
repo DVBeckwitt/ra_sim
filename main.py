@@ -210,21 +210,24 @@ if has_second_cif:
     )
     details = [details_dict1.get(tuple(h), details_dict2.get(tuple(h), [])) for h in miller]
 
-    weight = 0.5
-    amp1 = np.sqrt(intensities_cif1)
-    amp2 = np.sqrt(intensities_cif2)
-    intensities = (weight * amp1 + (1.0 - weight) * amp2) ** 2
+    weight1 = 1.0
+    weight2 = 1.0
+    intensities = weight1 * intensities_cif1 + weight2 * intensities_cif2
     max_I = intensities.max() if intensities.size else 0.0
     if max_I > 0:
         intensities = intensities * (100.0 / max_I)
-
+else:
     miller = miller1
     intensities_cif1 = intens1
     intensities_cif2 = np.zeros_like(intensities_cif1)
     degeneracy = degeneracy1
     details = details1
-    weight = 1.0
-    intensities = intensities_cif1.copy()
+    weight1 = 1.0
+    weight2 = 0.0
+    intensities = weight1 * intensities_cif1
+    max_I = intensities.max() if intensities.size else 0.0
+    if max_I > 0:
+        intensities = intensities * (100.0 / max_I)
 
 # Create the Summary DataFrame.
 # Create the Summary DataFrame.
@@ -1746,20 +1749,21 @@ center_y_var, center_y_scale = make_slider(
     right_col
 )
 
-# Slider controlling contribution of the first CIF file, only if a second CIF
-# was provided.
+# Sliders controlling the contribution of each CIF file when two are provided.
 if has_second_cif:
-    weight_var, weight_scale = make_slider(
-        'CIF1 Weight', 0.0, 1.0, weight, 0.01, right_col
+    weight1_var, _ = make_slider(
+        'CIF1 Weight', 0.0, 2.0, 1.0, 0.01, right_col
+    )
+    weight2_var, _ = make_slider(
+        'CIF2 Weight', 0.0, 2.0, 1.0, 0.01, right_col
     )
 
-    def update_weight(*args):
-        """Recompute intensities using the current CIF weight."""
+    def update_weights(*args):
+        """Recompute intensities using the current CIF weights."""
         global intensities, df_summary, last_simulation_signature
-        w = weight_var.get()
-        amp1 = np.sqrt(intensities_cif1)
-        amp2 = np.sqrt(intensities_cif2)
-        intensities = (w * amp1 + (1.0 - w) * amp2) ** 2
+        w1 = weight1_var.get()
+        w2 = weight2_var.get()
+        intensities = w1 * intensities_cif1 + w2 * intensities_cif2
         max_I = intensities.max() if intensities.size else 0.0
         if max_I > 0:
             intensities = intensities * (100.0 / max_I)
@@ -1768,9 +1772,11 @@ if has_second_cif:
         last_simulation_signature = None
         schedule_update()
 
-    weight_var.trace_add('write', update_weight)
+    weight1_var.trace_add('write', update_weights)
+    weight2_var.trace_add('write', update_weights)
 else:
-    weight_var = tk.DoubleVar(value=1.0)
+    weight1_var = tk.DoubleVar(value=1.0)
+    weight2_var = tk.DoubleVar(value=0.0)
 
 vmax_slider.config(command=vmax_slider_command)
 # ---------------------------------------------------------------------------
@@ -1820,10 +1826,9 @@ def update_occupancies(*args):
         int2 = {tuple(h): v for h, v in zip(m2, i2)}
         intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
         intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in miller])
-        w = weight_var.get()
-        amp1 = np.sqrt(intensities_cif1)
-        amp2 = np.sqrt(intensities_cif2)
-        intensities = (w * amp1 + (1.0 - w) * amp2) ** 2
+        w1 = weight1_var.get()
+        w2 = weight2_var.get()
+        intensities = w1 * intensities_cif1 + w2 * intensities_cif2
         max_I = intensities.max() if intensities.size else 0.0
         if max_I > 0:
             intensities = intensities * (100.0 / max_I)
@@ -1834,7 +1839,8 @@ def update_occupancies(*args):
         miller = m1
         intensities_cif1 = i1
         intensities_cif2 = np.zeros_like(intensities_cif1)
-        intensities = intensities_cif1
+        w1 = weight1_var.get()
+        intensities = w1 * intensities_cif1
         degeneracy = d1
         details = det1
 
