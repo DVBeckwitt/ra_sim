@@ -1,7 +1,5 @@
-import tkinter as tk
-from tkinter import ttk
+"""Reusable Tkinter slider widgets."""
 
-# sliders.py
 import tkinter as tk
 from tkinter import ttk
 

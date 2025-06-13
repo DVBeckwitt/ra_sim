@@ -1,3 +1,5 @@
+"""Light-weight GUI components built with Tkinter."""
+
 import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -13,18 +15,19 @@ from ra_sim.simulation.geometry import setup_azimuthal_integrator
 from ra_sim.simulation.diffraction import simulate_diffraction_pattern
 from ra_sim.simulation.mosaic_profiles import sample_pseudo_voigt_2d
 from ra_sim.utils.constants import av, cv, q_c
+from ra_sim.path_config import get_path
 
 def main():
     root = tk.Tk()
     root.title("XRD Analysis")
 
     # Load parameters
-    poni_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Analysis\Bi2Se3\geometry.poni"
+    poni_path = get_path("gui_geometry_poni")
     params = parse_poni_file(poni_path)
     ai = setup_azimuthal_integrator(params)
 
     # Load a background image
-    bg_image_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Analysis\Bi2Se3\In-Plane\3\Bi2Se3_6d_5m.asc"
+    bg_image_path = get_path("gui_background_image")
     bg_image = load_background_image(bg_image_path)
 
     # Setup figure

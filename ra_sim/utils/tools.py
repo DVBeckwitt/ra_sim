@@ -1,33 +1,19 @@
+"""Utility helpers for blob detection and analysis."""
+
+import itertools
+import json
+import math
+from PIL import Image
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pyFAI
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-import json
+from skimage import color, exposure, feature, io
+
+from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.utils.calculations import d_spacing, two_theta
-from ra_sim.StructureFactor.StructureFactor  import calculate_structure_factor
-from skimage import exposure
-
-import numpy as np
-import itertools
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import io, feature, color
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import io, feature, color
-from PIL import Image
-
-import numpy as np
-import math
-from skimage import feature, color
-import matplotlib.pyplot as plt
-
-import math
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
-from skimage import feature, color
+from ra_sim.path_config import get_temp_dir
 
 def detect_blobs(
     source,
@@ -254,35 +240,6 @@ import numpy as np
 import math
 import Dans_Diffraction as dif
 
-def d_spacing(h, k, l, xtl):
-    """
-    Calculate the d-spacing for Miller indices (h, k, l) based on the crystal lattice.
-    This example assumes a hexagonal system:
-      1/d² = (4/3)*((h² + h*k + k²)/a²) + (l²/c²)
-    """
-    a = xtl.Cell.a
-    c = xtl.Cell.c
-    try:
-        d_inv_sq = (4.0/3.0)*((h**2 + h*k + k**2) / a**2) + (l**2 / c**2)
-        if d_inv_sq <= 0:
-            return None
-        return 1.0 / math.sqrt(d_inv_sq)
-    except Exception:
-        return None
-
-def two_theta(d, lambda_):
-    """
-    Calculate the Bragg angle (2θ in degrees) from d-spacing and wavelength using Bragg's law:
-         λ = 2 d sinθ   =>   2θ = 2 * arcsin(λ/(2d))
-    """
-    if d is None or d <= 0:
-        return None
-    sin_theta = lambda_ / (2*d)
-    if sin_theta > 1 or sin_theta < -1:
-        return None
-    theta = math.degrees(math.asin(sin_theta))
-    return 2 * theta
-
 
 def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
                      intensity_threshold=1.0, two_theta_range=(0,70)):
@@ -333,7 +290,11 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     # Get the occupancy values; expect a list.
     occupancies = block.get("_atom_site_occupancy")
     if occupancies is None:
-        raise ValueError("Occupancy tag '_atom_site_occupancy' not found in CIF block.")
+        labels = block.get("_atom_site_label")
+        if isinstance(labels, list):
+            occupancies = ["1.0"] * len(labels)
+        else:
+            occupancies = ["1.0"]
 
     # Determine whether to update each occupancy individually or uniformly.
     if isinstance(occ, (list, tuple)):
@@ -366,8 +327,10 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
             occupancies[i] = str(original * factor)
     # ---------------------------------------------------------------------
 
-    # Write the updated CIF to a temporary file.
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False)
+    # Write the updated CIF to a temporary file within our temp directory.
+    tmp_dir = get_temp_dir()
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False,
+                                      dir=str(tmp_dir))
     tmp.close()  # Close the file to allow writing via PyCifRW.
     # If your version of PyCifRW provides a WriteCif function, you can use it.
     # Otherwise, use the WriteOut method on the CIF object.
@@ -395,7 +358,7 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     zeros = []                  # For (0,0,l) reflections
 
     for (h, k, l) in raw_miller:
-        d = d_spacing(h, k, l, xtl)
+        d = d_spacing(h, k, l, xtl.Cell.a, xtl.Cell.c)
         tth = two_theta(d, lambda_)
         if tth is None or not (two_theta_range[0] <= tth <= two_theta_range[1]):
             continue

@@ -20,6 +20,7 @@ from ra_sim.utils.tools          import miller_generator
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing      import parse_poni_file
+from ra_sim.path_config          import get_path
 import io, contextlib
 from CifFile import ReadCif
 
@@ -31,8 +32,8 @@ def silent_ReadCif(path):
     return cf
 
 # ───────────── file locations ─────────────
-CIF_FILE  = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\Bi2Se3\Bi2Se3_test.cif"
-PONI_FILE = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\geometry.poni"
+CIF_FILE  = get_path("test_cif_file")
+PONI_FILE = get_path("test_poni_file")
 
 # ───────────── geometry & wavelength ─────────────
 poni  = parse_poni_file(PONI_FILE)
@@ -114,7 +115,7 @@ mosaic_params = dict(
 sim_buffer = np.zeros((IMAGE_SIZE, IMAGE_SIZE), np.float64)
 
 # grab *all* outputs
-image, hit_tables, q_data, q_count = process_peaks_parallel(
+image, hit_tables, q_data, q_count, solve_status, miss_tables = process_peaks_parallel(
     miller, intens, IMAGE_SIZE,
     a_v, c_v, λ,
     sim_buffer,
@@ -134,9 +135,13 @@ image, hit_tables, q_data, q_count = process_peaks_parallel(
     theta_initial,
     np.array([1.0,0.0,0.0]),
     np.array([0.0,1.0,0.0]),
-    save_flag=0
-    
+    save_flag=0,
+    record_status=True
+
 )
+
+# ───────────── additional geometry debug info ─────────────
+debug_info = miss_tables[0]
 
 
 # ───────────── Display ─────────────
@@ -153,8 +158,6 @@ turbo_white0 = ListedColormap(turbo_rgba, name='turbo_white0'); turbo_white0.set
 
 # ───────────── Optional save ─────────────
 # ───────────── Save everything together ─────────────
-from pathlib import Path
-from datetime import datetime
 
 def _detach(x):
     "deep-copy arrays so they are pickle-safe; pack lists as object arrays"
@@ -165,7 +168,6 @@ def _detach(x):
     return x                    # fall-back (shouldn’t happen)
 
 # ─── choose a *constant* filename instead of a timestamp ─────────────
-from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent
 out        = script_dir / "simulation.npz"     # ← no date component
@@ -186,6 +188,9 @@ for i, tbl in enumerate(hit_tables):                # ← works with numba List
 if q_data is not None:
     arrays["q_data"]  = _detach(q_data)
     arrays["q_count"] = _detach(q_count)
+
+arrays["debug_info"] = _detach(debug_info)
+arrays["solve_status"] = _detach(solve_status)
 
 # finally write the .npz
 np.savez(script_dir / "simulation.npz", **arrays)

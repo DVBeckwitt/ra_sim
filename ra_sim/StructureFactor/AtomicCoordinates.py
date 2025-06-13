@@ -1,7 +1,9 @@
+"""Utilities for expanding atomic coordinates via symmetry operations."""
+
 import numpy as np
 import spglib
 
-def get_Atomic_Coordinates( positions, space_group_operations, atomic_labels):
+def get_atomic_coordinates(lattice, positions, numbers, space_group_operations, atomic_labels, cell_params):
     # Apply space group symmetry operations to generate all atomic fractional coordinates
     all_positions = []
     all_labels = []
@@ -12,9 +14,8 @@ def get_Atomic_Coordinates( positions, space_group_operations, atomic_labels):
             all_positions.append(new_pos)
             all_labels.append(label)
 
-    # Define cell parameters directly
-    a, b, c = 4.143000, 4.143000, 28.636000
-    alpha, beta, gamma = 90.0, 90.0, 120.0
+    # Use cell parameters provided from the CIF file
+    a, b, c, alpha, beta, gamma = cell_params
 
     # Instead of returning (label, [x, y, z]), return (label, x, y, z) directly
     atoms = [(label, pos[0], pos[1], pos[2]) for label, pos in zip(all_labels, all_positions)]
@@ -40,8 +41,8 @@ def get_Atomic_Coordinates( positions, space_group_operations, atomic_labels):
 
     return (a, b, c, alpha, beta, gamma), atoms
 
-def write_xtl(lattice, positions, numbers, space_group_operations, atomic_labels, filename="output.xtl"):
-    (a, b, c, alpha, beta, gamma), atoms = get_Atomic_Coordinates(lattice, positions, numbers, space_group_operations, atomic_labels)
+def write_xtl(lattice, positions, numbers, space_group_operations, atomic_labels, cell_params, filename="output.xtl"):
+    (a, b, c, alpha, beta, gamma), atoms = get_atomic_coordinates(lattice, positions, numbers, space_group_operations, atomic_labels, cell_params)
     
     # Define the dtype for the structured array
     atom_dtype = np.dtype([

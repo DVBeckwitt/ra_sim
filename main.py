@@ -4,6 +4,11 @@
 
 import math
 import os
+import re
+import tempfile
+from collections import defaultdict, namedtuple
+from datetime import datetime
+from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, ttk
 
@@ -14,12 +19,16 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
 import pyFAI
+from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from scipy.optimize import differential_evolution, least_squares
 from skimage.metrics import mean_squared_error
 import spglib
 import OSC_Reader
 from OSC_Reader import read_osc
 import numba
+import pandas as pd
+import Dans_Diffraction as dif
+import CifFile
 
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
@@ -29,7 +38,10 @@ from ra_sim.io.data_loading import (
     save_all_parameters,
     load_parameters,
 )
-from ra_sim.fitting.optimization import simulate_and_compare_hkl
+from ra_sim.fitting.optimization import (
+    simulate_and_compare_hkl,
+    fit_geometry_parameters,
+)
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_peaks_parallel
 from ra_sim.simulation.diffraction_debug import (
@@ -53,14 +65,17 @@ DEBUG_ENABLED = False
 ###############################################################################
 #                          DATA & PARAMETER SETUP
 ###############################################################################
-file_path = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\darkImg.osc"
+from ra_sim.path_config import get_path, get_dir
+
+file_path = get_path("dark_image")
 BI = read_osc(file_path)  # Dark (background) image
 
-file1 = read_osc(r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\B_4deg_2m.osc")
+osc_files = get_path("osc_files")
+file1 = read_osc(osc_files[0])
 #file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_5m_5d.osc")
-file2 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_10d_5m.osc")
-file3 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_15d_5m.osc")
-file4 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL_4_12_24\Varying\Images\Bi2Se3_30d_2m.osc")
+file2 = read_osc(osc_files[1])
+file3 = read_osc(osc_files[2])
+file4 = read_osc(osc_files[3])
 
 #bg1 = np.load(r"C:\Users\Kenpo\Downloads\background_6d.npy")
 #bg2 = np.load(r"C:\Users\Kenpo\Downloads\background_10d.npy")
@@ -76,7 +91,7 @@ files = [file1, file2, file3, file4]
 background_images = files
 
 # Parse geometry
-poni_file_path = r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\geometry.poni"
+poni_file_path = get_path("geometry_poni")
 parameters = parse_poni_file(poni_file_path)
 
 Distance_CoR_to_Detector = parameters.get("Dist", 0.075)
@@ -121,12 +136,11 @@ bandwidth = 0.7 / 100  # 0.7%
 occ = [1.0, 1.0, 1.0]
 
 # Parameters and file paths.
-cif_file = r"C:\Users\Kenpo\OneDrive - University of Missouri\David and Paul\PbI2\Catalog\3.18.24\PbI2.cif"
-from collections import defaultdict
-import numpy as np, os, math, tempfile
-import Dans_Diffraction as dif  # your diffraction module
-import CifFile  # from PyCifRW
-import re
+cif_file = get_path("cif_file")
+try:
+    cif_file2 = get_path("cif_file2")
+except KeyError:
+    cif_file2 = None
 
 # read with PyCifRW
 cf    = CifFile.ReadCif(cif_file)
@@ -155,20 +169,68 @@ intensity_threshold = 1.0
 two_theta_range = (0, 70)
 
 # ---------------------------------------------------------------------------
-# Generate miller indices & intensities from the .cif file at script start.
-# This will be dynamically updated once we add occupancy sliders.
+# Load reflections from the two CIF files and prepare for weighted combining.
 # ---------------------------------------------------------------------------
-miller, intensities, degeneracy, details = miller_generator(
+miller1, intens1, degeneracy1, details1 = miller_generator(
     mx,
     cif_file,
     occ,
     lambda_,
     energy,
     intensity_threshold,
-    two_theta_range
+    two_theta_range,
 )
 
-import pandas as pd
+has_second_cif = bool(cif_file2)
+if has_second_cif:
+    miller2, intens2, degeneracy2, details2 = miller_generator(
+        mx,
+        cif_file2,
+        occ,
+        lambda_,
+        energy,
+        intensity_threshold,
+        two_theta_range,
+    )
+
+    union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
+    miller = np.array(sorted(union_set), dtype=np.int32)
+
+    int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
+    int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
+    deg_dict1 = {tuple(h): d for h, d in zip(miller1, degeneracy1)}
+    deg_dict2 = {tuple(h): d for h, d in zip(miller2, degeneracy2)}
+    details_dict1 = {tuple(miller1[i]): details1[i] for i in range(len(miller1))}
+    details_dict2 = {tuple(miller2[i]): details2[i] for i in range(len(miller2))}
+
+    intensities_cif1 = np.array([int1_dict.get(tuple(h), 0.0) for h in miller])
+    intensities_cif2 = np.array([int2_dict.get(tuple(h), 0.0) for h in miller])
+    degeneracy = np.array(
+        [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
+        dtype=np.int32,
+    )
+    details = [
+        details_dict1.get(tuple(h), []) + details_dict2.get(tuple(h), [])
+        for h in miller
+    ]
+
+    weight1 = 0.5
+    weight2 = 0.5
+    intensities = weight1 * intensities_cif1 + weight2 * intensities_cif2
+    max_I = intensities.max() if intensities.size else 0.0
+    if max_I > 0:
+        intensities = intensities * (100.0 / max_I)
+else:
+    miller = miller1
+    intensities_cif1 = intens1
+    intensities_cif2 = np.zeros_like(intensities_cif1)
+    degeneracy = degeneracy1
+    details = details1
+    weight1 = 1.0
+    weight2 = 0.0
+    intensities = intensities_cif1.copy()
+
+# Create the Summary DataFrame.
 # Create the Summary DataFrame.
 df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
 df_summary['Intensity'] = intensities
@@ -189,9 +251,9 @@ for i, group_details in enumerate(details):
 
 df_details = pd.DataFrame(details_list)
 
-# Save the initial intensities to Excel in the user's Downloads folder.
-download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-excel_path = os.path.join(download_dir, "miller_intensities.xlsx")
+# Save the initial intensities to Excel in the configured downloads directory.
+download_dir = get_dir("downloads")
+excel_path = download_dir / "miller_intensities.xlsx"
 
 with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
     df_summary.to_excel(writer, sheet_name='Summary', index=False)
@@ -258,7 +320,7 @@ current_background_image = background_images[0]
 current_background_index = 0
 background_visible = True
 
-measured_peaks = np.load(r"C:\Users\Kenpo\OneDrive\Documents\GitHub\blobs.npy", allow_pickle=True)
+measured_peaks = np.load(get_path("measured_peaks"), allow_pickle=True)
 
 defaults = {
     'theta_initial': 5.0,
@@ -607,8 +669,6 @@ phi_max_slider = ttk.Scale(
 phi_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 ttk.Label(phi_max_container, textvariable=phi_max_label_var, width=5).pack(side=tk.LEFT, padx=5)
 
-from collections import namedtuple
-
 def caking(data, ai):
     return ai.integrate2d(
         data,
@@ -773,7 +833,7 @@ def do_update():
         sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
         # Re-use the globally updated miller, intensities from occupancy changes:
-        updated_image, max_positions_local, _, _ = process_peaks_parallel(
+        updated_image, max_positions_local, _, _, _, _ = process_peaks_parallel(
             miller, intensities, image_size,
             a_updated, c_updated, lambda_,
             sim_buffer, corto_det_up,
@@ -871,7 +931,6 @@ def do_update():
         chi_square_label.config(text=f"Chi-Squared: Error - {e}")
 
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
-    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
     ai = pyFAI.AzimuthalIntegrator(
         dist=corto_det_up,
@@ -1094,7 +1153,7 @@ chi_square_label.pack(side=tk.BOTTOM, padx=5)
 save_button = ttk.Button(
     text="Save Params",
     command=lambda: save_all_parameters(
-        r"C:\Users\Kenpo\parameters.npy",
+        get_path("parameters_file"),
         theta_initial_var,
         gamma_var,
         Gamma_var,
@@ -1120,7 +1179,7 @@ load_button = ttk.Button(
     command=lambda: (
         progress_label.config(
             text=load_parameters(
-                r"C:\Users\Kenpo\parameters.npy",
+                get_path("parameters_file"),
                 theta_initial_var,
                 gamma_var,
                 Gamma_var,
@@ -1143,8 +1202,6 @@ load_button = ttk.Button(
     )
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
-from pathlib import Path
-from ra_sim.fitting.optimization import simulate_and_compare_hkl, fit_geometry_parameters
 
 # Frame for selecting which geometry params to fit
 fit_frame = ttk.LabelFrame(root, text="Fit geometry parameters")
@@ -1288,12 +1345,9 @@ def on_fit_geometry_click():
         })
 
     # ─────────────────────────────────────────────────────────────────────
-    # ❸  SAVE AUTOMATICALLY INTO  ~/Downloads/
-    from pathlib import Path
-    from datetime import datetime
+    # ❸  SAVE AUTOMATICALLY INTO configured downloads directory
 
-    download_dir = Path.home() / "Downloads"
-    download_dir.mkdir(exist_ok=True)          # just in case
+    download_dir = get_dir("downloads")
 
     stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_path  = download_dir / f"matched_peaks_{stamp}.npy"
@@ -1426,7 +1480,7 @@ def save_1d_snapshot():
     Save only the final 2D simulated image as a .npy file.
     """
     file_path = filedialog.asksaveasfilename(
-        initialdir=r"C:\Users\Kenpo\Downloads",
+        initialdir=get_dir("file_dialog_dir"),
         defaultextension=".npy",
         filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")]
     )
@@ -1496,7 +1550,7 @@ def save_q_space_representation():
         "eta": profile_cache.get("eta", 0.0)
     }
 
-    image_result, max_positions_local, q_data, q_count = process_peaks_parallel(
+    image_result, max_positions_local, q_data, q_count, _, _ = process_peaks_parallel(
         miller,
         intensities,
         image_size,
@@ -1556,7 +1610,6 @@ save_1d_grid_button = ttk.Button(
 save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
 
 def run_debug_simulation():
-    from ra_sim.simulation.diffraction_debug import process_peaks_parallel_debug, dump_debug_log
 
     gamma_val = float(gamma_var.get())
     Gamma_val = float(Gamma_var.get())
@@ -1697,6 +1750,36 @@ center_y_var, center_y_scale = make_slider(
     right_col
 )
 
+# Slider controlling contribution of the first CIF file, only if a second CIF
+# was provided.
+if has_second_cif:
+    weight1_var, _ = make_slider(
+        'CIF1 Weight', 0.0, 1.0, weight1, 0.01, right_col
+    )
+    weight2_var, _ = make_slider(
+        'CIF2 Weight', 0.0, 1.0, weight2, 0.01, right_col
+    )
+
+    def update_weights(*args):
+        """Recompute intensities using the current CIF weights."""
+        global intensities, df_summary, last_simulation_signature
+        w1 = weight1_var.get()
+        w2 = weight2_var.get()
+        intensities = w1 * intensities_cif1 + w2 * intensities_cif2
+        max_I = intensities.max() if intensities.size else 0.0
+        if max_I > 0:
+            intensities = intensities * (100.0 / max_I)
+
+        df_summary['Intensity'] = intensities
+        last_simulation_signature = None
+        schedule_update()
+
+    weight1_var.trace_add('write', update_weights)
+    weight2_var.trace_add('write', update_weights)
+else:
+    weight1_var = tk.DoubleVar(value=1.0)
+    weight2_var = tk.DoubleVar(value=0.0)
+
 vmax_slider.config(command=vmax_slider_command)
 # ---------------------------------------------------------------------------
 #  OCCUPANCY SLIDERS: Sliders for occ[0], occ[1], occ[2]
@@ -1717,16 +1800,56 @@ def update_occupancies(*args):
     # Grab new occupancy values from the variables (they may have been updated via the slider or Entry)
     new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
 
-    # Re-run miller_generator with updated occupancies.
-    miller, intensities, degeneracy, details = miller_generator(
+    global intensities_cif1, intensities_cif2
+    m1, i1, d1, det1 = miller_generator(
         mx,
         cif_file,
         new_occ,
         lambda_,
         energy,
         intensity_threshold,
-        two_theta_range
+        two_theta_range,
     )
+
+    if has_second_cif:
+        m2, i2, d2, det2 = miller_generator(
+            mx,
+            cif_file2,
+            new_occ,
+            lambda_,
+            energy,
+            intensity_threshold,
+            two_theta_range,
+        )
+
+        union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
+        miller = np.array(sorted(union), dtype=np.int32)
+        int1 = {tuple(h): v for h, v in zip(m1, i1)}
+        int2 = {tuple(h): v for h, v in zip(m2, i2)}
+        intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
+        intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in miller])
+        w1 = weight1_var.get()
+        w2 = weight2_var.get()
+        intensities = w1 * intensities_cif1 + w2 * intensities_cif2
+        max_I = intensities.max() if intensities.size else 0.0
+        if max_I > 0:
+            intensities = intensities * (100.0 / max_I)
+
+        degeneracy = np.array(
+            [d1.get(tuple(h), 0) + d2.get(tuple(h), 0) for h in miller],
+            dtype=np.int32,
+        )
+        details = [
+            det1.get(tuple(h), []) + det2.get(tuple(h), [])
+            for h in miller
+        ]
+    else:
+        miller = m1
+        intensities_cif1 = i1
+        intensities_cif2 = np.zeros_like(intensities_cif1)
+        intensities = intensities_cif1
+        degeneracy = d1
+        details = det1
 
     # (Re-)build the summary DataFrame.
     df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
@@ -1813,7 +1936,7 @@ force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
 def main():
     """Entry point for running the GUI application."""
 
-    params_file_path = r"C:\Users\Kenpo\parameters.npy"
+    params_file_path = get_path("parameters_file")
     if os.path.exists(params_file_path):
         load_parameters(
             params_file_path,

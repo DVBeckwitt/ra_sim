@@ -1,0 +1,13 @@
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+
+# Distribution metadata
+*.egg-info/
+
+# Jupyter notebooks
+*.ipynb
+
+# Test artifacts
+*.npz
+

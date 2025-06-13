@@ -1,6 +1,8 @@
 import os
 import csv
 import datetime
+from pathlib import Path
+from ra_sim.path_config import get_dir
 import numpy as np
 from math import sin, cos, sqrt, pi, exp, acos
 
@@ -10,11 +12,9 @@ from math import sin, cos, sqrt, pi, exp, acos
 DEBUG_LOG = []
 
 def dump_debug_log():
-    """
-    Writes the global debug log to ~/Downloads/mosaic_full_debug_log.csv,
-    ensuring columns like 'IntersectionDetector', 'EventType', 'Qx', 'Qy', etc. exist.
-    """
-    filename = os.path.expanduser("~/Downloads/mosaic_full_debug_log.csv")
+    """Write the global debug log to ``debug_log_dir`` as ``mosaic_full_debug_log.csv``."""
+    log_dir = get_dir("debug_log_dir")
+    filename = Path(log_dir) / "mosaic_full_debug_log.csv"
     now_str = datetime.datetime.now().isoformat()
 
     fieldnames = [
@@ -132,6 +132,11 @@ def compute_intensity(Q, G_vec, sigma):
 def intersect_line_plane(P0, k_vec, P_plane, n_plane):
     denom = k_vec[0]*n_plane[0] + k_vec[1]*n_plane[1] + k_vec[2]*n_plane[2]
     if abs(denom) < 1e-14:
+        dist = ((P0[0] - P_plane[0]) * n_plane[0]
+              + (P0[1] - P_plane[1]) * n_plane[1]
+              + (P0[2] - P_plane[2]) * n_plane[2])
+        if abs(dist) < 1e-6:
+            return (P0[0], P0[1], P0[2], True)
         return (np.nan, np.nan, np.nan, False)
 
     num = ((P_plane[0] - P0[0]) * n_plane[0]
@@ -151,12 +156,22 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
     Ndir = directions.shape[0]
     intersects = np.full((Ndir,3), np.nan, dtype=np.float64)
     valid = np.zeros(Ndir, dtype=bool)
+
+    dist = ((start_pt[0] - plane_pt[0]) * plane_n[0]
+          + (start_pt[1] - plane_pt[1]) * plane_n[1]
+          + (start_pt[2] - plane_pt[2]) * plane_n[2])
+
     for i in range(Ndir):
         kx = directions[i,0]
         ky = directions[i,1]
         kz = directions[i,2]
         dot_dn = kx*plane_n[0] + ky*plane_n[1] + kz*plane_n[2]
         if abs(dot_dn) < 1e-14:
+            if abs(dist) < 1e-6:
+                intersects[i,0] = start_pt[0]
+                intersects[i,1] = start_pt[1]
+                intersects[i,2] = start_pt[2]
+                valid[i] = True
             continue
 
         num = ((plane_pt[0]-start_pt[0])*plane_n[0]
