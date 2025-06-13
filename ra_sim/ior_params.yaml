@@ -1,0 +1,13 @@
+classical_electron_radius: 2.8179403267e-15
+default_wavelength: 1.54e-10
+avogadro_number: 6.022e23
+atomic_masses:
+  Bi: 208.98
+  Se: 78.96
+mass_attenuation_coefficients:
+  Bi: 237.8
+  Se: 81.16
+compound_density: 6.82
+atomic_numbers:
+  Bi: 83
+  Se: 34
