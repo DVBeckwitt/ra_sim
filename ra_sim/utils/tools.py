@@ -410,6 +410,62 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     return miller_arr, intensities_arr, degeneracy_arr, normalized_details
 
 
+def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
+    """Add fractional Miller indices with constant intensity.
+
+    Parameters
+    ----------
+    miller : ndarray
+        Existing ``(N,3)`` array of integer Miller indices.
+    intensities : ndarray
+        Intensities corresponding to ``miller``.
+    mx : int
+        Maximum index bound used for the original Miller generation.
+    step : float, optional
+        Spacing for fractional indices. The default ``0.5`` inserts half
+        steps between integer peaks.
+    value : float, optional
+        Intensity assigned to each injected reflection. Default ``0.1``.
+
+    Returns
+    -------
+    miller_new : ndarray
+        Array containing both the original and fractional Miller indices.
+    intensities_new : ndarray
+        Intensities for ``miller_new``.
+    """
+
+    offsets = np.array([-step, step])
+    candidates = []
+    for h, k, l in miller:
+        for dh in offsets:
+            for dk in offsets:
+                for dl in offsets:
+                    nh = h + dh
+                    nk = k + dk
+                    nl = l + dl
+                    if (
+                        -mx + 1 <= nh < mx
+                        and -mx + 1 <= nk < mx
+                        and 1 <= nl < mx
+                        and not (
+                            abs(nh - round(nh)) < 1e-8
+                            and abs(nk - round(nk)) < 1e-8
+                            and abs(nl - round(nl)) < 1e-8
+                        )
+                    ):
+                        candidates.append((nh, nk, nl))
+
+    if not candidates:
+        return miller.astype(float), intensities
+
+    uniq = np.unique(np.array(candidates, dtype=float), axis=0)
+    frac_intens = np.full(len(uniq), value, dtype=float)
+    miller_new = np.vstack((miller.astype(float), uniq))
+    intensities_new = np.concatenate((intensities, frac_intens))
+    return miller_new, intensities_new
+
+
 
 import matplotlib.pyplot as plt
 import numpy as np
