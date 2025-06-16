@@ -422,8 +422,9 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
     mx : int
         Maximum index bound used for the original Miller generation.
     step : float, optional
-        Spacing for fractional indices. The default ``0.5`` inserts half
-        steps between integer peaks.
+        Spacing for fractional indices along ``l``. The default ``0.5``
+        inserts half steps between integer peaks.
+
     value : float, optional
         Intensity assigned to each injected reflection. Default ``0.1``.
 
@@ -438,23 +439,17 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
     offsets = np.array([-step, step])
     candidates = []
     for h, k, l in miller:
-        for dh in offsets:
-            for dk in offsets:
-                for dl in offsets:
-                    nh = h + dh
-                    nk = k + dk
-                    nl = l + dl
-                    if (
-                        -mx + 1 <= nh < mx
-                        and -mx + 1 <= nk < mx
-                        and 1 <= nl < mx
-                        and not (
-                            abs(nh - round(nh)) < 1e-8
-                            and abs(nk - round(nk)) < 1e-8
-                            and abs(nl - round(nl)) < 1e-8
-                        )
-                    ):
-                        candidates.append((nh, nk, nl))
+        # Only offset the L value while keeping H and K fixed
+        for dl in offsets:
+            nl = l + dl
+            if (
+                -mx + 1 <= h < mx
+                and -mx + 1 <= k < mx
+                and 1 <= nl < mx
+                and not abs(nl - round(nl)) < 1e-8
+            ):
+                candidates.append((h, k, nl))
+
 
     if not candidates:
         return miller.astype(float), intensities
