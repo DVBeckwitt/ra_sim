@@ -1013,9 +1013,10 @@ def process_peaks_parallel(
 
     # prange over each reflection
     for i_pk in prange(num_peaks):
-        H= miller[i_pk,0]
-        K= miller[i_pk,1]
-        L= miller[i_pk,2]
+        # Ensure HKL values remain floating point to allow fractional indices
+        H = float(miller[i_pk, 0])
+        K = float(miller[i_pk, 1])
+        L = float(miller[i_pk, 2])
         reflI= intensities[i_pk]
 
         # We'll do a reflection-level call to calculate_phi

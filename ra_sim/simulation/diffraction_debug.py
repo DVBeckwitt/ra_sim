@@ -577,9 +577,10 @@ def process_peaks_parallel_debug(
     max_positions= np.empty((num_peaks,6), dtype=np.float64)
 
     for i_pk in range(num_peaks):
-        H= miller[i_pk,0]
-        K= miller[i_pk,1]
-        L= miller[i_pk,2]
+        # Keep HKL values as floats to avoid unintended rounding
+        H = float(miller[i_pk, 0])
+        K = float(miller[i_pk, 1])
+        L = float(miller[i_pk, 2])
         reflI= intensities[i_pk]
 
         (mx0,my0,mv0, mx1,my1,mv1) = calculate_phi(
