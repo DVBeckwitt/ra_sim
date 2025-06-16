@@ -435,25 +435,34 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
         Intensities for ``miller_new``.
     """
 
-    frac_indices = []
-    for h in np.arange(-mx + 1, mx, step):
-        for k in np.arange(-mx + 1, mx, step):
-            for l in np.arange(1, mx, step):
-                if (
-                    abs(h - round(h)) < 1e-8
-                    and abs(k - round(k)) < 1e-8
-                    and abs(l - round(l)) < 1e-8
-                ):
-                    continue
-                frac_indices.append([h, k, l])
+    offsets = np.array([-step, step])
+    candidates = []
+    for h, k, l in miller:
+        for dh in offsets:
+            for dk in offsets:
+                for dl in offsets:
+                    nh = h + dh
+                    nk = k + dk
+                    nl = l + dl
+                    if (
+                        -mx + 1 <= nh < mx
+                        and -mx + 1 <= nk < mx
+                        and 1 <= nl < mx
+                        and not (
+                            abs(nh - round(nh)) < 1e-8
+                            and abs(nk - round(nk)) < 1e-8
+                            and abs(nl - round(nl)) < 1e-8
+                        )
+                    ):
+                        candidates.append((nh, nk, nl))
 
-    if not frac_indices:
+    if not candidates:
         return miller.astype(float), intensities
 
-    frac_miller = np.array(frac_indices, dtype=float)
-    frac_intens = np.full(frac_miller.shape[0], value, dtype=float)
+    uniq = np.unique(np.array(candidates, dtype=float), axis=0)
+    frac_intens = np.full(len(uniq), value, dtype=float)
+    miller_new = np.vstack((miller.astype(float), uniq))
 
-    miller_new = np.vstack((miller.astype(float), frac_miller))
     intensities_new = np.concatenate((intensities, frac_intens))
     return miller_new, intensities_new
 
