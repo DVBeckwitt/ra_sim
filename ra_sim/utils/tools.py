@@ -435,7 +435,7 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
         Intensities for ``miller_new``.
     """
 
-    offsets = np.array([-step / 2, step / 2])
+    offsets = np.array([-step, step])
     candidates = []
     for h, k, l in miller:
         for dh in offsets:
