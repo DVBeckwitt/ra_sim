@@ -424,6 +424,7 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
     step : float, optional
         Spacing for fractional indices along ``l``. The default ``0.5``
         inserts half steps between integer peaks.
+
     value : float, optional
         Intensity assigned to each injected reflection. Default ``0.1``.
 
@@ -449,12 +450,14 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
             ):
                 candidates.append((h, k, nl))
 
+
     if not candidates:
         return miller.astype(float), intensities
 
     uniq = np.unique(np.array(candidates, dtype=float), axis=0)
     frac_intens = np.full(len(uniq), value, dtype=float)
     miller_new = np.vstack((miller.astype(float), uniq))
+
     intensities_new = np.concatenate((intensities, frac_intens))
     return miller_new, intensities_new
 
