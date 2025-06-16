@@ -16,7 +16,7 @@ import CifFile
 
 # ra_sim internals
 from ra_sim.utils.calculations   import IndexofRefraction
-from ra_sim.utils.tools          import miller_generator
+from ra_sim.utils.tools          import miller_generator, inject_fractional_reflections
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing      import parse_poni_file
@@ -90,6 +90,9 @@ miller, intens, _, _ = miller_generator(
     int_thresh,
     two_theta_rng
 )
+
+# Inject fractional reflections with a constant intensity of 0.1
+miller, intens = inject_fractional_reflections(miller, intens, MX)
 
 # ───────────── random beam / mosaic profile ─────────────
 bx, by, θarr, φarr, λarr = generate_random_profiles(

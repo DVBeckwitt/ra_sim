@@ -410,6 +410,54 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     return miller_arr, intensities_arr, degeneracy_arr, normalized_details
 
 
+def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
+    """Add fractional Miller indices with constant intensity.
+
+    Parameters
+    ----------
+    miller : ndarray
+        Existing ``(N,3)`` array of integer Miller indices.
+    intensities : ndarray
+        Intensities corresponding to ``miller``.
+    mx : int
+        Maximum index bound used for the original Miller generation.
+    step : float, optional
+        Spacing for fractional indices. The default ``0.5`` inserts half
+        steps between integer peaks.
+    value : float, optional
+        Intensity assigned to each injected reflection. Default ``0.1``.
+
+    Returns
+    -------
+    miller_new : ndarray
+        Array containing both the original and fractional Miller indices.
+    intensities_new : ndarray
+        Intensities for ``miller_new``.
+    """
+
+    frac_indices = []
+    for h in np.arange(-mx + 1, mx, step):
+        for k in np.arange(-mx + 1, mx, step):
+            for l in np.arange(1, mx, step):
+                if (
+                    abs(h - round(h)) < 1e-8
+                    and abs(k - round(k)) < 1e-8
+                    and abs(l - round(l)) < 1e-8
+                ):
+                    continue
+                frac_indices.append([h, k, l])
+
+    if not frac_indices:
+        return miller.astype(float), intensities
+
+    frac_miller = np.array(frac_indices, dtype=float)
+    frac_intens = np.full(frac_miller.shape[0], value, dtype=float)
+
+    miller_new = np.vstack((miller.astype(float), frac_miller))
+    intensities_new = np.concatenate((intensities, frac_intens))
+    return miller_new, intensities_new
+
+
 
 import matplotlib.pyplot as plt
 import numpy as np
