@@ -462,6 +462,7 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
     uniq = np.unique(np.array(candidates, dtype=float), axis=0)
     frac_intens = np.full(len(uniq), value, dtype=float)
     miller_new = np.vstack((miller.astype(float), uniq))
+
     intensities_new = np.concatenate((intensities, frac_intens))
     return miller_new, intensities_new
 
