@@ -411,6 +411,111 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
 
 
 
+def intensities_for_hkls(hkls, cif_file, occ, lambda_, energy=8.047,
+                         intensity_threshold=0, two_theta_range=None):
+    """Return scattering intensities for specific Miller indices.
+
+    This helper performs the same CIF and :mod:`Dans_Diffraction` setup as
+    :func:`miller_generator` but takes an explicit list of ``(h, k, l)``
+    tuples.  Each reflection is evaluated individually and the raw intensity
+    from ``xtl.Scatter.intensity`` is returned.
+
+    Parameters
+    ----------
+    hkls : iterable of tuple[int, int, int]
+        Miller indices to evaluate.
+    cif_file : str
+        Path to the CIF file describing the crystal structure.
+    occ : sequence[float] or float
+        Occupancy multipliers applied in the same manner as in
+        :func:`miller_generator`.
+    lambda_ : float
+        Wavelength in Å used to compute 2θ for optional filtering.
+    energy : float, optional
+        Energy in keV passed to ``xtl.Scatter.setup_scatter``.
+    intensity_threshold : float, optional
+        Intensities below this value are returned as ``0``.
+    two_theta_range : tuple[float, float] or None, optional
+        If given, reflections whose 2θ lies outside the range are assigned
+        zero intensity.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of intensities ordered as ``hkls``.
+
+    Examples
+    --------
+    >>> hkls = [(0, 0, 1), (1, 0, 1)]
+    >>> intensities_for_hkls(hkls, "tests/local_test.cif", [1.0], 1.0)
+    array([...])
+    """
+    import tempfile
+    import CifFile
+    import Dans_Diffraction as dif
+    import numpy as np
+
+    cf = CifFile.ReadCif(cif_file)
+    block_name = list(cf.keys())[0]
+    block = cf[block_name]
+
+    occupancies = block.get("_atom_site_occupancy")
+    if occupancies is None:
+        labels = block.get("_atom_site_label")
+        occupancies = ["1.0"] * len(labels) if isinstance(labels, list) else ["1.0"]
+
+    if isinstance(occ, (list, tuple)):
+        if len(occ) == len(occupancies):
+            for i in range(len(occupancies)):
+                occupancies[i] = str(float(occupancies[i]) * float(occ[i]))
+        else:
+            factor = float(occ[0])
+            for i in range(len(occupancies)):
+                occupancies[i] = str(float(occupancies[i]) * factor)
+    else:
+        factor = float(occ)
+        for i in range(len(occupancies)):
+            occupancies[i] = str(float(occupancies[i]) * factor)
+
+    tmp_dir = get_temp_dir()
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False,
+                                      dir=str(tmp_dir))
+    tmp.close()
+    try:
+        CifFile.WriteCif(cf, tmp.name)
+    except AttributeError:
+        with open(tmp.name, "w") as f:
+            f.write(cf.WriteOut())
+
+    xtl = dif.Crystal(tmp.name)
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=energy)
+    xtl.Scatter.integer_hkl = True
+
+    intensities = []
+    for h, k, l in hkls:
+        d = d_spacing(h, k, l, xtl.Cell.a, xtl.Cell.c)
+        tth = two_theta(d, lambda_)
+        if tth is None:
+            intensities.append(0.0)
+            continue
+        if two_theta_range is not None and not (two_theta_range[0] <= tth <= two_theta_range[1]):
+            intensities.append(0.0)
+            continue
+        intensity_val = xtl.Scatter.intensity([h, k, l])
+        try:
+            intensity_val = float(intensity_val)
+        except Exception:
+            intensity_val = 0.0
+        if intensity_val < intensity_threshold:
+            intensity_val = 0.0
+        intensities.append(intensity_val)
+
+    return np.asarray(intensities, dtype=float)
+
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 
