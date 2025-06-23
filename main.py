@@ -217,9 +217,14 @@ for (h, k), curve in ht_curves.items():
         degeneracy1_list.append(1)
         details1.append([((h, k, float(L_val)), float(inten))])
 
-miller1 = np.asarray(miller1_list, dtype=float)
-intens1 = np.asarray(intens1_list, dtype=np.float64)
-degeneracy1 = np.asarray(degeneracy1_list, dtype=np.int32)
+if miller1_list:
+    miller1 = np.asarray(miller1_list, dtype=float)
+    intens1 = np.asarray(intens1_list, dtype=np.float64)
+    degeneracy1 = np.asarray(degeneracy1_list, dtype=np.int32)
+else:
+    miller1 = np.empty((0, 3), dtype=float)
+    intens1 = np.empty((0,), dtype=np.float64)
+    degeneracy1 = np.empty((0,), dtype=np.int32)
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
