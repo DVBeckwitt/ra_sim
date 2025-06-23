@@ -203,15 +203,23 @@ ht_curves = ht_Iinf_dict(                 # ← new core
 )
 
 # ---- convert the dict → arrays compatible with the downstream code ----
-# stack-fault calculations return intensities for (h,k) rods as curves in L.
-# Downstream code expects discrete (h,k,l) reflections, so represent each rod
-# by a single l=0 entry using its peak intensity.
-miller1 = np.array([(h, k, 0) for h, k in ht_curves.keys()], dtype=np.int32)
-intens1 = np.fromiter((curve["I"].max() for curve in ht_curves.values()),
-                      dtype=np.float64)
-degeneracy1 = np.ones_like(intens1, dtype=np.int32)
-details1 = [[((h, k, 0), inten)]
-            for (h, k), inten in zip(ht_curves.keys(), intens1)]
+# stack-fault calculations return intensities for (h,k) rods sampled along L.
+# Build explicit (h,k,L) reflections for each L step.
+miller1_list = []
+intens1_list = []
+degeneracy1_list = []
+details1 = []
+for (h, k), curve in ht_curves.items():
+    for L_val, inten in zip(curve["L"], curve["I"]):
+        miller1_list.append((h, k, float(L_val)))
+        intens1_list.append(float(inten))
+        degeneracy1_list.append(1)
+        details1.append([((h, k, float(L_val)), float(inten))])
+
+miller1 = np.asarray(miller1_list, dtype=float)
+intens1 = np.asarray(intens1_list, dtype=np.float64)
+degeneracy1 = np.asarray(degeneracy1_list, dtype=np.int32)
+
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
@@ -228,7 +236,7 @@ if has_second_cif:
         miller2, intens2 = inject_fractional_reflections(miller2, intens2, mx)
 
     union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
-    miller = np.array(sorted(union_set), dtype=np.int32)
+    miller = np.array(sorted(union_set), dtype=float)
 
     int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
     int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
@@ -1903,7 +1911,7 @@ def update_occupancies(*args):
             m2, i2 = inject_fractional_reflections(m2, i2, mx)
 
         union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
-        miller = np.array(sorted(union), dtype=np.int32)
+        miller = np.array(sorted(union), dtype=float)
         int1 = {tuple(h): v for h, v in zip(m1, i1)}
         int2 = {tuple(h): v for h, v in zip(m2, i2)}
         intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
