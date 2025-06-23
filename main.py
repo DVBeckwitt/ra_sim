@@ -220,7 +220,6 @@ miller1 = np.asarray(miller1_list, dtype=float)
 intens1 = np.asarray(intens1_list, dtype=np.float64)
 degeneracy1 = np.asarray(degeneracy1_list, dtype=np.int32)
 
-
 has_second_cif = bool(cif_file2)
 if has_second_cif:
     miller2, intens2, degeneracy2, details2 = miller_generator(
