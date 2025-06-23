@@ -60,6 +60,7 @@ from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.debug_utils import debug_print, is_debug_enabled
 
+
 turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
 turbo_rgba = turbo(np.linspace(0, 1, 256))
 turbo_rgba[0] = [1.0, 1.0, 1.0, 1.0]       # make the 0-bin white
@@ -208,6 +209,20 @@ ht_curves = ht_Iinf_dict(                 # ← new core
 
 # ---- convert the dict → arrays compatible with the downstream code ----
 miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
+debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
+debug_print("miller1 sample:", miller1[:5])
+
+if DEBUG_ENABLED:
+    from ra_sim.debug_utils import check_ht_arrays
+    check_ht_arrays(miller1, intens1)
+
+if DEBUG_ENABLED:
+    from ra_sim.debug_utils import check_ht_arrays
+    check_ht_arrays(miller1, intens1)
+    debug_print(
+        "miller1 shape:", miller1.shape,
+        "intens1 shape:", intens1.shape
+    )
 
 if DEBUG_ENABLED:
     from ra_sim.debug_utils import check_ht_arrays
@@ -230,9 +245,9 @@ if has_second_cif:
     )
     if include_rods_flag:
         miller2, intens2 = inject_fractional_reflections(miller2, intens2, mx)
-
     union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
     miller = np.array(sorted(union_set), dtype=float)
+    debug_print("combined miller count:", miller.shape[0])
 
     int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
     int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
@@ -275,6 +290,7 @@ else:
     intensities1_sim = intens1
     miller2_sim = np.empty((0,3), dtype=np.int32)
     intensities2_sim = np.empty((0,), dtype=np.float64)
+    debug_print("single CIF miller count:", miller.shape[0])
 
 # Save simulation data for later use
 SIM_MILLER1 = miller1_sim
@@ -870,6 +886,12 @@ def do_update():
 
         def run_one(miller_arr, intens_arr, a_val, c_val):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
+            if DEBUG_ENABLED:
+                debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
+                if not np.all(np.isfinite(miller_arr)):
+                    debug_print("Non-finite miller indices detected")
+                if not np.all(np.isfinite(intens_arr)):
+                    debug_print("Non-finite intensities detected")
             return process_peaks_parallel(
                 miller_arr, intens_arr, image_size,
                 a_val, c_val, lambda_,
@@ -2038,4 +2060,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print("Unhandled exception during startup:", exc)
+        import traceback
+        traceback.print_exc()

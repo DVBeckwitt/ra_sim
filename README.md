@@ -25,6 +25,7 @@ Linux/macOS use ``export RA_SIM_DEBUG=1``; in Windows ``cmd`` use
 ``set RA_SIM_DEBUG=1`` or in PowerShell ``$env:RA_SIM_DEBUG='1'``.  You can also
 call ``ra_sim.debug_utils.debug_print`` in your own code to emit messages only
 when debug mode is active.  For manual inspection insert the snippet below in
+
 ``main.py`` right after ``ht_dict_to_arrays`` is called:
 
 ```python
