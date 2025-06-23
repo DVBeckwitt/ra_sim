@@ -165,6 +165,7 @@ def ht_dict_to_arrays(ht_curves):
         # Preserve the ordering of L values exactly as generated in ``ht_Iinf_dict``
         # so that callers obtain the same sequence as the previous inline loop
         # implementation.
+
         for L_val, inten in zip(curve["L"], curve["I"]):
             miller_list.append((h, k, float(L_val)))
             intens_list.append(float(inten))
@@ -173,6 +174,7 @@ def ht_dict_to_arrays(ht_curves):
 
     if miller_list:
         miller = np.asarray(miller_list, dtype=np.float64)
+
         intens = np.asarray(intens_list, dtype=np.float64)
         degeneracy = np.asarray(degeneracy_list, dtype=np.int32)
     else:
