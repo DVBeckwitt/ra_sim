@@ -19,10 +19,12 @@ showing the GUI, the parameters passed to the Numba compiled
 values the ``miller1`` and ``intens1`` arrays should contain floating point
 numbers and be contiguous.
 
-Setting ``RA_SIM_DEBUG=1`` will automatically print a summary of these arrays
-via ``ra_sim.debug_utils.check_ht_arrays``.  You can also call
-``ra_sim.debug_utils.debug_print`` in your own code to emit messages only when
-debug mode is active.  For manual inspection insert the snippet below in
+Set the environment variable ``RA_SIM_DEBUG`` to ``1`` (or any truthy value) to
+print a summary of these arrays via ``ra_sim.debug_utils.check_ht_arrays``.  On
+Linux/macOS use ``export RA_SIM_DEBUG=1``; in Windows ``cmd`` use
+``set RA_SIM_DEBUG=1`` or in PowerShell ``$env:RA_SIM_DEBUG='1'``.  You can also
+call ``ra_sim.debug_utils.debug_print`` in your own code to emit messages only
+when debug mode is active.  For manual inspection insert the snippet below in
 
 ``main.py`` right after ``ht_dict_to_arrays`` is called:
 
