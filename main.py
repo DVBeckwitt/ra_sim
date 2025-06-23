@@ -39,6 +39,7 @@ from ra_sim.utils.tools import (
     view_azimuthal_radial,
     detect_blobs,
     inject_fractional_reflections,
+    build_intensity_dataframes,
 )
 from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
@@ -285,26 +286,10 @@ SIM_INTENS1 = intensities1_sim
 SIM_MILLER2 = miller2_sim
 SIM_INTENS2 = intensities2_sim
 
-# Create the Summary DataFrame.
-# Create the Summary DataFrame.
-df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
-df_summary['Intensity'] = intensities
-df_summary['Degeneracy'] = degeneracy
-df_summary['Details'] = [f"See Details Sheet - Group {i+1}" for i in range(len(df_summary))]
-
-# Create the Details DataFrame by flattening the details list.
-details_list = []
-for i, group_details in enumerate(details):
-    for hkl, indiv_intensity in group_details:
-        details_list.append({
-            'Group': i+1,
-            'h': hkl[0],
-            'k': hkl[1],
-            'l': hkl[2],
-            'Individual Intensity': indiv_intensity
-        })
-
-df_details = pd.DataFrame(details_list)
+# Build summary and details dataframes using the helper.
+df_summary, df_details = build_intensity_dataframes(
+    miller, intensities, degeneracy, details
+)
 
 # Save the initial intensities to Excel in the configured downloads directory.
 download_dir = get_dir("downloads")
@@ -1948,24 +1933,10 @@ def update_occupancies(*args):
         SIM_MILLER2 = np.empty((0,3), dtype=np.int32)
         SIM_INTENS2 = np.empty((0,), dtype=np.float64)
 
-    # (Re-)build the summary DataFrame.
-    df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
-    df_summary['Intensity'] = intensities
-    df_summary['Degeneracy'] = degeneracy
-    df_summary['Details'] = [f"See Details Sheet - Group {i+1}" for i in range(len(df_summary))]
-
-    # Re-build the details DataFrame.
-    details_list = []
-    for i, group_details in enumerate(details):
-        for hkl, indiv_intensity in group_details:
-            details_list.append({
-                'Group': i+1,
-                'h': hkl[0],
-                'k': hkl[1],
-                'l': hkl[2],
-                'Individual Intensity': indiv_intensity
-            })
-    df_details = pd.DataFrame(details_list)
+    # (Re-)build the summary and details DataFrames.
+    df_summary, df_details = build_intensity_dataframes(
+        miller, intensities, degeneracy, details
+    )
 
     # Reset the simulation signature so the next update is forced.
     last_simulation_signature = None

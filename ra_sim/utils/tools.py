@@ -7,6 +7,7 @@ from PIL import Image
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pyFAI
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from skimage import color, exposure, feature, io
@@ -644,3 +645,30 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
     plt.ylabel('Azimuthal angle φ (degrees)')
     plt.colorbar(label='Intensity')
     plt.show()
+
+
+def build_intensity_dataframes(miller, intensities, degeneracy, details):
+    """Return summary and details DataFrames for diffraction results."""
+
+    df_summary = pd.DataFrame(miller, columns=["h", "k", "l"])
+    df_summary["Intensity"] = intensities
+    df_summary["Degeneracy"] = degeneracy
+    df_summary["Details"] = [
+        f"See Details Sheet - Group {i+1}" for i in range(len(df_summary))
+    ]
+
+    details_list = []
+    for i, group_details in enumerate(details):
+        for hkl, indiv_intensity in group_details:
+            details_list.append(
+                {
+                    "Group": i + 1,
+                    "h": hkl[0],
+                    "k": hkl[1],
+                    "l": hkl[2],
+                    "Individual Intensity": indiv_intensity,
+                }
+            )
+
+    df_details = pd.DataFrame(details_list)
+    return df_summary, df_details
