@@ -1887,6 +1887,7 @@ def update_occupancies(*args):
     i1_list = []
     d1_list = []
     det1_list = []
+
     for (h, k), curve in ht_curves_local.items():
         for L_val, inten in zip(curve["L"], curve["I"]):
             m1_list.append((h, k, float(L_val)))
@@ -1894,11 +1895,12 @@ def update_occupancies(*args):
             d1_list.append(1)
             det1_list.append([((h, k, float(L_val)), float(inten))])
 
+
     if m1_list:
         m1 = np.asarray(m1_list, dtype=float)
         i1 = np.asarray(i1_list, dtype=np.float64)
         d1 = np.asarray(d1_list, dtype=np.int32)
-        det1 = det1_list
+
     else:
         m1 = np.empty((0, 3), dtype=float)
         i1 = np.empty((0,), dtype=np.float64)
@@ -1908,6 +1910,7 @@ def update_occupancies(*args):
     # Convert arrays → dictionaries for quick lookup
     deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}
     det_dict1 = {tuple(m1[i]): det1[i] for i in range(len(m1))}
+
 
     if has_second_cif:
         m2, i2, d2, det2 = miller_generator(
