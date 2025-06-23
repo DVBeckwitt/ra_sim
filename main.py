@@ -32,7 +32,12 @@ import CifFile
 
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
-from ra_sim.utils.tools import miller_generator, view_azimuthal_radial, detect_blobs
+from ra_sim.utils.tools import (
+    miller_generator,
+    view_azimuthal_radial,
+    detect_blobs,
+    inject_fractional_reflections,
+)
 from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
     save_all_parameters,
@@ -130,10 +135,14 @@ debye_x = 0.0
 debye_y = 0.0
 n2 = IndexofRefraction()
 
-bandwidth = 0.7 / 100  # 0.7%   
+bandwidth = 0.7 / 100  # 0.7%
 
 # NOTE: We define the default occupancy for each site:
 occ = [1.0, 1.0, 1.0]
+
+# When enabled, additional fractional reflections ("rods")
+# are injected between integer L values.
+include_rods_flag = False
 
 # Parameters and file paths.
 cif_file = get_path("cif_file")
@@ -191,6 +200,8 @@ miller1, intens1, degeneracy1, details1 = miller_generator(
     intensity_threshold,
     two_theta_range,
 )
+if include_rods_flag:
+    miller1, intens1 = inject_fractional_reflections(miller1, intens1, mx)
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
@@ -203,6 +214,8 @@ if has_second_cif:
         intensity_threshold,
         two_theta_range,
     )
+    if include_rods_flag:
+        miller2, intens2 = inject_fractional_reflections(miller2, intens2, mx)
 
     union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
     miller = np.array(sorted(union_set), dtype=np.int32)
@@ -1513,6 +1526,20 @@ check_log_azimuth = ttk.Checkbutton(
 )
 check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
 
+# Option to add fractional rods between integer L values
+include_rods_var = tk.BooleanVar(value=include_rods_flag)
+def toggle_rods():
+    global include_rods_flag
+    include_rods_flag = include_rods_var.get()
+    update_occupancies()
+
+check_rods = ttk.Checkbutton(
+    text="Include Rods",
+    variable=include_rods_var,
+    command=toggle_rods
+)
+check_rods.pack(side=tk.TOP, padx=5, pady=2)
+
 def save_1d_snapshot():
     """
     Save only the final 2D simulated image as a .npy file.
@@ -1849,6 +1876,8 @@ def update_occupancies(*args):
         intensity_threshold,
         two_theta_range,
     )
+    if include_rods_var.get():
+        m1, i1 = inject_fractional_reflections(m1, i1, mx)
 
     if has_second_cif:
         m2, i2, d2, det2 = miller_generator(
@@ -1860,6 +1889,8 @@ def update_occupancies(*args):
             intensity_threshold,
             two_theta_range,
         )
+        if include_rods_var.get():
+            m2, i2 = inject_fractional_reflections(m2, i2, mx)
 
         union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
         miller = np.array(sorted(union), dtype=np.int32)
