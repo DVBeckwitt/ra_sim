@@ -1874,17 +1874,34 @@ def update_occupancies(*args):
     new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
 
     global intensities_cif1, intensities_cif2
-    m1, i1, d1, det1 = miller_generator(
-        mx,
-        cif_file,
-        new_occ,
-        lambda_,
-        energy,
-        intensity_threshold,
-        two_theta_range,
+    ht_curves_local = ht_Iinf_dict(
+        cif_path=cif_file,
+        mx=mx,
+        occ=new_occ,
+        p=1.0,
+        L_step=0.02,
+        L_max=5.0,
     )
-    if include_rods_var.get():
-        m1, i1 = inject_fractional_reflections(m1, i1, mx)
+
+    m1_list = []
+    i1_list = []
+    d1_list = []
+    det1 = []
+    for (h, k), curve in ht_curves_local.items():
+        for L_val, inten in zip(curve["L"], curve["I"]):
+            m1_list.append((h, k, float(L_val)))
+            i1_list.append(float(inten))
+            d1_list.append(1)
+            det1.append([((h, k, float(L_val)), float(inten))])
+
+    if m1_list:
+        m1 = np.asarray(m1_list, dtype=float)
+        i1 = np.asarray(i1_list, dtype=np.float64)
+        d1 = np.asarray(d1_list, dtype=np.int32)
+    else:
+        m1 = np.empty((0, 3), dtype=float)
+        i1 = np.empty((0,), dtype=np.float64)
+        d1 = np.empty((0,), dtype=np.int32)
 
     if has_second_cif:
         m2, i2, d2, det2 = miller_generator(
