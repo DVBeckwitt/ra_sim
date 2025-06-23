@@ -15,7 +15,7 @@ DEBUG_ENABLED = is_debug_enabled()
 
 def debug_print(*args, **kwargs) -> None:
     """Print only when ``RA_SIM_DEBUG`` is enabled."""
-    if DEBUG_ENABLED:
+    if is_debug_enabled():
         print(*args, **kwargs)
 
 
