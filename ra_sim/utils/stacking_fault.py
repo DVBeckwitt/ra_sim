@@ -129,3 +129,56 @@ def ht_Iinf_dict(
         return out
     finally:
         _cleanup(tmp_cif)          # remove temp file
+
+
+# ---------------------------------------------------------------------------
+# Helper: convert ``ht_Iinf_dict`` output to ``(miller, intens, degeneracy, details)``
+# ---------------------------------------------------------------------------
+def ht_dict_to_arrays(ht_curves):
+    """Return arrays in the same format as :func:`miller_generator`.
+
+    Parameters
+    ----------
+    ht_curves : dict
+        Mapping ``(h, k)`` to ``{"L": array, "I": array}`` as returned by
+        :func:`ht_Iinf_dict`.
+
+    Returns
+    -------
+    miller : ndarray
+        ``(N, 3)`` array of Miller indices including fractional ``L`` values.
+    intensities : ndarray
+        ``(N,)`` array of intensities corresponding to ``miller``.
+    degeneracy : ndarray
+        ``(N,)`` array with all ones, matching :func:`miller_generator` output.
+    details : list
+        List of length ``N`` with ``[((h, k, L), intensity)]`` records.
+    """
+    import numpy as np
+
+    miller_list = []
+    intens_list = []
+    degeneracy_list = []
+    details = []
+
+    for (h, k), curve in ht_curves.items():
+        # Preserve the ordering of L values exactly as generated in ``ht_Iinf_dict``
+        # so that callers obtain the same sequence as the previous inline loop
+        # implementation.
+        for L_val, inten in zip(curve["L"], curve["I"]):
+            miller_list.append((h, k, float(L_val)))
+            intens_list.append(float(inten))
+            degeneracy_list.append(1)
+            details.append([((h, k, float(L_val)), float(inten))])
+
+    if miller_list:
+        miller = np.asarray(miller_list, dtype=np.float64)
+        intens = np.asarray(intens_list, dtype=np.float64)
+        degeneracy = np.asarray(degeneracy_list, dtype=np.int32)
+    else:
+        miller = np.empty((0, 3), dtype=float)
+        intens = np.empty((0,), dtype=np.float64)
+        degeneracy = np.empty((0,), dtype=np.int32)
+
+    return miller, intens, degeneracy, details
+

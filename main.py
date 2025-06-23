@@ -30,7 +30,7 @@ import pandas as pd
 import Dans_Diffraction as dif
 import CifFile
 
-from ra_sim.utils.stacking_fault import ht_Iinf_dict
+from ra_sim.utils.stacking_fault import ht_Iinf_dict, ht_dict_to_arrays
 
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
@@ -204,27 +204,7 @@ ht_curves = ht_Iinf_dict(                 # ← new core
 )
 
 # ---- convert the dict → arrays compatible with the downstream code ----
-# stack-fault calculations return intensities for (h,k) rods sampled along L.
-# Build explicit (h,k,L) reflections for each L step.
-miller1_list = []
-intens1_list = []
-degeneracy1_list = []
-details1 = []
-for (h, k), curve in ht_curves.items():
-    for L_val, inten in zip(curve["L"], curve["I"]):
-        miller1_list.append((h, k, float(L_val)))
-        intens1_list.append(float(inten))
-        degeneracy1_list.append(1)
-        details1.append([((h, k, float(L_val)), float(inten))])
-
-if miller1_list:
-    miller1 = np.asarray(miller1_list, dtype=float)
-    intens1 = np.asarray(intens1_list, dtype=np.float64)
-    degeneracy1 = np.asarray(degeneracy1_list, dtype=np.int32)
-else:
-    miller1 = np.empty((0, 3), dtype=float)
-    intens1 = np.empty((0,), dtype=np.float64)
-    degeneracy1 = np.empty((0,), dtype=np.int32)
+miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
@@ -1883,29 +1863,7 @@ def update_occupancies(*args):
         L_max=5.0,
     )
 
-    m1_list = []
-    i1_list = []
-    d1_list = []
-    det1_list = []
-
-    for (h, k), curve in ht_curves_local.items():
-        for L_val, inten in zip(curve["L"], curve["I"]):
-            m1_list.append((h, k, float(L_val)))
-            i1_list.append(float(inten))
-            d1_list.append(1)
-            det1_list.append([((h, k, float(L_val)), float(inten))])
-
-
-    if m1_list:
-        m1 = np.asarray(m1_list, dtype=float)
-        i1 = np.asarray(i1_list, dtype=np.float64)
-        d1 = np.asarray(d1_list, dtype=np.int32)
-
-    else:
-        m1 = np.empty((0, 3), dtype=float)
-        i1 = np.empty((0,), dtype=np.float64)
-        d1 = np.empty((0,), dtype=np.int32)
-        det1 = []
+    m1, i1, d1, det1 = ht_dict_to_arrays(ht_curves_local)
 
     # Convert arrays → dictionaries for quick lookup
     deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}
