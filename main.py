@@ -197,17 +197,21 @@ ht_curves = ht_Iinf_dict(                 # ← new core
     cif_path=cif_file,
     mx=mx,                                # generates all (h,k) for |h|,|k|<mx
     occ=occ,                              # same occupancy-scaling rules
-    p=1.0,                                  # disorder probability
+    p=1.0,                                # disorder probability
     L_step=0.02,
     L_max=5.0,
 )
 
 # ---- convert the dict → arrays compatible with the downstream code ----
-miller1     = np.asarray(list(ht_curves.keys()), dtype=np.int32)  # (N,2)
-intens1     = np.fromiter((c["I"].max() for c in ht_curves.values()),
-                          dtype=np.float64)                       # peak I
-degeneracy1 = np.ones_like(intens1, dtype=np.int32)               # each (h,k) unique
-details1    = [ [((h,k), c["I"])] for (h,k), c in ht_curves.items() ]
+# stack-fault calculations return intensities for (h,k) rods as curves in L.
+# Downstream code expects discrete (h,k,l) reflections, so represent each rod
+# by a single l=0 entry using its peak intensity.
+miller1 = np.array([(h, k, 0) for h, k in ht_curves.keys()], dtype=np.int32)
+intens1 = np.fromiter((curve["I"].max() for curve in ht_curves.values()),
+                      dtype=np.float64)
+degeneracy1 = np.ones_like(intens1, dtype=np.int32)
+details1 = [[((h, k, 0), inten)]
+            for (h, k), inten in zip(ht_curves.keys(), intens1)]
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
