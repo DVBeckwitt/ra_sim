@@ -72,7 +72,11 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 matplotlib.use('TkAgg')
 # Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
 DEBUG_ENABLED = is_debug_enabled()
-debug_print("Debug mode active" if DEBUG_ENABLED else "Debug mode off")
+if DEBUG_ENABLED:
+    print("Debug mode active (RA_SIM_DEBUG=1)")
+else:
+    print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
+
 
 ###############################################################################
 #                          DATA & PARAMETER SETUP
@@ -215,6 +219,14 @@ debug_print("miller1 sample:", miller1[:5])
 if DEBUG_ENABLED:
     from ra_sim.debug_utils import check_ht_arrays
     check_ht_arrays(miller1, intens1)
+
+if DEBUG_ENABLED:
+    from ra_sim.debug_utils import check_ht_arrays
+    check_ht_arrays(miller1, intens1)
+    debug_print(
+        "miller1 shape:", miller1.shape,
+        "intens1 shape:", intens1.shape
+    )
 
 if DEBUG_ENABLED:
     from ra_sim.debug_utils import check_ht_arrays
