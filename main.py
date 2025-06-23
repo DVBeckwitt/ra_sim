@@ -58,6 +58,7 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
+from ra_sim.debug_utils import debug_print, is_debug_enabled
 
 turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
 turbo_rgba = turbo(np.linspace(0, 1, 256))
@@ -68,7 +69,12 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
-DEBUG_ENABLED = False
+# Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
+DEBUG_ENABLED = is_debug_enabled()
+if DEBUG_ENABLED:
+    print("Debug mode active (RA_SIM_DEBUG=1)")
+else:
+    print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
 
 ###############################################################################
 #                          DATA & PARAMETER SETUP
@@ -205,6 +211,14 @@ ht_curves = ht_Iinf_dict(                 # ← new core
 
 # ---- convert the dict → arrays compatible with the downstream code ----
 miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
+
+if DEBUG_ENABLED:
+    from ra_sim.debug_utils import check_ht_arrays
+    check_ht_arrays(miller1, intens1)
+    debug_print(
+        "miller1 shape:", miller1.shape,
+        "intens1 shape:", intens1.shape
+    )
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
