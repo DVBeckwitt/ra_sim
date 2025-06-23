@@ -219,30 +219,12 @@ debug_print("miller1 sample:", miller1[:5])
 if DEBUG_ENABLED:
     from ra_sim.debug_utils import check_ht_arrays
     check_ht_arrays(miller1, intens1)
-
-if DEBUG_ENABLED:
-    from ra_sim.debug_utils import check_ht_arrays
-    check_ht_arrays(miller1, intens1)
-    debug_print(
-        "miller1 shape:", miller1.shape,
-        "intens1 shape:", intens1.shape
-    )
-
-if DEBUG_ENABLED:
-    from ra_sim.debug_utils import check_ht_arrays
-    check_ht_arrays(miller1, intens1)
-    debug_print(
-        "miller1 shape:", miller1.shape,
-        "intens1 shape:", intens1.shape
-    )
-
-if DEBUG_ENABLED:
-    from ra_sim.debug_utils import check_ht_arrays
-    check_ht_arrays(miller1, intens1)
-    debug_print(
-        "miller1 shape:", miller1.shape,
-        "intens1 shape:", intens1.shape
-    )
+    # Manual inspection snippet recommended in the README
+    debug_print('miller1 dtype:', miller1.dtype, 'shape:', miller1.shape)
+    debug_print('L range:', miller1[:, 2].min(), miller1[:, 2].max())
+    debug_print('intens1 dtype:', intens1.dtype, 'min:', intens1.min(), 'max:', intens1.max())
+    debug_print('miller1 contiguous:', miller1.flags['C_CONTIGUOUS'])
+    debug_print('intens1 contiguous:', intens1.flags['C_CONTIGUOUS'])
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
