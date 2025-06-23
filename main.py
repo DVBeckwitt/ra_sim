@@ -30,6 +30,8 @@ import pandas as pd
 import Dans_Diffraction as dif
 import CifFile
 
+from ra_sim.utils.stacking_fault import ht_Iinf_dict
+
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
 from ra_sim.utils.tools import (
@@ -189,19 +191,23 @@ intensity_threshold = 1.0
 two_theta_range = (0, 70)
 
 # ---------------------------------------------------------------------------
-# Load reflections from the two CIF files and prepare for weighted combining.
+# Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-miller1, intens1, degeneracy1, details1 = miller_generator(
-    mx,
-    cif_file,
-    occ,
-    lambda_,
-    energy,
-    intensity_threshold,
-    two_theta_range,
+ht_curves = ht_Iinf_dict(                 # ← new core
+    cif_path=cif_file,
+    mx=mx,                                # generates all (h,k) for |h|,|k|<mx
+    occ=occ,                              # same occupancy-scaling rules
+    p=1.0,                                  # disorder probability
+    L_step=0.02,
+    L_max=5.0,
 )
-if include_rods_flag:
-    miller1, intens1 = inject_fractional_reflections(miller1, intens1, mx)
+
+# ---- convert the dict → arrays compatible with the downstream code ----
+miller1     = np.asarray(list(ht_curves.keys()), dtype=np.int32)  # (N,2)
+intens1     = np.fromiter((c["I"].max() for c in ht_curves.values()),
+                          dtype=np.float64)                       # peak I
+degeneracy1 = np.ones_like(intens1, dtype=np.int32)               # each (h,k) unique
+details1    = [ [((h,k), c["I"])] for (h,k), c in ht_curves.items() ]
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:

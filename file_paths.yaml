@@ -8,8 +8,8 @@ osc_files:
   - "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/Bi2Se3_15d_5m.osc"
   - "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL_4_12_24/Varying/Images/Bi2Se3_30d_2m.osc"
 geometry_poni: "C:/Users/Kenpo/OneDrive - University of Missouri/David and Paul/PbI2/Catalog/3.18.24/geometry.poni"
-cif_file: "C:/Users/Kenpo/OneDrive/Research/Misc. Calculations/PbI2/Polytypes SF/PbI2_2H.cif"
-cif_file2: "C:/Users/Kenpo/OneDrive/Research/Misc. Calculations/PbI2/Polytypes SF/PbI2_6H.cif"
+cif_file: "C:/Users/Kenpo/OneDrive/Research/Misc. Calculations/PbI2/Polytypes SF/PbI2_6H.cif"
+#cif_file2: "C:/Users/Kenpo/OneDrive/Research/Misc. Calculations/PbI2/Polytypes SF/PbI2_6H.cif"
 measured_peaks: "C:/Users/Kenpo/OneDrive/Documents/GitHub/blobs.npy"
 parameters_file: "C:/Users/Kenpo/parameters.npy"
 
