@@ -410,6 +410,58 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     return miller_arr, intensities_arr, degeneracy_arr, normalized_details
 
 
+def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
+    """Add fractional Miller indices with constant intensity.
+
+    Parameters
+    ----------
+    miller : ndarray
+        Existing ``(N,3)`` array of integer Miller indices.
+    intensities : ndarray
+        Intensities corresponding to ``miller``.
+    mx : int
+        Maximum index bound used for the original Miller generation.
+    step : float, optional
+        Spacing for fractional indices along ``l``. The default ``0.5``
+        inserts half steps between integer peaks.
+
+    value : float, optional
+        Intensity assigned to each injected reflection. Default ``0.1``.
+
+    Returns
+    -------
+    miller_new : ndarray
+        Array containing both the original and fractional Miller indices.
+    intensities_new : ndarray
+        Intensities for ``miller_new``.
+    """
+
+    offsets = np.array([-step, step])
+    candidates = []
+    for h, k, l in miller:
+        # Only offset the L value while keeping H and K fixed
+        for dl in offsets:
+            nl = l + dl
+            if (
+                -mx + 1 <= h < mx
+                and -mx + 1 <= k < mx
+                and 1 <= nl < mx
+                and not abs(nl - round(nl)) < 1e-8
+            ):
+                candidates.append((h, k, nl))
+
+
+    if not candidates:
+        return miller.astype(float), intensities
+
+    uniq = np.unique(np.array(candidates, dtype=float), axis=0)
+    frac_intens = np.full(len(uniq), value, dtype=float)
+    miller_new = np.vstack((miller.astype(float), uniq))
+
+    intensities_new = np.concatenate((intensities, frac_intens))
+    return miller_new, intensities_new
+
+
 
 def intensities_for_hkls(hkls, cif_file, occ, lambda_, energy=8.047,
                          intensity_threshold=0, two_theta_range=None):
