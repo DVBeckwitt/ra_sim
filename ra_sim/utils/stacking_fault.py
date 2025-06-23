@@ -1,4 +1,5 @@
 # ────────────────────────── global constants (unchanged) ──────────────────────────
+import numpy as np
 A_HEX   = 4.557
 P_CLAMP = 1e-6
 N_P, A_C = 3, 17.98e-10
@@ -18,7 +19,7 @@ def _temp_cif_with_occ(cif_in: str, occ):
     """
     import tempfile, os, CifFile
     cf          = CifFile.ReadCif(cif_in)
-    block_name  = next(iter(cf))
+    block_name  = list(cf.keys())[0]
     block       = cf[block_name]
 
     occ_field = block.get('_atom_site_occupancy')
