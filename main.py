@@ -68,14 +68,8 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
-# Enable verbose troubleshooting logs when the environment variable
-# ``RA_SIM_DEBUG`` is set to ``1``.  This helps diagnose early crashes
-# before the GUI window appears.
-DEBUG_ENABLED = os.getenv("RA_SIM_DEBUG", "0") == "1"
-
-def debug_print(*args, **kwargs):
-    if DEBUG_ENABLED:
-        print(*args, **kwargs)
+# Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
+DEBUG_ENABLED = os.environ.get("RA_SIM_DEBUG") == "1"
 
 ###############################################################################
 #                          DATA & PARAMETER SETUP
@@ -214,6 +208,10 @@ ht_curves = ht_Iinf_dict(                 # ← new core
 miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
+
+if DEBUG_ENABLED:
+    from ra_sim.debug_utils import check_ht_arrays
+    check_ht_arrays(miller1, intens1)
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
