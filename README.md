@@ -23,6 +23,7 @@ Setting ``RA_SIM_DEBUG=1`` will automatically print a summary of these arrays
 via ``ra_sim.debug_utils.check_ht_arrays``.  You can also call
 ``ra_sim.debug_utils.debug_print`` in your own code to emit messages only when
 debug mode is active.  For manual inspection insert the snippet below in
+
 ``main.py`` right after ``ht_dict_to_arrays`` is called:
 
 ```python
