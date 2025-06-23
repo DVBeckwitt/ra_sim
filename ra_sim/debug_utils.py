@@ -33,6 +33,7 @@ def check_ht_arrays(miller1: np.ndarray, intens1: np.ndarray) -> None:
             debug_print(f"L values contain {frac_count} fractional entries")
     else:
         debug_print("L range: array empty")
+
     if intens1.size:
         i_min = float(intens1.min())
         i_max = float(intens1.max())
