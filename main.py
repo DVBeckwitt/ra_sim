@@ -1874,17 +1874,40 @@ def update_occupancies(*args):
     new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
 
     global intensities_cif1, intensities_cif2
-    m1, i1, d1, det1 = miller_generator(
-        mx,
-        cif_file,
-        new_occ,
-        lambda_,
-        energy,
-        intensity_threshold,
-        two_theta_range,
+    ht_curves_local = ht_Iinf_dict(
+        cif_path=cif_file,
+        mx=mx,
+        occ=new_occ,
+        p=1.0,
+        L_step=0.02,
+        L_max=5.0,
     )
-    if include_rods_var.get():
-        m1, i1 = inject_fractional_reflections(m1, i1, mx)
+
+    m1_list = []
+    i1_list = []
+    d1_list = []
+    det1_list = []
+    for (h, k), curve in ht_curves_local.items():
+        for L_val, inten in zip(curve["L"], curve["I"]):
+            m1_list.append((h, k, float(L_val)))
+            i1_list.append(float(inten))
+            d1_list.append(1)
+            det1_list.append([((h, k, float(L_val)), float(inten))])
+
+    if m1_list:
+        m1 = np.asarray(m1_list, dtype=float)
+        i1 = np.asarray(i1_list, dtype=np.float64)
+        d1 = np.asarray(d1_list, dtype=np.int32)
+        det1 = det1_list
+    else:
+        m1 = np.empty((0, 3), dtype=float)
+        i1 = np.empty((0,), dtype=np.float64)
+        d1 = np.empty((0,), dtype=np.int32)
+        det1 = []
+
+    # Convert arrays → dictionaries for quick lookup
+    deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}
+    det_dict1 = {tuple(m1[i]): det1[i] for i in range(len(m1))}
 
     if has_second_cif:
         m2, i2, d2, det2 = miller_generator(
@@ -1898,6 +1921,9 @@ def update_occupancies(*args):
         )
         if include_rods_var.get():
             m2, i2 = inject_fractional_reflections(m2, i2, mx)
+
+        deg_dict2 = {tuple(m2[i]): int(d2[i]) for i in range(len(m2))}
+        det_dict2 = {tuple(m2[i]): det2[i] for i in range(len(m2))}
 
         union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
         miller = np.array(sorted(union), dtype=float)
@@ -1918,11 +1944,11 @@ def update_occupancies(*args):
         SIM_INTENS2 = i2
 
         degeneracy = np.array(
-            [d1.get(tuple(h), 0) + d2.get(tuple(h), 0) for h in miller],
+            [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
             dtype=np.int32,
         )
         details = [
-            det1.get(tuple(h), []) + det2.get(tuple(h), [])
+            det_dict1.get(tuple(h), []) + det_dict2.get(tuple(h), [])
             for h in miller
         ]
     else:
