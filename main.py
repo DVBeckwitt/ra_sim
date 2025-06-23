@@ -58,6 +58,7 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
+from ra_sim.debug_utils import debug_print
 
 turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
 turbo_rgba = turbo(np.linspace(0, 1, 256))
@@ -212,6 +213,14 @@ debug_print("miller1 sample:", miller1[:5])
 if DEBUG_ENABLED:
     from ra_sim.debug_utils import check_ht_arrays
     check_ht_arrays(miller1, intens1)
+
+if DEBUG_ENABLED:
+    from ra_sim.debug_utils import check_ht_arrays
+    check_ht_arrays(miller1, intens1)
+    debug_print(
+        "miller1 shape:", miller1.shape,
+        "intens1 shape:", intens1.shape
+    )
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
