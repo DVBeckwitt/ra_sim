@@ -899,7 +899,7 @@ def calculate_phi(
 # 6) PROCESS_PEAKS_PARALLEL
 # =============================================================================
 
-@njit(parallel=True, fastmath=True)
+@njit(fastmath=True)
 def process_peaks_parallel(
     miller, intensities, image_size,
     av, cv, lambda_, image,
@@ -919,9 +919,11 @@ def process_peaks_parallel(
     High-level loop over multiple reflections from 'miller', each with an intensity
     from 'intensities'. For each reflection, call 'calculate_phi(...).'
 
-    parallel=True: We do a prange over each reflection. Each reflection is processed
-    independently, building the mosaic, computing geometry, and depositing
-    intensities in the final 'image'.
+    Each reflection is processed independently, building the mosaic, computing
+    geometry, and depositing intensities in the final ``image``. Historically
+    this function used ``prange`` with ``parallel=True`` for multi-threaded
+    execution.  The implementation now runs sequentially but retains the
+    ``prange`` loop for compatibility.
 
     Physically:
       - This simulates multiple Bragg peaks in a single run,
@@ -1011,7 +1013,7 @@ def process_peaks_parallel(
     miss_tables = List.empty_list(types.float64[:, ::1])
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
 
-    # prange over each reflection
+    # Loop over each reflection (using ``prange`` for compatibility)
     for i_pk in prange(num_peaks):
         # Ensure HKL values remain floating point to allow fractional indices
         H = float(miller[i_pk, 0])
