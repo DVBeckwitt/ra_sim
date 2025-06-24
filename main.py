@@ -206,7 +206,7 @@ ht_curves = ht_Iinf_dict(                 # ← new core
     cif_path=cif_file,
     mx=mx,                                # generates all (h,k) for |h|,|k|<mx
     occ=occ,                              # same occupancy-scaling rules
-    p=1.0,                                # disorder probability
+    p=defaults['p'],                      # disorder probability
     L_step=0.02,
     two_theta_max=two_theta_range[1],
     lambda_=lambda_,
@@ -385,6 +385,7 @@ defaults = {
     'a': av,
     'c': cv,
     'vmax': 1000,
+    'p': 1.0,
     'center_x': center_default[0],
     'center_y': center_default[1]
 }
@@ -1886,7 +1887,7 @@ def update_occupancies(*args):
         cif_path=cif_file,
         mx=mx,
         occ=new_occ,
-        p=1.0,
+        p=p_var.get(),
         L_step=0.02,
         two_theta_max=two_theta_range[1],
         lambda_=lambda_,
@@ -1962,6 +1963,11 @@ def update_occupancies(*args):
     # Reset the simulation signature so the next update is forced.
     last_simulation_signature = None
     schedule_update()
+
+# Slider for stacking disorder probability p
+p_var, _ = create_slider(
+    'Disorder p', 0.0, 1.0, defaults['p'], 0.01, right_col, update_occupancies
+)
 
 # Existing occupancy slider for site 1.
 ttk.Label(right_col, text="Occupancy Site 1").pack(padx=5, pady=2)
