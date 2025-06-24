@@ -1,6 +1,7 @@
 # ────────────────────────── global constants (unchanged) ──────────────────────────
 import numpy as np
 import os
+from numba import njit
 A_HEX   = 4.557
 P_CLAMP = 1e-6
 N_P, A_C = 3, 17.98e-10
@@ -72,18 +73,16 @@ def _cell_c_from_cif(cif_path: str) -> float:
     raise ValueError(f"_cell_length_c not found in {cif_path}")
 
 def _f0(symbol: str, q):               # Z-approx
-    import numpy as np
     return np.full_like(q, _FALLBACK_Z.get(symbol, 0.), dtype=float)
 
+@njit
 def _Qmag(h, k, L, c_2h):
-    import numpy as np
     inv_d2 = (4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L**2)/c_2h**2
     return 2*np.pi*np.sqrt(inv_d2)
 
+@njit
 def _F2(h, k, L, c_2h):
     """Return |F|^2 using vectorised operations."""
-    import numpy as np
-
     Q = _Qmag(h, k, L, c_2h)
     phase_arg = (h * _SITES_POS[:, 0, None] +
                  k * _SITES_POS[:, 1, None] +
@@ -93,10 +92,9 @@ def _F2(h, k, L, c_2h):
     F = np.sum(cf * phases, axis=0)
     return np.abs(F) ** 2
 
+@njit
 def _abc(p, h, k):
     """Compute amplitude factor ``f`` and phase ``ψ`` without complex math."""
-    import numpy as np
-
     δ = _TWO_PI * ((2 * h + k) / 3)
     real = (1 - p) + p * np.cos(δ)
     imag = p * np.sin(δ)
@@ -105,8 +103,8 @@ def _abc(p, h, k):
     ψ = np.arctan2(imag, real)
     return f, ψ, δ
 
+@njit
 def _I_inf(L, p, h, k, F2):
-    import numpy as np
     f, ψ, δ = _abc(p, h, k)
     φ = δ + _TWO_PI * L
     return AREA * F2 * (1-f**2) / (1 + f**2 - 2*f*np.cos(φ-ψ))
