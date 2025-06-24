@@ -921,15 +921,26 @@ def do_update():
         peak_intensities.clear()
 
         def run_one(miller_arr, intens_arr, a_val, c_val):
+            # Ensure arrays passed to the JITed routine are contiguous ``float64``.
+            # Some helper routines return ``int32`` arrays which trigger a Numba
+            # ``array_to_array`` assertion when implicitly cast.  Explicitly
+            # convert them to a safe format here.
+            miller_arr = np.ascontiguousarray(miller_arr, dtype=np.float64)
+            intens_arr = np.ascontiguousarray(intens_arr, dtype=np.float64)
+
             buf = np.zeros((image_size, image_size), dtype=np.float64)
             if DEBUG_ENABLED:
-                debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
+                debug_print(
+                    "process_peaks_parallel with", miller_arr.shape[0], "reflections"
+                )
                 if not np.all(np.isfinite(miller_arr)):
                     debug_print("Non-finite miller indices detected")
                 if not np.all(np.isfinite(intens_arr)):
                     debug_print("Non-finite intensities detected")
             return process_peaks_parallel(
-                miller_arr, intens_arr, image_size,
+                miller_arr,
+                intens_arr,
+                image_size,
                 a_val, c_val, lambda_,
                 buf, corto_det_up,
                 gamma_updated, Gamma_updated, chi_updated, psi,
