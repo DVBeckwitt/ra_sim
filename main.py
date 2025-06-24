@@ -79,6 +79,11 @@ if DEBUG_ENABLED:
 else:
     print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
 
+# When True the initial intensities are written to an Excel file once
+# initialization completes.  This can be toggled via the ``write_excel``
+# parameter to :func:`main`.
+WRITE_EXCEL = True
+
 
 ###############################################################################
 #                          DATA & PARAMETER SETUP
@@ -1957,63 +1962,75 @@ def _finish_ht_init():
     update_mosaic_cache()
     update_occupancies()
 
-    download_dir = get_dir("downloads")
-    excel_path = download_dir / "miller_intensities.xlsx"
+    if WRITE_EXCEL:
+        download_dir = get_dir("downloads")
+        excel_path = download_dir / "miller_intensities.xlsx"
 
-    with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-        df_summary.to_excel(writer, sheet_name='Summary', index=False)
-        df_details.to_excel(writer, sheet_name='Details', index=False)
+        with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+            df_summary.to_excel(writer, sheet_name='Summary', index=False)
+            df_details.to_excel(writer, sheet_name='Details', index=False)
 
-        workbook = writer.book
-        summary_sheet = writer.sheets['Summary']
-        details_sheet = writer.sheets['Details']
+            workbook = writer.book
+            summary_sheet = writer.sheets['Summary']
+            details_sheet = writer.sheets['Details']
 
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'vcenter',
-            'align': 'center',
-            'fg_color': '#4F81BD',
-            'font_color': '#FFFFFF',
-            'border': 1
-        })
-        for col_num, col_name in enumerate(df_summary.columns):
-            summary_sheet.write(0, col_num, col_name, header_format)
-            summary_sheet.set_column(col_num, col_num, 18)
+            header_format = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'vcenter',
+                'align': 'center',
+                'fg_color': '#4F81BD',
+                'font_color': '#FFFFFF',
+                'border': 1
+            })
+            for col_num, col_name in enumerate(df_summary.columns):
+                summary_sheet.write(0, col_num, col_name, header_format)
+                summary_sheet.set_column(col_num, col_num, 18)
 
-        header_format_details = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'vcenter',
-            'align': 'center',
-            'fg_color': '#4BACC6',
-            'font_color': '#FFFFFF',
-            'border': 1
-        })
-        for col_num, col_name in enumerate(df_details.columns):
-            details_sheet.write(0, col_num, col_name, header_format_details)
-            details_sheet.set_column(col_num, col_num, 18)
+            header_format_details = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'vcenter',
+                'align': 'center',
+                'fg_color': '#4BACC6',
+                'font_color': '#FFFFFF',
+                'border': 1
+            })
+            for col_num, col_name in enumerate(df_details.columns):
+                details_sheet.write(0, col_num, col_name, header_format_details)
+                details_sheet.set_column(col_num, col_num, 18)
 
-        last_row = len(df_summary) + 1
-        summary_sheet.conditional_format(f'D2:D{last_row}', {
-            'type': '3_color_scale',
-            'min_color': '#FFFFFF',
-            'mid_color': '#FFEB84',
-            'max_color': '#FF0000'
-        })
+            last_row = len(df_summary) + 1
+            summary_sheet.conditional_format(f'D2:D{last_row}', {
+                'type': '3_color_scale',
+                'min_color': '#FFFFFF',
+                'mid_color': '#FFEB84',
+                'max_color': '#FF0000'
+            })
 
-        zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
-        for row in range(1, len(df_details) + 1):
-            if row % 2 == 1:
-                details_sheet.set_row(row, cell_format=zebra_format)
+            zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
+            for row in range(1, len(df_details) + 1):
+                if row % 2 == 1:
+                    details_sheet.set_row(row, cell_format=zebra_format)
 
-    print(f"Excel file saved at {excel_path}")
+        print(f"Excel file saved at {excel_path}")
+
     init_progress.stop()
     init_progress.pack_forget()
     progress_label.config(text="Initialization complete")
 
-def main():
-    """Entry point for running the GUI application."""
+def main(write_excel: bool = True):
+    """Entry point for running the GUI application.
+
+    Parameters
+    ----------
+    write_excel : bool, optional
+        If ``True`` the initial intensities are written to an Excel file
+        when initialization completes.
+    """
+
+    global WRITE_EXCEL
+    WRITE_EXCEL = write_excel
 
 
     params_file_path = get_path("parameters_file")
