@@ -4,6 +4,9 @@
 
 import math
 import os
+
+# Enable debug messages automatically. Set RA_SIM_DEBUG=0 to disable.
+os.environ.setdefault("RA_SIM_DEBUG", "1")
 import re
 import argparse
 import tempfile
@@ -75,6 +78,8 @@ matplotlib.use('TkAgg')
 DEBUG_ENABLED = is_debug_enabled()
 if DEBUG_ENABLED:
     print("Debug mode active (RA_SIM_DEBUG=1)")
+    from ra_sim.debug_utils import enable_numba_logging
+    enable_numba_logging()
 else:
     print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
 

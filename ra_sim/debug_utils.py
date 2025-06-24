@@ -1,6 +1,7 @@
 """Helper utilities for debugging RA_SIM execution."""
 
 import os
+import logging
 import numpy as np
 
 
@@ -17,6 +18,32 @@ def debug_print(*args, **kwargs) -> None:
     """Print only when ``RA_SIM_DEBUG`` is enabled."""
     if is_debug_enabled():
         print(*args, **kwargs)
+
+
+def enable_numba_logging(default_level: str = "DEBUG") -> None:
+    """Configure the ``numba`` logger when debug mode is active.
+
+    If ``RA_SIM_DEBUG`` is enabled this sets up the ``numba`` logger to emit
+    messages to ``stdout`` using the log level from ``NUMBA_LOG_LEVEL`` if
+    defined or ``default_level`` otherwise.
+    """
+    if not is_debug_enabled():
+        return
+
+    level_name = os.environ.get("NUMBA_LOG_LEVEL", default_level).upper()
+    os.environ["NUMBA_LOG_LEVEL"] = level_name
+
+    try:
+        level = getattr(logging, level_name)
+    except AttributeError:
+        level = logging.DEBUG
+
+    logger = logging.getLogger("numba")
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s numba: %(message)s"))
+        logger.addHandler(handler)
+    logger.setLevel(level)
 
 
 def check_ht_arrays(miller1: np.ndarray, intens1: np.ndarray) -> None:
