@@ -13,6 +13,8 @@ python main.py
 
 By default an Excel file named ``miller_intensities.xlsx`` is written to the
 configured downloads directory.  Pass ``--no-excel`` to disable this step.
+You can also restrict the computation to a single ``(h,k)`` rod by providing
+``--hk H K``.
 
 
 ## Troubleshooting

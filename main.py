@@ -135,6 +135,10 @@ center_default = [
 
 mx = 19
 
+# Optional override to compute intensities for a single (h,k) pair.
+# When ``selected_hk`` is not ``None`` ``mx`` is ignored.
+selected_hk = None
+
 fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
 divergence_sigma = math.radians(0.05 * fwhm2sigma)
 
@@ -235,7 +239,8 @@ defaults = {
 # ---------------------------------------------------------------------------
 ht_curves = ht_Iinf_dict(                 # ← new core
     cif_path=cif_file,
-    mx=mx,                                # generates all (h,k) for |h|,|k|<mx
+    hk_list=[selected_hk] if selected_hk else None,
+    mx=None if selected_hk else mx,       # generates all (h,k) for |h|,|k|<mx
     occ=occ,                              # same occupancy-scaling rules
     p=defaults['p'],                      # disorder probability
     L_step=0.02,
@@ -1915,7 +1920,8 @@ def update_occupancies(*args):
     ):
         ht_curves_local = ht_Iinf_dict(
             cif_path=cif_file,
-            mx=mx,
+            hk_list=[selected_hk] if selected_hk else None,
+            mx=None if selected_hk else mx,
             occ=new_occ,
             p=new_p,
             L_step=0.02,
@@ -2112,7 +2118,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Do not write the initial intensity Excel file",
     )
+    parser.add_argument(
+        "--hk",
+        metavar=("H", "K"),
+        type=int,
+        nargs=2,
+        help="Specify a single (h,k) pair to compute intensities only for that rod",
+    )
     args = parser.parse_args()
+
+    if args.hk is not None:
+        selected_hk = tuple(args.hk)
 
     try:
         main(write_excel=not args.no_excel)
