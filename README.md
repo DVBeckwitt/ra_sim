@@ -11,20 +11,9 @@ packages listed in ``setup.py``) launch the GUI with:
 python main.py
 ```
 
-**Python compatibility**: the simulation relies on Numba-compiled routines.
-Ensure your Numba build matches your Python interpreter.  If the program exits
-after printing the initial diagnostics, your Numba version might be
-incompatible.  Installing a recent Numba release for your Python version (or
-temporarily running Python 3.11 with an older Numba) usually resolves the
-issue.
 
 ## Troubleshooting
 
-If the program prints ``Loaded saved profile ...`` and then exits without
-showing the GUI, the parameters passed to the Numba compiled
-``process_peaks_parallel`` routine may be malformed.  When using fractional ``L``
-values the ``miller1`` and ``intens1`` arrays should contain floating point
-numbers and be contiguous.
 
 Set the environment variable ``RA_SIM_DEBUG`` to ``1`` (or any truthy value) to
 print a summary of these arrays via ``ra_sim.debug_utils.check_ht_arrays``.  On
