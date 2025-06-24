@@ -208,7 +208,8 @@ ht_curves = ht_Iinf_dict(                 # ← new core
     occ=occ,                              # same occupancy-scaling rules
     p=1.0,                                # disorder probability
     L_step=0.02,
-    L_max=5.0,
+    two_theta_max=two_theta_range[1],
+    lambda_=lambda_,
 )
 
 # ---- convert the dict → arrays compatible with the downstream code ----
@@ -1887,7 +1888,8 @@ def update_occupancies(*args):
         occ=new_occ,
         p=1.0,
         L_step=0.02,
-        L_max=5.0,
+        two_theta_max=two_theta_range[1],
+        lambda_=lambda_,
     )
 
     m1, i1, d1, det1 = ht_dict_to_arrays(ht_curves_local)

@@ -99,14 +99,17 @@ def ht_Iinf_dict(
         p: float = 0.1,
         L_step: float = 0.01,
         L_max: float = 10.0,
+        two_theta_max: float | None = None,
+        lambda_: float = 1.54,
     ):
     """
     Infinite-domain Hendricks–Teller intensities, now with:
       • on-the-fly occupancy scaling (scalar / list)
       • optional automatic HK grid via `mx` (drop h=k=0)
+      • limit by ``two_theta_max`` instead of ``L_max`` if desired
     Returns { (h,k): {'L':…, 'I':…} }
     """
-    import numpy as np, itertools
+    import numpy as np, itertools, math
 
     if hk_list is None:
         if mx is None:
@@ -119,13 +122,30 @@ def ht_Iinf_dict(
     tmp_cif, _cleanup = _temp_cif_with_occ(cif_path, occ)
     try:
         c_2h   = _cell_c_from_cif(tmp_cif)
-        L_vals = np.arange(0.0, L_max + L_step/2, L_step)
 
-        out = {}
-        for h, k in hk_list:
-            F2 = _F2(h, k, L_vals, c_2h)
-            I  = _I_inf(L_vals, p, h, k, F2)
-            out[(h, k)] = {"L": L_vals.copy(), "I": I}
+        if two_theta_max is None:
+            base_L = np.arange(0.0, L_max + L_step/2, L_step)
+
+            out = {}
+            for h, k in hk_list:
+                F2 = _F2(h, k, base_L, c_2h)
+                I  = _I_inf(base_L, p, h, k, F2)
+                out[(h, k)] = {"L": base_L.copy(), "I": I}
+        else:
+            q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
+            out = {}
+            for h, k in hk_list:
+                const = (4/3) * (h*h + k*k + h*k) / (A_HEX**2)
+                l_sq = (q_max / (2*math.pi))**2 - const
+                if l_sq <= 0:
+                    L_vals = np.array([], dtype=float)
+                    out[(h, k)] = {"L": L_vals, "I": L_vals}
+                    continue
+                L_max_local = c_2h * math.sqrt(l_sq)
+                L_vals = np.arange(0.0, L_max_local + L_step/2, L_step)
+                F2 = _F2(h, k, L_vals, c_2h)
+                I  = _I_inf(L_vals, p, h, k, F2)
+                out[(h, k)] = {"L": L_vals.copy(), "I": I}
         return out
     finally:
         _cleanup(tmp_cif)          # remove temp file
