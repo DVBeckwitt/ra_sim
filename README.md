@@ -23,7 +23,11 @@ print a summary of these arrays via ``ra_sim.debug_utils.check_ht_arrays``.  On
 Linux/macOS use ``export RA_SIM_DEBUG=1``; in Windows ``cmd`` use
 ``set RA_SIM_DEBUG=1`` or in PowerShell ``$env:RA_SIM_DEBUG='1'``.  You can also
 call ``ra_sim.debug_utils.debug_print`` in your own code to emit messages only
-when debug mode is active.  For manual inspection insert the snippet below in
+when debug mode is active. The ``main.py`` script sets ``RA_SIM_DEBUG=1`` on
+startup so logging is enabled by default. When debug mode is active, the
+``numba`` logger is configured to emit debug-level messages which can help
+troubleshoot JIT compilation errors.
+For manual inspection insert the snippet below in
 
 ``main.py`` right after ``ht_dict_to_arrays`` is called:
 
