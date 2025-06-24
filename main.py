@@ -212,6 +212,12 @@ ht_curves = ht_Iinf_dict(                 # ← new core
     lambda_=lambda_,
 )
 
+# Cache the initial HT curves along with the occupancy and p values so that
+# subsequent updates can reuse them unless these parameters change.
+ht_curves_cache = ht_curves
+_last_occ_for_ht = list(occ)
+_last_p_for_ht = float(defaults['p'])
+
 # ---- convert the dict → arrays compatible with the downstream code ----
 miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
@@ -1878,20 +1884,34 @@ def update_occupancies(*args):
     global df_summary, df_details
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
+    global ht_curves_cache, _last_occ_for_ht, _last_p_for_ht
 
     # Grab new occupancy values from the variables (they may have been updated via the slider or Entry)
     new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
 
     global intensities_cif1, intensities_cif2
-    ht_curves_local = ht_Iinf_dict(
-        cif_path=cif_file,
-        mx=mx,
-        occ=new_occ,
-        p=p_var.get(),
-        L_step=0.02,
-        two_theta_max=two_theta_range[1],
-        lambda_=lambda_,
-    )
+    new_p = p_var.get()
+
+    # Reuse the cached ht_curves unless occupancy or p has changed
+    if (
+        ht_curves_cache is None
+        or list(new_occ) != list(_last_occ_for_ht)
+        or not math.isclose(new_p, _last_p_for_ht, rel_tol=0.0, abs_tol=1e-12)
+    ):
+        ht_curves_local = ht_Iinf_dict(
+            cif_path=cif_file,
+            mx=mx,
+            occ=new_occ,
+            p=new_p,
+            L_step=0.02,
+            two_theta_max=two_theta_range[1],
+            lambda_=lambda_,
+        )
+        ht_curves_cache = ht_curves_local
+        _last_occ_for_ht = list(new_occ)
+        _last_p_for_ht = float(new_p)
+    else:
+        ht_curves_local = ht_curves_cache
 
     m1, i1, d1, det1 = ht_dict_to_arrays(ht_curves_local)
 
