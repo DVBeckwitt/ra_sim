@@ -155,9 +155,9 @@ def _get_base_curves(
 
     out: dict[tuple, dict] = {}
     if two_theta_max is None:
-        base_L = np.arange(0.0, L_max + L_step / 2, L_step)
+        base_L = np.arange(0.0, L_max + L_step / 2, L_step, dtype=np.float32)
         for h, k in hk_list:
-            F2 = _F2(h, k, base_L, c_2h)
+            F2 = _F2(h, k, base_L, c_2h).astype(np.float32)
             out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
@@ -165,12 +165,12 @@ def _get_base_curves(
             const = (4 / 3) * (h * h + k * k + h * k) / (A_HEX**2)
             l_sq = (q_max / (2 * math.pi)) ** 2 - const
             if l_sq <= 0:
-                L_vals = np.array([], dtype=float)
+                L_vals = np.array([], dtype=np.float32)
                 out[(h, k)] = {"L": L_vals, "F2": L_vals}
                 continue
             L_max_local = c_2h * math.sqrt(l_sq)
-            L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step)
-            F2 = _F2(h, k, L_vals, c_2h)
+            L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step, dtype=np.float32)
+            F2 = _F2(h, k, L_vals, c_2h).astype(np.float32)
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
@@ -210,7 +210,7 @@ def ht_Iinf_dict(
     for (h, k), data in base.items():
         L_vals = data["L"]
         F2 = data["F2"]
-        I = _I_inf(L_vals, p, h, k, F2)
+        I = _I_inf(L_vals, p, h, k, F2).astype(np.float32)
         out[(h, k)] = {"L": L_vals.copy(), "I": I}
 
     return out
@@ -243,8 +243,8 @@ def ht_dict_to_arrays(ht_curves):
 
     total = sum(len(c["L"]) for c in ht_curves.values())
 
-    miller = np.empty((total, 3), dtype=np.float64)
-    intens = np.empty(total, dtype=np.float64)
+    miller = np.empty((total, 3), dtype=np.float32)
+    intens = np.empty(total, dtype=np.float32)
     degeneracy = np.ones(total, dtype=np.int32)
     details = []
 
