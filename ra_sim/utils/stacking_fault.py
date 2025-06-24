@@ -1,5 +1,6 @@
 # ────────────────────────── global constants (unchanged) ──────────────────────────
 import numpy as np
+import os
 A_HEX   = 4.557
 P_CLAMP = 1e-6
 N_P, A_C = 3, 17.98e-10
@@ -14,6 +15,11 @@ _SITES_POS = np.array([(x, y, z) for x, y, z, _ in _SITES], dtype=float)
 _SITES_Z   = np.array([_FALLBACK_Z.get(sym, 0.) for *_, sym in _SITES],
                       dtype=float)
 _TWO_PI = 2 * np.pi
+
+# Cache of base L grids and F2 values keyed by parameters that do not depend
+# on occupancy or stacking probability.  Each entry is a mapping
+# ``(h,k) -> {"L": array, "F2": array}``.
+_HT_BASE_CACHE: dict[tuple, dict] = {}
 
 # ───────────────────────── occupancy helper ─────────────────────────
 def _temp_cif_with_occ(cif_in: str, occ):
@@ -106,6 +112,71 @@ def _I_inf(L, p, h, k, F2):
     return AREA * F2 * (1-f**2) / (1 + f**2 - 2*f*np.cos(φ-ψ))
 
 
+def _get_base_curves(
+    cif_path: str,
+    hk_list=None,
+    mx: int | None = None,
+    L_step: float = 0.01,
+    L_max: float = 10.0,
+    two_theta_max: float | None = None,
+    lambda_: float = 1.54,
+):
+    """Return cached ``{(h,k): {"L": ..., "F2": ...}}`` independent of ``occ`` and ``p``."""
+    import numpy as np, itertools, math
+
+    if hk_list is None:
+        if mx is None:
+            raise ValueError("Specify hk_list or mx")
+        hk_list = [
+            (h, k)
+            for h, k in itertools.product(range(-mx + 1, mx), repeat=2)
+            if not (h == 0 and k == 0)
+        ]
+
+    key = (
+        os.path.abspath(cif_path),
+        tuple(hk_list),
+        float(L_step),
+        float(L_max),
+        two_theta_max,
+        float(lambda_),
+    )
+
+    cached = _HT_BASE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    c_2h = _cell_c_from_cif(cif_path)
+
+    if L_step <= 0.0:
+        raise ValueError("L_step must be > 0")
+    if L_step < 1e-4:
+        L_step = 1e-4
+
+    out: dict[tuple, dict] = {}
+    if two_theta_max is None:
+        base_L = np.arange(0.0, L_max + L_step / 2, L_step)
+        for h, k in hk_list:
+            F2 = _F2(h, k, base_L, c_2h)
+            out[(h, k)] = {"L": base_L.copy(), "F2": F2}
+    else:
+        q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
+        for h, k in hk_list:
+            const = (4 / 3) * (h * h + k * k + h * k) / (A_HEX**2)
+            l_sq = (q_max / (2 * math.pi)) ** 2 - const
+            if l_sq <= 0:
+                L_vals = np.array([], dtype=float)
+                out[(h, k)] = {"L": L_vals, "F2": L_vals}
+                continue
+            L_max_local = c_2h * math.sqrt(l_sq)
+            L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step)
+            F2 = _F2(h, k, L_vals, c_2h)
+            out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
+
+    _HT_BASE_CACHE[key] = out
+    return out
+
+
 # ───────────────────────── revitalised public routine ─────────────────────────
 def ht_Iinf_dict(
         cif_path: str,
@@ -125,52 +196,24 @@ def ht_Iinf_dict(
       • limit by ``two_theta_max`` instead of ``L_max`` if desired
     Returns { (h,k): {'L':…, 'I':…} }
     """
-    import numpy as np, itertools, math
+    base = _get_base_curves(
+        cif_path=cif_path,
+        hk_list=hk_list,
+        mx=mx,
+        L_step=L_step,
+        L_max=L_max,
+        two_theta_max=two_theta_max,
+        lambda_=lambda_,
+    )
 
-    if hk_list is None:
-        if mx is None:
-            raise ValueError("Specify hk_list or mx")
-        hk_list = [(h, k) for h, k
-                   in itertools.product(range(-mx+1, mx), repeat=2)
-                   if not (h == 0 and k == 0)]
+    out = {}
+    for (h, k), data in base.items():
+        L_vals = data["L"]
+        F2 = data["F2"]
+        I = _I_inf(L_vals, p, h, k, F2)
+        out[(h, k)] = {"L": L_vals.copy(), "I": I}
 
-    # create occupancy-modified CIF
-    tmp_cif, _cleanup = _temp_cif_with_occ(cif_path, occ)
-    try:
-        c_2h   = _cell_c_from_cif(tmp_cif)
-
-        if L_step <= 0.0:
-            raise ValueError("L_step must be > 0")
-
-        if L_step < 1e-4:
-            L_step = 1e-4  # avoid overly fine grids that slow down numba
-
-        if two_theta_max is None:
-            base_L = np.arange(0.0, L_max + L_step/2, L_step)
-
-            out = {}
-            for h, k in hk_list:
-                F2 = _F2(h, k, base_L, c_2h)
-                I  = _I_inf(base_L, p, h, k, F2)
-                out[(h, k)] = {"L": base_L.copy(), "I": I}
-        else:
-            q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
-            out = {}
-            for h, k in hk_list:
-                const = (4/3) * (h*h + k*k + h*k) / (A_HEX**2)
-                l_sq = (q_max / (2*math.pi))**2 - const
-                if l_sq <= 0:
-                    L_vals = np.array([], dtype=float)
-                    out[(h, k)] = {"L": L_vals, "I": L_vals}
-                    continue
-                L_max_local = c_2h * math.sqrt(l_sq)
-                L_vals = np.arange(0.0, L_max_local + L_step/2, L_step)
-                F2 = _F2(h, k, L_vals, c_2h)
-                I  = _I_inf(L_vals, p, h, k, F2)
-                out[(h, k)] = {"L": L_vals.copy(), "I": I}
-        return out
-    finally:
-        _cleanup(tmp_cif)          # remove temp file
+    return out
 
 
 # ---------------------------------------------------------------------------

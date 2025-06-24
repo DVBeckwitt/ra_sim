@@ -16,6 +16,61 @@ from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.path_config import get_temp_dir
 
+# Cache CIF objects and temporary files so repeated updates only modify
+# in-memory data instead of reading/writing new files each time.  Keys are
+# absolute CIF paths.
+_CIF_CACHE: dict[str, tuple] = {}
+_CIF_ORIG_OCC: dict[str, list[str]] = {}
+_TMP_CIF_PATH: dict[str, str] = {}
+
+
+def _prepare_temp_cif(cif_path: str, occ) -> str:
+    """Return path to a temporary CIF with updated occupancies."""
+    import os, tempfile, CifFile
+
+    abs_path = os.path.abspath(cif_path)
+    if abs_path not in _CIF_CACHE:
+        cf = CifFile.ReadCif(abs_path)
+        block_name = list(cf.keys())[0]
+        block = cf[block_name]
+        occ_field = block.get("_atom_site_occupancy")
+        if occ_field is None:
+            labels = block.get("_atom_site_label")
+            occ_field = ["1.0"] * (len(labels) if isinstance(labels, list) else 1)
+            block["_atom_site_occupancy"] = occ_field
+        _CIF_CACHE[abs_path] = (cf, block_name)
+        _CIF_ORIG_OCC[abs_path] = [str(v) for v in occ_field]
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".cif")
+        tmp.close()
+        _TMP_CIF_PATH[abs_path] = tmp.name
+    cf, block_name = _CIF_CACHE[abs_path]
+    occ_field = cf[block_name]["_atom_site_occupancy"]
+    # reset to original before applying new factors
+    orig_vals = _CIF_ORIG_OCC[abs_path]
+    for i, val in enumerate(orig_vals):
+        occ_field[i] = val
+
+    if isinstance(occ, (list, tuple)):
+        if len(occ) == len(occ_field):
+            for i in range(len(occ_field)):
+                occ_field[i] = str(float(orig_vals[i]) * float(occ[i]))
+        else:
+            fac = float(occ[0])
+            for i in range(len(occ_field)):
+                occ_field[i] = str(float(orig_vals[i]) * fac)
+    else:
+        fac = float(occ)
+        for i in range(len(occ_field)):
+            occ_field[i] = str(float(orig_vals[i]) * fac)
+
+    tmp_path = _TMP_CIF_PATH[abs_path]
+    try:
+        CifFile.WriteCif(cf, tmp_path)
+    except AttributeError:
+        with open(tmp_path, "w") as f:
+            f.write(cf.WriteOut())
+    return tmp_path
+
 def detect_blobs(
     source,
     notblob=None,
@@ -272,9 +327,8 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
                     for the reflections in that group.
     """
     from collections import defaultdict
-    import numpy as np, os, math, tempfile
-    import Dans_Diffraction as dif  # your diffraction module
-    import CifFile  # from PyCifRW
+    import numpy as np, math
+    import Dans_Diffraction as dif
 
     # Generate candidate Miller indices.
     raw_miller = [
@@ -284,66 +338,11 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
         for l in range(1, mx)
     ]
 
-    # --------------- Use PyCifRW to update occupancies -------------------
-    cf = CifFile.ReadCif(cif_file)
-    block_name = list(cf.keys())[0]
-    block = cf[block_name]
-    # Get the occupancy values; expect a list.
-    occupancies = block.get("_atom_site_occupancy")
-    if occupancies is None:
-        labels = block.get("_atom_site_label")
-        if isinstance(labels, list):
-            occupancies = ["1.0"] * len(labels)
-        else:
-            occupancies = ["1.0"]
-
-    # Determine whether to update each occupancy individually or uniformly.
-    if isinstance(occ, (list, tuple)):
-        # If length matches the number of occupancies, apply elementwise multiplication.
-        if len(occ) == len(occupancies):
-            for i in range(len(occupancies)):
-                try:
-                    original = float(occupancies[i])
-                    multiplier = float(occ[i])
-                except Exception as e:
-                    raise ValueError(f"Error converting occupancy value '{occupancies[i]}' or occ[{i}]='{occ[i]}' to float: {e}")
-                occupancies[i] = str(original * multiplier)
-        else:
-            # Use the first element of occ uniformly.
-            factor = float(occ[0])
-            for i in range(len(occupancies)):
-                try:
-                    original = float(occupancies[i])
-                except Exception as e:
-                    raise ValueError(f"Error converting occupancy value '{occupancies[i]}' to float: {e}")
-                occupancies[i] = str(original * factor)
-    else:
-        # occ is a single value.
-        factor = float(occ)
-        for i in range(len(occupancies)):
-            try:
-                original = float(occupancies[i])
-            except Exception as e:
-                raise ValueError(f"Error converting occupancy value '{occupancies[i]}' to float: {e}")
-            occupancies[i] = str(original * factor)
-    # ---------------------------------------------------------------------
-
-    # Write the updated CIF to a temporary file within our temp directory.
-    tmp_dir = get_temp_dir()
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False,
-                                      dir=str(tmp_dir))
-    tmp.close()  # Close the file to allow writing via PyCifRW.
-    # If your version of PyCifRW provides a WriteCif function, you can use it.
-    # Otherwise, use the WriteOut method on the CIF object.
-    try:
-        CifFile.WriteCif(cf, tmp.name)
-    except AttributeError:
-        # Fall back to WriteOut() if WriteCif isn't available.
-        with open(tmp.name, "w") as f:
-            f.write(cf.WriteOut())
+    # --------------- prepare/update temporary CIF -----------------------
+    tmp_cif = _prepare_temp_cif(cif_file, occ)
 
     # Load the crystal using the temporary CIF file.
-    xtl = dif.Crystal(tmp.name)
+    xtl = dif.Crystal(tmp_cif)
     # Optionally, remove the temporary file later if desired:
     # os.remove(tmp.name)
     # ---------------------------------------------------------------------
@@ -503,44 +502,12 @@ def intensities_for_hkls(hkls, cif_file, occ, lambda_, energy=8.047,
     >>> intensities_for_hkls(hkls, "tests/local_test.cif", [1.0], 1.0)
     array([...])
     """
-    import tempfile
-    import CifFile
-    import Dans_Diffraction as dif
     import numpy as np
+    import Dans_Diffraction as dif
 
-    cf = CifFile.ReadCif(cif_file)
-    block_name = list(cf.keys())[0]
-    block = cf[block_name]
+    tmp_cif = _prepare_temp_cif(cif_file, occ)
 
-    occupancies = block.get("_atom_site_occupancy")
-    if occupancies is None:
-        labels = block.get("_atom_site_label")
-        occupancies = ["1.0"] * len(labels) if isinstance(labels, list) else ["1.0"]
-
-    if isinstance(occ, (list, tuple)):
-        if len(occ) == len(occupancies):
-            for i in range(len(occupancies)):
-                occupancies[i] = str(float(occupancies[i]) * float(occ[i]))
-        else:
-            factor = float(occ[0])
-            for i in range(len(occupancies)):
-                occupancies[i] = str(float(occupancies[i]) * factor)
-    else:
-        factor = float(occ)
-        for i in range(len(occupancies)):
-            occupancies[i] = str(float(occupancies[i]) * factor)
-
-    tmp_dir = get_temp_dir()
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".cif", delete=False,
-                                      dir=str(tmp_dir))
-    tmp.close()
-    try:
-        CifFile.WriteCif(cf, tmp.name)
-    except AttributeError:
-        with open(tmp.name, "w") as f:
-            f.write(cf.WriteOut())
-
-    xtl = dif.Crystal(tmp.name)
+    xtl = dif.Crystal(tmp_cif)
     xtl.Symmetry.generate_matrices()
     xtl.generate_structure()
     xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=energy)
