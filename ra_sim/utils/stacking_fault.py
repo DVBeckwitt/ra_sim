@@ -139,6 +139,12 @@ def ht_Iinf_dict(
     try:
         c_2h   = _cell_c_from_cif(tmp_cif)
 
+        if L_step <= 0.0:
+            raise ValueError("L_step must be > 0")
+
+        if L_step < 1e-4:
+            L_step = 1e-4  # avoid overly fine grids that slow down numba
+
         if two_theta_max is None:
             base_L = np.arange(0.0, L_max + L_step/2, L_step)
 
@@ -192,31 +198,28 @@ def ht_dict_to_arrays(ht_curves):
     """
     import numpy as np
 
-    miller_list = []
-    intens_list = []
-    degeneracy_list = []
+    total = sum(len(c["L"]) for c in ht_curves.values())
+
+    miller = np.empty((total, 3), dtype=np.float64)
+    intens = np.empty(total, dtype=np.float64)
+    degeneracy = np.ones(total, dtype=np.int32)
     details = []
 
+    idx = 0
     for (h, k), curve in ht_curves.items():
-        # Preserve the ordering of L values exactly as generated in ``ht_Iinf_dict``
-        # so that callers obtain the same sequence as the previous inline loop
-        # implementation.
+        L_vals = curve["L"]
+        I_vals = curve["I"]
+        n = len(L_vals)
 
-        for L_val, inten in zip(curve["L"], curve["I"]):
-            miller_list.append((h, k, float(L_val)))
-            intens_list.append(float(inten))
-            degeneracy_list.append(1)
+        miller[idx:idx+n, 0] = h
+        miller[idx:idx+n, 1] = k
+        miller[idx:idx+n, 2] = L_vals
+        intens[idx:idx+n] = I_vals
+
+        for L_val, inten in zip(L_vals, I_vals):
             details.append([((h, k, float(L_val)), float(inten))])
 
-    if miller_list:
-        miller = np.asarray(miller_list, dtype=np.float64)
-
-        intens = np.asarray(intens_list, dtype=np.float64)
-        degeneracy = np.asarray(degeneracy_list, dtype=np.int32)
-    else:
-        miller = np.empty((0, 3), dtype=float)
-        intens = np.empty((0,), dtype=np.float64)
-        degeneracy = np.empty((0,), dtype=np.int32)
+        idx += n
 
     return miller, intens, degeneracy, details
 
