@@ -238,13 +238,16 @@ ht_curves = ht_Iinf_dict(                 # ← new core
 )
 
 # Cache the initial HT curves along with the occupancy and p values so that
-# subsequent updates can reuse them unless these parameters change.
-ht_curves_cache = ht_curves
+# subsequent updates can reuse them unless these parameters change.  We also
+# cache the converted arrays to avoid repeated dict→array conversions.
+miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
+ht_curves_cache = {
+    "curves": ht_curves,
+    "arrays": (miller1, intens1, degeneracy1, details1),
+}
 _last_occ_for_ht = list(occ)
 _last_p_for_ht = float(defaults['p'])
-
 # ---- convert the dict → arrays compatible with the downstream code ----
-miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
 
@@ -1911,13 +1914,15 @@ def update_occupancies(*args):
             two_theta_max=two_theta_range[1],
             lambda_=lambda_,
         )
-        ht_curves_cache = ht_curves_local
+        arrays_local = ht_dict_to_arrays(ht_curves_local)
+        ht_curves_cache = {"curves": ht_curves_local, "arrays": arrays_local}
         _last_occ_for_ht = list(new_occ)
         _last_p_for_ht = float(new_p)
     else:
-        ht_curves_local = ht_curves_cache
+        ht_curves_local = ht_curves_cache["curves"]
+        arrays_local = ht_curves_cache["arrays"]
 
-    m1, i1, d1, det1 = ht_dict_to_arrays(ht_curves_local)
+    m1, i1, d1, det1 = arrays_local
 
     # Convert arrays → dictionaries for quick lookup
     deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}
