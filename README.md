@@ -11,6 +11,9 @@ packages listed in ``setup.py``) launch the GUI with:
 python main.py
 ```
 
+By default an Excel file named ``miller_intensities.xlsx`` is written to the
+configured downloads directory.  Pass ``--no-excel`` to disable this step.
+
 
 ## Troubleshooting
 
