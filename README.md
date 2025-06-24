@@ -11,6 +11,13 @@ packages listed in ``setup.py``) launch the GUI with:
 python main.py
 ```
 
+**Python compatibility**: the simulation relies on Numba-compiled routines.
+Ensure your Numba build matches your Python interpreter.  If the program exits
+after printing the initial diagnostics, your Numba version might be
+incompatible.  Installing a recent Numba release for your Python version (or
+temporarily running Python 3.11 with an older Numba) usually resolves the
+issue.
+
 ## Troubleshooting
 
 If the program prints ``Loaded saved profile ...`` and then exits without
