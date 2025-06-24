@@ -41,6 +41,7 @@ def simulate_diffraction(
     :func:`generate_random_profiles`.
     """
 
+    center = np.asarray(center, dtype=np.float64)
     current_sigma_mosaic = np.radians(sigma_mosaic_var.get())
     current_gamma_mosaic = np.radians(gamma_mosaic_var.get())
     current_eta = eta_var.get()

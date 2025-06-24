@@ -71,7 +71,10 @@ def main() -> None:
     gamma_mosaic = math.radians(0.3 * FWHM2SIGMA)
     bandwidth    = 0.7 / 100
     bw_sigma     = 0.05e-3 * FWHM2SIGMA
-    center       = [(poni2/100e-6), IMAGE_SIZE-(poni1/100e-6)]
+    center       = np.array([
+        (poni2/100e-6),
+        IMAGE_SIZE-(poni1/100e-6)
+    ], dtype=np.float64)
     theta_initial = 6.0
     psi          = 0.0
     zs = zb      = debye_x = debye_y = 0.0

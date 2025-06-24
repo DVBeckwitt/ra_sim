@@ -42,7 +42,7 @@ def simulate_and_compare_hkl(
     zs    = params['zs']; zb    = params['zb']
     debye_x = params['debye_x']; debye_y = params['debye_y']
     n2    = params['n2']
-    center = params['center']
+    center = np.asarray(params['center'], dtype=np.float64)
     theta_initial = params['theta_initial']
 
     mosaic = params['mosaic_params']
