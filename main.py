@@ -200,6 +200,31 @@ intensity_threshold = 1.0
 two_theta_range = (0, 70)
 
 # ---------------------------------------------------------------------------
+# Default GUI/fit parameter values. These must be defined before any calls
+# that reference them (e.g. ``ht_Iinf_dict`` below).
+# ---------------------------------------------------------------------------
+defaults = {
+    'theta_initial': 5.0,
+    'gamma': Gamma_initial,
+    'Gamma': gamma_initial,
+    'chi': 0.0,
+    'zs': 0.0,
+    'zb': 0.0,
+    'debye_x': 0.0,
+    'debye_y': 0.0,
+    'corto_detector': Distance_CoR_to_Detector,
+    'sigma_mosaic_deg': np.degrees(sigma_mosaic),
+    'gamma_mosaic_deg': np.degrees(gamma_mosaic),
+    'eta': 0.0,
+    'a': av,
+    'c': cv,
+    'vmax': 1000,
+    'p': 1.0,
+    'center_x': center_default[0],
+    'center_y': center_default[1],
+}
+
+# ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
 ht_curves = ht_Iinf_dict(                 # ← new core
@@ -374,27 +399,6 @@ current_background_index = 0
 background_visible = True
 
 measured_peaks = np.load(get_path("measured_peaks"), allow_pickle=True)
-
-defaults = {
-    'theta_initial': 5.0,
-    'gamma': Gamma_initial,
-    'Gamma': gamma_initial,
-    'chi': 0.0,
-    'zs': 0.0,
-    'zb': 0.0,
-    'debye_x': 0.0,
-    'debye_y': 0.0,
-    'corto_detector': Distance_CoR_to_Detector,
-    'sigma_mosaic_deg': np.degrees(sigma_mosaic),
-    'gamma_mosaic_deg': np.degrees(gamma_mosaic),
-    'eta': 0.0,
-    'a': av,
-    'c': cv,
-    'vmax': 1000,
-    'p': 1.0,
-    'center_x': center_default[0],
-    'center_y': center_default[1]
-}
 
 ###############################################################################
 #                                  TK SETUP
