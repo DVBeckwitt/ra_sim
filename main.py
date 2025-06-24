@@ -824,11 +824,23 @@ line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 
 update_pending = None
+occupancy_update_pending = None
 def schedule_update():
     global update_pending
     if update_pending is not None:
         root.after_cancel(update_pending)
     update_pending = root.after(100, do_update)
+
+def _run_update_occupancies():
+    global occupancy_update_pending
+    occupancy_update_pending = None
+    update_occupancies()
+
+def schedule_update_occupancies(*args):
+    global occupancy_update_pending
+    if occupancy_update_pending is not None:
+        root.after_cancel(occupancy_update_pending)
+    occupancy_update_pending = root.after(300, _run_update_occupancies)
 
 peak_positions = []
 peak_millers = []
@@ -1573,7 +1585,7 @@ include_rods_var = tk.BooleanVar(value=include_rods_flag)
 def toggle_rods():
     global include_rods_flag
     include_rods_flag = include_rods_var.get()
-    update_occupancies()
+    schedule_update_occupancies()
 
 check_rods = ttk.Checkbutton(
     text="Include Rods",
@@ -2009,7 +2021,7 @@ def update_occupancies(*args):
 
 # Slider for stacking disorder probability p
 p_var, _ = create_slider(
-    'Disorder p', 0.0, 1.0, defaults['p'], 0.01, right_col, update_occupancies
+    'Disorder p', 0.0, 1.0, defaults['p'], 0.01, right_col, schedule_update_occupancies
 )
 
 # Existing occupancy slider for site 1.
@@ -2020,7 +2032,7 @@ occ_scale1 = ttk.Scale(
     to=1.0,
     orient=tk.HORIZONTAL,
     variable=occ_var1,
-    command=update_occupancies
+    command=schedule_update_occupancies
 )
 occ_scale1.pack(fill=tk.X, padx=5, pady=2)
 
@@ -2032,7 +2044,7 @@ occ_scale2 = ttk.Scale(
     to=1.0,
     orient=tk.HORIZONTAL,
     variable=occ_var2,
-    command=update_occupancies
+    command=schedule_update_occupancies
 )
 occ_scale2.pack(fill=tk.X, padx=5, pady=2)
 
@@ -2044,7 +2056,7 @@ occ_scale3 = ttk.Scale(
     to=1.0,
     orient=tk.HORIZONTAL,
     variable=occ_var3,
-    command=update_occupancies
+    command=schedule_update_occupancies
 )
 occ_scale3.pack(fill=tk.X, padx=5, pady=2)
 
@@ -2056,16 +2068,19 @@ occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
 ttk.Label(occ_entry_frame, text="Input Occupancy Site 1:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
 occ_entry1 = ttk.Entry(occ_entry_frame, textvariable=occ_var1, width=5)
 occ_entry1.grid(row=0, column=1, padx=5, pady=2)
+occ_entry1.bind("<Return>", lambda e: schedule_update_occupancies())
 
 # Occupancy input for Site 2.
 ttk.Label(occ_entry_frame, text="Input Occupancy Site 2:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
 occ_entry2 = ttk.Entry(occ_entry_frame, textvariable=occ_var2, width=5)
 occ_entry2.grid(row=1, column=1, padx=5, pady=2)
+occ_entry2.bind("<Return>", lambda e: schedule_update_occupancies())
 
 # Occupancy input for Site 3.
 ttk.Label(occ_entry_frame, text="Input Occupancy Site 3:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
 occ_entry3 = ttk.Entry(occ_entry_frame, textvariable=occ_var3, width=5)
 occ_entry3.grid(row=2, column=1, padx=5, pady=2)
+occ_entry3.bind("<Return>", lambda e: schedule_update_occupancies())
 
 # Button to force a full update (re-read occupancies and recalc everything).
 force_update_button = ttk.Button(occ_entry_frame, text="Force Update", command=update_occupancies)
