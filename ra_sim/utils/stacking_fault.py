@@ -9,6 +9,12 @@ _SITES  = [(0.0, 0.0,  0.000, "Pb"),
            (1/3, 2/3,  0.25 , "I"),
            (2/3, 1/3, -0.25 , "I")]
 
+# Pre-compute site coordinates and atomic numbers for vectorised operations
+_SITES_POS = np.array([(x, y, z) for x, y, z, _ in _SITES], dtype=float)
+_SITES_Z   = np.array([_FALLBACK_Z.get(sym, 0.) for *_, sym in _SITES],
+                      dtype=float)
+_TWO_PI = 2 * np.pi
+
 # ───────────────────────── occupancy helper ─────────────────────────
 def _temp_cif_with_occ(cif_in: str, occ):
     """
@@ -69,24 +75,34 @@ def _Qmag(h, k, L, c_2h):
     return 2*np.pi*np.sqrt(inv_d2)
 
 def _F2(h, k, L, c_2h):
+    """Return |F|^2 using vectorised operations."""
     import numpy as np
-    Q  = _Qmag(h, k, L, c_2h)
-    ph = [np.exp(2j*np.pi*(h*x + k*y + L*z)) for x, y, z, _ in _SITES]
-    cf = [_f0(sym, Q) for *_, sym in _SITES]
-    return np.abs(sum(c*p for c, p in zip(cf, ph)))**2
+
+    Q = _Qmag(h, k, L, c_2h)
+    phase_arg = (h * _SITES_POS[:, 0, None] +
+                 k * _SITES_POS[:, 1, None] +
+                 L * _SITES_POS[:, 2, None])
+    phases = np.exp(1j * _TWO_PI * phase_arg)
+    cf = _SITES_Z[:, None]
+    F = np.sum(cf * phases, axis=0)
+    return np.abs(F) ** 2
 
 def _abc(p, h, k):
+    """Compute amplitude factor ``f`` and phase ``ψ`` without complex math."""
     import numpy as np
-    δ = 2*np.pi*((2*h + k)/3)
-    z = (1-p) + p*np.exp(1j*δ)
-    f = np.minimum(np.abs(z), 1-P_CLAMP)
-    ψ = np.angle(z)
+
+    δ = _TWO_PI * ((2 * h + k) / 3)
+    real = (1 - p) + p * np.cos(δ)
+    imag = p * np.sin(δ)
+    abs_z = np.hypot(real, imag)
+    f = np.minimum(abs_z, 1 - P_CLAMP)
+    ψ = np.arctan2(imag, real)
     return f, ψ, δ
 
 def _I_inf(L, p, h, k, F2):
     import numpy as np
     f, ψ, δ = _abc(p, h, k)
-    φ = δ + 2*np.pi*L
+    φ = δ + _TWO_PI * L
     return AREA * F2 * (1-f**2) / (1 + f**2 - 2*f*np.cos(φ-ψ))
 
 
