@@ -899,7 +899,7 @@ def calculate_phi(
 # 6) PROCESS_PEAKS_PARALLEL
 # =============================================================================
 
-@njit(fastmath=True)
+@njit(parallel=True, fastmath=True)
 def process_peaks_parallel(
     miller, intensities, image_size,
     av, cv, lambda_, image,
@@ -1009,11 +1009,15 @@ def process_peaks_parallel(
     else:
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
-    hit_tables = List.empty_list(types.float64[:, ::1])
-    miss_tables = List.empty_list(types.float64[:, ::1])
+    max_hits_per_peak = beam_x_array.size * 2
+
+    hit_tables_arr = np.empty((num_peaks, max_hits_per_peak, 7), dtype=np.float64)
+    miss_tables_arr = np.empty((num_peaks, max_hits_per_peak, 3), dtype=np.float64)
+    hit_counts = np.zeros(num_peaks, dtype=np.int64)
+    miss_counts = np.zeros(num_peaks, dtype=np.int64)
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
 
-    # Loop over each reflection (using ``prange`` for compatibility)
+    # Loop over each reflection
     for i_pk in prange(num_peaks):
         # Ensure HKL values remain floating point to allow fractional indices
         H = float(miller[i_pk, 0])
@@ -1043,10 +1047,21 @@ def process_peaks_parallel(
             save_flag, q_data, q_count, i_pk,
             record_status
         )
+        hit_len = pixel_hits.shape[0]
+        miss_len = missed_arr.shape[0]
+        hit_tables_arr[i_pk, :hit_len, :] = pixel_hits
+        miss_tables_arr[i_pk, :miss_len, :] = missed_arr
+        hit_counts[i_pk] = hit_len
+        miss_counts[i_pk] = miss_len
         if record_status:
             all_status[i_pk, :] = status_arr
-        hit_tables.append(pixel_hits)
-        miss_tables.append(missed_arr)
+
+    hit_tables = List.empty_list(types.float64[:, ::1])
+    miss_tables = List.empty_list(types.float64[:, ::1])
+    for i_pk in range(num_peaks):
+        hit_tables.append(hit_tables_arr[i_pk, :hit_counts[i_pk], :])
+        miss_tables.append(miss_tables_arr[i_pk, :miss_counts[i_pk], :])
+
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
