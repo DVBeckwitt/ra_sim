@@ -921,15 +921,27 @@ def do_update():
         peak_intensities.clear()
 
         def run_one(miller_arr, intens_arr, a_val, c_val):
+            """Wrapper to call :func:`process_peaks_parallel` safely."""
+            # Ensure arrays passed to the JIT routine are contiguous ``float64``.
+            # Some helper routines may return ``int32`` arrays which trigger a
+            # Numba ``array_to_array`` assertion when implicitly cast.  Explicit
+            # conversion avoids the error.
+            miller_arr = np.ascontiguousarray(miller_arr, dtype=np.float64)
+            intens_arr = np.ascontiguousarray(intens_arr, dtype=np.float64)
+
             buf = np.zeros((image_size, image_size), dtype=np.float64)
             if DEBUG_ENABLED:
-                debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
+                debug_print(
+                    "process_peaks_parallel with", miller_arr.shape[0], "reflections"
+                )
                 if not np.all(np.isfinite(miller_arr)):
                     debug_print("Non-finite miller indices detected")
                 if not np.all(np.isfinite(intens_arr)):
                     debug_print("Non-finite intensities detected")
             return process_peaks_parallel(
-                miller_arr, intens_arr, image_size,
+                miller_arr,
+                intens_arr,
+                image_size,
                 a_val, c_val, lambda_,
                 buf, corto_det_up,
                 gamma_updated, Gamma_updated, chi_updated, psi,
@@ -1672,8 +1684,8 @@ def save_q_space_representation():
     }
 
     image_result, max_positions_local, q_data, q_count, _, _ = process_peaks_parallel(
-        miller,
-        intensities,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intensities, dtype=np.float64),
         image_size,
         a_var.get(),
         c_var.get(),
@@ -1759,8 +1771,8 @@ def run_debug_simulation():
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
     image_out, maxpos, qdata, qcount = process_peaks_parallel_debug(
-        miller,
-        intensities,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intensities, dtype=np.float64),
         image_size,
         a_val,
         c_val,

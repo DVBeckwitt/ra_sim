@@ -101,7 +101,8 @@ def run_simulation(
     ], dtype=np.float64)
 
     img, hit_tables, *_ = process_peaks_parallel(
-        miller, intens, image_size,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intens, dtype=np.float64),
         *parse_cif(cif_path), geometry["wavelength"]*1e10, img_buf,
         geometry["dist"], geometry["rot1"], geometry["rot2"],
         chi, 0.0, zs, zb, n2,
