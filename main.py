@@ -5,6 +5,7 @@
 import math
 import os
 import re
+import argparse
 import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
@@ -242,6 +243,7 @@ SIM_MILLER1 = np.empty((0, 3), dtype=float)
 SIM_INTENS1 = np.empty((0,), dtype=float)
 SIM_MILLER2 = np.empty((0, 3), dtype=float)
 SIM_INTENS2 = np.empty((0,), dtype=float)
+
 
 # Zero out beamstop region near center
 row_center = int(center_default[0])
@@ -2013,6 +2015,7 @@ def _finish_ht_init():
 def main():
     """Entry point for running the GUI application."""
 
+
     params_file_path = get_path("parameters_file")
     if os.path.exists(params_file_path):
         load_parameters(
@@ -2045,8 +2048,16 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="RA Simulation GUI")
+    parser.add_argument(
+        "--no-excel",
+        action="store_true",
+        help="Do not write the initial intensity Excel file",
+    )
+    args = parser.parse_args()
+
     try:
-        main()
+        main(write_excel=not args.no_excel)
     except Exception as exc:
         print("Unhandled exception during startup:", exc)
         import traceback
