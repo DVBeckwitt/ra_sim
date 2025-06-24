@@ -10,6 +10,7 @@ import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
+import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 
@@ -226,167 +227,23 @@ defaults = {
 }
 
 # ---------------------------------------------------------------------------
-# Replace the old miller_generator call with the new Hendricks–Teller helper.
+# Placeholder variables for Hendricks–Teller curves populated asynchronously.
 # ---------------------------------------------------------------------------
-ht_curves = ht_Iinf_dict(                 # ← new core
-    cif_path=cif_file,
-    mx=mx,                                # generates all (h,k) for |h|,|k|<mx
-    occ=occ,                              # same occupancy-scaling rules
-    p=defaults['p'],                      # disorder probability
-    L_step=0.02,
-    two_theta_max=two_theta_range[1],
-    lambda_=lambda_,
-)
-
-# Cache the initial HT curves along with the occupancy and p values so that
-# subsequent updates can reuse them unless these parameters change.  We also
-# cache the converted arrays to avoid repeated dict→array conversions.
-miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
-ht_curves_cache = {
-    "curves": ht_curves,
-    "arrays": (miller1, intens1, degeneracy1, details1),
-}
+ht_curves_cache = None
+ht_cache_lock = threading.Lock()
 _last_occ_for_ht = list(occ)
 _last_p_for_ht = float(defaults['p'])
-# ---- convert the dict → arrays compatible with the downstream code ----
-debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
-debug_print("miller1 sample:", miller1[:5])
+miller = np.empty((0, 3), dtype=float)
+intensities = np.empty((0,), dtype=float)
+degeneracy = np.empty((0,), dtype=np.int32)
+details = []
+df_summary = pd.DataFrame()
+df_details = pd.DataFrame()
+SIM_MILLER1 = np.empty((0, 3), dtype=float)
+SIM_INTENS1 = np.empty((0,), dtype=float)
+SIM_MILLER2 = np.empty((0, 3), dtype=float)
+SIM_INTENS2 = np.empty((0,), dtype=float)
 
-if DEBUG_ENABLED:
-    from ra_sim.debug_utils import check_ht_arrays
-    check_ht_arrays(miller1, intens1)
-    # Manual inspection snippet recommended in the README
-    debug_print('miller1 dtype:', miller1.dtype, 'shape:', miller1.shape)
-    debug_print('L range:', miller1[:, 2].min(), miller1[:, 2].max())
-    debug_print('intens1 dtype:', intens1.dtype, 'min:', intens1.min(), 'max:', intens1.max())
-    debug_print('miller1 contiguous:', miller1.flags['C_CONTIGUOUS'])
-    debug_print('intens1 contiguous:', intens1.flags['C_CONTIGUOUS'])
-
-has_second_cif = bool(cif_file2)
-if has_second_cif:
-    miller2, intens2, degeneracy2, details2 = miller_generator(
-        mx,
-        cif_file2,
-        occ,
-        lambda_,
-        energy,
-        intensity_threshold,
-        two_theta_range,
-    )
-    if include_rods_flag:
-        miller2, intens2 = inject_fractional_reflections(miller2, intens2, mx)
-    union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
-    miller = np.array(sorted(union_set), dtype=float)
-    debug_print("combined miller count:", miller.shape[0])
-
-    int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
-    int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
-    deg_dict1 = {tuple(h): d for h, d in zip(miller1, degeneracy1)}
-    deg_dict2 = {tuple(h): d for h, d in zip(miller2, degeneracy2)}
-    details_dict1 = {tuple(miller1[i]): details1[i] for i in range(len(miller1))}
-    details_dict2 = {tuple(miller2[i]): details2[i] for i in range(len(miller2))}
-
-    intensities_cif1 = np.array([int1_dict.get(tuple(h), 0.0) for h in miller])
-    intensities_cif2 = np.array([int2_dict.get(tuple(h), 0.0) for h in miller])
-    degeneracy = np.array(
-        [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
-        dtype=np.int32,
-    )
-    details = [
-        details_dict1.get(tuple(h), []) + details_dict2.get(tuple(h), [])
-        for h in miller
-    ]
-
-    weight1 = 0.5
-    weight2 = 0.5
-    intensities = weight1 * intensities_cif1 + weight2 * intensities_cif2
-    max_I = intensities.max() if intensities.size else 0.0
-    if max_I > 0:
-        intensities = intensities * (100.0 / max_I)
-    miller1_sim = miller1
-    intensities1_sim = intens1
-    miller2_sim = miller2
-    intensities2_sim = intens2
-else:
-    miller = miller1
-    intensities_cif1 = intens1
-    intensities_cif2 = np.zeros_like(intensities_cif1)
-    degeneracy = degeneracy1
-    details = details1
-    weight1 = 1.0
-    weight2 = 0.0
-    intensities = intensities_cif1.copy()
-    miller1_sim = miller1
-    intensities1_sim = intens1
-    miller2_sim = np.empty((0,3), dtype=np.int32)
-    intensities2_sim = np.empty((0,), dtype=np.float64)
-    debug_print("single CIF miller count:", miller.shape[0])
-
-# Save simulation data for later use
-SIM_MILLER1 = miller1_sim
-SIM_INTENS1 = intensities1_sim
-SIM_MILLER2 = miller2_sim
-SIM_INTENS2 = intensities2_sim
-
-# Build summary and details dataframes using the helper.
-df_summary, df_details = build_intensity_dataframes(
-    miller, intensities, degeneracy, details
-)
-
-if write_excel:
-    # Save the initial intensities to Excel in the configured downloads
-    # directory.
-    download_dir = get_dir("downloads")
-    excel_path = download_dir / "miller_intensities.xlsx"
-
-    with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-        df_summary.to_excel(writer, sheet_name='Summary', index=False)
-        df_details.to_excel(writer, sheet_name='Details', index=False)
-
-        workbook  = writer.book
-        summary_sheet = writer.sheets['Summary']
-        details_sheet = writer.sheets['Details']
-
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'vcenter',
-            'align': 'center',
-            'fg_color': '#4F81BD',
-            'font_color': '#FFFFFF',
-            'border': 1
-        })
-        for col_num, col_name in enumerate(df_summary.columns):
-            summary_sheet.write(0, col_num, col_name, header_format)
-            summary_sheet.set_column(col_num, col_num, 18)
-
-        header_format_details = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'vcenter',
-            'align': 'center',
-            'fg_color': '#4BACC6',
-            'font_color': '#FFFFFF',
-            'border': 1
-        })
-        for col_num, col_name in enumerate(df_details.columns):
-            details_sheet.write(0, col_num, col_name, header_format_details)
-            details_sheet.set_column(col_num, col_num, 18)
-
-        last_row = len(df_summary) + 1
-        summary_sheet.conditional_format(f'D2:D{last_row}', {
-            'type': '3_color_scale',
-            'min_color': '#FFFFFF',
-            'mid_color': '#FFEB84',
-            'max_color': '#FF0000'
-        })
-
-        zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
-        for row in range(1, len(df_details) + 1):
-            if row % 2 == 1:
-                details_sheet.set_row(row, cell_format=zebra_format)
-
-    print(f"Excel file saved at {excel_path}")
 
 # Zero out beamstop region near center
 row_center = int(center_default[0])
@@ -1227,8 +1084,12 @@ progress_label_positions.pack(side=tk.BOTTOM, padx=5)
 progress_label_geometry = ttk.Label(root, text="")
 progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
 
+
+# Progress indicator shown until initial HT curves are generated
 progress_label = ttk.Label(root, text="", font=("Helvetica", 8))
 progress_label.pack(side=tk.BOTTOM, padx=5)
+init_progress = ttk.Progressbar(root, mode="indeterminate")
+init_progress.pack(side=tk.BOTTOM, fill=tk.X)
 
 chi_square_label = ttk.Label(root, text="Chi-Squared: ", font=("Helvetica", 8))
 chi_square_label.pack(side=tk.BOTTOM, padx=5)
@@ -1903,10 +1764,15 @@ def update_occupancies(*args):
     new_p = p_var.get()
 
     # Reuse the cached ht_curves unless occupancy or p has changed
+    with ht_cache_lock:
+        cache_copy = ht_curves_cache
+        last_occ = list(_last_occ_for_ht)
+        last_p = _last_p_for_ht
+
     if (
-        ht_curves_cache is None
-        or list(new_occ) != list(_last_occ_for_ht)
-        or not math.isclose(new_p, _last_p_for_ht, rel_tol=0.0, abs_tol=1e-12)
+        cache_copy is None
+        or list(new_occ) != last_occ
+        or not math.isclose(new_p, last_p, rel_tol=0.0, abs_tol=1e-12)
     ):
         ht_curves_local = ht_Iinf_dict(
             cif_path=cif_file,
@@ -1918,12 +1784,13 @@ def update_occupancies(*args):
             lambda_=lambda_,
         )
         arrays_local = ht_dict_to_arrays(ht_curves_local)
-        ht_curves_cache = {"curves": ht_curves_local, "arrays": arrays_local}
-        _last_occ_for_ht = list(new_occ)
-        _last_p_for_ht = float(new_p)
+        with ht_cache_lock:
+            ht_curves_cache = {"curves": ht_curves_local, "arrays": arrays_local}
+            _last_occ_for_ht = list(new_occ)
+            _last_p_for_ht = float(new_p)
     else:
-        ht_curves_local = ht_curves_cache["curves"]
-        arrays_local = ht_curves_cache["arrays"]
+        ht_curves_local = cache_copy["curves"]
+        arrays_local = cache_copy["arrays"]
 
     m1, i1, d1, det1 = arrays_local
 
@@ -2060,15 +1927,94 @@ occ_entry3.grid(row=2, column=1, padx=5, pady=2)
 force_update_button = ttk.Button(occ_entry_frame, text="Force Update", command=update_occupancies)
 force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
 
-def main(write_excel: bool = True):
-    """Entry point for running the GUI application.
 
-    Parameters
-    ----------
-    write_excel : bool, optional
-        When ``True`` the initial intensities are written to an Excel
-        file in the configured downloads directory.
-    """
+def _ht_worker():
+    """Background thread to generate initial Hendricks–Teller curves."""
+    try:
+        curves = ht_Iinf_dict(
+            cif_path=cif_file,
+            mx=mx,
+            occ=occ,
+            p=defaults['p'],
+            L_step=0.02,
+            two_theta_max=two_theta_range[1],
+            lambda_=lambda_,
+        )
+        arrays = ht_dict_to_arrays(curves)
+        with ht_cache_lock:
+            global ht_curves_cache, _last_occ_for_ht, _last_p_for_ht
+            ht_curves_cache = {"curves": curves, "arrays": arrays}
+            _last_occ_for_ht = list(occ)
+            _last_p_for_ht = float(defaults['p'])
+        root.after(0, _finish_ht_init)
+    except Exception as exc:
+        root.after(0, lambda: progress_label.config(text=f"HT init error: {exc}"))
+        root.after(0, init_progress.stop)
+
+
+def _finish_ht_init():
+    """Finalize initialization once the worker thread is done."""
+    update_mosaic_cache()
+    update_occupancies()
+
+    download_dir = get_dir("downloads")
+    excel_path = download_dir / "miller_intensities.xlsx"
+
+    with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+        df_summary.to_excel(writer, sheet_name='Summary', index=False)
+        df_details.to_excel(writer, sheet_name='Details', index=False)
+
+        workbook = writer.book
+        summary_sheet = writer.sheets['Summary']
+        details_sheet = writer.sheets['Details']
+
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'fg_color': '#4F81BD',
+            'font_color': '#FFFFFF',
+            'border': 1
+        })
+        for col_num, col_name in enumerate(df_summary.columns):
+            summary_sheet.write(0, col_num, col_name, header_format)
+            summary_sheet.set_column(col_num, col_num, 18)
+
+        header_format_details = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'fg_color': '#4BACC6',
+            'font_color': '#FFFFFF',
+            'border': 1
+        })
+        for col_num, col_name in enumerate(df_details.columns):
+            details_sheet.write(0, col_num, col_name, header_format_details)
+            details_sheet.set_column(col_num, col_num, 18)
+
+        last_row = len(df_summary) + 1
+        summary_sheet.conditional_format(f'D2:D{last_row}', {
+            'type': '3_color_scale',
+            'min_color': '#FFFFFF',
+            'mid_color': '#FFEB84',
+            'max_color': '#FF0000'
+        })
+
+        zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
+        for row in range(1, len(df_details) + 1):
+            if row % 2 == 1:
+                details_sheet.set_row(row, cell_format=zebra_format)
+
+    print(f"Excel file saved at {excel_path}")
+    init_progress.stop()
+    init_progress.pack_forget()
+    progress_label.config(text="Initialization complete")
+
+def main():
+    """Entry point for running the GUI application."""
+
 
     params_file_path = get_path("parameters_file")
     if os.path.exists(params_file_path):
@@ -2095,8 +2041,9 @@ def main(write_excel: bool = True):
     else:
         print("No saved profile found; using default parameters.")
 
-    update_mosaic_cache()
-    do_update()
+    progress_label.config(text="Generating reflection data...")
+    init_progress.start()
+    threading.Thread(target=_ht_worker, daemon=True).start()
     root.mainloop()
 
 
