@@ -5,6 +5,7 @@
 import math
 import os
 import re
+import argparse
 import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
@@ -332,58 +333,60 @@ df_summary, df_details = build_intensity_dataframes(
     miller, intensities, degeneracy, details
 )
 
-# Save the initial intensities to Excel in the configured downloads directory.
-download_dir = get_dir("downloads")
-excel_path = download_dir / "miller_intensities.xlsx"
+if write_excel:
+    # Save the initial intensities to Excel in the configured downloads
+    # directory.
+    download_dir = get_dir("downloads")
+    excel_path = download_dir / "miller_intensities.xlsx"
 
-with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-    df_summary.to_excel(writer, sheet_name='Summary', index=False)
-    df_details.to_excel(writer, sheet_name='Details', index=False)
-    
-    workbook  = writer.book
-    summary_sheet = writer.sheets['Summary']
-    details_sheet = writer.sheets['Details']
-    
-    header_format = workbook.add_format({
-        'bold': True,
-        'text_wrap': True,
-        'valign': 'vcenter',
-        'align': 'center',
-        'fg_color': '#4F81BD',
-        'font_color': '#FFFFFF',
-        'border': 1
-    })
-    for col_num, col_name in enumerate(df_summary.columns):
-        summary_sheet.write(0, col_num, col_name, header_format)
-        summary_sheet.set_column(col_num, col_num, 18)
-    
-    header_format_details = workbook.add_format({
-        'bold': True,
-        'text_wrap': True,
-        'valign': 'vcenter',
-        'align': 'center',
-        'fg_color': '#4BACC6',
-        'font_color': '#FFFFFF',
-        'border': 1
-    })
-    for col_num, col_name in enumerate(df_details.columns):
-        details_sheet.write(0, col_num, col_name, header_format_details)
-        details_sheet.set_column(col_num, col_num, 18)
-    
-    last_row = len(df_summary) + 1
-    summary_sheet.conditional_format(f'D2:D{last_row}', {
-        'type': '3_color_scale',
-        'min_color': '#FFFFFF',
-        'mid_color': '#FFEB84',
-        'max_color': '#FF0000'
-    })
-    
-    zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
-    for row in range(1, len(df_details) + 1):
-        if row % 2 == 1:
-            details_sheet.set_row(row, cell_format=zebra_format)
+    with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+        df_summary.to_excel(writer, sheet_name='Summary', index=False)
+        df_details.to_excel(writer, sheet_name='Details', index=False)
 
-print(f"Excel file saved at {excel_path}")
+        workbook  = writer.book
+        summary_sheet = writer.sheets['Summary']
+        details_sheet = writer.sheets['Details']
+
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'fg_color': '#4F81BD',
+            'font_color': '#FFFFFF',
+            'border': 1
+        })
+        for col_num, col_name in enumerate(df_summary.columns):
+            summary_sheet.write(0, col_num, col_name, header_format)
+            summary_sheet.set_column(col_num, col_num, 18)
+
+        header_format_details = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'fg_color': '#4BACC6',
+            'font_color': '#FFFFFF',
+            'border': 1
+        })
+        for col_num, col_name in enumerate(df_details.columns):
+            details_sheet.write(0, col_num, col_name, header_format_details)
+            details_sheet.set_column(col_num, col_num, 18)
+
+        last_row = len(df_summary) + 1
+        summary_sheet.conditional_format(f'D2:D{last_row}', {
+            'type': '3_color_scale',
+            'min_color': '#FFFFFF',
+            'mid_color': '#FFEB84',
+            'max_color': '#FF0000'
+        })
+
+        zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
+        for row in range(1, len(df_details) + 1):
+            if row % 2 == 1:
+                details_sheet.set_row(row, cell_format=zebra_format)
+
+    print(f"Excel file saved at {excel_path}")
 
 # Zero out beamstop region near center
 row_center = int(center_default[0])
@@ -2057,8 +2060,15 @@ occ_entry3.grid(row=2, column=1, padx=5, pady=2)
 force_update_button = ttk.Button(occ_entry_frame, text="Force Update", command=update_occupancies)
 force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
 
-def main():
-    """Entry point for running the GUI application."""
+def main(write_excel: bool = True):
+    """Entry point for running the GUI application.
+
+    Parameters
+    ----------
+    write_excel : bool, optional
+        When ``True`` the initial intensities are written to an Excel
+        file in the configured downloads directory.
+    """
 
     params_file_path = get_path("parameters_file")
     if os.path.exists(params_file_path):
@@ -2091,8 +2101,16 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="RA Simulation GUI")
+    parser.add_argument(
+        "--no-excel",
+        action="store_true",
+        help="Do not write the initial intensity Excel file",
+    )
+    args = parser.parse_args()
+
     try:
-        main()
+        main(write_excel=not args.no_excel)
     except Exception as exc:
         print("Unhandled exception during startup:", exc)
         import traceback
