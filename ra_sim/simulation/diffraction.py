@@ -1009,7 +1009,7 @@ def process_peaks_parallel(
     else:
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
-    # Preallocate result buffers to avoid thread-unsafe list appends
+
     max_hits_per_peak = beam_x_array.size * 2
 
     hit_tables_arr = np.empty((num_peaks, max_hits_per_peak, 7), dtype=np.float64)
