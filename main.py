@@ -921,10 +921,7 @@ def do_update():
         peak_intensities.clear()
 
         def run_one(miller_arr, intens_arr, a_val, c_val):
-            # Ensure arrays passed to the JITed routine are contiguous ``float64``.
-            # Some helper routines return ``int32`` arrays which trigger a Numba
-            # ``array_to_array`` assertion when implicitly cast.  Explicitly
-            # convert them to a safe format here.
+
             miller_arr = np.ascontiguousarray(miller_arr, dtype=np.float64)
             intens_arr = np.ascontiguousarray(intens_arr, dtype=np.float64)
 
@@ -1683,8 +1680,8 @@ def save_q_space_representation():
     }
 
     image_result, max_positions_local, q_data, q_count, _, _ = process_peaks_parallel(
-        miller,
-        intensities,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intensities, dtype=np.float64),
         image_size,
         a_var.get(),
         c_var.get(),
@@ -1770,8 +1767,8 @@ def run_debug_simulation():
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
     image_out, maxpos, qdata, qcount = process_peaks_parallel_debug(
-        miller,
-        intensities,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intensities, dtype=np.float64),
         image_size,
         a_val,
         c_val,

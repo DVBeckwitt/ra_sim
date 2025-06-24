@@ -58,8 +58,8 @@ def simulate_diffraction(
     n_detector = np.array([0.0, 1.0, 0.0])
 
     simulated_image, *_ = process_peaks_parallel(
-        miller,
-        intensities,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intensities, dtype=np.float64),
         image_size,
         av,
         cv,

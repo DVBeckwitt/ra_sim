@@ -52,7 +52,8 @@ def simulate_and_compare_hkl(
 
     # Full-pattern simulation
     updated_image, maxpos, _, _, _ = process_peaks_parallel(
-        miller, intensities, image_size,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intensities, dtype=np.float64),
         a, c, wavelength_array,
         sim_buffer, dist,
         gamma, Gamma, chi, psi,
