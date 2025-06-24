@@ -95,7 +95,10 @@ def run_simulation(
 
     img_buf = np.zeros((image_size, image_size), np.float64)
     n2      = IndexofRefraction()
-    center  = (geometry["poni2"]/100e-6, image_size - geometry["poni1"]/100e-6)
+    center  = np.array([
+        geometry["poni2"]/100e-6,
+        image_size - geometry["poni1"]/100e-6
+    ], dtype=np.float64)
 
     img, hit_tables, *_ = process_peaks_parallel(
         miller, intens, image_size,
