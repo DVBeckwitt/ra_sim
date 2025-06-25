@@ -70,6 +70,7 @@ def simulate_and_compare_hkl(
         np.ascontiguousarray(mosaic['beam_y_array'], dtype=np.float64),
         np.ascontiguousarray(mosaic['theta_array'], dtype=np.float64),
         np.ascontiguousarray(mosaic['phi_array'], dtype=np.float64),
+
         mosaic['sigma_mosaic_deg'],
         mosaic['gamma_mosaic_deg'],
         mosaic['eta'],

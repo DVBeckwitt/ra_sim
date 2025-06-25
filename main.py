@@ -921,11 +921,7 @@ def do_update():
         peak_intensities.clear()
 
         def run_one(miller_arr, intens_arr, a_val, c_val):
-            """Wrapper to call :func:`process_peaks_parallel` safely."""
-            # Ensure arrays passed to the JIT routine are contiguous ``float64``.
-            # Some helper routines may return ``int32`` arrays which trigger a
-            # Numba ``array_to_array`` assertion when implicitly cast.  Explicit
-            # conversion avoids the error.
+
             miller_arr = np.ascontiguousarray(miller_arr, dtype=np.float64)
             intens_arr = np.ascontiguousarray(intens_arr, dtype=np.float64)
 
@@ -958,6 +954,7 @@ def do_update():
                 np.ascontiguousarray(mosaic_params["beam_y_array"], dtype=np.float64),
                 np.ascontiguousarray(mosaic_params["theta_array"], dtype=np.float64),
                 np.ascontiguousarray(mosaic_params["phi_array"], dtype=np.float64),
+
                 mosaic_params["sigma_mosaic_deg"],
                 mosaic_params["gamma_mosaic_deg"],
                 mosaic_params["eta"],
