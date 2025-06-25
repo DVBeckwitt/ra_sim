@@ -1011,6 +1011,12 @@ def process_peaks_parallel(
     miss_tables = List.empty_list(types.float64[:, ::1])
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
 
+    max_hits = beam_x_array.size * 2
+    pre_hits = np.empty((num_peaks, max_hits, 7), dtype=np.float64)
+    pre_miss = np.empty((num_peaks, max_hits, 3), dtype=np.float64)
+    hit_count = np.zeros(num_peaks, dtype=np.int64)
+    miss_count = np.zeros(num_peaks, dtype=np.int64)
+
     # prange over each reflection
     for i_pk in prange(num_peaks):
         # Ensure HKL values remain floating point to allow fractional indices
@@ -1043,8 +1049,17 @@ def process_peaks_parallel(
         )
         if record_status:
             all_status[i_pk, :] = status_arr
-        hit_tables.append(pixel_hits)
-        miss_tables.append(missed_arr)
+        h_n = pixel_hits.shape[0]
+        m_n = missed_arr.shape[0]
+        pre_hits[i_pk, :h_n, :] = pixel_hits
+        pre_miss[i_pk, :m_n, :] = missed_arr
+        hit_count[i_pk] = h_n
+        miss_count[i_pk] = m_n
+
+    for i_pk in range(num_peaks):
+        hit_tables.append(pre_hits[i_pk, :hit_count[i_pk]].copy())
+        miss_tables.append(pre_miss[i_pk, :miss_count[i_pk]].copy())
+
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
