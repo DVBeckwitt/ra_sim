@@ -6,7 +6,9 @@ import math
 import os
 
 # Enable debug messages automatically. Set RA_SIM_DEBUG=0 to disable.
-os.environ.setdefault("RA_SIM_DEBUG", "1")
+os.environ.setdefault("RA_SIM_DEBUG", "0")
+write_excel = False
+
 import re
 import argparse
 import tempfile
@@ -238,7 +240,7 @@ ht_curves = ht_Iinf_dict(                 # ← new core
     mx=mx,                                # generates all (h,k) for |h|,|k|<mx
     occ=occ,                              # same occupancy-scaling rules
     p=defaults['p'],                      # disorder probability
-    L_step=0.02,
+    L_step=0.2,
     two_theta_max=two_theta_range[1],
     lambda_=lambda_,
 )
