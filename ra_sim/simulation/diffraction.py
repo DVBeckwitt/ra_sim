@@ -1007,9 +1007,15 @@ def process_peaks_parallel(
     else:
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
-    hit_tables = List.empty_list(types.float64[:, ::1])
-    miss_tables = List.empty_list(types.float64[:, ::1])
-    all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
+    n_samp = beam_x_array.size
+    max_hits = n_samp * 2
+
+    hit_storage = np.empty((num_peaks, max_hits, 7), dtype=np.float64)
+    miss_storage = np.empty((num_peaks, max_hits, 3), dtype=np.float64)
+    hit_counts = np.zeros(num_peaks, dtype=np.int64)
+    miss_counts = np.zeros(num_peaks, dtype=np.int64)
+
+    all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
 
     # prange over each reflection
     for i_pk in prange(num_peaks):
@@ -1043,8 +1049,19 @@ def process_peaks_parallel(
         )
         if record_status:
             all_status[i_pk, :] = status_arr
-        hit_tables.append(pixel_hits)
-        miss_tables.append(missed_arr)
+        n_hit = pixel_hits.shape[0]
+        hit_counts[i_pk] = n_hit
+        hit_storage[i_pk, :n_hit, :] = pixel_hits
+
+        n_miss = missed_arr.shape[0]
+        miss_counts[i_pk] = n_miss
+        miss_storage[i_pk, :n_miss, :] = missed_arr
+
+    hit_tables = List.empty_list(types.float64[:, ::1])
+    miss_tables = List.empty_list(types.float64[:, ::1])
+    for i_pk in range(num_peaks):
+        hit_tables.append(hit_storage[i_pk, :hit_counts[i_pk], :])
+        miss_tables.append(miss_storage[i_pk, :miss_counts[i_pk], :])
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
