@@ -614,3 +614,73 @@ def process_peaks_parallel_debug(
         return image, max_positions, q_data, q_count
     else:
         return image, max_positions, None, None
+
+
+def process_qr_rods_parallel_debug(
+    qr_dict,
+    image_size,
+    av,
+    cv,
+    lambda_,
+    image,
+    Distance_CoR_to_Detector,
+    gamma_deg,
+    Gamma_deg,
+    chi_deg,
+    psi_deg,
+    zs,
+    zb,
+    n2,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    sigma_pv_deg,
+    gamma_pv_deg,
+    eta_pv,
+    wavelength_array,
+    debye_x,
+    debye_y,
+    center,
+    theta_initial_deg,
+    unit_x,
+    n_detector,
+    save_flag,
+):
+    """Wrapper to debug-process rods instead of individual reflections."""
+    from ra_sim.utils.stacking_fault import qr_dict_to_arrays
+
+    miller, intens, _, _ = qr_dict_to_arrays(qr_dict)
+
+    return process_peaks_parallel_debug(
+        miller,
+        intens,
+        image_size,
+        av,
+        cv,
+        lambda_,
+        image,
+        Distance_CoR_to_Detector,
+        gamma_deg,
+        Gamma_deg,
+        chi_deg,
+        psi_deg,
+        zs,
+        zb,
+        n2,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        sigma_pv_deg,
+        gamma_pv_deg,
+        eta_pv,
+        wavelength_array,
+        debye_x,
+        debye_y,
+        center,
+        theta_initial_deg,
+        unit_x,
+        n_detector,
+        save_flag,
+    )

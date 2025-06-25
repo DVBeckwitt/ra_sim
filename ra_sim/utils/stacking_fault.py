@@ -266,3 +266,65 @@ def ht_dict_to_arrays(ht_curves):
 
     return miller, intens, degeneracy, details
 
+
+# ---------------------------------------------------------------------------
+# New helpers: group HT curves by radial index (Qr rods)
+# ---------------------------------------------------------------------------
+def ht_dict_to_qr_dict(ht_curves):
+    """Combine Hendricks–Teller curves with identical radial index.
+
+    Parameters
+    ----------
+    ht_curves : dict
+        Mapping ``(h, k)`` to ``{"L": array, "I": array}``.
+
+    Returns
+    -------
+    dict
+        ``{m: {"L": array, "I": array, "hk": (h,k)}}`` keyed by the radial index
+        ``m = h*h + h*k + k*k``. Intensities for curves with the same ``m`` are
+        summed and one representative ``(h,k)`` pair is stored.
+    """
+    import numpy as np
+
+    rods = {}
+    for (h, k), curve in ht_curves.items():
+        m = h*h + h*k + k*k
+        entry = rods.setdefault(
+            m, {"L": curve["L"], "I": np.zeros_like(curve["I"]), "hk": (h, k)}
+        )
+        if entry["L"].shape != curve["L"].shape or not np.allclose(entry["L"], curve["L"]):
+            raise ValueError("L grids for HK pairs with identical radial index must match")
+        entry["I"] += curve["I"]
+    return rods
+
+
+def qr_dict_to_arrays(qr_dict):
+    """Convert a ``qr_dict`` from :func:`ht_dict_to_qr_dict` into arrays."""
+    import numpy as np
+
+    total = sum(len(v["L"]) for v in qr_dict.values())
+    miller = np.empty((total, 3), dtype=np.float64)
+    intens = np.empty(total, dtype=np.float64)
+    degeneracy = np.ones(total, dtype=np.int32)
+    details = []
+
+    idx = 0
+    for m, data in sorted(qr_dict.items()):
+        h, k = data["hk"]
+        L_vals = data["L"]
+        I_vals = data["I"]
+        n = len(L_vals)
+
+        miller[idx:idx+n, 0] = h
+        miller[idx:idx+n, 1] = k
+        miller[idx:idx+n, 2] = L_vals
+        intens[idx:idx+n] = I_vals
+
+        for L_val, inten in zip(L_vals, I_vals):
+            details.append([((h, k, float(L_val)), float(inten))])
+
+        idx += n
+
+    return miller, intens, degeneracy, details
+

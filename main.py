@@ -36,7 +36,12 @@ import pandas as pd
 import Dans_Diffraction as dif
 import CifFile
 
-from ra_sim.utils.stacking_fault import ht_Iinf_dict, ht_dict_to_arrays
+from ra_sim.utils.stacking_fault import (
+    ht_Iinf_dict,
+    ht_dict_to_arrays,
+    ht_dict_to_qr_dict,
+    qr_dict_to_arrays,
+)
 
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
@@ -57,9 +62,13 @@ from ra_sim.fitting.optimization import (
     fit_geometry_parameters,
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction import process_peaks_parallel
+from ra_sim.simulation.diffraction import (
+    process_peaks_parallel,
+    process_qr_rods_parallel,
+)
 from ra_sim.simulation.diffraction_debug import (
     process_peaks_parallel_debug,
+    process_qr_rods_parallel_debug,
     dump_debug_log,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
@@ -245,12 +254,14 @@ ht_curves = ht_Iinf_dict(                 # ← new core
     lambda_=lambda_,
 )
 
-# Cache the initial HT curves along with the occupancy and p values so that
-# subsequent updates can reuse them unless these parameters change.  We also
-# cache the converted arrays to avoid repeated dict→array conversions.
-miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(ht_curves)
+# Convert to Qr rods by summing curves with identical radial index.
+qr_curves = ht_dict_to_qr_dict(ht_curves)
+
+# Cache the initial Qr curves along with the occupancy and p values so that
+# subsequent updates can reuse them unless these parameters change.
+miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(qr_curves)
 ht_curves_cache = {
-    "curves": ht_curves,
+    "curves": qr_curves,
     "arrays": (miller1, intens1, degeneracy1, details1),
 }
 _last_occ_for_ht = list(occ)
@@ -903,37 +914,85 @@ def do_update():
         peak_millers.clear()
         peak_intensities.clear()
 
-        def run_one(miller_arr, intens_arr, a_val, c_val):
+        def run_one(data, intens_arr, a_val, c_val):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
-            if DEBUG_ENABLED:
-                debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
-                if not np.all(np.isfinite(miller_arr)):
-                    debug_print("Non-finite miller indices detected")
-                if not np.all(np.isfinite(intens_arr)):
-                    debug_print("Non-finite intensities detected")
-            return process_peaks_parallel(
-                miller_arr, intens_arr, image_size,
-                a_val, c_val, lambda_,
-                buf, corto_det_up,
-                gamma_updated, Gamma_updated, chi_updated, psi,
-                zs_updated, zb_updated, n2,
-                mosaic_params["beam_x_array"],
-                mosaic_params["beam_y_array"],
-                mosaic_params["theta_array"],
-                mosaic_params["phi_array"],
-                mosaic_params["sigma_mosaic_deg"],
-                mosaic_params["gamma_mosaic_deg"],
-                mosaic_params["eta"],
-                mosaic_params["wavelength_array"],
-                debye_x_updated, debye_y_updated,
-                [center_x_up, center_y_up],
-                theta_init_up,
-                np.array([1.0, 0.0, 0.0]),
-                np.array([0.0, 1.0, 0.0]),
-                save_flag=0
-            )
+            if isinstance(data, dict):
+                if DEBUG_ENABLED:
+                    n_pts = sum(len(v["L"]) for v in data.values())
+                    debug_print("process_qr_rods_parallel with", n_pts, "points")
+                return process_qr_rods_parallel(
+                    data,
+                    image_size,
+                    a_val,
+                    c_val,
+                    lambda_,
+                    buf,
+                    corto_det_up,
+                    gamma_updated,
+                    Gamma_updated,
+                    chi_updated,
+                    psi,
+                    zs_updated,
+                    zb_updated,
+                    n2,
+                    mosaic_params["beam_x_array"],
+                    mosaic_params["beam_y_array"],
+                    mosaic_params["theta_array"],
+                    mosaic_params["phi_array"],
+                    mosaic_params["sigma_mosaic_deg"],
+                    mosaic_params["gamma_mosaic_deg"],
+                    mosaic_params["eta"],
+                    mosaic_params["wavelength_array"],
+                    debye_x_updated,
+                    debye_y_updated,
+                    [center_x_up, center_y_up],
+                    theta_init_up,
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.0, 1.0, 0.0]),
+                    save_flag=0,
+                )
+            else:
+                miller_arr = data
+                if DEBUG_ENABLED:
+                    debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
+                    if not np.all(np.isfinite(miller_arr)):
+                        debug_print("Non-finite miller indices detected")
+                    if not np.all(np.isfinite(intens_arr)):
+                        debug_print("Non-finite intensities detected")
+                return process_peaks_parallel(
+                    miller_arr,
+                    intens_arr,
+                    image_size,
+                    a_val,
+                    c_val,
+                    lambda_,
+                    buf,
+                    corto_det_up,
+                    gamma_updated,
+                    Gamma_updated,
+                    chi_updated,
+                    psi,
+                    zs_updated,
+                    zb_updated,
+                    n2,
+                    mosaic_params["beam_x_array"],
+                    mosaic_params["beam_y_array"],
+                    mosaic_params["theta_array"],
+                    mosaic_params["phi_array"],
+                    mosaic_params["sigma_mosaic_deg"],
+                    mosaic_params["gamma_mosaic_deg"],
+                    mosaic_params["eta"],
+                    mosaic_params["wavelength_array"],
+                    debye_x_updated,
+                    debye_y_updated,
+                    [center_x_up, center_y_up],
+                    theta_init_up,
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.0, 1.0, 0.0]),
+                    save_flag=0,
+                )
 
-        img1, maxpos1, _, _, _, _ = run_one(SIM_MILLER1, SIM_INTENS1, a_updated, c_updated)
+        img1, maxpos1, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
         if SIM_MILLER2.size > 0:
             img2, maxpos2, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
         else:
@@ -1924,8 +1983,9 @@ def update_occupancies(*args):
             two_theta_max=two_theta_range[1],
             lambda_=lambda_,
         )
-        arrays_local = ht_dict_to_arrays(ht_curves_local)
-        ht_curves_cache = {"curves": ht_curves_local, "arrays": arrays_local}
+        qr_local = ht_dict_to_qr_dict(ht_curves_local)
+        arrays_local = qr_dict_to_arrays(qr_local)
+        ht_curves_cache = {"curves": qr_local, "arrays": arrays_local}
         _last_occ_for_ht = list(new_occ)
         _last_p_for_ht = float(new_p)
     else:
