@@ -122,7 +122,8 @@ def main() -> None:
     sim_buffer = np.zeros((IMAGE_SIZE, IMAGE_SIZE), np.float64)
 
     image, hit_tables, q_data, q_count, solve_status, miss_tables = process_peaks_parallel(
-        miller, intens, IMAGE_SIZE,
+        np.ascontiguousarray(miller, dtype=np.float64),
+        np.ascontiguousarray(intens, dtype=np.float64),
         a_v, c_v, λ,
         sim_buffer,
         dist,
