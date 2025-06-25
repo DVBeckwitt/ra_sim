@@ -283,19 +283,31 @@ def ht_dict_to_qr_dict(ht_curves):
     dict
         ``{m: {"L": array, "I": array, "hk": (h,k)}}`` keyed by the radial index
         ``m = h*h + h*k + k*k``. Intensities for curves with the same ``m`` are
-        summed and one representative ``(h,k)`` pair is stored.
+        summed and one representative ``(h,k)`` pair is stored. If the ``L`` grids
+        for reflections with the same radial index differ, the intensities are
+        interpolated onto the union of both grids before summation.
     """
     import numpy as np
 
     rods = {}
     for (h, k), curve in ht_curves.items():
-        m = h*h + h*k + k*k
-        entry = rods.setdefault(
-            m, {"L": curve["L"], "I": np.zeros_like(curve["I"]), "hk": (h, k)}
-        )
-        if entry["L"].shape != curve["L"].shape or not np.allclose(entry["L"], curve["L"]):
-            raise ValueError("L grids for HK pairs with identical radial index must match")
-        entry["I"] += curve["I"]
+        L_vals = np.asarray(curve["L"], dtype=float)
+        I_vals = np.asarray(curve["I"], dtype=float)
+        m = h * h + h * k + k * k
+        if m not in rods:
+            rods[m] = {"L": L_vals.copy(), "I": I_vals.copy(), "hk": (h, k)}
+            continue
+
+        entry = rods[m]
+        if entry["L"].shape != L_vals.shape or not np.allclose(entry["L"], L_vals):
+            union_L = np.union1d(entry["L"], L_vals)
+            entry_I = np.interp(union_L, entry["L"], entry["I"], left=0.0, right=0.0)
+            add_I = np.interp(union_L, L_vals, I_vals, left=0.0, right=0.0)
+            entry["L"] = union_L
+            entry["I"] = entry_I + add_I
+        else:
+            entry["I"] += I_vals
+
     return rods
 
 
