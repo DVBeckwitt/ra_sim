@@ -74,6 +74,7 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.debug_utils import debug_print, is_debug_enabled
+from ra_sim.gui.collapsible import CollapsibleFrame
 
 
 turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
@@ -2098,18 +2099,29 @@ def update_occupancies(*args):
     last_simulation_signature = None
     schedule_update()
 
-# Sliders for three disorder probabilities and weights
-p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001, right_col, update_occupancies)
-w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1, right_col, update_occupancies)
-p1_var, _ = create_slider('p≈1', 0.8, 1.0, defaults['p1'], 0.001, right_col, update_occupancies)
-w1_var, _ = create_slider('w(p≈1)%', 0.0, 100.0, defaults['w1'], 0.1, right_col, update_occupancies)
-p2_var, _ = create_slider('p', 0.0, 1.0, defaults['p2'], 0.001, right_col, update_occupancies)
-w2_var, _ = create_slider('w(p)%', 0.0, 100.0, defaults['w2'], 0.1, right_col, update_occupancies)
+# Sliders for three disorder probabilities and weights inside a collapsible frame
+stack_frame = CollapsibleFrame(right_col, text='Stacking Probabilities')
+stack_frame.pack(fill=tk.X, padx=5, pady=5)
+p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
+                          stack_frame.frame, update_occupancies)
+w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
+                          stack_frame.frame, update_occupancies)
+p1_var, _ = create_slider('p≈1', 0.8, 1.0, defaults['p1'], 0.001,
+                          stack_frame.frame, update_occupancies)
+w1_var, _ = create_slider('w(p≈1)%', 0.0, 100.0, defaults['w1'], 0.1,
+                          stack_frame.frame, update_occupancies)
+p2_var, _ = create_slider('p', 0.0, 1.0, defaults['p2'], 0.001,
+                          stack_frame.frame, update_occupancies)
+w2_var, _ = create_slider('w(p)%', 0.0, 100.0, defaults['w2'], 0.1,
+                          stack_frame.frame, update_occupancies)
 
-# Existing occupancy slider for site 1.
-ttk.Label(right_col, text="Occupancy Site 1").pack(padx=5, pady=2)
+# Occupancy sliders grouped in a collapsible frame
+occ_frame = CollapsibleFrame(right_col, text='Site Occupancies')
+occ_frame.pack(fill=tk.X, padx=5, pady=5)
+
+ttk.Label(occ_frame.frame, text="Occupancy Site 1").pack(padx=5, pady=2)
 occ_scale1 = ttk.Scale(
-    right_col,
+    occ_frame.frame,
     from_=0.0,
     to=1.0,
     orient=tk.HORIZONTAL,
@@ -2118,10 +2130,9 @@ occ_scale1 = ttk.Scale(
 )
 occ_scale1.pack(fill=tk.X, padx=5, pady=2)
 
-# Existing occupancy slider for site 2.
-ttk.Label(right_col, text="Occupancy Site 2").pack(padx=5, pady=2)
+ttk.Label(occ_frame.frame, text="Occupancy Site 2").pack(padx=5, pady=2)
 occ_scale2 = ttk.Scale(
-    right_col,
+    occ_frame.frame,
     from_=0.0,
     to=1.0,
     orient=tk.HORIZONTAL,
@@ -2130,10 +2141,9 @@ occ_scale2 = ttk.Scale(
 )
 occ_scale2.pack(fill=tk.X, padx=5, pady=2)
 
-# Existing occupancy slider for site 3.
-ttk.Label(right_col, text="Occupancy Site 3").pack(padx=5, pady=2)
+ttk.Label(occ_frame.frame, text="Occupancy Site 3").pack(padx=5, pady=2)
 occ_scale3 = ttk.Scale(
-    right_col,
+    occ_frame.frame,
     from_=0.0,
     to=1.0,
     orient=tk.HORIZONTAL,
@@ -2143,7 +2153,7 @@ occ_scale3 = ttk.Scale(
 occ_scale3.pack(fill=tk.X, padx=5, pady=2)
 
 # --- Add numeric input fields and a Force Update button ---
-occ_entry_frame = ttk.Frame(right_col)
+occ_entry_frame = ttk.Frame(occ_frame.frame)
 occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
 
 # Occupancy input for Site 1.
