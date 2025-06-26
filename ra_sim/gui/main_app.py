@@ -43,15 +43,33 @@ def main():
     slider_frame.pack(side=tk.LEFT, fill=tk.Y)
 
     # Initialize variables for sliders
-    theta_initial_var, _ = create_slider(slider_frame, "Theta Initial", 5.0, 20.0, 6.0, 0.01)
-    gamma_var, _ = create_slider(slider_frame, "Gamma", -5, 5, ai.rot2, 0.001)
-    Gamma_var, _ = create_slider(slider_frame, "Detector Rotation Gamma", -5, 5, ai.rot1, 0.001)
-    chi_var, _ = create_slider(slider_frame, "Chi", -1, 1, 0.0, 0.001)
-    zs_var, _ = create_slider(slider_frame, "Zs", 0.0, 5e-3, 0.0, 0.0001)
-    zb_var, _ = create_slider(slider_frame, "Zb", 0.0, 5e-3, -0.1e-3, 0.0001)
-    eta_var, _ = create_slider(slider_frame, "Eta (fraction)", 0.0, 1.0, 0.08, 0.001)
-    sigma_mosaic_var, _ = create_slider(slider_frame, "Sigma Mosaic (deg)", 0.0, 5.0, 3.0, 0.01)
-    gamma_mosaic_var, _ = create_slider(slider_frame, "Gamma Mosaic (deg)", 0.0, 5.0, 0.7, 0.01)
+    theta_initial_var, _ = create_slider(
+        "Theta Initial", 5.0, 20.0, 6.0, 0.01, slider_frame
+    )
+    gamma_var, _ = create_slider(
+        "Gamma", -5, 5, ai.rot2, 0.001, slider_frame
+    )
+    Gamma_var, _ = create_slider(
+        "Detector Rotation Gamma", -5, 5, ai.rot1, 0.001, slider_frame
+    )
+    chi_var, _ = create_slider(
+        "Chi", -1, 1, 0.0, 0.001, slider_frame
+    )
+    zs_var, _ = create_slider(
+        "Zs", 0.0, 5e-3, 0.0, 0.0001, slider_frame
+    )
+    zb_var, _ = create_slider(
+        "Zb", 0.0, 5e-3, -0.1e-3, 0.0001, slider_frame
+    )
+    eta_var, _ = create_slider(
+        "Eta (fraction)", 0.0, 1.0, 0.08, 0.001, slider_frame
+    )
+    sigma_mosaic_var, _ = create_slider(
+        "Sigma Mosaic (deg)", 0.0, 5.0, 3.0, 0.01, slider_frame
+    )
+    gamma_mosaic_var, _ = create_slider(
+        "Gamma Mosaic (deg)", 0.0, 5.0, 0.7, 0.01, slider_frame
+    )
 
     # Generate random profiles
     def generate_random_profiles():
