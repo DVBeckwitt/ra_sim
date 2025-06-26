@@ -108,7 +108,7 @@ def _abc(p, h, k):
 def _I_inf(L, p, h, k, F2):
     import numpy as np
     f, ψ, δ = _abc(p, h, k)
-    φ = δ + _TWO_PI * L
+    φ = δ + _TWO_PI * L/3
     return AREA * F2 * (1-f**2) / (1 + f**2 - 2*f*np.cos(φ-ψ))
 
 

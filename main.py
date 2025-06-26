@@ -249,7 +249,7 @@ ht_curves = ht_Iinf_dict(                 # ← new core
     mx=mx,                                # generates all (h,k) for |h|,|k|<mx
     occ=occ,                              # same occupancy-scaling rules
     p=defaults['p'],                      # disorder probability
-    L_step=0.2,
+    L_step=0.01,
     two_theta_max=two_theta_range[1],
     lambda_=lambda_,
 )
