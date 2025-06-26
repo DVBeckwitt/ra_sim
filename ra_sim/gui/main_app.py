@@ -139,9 +139,21 @@ def main():
         ax.imshow(simulated_image, cmap='turbo', vmin=0, vmax=1e5)
         canvas.draw_idle()
 
-    # Link sliders to the update function
-    for var in [theta_initial_var, gamma_var, Gamma_var, chi_var, zs_var, zb_var, eta_var, sigma_mosaic_var, gamma_mosaic_var]:
-        var.trace_add("write", update_plot)
+    # Throttle updates to avoid excessive computation when the user is
+    # dragging sliders. Each change schedules an update after a short
+    # delay and cancels any previously scheduled update.
+    update_job = None
+
+    def schedule_update(*args):
+        nonlocal update_job
+        if update_job is not None:
+            root.after_cancel(update_job)
+        update_job = root.after(200, update_plot)
+
+    # Link sliders to the throttled update function
+    for var in [theta_initial_var, gamma_var, Gamma_var, chi_var,
+                zs_var, zb_var, eta_var, sigma_mosaic_var, gamma_mosaic_var]:
+        var.trace_add("write", schedule_update)
 
     # Launch the main GUI loop
     root.mainloop()
