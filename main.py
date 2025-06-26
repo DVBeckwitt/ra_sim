@@ -236,7 +236,12 @@ defaults = {
     'a': av,
     'c': cv,
     'vmax': 1000,
-    'p': 0.5,
+    'p0': 0.05,
+    'p1': 0.95,
+    'p2': 0.5,
+    'w0': 33.3,
+    'w1': 33.3,
+    'w2': 33.4,
     'center_x': center_default[0],
     'center_y': center_default[1],
 }
@@ -244,28 +249,57 @@ defaults = {
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-ht_curves = ht_Iinf_dict(                 # ← new core
-    cif_path=cif_file,
-    mx=mx,                                # generates all (h,k) for |h|,|k|<mx
-    occ=occ,                              # same occupancy-scaling rules
-    p=defaults['p'],                      # disorder probability
-    L_step= 0.01,
-    two_theta_max=two_theta_range[1],
-    lambda_=lambda_,
-)
+def build_ht_cache(p_val, occ_vals):
+    curves = ht_Iinf_dict(
+        cif_path=cif_file,
+        mx=mx,
+        occ=occ_vals,
+        p=p_val,
+        L_step=0.01,
+        two_theta_max=two_theta_range[1],
+        lambda_=lambda_,
+    )
+    qr = ht_dict_to_qr_dict(curves)
+    arrays = qr_dict_to_arrays(qr)
+    return {"p": p_val, "occ": tuple(occ_vals), "qr": qr, "arrays": arrays}
 
-# Convert to Qr rods by summing curves with identical radial index.
-qr_curves = ht_dict_to_qr_dict(ht_curves)
-
-# Cache the initial Qr curves along with the occupancy and p values so that
-# subsequent updates can reuse them unless these parameters change.
-miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(qr_curves)
-ht_curves_cache = {
-    "curves": qr_curves,
-    "arrays": (miller1, intens1, degeneracy1, details1),
+# Precompute curves for the three p values
+ht_cache_multi = {
+    "p0": build_ht_cache(defaults['p0'], occ),
+    "p1": build_ht_cache(defaults['p1'], occ),
+    "p2": build_ht_cache(defaults['p2'], occ),
 }
+
+def combine_qr_dicts(caches, weights):
+    import numpy as np
+    out = {}
+    for cache, w in zip(caches, weights):
+        qr = cache["qr"]
+        for m, data in qr.items():
+            if m not in out:
+                out[m] = {"L": data["L"].copy(), "I": w * data["I"].copy(), "hk": data["hk"]}
+            else:
+                entry = out[m]
+                if entry["L"].shape != data["L"].shape or not np.allclose(entry["L"], data["L"]):
+                    union_L = np.union1d(entry["L"], data["L"])
+                    entry_I = np.interp(union_L, entry["L"], entry["I"], left=0.0, right=0.0)
+                    add_I = w * np.interp(union_L, data["L"], data["I"], left=0.0, right=0.0)
+                    entry["L"] = union_L
+                    entry["I"] = entry_I + add_I
+                else:
+                    entry["I"] += w * data["I"]
+    return out
+
+weights_init = np.array([defaults['w0'], defaults['w1'], defaults['w2']], dtype=float)
+weights_init /= weights_init.sum() if weights_init.sum() else 1.0
+combined_qr = combine_qr_dicts(
+    [ht_cache_multi['p0'], ht_cache_multi['p1'], ht_cache_multi['p2']],
+    weights_init,
+)
+miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
+ht_curves_cache = {"curves": combined_qr, "arrays": (miller1, intens1, degeneracy1, details1)}
 _last_occ_for_ht = list(occ)
-_last_p_for_ht = float(defaults['p'])
+_last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
 # ---- convert the dict → arrays compatible with the downstream code ----
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
@@ -1219,6 +1253,12 @@ def reset_to_defaults():
     occ_var1.set(1.0)
     occ_var2.set(0.5)
     occ_var3.set(0.5)
+    p0_var.set(defaults['p0'])
+    p1_var.set(defaults['p1'])
+    p2_var.set(defaults['p2'])
+    w0_var.set(defaults['w0'])
+    w1_var.set(defaults['w1'])
+    w2_var.set(defaults['w2'])
 
     update_mosaic_cache()
     global last_simulation_signature
@@ -1952,45 +1992,40 @@ occ_var2 = tk.DoubleVar(value=1.0)
 occ_var3 = tk.DoubleVar(value=1.0)
 
 def update_occupancies(*args):
-    """
-    Re-run miller_generator with updated occupancies,
-    then force the simulation to recalc.
-    """
+    """Recompute Hendricks–Teller curves when occupancies or p-values change."""
     global miller, intensities, degeneracy, details
     global df_summary, df_details
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
-    global ht_curves_cache, _last_occ_for_ht, _last_p_for_ht
-
-    # Grab new occupancy values from the variables (they may have been updated via the slider or Entry)
-    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
-
+    global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet
     global intensities_cif1, intensities_cif2
-    new_p = p_var.get()
 
-    # Reuse the cached ht_curves unless occupancy or p has changed
-    if (
-        ht_curves_cache is None
-        or list(new_occ) != list(_last_occ_for_ht)
-        or not math.isclose(new_p, _last_p_for_ht, rel_tol=0.0, abs_tol=1e-12)
-    ):
-        ht_curves_local = ht_Iinf_dict(
-            cif_path=cif_file,
-            mx=mx,
-            occ=new_occ,
-            p=new_p,
-            L_step=0.02,
-            two_theta_max=two_theta_range[1],
-            lambda_=lambda_,
-        )
-        qr_local = ht_dict_to_qr_dict(ht_curves_local)
-        arrays_local = qr_dict_to_arrays(qr_local)
-        ht_curves_cache = {"curves": qr_local, "arrays": arrays_local}
-        _last_occ_for_ht = list(new_occ)
-        _last_p_for_ht = float(new_p)
-    else:
-        ht_curves_local = ht_curves_cache["curves"]
-        arrays_local = ht_curves_cache["arrays"]
+    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
+    p_vals = [p0_var.get(), p1_var.get(), p2_var.get()]
+    w_raw = [w0_var.get(), w1_var.get(), w2_var.get()]
+    w_sum = sum(w_raw) or 1.0
+    weights = [w / w_sum for w in w_raw]
+
+    def get_cache(label, p_val):
+        cache = ht_cache_multi.get(label)
+        if (
+            cache is None
+            or cache["p"] != p_val
+            or list(cache["occ"]) != list(new_occ)
+        ):
+            cache = build_ht_cache(p_val, new_occ)
+            ht_cache_multi[label] = cache
+        return cache
+
+    caches = [get_cache("p0", p_vals[0]),
+              get_cache("p1", p_vals[1]),
+              get_cache("p2", p_vals[2])]
+
+    combined_qr_local = combine_qr_dicts(caches, weights)
+    arrays_local = qr_dict_to_arrays(combined_qr_local)
+    ht_curves_cache = {"curves": combined_qr_local, "arrays": arrays_local}
+    _last_occ_for_ht = list(new_occ)
+    _last_p_triplet = list(p_vals)
 
     m1, i1, d1, det1 = arrays_local
 
@@ -2063,10 +2098,13 @@ def update_occupancies(*args):
     last_simulation_signature = None
     schedule_update()
 
-# Slider for stacking disorder probability p
-p_var, _ = create_slider(
-    'Disorder p', 0.0, 1.0, defaults['p'], 0.01, right_col, update_occupancies
-)
+# Sliders for three disorder probabilities and weights
+p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001, right_col, update_occupancies)
+w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1, right_col, update_occupancies)
+p1_var, _ = create_slider('p≈1', 0.8, 1.0, defaults['p1'], 0.001, right_col, update_occupancies)
+w1_var, _ = create_slider('w(p≈1)%', 0.0, 100.0, defaults['w1'], 0.1, right_col, update_occupancies)
+p2_var, _ = create_slider('p', 0.0, 1.0, defaults['p2'], 0.001, right_col, update_occupancies)
+w2_var, _ = create_slider('w(p)%', 0.0, 100.0, defaults['w2'], 0.1, right_col, update_occupancies)
 
 # Existing occupancy slider for site 1.
 ttk.Label(right_col, text="Occupancy Site 1").pack(padx=5, pady=2)
