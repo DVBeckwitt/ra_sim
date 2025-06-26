@@ -739,6 +739,17 @@ def calculate_phi(
 
     e2_temp = np.cross(n_surf, e1_temp)
 
+    # Preallocate small arrays used inside the loop to avoid dynamic
+    # allocations when parallelizing with ``prange``.
+    beam_start = np.empty(3, dtype=np.float64)
+    k_in = np.empty(3, dtype=np.float64)
+    I_plane = np.empty(3, dtype=np.float64)
+    proj_incident = np.empty(3, dtype=np.float64)
+    k_in_crystal = np.empty(3, dtype=np.float64)
+    kf = np.empty(3, dtype=np.float64)
+    kf_prime = np.empty(3, dtype=np.float64)
+    plane_to_det = np.empty(3, dtype=np.float64)
+
     # Main loop over each beam sample in wave + mosaic
     for i_samp in prange(n_samp):
         lam_samp = wavelength_array[i_samp]
@@ -746,16 +757,16 @@ def calculate_phi(
 
         bx = beam_x_array[i_samp]
         by = beam_y_array[i_samp]
-        beam_start = np.array([bx, -20e-3, -zb + by], dtype=np.float64)
+        beam_start[0] = bx
+        beam_start[1] = -20e-3
+        beam_start[2] = -zb + by
 
         dtheta = theta_array[i_samp]
         dphi   = phi_array[i_samp]
-        
-        k_in = np.array([
-            cos(dtheta)*sin(dphi),
-            cos(dtheta)*cos(dphi),
-            sin(dtheta)
-        ], dtype=np.float64)
+
+        k_in[0] = cos(dtheta)*sin(dphi)
+        k_in[1] = cos(dtheta)*cos(dphi)
+        k_in[2] = sin(dtheta)
 
         # Intersect the beam with the sample plane
         ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
@@ -764,21 +775,29 @@ def calculate_phi(
                 statuses[i_samp] = -10
             continue
 
-        I_plane = np.array([ix, iy, iz])
+        I_plane[0] = ix
+        I_plane[1] = iy
+        I_plane[2] = iz
         kn_dot = k_in[0]*n_surf[0] + k_in[1]*n_surf[1] + k_in[2]*n_surf[2]
         th_i_prime = (pi/2.0) - acos(kn_dot)
 
-        projected_incident = k_in - kn_dot*n_surf
-        pln = sqrt(projected_incident[0]*projected_incident[0]
-                 + projected_incident[1]*projected_incident[1]
-                 + projected_incident[2]*projected_incident[2])
+        proj_incident[0] = k_in[0] - kn_dot*n_surf[0]
+        proj_incident[1] = k_in[1] - kn_dot*n_surf[1]
+        proj_incident[2] = k_in[2] - kn_dot*n_surf[2]
+        pln = sqrt(proj_incident[0]*proj_incident[0]
+                 + proj_incident[1]*proj_incident[1]
+                 + proj_incident[2]*proj_incident[2])
         if pln > 1e-12:
-            projected_incident /= pln
+            proj_incident[0] /= pln
+            proj_incident[1] /= pln
+            proj_incident[2] /= pln
         else:
-            projected_incident[:] = 0.0
+            proj_incident[0] = 0.0
+            proj_incident[1] = 0.0
+            proj_incident[2] = 0.0
 
-        p1 = projected_incident[0]*e1_temp[0] + projected_incident[1]*e1_temp[1] + projected_incident[2]*e1_temp[2]
-        p2 = projected_incident[0]*e2_temp[0] + projected_incident[1]*e2_temp[1] + projected_incident[2]*e2_temp[2]
+        p1 = proj_incident[0]*e1_temp[0] + proj_incident[1]*e1_temp[1] + proj_incident[2]*e1_temp[2]
+        p2 = proj_incident[0]*e2_temp[0] + proj_incident[1]*e2_temp[1] + proj_incident[2]*e2_temp[2]
         phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
 
         th_t = acos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
@@ -796,7 +815,9 @@ def calculate_phi(
         re_k_z = - np.sqrt((np.sqrt(at*at + bt*bt) + at)/2.0)
         #im_k_z =   np.sqrt((np.sqrt(at*at + bt*bt) - at)/2.0)
 
-        k_in_crystal = np.array([k_x_scat, k_y_scat, re_k_z])
+        k_in_crystal[0] = k_x_scat
+        k_in_crystal[1] = k_y_scat
+        k_in_crystal[2] = re_k_z
 
         # Incoherent mosaic average
         #incoherent = incoherent_averaging(Q_grid, N, cv, thickness,
@@ -833,8 +854,12 @@ def calculate_phi(
             k_tz_f = k_scat*sin(twotheta_t)
             #Tf = fresnel_transmission(th_t, n2, direction="out")
 
-            kf = np.array([k_tx_f, k_ty_f, k_tz_f])
-            kf_prime = R_sample @ kf
+            kf[0] = k_tx_f
+            kf[1] = k_ty_f
+            kf[2] = k_tz_f
+            kf_prime[0] = R_sample[0,0]*kf[0] + R_sample[0,1]*kf[1] + R_sample[0,2]*kf[2]
+            kf_prime[1] = R_sample[1,0]*kf[0] + R_sample[1,1]*kf[1] + R_sample[1,2]*kf[2]
+            kf_prime[2] = R_sample[2,0]*kf[0] + R_sample[2,1]*kf[1] + R_sample[2,2]*kf[2]
 
             dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
             if not valid_det:
@@ -845,9 +870,9 @@ def calculate_phi(
                     n_missed += 1
                 continue
 
-            plane_to_det = np.array([dx - Detector_Pos[0],
-                                     dy - Detector_Pos[1],
-                                     dz - Detector_Pos[2]], dtype=np.float64)
+            plane_to_det[0] = dx - Detector_Pos[0]
+            plane_to_det[1] = dy - Detector_Pos[1]
+            plane_to_det[2] = dz - Detector_Pos[2]
             x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
             y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
 
