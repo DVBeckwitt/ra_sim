@@ -6,6 +6,31 @@ from numba import njit, int64, float64, prange
 import matplotlib.pyplot as plt
 
 
+def sample_pseudo_voigt_2d(n, eta, sigma, gamma):
+    """Return ``n`` samples from a simple 2D pseudo-Voigt distribution.
+
+    Parameters
+    ----------
+    n : int
+        Number of samples to draw.
+    eta : float
+        Mixing fraction between Gaussian (0) and Lorentzian (1).
+    sigma : float
+        Standard deviation of the Gaussian component.
+    gamma : float
+        Half width at half maximum of the Lorentzian component.
+
+    Returns
+    -------
+    ndarray
+        Array of shape ``(n, 2)`` containing the sampled points.
+    """
+
+    gauss = np.random.normal(0.0, sigma, (n, 2))
+    lorentz = gamma * np.random.standard_cauchy((n, 2))
+    return (1.0 - eta) * gauss + eta * lorentz
+
+
 def sample_2d_gaussian(n, sigma):
     return np.random.normal(0, sigma, (n, 2))
 

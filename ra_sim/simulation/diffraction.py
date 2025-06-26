@@ -1240,3 +1240,76 @@ def debug_detector_paths(
     return out
 
 
+def simulate_diffraction_pattern(
+    *,
+    miller,
+    intensities,
+    parameters,
+    beam_arrays,
+    mosaic_arrays,
+    divergence_arrays,
+    av,
+    cv,
+    lambda_,
+    center,
+    debye_x,
+    debye_y,
+    theta_initial,
+    theta_range,
+    step,
+    geometry_params,
+):
+    """Simplified wrapper to generate a diffraction image for the GUI."""
+
+    dist, gamma, Gamma, chi, psi, zs, zb, n2 = geometry_params
+
+    bx, by, _weight_b = beam_arrays
+    beta, kappa, _weight_m = mosaic_arrays
+    theta_arr, phi_arr, _weight_d = divergence_arrays
+
+    image_size = int(2 * max(center) + 10)
+    image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    unit_x = np.array([1.0, 0.0, 0.0])
+    n_detector = np.array([0.0, 1.0, 0.0])
+
+    sigma_deg = np.degrees(np.std(beta)) if beta.size > 0 else 0.0
+    gamma_deg = np.degrees(np.std(kappa)) if kappa.size > 0 else 0.0
+    eta = 0.0
+
+    image, *_ = process_peaks_parallel(
+        np.array(miller, dtype=np.float64),
+        np.array(intensities, dtype=np.float64),
+        image_size,
+        av,
+        cv,
+        lambda_,
+        image,
+        dist,
+        gamma,
+        Gamma,
+        chi,
+        psi,
+        zs,
+        zb,
+        n2,
+        bx,
+        by,
+        theta_arr,
+        phi_arr,
+        sigma_deg,
+        gamma_deg,
+        eta,
+        np.full(theta_arr.shape, lambda_),
+        debye_x,
+        debye_y,
+        center,
+        theta_initial,
+        unit_x,
+        n_detector,
+        save_flag=0,
+    )
+
+    return image
+
+
