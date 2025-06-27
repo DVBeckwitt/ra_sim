@@ -263,17 +263,6 @@ b.on_clicked(lambda _: (
     ax.set_yscale('linear' if ax.get_yscale()=='log' else 'log'),
     refresh()
 ))
-# ─── create & store m-slider ────────────────────────────────────────────────
-m_slider = make_slider(
-    [0.25, ys[0], 0.65, 0.03],
-    'm index',
-    min(ALLOWED_M), max(ALLOWED_M),
-    state['m'],
-    ALLOWED_M,
-    lambda v: (state.update(m=int(v)), compute_components(), refresh())
-)
-# also keep it in _sliders for uniform handling if you like
-_sliders.append(m_slider)
 
 
 def toggle_mode(_):
