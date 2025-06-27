@@ -868,7 +868,10 @@ line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 
 update_pending = None
+update_running = False
+
 def schedule_update():
+    """Throttle updates so heavy simulations don't overlap."""
     global update_pending
     if update_pending is not None:
         root.after_cancel(update_pending)
@@ -889,13 +892,19 @@ stored_sim_image = None
 #                              MAIN UPDATE
 ###############################################################################
 def do_update():
-    global update_pending, last_simulation_signature
+    global update_pending, update_running, last_simulation_signature
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global av2, cv2
 
+    if update_running:
+        # another update is in progress; try again shortly
+        update_pending = root.after(100, do_update)
+        return
+
     update_pending = None
+    update_running = True
 
     gamma_updated      = float(gamma_var.get())
     Gamma_updated      = float(Gamma_var.get())
@@ -1046,6 +1055,7 @@ def do_update():
         if stored_max_positions_local is None:
             # first run after programme start – force a simulation
             last_simulation_signature = None
+            update_running = False
             return do_update()          # re-enter with computation path
         max_positions_local = stored_max_positions_local
         updated_image       = stored_sim_image
@@ -1207,6 +1217,9 @@ def do_update():
             chi_square_label.config(text="Chi-Squared: N/A")
     except Exception as e:
         chi_square_label.config(text=f"Chi-Squared Error: {e}")
+    finally:
+        # mark update completion so future updates can run
+        update_running = False
 
 # ── after you’ve updated background_visible in toggle_background() ──
 def toggle_background():
