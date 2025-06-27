@@ -1145,6 +1145,14 @@ def do_update():
         caked_img = sim_res2.intensity
         image_display.set_data(caked_img)
         image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
+        # Set axes for 2θ and φ ranges
+        tth_min, tth_max = float(sim_res2.radial[0]), float(sim_res2.radial[-1])
+        phi_min, phi_max = float(sim_res2.azimuthal[0]), float(sim_res2.azimuthal[-1])
+        image_display.set_extent([tth_min, tth_max, phi_max, phi_min])
+        ax.set_xlim(tth_min, tth_max)
+        ax.set_ylim(phi_max, phi_min)
+        ax.set_xlabel('2θ (degrees)')
+        ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
         background_display.set_visible(False)
     else:
@@ -1154,6 +1162,11 @@ def do_update():
         else:
             image_display.set_data(np.zeros((image_size, image_size)))
         image_display.set_clim(0, vmax_var.get())
+        image_display.set_extent([0, image_size, row_center, 0])
+        ax.set_xlim(0, image_size)
+        ax.set_ylim(row_center, 0)
+        ax.set_xlabel('X (pixels)')
+        ax.set_ylabel('Y (pixels)')
         ax.set_title('Simulated Diffraction Pattern')
         background_display.set_visible(background_visible)
         
