@@ -167,7 +167,7 @@ line_tot, = ax.plot([], [], lw=2, label='Σ weighted')
 line0,   = ax.plot([], [], ls='--', label='I(p≈0)')
 line1,   = ax.plot([], [], ls='--', label='I(p≈1)')
 line3,   = ax.plot([], [], ls='--', label='I(p)')
-bragg_scat = ax.scatter([], [], c='C4', marker='o', label='Bragg', zorder=3)
+bragg_scat = ax.scatter([], [], c='C4', marker='o', label='Bragg (scaled)', zorder=3)
 title = ax.set_title("")
 
 # refresh function
@@ -186,8 +186,15 @@ def refresh(_=None):
     handles = [line_tot] + [ln for ln,v in zip((line0,line1,line3), vis) if v]
     if state.get('show_bragg', True):
         b_tot = bragg_tot()
+        b_max = b_tot.max() if np.any(b_tot) else 0
+        # scale Bragg intensities so they share a similar scale with the
+        # composite curve
+        scale = (tot.max() / b_max) if b_max else 1.0
         mask_b = (L_INT>=lo) & (L_INT<=hi)
-        bragg_scat.set_offsets(np.column_stack([L_INT[mask_b], b_tot[mask_b]]))
+        bragg_scat.set_offsets(np.column_stack([
+            L_INT[mask_b],
+            b_tot[mask_b] * scale
+        ]))
         bragg_scat.set_visible(True)
         handles.append(bragg_scat)
     else:
