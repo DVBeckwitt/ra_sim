@@ -314,14 +314,14 @@ def refresh(_=None):
             msk = (L_vals >= lo) & (L_vals <= hi)
             ln2, = ax.plot(L_vals[msk], i2h[msk], marker='o', ls='none', label=f'2H m={state["m"]}')
             ln6, = ax.plot(L_vals[msk], i6h[msk], marker='s', ls='none', label=f'6H m={state["m"]}')
-            _bragg_lines += [ln2, ln6]
+            _bragg_lines.extend([ln2, ln6])
         else:
             for h, k in pairs:
                 L_vals, i2h, i6h = bragg_intensity_single(h, k)
                 msk = (L_vals >= lo) & (L_vals <= hi)
                 ln2, = ax.plot(L_vals[msk], i2h[msk], marker='o', ls='none', label=f'2H({h},{k})')
                 ln6, = ax.plot(L_vals[msk], i6h[msk], marker='s', ls='none', label=f'6H({h},{k})')
-                _bragg_lines += [ln2, ln6]
+                _bragg_lines.extend([ln2, ln6])
         handles += _bragg_lines
     ax.legend(handles, [h.get_label() for h in handles], loc='upper right')
     m = state['m']; r = np.sqrt(m)
