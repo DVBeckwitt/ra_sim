@@ -35,16 +35,21 @@ def main():
     fig, ax = setup_figure()
     img = ax.imshow(bg_image, cmap='turbo', vmin=0, vmax=1e3)
 
+    # Status indicator square
+    status_canvas = tk.Canvas(root, width=40, height=40, highlightthickness=0)
+    status_rect = status_canvas.create_rectangle(0, 0, 40, 40, fill="green", outline="")
+    status_canvas.pack(side=tk.RIGHT, padx=10, pady=10)
+
+    # Add sliders
+    slider_frame = ttk.Frame(root)
+    slider_frame.pack(side=tk.LEFT, fill=tk.Y)
+
     canvas = FigureCanvasTkAgg(fig, master=root)
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
     canvas.draw()
 
     # Loading indicator shown during long computations
     loading_label = ttk.Label(root, text="Loading...", font=("Helvetica", 12))
-
-    # Add sliders
-    slider_frame = ttk.Frame(root)
-    slider_frame.pack(side=tk.LEFT, fill=tk.Y)
 
     # Initialize variables for sliders
     theta_initial_var, _ = create_slider(
@@ -139,6 +144,8 @@ def main():
                 ax.imshow(image, cmap='turbo', vmin=0, vmax=1e5)
                 canvas.draw_idle()
                 loading_label.pack_forget()
+                status_canvas.itemconfig(status_rect, fill="green")
+                root.update_idletasks()
                 is_computing = False
                 if pending_update:
                     pending_update = False
@@ -148,6 +155,8 @@ def main():
 
         is_computing = True
         loading_label.pack(side=tk.BOTTOM, pady=5)
+        status_canvas.itemconfig(status_rect, fill="red")
+        root.update_idletasks()
 
         theta_initial = theta_initial_var.get()
         gamma = gamma_var.get()
