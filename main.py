@@ -1720,12 +1720,15 @@ def save_1d_snapshot():
     if not file_path.lower().endswith(".npy"):
         file_path += ".npy"
     
-    sim_img = last_1d_integration_data.get("simulated_2d_image")
-    if sim_img is None:
+    # Grab the currently displayed simulated image. ``global_image_buffer`` holds
+    # the scaled image that is shown in the GUI so copying it ensures we save
+    # exactly what the user sees.  ``last_1d_integration_data`` may be empty if
+    # the simulation hasn't run yet so rely directly on the buffer instead of
+    # that cache.
+    sim_img = np.asarray(global_image_buffer, dtype=np.float64).copy()
+    if sim_img.size == 0:
         progress_label.config(text="No simulated image available to save!")
         return
-
-    sim_img = np.asarray(sim_img, dtype=np.float64)
     try:
         np.save(file_path, sim_img, allow_pickle=False)
         progress_label.config(text=f"Saved simulated image to {file_path}")
