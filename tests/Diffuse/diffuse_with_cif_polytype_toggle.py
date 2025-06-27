@@ -17,6 +17,8 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RangeSlider, Button
 from collections import Counter
 
+from ra_sim.utils.tools import intensities_for_hkls
+
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
 
@@ -119,7 +121,11 @@ state = defaults.copy()
 
 # ─── after 'state = defaults.copy()' ───────────────────────────────────────────
 state.update({'mode': 'm',      # 'm' or 'hk'
-              'h': 0, 'k': 0})  # current HK in hk‑mode
+              'h': 0, 'k': 0,
+              'show_bragg': False})  # current HK in hk‑mode
+
+# cache Bragg intensities per (h,k)
+_BRAGG_CACHE = {}
 # ─── utilities ‑‑‑ choose active (h,k) list based on state['mode'] ────────────
 def active_pairs():
     if state['mode'] == 'm':
@@ -150,6 +156,33 @@ def composite_tot():
     w0, w1, w2 = w0/s, w1/s, w2/s
     return w0*state['I0'] + w1*state['I1'] + w2*state['I3']
 
+
+def ht_total_for_pair(h, k):
+    """Return total HT intensity for a single (h,k) pair."""
+    w0, w1, w2 = state['w0'], state['w1'], state['w2']
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0/s, w1/s, w2/s
+    F2 = F2_cache[(h, k)]
+    return (
+        w0 * I_inf(state['p0'], h, k, F2)
+        + w1 * I_inf(state['p1'], h, k, F2)
+        + w2 * I_inf(state['p3'], h, k, F2)
+    )
+
+
+def bragg_intensity(h, k):
+    """Return scaled Bragg intensities for the given (h,k) pair."""
+    if (h, k) not in _BRAGG_CACHE:
+        hkls = [(h, k, int(l)) for l in range(int(L_MAX) + 1)]
+        intens = intensities_for_hkls(hkls, str(CIF_2H), [1.0], LAMBDA)
+        _BRAGG_CACHE[(h, k)] = intens
+    intens = _BRAGG_CACHE[(h, k)]
+    ht = ht_total_for_pair(h, k)
+    max_ht = float(ht.max()) if np.any(ht) else 1.0
+    max_b = float(intens.max()) if np.any(intens) else 1.0
+    scale = max_ht / max_b if max_b else 1.0
+    return np.asarray(intens) * scale
+
 # set up figure
 fig, ax = plt.subplots(figsize=(8,6))
 plt.subplots_adjust(left=0.25, bottom=0.40, top=0.88)
@@ -162,6 +195,7 @@ line0,   = ax.plot([], [], ls='--', label='I(p≈0)')
 line1,   = ax.plot([], [], ls='--', label='I(p≈1)')
 line3,   = ax.plot([], [], ls='--', label='I(p)')
 title = ax.set_title("")
+_bragg_lines = []
 
 # refresh function
 def refresh(_=None):
@@ -177,6 +211,18 @@ def refresh(_=None):
     for ln, v in zip((line0, line1, line3), vis):
         ln.set_visible(v)
     handles = [line_tot] + [ln for ln,v in zip((line0,line1,line3), vis) if v]
+    for ln in _bragg_lines:
+        ln.remove()
+    _bragg_lines.clear()
+    if state['show_bragg']:
+        pairs = active_pairs()
+        for h,k in pairs:
+            intens = bragg_intensity(h,k)
+            L_vals = np.arange(len(intens))
+            msk = (L_vals>=lo) & (L_vals<=hi)
+            ln, = ax.plot(L_vals[msk], intens[msk], marker='o', ls='none', label=f'Bragg({h},{k})')
+            _bragg_lines.append(ln)
+        handles += _bragg_lines
     ax.legend(handles, [h.get_label() for h in handles], loc='upper right')
     m = state['m']; r = np.sqrt(m)
     Qr = 2*np.pi/A_HEX * np.sqrt(4*m/3) if m else 0
@@ -263,6 +309,13 @@ b.on_clicked(lambda _: (
     ax.set_yscale('linear' if ax.get_yscale()=='log' else 'log'),
     refresh()
 ))
+
+# toggle Bragg peaks
+btn_bragg = Button(plt.axes([0.25, 0.01, 0.13, 0.03]), 'Bragg on/off')
+def _toggle_bragg(_):
+    state['show_bragg'] = not state['show_bragg']
+    refresh()
+btn_bragg.on_clicked(_toggle_bragg)
 
 
 def toggle_mode(_):
