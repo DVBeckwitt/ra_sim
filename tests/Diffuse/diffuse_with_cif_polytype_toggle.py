@@ -172,40 +172,47 @@ def ht_total_for_pair(h, k):
         + w2 * I_inf(state['p3'], h, k, F2)
     )
 
-def _raw_bragg(h, k):
-    """Return raw Bragg intensities for a single (h,k) reflection."""
-    if (h, k) not in _BRAGG_CACHE:
-        hkls = [(h, k, int(l)) for l in range(int(L_MAX) + 1)]
+def _raw_bragg(h, k, lo, hi):
+    """Return ``(L_vals, intensities)`` for integer L within ``[lo, hi]``."""
+    lo_i = int(np.floor(lo))
+    hi_i = int(np.ceil(hi))
+    key = (h, k, lo_i, hi_i)
+    if key not in _BRAGG_CACHE:
+        hkls = [(h, k, l) for l in range(lo_i, hi_i + 1)]
         intens = intensities_for_hkls(hkls, str(CIF_2H), [1.0], LAMBDA)
-        _BRAGG_CACHE[(h, k)] = intens
-    return _BRAGG_CACHE[(h, k)]
+        L_vals = np.arange(lo_i, hi_i + 1)
+        _BRAGG_CACHE[key] = (L_vals, np.asarray(intens))
+    return _BRAGG_CACHE[key]
 
 
 def bragg_intensity_single(h, k):
-    """Return scaled Bragg intensities for one (h,k) pair."""
-    intens = _raw_bragg(h, k)
+    """Return ``(L_vals, scaled_intens)`` for one (h,k) pair."""
+    lo, hi = state['L_lo'], state['L_hi']
+    L_vals, intens = _raw_bragg(h, k, lo, hi)
     ht = ht_total_for_pair(h, k)
-    max_ht = float(ht.max()) if np.any(ht) else 1.0
+    idx = np.round(L_vals / L_MAX * (len(L_GRID) - 1)).astype(int)
+    ht_slice = ht[idx]
+    max_ht = float(ht_slice.max()) if np.any(ht_slice) else 1.0
     max_b = float(intens.max()) if np.any(intens) else 1.0
     scale = max_ht / max_b if max_b else 1.0
-    return np.asarray(intens) * scale
+    return L_vals, intens * scale
 
 
 def bragg_intensity_sum(pairs):
-    """Sum scaled Bragg intensities for all (h,k) in *pairs*."""
-    total_raw = None
-    total_ht = None
+    """Sum scaled Bragg intensities for all ``pairs``."""
+    lo, hi = state['L_lo'], state['L_hi']
+    L_vals = np.arange(int(np.floor(lo)), int(np.ceil(hi)) + 1)
+    total_raw = np.zeros_like(L_vals, dtype=float)
+    total_ht = np.zeros_like(L_vals, dtype=float)
+    idx = np.round(L_vals / L_MAX * (len(L_GRID) - 1)).astype(int)
     for h, k in pairs:
-        b = _raw_bragg(h, k)
-        ht = ht_total_for_pair(h, k)
-        total_raw = b if total_raw is None else total_raw + b
-        total_ht = ht if total_ht is None else total_ht + ht
-    if total_raw is None:
-        return np.zeros(int(L_MAX) + 1)
+        L_tmp, b = _raw_bragg(h, k, lo, hi)
+        total_raw += b
+        total_ht += ht_total_for_pair(h, k)[idx]
     max_ht = float(total_ht.max()) if np.any(total_ht) else 1.0
     max_b = float(total_raw.max()) if np.any(total_raw) else 1.0
     scale = max_ht / max_b if max_b else 1.0
-    return total_raw * scale
+    return L_vals, total_raw * scale
 
 
 def _ht_peak_area_for_p(p, h, k, l):
@@ -242,17 +249,17 @@ def export_bragg_data(_):
     pairs = active_pairs()
     rows = []
     for h, k in pairs:
-        raw = _raw_bragg(h, k)
+        L_vals, raw = _raw_bragg(h, k, 0, L_MAX)
         ht = ht_total_for_pair(h, k)
         max_ht = float(ht.max()) if np.any(ht) else 1.0
         max_b = float(raw.max()) if np.any(raw) else 1.0
         scale = max_ht / max_b if max_b else 1.0
-        for l in range(len(raw)):
+        for l, r in zip(L_vals, raw):
             rows.append({
-                'h': h, 'k': k, 'l': l,
+                'h': h, 'k': k, 'l': int(l),
                 'HT_area': ht_peak_area(h, k, l),
-                'Dans_scaled': raw[l] * scale,
-                'Dans_raw': raw[l],
+                'Dans_scaled': r * scale,
+                'Dans_raw': r,
             })
     pd.DataFrame(rows).to_excel(filename, index=False)
 
@@ -290,16 +297,14 @@ def refresh(_=None):
     if state['show_bragg']:
         pairs = active_pairs()
         if state['mode'] == 'm':
-            intens = bragg_intensity_sum(pairs)
-            L_vals = np.arange(len(intens))
+            L_vals, intens = bragg_intensity_sum(pairs)
             msk = (L_vals >= lo) & (L_vals <= hi)
             label = f'Bragg m={state["m"]}'
             ln, = ax.plot(L_vals[msk], intens[msk], marker='o', ls='none', label=label)
             _bragg_lines.append(ln)
         else:
             for h, k in pairs:
-                intens = bragg_intensity_single(h, k)
-                L_vals = np.arange(len(intens))
+                L_vals, intens = bragg_intensity_single(h, k)
                 msk = (L_vals >= lo) & (L_vals <= hi)
                 ln, = ax.plot(L_vals[msk], intens[msk], marker='o', ls='none', label=f'Bragg({h},{k})')
                 _bragg_lines.append(ln)
