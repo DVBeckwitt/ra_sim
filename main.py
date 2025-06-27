@@ -727,8 +727,9 @@ def phi_max_slider_command(val):
     phi_max_label_var.set(f"{val_f:.1f}")
     schedule_update()
 
-range_frame = ttk.LabelFrame(plot_frame_1d, text="Integration Ranges")
-range_frame.pack(side=tk.TOP, fill=tk.X, pady=5)
+range_cf = CollapsibleFrame(plot_frame_1d, text='Integration Ranges', expanded=True)
+range_cf.pack(side=tk.TOP, fill=tk.X, pady=5)
+range_frame = range_cf.frame
 
 tth_min_container = ttk.Frame(range_frame)
 tth_min_container.pack(side=tk.TOP, fill=tk.X, pady=2)
@@ -1883,6 +1884,26 @@ debug_button = ttk.Button(
 )
 debug_button.pack(side=tk.TOP, padx=5, pady=2)
 
+# Group related sliders in collapsible sections so the interface remains
+# manageable as more controls are added.
+geo_frame = CollapsibleFrame(left_col, text='Geometry', expanded=True)
+geo_frame.pack(fill=tk.X, padx=5, pady=5)
+
+debye_frame = CollapsibleFrame(left_col, text='Debye Parameters')
+debye_frame.pack(fill=tk.X, padx=5, pady=5)
+
+detector_frame = CollapsibleFrame(right_col, text='Detector')
+detector_frame.pack(fill=tk.X, padx=5, pady=5)
+
+lattice_frame = CollapsibleFrame(right_col, text='Lattice Parameters', expanded=True)
+lattice_frame.pack(fill=tk.X, padx=5, pady=5)
+
+mosaic_frame = CollapsibleFrame(right_col, text='Mosaic Broadening')
+mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
+
+center_frame = CollapsibleFrame(right_col, text='Beam Center')
+center_frame.pack(fill=tk.X, padx=5, pady=5)
+
 def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=False):
     var, scale = create_slider(
         label_str,
@@ -1896,46 +1917,46 @@ def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=Fals
     return var, scale
 
 theta_initial_var, theta_initial_scale = make_slider(
-    'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, left_col
+    'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
 )
 gamma_var, gamma_scale = make_slider(
-    'Gamma', -4, 4, defaults['gamma'], 0.001, left_col
+    'Gamma', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
 )
 Gamma_var, Gamma_scale = make_slider(
-    'Detector Rotation Γ', -4, 4, defaults['Gamma'], 0.001, left_col
+    'Detector Rotation Γ', -4, 4, defaults['Gamma'], 0.001, geo_frame.frame
 )
 chi_var, chi_scale = make_slider(
-    'Chi', -1, 1, defaults['chi'], 0.001, left_col
+    'Chi', -1, 1, defaults['chi'], 0.001, geo_frame.frame
 )
 zs_var, zs_scale = make_slider(
-    'Zs', -2.0e-3, 2e-3, defaults['zs'], 0.0001, left_col
+    'Zs', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame
 )
 zb_var, zb_scale = make_slider(
-    'Zb', -2.0e-3, 2e-3, defaults['zb'], 0.0001, left_col
+    'Zb', -2.0e-3, 2e-3, defaults['zb'], 0.0001, geo_frame.frame
 )
 debye_x_var, debye_x_scale = make_slider(
-    'Debye Qz', 0.0, 1.0, defaults['debye_x'], 0.001, left_col
+    'Debye Qz', 0.0, 1.0, defaults['debye_x'], 0.001, debye_frame.frame
 )
 debye_y_var, debye_y_scale = make_slider(
-    'Debye Qr', 0.0, 1.0, defaults['debye_y'], 0.001, left_col
+    'Debye Qr', 0.0, 1.0, defaults['debye_y'], 0.001, debye_frame.frame
 )
 corto_detector_var, corto_detector_scale = make_slider(
-    'CortoDetector', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, right_col
+    'CortoDetector', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, detector_frame.frame
 )
 a_var, a_scale = make_slider(
-    'a (Å)', 3.5, 8.0, defaults['a'], 0.01, right_col
+    'a (Å)', 3.5, 8.0, defaults['a'], 0.01, lattice_frame.frame
 )
 c_var, c_scale = make_slider(
-    'c (Å)', 20.0, 40.0, defaults['c'], 0.01, right_col
+    'c (Å)', 20.0, 40.0, defaults['c'], 0.01, lattice_frame.frame
 )
 sigma_mosaic_var, sigma_mosaic_scale = make_slider(
-    'σ Mosaic (deg)', 0.0, 5.0, defaults['sigma_mosaic_deg'], 0.01, right_col, mosaic=True
+    'σ Mosaic (deg)', 0.0, 5.0, defaults['sigma_mosaic_deg'], 0.01, mosaic_frame.frame, mosaic=True
 )
 gamma_mosaic_var, gamma_mosaic_scale = make_slider(
-    'γ Mosaic (deg)', 0.0, 5.0, defaults['gamma_mosaic_deg'], 0.01, right_col, mosaic=True
+    'γ Mosaic (deg)', 0.0, 5.0, defaults['gamma_mosaic_deg'], 0.01, mosaic_frame.frame, mosaic=True
 )
 eta_var, eta_scale = make_slider(
-    'η (fraction)', 0.0, 1.0, defaults['eta'], 0.001, right_col, mosaic=True
+    'η (fraction)', 0.0, 1.0, defaults['eta'], 0.001, mosaic_frame.frame, mosaic=True
 )
 center_x_var, center_x_scale = make_slider(
     'Beam Center Row',
@@ -1943,7 +1964,7 @@ center_x_var, center_x_scale = make_slider(
     center_default[0]+100.0,
     defaults['center_x'],
     1.0,
-    right_col
+    center_frame.frame
 )
 center_y_var, center_y_scale = make_slider(
     'Beam Center Col',
@@ -1951,17 +1972,19 @@ center_y_var, center_y_scale = make_slider(
     center_default[1]+100.0,
     defaults['center_y'],
     1.0,
-    right_col
+    center_frame.frame
 )
 
 # Slider controlling contribution of the first CIF file, only if a second CIF
 # was provided.
 if has_second_cif:
+    weights_frame = CollapsibleFrame(right_col, text='CIF Weights')
+    weights_frame.pack(fill=tk.X, padx=5, pady=5)
     weight1_var, _ = make_slider(
-        'CIF1 Weight', 0.0, 1.0, weight1, 0.01, right_col
+        'CIF1 Weight', 0.0, 1.0, weight1, 0.01, weights_frame.frame
     )
     weight2_var, _ = make_slider(
-        'CIF2 Weight', 0.0, 1.0, weight2, 0.01, right_col
+        'CIF2 Weight', 0.0, 1.0, weight2, 0.01, weights_frame.frame
     )
 
     def update_weights(*args):
