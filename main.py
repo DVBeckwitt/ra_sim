@@ -1908,6 +1908,13 @@ debug_button = ttk.Button(
 )
 debug_button.pack(side=tk.TOP, padx=5, pady=2)
 
+# Button to force a full update (re-read occupancies and recalc everything).
+force_update_button = ttk.Button(
+    text="Force Update",
+    command=lambda: update_occupancies()
+)
+force_update_button.pack(side=tk.TOP, padx=5, pady=2)
+
 # Group related sliders in collapsible sections so the interface remains
 # manageable as more controls are added.
 geo_frame = CollapsibleFrame(left_col, text='Geometry', expanded=True)
@@ -2217,10 +2224,6 @@ occ_entry2.grid(row=1, column=1, padx=5, pady=2)
 ttk.Label(occ_entry_frame, text="Input Occupancy Site 3:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
 occ_entry3 = ttk.Entry(occ_entry_frame, textvariable=occ_var3, width=5)
 occ_entry3.grid(row=2, column=1, padx=5, pady=2)
-
-# Button to force a full update (re-read occupancies and recalc everything).
-force_update_button = ttk.Button(occ_entry_frame, text="Force Update", command=update_occupancies)
-force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
 
 def main(write_excel: bool = True):
     """Entry point for running the GUI application.
