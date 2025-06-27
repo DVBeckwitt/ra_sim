@@ -127,7 +127,7 @@ state.update({'mode': 'm',      # 'm' or 'hk'
               'h': 0, 'k': 0,
               'show_bragg': False})  # current HK in hk‑mode
 
-# cache Bragg intensities per (h,k)
+# cache Bragg intensities per CIF and (h,k)
 _BRAGG_CACHE = {}
 # ─── utilities ‑‑‑ choose active (h,k) list based on state['mode'] ────────────
 def active_pairs():
@@ -172,47 +172,55 @@ def ht_total_for_pair(h, k):
         + w2 * I_inf(state['p3'], h, k, F2)
     )
 
-def _raw_bragg(h, k, lo, hi):
+def _raw_bragg(h, k, lo, hi, cif_path):
     """Return ``(L_vals, intensities)`` for integer L within ``[lo, hi]``."""
     lo_i = int(np.floor(lo))
     hi_i = int(np.ceil(hi))
-    key = (h, k, lo_i, hi_i)
+    key = (cif_path, h, k, lo_i, hi_i)
     if key not in _BRAGG_CACHE:
         hkls = [(h, k, l) for l in range(lo_i, hi_i + 1)]
-        intens = intensities_for_hkls(hkls, str(CIF_2H), [1.0], LAMBDA)
+        intens = intensities_for_hkls(hkls, cif_path, [1.0], LAMBDA)
         L_vals = np.arange(lo_i, hi_i + 1)
         _BRAGG_CACHE[key] = (L_vals, np.asarray(intens))
     return _BRAGG_CACHE[key]
 
 
 def bragg_intensity_single(h, k):
-    """Return ``(L_vals, scaled_intens)`` for one (h,k) pair."""
+    """Return ``(L_vals, b2h, b6h)`` scaled to HT for one (h,k) pair."""
     lo, hi = state['L_lo'], state['L_hi']
-    L_vals, intens = _raw_bragg(h, k, lo, hi)
+    L_vals, raw2h = _raw_bragg(h, k, lo, hi, str(CIF_2H))
+    _, raw6h = _raw_bragg(h, k, lo, hi, str(CIF_6H))
     ht = ht_total_for_pair(h, k)
     idx = np.round(L_vals / L_MAX * (len(L_GRID) - 1)).astype(int)
     ht_slice = ht[idx]
     max_ht = float(ht_slice.max()) if np.any(ht_slice) else 1.0
-    max_b = float(intens.max()) if np.any(intens) else 1.0
-    scale = max_ht / max_b if max_b else 1.0
-    return L_vals, intens * scale
+    max_2h = float(raw2h.max()) if np.any(raw2h) else 1.0
+    max_6h = float(raw6h.max()) if np.any(raw6h) else 1.0
+    scale2 = max_ht / max_2h if max_2h else 1.0
+    scale6 = max_ht / max_6h if max_6h else 1.0
+    return L_vals, raw2h * scale2, raw6h * scale6
 
 
 def bragg_intensity_sum(pairs):
     """Sum scaled Bragg intensities for all ``pairs``."""
     lo, hi = state['L_lo'], state['L_hi']
     L_vals = np.arange(int(np.floor(lo)), int(np.ceil(hi)) + 1)
-    total_raw = np.zeros_like(L_vals, dtype=float)
+    total_2h = np.zeros_like(L_vals, dtype=float)
+    total_6h = np.zeros_like(L_vals, dtype=float)
     total_ht = np.zeros_like(L_vals, dtype=float)
     idx = np.round(L_vals / L_MAX * (len(L_GRID) - 1)).astype(int)
     for h, k in pairs:
-        L_tmp, b = _raw_bragg(h, k, lo, hi)
-        total_raw += b
+        L_tmp, b2 = _raw_bragg(h, k, lo, hi, str(CIF_2H))
+        _, b6 = _raw_bragg(h, k, lo, hi, str(CIF_6H))
+        total_2h += b2
+        total_6h += b6
         total_ht += ht_total_for_pair(h, k)[idx]
     max_ht = float(total_ht.max()) if np.any(total_ht) else 1.0
-    max_b = float(total_raw.max()) if np.any(total_raw) else 1.0
-    scale = max_ht / max_b if max_b else 1.0
-    return L_vals, total_raw * scale
+    max_2h = float(total_2h.max()) if np.any(total_2h) else 1.0
+    max_6h = float(total_6h.max()) if np.any(total_6h) else 1.0
+    scale2 = max_ht / max_2h if max_2h else 1.0
+    scale6 = max_ht / max_6h if max_6h else 1.0
+    return L_vals, total_2h * scale2, total_6h * scale6
 
 
 def _ht_peak_area_for_p(p, h, k, l):
@@ -249,17 +257,22 @@ def export_bragg_data(_):
     pairs = active_pairs()
     rows = []
     for h, k in pairs:
-        L_vals, raw = _raw_bragg(h, k, 0, L_MAX)
+        L_vals, raw2 = _raw_bragg(h, k, 0, L_MAX, str(CIF_2H))
+        _, raw6 = _raw_bragg(h, k, 0, L_MAX, str(CIF_6H))
         ht = ht_total_for_pair(h, k)
         max_ht = float(ht.max()) if np.any(ht) else 1.0
-        max_b = float(raw.max()) if np.any(raw) else 1.0
-        scale = max_ht / max_b if max_b else 1.0
-        for l, r in zip(L_vals, raw):
+        max2 = float(raw2.max()) if np.any(raw2) else 1.0
+        max6 = float(raw6.max()) if np.any(raw6) else 1.0
+        scale2 = max_ht / max2 if max2 else 1.0
+        scale6 = max_ht / max6 if max6 else 1.0
+        for l, r2, r6 in zip(L_vals, raw2, raw6):
             rows.append({
                 'h': h, 'k': k, 'l': int(l),
                 'HT_area': ht_peak_area(h, k, l),
-                'Dans_scaled': r * scale,
-                'Dans_raw': r,
+                'Dans2H_scaled': r2 * scale2,
+                'Dans2H_raw': r2,
+                'Dans6H_scaled': r6 * scale6,
+                'Dans6H_raw': r6,
             })
     pd.DataFrame(rows).to_excel(filename, index=False)
 
@@ -297,17 +310,18 @@ def refresh(_=None):
     if state['show_bragg']:
         pairs = active_pairs()
         if state['mode'] == 'm':
-            L_vals, intens = bragg_intensity_sum(pairs)
+            L_vals, i2h, i6h = bragg_intensity_sum(pairs)
             msk = (L_vals >= lo) & (L_vals <= hi)
-            label = f'Bragg m={state["m"]}'
-            ln, = ax.plot(L_vals[msk], intens[msk], marker='o', ls='none', label=label)
-            _bragg_lines.append(ln)
+            ln2, = ax.plot(L_vals[msk], i2h[msk], marker='o', ls='none', label=f'2H m={state["m"]}')
+            ln6, = ax.plot(L_vals[msk], i6h[msk], marker='s', ls='none', label=f'6H m={state["m"]}')
+            _bragg_lines += [ln2, ln6]
         else:
             for h, k in pairs:
-                L_vals, intens = bragg_intensity_single(h, k)
+                L_vals, i2h, i6h = bragg_intensity_single(h, k)
                 msk = (L_vals >= lo) & (L_vals <= hi)
-                ln, = ax.plot(L_vals[msk], intens[msk], marker='o', ls='none', label=f'Bragg({h},{k})')
-                _bragg_lines.append(ln)
+                ln2, = ax.plot(L_vals[msk], i2h[msk], marker='o', ls='none', label=f'2H({h},{k})')
+                ln6, = ax.plot(L_vals[msk], i6h[msk], marker='s', ls='none', label=f'6H({h},{k})')
+                _bragg_lines += [ln2, ln6]
         handles += _bragg_lines
     ax.legend(handles, [h.get_label() for h in handles], loc='upper right')
     m = state['m']; r = np.sqrt(m)
