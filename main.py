@@ -247,10 +247,19 @@ defaults = {
     'center_y': center_default[1],
 }
 
+# Cache for Hendricks--Teller calculations keyed by (p, occ tuple)
+_ht_cache_global = {}
+
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
 def build_ht_cache(p_val, occ_vals):
+    """Return cached HT curves and arrays for the given parameters."""
+    key = (float(p_val), tuple(float(x) for x in occ_vals))
+    cached = _ht_cache_global.get(key)
+    if cached is not None:
+        return cached
+
     curves = ht_Iinf_dict(
         cif_path=cif_file,
         mx=mx,
@@ -262,7 +271,9 @@ def build_ht_cache(p_val, occ_vals):
     )
     qr = ht_dict_to_qr_dict(curves)
     arrays = qr_dict_to_arrays(qr)
-    return {"p": p_val, "occ": tuple(occ_vals), "qr": qr, "arrays": arrays}
+    result = {"p": p_val, "occ": tuple(occ_vals), "qr": qr, "arrays": arrays}
+    _ht_cache_global[key] = result
+    return result
 
 # Precompute curves for the three p values
 ht_cache_multi = {
@@ -301,6 +312,7 @@ miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
 ht_curves_cache = {"curves": combined_qr, "arrays": (miller1, intens1, degeneracy1, details1)}
 _last_occ_for_ht = list(occ)
 _last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
+_last_weights = list(weights_init)
 # ---- convert the dict → arrays compatible with the downstream code ----
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
@@ -2034,7 +2046,7 @@ def update_occupancies(*args):
     global df_summary, df_details
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
-    global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet
+    global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
     global intensities_cif1, intensities_cif2
 
     new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
@@ -2042,6 +2054,13 @@ def update_occupancies(*args):
     w_raw = [w0_var.get(), w1_var.get(), w2_var.get()]
     w_sum = sum(w_raw) or 1.0
     weights = [w / w_sum for w in w_raw]
+
+    if (
+        new_occ == _last_occ_for_ht
+        and p_vals == _last_p_triplet
+        and weights == _last_weights
+    ):
+        return
 
     def get_cache(label, p_val):
         cache = ht_cache_multi.get(label)
@@ -2063,6 +2082,7 @@ def update_occupancies(*args):
     ht_curves_cache = {"curves": combined_qr_local, "arrays": arrays_local}
     _last_occ_for_ht = list(new_occ)
     _last_p_triplet = list(p_vals)
+    _last_weights = list(weights)
 
     m1, i1, d1, det1 = arrays_local
 
