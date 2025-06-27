@@ -16,6 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RangeSlider, Button
 from collections import Counter
+import Dans_Diffraction as dd
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
@@ -39,34 +40,7 @@ C_2H, C_6H = map(c_from_cif, map(str, (CIF_2H, CIF_6H)))
 LAMBDA = 1.5406                          # Å   (Cu Kα1)
 E_CuKa = 12398.4193 / LAMBDA             # eV  (≈ 8040 eV)
 
-ION   = {'Pb': 'Pb2+', 'I': 'I1-'}       # ionic labels for f₀
-NEUTR = {'Pb': 'Pb',  'I': 'I'}          # neutral symbols for f′/f″
-
-def f_comp(el: str, Q: np.ndarray) -> np.ndarray:
-    """Total atomic scattering factor  f = f₀(Q)+f′(E)+i f″(E)."""
-    q   = Q / (4*np.pi)                                      # Å⁻¹
-    f0  = xraydb.f0(ION[el], q)
-    f1  = xraydb.f1_chantler(NEUTR[el], E_CuKa)              # scalar
-    f2  = xraydb.f2_chantler(NEUTR[el], E_CuKa)              # scalar
-    return f0 + f1 + 1j*f2                                   # broadcasts
-
-
-# ionic form factors
-try:
-    import xraydb
-    def f0(el: str, Q: np.ndarray) -> np.ndarray:
-        q = Q / (4*np.pi)
-        ion = {'Pb': 'Pb2+', 'I': 'I1-'}.get(el, el)
-        return xraydb.f0(ion, q)
-except ImportError:
-    _fallback = {'Pb2+': 82.0, 'I1-': 53.0}
-    def f0(el: str, Q: np.ndarray) -> np.ndarray:
-        ion = {'Pb': 'Pb2+', 'I': 'Pb2+' if el=='Pb' else 'I1-'}.get(el, el)
-        print(f"Warning: xraydb not found, using fallback for {ion}", file=sys.stderr)
-        return np.full_like(Q, _fallback[ion])
-
-# atomic sites
-SITES    = [(0,0,0.0,'Pb'), (1/3,2/3,0.25,'I'), (2/3,1/3,-0.25,'I')]
+# constants for Hendricks–Teller model
 N_P, A_CELL = 3, 17.98e-10
 AREA     = (2*np.pi)**2 / A_CELL * N_P
 
@@ -83,16 +57,33 @@ ALLOWED_M = sorted(HK_BY_M)   # only these m values are valid
 L_MAX  = 20
 N_L    = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
+L_INT  = np.arange(0, L_MAX+1)
 
-# precompute |F|² (2H lattice)
+XTALS = {
+    '2H': dd.Crystal(str(CIF_2H)),
+    '6H': dd.Crystal(str(CIF_6H)),
+}
+
+def make_caches(xtl):
+    grid_cache = {}
+    disc_cache = {}
+    for pairs in HK_BY_M.values():
+        for h, k in pairs:
+            hk_grid = np.column_stack([
+                np.full_like(L_GRID, h),
+                np.full_like(L_GRID, k),
+                L_GRID,
+            ])
+            grid_cache[(h, k)] = xtl.Scatter.intensity(hk_grid, 'xray', energy_kev=E_CuKa/1000)
+
+            hk_disc = np.array([[h, k, l] for l in L_INT])
+            disc_cache[(h, k)] = xtl.Scatter.intensity(hk_disc, 'xray', energy_kev=E_CuKa/1000)
+    return grid_cache, disc_cache
+
 F2_cache = {}
-for pairs in HK_BY_M.values():
-    for h,k in pairs:
-        Q = 2*np.pi * np.sqrt((4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L_GRID**2)/C_2H**2)
-        phases = np.array([np.exp(2j*np.pi*(h*x + k*y + L_GRID*z)) for x,y,z,_ in SITES])
-        coeffs = np.array([f_comp(sym, Q) for *_, sym in SITES])
-        F2_cache[(h,k)] = np.abs((coeffs * phases).sum(axis=0))**2
-
+BRAGG_cache = {}
+for key, xtl in XTALS.items():
+    F2_cache[key], BRAGG_cache[key] = make_caches(xtl)
 # Hendricks–Teller infinite stacking
 
 def _abc(p,h,k):
@@ -113,7 +104,9 @@ defaults = {
     'p0': 0.0, 'p1': 1.0, 'p3': 0.5,
     'w0': 33.3, 'w1': 33.3, 'w2': 0,
     'I0': None, 'I1': None, 'I3': None,
-    'L_lo': 1.0, 'L_hi': L_MAX
+    'L_lo': 1.0, 'L_hi': L_MAX,
+    'poly': '2H',
+    'show_bragg': True,
 }
 state = defaults.copy()
 
@@ -136,8 +129,9 @@ def compute_components():
     else:                                        # hexagonal degeneracy
         counts = Counter((abs(h), abs(k)) for h, k in pairs)
 
+    fc = F2_cache[state['poly']]
     def comp(p):
-        return sum(n * I_inf(p, h, k, F2_cache[(h, k)])
+        return sum(n * I_inf(p, h, k, fc[(h, k)])
                    for (h, k), n in counts.items())
 
     state['I0'], state['I1'], state['I3'] = comp(state['p0']), comp(state['p1']), comp(state['p3'])
@@ -150,6 +144,18 @@ def composite_tot():
     w0, w1, w2 = w0/s, w1/s, w2/s
     return w0*state['I0'] + w1*state['I1'] + w2*state['I3']
 
+def bragg_tot():
+    pairs = active_pairs()
+    if state['mode'] == 'hk':
+        counts = {(h, k): 1 for h, k in pairs}
+    else:
+        counts = Counter((abs(h), abs(k)) for h, k in pairs)
+    bc = BRAGG_cache[state['poly']]
+    tot = np.zeros(len(L_INT))
+    for (h, k), n in counts.items():
+        tot += n * bc[(h, k)]
+    return tot
+
 # set up figure
 fig, ax = plt.subplots(figsize=(8,6))
 plt.subplots_adjust(left=0.25, bottom=0.40, top=0.88)
@@ -161,6 +167,7 @@ line_tot, = ax.plot([], [], lw=2, label='Σ weighted')
 line0,   = ax.plot([], [], ls='--', label='I(p≈0)')
 line1,   = ax.plot([], [], ls='--', label='I(p≈1)')
 line3,   = ax.plot([], [], ls='--', label='I(p)')
+bragg_scat = ax.scatter([], [], c='C4', marker='o', label='Bragg', zorder=3)
 title = ax.set_title("")
 
 # refresh function
@@ -177,6 +184,14 @@ def refresh(_=None):
     for ln, v in zip((line0, line1, line3), vis):
         ln.set_visible(v)
     handles = [line_tot] + [ln for ln,v in zip((line0,line1,line3), vis) if v]
+    if state.get('show_bragg', True):
+        b_tot = bragg_tot()
+        mask_b = (L_INT>=lo) & (L_INT<=hi)
+        bragg_scat.set_offsets(np.column_stack([L_INT[mask_b], b_tot[mask_b]]))
+        bragg_scat.set_visible(True)
+        handles.append(bragg_scat)
+    else:
+        bragg_scat.set_visible(False)
     ax.legend(handles, [h.get_label() for h in handles], loc='upper right')
     m = state['m']; r = np.sqrt(m)
     Qr = 2*np.pi/A_HEX * np.sqrt(4*m/3) if m else 0
@@ -273,8 +288,24 @@ def toggle_mode(_):
     compute_components(); refresh()
 
 
+def toggle_poly(_):
+    state['poly'] = '6H' if state['poly']=='2H' else '2H'
+    compute_components(); refresh()
+
+
+def toggle_bragg(_):
+    state['show_bragg'] = not state['show_bragg']
+    refresh()
+
+
 b_mode = Button(plt.axes([0.60,0.01,0.16,0.03]), 'H/K panel')
 b_mode.on_clicked(toggle_mode)
+
+b_poly = Button(plt.axes([0.24,0.01,0.16,0.03]), 'Polytype')
+b_poly.on_clicked(toggle_poly)
+
+b_bragg = Button(plt.axes([0.78,0.01,0.16,0.03]), 'Bragg on/off')
+b_bragg.on_clicked(toggle_bragg)
 
 refresh()
 plt.show()
