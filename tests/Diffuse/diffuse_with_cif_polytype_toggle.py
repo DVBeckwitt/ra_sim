@@ -18,6 +18,9 @@ from matplotlib.widgets import Slider, RangeSlider, Button
 from collections import Counter
 
 from ra_sim.utils.tools import intensities_for_hkls
+import pandas as pd
+import tkinter as tk
+from tkinter.filedialog import asksaveasfilename
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
@@ -204,6 +207,55 @@ def bragg_intensity_sum(pairs):
     scale = max_ht / max_b if max_b else 1.0
     return total_raw * scale
 
+
+def _ht_peak_area_for_p(p, h, k, l):
+    """Return integrated area of one Bragg peak for probability ``p``."""
+    idx = int(round(l / L_MAX * (len(L_GRID) - 1)))
+    F2 = F2_cache[(h, k)][idx]
+    phi0 = 2 * np.pi * ((2 * h + k) / 3)
+    f0 = (1 - p) + p * np.cos(phi0)
+    denom = 1 - f0
+    if np.isclose(denom, 0):
+        return np.inf
+    return np.pi * F2 * (f0 ** 1.5) / denom
+
+
+def ht_peak_area(h, k, l):
+    """Composite integrated area for one (h,k,l) Bragg peak."""
+    w0, w1, w2 = state['w0'], state['w1'], state['w2']
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    return (
+        w0 * _ht_peak_area_for_p(state['p0'], h, k, l)
+        + w1 * _ht_peak_area_for_p(state['p1'], h, k, l)
+        + w2 * _ht_peak_area_for_p(state['p3'], h, k, l)
+    )
+
+
+def export_bragg_data(_):
+    """Prompt for a path and save Bragg peak intensities to Excel."""
+    root = tk.Tk(); root.withdraw()
+    filename = asksaveasfilename(defaultextension='.xlsx',
+                                 filetypes=[('Excel', '*.xlsx')])
+    if not filename:
+        return
+    pairs = active_pairs()
+    rows = []
+    for h, k in pairs:
+        raw = _raw_bragg(h, k)
+        ht = ht_total_for_pair(h, k)
+        max_ht = float(ht.max()) if np.any(ht) else 1.0
+        max_b = float(raw.max()) if np.any(raw) else 1.0
+        scale = max_ht / max_b if max_b else 1.0
+        for l in range(len(raw)):
+            rows.append({
+                'h': h, 'k': k, 'l': l,
+                'HT_area': ht_peak_area(h, k, l),
+                'Dans_scaled': raw[l] * scale,
+                'Dans_raw': raw[l],
+            })
+    pd.DataFrame(rows).to_excel(filename, index=False)
+
 # set up figure
 fig, ax = plt.subplots(figsize=(8,6))
 plt.subplots_adjust(left=0.25, bottom=0.40, top=0.88)
@@ -345,6 +397,10 @@ def _toggle_bragg(_):
     state['show_bragg'] = not state['show_bragg']
     refresh()
 btn_bragg.on_clicked(_toggle_bragg)
+
+# export button
+btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), 'Save Bragg XLSX')
+btn_export.on_clicked(export_bragg_data)
 
 
 def toggle_mode(_):
