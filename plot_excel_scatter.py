@@ -21,6 +21,12 @@ def main() -> None:
         default=None,
         help="Path to miller_intensities.xlsx (defaults to downloads directory)",
     )
+    parser.add_argument(
+        "--sheet",
+        default=None,
+        help="Name of worksheet to read (defaults to 'Summary' or first sheet)",
+    )
+
     args = parser.parse_args()
 
     if args.excel_path is None:
@@ -33,7 +39,23 @@ def main() -> None:
     if not excel_path.exists():
         raise SystemExit(f"File not found: {excel_path}")
 
-    df = pd.read_excel(excel_path, sheet_name="Summary")
+    sheet_to_read = args.sheet or "Summary"
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_to_read)
+    except ValueError as exc:
+        xls = pd.ExcelFile(excel_path)
+        available = xls.sheet_names
+        if args.sheet is None and sheet_to_read == "Summary" and available:
+            sheet_to_read = available[0]
+            print(
+                f"Worksheet 'Summary' not found; using '{sheet_to_read}' instead."
+            )
+            df = pd.read_excel(xls, sheet_name=sheet_to_read)
+        else:
+            raise SystemExit(
+                f"Worksheet '{sheet_to_read}' not found. Available: {available}"
+            ) from exc
+
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
