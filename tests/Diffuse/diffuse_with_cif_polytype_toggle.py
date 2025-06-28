@@ -291,7 +291,14 @@ def _norm_weights():
 # ------------------------------------------------------------------
 # ────────── XLSX EXPORT  (changed block) ────────────────────────────
 def export_bragg_data(_):
-    """Save Bragg info to XLSX, including analytic integrated areas."""
+    """Save Bragg info to XLSX with intensities normalized to a common scale.
+
+    The numeric intensities from ``Dans_Diffraction`` (2H/6H) are scaled to the
+    Hendricks–Teller profile and then normalised across all reflections so that
+    the strongest intensity equals ``100``.  This ensures the exported Dans
+    columns can be directly compared to the numeric areas saved alongside the
+    analytic Hendricks–Teller values.
+    """
     root = tk.Tk(); root.withdraw()
     fname = filedialog.asksaveasfilename(
         defaultextension='.xlsx',
@@ -301,6 +308,7 @@ def export_bragg_data(_):
         return
 
     rows, w2h, w6h = [], *_norm_weights()[:2]
+    intensity_max = 0.0
 
     pairs = ([(state['h'], state['k'])] if _is_hk_mode()
              else HK_BY_M[state['m']])
@@ -316,11 +324,16 @@ def export_bragg_data(_):
         sc6      = s_ht / (raw6.max() or 1.0)
 
         for l, r2, r6 in zip(L, raw2, raw6):
+            scaled2 = r2 * sc2 * w2h
+            scaled6 = r6 * sc6 * w6h
+            total   = scaled2 + scaled6
+            intensity_max = max(intensity_max, total)
             row = dict(h=h, k=k, l=int(l),
-                       Dans2H_scaled=r2*sc2*w2h,
+                       Dans2H_scaled=scaled2,
                        Dans2H_raw=r2,
-                       Dans6H_scaled=r6*sc6*w6h,
-                       Dans6H_raw=r6)
+                       Dans6H_scaled=scaled6,
+                       Dans6H_raw=r6,
+                       Total_scaled=total)
 
             if _is_hk_mode():                           ### ← NEW
                 row['Analytic_2H_area'] = ht_integrated_area(state['p0'], h, k, l)
@@ -329,6 +342,12 @@ def export_bragg_data(_):
                 row['Analytic_area'] = analytic_area_weighted(h, k, l)
 
             rows.append(row)
+
+    if intensity_max <= 0:
+        intensity_max = 1.0
+
+    for row in rows:
+        row["Intensity_norm"] = 100.0 * row["Total_scaled"] / intensity_max
 
     pd.DataFrame(rows).to_excel(fname, index=False)
     print("Saved →", fname)
@@ -340,7 +359,7 @@ ax.set_xlabel(r"$\ell$")
 ax.set_ylabel("I (a.u.)")
 ax.set_yscale('log')
 
-line_tot, = ax.plot([], [], lw=2, label='Σ weighted')
+line_tot, = ax.plot([], [], lw=2, label='Σ weighted (numeric)')
 line0,   = ax.plot([], [], ls='--', label='I(p≈0)')
 line1,   = ax.plot([], [], ls='--', label='I(p≈1)')
 line3,   = ax.plot([], [], ls='--', label='I(p)')
