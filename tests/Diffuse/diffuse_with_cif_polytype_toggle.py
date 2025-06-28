@@ -34,6 +34,7 @@ def c_from_cif(path: str) -> float:
 
 # constants
 P_CLAMP = 1e-6
+
 A_HEX   = 4.557  # Å
 BUNDLE  = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 CIF_2H  = BUNDLE / "PbI2_2H.cif"
@@ -237,61 +238,100 @@ def bragg_intensity_sum(pairs):
     w2h, w6h = _weight_2h_6h()
     return L_vals, total_2h * scale2 * w2h, total_6h * scale6 * w6h
 
+def _is_hk_mode() -> bool:                  ### ← NEW
+    return state['mode'] == 'hk'
+# ──────────────────────────────────────────────────────────────
+# 2)  SIMPLE closed-form integrated area for **any** p
+def ht_integrated_area(p, h, k, ell):
+    """
+    Analytic Hendricks–Teller area:
+        A = 2π |F|² r² / (1 − r²)
 
-def _ht_peak_area_for_p(p, h, k, l):
-    """Return integrated area of one Bragg peak for probability ``p``."""
-    idx = int(round(l / L_MAX * (len(L_GRID) - 1)))
-    F2 = F2_cache[(h, k)][idx]
-    delta = 2 * np.pi * ((2 * h + k) / 3)
-    f = (1 - p) + p * np.exp(-1j * delta)
-    r2 = np.abs(f) ** 2
-    denom = 1.0 - r2
-    if np.isclose(denom, 0):
-        return np.inf
-    return 2 * np.pi * F2 * r2 / denom
+    • p = 0  → p_eff = +P_EPS
+    • p = 1  → p_eff = 1 − P_EPS
+    """
+    P_EPS = 1.0e-6           # 1 ppm away from the exact pole
 
+    # ------- effective p (keep inside (0,1)) ------------------------
+    if p <= 1e-15:
+        p_eff = P_EPS
+    elif p >= 1 - 1e-15:
+        p_eff = 1.0 - P_EPS
+    else:
+        p_eff = p
 
-def ht_peak_area(h, k, l):
-    """Composite integrated area for one (h,k,l) Bragg peak."""
+    # ------- lattice slice -----------------------------------------
+    idx   = int(round(ell / L_MAX * (N_L - 1)))
+    F2    = F2_cache[(h, k)][idx]
+
+    delta = 2 * np.pi * (2*h + k) / 3
+    z     = (1 - p_eff) + p_eff * np.exp(-1j * delta)     # ← use np.exp
+    r2    = abs(z)**2
+
+    return 2 * np.pi * F2 * r2 / (1.0 - r2)
+
+# composite (still honours weights, but p-values are 0 now)
+def analytic_area_weighted(h, k, ell):
     w0, w1, w2 = state['w0'], state['w1'], state['w2']
-    s = (w0 + w1 + w2) or 1
-    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    s          = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0/s, w1/s, w2/s
     return (
-        w0 * _ht_peak_area_for_p(state['p0'], h, k, l)
-        + w1 * _ht_peak_area_for_p(state['p1'], h, k, l)
-        + w2 * _ht_peak_area_for_p(state['p3'], h, k, l)
+        w0 * ht_integrated_area(state['p0'], h, k, ell) +
+        w1 * ht_integrated_area(state['p1'], h, k, ell) +
+        w2 * ht_integrated_area(state['p3'], h, k, ell)
     )
 
-
+# ──────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# helper – return normalised slider weights  w0 w1 w2  (sum = 1)
+def _norm_weights():
+    w0, w1, w2 = state['w0'], state['w1'], state['w2']
+    s = (w0 + w1 + w2) or 1.0          # avoid division by zero
+    return w0/s, w1/s, w2/s
+# ------------------------------------------------------------------
+# ────────── XLSX EXPORT  (changed block) ────────────────────────────
 def export_bragg_data(_):
-    """Prompt for a path and save Bragg peak intensities to Excel."""
+    """Save Bragg info to XLSX, including analytic integrated areas."""
     root = tk.Tk(); root.withdraw()
-    filename = asksaveasfilename(defaultextension='.xlsx',
-                                 filetypes=[('Excel', '*.xlsx')])
-    if not filename:
+    fname = tk.filedialog.asksaveasfilename(
+        defaultextension='.xlsx',
+        filetypes=[('Excel', '*.xlsx')]
+    )
+    if not fname:
         return
-    pairs = active_pairs()
-    rows = []
-    w2h, w6h = _weight_2h_6h()
+
+    rows, w2h, w6h = [], *_norm_weights()[:2]
+
+    pairs = ([(state['h'], state['k'])] if _is_hk_mode()
+             else HK_BY_M[state['m']])
+
     for h, k in pairs:
-        L_vals, raw2 = _raw_bragg(h, k, 0, L_MAX, str(CIF_2H))
+        L, raw2 = _raw_bragg(h, k, 0, L_MAX, str(CIF_2H))
         _, raw6 = _raw_bragg(h, k, 0, L_MAX, str(CIF_6H))
-        ht = ht_total_for_pair(h, k)
-        max_ht = float(ht.max()) if np.any(ht) else 1.0
-        max2 = float(raw2.max()) if np.any(raw2) else 1.0
-        max6 = float(raw6.max()) if np.any(raw6) else 1.0
-        scale2 = max_ht / max2 if max2 else 1.0
-        scale6 = max_ht / max6 if max6 else 1.0
-        for l, r2, r6 in zip(L_vals, raw2, raw6):
-            rows.append({
-                'h': h, 'k': k, 'l': int(l),
-                'HT_area': ht_peak_area(h, k, l),
-                'Dans2H_scaled': r2 * scale2 * w2h,
-                'Dans2H_raw': r2,
-                'Dans6H_scaled': r6 * scale6 * w6h,
-                'Dans6H_raw': r6,
-            })
-    pd.DataFrame(rows).to_excel(filename, index=False)
+
+        # scale factors (unchanged logic)
+        ht_curve = composite_tot()
+        s_ht     = ht_curve.max() or 1.0
+        sc2      = s_ht / (raw2.max() or 1.0)
+        sc6      = s_ht / (raw6.max() or 1.0)
+
+        for l, r2, r6 in zip(L, raw2, raw6):
+            row = dict(h=h, k=k, l=int(l),
+                       Dans2H_scaled=r2*sc2*w2h,
+                       Dans2H_raw=r2,
+                       Dans6H_scaled=r6*sc6*w6h,
+                       Dans6H_raw=r6)
+
+            if _is_hk_mode():                           ### ← NEW
+                row['Analytic_2H_area'] = ht_integrated_area(state['p0'], h, k, l)
+                row['Analytic_6H_area'] = ht_integrated_area(state['p1'], h, k, l)
+            else:
+                row['Analytic_area'] = analytic_area_weighted(h, k, l)
+
+            rows.append(row)
+
+    pd.DataFrame(rows).to_excel(fname, index=False)
+    print("Saved →", fname)
 
 # set up figure
 fig, ax = plt.subplots(figsize=(8,6))
