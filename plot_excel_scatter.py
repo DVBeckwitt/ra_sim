@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 try:
     from ra_sim.path_config import get_dir
@@ -30,8 +29,12 @@ def _find_column(df: pd.DataFrame, target: str) -> str | None:
     return None
 
 
-def _find_intensity_column(df: pd.DataFrame, name: str | None) -> str:
-    """Return the intensity column based on ``name`` or heuristics."""
+def _find_intensity_columns(df: pd.DataFrame, name: str | None) -> list[str]:
+    """Return intensity columns based on ``name`` or heuristics.
+
+    If ``name`` is ``None`` and multiple candidate columns are found,
+    they are all returned instead of raising an error.
+    """
 
     if name:
         col = _find_column(df, name)
@@ -39,11 +42,11 @@ def _find_intensity_column(df: pd.DataFrame, name: str | None) -> str:
             raise SystemExit(
                 f"Intensity column '{name}' not found. Available columns: {list(df.columns)}"
             )
-        return col
+        return [col]
 
     col = _find_column(df, "Intensity")
     if col:
-        return col
+        return [col]
 
     keywords = ["scaled", "intensity", "area"]
     hkl_cols = {_find_column(df, "h"), _find_column(df, "k"), _find_column(df, "l")}
@@ -60,19 +63,23 @@ def _find_intensity_column(df: pd.DataFrame, name: str | None) -> str:
         )
 
     if len(candidates) > 1:
-        raise SystemExit(
+        print(
             "Multiple possible intensity columns found: "
-            f"{candidates}. Specify one with --intensity"
+            f"{candidates}. Plotting them all"
         )
+        return candidates
 
     col = candidates[0]
     print(f"Using column '{col}' for intensities")
-    return col
+    return [col]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Plot Miller intensities from an Excel file as a 3D scatter plot"
+        description=(
+            "Plot intensities from an Excel file as an L vs intensity scatter plot "
+            "with interactive controls"
+        )
     )
     parser.add_argument(
         "excel_path",
@@ -121,7 +128,7 @@ def main() -> None:
             ) from exc
 
     # Find required columns regardless of case or spaces
-    required = ["h", "k", "l"]
+    required = ["l"]
     col_map = {}
     for col in required:
         found = _find_column(df, col)
@@ -132,24 +139,62 @@ def main() -> None:
             )
         col_map[col] = found
 
-    intensity_col = _find_intensity_column(df, args.intensity)
-    col_map["Intensity"] = intensity_col
+    intensity_cols = _find_intensity_columns(df, args.intensity)
 
 
-    fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    sc = ax.scatter(
-        df[col_map["h"]],
-        df[col_map["k"]],
-        df[col_map["l"]],
-        c=df[col_map["Intensity"]],
-        cmap="viridis",
-    )
-    ax.set_xlabel("h")
-    ax.set_ylabel("k")
-    ax.set_zlabel("l")
-    fig.colorbar(sc, ax=ax, label="Normalized Intensity")
-    ax.set_title("Miller Intensities")
+    fig, ax = plt.subplots(figsize=(8, 6))
+    scatters = []
+    for col in intensity_cols:
+        sc = ax.scatter(
+            df[col_map["l"]],
+            df[col],
+            label=col,
+            s=20,
+            alpha=0.7,
+        )
+        scatters.append(sc)
+
+    ax.set_xlabel("l")
+    ax.set_ylabel("Normalized Intensity")
+    ax.set_title("L vs Intensity")
+
+    legend = ax.legend(title="Intensity columns") if len(intensity_cols) > 1 else None
+
+    # Add interactive checkboxes to toggle datasets
+    if legend:
+        from matplotlib.widgets import CheckButtons, Button
+
+        # Position checkboxes to the right of the plot
+        rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
+        visibility = [sc.get_visible() for sc in scatters]
+        checks = CheckButtons(rax, intensity_cols, visibility)
+
+        def func(label: str) -> None:
+            idx = intensity_cols.index(label)
+            scatters[idx].set_visible(not scatters[idx].get_visible())
+            fig.canvas.draw_idle()
+
+        checks.on_clicked(func)
+
+        # Buttons to hide/show all
+        hide_ax = fig.add_axes([0.82, 0.32, 0.07, 0.05])
+        show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
+        hide_btn = Button(hide_ax, "Hide\nAll")
+        show_btn = Button(show_ax, "Show\nAll")
+
+        def hide_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if sc.get_visible():
+                    checks.set_active(i)
+
+        def show_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if not sc.get_visible():
+                    checks.set_active(i)
+
+        hide_btn.on_clicked(hide_all)
+        show_btn.on_clicked(show_all)
+
     plt.tight_layout()
     plt.show()
 
