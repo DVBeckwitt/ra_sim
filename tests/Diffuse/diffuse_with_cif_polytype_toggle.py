@@ -270,6 +270,14 @@ def ht_integrated_area(p, h, k, ell):
 
     return 2 * np.pi * F2 * r2 / (1.0 - r2)
 
+
+def ht_numeric_area(p, h, k, ell):
+    """Numeric Hendricks–Teller peak area for a given integer ``ell``."""
+    F2 = F2_cache[(h, k)]
+    I_vals = I_inf(p, h, k, F2)
+    mask = (L_GRID >= ell - 0.5) & (L_GRID <= ell + 0.5)
+    return float(np.trapz(I_vals[mask], L_GRID[mask]))
+
 # composite (still honours weights, but p-values are 0 now)
 def analytic_area_weighted(h, k, ell):
     w0, w1, w2 = state['w0'], state['w1'], state['w2']
@@ -281,6 +289,18 @@ def analytic_area_weighted(h, k, ell):
         w2 * ht_integrated_area(state['p3'], h, k, ell)
     )
 
+# Numeric integration counterpart
+def numeric_area_weighted(h, k, ell):
+    w0, w1, w2 = _norm_weights()
+    F2 = F2_cache[(h, k)]
+    I_total = (
+        w0 * I_inf(state['p0'], h, k, F2)
+        + w1 * I_inf(state['p1'], h, k, F2)
+        + w2 * I_inf(state['p3'], h, k, F2)
+    )
+    mask = (L_GRID >= ell - 0.5) & (L_GRID <= ell + 0.5)
+    return float(np.trapz(I_total[mask], L_GRID[mask]))
+
 # ──────────────────────────────────────────────────────────────
 # ------------------------------------------------------------------
 # helper – return normalised slider weights  w0 w1 w2  (sum = 1)
@@ -291,7 +311,7 @@ def _norm_weights():
 # ------------------------------------------------------------------
 # ────────── XLSX EXPORT  (changed block) ────────────────────────────
 def export_bragg_data(_):
-    """Save Bragg info to XLSX, including analytic integrated areas."""
+    """Save Bragg info to XLSX with numerically integrated HT areas."""
     root = tk.Tk(); root.withdraw()
     fname = tk.filedialog.asksaveasfilename(
         defaultextension='.xlsx',
@@ -323,10 +343,10 @@ def export_bragg_data(_):
                        Dans6H_raw=r6)
 
             if _is_hk_mode():                           ### ← NEW
-                row['Analytic_2H_area'] = ht_integrated_area(state['p0'], h, k, l)
-                row['Analytic_6H_area'] = ht_integrated_area(state['p1'], h, k, l)
+                row['Numeric_2H_area'] = ht_numeric_area(state['p0'], h, k, l)
+                row['Numeric_6H_area'] = ht_numeric_area(state['p1'], h, k, l)
             else:
-                row['Analytic_area'] = analytic_area_weighted(h, k, l)
+                row['Numeric_area'] = numeric_area_weighted(h, k, l)
 
             rows.append(row)
 
