@@ -153,6 +153,7 @@ def main() -> None:
     if len(intensity_cols) > 1:
         ax.legend(title="Intensity columns")
     ax.set_title("L vs Intensity")
+
     plt.tight_layout()
     plt.show()
 
