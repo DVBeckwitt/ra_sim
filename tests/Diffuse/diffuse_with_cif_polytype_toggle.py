@@ -293,7 +293,7 @@ def _norm_weights():
 def export_bragg_data(_):
     """Save Bragg info to XLSX, including analytic integrated areas."""
     root = tk.Tk(); root.withdraw()
-    fname = tk.filedialog.asksaveasfilename(
+    fname = asksaveasfilename(
         defaultextension='.xlsx',
         filetypes=[('Excel', '*.xlsx')]
     )
