@@ -11,6 +11,25 @@ except Exception:  # pragma: no cover
     get_dir = None
 
 
+def _find_column(df: pd.DataFrame, target: str) -> str | None:
+    """Return the name of ``target`` column in ``df`` if present.
+
+    The search is case-insensitive and ignores spaces.  If an exact match is
+    not found, a column containing the target text is returned if available.
+    """
+
+    normalized = target.lower().replace(" ", "")
+    for col in df.columns:
+        col_normalized = col.lower().replace(" ", "")
+        if col_normalized == normalized:
+            return col
+
+    for col in df.columns:
+        if normalized in col.lower().replace(" ", ""):
+            return col
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot Miller intensities from an Excel file as a 3D scatter plot"
@@ -56,10 +75,28 @@ def main() -> None:
                 f"Worksheet '{sheet_to_read}' not found. Available: {available}"
             ) from exc
 
+    # Find required columns regardless of case or spaces
+    required = ["h", "k", "l", "Intensity"]
+    col_map = {}
+    for col in required:
+        found = _find_column(df, col)
+        if not found:
+            raise SystemExit(
+                f"Required column '{col}' not found in sheet '{sheet_to_read}'. "
+                f"Available columns: {list(df.columns)}"
+            )
+        col_map[col] = found
+
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
-    sc = ax.scatter(df["h"], df["k"], df["l"], c=df["Intensity"], cmap="viridis")
+    sc = ax.scatter(
+        df[col_map["h"]],
+        df[col_map["k"]],
+        df[col_map["l"]],
+        c=df[col_map["Intensity"]],
+        cmap="viridis",
+    )
     ax.set_xlabel("h")
     ax.set_ylabel("k")
     ax.set_zlabel("l")
