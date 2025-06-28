@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 try:
     from ra_sim.path_config import get_dir
@@ -77,7 +76,7 @@ def _find_intensity_columns(df: pd.DataFrame, name: str | None) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Plot Miller intensities from an Excel file as a 3D scatter plot"
+        description="Plot intensities from an Excel file as an L vs intensity scatter plot"
     )
     parser.add_argument(
         "excel_path",
@@ -126,7 +125,7 @@ def main() -> None:
             ) from exc
 
     # Find required columns regardless of case or spaces
-    required = ["h", "k", "l"]
+    required = ["l"]
     col_map = {}
     for col in required:
         found = _find_column(df, col)
@@ -140,27 +139,21 @@ def main() -> None:
     intensity_cols = _find_intensity_columns(df, args.intensity)
 
 
-    fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    sc = None
-    for idx, col in enumerate(intensity_cols):
-        sc = ax.scatter(
-            df[col_map["h"]],
-            df[col_map["k"]],
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for col in intensity_cols:
+        ax.scatter(
             df[col_map["l"]],
-            c=df[col],
-            cmap="viridis",
-            alpha=0.7,
+            df[col],
             label=col,
+            s=20,
+            alpha=0.7,
         )
-        if idx == 0:
-            fig.colorbar(sc, ax=ax, label="Normalized Intensity")
-    ax.set_xlabel("h")
-    ax.set_ylabel("k")
-    ax.set_zlabel("l")
+    ax.set_xlabel("l")
+    ax.set_ylabel("Normalized Intensity")
     if len(intensity_cols) > 1:
         ax.legend(title="Intensity columns")
-    ax.set_title("Miller Intensities")
+    ax.set_title("L vs Intensity")
+
     plt.tight_layout()
     plt.show()
 
