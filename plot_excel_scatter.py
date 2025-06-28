@@ -48,13 +48,12 @@ def _find_intensity_columns(df: pd.DataFrame, name: str | None) -> list[str]:
     if col:
         return [col]
 
-    keywords = ["scaled", "intensity", "area"]
+    keywords = ["scaled", "raw", "intensity", "area"]
     hkl_cols = {_find_column(df, "h"), _find_column(df, "k"), _find_column(df, "l")}
     candidates = [
         c
         for c in df.columns
-        if any(k in c.lower() for k in keywords)
-        and c not in hkl_cols
+        if any(k in c.lower() for k in keywords) and c not in hkl_cols
     ]
 
     if not candidates:
@@ -80,7 +79,6 @@ def main() -> None:
             "Plot intensities from an Excel file as an L vs intensity scatter plot "
             "with interactive controls"
         )
-
     )
     parser.add_argument(
         "excel_path",
@@ -119,9 +117,7 @@ def main() -> None:
         available = xls.sheet_names
         if args.sheet is None and sheet_to_read == "Summary" and available:
             sheet_to_read = available[0]
-            print(
-                f"Worksheet 'Summary' not found; using '{sheet_to_read}' instead."
-            )
+            print(f"Worksheet 'Summary' not found; using '{sheet_to_read}' instead.")
             df = pd.read_excel(xls, sheet_name=sheet_to_read)
         else:
             raise SystemExit(
@@ -141,7 +137,6 @@ def main() -> None:
         col_map[col] = found
 
     intensity_cols = _find_intensity_columns(df, args.intensity)
-
 
     fig, ax = plt.subplots(figsize=(8, 6))
     scatters = []
@@ -195,7 +190,6 @@ def main() -> None:
 
         hide_btn.on_clicked(hide_all)
         show_btn.on_clicked(show_all)
-
 
     plt.tight_layout()
     plt.show()
