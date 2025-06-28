@@ -227,12 +227,13 @@ def _ht_peak_area_for_p(p, h, k, l):
     """Return integrated area of one Bragg peak for probability ``p``."""
     idx = int(round(l / L_MAX * (len(L_GRID) - 1)))
     F2 = F2_cache[(h, k)][idx]
-    phi0 = 2 * np.pi * ((2 * h + k) / 3)
-    f0 = (1 - p) + p * np.cos(phi0)
-    denom = 1 - f0
+    delta = 2 * np.pi * ((2 * h + k) / 3)
+    f = (1 - p) + p * np.exp(-1j * delta)
+    r2 = np.abs(f) ** 2
+    denom = 1.0 - r2
     if np.isclose(denom, 0):
         return np.inf
-    return np.pi * F2 * (f0 ** 1.5) / denom
+    return 2 * np.pi * F2 * r2 / denom
 
 
 def ht_peak_area(h, k, l):
