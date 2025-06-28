@@ -26,6 +26,7 @@ def main() -> None:
         default=None,
         help="Name of worksheet to read (defaults to 'Summary' or first sheet)",
     )
+
     args = parser.parse_args()
 
     if args.excel_path is None:
@@ -54,6 +55,7 @@ def main() -> None:
             raise SystemExit(
                 f"Worksheet '{sheet_to_read}' not found. Available: {available}"
             ) from exc
+
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
