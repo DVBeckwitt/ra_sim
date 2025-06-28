@@ -30,6 +30,46 @@ def _find_column(df: pd.DataFrame, target: str) -> str | None:
     return None
 
 
+def _find_intensity_column(df: pd.DataFrame, name: str | None) -> str:
+    """Return the intensity column based on ``name`` or heuristics."""
+
+    if name:
+        col = _find_column(df, name)
+        if not col:
+            raise SystemExit(
+                f"Intensity column '{name}' not found. Available columns: {list(df.columns)}"
+            )
+        return col
+
+    col = _find_column(df, "Intensity")
+    if col:
+        return col
+
+    keywords = ["scaled", "intensity", "area"]
+    hkl_cols = {_find_column(df, "h"), _find_column(df, "k"), _find_column(df, "l")}
+    candidates = [
+        c
+        for c in df.columns
+        if any(k in c.lower() for k in keywords)
+        and c not in hkl_cols
+    ]
+
+    if not candidates:
+        raise SystemExit(
+            f"Required column 'Intensity' not found. Available columns: {list(df.columns)}"
+        )
+
+    if len(candidates) > 1:
+        raise SystemExit(
+            "Multiple possible intensity columns found: "
+            f"{candidates}. Specify one with --intensity"
+        )
+
+    col = candidates[0]
+    print(f"Using column '{col}' for intensities")
+    return col
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot Miller intensities from an Excel file as a 3D scatter plot"
@@ -44,6 +84,11 @@ def main() -> None:
         "--sheet",
         default=None,
         help="Name of worksheet to read (defaults to 'Summary' or first sheet)",
+    )
+    parser.add_argument(
+        "--intensity",
+        default=None,
+        help="Column containing intensities (auto-detected if omitted)",
     )
 
     args = parser.parse_args()
@@ -76,7 +121,7 @@ def main() -> None:
             ) from exc
 
     # Find required columns regardless of case or spaces
-    required = ["h", "k", "l", "Intensity"]
+    required = ["h", "k", "l"]
     col_map = {}
     for col in required:
         found = _find_column(df, col)
@@ -86,6 +131,9 @@ def main() -> None:
                 f"Available columns: {list(df.columns)}"
             )
         col_map[col] = found
+
+    intensity_col = _find_intensity_column(df, args.intensity)
+    col_map["Intensity"] = intensity_col
 
 
     fig = plt.figure(figsize=(8, 6))
