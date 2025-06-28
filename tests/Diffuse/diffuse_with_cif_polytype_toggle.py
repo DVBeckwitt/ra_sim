@@ -20,7 +20,6 @@ from collections import Counter
 from ra_sim.utils.tools import intensities_for_hkls
 import pandas as pd
 import tkinter as tk
-from tkinter.filedialog import asksaveasfilename
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
@@ -238,7 +237,7 @@ def bragg_intensity_sum(pairs):
     w2h, w6h = _weight_2h_6h()
     return L_vals, total_2h * scale2 * w2h, total_6h * scale6 * w6h
 
-def _is_hk_mode() -> bool:                  ### ← NEW
+def _is_hk_mode() -> bool:
     return state['mode'] == 'hk'
 # ──────────────────────────────────────────────────────────────
 # 2)  SIMPLE closed-form integrated area for **any** p
@@ -276,7 +275,7 @@ def ht_numeric_area(p, h, k, ell):
     F2 = F2_cache[(h, k)]
     I_vals = I_inf(p, h, k, F2)
     mask = (L_GRID >= ell - 0.5) & (L_GRID <= ell + 0.5)
-    return float(np.trapz(I_vals[mask], L_GRID[mask]))
+    return float(np.trapezoid(I_vals[mask], L_GRID[mask]))
 
 # composite (still honours weights, but p-values are 0 now)
 def analytic_area_weighted(h, k, ell):
@@ -299,7 +298,7 @@ def numeric_area_weighted(h, k, ell):
         + w2 * I_inf(state['p3'], h, k, F2)
     )
     mask = (L_GRID >= ell - 0.5) & (L_GRID <= ell + 0.5)
-    return float(np.trapz(I_total[mask], L_GRID[mask]))
+    return float(np.trapezoid(I_total[mask], L_GRID[mask]))
 
 # ──────────────────────────────────────────────────────────────
 # ------------------------------------------------------------------
@@ -349,7 +348,7 @@ def export_bragg_data(_):
                 Dans6H=r6 * sc6 * w6h,
             )
 
-            if _is_hk_mode():                           ### ← NEW
+            if _is_hk_mode():
                 row['Numeric_2H_area'] = ht_numeric_area(state['p0'], h, k, l)
                 row['Numeric_6H_area'] = ht_numeric_area(state['p1'], h, k, l)
             else:
