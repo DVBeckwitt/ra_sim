@@ -20,7 +20,7 @@ from collections import Counter
 from ra_sim.utils.tools import intensities_for_hkls
 import pandas as pd
 import tkinter as tk
-from tkinter.filedialog import asksaveasfilename
+from tkinter import filedialog
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
@@ -293,7 +293,7 @@ def _norm_weights():
 def export_bragg_data(_):
     """Save Bragg info to XLSX, including analytic integrated areas."""
     root = tk.Tk(); root.withdraw()
-    fname = asksaveasfilename(
+    fname = filedialog.asksaveasfilename(
         defaultextension='.xlsx',
         filetypes=[('Excel', '*.xlsx')]
     )
