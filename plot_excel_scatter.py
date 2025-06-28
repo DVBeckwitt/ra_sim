@@ -58,9 +58,22 @@ def _find_intensity_columns(df: pd.DataFrame, name: str | None) -> list[str]:
     ]
 
     if not candidates:
-        raise SystemExit(
-            f"Required column 'Intensity' not found. Available columns: {list(df.columns)}"
-        )
+        # Fallback: use any numeric columns excluding Miller indices
+        numeric_candidates = [
+            c
+            for c in df.select_dtypes(include="number").columns
+            if c not in hkl_cols
+        ]
+        if numeric_candidates:
+            print(
+                "No standard intensity column found. "
+                f"Using numeric columns {numeric_candidates}"
+            )
+            candidates = numeric_candidates
+        else:
+            raise SystemExit(
+                f"Required column 'Intensity' not found. Available columns: {list(df.columns)}"
+            )
 
     if len(candidates) > 1:
         print(
