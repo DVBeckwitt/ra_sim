@@ -76,7 +76,11 @@ def _find_intensity_columns(df: pd.DataFrame, name: str | None) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Plot intensities from an Excel file as an L vs intensity scatter plot"
+        description=(
+            "Plot intensities from an Excel file as an L vs intensity scatter plot "
+            "with interactive controls"
+        )
+
     )
     parser.add_argument(
         "excel_path",
@@ -140,19 +144,59 @@ def main() -> None:
 
 
     fig, ax = plt.subplots(figsize=(8, 6))
+    scatters = []
     for col in intensity_cols:
-        ax.scatter(
+        sc = ax.scatter(
+
             df[col_map["l"]],
             df[col],
             label=col,
             s=20,
             alpha=0.7,
         )
+        scatters.append(sc)
+
     ax.set_xlabel("l")
     ax.set_ylabel("Normalized Intensity")
-    if len(intensity_cols) > 1:
-        ax.legend(title="Intensity columns")
     ax.set_title("L vs Intensity")
+
+    legend = ax.legend(title="Intensity columns") if len(intensity_cols) > 1 else None
+
+    # Add interactive checkboxes to toggle datasets
+    if legend:
+        from matplotlib.widgets import CheckButtons, Button
+
+        # Position checkboxes to the right of the plot
+        rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
+        visibility = [sc.get_visible() for sc in scatters]
+        checks = CheckButtons(rax, intensity_cols, visibility)
+
+        def func(label: str) -> None:
+            idx = intensity_cols.index(label)
+            scatters[idx].set_visible(not scatters[idx].get_visible())
+            fig.canvas.draw_idle()
+
+        checks.on_clicked(func)
+
+        # Buttons to hide/show all
+        hide_ax = fig.add_axes([0.82, 0.32, 0.07, 0.05])
+        show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
+        hide_btn = Button(hide_ax, "Hide\nAll")
+        show_btn = Button(show_ax, "Show\nAll")
+
+        def hide_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if sc.get_visible():
+                    checks.set_active(i)
+
+        def show_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if not sc.get_visible():
+                    checks.set_active(i)
+
+        hide_btn.on_clicked(hide_all)
+        show_btn.on_clicked(show_all)
+
 
     plt.tight_layout()
     plt.show()
