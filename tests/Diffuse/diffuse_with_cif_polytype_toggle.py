@@ -185,8 +185,15 @@ def _raw_bragg(h, k, lo, hi, cif_path):
     return _BRAGG_CACHE[key]
 
 
+def _weight_2h_6h():
+    """Return normalized weights for 2H and 6H contributions."""
+    w0, w1 = state['w0'], state['w1']
+    s = (w0 + w1) or 1.0
+    return (w1 / s, w0 / s)  # 2H weight, 6H weight
+
+
 def bragg_intensity_single(h, k):
-    """Return ``(L_vals, b2h, b6h)`` scaled to HT for one (h,k) pair."""
+    """Return ``(L_vals, b2h, b6h)`` scaled and weighted for one (h,k) pair."""
     lo, hi = state['L_lo'], state['L_hi']
     L_vals, raw2h = _raw_bragg(h, k, lo, hi, str(CIF_2H))
     _, raw6h = _raw_bragg(h, k, lo, hi, str(CIF_6H))
@@ -198,15 +205,17 @@ def bragg_intensity_single(h, k):
     max_6h = float(raw6h.max()) if np.any(raw6h) else 1.0
     scale2 = max_ht / max_2h if max_2h else 1.0
     scale6 = max_ht / max_6h if max_6h else 1.0
-    return L_vals, raw2h * scale2, raw6h * scale6
+    w2h, w6h = _weight_2h_6h()
+    return L_vals, raw2h * scale2 * w2h, raw6h * scale6 * w6h
 
 
 def bragg_intensity_sum(pairs):
-    """Return combined 2H and 6H intensities for all ``pairs``.
+    """Return weighted 2H and 6H intensities for all ``pairs``.
 
     The returned arrays correspond to integer ``L`` values within the
     current slider range. Intensities from each polytype are scaled to
-    the Hendricks–Teller data before summing or further processing.
+    the Hendricks–Teller data and multiplied by the user weights before
+    summing or further processing.
     """
     lo, hi = state['L_lo'], state['L_hi']
     L_vals = np.arange(int(np.floor(lo)), int(np.ceil(hi)) + 1)
@@ -225,7 +234,8 @@ def bragg_intensity_sum(pairs):
     max_6h = float(total_6h.max()) if np.any(total_6h) else 1.0
     scale2 = max_ht / max_2h if max_2h else 1.0
     scale6 = max_ht / max_6h if max_6h else 1.0
-    return L_vals, total_2h * scale2, total_6h * scale6
+    w2h, w6h = _weight_2h_6h()
+    return L_vals, total_2h * scale2 * w2h, total_6h * scale6 * w6h
 
 
 def _ht_peak_area_for_p(p, h, k, l):
@@ -262,6 +272,7 @@ def export_bragg_data(_):
         return
     pairs = active_pairs()
     rows = []
+    w2h, w6h = _weight_2h_6h()
     for h, k in pairs:
         L_vals, raw2 = _raw_bragg(h, k, 0, L_MAX, str(CIF_2H))
         _, raw6 = _raw_bragg(h, k, 0, L_MAX, str(CIF_6H))
@@ -275,9 +286,9 @@ def export_bragg_data(_):
             rows.append({
                 'h': h, 'k': k, 'l': int(l),
                 'HT_area': ht_peak_area(h, k, l),
-                'Dans2H_scaled': r2 * scale2,
+                'Dans2H_scaled': r2 * scale2 * w2h,
                 'Dans2H_raw': r2,
-                'Dans6H_scaled': r6 * scale6,
+                'Dans6H_scaled': r6 * scale6 * w6h,
                 'Dans6H_raw': r6,
             })
     pd.DataFrame(rows).to_excel(filename, index=False)
