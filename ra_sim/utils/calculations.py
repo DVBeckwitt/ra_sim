@@ -1,8 +1,13 @@
 """Numerical helper functions used by the simulator."""
 
 import numpy as np
-import pyFAI
-from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+try:
+    import pyFAI
+    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+except Exception:  # pragma: no cover - optional
+    pyFAI = None
+    class AzimuthalIntegrator:
+        pass
 import json
 import matplotlib.pyplot as plt
 from pathlib import Path

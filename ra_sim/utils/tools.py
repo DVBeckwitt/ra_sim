@@ -8,8 +8,13 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pyFAI
-from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+try:
+    import pyFAI
+    from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+except Exception:  # pragma: no cover - optional dependency may be absent
+    pyFAI = None
+    class AzimuthalIntegrator:  # minimal stub for type hints
+        pass
 from skimage import color, exposure, feature, io
 
 from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor

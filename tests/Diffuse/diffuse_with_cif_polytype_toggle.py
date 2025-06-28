@@ -202,7 +202,12 @@ def bragg_intensity_single(h, k):
 
 
 def bragg_intensity_sum(pairs):
-    """Sum scaled Bragg intensities for all ``pairs``."""
+    """Return combined 2H and 6H intensities for all ``pairs``.
+
+    The returned arrays correspond to integer ``L`` values within the
+    current slider range. Intensities from each polytype are scaled to
+    the Hendricks–Teller data before summing or further processing.
+    """
     lo, hi = state['L_lo'], state['L_hi']
     L_vals = np.arange(int(np.floor(lo)), int(np.ceil(hi)) + 1)
     total_2h = np.zeros_like(L_vals, dtype=float)
@@ -312,10 +317,13 @@ def refresh(_=None):
         pairs = active_pairs()
         if state['mode'] == 'm':
             L_vals, i2h, i6h = bragg_intensity_sum(pairs)
+            total = i2h + i6h
             msk = (L_vals >= lo) & (L_vals <= hi)
-            ln2, = ax.plot(L_vals[msk], i2h[msk], marker='o', ls='none', label=f'2H m={state["m"]}')
-            ln6, = ax.plot(L_vals[msk], i6h[msk], marker='s', ls='none', label=f'6H m={state["m"]}')
-            _bragg_lines.extend([ln2, ln6])
+            ln, = ax.plot(
+                L_vals[msk], total[msk], marker='D', ls='none',
+                label=f'Bragg sum m={state["m"]}'
+            )
+            _bragg_lines.append(ln)
         else:
             for h, k in pairs:
                 L_vals, i2h, i6h = bragg_intensity_single(h, k)
