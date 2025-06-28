@@ -80,6 +80,7 @@ def main() -> None:
             "Plot intensities from an Excel file as an L vs intensity scatter plot "
             "with interactive controls"
         )
+
     )
     parser.add_argument(
         "excel_path",
@@ -194,6 +195,7 @@ def main() -> None:
 
         hide_btn.on_clicked(hide_all)
         show_btn.on_clicked(show_all)
+
 
     plt.tight_layout()
     plt.show()
