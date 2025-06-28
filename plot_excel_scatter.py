@@ -147,7 +147,6 @@ def main() -> None:
     scatters = []
     for col in intensity_cols:
         sc = ax.scatter(
-
             df[col_map["l"]],
             df[col],
             label=col,
