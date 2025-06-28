@@ -311,7 +311,11 @@ def _norm_weights():
 # ------------------------------------------------------------------
 # ────────── XLSX EXPORT  (changed block) ────────────────────────────
 def export_bragg_data(_):
-    """Save Bragg info to XLSX with numerically integrated HT areas."""
+    """Save Bragg info to XLSX with numerically integrated HT areas.
+
+    Only scaled intensities for the 2H and 6H contributions are stored
+    so they correspond directly to each other.
+    """
     root = tk.Tk(); root.withdraw()
     fname = tk.filedialog.asksaveasfilename(
         defaultextension='.xlsx',
@@ -320,7 +324,8 @@ def export_bragg_data(_):
     if not fname:
         return
 
-    rows, w2h, w6h = [], *_norm_weights()[:2]
+    rows = []
+    w2h, w6h = _weight_2h_6h()
 
     pairs = ([(state['h'], state['k'])] if _is_hk_mode()
              else HK_BY_M[state['m']])
@@ -336,11 +341,13 @@ def export_bragg_data(_):
         sc6      = s_ht / (raw6.max() or 1.0)
 
         for l, r2, r6 in zip(L, raw2, raw6):
-            row = dict(h=h, k=k, l=int(l),
-                       Dans2H_scaled=r2*sc2*w2h,
-                       Dans2H_raw=r2,
-                       Dans6H_scaled=r6*sc6*w6h,
-                       Dans6H_raw=r6)
+            row = dict(
+                h=h,
+                k=k,
+                l=int(l),
+                Dans2H=r2 * sc2 * w2h,
+                Dans6H=r6 * sc6 * w6h,
+            )
 
             if _is_hk_mode():                           ### ← NEW
                 row['Numeric_2H_area'] = ht_numeric_area(state['p0'], h, k, l)
