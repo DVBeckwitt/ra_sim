@@ -90,14 +90,25 @@ L_MAX  = 20
 N_L    = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
 
-# precompute |F|² (2H lattice)
-F2_cache = {}
+# precompute |F|² for 2H and 6H lattices
+F2_cache_2H = {}
+F2_cache_6H = {}
 for pairs in HK_BY_M.values():
-    for h,k in pairs:
-        Q = 2*np.pi * np.sqrt((4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L_GRID**2)/C_2H**2)
-        phases = np.array([np.exp(2j*np.pi*(h*x + k*y + L_GRID*z)) for x,y,z,_ in SITES])
-        coeffs = np.array([f_comp(sym, Q) for *_, sym in SITES])
-        F2_cache[(h,k)] = np.abs((coeffs * phases).sum(axis=0))**2
+    for h, k in pairs:
+        # 2H structure
+        Q_2h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
+                                   + (L_GRID**2) / C_2H**2)
+        phases = np.array([
+            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z)) for x, y, z, _ in SITES
+        ])
+        coeffs = np.array([f_comp(sym, Q_2h) for *_, sym in SITES])
+        F2_cache_2H[(h, k)] = np.abs((coeffs * phases).sum(axis=0))**2
+
+        # 6H structure – same in‑plane coords, different c parameter
+        Q_6h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
+                                   + (L_GRID**2) / C_6H**2)
+        coeffs_6h = np.array([f_comp(sym, Q_6h) for *_, sym in SITES])
+        F2_cache_6H[(h, k)] = np.abs((coeffs_6h * phases).sum(axis=0))**2
 
 # Hendricks–Teller infinite stacking
 
@@ -147,7 +158,7 @@ def compute_components():
         counts = Counter((abs(h), abs(k)) for h, k in pairs)
 
     def comp(p):
-        return sum(n * I_inf(p, h, k, F2_cache[(h, k)])
+        return sum(n * I_inf(p, h, k, F2_cache_2H[(h, k)])
                    for (h, k), n in counts.items())
 
     state['I0'], state['I1'], state['I3'] = comp(state['p0']), comp(state['p1']), comp(state['p3'])
@@ -166,7 +177,7 @@ def ht_total_for_pair(h, k):
     w0, w1, w2 = state['w0'], state['w1'], state['w2']
     s = (w0 + w1 + w2) or 1
     w0, w1, w2 = w0/s, w1/s, w2/s
-    F2 = F2_cache[(h, k)]
+    F2 = F2_cache_2H[(h, k)]
     return (
         w0 * I_inf(state['p0'], h, k, F2)
         + w1 * I_inf(state['p1'], h, k, F2)
@@ -254,7 +265,7 @@ def ht_integrated_area(p, h, k, ell):
         p_eff = p
 
     idx = int(round(ell / L_MAX * (N_L - 1)))
-    F2 = F2_cache[(h, k)][idx]
+    F2 = F2_cache_2H[(h, k)][idx]
 
     delta = 2 * np.pi * (2 * h + k) / 3
     z = (1 - p_eff) + p_eff * np.exp(-1j * delta)
@@ -263,10 +274,25 @@ def ht_integrated_area(p, h, k, ell):
     return 2 * np.pi * F2 * r2 / (1.0 - r2)
 
 
-def ht_numeric_area(p, h, k, ell, nphi=4001):
-    """Numeric Hendricks–Teller area using φ integration."""
+def ht_numeric_area(p, h, k, ell, nphi=4001, phase="2H"):
+    """Numeric Hendricks–Teller area using φ integration.
+
+    Parameters
+    ----------
+    p : float
+        Stacking-fault probability.
+    h, k : int
+        Miller indices.
+    ell : int
+        L index of the reflection.
+    nphi : int, optional
+        Number of φ samples for integration.
+    phase : {"2H", "6H"}, optional
+        Choose which structure factor cache to use.
+    """
     idx = int(round(ell / L_MAX * (N_L - 1)))
-    F2 = F2_cache[(h, k)][idx]
+    cache = F2_cache_2H if phase == "2H" else F2_cache_6H
+    F2 = cache[(h, k)][idx]
 
     phi_axis = np.linspace(-np.pi, np.pi, nphi)
     f, _, _ = _abc(p, h, k)
@@ -292,9 +318,9 @@ def numeric_area_weighted(h, k, ell, nphi=4001):
     s = (w0 + w1 + w2) or 1
     w0, w1, w2 = w0 / s, w1 / s, w2 / s
     return (
-        w0 * ht_numeric_area(state['p0'], h, k, ell, nphi)
-        + w1 * ht_numeric_area(state['p1'], h, k, ell, nphi)
-        + w2 * ht_numeric_area(state['p3'], h, k, ell, nphi)
+        w0 * ht_numeric_area(state['p0'], h, k, ell, nphi, phase="6H")
+        + w1 * ht_numeric_area(state['p1'], h, k, ell, nphi, phase="2H")
+        + w2 * ht_numeric_area(state['p3'], h, k, ell, nphi, phase="2H")
     )
 # ──────────────────────────────────────────────────────────────
 # ------------------------------------------------------------------
@@ -353,8 +379,8 @@ def export_bragg_data(_):
 
             if _is_hk_mode():                           ### ← NEW
                 # p≈1 → 2H,  p≈0 → 6H (mirrors _weight_2h_6h logic)
-                n2 = ht_numeric_area(state['p1'], h, k, l)
-                n6 = ht_numeric_area(state['p0'], h, k, l)
+                n2 = ht_numeric_area(state['p1'], h, k, l, phase="2H")
+                n6 = ht_numeric_area(state['p0'], h, k, l, phase="6H")
                 area_max = max(area_max, n2, n6)
                 row['Numeric_2H_area'] = n2
                 row['Numeric_6H_area'] = n6

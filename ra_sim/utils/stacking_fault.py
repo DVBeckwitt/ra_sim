@@ -112,39 +112,6 @@ def _I_inf(L, p, h, k, F2):
     return AREA * F2 * (1-f**2) / (1 + f**2 - 2*f*np.cos(φ-ψ))
 
 
-def _I_inf_numeric(L, p, h, k, F2, nphi=4001):
-    """Numerically integrate the Hendricks–Teller peak area.
-
-    This variant computes the constant prefactor by numerical integration of
-    ``r**2 / (1 + r**2 - 2*r*cos(phi))`` over ``phi`` in ``[-π, π]``.
-
-    Parameters
-    ----------
-    L : array_like
-        L values at which ``F2`` is defined.
-    p : float
-        Stacking fault probability.
-    h, k : int
-        Miller indices.
-    F2 : array_like
-        ``|F|^2`` values matching ``L``.
-    nphi : int, optional
-        Number of φ samples for the integration grid.
-
-    Returns
-    -------
-    numpy.ndarray
-        Intensities matching ``L`` computed via numerical integration.
-    """
-    import numpy as np
-
-    phi_axis = np.linspace(-np.pi, np.pi, nphi)
-    f, ψ, δ = _abc(p, h, k)
-    r = abs(f)
-    integrand = r*r / (1 + r*r - 2*r*np.cos(phi_axis))
-    area = np.trapezoid(integrand, phi_axis)
-    return AREA * F2 * area
-
 
 def _get_base_curves(
     cif_path: str,
@@ -244,7 +211,7 @@ def ht_Iinf_dict(
     for (h, k), data in base.items():
         L_vals = data["L"]
         F2 = data["F2"]
-        I = _I_inf_numeric(L_vals, p, h, k, F2)
+        I = _I_inf(L_vals, p, h, k, F2)
         out[(h, k)] = {"L": L_vals.copy(), "I": I}
 
     return out
