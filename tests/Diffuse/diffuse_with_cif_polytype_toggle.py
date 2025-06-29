@@ -243,16 +243,9 @@ def _is_hk_mode() -> bool:                  ### ← NEW
 # ──────────────────────────────────────────────────────────────
 # 2)  SIMPLE closed-form integrated area for **any** p
 def ht_integrated_area(p, h, k, ell):
-    """
-    Analytic Hendricks–Teller area:
-        A = 2π |F|² r² / (1 − r²)
+    """Analytic Hendricks–Teller area for a single reflection."""
+    P_EPS = 1.0e-6  # keep r away from the pole
 
-    • p = 0  → p_eff = +P_EPS
-    • p = 1  → p_eff = 1 − P_EPS
-    """
-    P_EPS = 1.0e-6           # 1 ppm away from the exact pole
-
-    # ------- effective p (keep inside (0,1)) ------------------------
     if p <= 1e-15:
         p_eff = P_EPS
     elif p >= 1 - 1e-15:
@@ -260,15 +253,27 @@ def ht_integrated_area(p, h, k, ell):
     else:
         p_eff = p
 
-    # ------- lattice slice -----------------------------------------
-    idx   = int(round(ell / L_MAX * (N_L - 1)))
-    F2    = F2_cache[(h, k)][idx]
+    idx = int(round(ell / L_MAX * (N_L - 1)))
+    F2 = F2_cache[(h, k)][idx]
 
-    delta = 2 * np.pi * (2*h + k) / 3
-    z     = (1 - p_eff) + p_eff * np.exp(-1j * delta)     # ← use np.exp
-    r2    = abs(z)**2
+    delta = 2 * np.pi * (2 * h + k) / 3
+    z = (1 - p_eff) + p_eff * np.exp(-1j * delta)
+    r2 = abs(z) ** 2
 
     return 2 * np.pi * F2 * r2 / (1.0 - r2)
+
+
+def ht_numeric_area(p, h, k, ell, nphi=4001):
+    """Numeric Hendricks–Teller area using φ integration."""
+    idx = int(round(ell / L_MAX * (N_L - 1)))
+    F2 = F2_cache[(h, k)][idx]
+
+    phi_axis = np.linspace(-np.pi, np.pi, nphi)
+    f, _, _ = _abc(p, h, k)
+    r = abs(f)
+    integrand = r * r / (1 + r * r - 2 * r * np.cos(phi_axis))
+    area = np.trapezoid(integrand, phi_axis)
+    return AREA * F2 * area
 
 # composite (still honours weights, but p-values are 0 now)
 def analytic_area_weighted(h, k, ell):
@@ -281,6 +286,16 @@ def analytic_area_weighted(h, k, ell):
         w2 * ht_integrated_area(state['p3'], h, k, ell)
     )
 
+# numeric variant
+def numeric_area_weighted(h, k, ell, nphi=4001):
+    w0, w1, w2 = state['w0'], state['w1'], state['w2']
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    return (
+        w0 * ht_numeric_area(state['p0'], h, k, ell, nphi)
+        + w1 * ht_numeric_area(state['p1'], h, k, ell, nphi)
+        + w2 * ht_numeric_area(state['p3'], h, k, ell, nphi)
+    )
 # ──────────────────────────────────────────────────────────────
 # ------------------------------------------------------------------
 # helper – return normalised slider weights  w0 w1 w2  (sum = 1)
@@ -296,8 +311,8 @@ def export_bragg_data(_):
     The numeric intensities from ``Dans_Diffraction`` (2H/6H) are scaled to the
     Hendricks–Teller profile and then normalised across all reflections so that
     the strongest intensity equals ``100``.  This ensures the exported Dans
-    columns can be directly compared to the numeric areas saved alongside the
-    analytic Hendricks–Teller values.
+    columns can be directly compared to the numeric Hendricks–Teller areas
+    saved alongside.
     """
     root = tk.Tk(); root.withdraw()
     fname = filedialog.asksaveasfilename(
@@ -336,10 +351,10 @@ def export_bragg_data(_):
                        Total_scaled=total)
 
             if _is_hk_mode():                           ### ← NEW
-                row['Analytic_2H_area'] = ht_integrated_area(state['p0'], h, k, l)
-                row['Analytic_6H_area'] = ht_integrated_area(state['p1'], h, k, l)
+                row['Numeric_2H_area'] = ht_numeric_area(state['p0'], h, k, l)
+                row['Numeric_6H_area'] = ht_numeric_area(state['p1'], h, k, l)
             else:
-                row['Analytic_area'] = analytic_area_weighted(h, k, l)
+                row['Numeric_area'] = numeric_area_weighted(h, k, l)
 
             rows.append(row)
 
