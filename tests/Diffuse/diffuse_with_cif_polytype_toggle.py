@@ -310,9 +310,9 @@ def export_bragg_data(_):
 
     The numeric intensities from ``Dans_Diffraction`` (2H/6H) are scaled to the
     Hendricks–Teller profile and then normalised across all reflections so that
-    the strongest intensity equals ``100``.  This ensures the exported Dans
-    columns can be directly compared to the numeric Hendricks–Teller areas
-    saved alongside.
+    the strongest intensity equals ``100``.  The Hendricks–Teller areas are
+    rescaled to share this reference, ensuring the numeric columns are directly
+    comparable to the Dans values.
     """
     root = tk.Tk(); root.withdraw()
     fname = filedialog.asksaveasfilename(
@@ -324,6 +324,7 @@ def export_bragg_data(_):
 
     rows, w2h, w6h = [], *_norm_weights()[:2]
     intensity_max = 0.0
+    area_max = 0.0
 
     pairs = ([(state['h'], state['k'])] if _is_hk_mode()
              else HK_BY_M[state['m']])
@@ -351,18 +352,30 @@ def export_bragg_data(_):
                        Total_scaled=total)
 
             if _is_hk_mode():                           ### ← NEW
-                row['Numeric_2H_area'] = ht_numeric_area(state['p0'], h, k, l)
-                row['Numeric_6H_area'] = ht_numeric_area(state['p1'], h, k, l)
+                n2 = ht_numeric_area(state['p0'], h, k, l)
+                n6 = ht_numeric_area(state['p1'], h, k, l)
+                area_max = max(area_max, n2, n6)
+                row['Numeric_2H_area'] = n2
+                row['Numeric_6H_area'] = n6
             else:
-                row['Numeric_area'] = numeric_area_weighted(h, k, l)
+                n = numeric_area_weighted(h, k, l)
+                area_max = max(area_max, n)
+                row['Numeric_area'] = n
 
             rows.append(row)
 
     if intensity_max <= 0:
         intensity_max = 1.0
 
+    scale_num = intensity_max / (area_max or 1.0)
+
     for row in rows:
         row["Intensity_norm"] = 100.0 * row["Total_scaled"] / intensity_max
+        if "Numeric_2H_area" in row:
+            row["Numeric_2H_area"] *= scale_num
+            row["Numeric_6H_area"] *= scale_num
+        elif "Numeric_area" in row:
+            row["Numeric_area"] *= scale_num
 
     pd.DataFrame(rows).to_excel(fname, index=False)
     print("Saved →", fname)
