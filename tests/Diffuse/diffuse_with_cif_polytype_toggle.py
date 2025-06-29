@@ -352,8 +352,9 @@ def export_bragg_data(_):
                        Total_scaled=total)
 
             if _is_hk_mode():                           ### ← NEW
-                n2 = ht_numeric_area(state['p0'], h, k, l)
-                n6 = ht_numeric_area(state['p1'], h, k, l)
+                # p≈1 → 2H,  p≈0 → 6H (mirrors _weight_2h_6h logic)
+                n2 = ht_numeric_area(state['p1'], h, k, l)
+                n6 = ht_numeric_area(state['p0'], h, k, l)
                 area_max = max(area_max, n2, n6)
                 row['Numeric_2H_area'] = n2
                 row['Numeric_6H_area'] = n6
