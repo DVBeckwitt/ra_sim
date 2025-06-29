@@ -21,3 +21,15 @@ def test_find_intensity_columns_multiple():
     })
     cols = _find_intensity_columns(df, None)
     assert cols == ['A_scaled', 'B_scaled']
+
+
+def test_find_intensity_columns_with_intensity_and_extra():
+    df = pd.DataFrame({
+        'h': [0],
+        'k': [0],
+        'l': [1],
+        'Intensity': [1.0],
+        'Intensity2': [2.0],
+    })
+    cols = _find_intensity_columns(df, None)
+    assert cols == ['Intensity', 'Intensity2']

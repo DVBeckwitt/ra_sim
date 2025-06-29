@@ -44,10 +44,6 @@ def _find_intensity_columns(df: pd.DataFrame, name: str | None) -> list[str]:
             )
         return [col]
 
-    col = _find_column(df, "Intensity")
-    if col:
-        return [col]
-
     keywords = ["scaled", "intensity", "area"]
     hkl_cols = {_find_column(df, "h"), _find_column(df, "k"), _find_column(df, "l")}
     candidates = [
