@@ -472,19 +472,20 @@ def export_cif_hkls(_):
         tth = two_theta(d_val, LAMBDA)
         F_mag = float(np.sqrt(I)) if I >= 0 else 0.0
         rows.append({
-            'h': h,
-            'k': k,
-            'l': l,
-            'd (Å)': d_val,
-            'F(real)': F_mag,
-            'F(imag)': 0.0,
-            '|F|': F_mag,
-            '2θ': tth,
-            'I': 100.0 * float(I) / i_max,
-            'M': 1,
+            "h": h,
+            "k": k,
+            "l": l,
+            "d (Å)": d_val,
+            "F(real)": F_mag,
+            "F(imag)": 0.0,
+            "|F|": F_mag,
+            "2θ": tth,
+            "I": 100.0 * float(I) / i_max,
+            "M": 1,
         })
 
-    pd.DataFrame(rows).to_excel(fname, index=False)
+    cols = ["h", "k", "l", "d (Å)", "F(real)", "F(imag)", "|F|", "2θ", "I", "M"]
+    pd.DataFrame(rows, columns=cols).to_excel(fname, index=False)
     print("Saved →", fname)
 
 def plot_scatter(_):
