@@ -38,6 +38,8 @@ from tkinter import filedialog
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
 _last_df = None  # store last exported dataframe for extra plots
+# hold scatter plot widgets so they remain responsive
+_scatter_widgets: list[object] = []
 
 def c_from_cif(path: str) -> float:
     with open(path, "r", encoding="utf-8", errors="ignore") as fp:
@@ -462,10 +464,12 @@ def plot_scatter(_):
 
     if legend:
         from matplotlib.widgets import CheckButtons, Button
+        _scatter_widgets.clear()
 
         rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
         visibility = [sc.get_visible() for sc in scatters]
         checks = CheckButtons(rax, intensity_cols, visibility)
+        _scatter_widgets.append(checks)
 
         def func(label: str) -> None:
             idx = intensity_cols.index(label)
@@ -478,6 +482,7 @@ def plot_scatter(_):
         show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
         hide_btn = Button(hide_ax, 'Hide\nAll')
         show_btn = Button(show_ax, 'Show\nAll')
+        _scatter_widgets.extend([hide_btn, show_btn])
 
         def hide_all(event) -> None:  # pragma: no cover - UI
             for i, sc in enumerate(scatters):
