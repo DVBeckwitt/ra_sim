@@ -10,12 +10,25 @@ Optimised Hendricks–Teller viewer for PbI₂ (modified)
 * Uses ionic form factors: Pb²⁺ and I⁻.
 * Deduplicates symmetry-equivalent HK pairs with degeneracy.
 """
+import os
 import re, sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+
+if (
+    plt.get_backend().lower().endswith("agg")
+    and not os.environ.get("PYTEST_CURRENT_TEST")
+):
+    try:  # pragma: no cover - UI safeguard
+        plt.switch_backend("TkAgg")
+    except Exception:
+        pass
 from matplotlib.widgets import Slider, RangeSlider, Button
 from collections import Counter
+
+from plot_excel_scatter import _normalize_columns, _find_intensity_columns
+from compare_intensity import compute_metrics, plot_comparison
 
 from ra_sim.utils.tools import intensities_for_hkls
 import pandas as pd
@@ -24,6 +37,7 @@ from tkinter import filedialog
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
+_last_df = None  # store last exported dataframe for extra plots
 
 def c_from_cif(path: str) -> float:
     with open(path, "r", encoding="utf-8", errors="ignore") as fp:
@@ -90,14 +104,25 @@ L_MAX  = 20
 N_L    = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
 
-# precompute |F|² (2H lattice)
-F2_cache = {}
+# precompute |F|² for 2H and 6H lattices
+F2_cache_2H = {}
+F2_cache_6H = {}
 for pairs in HK_BY_M.values():
-    for h,k in pairs:
-        Q = 2*np.pi * np.sqrt((4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L_GRID**2)/C_2H**2)
-        phases = np.array([np.exp(2j*np.pi*(h*x + k*y + L_GRID*z)) for x,y,z,_ in SITES])
-        coeffs = np.array([f_comp(sym, Q) for *_, sym in SITES])
-        F2_cache[(h,k)] = np.abs((coeffs * phases).sum(axis=0))**2
+    for h, k in pairs:
+        # 2H structure
+        Q_2h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
+                                   + (L_GRID**2) / C_2H**2)
+        phases = np.array([
+            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z)) for x, y, z, _ in SITES
+        ])
+        coeffs = np.array([f_comp(sym, Q_2h) for *_, sym in SITES])
+        F2_cache_2H[(h, k)] = np.abs((coeffs * phases).sum(axis=0))**2
+
+        # 6H structure – same in‑plane coords, different c parameter
+        Q_6h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
+                                   + (L_GRID**2) / C_6H**2)
+        coeffs_6h = np.array([f_comp(sym, Q_6h) for *_, sym in SITES])
+        F2_cache_6H[(h, k)] = np.abs((coeffs_6h * phases).sum(axis=0))**2
 
 # Hendricks–Teller infinite stacking
 
@@ -147,7 +172,7 @@ def compute_components():
         counts = Counter((abs(h), abs(k)) for h, k in pairs)
 
     def comp(p):
-        return sum(n * I_inf(p, h, k, F2_cache[(h, k)])
+        return sum(n * I_inf(p, h, k, F2_cache_2H[(h, k)])
                    for (h, k), n in counts.items())
 
     state['I0'], state['I1'], state['I3'] = comp(state['p0']), comp(state['p1']), comp(state['p3'])
@@ -166,7 +191,7 @@ def ht_total_for_pair(h, k):
     w0, w1, w2 = state['w0'], state['w1'], state['w2']
     s = (w0 + w1 + w2) or 1
     w0, w1, w2 = w0/s, w1/s, w2/s
-    F2 = F2_cache[(h, k)]
+    F2 = F2_cache_2H[(h, k)]
     return (
         w0 * I_inf(state['p0'], h, k, F2)
         + w1 * I_inf(state['p1'], h, k, F2)
@@ -243,16 +268,9 @@ def _is_hk_mode() -> bool:                  ### ← NEW
 # ──────────────────────────────────────────────────────────────
 # 2)  SIMPLE closed-form integrated area for **any** p
 def ht_integrated_area(p, h, k, ell):
-    """
-    Analytic Hendricks–Teller area:
-        A = 2π |F|² r² / (1 − r²)
+    """Analytic Hendricks–Teller area for a single reflection."""
+    P_EPS = 1.0e-6  # keep r away from the pole
 
-    • p = 0  → p_eff = +P_EPS
-    • p = 1  → p_eff = 1 − P_EPS
-    """
-    P_EPS = 1.0e-6           # 1 ppm away from the exact pole
-
-    # ------- effective p (keep inside (0,1)) ------------------------
     if p <= 1e-15:
         p_eff = P_EPS
     elif p >= 1 - 1e-15:
@@ -260,15 +278,42 @@ def ht_integrated_area(p, h, k, ell):
     else:
         p_eff = p
 
-    # ------- lattice slice -----------------------------------------
-    idx   = int(round(ell / L_MAX * (N_L - 1)))
-    F2    = F2_cache[(h, k)][idx]
+    idx = int(round(ell / L_MAX * (N_L - 1)))
+    F2 = F2_cache_2H[(h, k)][idx]
 
-    delta = 2 * np.pi * (2*h + k) / 3
-    z     = (1 - p_eff) + p_eff * np.exp(-1j * delta)     # ← use np.exp
-    r2    = abs(z)**2
+    delta = 2 * np.pi * (2 * h + k) / 3
+    z = (1 - p_eff) + p_eff * np.exp(-1j * delta)
+    r2 = abs(z) ** 2
 
     return 2 * np.pi * F2 * r2 / (1.0 - r2)
+
+
+def ht_numeric_area(p, h, k, ell, nphi=4001, phase="2H"):
+    """Numeric Hendricks–Teller area using φ integration.
+
+    Parameters
+    ----------
+    p : float
+        Stacking-fault probability.
+    h, k : int
+        Miller indices.
+    ell : int
+        L index of the reflection.
+    nphi : int, optional
+        Number of φ samples for integration.
+    phase : {"2H", "6H"}, optional
+        Choose which structure factor cache to use.
+    """
+    idx = int(round(ell / L_MAX * (N_L - 1)))
+    cache = F2_cache_2H if phase == "2H" else F2_cache_6H
+    F2 = cache[(h, k)][idx]
+
+    phi_axis = np.linspace(-np.pi, np.pi, nphi)
+    f, _, _ = _abc(p, h, k)
+    r = abs(f)
+    integrand = r * r / (1 + r * r - 2 * r * np.cos(phi_axis))
+    area = np.trapezoid(integrand, phi_axis)
+    return AREA * F2 * area
 
 # composite (still honours weights, but p-values are 0 now)
 def analytic_area_weighted(h, k, ell):
@@ -281,6 +326,16 @@ def analytic_area_weighted(h, k, ell):
         w2 * ht_integrated_area(state['p3'], h, k, ell)
     )
 
+# numeric variant
+def numeric_area_weighted(h, k, ell, nphi=4001):
+    w0, w1, w2 = state['w0'], state['w1'], state['w2']
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    return (
+        w0 * ht_numeric_area(state['p0'], h, k, ell, nphi, phase="6H")
+        + w1 * ht_numeric_area(state['p1'], h, k, ell, nphi, phase="2H")
+        + w2 * ht_numeric_area(state['p3'], h, k, ell, nphi, phase="2H")
+    )
 # ──────────────────────────────────────────────────────────────
 # ------------------------------------------------------------------
 # helper – return normalised slider weights  w0 w1 w2  (sum = 1)
@@ -288,27 +343,12 @@ def _norm_weights():
     w0, w1, w2 = state['w0'], state['w1'], state['w2']
     s = (w0 + w1 + w2) or 1.0          # avoid division by zero
     return w0/s, w1/s, w2/s
-# ------------------------------------------------------------------
-# ────────── XLSX EXPORT  (changed block) ────────────────────────────
-def export_bragg_data(_):
-    """Save Bragg info to XLSX with intensities normalized to a common scale.
 
-    The numeric intensities from ``Dans_Diffraction`` (2H/6H) are scaled to the
-    Hendricks–Teller profile and then normalised across all reflections so that
-    the strongest intensity equals ``100``.  This ensures the exported Dans
-    columns can be directly compared to the numeric areas saved alongside the
-    analytic Hendricks–Teller values.
-    """
-    root = tk.Tk(); root.withdraw()
-    fname = filedialog.asksaveasfilename(
-        defaultextension='.xlsx',
-        filetypes=[('Excel', '*.xlsx')]
-    )
-    if not fname:
-        return
-
+def _build_bragg_dataframe():
+    """Return DataFrame with scaled Dans and numeric intensities."""
     rows, w2h, w6h = [], *_norm_weights()[:2]
     intensity_max = 0.0
+    area_max = 0.0
 
     pairs = ([(state['h'], state['k'])] if _is_hk_mode()
              else HK_BY_M[state['m']])
@@ -317,17 +357,17 @@ def export_bragg_data(_):
         L, raw2 = _raw_bragg(h, k, 0, L_MAX, str(CIF_2H))
         _, raw6 = _raw_bragg(h, k, 0, L_MAX, str(CIF_6H))
 
-        # scale factors (unchanged logic)
         ht_curve = composite_tot()
-        s_ht     = ht_curve.max() or 1.0
-        sc2      = s_ht / (raw2.max() or 1.0)
-        sc6      = s_ht / (raw6.max() or 1.0)
+        s_ht = ht_curve.max() or 1.0
+        sc2 = s_ht / (raw2.max() or 1.0)
+        sc6 = s_ht / (raw6.max() or 1.0)
 
         for l, r2, r6 in zip(L, raw2, raw6):
             scaled2 = r2 * sc2 * w2h
             scaled6 = r6 * sc6 * w6h
-            total   = scaled2 + scaled6
+            total = scaled2 + scaled6
             intensity_max = max(intensity_max, total)
+
             row = dict(h=h, k=k, l=int(l),
                        Dans2H_scaled=scaled2,
                        Dans2H_raw=r2,
@@ -335,22 +375,128 @@ def export_bragg_data(_):
                        Dans6H_raw=r6,
                        Total_scaled=total)
 
-            if _is_hk_mode():                           ### ← NEW
-                row['Analytic_2H_area'] = ht_integrated_area(state['p0'], h, k, l)
-                row['Analytic_6H_area'] = ht_integrated_area(state['p1'], h, k, l)
+            if _is_hk_mode():
+                n2 = ht_numeric_area(state['p1'], h, k, l, phase="2H")
+                n6 = ht_numeric_area(state['p0'], h, k, l, phase="6H")
+                area_max = max(area_max, n2, n6)
+                row['Numeric_2H_area'] = n2
+                row['Numeric_6H_area'] = n6
             else:
-                row['Analytic_area'] = analytic_area_weighted(h, k, l)
+                n = numeric_area_weighted(h, k, l)
+                area_max = max(area_max, n)
+                row['Numeric_area'] = n
 
             rows.append(row)
 
     if intensity_max <= 0:
         intensity_max = 1.0
 
-    for row in rows:
-        row["Intensity_norm"] = 100.0 * row["Total_scaled"] / intensity_max
+    scale_num = intensity_max / (area_max or 1.0)
 
-    pd.DataFrame(rows).to_excel(fname, index=False)
+    for row in rows:
+        row['Intensity_norm'] = 100.0 * row['Total_scaled'] / intensity_max
+        if 'Numeric_2H_area' in row:
+            row['Numeric_2H_area'] *= scale_num
+            row['Numeric_6H_area'] *= scale_num
+        elif 'Numeric_area' in row:
+            row['Numeric_area'] *= scale_num
+
+    df = pd.DataFrame(rows)
+    global _last_df
+    _last_df = df
+    return df
+# ------------------------------------------------------------------
+# ────────── XLSX EXPORT  (changed block) ────────────────────────────
+def export_bragg_data(_):
+    """Save Bragg info to XLSX with intensities normalized to a common scale."""
+    root = tk.Tk(); root.withdraw()
+    fname = filedialog.asksaveasfilename(
+        defaultextension='.xlsx',
+        filetypes=[('Excel', '*.xlsx')]
+    )
+    if not fname:
+        return
+
+    df = _build_bragg_dataframe()
+    df.to_excel(fname, index=False)
     print("Saved →", fname)
+
+def plot_scatter(_):
+    df = _last_df if _last_df is not None else _build_bragg_dataframe()
+    intensity_cols = _find_intensity_columns(df, None)
+    df_norm = _normalize_columns(df, intensity_cols)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    scatters = []
+    for col in intensity_cols:
+        sc = ax.scatter(df_norm['l'], df_norm[col], label=col, s=20, alpha=0.7)
+        scatters.append(sc)
+
+    ax.set_ylabel('Normalized Intensity (0-100)')
+    ax.set_ylim(0, 110)
+    ax.set_xlabel('l')
+    ax.set_title('L vs Intensity')
+
+    legend = ax.legend(title='Intensity columns') if len(intensity_cols) > 1 else None
+
+    if {'h', 'k'}.issubset(df.columns):
+        seen = set()
+        for _, row in df.iterrows():
+            l_val = row['l']
+            if l_val in seen:
+                continue
+            seen.add(l_val)
+            label = f"({int(row['h'])},{int(row['k'])},{int(l_val)})"
+            ax.annotate(
+                label,
+                (l_val, 102),
+                rotation=90,
+                ha='center',
+                va='bottom',
+                fontsize=8,
+            )
+
+    if legend:
+        from matplotlib.widgets import CheckButtons, Button
+
+        rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
+        visibility = [sc.get_visible() for sc in scatters]
+        checks = CheckButtons(rax, intensity_cols, visibility)
+
+        def func(label: str) -> None:
+            idx = intensity_cols.index(label)
+            scatters[idx].set_visible(not scatters[idx].get_visible())
+            fig.canvas.draw_idle()
+
+        checks.on_clicked(func)
+
+        hide_ax = fig.add_axes([0.82, 0.32, 0.07, 0.05])
+        show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
+        hide_btn = Button(hide_ax, 'Hide\nAll')
+        show_btn = Button(show_ax, 'Show\nAll')
+
+        def hide_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if sc.get_visible():
+                    checks.set_active(i)
+
+        def show_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if not sc.get_visible():
+                    checks.set_active(i)
+
+        hide_btn.on_clicked(hide_all)
+        show_btn.on_clicked(show_all)
+
+    # Leave room for the control widgets to remain responsive
+    plt.subplots_adjust(right=0.78)
+    plt.show()
+
+def compare_numeric(_):
+    df = _last_df if _last_df is not None else _build_bragg_dataframe()
+    metrics = compute_metrics(df)
+    print(f"RMSE: {metrics['rmse']:.3f}")
+    print(f"Mean ratio: {metrics['mean_ratio']:.3f}")
+    plot_comparison(df)
 
 # set up figure
 fig, ax = plt.subplots(figsize=(8,6))
@@ -499,6 +645,12 @@ btn_bragg.on_clicked(_toggle_bragg)
 # export button
 btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), 'Save Bragg XLSX')
 btn_export.on_clicked(export_bragg_data)
+
+# additional buttons for plotting
+btn_plot = Button(plt.axes([0.25, 0.10, 0.16, 0.03]), 'Plot scatter')
+btn_plot.on_clicked(plot_scatter)
+btn_cmp = Button(plt.axes([0.60, 0.10, 0.16, 0.03]), 'Compare numeric')
+btn_cmp.on_clicked(compare_numeric)
 
 
 def toggle_mode(_):

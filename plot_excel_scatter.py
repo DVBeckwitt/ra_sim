@@ -1,8 +1,18 @@
 import argparse
 from pathlib import Path
 
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
+
+if (
+    plt.get_backend().lower().endswith("agg")
+    and not os.environ.get("PYTEST_CURRENT_TEST")
+):
+    try:  # pragma: no cover - UI safeguard
+        plt.switch_backend("TkAgg")
+    except Exception:
+        pass
 
 try:
     from ra_sim.path_config import get_dir
@@ -83,6 +93,17 @@ def _find_intensity_columns(df: pd.DataFrame, name: str | None) -> list[str]:
     return [col]
 
 
+def _normalize_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Return a copy of ``df`` with ``cols`` scaled so each has a 0–100 range."""
+    out = df.copy()
+    for c in cols:
+        max_val = out[c].max()
+        if not pd.api.types.is_number(max_val) or max_val == 0:
+            max_val = 1.0
+        out[c] = 100.0 * out[c] / max_val
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -137,12 +158,11 @@ def main() -> None:
                 f"Worksheet '{sheet_to_read}' not found. Available: {available}"
             ) from exc
 
-    # Find required columns regardless of case or spaces
-    required = ["l"]
+    # Locate Miller index columns
     col_map = {}
-    for col in required:
+    for col in ["h", "k", "l"]:
         found = _find_column(df, col)
-        if not found:
+        if col == "l" and not found:
             raise SystemExit(
                 f"Required column '{col}' not found in sheet '{sheet_to_read}'. "
                 f"Available columns: {list(df.columns)}"
@@ -151,6 +171,7 @@ def main() -> None:
 
     intensity_cols = _find_intensity_columns(df, args.intensity)
 
+    df = _normalize_columns(df, intensity_cols)
 
     fig, ax = plt.subplots(figsize=(8, 6))
     scatters = []
@@ -164,17 +185,36 @@ def main() -> None:
         )
         scatters.append(sc)
 
+    ax.set_ylabel("Normalized Intensity (0-100)")
+    ax.set_ylim(0, 110)
     ax.set_xlabel("l")
-    ax.set_ylabel("Normalized Intensity")
     ax.set_title("L vs Intensity")
 
     legend = ax.legend(title="Intensity columns") if len(intensity_cols) > 1 else None
 
-    # Add interactive checkboxes to toggle datasets
+    annot_ax = ax
+
+    # annotate HKL labels at each L position (once per unique L)
+    if col_map.get("h") is not None and col_map.get("k") is not None:
+        seen = set()
+        for _, row in df.iterrows():
+            l_val = row[col_map["l"]]
+            if l_val in seen:
+                continue
+            seen.add(l_val)
+            label = f"({int(row[col_map['h']])},{int(row[col_map['k']])},{int(l_val)})"
+            annot_ax.annotate(
+                label,
+                (l_val, 102),
+                rotation=90,
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
     if legend:
         from matplotlib.widgets import CheckButtons, Button
 
-        # Position checkboxes to the right of the plot
         rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
         visibility = [sc.get_visible() for sc in scatters]
         checks = CheckButtons(rax, intensity_cols, visibility)
@@ -186,7 +226,6 @@ def main() -> None:
 
         checks.on_clicked(func)
 
-        # Buttons to hide/show all
         hide_ax = fig.add_axes([0.82, 0.32, 0.07, 0.05])
         show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
         hide_btn = Button(hide_ax, "Hide\nAll")
@@ -205,8 +244,8 @@ def main() -> None:
         hide_btn.on_clicked(hide_all)
         show_btn.on_clicked(show_all)
 
-
-    plt.tight_layout()
+    # Leave room on the right so widget axes remain clickable
+    plt.subplots_adjust(right=0.78)
     plt.show()
 
 
