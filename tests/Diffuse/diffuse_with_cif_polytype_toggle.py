@@ -487,7 +487,8 @@ def plot_scatter(_):
         hide_btn.on_clicked(hide_all)
         show_btn.on_clicked(show_all)
 
-    plt.tight_layout()
+    # Leave room for the control widgets to remain responsive
+    plt.tight_layout(rect=[0, 0, 0.78, 1])
     plt.show()
 
 def compare_numeric(_):
