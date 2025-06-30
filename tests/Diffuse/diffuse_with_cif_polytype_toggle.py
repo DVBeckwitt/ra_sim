@@ -32,6 +32,7 @@ from compare_intensity import compute_metrics, plot_comparison
 
 from ra_sim.utils.tools import intensities_for_hkls
 from ra_sim.utils.calculations import d_spacing, two_theta
+import Dans_Diffraction as dif
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, simpledialog, messagebox
@@ -473,6 +474,13 @@ def export_cif_hkls(_):
         hkls, cif, [1.0], LAMBDA, energy=E_CuKa / 1000
     )
 
+    # Directly compute structure factor magnitudes for reference
+    xtl = dif.Crystal(str(cif))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=E_CuKa / 1000)
+    xtl.Scatter.integer_hkl = True
+
     from collections import defaultdict
 
     groups = defaultdict(list)
@@ -513,7 +521,10 @@ def export_cif_hkls(_):
         d_val = d_spacing(h, k, l, A_HEX, c_val)
         tth = two_theta(d_val, LAMBDA)
         intensity_norm = round(total * 100 / max_total, 2)
-        F_mag = float(np.sqrt(total)) if total >= 0 else 0.0
+        try:
+            F_mag = abs(float(xtl.Scatter.structure_factor([int(h), int(k), int(l)])))
+        except Exception:
+            F_mag = float(np.sqrt(total)) if total >= 0 else 0.0
         rows.append({
             "h": int(h),
             "k": int(k),
