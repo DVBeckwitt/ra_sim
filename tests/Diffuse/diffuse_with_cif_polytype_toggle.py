@@ -32,6 +32,7 @@ from compare_intensity import compute_metrics, plot_comparison
 
 from ra_sim.utils.tools import intensities_for_hkls
 from ra_sim.utils.calculations import d_spacing, two_theta
+import Dans_Diffraction as dif
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, simpledialog, messagebox
@@ -465,27 +466,80 @@ def export_cif_hkls(_):
     cif = str(CIF_2H) if poly == "2H" else str(CIF_6H)
     c_val = C_2H if poly == "2H" else C_6H
 
-    ints = intensities_for_hkls(
-        hkls, cif, [1.0], LAMBDA, energy=E_CuKa/1000
+    # Use the same grouping/normalisation logic as ``miller_generator``
+    intensity_threshold = 1.0
+    two_theta_range = (0, 70)
+
+    raw_ints = intensities_for_hkls(
+        hkls, cif, [1.0], LAMBDA, energy=E_CuKa / 1000
     )
 
-    rows = []
-    i_max = max(float(i) for i in ints) or 1.0
-    for (h, k, l), I in zip(hkls, ints):
+    # Directly compute structure factor magnitudes for reference
+    xtl = dif.Crystal(str(cif))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=E_CuKa / 1000)
+    xtl.Scatter.integer_hkl = True
+
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    zeros = []
+
+    for (h, k, l), I in zip(hkls, raw_ints):
         d_val = d_spacing(h, k, l, A_HEX, c_val)
         tth = two_theta(d_val, LAMBDA)
-        F_mag = float(np.sqrt(I)) if I >= 0 else 0.0
+        if tth is None or not (two_theta_range[0] <= tth <= two_theta_range[1]):
+            continue
+        if I < intensity_threshold:
+            continue
+        if h == 0 and k == 0:
+            zeros.append(((h, k, l), I))
+        else:
+            key = (h * h + k * k, l)
+            groups[key].append(((h, k, l), I))
+
+    combined = []
+    for items in groups.values():
+        rep = items[0][0]
+        multiplicity = len(items)
+        total_intensity = sum(it[1] for it in items)
+        details = [(hk, val) for hk, val in items]
+        combined.append((rep, total_intensity, multiplicity, details))
+
+    combined += [
+        (hk, val, 1, [(hk, val)]) for hk, val in zeros
+    ]
+
+    if not combined:
+        return
+
+    max_total = max(item[1] for item in combined)
+
+    rows = []
+    for (h, k, l), total, mult, _ in combined:
+        d_val = d_spacing(h, k, l, A_HEX, c_val)
+        tth = two_theta(d_val, LAMBDA)
+        intensity_norm = round(total * 100 / max_total, 2)
+        try:
+            F_complex = xtl.Scatter.structure_factor([int(h), int(k), int(l)])
+            F_real = float(np.real(F_complex))
+            F_imag = float(np.imag(F_complex))
+            F_mag = abs(complex(F_real, F_imag))
+        except Exception:
+            F_real = F_imag = 0.0
+            F_mag = float(np.sqrt(total)) if total >= 0 else 0.0
         rows.append({
-            "h": h,
-            "k": k,
-            "l": l,
+            "h": int(h),
+            "k": int(k),
+            "l": int(l),
             "d (Å)": d_val,
-            "F(real)": F_mag,
-            "F(imag)": 0.0,
+            "F(real)": F_real,
+            "F(imag)": F_imag,
             "|F|": F_mag,
             "2θ": tth,
-            "I": 100.0 * float(I) / i_max,
-            "M": 1,
+            "I": intensity_norm,
+            "M": int(mult),
         })
 
     cols = ["h", "k", "l", "d (Å)", "F(real)", "F(imag)", "|F|", "2θ", "I", "M"]
