@@ -345,7 +345,7 @@ def _norm_weights():
     return w0/s, w1/s, w2/s
 
 def _build_bragg_dataframe():
-    """Return DataFrame with scaled Dans and numeric intensities."""
+    """Return DataFrame with scaled Cif and numeric intensities."""
     rows, w2h, w6h = [], *_norm_weights()[:2]
     intensity_max = 0.0
     area_max = 0.0
@@ -368,12 +368,16 @@ def _build_bragg_dataframe():
             total = scaled2 + scaled6
             intensity_max = max(intensity_max, total)
 
-            row = dict(h=h, k=k, l=int(l),
-                       Dans2H_scaled=scaled2,
-                       Dans2H_raw=r2,
-                       Dans6H_scaled=scaled6,
-                       Dans6H_raw=r6,
-                       Total_scaled=total)
+            row = dict(
+                h=h,
+                k=k,
+                l=int(l),
+                Cif2H_scaled=scaled2,
+                Cif2H_raw=r2,
+                Cif6H_scaled=scaled6,
+                Cif6H_raw=r6,
+                Total_scaled=total,
+            )
 
             if _is_hk_mode():
                 n2 = ht_numeric_area(state['p1'], h, k, l, phase="2H")
@@ -489,7 +493,7 @@ def plot_scatter(_):
 
     # Leave room for the control widgets to remain responsive
     plt.subplots_adjust(right=0.78)
-    plt.show(block=False)
+    fig.show()
     # allow the Tk event loop to process initial events
     plt.pause(0.001)
 
