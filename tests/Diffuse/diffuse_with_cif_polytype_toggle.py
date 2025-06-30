@@ -415,23 +415,18 @@ def plot_scatter(_):
     df = _last_df if _last_df is not None else _build_bragg_dataframe()
     intensity_cols = _find_intensity_columns(df, None)
     df_norm = _normalize_columns(df, intensity_cols)
-    if len(intensity_cols) == 1:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        axes = [ax]
-    else:
-        fig, axes = plt.subplots(
-            len(intensity_cols), 1,
-            sharex=True, sharey=True,
-            figsize=(8, 4 * len(intensity_cols))
-        )
-        fig.subplots_adjust(hspace=0.05)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    scatters = []
+    for col in intensity_cols:
+        sc = ax.scatter(df_norm['l'], df_norm[col], label=col, s=20, alpha=0.7)
+        scatters.append(sc)
 
-    for ax, col in zip(axes, intensity_cols):
-        ax.scatter(df_norm['l'], df_norm[col], label=col, s=20, alpha=0.7)
-        ax.set_ylabel('Normalized Intensity (0-100)')
-        ax.set_ylim(0, 110)
-        if len(intensity_cols) > 1:
-            ax.legend(loc='upper right')
+    ax.set_ylabel('Normalized Intensity (0-100)')
+    ax.set_ylim(0, 110)
+    ax.set_xlabel('l')
+    ax.set_title('L vs Intensity')
+
+    legend = ax.legend(title='Intensity columns') if len(intensity_cols) > 1 else None
 
     if {'h', 'k'}.issubset(df.columns):
         seen = set()
@@ -441,7 +436,7 @@ def plot_scatter(_):
                 continue
             seen.add(l_val)
             label = f"({int(row['h'])},{int(row['k'])},{int(l_val)})"
-            axes[-1].annotate(
+            ax.annotate(
                 label,
                 (l_val, 102),
                 rotation=90,
@@ -450,8 +445,38 @@ def plot_scatter(_):
                 fontsize=8,
             )
 
-    axes[-1].set_xlabel('l')
-    axes[0].set_title('L vs Intensity')
+    if legend:
+        from matplotlib.widgets import CheckButtons, Button
+
+        rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
+        visibility = [sc.get_visible() for sc in scatters]
+        checks = CheckButtons(rax, intensity_cols, visibility)
+
+        def func(label: str) -> None:
+            idx = intensity_cols.index(label)
+            scatters[idx].set_visible(not scatters[idx].get_visible())
+            fig.canvas.draw_idle()
+
+        checks.on_clicked(func)
+
+        hide_ax = fig.add_axes([0.82, 0.32, 0.07, 0.05])
+        show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
+        hide_btn = Button(hide_ax, 'Hide\nAll')
+        show_btn = Button(show_ax, 'Show\nAll')
+
+        def hide_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if sc.get_visible():
+                    checks.set_active(i)
+
+        def show_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if not sc.get_visible():
+                    checks.set_active(i)
+
+        hide_btn.on_clicked(hide_all)
+        show_btn.on_clicked(show_all)
+
     plt.tight_layout()
     plt.show()
 
