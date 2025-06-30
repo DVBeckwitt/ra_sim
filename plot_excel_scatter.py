@@ -164,9 +164,19 @@ def main() -> None:
     df = _normalize_columns(df, intensity_cols)
 
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    if len(intensity_cols) == 1:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        axes = [ax]
+    else:
+        fig, axes = plt.subplots(
+            len(intensity_cols), 1,
+            sharex=True, sharey=True,
+            figsize=(8, 4 * len(intensity_cols))
+        )
+        fig.subplots_adjust(hspace=0.05)
+
     scatters = []
-    for col in intensity_cols:
+    for ax, col in zip(axes, intensity_cols):
         sc = ax.scatter(
             df[col_map["l"]],
             df[col],
@@ -175,6 +185,12 @@ def main() -> None:
             alpha=0.7,
         )
         scatters.append(sc)
+        ax.set_ylabel("Normalized Intensity (0-100)")
+        ax.set_ylim(0, 110)
+        if len(intensity_cols) > 1:
+            ax.legend(loc="upper right")
+
+    annot_ax = axes[-1]
 
     # annotate HKL labels at each L position (once per unique L)
     if col_map.get("h") is not None and col_map.get("k") is not None:
@@ -185,7 +201,7 @@ def main() -> None:
                 continue
             seen.add(l_val)
             label = f"({int(row[col_map['h']])},{int(row[col_map['k']])},{int(l_val)})"
-            ax.annotate(
+            annot_ax.annotate(
                 label,
                 (l_val, 102),
                 rotation=90,
@@ -194,48 +210,12 @@ def main() -> None:
                 fontsize=8,
             )
 
-    ax.set_xlabel("l")
-    ax.set_ylabel("Normalized Intensity (0-100)")
-    ax.set_title("L vs Intensity")
-    ax.set_ylim(0, 110)
+    axes[-1].set_xlabel("l")
+    axes[0].set_title("L vs Intensity")
 
-    legend = ax.legend(title="Intensity columns") if len(intensity_cols) > 1 else None
-
-    # Add interactive checkboxes to toggle datasets
-    if legend:
-        from matplotlib.widgets import CheckButtons, Button
-
-        # Position checkboxes to the right of the plot
-        rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
-        visibility = [sc.get_visible() for sc in scatters]
-        checks = CheckButtons(rax, intensity_cols, visibility)
-
-        def func(label: str) -> None:
-            idx = intensity_cols.index(label)
-            scatters[idx].set_visible(not scatters[idx].get_visible())
-            fig.canvas.draw_idle()
-
-        checks.on_clicked(func)
-
-        # Buttons to hide/show all
-        hide_ax = fig.add_axes([0.82, 0.32, 0.07, 0.05])
-        show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
-        hide_btn = Button(hide_ax, "Hide\nAll")
-        show_btn = Button(show_ax, "Show\nAll")
-
-        def hide_all(event) -> None:  # pragma: no cover - UI
-            for i, sc in enumerate(scatters):
-                if sc.get_visible():
-                    checks.set_active(i)
-
-        def show_all(event) -> None:  # pragma: no cover - UI
-            for i, sc in enumerate(scatters):
-                if not sc.get_visible():
-                    checks.set_active(i)
-
-        hide_btn.on_clicked(hide_all)
-        show_btn.on_clicked(show_all)
-
+    legend = None
+    if len(intensity_cols) == 1:
+        legend = axes[0].legend(title="Intensity column")
 
     plt.tight_layout()
     plt.show()
