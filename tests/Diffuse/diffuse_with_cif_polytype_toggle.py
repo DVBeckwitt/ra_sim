@@ -522,16 +522,20 @@ def export_cif_hkls(_):
         tth = two_theta(d_val, LAMBDA)
         intensity_norm = round(total * 100 / max_total, 2)
         try:
-            F_mag = abs(float(xtl.Scatter.structure_factor([int(h), int(k), int(l)])))
+            F_complex = xtl.Scatter.structure_factor([int(h), int(k), int(l)])
+            F_real = float(np.real(F_complex))
+            F_imag = float(np.imag(F_complex))
+            F_mag = abs(complex(F_real, F_imag))
         except Exception:
+            F_real = F_imag = 0.0
             F_mag = float(np.sqrt(total)) if total >= 0 else 0.0
         rows.append({
             "h": int(h),
             "k": int(k),
             "l": int(l),
             "d (Å)": d_val,
-            "F(real)": F_mag,
-            "F(imag)": 0.0,
+            "F(real)": F_real,
+            "F(imag)": F_imag,
             "|F|": F_mag,
             "2θ": tth,
             "I": intensity_norm,
