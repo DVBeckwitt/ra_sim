@@ -513,7 +513,7 @@ def export_cif_hkls(_):
         d_val = d_spacing(h, k, l, A_HEX, c_val)
         tth = two_theta(d_val, LAMBDA)
         intensity_norm = round(total * 100 / max_total, 2)
-        F_mag = float(np.sqrt(intensity_norm)) if intensity_norm >= 0 else 0.0
+        F_mag = float(np.sqrt(total)) if total >= 0 else 0.0
         rows.append({
             "h": int(h),
             "k": int(k),
