@@ -31,13 +31,16 @@ from plot_excel_scatter import _normalize_columns, _find_intensity_columns
 from compare_intensity import compute_metrics, plot_comparison
 
 from ra_sim.utils.tools import intensities_for_hkls
+from ra_sim.utils.calculations import d_spacing, two_theta
 import pandas as pd
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, simpledialog, messagebox
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
 _last_df = None  # store last exported dataframe for extra plots
+# hold scatter plot widgets so they remain responsive
+_scatter_widgets: list[object] = []
 
 def c_from_cif(path: str) -> float:
     with open(path, "r", encoding="utf-8", errors="ignore") as fp:
@@ -345,8 +348,9 @@ def _norm_weights():
     return w0/s, w1/s, w2/s
 
 def _build_bragg_dataframe():
-    """Return DataFrame with scaled Dans and numeric intensities."""
-    rows, w2h, w6h = [], *_norm_weights()[:2]
+    """Return DataFrame with scaled Cif and numeric intensities."""
+    rows: list[dict] = []
+    w2h, w6h = _weight_2h_6h()  # use proper polytype weights
     intensity_max = 0.0
     area_max = 0.0
 
@@ -368,12 +372,16 @@ def _build_bragg_dataframe():
             total = scaled2 + scaled6
             intensity_max = max(intensity_max, total)
 
-            row = dict(h=h, k=k, l=int(l),
-                       Dans2H_scaled=scaled2,
-                       Dans2H_raw=r2,
-                       Dans6H_scaled=scaled6,
-                       Dans6H_raw=r6,
-                       Total_scaled=total)
+            row = dict(
+                h=h,
+                k=k,
+                l=int(l),
+                Cif2H_scaled=scaled2,
+                Cif2H_raw=r2,
+                Cif6H_scaled=scaled6,
+                Cif6H_raw=r6,
+                Total_scaled=total,
+            )
 
             if _is_hk_mode():
                 n2 = ht_numeric_area(state['p1'], h, k, l, phase="2H")
@@ -421,11 +429,71 @@ def export_bragg_data(_):
     df.to_excel(fname, index=False)
     print("Saved →", fname)
 
+
+def export_cif_hkls(_):
+    """Save raw CIF HKL intensities to an Excel file."""
+    root = tk.Tk(); root.withdraw()
+
+    poly = simpledialog.askstring(
+        "Choose polytype",
+        "Save peaks for which CIF polytype? (2H or 6H)",
+        parent=root,
+    )
+    if not poly:
+        return
+    poly = poly.strip().upper()
+    if poly not in {"2H", "6H"}:
+        messagebox.showerror("Invalid choice", "Enter 2H or 6H")
+        return
+
+    fname = filedialog.asksaveasfilename(
+        defaultextension='.xlsx',
+        filetypes=[('Excel', '*.xlsx')]
+    )
+    if not fname:
+        return
+
+    hkls = [
+        (h, k, l)
+        for h in range(0, MAX_HK + 1)
+        for k in range(0, MAX_HK + 1)
+        for l in range(1, int(L_MAX) + 1)
+    ]
+
+    cif = str(CIF_2H) if poly == "2H" else str(CIF_6H)
+    c_val = C_2H if poly == "2H" else C_6H
+
+    ints = intensities_for_hkls(hkls, cif, [1.0], LAMBDA)
+
+    rows = []
+    i_max = max(float(i) for i in ints) or 1.0
+    for (h, k, l), I in zip(hkls, ints):
+        d_val = d_spacing(h, k, l, A_HEX, c_val)
+        tth = two_theta(d_val, LAMBDA)
+        F_mag = float(np.sqrt(I)) if I >= 0 else 0.0
+        rows.append({
+            "h": h,
+            "k": k,
+            "l": l,
+            "d (Å)": d_val,
+            "F(real)": F_mag,
+            "F(imag)": 0.0,
+            "|F|": F_mag,
+            "2θ": tth,
+            "I": 100.0 * float(I) / i_max,
+            "M": 1,
+        })
+
+    cols = ["h", "k", "l", "d (Å)", "F(real)", "F(imag)", "|F|", "2θ", "I", "M"]
+    pd.DataFrame(rows, columns=cols).to_excel(fname, index=False)
+    print("Saved →", fname)
+
 def plot_scatter(_):
     df = _last_df if _last_df is not None else _build_bragg_dataframe()
     intensity_cols = _find_intensity_columns(df, None)
     df_norm = _normalize_columns(df, intensity_cols)
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111)
     scatters = []
     for col in intensity_cols:
         sc = ax.scatter(df_norm['l'], df_norm[col], label=col, s=20, alpha=0.7)
@@ -457,10 +525,12 @@ def plot_scatter(_):
 
     if legend:
         from matplotlib.widgets import CheckButtons, Button
+        _scatter_widgets.clear()
 
         rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
         visibility = [sc.get_visible() for sc in scatters]
         checks = CheckButtons(rax, intensity_cols, visibility)
+        _scatter_widgets.append(checks)
 
         def func(label: str) -> None:
             idx = intensity_cols.index(label)
@@ -473,6 +543,7 @@ def plot_scatter(_):
         show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
         hide_btn = Button(hide_ax, 'Hide\nAll')
         show_btn = Button(show_ax, 'Show\nAll')
+        _scatter_widgets.extend([hide_btn, show_btn])
 
         def hide_all(event) -> None:  # pragma: no cover - UI
             for i, sc in enumerate(scatters):
@@ -490,6 +561,8 @@ def plot_scatter(_):
     # Leave room for the control widgets to remain responsive
     plt.subplots_adjust(right=0.78)
     plt.show(block=False)
+    # allow the Tk event loop to process initial events
+    plt.pause(0.001)
 
 def compare_numeric(_):
     df = _last_df if _last_df is not None else _build_bragg_dataframe()
@@ -645,6 +718,10 @@ btn_bragg.on_clicked(_toggle_bragg)
 # export button
 btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), 'Save Bragg XLSX')
 btn_export.on_clicked(export_bragg_data)
+
+# save all CIF HKLs button – position it away from the ℓ-range slider
+btn_cif = Button(plt.axes([0.78, 0.08, 0.16, 0.03]), 'Save CIF HKLs')
+btn_cif.on_clicked(export_cif_hkls)
 
 # additional buttons for plotting
 btn_plot = Button(plt.axes([0.25, 0.10, 0.16, 0.03]), 'Plot scatter')

@@ -44,14 +44,14 @@ def plot_comparison(df: pd.DataFrame) -> None:
     ax.scatter(total, numeric, alpha=0.7)
     lims = [0, max(total.max(), numeric.max()) * 1.05]
     ax.plot(lims, lims, "k--")
-    ax.set_xlabel("Dans intensity")
+    ax.set_xlabel("Cif intensity")
     ax.set_ylabel("Numeric intensity")
-    ax.set_title("Numeric vs Dans")
+    ax.set_title("Numeric vs Cif")
     ax.set_aspect("equal", "box")
     ax.grid(True, ls=":", alpha=.4)
 
     axes[1].hist(ratio.dropna(), bins=20, edgecolor="k")
-    axes[1].set_xlabel("Numeric / Dans")
+    axes[1].set_xlabel("Numeric / Cif")
     axes[1].set_ylabel("Count")
     axes[1].set_title("Ratio distribution")
     axes[1].grid(axis="y", ls=":", alpha=.4)
@@ -61,7 +61,7 @@ def plot_comparison(df: pd.DataFrame) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare Dans intensities with numeric Hendricks–Teller areas")
+    parser = argparse.ArgumentParser(description="Compare Cif intensities with numeric Hendricks–Teller areas")
     parser.add_argument("excel_path", help="Path to miller_intensities.xlsx")
     parser.add_argument("--sheet", default="Summary", help="Worksheet name")
     args = parser.parse_args()
