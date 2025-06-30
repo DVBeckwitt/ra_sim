@@ -1,8 +1,18 @@
 import argparse
 from pathlib import Path
 
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
+
+if (
+    plt.get_backend().lower().endswith("agg")
+    and not os.environ.get("PYTEST_CURRENT_TEST")
+):
+    try:  # pragma: no cover - UI safeguard
+        plt.switch_backend("TkAgg")
+    except Exception:
+        pass
 
 try:
     from ra_sim.path_config import get_dir

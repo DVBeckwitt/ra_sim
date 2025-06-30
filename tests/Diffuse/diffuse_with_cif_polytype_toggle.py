@@ -10,10 +10,20 @@ Optimised Hendricks–Teller viewer for PbI₂ (modified)
 * Uses ionic form factors: Pb²⁺ and I⁻.
 * Deduplicates symmetry-equivalent HK pairs with degeneracy.
 """
+import os
 import re, sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+
+if (
+    plt.get_backend().lower().endswith("agg")
+    and not os.environ.get("PYTEST_CURRENT_TEST")
+):
+    try:  # pragma: no cover - UI safeguard
+        plt.switch_backend("TkAgg")
+    except Exception:
+        pass
 from matplotlib.widgets import Slider, RangeSlider, Button
 from collections import Counter
 
