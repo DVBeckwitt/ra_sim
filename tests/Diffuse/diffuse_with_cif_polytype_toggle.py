@@ -34,7 +34,7 @@ from ra_sim.utils.tools import intensities_for_hkls
 from ra_sim.utils.calculations import d_spacing, two_theta
 import pandas as pd
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, simpledialog, messagebox
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
@@ -433,6 +433,19 @@ def export_bragg_data(_):
 def export_cif_hkls(_):
     """Save raw CIF HKL intensities to an Excel file."""
     root = tk.Tk(); root.withdraw()
+
+    poly = simpledialog.askstring(
+        "Choose polytype",
+        "Save peaks for which CIF polytype? (2H or 6H)",
+        parent=root,
+    )
+    if not poly:
+        return
+    poly = poly.strip().upper()
+    if poly not in {"2H", "6H"}:
+        messagebox.showerror("Invalid choice", "Enter 2H or 6H")
+        return
+
     fname = filedialog.asksaveasfilename(
         defaultextension='.xlsx',
         filetypes=[('Excel', '*.xlsx')]
@@ -447,12 +460,15 @@ def export_cif_hkls(_):
         for l in range(1, int(L_MAX) + 1)
     ]
 
-    ints = intensities_for_hkls(hkls, str(CIF_2H), [1.0], LAMBDA)
+    cif = str(CIF_2H) if poly == "2H" else str(CIF_6H)
+    c_val = C_2H if poly == "2H" else C_6H
+
+    ints = intensities_for_hkls(hkls, cif, [1.0], LAMBDA)
 
     rows = []
     i_max = max(float(i) for i in ints) or 1.0
     for (h, k, l), I in zip(hkls, ints):
-        d_val = d_spacing(h, k, l, A_HEX, C_2H)
+        d_val = d_spacing(h, k, l, A_HEX, c_val)
         tth = two_theta(d_val, LAMBDA)
         F_mag = float(np.sqrt(I)) if I >= 0 else 0.0
         rows.append({
