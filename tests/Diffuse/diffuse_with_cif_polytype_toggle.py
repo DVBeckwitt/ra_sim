@@ -31,6 +31,7 @@ from plot_excel_scatter import _normalize_columns, _find_intensity_columns
 from compare_intensity import compute_metrics, plot_comparison
 
 from ra_sim.utils.tools import intensities_for_hkls
+from ra_sim.utils.calculations import d_spacing, two_theta
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog
@@ -428,6 +429,47 @@ def export_bragg_data(_):
     df.to_excel(fname, index=False)
     print("Saved →", fname)
 
+
+def export_cif_hkls(_):
+    """Save raw CIF HKL intensities to an Excel file."""
+    root = tk.Tk(); root.withdraw()
+    fname = filedialog.asksaveasfilename(
+        defaultextension='.xlsx',
+        filetypes=[('Excel', '*.xlsx')]
+    )
+    if not fname:
+        return
+
+    hkls = [
+        (h, k, l)
+        for h in range(0, MAX_HK + 1)
+        for k in range(0, MAX_HK + 1)
+        for l in range(1, int(L_MAX) + 1)
+    ]
+
+    ints = intensities_for_hkls(hkls, str(CIF_2H), [1.0], LAMBDA)
+
+    rows = []
+    for (h, k, l), I in zip(hkls, ints):
+        d_val = d_spacing(h, k, l, A_HEX, C_2H)
+        tth = two_theta(d_val, LAMBDA)
+        F_mag = float(np.sqrt(I)) if I >= 0 else 0.0
+        rows.append({
+            'h': h,
+            'k': k,
+            'l': l,
+            'd (Å)': d_val,
+            'F(real)': F_mag,
+            'F(imag)': 0.0,
+            '|F|': F_mag,
+            '2θ': tth,
+            'I': I,
+            'M': 1,
+        })
+
+    pd.DataFrame(rows).to_excel(fname, index=False)
+    print("Saved →", fname)
+
 def plot_scatter(_):
     df = _last_df if _last_df is not None else _build_bragg_dataframe()
     intensity_cols = _find_intensity_columns(df, None)
@@ -658,6 +700,10 @@ btn_bragg.on_clicked(_toggle_bragg)
 # export button
 btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), 'Save Bragg XLSX')
 btn_export.on_clicked(export_bragg_data)
+
+# save all CIF HKLs button
+btn_cif = Button(plt.axes([0.78, 0.05, 0.16, 0.03]), 'Save CIF HKLs')
+btn_cif.on_clicked(export_cif_hkls)
 
 # additional buttons for plotting
 btn_plot = Button(plt.axes([0.25, 0.10, 0.16, 0.03]), 'Plot scatter')
