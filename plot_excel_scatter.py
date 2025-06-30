@@ -245,7 +245,7 @@ def main() -> None:
         show_btn.on_clicked(show_all)
 
     # Leave room on the right so widget axes remain clickable
-    plt.tight_layout(rect=[0, 0, 0.78, 1])
+    plt.subplots_adjust(right=0.78)
     plt.show()
 
 
