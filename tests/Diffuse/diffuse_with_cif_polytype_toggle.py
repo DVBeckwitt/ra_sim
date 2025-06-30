@@ -17,6 +17,9 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RangeSlider, Button
 from collections import Counter
 
+from plot_excel_scatter import _normalize_columns, _find_intensity_columns
+from compare_intensity import compute_metrics, plot_comparison
+
 from ra_sim.utils.tools import intensities_for_hkls
 import pandas as pd
 import tkinter as tk
@@ -24,6 +27,7 @@ from tkinter import filedialog
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
+_last_df = None  # store last exported dataframe for extra plots
 
 def c_from_cif(path: str) -> float:
     with open(path, "r", encoding="utf-8", errors="ignore") as fp:
@@ -329,25 +333,9 @@ def _norm_weights():
     w0, w1, w2 = state['w0'], state['w1'], state['w2']
     s = (w0 + w1 + w2) or 1.0          # avoid division by zero
     return w0/s, w1/s, w2/s
-# ------------------------------------------------------------------
-# ────────── XLSX EXPORT  (changed block) ────────────────────────────
-def export_bragg_data(_):
-    """Save Bragg info to XLSX with intensities normalized to a common scale.
 
-    The numeric intensities from ``Dans_Diffraction`` (2H/6H) are scaled to the
-    Hendricks–Teller profile and then normalised across all reflections so that
-    the strongest intensity equals ``100``.  The Hendricks–Teller areas are
-    rescaled to share this reference, ensuring the numeric columns are directly
-    comparable to the Dans values.
-    """
-    root = tk.Tk(); root.withdraw()
-    fname = filedialog.asksaveasfilename(
-        defaultextension='.xlsx',
-        filetypes=[('Excel', '*.xlsx')]
-    )
-    if not fname:
-        return
-
+def _build_bragg_dataframe():
+    """Return DataFrame with scaled Dans and numeric intensities."""
     rows, w2h, w6h = [], *_norm_weights()[:2]
     intensity_max = 0.0
     area_max = 0.0
@@ -359,17 +347,17 @@ def export_bragg_data(_):
         L, raw2 = _raw_bragg(h, k, 0, L_MAX, str(CIF_2H))
         _, raw6 = _raw_bragg(h, k, 0, L_MAX, str(CIF_6H))
 
-        # scale factors (unchanged logic)
         ht_curve = composite_tot()
-        s_ht     = ht_curve.max() or 1.0
-        sc2      = s_ht / (raw2.max() or 1.0)
-        sc6      = s_ht / (raw6.max() or 1.0)
+        s_ht = ht_curve.max() or 1.0
+        sc2 = s_ht / (raw2.max() or 1.0)
+        sc6 = s_ht / (raw6.max() or 1.0)
 
         for l, r2, r6 in zip(L, raw2, raw6):
             scaled2 = r2 * sc2 * w2h
             scaled6 = r6 * sc6 * w6h
-            total   = scaled2 + scaled6
+            total = scaled2 + scaled6
             intensity_max = max(intensity_max, total)
+
             row = dict(h=h, k=k, l=int(l),
                        Dans2H_scaled=scaled2,
                        Dans2H_raw=r2,
@@ -377,8 +365,7 @@ def export_bragg_data(_):
                        Dans6H_raw=r6,
                        Total_scaled=total)
 
-            if _is_hk_mode():                           ### ← NEW
-                # p≈1 → 2H,  p≈0 → 6H (mirrors _weight_2h_6h logic)
+            if _is_hk_mode():
                 n2 = ht_numeric_area(state['p1'], h, k, l, phase="2H")
                 n6 = ht_numeric_area(state['p0'], h, k, l, phase="6H")
                 area_max = max(area_max, n2, n6)
@@ -397,15 +384,83 @@ def export_bragg_data(_):
     scale_num = intensity_max / (area_max or 1.0)
 
     for row in rows:
-        row["Intensity_norm"] = 100.0 * row["Total_scaled"] / intensity_max
-        if "Numeric_2H_area" in row:
-            row["Numeric_2H_area"] *= scale_num
-            row["Numeric_6H_area"] *= scale_num
-        elif "Numeric_area" in row:
-            row["Numeric_area"] *= scale_num
+        row['Intensity_norm'] = 100.0 * row['Total_scaled'] / intensity_max
+        if 'Numeric_2H_area' in row:
+            row['Numeric_2H_area'] *= scale_num
+            row['Numeric_6H_area'] *= scale_num
+        elif 'Numeric_area' in row:
+            row['Numeric_area'] *= scale_num
 
-    pd.DataFrame(rows).to_excel(fname, index=False)
+    df = pd.DataFrame(rows)
+    global _last_df
+    _last_df = df
+    return df
+# ------------------------------------------------------------------
+# ────────── XLSX EXPORT  (changed block) ────────────────────────────
+def export_bragg_data(_):
+    """Save Bragg info to XLSX with intensities normalized to a common scale."""
+    root = tk.Tk(); root.withdraw()
+    fname = filedialog.asksaveasfilename(
+        defaultextension='.xlsx',
+        filetypes=[('Excel', '*.xlsx')]
+    )
+    if not fname:
+        return
+
+    df = _build_bragg_dataframe()
+    df.to_excel(fname, index=False)
     print("Saved →", fname)
+
+def plot_scatter(_):
+    df = _last_df if _last_df is not None else _build_bragg_dataframe()
+    intensity_cols = _find_intensity_columns(df, None)
+    df_norm = _normalize_columns(df, intensity_cols)
+    if len(intensity_cols) == 1:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        axes = [ax]
+    else:
+        fig, axes = plt.subplots(
+            len(intensity_cols), 1,
+            sharex=True, sharey=True,
+            figsize=(8, 4 * len(intensity_cols))
+        )
+        fig.subplots_adjust(hspace=0.05)
+
+    for ax, col in zip(axes, intensity_cols):
+        ax.scatter(df_norm['l'], df_norm[col], label=col, s=20, alpha=0.7)
+        ax.set_ylabel('Normalized Intensity (0-100)')
+        ax.set_ylim(0, 110)
+        if len(intensity_cols) > 1:
+            ax.legend(loc='upper right')
+
+    if {'h', 'k'}.issubset(df.columns):
+        seen = set()
+        for _, row in df.iterrows():
+            l_val = row['l']
+            if l_val in seen:
+                continue
+            seen.add(l_val)
+            label = f"({int(row['h'])},{int(row['k'])},{int(l_val)})"
+            axes[-1].annotate(
+                label,
+                (l_val, 102),
+                rotation=90,
+                ha='center',
+                va='bottom',
+                fontsize=8,
+            )
+
+    axes[-1].set_xlabel('l')
+    axes[0].set_title('L vs Intensity')
+    plt.tight_layout()
+    plt.show()
+
+def compare_numeric(_):
+    df = _last_df if _last_df is not None else _build_bragg_dataframe()
+    metrics = compute_metrics(df)
+    print(f"RMSE: {metrics['rmse']:.3f}")
+    print(f"Mean ratio: {metrics['mean_ratio']:.3f}")
+    plot_comparison(df)
 
 # set up figure
 fig, ax = plt.subplots(figsize=(8,6))
@@ -554,6 +609,12 @@ btn_bragg.on_clicked(_toggle_bragg)
 # export button
 btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), 'Save Bragg XLSX')
 btn_export.on_clicked(export_bragg_data)
+
+# additional buttons for plotting
+btn_plot = Button(plt.axes([0.25, 0.10, 0.16, 0.03]), 'Plot scatter')
+btn_plot.on_clicked(plot_scatter)
+btn_cmp = Button(plt.axes([0.60, 0.10, 0.16, 0.03]), 'Compare numeric')
+btn_cmp.on_clicked(compare_numeric)
 
 
 def toggle_mode(_):
