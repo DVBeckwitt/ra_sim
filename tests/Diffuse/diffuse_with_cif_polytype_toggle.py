@@ -489,7 +489,9 @@ def plot_scatter(_):
 
     # Leave room for the control widgets to remain responsive
     plt.subplots_adjust(right=0.78)
-    plt.show()
+    plt.show(block=False)
+    # allow the Tk event loop to process initial events
+    plt.pause(0.001)
 
 def compare_numeric(_):
     df = _last_df if _last_df is not None else _build_bragg_dataframe()
