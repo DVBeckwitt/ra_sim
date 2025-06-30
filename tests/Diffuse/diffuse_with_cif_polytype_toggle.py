@@ -208,7 +208,9 @@ def _raw_bragg(h, k, lo, hi, cif_path):
     key = (cif_path, h, k, lo_i, hi_i)
     if key not in _BRAGG_CACHE:
         hkls = [(h, k, l) for l in range(lo_i, hi_i + 1)]
-        intens = intensities_for_hkls(hkls, cif_path, [1.0], LAMBDA)
+        intens = intensities_for_hkls(
+            hkls, cif_path, [1.0], LAMBDA, energy=E_CuKa/1000
+        )
         L_vals = np.arange(lo_i, hi_i + 1)
         _BRAGG_CACHE[key] = (L_vals, np.asarray(intens))
     return _BRAGG_CACHE[key]
@@ -463,7 +465,9 @@ def export_cif_hkls(_):
     cif = str(CIF_2H) if poly == "2H" else str(CIF_6H)
     c_val = C_2H if poly == "2H" else C_6H
 
-    ints = intensities_for_hkls(hkls, cif, [1.0], LAMBDA)
+    ints = intensities_for_hkls(
+        hkls, cif, [1.0], LAMBDA, energy=E_CuKa/1000
+    )
 
     rows = []
     i_max = max(float(i) for i in ints) or 1.0
