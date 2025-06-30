@@ -450,6 +450,7 @@ def export_cif_hkls(_):
     ints = intensities_for_hkls(hkls, str(CIF_2H), [1.0], LAMBDA)
 
     rows = []
+    i_max = max(float(i) for i in ints) or 1.0
     for (h, k, l), I in zip(hkls, ints):
         d_val = d_spacing(h, k, l, A_HEX, C_2H)
         tth = two_theta(d_val, LAMBDA)
@@ -463,7 +464,7 @@ def export_cif_hkls(_):
             'F(imag)': 0.0,
             '|F|': F_mag,
             '2θ': tth,
-            'I': I,
+            'I': 100.0 * float(I) / i_max,
             'M': 1,
         })
 
