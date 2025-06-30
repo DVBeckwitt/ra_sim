@@ -348,7 +348,8 @@ def _norm_weights():
 
 def _build_bragg_dataframe():
     """Return DataFrame with scaled Cif and numeric intensities."""
-    rows, w2h, w6h = [], *_norm_weights()[:2]
+    rows: list[dict] = []
+    w2h, w6h = _weight_2h_6h()  # use proper polytype weights
     intensity_max = 0.0
     area_max = 0.0
 
