@@ -429,7 +429,8 @@ def plot_scatter(_):
     df = _last_df if _last_df is not None else _build_bragg_dataframe()
     intensity_cols = _find_intensity_columns(df, None)
     df_norm = _normalize_columns(df, intensity_cols)
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111)
     scatters = []
     for col in intensity_cols:
         sc = ax.scatter(df_norm['l'], df_norm[col], label=col, s=20, alpha=0.7)
@@ -493,7 +494,7 @@ def plot_scatter(_):
 
     # Leave room for the control widgets to remain responsive
     plt.subplots_adjust(right=0.78)
-    fig.show()
+    plt.show(block=False)
     # allow the Tk event loop to process initial events
     plt.pause(0.001)
 
