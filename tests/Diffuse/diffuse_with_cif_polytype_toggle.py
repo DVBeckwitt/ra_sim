@@ -702,8 +702,8 @@ btn_bragg.on_clicked(_toggle_bragg)
 btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), 'Save Bragg XLSX')
 btn_export.on_clicked(export_bragg_data)
 
-# save all CIF HKLs button
-btn_cif = Button(plt.axes([0.78, 0.05, 0.16, 0.03]), 'Save CIF HKLs')
+# save all CIF HKLs button – position it away from the ℓ-range slider
+btn_cif = Button(plt.axes([0.78, 0.08, 0.16, 0.03]), 'Save CIF HKLs')
 btn_cif.on_clicked(export_cif_hkls)
 
 # additional buttons for plotting
