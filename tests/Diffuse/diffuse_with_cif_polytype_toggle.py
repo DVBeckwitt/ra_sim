@@ -160,7 +160,7 @@ for pairs in HK_BY_M.values():
         )
         phases_2h = np.array(
             [
-                np.exp(2j * np.pi * (h * x + k * y + L_GRID * z))
+                np.exp(2j * np.pi * (h * x + k * y + L_GRID * z/3))
                 for x, y, z, _ in SITES_2H
             ]
         )
