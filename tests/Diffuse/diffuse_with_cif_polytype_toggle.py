@@ -64,7 +64,7 @@ def c_from_cif(path: str) -> float:
 
 
 # constants
-P_CLAMP = 1e-6
+P_EPS = 1e-6  # keep probabilities away from 0 or 1
 
 A_HEX = 4.557  # Å
 BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
@@ -173,20 +173,9 @@ for pairs in HK_BY_M.values():
 def _abc(p, h, k):
     δ = 2 * np.pi * ((2 * h + k) / 3)
     z = (1 - p) + p * np.exp(1j * δ)
-    f = np.minimum(np.abs(z), 1 - P_CLAMP)
-    ψ = np.angle(z)
-    return f, ψ, δ
-
-
-def _abc_raw(p, h, k):
-    """Return ``(f, ψ, δ)`` without clamping ``f`` to ``1-P_CLAMP``."""
-
-    δ = 2 * np.pi * ((2 * h + k) / 3)
-    z = (1 - p) + p * np.exp(1j * δ)
     f = np.abs(z)
     ψ = np.angle(z)
     return f, ψ, δ
-
 
 def _ratio_limit(f: np.ndarray, theta: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """Return ``R`` using series limits for ``f`` near ``0`` or ``1``.
@@ -249,7 +238,7 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
         only needed for the 2H case.
     """
 
-    f, ψ, δ = _abc_raw(p, h, k)
+    f, ψ, δ = _abc(p, h, k)
     φ = δ + 2 * np.pi * L_GRID * phi_scale
     θ = φ - ψ
     R = _ratio_limit(f, θ)
@@ -259,8 +248,8 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
 # GUI state
 defaults = {
     "m": ALLOWED_M[0],
-    "p0": 0.0,
-    "p1": 1.0,
+    "p0": P_EPS,
+    "p1": 1.0 - P_EPS,
     "p3": 0.5,
     # Use only the general p case by default.  The perfect 2H and 6H
     # components can still be enabled via their weight sliders.
@@ -411,20 +400,11 @@ def _is_hk_mode() -> bool:  ### ← NEW
 # 2)  SIMPLE closed-form integrated area for **any** p
 def ht_integrated_area(p, h, k, ell):
     """Analytic Hendricks–Teller area for a single reflection."""
-    P_EPS = 1.0e-6  # keep r away from the pole
-
-    if p <= 1e-15:
-        p_eff = P_EPS
-    elif p >= 1 - 1e-15:
-        p_eff = 1.0 - P_EPS
-    else:
-        p_eff = p
-
     idx = int(round(ell / L_MAX * (N_L - 1)))
     F2 = F2_cache_2H[(h, k)][idx]
 
     delta = 2 * np.pi * (2 * h + k) / 3
-    z = (1 - p_eff) + p_eff * np.exp(-1j * delta)
+    z = (1 - p) + p * np.exp(-1j * delta)
     r2 = abs(z) ** 2
 
     return 2 * np.pi * F2 * r2 / (1.0 - r2)
@@ -963,7 +943,7 @@ make_int_slider([0.60, ys[0], 0.30, 0.03], "K", MAX_HK, "k")
 make_slider(
     [0.25, ys[1], 0.45, 0.03],
     "p≈0",
-    0,
+    P_EPS,
     0.2,
     state["p0"],
     1e-3,
@@ -984,7 +964,7 @@ make_slider(
     [0.25, ys[2], 0.45, 0.03],
     "p≈1",
     0.8,
-    1,
+    1 - P_EPS,
     state["p1"],
     1e-3,
     lambda v: (state.update(p1=v), compute_components(), refresh()),
@@ -1003,8 +983,8 @@ make_slider(
 make_slider(
     [0.25, ys[3], 0.45, 0.03],
     "p",
-    0,
-    1,
+    P_EPS,
+    1 - P_EPS,
     state["p3"],
     1e-3,
     lambda v: (state.update(p3=v), compute_components(), refresh()),
