@@ -66,31 +66,56 @@ E_CuKa = 12398.4193 / LAMBDA             # eV  (≈ 8040 eV)
 ION   = {'Pb': 'Pb2+', 'I': 'I1-'}       # ionic labels for f₀
 NEUTR = {'Pb': 'Pb',  'I': 'I'}          # neutral symbols for f′/f″
 
+# --- atomic form factors ----------------------------------------------------
+from Dans_Diffraction.functions_crystallography import (
+    xray_scattering_factor,
+    xray_dispersion_corrections,
+)
+
 def f_comp(el: str, Q: np.ndarray) -> np.ndarray:
-    """Total atomic scattering factor  f = f₀(Q)+f′(E)+i f″(E)."""
-    q   = Q / (4*np.pi)                                      # Å⁻¹
-    f0  = xraydb.f0(ION[el], q)
-    f1  = xraydb.f1_chantler(NEUTR[el], E_CuKa)              # scalar
-    f2  = xraydb.f2_chantler(NEUTR[el], E_CuKa)              # scalar
-    return f0 + f1 + 1j*f2                                   # broadcasts
+    """Total atomic scattering factor  f = f₀(Q)+f′(E)+i f″(E).
+
+    Parameters
+    ----------
+    el : str
+        Chemical symbol (``"Pb"`` or ``"I"``).
+    Q : ndarray
+        Magnitude of the scattering vector in Å⁻¹.
+
+    Returns
+    -------
+    ndarray
+        Complex form factor values matching the shape of ``Q``.
+    """
+
+    q = np.asarray(Q, dtype=float).reshape(-1)
+    f0 = xray_scattering_factor([ION[el]], q)[:, 0]
+    f1, f2 = xray_dispersion_corrections([NEUTR[el]], energy_kev=[E_CuKa / 1000])
+    f1 = float(f1[0, 0])
+    f2 = float(f2[0, 0])
+    out = f0 + f1 + 1j * f2
+    return out.reshape(Q.shape)
 
 
-# ionic form factors
-try:
-    import xraydb
-    def f0(el: str, Q: np.ndarray) -> np.ndarray:
-        q = Q / (4*np.pi)
-        ion = {'Pb': 'Pb2+', 'I': 'I1-'}.get(el, el)
-        return xraydb.f0(ion, q)
-except ImportError:
-    _fallback = {'Pb2+': 82.0, 'I1-': 53.0}
-    def f0(el: str, Q: np.ndarray) -> np.ndarray:
-        ion = {'Pb': 'Pb2+', 'I': 'Pb2+' if el=='Pb' else 'I1-'}.get(el, el)
-        print(f"Warning: xraydb not found, using fallback for {ion}", file=sys.stderr)
-        return np.full_like(Q, _fallback[ion])
 
-# atomic sites
-SITES    = [(0,0,0.0,'Pb'), (1/3,2/3,0.25,'I'), (2/3,1/3,-0.25,'I')]
+# atomic sites pulled directly from the CIFs so the phase conventions match
+def _sites_from_cif(path: Path) -> list[tuple[float, float, float, str]]:
+    xtl = dif.Crystal(str(path))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    st = xtl.Structure
+    return [
+        (float(st.u[i]), float(st.v[i]), float(st.w[i]), str(st.type[i]))
+        for i in range(len(st.u))
+    ]
+
+# For both 2H and 6H polytypes we use the same three atomic positions.  The
+# 6H structure differs only in the lattice parameter ``c``; the atomic basis is
+# otherwise identical.  The positions are read from the 2H CIF so that the phase
+# conventions stay in sync with the tabulated form factors used when exporting
+# CIF HKLs.
+SITES_2H = _sites_from_cif(CIF_2H)
+SITES_6H = SITES_2H
 N_P, A_CELL = 3, 17.98e-10
 AREA     = (2*np.pi)**2 / A_CELL * N_P
 
@@ -116,17 +141,22 @@ for pairs in HK_BY_M.values():
         # 2H structure
         Q_2h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
                                    + (L_GRID**2) / C_2H**2)
-        phases = np.array([
-            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z)) for x, y, z, _ in SITES
+        phases_2h = np.array([
+            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z))
+            for x, y, z, _ in SITES_2H
         ])
-        coeffs = np.array([f_comp(sym, Q_2h) for *_, sym in SITES])
-        F2_cache_2H[(h, k)] = np.abs((coeffs * phases).sum(axis=0))**2
+        coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in SITES_2H])
+        F2_cache_2H[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0))**2
 
-        # 6H structure – same in‑plane coords, different c parameter
+        # 6H structure uses positions from the 6H CIF
         Q_6h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
                                    + (L_GRID**2) / C_6H**2)
-        coeffs_6h = np.array([f_comp(sym, Q_6h) for *_, sym in SITES])
-        F2_cache_6H[(h, k)] = np.abs((coeffs_6h * phases).sum(axis=0))**2
+        phases_6h = np.array([
+            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z))
+            for x, y, z, _ in SITES_6H
+        ])
+        coeffs_6h = np.array([f_comp(sym, Q_6h) for *_, sym in SITES_6H])
+        F2_cache_6H[(h, k)] = np.abs((coeffs_6h * phases_6h).sum(axis=0))**2
 
 # Hendricks–Teller infinite stacking
 
@@ -137,10 +167,28 @@ def _abc(p,h,k):
     ψ = np.angle(z)
     return f, ψ, δ
 
-def I_inf(p,h,k,F2):
-    f,ψ,δ = _abc(p,h,k)
-    φ = δ + 2*np.pi * L_GRID/3
-    return AREA * F2 * (1 - f**2) / (1 + f**2 - 2*f*np.cos(φ - ψ))
+def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
+    """Return the Hendricks–Teller intensity for one HK pair.
+
+    Parameters
+    ----------
+    p : float
+        Stacking-fault probability. Values close to 0 correspond to the
+        6H polytype and values close to 1 correspond to the 2H polytype.
+    h, k : int
+        Miller indices.
+    F2 : ndarray
+        Pre-computed structure factor magnitude squared.
+    phi_scale : float, optional
+        Scale factor applied to ``L_GRID`` when forming the phase ``φ``.
+        ``1`` corresponds to the 2H convention while ``1/3`` matches the
+        6H convention. The default uses ``1/3`` so explicit arguments are
+        only needed for the 2H case.
+    """
+
+    f, ψ, δ = _abc(p, h, k)
+    φ = δ + 2 * np.pi * L_GRID * phi_scale
+    return AREA * F2 * (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
 
 # GUI state
 defaults = {
@@ -175,11 +223,15 @@ def compute_components():
     else:                                        # hexagonal degeneracy
         counts = Counter((abs(h), abs(k)) for h, k in pairs)
 
-    def comp(p):
-        return sum(n * I_inf(p, h, k, F2_cache_2H[(h, k)])
-                   for (h, k), n in counts.items())
+    def comp(p, phi_scale):
+        return sum(
+            n * I_inf(p, h, k, F2_cache_2H[(h, k)], phi_scale)
+            for (h, k), n in counts.items()
+        )
 
-    state['I0'], state['I1'], state['I3'] = comp(state['p0']), comp(state['p1']), comp(state['p3'])
+    state['I0'] = comp(state['p0'], 1 / 3)
+    state['I1'] = comp(state['p1'], 1.0)
+    state['I3'] = comp(state['p3'], 1 / 3)
 
 compute_components()
 
@@ -197,9 +249,9 @@ def ht_total_for_pair(h, k):
     w0, w1, w2 = w0/s, w1/s, w2/s
     F2 = F2_cache_2H[(h, k)]
     return (
-        w0 * I_inf(state['p0'], h, k, F2)
-        + w1 * I_inf(state['p1'], h, k, F2)
-        + w2 * I_inf(state['p3'], h, k, F2)
+        w0 * I_inf(state['p0'], h, k, F2, 1 / 3)
+        + w1 * I_inf(state['p1'], h, k, F2, 1.0)
+        + w2 * I_inf(state['p3'], h, k, F2, 1 / 3)
     )
 
 def _raw_bragg(h, k, lo, hi, cif_path):
@@ -429,7 +481,61 @@ def export_bragg_data(_):
         return
 
     df = _build_bragg_dataframe()
-    df.to_excel(fname, index=False)
+
+    # Also record the complex structure factors used for each polytype so that
+    # the spreadsheet mirrors the CIF HKL export.  This requires evaluating the
+    # structure factors via ``Dans_Diffraction`` at the Cu Kα energy.
+    xtl2 = dif.Crystal(str(CIF_2H))
+    xtl2.Symmetry.generate_matrices()
+    xtl2.generate_structure()
+    xtl2.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
+    xtl2.Scatter.integer_hkl = True
+
+    xtl6 = dif.Crystal(str(CIF_6H))
+    xtl6.Symmetry.generate_matrices()
+    xtl6.generate_structure()
+    xtl6.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
+    xtl6.Scatter.integer_hkl = True
+
+    f2h_r = []
+    f2h_i = []
+    f6h_r = []
+    f6h_i = []
+    for h, k, l in df[["h", "k", "l"]].to_numpy():
+        try:
+            fc2 = xtl2.Scatter.structure_factor([int(h), int(k), int(l)])
+            f2h_r.append(float(np.real(fc2)))
+            f2h_i.append(float(np.imag(fc2)))
+        except Exception:
+            f2h_r.append(0.0)
+            f2h_i.append(0.0)
+
+        try:
+            fc6 = xtl6.Scatter.structure_factor([int(h), int(k), int(l)])
+            f6h_r.append(float(np.real(fc6)))
+            f6h_i.append(float(np.imag(fc6)))
+        except Exception:
+            f6h_r.append(0.0)
+            f6h_i.append(0.0)
+
+    df["F2H(real)"] = f2h_r
+    df["F2H(imag)"] = f2h_i
+    df["F6H(real)"] = f6h_r
+    df["F6H(imag)"] = f6h_i
+
+    # Record the atomic positions currently in use.  The 2H and 6H
+    # polytypes share the same fractional coordinates; the difference is
+    # purely in the lattice parameter ``c``.  Include these positions in a
+    # separate sheet so the saved workbook documents the full calculation
+    # context.
+    sites_df = pd.DataFrame(
+        SITES_2H, columns=["u", "v", "w", "element"]
+    )
+
+    with pd.ExcelWriter(fname) as wr:
+        df.to_excel(wr, index=False, sheet_name="Bragg data")
+        sites_df.to_excel(wr, index=False, sheet_name="Atomic sites")
+
     print("Saved →", fname)
 
 
