@@ -178,6 +178,45 @@ def _abc(p, h, k):
     return f, ψ, δ
 
 
+def _abc_raw(p, h, k):
+    """Return ``(f, ψ, δ)`` without clamping ``f`` to ``1-P_CLAMP``."""
+
+    δ = 2 * np.pi * ((2 * h + k) / 3)
+    z = (1 - p) + p * np.exp(1j * δ)
+    f = np.abs(z)
+    ψ = np.angle(z)
+    return f, ψ, δ
+
+
+def _ratio_limit(f: np.ndarray, theta: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """Return ``R`` using series limits for ``f`` near ``0`` or ``1``."""
+
+    f = np.asarray(f, dtype=float)
+    theta = np.asarray(theta, dtype=float)
+
+    R = (1 - f ** 2) / (1 + f ** 2 - 2 * f * np.cos(theta))
+
+    mask_p1 = np.abs(1 - f) < eps
+    if np.any(mask_p1):
+        eps1 = 1 - f[mask_p1]
+        th = theta[mask_p1]
+        lim = np.isclose(np.sin(th / 2), 0.0, atol=eps)
+        val = np.empty_like(eps1)
+        val[lim] = 2 / eps1[lim] - 1
+        val[~lim] = (
+            eps1[~lim] / (1 - np.cos(th[~lim])) * (1 - eps1[~lim] / 2)
+        )
+        R[mask_p1] = val
+
+    mask_p0 = f < eps
+    if np.any(mask_p0):
+        eps0 = f[mask_p0]
+        th = theta[mask_p0]
+        R[mask_p0] = 1 + 2 * eps0 * np.cos(th)
+
+    return R
+
+
 def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
     """Return the Hendricks–Teller intensity for one HK pair.
 
@@ -197,9 +236,11 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
         only needed for the 2H case.
     """
 
-    f, ψ, δ = _abc(p, h, k)
+    f, ψ, δ = _abc_raw(p, h, k)
     φ = δ + 2 * np.pi * L_GRID * phi_scale
-    return AREA * F2 * (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
+    θ = φ - ψ
+    R = _ratio_limit(f, θ)
+    return AREA * F2 * R
 
 
 # GUI state
