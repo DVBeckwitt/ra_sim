@@ -98,8 +98,19 @@ def f_comp(el: str, Q: np.ndarray) -> np.ndarray:
 
 
 
-# atomic sites
-SITES    = [(0,0,0.0,'Pb'), (1/3,2/3,0.25,'I'), (2/3,1/3,-0.25,'I')]
+# atomic sites pulled directly from the CIFs so the phase conventions match
+def _sites_from_cif(path: Path) -> list[tuple[float, float, float, str]]:
+    xtl = dif.Crystal(str(path))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    st = xtl.Structure
+    return [
+        (float(st.u[i]), float(st.v[i]), float(st.w[i]), str(st.type[i]))
+        for i in range(len(st.u))
+    ]
+
+SITES_2H = _sites_from_cif(CIF_2H)
+SITES_6H = _sites_from_cif(CIF_6H)
 N_P, A_CELL = 3, 17.98e-10
 AREA     = (2*np.pi)**2 / A_CELL * N_P
 
@@ -125,17 +136,22 @@ for pairs in HK_BY_M.values():
         # 2H structure
         Q_2h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
                                    + (L_GRID**2) / C_2H**2)
-        phases = np.array([
-            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z)) for x, y, z, _ in SITES
+        phases_2h = np.array([
+            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z))
+            for x, y, z, _ in SITES_2H
         ])
-        coeffs = np.array([f_comp(sym, Q_2h) for *_, sym in SITES])
-        F2_cache_2H[(h, k)] = np.abs((coeffs * phases).sum(axis=0))**2
+        coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in SITES_2H])
+        F2_cache_2H[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0))**2
 
-        # 6H structure – same in‑plane coords, different c parameter
+        # 6H structure uses positions from the 6H CIF
         Q_6h = 2 * np.pi * np.sqrt((4/3) * (h*h + k*k + h*k) / A_HEX**2
                                    + (L_GRID**2) / C_6H**2)
-        coeffs_6h = np.array([f_comp(sym, Q_6h) for *_, sym in SITES])
-        F2_cache_6H[(h, k)] = np.abs((coeffs_6h * phases).sum(axis=0))**2
+        phases_6h = np.array([
+            np.exp(2j * np.pi * (h*x + k*y + L_GRID*z))
+            for x, y, z, _ in SITES_6H
+        ])
+        coeffs_6h = np.array([f_comp(sym, Q_6h) for *_, sym in SITES_6H])
+        F2_cache_6H[(h, k)] = np.abs((coeffs_6h * phases_6h).sum(axis=0))**2
 
 # Hendricks–Teller infinite stacking
 
