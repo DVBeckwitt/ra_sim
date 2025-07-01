@@ -132,6 +132,15 @@ SITES_2H = _sites_from_cif(CIF_2H)
 N_P, A_CELL = 3, 17.98e-10
 AREA = (2 * np.pi) ** 2 / A_CELL * N_P
 
+# keep track of iodine site indices so their z coordinate can be tweaked via
+# a slider.  The CIF is read using ``Dans_Diffraction`` so ``SITES_2H`` already
+# includes all symmetry-equivalent positions.  ``I_INDICES`` stores the indices
+# of iodine atoms while ``Z_BASE`` records their original fractional z values
+# so they can be offset relative to the CIF value.
+I_INDICES = [i for i, (*_, sym) in enumerate(SITES_2H) if sym.strip().startswith("I")]
+Z_BASE = [SITES_2H[i][2] for i in I_INDICES]
+Z_DEFAULT = float(np.mean(Z_BASE)) if Z_BASE else 0.0
+
 # ─── Recommendation 1: extend HK range
 MAX_HK = 10  # increase as needed
 HK_BY_M = {}
@@ -146,26 +155,45 @@ L_MAX = float(_ARGS.l_max)
 N_L = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
 
-# precompute |F|² for 2H lattice (single-layer form factor)
+# precompute |F|² for 2H lattice (single-layer form factor) and allow
+# rebuilding when the iodine ``z`` position is adjusted.
 F2_cache_2H = {}
-for pairs in HK_BY_M.values():
-    for h, k in pairs:
-        # 2H structure
-        Q_2h = (
-            2
-            * np.pi
-            * np.sqrt(
-                (4 / 3) * (h * h + k * k + h * k) / A_HEX**2 + (L_GRID**2) / C_2H**2
+
+
+def rebuild_F2_cache(z_val: float) -> None:
+    """Recompute ``F2_cache_2H`` for the given iodine z position."""
+
+    F2_cache_2H.clear()
+
+    shift = z_val - Z_DEFAULT
+    sites = []
+    for i, (x, y, z, sym) in enumerate(SITES_2H):
+        if i in I_INDICES:
+            z = z + shift
+        sites.append((x, y, z, sym))
+
+    for pairs in HK_BY_M.values():
+        for h, k in pairs:
+            Q_2h = (
+                2
+                * np.pi
+                * np.sqrt(
+                    (4 / 3) * (h * h + k * k + h * k) / A_HEX**2
+                    + (L_GRID**2) / C_2H**2
+                )
             )
-        )
-        phases_2h = np.array(
-            [
-                np.exp(2j * np.pi * (h * x + k * y + L_GRID * z/3))
-                for x, y, z, _ in SITES_2H
-            ]
-        )
-        coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in SITES_2H])
-        F2_cache_2H[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0)) ** 2
+            phases_2h = np.array(
+                [
+                    np.exp(2j * np.pi * (h * x + k * y + L_GRID * z / 3))
+                    for x, y, z, _ in sites
+                ]
+            )
+            coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in sites])
+            F2_cache_2H[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0)) ** 2
+
+
+# initialise cache using the CIF value
+rebuild_F2_cache(Z_DEFAULT)
 
 # Hendricks–Teller infinite stacking
 
@@ -204,7 +232,9 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
 
 # GUI state
 defaults = {
-    "m": ALLOWED_M[0],
+    # start on the first non-zero ring so the p slider visibly affects the
+    # Hendricks–Teller curves right away
+    "m": ALLOWED_M[1],
     "p0": 0.0,
     "p1": 1.0,
     "p3": 0.5,
@@ -218,6 +248,7 @@ defaults = {
     "I3": None,
     "L_lo": 1.0,
     "L_hi": L_MAX,
+    "z": Z_DEFAULT,
 }
 state = defaults.copy()
 
@@ -963,6 +994,24 @@ make_slider(
     state["w2"],
     0.1,
     lambda v: (state.update(w2=v), refresh()),
+)
+
+# Slider to tweak the iodine fractional ``z`` position relative to the CIF
+# value.  Moving this slider triggers a rebuild of the form-factor cache
+# followed by recomputation of the Hendricks–Teller components.
+make_slider(
+    [0.25, 0.38, 0.65, 0.03],
+    "z(fract)",
+    Z_DEFAULT - 0.1,
+    Z_DEFAULT + 0.1,
+    state["z"],
+    1e-3,
+    lambda v: (
+        state.update(z=float(v)),
+        rebuild_F2_cache(float(v)),
+        compute_components(),
+        refresh(),
+    ),
 )
 
 # toggle scale button
