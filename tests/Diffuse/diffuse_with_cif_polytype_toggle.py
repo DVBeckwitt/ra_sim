@@ -132,6 +132,41 @@ SITES_2H = _sites_from_cif(CIF_2H)
 N_P, A_CELL = 3, 17.98e-10
 AREA = (2 * np.pi) ** 2 / A_CELL * N_P
 
+# neutron scattering lengths (fm)
+B_PB = 9.405
+B_I = 5.28
+
+# iodide fractional z coordinate extracted from CIF
+Z_I_FRAC = 0.2675
+
+def layer_form_factor(h: int, k: int, L: np.ndarray, z: float = Z_I_FRAC) -> np.ndarray:
+    """Return the single-layer form factor.
+
+    Implements
+
+    .. math::
+
+       F_m = b_{Pb} + b_I\left[e^{2\pi i\left(H/3 + 2K/3 + Lz/3\right)} +
+       e^{2\pi i\left(2H/3 + K/3 - Lz/3\right)}\right]
+
+    Parameters
+    ----------
+    h, k : int
+        Miller indices.
+    L : ndarray
+        Array of L values.
+    z : float, optional
+        Iodine fractional coordinate ``z``.
+
+    Returns
+    -------
+    ndarray
+        Complex form factor values for each ``L``.
+    """
+    phase1 = np.exp(2j * np.pi * ((h / 3) + (2 * k / 3) + (L * z / 3)))
+    phase2 = np.exp(2j * np.pi * ((2 * h / 3) + (k / 3) - (L * z / 3)))
+    return B_PB + B_I * (phase1 + phase2)
+
 # ─── Recommendation 1: extend HK range
 MAX_HK = 10  # increase as needed
 HK_BY_M = {}
@@ -150,22 +185,8 @@ L_GRID = np.linspace(0, L_MAX, N_L)
 F2_cache_2H = {}
 for pairs in HK_BY_M.values():
     for h, k in pairs:
-        # 2H structure
-        Q_2h = (
-            2
-            * np.pi
-            * np.sqrt(
-                (4 / 3) * (h * h + k * k + h * k) / A_HEX**2 + (L_GRID**2) / C_2H**2
-            )
-        )
-        phases_2h = np.array(
-            [
-                np.exp(2j * np.pi * (h * x + k * y + L_GRID * z))
-                for x, y, z, _ in SITES_2H
-            ]
-        )
-        coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in SITES_2H])
-        F2_cache_2H[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0)) ** 2
+        F_layer = layer_form_factor(h, k, L_GRID)
+        F2_cache_2H[(h, k)] = np.abs(F_layer) ** 2
 
 # Hendricks–Teller infinite stacking
 
