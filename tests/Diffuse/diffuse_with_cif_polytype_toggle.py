@@ -204,7 +204,8 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
 
 # GUI state
 defaults = {
-    "m": ALLOWED_M[0],
+    # Start at the first non-zero m value so p-slider changes are visible
+    "m": ALLOWED_M[1],
     "p0": 0.0,
     "p1": 1.0,
     "p3": 0.5,
