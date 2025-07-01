@@ -66,28 +66,37 @@ E_CuKa = 12398.4193 / LAMBDA             # eV  (≈ 8040 eV)
 ION   = {'Pb': 'Pb2+', 'I': 'I1-'}       # ionic labels for f₀
 NEUTR = {'Pb': 'Pb',  'I': 'I'}          # neutral symbols for f′/f″
 
+# --- atomic form factors ----------------------------------------------------
+from Dans_Diffraction.functions_crystallography import (
+    xray_scattering_factor,
+    xray_dispersion_corrections,
+)
+
 def f_comp(el: str, Q: np.ndarray) -> np.ndarray:
-    """Total atomic scattering factor  f = f₀(Q)+f′(E)+i f″(E)."""
-    q   = Q / (4*np.pi)                                      # Å⁻¹
-    f0  = xraydb.f0(ION[el], q)
-    f1  = xraydb.f1_chantler(NEUTR[el], E_CuKa)              # scalar
-    f2  = xraydb.f2_chantler(NEUTR[el], E_CuKa)              # scalar
-    return f0 + f1 + 1j*f2                                   # broadcasts
+    """Total atomic scattering factor  f = f₀(Q)+f′(E)+i f″(E).
+
+    Parameters
+    ----------
+    el : str
+        Chemical symbol (``"Pb"`` or ``"I"``).
+    Q : ndarray
+        Magnitude of the scattering vector in Å⁻¹.
+
+    Returns
+    -------
+    ndarray
+        Complex form factor values matching the shape of ``Q``.
+    """
+
+    q = np.asarray(Q, dtype=float).reshape(-1)
+    f0 = xray_scattering_factor([ION[el]], q)[:, 0]
+    f1, f2 = xray_dispersion_corrections([NEUTR[el]], energy_kev=[E_CuKa / 1000])
+    f1 = float(f1[0, 0])
+    f2 = float(f2[0, 0])
+    out = f0 + f1 + 1j * f2
+    return out.reshape(Q.shape)
 
 
-# ionic form factors
-try:
-    import xraydb
-    def f0(el: str, Q: np.ndarray) -> np.ndarray:
-        q = Q / (4*np.pi)
-        ion = {'Pb': 'Pb2+', 'I': 'I1-'}.get(el, el)
-        return xraydb.f0(ion, q)
-except ImportError:
-    _fallback = {'Pb2+': 82.0, 'I1-': 53.0}
-    def f0(el: str, Q: np.ndarray) -> np.ndarray:
-        ion = {'Pb': 'Pb2+', 'I': 'Pb2+' if el=='Pb' else 'I1-'}.get(el, el)
-        print(f"Warning: xraydb not found, using fallback for {ion}", file=sys.stderr)
-        return np.full_like(Q, _fallback[ion])
 
 # atomic sites
 SITES    = [(0,0,0.0,'Pb'), (1/3,2/3,0.25,'I'), (2/3,1/3,-0.25,'I')]
