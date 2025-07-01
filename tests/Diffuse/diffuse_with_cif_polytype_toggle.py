@@ -185,7 +185,8 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
     ----------
     p : float
         Stacking-fault probability. Values close to 0 correspond to the
-        6H polytype and values close to 1 correspond to the 2H polytype.
+        2H polytype (no faults) and values close to 1 correspond to the
+        6H polytype (all faults).
     h, k : int
         Miller indices.
     F2 : ndarray
@@ -253,8 +254,8 @@ def compute_components():
             for (h, k), n in counts.items()
         )
 
-    state["I0"] = comp(state["p0"], 1 / 3)
-    state["I1"] = comp(state["p1"], 1.0)
+    state["I0"] = comp(state["p0"], 1.0)   # 2H component
+    state["I1"] = comp(state["p1"], 1 / 3)  # 6H component
     state["I3"] = comp(state["p3"], 1 / 3)
 
 
@@ -275,8 +276,8 @@ def ht_total_for_pair(h, k):
     w0, w1, w2 = w0 / s, w1 / s, w2 / s
     F2 = F2_cache_2H[(h, k)]
     return (
-        w0 * I_inf(state["p0"], h, k, F2, 1 / 3)
-        + w1 * I_inf(state["p1"], h, k, F2, 1.0)
+        w0 * I_inf(state["p0"], h, k, F2, 1.0)
+        + w1 * I_inf(state["p1"], h, k, F2, 1 / 3)
         + w2 * I_inf(state["p3"], h, k, F2, 1 / 3)
     )
 
@@ -300,7 +301,7 @@ def _weight_2h_6h():
     """Return normalized weights for 2H and 6H contributions."""
     w0, w1 = state["w0"], state["w1"]
     s = (w0 + w1) or 1.0
-    return (w1 / s, w0 / s)  # 2H weight, 6H weight
+    return (w0 / s, w1 / s)  # 2H weight, 6H weight
 
 
 def bragg_intensity_single(h, k):
@@ -473,8 +474,8 @@ def _build_bragg_dataframe():
             )
 
             if _is_hk_mode():
-                n2 = ht_numeric_area(state["p1"], h, k, l)
-                n6 = ht_numeric_area(state["p0"], h, k, l)
+                n2 = ht_numeric_area(state["p0"], h, k, l)
+                n6 = ht_numeric_area(state["p1"], h, k, l)
                 area_max = max(area_max, n2, n6)
                 row["Numeric_2H_area"] = n2
                 row["Numeric_6H_area"] = n6
@@ -779,8 +780,8 @@ ax.set_ylabel("I (a.u.)")
 ax.set_yscale("log")
 
 (line_tot,) = ax.plot([], [], lw=2, label="Σ weighted (numeric)")
-(line0,) = ax.plot([], [], ls="--", label="I(p≈0)")
-(line1,) = ax.plot([], [], ls="--", label="I(p≈1)")
+(line0,) = ax.plot([], [], ls="--", label="I(2H)")
+(line1,) = ax.plot([], [], ls="--", label="I(6H)")
 (line3,) = ax.plot([], [], ls="--", label="I(p)")
 title = ax.set_title("")
 _bragg_lines = []
@@ -908,7 +909,7 @@ make_int_slider([0.60, ys[0], 0.30, 0.03], "K", MAX_HK, "k")
 # p0 & w0
 make_slider(
     [0.25, ys[1], 0.45, 0.03],
-    "p≈0",
+    "2H (no faults)",
     0,
     0.2,
     state["p0"],
@@ -917,7 +918,7 @@ make_slider(
 )
 make_slider(
     [0.72, ys[1], 0.20, 0.03],
-    "w(p≈0)%",
+    "w(2H)%",
     0,
     100,
     state["w0"],
@@ -928,7 +929,7 @@ make_slider(
 # p1 & w1
 make_slider(
     [0.25, ys[2], 0.45, 0.03],
-    "p≈1",
+    "6H (all faults)",
     0.8,
     1,
     state["p1"],
@@ -937,7 +938,7 @@ make_slider(
 )
 make_slider(
     [0.72, ys[2], 0.20, 0.03],
-    "w(p≈1)%",
+    "w(6H)%",
     0,
     100,
     state["w1"],
@@ -1012,6 +1013,12 @@ def toggle_mode(_):
 
 b_mode = Button(plt.axes([0.60, 0.01, 0.16, 0.03]), "H/K panel")
 b_mode.on_clicked(toggle_mode)
+
+# quick assert
+assert np.allclose(
+    I_inf(0.0, 1, 0, F2_cache_2H[(1, 0)], 1.0),
+    I_inf(1.0, 1, 0, F2_cache_2H[(1, 0)], 1 / 3),
+), "Mapping swap failed"
 
 refresh()
 plt.show()
