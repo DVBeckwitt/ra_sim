@@ -10,11 +10,12 @@ def create_slider(label, min_val, max_val, initial_val, step_size, parent, updat
     label_widget.pack(anchor=tk.W)
     slider_var = tk.DoubleVar(value=initial_val)
 
+    if update_callback is not None:
+        slider_var.trace_add('write', lambda *args: update_callback())
+
     def slider_command(val):
         precise_value = round(float(val) / step_size) * step_size
         slider_var.set(precise_value)
-        if update_callback is not None:
-            update_callback()
 
     slider = ttk.Scale(frame, from_=min_val, to=max_val, orient=tk.HORIZONTAL,
                        variable=slider_var, command=slider_command)
@@ -28,14 +29,10 @@ def create_slider(label, min_val, max_val, initial_val, step_size, parent, updat
             new_val = slider_var.get() - step_size + 1.0
             new_val = max(new_val, min_val)
             slider_var.set(round(new_val / step_size) * step_size)
-            if update_callback is not None:
-                update_callback()
         elif event.keysym == 'Right':
             new_val = slider_var.get() + step_size - 1.0
             new_val = min(new_val, max_val)
             slider_var.set(round(new_val / step_size) * step_size)
-            if update_callback is not None:
-                update_callback()
 
     def on_click(event):
         slider.focus_set()
