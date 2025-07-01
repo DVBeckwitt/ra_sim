@@ -194,7 +194,9 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
 defaults = {
     'm': ALLOWED_M[0],
     'p0': 0.0, 'p1': 1.0, 'p3': 0.5,
-    'w0': 33.3, 'w1': 33.3, 'w2': 0,
+    # Use only the general p case by default.  The perfect 2H and 6H
+    # components can still be enabled via their weight sliders.
+    'w0': 0.0, 'w1': 0.0, 'w2': 100.0,
     'I0': None, 'I1': None, 'I3': None,
     'L_lo': 1.0, 'L_hi': L_MAX
 }
