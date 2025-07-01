@@ -109,8 +109,13 @@ def _sites_from_cif(path: Path) -> list[tuple[float, float, float, str]]:
         for i in range(len(st.u))
     ]
 
+# For both 2H and 6H polytypes we use the same three atomic positions.  The
+# 6H structure differs only in the lattice parameter ``c``; the atomic basis is
+# otherwise identical.  The positions are read from the 2H CIF so that the phase
+# conventions stay in sync with the tabulated form factors used when exporting
+# CIF HKLs.
 SITES_2H = _sites_from_cif(CIF_2H)
-SITES_6H = _sites_from_cif(CIF_6H)
+SITES_6H = SITES_2H
 N_P, A_CELL = 3, 17.98e-10
 AREA     = (2*np.pi)**2 / A_CELL * N_P
 
