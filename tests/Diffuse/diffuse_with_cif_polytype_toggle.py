@@ -405,9 +405,18 @@ def ht_integrated_area(p, h, k, ell):
 
     delta = 2 * np.pi * (2 * h + k) / 3
     z = (1 - p) + p * np.exp(-1j * delta)
-    r2 = abs(z) ** 2
+    r = abs(z)
 
-    return 2 * np.pi * F2 * r2 / (1.0 - r2)
+    if r < P_EPS:
+        ratio = r * r
+    elif abs(1 - r) < P_EPS:
+        eps1 = 1 - r
+        ratio = 1.0 / (2 * eps1) - 1.0
+    else:
+        r2 = r * r
+        ratio = r2 / (1.0 - r2)
+
+    return 2 * np.pi * F2 * ratio
 
 
 def ht_numeric_area(p, h, k, ell, nphi=4001):
