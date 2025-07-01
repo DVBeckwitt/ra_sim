@@ -4,7 +4,8 @@ Optimised Hendricks–Teller viewer for PbI₂ (modified)
 ──────────────────────────────────────────
 * Pre-computes F²(h,k,ℓ) once for extended HK range.
 * Caches component intensities for three p-values.
-* ℓ-range RangeSlider up to `L_MAX` (default 20).
+* ℓ-range RangeSlider up to ``L_MAX`` (default 10).
+* ``L_MAX`` can be changed via ``--l-max`` on the command line.
 * All sliders placed below the figure area; no overlap.
 * Top secondary axis removed.
 * Uses ionic form factors: Pb²⁺ and I⁻.
@@ -15,6 +16,7 @@ import re, sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 
 if plt.get_backend().lower().endswith("agg") and not os.environ.get(
     "PYTEST_CURRENT_TEST"
@@ -35,6 +37,16 @@ import Dans_Diffraction as dif
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, simpledialog, messagebox
+
+# command-line options ------------------------------------------------------
+parser = argparse.ArgumentParser(description="HT viewer")
+parser.add_argument(
+    "--l-max",
+    type=float,
+    default=10.0,
+    help="maximum ℓ range for Hendricks–Teller curves",
+)
+_ARGS, _ = parser.parse_known_args()
 
 # preserve slider objects so they aren’t garbage-collected
 _sliders = []
@@ -130,7 +142,7 @@ for h in range(-MAX_HK, MAX_HK + 1):
 ALLOWED_M = sorted(HK_BY_M)  # only these m values are valid
 
 # ℓ grid
-L_MAX = 20
+L_MAX = float(_ARGS.l_max)
 N_L = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
 
