@@ -105,6 +105,26 @@ def _abc(p, h, k):
     ψ = np.arctan2(imag, real)
     return f, ψ, δ
 
+def R_exact(f, theta):
+    """Return the Hendricks–Teller ratio ``R(f, θ)`` exactly."""
+    import numpy as np
+    return (1 - f * f) / (1 + f * f - 2 * f * np.cos(theta))
+
+
+def R_near_perfect(theta, eps):
+    """Series expansion of ``R`` for ``f = 1 - ε`` (``ε`` small)."""
+    import numpy as np
+    if np.isclose(np.mod(theta, 2 * np.pi), 0.0):
+        return 2.0 / eps - 1.0
+    denom = 1.0 - np.cos(theta)
+    return (eps / denom) * (1.0 - 0.5 * eps)
+
+
+def R_quasi_random(theta, eps):
+    """Series expansion of ``R`` for ``f = ε`` (``ε`` small)."""
+    import numpy as np
+    return 1.0 + 2.0 * eps * np.cos(theta)
+
 def _I_inf(L, p, h, k, F2):
     import numpy as np
     f, ψ, δ = _abc(p, h, k)
