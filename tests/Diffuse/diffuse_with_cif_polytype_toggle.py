@@ -204,9 +204,11 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
 
 # GUI state
 defaults = {
-    "m": ALLOWED_M[0],
+    # Start at the first non-zero m value so p-slider changes are visible
+    "m": ALLOWED_M[1],
     "p0": 0.0,
-    "p1": 1.0,
+    # p≈1 should not start at the perfect 2H limit
+    "p1": 0.99,
     "p3": 0.5,
     # Use only the general p case by default.  The perfect 2H and 6H
     # components can still be enabled via their weight sliders.
@@ -779,6 +781,7 @@ ax.set_ylabel("I (a.u.)")
 ax.set_yscale("log")
 
 (line_tot,) = ax.plot([], [], lw=2, label="Σ weighted (numeric)")
+line_tot.set_visible(False)
 (line0,) = ax.plot([], [], ls="--", label="I(p≈0)")
 (line1,) = ax.plot([], [], ls="--", label="I(p≈1)")
 (line3,) = ax.plot([], [], ls="--", label="I(p)")
