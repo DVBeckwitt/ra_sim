@@ -207,7 +207,8 @@ defaults = {
     # Start at the first non-zero m value so p-slider changes are visible
     "m": ALLOWED_M[1],
     "p0": 0.0,
-    "p1": 1.0,
+    # p≈1 should not start at the perfect 2H limit
+    "p1": 0.99,
     "p3": 0.5,
     # Use only the general p case by default.  The perfect 2H and 6H
     # components can still be enabled via their weight sliders.
