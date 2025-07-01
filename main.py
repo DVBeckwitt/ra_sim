@@ -829,6 +829,7 @@ last_1d_integration_data = {
 
 last_res2_background = None
 last_res2_sim = None
+_ai_cache = {}
 
 def update_mosaic_cache():
     """
@@ -1127,17 +1128,38 @@ def do_update():
 
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
 
-    ai = pyFAI.AzimuthalIntegrator(
-        dist=corto_det_up,
-        poni1=center_x_up * 100e-6,
-        poni2=center_y_up * 100e-6,
-        rot1=np.deg2rad(Gamma_updated),
-        rot2=np.deg2rad(gamma_updated),
-        rot3=0.0,
-        wavelength=wave_m,
-        pixel1=100e-6,
-        pixel2=100e-6
+    # ---------------------------------------------------------------
+    # pyFAI integrator setup is relatively expensive. Cache the
+    # AzimuthalIntegrator instance and only recreate it when any of the
+    # geometry parameters actually change. This significantly reduces
+    # overhead when repeatedly redrawing the live simulation with
+    # unchanged geometry settings.
+    # ---------------------------------------------------------------
+    global _ai_cache
+    sig = (
+        corto_det_up,
+        center_x_up,
+        center_y_up,
+        Gamma_updated,
+        gamma_updated,
+        wave_m,
     )
+    if _ai_cache.get("sig") != sig:
+        _ai_cache = {
+            "sig": sig,
+            "ai": pyFAI.AzimuthalIntegrator(
+                dist=corto_det_up,
+                poni1=center_x_up * 100e-6,
+                poni2=center_y_up * 100e-6,
+                rot1=np.deg2rad(Gamma_updated),
+                rot2=np.deg2rad(gamma_updated),
+                rot3=0.0,
+                wavelength=wave_m,
+                pixel1=100e-6,
+                pixel2=100e-6,
+            ),
+        }
+    ai = _ai_cache["ai"]
 
     # Caked 2D or normal 2D?
     if show_caked_2d_var.get() and unscaled_image_global is not None:
