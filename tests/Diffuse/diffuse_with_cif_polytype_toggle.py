@@ -523,7 +523,19 @@ def export_bragg_data(_):
     df["F6H(real)"] = f6h_r
     df["F6H(imag)"] = f6h_i
 
-    df.to_excel(fname, index=False)
+    # Record the atomic positions currently in use.  The 2H and 6H
+    # polytypes share the same fractional coordinates; the difference is
+    # purely in the lattice parameter ``c``.  Include these positions in a
+    # separate sheet so the saved workbook documents the full calculation
+    # context.
+    sites_df = pd.DataFrame(
+        SITES_2H, columns=["u", "v", "w", "element"]
+    )
+
+    with pd.ExcelWriter(fname) as wr:
+        df.to_excel(wr, index=False, sheet_name="Bragg data")
+        sites_df.to_excel(wr, index=False, sheet_name="Atomic sites")
+
     print("Saved →", fname)
 
 
