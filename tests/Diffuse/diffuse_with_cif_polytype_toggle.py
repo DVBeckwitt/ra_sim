@@ -781,6 +781,7 @@ ax.set_ylabel("I (a.u.)")
 ax.set_yscale("log")
 
 (line_tot,) = ax.plot([], [], lw=2, label="Σ weighted (numeric)")
+line_tot.set_visible(False)
 (line0,) = ax.plot([], [], ls="--", label="I(p≈0)")
 (line1,) = ax.plot([], [], ls="--", label="I(p≈1)")
 (line3,) = ax.plot([], [], ls="--", label="I(p)")
