@@ -438,6 +438,48 @@ def export_bragg_data(_):
         return
 
     df = _build_bragg_dataframe()
+
+    # Also record the complex structure factors used for each polytype so that
+    # the spreadsheet mirrors the CIF HKL export.  This requires evaluating the
+    # structure factors via ``Dans_Diffraction`` at the Cu Kα energy.
+    xtl2 = dif.Crystal(str(CIF_2H))
+    xtl2.Symmetry.generate_matrices()
+    xtl2.generate_structure()
+    xtl2.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
+    xtl2.Scatter.integer_hkl = True
+
+    xtl6 = dif.Crystal(str(CIF_6H))
+    xtl6.Symmetry.generate_matrices()
+    xtl6.generate_structure()
+    xtl6.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
+    xtl6.Scatter.integer_hkl = True
+
+    f2h_r = []
+    f2h_i = []
+    f6h_r = []
+    f6h_i = []
+    for h, k, l in df[["h", "k", "l"]].to_numpy():
+        try:
+            fc2 = xtl2.Scatter.structure_factor([int(h), int(k), int(l)])
+            f2h_r.append(float(np.real(fc2)))
+            f2h_i.append(float(np.imag(fc2)))
+        except Exception:
+            f2h_r.append(0.0)
+            f2h_i.append(0.0)
+
+        try:
+            fc6 = xtl6.Scatter.structure_factor([int(h), int(k), int(l)])
+            f6h_r.append(float(np.real(fc6)))
+            f6h_i.append(float(np.imag(fc6)))
+        except Exception:
+            f6h_r.append(0.0)
+            f6h_i.append(0.0)
+
+    df["F2H(real)"] = f2h_r
+    df["F2H(imag)"] = f2h_i
+    df["F6H(real)"] = f6h_r
+    df["F6H(imag)"] = f6h_i
+
     df.to_excel(fname, index=False)
     print("Saved →", fname)
 
