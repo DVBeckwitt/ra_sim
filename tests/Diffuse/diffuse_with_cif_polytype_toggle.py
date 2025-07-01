@@ -167,10 +167,28 @@ def _abc(p,h,k):
     ψ = np.angle(z)
     return f, ψ, δ
 
-def I_inf(p,h,k,F2):
-    f,ψ,δ = _abc(p,h,k)
-    φ = δ + 2*np.pi * L_GRID/3
-    return AREA * F2 * (1 - f**2) / (1 + f**2 - 2*f*np.cos(φ - ψ))
+def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
+    """Return the Hendricks–Teller intensity for one HK pair.
+
+    Parameters
+    ----------
+    p : float
+        Stacking-fault probability. Values close to 0 correspond to the
+        6H polytype and values close to 1 correspond to the 2H polytype.
+    h, k : int
+        Miller indices.
+    F2 : ndarray
+        Pre-computed structure factor magnitude squared.
+    phi_scale : float, optional
+        Scale factor applied to ``L_GRID`` when forming the phase ``φ``.
+        ``1`` corresponds to the 2H convention while ``1/3`` matches the
+        6H convention. The default uses ``1/3`` so explicit arguments are
+        only needed for the 2H case.
+    """
+
+    f, ψ, δ = _abc(p, h, k)
+    φ = δ + 2 * np.pi * L_GRID * phi_scale
+    return AREA * F2 * (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
 
 # GUI state
 defaults = {
@@ -205,11 +223,15 @@ def compute_components():
     else:                                        # hexagonal degeneracy
         counts = Counter((abs(h), abs(k)) for h, k in pairs)
 
-    def comp(p):
-        return sum(n * I_inf(p, h, k, F2_cache_2H[(h, k)])
-                   for (h, k), n in counts.items())
+    def comp(p, phi_scale):
+        return sum(
+            n * I_inf(p, h, k, F2_cache_2H[(h, k)], phi_scale)
+            for (h, k), n in counts.items()
+        )
 
-    state['I0'], state['I1'], state['I3'] = comp(state['p0']), comp(state['p1']), comp(state['p3'])
+    state['I0'] = comp(state['p0'], 1 / 3)
+    state['I1'] = comp(state['p1'], 1.0)
+    state['I3'] = comp(state['p3'], 1 / 3)
 
 compute_components()
 
@@ -227,9 +249,9 @@ def ht_total_for_pair(h, k):
     w0, w1, w2 = w0/s, w1/s, w2/s
     F2 = F2_cache_2H[(h, k)]
     return (
-        w0 * I_inf(state['p0'], h, k, F2)
-        + w1 * I_inf(state['p1'], h, k, F2)
-        + w2 * I_inf(state['p3'], h, k, F2)
+        w0 * I_inf(state['p0'], h, k, F2, 1 / 3)
+        + w1 * I_inf(state['p1'], h, k, F2, 1.0)
+        + w2 * I_inf(state['p3'], h, k, F2, 1 / 3)
     )
 
 def _raw_bragg(h, k, lo, hi, cif_path):
