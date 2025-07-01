@@ -189,10 +189,25 @@ def _abc_raw(p, h, k):
 
 
 def _ratio_limit(f: np.ndarray, theta: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    """Return ``R`` using series limits for ``f`` near ``0`` or ``1``."""
+    """Return ``R`` using series limits for ``f`` near ``0`` or ``1``.
 
-    f = np.asarray(f, dtype=float)
+    Parameters
+    ----------
+    f : array_like
+        Magnitude parameter ``|z|`` from Hendricks–Teller ``_abc``.
+        May be scalar or array and is broadcast to ``theta``.
+    theta : array_like
+        Phase difference ``φ-ψ``.
+    eps : float, optional
+        Threshold to trigger the small‑``ε`` expansions.
+    """
+
     theta = np.asarray(theta, dtype=float)
+    f = np.asarray(f, dtype=float)
+    if f.ndim == 0:
+        f = np.broadcast_to(f, theta.shape)
+    else:
+        f = np.broadcast_to(f, np.broadcast(f, theta).shape)
 
     R = (1 - f ** 2) / (1 + f ** 2 - 2 * f * np.cos(theta))
 
@@ -203,9 +218,7 @@ def _ratio_limit(f: np.ndarray, theta: np.ndarray, eps: float = 1e-6) -> np.ndar
         lim = np.isclose(np.sin(th / 2), 0.0, atol=eps)
         val = np.empty_like(eps1)
         val[lim] = 2 / eps1[lim] - 1
-        val[~lim] = (
-            eps1[~lim] / (1 - np.cos(th[~lim])) * (1 - eps1[~lim] / 2)
-        )
+        val[~lim] = eps1[~lim] / (1 - np.cos(th[~lim])) * (1 - eps1[~lim] / 2)
         R[mask_p1] = val
 
     mask_p0 = f < eps
