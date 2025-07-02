@@ -220,6 +220,7 @@ defaults = {
     "I3": None,
     "L_lo": 1.0,
     "L_hi": L_MAX,
+    "z_val": 1 / 3,
 }
 state = defaults.copy()
 
@@ -257,7 +258,7 @@ def compute_components():
 
     state["I0"] = comp(state["p0"], 1 / 3)
     state["I1"] = comp(state["p1"], 1.0)
-    state["I3"] = comp(state["p3"], 1 / 3)
+    state["I3"] = comp(state["p3"], state["z_val"])
 
 
 compute_components()
@@ -279,7 +280,7 @@ def ht_total_for_pair(h, k):
     return (
         w0 * I_inf(state["p0"], h, k, F2, 1 / 3)
         + w1 * I_inf(state["p1"], h, k, F2, 1.0)
-        + w2 * I_inf(state["p3"], h, k, F2, 1 / 3)
+        + w2 * I_inf(state["p3"], h, k, F2, state["z_val"])
     )
 
 
@@ -966,6 +967,17 @@ make_slider(
     state["w2"],
     0.1,
     lambda v: (state.update(w2=v), refresh()),
+)
+
+# z value slider for main HT simulation
+make_slider(
+    [0.25, 0.12, 0.65, 0.03],
+    "z value",
+    0.1,
+    1.0,
+    state["z_val"],
+    0.01,
+    lambda v: (state.update(z_val=v), compute_components(), refresh()),
 )
 
 # toggle scale button
