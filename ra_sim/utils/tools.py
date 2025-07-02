@@ -468,8 +468,17 @@ def inject_fractional_reflections(miller, intensities, mx, step=0.5, value=0.1):
 
 
 
-def intensities_for_hkls(hkls, cif_file, occ, lambda_, energy=8.047,
-                         intensity_threshold=0, two_theta_range=None):
+def intensities_for_hkls(
+    hkls,
+    cif_file,
+    occ,
+    lambda_,
+    energy=8.047,
+    intensity_threshold=0,
+    two_theta_range=None,
+    *,
+    scale_l_2h=True,
+):
     """Return scattering intensities for specific Miller indices.
 
     This helper performs the same CIF and :mod:`Dans_Diffraction` setup as
@@ -496,6 +505,11 @@ def intensities_for_hkls(hkls, cif_file, occ, lambda_, energy=8.047,
         If given, reflections whose 2θ lies outside the range are assigned
         zero intensity.
 
+    scale_l_2h : bool, optional
+        If ``True`` and ``cif_file`` corresponds to a 2H polytype, each ``l``
+        value is multiplied by ``3`` before evaluating intensities.  Set to
+        ``False`` when exporting raw CIF HKL values.
+
     Returns
     -------
     numpy.ndarray
@@ -518,9 +532,13 @@ def intensities_for_hkls(hkls, cif_file, occ, lambda_, energy=8.047,
     xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=energy)
     xtl.Scatter.integer_hkl = True
 
+    from pathlib import Path
+    is_2h = scale_l_2h and '2h' in Path(cif_file).stem.lower()
+
     intensities = []
     for h, k, l in hkls:
-        d = d_spacing(h, k, l, xtl.Cell.a, xtl.Cell.c)
+        l_use = l * 3 if is_2h else l
+        d = d_spacing(h, k, l_use, xtl.Cell.a, xtl.Cell.c)
         tth = two_theta(d, lambda_)
         if tth is None:
             intensities.append(0.0)
@@ -528,7 +546,7 @@ def intensities_for_hkls(hkls, cif_file, occ, lambda_, energy=8.047,
         if two_theta_range is not None and not (two_theta_range[0] <= tth <= two_theta_range[1]):
             intensities.append(0.0)
             continue
-        intensity_val = xtl.Scatter.intensity([h, k, l])
+        intensity_val = xtl.Scatter.intensity([h, k, l_use])
         try:
             intensity_val = float(intensity_val)
         except Exception:

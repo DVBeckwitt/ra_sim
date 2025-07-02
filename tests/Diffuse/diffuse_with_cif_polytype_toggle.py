@@ -665,7 +665,14 @@ def export_cif_hkls(_):
     intensity_threshold = 1.0
     two_theta_range = (0, 70)
 
-    raw_ints = intensities_for_hkls(hkls, cif, [1.0], LAMBDA, energy=E_CuKa / 1000)
+    raw_ints = intensities_for_hkls(
+        hkls,
+        cif,
+        [1.0],
+        LAMBDA,
+        energy=E_CuKa / 1000,
+        scale_l_2h=False,
+    )
 
     # Directly compute structure factor magnitudes for reference
     xtl = dif.Crystal(str(cif))
