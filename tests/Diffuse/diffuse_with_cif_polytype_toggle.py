@@ -153,6 +153,15 @@ def _sites_from_cif(path: Path) -> list[tuple[float, float, float, str]]:
 # conventions stay in sync with the tabulated form factors used when exporting
 # CIF HKLs.
 SITES_2H = _sites_from_cif(CIF_2H)
+
+# Helper to build the atomic positions with a custom iodide ``z`` value.
+def build_sites(z_val: float) -> list[tuple[float, float, float, str]]:
+    """Return atomic sites using ``z_val`` for the iodide position."""
+    return [
+        (0.0, 0.0, 0.0, "Pb"),
+        (1 / 3, 2 / 3, z_val, "I"),
+        (2 / 3, 1 / 3, 1 - z_val, "I"),
+    ]
 N_P, A_CELL = 3, 17.98e-10
 AREA = (2 * np.pi) ** 2 / A_CELL * N_P
 
@@ -170,26 +179,48 @@ L_MAX = float(_ARGS.l_max)
 N_L = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
 
-# precompute |F|² for 2H lattice (single-layer form factor)
+# precompute |F|² for the 2H lattice (single-layer form factor).  The iodide
+# ``z`` coordinate can be varied via the ``z_val`` slider so the cache is
+# rebuilt when this value changes.
 F2_cache_2H = {}
-for pairs in HK_BY_M.values():
-    for h, k in pairs:
-        # 2H structure
-        Q_2h = (
-            2
-            * np.pi
-            * np.sqrt(
-                (4 / 3) * (h * h + k * k + h * k) / A_HEX**2 + (L_GRID**2) / C_2H**2
+_cache_z_val = None
+
+
+def _compute_F2_cache(z_val: float) -> dict[tuple[int, int], np.ndarray]:
+    cache: dict[tuple[int, int], np.ndarray] = {}
+    sites = build_sites(z_val)
+    for pairs in HK_BY_M.values():
+        for h, k in pairs:
+            Q_2h = (
+                2
+                * np.pi
+                * np.sqrt(
+                    (4 / 3) * (h * h + k * k + h * k) / A_HEX**2
+                    + (L_GRID**2) / C_2H**2
+                )
             )
-        )
-        phases_2h = np.array(
-            [
-                np.exp(2j * np.pi * (h * x + k * y + L_GRID * z/3))
-                for x, y, z, _ in SITES_2H
-            ]
-        )
-        coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in SITES_2H])
-        F2_cache_2H[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0)) ** 2
+            phases_2h = np.array(
+                [
+                    np.exp(2j * np.pi * (h * x + k * y + L_GRID * z / 3))
+                    for x, y, z, _ in sites
+                ]
+            )
+            coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in sites])
+            cache[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0)) ** 2
+    return cache
+
+
+def _ensure_cache():
+    global F2_cache_2H, _cache_z_val
+    z_val = state.get("z_val", Z_DEFAULT)
+    if _cache_z_val != z_val:
+        F2_cache_2H = _compute_F2_cache(z_val)
+        _cache_z_val = z_val
+
+
+# initial cache uses the default z from the CIF
+F2_cache_2H = _compute_F2_cache(Z_DEFAULT)
+_cache_z_val = Z_DEFAULT
 
 # Hendricks–Teller infinite stacking
 
@@ -294,6 +325,7 @@ def phi_scale_for_p3(p_val: float, z_val: float | None = None) -> float:
 
 
 def compute_components():
+    _ensure_cache()
     pairs = active_pairs()  # picks either HK or m list
 
     if state["mode"] == "hk":  # no symmetry weight
@@ -324,6 +356,7 @@ def composite_tot():
 
 def ht_total_for_pair(h, k):
     """Return total HT intensity for a single (h,k) pair."""
+    _ensure_cache()
     w0, w1, w2 = state["w0"], state["w1"], state["w2"]
     s = (w0 + w1 + w2) or 1
     w0, w1, w2 = w0 / s, w1 / s, w2 / s
@@ -421,6 +454,7 @@ def ht_integrated_area(p, h, k, ell):
     else:
         p_eff = p
 
+    _ensure_cache()
     idx = int(round(ell / L_MAX * (N_L - 1)))
     F2 = F2_cache_2H[(h, k)][idx]
 
@@ -448,6 +482,7 @@ def ht_numeric_area(p, h, k, ell, nphi=4001):
     nphi : int, optional
         Number of φ samples for integration.
     """
+    _ensure_cache()
     idx = int(round(ell / L_MAX * (N_L - 1)))
     F2 = F2_cache_2H[(h, k)][idx]
 
@@ -619,7 +654,7 @@ def export_bragg_data(_):
     # purely in the lattice parameter ``c``.  Include these positions in a
     # separate sheet so the saved workbook documents the full calculation
     # context.
-    sites_df = pd.DataFrame(SITES_2H, columns=["u", "v", "w", "element"])
+    sites_df = pd.DataFrame(build_sites(state["z_val"]), columns=["u", "v", "w", "element"])
 
     with pd.ExcelWriter(fname) as wr:
         df.to_excel(wr, index=False, sheet_name="Bragg data")
@@ -1024,7 +1059,7 @@ make_slider(
 # z value slider for main HT simulation (to the right of the ℓ-range slider)
 make_slider(
     [0.72, 0.05, 0.20, 0.03],
-    "z value",
+    "z(I)",
     0.1,
     1.0,
     state["z_val"],
