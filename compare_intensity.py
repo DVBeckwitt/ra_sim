@@ -24,9 +24,13 @@ def compute_metrics(df: pd.DataFrame) -> dict:
     if not total_col:
         raise KeyError("Total_scaled column not found")
     num_col = _numeric_column(df)
-    diff = df[num_col] - df[total_col]
-    ratio = df[num_col] / df[total_col].replace(0, np.nan)
-    rmse = float(np.sqrt(np.nanmean(diff ** 2)))
+    mask = df[total_col] > 0
+    if not mask.any():
+        return {"rmse": float("nan"), "mean_ratio": float("nan")}
+
+    diff = df.loc[mask, num_col] - df.loc[mask, total_col]
+    ratio = df.loc[mask, num_col] / df.loc[mask, total_col].replace(0, np.nan)
+    rmse = float(np.sqrt(np.nanmean(diff**2)))
     mean_ratio = float(np.nanmean(ratio))
     return {"rmse": rmse, "mean_ratio": mean_ratio}
 
@@ -48,20 +52,22 @@ def plot_comparison(df: pd.DataFrame) -> None:
     ax.set_ylabel("Numeric intensity")
     ax.set_title("Numeric vs Cif")
     ax.set_aspect("equal", "box")
-    ax.grid(True, ls=":", alpha=.4)
+    ax.grid(True, ls=":", alpha=0.4)
 
     axes[1].hist(ratio.dropna(), bins=20, edgecolor="k")
     axes[1].set_xlabel("Numeric / Cif")
     axes[1].set_ylabel("Count")
     axes[1].set_title("Ratio distribution")
-    axes[1].grid(axis="y", ls=":", alpha=.4)
+    axes[1].grid(axis="y", ls=":", alpha=0.4)
 
     plt.tight_layout()
     plt.show()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare Cif intensities with numeric Hendricks–Teller areas")
+    parser = argparse.ArgumentParser(
+        description="Compare Cif intensities with numeric Hendricks–Teller areas"
+    )
     parser.add_argument("excel_path", help="Path to miller_intensities.xlsx")
     parser.add_argument("--sheet", default="Summary", help="Worksheet name")
     args = parser.parse_args()
