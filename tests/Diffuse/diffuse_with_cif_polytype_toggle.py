@@ -64,21 +64,21 @@ def c_from_cif(path: str) -> float:
 
 
 def z_from_cif(path: str) -> float:
-    """Return the first fractional z coordinate found in ``path``."""
+    """Return the iodide fractional ``z`` coordinate from ``path``."""
     with open(path, "r", encoding="utf-8", errors="ignore") as fp:
-        found_header = False
+        header_found = False
         for ln in fp:
             if "_atom_site_fract_z" in ln:
-                found_header = True
+                header_found = True
                 continue
-            if found_header:
+            if header_found:
                 parts = ln.split()
-                if len(parts) >= 5:
+                if len(parts) >= 8 and parts[-1].startswith("I"):
                     try:
                         return float(parts[4])
                     except ValueError:
                         continue
-    raise ValueError("_atom_site_fract_z not found in CIF")
+    raise ValueError("iodine z coordinate not found in CIF")
 
 
 # constants
