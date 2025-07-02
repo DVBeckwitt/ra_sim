@@ -284,7 +284,11 @@ def compute_components():
     if state["mode"] == "hk":  # no symmetry weight
         counts = {(h, k): 1 for h, k in pairs}
     else:  # hexagonal degeneracy
-        counts = Counter((abs(h), abs(k)) for h, k in pairs)
+        # Keep the sign for each (h,k) pair so the correct single-layer
+        # form factor is used for ``I_inf``.  Each pair appears once in
+        # ``pairs`` so the Counter simply enables potential future
+        # weighting without dropping the sign information.
+        counts = Counter(pairs)
 
     def comp(p, phi_scale):
         return sum(
