@@ -281,7 +281,11 @@ def phi_scale_for_p3(p_val: float, z_val: float | None = None) -> float:
     if z_val is None:
         z_val = state["z_val"]
 
-    eps = 1e-3
+    # Use a very small tolerance so only an exact slider value of ``0``
+    # or ``1`` triggers the perfect 6H/2H limits.  This prevents the
+    # near-perfect cases from always snapping to the ideal phases when
+    # the user simply nudges the ``p`` slider away from an endpoint.
+    eps = 1e-6
     if abs(p_val) <= eps:
         return 1 / 3
     if abs(p_val - 1.0) <= eps:
