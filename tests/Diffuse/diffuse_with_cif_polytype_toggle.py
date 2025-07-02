@@ -971,7 +971,7 @@ make_slider(
 
 # z value slider for main HT simulation
 make_slider(
-    [0.25, 0.12, 0.65, 0.03],
+    [0.25, 0.36, 0.65, 0.03],
     "z value",
     0.1,
     1.0,
