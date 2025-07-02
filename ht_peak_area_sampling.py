@@ -41,7 +41,10 @@ for H in range(-H_MAX, H_MAX + 1):
         if (2 * H + K) % 3 == 0:  # basal reflections → infinite A_HT
             continue
 
-        delta_phi = (2 * H + K) / 3.0
+        _num = 2 * H + K
+        if _num == 0:
+            _num = K + 2 * H
+        delta_phi = _num / 3.0
         f = (1 - p) + p * np.exp(-1j * delta_phi)
         r = abs(f)
 

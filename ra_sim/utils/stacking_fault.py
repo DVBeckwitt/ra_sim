@@ -97,7 +97,10 @@ def _abc(p, h, k):
     """Compute amplitude factor ``f`` and phase ``ψ`` without complex math."""
     import numpy as np
 
-    δ = _TWO_PI * ((2 * h + k) / 3)
+    _num = 2 * h + k
+    if _num == 0:
+        _num = k + 2 * h
+    δ = _TWO_PI * (_num / 3)
     real = (1 - p) + p * np.cos(δ)
     imag = p * np.sin(δ)
     abs_z = np.hypot(real, imag)

@@ -171,7 +171,10 @@ for pairs in HK_BY_M.values():
 
 
 def _abc(p, h, k):
-    δ = 2 * np.pi * ((2 * h + k) / 3)
+    _num = 2 * h + k
+    if _num == 0:
+        _num = k + 2 * h
+    δ = 2 * np.pi * (_num / 3)
     z = (1 - p) + p * np.exp(1j * δ)
     f = np.minimum(np.abs(z), 1 - P_CLAMP)
     ψ = np.angle(z)
@@ -369,7 +372,10 @@ def ht_integrated_area(p, h, k, ell):
     idx = int(round(ell / L_MAX * (N_L - 1)))
     F2 = F2_cache_2H[(h, k)][idx]
 
-    delta = 2 * np.pi * (2 * h + k) / 3
+    _num = 2 * h + k
+    if _num == 0:
+        _num = k + 2 * h
+    delta = 2 * np.pi * (_num / 3)
     z = (1 - p_eff) + p_eff * np.exp(-1j * delta)
     r2 = abs(z) ** 2
 
