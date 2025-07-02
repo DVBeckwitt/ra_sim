@@ -341,3 +341,73 @@ def qr_dict_to_arrays(qr_dict):
 
     return miller, intens, degeneracy, details
 
+
+# ---------------------------------------------------------------------------
+# Additional helpers: peak area calculations and probability inversion
+# ---------------------------------------------------------------------------
+
+def ht_integrated_area(p: float, h: int, k: int, ell: float, c_2h: float) -> float:
+    """Return the closed‑form Hendricks–Teller peak area.
+
+    Parameters
+    ----------
+    p : float
+        Stacking fault probability.
+    h, k : int
+        Miller indices.
+    ell : float
+        L index of the reflection.
+    c_2h : float
+        ``c`` lattice constant of the 2H polytype in Å.
+    """
+
+    P_EPS = 1.0e-6  # keep r away from the pole
+    if p <= 1e-15:
+        p_eff = P_EPS
+    elif p >= 1 - 1e-15:
+        p_eff = 1.0 - P_EPS
+    else:
+        p_eff = p
+
+    F2 = float(_F2(h, k, np.asarray([ell]), c_2h)[0])
+    delta = _TWO_PI * (2 * h + k) / 3
+    z = (1 - p_eff) + p_eff * np.exp(-1j * delta)
+    r2 = abs(z) ** 2
+
+    return 2 * np.pi * F2 * r2 / (1.0 - r2)
+
+
+def ht_numeric_area(
+    p: float, h: int, k: int, ell: float, c_2h: float, nphi: int = 4001
+) -> float:
+    """Numeric Hendricks–Teller peak area via φ integration."""
+
+    F2 = float(_F2(h, k, np.asarray([ell]), c_2h)[0])
+    phi_axis = np.linspace(-np.pi, np.pi, nphi)
+    f, _, _ = _abc(p, h, k)
+    r = abs(f)
+    integrand = r * r / (1 + r * r - 2 * r * np.cos(phi_axis))
+    area = np.trapezoid(integrand, phi_axis)
+    return AREA * F2 * area
+
+
+def p_from_ht_area(area: float, h: int, k: int, ell: float, c_2h: float) -> float:
+    """Return the stacking fault probability from an HT peak area."""
+
+    F2 = float(_F2(h, k, np.asarray([ell]), c_2h)[0])
+    if area <= 0:
+        return 0.0
+    r2 = area / (2 * np.pi * F2 + area)
+    cosd = np.cos(_TWO_PI * (2 * h + k) / 3)
+    denom = 2 * (1 - cosd)
+    if denom == 0:
+        return 0.0
+    disc = 1 - 2 * (1 - r2) / denom
+    disc = max(disc, 0.0)
+    p1 = (1 - np.sqrt(disc)) / 2
+    p2 = (1 + np.sqrt(disc)) / 2
+    if 0 <= p1 <= 1:
+        return p1
+    return p2
+
+
