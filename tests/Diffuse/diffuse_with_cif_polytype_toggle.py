@@ -646,11 +646,12 @@ def export_cif_hkls(_):
     if not fname:
         return
 
+    # Export all (h, k, l) permutations up to ``l=10``
     hkls = [
         (h, k, l)
-        for h in range(0, MAX_HK + 1)
-        for k in range(0, MAX_HK + 1)
-        for l in range(1, int(L_MAX) + 1)
+        for h in range(-MAX_HK, MAX_HK + 1)
+        for k in range(-MAX_HK, MAX_HK + 1)
+        for l in range(1, 11)
     ]
 
     cif = str(CIF_2H) if poly == "2H" else str(CIF_6H)
@@ -669,11 +670,7 @@ def export_cif_hkls(_):
     xtl.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
     xtl.Scatter.integer_hkl = True
 
-    from collections import defaultdict
-
-    groups = defaultdict(list)
-    zeros = []
-
+    data = []
     for (h, k, l), I in zip(hkls, raw_ints):
         d_val = d_spacing(h, k, l, A_HEX, c_val)
         tth = two_theta(d_val, LAMBDA)
@@ -681,32 +678,16 @@ def export_cif_hkls(_):
             continue
         if I < intensity_threshold:
             continue
-        if h == 0 and k == 0:
-            zeros.append(((h, k, l), I))
-        else:
-            key = (h * h + k * k, l)
-            groups[key].append(((h, k, l), I))
+        data.append((h, k, l, I, d_val, tth))
 
-    combined = []
-    for items in groups.values():
-        rep = items[0][0]
-        multiplicity = len(items)
-        total_intensity = sum(it[1] for it in items)
-        details = [(hk, val) for hk, val in items]
-        combined.append((rep, total_intensity, multiplicity, details))
-
-    combined += [(hk, val, 1, [(hk, val)]) for hk, val in zeros]
-
-    if not combined:
+    if not data:
         return
 
-    max_total = max(item[1] for item in combined)
+    max_total = max(item[3] for item in data)
 
     rows = []
-    for (h, k, l), total, mult, _ in combined:
-        d_val = d_spacing(h, k, l, A_HEX, c_val)
-        tth = two_theta(d_val, LAMBDA)
-        intensity_norm = round(total * 100 / max_total, 2)
+    for h, k, l, val, d_val, tth in data:
+        intensity_norm = round(val * 100 / max_total, 2)
         try:
             F_complex = xtl.Scatter.structure_factor([int(h), int(k), int(l)])
             F_real = float(np.real(F_complex))
@@ -714,7 +695,7 @@ def export_cif_hkls(_):
             F_mag = abs(complex(F_real, F_imag))
         except Exception:
             F_real = F_imag = 0.0
-            F_mag = float(np.sqrt(total)) if total >= 0 else 0.0
+            F_mag = float(np.sqrt(val)) if val >= 0 else 0.0
         rows.append(
             {
                 "h": int(h),
@@ -726,7 +707,7 @@ def export_cif_hkls(_):
                 "|F|": F_mag,
                 "2θ": tth,
                 "I": intensity_norm,
-                "M": int(mult),
+                "M": 1,
             }
         )
 
