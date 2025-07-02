@@ -71,6 +71,7 @@ BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 CIF_2H = BUNDLE / "PbI2_2H.cif"
 CIF_6H = BUNDLE / "PbI2_6H.cif"
 C_2H, C_6H = map(c_from_cif, map(str, (CIF_2H, CIF_6H)))
+Z_DEFAULT = C_2H / C_6H
 
 # ───────── constants ─────────
 LAMBDA = 1.5406  # Å   (Cu Kα1)
@@ -220,6 +221,8 @@ defaults = {
     "I3": None,
     "L_lo": 1.0,
     "L_hi": L_MAX,
+    # Use the ratio of lattice parameters from the CIFs as the phase scale
+    "z_val": Z_DEFAULT,
 }
 state = defaults.copy()
 
@@ -257,7 +260,7 @@ def compute_components():
 
     state["I0"] = comp(state["p0"], 1 / 3)
     state["I1"] = comp(state["p1"], 1.0)
-    state["I3"] = comp(state["p3"], 1 / 3)
+    state["I3"] = comp(state["p3"], state["z_val"])
 
 
 compute_components()
@@ -279,7 +282,7 @@ def ht_total_for_pair(h, k):
     return (
         w0 * I_inf(state["p0"], h, k, F2, 1 / 3)
         + w1 * I_inf(state["p1"], h, k, F2, 1.0)
-        + w2 * I_inf(state["p3"], h, k, F2, 1 / 3)
+        + w2 * I_inf(state["p3"], h, k, F2, state["z_val"])
     )
 
 
@@ -868,7 +871,7 @@ def make_slider(rect, label, vmin, vmax, val, valstep, cb):
 
 
 # ℓ-range slider
-ax_range = plt.axes([0.25, 0.05, 0.65, 0.03])
+ax_range = plt.axes([0.25, 0.05, 0.45, 0.03])
 rs = RangeSlider(
     ax_range, "ℓ range", 0, L_MAX, valinit=(state["L_lo"], state["L_hi"]), valstep=0.1
 )
@@ -966,6 +969,17 @@ make_slider(
     state["w2"],
     0.1,
     lambda v: (state.update(w2=v), refresh()),
+)
+
+# z value slider for main HT simulation (to the right of the ℓ-range slider)
+make_slider(
+    [0.72, 0.05, 0.20, 0.03],
+    "z value",
+    0.1,
+    1.0,
+    state["z_val"],
+    1e-4,
+    lambda v: (state.update(z_val=v), compute_components(), refresh()),
 )
 
 # toggle scale button
