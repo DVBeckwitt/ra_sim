@@ -244,6 +244,24 @@ def active_pairs():
 
 
 # 1. keep only ONE definition of compute_components --------------------------
+
+def phi_scale_for_p3(p_val: float, z_val: float) -> float:
+    """Return phase scale for the general ``p`` slider.
+
+    When ``p_val`` is effectively ``0`` or ``1`` (within a tiny
+    tolerance), the returned scale matches the dedicated ``p≈0`` and
+    ``p≈1`` cases. Otherwise ``z_val`` is used so the user can adjust
+    the phase freely.
+    """
+
+    eps = 1e-9
+    if abs(p_val) <= eps:
+        return 1 / 3
+    if abs(p_val - 1.0) <= eps:
+        return 1.0
+    return z_val
+
+
 def compute_components():
     pairs = active_pairs()  # picks either HK or m list
 
@@ -260,7 +278,9 @@ def compute_components():
 
     state["I0"] = comp(state["p0"], 1 / 3)
     state["I1"] = comp(state["p1"], 1.0)
-    state["I3"] = comp(state["p3"], state["z_val"])
+    state["I3"] = comp(
+        state["p3"], phi_scale_for_p3(state["p3"], state["z_val"])
+    )
 
 
 compute_components()
@@ -279,10 +299,11 @@ def ht_total_for_pair(h, k):
     s = (w0 + w1 + w2) or 1
     w0, w1, w2 = w0 / s, w1 / s, w2 / s
     F2 = F2_cache_2H[(h, k)]
+    phase = phi_scale_for_p3(state["p3"], state["z_val"])
     return (
         w0 * I_inf(state["p0"], h, k, F2, 1 / 3)
         + w1 * I_inf(state["p1"], h, k, F2, 1.0)
-        + w2 * I_inf(state["p3"], h, k, F2, state["z_val"])
+        + w2 * I_inf(state["p3"], h, k, F2, phase)
     )
 
 
