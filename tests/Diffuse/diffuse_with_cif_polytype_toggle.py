@@ -70,8 +70,17 @@ A_HEX = 4.557  # Å
 BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 CIF_2H = BUNDLE / "PbI2_2H.cif"
 CIF_6H = BUNDLE / "PbI2_6H.cif"
-C_2H, C_6H = map(c_from_cif, map(str, (CIF_2H, CIF_6H)))
-Z_DEFAULT = C_2H / C_6H
+
+
+def _phase_scale_from_cifs(path_2h: Path, path_6h: Path) -> float:
+    """Return the phase scale derived from 2H/6H CIF files."""
+
+    c_2h = c_from_cif(str(path_2h))
+    c_6h = c_from_cif(str(path_6h))
+    return c_2h / c_6h
+
+
+Z_DEFAULT = _phase_scale_from_cifs(CIF_2H, CIF_6H)
 
 # ───────── constants ─────────
 LAMBDA = 1.5406  # Å   (Cu Kα1)
