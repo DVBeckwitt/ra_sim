@@ -233,7 +233,7 @@ def _abc(p, h, k):
     return f, ψ, δ
 
 
-def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
+def I_inf(p, h, k, F2) -> np.ndarray:
     """Return the Hendricks–Teller intensity for one HK pair.
 
     Parameters
@@ -245,11 +245,6 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
         Miller indices.
     F2 : ndarray
         Pre-computed structure factor magnitude squared.
-    phi_scale : float, optional
-        Scale factor applied to ``L_GRID`` when forming the phase ``φ``.
-        ``1`` corresponds to the 2H convention while ``1/3`` matches the
-        6H convention. The default uses ``1/3`` so explicit arguments are
-        only needed for the 2H case.
     """
 
     if state.get("f2_only"):
@@ -312,15 +307,15 @@ def compute_components():
         # weighting without dropping the sign information.
         counts = Counter(pairs)
 
-    def comp(p, phi_scale):
+    def comp(p):
         return sum(
-            n * I_inf(p, h, k, F2_cache_2H[(h, k)], phi_scale)
+            n * I_inf(p, h, k, F2_cache_2H[(h, k)])
             for (h, k), n in counts.items()
         )
 
-    state["I0"] = comp(state["p0"], 1 / 3)
-    state["I1"] = comp(state["p1"], 1.0)
-    state["I3"] = comp(state["p3"], 1 / 3)
+    state["I0"] = comp(state["p0"])
+    state["I1"] = comp(state["p1"])
+    state["I3"] = comp(state["p3"])
 
 
 compute_components()
