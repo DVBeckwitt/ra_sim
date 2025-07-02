@@ -16,6 +16,7 @@ import re, sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+from cycler import cycler
 import argparse
 
 if plt.get_backend().lower().endswith("agg") and not os.environ.get(
@@ -37,6 +38,20 @@ import Dans_Diffraction as dif
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, simpledialog, messagebox
+
+# color palette for accessibility
+COLORBLIND_COLORS = [
+    "#0072B2",  # blue
+    "#D55E00",  # vermillion
+    "#009E73",  # bluish green
+    "#CC79A7",  # reddish purple
+    "#F0E442",  # yellow
+    "#56B4E9",  # sky blue
+    "#E69F00",  # orange
+    "#000000",  # black
+]
+
+plt.rc("axes", prop_cycle=cycler("color", COLORBLIND_COLORS))
 
 # command-line options ------------------------------------------------------
 parser = argparse.ArgumentParser(description="HT viewer")
@@ -723,8 +738,16 @@ def plot_scatter(_):
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111)
     scatters = []
-    for col in intensity_cols:
-        sc = ax.scatter(df_norm["l"], df_norm[col], label=col, s=20, alpha=0.7)
+    for idx, col in enumerate(intensity_cols):
+        color = COLORBLIND_COLORS[idx % len(COLORBLIND_COLORS)]
+        sc = ax.scatter(
+            df_norm["l"],
+            df_norm[col],
+            label=col,
+            s=20,
+            alpha=0.7,
+            color=color,
+        )
         scatters.append(sc)
 
     ax.set_ylabel("Normalized Intensity (0-100)")
@@ -809,10 +832,10 @@ ax.set_xlabel(r"$\ell$")
 ax.set_ylabel("I (a.u.)")
 ax.set_yscale("log")
 
-(line_tot,) = ax.plot([], [], lw=2, label="Σ weighted (numeric)")
-(line0,) = ax.plot([], [], ls="--", label="I(p≈0)")
-(line1,) = ax.plot([], [], ls="--", label="I(p≈1)")
-(line3,) = ax.plot([], [], ls="--", label="I(p)")
+(line_tot,) = ax.plot([], [], lw=2, label="Σ weighted (numeric)", color=COLORBLIND_COLORS[0])
+(line0,) = ax.plot([], [], ls="--", label="I(p≈0)", color=COLORBLIND_COLORS[1])
+(line1,) = ax.plot([], [], ls="--", label="I(p≈1)", color=COLORBLIND_COLORS[2])
+(line3,) = ax.plot([], [], ls="--", label="I(p)", color=COLORBLIND_COLORS[3])
 title = ax.set_title("")
 _bragg_lines = []
 
@@ -865,6 +888,7 @@ def refresh(_=None):
                 marker="D",
                 ls="none",
                 label=f'Bragg sum m={state["m"]}',
+                color=COLORBLIND_COLORS[4],
             )
             _bragg_lines.append(ln)
         else:
@@ -877,10 +901,20 @@ def refresh(_=None):
                     else L_vals[msk]
                 )
                 (ln2,) = ax.plot(
-                    x_vals, i2h[msk], marker="o", ls="none", label=f"2H({h},{k})"
+                    x_vals,
+                    i2h[msk],
+                    marker="o",
+                    ls="none",
+                    label=f"2H({h},{k})",
+                    color=COLORBLIND_COLORS[5],
                 )
                 (ln6,) = ax.plot(
-                    x_vals, i6h[msk], marker="s", ls="none", label=f"6H({h},{k})"
+                    x_vals,
+                    i6h[msk],
+                    marker="s",
+                    ls="none",
+                    label=f"6H({h},{k})",
+                    color=COLORBLIND_COLORS[6],
                 )
                 _bragg_lines.extend([ln2, ln6])
         handles += _bragg_lines
