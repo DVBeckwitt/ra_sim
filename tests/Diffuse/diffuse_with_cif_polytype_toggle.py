@@ -72,6 +72,19 @@ CIF_2H = BUNDLE / "PbI2_2H.cif"
 CIF_6H = BUNDLE / "PbI2_6H.cif"
 C_2H, C_6H = map(c_from_cif, map(str, (CIF_2H, CIF_6H)))
 
+
+def iodine_z_from_cif(path: Path) -> float:
+    """Return the fractional z position for iodine from ``path``."""
+    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+        for ln in fp:
+            if ln.strip().startswith("I1"):
+                parts = ln.split()
+                if len(parts) >= 5:
+                    return float(parts[4])
+    raise ValueError("Iodine position not found")
+
+DEFAULT_I_Z = iodine_z_from_cif(CIF_2H)
+
 # ───────── constants ─────────
 LAMBDA = 1.5406  # Å   (Cu Kα1)
 E_CuKa = 12398.4193 / LAMBDA  # eV  (≈ 8040 eV)
@@ -147,25 +160,50 @@ N_L = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
 
 # precompute |F|² for 2H lattice (single-layer form factor)
-F2_cache_2H = {}
-for pairs in HK_BY_M.values():
-    for h, k in pairs:
-        # 2H structure
-        Q_2h = (
-            2
-            * np.pi
-            * np.sqrt(
-                (4 / 3) * (h * h + k * k + h * k) / A_HEX**2 + (L_GRID**2) / C_2H**2
+F2_cache_2H: dict[tuple[int, int], np.ndarray] = {}
+
+# store contributions that don't change with iodine z
+_FIXED_PART: dict[tuple[int, int], np.ndarray] = {}
+# store the coefficient multiplied by exp(2πi * ℓ * z) for iodine sites
+_IODINE_FACTOR: dict[tuple[int, int], np.ndarray] = {}
+
+
+def _precompute_F_parts() -> None:
+    """Precompute constant and iodine-dependent scattering contributions."""
+    for pairs in HK_BY_M.values():
+        for h, k in pairs:
+            Q_2h = (
+                2
+                * np.pi
+                * np.sqrt(
+                    (4 / 3) * (h * h + k * k + h * k) / A_HEX**2
+                    + (L_GRID**2) / C_2H**2
+                )
             )
-        )
-        phases_2h = np.array(
-            [
-                np.exp(2j * np.pi * (h * x + k * y + L_GRID * z/3))
-                for x, y, z, _ in SITES_2H
-            ]
-        )
-        coeffs_2h = np.array([f_comp(sym, Q_2h) for *_, sym in SITES_2H])
-        F2_cache_2H[(h, k)] = np.abs((coeffs_2h * phases_2h).sum(axis=0)) ** 2
+            fixed = np.zeros_like(L_GRID, dtype=complex)
+            factor = np.zeros_like(L_GRID, dtype=complex)
+            for x, y, z, sym in SITES_2H:
+                f = f_comp(sym, Q_2h)
+                phase_xy = np.exp(2j * np.pi * (h * x + k * y))
+                if sym.startswith("I"):
+                    factor += f * phase_xy
+                else:
+                    fixed += f * phase_xy * np.exp(2j * np.pi * L_GRID * (z / 3))
+            _FIXED_PART[(h, k)] = fixed
+            _IODINE_FACTOR[(h, k)] = factor
+
+
+def compute_F2_cache(i_z: float) -> None:
+    """Recalculate ``F2_cache_2H`` for a given iodine ``z`` position."""
+    phase_z = np.exp(2j * np.pi * L_GRID * (i_z / 3))
+    F2_cache_2H.clear()
+    for key in _FIXED_PART:
+        total = _FIXED_PART[key] + _IODINE_FACTOR[key] * phase_z
+        F2_cache_2H[key] = np.abs(total) ** 2
+
+
+_precompute_F_parts()
+compute_F2_cache(DEFAULT_I_Z)
 
 # Hendricks–Teller infinite stacking
 
@@ -218,6 +256,7 @@ defaults = {
     "I3": None,
     "L_lo": 1.0,
     "L_hi": L_MAX,
+    "I_z": DEFAULT_I_Z,
 }
 state = defaults.copy()
 
@@ -870,6 +909,13 @@ rs = RangeSlider(
     ax_range, "ℓ range", 0, L_MAX, valinit=(state["L_lo"], state["L_hi"]), valstep=0.1
 )
 rs.on_changed(lambda v: (state.update(L_lo=v[0], L_hi=v[1]), refresh()))
+
+# iodine z slider just to the right of the ℓ-range slider
+ax_z = plt.axes([0.92, 0.05, 0.05, 0.03])
+sz = Slider(ax_z, "z(I)", 0, 1, valinit=state["I_z"], valstep=1e-3)
+sz.on_changed(
+    lambda v: (state.update(I_z=v), compute_F2_cache(v), compute_components(), refresh())
+)
 
 # m-index slider
 ys = [0.32, 0.26, 0.20, 0.14]
