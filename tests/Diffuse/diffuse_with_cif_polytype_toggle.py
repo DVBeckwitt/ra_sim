@@ -63,6 +63,24 @@ def c_from_cif(path: str) -> float:
     raise ValueError("_cell_length_c not found in CIF")
 
 
+def z_from_cif(path: str) -> float:
+    """Return the first fractional z coordinate found in ``path``."""
+    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+        found_header = False
+        for ln in fp:
+            if "_atom_site_fract_z" in ln:
+                found_header = True
+                continue
+            if found_header:
+                parts = ln.split()
+                if len(parts) >= 5:
+                    try:
+                        return float(parts[4])
+                    except ValueError:
+                        continue
+    raise ValueError("_atom_site_fract_z not found in CIF")
+
+
 # constants
 P_CLAMP = 1e-6
 
@@ -75,8 +93,8 @@ CIF_6H = BUNDLE / "PbI2_6H.cif"
 C_2H = c_from_cif(str(CIF_2H))
 C_6H = c_from_cif(str(CIF_6H))
 
-# Default phase scale for the z-value slider derived from the CIFs
-Z_DEFAULT = C_2H / C_6H
+# Default phase scale for the z-value slider derived from the 2H CIF
+Z_DEFAULT = z_from_cif(str(CIF_2H))
 
 # ───────── constants ─────────
 LAMBDA = 1.5406  # Å   (Cu Kα1)
@@ -226,7 +244,7 @@ defaults = {
     "I3": None,
     "L_lo": 1.0,
     "L_hi": L_MAX,
-    # Use the ratio of lattice parameters from the CIFs as the phase scale
+    # Use the fractional z position from the CIF as the phase scale
     "z_val": Z_DEFAULT,
 }
 state = defaults.copy()
