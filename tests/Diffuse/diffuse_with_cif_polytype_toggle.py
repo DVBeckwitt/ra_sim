@@ -241,7 +241,7 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
         return F2
 
     f, ψ, δ = _abc(p, h, k)
-    φ = δ + 2 * np.pi * L_GRID * phi_scale
+    φ = δ + 2 * np.pi * L_GRID * 1/3
     return AREA * F2 * (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
 
 
