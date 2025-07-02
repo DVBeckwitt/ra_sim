@@ -63,6 +63,24 @@ def c_from_cif(path: str) -> float:
     raise ValueError("_cell_length_c not found in CIF")
 
 
+def z_from_cif(path: str) -> float:
+    """Return the iodide fractional ``z`` coordinate from ``path``."""
+    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+        header_found = False
+        for ln in fp:
+            if "_atom_site_fract_z" in ln:
+                header_found = True
+                continue
+            if header_found:
+                parts = ln.split()
+                if len(parts) >= 8 and parts[-1].startswith("I"):
+                    try:
+                        return float(parts[4])
+                    except ValueError:
+                        continue
+    raise ValueError("iodine z coordinate not found in CIF")
+
+
 # constants
 P_CLAMP = 1e-6
 
@@ -70,8 +88,13 @@ A_HEX = 4.557  # Å
 BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 CIF_2H = BUNDLE / "PbI2_2H.cif"
 CIF_6H = BUNDLE / "PbI2_6H.cif"
-C_2H, C_6H = map(c_from_cif, map(str, (CIF_2H, CIF_6H)))
-Z_DEFAULT = C_2H / C_6H
+
+# Lattice parameters for each polytype
+C_2H = c_from_cif(str(CIF_2H))
+C_6H = c_from_cif(str(CIF_6H))
+
+# Default phase scale for the z-value slider derived from the 2H CIF
+Z_DEFAULT = z_from_cif(str(CIF_2H))
 
 # ───────── constants ─────────
 LAMBDA = 1.5406  # Å   (Cu Kα1)
@@ -221,7 +244,7 @@ defaults = {
     "I3": None,
     "L_lo": 1.0,
     "L_hi": L_MAX,
-    # Use the ratio of lattice parameters from the CIFs as the phase scale
+    # Use the fractional z position from the CIF as the phase scale
     "z_val": Z_DEFAULT,
 }
 state = defaults.copy()
