@@ -276,11 +276,27 @@ def compute_components():
             for (h, k), n in counts.items()
         )
 
+    def phi_scale_for_p3(p_val: float) -> float:
+        """Return phase scale for the general ``p`` slider.
+
+        Values very close to 0 or 1 should behave exactly like the
+        dedicated ``p≈0`` and ``p≈1`` components.  Otherwise the user
+        supplied ``z_val`` is used.
+        """
+
+        eps = 1e-3
+        if p_val <= eps:
+            return 1 / 3
+        if p_val >= 1 - eps:
+            return 1.0
+        return state["z_val"]
+
     state["I0"] = comp(state["p0"], 1 / 3)
     state["I1"] = comp(state["p1"], 1.0)
     state["I3"] = comp(
         state["p3"], phi_scale_for_p3(state["p3"], state["z_val"])
     )
+
 
 
 compute_components()
