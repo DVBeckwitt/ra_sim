@@ -25,7 +25,7 @@ if plt.get_backend().lower().endswith("agg") and not os.environ.get(
         plt.switch_backend("TkAgg")
     except Exception:
         pass
-from matplotlib.widgets import Slider, RangeSlider, Button
+from matplotlib.widgets import Slider, RangeSlider, Button, CheckButtons
 from collections import Counter
 
 from plot_excel_scatter import _normalize_columns, _find_intensity_columns
@@ -53,6 +53,7 @@ _sliders = []
 _last_df = None  # store last exported dataframe for extra plots
 # hold scatter plot widgets so they remain responsive
 _scatter_widgets: list[object] = []
+_check_widgets: list[object] = []
 
 
 def c_from_cif(path: str) -> float:
@@ -158,6 +159,7 @@ ALLOWED_M = sorted(HK_BY_M)  # only these m values are valid
 L_MAX = float(_ARGS.l_max)
 N_L = 2001
 L_GRID = np.linspace(0, L_MAX, N_L)
+QZ_GRID = 2 * np.pi / C_2H * L_GRID
 
 # precompute |F|² for 2H lattice (single-layer form factor)
 F2_cache_2H: dict[tuple[int, int], np.ndarray] = {}
@@ -235,6 +237,9 @@ def I_inf(p, h, k, F2, phi_scale: float = 1 / 3) -> np.ndarray:
         only needed for the 2H case.
     """
 
+    if state.get("f2_only"):
+        return F2
+
     f, ψ, δ = _abc(p, h, k)
     φ = δ + 2 * np.pi * L_GRID * phi_scale
     return AREA * F2 * (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
@@ -257,6 +262,8 @@ defaults = {
     "L_lo": 1.0,
     "L_hi": L_MAX,
     "I_z": DEFAULT_I_Z,
+    "f2_only": False,
+    "qz_axis": False,
 }
 state = defaults.copy()
 
@@ -833,6 +840,15 @@ _bragg_lines = []
 def refresh(_=None):
     lo, hi = state["L_lo"], state["L_hi"]
     mask = (L_GRID >= lo) & (L_GRID <= hi)
+    x_grid = QZ_GRID if state.get("qz_axis") else L_GRID
+    x_lo = 2 * np.pi / C_2H * lo if state.get("qz_axis") else lo
+    x_hi = 2 * np.pi / C_2H * hi if state.get("qz_axis") else hi
+    ticks = (
+        2 * np.pi / C_2H * np.arange(np.ceil(lo), np.floor(hi) + 1)
+        if state.get("qz_axis")
+        else np.arange(np.ceil(lo), np.floor(hi) + 1)
+    )
+
     tot = composite_tot()
     for line, I in [
         (line_tot, tot),
@@ -840,9 +856,10 @@ def refresh(_=None):
         (line1, state["I1"]),
         (line3, state["I3"]),
     ]:
-        line.set_data(L_GRID[mask], I[mask])
-    ax.set_xlim(lo, hi)
-    ax.set_xticks(np.arange(np.ceil(lo), np.floor(hi) + 1))
+        line.set_data(x_grid[mask], I[mask])
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_xticks(ticks)
+    ax.set_xlabel(r"$q_z$ (Å⁻¹)" if state.get("qz_axis") else r"$\ell$")
     vis = [state["w0"] > 0, state["w1"] > 0, state["w2"] > 0]
     for ln, v in zip((line0, line1, line3), vis):
         ln.set_visible(v)
@@ -856,8 +873,13 @@ def refresh(_=None):
             L_vals, i2h, i6h = bragg_intensity_sum(pairs)
             total = i2h + i6h
             msk = (L_vals >= lo) & (L_vals <= hi)
+            x_vals = (
+                2 * np.pi / C_2H * L_vals[msk]
+                if state.get("qz_axis")
+                else L_vals[msk]
+            )
             (ln,) = ax.plot(
-                L_vals[msk],
+                x_vals,
                 total[msk],
                 marker="D",
                 ls="none",
@@ -868,11 +890,16 @@ def refresh(_=None):
             for h, k in pairs:
                 L_vals, i2h, i6h = bragg_intensity_single(h, k)
                 msk = (L_vals >= lo) & (L_vals <= hi)
+                x_vals = (
+                    2 * np.pi / C_2H * L_vals[msk]
+                    if state.get("qz_axis")
+                    else L_vals[msk]
+                )
                 (ln2,) = ax.plot(
-                    L_vals[msk], i2h[msk], marker="o", ls="none", label=f"2H({h},{k})"
+                    x_vals, i2h[msk], marker="o", ls="none", label=f"2H({h},{k})"
                 )
                 (ln6,) = ax.plot(
-                    L_vals[msk], i6h[msk], marker="s", ls="none", label=f"6H({h},{k})"
+                    x_vals, i6h[msk], marker="s", ls="none", label=f"6H({h},{k})"
                 )
                 _bragg_lines.extend([ln2, ln6])
         handles += _bragg_lines
@@ -1035,6 +1062,25 @@ def _toggle_bragg(_):
 
 
 btn_bragg.on_clicked(_toggle_bragg)
+
+# additional checkboxes
+chk_ax = plt.axes([0.05, 0.01, 0.15, 0.08])
+checks = CheckButtons(
+    chk_ax,
+    ["F² only", "qz axis"],
+    [state["f2_only"], state["qz_axis"]],
+)
+_check_widgets.append(checks)
+
+def _toggle_checks(label):
+    if label == "F² only":
+        state["f2_only"] = not state["f2_only"]
+        compute_components()
+    elif label == "qz axis":
+        state["qz_axis"] = not state["qz_axis"]
+    refresh()
+
+checks.on_clicked(_toggle_checks)
 
 # export button
 btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), "Save Bragg XLSX")
