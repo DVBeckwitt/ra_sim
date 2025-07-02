@@ -80,18 +80,32 @@ def _Qmag(h, k, L, c_2h):
     inv_d2 = (4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L**2)/c_2h**2
     return 2*np.pi*np.sqrt(inv_d2)
 
-def _F2(h, k, L, c_2h):
-    """Return |F|^2 using vectorised operations."""
+def _iodine_z_from_cif(path: str) -> float:
+    """Extract the fractional ``z`` position of iodine from ``path``."""
+    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+        for ln in fp:
+            if ln.strip().startswith("I1"):
+                parts = ln.split()
+                if len(parts) >= 5:
+                    try:
+                        return float(parts[4])
+                    except ValueError:
+                        pass
+    raise ValueError("Iodine position not found")
+
+def _F2(h, k, L, c_2h, z_pos):
+    """Return ``|F_m|^2`` for a single PbI₂ layer."""
     import numpy as np
 
     Q = _Qmag(h, k, L, c_2h)
-    phase_arg = (h * _SITES_POS[:, 0, None] +
-                 k * _SITES_POS[:, 1, None] +
-                 L * _SITES_POS[:, 2, None])
-    phases = np.exp(1j * _TWO_PI * phase_arg)
-    cf = _SITES_Z[:, None]
-    F = np.sum(cf * phases, axis=0)
-    return np.abs(F) ** 2
+    b_pb = _f0("Pb", Q)
+    b_i = _f0("I", Q)
+
+    term1 = np.exp(1j * _TWO_PI * (h/3 + 2*k/3 + L * (z_pos/3)))
+    term2 = np.exp(1j * _TWO_PI * (2*h/3 + k/3 - L * (z_pos/3)))
+
+    F_m = b_pb + b_i * (term1 + term2)
+    return np.abs(F_m) ** 2
 
 def _abc(p, h, k):
     """Compute amplitude factor ``f`` and phase ``ψ`` without complex math."""
@@ -148,6 +162,7 @@ def _get_base_curves(
         return cached
 
     c_2h = _cell_c_from_cif(cif_path)
+    i_z = _iodine_z_from_cif(cif_path)
 
     if L_step <= 0.0:
         raise ValueError("L_step must be > 0")
@@ -158,7 +173,7 @@ def _get_base_curves(
     if two_theta_max is None:
         base_L = np.arange(0.0, L_max + L_step / 2, L_step)
         for h, k in hk_list:
-            F2 = _F2(h, k, base_L, c_2h)
+            F2 = _F2(h, k, base_L, c_2h, i_z)
             out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
@@ -171,7 +186,7 @@ def _get_base_curves(
                 continue
             L_max_local = c_2h * math.sqrt(l_sq)
             L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step)
-            F2 = _F2(h, k, L_vals, c_2h)
+            F2 = _F2(h, k, L_vals, c_2h, i_z)
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
