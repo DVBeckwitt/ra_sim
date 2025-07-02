@@ -1,5 +1,7 @@
 # Changelog
 
+### fix: p slider uses extreme phases only for exact 0 or 1
+
 ## feat: reorganize package and add advanced diffraction/mosaic features
 
 - **Folder Structure & Organization**  
