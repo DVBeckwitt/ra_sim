@@ -21,6 +21,13 @@ _TWO_PI = 2 * np.pi
 # ``(h,k) -> {"L": array, "F2": array}``.
 _HT_BASE_CACHE: dict[tuple, dict] = {}
 
+# Cache for form factor calculations
+_FORM_FACTOR_CACHE: dict[tuple[str, bytes], np.ndarray] = {}
+_F1F2_CACHE: dict[str, complex] = {}
+
+# Cache for structure factor |F|^2 curves keyed by (base_key, iodine_z)
+_F2_I_Z_CACHE: dict[tuple, dict] = {}
+
 # ───────────────────────── occupancy helper ─────────────────────────
 def _temp_cif_with_occ(cif_in: str, occ):
     """
@@ -93,13 +100,28 @@ E_CuKa   = 12398.4193 / LAMBDA              # eV
 ION  = {"Pb":"Pb2+", "I":"I1-"}    
 NEUTR = {"Pb":"Pb",  "I":"I"}    
 def f_comp(el: str, Q: np.ndarray) -> np.ndarray:
+    """Return complex form factor for ``el`` at momentum transfers ``Q``.
+
+    Results are cached by element and Q array to avoid repeated expensive
+    calls into :mod:`Dans_Diffraction`.
+    """
     q = np.asarray(Q, dtype=float).reshape(-1)
+    key = (el, q.tobytes())
+    cached = _FORM_FACTOR_CACHE.get(key)
+    if cached is not None:
+        return cached.reshape(Q.shape)
+
     f0 = xray_scattering_factor([ION[el]], q)[:, 0]
-    fp, fd = xray_dispersion_corrections(
-        [NEUTR[el]], energy_kev=[E_CuKa/1000]
-    )
-    f1, f2 = float(fp[0,0]), float(fd[0,0])
-    return (f0 + f1 + 1j*f2).reshape(Q.shape)
+
+    if el not in _F1F2_CACHE:
+        fp, fd = xray_dispersion_corrections(
+            [NEUTR[el]], energy_kev=[E_CuKa/1000]
+        )
+        _F1F2_CACHE[el] = float(fp[0, 0]) + 1j * float(fd[0, 0])
+
+    ff = f0 + _F1F2_CACHE[el]
+    _FORM_FACTOR_CACHE[key] = ff
+    return ff.reshape(Q.shape)
 
 # precompute |F|² for 2H lattice (single-layer form factor)
 F2_cache_2H: dict[tuple[int, int], np.ndarray] = {}
@@ -200,10 +222,21 @@ def _get_base_curves(cif_path, hk_list=None, mx=None,
     return out
 
 def _update_F2_cache(i_z: float, L_vals: np.ndarray):
-    phase_z = np.exp(1j*_TWO_PI*L_vals*(i_z/3))
+    """Update ``_F2_CACHE`` for a given iodine ``z`` position."""
+    global _F2_CACHE
+    cache_key = (_CURRENT_PARTS_KEY, float(i_z))
+    cached = _F2_I_Z_CACHE.get(cache_key)
+    if cached is not None:
+        _F2_CACHE = cached
+        return
+
+    phase_z = np.exp(1j * _TWO_PI * L_vals * (i_z / 3))
+    new_cache = {}
     for key in _FIXED_PART:
         total = _FIXED_PART[key] + _I_FACTOR[key] * phase_z
-        _F2_CACHE[key] = np.abs(total)**2
+        new_cache[key] = np.abs(total) ** 2
+    _F2_I_Z_CACHE[cache_key] = new_cache
+    _F2_CACHE = new_cache
 
 # ───────────────────────── revitalised public routine ─────────────────────────
 def ht_Iinf_dict(cif_path, hk_list=None, mx=None, occ=1.0,
