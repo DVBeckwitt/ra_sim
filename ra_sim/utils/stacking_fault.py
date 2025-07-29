@@ -5,15 +5,6 @@ A_HEX   = 4.557
 P_CLAMP = 1e-6
 N_P, A_C = 3, 17.98e-10
 AREA    = (2*np.pi)**2 / A_C * N_P
-_FALLBACK_Z = {"Pb": 82, "I": 53}
-_SITES  = [(0.0, 0.0,  0.000, "Pb"),
-           (1/3, 2/3,  0.25 , "I"),
-           (2/3, 1/3, -0.25 , "I")]
-
-# Pre-compute site coordinates and atomic numbers for vectorised operations
-_SITES_POS = np.array([(x, y, z) for x, y, z, _ in _SITES], dtype=float)
-_SITES_Z   = np.array([_FALLBACK_Z.get(sym, 0.) for *_, sym in _SITES],
-                      dtype=float)
 _TWO_PI = 2 * np.pi
 
 # Cache of base L grids and F2 values keyed by parameters that do not depend
@@ -62,7 +53,7 @@ def _temp_cif_with_occ(cif_in: str, occ):
 
 # ───────────────────────── low-level physics helpers (unchanged) ─────────────────────────
 def _cell_c_from_cif(cif_path: str) -> float:
-    """Return the c lattice parameter from ``cif_path`` multiplied by three."""
+    """Return the c lattice parameter from ``cif_path``."""
     import re
 
     pat = re.compile(r"_cell_length_c\s+([\d.]+)")
@@ -70,8 +61,22 @@ def _cell_c_from_cif(cif_path: str) -> float:
         for ln in fp:
             m = pat.match(ln)
             if m:
-                return float(m.group(1)) * 3.0
+                return float(m.group(1))
     raise ValueError(f"_cell_length_c not found in {cif_path}")
+
+
+def _sites_from_cif(cif_path: str):
+    """Return atomic sites from ``cif_path`` with symmetry applied."""
+    import Dans_Diffraction as dif
+
+    xtl = dif.Crystal(str(cif_path))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    st = xtl.Structure
+    return [
+        (float(st.u[i]), float(st.v[i]), float(st.w[i]), str(st.type[i]))
+        for i in range(len(st.u))
+    ]
 
 from .factors import F_comp
 
@@ -80,13 +85,13 @@ def _Qmag(h, k, L, c_2h):
     inv_d2 = (4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L**2)/c_2h**2
     return 2*np.pi*np.sqrt(inv_d2)
 
-def _F2(h, k, L, c_2h, energy_kev):
+def _F2(h, k, L, c_2h, energy_kev, sites):
     """Return |F|² using tabulated form factors."""
     import numpy as np
 
     Q = _Qmag(h, k, L, c_2h)
     F = np.zeros_like(Q, dtype=complex)
-    for x, y, z, sym in _SITES:
+    for x, y, z, sym in sites:
         ff = F_comp(sym, Q, energy_kev)
         phase = np.exp(1j * _TWO_PI * (h * x + k * y + L * z))
         F += ff * phase
@@ -147,6 +152,7 @@ def _get_base_curves(
         return cached
 
     c_2h = _cell_c_from_cif(cif_path)
+    sites = _sites_from_cif(cif_path)
 
     if L_step <= 0.0:
         raise ValueError("L_step must be > 0")
@@ -158,7 +164,7 @@ def _get_base_curves(
     if two_theta_max is None:
         base_L = np.arange(0.0, L_max + L_step / 2, L_step)
         for h, k in hk_list:
-            F2 = _F2(h, k, base_L, c_2h, energy_kev)
+            F2 = _F2(h, k, base_L, c_2h, energy_kev, sites)
             out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
@@ -171,7 +177,7 @@ def _get_base_curves(
                 continue
             L_max_local = c_2h * math.sqrt(l_sq)
             L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step)
-            F2 = _F2(h, k, L_vals, c_2h, energy_kev)
+            F2 = _F2(h, k, L_vals, c_2h, energy_kev, sites)
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
