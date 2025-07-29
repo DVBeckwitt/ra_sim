@@ -7,8 +7,8 @@ N_P, A_C = 3, 17.98e-10
 AREA    = (2*np.pi)**2 / A_C * N_P
 _FALLBACK_Z = {"Pb": 82, "I": 53}
 _SITES  = [(0.0, 0.0,  0.000, "Pb"),
-           (1/3, 2/3,  0.25 , "I"),
-           (2/3, 1/3, -0.25 , "I")]
+           (1/3, 2/3,  0.267500 , "I"),
+           (2/3, 1/3, -0.267500 , "I")]
 
 # Pre-compute site coordinates and atomic numbers for vectorised operations
 _SITES_POS = np.array([(x, y, z) for x, y, z, _ in _SITES], dtype=float)
@@ -80,18 +80,64 @@ def _Qmag(h, k, L, c_2h):
     inv_d2 = (4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L**2)/c_2h**2
     return 2*np.pi*np.sqrt(inv_d2)
 
-def _F2(h, k, L, c_2h):
-    """Return |F|^2 using vectorised operations."""
-    import numpy as np
+from Dans_Diffraction.functions_crystallography import (
+    xray_scattering_factor,
+    xray_dispersion_corrections,
+)
 
-    Q = _Qmag(h, k, L, c_2h)
-    phase_arg = (h * _SITES_POS[:, 0, None] +
-                 k * _SITES_POS[:, 1, None] +
-                 L * _SITES_POS[:, 2, None])
-    phases = np.exp(1j * _TWO_PI * phase_arg)
-    cf = _SITES_Z[:, None]
-    F = np.sum(cf * phases, axis=0)
-    return np.abs(F) ** 2
+# X‑ray constants (Cu Kα1)
+LAMBDA = 1.5406                             # Å
+E_CuKa   = 12398.4193 / LAMBDA              # eV
+
+# ionic labels matching Dans_Diffraction API
+ION  = {"Pb":"Pb2+", "I":"I1-"}    
+NEUTR = {"Pb":"Pb",  "I":"I"}    
+def f_comp(el: str, Q: np.ndarray) -> np.ndarray:
+    q = np.asarray(Q, dtype=float).reshape(-1)
+    f0 = xray_scattering_factor([ION[el]], q)[:, 0]
+    fp, fd = xray_dispersion_corrections(
+        [NEUTR[el]], energy_kev=[E_CuKa/1000]
+    )
+    f1, f2 = float(fp[0,0]), float(fd[0,0])
+    return (f0 + f1 + 1j*f2).reshape(Q.shape)
+
+# precompute |F|² for 2H lattice (single-layer form factor)
+F2_cache_2H: dict[tuple[int, int], np.ndarray] = {}
+
+# store contributions that don't change with iodine z
+_FIXED_PART: dict[tuple[int, int], np.ndarray] = {}
+# store the coefficient multiplied by exp(2πi * ℓ * z) for iodine sites
+_IODINE_FACTOR: dict[tuple[int, int], np.ndarray] = {}
+
+# ─── global caches ───────────────────────────────────────────────
+# global caches (single “current base”)
+_FIXED_PART : dict[tuple[int,int], np.ndarray] = {}
+_I_FACTOR   : dict[tuple[int,int], np.ndarray] = {}
+_F2_CACHE   : dict[tuple[int,int], np.ndarray] = {}
+
+_CURRENT_PARTS_KEY = None         # tracks which base (cif,hk,L) is loaded
+_CURRENT_L = None                 # the L grid used for parts
+
+
+def _precompute_F_parts(hk_list, L_vals, c_2h):
+    _FIXED_PART.clear(); _I_FACTOR.clear()
+    for h, k in hk_list:
+        Q = _Qmag(h, k, L_vals, c_2h)
+        fixed  = np.zeros_like(L_vals, dtype=complex)
+        factor = np.zeros_like(L_vals, dtype=complex)
+        for (x,y,z,sym) in _SITES:
+            f0 = f_comp(sym, Q)
+            phase_xy = np.exp(1j*_TWO_PI*(h*x + k*y))
+            if sym.startswith('I'):
+                factor += f0 * phase_xy
+            else:
+                fixed  += f0 * phase_xy * np.exp(1j*_TWO_PI*L_vals*(z/3))
+        _FIXED_PART[(h,k)] = fixed
+        _I_FACTOR [(h,k)] = factor
+
+
+def _F2(h,k,L_idx):          # fast lookup inside numerical loops
+    return _F2_CACHE[(h,k)][L_idx]
 
 def _abc(p, h, k):
     """Compute amplitude factor ``f`` and phase ``ψ`` without complex math."""
@@ -111,110 +157,71 @@ def _I_inf(L, p, h, k, F2):
     φ = δ + _TWO_PI * L/3
     return AREA * F2 * (1-f**2) / (1 + f**2 - 2*f*np.cos(φ-ψ))
 
-
-
-def _get_base_curves(
-    cif_path: str,
-    hk_list=None,
-    mx: int | None = None,
-    L_step: float = 0.01,
-    L_max: float = 10.0,
-    two_theta_max: float | None = None,
-    lambda_: float = 1.54,
-):
-    """Return cached ``{(h,k): {"L": ..., "F2": ...}}`` independent of ``occ`` and ``p``."""
-    import numpy as np, itertools, math
+def _get_base_curves(cif_path, hk_list=None, mx=None,
+                     L_step=0.01, L_max=10.0,
+                     two_theta_max=None, lambda_=1.54):
+    import itertools, math
+    global _CURRENT_PARTS_KEY, _CURRENT_L
 
     if hk_list is None:
-        if mx is None:
-            raise ValueError("Specify hk_list or mx")
-        hk_list = [
-            (h, k)
-            for h, k in itertools.product(range(-mx + 1, mx), repeat=2)
-            if not (h == 0 and k == 0)
-        ]
+        if mx is None: raise ValueError("Specify hk_list or mx")
+        hk_list = [(h,k) for h,k in itertools.product(range(-mx+1, mx), repeat=2)
+                   if not (h==0 and k==0)]
 
-    key = (
-        os.path.abspath(cif_path),
-        tuple(hk_list),
-        float(L_step),
-        float(L_max),
-        two_theta_max,
-        float(lambda_),
-    )
-
+    key = (os.path.abspath(cif_path), tuple(hk_list),
+           float(L_step), float(L_max), two_theta_max, float(lambda_))
     cached = _HT_BASE_CACHE.get(key)
     if cached is not None:
+        # keep _CURRENT_* coherent with cache key
+        if _CURRENT_PARTS_KEY != key:
+            _CURRENT_PARTS_KEY = key
+            _CURRENT_L = next(iter(cached.values()))["L"]
         return cached
 
-    c_2h = _cell_c_from_cif(cif_path)
+    c_2h = _cell_c_from_cif(cif_path) *3
 
-    if L_step <= 0.0:
-        raise ValueError("L_step must be > 0")
-    if L_step < 1e-4:
-        L_step = 1e-4
+    if L_step <= 0.0: raise ValueError("L_step must be > 0")
+    if L_step < 1e-4: L_step = 1e-4
 
-    out: dict[tuple, dict] = {}
     if two_theta_max is None:
-        base_L = np.arange(0.0, L_max + L_step / 2, L_step)
-        for h, k in hk_list:
-            F2 = _F2(h, k, base_L, c_2h)
-            out[(h, k)] = {"L": base_L.copy(), "F2": F2}
+        base_L = np.arange(0.0, L_max + L_step/2, L_step)
     else:
-        q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
-        for h, k in hk_list:
-            const = (4 / 3) * (h * h + k * k + h * k) / (A_HEX**2)
-            l_sq = (q_max / (2 * math.pi)) ** 2 - const
-            if l_sq <= 0:
-                L_vals = np.array([], dtype=float)
-                out[(h, k)] = {"L": L_vals, "F2": L_vals}
-                continue
-            L_max_local = c_2h * math.sqrt(l_sq)
-            L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step)
-            F2 = _F2(h, k, L_vals, c_2h)
-            out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
+        q_max = (4*np.pi / lambda_) * np.sin(np.radians(two_theta_max/2))
+        # we build per-(h,k) L later, but parts need a common grid → use L_max path
+        base_L = np.arange(0.0, L_max + L_step/2, L_step)
 
+    # Precompute parts for this base
+    _precompute_F_parts(hk_list, base_L, c_2h)
+    _CURRENT_PARTS_KEY = key
+    _CURRENT_L = base_L.copy()
+
+    out = {(h,k): {"L": base_L.copy()} for h,k in hk_list}
     _HT_BASE_CACHE[key] = out
     return out
 
+def _update_F2_cache(i_z: float, L_vals: np.ndarray):
+    phase_z = np.exp(1j*_TWO_PI*L_vals*(i_z/3))
+    for key in _FIXED_PART:
+        total = _FIXED_PART[key] + _I_FACTOR[key] * phase_z
+        _F2_CACHE[key] = np.abs(total)**2
 
 # ───────────────────────── revitalised public routine ─────────────────────────
-def ht_Iinf_dict(
-        cif_path: str,
-        hk_list=None,                  # explicit list or None
-        mx: int|None = None,           # generate –mx+1…mx-1 if hk_list is None
-        occ=1.0,                       # occupancy scaling, same rules as miller_generator
-        p: float = 0.1,
-        L_step: float = 0.01,
-        L_max: float = 10.0,
-        two_theta_max: float | None = None,
-        lambda_: float = 1.54,
-    ):
-    """
-    Infinite-domain Hendricks–Teller intensities, now with:
-      • on-the-fly occupancy scaling (scalar / list)
-      • optional automatic HK grid via `mx` (drop h=k=0)
-      • limit by ``two_theta_max`` instead of ``L_max`` if desired
-    Returns { (h,k): {'L':…, 'I':…} }
-    """
-    base = _get_base_curves(
-        cif_path=cif_path,
-        hk_list=hk_list,
-        mx=mx,
-        L_step=L_step,
-        L_max=L_max,
-        two_theta_max=two_theta_max,
-        lambda_=lambda_,
-    )
+def ht_Iinf_dict(cif_path, hk_list=None, mx=None, occ=1.0,
+                 p=0.1, L_step=0.01, L_max=10.0,
+                 two_theta_max=None, lambda_=1.54, i_z=0.2675):
+    base = _get_base_curves(cif_path, hk_list, mx, L_step, L_max,
+                            two_theta_max, lambda_)
+    _update_F2_cache(i_z, _CURRENT_L)
 
     out = {}
-    for (h, k), data in base.items():
+    for (h,k), data in base.items():
         L_vals = data["L"]
-        F2 = data["F2"]
-        I = _I_inf(L_vals, p, h, k, F2)
-        out[(h, k)] = {"L": L_vals.copy(), "I": I}
-
+        F2 = _F2_CACHE[(h,k)]          # aligned to L_vals
+        I  = _I_inf(L_vals, p, h, k, F2)
+        # optional: clip by two_theta_max here if you want per-(h,k) L shortening
+        out[(h,k)] = {"L": L_vals.copy(), "I": I}
     return out
+
 
 
 # ---------------------------------------------------------------------------
