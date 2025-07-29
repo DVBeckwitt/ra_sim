@@ -199,7 +199,7 @@ def parse_cif_num(txt):
 
 av = parse_cif_num(a_text)
 bv = parse_cif_num(b_text)
-cv = parse_cif_num(c_text)
+cv = parse_cif_num(c_text) * 3
 
 if cif_file2:
     cf2  = CifFile.ReadCif(cif_file2)

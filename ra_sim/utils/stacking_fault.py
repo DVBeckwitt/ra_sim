@@ -151,7 +151,7 @@ def _get_base_curves(
     if cached is not None:
         return cached
 
-    c_2h = _cell_c_from_cif(cif_path)
+    c_2h = _cell_c_from_cif(cif_path) * 3 
     sites = _sites_from_cif(cif_path)
 
     if L_step <= 0.0:
