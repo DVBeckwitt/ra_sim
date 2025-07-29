@@ -215,7 +215,8 @@ else:
 lambda_ = 1.54   # X-ray wavelength in Å (e.g., Cu Kα)
 energy = 6.62607e-34 * 2.99792458e8 / (lambda_*1e-10) / (1.602176634e-19)    # keV
 intensity_threshold = 1.0
-two_theta_range = (0, 70)
+# limit simulated data to 60° by default
+two_theta_range = (0, 60)
 
 # ---------------------------------------------------------------------------
 # Default GUI/fit parameter values. These must be defined before any calls
