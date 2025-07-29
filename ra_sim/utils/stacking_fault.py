@@ -153,7 +153,7 @@ def _get_base_curves(
     if L_step < 1e-4:
         L_step = 1e-4
 
-    energy_kev = 12398.4193 / lambda_
+    energy_kev = (12398.4193 / lambda_) / 1000.0
     out: dict[tuple, dict] = {}
     if two_theta_max is None:
         base_L = np.arange(0.0, L_max + L_step / 2, L_step)
