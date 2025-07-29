@@ -62,35 +62,34 @@ def _temp_cif_with_occ(cif_in: str, occ):
 
 # ───────────────────────── low-level physics helpers (unchanged) ─────────────────────────
 def _cell_c_from_cif(cif_path: str) -> float:
+    """Return the c lattice parameter from ``cif_path`` multiplied by three."""
     import re
+
     pat = re.compile(r"_cell_length_c\s+([\d.]+)")
     with open(cif_path, "r", encoding="utf-8", errors="ignore") as fp:
         for ln in fp:
             m = pat.match(ln)
             if m:
-                return float(m.group(1))
+                return float(m.group(1)) * 3.0
     raise ValueError(f"_cell_length_c not found in {cif_path}")
 
-def _f0(symbol: str, q):               # Z-approx
-    import numpy as np
-    return np.full_like(q, _FALLBACK_Z.get(symbol, 0.), dtype=float)
+from .factors import F_comp
 
 def _Qmag(h, k, L, c_2h):
     import numpy as np
     inv_d2 = (4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L**2)/c_2h**2
     return 2*np.pi*np.sqrt(inv_d2)
 
-def _F2(h, k, L, c_2h):
-    """Return |F|^2 using vectorised operations."""
+def _F2(h, k, L, c_2h, energy_kev):
+    """Return |F|² using tabulated form factors."""
     import numpy as np
 
     Q = _Qmag(h, k, L, c_2h)
-    phase_arg = (h * _SITES_POS[:, 0, None] +
-                 k * _SITES_POS[:, 1, None] +
-                 L * _SITES_POS[:, 2, None])
-    phases = np.exp(1j * _TWO_PI * phase_arg)
-    cf = _SITES_Z[:, None]
-    F = np.sum(cf * phases, axis=0)
+    F = np.zeros_like(Q, dtype=complex)
+    for x, y, z, sym in _SITES:
+        ff = F_comp(sym, Q, energy_kev)
+        phase = np.exp(1j * _TWO_PI * (h * x + k * y + L * z))
+        F += ff * phase
     return np.abs(F) ** 2
 
 def _abc(p, h, k):
@@ -154,11 +153,12 @@ def _get_base_curves(
     if L_step < 1e-4:
         L_step = 1e-4
 
+    energy_kev = 12398.4193 / lambda_
     out: dict[tuple, dict] = {}
     if two_theta_max is None:
         base_L = np.arange(0.0, L_max + L_step / 2, L_step)
         for h, k in hk_list:
-            F2 = _F2(h, k, base_L, c_2h)
+            F2 = _F2(h, k, base_L, c_2h, energy_kev)
             out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
@@ -171,7 +171,7 @@ def _get_base_curves(
                 continue
             L_max_local = c_2h * math.sqrt(l_sq)
             L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step)
-            F2 = _F2(h, k, L_vals, c_2h)
+            F2 = _F2(h, k, L_vals, c_2h, energy_kev)
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
