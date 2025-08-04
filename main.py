@@ -278,7 +278,12 @@ def combine_qr_dicts(caches, weights):
         qr = cache["qr"]
         for m, data in qr.items():
             if m not in out:
-                out[m] = {"L": data["L"].copy(), "I": w * data["I"].copy(), "hk": data["hk"]}
+                out[m] = {
+                    "L": data["L"].copy(),
+                    "I": w * data["I"].copy(),
+                    "hk": data["hk"],
+                    "deg": data.get("deg", 1),
+                }
             else:
                 entry = out[m]
                 if entry["L"].shape != data["L"].shape or not np.allclose(entry["L"], data["L"]):
