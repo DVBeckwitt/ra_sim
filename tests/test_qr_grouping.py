@@ -5,6 +5,7 @@ from ra_sim.utils.stacking_fault import (
     ht_dict_to_qr_dict,
     qr_dict_to_arrays,
 )
+from ra_sim.simulation import diffraction
 
 
 def combine_qr_dicts(caches, weights):
@@ -101,3 +102,59 @@ def test_combine_ht_caches_preserves_deg():
     # Intensities should be a weighted sum of the individual caches
     manual_I = 0.6 * cache0["qr"][1]["I"] + 0.4 * cache1["qr"][1]["I"]
     assert np.allclose(combined[1]["I"], manual_I)
+
+
+def test_process_qr_rods_parallel_scales_with_degeneracy(monkeypatch):
+    captured = {}
+
+    def fake_process_peaks_parallel(miller, intensities, *args, **kwargs):
+        captured["miller"] = miller
+        captured["intensities"] = intensities
+        return (None, None, None, None, None, None)
+
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_process_peaks_parallel)
+
+    qr_dict = {
+        1: {
+            "hk": (1, 0),
+            "L": np.array([0.0, 0.5]),
+            "I": np.array([1.0, 2.0]),
+            "deg": 3,
+        }
+    }
+
+    image = np.zeros((1, 1), dtype=np.float64)
+    result = diffraction.process_qr_rods_parallel(
+        qr_dict=qr_dict,
+        image_size=1,
+        av=1.0,
+        cv=1.0,
+        lambda_=1.0,
+        image=image,
+        Distance_CoR_to_Detector=1.0,
+        gamma_deg=0.0,
+        Gamma_deg=0.0,
+        chi_deg=0.0,
+        psi_deg=0.0,
+        zs=0.0,
+        zb=0.0,
+        n2=1,
+        beam_x_array=np.array([0.0]),
+        beam_y_array=np.array([0.0]),
+        theta_array=np.array([0.0]),
+        phi_array=np.array([0.0]),
+        sigma_pv_deg=0.0,
+        gamma_pv_deg=0.0,
+        eta_pv=0.0,
+        wavelength_array=np.array([1.0]),
+        debye_x=0.0,
+        debye_y=0.0,
+        center=[0.0, 0.0],
+        theta_initial_deg=0.0,
+        unit_x=np.array([1.0, 0.0, 0.0]),
+        n_detector=np.array([0.0, 1.0, 0.0]),
+        save_flag=0,
+    )
+
+    assert np.allclose(captured["intensities"], np.array([1.0, 2.0]) * 3)
+    assert np.array_equal(result[-1], np.array([3, 3], dtype=np.int32))
