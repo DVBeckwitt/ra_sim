@@ -278,7 +278,12 @@ def combine_qr_dicts(caches, weights):
         qr = cache["qr"]
         for m, data in qr.items():
             if m not in out:
-                out[m] = {"L": data["L"].copy(), "I": w * data["I"].copy(), "hk": data["hk"]}
+                out[m] = {
+                    "L": data["L"].copy(),
+                    "I": w * data["I"].copy(),
+                    "hk": data["hk"],
+                    "deg": data.get("deg", 1),
+                }
             else:
                 entry = out[m]
                 if entry["L"].shape != data["L"].shape or not np.allclose(entry["L"], data["L"]):
@@ -1037,11 +1042,11 @@ def do_update():
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
-                )
+                ) + (None,)
 
-        img1, maxpos1, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
+        img1, maxpos1, _, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
         if SIM_MILLER2.size > 0:
-            img2, maxpos2, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
+            img2, maxpos2, _, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
         else:
             img2 = np.zeros_like(img1)
             maxpos2 = []

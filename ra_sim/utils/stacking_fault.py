@@ -288,11 +288,13 @@ def ht_dict_to_qr_dict(ht_curves):
     Returns
     -------
     dict
-        ``{m: {"L": array, "I": array, "hk": (h,k)}}`` keyed by the radial index
-        ``m = h*h + h*k + k*k``. Intensities for curves with the same ``m`` are
-        summed and one representative ``(h,k)`` pair is stored. If the ``L`` grids
-        for reflections with the same radial index differ, the intensities are
-        interpolated onto the union of both grids before summation.
+        ``{m: {"L": array, "I": array, "hk": (h,k), "deg": int}}`` keyed by the
+        radial index ``m = h*h + h*k + k*k``. Intensities for curves with the same
+        ``m`` are summed, one representative ``(h,k)`` pair is stored, and the
+        number of contributing in-plane peaks is recorded in ``deg``. If the
+        ``L`` grids for reflections with the same radial index differ, the
+        intensities are interpolated onto the union of both grids before
+        summation.
     """
     import numpy as np
 
@@ -302,18 +304,26 @@ def ht_dict_to_qr_dict(ht_curves):
         I_vals = np.asarray(curve["I"], dtype=float)
         m = h * h + h * k + k * k
         if m not in rods:
-            rods[m] = {"L": L_vals.copy(), "I": I_vals.copy(), "hk": (h, k)}
+            rods[m] = {
+                "L": L_vals.copy(),
+                "I": I_vals.copy(),
+                "hk": (h, k),
+                "deg": 1,
+            }
             continue
 
         entry = rods[m]
         if entry["L"].shape != L_vals.shape or not np.allclose(entry["L"], L_vals):
             union_L = np.union1d(entry["L"], L_vals)
-            entry_I = np.interp(union_L, entry["L"], entry["I"], left=0.0, right=0.0)
+            entry_I = np.interp(
+                union_L, entry["L"], entry["I"], left=0.0, right=0.0
+            )
             add_I = np.interp(union_L, L_vals, I_vals, left=0.0, right=0.0)
             entry["L"] = union_L
             entry["I"] = entry_I + add_I
         else:
             entry["I"] += I_vals
+        entry["deg"] += 1
 
     return rods
 
@@ -325,7 +335,7 @@ def qr_dict_to_arrays(qr_dict):
     total = sum(len(v["L"]) for v in qr_dict.values())
     miller = np.empty((total, 3), dtype=np.float64)
     intens = np.empty(total, dtype=np.float64)
-    degeneracy = np.ones(total, dtype=np.int32)
+    degeneracy = np.empty(total, dtype=np.int32)
     details = []
 
     idx = 0
@@ -333,12 +343,14 @@ def qr_dict_to_arrays(qr_dict):
         h, k = data["hk"]
         L_vals = data["L"]
         I_vals = data["I"]
+        deg = int(data.get("deg", 1))
         n = len(L_vals)
 
         miller[idx:idx+n, 0] = h
         miller[idx:idx+n, 1] = k
         miller[idx:idx+n, 2] = L_vals
         intens[idx:idx+n] = I_vals
+        degeneracy[idx:idx+n] = deg
 
         for L_val, inten in zip(L_vals, I_vals):
             details.append([((h, k, float(L_val)), float(inten))])

@@ -650,9 +650,10 @@ def process_qr_rods_parallel_debug(
     """Wrapper to debug-process rods instead of individual reflections."""
     from ra_sim.utils.stacking_fault import qr_dict_to_arrays
 
-    miller, intens, _, _ = qr_dict_to_arrays(qr_dict)
+    miller, intens, degeneracy, _ = qr_dict_to_arrays(qr_dict)
+    intens = intens * degeneracy
 
-    return process_peaks_parallel_debug(
+    result = process_peaks_parallel_debug(
         miller,
         intens,
         image_size,
@@ -684,3 +685,5 @@ def process_qr_rods_parallel_debug(
         n_detector,
         save_flag,
     )
+
+    return (*result, degeneracy)
