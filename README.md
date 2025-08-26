@@ -1,54 +1,53 @@
 # RA Simulation
 
-This project contains a diffraction simulation tool with a Tk based GUI.
+RA Simulation is an open-source Distorted-Wave Born Approximation (DWBA) forward model for quantitative analysis of diffraction from two-dimensional oriented powders. The code refines full area-detector images, jointly modeling detector geometry, mosaic orientation distributions, stacking disorder, and crystallographic structure factors. It accompanies the manuscript "Quantitative simulation and refinement of diffraction from 2D oriented powders."
 
-## Running
+## Features
 
-After installing the required packages (``pip install -r requirements.txt`` or the
-packages listed in ``setup.py``) launch the GUI with:
+- **DWBA forward model** with refraction, footprint and divergence corrections for grazing-incidence diffraction.
+- **Geometry and detector calibration** using a 3D powder standard and transfer to samples.
+- **Mosaic orientation distributions** parameterized by pseudo-Voigt functions for hybrid ring–cap patterns.
+- **Structure-factor refinement** including fractional occupancies, atomic positions, and anisotropic Debye–Waller factors.
+- **Tk-based GUI** for loading images, running simulations and refining parameters.
+- **Debug utilities** and helpers for stacking-fault analysis.
+
+## Installation
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/<user>/ra_sim.git
+cd ra_sim
+pip install -e .
+```
+
+## Quick start
+
+Launch the GUI:
 
 ```bash
 python main.py
 ```
 
-By default an Excel file named ``miller_intensities.xlsx`` is written to the
-configured downloads directory.  Pass ``--no-excel`` to disable this step.
-
+The application loads example images specified in `dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
 
 ## Troubleshooting
 
-
-Set the environment variable ``RA_SIM_DEBUG`` to ``1`` (or any truthy value) to
-print a summary of these arrays via ``ra_sim.debug_utils.check_ht_arrays``.  On
-Linux/macOS use ``export RA_SIM_DEBUG=1``; in Windows ``cmd`` use
-``set RA_SIM_DEBUG=1`` or in PowerShell ``$env:RA_SIM_DEBUG='1'``.  You can also
-call ``ra_sim.debug_utils.debug_print`` in your own code to emit messages only
-when debug mode is active. The ``main.py`` script sets ``RA_SIM_DEBUG=1`` on
-startup so logging is enabled by default. When debug mode is active, the
-``numba`` logger is configured to emit debug-level messages which can help
-troubleshoot JIT compilation errors.
-For manual inspection insert the snippet below in
-
-``main.py`` right after ``ht_dict_to_arrays`` is called:
-
-```python
-print('miller1 dtype:', miller1.dtype, 'shape:', miller1.shape)
-print('L range:', miller1[:, 2].min(), miller1[:, 2].max())
-print('intens1 dtype:', intens1.dtype, 'min:', intens1.min(), 'max:', intens1.max())
-print('miller1 contiguous:', miller1.flags['C_CONTIGUOUS'])
-print('intens1 contiguous:', intens1.flags['C_CONTIGUOUS'])
-```
-
-Run the script from the command line to see the output.  If the arrays look
-reasonable, enable the debug simulation (``Run Debug Simulation`` button) or set
-the environment variable ``RA_SIM_DEBUG=1`` (or change ``DEBUG_ENABLED`` to
-``True`` in ``main.py``) to write detailed logs from ``diffraction_debug.py``.
-These logs show intersection calculations for each reflection and help pinpoint
-where processing stops.
-
-Finally, running the unit tests provides a quick check that the intensity helper
-is functioning correctly:
+Set `RA_SIM_DEBUG=1` to enable verbose logging and additional diagnostic plots:
 
 ```bash
-pytest
+export RA_SIM_DEBUG=1  # Linux/macOS
+# or
+set RA_SIM_DEBUG=1     # Windows CMD
 ```
+
+## Citation
+
+If you use this software in published work, please cite the corresponding paper:
+
+> D. V. Beckwitt *et al.*, "Quantitative simulation and refinement of diffraction from 2D oriented powders," (in preparation, 2024).
+
+## License
+
+This project is distributed under the terms of the GNU General Public License v3.0. See [LICENSE](LICENSE) for details.
+
