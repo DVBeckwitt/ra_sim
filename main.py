@@ -4,7 +4,13 @@
 
 import math
 import os
+
+# Enable debug messages automatically. Set RA_SIM_DEBUG=0 to disable.
+os.environ.setdefault("RA_SIM_DEBUG", "0")
+write_excel = False
+
 import re
+import argparse
 import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
@@ -30,6 +36,13 @@ import pandas as pd
 import Dans_Diffraction as dif
 import CifFile
 
+from ra_sim.utils.stacking_fault import (
+    ht_Iinf_dict,
+    ht_dict_to_arrays,
+    ht_dict_to_qr_dict,
+    qr_dict_to_arrays,
+)
+
 from ra_sim.utils.calculations import IndexofRefraction
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
 from ra_sim.utils.tools import (
@@ -37,6 +50,7 @@ from ra_sim.utils.tools import (
     view_azimuthal_radial,
     detect_blobs,
     inject_fractional_reflections,
+    build_intensity_dataframes,
 )
 from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
@@ -48,13 +62,20 @@ from ra_sim.fitting.optimization import (
     fit_geometry_parameters,
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction import process_peaks_parallel
+from ra_sim.simulation.diffraction import (
+    process_peaks_parallel,
+    process_qr_rods_parallel,
+)
 from ra_sim.simulation.diffraction_debug import (
     process_peaks_parallel_debug,
+    process_qr_rods_parallel_debug,
     dump_debug_log,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
+from ra_sim.debug_utils import debug_print, is_debug_enabled
+from ra_sim.gui.collapsible import CollapsibleFrame
+
 
 turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
 turbo_rgba = turbo(np.linspace(0, 1, 256))
@@ -65,7 +86,15 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
-DEBUG_ENABLED = False
+# Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
+DEBUG_ENABLED = is_debug_enabled()
+if DEBUG_ENABLED:
+    print("Debug mode active (RA_SIM_DEBUG=1)")
+    from ra_sim.debug_utils import enable_numba_logging
+    enable_numba_logging()
+else:
+    print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
+
 
 ###############################################################################
 #                          DATA & PARAMETER SETUP
@@ -170,7 +199,7 @@ def parse_cif_num(txt):
 
 av = parse_cif_num(a_text)
 bv = parse_cif_num(b_text)
-cv = parse_cif_num(c_text)
+cv = parse_cif_num(c_text) * 3
 
 if cif_file2:
     cf2  = CifFile.ReadCif(cif_file2)
@@ -189,19 +218,103 @@ intensity_threshold = 1.0
 two_theta_range = (0, 70)
 
 # ---------------------------------------------------------------------------
-# Load reflections from the two CIF files and prepare for weighted combining.
+# Default GUI/fit parameter values. These must be defined before any calls
+# that reference them (e.g. ``ht_Iinf_dict`` below).
 # ---------------------------------------------------------------------------
-miller1, intens1, degeneracy1, details1 = miller_generator(
-    mx,
-    cif_file,
-    occ,
-    lambda_,
-    energy,
-    intensity_threshold,
-    two_theta_range,
+defaults = {
+    'theta_initial': 5.0,
+    'gamma': Gamma_initial,
+    'Gamma': gamma_initial,
+    'chi': 0.0,
+    'zs': 0.0,
+    'zb': 0.0,
+    'debye_x': 0.0,
+    'debye_y': 0.0,
+    'corto_detector': Distance_CoR_to_Detector,
+    'sigma_mosaic_deg': np.degrees(sigma_mosaic),
+    'gamma_mosaic_deg': np.degrees(gamma_mosaic),
+    'eta': 0.0,
+    'a': av,
+    'c': cv,
+    'vmax': 1000,
+    'p0': 0.01,
+    'p1': 0.99,
+    'p2': 0.5,
+    'w0': 50.0,
+    'w1': 50.0,
+    'w2': 0.0,
+    'center_x': center_default[0],
+    'center_y': center_default[1],
+}
+
+# ---------------------------------------------------------------------------
+# Replace the old miller_generator call with the new Hendricks–Teller helper.
+# ---------------------------------------------------------------------------
+def build_ht_cache(p_val, occ_vals):
+    curves = ht_Iinf_dict(
+        cif_path=cif_file,
+        mx=mx,
+        occ=occ_vals,
+        p=p_val,
+        L_step=0.01,
+        two_theta_max=two_theta_range[1],
+        lambda_=lambda_,
+    )
+    qr = ht_dict_to_qr_dict(curves)
+    arrays = qr_dict_to_arrays(qr)
+    return {"p": p_val, "occ": tuple(occ_vals), "qr": qr, "arrays": arrays}
+
+# Precompute curves for the three p values
+ht_cache_multi = {
+    "p0": build_ht_cache(defaults['p0'], occ),
+    "p1": build_ht_cache(defaults['p1'], occ),
+    "p2": build_ht_cache(defaults['p2'], occ),
+}
+
+def combine_qr_dicts(caches, weights):
+    import numpy as np
+    out = {}
+    for cache, w in zip(caches, weights):
+        qr = cache["qr"]
+        for m, data in qr.items():
+            if m not in out:
+                out[m] = {"L": data["L"].copy(), "I": w * data["I"].copy(), "hk": data["hk"]}
+            else:
+                entry = out[m]
+                if entry["L"].shape != data["L"].shape or not np.allclose(entry["L"], data["L"]):
+                    union_L = np.union1d(entry["L"], data["L"])
+                    entry_I = np.interp(union_L, entry["L"], entry["I"], left=0.0, right=0.0)
+                    add_I = w * np.interp(union_L, data["L"], data["I"], left=0.0, right=0.0)
+                    entry["L"] = union_L
+                    entry["I"] = entry_I + add_I
+                else:
+                    entry["I"] += w * data["I"]
+    return out
+
+weights_init = np.array([defaults['w0'], defaults['w1'], defaults['w2']], dtype=float)
+weights_init /= weights_init.sum() if weights_init.sum() else 1.0
+combined_qr = combine_qr_dicts(
+    [ht_cache_multi['p0'], ht_cache_multi['p1'], ht_cache_multi['p2']],
+    weights_init,
 )
-if include_rods_flag:
-    miller1, intens1 = inject_fractional_reflections(miller1, intens1, mx)
+miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
+ht_curves_cache = {"curves": combined_qr, "arrays": (miller1, intens1, degeneracy1, details1)}
+_last_occ_for_ht = list(occ)
+_last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
+_last_weights = list(weights_init)
+# ---- convert the dict → arrays compatible with the downstream code ----
+debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
+debug_print("miller1 sample:", miller1[:5])
+
+if DEBUG_ENABLED:
+    from ra_sim.debug_utils import check_ht_arrays
+    check_ht_arrays(miller1, intens1)
+    # Manual inspection snippet recommended in the README
+    debug_print('miller1 dtype:', miller1.dtype, 'shape:', miller1.shape)
+    debug_print('L range:', miller1[:, 2].min(), miller1[:, 2].max())
+    debug_print('intens1 dtype:', intens1.dtype, 'min:', intens1.min(), 'max:', intens1.max())
+    debug_print('miller1 contiguous:', miller1.flags['C_CONTIGUOUS'])
+    debug_print('intens1 contiguous:', intens1.flags['C_CONTIGUOUS'])
 
 has_second_cif = bool(cif_file2)
 if has_second_cif:
@@ -216,9 +329,9 @@ if has_second_cif:
     )
     if include_rods_flag:
         miller2, intens2 = inject_fractional_reflections(miller2, intens2, mx)
-
     union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
-    miller = np.array(sorted(union_set), dtype=np.int32)
+    miller = np.array(sorted(union_set), dtype=float)
+    debug_print("combined miller count:", miller.shape[0])
 
     int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
     int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
@@ -261,6 +374,7 @@ else:
     intensities1_sim = intens1
     miller2_sim = np.empty((0,3), dtype=np.int32)
     intensities2_sim = np.empty((0,), dtype=np.float64)
+    debug_print("single CIF miller count:", miller.shape[0])
 
 # Save simulation data for later use
 SIM_MILLER1 = miller1_sim
@@ -268,79 +382,65 @@ SIM_INTENS1 = intensities1_sim
 SIM_MILLER2 = miller2_sim
 SIM_INTENS2 = intensities2_sim
 
-# Create the Summary DataFrame.
-# Create the Summary DataFrame.
-df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
-df_summary['Intensity'] = intensities
-df_summary['Degeneracy'] = degeneracy
-df_summary['Details'] = [f"See Details Sheet - Group {i+1}" for i in range(len(df_summary))]
+# Build summary and details dataframes using the helper.
+df_summary, df_details = build_intensity_dataframes(
+    miller, intensities, degeneracy, details
+)
 
-# Create the Details DataFrame by flattening the details list.
-details_list = []
-for i, group_details in enumerate(details):
-    for hkl, indiv_intensity in group_details:
-        details_list.append({
-            'Group': i+1,
-            'h': hkl[0],
-            'k': hkl[1],
-            'l': hkl[2],
-            'Individual Intensity': indiv_intensity
+if write_excel:
+    # Save the initial intensities to Excel in the configured downloads
+    # directory.
+    download_dir = get_dir("downloads")
+    excel_path = download_dir / "miller_intensities.xlsx"
+
+    with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
+        df_summary.to_excel(writer, sheet_name='Summary', index=False)
+        df_details.to_excel(writer, sheet_name='Details', index=False)
+
+        workbook  = writer.book
+        summary_sheet = writer.sheets['Summary']
+        details_sheet = writer.sheets['Details']
+
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'fg_color': '#4F81BD',
+            'font_color': '#FFFFFF',
+            'border': 1
+        })
+        for col_num, col_name in enumerate(df_summary.columns):
+            summary_sheet.write(0, col_num, col_name, header_format)
+            summary_sheet.set_column(col_num, col_num, 18)
+
+        header_format_details = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'fg_color': '#4BACC6',
+            'font_color': '#FFFFFF',
+            'border': 1
+        })
+        for col_num, col_name in enumerate(df_details.columns):
+            details_sheet.write(0, col_num, col_name, header_format_details)
+            details_sheet.set_column(col_num, col_num, 18)
+
+        last_row = len(df_summary) + 1
+        summary_sheet.conditional_format(f'D2:D{last_row}', {
+            'type': '3_color_scale',
+            'min_color': '#FFFFFF',
+            'mid_color': '#FFEB84',
+            'max_color': '#FF0000'
         })
 
-df_details = pd.DataFrame(details_list)
+        zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
+        for row in range(1, len(df_details) + 1):
+            if row % 2 == 1:
+                details_sheet.set_row(row, cell_format=zebra_format)
 
-# Save the initial intensities to Excel in the configured downloads directory.
-download_dir = get_dir("downloads")
-excel_path = download_dir / "miller_intensities.xlsx"
-
-with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-    df_summary.to_excel(writer, sheet_name='Summary', index=False)
-    df_details.to_excel(writer, sheet_name='Details', index=False)
-    
-    workbook  = writer.book
-    summary_sheet = writer.sheets['Summary']
-    details_sheet = writer.sheets['Details']
-    
-    header_format = workbook.add_format({
-        'bold': True,
-        'text_wrap': True,
-        'valign': 'vcenter',
-        'align': 'center',
-        'fg_color': '#4F81BD',
-        'font_color': '#FFFFFF',
-        'border': 1
-    })
-    for col_num, col_name in enumerate(df_summary.columns):
-        summary_sheet.write(0, col_num, col_name, header_format)
-        summary_sheet.set_column(col_num, col_num, 18)
-    
-    header_format_details = workbook.add_format({
-        'bold': True,
-        'text_wrap': True,
-        'valign': 'vcenter',
-        'align': 'center',
-        'fg_color': '#4BACC6',
-        'font_color': '#FFFFFF',
-        'border': 1
-    })
-    for col_num, col_name in enumerate(df_details.columns):
-        details_sheet.write(0, col_num, col_name, header_format_details)
-        details_sheet.set_column(col_num, col_num, 18)
-    
-    last_row = len(df_summary) + 1
-    summary_sheet.conditional_format(f'D2:D{last_row}', {
-        'type': '3_color_scale',
-        'min_color': '#FFFFFF',
-        'mid_color': '#FFEB84',
-        'max_color': '#FF0000'
-    })
-    
-    zebra_format = workbook.add_format({'bg_color': '#F2F2F2'})
-    for row in range(1, len(df_details) + 1):
-        if row % 2 == 1:
-            details_sheet.set_row(row, cell_format=zebra_format)
-
-print(f"Excel file saved at {excel_path}")
+    print(f"Excel file saved at {excel_path}")
 
 # Zero out beamstop region near center
 row_center = int(center_default[0])
@@ -359,26 +459,6 @@ current_background_index = 0
 background_visible = True
 
 measured_peaks = np.load(get_path("measured_peaks"), allow_pickle=True)
-
-defaults = {
-    'theta_initial': 5.0,
-    'gamma': Gamma_initial,
-    'Gamma': gamma_initial,
-    'chi': 0.0,
-    'zs': 0.0,
-    'zb': 0.0,
-    'debye_x': 0.0,
-    'debye_y': 0.0,
-    'corto_detector': Distance_CoR_to_Detector,
-    'sigma_mosaic_deg': np.degrees(sigma_mosaic),
-    'gamma_mosaic_deg': np.degrees(gamma_mosaic),
-    'eta': 0.0,
-    'a': av,
-    'c': cv,
-    'vmax': 1000,
-    'center_x': center_default[0],
-    'center_y': center_default[1]
-}
 
 ###############################################################################
 #                                  TK SETUP
@@ -648,8 +728,9 @@ def phi_max_slider_command(val):
     phi_max_label_var.set(f"{val_f:.1f}")
     schedule_update()
 
-range_frame = ttk.LabelFrame(plot_frame_1d, text="Integration Ranges")
-range_frame.pack(side=tk.TOP, fill=tk.X, pady=5)
+range_cf = CollapsibleFrame(plot_frame_1d, text='Integration Ranges', expanded=True)
+range_cf.pack(side=tk.TOP, fill=tk.X, pady=5)
+range_frame = range_cf.frame
 
 tth_min_container = ttk.Frame(range_frame)
 tth_min_container.pack(side=tk.TOP, fill=tk.X, pady=2)
@@ -749,6 +830,7 @@ last_1d_integration_data = {
 
 last_res2_background = None
 last_res2_sim = None
+_ai_cache = {}
 
 def update_mosaic_cache():
     """
@@ -788,7 +870,10 @@ line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 
 update_pending = None
+update_running = False
+
 def schedule_update():
+    """Throttle updates so heavy simulations don't overlap."""
     global update_pending
     if update_pending is not None:
         root.after_cancel(update_pending)
@@ -809,13 +894,19 @@ stored_sim_image = None
 #                              MAIN UPDATE
 ###############################################################################
 def do_update():
-    global update_pending, last_simulation_signature
+    global update_pending, update_running, last_simulation_signature
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global av2, cv2
 
+    if update_running:
+        # another update is in progress; try again shortly
+        update_pending = root.after(100, do_update)
+        return
+
     update_pending = None
+    update_running = True
 
     gamma_updated      = float(gamma_var.get())
     Gamma_updated      = float(Gamma_var.get())
@@ -870,31 +961,85 @@ def do_update():
         peak_millers.clear()
         peak_intensities.clear()
 
-        def run_one(miller_arr, intens_arr, a_val, c_val):
+        def run_one(data, intens_arr, a_val, c_val):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
-            return process_peaks_parallel(
-                miller_arr, intens_arr, image_size,
-                a_val, c_val, lambda_,
-                buf, corto_det_up,
-                gamma_updated, Gamma_updated, chi_updated, psi,
-                zs_updated, zb_updated, n2,
-                mosaic_params["beam_x_array"],
-                mosaic_params["beam_y_array"],
-                mosaic_params["theta_array"],
-                mosaic_params["phi_array"],
-                mosaic_params["sigma_mosaic_deg"],
-                mosaic_params["gamma_mosaic_deg"],
-                mosaic_params["eta"],
-                mosaic_params["wavelength_array"],
-                debye_x_updated, debye_y_updated,
-                [center_x_up, center_y_up],
-                theta_init_up,
-                np.array([1.0, 0.0, 0.0]),
-                np.array([0.0, 1.0, 0.0]),
-                save_flag=0
-            )
+            if isinstance(data, dict):
+                if DEBUG_ENABLED:
+                    n_pts = sum(len(v["L"]) for v in data.values())
+                    debug_print("process_qr_rods_parallel with", n_pts, "points")
+                return process_qr_rods_parallel(
+                    data,
+                    image_size,
+                    a_val,
+                    c_val,
+                    lambda_,
+                    buf,
+                    corto_det_up,
+                    gamma_updated,
+                    Gamma_updated,
+                    chi_updated,
+                    psi,
+                    zs_updated,
+                    zb_updated,
+                    n2,
+                    mosaic_params["beam_x_array"],
+                    mosaic_params["beam_y_array"],
+                    mosaic_params["theta_array"],
+                    mosaic_params["phi_array"],
+                    mosaic_params["sigma_mosaic_deg"],
+                    mosaic_params["gamma_mosaic_deg"],
+                    mosaic_params["eta"],
+                    mosaic_params["wavelength_array"],
+                    debye_x_updated,
+                    debye_y_updated,
+                    [center_x_up, center_y_up],
+                    theta_init_up,
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.0, 1.0, 0.0]),
+                    save_flag=0,
+                )
+            else:
+                miller_arr = data
+                if DEBUG_ENABLED:
+                    debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
+                    if not np.all(np.isfinite(miller_arr)):
+                        debug_print("Non-finite miller indices detected")
+                    if not np.all(np.isfinite(intens_arr)):
+                        debug_print("Non-finite intensities detected")
+                return process_peaks_parallel(
+                    miller_arr,
+                    intens_arr,
+                    image_size,
+                    a_val,
+                    c_val,
+                    lambda_,
+                    buf,
+                    corto_det_up,
+                    gamma_updated,
+                    Gamma_updated,
+                    chi_updated,
+                    psi,
+                    zs_updated,
+                    zb_updated,
+                    n2,
+                    mosaic_params["beam_x_array"],
+                    mosaic_params["beam_y_array"],
+                    mosaic_params["theta_array"],
+                    mosaic_params["phi_array"],
+                    mosaic_params["sigma_mosaic_deg"],
+                    mosaic_params["gamma_mosaic_deg"],
+                    mosaic_params["eta"],
+                    mosaic_params["wavelength_array"],
+                    debye_x_updated,
+                    debye_y_updated,
+                    [center_x_up, center_y_up],
+                    theta_init_up,
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.0, 1.0, 0.0]),
+                    save_flag=0,
+                )
 
-        img1, maxpos1, _, _, _, _ = run_one(SIM_MILLER1, SIM_INTENS1, a_updated, c_updated)
+        img1, maxpos1, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
         if SIM_MILLER2.size > 0:
             img2, maxpos2, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
         else:
@@ -912,6 +1057,7 @@ def do_update():
         if stored_max_positions_local is None:
             # first run after programme start – force a simulation
             last_simulation_signature = None
+            update_running = False
             return do_update()          # re-enter with computation path
         max_positions_local = stored_max_positions_local
         updated_image       = stored_sim_image
@@ -983,17 +1129,38 @@ def do_update():
 
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
 
-    ai = pyFAI.AzimuthalIntegrator(
-        dist=corto_det_up,
-        poni1=center_x_up * 100e-6,
-        poni2=center_y_up * 100e-6,
-        rot1=np.deg2rad(Gamma_updated),
-        rot2=np.deg2rad(gamma_updated),
-        rot3=0.0,
-        wavelength=wave_m,
-        pixel1=100e-6,
-        pixel2=100e-6
+    # ---------------------------------------------------------------
+    # pyFAI integrator setup is relatively expensive. Cache the
+    # AzimuthalIntegrator instance and only recreate it when any of the
+    # geometry parameters actually change. This significantly reduces
+    # overhead when repeatedly redrawing the live simulation with
+    # unchanged geometry settings.
+    # ---------------------------------------------------------------
+    global _ai_cache
+    sig = (
+        corto_det_up,
+        center_x_up,
+        center_y_up,
+        Gamma_updated,
+        gamma_updated,
+        wave_m,
     )
+    if _ai_cache.get("sig") != sig:
+        _ai_cache = {
+            "sig": sig,
+            "ai": pyFAI.AzimuthalIntegrator(
+                dist=corto_det_up,
+                poni1=center_x_up * 100e-6,
+                poni2=center_y_up * 100e-6,
+                rot1=np.deg2rad(Gamma_updated),
+                rot2=np.deg2rad(gamma_updated),
+                rot3=0.0,
+                wavelength=wave_m,
+                pixel1=100e-6,
+                pixel2=100e-6,
+            ),
+        }
+    ai = _ai_cache["ai"]
 
     # Caked 2D or normal 2D?
     if show_caked_2d_var.get() and unscaled_image_global is not None:
@@ -1001,6 +1168,14 @@ def do_update():
         caked_img = sim_res2.intensity
         image_display.set_data(caked_img)
         image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
+        image_display.set_extent([
+            float(sim_res2.radial[0]),
+            float(sim_res2.radial[-1]),
+            float(sim_res2.azimuthal[-1]),
+            float(sim_res2.azimuthal[0]),
+        ])
+        ax.set_xlabel('2θ (degrees)')
+        ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
         background_display.set_visible(False)
     else:
@@ -1010,6 +1185,9 @@ def do_update():
         else:
             image_display.set_data(np.zeros((image_size, image_size)))
         image_display.set_clim(0, vmax_var.get())
+        image_display.set_extent([0, image_size, image_size, 0])
+        ax.set_xlabel('X (pixels)')
+        ax.set_ylabel('Y (pixels)')
         ax.set_title('Simulated Diffraction Pattern')
         background_display.set_visible(background_visible)
         
@@ -1073,6 +1251,9 @@ def do_update():
             chi_square_label.config(text="Chi-Squared: N/A")
     except Exception as e:
         chi_square_label.config(text=f"Chi-Squared Error: {e}")
+    finally:
+        # mark update completion so future updates can run
+        update_running = False
 
 # ── after you’ve updated background_visible in toggle_background() ──
 def toggle_background():
@@ -1121,6 +1302,12 @@ def reset_to_defaults():
     occ_var1.set(1.0)
     occ_var2.set(0.5)
     occ_var3.set(0.5)
+    p0_var.set(defaults['p0'])
+    p1_var.set(defaults['p1'])
+    p2_var.set(defaults['p2'])
+    w0_var.set(defaults['w0'])
+    w1_var.set(defaults['w1'])
+    w2_var.set(defaults['w2'])
 
     update_mosaic_cache()
     global last_simulation_signature
@@ -1556,12 +1743,15 @@ def save_1d_snapshot():
     if not file_path.lower().endswith(".npy"):
         file_path += ".npy"
     
-    sim_img = last_1d_integration_data.get("simulated_2d_image")
-    if sim_img is None:
+    # Grab the currently displayed simulated image. ``global_image_buffer`` holds
+    # the scaled image that is shown in the GUI so copying it ensures we save
+    # exactly what the user sees.  ``last_1d_integration_data`` may be empty if
+    # the simulation hasn't run yet so rely directly on the buffer instead of
+    # that cache.
+    sim_img = np.asarray(global_image_buffer, dtype=np.float64).copy()
+    if sim_img.size == 0:
         progress_label.config(text="No simulated image available to save!")
         return
-
-    sim_img = np.asarray(sim_img, dtype=np.float64)
     try:
         np.save(file_path, sim_img, allow_pickle=False)
         progress_label.config(text=f"Saved simulated image to {file_path}")
@@ -1744,6 +1934,33 @@ debug_button = ttk.Button(
 )
 debug_button.pack(side=tk.TOP, padx=5, pady=2)
 
+# Button to force a full update (re-read occupancies and recalc everything).
+force_update_button = ttk.Button(
+    text="Force Update",
+    command=lambda: update_occupancies()
+)
+force_update_button.pack(side=tk.TOP, padx=5, pady=2)
+
+# Group related sliders in collapsible sections so the interface remains
+# manageable as more controls are added.
+geo_frame = CollapsibleFrame(left_col, text='Geometry', expanded=True)
+geo_frame.pack(fill=tk.X, padx=5, pady=5)
+
+debye_frame = CollapsibleFrame(left_col, text='Debye Parameters')
+debye_frame.pack(fill=tk.X, padx=5, pady=5)
+
+detector_frame = CollapsibleFrame(right_col, text='Detector')
+detector_frame.pack(fill=tk.X, padx=5, pady=5)
+
+lattice_frame = CollapsibleFrame(right_col, text='Lattice Parameters', expanded=True)
+lattice_frame.pack(fill=tk.X, padx=5, pady=5)
+
+mosaic_frame = CollapsibleFrame(right_col, text='Mosaic Broadening')
+mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
+
+center_frame = CollapsibleFrame(right_col, text='Beam Center')
+center_frame.pack(fill=tk.X, padx=5, pady=5)
+
 def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=False):
     var, scale = create_slider(
         label_str,
@@ -1757,46 +1974,46 @@ def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=Fals
     return var, scale
 
 theta_initial_var, theta_initial_scale = make_slider(
-    'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, left_col
+    'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
 )
 gamma_var, gamma_scale = make_slider(
-    'Gamma', -4, 4, defaults['gamma'], 0.001, left_col
+    'Gamma', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
 )
 Gamma_var, Gamma_scale = make_slider(
-    'Detector Rotation Γ', -4, 4, defaults['Gamma'], 0.001, left_col
+    'Detector Rotation Γ', -4, 4, defaults['Gamma'], 0.001, geo_frame.frame
 )
 chi_var, chi_scale = make_slider(
-    'Chi', -1, 1, defaults['chi'], 0.001, left_col
+    'Chi', -1, 1, defaults['chi'], 0.001, geo_frame.frame
 )
 zs_var, zs_scale = make_slider(
-    'Zs', -2.0e-3, 2e-3, defaults['zs'], 0.0001, left_col
+    'Zs', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame
 )
 zb_var, zb_scale = make_slider(
-    'Zb', -2.0e-3, 2e-3, defaults['zb'], 0.0001, left_col
+    'Zb', -2.0e-3, 2e-3, defaults['zb'], 0.0001, geo_frame.frame
 )
 debye_x_var, debye_x_scale = make_slider(
-    'Debye Qz', 0.0, 1.0, defaults['debye_x'], 0.001, left_col
+    'Debye Qz', 0.0, 1.0, defaults['debye_x'], 0.001, debye_frame.frame
 )
 debye_y_var, debye_y_scale = make_slider(
-    'Debye Qr', 0.0, 1.0, defaults['debye_y'], 0.001, left_col
+    'Debye Qr', 0.0, 1.0, defaults['debye_y'], 0.001, debye_frame.frame
 )
 corto_detector_var, corto_detector_scale = make_slider(
-    'CortoDetector', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, right_col
+    'CortoDetector', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, detector_frame.frame
 )
 a_var, a_scale = make_slider(
-    'a (Å)', 3.5, 8.0, defaults['a'], 0.01, right_col
+    'a (Å)', 3.5, 8.0, defaults['a'], 0.01, lattice_frame.frame
 )
 c_var, c_scale = make_slider(
-    'c (Å)', 20.0, 40.0, defaults['c'], 0.01, right_col
+    'c (Å)', 20.0, 40.0, defaults['c'], 0.01, lattice_frame.frame
 )
 sigma_mosaic_var, sigma_mosaic_scale = make_slider(
-    'σ Mosaic (deg)', 0.0, 5.0, defaults['sigma_mosaic_deg'], 0.01, right_col, mosaic=True
+    'σ Mosaic (deg)', 0.0, 5.0, defaults['sigma_mosaic_deg'], 0.01, mosaic_frame.frame, mosaic=True
 )
 gamma_mosaic_var, gamma_mosaic_scale = make_slider(
-    'γ Mosaic (deg)', 0.0, 5.0, defaults['gamma_mosaic_deg'], 0.01, right_col, mosaic=True
+    'γ Mosaic (deg)', 0.0, 5.0, defaults['gamma_mosaic_deg'], 0.01, mosaic_frame.frame, mosaic=True
 )
 eta_var, eta_scale = make_slider(
-    'η (fraction)', 0.0, 1.0, defaults['eta'], 0.001, right_col, mosaic=True
+    'η (fraction)', 0.0, 1.0, defaults['eta'], 0.001, mosaic_frame.frame, mosaic=True
 )
 center_x_var, center_x_scale = make_slider(
     'Beam Center Row',
@@ -1804,7 +2021,7 @@ center_x_var, center_x_scale = make_slider(
     center_default[0]+100.0,
     defaults['center_x'],
     1.0,
-    right_col
+    center_frame.frame
 )
 center_y_var, center_y_scale = make_slider(
     'Beam Center Col',
@@ -1812,17 +2029,19 @@ center_y_var, center_y_scale = make_slider(
     center_default[1]+100.0,
     defaults['center_y'],
     1.0,
-    right_col
+    center_frame.frame
 )
 
 # Slider controlling contribution of the first CIF file, only if a second CIF
 # was provided.
 if has_second_cif:
+    weights_frame = CollapsibleFrame(right_col, text='CIF Weights')
+    weights_frame.pack(fill=tk.X, padx=5, pady=5)
     weight1_var, _ = make_slider(
-        'CIF1 Weight', 0.0, 1.0, weight1, 0.01, right_col
+        'CIF1 Weight', 0.0, 1.0, weight1, 0.01, weights_frame.frame
     )
     weight2_var, _ = make_slider(
-        'CIF2 Weight', 0.0, 1.0, weight2, 0.01, right_col
+        'CIF2 Weight', 0.0, 1.0, weight2, 0.01, weights_frame.frame
     )
 
     def update_weights(*args):
@@ -1854,30 +2073,57 @@ occ_var2 = tk.DoubleVar(value=1.0)
 occ_var3 = tk.DoubleVar(value=1.0)
 
 def update_occupancies(*args):
-    """
-    Re-run miller_generator with updated occupancies,
-    then force the simulation to recalc.
-    """
+    """Recompute Hendricks–Teller curves when occupancies or p-values change."""
     global miller, intensities, degeneracy, details
     global df_summary, df_details
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
-
-    # Grab new occupancy values from the variables (they may have been updated via the slider or Entry)
-    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
-
+    global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
     global intensities_cif1, intensities_cif2
-    m1, i1, d1, det1 = miller_generator(
-        mx,
-        cif_file,
-        new_occ,
-        lambda_,
-        energy,
-        intensity_threshold,
-        two_theta_range,
-    )
-    if include_rods_var.get():
-        m1, i1 = inject_fractional_reflections(m1, i1, mx)
+
+    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
+    p_vals = [p0_var.get(), p1_var.get(), p2_var.get()]
+    w_raw = [w0_var.get(), w1_var.get(), w2_var.get()]
+    w_sum = sum(w_raw) or 1.0
+    weights = [w / w_sum for w in w_raw]
+
+    if (
+        list(new_occ) == _last_occ_for_ht
+        and list(p_vals) == _last_p_triplet
+        and list(weights) == _last_weights
+    ):
+        last_simulation_signature = None
+        schedule_update()
+        return
+
+    def get_cache(label, p_val):
+        cache = ht_cache_multi.get(label)
+        if (
+            cache is None
+            or cache["p"] != p_val
+            or list(cache["occ"]) != list(new_occ)
+        ):
+            cache = build_ht_cache(p_val, new_occ)
+            ht_cache_multi[label] = cache
+        return cache
+
+    caches = [get_cache("p0", p_vals[0]),
+              get_cache("p1", p_vals[1]),
+              get_cache("p2", p_vals[2])]
+
+    combined_qr_local = combine_qr_dicts(caches, weights)
+    arrays_local = qr_dict_to_arrays(combined_qr_local)
+    ht_curves_cache = {"curves": combined_qr_local, "arrays": arrays_local}
+    _last_occ_for_ht = list(new_occ)
+    _last_p_triplet = list(p_vals)
+    _last_weights = list(weights)
+
+    m1, i1, d1, det1 = arrays_local
+
+    # Convert arrays → dictionaries for quick lookup
+    deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}
+    det_dict1 = {tuple(m1[i]): det1[i] for i in range(len(m1))}
+
 
     if has_second_cif:
         m2, i2, d2, det2 = miller_generator(
@@ -1892,8 +2138,11 @@ def update_occupancies(*args):
         if include_rods_var.get():
             m2, i2 = inject_fractional_reflections(m2, i2, mx)
 
+        deg_dict2 = {tuple(m2[i]): int(d2[i]) for i in range(len(m2))}
+        det_dict2 = {tuple(m2[i]): det2[i] for i in range(len(m2))}
+
         union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
-        miller = np.array(sorted(union), dtype=np.int32)
+        miller = np.array(sorted(union), dtype=float)
         int1 = {tuple(h): v for h, v in zip(m1, i1)}
         int2 = {tuple(h): v for h, v in zip(m2, i2)}
         intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
@@ -1911,11 +2160,11 @@ def update_occupancies(*args):
         SIM_INTENS2 = i2
 
         degeneracy = np.array(
-            [d1.get(tuple(h), 0) + d2.get(tuple(h), 0) for h in miller],
+            [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
             dtype=np.int32,
         )
         details = [
-            det1.get(tuple(h), []) + det2.get(tuple(h), [])
+            det_dict1.get(tuple(h), []) + det_dict2.get(tuple(h), [])
             for h in miller
         ]
     else:
@@ -1931,33 +2180,38 @@ def update_occupancies(*args):
         SIM_MILLER2 = np.empty((0,3), dtype=np.int32)
         SIM_INTENS2 = np.empty((0,), dtype=np.float64)
 
-    # (Re-)build the summary DataFrame.
-    df_summary = pd.DataFrame(miller, columns=['h', 'k', 'l'])
-    df_summary['Intensity'] = intensities
-    df_summary['Degeneracy'] = degeneracy
-    df_summary['Details'] = [f"See Details Sheet - Group {i+1}" for i in range(len(df_summary))]
-
-    # Re-build the details DataFrame.
-    details_list = []
-    for i, group_details in enumerate(details):
-        for hkl, indiv_intensity in group_details:
-            details_list.append({
-                'Group': i+1,
-                'h': hkl[0],
-                'k': hkl[1],
-                'l': hkl[2],
-                'Individual Intensity': indiv_intensity
-            })
-    df_details = pd.DataFrame(details_list)
+    # (Re-)build the summary and details DataFrames.
+    df_summary, df_details = build_intensity_dataframes(
+        miller, intensities, degeneracy, details
+    )
 
     # Reset the simulation signature so the next update is forced.
     last_simulation_signature = None
     schedule_update()
 
-# Existing occupancy slider for site 1.
-ttk.Label(right_col, text="Occupancy Site 1").pack(padx=5, pady=2)
+# Sliders for three disorder probabilities and weights inside a collapsible frame
+stack_frame = CollapsibleFrame(right_col, text='Stacking Probabilities')
+stack_frame.pack(fill=tk.X, padx=5, pady=5)
+p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
+                          stack_frame.frame, update_occupancies)
+w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
+                          stack_frame.frame, update_occupancies)
+p1_var, _ = create_slider('p≈1', 0.8, 1.0, defaults['p1'], 0.001,
+                          stack_frame.frame, update_occupancies)
+w1_var, _ = create_slider('w(p≈1)%', 0.0, 100.0, defaults['w1'], 0.1,
+                          stack_frame.frame, update_occupancies)
+p2_var, _ = create_slider('p', 0.0, 1.0, defaults['p2'], 0.001,
+                          stack_frame.frame, update_occupancies)
+w2_var, _ = create_slider('w(p)%', 0.0, 100.0, defaults['w2'], 0.1,
+                          stack_frame.frame, update_occupancies)
+
+# Occupancy sliders grouped in a collapsible frame
+occ_frame = CollapsibleFrame(right_col, text='Site Occupancies')
+occ_frame.pack(fill=tk.X, padx=5, pady=5)
+
+ttk.Label(occ_frame.frame, text="Occupancy Site 1").pack(padx=5, pady=2)
 occ_scale1 = ttk.Scale(
-    right_col,
+    occ_frame.frame,
     from_=0.0,
     to=1.0,
     orient=tk.HORIZONTAL,
@@ -1966,10 +2220,9 @@ occ_scale1 = ttk.Scale(
 )
 occ_scale1.pack(fill=tk.X, padx=5, pady=2)
 
-# Existing occupancy slider for site 2.
-ttk.Label(right_col, text="Occupancy Site 2").pack(padx=5, pady=2)
+ttk.Label(occ_frame.frame, text="Occupancy Site 2").pack(padx=5, pady=2)
 occ_scale2 = ttk.Scale(
-    right_col,
+    occ_frame.frame,
     from_=0.0,
     to=1.0,
     orient=tk.HORIZONTAL,
@@ -1978,10 +2231,9 @@ occ_scale2 = ttk.Scale(
 )
 occ_scale2.pack(fill=tk.X, padx=5, pady=2)
 
-# Existing occupancy slider for site 3.
-ttk.Label(right_col, text="Occupancy Site 3").pack(padx=5, pady=2)
+ttk.Label(occ_frame.frame, text="Occupancy Site 3").pack(padx=5, pady=2)
 occ_scale3 = ttk.Scale(
-    right_col,
+    occ_frame.frame,
     from_=0.0,
     to=1.0,
     orient=tk.HORIZONTAL,
@@ -1991,7 +2243,7 @@ occ_scale3 = ttk.Scale(
 occ_scale3.pack(fill=tk.X, padx=5, pady=2)
 
 # --- Add numeric input fields and a Force Update button ---
-occ_entry_frame = ttk.Frame(right_col)
+occ_entry_frame = ttk.Frame(occ_frame.frame)
 occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
 
 # Occupancy input for Site 1.
@@ -2009,12 +2261,15 @@ ttk.Label(occ_entry_frame, text="Input Occupancy Site 3:").grid(row=2, column=0,
 occ_entry3 = ttk.Entry(occ_entry_frame, textvariable=occ_var3, width=5)
 occ_entry3.grid(row=2, column=1, padx=5, pady=2)
 
-# Button to force a full update (re-read occupancies and recalc everything).
-force_update_button = ttk.Button(occ_entry_frame, text="Force Update", command=update_occupancies)
-force_update_button.grid(row=3, column=0, columnspan=2, pady=5)
+def main(write_excel: bool = True):
+    """Entry point for running the GUI application.
 
-def main():
-    """Entry point for running the GUI application."""
+    Parameters
+    ----------
+    write_excel : bool, optional
+        When ``True`` the initial intensities are written to an Excel
+        file in the configured downloads directory.
+    """
 
     params_file_path = get_path("parameters_file")
     if os.path.exists(params_file_path):
@@ -2047,4 +2302,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="RA Simulation GUI")
+    parser.add_argument(
+        "--no-excel",
+        action="store_true",
+        help="Do not write the initial intensity Excel file",
+    )
+    args = parser.parse_args()
+
+    try:
+        main(write_excel=not args.no_excel)
+    except Exception as exc:
+        print("Unhandled exception during startup:", exc)
+        import traceback
+        traceback.print_exc()

@@ -1,0 +1,1123 @@
+#!/usr/bin/env python3
+"""
+Optimised Hendricks–Teller viewer for PbI₂ (modified)
+──────────────────────────────────────────
+* Pre-computes F²(h,k,ℓ) once for extended HK range.
+* Caches component intensities for three p-values.
+* ℓ-range RangeSlider up to ``L_MAX`` (default 10).
+* ``L_MAX`` can be changed via ``--l-max`` on the command line.
+* All sliders placed below the figure area; no overlap.
+* Top secondary axis removed.
+* Uses ionic form factors: Pb²⁺ and I⁻.
+* Deduplicates symmetry-equivalent HK pairs with degeneracy.
+"""
+import os
+import re, sys
+from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+from cycler import cycler
+import argparse
+
+if plt.get_backend().lower().endswith("agg") and not os.environ.get(
+    "PYTEST_CURRENT_TEST"
+):
+    try:  # pragma: no cover - UI safeguard
+        plt.switch_backend("TkAgg")
+    except Exception:
+        pass
+from matplotlib.widgets import Slider, RangeSlider, Button, CheckButtons
+from collections import Counter
+
+from plot_excel_scatter import _normalize_columns, _find_intensity_columns
+from compare_intensity import compute_metrics, plot_comparison
+
+from ra_sim.utils.tools import intensities_for_hkls
+from ra_sim.utils.calculations import d_spacing, two_theta
+import Dans_Diffraction as dif
+import pandas as pd
+import tkinter as tk
+from tkinter import filedialog, simpledialog, messagebox
+
+# color palette for accessibility
+COLORBLIND_COLORS = [
+    "#0072B2",  # blue
+    "#D55E00",  # vermillion
+    "#009E73",  # bluish green
+    "#CC79A7",  # reddish purple
+    "#F0E442",  # yellow
+    "#56B4E9",  # sky blue
+    "#E69F00",  # orange
+    "#000000",  # black
+]
+
+plt.rc("axes", prop_cycle=cycler("color", COLORBLIND_COLORS))
+
+# command-line options ------------------------------------------------------
+parser = argparse.ArgumentParser(description="HT viewer")
+parser.add_argument(
+    "--l-max",
+    type=float,
+    default=10.0,
+    help="maximum ℓ range for Hendricks–Teller curves",
+)
+_ARGS, _ = parser.parse_known_args()
+
+# preserve slider objects so they aren’t garbage-collected
+_sliders = []
+_last_df = None  # store last exported dataframe for extra plots
+# hold scatter plot widgets so they remain responsive
+_scatter_widgets: list[object] = []
+_check_widgets: list[object] = []
+
+
+def c_from_cif(path: str) -> float:
+    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+        for ln in fp:
+            if m := re.match(r"_cell_length_c\s+([\d.]+)", ln):
+                return float(m.group(1))
+    raise ValueError("_cell_length_c not found in CIF")
+
+
+# constants
+P_CLAMP = 1e-6
+
+A_HEX = 4.557  # Å
+BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+CIF_2H = BUNDLE / "PbI2_2H.cif"
+CIF_6H = BUNDLE / "PbI2_6H.cif"
+C_2H, C_6H = map(c_from_cif, map(str, (CIF_2H, CIF_6H)))
+
+
+def iodine_z_from_cif(path: Path) -> float:
+    """Return the fractional z position for iodine from ``path``."""
+    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+        for ln in fp:
+            if ln.strip().startswith("I1"):
+                parts = ln.split()
+                if len(parts) >= 5:
+                    return float(parts[4])
+    raise ValueError("Iodine position not found")
+
+DEFAULT_I_Z = iodine_z_from_cif(CIF_2H)
+
+# ───────── constants ─────────
+LAMBDA = 1.5406  # Å   (Cu Kα1)
+E_CuKa = 12398.4193 / LAMBDA  # eV  (≈ 8040 eV)
+
+ION = {"Pb": "Pb2+", "I": "I1-"}  # ionic labels for f₀
+NEUTR = {"Pb": "Pb", "I": "I"}  # neutral symbols for f′/f″
+
+# --- atomic form factors ----------------------------------------------------
+from Dans_Diffraction.functions_crystallography import (
+    xray_scattering_factor,
+    xray_dispersion_corrections,
+)
+
+
+def f_comp(el: str, Q: np.ndarray) -> np.ndarray:
+    """Total atomic scattering factor  f = f₀(Q)+f′(E)+i f″(E).
+
+    Parameters
+    ----------
+    el : str
+        Chemical symbol (``"Pb"`` or ``"I"``).
+    Q : ndarray
+        Magnitude of the scattering vector in Å⁻¹.
+
+    Returns
+    -------
+    ndarray
+        Complex form factor values matching the shape of ``Q``.
+    """
+
+    q = np.asarray(Q, dtype=float).reshape(-1)
+    f0 = xray_scattering_factor([ION[el]], q)[:, 0]
+    f1, f2 = xray_dispersion_corrections([NEUTR[el]], energy_kev=[E_CuKa / 1000])
+    f1 = float(f1[0, 0])
+    f2 = float(f2[0, 0])
+    out = f0 + f1 + 1j * f2
+    return out.reshape(Q.shape)
+
+
+# atomic sites pulled directly from the CIFs so the phase conventions match
+def _sites_from_cif(path: Path) -> list[tuple[float, float, float, str]]:
+    xtl = dif.Crystal(str(path))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    st = xtl.Structure
+    return [
+        (float(st.u[i]), float(st.v[i]), float(st.w[i]), str(st.type[i]))
+        for i in range(len(st.u))
+    ]
+
+
+# For both 2H and 6H polytypes we use the same three atomic positions.  The
+# 6H structure differs only in the lattice parameter ``c``; the atomic basis is
+# otherwise identical.  The positions are read from the 2H CIF so that the phase
+# conventions stay in sync with the tabulated form factors used when exporting
+# CIF HKLs.
+SITES_2H = _sites_from_cif(CIF_2H)
+N_P, A_CELL = 3, 17.98e-10
+AREA = (2 * np.pi) ** 2 / A_CELL * N_P
+
+# ─── Recommendation 1: extend HK range
+MAX_HK = 10  # increase as needed
+HK_BY_M = {}
+for h in range(-MAX_HK, MAX_HK + 1):
+    for k in range(-MAX_HK, MAX_HK + 1):
+        m = h * h + h * k + k * k
+        HK_BY_M.setdefault(m, []).append((h, k))
+ALLOWED_M = sorted(HK_BY_M)  # only these m values are valid
+
+# ℓ grid
+L_MAX = float(_ARGS.l_max)
+N_L = 2001
+L_GRID = np.linspace(0, L_MAX, N_L)
+QZ_GRID = 2 * np.pi / C_2H * L_GRID
+
+# precompute |F|² for 2H lattice (single-layer form factor)
+F2_cache_2H: dict[tuple[int, int], np.ndarray] = {}
+
+# store contributions that don't change with iodine z
+_FIXED_PART: dict[tuple[int, int], np.ndarray] = {}
+# store the coefficient multiplied by exp(2πi * ℓ * z) for iodine sites
+_IODINE_FACTOR: dict[tuple[int, int], np.ndarray] = {}
+
+
+def _precompute_F_parts() -> None:
+    """Precompute constant and iodine-dependent scattering contributions."""
+    for pairs in HK_BY_M.values():
+        for h, k in pairs:
+            Q_2h = (
+                2
+                * np.pi
+                * np.sqrt(
+                    (4 / 3) * (h * h + k * k + h * k) / A_HEX**2
+                    + (L_GRID**2) / C_2H**2
+                )
+            )
+            fixed = np.zeros_like(L_GRID, dtype=complex)
+            factor = np.zeros_like(L_GRID, dtype=complex)
+            for x, y, z, sym in SITES_2H:
+                f = f_comp(sym, Q_2h)
+                phase_xy = np.exp(2j * np.pi * (h * x + k * y))
+                if sym.startswith("I"):
+                    factor += f * phase_xy
+                else:
+                    fixed += f * phase_xy * np.exp(2j * np.pi * L_GRID * (z / 3))
+            _FIXED_PART[(h, k)] = fixed
+            _IODINE_FACTOR[(h, k)] = factor
+
+
+def compute_F2_cache(i_z: float) -> None:
+    """Recalculate ``F2_cache_2H`` for a given iodine ``z`` position."""
+    phase_z = np.exp(2j * np.pi * L_GRID * (i_z / 3))
+    F2_cache_2H.clear()
+    for key in _FIXED_PART:
+        total = _FIXED_PART[key] + _IODINE_FACTOR[key] * phase_z
+        F2_cache_2H[key] = np.abs(total) ** 2
+
+
+_precompute_F_parts()
+compute_F2_cache(DEFAULT_I_Z)
+
+# Hendricks–Teller infinite stacking
+
+
+def _abc(p, h, k):
+    δ = 2 * np.pi * ((2 * h + k) / 3)
+    z = (1 - p) + p * np.exp(1j * δ)
+    f = np.minimum(np.abs(z), 1 - P_CLAMP)
+    ψ = np.angle(z)
+    return f, ψ, δ
+
+
+def I_inf(p, h, k, F2) -> np.ndarray:
+    """Return the Hendricks–Teller intensity for one HK pair.
+
+    Parameters
+    ----------
+    p : float
+        Stacking-fault probability. Values close to 0 correspond to the
+        6H polytype and values close to 1 correspond to the 2H polytype.
+    h, k : int
+        Miller indices.
+    F2 : ndarray
+        Pre-computed structure factor magnitude squared.
+    """
+
+    if state.get("f2_only"):
+        return F2
+
+    f, ψ, δ = _abc(p, h, k)
+    φ = δ + 2 * np.pi * L_GRID * 1/3
+    return AREA * F2 * (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
+
+
+# GUI state
+defaults = {
+    "m": ALLOWED_M[0],
+    "p0": 0.0,
+    "p1": 1.0,
+    "p3": 0.5,
+    # Use only the general p case by default.  The perfect 2H and 6H
+    # components can still be enabled via their weight sliders.
+    "w0": 0.0,
+    "w1": 0.0,
+    "w2": 100.0,
+    "I0": None,
+    "I1": None,
+    "I3": None,
+    "L_lo": 1.0,
+    "L_hi": L_MAX,
+    "I_z": DEFAULT_I_Z,
+    "f2_only": False,
+    "qz_axis": False,
+}
+state = defaults.copy()
+
+# ─── after 'state = defaults.copy()' ───────────────────────────────────────────
+state.update(
+    {"mode": "m", "h": 0, "k": 0, "show_bragg": False}  # 'm' or 'hk'
+)  # current HK in hk‑mode
+
+# cache Bragg intensities per CIF and (h,k)
+_BRAGG_CACHE = {}
+
+
+# ─── utilities ‑‑‑ choose active (h,k) list based on state['mode'] ────────────
+def active_pairs():
+    if state["mode"] == "m":
+        return HK_BY_M.get(state["m"], [])
+    else:
+        return [(state["h"], state["k"])]
+
+
+# 1. keep only ONE definition of compute_components --------------------------
+def compute_components():
+    pairs = active_pairs()  # picks either HK or m list
+
+    if state["mode"] == "hk":  # no symmetry weight
+        counts = {(h, k): 1 for h, k in pairs}
+    else:  # hexagonal degeneracy
+        # Keep the sign for each (h,k) pair so the correct single-layer
+        # form factor is used for ``I_inf``.  Each pair appears once in
+        # ``pairs`` so the Counter simply enables potential future
+        # weighting without dropping the sign information.
+        counts = Counter(pairs)
+
+    def comp(p):
+        return sum(
+            n * I_inf(p, h, k, F2_cache_2H[(h, k)])
+            for (h, k), n in counts.items()
+        )
+
+    state["I0"] = comp(state["p0"])
+    state["I1"] = comp(state["p1"])
+    state["I3"] = comp(state["p3"])
+
+
+compute_components()
+
+
+def composite_tot():
+    w0, w1, w2 = state["w0"], state["w1"], state["w2"]
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    return w0 * state["I0"] + w1 * state["I1"] + w2 * state["I3"]
+
+
+def ht_total_for_pair(h, k):
+    """Return total HT intensity for a single (h,k) pair."""
+    w0, w1, w2 = state["w0"], state["w1"], state["w2"]
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    F2 = F2_cache_2H[(h, k)]
+    return (
+        w0 * I_inf(state["p0"], h, k, F2, 1 / 3)
+        + w1 * I_inf(state["p1"], h, k, F2, 1.0)
+        + w2 * I_inf(state["p3"], h, k, F2, 1 / 3)
+    )
+
+
+def _raw_bragg(h, k, lo, hi, cif_path):
+    """Return ``(L_vals, intensities)`` for integer L within ``[lo, hi]``."""
+    lo_i = int(np.floor(lo))
+    hi_i = int(np.ceil(hi))
+    key = (cif_path, h, k, lo_i, hi_i)
+    if key not in _BRAGG_CACHE:
+        hkls = [(h, k, l) for l in range(lo_i, hi_i + 1)]
+        intens = intensities_for_hkls(
+            hkls, cif_path, [1.0], LAMBDA, energy=E_CuKa / 1000
+        )
+        L_vals = np.arange(lo_i, hi_i + 1)
+        _BRAGG_CACHE[key] = (L_vals, np.asarray(intens))
+    return _BRAGG_CACHE[key]
+
+
+def _weight_2h_6h():
+    """Return normalized weights for 2H and 6H contributions."""
+    w0, w1 = state["w0"], state["w1"]
+    s = (w0 + w1) or 1.0
+    return (w1 / s, w0 / s)  # 2H weight, 6H weight
+
+
+def bragg_intensity_single(h, k):
+    """Return ``(L_vals, b2h, b6h)`` scaled and weighted for one (h,k) pair."""
+    lo, hi = state["L_lo"], state["L_hi"]
+    L_vals, raw2h = _raw_bragg(h, k, lo, hi, str(CIF_2H))
+    _, raw6h = _raw_bragg(h, k, lo, hi, str(CIF_6H))
+    ht = ht_total_for_pair(h, k)
+    idx = np.round(L_vals / L_MAX * (len(L_GRID) - 1)).astype(int)
+    ht_slice = ht[idx]
+    max_ht = float(ht_slice.max()) if np.any(ht_slice) else 1.0
+    max_2h = float(raw2h.max()) if np.any(raw2h) else 1.0
+    max_6h = float(raw6h.max()) if np.any(raw6h) else 1.0
+    scale2 = max_ht / max_2h if max_2h else 1.0
+    scale6 = max_ht / max_6h if max_6h else 1.0
+    w2h, w6h = _weight_2h_6h()
+    return L_vals, raw2h * scale2 * w2h, raw6h * scale6 * w6h
+
+
+def bragg_intensity_sum(pairs):
+    """Return weighted 2H and 6H intensities for all ``pairs``.
+
+    The returned arrays correspond to integer ``L`` values within the
+    current slider range. Intensities from each polytype are scaled to
+    the Hendricks–Teller data and multiplied by the user weights before
+    summing or further processing.
+    """
+    lo, hi = state["L_lo"], state["L_hi"]
+    L_vals = np.arange(int(np.floor(lo)), int(np.ceil(hi)) + 1)
+    total_2h = np.zeros_like(L_vals, dtype=float)
+    total_6h = np.zeros_like(L_vals, dtype=float)
+    total_ht = np.zeros_like(L_vals, dtype=float)
+    idx = np.round(L_vals / L_MAX * (len(L_GRID) - 1)).astype(int)
+    for h, k in pairs:
+        L_tmp, b2 = _raw_bragg(h, k, lo, hi, str(CIF_2H))
+        _, b6 = _raw_bragg(h, k, lo, hi, str(CIF_6H))
+        total_2h += b2
+        total_6h += b6
+        total_ht += ht_total_for_pair(h, k)[idx]
+    max_ht = float(total_ht.max()) if np.any(total_ht) else 1.0
+    max_2h = float(total_2h.max()) if np.any(total_2h) else 1.0
+    max_6h = float(total_6h.max()) if np.any(total_6h) else 1.0
+    scale2 = max_ht / max_2h if max_2h else 1.0
+    scale6 = max_ht / max_6h if max_6h else 1.0
+    w2h, w6h = _weight_2h_6h()
+    return L_vals, total_2h * scale2 * w2h, total_6h * scale6 * w6h
+
+
+def _is_hk_mode() -> bool:  ### ← NEW
+    return state["mode"] == "hk"
+
+
+# ──────────────────────────────────────────────────────────────
+# 2)  SIMPLE closed-form integrated area for **any** p
+def ht_integrated_area(p, h, k, ell):
+    """Analytic Hendricks–Teller area for a single reflection."""
+    P_EPS = 1.0e-6  # keep r away from the pole
+
+    if p <= 1e-15:
+        p_eff = P_EPS
+    elif p >= 1 - 1e-15:
+        p_eff = 1.0 - P_EPS
+    else:
+        p_eff = p
+
+    idx = int(round(ell / L_MAX * (N_L - 1)))
+    F2 = F2_cache_2H[(h, k)][idx]
+
+    delta = 2 * np.pi * (2 * h + k) / 3
+    z = (1 - p_eff) + p_eff * np.exp(-1j * delta)
+    r2 = abs(z) ** 2
+
+    return 2 * np.pi * F2 * r2 / (1.0 - r2)
+
+
+def ht_numeric_area(p, h, k, ell, nphi=4001):
+    """Numeric Hendricks–Teller area using φ integration.
+
+    The 2H single-layer form factor is used for all ``p`` values so the
+    numeric area remains consistent with the analytic model.
+
+    Parameters
+    ----------
+    p : float
+        Stacking-fault probability.
+    h, k : int
+        Miller indices.
+    ell : int
+        L index of the reflection.
+    nphi : int, optional
+        Number of φ samples for integration.
+    """
+    idx = int(round(ell / L_MAX * (N_L - 1)))
+    F2 = F2_cache_2H[(h, k)][idx]
+
+    phi_axis = np.linspace(-np.pi, np.pi, nphi)
+    f, _, _ = _abc(p, h, k)
+    r = abs(f)
+    integrand = r * r / (1 + r * r - 2 * r * np.cos(phi_axis))
+    area = np.trapezoid(integrand, phi_axis)
+    return AREA * F2 * area
+
+
+# composite (still honours weights, but p-values are 0 now)
+def analytic_area_weighted(h, k, ell):
+    w0, w1, w2 = state["w0"], state["w1"], state["w2"]
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    return (
+        w0 * ht_integrated_area(state["p0"], h, k, ell)
+        + w1 * ht_integrated_area(state["p1"], h, k, ell)
+        + w2 * ht_integrated_area(state["p3"], h, k, ell)
+    )
+
+
+# numeric variant
+def numeric_area_weighted(h, k, ell, nphi=4001):
+    w0, w1, w2 = state["w0"], state["w1"], state["w2"]
+    s = (w0 + w1 + w2) or 1
+    w0, w1, w2 = w0 / s, w1 / s, w2 / s
+    return (
+        w0 * ht_numeric_area(state["p0"], h, k, ell, nphi)
+        + w1 * ht_numeric_area(state["p1"], h, k, ell, nphi)
+        + w2 * ht_numeric_area(state["p3"], h, k, ell, nphi)
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# helper – return normalised slider weights  w0 w1 w2  (sum = 1)
+def _norm_weights():
+    w0, w1, w2 = state["w0"], state["w1"], state["w2"]
+    s = (w0 + w1 + w2) or 1.0  # avoid division by zero
+    return w0 / s, w1 / s, w2 / s
+
+
+def _build_bragg_dataframe():
+    """Return DataFrame with scaled Cif and numeric intensities."""
+    rows: list[dict] = []
+    w2h, w6h = _weight_2h_6h()  # use proper polytype weights
+    intensity_max = 0.0
+    area_max = 0.0
+
+    pairs = [(state["h"], state["k"])] if _is_hk_mode() else HK_BY_M[state["m"]]
+
+    for h, k in pairs:
+        L, raw2 = _raw_bragg(h, k, 0, L_MAX, str(CIF_2H))
+        _, raw6 = _raw_bragg(h, k, 0, L_MAX, str(CIF_6H))
+
+        ht_curve = composite_tot()
+        s_ht = ht_curve.max() or 1.0
+        sc2 = s_ht / (raw2.max() or 1.0)
+        sc6 = s_ht / (raw6.max() or 1.0)
+
+        for l, r2, r6 in zip(L, raw2, raw6):
+            scaled2 = r2 * sc2 * w2h
+            scaled6 = r6 * sc6 * w6h
+            total = scaled2 + scaled6
+            intensity_max = max(intensity_max, total)
+
+            row = dict(
+                h=h,
+                k=k,
+                l=int(l),
+                Cif2H_scaled=scaled2,
+                Cif2H_raw=r2,
+                Cif6H_scaled=scaled6,
+                Cif6H_raw=r6,
+                Total_scaled=total,
+            )
+
+            if _is_hk_mode():
+                n2 = ht_numeric_area(state["p1"], h, k, l)
+                n6 = ht_numeric_area(state["p0"], h, k, l)
+                area_max = max(area_max, n2, n6)
+                row["Numeric_2H_area"] = n2
+                row["Numeric_6H_area"] = n6
+            else:
+                n = numeric_area_weighted(h, k, l)
+                area_max = max(area_max, n)
+                row["Numeric_area"] = n
+
+            rows.append(row)
+
+    if intensity_max <= 0:
+        intensity_max = 1.0
+
+    scale_num = intensity_max / (area_max or 1.0)
+
+    for row in rows:
+        row["Intensity_norm"] = 100.0 * row["Total_scaled"] / intensity_max
+        if "Numeric_2H_area" in row:
+            row["Numeric_2H_area"] *= scale_num
+            row["Numeric_6H_area"] *= scale_num
+        elif "Numeric_area" in row:
+            row["Numeric_area"] *= scale_num
+
+    df = pd.DataFrame(rows)
+    global _last_df
+    _last_df = df
+    return df
+
+
+# ------------------------------------------------------------------
+# ────────── XLSX EXPORT  (changed block) ────────────────────────────
+def export_bragg_data(_):
+    """Save Bragg info to XLSX with intensities normalized to a common scale."""
+    root = tk.Tk()
+    root.withdraw()
+    fname = filedialog.asksaveasfilename(
+        defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")]
+    )
+    if not fname:
+        return
+
+    df = _build_bragg_dataframe()
+
+    # Also record the complex structure factors used for each polytype so that
+    # the spreadsheet mirrors the CIF HKL export.  This requires evaluating the
+    # structure factors via ``Dans_Diffraction`` at the Cu Kα energy.
+    xtl2 = dif.Crystal(str(CIF_2H))
+    xtl2.Symmetry.generate_matrices()
+    xtl2.generate_structure()
+    xtl2.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
+    xtl2.Scatter.integer_hkl = True
+
+    xtl6 = dif.Crystal(str(CIF_6H))
+    xtl6.Symmetry.generate_matrices()
+    xtl6.generate_structure()
+    xtl6.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
+    xtl6.Scatter.integer_hkl = True
+
+    f2h_r = []
+    f2h_i = []
+    f6h_r = []
+    f6h_i = []
+    for h, k, l in df[["h", "k", "l"]].to_numpy():
+        try:
+            fc2 = xtl2.Scatter.structure_factor([int(h), int(k), int(l)])
+            f2h_r.append(float(np.real(fc2)))
+            f2h_i.append(float(np.imag(fc2)))
+        except Exception:
+            f2h_r.append(0.0)
+            f2h_i.append(0.0)
+
+        try:
+            fc6 = xtl6.Scatter.structure_factor([int(h), int(k), int(l)])
+            f6h_r.append(float(np.real(fc6)))
+            f6h_i.append(float(np.imag(fc6)))
+        except Exception:
+            f6h_r.append(0.0)
+            f6h_i.append(0.0)
+
+    df["F2H(real)"] = f2h_r
+    df["F2H(imag)"] = f2h_i
+    df["F6H(real)"] = f6h_r
+    df["F6H(imag)"] = f6h_i
+
+    # Record the atomic positions currently in use.  The 2H and 6H
+    # polytypes share the same fractional coordinates; the difference is
+    # purely in the lattice parameter ``c``.  Include these positions in a
+    # separate sheet so the saved workbook documents the full calculation
+    # context.
+    sites_df = pd.DataFrame(SITES_2H, columns=["u", "v", "w", "element"])
+
+    with pd.ExcelWriter(fname) as wr:
+        df.to_excel(wr, index=False, sheet_name="Bragg data")
+        sites_df.to_excel(wr, index=False, sheet_name="Atomic sites")
+
+    print("Saved →", fname)
+
+
+def export_cif_hkls(_):
+    """Save raw CIF HKL intensities to an Excel file."""
+    root = tk.Tk()
+    root.withdraw()
+
+    poly = simpledialog.askstring(
+        "Choose polytype",
+        "Save peaks for which CIF polytype? (2H or 6H)",
+        parent=root,
+    )
+    if not poly:
+        return
+    poly = poly.strip().upper()
+    if poly not in {"2H", "6H"}:
+        messagebox.showerror("Invalid choice", "Enter 2H or 6H")
+        return
+
+    fname = filedialog.asksaveasfilename(
+        defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")]
+    )
+    if not fname:
+        return
+
+    # Export all (h, k, l) permutations up to ``l=10``
+    hkls = [
+        (h, k, l)
+        for h in range(-MAX_HK, MAX_HK + 1)
+        for k in range(-MAX_HK, MAX_HK + 1)
+        for l in range(1, 11)
+    ]
+
+    cif = str(CIF_2H) if poly == "2H" else str(CIF_6H)
+    c_val = C_2H if poly == "2H" else C_6H
+
+    # Use the same grouping/normalisation logic as ``miller_generator``
+    intensity_threshold = 1.0
+    two_theta_range = (0, 70)
+
+    raw_ints = intensities_for_hkls(hkls, cif, [1.0], LAMBDA, energy=E_CuKa / 1000)
+
+    # Directly compute structure factor magnitudes for reference
+    xtl = dif.Crystal(str(cif))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    xtl.Scatter.setup_scatter(scattering_type="xray", energy_kev=E_CuKa / 1000)
+    xtl.Scatter.integer_hkl = True
+
+    data = []
+    for (h, k, l), I in zip(hkls, raw_ints):
+        d_val = d_spacing(h, k, l, A_HEX, c_val)
+        tth = two_theta(d_val, LAMBDA)
+        if tth is None or not (two_theta_range[0] <= tth <= two_theta_range[1]):
+            continue
+        if I < intensity_threshold:
+            continue
+        data.append((h, k, l, I, d_val, tth))
+
+    if not data:
+        return
+
+    max_total = max(item[3] for item in data)
+
+    rows = []
+    for h, k, l, val, d_val, tth in data:
+        intensity_norm = round(val * 100 / max_total, 2)
+        try:
+            F_complex = xtl.Scatter.structure_factor([int(h), int(k), int(l)])
+            F_real = float(np.real(F_complex))
+            F_imag = float(np.imag(F_complex))
+            F_mag = abs(complex(F_real, F_imag))
+        except Exception:
+            F_real = F_imag = 0.0
+            F_mag = float(np.sqrt(val)) if val >= 0 else 0.0
+        rows.append(
+            {
+                "h": int(h),
+                "k": int(k),
+                "l": int(l),
+                "d (Å)": d_val,
+                "F(real)": F_real,
+                "F(imag)": F_imag,
+                "|F|": F_mag,
+                "2θ": tth,
+                "I": intensity_norm,
+                "M": 1,
+            }
+        )
+
+    cols = ["h", "k", "l", "d (Å)", "F(real)", "F(imag)", "|F|", "2θ", "I", "M"]
+    pd.DataFrame(rows, columns=cols).to_excel(fname, index=False)
+    print("Saved →", fname)
+
+
+def plot_scatter(_):
+    df = _last_df if _last_df is not None else _build_bragg_dataframe()
+    intensity_cols = _find_intensity_columns(df, None)
+    df_norm = _normalize_columns(df, intensity_cols)
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111)
+    scatters = []
+    for idx, col in enumerate(intensity_cols):
+        color = COLORBLIND_COLORS[idx % len(COLORBLIND_COLORS)]
+        sc = ax.scatter(
+            df_norm["l"],
+            df_norm[col],
+            label=col,
+            s=20,
+            alpha=0.7,
+            color=color,
+        )
+        scatters.append(sc)
+
+    ax.set_ylabel("Normalized Intensity (0-100)")
+    ax.set_ylim(0, 110)
+    ax.set_xlabel("l")
+    ax.set_title("L vs Intensity")
+
+    legend = ax.legend(title="Intensity columns") if len(intensity_cols) > 1 else None
+
+    if {"h", "k"}.issubset(df.columns):
+        seen = set()
+        for _, row in df.iterrows():
+            l_val = row["l"]
+            if l_val in seen:
+                continue
+            seen.add(l_val)
+            label = f"({int(row['h'])},{int(row['k'])},{int(l_val)})"
+            ax.annotate(
+                label,
+                (l_val, 102),
+                rotation=90,
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    if legend:
+        from matplotlib.widgets import CheckButtons, Button
+
+        _scatter_widgets.clear()
+
+        rax = fig.add_axes([0.82, 0.4, 0.15, 0.2])
+        visibility = [sc.get_visible() for sc in scatters]
+        checks = CheckButtons(rax, intensity_cols, visibility)
+        _scatter_widgets.append(checks)
+
+        def func(label: str) -> None:
+            idx = intensity_cols.index(label)
+            scatters[idx].set_visible(not scatters[idx].get_visible())
+            fig.canvas.draw_idle()
+
+        checks.on_clicked(func)
+
+        hide_ax = fig.add_axes([0.82, 0.32, 0.07, 0.05])
+        show_ax = fig.add_axes([0.90, 0.32, 0.07, 0.05])
+        hide_btn = Button(hide_ax, "Hide\nAll")
+        show_btn = Button(show_ax, "Show\nAll")
+        _scatter_widgets.extend([hide_btn, show_btn])
+
+        def hide_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if sc.get_visible():
+                    checks.set_active(i)
+
+        def show_all(event) -> None:  # pragma: no cover - UI
+            for i, sc in enumerate(scatters):
+                if not sc.get_visible():
+                    checks.set_active(i)
+
+        hide_btn.on_clicked(hide_all)
+        show_btn.on_clicked(show_all)
+
+    # Leave room for the control widgets to remain responsive
+    plt.subplots_adjust(right=0.78)
+    plt.show(block=False)
+    # allow the Tk event loop to process initial events
+    plt.pause(0.001)
+
+
+def compare_numeric(_):
+    df = _last_df if _last_df is not None else _build_bragg_dataframe()
+    metrics = compute_metrics(df)
+    print(f"RMSE: {metrics['rmse']:.3f}")
+    print(f"Mean ratio: {metrics['mean_ratio']:.3f}")
+    plot_comparison(df)
+
+
+# set up figure
+fig, ax = plt.subplots(figsize=(8, 6))
+plt.subplots_adjust(left=0.25, bottom=0.40, top=0.88)
+ax.set_xlabel(r"$\ell$")
+ax.set_ylabel("I (a.u.)")
+ax.set_yscale("log")
+
+(line_tot,) = ax.plot([], [], lw=2, label="Σ weighted (numeric)", color=COLORBLIND_COLORS[0])
+(line0,) = ax.plot([], [], ls="--", label="I(p≈0)", color=COLORBLIND_COLORS[1])
+(line1,) = ax.plot([], [], ls="--", label="I(p≈1)", color=COLORBLIND_COLORS[2])
+(line3,) = ax.plot([], [], ls="--", label="I(p)", color=COLORBLIND_COLORS[3])
+title = ax.set_title("")
+_bragg_lines = []
+
+
+# refresh function
+def refresh(_=None):
+    lo, hi = state["L_lo"], state["L_hi"]
+    mask = (L_GRID >= lo) & (L_GRID <= hi)
+    x_grid = QZ_GRID if state.get("qz_axis") else L_GRID
+    x_lo = 2 * np.pi / C_2H * lo if state.get("qz_axis") else lo
+    x_hi = 2 * np.pi / C_2H * hi if state.get("qz_axis") else hi
+    ticks = (
+        2 * np.pi / C_2H * np.arange(np.ceil(lo), np.floor(hi) + 1)
+        if state.get("qz_axis")
+        else np.arange(np.ceil(lo), np.floor(hi) + 1)
+    )
+
+    tot = composite_tot()
+    for line, I in [
+        (line_tot, tot),
+        (line0, state["I0"]),
+        (line1, state["I1"]),
+        (line3, state["I3"]),
+    ]:
+        line.set_data(x_grid[mask], I[mask])
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_xticks(ticks)
+    ax.set_xlabel(r"$q_z$ (Å⁻¹)" if state.get("qz_axis") else r"$\ell$")
+    vis = [state["w0"] > 0, state["w1"] > 0, state["w2"] > 0]
+    for ln, v in zip((line0, line1, line3), vis):
+        ln.set_visible(v)
+    handles = [line_tot] + [ln for ln, v in zip((line0, line1, line3), vis) if v]
+    for ln in _bragg_lines:
+        ln.remove()
+    _bragg_lines.clear()
+    if state["show_bragg"]:
+        pairs = active_pairs()
+        if state["mode"] == "m":
+            L_vals, i2h, i6h = bragg_intensity_sum(pairs)
+            total = i2h + i6h
+            msk = (L_vals >= lo) & (L_vals <= hi)
+            x_vals = (
+                2 * np.pi / C_2H * L_vals[msk]
+                if state.get("qz_axis")
+                else L_vals[msk]
+            )
+            (ln,) = ax.plot(
+                x_vals,
+                total[msk],
+                marker="D",
+                ls="none",
+                label=f'Bragg sum m={state["m"]}',
+                color=COLORBLIND_COLORS[4],
+            )
+            _bragg_lines.append(ln)
+        else:
+            for h, k in pairs:
+                L_vals, i2h, i6h = bragg_intensity_single(h, k)
+                msk = (L_vals >= lo) & (L_vals <= hi)
+                x_vals = (
+                    2 * np.pi / C_2H * L_vals[msk]
+                    if state.get("qz_axis")
+                    else L_vals[msk]
+                )
+                (ln2,) = ax.plot(
+                    x_vals,
+                    i2h[msk],
+                    marker="o",
+                    ls="none",
+                    label=f"2H({h},{k})",
+                    color=COLORBLIND_COLORS[5],
+                )
+                (ln6,) = ax.plot(
+                    x_vals,
+                    i6h[msk],
+                    marker="s",
+                    ls="none",
+                    label=f"6H({h},{k})",
+                    color=COLORBLIND_COLORS[6],
+                )
+                _bragg_lines.extend([ln2, ln6])
+        handles += _bragg_lines
+    ax.legend(handles, [h.get_label() for h in handles], loc="upper right")
+    m = state["m"]
+    r = np.sqrt(m)
+    Qr = 2 * np.pi / A_HEX * np.sqrt(4 * m / 3) if m else 0
+    # ─── refresh(): tweak title string ────────────────────────────────────────────
+    if state["mode"] == "m":
+        m = state["m"]
+        r = np.sqrt(m)
+        Qr = 2 * np.pi / A_HEX * np.sqrt(4 * m / 3) if m else 0
+        title.set_text(f"r=√m={r:.3f}, Qᵣ={Qr:.3f} Å⁻¹ | HK set: {HK_BY_M[m]}")
+    else:
+        h, k = state["h"], state["k"]
+        m = h * h + h * k + k * k
+        Qr = 2 * np.pi / A_HEX * np.sqrt(4 * m / 3)
+        title.set_text(f"(h,k)=({h},{k}), m={m}, Qᵣ={Qr:.3f} Å⁻¹")
+
+    ax.relim()
+    ax.autoscale_view()
+    fig.canvas.draw_idle()
+
+
+# slider factory
+def make_slider(rect, label, vmin, vmax, val, valstep, cb):
+    axr = plt.axes(rect)
+    s = Slider(axr, "", vmin, vmax, valinit=val, valstep=valstep)
+    axr.text(0.5, 1.2, label, transform=axr.transAxes, ha="center")
+    s.on_changed(cb)
+    _sliders.append(s)
+    return s
+
+
+# ℓ-range slider
+ax_range = plt.axes([0.25, 0.05, 0.65, 0.03])
+rs = RangeSlider(
+    ax_range, "ℓ range", 0, L_MAX, valinit=(state["L_lo"], state["L_hi"]), valstep=0.1
+)
+rs.on_changed(lambda v: (state.update(L_lo=v[0], L_hi=v[1]), refresh()))
+
+# iodine z slider just to the right of the ℓ-range slider
+ax_z = plt.axes([0.92, 0.05, 0.05, 0.03])
+sz = Slider(ax_z, "z(I)", 0, 1, valinit=state["I_z"], valstep=1e-3)
+sz.on_changed(
+    lambda v: (state.update(I_z=v), compute_F2_cache(v), compute_components(), refresh())
+)
+
+# m-index slider
+ys = [0.32, 0.26, 0.20, 0.14]
+# new: capture the slider in a variable
+m_slider = make_slider(
+    [0.25, ys[0], 0.65, 0.03],
+    "m index",
+    min(ALLOWED_M),
+    max(ALLOWED_M),
+    state["m"],
+    ALLOWED_M,
+    lambda v: (state.update(m=int(v)), compute_components(), refresh()),
+)
+
+# ─── build HK sliders (hidden by default) ‑ insert after m‑slider creation ────
+hk_sliders = []
+
+
+def make_int_slider(rect, label, vmax, key):
+    s = make_slider(
+        rect,
+        label,
+        -MAX_HK,
+        vmax,
+        state[key],
+        1,
+        lambda v: (state.update({key: int(v)}), compute_components(), refresh()),
+    )
+    hk_sliders.append(s)
+    s.ax.set_visible(False)
+
+
+make_int_slider([0.25, ys[0], 0.30, 0.03], "H", MAX_HK, "h")
+make_int_slider([0.60, ys[0], 0.30, 0.03], "K", MAX_HK, "k")
+
+# p0 & w0
+make_slider(
+    [0.25, ys[1], 0.45, 0.03],
+    "p≈0",
+    0,
+    0.2,
+    state["p0"],
+    1e-3,
+    lambda v: (state.update(p0=v), compute_components(), refresh()),
+)
+make_slider(
+    [0.72, ys[1], 0.20, 0.03],
+    "w(p≈0)%",
+    0,
+    100,
+    state["w0"],
+    0.1,
+    lambda v: (state.update(w0=v), refresh()),
+)
+
+# p1 & w1
+make_slider(
+    [0.25, ys[2], 0.45, 0.03],
+    "p≈1",
+    0.8,
+    1,
+    state["p1"],
+    1e-3,
+    lambda v: (state.update(p1=v), compute_components(), refresh()),
+)
+make_slider(
+    [0.72, ys[2], 0.20, 0.03],
+    "w(p≈1)%",
+    0,
+    100,
+    state["w1"],
+    0.1,
+    lambda v: (state.update(w1=v), refresh()),
+)
+
+# p3 & w2
+make_slider(
+    [0.25, ys[3], 0.45, 0.03],
+    "p",
+    0,
+    1,
+    state["p3"],
+    1e-3,
+    lambda v: (state.update(p3=v), compute_components(), refresh()),
+)
+make_slider(
+    [0.72, ys[3], 0.20, 0.03],
+    "w(p)%",
+    0,
+    100,
+    state["w2"],
+    0.1,
+    lambda v: (state.update(w2=v), refresh()),
+)
+
+# toggle scale button
+btn_ax = plt.axes([0.42, 0.01, 0.16, 0.03])
+b = Button(btn_ax, "Toggle scale")
+b.on_clicked(
+    lambda _: (
+        ax.set_yscale("linear" if ax.get_yscale() == "log" else "log"),
+        refresh(),
+    )
+)
+
+# toggle Bragg peaks
+btn_bragg = Button(plt.axes([0.25, 0.01, 0.13, 0.03]), "Bragg on/off")
+
+
+def _toggle_bragg(_):
+    state["show_bragg"] = not state["show_bragg"]
+    refresh()
+
+
+btn_bragg.on_clicked(_toggle_bragg)
+
+# additional checkboxes
+chk_ax = plt.axes([0.05, 0.01, 0.15, 0.08])
+checks = CheckButtons(
+    chk_ax,
+    ["F² only", "qz axis"],
+    [state["f2_only"], state["qz_axis"]],
+)
+_check_widgets.append(checks)
+
+def _toggle_checks(label):
+    if label == "F² only":
+        state["f2_only"] = not state["f2_only"]
+        compute_components()
+    elif label == "qz axis":
+        state["qz_axis"] = not state["qz_axis"]
+    refresh()
+
+checks.on_clicked(_toggle_checks)
+
+# export button
+btn_export = Button(plt.axes([0.78, 0.01, 0.16, 0.03]), "Save Bragg XLSX")
+btn_export.on_clicked(export_bragg_data)
+
+# save all CIF HKLs button – position it away from the ℓ-range slider
+btn_cif = Button(plt.axes([0.78, 0.08, 0.16, 0.03]), "Save CIF HKLs")
+btn_cif.on_clicked(export_cif_hkls)
+
+# additional buttons for plotting
+btn_plot = Button(plt.axes([0.25, 0.10, 0.16, 0.03]), "Plot scatter")
+btn_plot.on_clicked(plot_scatter)
+btn_cmp = Button(plt.axes([0.60, 0.10, 0.16, 0.03]), "Compare numeric")
+btn_cmp.on_clicked(compare_numeric)
+
+
+def toggle_mode(_):
+    state["mode"] = "hk" if state["mode"] == "m" else "m"
+    m_slider.ax.set_visible(state["mode"] == "m")
+    for s in hk_sliders:
+        s.ax.set_visible(state["mode"] == "hk")
+    compute_components()
+    refresh()
+
+
+b_mode = Button(plt.axes([0.60, 0.01, 0.16, 0.03]), "H/K panel")
+b_mode.on_clicked(toggle_mode)
+
+refresh()
+plt.show()
