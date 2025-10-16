@@ -1108,12 +1108,22 @@ def process_qr_rods_parallel(
     save_flag,
     record_status=False,
 ):
-    """Wrapper to process Hendricks–Teller rods instead of individual reflections."""
+    """Wrapper to process Hendricks–Teller rods instead of individual reflections.
+
+    The Hendricks–Teller preprocessing groups symmetry-related in-plane peaks
+    into ``Qr`` rods and records how many peaks contributed to each rod in the
+    ``deg`` field.  Simulation requires the total scattered intensity per rod, so
+    we scale the intensity array by this degeneracy before delegating to the
+    standard peak-processing routine.  The degeneracy array is returned so that
+    downstream code can, if needed, relate each processed reflection back to the
+    number of symmetry-equivalent HK pairs that produced it.
+    """
     from ra_sim.utils.stacking_fault import qr_dict_to_arrays
 
-    miller, intensities, _, _ = qr_dict_to_arrays(qr_dict)
+    miller, intensities, degeneracy, _ = qr_dict_to_arrays(qr_dict)
+    intensities = intensities * degeneracy
 
-    return process_peaks_parallel(
+    result = process_peaks_parallel(
         miller,
         intensities,
         image_size,
@@ -1146,6 +1156,8 @@ def process_qr_rods_parallel(
         save_flag,
         record_status,
     )
+
+    return (*result, degeneracy)
 
 
 def debug_detector_paths(
