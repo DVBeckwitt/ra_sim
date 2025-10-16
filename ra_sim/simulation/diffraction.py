@@ -4,9 +4,8 @@ import numpy as np
 from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.utils.calculations import fresnel_transmission
-from numba import types, float64
+from numba import types
 from numba.typed import List       #  only List lives here
-from numba import types            #  <--  this is the right module
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
@@ -164,8 +163,6 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
 
     return (out_Qx, out_Qy, out_Qz)
 
-from numba import njit
-import numpy as np
 
 @njit
 def compute_intensity_array(Qx, Qy, Qz,
@@ -479,6 +476,59 @@ def intersect_line_plane_batch(start_pt, directions, plane_pt, plane_n):
     return intersects, valid
 
 
+# ---------- NEW JIT-SAFE HELPERS ----------
+@njit
+def _clamp(x, lo, hi):
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+
+@njit
+def transmit_angle_grazing(theta_i_plane, n2):
+    """
+    Grazing angle form of Snell: cos(theta_t) = cos(theta_i) / Re(n2)
+    Inputs/outputs are grazing angles with respect to the surface plane.
+    """
+    c = np.cos(theta_i_plane) / np.maximum(np.real(n2), 1e-12)
+    c = _clamp(c, -1.0, 1.0)
+    # preserve sign of the incident grazing angle
+    return np.arccos(c) * np.sign(theta_i_plane)
+
+
+@njit
+def ktz_components(k0, n2, theta_t_plane):
+    """
+    Decompose K_tz for a complex refractive index.
+    Uses: a = Re(n^2) k0^2 sin^2(theta_t), b = Im(n^2) k0^2
+    Returns positive magnitudes (sign handled at call site).
+    """
+    n2_sq = n2 * n2
+    a = np.real(n2_sq) * (k0 * k0) * (np.sin(theta_t_plane) ** 2)
+    b = np.abs(np.imag(n2_sq)) * (k0 * k0)     # magnitude for stability
+    root = np.sqrt(a * a + b * b)
+    re_kz = np.sqrt(0.5 * (root + a))
+    im_kz = np.sqrt(0.5 * (root - a))
+    return re_kz, im_kz
+
+
+@njit
+def safe_path_length(thickness_m, theta_plane):
+    """
+    Path length through a slab of thickness_m for a ray with grazing angle
+    theta_plane (with respect to the plane). For semi-infinite thickness_m<=0,
+    returns 0 to signal use of penetration depth.
+    """
+    if thickness_m <= 0.0:
+        return 0.0
+    s = np.abs(np.sin(theta_plane))
+    if s < 1e-12:
+        s = 1e-12
+    return thickness_m / s
+
+
 # =============================================================================
 # 4) solve_q
 # =============================================================================
@@ -642,7 +692,8 @@ def calculate_phi(
     R_ZY_n,
     P0, unit_x,
     save_flag, q_data, q_count, i_peaks_index,
-    record_status=False
+    record_status=False,
+    thickness=0.0
 ):
     """
     For a single reflection (H,K,L), build a mosaic Q_grid around G_vec.
@@ -725,13 +776,11 @@ def calculate_phi(
             np.array([0.0,1.0,0.0]),
             np.array([0.0,0.0,1.0])
         ]
-        success = False
         for ar in alt_refs:
             cross_tmp = np.cross(n_surf, ar)
             cross_norm_tmp = sqrt(cross_tmp[0]*cross_tmp[0] + cross_tmp[1]*cross_tmp[1] + cross_tmp[2]*cross_tmp[2])
             if cross_norm_tmp > 1e-12:
                 e1_temp = cross_tmp / cross_norm_tmp
-                success = True
                 break
 
     else:
@@ -800,35 +849,46 @@ def calculate_phi(
         p2 = proj_incident[0]*e2_temp[0] + proj_incident[1]*e2_temp[1] + proj_incident[2]*e2_temp[2]
         phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
 
-        th_t = acos(cos(th_i_prime)/np.real(n2))*np.sign(th_i_prime)
-        
-        # k_scat is magnitude of the scattering wave in the crystal
-        k_scat = k_mag*sqrt(np.real(n2)*np.real(n2))
+        # ---------- ENTRY REFRACTION AND kz ----------
+        th_t = transmit_angle_grazing(th_i_prime, n2)     # grazing angle in medium
+        k0 = k_mag
+        # magnitude for in-plane internal wavevector (use Re(n^2))
+        k_scat = k0 * np.sqrt(np.maximum(np.real(n2*n2), 0.0))
+        k_x_scat = k_scat*np.cos(th_t)*np.sin(phi_i_prime)
+        k_y_scat = k_scat*np.cos(th_t)*np.cos(phi_i_prime)
 
-        k_x_scat = k_scat*cos(th_t)*sin(phi_i_prime)
-        k_y_scat = k_scat*cos(th_t)*cos(phi_i_prime)
+        # kz decomposition for the incident leg (sign convention: into sample)
+        re_k_z, im_k_z = ktz_components(k0, n2, th_t)
+        re_k_z = -re_k_z  # into the sample
 
-        # Compute partial absorption factors
-        at = k_mag**2 * np.real(n2)*np.real(n2) * np.sin(th_t)**2
-        bt = np.imag(n2)**2 * k_mag**2
-
-        re_k_z = - np.sqrt((np.sqrt(at*at + bt*bt) + at)/2.0)
-        #im_k_z =   np.sqrt((np.sqrt(at*at + bt*bt) - at)/2.0)
+        # Fresnel transmission at entry (amplitude -> intensity).
+        # Use both s- and p-polarizations and average for an unpolarized beam.
+        # fresnel_transmission signature: (grazing_angle, refractive_index,
+        #                                s_polarization=True, direction="in")
+        Ti_s = fresnel_transmission(th_i_prime, n2, True, "in")
+        Ti_p = fresnel_transmission(th_i_prime, n2, False, "in")
+        Ti2 = 0.5 * (
+            (np.real(Ti_s)*np.real(Ti_s) + np.imag(Ti_s)*np.imag(Ti_s))
+            + (np.real(Ti_p)*np.real(Ti_p) + np.imag(Ti_p)*np.imag(Ti_p))
+        )
 
         k_in_crystal[0] = k_x_scat
         k_in_crystal[1] = k_y_scat
         k_in_crystal[2] = re_k_z
 
-        # Incoherent mosaic average
-        #incoherent = incoherent_averaging(Q_grid, N, cv, thickness,
-        #                                  re_k_z, im_k_z, k_in_crystal,
-        #                                  k_mag, n2, bt)
-        #Ti = fresnel_transmission(th_t, n2)
-        
-        # solve_q approach for reflection geometry
+        # ---------- Solve allowed Q on the circle (unchanged) ----------
         All_Q, stat = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv, H, K, L, 1000)
         if record_status:
             statuses[i_samp] = stat
+
+        # Precompute entrance path length or penetration depth
+        L_in = safe_path_length(thickness, th_t)
+        use_pen_in = (L_in <= 0.0)
+        if use_pen_in:
+            # Semi-infinite: use effective penetration depth
+            L_in = 1.0 / np.maximum(2.0*im_k_z, 1e-30)
+
+        # ---------- Loop over each Q solution ----------
         for i_sol in range(All_Q.shape[0]):
             Qx = All_Q[i_sol, 0]
             Qy = All_Q[i_sol, 1]
@@ -836,24 +896,48 @@ def calculate_phi(
             I_Q = All_Q[i_sol, 3]
             if I_Q < 1e-5:
                 continue
-            
+
+            # internal scattered direction before exiting
             k_tx_prime = Qx + k_x_scat
             k_ty_prime = Qy + k_y_scat
             k_tz_prime = Qz + re_k_z
 
             kr = sqrt(k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime)
             if kr < 1e-12:
-                twotheta_t = 0.0
+                twotheta_t_prime = 0.0
             else:
                 twotheta_t_prime = np.arctan(k_tz_prime/kr)
-                twotheta_t = acos(cos(twotheta_t_prime)* np.real(n2))*np.sign(twotheta_t_prime)
 
+            # refract out to air: convert internal grazing angle to external
+            # get internal grazing angle for the exit leg
+            th_t_out = np.abs(twotheta_t_prime)
+            # Exit transmission amplitude and kz for exit leg.
+            # Use both polarizations and average for an unpolarized beam.
+            Tf_s = fresnel_transmission(th_t_out, n2, True, "out")
+            Tf_p = fresnel_transmission(th_t_out, n2, False, "out")
+            Tf2 = 0.5 * (
+                (np.real(Tf_s)*np.real(Tf_s) + np.imag(Tf_s)*np.imag(Tf_s))
+                + (np.real(Tf_p)*np.real(Tf_p) + np.imag(Tf_p)*np.imag(Tf_p))
+            )
+
+            re_k_z_f, im_k_z_f = ktz_components(k0, n2, th_t_out)
+
+            # path length for exit leg
+            L_out = safe_path_length(thickness, th_t_out)
+            if L_out <= 0.0:
+                L_out = 1.0 / np.maximum(2.0*im_k_z_f, 1e-30)
+
+            # apply propagation and interface factors
+            prop_fac = Ti2 * Tf2 \
+                       * np.exp(-2.0*im_k_z * L_in) \
+                       * np.exp(-2.0*im_k_z_f * L_out)
+
+            # external exit angles for detector mapping (existing code)
+            twotheta_t = np.arccos(_clamp(np.cos(twotheta_t_prime)* np.real(n2), -1.0, 1.0)) * np.sign(twotheta_t_prime)
             phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-            k_tx_f = k_scat*cos(twotheta_t)*sin(phi_f)
-            k_ty_f = k_scat*cos(twotheta_t)*cos(phi_f)
-            k_tz_f = k_scat*sin(twotheta_t)
-            #Tf = fresnel_transmission(th_t, n2, direction="out")
-
+            k_tx_f = k_scat*np.cos(twotheta_t)*np.sin(phi_f)
+            k_ty_f = k_scat*np.cos(twotheta_t)*np.cos(phi_f)
+            k_tz_f = k_scat*np.sin(twotheta_t)
             kf[0] = k_tx_f
             kf[1] = k_ty_f
             kf[2] = k_tz_f
@@ -886,7 +970,7 @@ def calculate_phi(
             #  2) I_Q -> partial mosaic weighting from solve_q circle
             #  3) incoherent -> the mosaic average from Q_grid
             #  4) exponent dampings -> Debye or extra broadening
-            val = (reflection_intensity * I_Q #* incoherent * (abs(Ti)**2) + (abs(Tf)**2)
+            val = (reflection_intensity * I_Q * prop_fac
                 * exp(-Qz*Qz * debye_x*debye_x)
                 * exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y))
             image[rpx, cpx] += val
@@ -938,7 +1022,8 @@ def process_peaks_parallel(
     theta_initial_deg,
     unit_x, n_detector,
     save_flag,
-    record_status=False
+    record_status=False,
+    thickness=50e-9
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an intensity
@@ -966,8 +1051,10 @@ def process_peaks_parallel(
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
 
     # Build transforms for the detector
-    cg = cos(gamma_rad); sg = sin(gamma_rad)
-    cG = cos(Gamma_rad); sG = sin(Gamma_rad)
+    cg = cos(gamma_rad)
+    sg = sin(gamma_rad)
+    cG = cos(Gamma_rad)
+    sG = sin(Gamma_rad)
     R_x_det = np.array([
         [1.0, 0.0, 0.0],
         [0.0, cg,  sg],
@@ -1003,13 +1090,15 @@ def process_peaks_parallel(
     else:
         e2_det /= e2_len
 
-    c_chi = cos(chi_rad); s_chi = sin(chi_rad)
+    c_chi = cos(chi_rad)
+    s_chi = sin(chi_rad)
     R_y = np.array([
         [ c_chi, 0.0,   s_chi],
         [ 0.0,   1.0,   0.0],
         [-s_chi, 0.0, c_chi]
     ])
-    c_psi= cos(psi_rad); s_psi= sin(psi_rad)
+    c_psi= cos(psi_rad)
+    s_psi= sin(psi_rad)
     R_z= np.array([
         [ c_psi, s_psi, 0.0],
         [-s_psi, c_psi, 0.0],
@@ -1067,7 +1156,8 @@ def process_peaks_parallel(
             P0,
             unit_x,
             save_flag, q_data, q_count, i_pk,
-            record_status
+            record_status,
+            thickness
         )
         if record_status:
             all_status[i_pk, :] = status_arr
@@ -1107,6 +1197,7 @@ def process_qr_rods_parallel(
     n_detector,
     save_flag,
     record_status=False,
+    thickness=0.0,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -1155,6 +1246,7 @@ def process_qr_rods_parallel(
         n_detector,
         save_flag,
         record_status,
+        thickness,
     )
 
     return (*result, degeneracy)
@@ -1199,8 +1291,10 @@ def debug_detector_paths(
     psi_rad   = np.radians(psi_deg)
     rad_theta_i = np.radians(theta_initial_deg)
 
-    cg = np.cos(gamma_rad); sg = np.sin(gamma_rad)
-    cG = np.cos(Gamma_rad); sG = np.sin(Gamma_rad)
+    cg = np.cos(gamma_rad)
+    sg = np.sin(gamma_rad)
+    cG = np.cos(Gamma_rad)
+    sG = np.sin(Gamma_rad)
     R_x_det = np.array([
         [1.0, 0.0, 0.0],
         [0.0, cg,  sg],
@@ -1216,13 +1310,15 @@ def debug_detector_paths(
     n_det_rot /= np.linalg.norm(n_det_rot)
     Detector_Pos = np.array([0.0, Distance_CoR_to_Detector, 0.0])
 
-    c_chi = np.cos(chi_rad); s_chi = np.sin(chi_rad)
+    c_chi = np.cos(chi_rad)
+    s_chi = np.sin(chi_rad)
     R_y = np.array([
         [ c_chi, 0.0,   s_chi],
         [ 0.0,   1.0,   0.0],
         [-s_chi, 0.0, c_chi]
     ])
-    c_psi= np.cos(psi_rad); s_psi= np.sin(psi_rad)
+    c_psi= np.cos(psi_rad)
+    s_psi= np.sin(psi_rad)
     R_z = np.array([
         [ c_psi, s_psi, 0.0],
         [-s_psi, c_psi, 0.0],
@@ -1230,7 +1326,8 @@ def debug_detector_paths(
     ])
     R_z_R_y = R_z @ R_y
 
-    ct = np.cos(rad_theta_i); st = np.sin(rad_theta_i)
+    ct = np.cos(rad_theta_i)
+    st = np.sin(rad_theta_i)
     R_x = np.array([
         [1.0, 0.0, 0.0],
         [0.0, ct, -st],

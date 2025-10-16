@@ -32,6 +32,7 @@ import spglib
 import OSC_Reader
 from OSC_Reader import read_osc
 import numba
+import sys
 import pandas as pd
 import Dans_Diffraction as dif
 import CifFile
@@ -163,6 +164,10 @@ zs = 0.0
 debye_x = 0.0
 debye_y = 0.0
 n2 = IndexofRefraction()
+
+# Print the computed complex index of refraction on startup and exit
+#print("Computed complex index of refraction n2:", n2)
+#sys.exit(0)
 
 bandwidth = 0.7 / 100  # 0.7%
 
