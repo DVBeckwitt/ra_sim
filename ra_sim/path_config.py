@@ -5,10 +5,12 @@ import tempfile
 import copy
 import yaml
 
-_YAML_PATH = Path(__file__).resolve().parents[1] / "file_paths.yaml"
-_DIR_YAML_PATH = Path(__file__).resolve().parents[1] / "dir_paths.yaml"
-_MATERIALS_YAML_PATH = Path(__file__).resolve().parents[1] / "materials.yaml"
-_INSTRUMENT_YAML_PATH = Path(__file__).resolve().parents[1] / "instrument.yaml"
+_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
+
+_YAML_PATH = _CONFIG_DIR / "file_paths.yaml"
+_DIR_YAML_PATH = _CONFIG_DIR / "dir_paths.yaml"
+_MATERIALS_YAML_PATH = _CONFIG_DIR / "materials.yaml"
+_INSTRUMENT_YAML_PATH = _CONFIG_DIR / "instrument.yaml"
 
 DEFAULT_DIRS = {
     "downloads": str(Path.home() / "Downloads"),
