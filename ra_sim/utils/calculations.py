@@ -10,30 +10,37 @@ except Exception:  # pragma: no cover - optional
         pass
 import json
 import matplotlib.pyplot as plt
-from pathlib import Path
-import yaml
 from numba import njit
 import math
 import numba
 
-# ``ior_params.yaml`` lives at the repository root. ``calculations.py`` sits
-# inside ``ra_sim/utils`` so we need to go two directories up to reach the
-# repository root before appending the file name.  Using ``parents[2]`` keeps
-# the path correct even if ``ra_sim`` is installed as a package.
-_IOR_YAML = Path(__file__).resolve().parents[2] / "ior_params.yaml"
-with open(_IOR_YAML, "r", encoding="utf-8") as fh:
-    _IOR_PARAMS = yaml.safe_load(fh)
+from ra_sim.path_config import get_material_config
 
-R_E = float(_IOR_PARAMS["classical_electron_radius"])
-LAMBDA_DEFAULT = float(_IOR_PARAMS["default_wavelength"])
-N_A = float(_IOR_PARAMS["avogadro_number"])
-M_BI = float(_IOR_PARAMS["atomic_masses"]["Bi"])
-M_SE = float(_IOR_PARAMS["atomic_masses"]["Se"])
-MU_MASS_BI = float(_IOR_PARAMS["mass_attenuation_coefficients"]["Bi"])
-MU_MASS_SE = float(_IOR_PARAMS["mass_attenuation_coefficients"]["Se"])
-RHO_BI2SE3 = float(_IOR_PARAMS["compound_density"])
-Z_BI = int(_IOR_PARAMS["atomic_numbers"]["Bi"])
-Z_SE = int(_IOR_PARAMS["atomic_numbers"]["Se"])
+# ``materials.yaml`` is discovered through :mod:`ra_sim.path_config` so that the
+# same configuration mechanism can be used by both the GUI and command line
+# tooling.
+_MATERIAL_CFG = get_material_config()
+_MATERIAL_CONSTANTS = _MATERIAL_CFG.get("constants", {})
+_MATERIAL_DATA = _MATERIAL_CFG["material"]
+
+R_E = float(_MATERIAL_CONSTANTS["classical_electron_radius"])
+LAMBDA_DEFAULT = float(_MATERIAL_CONSTANTS["default_wavelength"])
+N_A = float(_MATERIAL_CONSTANTS["avogadro_number"])
+
+_COMPOSITION = _MATERIAL_DATA.get("composition", {})
+_ELEMENTS = _MATERIAL_DATA.get("elements", {})
+_DENSITY = float(_MATERIAL_DATA["density"])
+
+_ELEMENT_KEYS = tuple(_COMPOSITION.keys())
+_STOICHIOMETRY = np.array([float(_COMPOSITION[key]) for key in _ELEMENT_KEYS], dtype=np.float64)
+_ATOMIC_MASSES = np.array([float(_ELEMENTS[key]["atomic_mass"]) for key in _ELEMENT_KEYS], dtype=np.float64)
+_MASS_ATTENUATION = np.array([float(_ELEMENTS[key]["mass_attenuation_coefficient"]) for key in _ELEMENT_KEYS], dtype=np.float64)
+_ATOMIC_NUMBERS = np.array([float(_ELEMENTS[key]["atomic_number"]) for key in _ELEMENT_KEYS], dtype=np.float64)
+
+_FORMULA_MASS = float(np.dot(_STOICHIOMETRY, _ATOMIC_MASSES))
+_MASS_FRACTIONS = (_STOICHIOMETRY * _ATOMIC_MASSES) / _FORMULA_MASS
+_TOTAL_ATOMIC_NUMBER = float(np.dot(_STOICHIOMETRY, _ATOMIC_NUMBERS))
+_WEIGHTED_MASS_ATTENUATION = float(np.dot(_MASS_FRACTIONS, _MASS_ATTENUATION))
 
 
 # Function to calculate d-spacing for hexagonal crystals
@@ -63,28 +70,21 @@ def IoR(lambda_, rho_e, r, mu):
 
 @njit
 def IndexofRefraction():
-    """Return the complex X-ray index of refraction for Bi2Se3."""
-    # Formula mass of Bi2Se3 (g/mol)
-    M_Bi2Se3 = 2.0 * M_BI + 3.0 * M_SE
-
-    # Mass fractions of Bi and Se in Bi2Se3
-    w_Bi = (2.0 * M_BI) / M_Bi2Se3
-    w_Se = (3.0 * M_SE) / M_Bi2Se3
+    """Return the complex X-ray index of refraction for the active material."""
 
     # Linear attenuation coefficient (m^-1)
-    mu_Bi2Se3_cm = RHO_BI2SE3 * (w_Bi * MU_MASS_BI + w_Se * MU_MASS_SE)
-    mu_Bi2Se3 = mu_Bi2Se3_cm * 1.0e2
+    mu_cm = _DENSITY * _WEIGHTED_MASS_ATTENUATION
+    mu_m = mu_cm * 1.0e2
 
     # Electron density (m^-3)
-    Z_total = 2.0 * Z_BI + 3.0 * Z_SE
-    rho_g_m3 = RHO_BI2SE3 * 1.0e6
-    V_mol = M_Bi2Se3 / rho_g_m3
+    rho_g_m3 = _DENSITY * 1.0e6
+    V_mol = _FORMULA_MASS / rho_g_m3
     n_formulas = 1.0 / V_mol
-    rho_e = Z_total * (n_formulas * N_A)
+    rho_e = _TOTAL_ATOMIC_NUMBER * (n_formulas * N_A)
 
     # delta and beta
-    delta = (R_E * LAMBDA_DEFAULT ** 2 * rho_e) / (2.0 * math.pi)
-    beta = (mu_Bi2Se3 * LAMBDA_DEFAULT) / (4.0 * math.pi)
+    delta = (R_E * (LAMBDA_DEFAULT ** 2) * rho_e) / (2.0 * math.pi)
+    beta = (mu_m * LAMBDA_DEFAULT) / (4.0 * math.pi)
 
     return 1.0 - delta + 1.0j * beta
 

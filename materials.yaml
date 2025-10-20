@@ -1,0 +1,29 @@
+# Material and constant definitions used by the diffraction calculations.
+#
+# The "constants" block defines values that are shared between all materials.
+# The "materials" block contains individual material entries.  Each material
+# defines its bulk density (g/cm^3), the elemental composition in units of the
+# chemical formula, and the elemental properties required for the index of
+# refraction calculation.  Additional materials can be added by following the
+# same structure and updating "default_material".
+
+default_material: Bi2Se3
+constants:
+  classical_electron_radius: 2.8179403267e-15
+  default_wavelength: 1.54e-10
+  avogadro_number: 6.022e23
+materials:
+  Bi2Se3:
+    density: 6.82  # g/cm^3
+    composition:
+      Bi: 2
+      Se: 3
+    elements:
+      Bi:
+        atomic_mass: 208.98  # g/mol
+        mass_attenuation_coefficient: 237.8  # cm^2/g
+        atomic_number: 83
+      Se:
+        atomic_mass: 78.96
+        mass_attenuation_coefficient: 81.16
+        atomic_number: 34
