@@ -6,6 +6,7 @@ import yaml
 
 _YAML_PATH = Path(__file__).resolve().parents[1] / "file_paths.yaml"
 _DIR_YAML_PATH = Path(__file__).resolve().parents[1] / "dir_paths.yaml"
+_MATERIALS_YAML_PATH = Path(__file__).resolve().parents[1] / "materials.yaml"
 
 DEFAULT_DIRS = {
     "downloads": str(Path.home() / "Downloads"),
@@ -25,6 +26,16 @@ else:
     yaml_dirs = {}
 
 DIRS = {**DEFAULT_DIRS, **yaml_dirs}
+
+if _MATERIALS_YAML_PATH.exists():
+    with open(_MATERIALS_YAML_PATH, "r", encoding="utf-8") as fh:
+        _materials_raw = yaml.safe_load(fh) or {}
+else:  # pragma: no cover - configuration file is optional in tests
+    _materials_raw = {}
+
+_MATERIAL_CONSTANTS = _materials_raw.get("constants", {})
+_MATERIALS = _materials_raw.get("materials", {})
+_DEFAULT_MATERIAL = _materials_raw.get("default_material")
 
 
 def get_path(key: str) -> str:
@@ -62,3 +73,43 @@ def get_temp_dir() -> Path:
         base_path.mkdir(parents=True, exist_ok=True)
         _TEMP_DIR = Path(tempfile.mkdtemp(prefix="ra_sim_", dir=str(base_path)))
     return _TEMP_DIR
+
+
+def get_material_config(material: str | None = None) -> dict:
+    """Return the configuration block for the requested *material*.
+
+    When *material* is ``None`` the default material defined in
+    ``materials.yaml`` is returned.  The resulting dictionary always contains
+    the material specific properties under ``"material"`` and any shared
+    constants (``"constants"``).
+    """
+
+    if not _MATERIALS:
+        raise KeyError(
+            "No materials configured. Expected materials.yaml to define at least one entry."
+        )
+
+    if material is None:
+        material = _DEFAULT_MATERIAL
+    if material is None:
+        raise KeyError("No default material configured. Provide a material name explicitly.")
+
+    try:
+        material_block = _MATERIALS[material]
+    except KeyError as exc:  # pragma: no cover - defensive programming
+        available = ", ".join(sorted(_MATERIALS)) or "<none>"
+        raise KeyError(
+            f"Unknown material {material!r}. Available materials: {available}"
+        ) from exc
+
+    return {
+        "name": material,
+        "material": material_block,
+        "constants": _MATERIAL_CONSTANTS,
+    }
+
+
+def list_materials() -> list[str]:
+    """Return the list of available material identifiers."""
+
+    return sorted(_MATERIALS)
