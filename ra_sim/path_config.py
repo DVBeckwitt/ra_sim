@@ -2,11 +2,13 @@
 from pathlib import Path
 import os
 import tempfile
+import copy
 import yaml
 
 _YAML_PATH = Path(__file__).resolve().parents[1] / "file_paths.yaml"
 _DIR_YAML_PATH = Path(__file__).resolve().parents[1] / "dir_paths.yaml"
 _MATERIALS_YAML_PATH = Path(__file__).resolve().parents[1] / "materials.yaml"
+_INSTRUMENT_YAML_PATH = Path(__file__).resolve().parents[1] / "instrument.yaml"
 
 DEFAULT_DIRS = {
     "downloads": str(Path.home() / "Downloads"),
@@ -36,6 +38,12 @@ else:  # pragma: no cover - configuration file is optional in tests
 _MATERIAL_CONSTANTS = _materials_raw.get("constants", {})
 _MATERIALS = _materials_raw.get("materials", {})
 _DEFAULT_MATERIAL = _materials_raw.get("default_material")
+
+if _INSTRUMENT_YAML_PATH.exists():
+    with open(_INSTRUMENT_YAML_PATH, "r", encoding="utf-8") as fh:
+        _instrument_raw = yaml.safe_load(fh) or {}
+else:  # pragma: no cover - configuration file is optional in tests
+    _instrument_raw = {}
 
 
 def get_path(key: str) -> str:
@@ -113,3 +121,9 @@ def list_materials() -> list[str]:
     """Return the list of available material identifiers."""
 
     return sorted(_MATERIALS)
+
+
+def get_instrument_config() -> dict:
+    """Return the parsed instrument configuration."""
+
+    return copy.deepcopy(_instrument_raw)
