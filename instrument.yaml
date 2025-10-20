@@ -1,0 +1,43 @@
+# Instrument-specific parameters used by the RA-SIM GUI and simulations.
+instrument:
+  detector:
+    image_size: 3000
+    monte_carlo_samples: 1000
+    beam_stop_half_size: 40
+    intensity_threshold: 1.0
+    two_theta_range_deg: [0, 70]
+    vmax: 1000
+    vmax_slider_max: 3000
+  geometry_defaults:
+    distance_m: 0.075
+    rot1: 0.0
+    rot2: 0.0
+    poni1_m: 0.0
+    poni2_m: 0.0
+    wavelength_m: 1.0e-10
+  beam:
+    wavelength_angstrom: 1.54
+    divergence_fwhm_deg: 0.05
+    sigma_mosaic_fwhm_deg: 0.8
+    gamma_mosaic_fwhm_deg: 0.7
+    eta: 0.0
+    bandwidth_percent: 0.7
+    bandwidth_sigma_fraction: 5.0e-05
+  sample_orientation:
+    theta_initial_deg: 6.0
+    chi_deg: 0.0
+    psi_deg: 0.0
+    zb: 0.0
+    zs: 0.0
+  debye_waller:
+    x: 0.0
+    y: 0.0
+  occupancies:
+    default: [1.0, 1.0, 1.0]
+  hendricks_teller:
+    default_p: [0.01, 0.99, 0.5]
+    default_w: [50.0, 50.0, 0.0]
+    max_miller_index: 19
+    include_rods: false
+  output:
+    write_excel: false

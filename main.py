@@ -100,83 +100,107 @@ else:
 ###############################################################################
 #                          DATA & PARAMETER SETUP
 ###############################################################################
-from ra_sim.path_config import get_path, get_dir
+from ra_sim.path_config import get_path, get_dir, get_instrument_config
+
+
+def _ensure_triplet(values, fallback):
+    """Return a 3-element list combining *values* with *fallback*."""
+
+    if not isinstance(values, (list, tuple)):
+        return list(fallback)
+    merged = list(fallback)
+    for idx, val in enumerate(values[:3]):
+        merged[idx] = val
+    return merged
+
+
+instrument_config = get_instrument_config().get("instrument", {})
+detector_config = instrument_config.get("detector", {})
+geometry_config = instrument_config.get("geometry_defaults", {})
+beam_config = instrument_config.get("beam", {})
+sample_config = instrument_config.get("sample_orientation", {})
+debye_config = instrument_config.get("debye_waller", {})
+occupancy_config = instrument_config.get("occupancies", {})
+hendricks_config = instrument_config.get("hendricks_teller", {})
+output_config = instrument_config.get("output", {})
 
 file_path = get_path("dark_image")
 BI = read_osc(file_path)  # Dark (background) image
 
 osc_files = get_path("osc_files")
-file1 = read_osc(osc_files[0])
-#file1 = read_osc(r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_5m_5d.osc")
-file2 = read_osc(osc_files[1])
-file3 = read_osc(osc_files[2])
-file4 = read_osc(osc_files[3])
-
-#bg1 = np.load(r"C:\Users\Kenpo\Downloads\background_6d.npy")
-#bg2 = np.load(r"C:\Users\Kenpo\Downloads\background_10d.npy")
-#bg3 = np.load(r"C:\Users\Kenpo\Downloads\background_15d.npy")
-#bg4 = np.load(r"C:\Users\Kenpo\Downloads\background_30d.npy")
-
-# Rotate and subtract dark image
-files = [file1, file2, file3, file4]
-#bg_data_list = [bg1, bg2, bg3, bg4]
-#for i in range(len(files)):
-#    files[i] = np.rot90(files[i], k=3) - BI
-
-background_images = files
+if isinstance(osc_files, str):
+    osc_files = [osc_files]
+background_images = [read_osc(path) for path in osc_files]
+if not background_images:
+    raise ValueError("No oscillation images configured in osc_files")
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
 parameters = parse_poni_file(poni_file_path)
 
-Distance_CoR_to_Detector = parameters.get("Dist", 0.075)
-Gamma_initial = parameters.get("Rot1", 0.0)
-gamma_initial = parameters.get("Rot2", 0.0)
-poni1 = parameters.get("Poni1", 0.0)
-poni2 = parameters.get("Poni2", 0.0)
-wave_m = parameters.get("Wavelength", 1e-10)
-lambda_ = wave_m * 1e10  # Convert m -> Å
+Distance_CoR_to_Detector = parameters.get(
+    "Dist", geometry_config.get("distance_m", 0.075)
+)
+Gamma_initial = parameters.get("Rot1", geometry_config.get("rot1", 0.0))
+gamma_initial = parameters.get("Rot2", geometry_config.get("rot2", 0.0))
+poni1 = parameters.get("Poni1", geometry_config.get("poni1_m", 0.0))
+poni2 = parameters.get("Poni2", geometry_config.get("poni2_m", 0.0))
+wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10))
+lambda_from_poni = wave_m * 1e10  # Convert m -> Å
 
-image_size = 3000
-num_samples = 1000
+image_size = detector_config.get("image_size", 3000)
+num_samples = detector_config.get("monte_carlo_samples", 1000)
+write_excel = output_config.get("write_excel", write_excel)
+intensity_threshold = detector_config.get("intensity_threshold", 1.0)
+two_theta_range = tuple(detector_config.get("two_theta_range_deg", (0, 70)))
+vmax_default = detector_config.get("vmax", 1000)
+vmax_slider_max = detector_config.get("vmax_slider_max", 3000)
 
 # Approximate beam center
 center_default = [
     (poni2 / (100e-6)),
-    3000 - (poni1 / (100e-6))
+    image_size - (poni1 / (100e-6))
 ]
 
-mx = 19
+mx = hendricks_config.get("max_miller_index", 19)
 
 fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
-divergence_sigma = math.radians(0.05 * fwhm2sigma)
+divergence_fwhm = beam_config.get("divergence_fwhm_deg", 0.05)
+divergence_sigma = math.radians(divergence_fwhm * fwhm2sigma)
 
-sigma_mosaic = math.radians(0.8 * fwhm2sigma)
-gamma_mosaic = math.radians(0.7 * fwhm2sigma)
-eta = 0.0
+sigma_mosaic = math.radians(
+    beam_config.get("sigma_mosaic_fwhm_deg", 0.8) * fwhm2sigma
+)
+gamma_mosaic = math.radians(
+    beam_config.get("gamma_mosaic_fwhm_deg", 0.7) * fwhm2sigma
+)
+eta = beam_config.get("eta", 0.0)
 
-theta_initial = 6.0
-chi = 0.0
-psi = 0.0
-zb = 0.0
-bw_sigma = 0.05e-3 * fwhm2sigma
-zs = 0.0
-debye_x = 0.0
-debye_y = 0.0
+theta_initial = sample_config.get("theta_initial_deg", 6.0)
+chi = sample_config.get("chi_deg", 0.0)
+psi = sample_config.get("psi_deg", 0.0)
+zb = sample_config.get("zb", 0.0)
+bw_sigma = beam_config.get("bandwidth_sigma_fraction", 0.05e-3) * fwhm2sigma
+zs = sample_config.get("zs", 0.0)
+debye_x = debye_config.get("x", 0.0)
+debye_y = debye_config.get("y", 0.0)
 n2 = IndexofRefraction()
 
 # Print the computed complex index of refraction on startup and exit
 #print("Computed complex index of refraction n2:", n2)
 #sys.exit(0)
 
-bandwidth = 0.7 / 100  # 0.7%
+bandwidth = beam_config.get("bandwidth_percent", 0.7) / 100
 
 # NOTE: We define the default occupancy for each site:
-occ = [1.0, 1.0, 1.0]
+occ = _ensure_triplet(occupancy_config.get("default"), [1.0, 1.0, 1.0])
 
 # When enabled, additional fractional reflections ("rods")
 # are injected between integer L values.
-include_rods_flag = False
+include_rods_flag = hendricks_config.get("include_rods", False)
+
+lambda_override = beam_config.get("wavelength_angstrom")
+lambda_ = lambda_override if lambda_override is not None else lambda_from_poni
 
 # Parameters and file paths.
 cif_file = get_path("cif_file")
@@ -216,38 +240,42 @@ if cif_file2:
 else:
     av2 = None
     cv2 = None
-    
-lambda_ = 1.54   # X-ray wavelength in Å (e.g., Cu Kα)
+
 energy = 6.62607e-34 * 2.99792458e8 / (lambda_*1e-10) / (1.602176634e-19)    # keV
-intensity_threshold = 1.0
-two_theta_range = (0, 70)
+
+p_defaults = _ensure_triplet(
+    hendricks_config.get("default_p"), [0.01, 0.99, 0.5]
+)
+w_defaults = _ensure_triplet(
+    hendricks_config.get("default_w"), [50.0, 50.0, 0.0]
+)
 
 # ---------------------------------------------------------------------------
 # Default GUI/fit parameter values. These must be defined before any calls
 # that reference them (e.g. ``ht_Iinf_dict`` below).
 # ---------------------------------------------------------------------------
 defaults = {
-    'theta_initial': 5.0,
+    'theta_initial': theta_initial,
     'gamma': Gamma_initial,
     'Gamma': gamma_initial,
-    'chi': 0.0,
-    'zs': 0.0,
-    'zb': 0.0,
-    'debye_x': 0.0,
-    'debye_y': 0.0,
+    'chi': chi,
+    'zs': zs,
+    'zb': zb,
+    'debye_x': debye_x,
+    'debye_y': debye_y,
     'corto_detector': Distance_CoR_to_Detector,
     'sigma_mosaic_deg': np.degrees(sigma_mosaic),
     'gamma_mosaic_deg': np.degrees(gamma_mosaic),
-    'eta': 0.0,
+    'eta': eta,
     'a': av,
     'c': cv,
-    'vmax': 1000,
-    'p0': 0.01,
-    'p1': 0.99,
-    'p2': 0.5,
-    'w0': 50.0,
-    'w1': 50.0,
-    'w2': 0.0,
+    'vmax': vmax_default,
+    'p0': p_defaults[0],
+    'p1': p_defaults[1],
+    'p2': p_defaults[2],
+    'w0': w_defaults[0],
+    'w1': w_defaults[1],
+    'w2': w_defaults[2],
     'center_x': center_default[0],
     'center_y': center_default[1],
 }
@@ -397,9 +425,12 @@ df_summary, df_details = build_intensity_dataframes(
     miller, intensities, degeneracy, details
 )
 
-if write_excel:
-    # Save the initial intensities to Excel in the configured downloads
-    # directory.
+def export_initial_excel():
+    """Write the initial intensity tables to Excel when enabled."""
+
+    if not write_excel:
+        return
+
     download_dir = get_dir("downloads")
     excel_path = download_dir / "miller_intensities.xlsx"
 
@@ -455,7 +486,7 @@ if write_excel:
 # Zero out beamstop region near center
 row_center = int(center_default[0])
 col_center = int(center_default[1])
-half_size = 40
+half_size = detector_config.get("beam_stop_half_size", 40)
 
 for bg in background_images:
     rmin = max(0, row_center - half_size)
@@ -623,7 +654,7 @@ def vmax_slider_command(val):
 vmax_slider = ttk.Scale(
     vmax_frame,
     from_=0,
-    to=3000,
+    to=vmax_slider_max,
     orient=tk.HORIZONTAL,
     variable=vmax_var,
     command=vmax_slider_command
@@ -1309,9 +1340,9 @@ def reset_to_defaults():
     vmax_caked_var.set(2000.0)
 
     # ALSO reset occupancies to default
-    occ_var1.set(1.0)
-    occ_var2.set(0.5)
-    occ_var3.set(0.5)
+    occ_var1.set(occ[0])
+    occ_var2.set(occ[1])
+    occ_var3.set(occ[2])
     p0_var.set(defaults['p0'])
     p1_var.set(defaults['p1'])
     p2_var.set(defaults['p2'])
@@ -2078,9 +2109,9 @@ vmax_slider.config(command=vmax_slider_command)
 # ---------------------------------------------------------------------------
 #  OCCUPANCY SLIDERS: Sliders for occ[0], occ[1], occ[2]
 # ---------------------------------------------------------------------------
-occ_var1 = tk.DoubleVar(value=1.0)
-occ_var2 = tk.DoubleVar(value=1.0)
-occ_var3 = tk.DoubleVar(value=1.0)
+occ_var1 = tk.DoubleVar(value=occ[0])
+occ_var2 = tk.DoubleVar(value=occ[1])
+occ_var3 = tk.DoubleVar(value=occ[2])
 
 def update_occupancies(*args):
     """Recompute Hendricks–Teller curves when occupancies or p-values change."""
@@ -2271,15 +2302,20 @@ ttk.Label(occ_entry_frame, text="Input Occupancy Site 3:").grid(row=2, column=0,
 occ_entry3 = ttk.Entry(occ_entry_frame, textvariable=occ_var3, width=5)
 occ_entry3.grid(row=2, column=1, padx=5, pady=2)
 
-def main(write_excel: bool = True):
+def main(write_excel_flag=None):
     """Entry point for running the GUI application.
 
     Parameters
     ----------
-    write_excel : bool, optional
+    write_excel_flag : bool or None, optional
         When ``True`` the initial intensities are written to an Excel
-        file in the configured downloads directory.
+        file in the configured downloads directory.  When ``None`` the
+        value from the instrument configuration file is used.
     """
+
+    global write_excel
+    if write_excel_flag is not None:
+        write_excel = write_excel_flag
 
     params_file_path = get_path("parameters_file")
     if os.path.exists(params_file_path):
@@ -2306,6 +2342,7 @@ def main(write_excel: bool = True):
     else:
         print("No saved profile found; using default parameters.")
 
+    export_initial_excel()
     update_mosaic_cache()
     do_update()
     root.mainloop()
@@ -2321,7 +2358,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        main(write_excel=not args.no_excel)
+        override_flag = False if args.no_excel else None
+        main(write_excel_flag=override_flag)
     except Exception as exc:
         print("Unhandled exception during startup:", exc)
         import traceback
