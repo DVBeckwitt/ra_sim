@@ -100,62 +100,31 @@ def complex_sqrt(z):
     half_phi = 0.5 * phi
     return complex(sqrt_r * math.cos(half_phi),
                    sqrt_r * math.sin(half_phi))
-
 @njit
-def fresnel_transmission(grazing_angle, refractive_index, s_polarization=True, direction="in"):
+def fresnel_transmission(grazing_angle, refractive_index, s_polarization=True, incoming=True):
     """
-    Calculate the Fresnel amplitude transmission coefficient for an interface
-    between vacuum (n0 = 1) and a medium (complex index 'refractive_index').
-    
-    The angle 'grazing_angle' is measured from the sample surface 
-    (0 => beam parallel to the surface). The parameter 'direction' can be:
-      - "in"  : vacuum -> medium  (t_i)
-      - "out" : medium -> vacuum  (t_f)
-      
-    Args:
-        grazing_angle (float): Grazing angle (radians) from the surface plane.
-        refractive_index (complex): Medium’s complex refractive index (1 - delta + i*beta).
-        s_polarization (bool): True => s-polarization (TE), False => p-polarization (TM).
-        direction (str): "in" or "out" for incoming or outgoing transmission.
-        
-    Returns:
-        complex: The complex amplitude transmission coefficient.
-                 Use abs(...)**2 to get intensity transmission.
+    Fresnel E-field amplitude transmission for vacuum <-> medium.
+    grazing_angle: radians from the surface (0 parallel).
+    refractive_index: complex n = 1 - delta + 1j*beta.
+    incoming=True means vacuum -> medium, False means medium -> vacuum.
+    For energy flux, use T = (kz1.real / kz0.real) * abs(t)**2.
     """
-    # Validate direction
-    direction = direction.lower()
-    if direction not in ("in", "out"):
-        raise ValueError("direction must be 'in' or 'out'.")
+    n = refractive_index
+    kz0 = math.sin(grazing_angle) + 0j
+    c = math.cos(grazing_angle)
+    kz1 = complex_sqrt(n*n - c*c)  # principal branch
 
-    # k_z0 = normal component in vacuum = sin(grazing_angle)
-    k_z0 = math.sin(grazing_angle) + 0j
-    # k_z1 = normal component in medium = sqrt(n^2 - cos^2(grazing_angle))
-    cos_angle = math.cos(grazing_angle)
-    k_z1 = complex_sqrt(refractive_index * refractive_index - cos_angle * cos_angle)
-
-    if direction == "in":
-        # Vacuum -> Medium
-        if s_polarization:
-            # s-pol: t_s = 2 k_z0 / (k_z0 + k_z1)
-            numerator = 2.0 * k_z0
-            denominator = k_z0 + k_z1
-        else:
-            # p-pol: t_p = 2 n^2 k_z0 / (n^2 k_z0 + k_z1)
-            numerator = 2.0 * refractive_index * refractive_index * k_z0
-            denominator = refractive_index * refractive_index * k_z0 + k_z1
+    if s_polarization:
+        num = 2.0 * (kz0 if incoming else kz1)
+        den = kz0 + kz1
     else:
-        # direction == "out" => Medium -> Vacuum
-        if s_polarization:
-            # s-pol: t_s = 2 k_z1 / (k_z1 + k_z0)
-            numerator = 2.0 * k_z1
-            denominator = k_z1 + k_z0
-        else:
-            # p-pol: t_p = 2 n^2 k_z1 / (n^2 k_z1 + k_z0)
-            numerator = 2.0 * refractive_index * refractive_index * k_z1
-            denominator = refractive_index * refractive_index * k_z1 + k_z0
+        if incoming:  # vacuum -> medium
+            num = 2.0 * n * kz0
+            den = n*n * kz0 + kz1
+        else:         # medium -> vacuum
+            num = 2.0 * n * kz1
+            den = kz1 + n*n * kz0
 
-    # Avoid division by near-zero
-    if abs(denominator) < 1e-30:
+    if abs(den) < 1e-30:
         return 0j
-
-    return numerator / denominator
+    return num / den
