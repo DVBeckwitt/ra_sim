@@ -17,6 +17,7 @@ from contextlib import redirect_stdout, redirect_stderr
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 from scipy.signal   import find_peaks, savgol_filter
 from scipy.optimize import least_squares, differential_evolution
 from numpy.linalg   import inv
@@ -364,7 +365,10 @@ def main():
     # ════════════════════════════════════════════════════════════
     plt.figure(figsize=(4,4))
     im=plt.imshow(corr,vmin=-1.0,vmax=1.0,cmap="coolwarm",interpolation="none")
-    plt.colorbar(im,fraction=0.046,pad=0.04,label="corr")
+    cbar=plt.colorbar(im,fraction=0.046,pad=0.04,label="corr")
+    cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=5))
+    cbar.ax.tick_params(labelsize=8)
+    cbar.update_ticks()
     plt.xticks(range(n),labels,rotation=45); plt.yticks(range(n),labels)
     plt.title("Correlation matrix"); plt.tight_layout()
 
