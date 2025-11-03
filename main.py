@@ -164,10 +164,6 @@ def _rotate_for_display(image, pivot_row, pivot_col):
 
 background_display_images = []
 background_display_extents = []
-for img in background_images:
-    rotated, extent = _rotate_for_display(img, row_center, col_center)
-    background_display_images.append(rotated)
-    background_display_extents.append(extent)
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -196,6 +192,22 @@ center_default = [
     (poni2 / (100e-6)),
     image_size - (poni1 / (100e-6))
 ]
+
+row_center = int(center_default[0])
+col_center = int(center_default[1])
+half_size = detector_config.get("beam_stop_half_size", 40)
+
+for bg in background_images:
+    rmin = max(0, row_center - half_size)
+    rmax = min(bg.shape[0], row_center + half_size)
+    cmin = max(0, col_center - half_size)
+    cmax = min(bg.shape[1], col_center + half_size)
+    bg[rmin:rmax, cmin:cmax] = 0.0
+
+for img in background_images:
+    rotated, extent = _rotate_for_display(img, row_center, col_center)
+    background_display_images.append(rotated)
+    background_display_extents.append(extent)
 
 mx = hendricks_config.get("max_miller_index", 19)
 
@@ -517,18 +529,6 @@ def export_initial_excel():
                 details_sheet.set_row(row, cell_format=zebra_format)
 
     print(f"Excel file saved at {excel_path}")
-
-# Zero out beamstop region near center
-row_center = int(center_default[0])
-col_center = int(center_default[1])
-half_size = detector_config.get("beam_stop_half_size", 40)
-
-for bg in background_images:
-    rmin = max(0, row_center - half_size)
-    rmax = min(bg.shape[0], row_center + half_size)
-    cmin = max(0, col_center - half_size)
-    cmax = min(bg.shape[1], col_center + half_size)
-    bg[rmin:rmax, cmin:cmax] = 0.0
 
 current_background_image = background_images[0]
 current_background_display = background_display_images[0]
