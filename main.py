@@ -134,6 +134,17 @@ background_images = [read_osc(path) for path in osc_files]
 if not background_images:
     raise ValueError("No oscillation images configured in osc_files")
 
+
+def _rotate_for_display(image):
+    """Rotate detector images 90° clockwise for on-screen display."""
+
+    if image is None:
+        return None
+    return np.rot90(image, k=-1)
+
+
+background_display_images = [_rotate_for_display(img) for img in background_images]
+
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
 parameters = parse_poni_file(poni_file_path)
@@ -496,6 +507,7 @@ for bg in background_images:
     bg[rmin:rmax, cmin:cmax] = 0.0
 
 current_background_image = background_images[0]
+current_background_display = background_display_images[0]
 current_background_index = 0
 background_visible = True
 
@@ -538,7 +550,7 @@ image_display = ax.imshow(
 
 
 background_display = ax.imshow(
-    current_background_image,
+    current_background_display,
     cmap='turbo',
     vmin=0,
     vmax=1e3,
@@ -1150,9 +1162,17 @@ def do_update():
 
     background_display.set_visible(background_visible)
     if background_visible:
-        background_display.set_data(current_background_image)
+        background_display.set_data(current_background_display)
     else:
-        background_display.set_data(np.zeros_like(current_background_image))
+        fallback = (
+            current_background_display
+            if current_background_display is not None
+            else current_background_image
+        )
+        if fallback is not None:
+            background_display.set_data(np.zeros_like(fallback))
+        else:
+            background_display.set_data(np.zeros((image_size, image_size)))
 
     try:
         norm_sim = (global_image_buffer / np.max(global_image_buffer)
@@ -1306,10 +1326,11 @@ def toggle_background():
 
 
 def switch_background():
-    global current_background_index, current_background_image
+    global current_background_index, current_background_image, current_background_display
     current_background_index = (current_background_index + 1) % len(background_images)
     current_background_image = background_images[current_background_index]
-    background_display.set_data(current_background_image)
+    current_background_display = background_display_images[current_background_index]
+    background_display.set_data(current_background_display)
     schedule_update()
 
 def reset_to_defaults():
