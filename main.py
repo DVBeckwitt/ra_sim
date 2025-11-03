@@ -135,15 +135,39 @@ if not background_images:
     raise ValueError("No oscillation images configured in osc_files")
 
 
-def _rotate_for_display(image):
-    """Rotate detector images 90° clockwise for on-screen display."""
+def _rotate_for_display(image, pivot_row, pivot_col):
+    """Rotate detector images 90° clockwise around the detector pivot."""
 
     if image is None:
-        return None
-    return np.rot90(image, k=-1)
+        return None, None
+
+    rotated = np.rot90(image, k=-1)
+
+    orig_rows, orig_cols = image.shape[:2]
+    rot_rows, rot_cols = rotated.shape[:2]
+
+    new_row = pivot_col
+    new_col = orig_rows - 1 - pivot_row
+
+    offset_x = pivot_col - new_col
+    offset_y = pivot_row - new_row
+
+    extent = (
+        -0.5 + offset_x,
+        rot_cols - 0.5 + offset_x,
+        rot_rows - 0.5 + offset_y,
+        -0.5 + offset_y,
+    )
+
+    return rotated, extent
 
 
-background_display_images = [_rotate_for_display(img) for img in background_images]
+background_display_images = []
+background_display_extents = []
+for img in background_images:
+    rotated, extent = _rotate_for_display(img, row_center, col_center)
+    background_display_images.append(rotated)
+    background_display_extents.append(extent)
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -508,6 +532,7 @@ for bg in background_images:
 
 current_background_image = background_images[0]
 current_background_display = background_display_images[0]
+current_background_extent = background_display_extents[0]
 current_background_index = 0
 background_visible = True
 
@@ -555,7 +580,8 @@ background_display = ax.imshow(
     vmin=0,
     vmax=1e3,
     zorder=0,
-    origin='upper'
+    origin='upper',
+    extent=(current_background_extent if current_background_extent is not None else None)
 )
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
@@ -952,6 +978,7 @@ def do_update():
     global stored_max_positions_local, stored_sim_image
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global av2, cv2
+    global current_background_extent
 
     if update_running:
         # another update is in progress; try again shortly
@@ -1163,6 +1190,8 @@ def do_update():
     background_display.set_visible(background_visible)
     if background_visible:
         background_display.set_data(current_background_display)
+        if current_background_extent is not None:
+            background_display.set_extent(current_background_extent)
     else:
         fallback = (
             current_background_display
@@ -1171,8 +1200,12 @@ def do_update():
         )
         if fallback is not None:
             background_display.set_data(np.zeros_like(fallback))
+            if current_background_extent is not None:
+                background_display.set_extent(current_background_extent)
         else:
             background_display.set_data(np.zeros((image_size, image_size)))
+            if current_background_extent is not None:
+                background_display.set_extent(current_background_extent)
 
     try:
         norm_sim = (global_image_buffer / np.max(global_image_buffer)
@@ -1326,11 +1359,15 @@ def toggle_background():
 
 
 def switch_background():
-    global current_background_index, current_background_image, current_background_display
+    global current_background_index, current_background_image
+    global current_background_display, current_background_extent
     current_background_index = (current_background_index + 1) % len(background_images)
     current_background_image = background_images[current_background_index]
     current_background_display = background_display_images[current_background_index]
+    current_background_extent = background_display_extents[current_background_index]
     background_display.set_data(current_background_display)
+    if current_background_extent is not None:
+        background_display.set_extent(current_background_extent)
     schedule_update()
 
 def reset_to_defaults():
