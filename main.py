@@ -483,17 +483,12 @@ def export_initial_excel():
 
     print(f"Excel file saved at {excel_path}")
 
-# Zero out beamstop region near center
+# Beam center (for plotting and limits)
 row_center = int(center_default[0])
 col_center = int(center_default[1])
-half_size = detector_config.get("beam_stop_half_size", 40)
 
-for bg in background_images:
-    rmin = max(0, row_center - half_size)
-    rmax = min(bg.shape[0], row_center + half_size)
-    cmin = max(0, col_center - half_size)
-    cmax = min(bg.shape[1], col_center + half_size)
-    bg[rmin:rmax, cmin:cmax] = 0.0
+# Rotate background images 90 degrees clockwise so orientation matches simulation
+background_images = [np.rot90(bg, -1) for bg in background_images]
 
 current_background_image = background_images[0]
 current_background_index = 0
