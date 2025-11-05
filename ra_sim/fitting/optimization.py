@@ -408,6 +408,9 @@ def fit_mosaic_widths_separable(
             hkl = (int(round(row[4])), int(round(row[5])), int(round(row[6])))
             if all(v == 0 for v in hkl):
                 continue
+            h, k, _ = hkl
+            if (2 * h + k) % 3 != 0:
+                continue
             d_hkl = d_spacing(hkl[0], hkl[1], hkl[2], a_lattice, c_lattice)
             tth = two_theta(d_hkl, lambda_scalar)
             candidates.append(

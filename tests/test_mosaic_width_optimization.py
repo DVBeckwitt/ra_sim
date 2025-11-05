@@ -18,9 +18,18 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
         [0, 1, 0],
         [0, 0, 1],
         [1, 1, 0],
+        [-1, 2, 0],
+        [2, -1, 1],
     ], dtype=np.float64)
-    intensities = np.array([3.0, 2.5, 2.2, 1.8], dtype=np.float64)
-    centers = [(16, 16), (16, 48), (48, 16), (48, 48)]
+    intensities = np.array([3.0, 2.5, 2.2, 1.8, 1.6, 1.4], dtype=np.float64)
+    centers = [
+        (16, 16),
+        (16, 48),
+        (48, 16),
+        (48, 48),
+        (24, 32),
+        (40, 32),
+    ]
 
     sigma_true = 0.65
     gamma_true = 0.4
@@ -182,4 +191,8 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
     assert abs(result.x[0] - sigma_true) < 0.1
     assert abs(result.x[1] - gamma_true) < 0.1
     assert abs(result.x[2] - eta_true) < 0.05
+
+    selected_hkls = {roi.hkl for roi in result.selected_rois}
+    assert selected_hkls == {(0, 0, 1), (1, 1, 0), (-1, 2, 0), (2, -1, 1)}
+    assert all((2 * h + k) % 3 == 0 for h, k, _ in selected_hkls)
 
