@@ -1419,6 +1419,9 @@ progress_label_positions.pack(side=tk.BOTTOM, padx=5)
 progress_label_geometry = ttk.Label(root, text="")
 progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
 
+mosaic_progressbar = ttk.Progressbar(root, mode="indeterminate", length=240)
+mosaic_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
+
 progress_label_mosaic = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
 progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
 
@@ -1669,8 +1672,10 @@ def on_fit_mosaic_click():
     }
 
     progress_label_mosaic.config(text="Running mosaic optimization…")
+    mosaic_progressbar.start(10)
     root.update_idletasks()
 
+    result = None
     try:
         result = fit_mosaic_widths_separable(
             experimental_image,
@@ -1683,6 +1688,10 @@ def on_fit_mosaic_click():
     except Exception as exc:  # pragma: no cover - GUI feedback path
         progress_label_mosaic.config(text=f"Mosaic fit failed: {exc}")
         return
+    finally:
+        mosaic_progressbar.stop()
+        mosaic_progressbar["value"] = 0
+        root.update_idletasks()
 
     if result.x is None or not np.all(np.isfinite(result.x)):
         progress_label_mosaic.config(
