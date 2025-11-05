@@ -698,13 +698,17 @@ vmax_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 caked_vrange_frame = ttk.Frame(fig_frame)
 caked_vrange_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
+caked_limits_user_override = False
+
 vmin_caked_label = ttk.Label(caked_vrange_frame, text="vmin (Caked)")
 vmin_caked_label.pack(side=tk.LEFT, padx=5)
 
 vmin_caked_var = tk.DoubleVar(value=0.0)
 def vmin_caked_slider_command(val):
+    global caked_limits_user_override
     v = float(val)
     vmin_caked_var.set(v)
+    caked_limits_user_override = True
     schedule_update()
 
 vmin_caked_slider = ttk.Scale(
@@ -722,8 +726,10 @@ vmax_caked_label.pack(side=tk.LEFT, padx=5)
 
 vmax_caked_var = tk.DoubleVar(value=2000.0)
 def vmax_caked_slider_command(val):
+    global caked_limits_user_override
     v = float(val)
     vmax_caked_var.set(v)
+    caked_limits_user_override = True
     schedule_update()
 
 vmax_caked_slider = ttk.Scale(
@@ -880,6 +886,34 @@ def caking(data, ai):
         method="lut",
         unit="2th_deg"
     )
+
+
+def _auto_caked_limits(image):
+    """Return sensible display limits for a caked image."""
+
+    if image is None:
+        return 0.0, 1.0
+
+    finite_mask = np.isfinite(image)
+    if not np.any(finite_mask):
+        return 0.0, 1.0
+
+    finite_vals = image[finite_mask]
+    vmin = float(np.nanmin(finite_vals))
+    vmax = float(np.nanmax(finite_vals))
+
+    if not (math.isfinite(vmin) and math.isfinite(vmax)):
+        return 0.0, 1.0
+
+    if math.isclose(vmin, vmax):
+        if vmin == 0.0:
+            vmax = 1.0
+        else:
+            spread = abs(vmax) * 1e-3 or 1.0
+            vmin -= spread
+            vmax += spread
+
+    return vmin, vmax
 
 
 def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
@@ -1323,7 +1357,24 @@ def do_update():
         caked_img = sim_res2.intensity
         azimuth_extent = _adjust_phi_zero(sim_res2.azimuthal)
         image_display.set_data(caked_img)
-        image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
+        auto_vmin, auto_vmax = _auto_caked_limits(caked_img)
+
+        if not caked_limits_user_override:
+            vmin_caked_var.set(auto_vmin)
+            vmax_caked_var.set(auto_vmax)
+
+        vmin_val = float(vmin_caked_var.get())
+        vmax_val = float(vmax_caked_var.get())
+
+        if not (math.isfinite(vmin_val) and math.isfinite(vmax_val)) or vmin_val >= vmax_val:
+            vmin_val, vmax_val = auto_vmin, auto_vmax
+
+        slider_from = min(float(vmin_caked_slider.cget("from")), vmin_val, auto_vmin, 0.0)
+        slider_to = max(float(vmin_caked_slider.cget("to")), vmax_val, auto_vmax, 1.0)
+        vmin_caked_slider.configure(from_=slider_from, to=slider_to)
+        vmax_caked_slider.configure(to=slider_to)
+
+        image_display.set_clim(vmin_val, vmax_val)
         image_display.set_extent([
             float(sim_res2.radial[0]),
             float(sim_res2.radial[-1]),
@@ -1431,6 +1482,7 @@ def switch_background():
     schedule_update()
 
 def reset_to_defaults():
+    global caked_limits_user_override
     theta_initial_var.set(defaults['theta_initial'])
     gamma_var.set(defaults['gamma'])
     Gamma_var.set(defaults['Gamma'])
@@ -1457,6 +1509,7 @@ def reset_to_defaults():
     show_caked_2d_var.set(False)
     vmin_caked_var.set(0.0)
     vmax_caked_var.set(2000.0)
+    caked_limits_user_override = False
 
     # ALSO reset occupancies to default
     occ_var1.set(occ[0])
@@ -1918,6 +1971,9 @@ check_1d.pack(side=tk.TOP, padx=5, pady=2)
 
 show_caked_2d_var = tk.BooleanVar(value=False)
 def toggle_caked_2d():
+    global caked_limits_user_override
+    if not show_caked_2d_var.get():
+        caked_limits_user_override = False
     schedule_update()
 
 check_2d = ttk.Checkbutton(
