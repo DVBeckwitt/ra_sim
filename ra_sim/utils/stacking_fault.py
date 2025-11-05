@@ -135,7 +135,6 @@ def _get_base_curves(
         hk_list = [
             (h, k)
             for h, k in itertools.product(range(-mx + 1, mx), repeat=2)
-            if not (h == 0 and k == 0)
         ]
 
     key = (

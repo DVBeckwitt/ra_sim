@@ -63,6 +63,22 @@ def test_qr_grouping_matches_manual_sum():
     assert np.allclose(intens, manual_I)
 
 
+def test_ht_curves_include_zero_zero_when_generated_from_mx():
+    cif = Path('tests/Diffuse/PbI2_2H.cif')
+    curves = ht_Iinf_dict(
+        cif_path=str(cif),
+        mx=2,
+        p=0.2,
+        L_step=0.1,
+        two_theta_max=70.0,
+        lambda_=1.54,
+    )
+    zero_curve = curves.get((0, 0))
+    assert zero_curve is not None
+    assert zero_curve['L'].size > 0
+    assert np.any(zero_curve['I'] > 0)
+
+
 def test_combine_ht_caches_preserves_deg():
     cif = Path('tests/Diffuse/PbI2_2H.cif')
     hk_list = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]
