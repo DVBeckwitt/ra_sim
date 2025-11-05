@@ -77,6 +77,10 @@ from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.debug_utils import debug_print, is_debug_enabled
 from ra_sim.gui.collapsible import CollapsibleFrame
+from ra_sim.utils.pyfai_compat import (
+    integrate2d_with_compat,
+    ensure_axes_in_degrees,
+)
 
 
 turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
@@ -832,19 +836,23 @@ phi_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 ttk.Label(phi_max_container, textvariable=phi_max_label_var, width=5).pack(side=tk.LEFT, padx=5)
 
 def caking(data, ai):
-    return ai.integrate2d(
+    return integrate2d_with_compat(
+        ai,
         data,
         npt_rad=1000,
         npt_azim=720,
-        correctSolidAngle=True,
+        correct_solid_angle=True,
         method="lut",
-        unit="2th_deg"
+        unit="2th_deg",
     )
 
-def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
+
+def caked_up(res2, ai, tth_min, tth_max, phi_min, phi_max):
     intensity = res2.intensity
-    radial_2theta = res2.radial
-    azimuth_vals = res2.azimuthal
+    radial_2theta, azimuth_vals = ensure_axes_in_degrees(
+        res2,
+        getattr(ai, "wavelength", None),
+    )
 
     mask_rad = (radial_2theta >= tth_min) & (radial_2theta <= tth_max)
     radial_filtered = radial_2theta[mask_rad]
@@ -1181,10 +1189,14 @@ def do_update():
     # unchanged geometry settings.
     # ---------------------------------------------------------------
     global _ai_cache
+    pixel_size_m = 100e-6
+    poni1_m = (image_size - center_x_up) * pixel_size_m
+    poni2_m = center_y_up * pixel_size_m
+
     sig = (
         corto_det_up,
-        center_x_up,
-        center_y_up,
+        poni1_m,
+        poni2_m,
         Gamma_updated,
         gamma_updated,
         wave_m,
@@ -1194,14 +1206,14 @@ def do_update():
             "sig": sig,
             "ai": pyFAI.AzimuthalIntegrator(
                 dist=corto_det_up,
-                poni1=center_x_up * 100e-6,
-                poni2=center_y_up * 100e-6,
+                poni1=poni1_m,
+                poni2=poni2_m,
                 rot1=np.deg2rad(Gamma_updated),
                 rot2=np.deg2rad(gamma_updated),
                 rot3=0.0,
                 wavelength=wave_m,
-                pixel1=100e-6,
-                pixel2=100e-6,
+                pixel1=pixel_size_m,
+                pixel2=pixel_size_m,
             ),
         }
     ai = _ai_cache["ai"]
@@ -1240,10 +1252,11 @@ def do_update():
         sim_res2 = caking(unscaled_image_global, ai)
         i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
             sim_res2,
+            ai,
             tth_min_var.get(),
             tth_max_var.get(),
             phi_min_var.get(),
-            phi_max_var.get()
+            phi_max_var.get(),
         )
         line_1d_rad.set_data(rad_sim, i2t_sim)
         line_1d_az.set_data(az_sim, i_phi_sim)
@@ -1252,10 +1265,11 @@ def do_update():
             bg_res2 = caking(current_background_image, ai)
             i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
                 bg_res2,
+                ai,
                 tth_min_var.get(),
                 tth_max_var.get(),
                 phi_min_var.get(),
-                phi_max_var.get()
+                phi_max_var.get(),
             )
             line_1d_rad_bg.set_data(rad_bg, i2t_bg)
             line_1d_az_bg.set_data(az_bg, i_phi_bg)
@@ -1409,8 +1423,8 @@ azimuthal_button = ttk.Button(
         [center_x_var.get(), center_y_var.get()],
         {
             'pixel_size': 100e-6,
-            'poni1': (center_x_var.get()) * 100e-6,
-            'poni2': (center_y_var.get()) * 100e-6,
+            'poni1': (image_size - center_x_var.get()) * 100e-6,
+            'poni2': center_y_var.get() * 100e-6,
             'dist': corto_detector_var.get(),
             'rot1': np.deg2rad(Gamma_var.get()),
             'rot2': np.deg2rad(gamma_var.get()),

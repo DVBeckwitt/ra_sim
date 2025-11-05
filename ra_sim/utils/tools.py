@@ -20,6 +20,10 @@ from skimage import color, exposure, feature, io
 from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.path_config import get_temp_dir
+from ra_sim.utils.pyfai_compat import (
+    ensure_axes_in_degrees,
+    integrate2d_with_compat,
+)
 
 # Cache CIF objects and temporary files so repeated updates only modify
 # in-memory data instead of reading/writing new files each time.  Keys are
@@ -550,18 +554,24 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
 
     Args:
         simulated_image (numpy.ndarray): The 2D diffraction pattern image.
-        center (tuple): The beam center in the format (center_x, center_y).
+        center (tuple): The beam center given as (row_pixels, col_pixels).
         detector_params (dict): Contains detector geometry and wavelength.
     """
     # Retrieve detector parameters
     pixel_size = detector_params['pixel_size']
-    poni1 = detector_params['poni1']
-    poni2 = detector_params['poni2']
     dist = detector_params['dist']
     rot1 = detector_params['rot1']
     rot2 = detector_params['rot2']
     rot3 = detector_params['rot3']
     wavelength = detector_params['wavelength']
+
+    if simulated_image is None:
+        raise ValueError("simulated_image must be provided for integration")
+
+    image_rows = simulated_image.shape[0]
+    center_row, center_col = center
+    poni1 = (image_rows - center_row) * pixel_size
+    poni2 = center_col * pixel_size
 
     # Set up the AzimuthalIntegrator
     ai = AzimuthalIntegrator(
@@ -577,17 +587,17 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
     )
 
     # Perform azimuthal integration
-    res2 = ai.integrate2d(
+    res2 = integrate2d_with_compat(
+        ai,
         simulated_image,
         npt_rad=2000,
         npt_azim=1000,
-        unit="2th_deg"
+        unit="2th_deg",
     )
 
     # Extract intensity, radial, and azimuthal arrays
     intensity = res2.intensity
-    radial = res2.radial
-    azimuthal = res2.azimuthal
+    radial, azimuthal = ensure_axes_in_degrees(res2, wavelength)
 
     # Adjust azimuthal values and sort
     azimuthal_adjusted = np.where(azimuthal < 0, azimuthal + 180, azimuthal - 180)
