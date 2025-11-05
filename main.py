@@ -862,7 +862,7 @@ phi_max_slider = ttk.Scale(
 phi_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 ttk.Label(phi_max_container, textvariable=phi_max_label_var, width=5).pack(side=tk.LEFT, padx=5)
 
-PHI_ZERO_OFFSET_DEGREES = 90.0
+PHI_ZERO_OFFSET_DEGREES = -90.0
 
 
 def _adjust_phi_zero(phi_values):
