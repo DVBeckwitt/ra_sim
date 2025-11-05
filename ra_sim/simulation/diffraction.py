@@ -734,6 +734,14 @@ def calculate_phi(
     missed_kf = np.empty((max_hits, 3), dtype=np.float64)
     n_hits = 0                     # running counter
     n_missed = 0
+
+    # Track the strongest valid hit so we can fall back when the nominal
+    # best beam sample does not intersect the detector.  This avoids losing
+    # reflections such as 00L where only off-axis beam samples produce a hit.
+    best_candidate = np.zeros(7, dtype=np.float64)
+    best_candidate_val = -1.0
+    have_candidate = False
+    recorded_nominal_hit = False
     if record_status:
         statuses = np.zeros(n_samp, dtype=np.int64)
 
@@ -974,8 +982,20 @@ def calculate_phi(
                 * exp(-Qz*Qz * debye_x*debye_x)
                 * exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y))
             image[rpx, cpx] += val
+
+            if val > best_candidate_val:
+                best_candidate_val = val
+                best_candidate[0] = val
+                best_candidate[1] = cpx
+                best_candidate[2] = rpx
+                best_candidate[3] = phi_f
+                best_candidate[4] = H
+                best_candidate[5] = K
+                best_candidate[6] = L
+                have_candidate = True
+
             if i_samp == best_idx:
-                
+
                 if valid_det and 0 <= rpx < image_size and 0 <= cpx < image_size:
                     # save       I_Q⋅extras        x-pix     y-pix      φf
                     pixel_hits[n_hits, 0] = val
@@ -985,8 +1005,9 @@ def calculate_phi(
                     pixel_hits[n_hits, 4] = H
                     pixel_hits[n_hits, 5] = K
                     pixel_hits[n_hits, 6] = L
-                    
+
                     n_hits += 1
+                    recorded_nominal_hit = True
                 
             # Optionally store Q-data
             if save_flag==1 and q_count[i_peaks_index]< q_data.shape[1]:
@@ -996,6 +1017,10 @@ def calculate_phi(
                 q_data[i_peaks_index, idx,2] = Qz
                 q_data[i_peaks_index, idx,3] = val
                 q_count[i_peaks_index]+=1
+
+    if (not recorded_nominal_hit) and have_candidate and n_hits < max_hits:
+        pixel_hits[n_hits, :] = best_candidate
+        n_hits += 1
 
     if record_status:
         return pixel_hits[:n_hits], statuses, missed_kf[:n_missed]
