@@ -150,7 +150,12 @@ wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10)
 lambda_from_poni = wave_m * 1e10  # Convert m -> Å
 
 image_size = detector_config.get("image_size", 3000)
-num_samples = detector_config.get("monte_carlo_samples", 1000)
+resolution_sample_counts = {
+    "Low": 25,
+    "Medium": 250,
+    "High": 500,
+}
+num_samples = resolution_sample_counts["High"]
 write_excel = output_config.get("write_excel", write_excel)
 intensity_threshold = detector_config.get("intensity_threshold", 1.0)
 two_theta_range = tuple(detector_config.get("two_theta_range_deg", (0, 70)))
@@ -279,6 +284,7 @@ defaults = {
     'w2': w_defaults[2],
     'center_x': center_default[0],
     'center_y': center_default[1],
+    'sampling_resolution': 'High',
 }
 
 # ---------------------------------------------------------------------------
@@ -1325,6 +1331,7 @@ def reset_to_defaults():
     a_var.set(defaults['a'])
     c_var.set(defaults['c'])
     vmax_var.set(defaults['vmax'])
+    resolution_var.set(defaults['sampling_resolution'])
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
     tth_min_var.set(0.0)
@@ -1451,7 +1458,8 @@ save_button = ttk.Button(
         a_var,
         c_var,
         center_x_var,
-        center_y_var
+        center_y_var,
+        resolution_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -1477,9 +1485,11 @@ load_button = ttk.Button(
                 a_var,
                 c_var,
                 center_x_var,
-                center_y_var
+                center_y_var,
+                resolution_var,
             )
         ),
+        ensure_valid_resolution_choice(),
         schedule_update()
     )
 )
@@ -2065,6 +2075,52 @@ lattice_frame.pack(fill=tk.X, padx=5, pady=5)
 mosaic_frame = CollapsibleFrame(right_col, text='Mosaic Broadening')
 mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
 
+initial_resolution = defaults.get('sampling_resolution', 'High')
+if initial_resolution not in resolution_sample_counts:
+    initial_resolution = 'High'
+
+resolution_var = tk.StringVar(value=initial_resolution)
+resolution_count_var = tk.StringVar()
+
+def _refresh_resolution_display():
+    count = resolution_sample_counts.get(
+        resolution_var.get(), resolution_sample_counts['High']
+    )
+    resolution_count_var.set(f"{count:,} samples" if count >= 1000 else f"{count} samples")
+
+def ensure_valid_resolution_choice():
+    if resolution_var.get() not in resolution_sample_counts:
+        resolution_var.set(defaults['sampling_resolution'])
+
+num_samples = resolution_sample_counts.get(initial_resolution, num_samples)
+_refresh_resolution_display()
+
+resolution_selector_frame = ttk.Frame(mosaic_frame.frame)
+resolution_selector_frame.pack(fill=tk.X, pady=5)
+ttk.Label(resolution_selector_frame, text='Sampling Resolution').pack(anchor=tk.W, padx=5)
+resolution_menu = ttk.OptionMenu(
+    resolution_selector_frame,
+    resolution_var,
+    resolution_var.get(),
+    *resolution_sample_counts.keys(),
+)
+resolution_menu.pack(fill=tk.X, padx=5, pady=(2, 0))
+ttk.Label(
+    resolution_selector_frame,
+    textvariable=resolution_count_var,
+).pack(anchor=tk.W, padx=5, pady=(2, 0))
+
+def on_resolution_option_change(*_):
+    global num_samples
+    num_samples = resolution_sample_counts.get(
+        resolution_var.get(), resolution_sample_counts['High']
+    )
+    _refresh_resolution_display()
+    update_mosaic_cache()
+    schedule_update()
+
+resolution_var.trace_add('write', on_resolution_option_change)
+
 center_frame = CollapsibleFrame(right_col, text='Beam Center')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -2402,8 +2458,10 @@ def main(write_excel_flag=None):
             a_var,
             c_var,
             center_x_var,
-            center_y_var
+            center_y_var,
+            resolution_var,
         )
+        ensure_valid_resolution_choice()
         print("Loaded saved profile from", params_file_path)
     else:
         print("No saved profile found; using default parameters.")

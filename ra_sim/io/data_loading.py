@@ -20,7 +20,8 @@ def load_parameters(
     a_var,
     c_var,
     center_x_var,      # <--- ADDED
-    center_y_var       # <--- ADDED
+    center_y_var,      # <--- ADDED
+    resolution_var=None,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
@@ -48,6 +49,10 @@ def load_parameters(
         # Set the new beam center parameters
         center_x_var.set(params.get('center_x', center_x_var.get()))
         center_y_var.set(params.get('center_y', center_y_var.get()))
+        if resolution_var is not None:
+            stored_resolution = params.get('sampling_resolution')
+            if stored_resolution:
+                resolution_var.set(stored_resolution)
 
         return "Parameters loaded from parameters.npy"
     else:
@@ -70,7 +75,8 @@ def save_all_parameters(
     a_var,
     c_var,
     center_x_var,    # <--- ADDED
-    center_y_var     # <--- ADDED
+    center_y_var,    # <--- ADDED
+    resolution_var=None,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
@@ -93,8 +99,10 @@ def save_all_parameters(
         'c':              c_var.get(),
         # Beam center
         'center_x':       center_x_var.get(),
-        'center_y':       center_y_var.get()
+        'center_y':       center_y_var.get(),
     }
+    if resolution_var is not None:
+        parameters['sampling_resolution'] = resolution_var.get()
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")
 
