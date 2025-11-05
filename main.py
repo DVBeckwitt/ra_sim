@@ -698,13 +698,17 @@ vmax_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 caked_vrange_frame = ttk.Frame(fig_frame)
 caked_vrange_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
+caked_limits_user_override = False
+
 vmin_caked_label = ttk.Label(caked_vrange_frame, text="vmin (Caked)")
 vmin_caked_label.pack(side=tk.LEFT, padx=5)
 
 vmin_caked_var = tk.DoubleVar(value=0.0)
 def vmin_caked_slider_command(val):
+    global caked_limits_user_override
     v = float(val)
     vmin_caked_var.set(v)
+    caked_limits_user_override = True
     schedule_update()
 
 vmin_caked_slider = ttk.Scale(
@@ -722,8 +726,10 @@ vmax_caked_label.pack(side=tk.LEFT, padx=5)
 
 vmax_caked_var = tk.DoubleVar(value=2000.0)
 def vmax_caked_slider_command(val):
+    global caked_limits_user_override
     v = float(val)
     vmax_caked_var.set(v)
+    caked_limits_user_override = True
     schedule_update()
 
 vmax_caked_slider = ttk.Scale(
@@ -871,6 +877,13 @@ def _adjust_phi_zero(phi_values):
     return np.asarray(phi_values) - PHI_ZERO_OFFSET_DEGREES
 
 
+def _wrap_phi_range(phi_values):
+    """Wrap azimuthal values into the ``[-180, 180)`` interval."""
+
+    wrapped = ((np.asarray(phi_values) + 180.0) % 360.0) - 180.0
+    return wrapped
+
+
 def caking(data, ai):
     return ai.integrate2d(
         data,
@@ -880,6 +893,34 @@ def caking(data, ai):
         method="lut",
         unit="2th_deg"
     )
+
+
+def _auto_caked_limits(image):
+    """Return sensible display limits for a caked image."""
+
+    if image is None:
+        return 0.0, 1.0
+
+    finite_mask = np.isfinite(image)
+    if not np.any(finite_mask):
+        return 0.0, 1.0
+
+    finite_vals = image[finite_mask]
+    vmin = float(np.nanmin(finite_vals))
+    vmax = float(np.nanmax(finite_vals))
+
+    if not (math.isfinite(vmin) and math.isfinite(vmax)):
+        return 0.0, 1.0
+
+    if math.isclose(vmin, vmax):
+        if vmin == 0.0:
+            vmax = 1.0
+        else:
+            spread = abs(vmax) * 1e-3 or 1.0
+            vmin -= spread
+            vmax += spread
+
+    return vmin, vmax
 
 
 def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
@@ -1321,15 +1362,59 @@ def do_update():
     if show_caked_2d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
         caked_img = sim_res2.intensity
-        azimuth_extent = _adjust_phi_zero(sim_res2.azimuthal)
+        radial_vals = np.asarray(sim_res2.radial)
+        azimuth_vals = _wrap_phi_range(_adjust_phi_zero(sim_res2.azimuthal))
+
+        radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
+        if np.any(radial_mask):
+            radial_vals = radial_vals[radial_mask]
+            caked_img = caked_img[:, radial_mask]
+
+        if azimuth_vals.size:
+            azimuth_order = np.argsort(azimuth_vals)[::-1]
+            azimuth_vals = azimuth_vals[azimuth_order]
+            caked_img = caked_img[azimuth_order, :]
+
         image_display.set_data(caked_img)
-        image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
+        auto_vmin, auto_vmax = _auto_caked_limits(caked_img)
+
+        if not caked_limits_user_override:
+            vmin_caked_var.set(auto_vmin)
+            vmax_caked_var.set(auto_vmax)
+
+        vmin_val = float(vmin_caked_var.get())
+        vmax_val = float(vmax_caked_var.get())
+
+        if not (math.isfinite(vmin_val) and math.isfinite(vmax_val)) or vmin_val >= vmax_val:
+            vmin_val, vmax_val = auto_vmin, auto_vmax
+
+        slider_from = min(float(vmin_caked_slider.cget("from")), vmin_val, auto_vmin, 0.0)
+        slider_to = max(float(vmin_caked_slider.cget("to")), vmax_val, auto_vmax, 1.0)
+        vmin_caked_slider.configure(from_=slider_from, to=slider_to)
+        vmax_caked_slider.configure(to=slider_to)
+
+        image_display.set_clim(vmin_val, vmax_val)
+
+        if radial_vals.size:
+            radial_min = float(np.min(radial_vals))
+            radial_max = float(np.max(radial_vals))
+        else:
+            radial_min, radial_max = 0.0, 90.0
+
+        if azimuth_vals.size:
+            azimuth_min = float(np.min(azimuth_vals))
+            azimuth_max = float(np.max(azimuth_vals))
+        else:
+            azimuth_min, azimuth_max = -180.0, 180.0
+
         image_display.set_extent([
-            float(sim_res2.radial[0]),
-            float(sim_res2.radial[-1]),
-            float(azimuth_extent[-1]),
-            float(azimuth_extent[0]),
+            radial_min,
+            radial_max,
+            azimuth_max,
+            azimuth_min,
         ])
+        ax.set_xlim(0.0, 90.0)
+        ax.set_ylim(-180.0, 180.0)
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
@@ -1342,6 +1427,8 @@ def do_update():
             image_display.set_data(np.zeros((image_size, image_size)))
         image_display.set_clim(0, vmax_var.get())
         image_display.set_extent([0, image_size, image_size, 0])
+        ax.set_xlim(0, image_size)
+        ax.set_ylim(image_size, 0)
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
         ax.set_title('Simulated Diffraction Pattern')
@@ -1431,6 +1518,7 @@ def switch_background():
     schedule_update()
 
 def reset_to_defaults():
+    global caked_limits_user_override
     theta_initial_var.set(defaults['theta_initial'])
     gamma_var.set(defaults['gamma'])
     Gamma_var.set(defaults['Gamma'])
@@ -1457,6 +1545,7 @@ def reset_to_defaults():
     show_caked_2d_var.set(False)
     vmin_caked_var.set(0.0)
     vmax_caked_var.set(2000.0)
+    caked_limits_user_override = False
 
     # ALSO reset occupancies to default
     occ_var1.set(occ[0])
@@ -1918,6 +2007,9 @@ check_1d.pack(side=tk.TOP, padx=5, pady=2)
 
 show_caked_2d_var = tk.BooleanVar(value=False)
 def toggle_caked_2d():
+    global caked_limits_user_override
+    if not show_caked_2d_var.get():
+        caked_limits_user_override = False
     schedule_update()
 
 check_2d = ttk.Checkbutton(
