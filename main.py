@@ -1362,19 +1362,20 @@ def do_update():
     if show_caked_2d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
         caked_img = sim_res2.intensity
-        radial_vals = np.asarray(sim_res2.radial)
+        radial_vals = np.asarray(sim_res2.radial, dtype=float)
         azimuth_vals = _wrap_phi_range(_adjust_phi_zero(sim_res2.azimuthal))
+
+        if azimuth_vals.size:
+            azimuth_order = np.argsort(azimuth_vals)
+            azimuth_vals = azimuth_vals[azimuth_order]
+            caked_img = caked_img[azimuth_order, :]
 
         radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
         if np.any(radial_mask):
             radial_vals = radial_vals[radial_mask]
             caked_img = caked_img[:, radial_mask]
 
-        if azimuth_vals.size:
-            azimuth_order = np.argsort(azimuth_vals)[::-1]
-            azimuth_vals = azimuth_vals[azimuth_order]
-            caked_img = caked_img[azimuth_order, :]
-
+        image_display.set_origin('lower')
         image_display.set_data(caked_img)
         auto_vmin, auto_vmax = _auto_caked_limits(caked_img)
 
@@ -1410,8 +1411,8 @@ def do_update():
         image_display.set_extent([
             radial_min,
             radial_max,
-            azimuth_max,
             azimuth_min,
+            azimuth_max,
         ])
         ax.set_xlim(0.0, 90.0)
         ax.set_ylim(-180.0, 180.0)
@@ -1425,6 +1426,7 @@ def do_update():
             image_display.set_data(disp_image)
         else:
             image_display.set_data(np.zeros((image_size, image_size)))
+        image_display.set_origin('upper')
         image_display.set_clim(0, vmax_var.get())
         image_display.set_extent([0, image_size, image_size, 0])
         ax.set_xlim(0, image_size)
