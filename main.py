@@ -1724,7 +1724,8 @@ def on_fit_mosaic_click():
     residual_norm = 0.0
     if getattr(result, "fun", None) is not None and result.fun.size:
         residual_norm = float(np.linalg.norm(result.fun))
-    roi_count = len(getattr(result, "selected_rois", []))
+    selected_rois = list(getattr(result, "selected_rois", []) or [])
+    roi_count = len(selected_rois)
     status = "converged" if bool(getattr(result, "success", False)) else "finished"
     message = (getattr(result, "message", "") or "").strip()
     if message:
@@ -1732,11 +1733,28 @@ def on_fit_mosaic_click():
     else:
         status_text = status.capitalize()
 
+    peaks_summary = ""
+    if selected_rois:
+        formatted = []
+        for roi in selected_rois:
+            try:
+                hkl = tuple(int(round(val)) for val in roi.hkl)
+            except Exception:  # pragma: no cover - defensive formatting
+                hkl = tuple(roi.hkl)
+            formatted.append(f"{hkl}")
+        max_display = 10
+        display = ", ".join(formatted[:max_display])
+        remaining = len(formatted) - max_display
+        if remaining > 0:
+            display += f", +{remaining} more"
+        peaks_summary = f"\nPeaks used: {display}"
+
     progress_label_mosaic.config(
         text=(
             f"Mosaic fit {status_text}\n"
             f"σ={sigma_deg:.3f}°, γ={gamma_deg:.3f}°, η={eta_val:.3f}\n"
             f"Residual norm={residual_norm:.2f} using {roi_count} ROIs"
+            f"{peaks_summary}"
         )
     )
 
