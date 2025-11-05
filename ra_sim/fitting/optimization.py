@@ -409,12 +409,15 @@ def fit_mosaic_widths_separable(
         hkl_int = tuple(int(round(val)) for val in hkl_row)
         if all(v == 0 for v in hkl_int):
             continue
+        is_zero_zero_l = hkl_int[0] == 0 and hkl_int[1] == 0 and hkl_int[2] != 0
         d_hkl = d_spacing(hkl_int[0], hkl_int[1], hkl_int[2], a_lattice, c_lattice)
         tth_val = two_theta(d_hkl, lambda_scalar)
-        if tth_val is None or not np.isfinite(tth_val) or tth_val > two_theta_limit:
+        if (tth_val is None or not np.isfinite(tth_val)) and not is_zero_zero_l:
+            continue
+        if not is_zero_zero_l and tth_val > two_theta_limit:
             continue
         kept_rows.append(local_idx)
-        allowed_two_theta.append(float(tth_val))
+        allowed_two_theta.append(float(tth_val) if tth_val is not None else float("nan"))
 
     if not kept_rows:
         raise RuntimeError(
