@@ -154,7 +154,6 @@ resolution_sample_counts = {
     "Low": 25,
     "Medium": 250,
     "High": 500,
-
 }
 num_samples = resolution_sample_counts["High"]
 write_excel = output_config.get("write_excel", write_excel)

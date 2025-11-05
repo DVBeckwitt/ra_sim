@@ -729,7 +729,7 @@ def calculate_phi(
     # )
     n_samp = beam_x_array.size
 
-    max_hits = n_samp * 2          # 2 solutions per beam sample ≫ safe
+    max_hits = max(n_samp * 2, 16)  # Ensure capacity even for very small samples
     pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
     missed_kf = np.empty((max_hits, 3), dtype=np.float64)
     n_hits = 0                     # running counter
@@ -995,18 +995,18 @@ def calculate_phi(
                 have_candidate = True
 
             if i_samp == best_idx:
-
                 if valid_det and 0 <= rpx < image_size and 0 <= cpx < image_size:
-                    # save       I_Q⋅extras        x-pix     y-pix      φf
-                    pixel_hits[n_hits, 0] = val
-                    pixel_hits[n_hits, 1] = cpx
-                    pixel_hits[n_hits, 2] = rpx
-                    pixel_hits[n_hits, 3] = phi_f
-                    pixel_hits[n_hits, 4] = H
-                    pixel_hits[n_hits, 5] = K
-                    pixel_hits[n_hits, 6] = L
+                    if n_hits < max_hits:
+                        # save       I_Q⋅extras        x-pix     y-pix      φf
+                        pixel_hits[n_hits, 0] = val
+                        pixel_hits[n_hits, 1] = cpx
+                        pixel_hits[n_hits, 2] = rpx
+                        pixel_hits[n_hits, 3] = phi_f
+                        pixel_hits[n_hits, 4] = H
+                        pixel_hits[n_hits, 5] = K
+                        pixel_hits[n_hits, 6] = L
 
-                    n_hits += 1
+                        n_hits += 1
                     recorded_nominal_hit = True
                 
             # Optionally store Q-data
