@@ -1117,7 +1117,8 @@ def do_update():
             cy = int(round(ypix))
             peak_positions.append((cx, cy))      # (column,x) == (MPL x)
             peak_intensities.append(I)
-            peak_millers.append((int(H), int(K), int(L)))
+            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
+            peak_millers.append(hkl)
 
         # Store the unscaled image globally
         unscaled_image_global = updated_image
