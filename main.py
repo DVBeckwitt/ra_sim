@@ -1198,8 +1198,8 @@ def do_update():
     # ---------------------------------------------------------------
     global _ai_cache
     pixel_size_m = 100e-6
-    poni1_m = (image_size - center_y_up) * pixel_size_m
-    poni2_m = center_x_up * pixel_size_m
+    poni1_m = (image_size - center_x_up) * pixel_size_m
+    poni2_m = center_y_up * pixel_size_m
 
     sig = (
         corto_det_up,
@@ -1475,8 +1475,8 @@ azimuthal_button = ttk.Button(
         [center_x_var.get(), center_y_var.get()],
         {
             'pixel_size': 100e-6,
-            'poni1': (image_size - center_y_var.get()) * 100e-6,
-            'poni2': center_x_var.get() * 100e-6,
+            'poni1': (image_size - center_x_var.get()) * 100e-6,
+            'poni2': center_y_var.get() * 100e-6,
             'dist': corto_detector_var.get(),
             'rot1': np.deg2rad(Gamma_var.get()),
             'rot2': np.deg2rad(gamma_var.get()),
