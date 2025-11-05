@@ -550,18 +550,24 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
 
     Args:
         simulated_image (numpy.ndarray): The 2D diffraction pattern image.
-        center (tuple): The beam center in the format (center_x, center_y).
+        center (tuple): The beam center given as (row_pixels, col_pixels).
         detector_params (dict): Contains detector geometry and wavelength.
     """
     # Retrieve detector parameters
     pixel_size = detector_params['pixel_size']
-    poni1 = detector_params['poni1']
-    poni2 = detector_params['poni2']
     dist = detector_params['dist']
     rot1 = detector_params['rot1']
     rot2 = detector_params['rot2']
     rot3 = detector_params['rot3']
     wavelength = detector_params['wavelength']
+
+    if simulated_image is None:
+        raise ValueError("simulated_image must be provided for integration")
+
+    image_rows = simulated_image.shape[0]
+    center_row, center_col = center
+    poni1 = (image_rows - center_row) * pixel_size
+    poni2 = center_col * pixel_size
 
     # Set up the AzimuthalIntegrator
     ai = AzimuthalIntegrator(
