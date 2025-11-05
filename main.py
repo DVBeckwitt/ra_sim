@@ -150,11 +150,11 @@ wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10)
 lambda_from_poni = wave_m * 1e10  # Convert m -> Å
 
 image_size = detector_config.get("image_size", 3000)
-default_num_samples = max(1, detector_config.get("monte_carlo_samples", 1000))
 resolution_sample_counts = {
-    "Low": max(1, default_num_samples // 4),
-    "Medium": max(1, default_num_samples // 2),
-    "High": default_num_samples,
+    "Low": 25,
+    "Medium": 250,
+    "High": 500,
+
 }
 num_samples = resolution_sample_counts["High"]
 write_excel = output_config.get("write_excel", write_excel)

@@ -96,9 +96,9 @@ def main():
 
     resolution_var = tk.StringVar(value="High")
     resolution_options = {
-        "Low": 250,
-        "Medium": 500,
-        "High": 1000,
+        "Low": 25,
+        "Medium": 250,
+        "High": 500,
     }
 
     resolution_menu = ttk.OptionMenu(
@@ -111,7 +111,7 @@ def main():
 
     # Generate random profiles
     def generate_random_profiles():
-        num_samples = resolution_options.get(resolution_var.get(), 1000)
+        num_samples = resolution_options.get(resolution_var.get(), 500)
         eta = eta_var.get()
         sigma_mosaic = np.radians(sigma_mosaic_var.get())
         gamma_mosaic = np.radians(gamma_mosaic_var.get())
