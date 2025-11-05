@@ -402,6 +402,30 @@ def fit_mosaic_widths_separable(
         intensities[allowed_indices], dtype=np.float64
     )
 
+    two_theta_limit = 65.0
+    kept_rows: List[int] = []
+    allowed_two_theta: List[float] = []
+    for local_idx, hkl_row in enumerate(allowed_miller):
+        hkl_int = tuple(int(round(val)) for val in hkl_row)
+        if all(v == 0 for v in hkl_int):
+            continue
+        d_hkl = d_spacing(hkl_int[0], hkl_int[1], hkl_int[2], a_lattice, c_lattice)
+        tth_val = two_theta(d_hkl, lambda_scalar)
+        if tth_val is None or not np.isfinite(tth_val) or tth_val > two_theta_limit:
+            continue
+        kept_rows.append(local_idx)
+        allowed_two_theta.append(float(tth_val))
+
+    if not kept_rows:
+        raise RuntimeError(
+            "No reflections satisfy the 2h + k ≡ 0 constraint within 65° 2θ"
+        )
+
+    allowed_indices = allowed_indices[kept_rows]
+    allowed_miller = allowed_miller[kept_rows]
+    allowed_intensities = allowed_intensities[kept_rows]
+    allowed_two_theta = np.asarray(allowed_two_theta, dtype=np.float64)
+
     _, hit_tables = _simulate(
         allowed_miller,
         allowed_intensities,
@@ -432,8 +456,7 @@ def fit_mosaic_widths_separable(
             h, k, _ = hkl
             if (2 * h + k) % 3 != 0:
                 continue
-            d_hkl = d_spacing(hkl[0], hkl[1], hkl[2], a_lattice, c_lattice)
-            tth = two_theta(d_hkl, lambda_scalar)
+            tth = float(allowed_two_theta[local_idx])
             candidates.append(
                 {
                     "reflection_index": int(allowed_indices[local_idx]),

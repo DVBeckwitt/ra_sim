@@ -1,6 +1,7 @@
 import numpy as np
 
 from ra_sim.fitting.optimization import fit_mosaic_widths_separable
+from ra_sim.utils.calculations import d_spacing, two_theta
 
 
 def _make_gaussian(center, sigma_px, gamma_px, size):
@@ -208,4 +209,10 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
             continue
         hk = np.rint(subset[:, :2]).astype(int)
         assert np.all((2 * hk[:, 0] + hk[:, 1]) % 3 == 0)
+        hkl_full = np.rint(subset[:, :3]).astype(int)
+        for h, k, l in hkl_full:
+            d_hkl = d_spacing(h, k, l, params["a"], params["c"])
+            tth = two_theta(d_hkl, params["lambda"])
+            assert tth is not None
+            assert tth <= 65.0 + 1e-8
 
