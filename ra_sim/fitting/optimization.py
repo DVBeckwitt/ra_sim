@@ -10,6 +10,7 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter, sobel, zoom
 from scipy.spatial import cKDTree
 
 from ra_sim.simulation.diffraction import process_peaks_parallel
+from ra_sim.utils.calculations import d_spacing, two_theta
 
 RNG = np.random.default_rng(42)
 
@@ -33,6 +34,23 @@ class TubeROI:
     tile_size: int = 8
     tile_probabilities: Optional[np.ndarray] = None
     identifier: int = 0
+
+
+@dataclass
+class PeakROI:
+    """Lightweight container describing a square ROI around a simulated peak."""
+
+    reflection_index: int
+    hkl: Tuple[int, int, int]
+    center: Tuple[float, float]
+    row_indices: np.ndarray
+    col_indices: np.ndarray
+    flat_indices: np.ndarray
+    observed: np.ndarray
+    observed_sum: float
+    observed_mean: float
+    num_pixels: int
+    simulated_intensity: float
 
 
 @dataclass
@@ -131,6 +149,15 @@ def _update_params(
     return updated
 
 
+def _allowed_reflection_mask(miller: np.ndarray) -> np.ndarray:
+    """Return a mask selecting reflections with ``2h + k`` divisible by 3."""
+
+    if miller.ndim != 2 or miller.shape[1] < 2:
+        raise ValueError("miller array must have shape (N, >=3)")
+    hk = np.rint(miller[:, :2]).astype(np.int64, copy=False)
+    return (2 * hk[:, 0] + hk[:, 1]) % 3 == 0
+
+
 def _simulate_with_cache(
     params: Dict[str, float],
     miller: np.ndarray,
@@ -177,6 +204,475 @@ def _simulate_with_cache(
 
     cache.store(params, image, maxpos)
     return image, maxpos
+
+
+def fit_mosaic_widths_separable(
+    experimental_image: np.ndarray,
+    miller: np.ndarray,
+    intensities: np.ndarray,
+    image_size: int,
+    params: Dict[str, float],
+    *,
+    num_peaks: int = 40,
+    roi_half_width: int = 8,
+    min_peak_separation: Optional[float] = None,
+    stratify: Optional[str] = None,
+    stratify_bins: int = 5,
+    loss: str = "soft_l1",
+    f_scale: float = 1.0,
+    max_nfev: int = 50,
+    bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
+) -> OptimizeResult:
+    r"""Estimate mosaic pseudo-Voigt widths using separable non-linear least squares.
+
+    Geometry, detector center, and per-peak locations are assumed to be fixed. Only
+    the pseudo-Voigt mosaic widths (:math:`\sigma`, :math:`\gamma`) and mixing
+    parameter :math:`\eta` are refined.  Peak amplitudes and a constant
+    background are eliminated analytically within each ROI so that intensity
+    outliers do not bias the width estimates.
+
+    Parameters
+    ----------
+    experimental_image:
+        Measured detector image at full resolution.
+    miller, intensities:
+        Arrays describing the simulated reflections.  These should match the
+        arrays used to generate ``experimental_image``.
+    image_size:
+        Detector dimension (assumed square).
+    params:
+        Dictionary of simulation parameters.  ``params['mosaic_params']`` must
+        contain the beam sample arrays plus initial values for
+        ``sigma_mosaic_deg``, ``gamma_mosaic_deg`` and ``eta``.
+    num_peaks:
+        Number of bright peaks to include in the separable fit.
+    roi_half_width:
+        Half-width (in pixels) of the square ROI around each selected peak.
+    min_peak_separation:
+        Minimum Euclidean distance between ROI centres.  Defaults to ``2.5``
+        times ``roi_half_width`` when ``None``.
+    stratify:
+        ``None`` (default) selects the globally brightest peaks.  ``"L"``
+        enforces round-robin selection across distinct :math:`L` values while
+        ``"twotheta"`` stratifies by equal-width 2θ bins.
+    stratify_bins:
+        Maximum number of bins when ``stratify='twotheta'``.
+    loss, f_scale, max_nfev, bounds:
+        Directly forwarded to :func:`scipy.optimize.least_squares`.
+
+    Returns
+    -------
+    OptimizeResult
+        ``x`` holds the refined ``[sigma_deg, gamma_deg, eta]`` vector.  The
+        ``best_params`` attribute mirrors ``params`` with the optimized mosaic
+        values inserted, and ``selected_rois`` enumerates the ROIs used during
+        the fit.
+    """
+
+    experimental_image = np.asarray(experimental_image, dtype=np.float64)
+    if experimental_image.shape != (image_size, image_size):
+        raise ValueError(
+            "experimental_image shape must match the provided image_size"
+        )
+
+    miller = np.asarray(miller, dtype=np.float64)
+    intensities = np.asarray(intensities, dtype=np.float64)
+    if miller.ndim != 2 or miller.shape[1] != 3:
+        raise ValueError("miller must be an array of shape (N, 3)")
+    if intensities.shape[0] != miller.shape[0]:
+        raise ValueError("intensities and miller must have matching lengths")
+
+    allowed_mask = _allowed_reflection_mask(miller)
+    allowed_indices = np.flatnonzero(allowed_mask)
+    if allowed_indices.size == 0:
+        raise RuntimeError(
+            "No reflections satisfy 2h + k ≡ 0 (mod 3) for mosaic-width fitting"
+        )
+
+    mosaic_params = dict(params.get("mosaic_params", {}))
+    if not mosaic_params:
+        raise ValueError("params['mosaic_params'] is required")
+
+    beam_x = np.asarray(mosaic_params.get("beam_x_array"), dtype=np.float64)
+    beam_y = np.asarray(mosaic_params.get("beam_y_array"), dtype=np.float64)
+    theta_array = np.asarray(mosaic_params.get("theta_array"), dtype=np.float64)
+    phi_array = np.asarray(mosaic_params.get("phi_array"), dtype=np.float64)
+    if not (beam_x.size and beam_y.size and theta_array.size and phi_array.size):
+        raise ValueError("mosaic_params must include beam and divergence samples")
+
+    wavelength_array = mosaic_params.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic_params.get("wavelength_i_array")
+    if wavelength_array is None:
+        base_lambda = float(params.get("lambda", 1.0))
+        wavelength_array = np.full(beam_x.shape, base_lambda, dtype=np.float64)
+    else:
+        wavelength_array = np.asarray(wavelength_array, dtype=np.float64)
+
+    sigma0 = float(mosaic_params.get("sigma_mosaic_deg", 0.5))
+    gamma0 = float(mosaic_params.get("gamma_mosaic_deg", 0.5))
+    eta0 = float(mosaic_params.get("eta", 0.05))
+
+    roi_half_width = int(roi_half_width)
+    if roi_half_width <= 0:
+        raise ValueError("roi_half_width must be a positive integer")
+    if min_peak_separation is None:
+        min_peak_separation = 2.5 * float(roi_half_width)
+    min_peak_separation = float(min_peak_separation)
+    min_peak_separation_sq = min_peak_separation * min_peak_separation
+
+    num_peaks = int(num_peaks)
+    if num_peaks <= 0:
+        raise ValueError("num_peaks must be positive")
+
+    a_lattice = float(params.get("a", 1.0))
+    c_lattice = float(params.get("c", 1.0))
+    lambda_scalar = float(params.get("lambda", float(np.mean(wavelength_array))))
+
+    gamma_deg = float(params.get("gamma", 0.0))
+    Gamma_deg = float(params.get("Gamma", 0.0))
+    chi_deg = float(params.get("chi", 0.0))
+    psi_deg = float(params.get("psi", 0.0))
+    zs = float(params.get("zs", 0.0))
+    zb = float(params.get("zb", 0.0))
+    n2 = params.get("n2")
+    if n2 is None:
+        raise ValueError("params['n2'] (complex index of refraction) is required")
+    debye_x = float(params.get("debye_x", 0.0))
+    debye_y = float(params.get("debye_y", 0.0))
+    theta_initial = float(params.get("theta_initial", 0.0))
+    corto_detector = float(params.get("corto_detector"))
+    center = tuple(params.get("center", (image_size / 2.0, image_size / 2.0)))
+    unit_x = np.asarray(params.get("uv1", np.array([1.0, 0.0, 0.0])), dtype=np.float64)
+    n_detector = np.asarray(params.get("uv2", np.array([0.0, 1.0, 0.0])), dtype=np.float64)
+
+    full_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+
+    def _simulate(
+        miller_subset: np.ndarray,
+        intens_subset: np.ndarray,
+        sigma_deg: float,
+        gamma_deg_: float,
+        eta_: float,
+        buffer: np.ndarray,
+        *,
+        record_hits: bool = False,
+    ) -> Tuple[np.ndarray, Optional[List[np.ndarray]]]:
+        buffer.fill(0.0)
+        image, hit_tables, *_ = process_peaks_parallel(
+            miller_subset,
+            intens_subset,
+            image_size,
+            a_lattice,
+            c_lattice,
+            wavelength_array,
+            buffer,
+            corto_detector,
+            gamma_deg,
+            Gamma_deg,
+            chi_deg,
+            psi_deg,
+            zs,
+            zb,
+            n2,
+            beam_x,
+            beam_y,
+            theta_array,
+            phi_array,
+            sigma_deg,
+            gamma_deg_,
+            eta_,
+            wavelength_array,
+            debye_x,
+            debye_y,
+            center,
+            theta_initial,
+            unit_x,
+            n_detector,
+            0,
+        )
+        image = np.asarray(image, dtype=np.float64)
+        if not record_hits:
+            return image, None
+        hits_py = [np.asarray(tbl) for tbl in hit_tables]
+        return image, hits_py
+
+    allowed_miller = np.ascontiguousarray(miller[allowed_indices], dtype=np.float64)
+    allowed_intensities = np.ascontiguousarray(
+        intensities[allowed_indices], dtype=np.float64
+    )
+
+    two_theta_limit = 65.0
+    kept_rows: List[int] = []
+    allowed_two_theta: List[float] = []
+    for local_idx, hkl_row in enumerate(allowed_miller):
+        hkl_int = tuple(int(round(val)) for val in hkl_row)
+        if all(v == 0 for v in hkl_int):
+            continue
+        d_hkl = d_spacing(hkl_int[0], hkl_int[1], hkl_int[2], a_lattice, c_lattice)
+        tth_val = two_theta(d_hkl, lambda_scalar)
+        if tth_val is None or not np.isfinite(tth_val):
+            continue
+        h_zero = hkl_int[0] == 0 and hkl_int[1] == 0
+        if (not h_zero) and tth_val > two_theta_limit:
+            continue
+        kept_rows.append(local_idx)
+        allowed_two_theta.append(float(tth_val) if tth_val is not None else float("nan"))
+
+    if not kept_rows:
+        raise RuntimeError(
+            "No reflections satisfy the 2h + k ≡ 0 constraint within 65° 2θ"
+        )
+
+    allowed_indices = allowed_indices[kept_rows]
+    allowed_miller = allowed_miller[kept_rows]
+    allowed_intensities = allowed_intensities[kept_rows]
+    allowed_two_theta = np.asarray(allowed_two_theta, dtype=np.float64)
+
+    _, hit_tables = _simulate(
+        allowed_miller,
+        allowed_intensities,
+        sigma0,
+        gamma0,
+        eta0,
+        full_buffer,
+        record_hits=True,
+    )
+
+    if not hit_tables:
+        raise RuntimeError("Initial simulation produced no peak information")
+
+    candidates: List[Dict[str, float]] = []
+    for local_idx, tbl in enumerate(hit_tables):
+        arr = np.asarray(tbl, dtype=np.float64)
+        if arr.size == 0:
+            continue
+        for row in arr:
+            intensity = float(row[0])
+            col = float(row[1])
+            row_pix = float(row[2])
+            if not (np.isfinite(intensity) and np.isfinite(col) and np.isfinite(row_pix)):
+                continue
+            hkl = (int(round(row[4])), int(round(row[5])), int(round(row[6])))
+            if all(v == 0 for v in hkl):
+                continue
+            h, k, _ = hkl
+            if (2 * h + k) % 3 != 0:
+                continue
+            tth = float(allowed_two_theta[local_idx])
+            candidates.append(
+                {
+                    "reflection_index": int(allowed_indices[local_idx]),
+                    "intensity": intensity,
+                    "row": row_pix,
+                    "col": col,
+                    "hkl": hkl,
+                    "L": hkl[2],
+                    "two_theta": tth,
+                }
+            )
+
+    if not candidates:
+        raise RuntimeError("No simulated peaks available for ROI selection")
+
+    def _candidate_iter() -> Iterable[Dict[str, float]]:
+        key = (stratify or "none").lower()
+        if key not in {"none", "l", "twotheta"}:
+            raise ValueError("stratify must be None, 'L', or 'twotheta'")
+        sorted_candidates = sorted(
+            candidates, key=lambda c: float(c["intensity"]), reverse=True
+        )
+        if key == "none" or len(sorted_candidates) <= 1:
+            return sorted_candidates
+
+        if key == "l":
+            groups: Dict[int, List[Dict[str, float]]] = {}
+            for cand in sorted_candidates:
+                groups.setdefault(cand["L"], []).append(cand)
+            for group in groups.values():
+                group.sort(key=lambda c: float(c["intensity"]), reverse=True)
+            order = sorted(groups.keys(), key=lambda val: (abs(val), val))
+            round_robin: List[Dict[str, float]] = []
+            while True:
+                progressed = False
+                for val in list(order):
+                    group = groups.get(val)
+                    if not group:
+                        continue
+                    round_robin.append(group.pop(0))
+                    progressed = True
+                    if not group:
+                        groups.pop(val)
+                if not progressed:
+                    break
+            return round_robin
+
+        # stratify == 'twotheta'
+        tth_values = [c["two_theta"] for c in sorted_candidates if c["two_theta"] is not None]
+        if not tth_values or np.allclose(tth_values, tth_values[0]):
+            return sorted_candidates
+        num_bins = max(1, min(int(stratify_bins), len(tth_values)))
+        if num_bins == 1:
+            return sorted_candidates
+        edges = np.linspace(min(tth_values), max(tth_values), num_bins + 1)
+        bins: Dict[int, List[Dict[str, float]]] = {i: [] for i in range(num_bins)}
+        for cand in sorted_candidates:
+            tth = cand["two_theta"]
+            if tth is None or not np.isfinite(tth):
+                bin_idx = 0
+            else:
+                bin_idx = int(np.searchsorted(edges, tth, side="right") - 1)
+                bin_idx = max(0, min(num_bins - 1, bin_idx))
+            bins[bin_idx].append(cand)
+        for group in bins.values():
+            group.sort(key=lambda c: float(c["intensity"]), reverse=True)
+        round_robin: List[Dict[str, float]] = []
+        active_bins = [idx for idx in range(num_bins) if bins[idx]]
+        while active_bins:
+            progressed = False
+            for idx in list(active_bins):
+                group = bins[idx]
+                if not group:
+                    active_bins.remove(idx)
+                    continue
+                round_robin.append(group.pop(0))
+                progressed = True
+                if not group:
+                    active_bins.remove(idx)
+            if not progressed:
+                break
+        return round_robin if round_robin else sorted_candidates
+
+    ordered_candidates = list(_candidate_iter())
+
+    rois: List[PeakROI] = []
+    selected_centres: List[Tuple[float, float]] = []
+    for cand in ordered_candidates:
+        if len(rois) >= num_peaks:
+            break
+        row_c = cand["row"]
+        col_c = cand["col"]
+        row_idx = int(round(row_c))
+        col_idx = int(round(col_c))
+        if (
+            row_idx - roi_half_width < 0
+            or row_idx + roi_half_width >= image_size
+            or col_idx - roi_half_width < 0
+            or col_idx + roi_half_width >= image_size
+        ):
+            continue
+        if selected_centres:
+            if any(
+                (row_c - r) ** 2 + (col_c - c) ** 2 < min_peak_separation_sq
+                for r, c in selected_centres
+            ):
+                continue
+
+        rows = np.arange(row_idx - roi_half_width, row_idx + roi_half_width + 1, dtype=int)
+        cols = np.arange(col_idx - roi_half_width, col_idx + roi_half_width + 1, dtype=int)
+        patch = experimental_image[np.ix_(rows, cols)]
+        flat_patch = patch.ravel()
+        valid_idx = np.flatnonzero(np.isfinite(flat_patch))
+        if valid_idx.size == 0:
+            continue
+        observed = flat_patch.take(valid_idx)
+        observed = observed.astype(np.float64, copy=False)
+        observed_sum = float(observed.sum())
+        num_valid = int(observed.size)
+        observed_mean = observed_sum / num_valid
+        rois.append(
+            PeakROI(
+                reflection_index=int(cand["reflection_index"]),
+                hkl=cand["hkl"],
+                center=(row_c, col_c),
+                row_indices=rows,
+                col_indices=cols,
+                flat_indices=valid_idx,
+                observed=observed,
+                observed_sum=observed_sum,
+                observed_mean=observed_mean,
+                num_pixels=num_valid,
+                simulated_intensity=float(cand["intensity"]),
+            )
+        )
+        selected_centres.append((row_c, col_c))
+
+    if not rois:
+        raise RuntimeError("No valid ROIs were selected for mosaic fitting")
+
+    unique_indices = sorted({roi.reflection_index for roi in rois})
+    subset_miller = np.ascontiguousarray(miller[unique_indices], dtype=np.float64)
+    subset_intensities = np.ones(subset_miller.shape[0], dtype=np.float64)
+
+    subset_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+
+    def residual(theta: np.ndarray) -> np.ndarray:
+        sigma_deg, gamma_deg_local, eta_local = map(float, theta)
+        sim_image, _ = _simulate(
+            subset_miller,
+            subset_intensities,
+            sigma_deg,
+            gamma_deg_local,
+            eta_local,
+            subset_buffer,
+            record_hits=False,
+        )
+
+        residual_blocks: List[np.ndarray] = []
+        for roi in rois:
+            block = sim_image[np.ix_(roi.row_indices, roi.col_indices)]
+            flat = block.ravel()
+            template = flat.take(roi.flat_indices)
+            if template.size == 0:
+                residual_blocks.append(roi.observed - roi.observed_mean)
+                continue
+            tt = float(np.dot(template, template))
+            if tt <= 1e-16:
+                residual_blocks.append(roi.observed - roi.observed_mean)
+                continue
+            to = float(np.sum(template))
+            ty = float(np.dot(template, roi.observed))
+            oy = roi.observed_sum
+            oo = float(roi.num_pixels)
+            det = tt * oo - to * to
+            if abs(det) <= 1e-14 * tt * oo:
+                residual_blocks.append(roi.observed - roi.observed_mean)
+                continue
+            amp = (ty * oo - oy * to) / det
+            bkg = (tt * oy - to * ty) / det
+            model = amp * template + bkg
+            residual_blocks.append(roi.observed - model)
+        if not residual_blocks:
+            return np.zeros(1, dtype=np.float64)
+        return np.concatenate(residual_blocks)
+
+    if bounds is None:
+        bounds = (
+            np.array([0.01, 0.01, 0.0], dtype=np.float64),
+            np.array([5.0, 5.0, 1.0], dtype=np.float64),
+        )
+
+    x0 = np.array([sigma0, gamma0, eta0], dtype=np.float64)
+    result = least_squares(
+        residual,
+        x0,
+        bounds=bounds,
+        loss=loss,
+        f_scale=f_scale,
+        max_nfev=int(max_nfev),
+    )
+
+    best_params = dict(params)
+    best_mosaic = dict(best_params.get("mosaic_params", {}))
+    best_mosaic["sigma_mosaic_deg"] = float(result.x[0])
+    best_mosaic["gamma_mosaic_deg"] = float(result.x[1])
+    best_mosaic["eta"] = float(result.x[2])
+    best_params["mosaic_params"] = best_mosaic
+
+    result.best_params = best_params
+    result.selected_rois = rois
+    result.reflection_indices = unique_indices
+    return result
 
 
 def _estimate_pixel_size(params: Dict[str, float]) -> float:
