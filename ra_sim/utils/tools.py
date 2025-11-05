@@ -555,13 +555,19 @@ def view_azimuthal_radial(simulated_image, center, detector_params):
     """
     # Retrieve detector parameters
     pixel_size = detector_params['pixel_size']
-    poni1 = detector_params['poni1']
-    poni2 = detector_params['poni2']
     dist = detector_params['dist']
     rot1 = detector_params['rot1']
     rot2 = detector_params['rot2']
     rot3 = detector_params['rot3']
     wavelength = detector_params['wavelength']
+
+    if simulated_image is None:
+        raise ValueError("simulated_image must be provided for integration")
+
+    image_rows = simulated_image.shape[0]
+    center_x, center_y = center
+    poni1 = (image_rows - center_y) * pixel_size
+    poni2 = center_x * pixel_size
 
     # Set up the AzimuthalIntegrator
     ai = AzimuthalIntegrator(
