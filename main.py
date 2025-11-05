@@ -877,6 +877,13 @@ def _adjust_phi_zero(phi_values):
     return np.asarray(phi_values) - PHI_ZERO_OFFSET_DEGREES
 
 
+def _wrap_phi_range(phi_values):
+    """Wrap azimuthal values into the ``[-180, 180)`` interval."""
+
+    wrapped = ((np.asarray(phi_values) + 180.0) % 360.0) - 180.0
+    return wrapped
+
+
 def caking(data, ai):
     return ai.integrate2d(
         data,
@@ -1355,7 +1362,19 @@ def do_update():
     if show_caked_2d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
         caked_img = sim_res2.intensity
-        azimuth_extent = _adjust_phi_zero(sim_res2.azimuthal)
+        radial_vals = np.asarray(sim_res2.radial)
+        azimuth_vals = _wrap_phi_range(_adjust_phi_zero(sim_res2.azimuthal))
+
+        radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
+        if np.any(radial_mask):
+            radial_vals = radial_vals[radial_mask]
+            caked_img = caked_img[:, radial_mask]
+
+        if azimuth_vals.size:
+            azimuth_order = np.argsort(azimuth_vals)[::-1]
+            azimuth_vals = azimuth_vals[azimuth_order]
+            caked_img = caked_img[azimuth_order, :]
+
         image_display.set_data(caked_img)
         auto_vmin, auto_vmax = _auto_caked_limits(caked_img)
 
@@ -1375,12 +1394,27 @@ def do_update():
         vmax_caked_slider.configure(to=slider_to)
 
         image_display.set_clim(vmin_val, vmax_val)
+
+        if radial_vals.size:
+            radial_min = float(np.min(radial_vals))
+            radial_max = float(np.max(radial_vals))
+        else:
+            radial_min, radial_max = 0.0, 90.0
+
+        if azimuth_vals.size:
+            azimuth_min = float(np.min(azimuth_vals))
+            azimuth_max = float(np.max(azimuth_vals))
+        else:
+            azimuth_min, azimuth_max = -180.0, 180.0
+
         image_display.set_extent([
-            float(sim_res2.radial[0]),
-            float(sim_res2.radial[-1]),
-            float(azimuth_extent[-1]),
-            float(azimuth_extent[0]),
+            radial_min,
+            radial_max,
+            azimuth_max,
+            azimuth_min,
         ])
+        ax.set_xlim(0.0, 90.0)
+        ax.set_ylim(-180.0, 180.0)
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
@@ -1393,6 +1427,8 @@ def do_update():
             image_display.set_data(np.zeros((image_size, image_size)))
         image_display.set_clim(0, vmax_var.get())
         image_display.set_extent([0, image_size, image_size, 0])
+        ax.set_xlim(0, image_size)
+        ax.set_ylim(image_size, 0)
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
         ax.set_title('Simulated Diffraction Pattern')
