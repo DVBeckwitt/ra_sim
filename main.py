@@ -862,6 +862,15 @@ phi_max_slider = ttk.Scale(
 phi_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 ttk.Label(phi_max_container, textvariable=phi_max_label_var, width=5).pack(side=tk.LEFT, padx=5)
 
+PHI_ZERO_OFFSET_DEGREES = -90.0
+
+
+def _adjust_phi_zero(phi_values):
+    """Shift azimuthal values so φ=0 is rotated clockwise by ``PHI_ZERO_OFFSET_DEGREES``."""
+
+    return np.asarray(phi_values) - PHI_ZERO_OFFSET_DEGREES
+
+
 def caking(data, ai):
     return ai.integrate2d(
         data,
@@ -872,10 +881,11 @@ def caking(data, ai):
         unit="2th_deg"
     )
 
+
 def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     intensity = res2.intensity
     radial_2theta = res2.radial
-    azimuth_vals = res2.azimuthal
+    azimuth_vals = _adjust_phi_zero(res2.azimuthal)
 
     mask_rad = (radial_2theta >= tth_min) & (radial_2theta <= tth_max)
     radial_filtered = radial_2theta[mask_rad]
@@ -939,6 +949,8 @@ def update_integration_region_visuals(ai, sim_res2):
     if two_theta is None or phi_vals is None:
         integration_region_overlay.set_visible(False)
         return
+
+    phi_vals = _adjust_phi_zero(phi_vals)
 
     mask = (
         (two_theta >= tth_min)
@@ -1309,13 +1321,14 @@ def do_update():
     if show_caked_2d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
         caked_img = sim_res2.intensity
+        azimuth_extent = _adjust_phi_zero(sim_res2.azimuthal)
         image_display.set_data(caked_img)
         image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
         image_display.set_extent([
             float(sim_res2.radial[0]),
             float(sim_res2.radial[-1]),
-            float(sim_res2.azimuthal[-1]),
-            float(sim_res2.azimuthal[0]),
+            float(azimuth_extent[-1]),
+            float(azimuth_extent[0]),
         ])
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
