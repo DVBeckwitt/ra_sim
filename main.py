@@ -1429,6 +1429,8 @@ def do_update():
         image_display.set_origin('upper')
         image_display.set_clim(0, vmax_var.get())
         image_display.set_extent([0, image_size, image_size, 0])
+        ax.set_xlim(0, image_size)
+        ax.set_ylim(image_size, 0)
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
         ax.set_title('Simulated Diffraction Pattern')
