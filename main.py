@@ -1580,10 +1580,15 @@ def on_fit_geometry_click():
         'chi': chi_var.get(),
     })
 
-    (_, _, _, _,
-     sim_coords, sim_millers,
-     meas_coords, meas_millers) = simulate_and_compare_hkl(
-        miller, intensities,
+    (
+        _,
+        sim_coords,
+        meas_coords,
+        sim_millers,
+        meas_millers,
+    ) = simulate_and_compare_hkl(
+        miller,
+        intensities,
         image_size,
         fitted_params,
         measured_peaks,

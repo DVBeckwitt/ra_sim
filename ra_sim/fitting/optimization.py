@@ -1533,13 +1533,34 @@ def build_measured_dict(measured_peaks):
 
 
 def simulate_and_compare_hkl(
-    miller, intensities, image_size,
-    params, measured_peaks, pixel_tol=np.inf
+    miller,
+    intensities,
+    image_size,
+    params,
+    measured_peaks,
+    pixel_tol=np.inf,
 ):
-    """
-    Simulate all HKLs with process_peaks_parallel, then for each
-    reflection match the two possible spots to the measured positions
-    of the same HKL, returning arrays of distances and coords.
+    """Simulate reflections and pair them with measured peak positions.
+
+    The routine performs a full-pattern simulation using
+    :func:`process_peaks_parallel`, then, for each Miller index present in
+    ``measured_peaks``, finds the closest simulated peak positions.  Only
+    matches within ``pixel_tol`` pixels are retained.
+
+    Returns
+    -------
+    distances : :class:`numpy.ndarray`
+        1D array with the distance (in pixels) between each matched
+        simulated and measured peak.
+    sim_coords : list[tuple[float, float]]
+        The coordinates of the simulated peaks that were matched.
+    meas_coords : list[tuple[float, float]]
+        The coordinates of the measured peaks corresponding to
+        ``sim_coords``.
+    sim_millers : list[tuple[int, int, int]]
+        Miller indices associated with each entry in ``sim_coords``.
+    meas_millers : list[tuple[int, int, int]]
+        Miller indices associated with each entry in ``meas_coords``.
     """
     measured_dict = build_measured_dict(measured_peaks)
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
@@ -1582,9 +1603,11 @@ def simulate_and_compare_hkl(
         save_flag=0
     )
 
-    distances = []
-    sim_coords = []
-    meas_coords = []
+    distances: list[float] = []
+    sim_coords: list[tuple[float, float]] = []
+    meas_coords: list[tuple[float, float]] = []
+    sim_millers: list[tuple[int, int, int]] = []
+    meas_millers: list[tuple[int, int, int]] = []
 
     for i, (H, K, L) in enumerate(miller):
         if (H, K, L) not in measured_dict:
@@ -1601,8 +1624,17 @@ def simulate_and_compare_hkl(
                 sim_coords.append((x, y))
                 meas_coords.append(candidates[idx])
                 distances.append(d)
+                hkl_int = (int(round(H)), int(round(K)), int(round(L)))
+                sim_millers.append(hkl_int)
+                meas_millers.append(hkl_int)
 
-    return np.array(distances), sim_coords, meas_coords
+    return (
+        np.array(distances, dtype=float),
+        sim_coords,
+        meas_coords,
+        sim_millers,
+        meas_millers,
+    )
 
 
 def compute_peak_position_error_geometry_local(
@@ -1632,9 +1664,13 @@ def compute_peak_position_error_geometry_local(
         'debye_y': debye_y,
         'mosaic_params': mosaic_params
     }
-    D, _, _ = simulate_and_compare_hkl(
-        miller, intensities, image_size,
-        params, measured_peaks, pixel_tol
+    D, *_ = simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks,
+        pixel_tol,
     )
     return D
 
