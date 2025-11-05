@@ -1018,7 +1018,21 @@ def calculate_phi(
                 q_data[i_peaks_index, idx,3] = val
                 q_count[i_peaks_index]+=1
 
-    if (not recorded_nominal_hit) and have_candidate and n_hits < max_hits:
+    add_candidate = False
+    if have_candidate:
+        add_candidate = not recorded_nominal_hit
+        if not add_candidate:
+            duplicate = False
+            for idx in range(n_hits):
+                if (
+                    abs(pixel_hits[idx, 1] - best_candidate[1]) < 0.5
+                    and abs(pixel_hits[idx, 2] - best_candidate[2]) < 0.5
+                ):
+                    duplicate = True
+                    break
+            if not duplicate:
+                add_candidate = True
+    if add_candidate and n_hits < max_hits:
         pixel_hits[n_hits, :] = best_candidate
         n_hits += 1
 
