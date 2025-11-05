@@ -6,6 +6,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 import numpy as np
 import threading
+import traceback
 
 # Import from ra_sim package modules
 from ra_sim.gui.plotting import setup_figure
@@ -143,25 +144,43 @@ def main():
             return
 
         def worker(theta_initial, gamma, Gamma, chi, zs, zb):
-            beam_arrays, mosaic_arrays, divergence_arrays = generate_random_profiles()
-            result = simulate_diffraction_pattern(
-                miller=[(0, 0, 3), (0, 0, 6)],  # Replace with actual data
-                intensities=[100, 200],         # Replace with actual data
-                parameters=params,
-                beam_arrays=beam_arrays,
-                mosaic_arrays=mosaic_arrays,
-                divergence_arrays=divergence_arrays,
-                av=av,
-                cv=cv,
-                lambda_=ai.wavelength * 1e10,
-                center=[3000 - ai.poni2 * 1e4, 3000 - ai.poni1 * 1e4],
-                debye_x=0.4,
-                debye_y=0.5,
-                theta_initial=theta_initial,
-                theta_range=0.1,
-                step=0.1,
-                geometry_params=(ai.dist, gamma, Gamma, chi, 0, zs, zb, 1),
-            )
+            try:
+                beam_arrays, mosaic_arrays, divergence_arrays = generate_random_profiles()
+                result = simulate_diffraction_pattern(
+                    miller=[(0, 0, 3), (0, 0, 6)],  # Replace with actual data
+                    intensities=[100, 200],         # Replace with actual data
+                    parameters=params,
+                    beam_arrays=beam_arrays,
+                    mosaic_arrays=mosaic_arrays,
+                    divergence_arrays=divergence_arrays,
+                    av=av,
+                    cv=cv,
+                    lambda_=ai.wavelength * 1e10,
+                    center=[3000 - ai.poni2 * 1e4, 3000 - ai.poni1 * 1e4],
+                    debye_x=0.4,
+                    debye_y=0.5,
+                    theta_initial=theta_initial,
+                    theta_range=0.1,
+                    step=0.1,
+                    geometry_params=(ai.dist, gamma, Gamma, chi, 0, zs, zb, 1),
+                )
+            except Exception as exc:  # pragma: no cover - GUI feedback path
+                traceback.print_exc()
+
+                def handle_failure():
+                    nonlocal is_computing, pending_update
+                    loading_label.pack_forget()
+                    loading_label.config(text=f"Error: {exc}")
+                    loading_label.pack(side=tk.BOTTOM, pady=5)
+                    status_canvas.itemconfig(status_rect, fill="orange")
+                    root.update_idletasks()
+                    is_computing = False
+                    if pending_update:
+                        pending_update = False
+                        update_plot()
+
+                root.after(0, handle_failure)
+                return
 
             def finish(image):
                 nonlocal is_computing, pending_update
@@ -180,6 +199,7 @@ def main():
             root.after(0, lambda: finish(result))
 
         is_computing = True
+        loading_label.config(text="Loading...")
         loading_label.pack(side=tk.BOTTOM, pady=5)
         status_canvas.itemconfig(status_rect, fill="red")
         root.update_idletasks()
