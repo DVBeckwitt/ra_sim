@@ -61,6 +61,7 @@ from ra_sim.io.data_loading import (
 from ra_sim.fitting.optimization import (
     simulate_and_compare_hkl,
     fit_geometry_parameters,
+    fit_mosaic_widths_separable,
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
@@ -1418,6 +1419,9 @@ progress_label_positions.pack(side=tk.BOTTOM, padx=5)
 progress_label_geometry = ttk.Label(root, text="")
 progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
 
+progress_label_mosaic = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
+progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
+
 progress_label = ttk.Label(root, text="", font=("Helvetica", 8))
 progress_label.pack(side=tk.BOTTOM, padx=5)
 
@@ -1598,6 +1602,136 @@ def on_fit_geometry_click():
               + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}')
     )
 
+
+def on_fit_mosaic_click():
+    """Run the separable mosaic-width optimizer and apply the results."""
+
+    global profile_cache, last_simulation_signature
+
+    miller_array = np.asarray(miller, dtype=np.float64)
+    if miller_array.ndim != 2 or miller_array.shape[1] != 3 or miller_array.size == 0:
+        progress_label_mosaic.config(
+            text="Mosaic fit unavailable: no simulated reflections loaded."
+        )
+        return
+
+    intensity_array = np.asarray(intensities, dtype=np.float64)
+    if intensity_array.shape[0] != miller_array.shape[0]:
+        progress_label_mosaic.config(
+            text="Mosaic fit unavailable: intensity array is not aligned with HKLs."
+        )
+        return
+
+    mosaic_params = build_mosaic_params()
+    required_keys = (
+        "beam_x_array",
+        "beam_y_array",
+        "theta_array",
+        "phi_array",
+        "wavelength_array",
+    )
+    missing = [key for key in required_keys if not np.asarray(mosaic_params.get(key)).size]
+    if missing:
+        progress_label_mosaic.config(
+            text="Mosaic fit unavailable: run a simulation to populate mosaic samples first."
+        )
+        return
+
+    experimental_image = np.asarray(current_background_image, dtype=np.float64)
+    if experimental_image.shape != (image_size, image_size):
+        progress_label_mosaic.config(
+            text=(
+                "Mosaic fit unavailable: experimental image has shape "
+                f"{experimental_image.shape}, expected {(image_size, image_size)}."
+            )
+        )
+        return
+
+    params = {
+        'a':             a_var.get(),
+        'c':             c_var.get(),
+        'lambda':        lambda_,
+        'psi':           psi,
+        'zs':            zs_var.get(),
+        'zb':            zb_var.get(),
+        'chi':           chi_var.get(),
+        'n2':            n2,
+        'mosaic_params': mosaic_params,
+        'debye_x':       debye_x_var.get(),
+        'debye_y':       debye_y_var.get(),
+        'center':        [center_x_var.get(), center_y_var.get()],
+        'theta_initial': theta_initial_var.get(),
+        'uv1':           np.array([1.0, 0.0, 0.0]),
+        'uv2':           np.array([0.0, 1.0, 0.0]),
+        'corto_detector': corto_detector_var.get(),
+        'gamma':          gamma_var.get(),
+        'Gamma':          Gamma_var.get(),
+    }
+
+    progress_label_mosaic.config(text="Running mosaic optimization…")
+    root.update_idletasks()
+
+    try:
+        result = fit_mosaic_widths_separable(
+            experimental_image,
+            miller_array,
+            intensity_array,
+            image_size,
+            params,
+            stratify="twotheta",
+        )
+    except Exception as exc:  # pragma: no cover - GUI feedback path
+        progress_label_mosaic.config(text=f"Mosaic fit failed: {exc}")
+        return
+
+    if result.x is None or not np.all(np.isfinite(result.x)):
+        progress_label_mosaic.config(
+            text="Mosaic fit failed: optimizer returned invalid parameters."
+        )
+        return
+
+    sigma_deg, gamma_deg, eta_val = map(float, result.x[:3])
+
+    sigma_mosaic_var.set(sigma_deg)
+    gamma_mosaic_var.set(gamma_deg)
+    eta_var.set(eta_val)
+
+    best_params = getattr(result, "best_params", None)
+    if best_params and "mosaic_params" in best_params:
+        profile_cache = dict(best_params["mosaic_params"])
+    else:
+        profile_cache = dict(mosaic_params)
+        profile_cache.update(
+            {
+                "sigma_mosaic_deg": sigma_deg,
+                "gamma_mosaic_deg": gamma_deg,
+                "eta": eta_val,
+            }
+        )
+
+    last_simulation_signature = None
+    schedule_update()
+
+    residual_norm = 0.0
+    if getattr(result, "fun", None) is not None and result.fun.size:
+        residual_norm = float(np.linalg.norm(result.fun))
+    roi_count = len(getattr(result, "selected_rois", []))
+    status = "converged" if bool(getattr(result, "success", False)) else "finished"
+    message = (getattr(result, "message", "") or "").strip()
+    if message:
+        status_text = f"{status} ({message})"
+    else:
+        status_text = status.capitalize()
+
+    progress_label_mosaic.config(
+        text=(
+            f"Mosaic fit {status_text}\n"
+            f"σ={sigma_deg:.3f}°, γ={gamma_deg:.3f}°, η={eta_val:.3f}\n"
+            f"Residual norm={residual_norm:.2f} using {roi_count} ROIs"
+        )
+    )
+
+
 fit_button_geometry = ttk.Button(
     root,
     text="Fit Positions & Geometry",
@@ -1605,6 +1739,13 @@ fit_button_geometry = ttk.Button(
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
+
+fit_button_mosaic = ttk.Button(
+    root,
+    text="Fit Mosaic Widths",
+    command=on_fit_mosaic_click,
+)
+fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
 
 show_1d_var = tk.BooleanVar(value=False)
 def toggle_1d_plots():
