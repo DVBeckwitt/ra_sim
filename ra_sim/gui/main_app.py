@@ -89,9 +89,29 @@ def main():
     is_computing = False
     pending_update = False
 
+    # Resolution selector for profile sampling
+    resolution_frame = ttk.Frame(slider_frame)
+    resolution_frame.pack(fill=tk.X, pady=(10, 0))
+    ttk.Label(resolution_frame, text="Sampling Resolution").pack(anchor=tk.W)
+
+    resolution_var = tk.StringVar(value="High")
+    resolution_options = {
+        "Low": 25,
+        "Medium": 250,
+        "High": 500,
+    }
+
+    resolution_menu = ttk.OptionMenu(
+        resolution_frame,
+        resolution_var,
+        resolution_var.get(),
+        *resolution_options.keys(),
+    )
+    resolution_menu.pack(fill=tk.X, pady=(2, 5))
+
     # Generate random profiles
     def generate_random_profiles():
-        num_samples = 1000
+        num_samples = resolution_options.get(resolution_var.get(), 500)
         eta = eta_var.get()
         sigma_mosaic = np.radians(sigma_mosaic_var.get())
         gamma_mosaic = np.radians(gamma_mosaic_var.get())
@@ -193,6 +213,8 @@ def main():
     for var in [theta_initial_var, gamma_var, Gamma_var, chi_var,
                 zs_var, zb_var, eta_var, sigma_mosaic_var, gamma_mosaic_var]:
         var.trace_add("write", schedule_update)
+
+    resolution_var.trace_add("write", lambda *args: schedule_update())
 
     # Launch the main GUI loop
     root.mainloop()
