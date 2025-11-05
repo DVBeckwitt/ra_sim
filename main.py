@@ -547,6 +547,19 @@ background_display = ax.imshow(
     zorder=0,
     origin='upper'
 )
+
+selection_cmap = ListedColormap([[1.0, 0.6, 0.0, 1.0]], name='selection_overlay')
+selection_cmap.set_bad((1.0, 0.6, 0.0, 0.0))
+highlight_display = ax.imshow(
+    np.ma.masked_all(global_image_buffer.shape),
+    cmap=selection_cmap,
+    vmin=0.0,
+    vmax=1.0,
+    alpha=0.35,
+    zorder=5,
+    origin='upper'
+)
+highlight_display.set_visible(False)
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
@@ -942,6 +955,7 @@ def do_update():
     global stored_max_positions_local, stored_sim_image
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global av2, cv2
+    global highlight_display
 
     if update_running:
         # another update is in progress; try again shortly
@@ -970,6 +984,8 @@ def do_update():
     center_marker.set_visible(False)
 
     mosaic_params = build_mosaic_params()
+
+    highlight_display.set_visible(False)
 
 
     def get_sim_signature():
@@ -1238,12 +1254,17 @@ def do_update():
     # 1D integration
     if show_1d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
+        tth_min = tth_min_var.get()
+        tth_max = tth_max_var.get()
+        phi_min = phi_min_var.get()
+        phi_max = phi_max_var.get()
+
         i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
             sim_res2,
-            tth_min_var.get(),
-            tth_max_var.get(),
-            phi_min_var.get(),
-            phi_max_var.get()
+            tth_min,
+            tth_max,
+            phi_min,
+            phi_max
         )
         line_1d_rad.set_data(rad_sim, i2t_sim)
         line_1d_az.set_data(az_sim, i_phi_sim)
@@ -1252,16 +1273,56 @@ def do_update():
             bg_res2 = caking(current_background_image, ai)
             i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
                 bg_res2,
-                tth_min_var.get(),
-                tth_max_var.get(),
-                phi_min_var.get(),
-                phi_max_var.get()
+                tth_min,
+                tth_max,
+                phi_min,
+                phi_max
             )
             line_1d_rad_bg.set_data(rad_bg, i2t_bg)
             line_1d_az_bg.set_data(az_bg, i_phi_bg)
         else:
             line_1d_rad_bg.set_data([], [])
             line_1d_az_bg.set_data([], [])
+
+        def masked_selection(mask: np.ndarray) -> np.ma.MaskedArray:
+            if not np.any(mask):
+                return np.ma.masked_all(mask.shape, dtype=float)
+            return np.ma.array(np.ones(mask.shape, dtype=float), mask=~mask)
+
+        if show_caked_2d_var.get():
+            mask_rad = (sim_res2.radial >= tth_min) & (sim_res2.radial <= tth_max)
+            mask_az = (sim_res2.azimuthal >= phi_min) & (sim_res2.azimuthal <= phi_max)
+            if np.any(mask_rad) and np.any(mask_az):
+                selection_mask = np.zeros_like(sim_res2.intensity, dtype=bool)
+                selection_mask[np.ix_(mask_az, mask_rad)] = True
+                highlight_display.set_data(masked_selection(selection_mask))
+                highlight_display.set_visible(True)
+            else:
+                highlight_display.set_visible(False)
+            highlight_display.set_extent([
+                float(sim_res2.radial[0]),
+                float(sim_res2.radial[-1]),
+                float(sim_res2.azimuthal[-1]),
+                float(sim_res2.azimuthal[0]),
+            ])
+        else:
+            if _ai_cache.get("tth_deg") is None or _ai_cache["tth_deg"].shape != global_image_buffer.shape:
+                _ai_cache["tth_deg"] = ai.twoThetaArray(shape=global_image_buffer.shape, unit="deg")
+                _ai_cache["chi_deg"] = ai.chiArray(shape=global_image_buffer.shape, unit="deg")
+            tth_deg = _ai_cache["tth_deg"]
+            chi_deg = _ai_cache["chi_deg"]
+            selection_mask = (
+                (tth_deg >= tth_min)
+                & (tth_deg <= tth_max)
+                & (chi_deg >= phi_min)
+                & (chi_deg <= phi_max)
+            )
+            highlight_display.set_extent([0, image_size, image_size, 0])
+            if np.any(selection_mask):
+                highlight_display.set_data(masked_selection(selection_mask))
+                highlight_display.set_visible(True)
+            else:
+                highlight_display.set_visible(False)
 
         ax_1d_radial.set_yscale('log' if log_radial_var.get() else 'linear')
         ax_1d_azim.set_yscale('log' if log_azimuth_var.get() else 'linear')
@@ -1277,6 +1338,7 @@ def do_update():
         line_1d_rad_bg.set_data([], [])
         line_1d_az_bg.set_data([], [])
         canvas_1d.draw_idle()
+        highlight_display.set_visible(False)
 
     canvas.draw_idle()
 
