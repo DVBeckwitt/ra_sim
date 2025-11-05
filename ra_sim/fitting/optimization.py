@@ -149,6 +149,15 @@ def _update_params(
     return updated
 
 
+def _allowed_reflection_mask(miller: np.ndarray) -> np.ndarray:
+    """Return a mask selecting reflections with ``2h + k`` divisible by 3."""
+
+    if miller.ndim != 2 or miller.shape[1] < 2:
+        raise ValueError("miller array must have shape (N, >=3)")
+    hk = np.rint(miller[:, :2]).astype(np.int64, copy=False)
+    return (2 * hk[:, 0] + hk[:, 1]) % 3 == 0
+
+
 def _simulate_with_cache(
     params: Dict[str, float],
     miller: np.ndarray,
@@ -273,6 +282,13 @@ def fit_mosaic_widths_separable(
     if intensities.shape[0] != miller.shape[0]:
         raise ValueError("intensities and miller must have matching lengths")
 
+    allowed_mask = _allowed_reflection_mask(miller)
+    allowed_indices = np.flatnonzero(allowed_mask)
+    if allowed_indices.size == 0:
+        raise RuntimeError(
+            "No reflections satisfy 2h + k ≡ 0 (mod 3) for mosaic-width fitting"
+        )
+
     mosaic_params = dict(params.get("mosaic_params", {}))
     if not mosaic_params:
         raise ValueError("params['mosaic_params'] is required")
@@ -381,9 +397,14 @@ def fit_mosaic_widths_separable(
         hits_py = [np.asarray(tbl) for tbl in hit_tables]
         return image, hits_py
 
+    allowed_miller = np.ascontiguousarray(miller[allowed_indices], dtype=np.float64)
+    allowed_intensities = np.ascontiguousarray(
+        intensities[allowed_indices], dtype=np.float64
+    )
+
     _, hit_tables = _simulate(
-        miller,
-        intensities,
+        allowed_miller,
+        allowed_intensities,
         sigma0,
         gamma0,
         eta0,
@@ -395,7 +416,7 @@ def fit_mosaic_widths_separable(
         raise RuntimeError("Initial simulation produced no peak information")
 
     candidates: List[Dict[str, float]] = []
-    for idx, tbl in enumerate(hit_tables):
+    for local_idx, tbl in enumerate(hit_tables):
         arr = np.asarray(tbl, dtype=np.float64)
         if arr.size == 0:
             continue
@@ -415,7 +436,7 @@ def fit_mosaic_widths_separable(
             tth = two_theta(d_hkl, lambda_scalar)
             candidates.append(
                 {
-                    "reflection_index": idx,
+                    "reflection_index": int(allowed_indices[local_idx]),
                     "intensity": intensity,
                     "row": row_pix,
                     "col": col,

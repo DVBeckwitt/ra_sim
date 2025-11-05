@@ -35,6 +35,8 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
     gamma_true = 0.4
     eta_true = 0.12
 
+    recorded_subsets = []
+
     def fake_process_peaks_parallel(
         miller_subset,
         intens_subset,
@@ -69,6 +71,7 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
         record_status=False,
         thickness=0.0,
     ):
+        recorded_subsets.append(np.array(miller_subset, dtype=np.float64, copy=True))
         buffer.fill(0.0)
         sigma_px = max(1.0, sigma_deg * 8.0)
         gamma_px = max(1.0, gamma_deg * 8.0)
@@ -166,6 +169,9 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
     )
     experimental_image = experimental_image + 5.0
 
+    # Drop the pre-fit call so only optimizer evaluations remain.
+    recorded_subsets.clear()
+
     params_initial = dict(params)
     params_initial["mosaic_params"] = dict(
         mosaic_arrays,
@@ -195,4 +201,11 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
     selected_hkls = {roi.hkl for roi in result.selected_rois}
     assert selected_hkls == {(0, 0, 1), (1, 1, 0), (-1, 2, 0), (2, -1, 1)}
     assert all((2 * h + k) % 3 == 0 for h, k, _ in selected_hkls)
+
+    assert recorded_subsets, "optimizer should simulate at least once"
+    for subset in recorded_subsets:
+        if subset.size == 0:
+            continue
+        hk = np.rint(subset[:, :2]).astype(int)
+        assert np.all((2 * hk[:, 0] + hk[:, 1]) % 3 == 0)
 
