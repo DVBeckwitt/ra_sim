@@ -24,6 +24,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
+from matplotlib.patches import Rectangle
 import pyFAI
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from scipy.optimize import differential_evolution, least_squares
@@ -547,6 +548,36 @@ background_display = ax.imshow(
     zorder=0,
     origin='upper'
 )
+
+highlight_cmap = ListedColormap(
+    [
+        (0.0, 0.0, 0.0, 0.0),
+        (0.0, 1.0, 1.0, 0.35),
+    ]
+)
+integration_region_overlay = ax.imshow(
+    np.zeros_like(global_image_buffer),
+    cmap=highlight_cmap,
+    vmin=0,
+    vmax=1,
+    origin='upper',
+    zorder=4,
+    interpolation='nearest'
+)
+integration_region_overlay.set_visible(False)
+
+integration_region_rect = Rectangle(
+    (0.0, 0.0),
+    0.0,
+    0.0,
+    linewidth=2.0,
+    edgecolor='cyan',
+    facecolor='none',
+    linestyle='--',
+    zorder=5,
+)
+integration_region_rect.set_visible(False)
+ax.add_patch(integration_region_rect)
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
@@ -857,6 +888,73 @@ def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     intensity_vs_phi = np.sum(intensity_sub, axis=1)
 
     return intensity_vs_2theta, intensity_vs_phi, azimuth_sub, radial_filtered
+
+
+def update_integration_region_visuals(ai, sim_res2):
+    show_region = show_1d_var.get() and unscaled_image_global is not None
+
+    if not show_region:
+        integration_region_overlay.set_visible(False)
+        integration_region_rect.set_visible(False)
+        return
+
+    tth_values = sorted((tth_min_var.get(), tth_max_var.get()))
+    phi_values = sorted((phi_min_var.get(), phi_max_var.get()))
+    tth_min, tth_max = tth_values
+    phi_min, phi_max = phi_values
+
+    if show_caked_2d_var.get() and sim_res2 is not None:
+        integration_region_overlay.set_visible(False)
+        integration_region_rect.set_xy((tth_min, phi_min))
+        integration_region_rect.set_width(tth_max - tth_min)
+        integration_region_rect.set_height(phi_max - phi_min)
+        integration_region_rect.set_visible(True)
+        return
+
+    integration_region_rect.set_visible(False)
+
+    if ai is None:
+        integration_region_overlay.set_visible(False)
+        return
+
+    detector_shape = global_image_buffer.shape
+    if _ai_cache.get("detector_shape") != detector_shape:
+        try:
+            two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
+        except TypeError:
+            two_theta = np.rad2deg(ai.twoThetaArray(shape=detector_shape))
+
+        try:
+            phi_vals = ai.chiArray(shape=detector_shape, unit="deg")
+        except TypeError:
+            phi_vals = np.rad2deg(ai.chiArray(shape=detector_shape))
+
+        _ai_cache["detector_shape"] = detector_shape
+        _ai_cache["detector_two_theta"] = two_theta
+        _ai_cache["detector_phi"] = phi_vals
+
+    two_theta = _ai_cache.get("detector_two_theta")
+    phi_vals = _ai_cache.get("detector_phi")
+
+    if two_theta is None or phi_vals is None:
+        integration_region_overlay.set_visible(False)
+        return
+
+    mask = (
+        (two_theta >= tth_min)
+        & (two_theta <= tth_max)
+        & (phi_vals >= phi_min)
+        & (phi_vals <= phi_max)
+    )
+
+    if not np.any(mask):
+        integration_region_overlay.set_visible(False)
+        return
+
+    integration_region_overlay.set_data(mask.astype(float))
+    integration_region_overlay.set_extent(image_display.get_extent())
+    integration_region_overlay.set_visible(True)
+
 
 profile_cache = {}
 last_1d_integration_data = {
@@ -1207,6 +1305,7 @@ def do_update():
     ai = _ai_cache["ai"]
 
     # Caked 2D or normal 2D?
+    sim_res2 = None
     if show_caked_2d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
         caked_img = sim_res2.intensity
@@ -1237,7 +1336,8 @@ def do_update():
         
     # 1D integration
     if show_1d_var.get() and unscaled_image_global is not None:
-        sim_res2 = caking(unscaled_image_global, ai)
+        if sim_res2 is None:
+            sim_res2 = caking(unscaled_image_global, ai)
         i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
             sim_res2,
             tth_min_var.get(),
@@ -1277,6 +1377,8 @@ def do_update():
         line_1d_rad_bg.set_data([], [])
         line_1d_az_bg.set_data([], [])
         canvas_1d.draw_idle()
+
+    update_integration_region_visuals(ai, sim_res2)
 
     canvas.draw_idle()
 
