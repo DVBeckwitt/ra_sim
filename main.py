@@ -1419,6 +1419,31 @@ def do_update():
 
         image_display.set_clim(vmin_val, vmax_val)
 
+        background_caked_available = False
+        if background_visible and current_background_image is not None:
+            bg_res2 = caking(current_background_image, ai)
+            bg_caked = bg_res2.intensity
+            bg_radial = np.asarray(bg_res2.radial, dtype=float)
+            bg_azimuth = _wrap_phi_range(_adjust_phi_zero(bg_res2.azimuthal))
+
+            if bg_azimuth.size:
+                bg_order = np.argsort(bg_azimuth)
+                bg_azimuth = bg_azimuth[bg_order]
+                bg_caked = bg_caked[bg_order, :]
+
+            bg_radial_mask = (bg_radial >= 0.0) & (bg_radial <= 90.0)
+            if np.any(bg_radial_mask):
+                bg_radial = bg_radial[bg_radial_mask]
+                bg_caked = bg_caked[:, bg_radial_mask]
+
+            _set_image_origin(background_display, 'lower')
+            background_display.set_data(bg_caked)
+            background_display.set_clim(vmin_val, vmax_val)
+            background_display.set_visible(True)
+            background_caked_available = True
+        else:
+            background_display.set_visible(False)
+
         if radial_vals.size:
             radial_min = float(np.min(radial_vals))
             radial_max = float(np.max(radial_vals))
@@ -1437,12 +1462,18 @@ def do_update():
             azimuth_min,
             azimuth_max,
         ])
+        if background_caked_available:
+            background_display.set_extent([
+                radial_min,
+                radial_max,
+                azimuth_min,
+                azimuth_max,
+            ])
         ax.set_xlim(0.0, 90.0)
         ax.set_ylim(-180.0, 180.0)
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
-        background_display.set_visible(False)
     else:
         if unscaled_image_global is not None:
             disp_image = scale_image_for_display(unscaled_image_global)
