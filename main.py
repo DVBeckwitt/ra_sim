@@ -1478,7 +1478,21 @@ def do_update():
 
             _set_image_origin(background_display, 'lower')
             background_display.set_data(bg_caked)
-            background_display.set_clim(vmin_val, display_vmax)
+            bg_display_vmax = vmax_val
+            if not math.isfinite(bg_display_vmax):
+                bg_display_vmax = auto_vmax
+            if not math.isfinite(bg_display_vmax):
+                bg_display_vmax = display_vmax
+            if bg_display_vmax <= vmin_val:
+                fallback_vmax = None
+                for candidate in (auto_vmax, display_vmax, vmax_val):
+                    if math.isfinite(candidate) and candidate > vmin_val:
+                        fallback_vmax = candidate
+                        break
+                if fallback_vmax is None:
+                    fallback_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
+                bg_display_vmax = fallback_vmax
+            background_display.set_clim(vmin_val, bg_display_vmax)
             background_display.set_visible(True)
             background_caked_available = True
         else:
@@ -1534,7 +1548,10 @@ def do_update():
         background_display.set_extent([0, image_size, image_size, 0])
         if background_visible and current_background_image is not None:
             background_display.set_data(current_background_image)
-            background_display.set_clim(0, vmax_var.get())
+            bg_vmax = float(np.max(current_background_image))
+            if not math.isfinite(bg_vmax) or bg_vmax <= 0:
+                bg_vmax = 1.0
+            background_display.set_clim(0, bg_vmax)
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
