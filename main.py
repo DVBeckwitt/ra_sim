@@ -923,6 +923,29 @@ def _auto_caked_limits(image):
     return vmin, vmax
 
 
+def _set_image_origin(image_display, origin):
+    """Set the origin for an AxesImage while tolerating older Matplotlib APIs."""
+
+    setter = getattr(image_display, "set_origin", None)
+    if callable(setter):
+        try:
+            setter(origin)
+            return
+        except AttributeError:
+            # Older Matplotlib builds may expose ``set_origin`` but still raise
+            # AttributeError when called; fall back to setting the attribute
+            # directly below.
+            pass
+
+    # Some Matplotlib releases exposed the origin as a simple attribute.
+    try:
+        image_display.origin = origin
+    except AttributeError:
+        # If the fallback attribute assignment also fails, there's not much
+        # else we can do; let the caller continue without crashing.
+        return
+
+
 def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     intensity = res2.intensity
     radial_2theta = res2.radial
@@ -1375,7 +1398,7 @@ def do_update():
             radial_vals = radial_vals[radial_mask]
             caked_img = caked_img[:, radial_mask]
 
-        image_display.set_origin('lower')
+        _set_image_origin(image_display, 'lower')
         image_display.set_data(caked_img)
         auto_vmin, auto_vmax = _auto_caked_limits(caked_img)
 
@@ -1426,7 +1449,7 @@ def do_update():
             image_display.set_data(disp_image)
         else:
             image_display.set_data(np.zeros((image_size, image_size)))
-        image_display.set_origin('upper')
+        _set_image_origin(image_display, 'upper')
         image_display.set_clim(0, vmax_var.get())
         image_display.set_extent([0, image_size, image_size, 0])
         ax.set_xlim(0, image_size)
