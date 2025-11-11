@@ -16,12 +16,31 @@ def create_slider(label, min_val, max_val, initial_val, step_size, parent, updat
         if update_callback is not None:
             update_callback()
 
-    slider = ttk.Scale(frame, from_=min_val, to=max_val, orient=tk.HORIZONTAL,
-                       variable=slider_var, command=slider_command)
+    slider = ttk.Scale(
+        frame,
+        from_=min_val,
+        to=max_val,
+        orient=tk.HORIZONTAL,
+        variable=slider_var,
+        command=slider_command,
+    )
     slider.pack(fill=tk.X, padx=5)
 
     entry = ttk.Entry(frame, textvariable=slider_var, width=10)
     entry.pack(side=tk.RIGHT, padx=5)
+
+    def apply_entry_value(event=None):
+        try:
+            value = float(entry.get())
+        except (tk.TclError, ValueError):
+            return
+
+        value = max(min_val, min(max_val, value))
+        precise_value = round(value / step_size) * step_size
+        slider.set(precise_value)
+
+    entry.bind("<FocusOut>", apply_entry_value)
+    entry.bind("<Return>", apply_entry_value)
 
     def on_key(event):
         if event.keysym == 'Left':

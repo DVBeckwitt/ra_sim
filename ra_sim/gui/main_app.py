@@ -33,7 +33,16 @@ def main():
 
     # Setup figure
     fig, ax = setup_figure()
-    img = ax.imshow(bg_image, cmap='turbo', vmin=0, vmax=1e3)
+
+    background_vmax_default = float(np.percentile(bg_image, 99))
+    if not np.isfinite(background_vmax_default) or background_vmax_default <= 0:
+        background_vmax_default = 1e3
+
+    background_slider_min = max(background_vmax_default / 100.0, 1.0)
+    background_slider_max = max(background_vmax_default * 5.0, background_slider_min + 1.0)
+
+    bg_artist = ax.imshow(bg_image, cmap='turbo', vmin=0, vmax=background_vmax_default)
+    sim_artist = None
 
     # Status indicator square
     status_canvas = tk.Canvas(root, width=40, height=40, highlightthickness=0)
@@ -56,7 +65,39 @@ def main():
     # Loading indicator shown during long computations
     loading_label = ttk.Label(root, text="Loading...", font=("Helvetica", 12))
 
+    def update_background_norm():
+        bg_artist.set_clim(0, background_max_var.get())
+        canvas.draw_idle()
+
+    def update_simulation_norm():
+        if sim_artist is not None:
+            sim_artist.set_clim(0, simulation_max_var.get())
+            canvas.draw_idle()
+
+    simulation_vmax_default = 1e5
+    simulation_slider_min = max(simulation_vmax_default / 100.0, 1.0)
+    simulation_slider_max = simulation_vmax_default * 10.0
+
     # Initialize variables for sliders
+    background_max_var, _ = create_slider(
+        "Background Max Intensity",
+        background_slider_min,
+        background_slider_max,
+        background_vmax_default,
+        background_slider_min,
+        parent=slider_frame,
+        update_callback=update_background_norm,
+    )
+    simulation_max_var, _ = create_slider(
+        "Simulation Max Intensity",
+        simulation_slider_min,
+        simulation_slider_max,
+        simulation_vmax_default,
+        simulation_slider_min,
+        parent=slider_frame,
+        update_callback=update_simulation_norm,
+    )
+
     theta_initial_var, _ = create_slider(
         "Theta Initial", 5.0, 20.0, 6.0, 0.01, parent=slider_frame
     )
@@ -164,9 +205,19 @@ def main():
             )
 
             def finish(image):
-                nonlocal is_computing, pending_update
-                ax.clear()
-                ax.imshow(image, cmap='turbo', vmin=0, vmax=1e5)
+                nonlocal is_computing, pending_update, sim_artist
+
+                if sim_artist is None:
+                    sim_artist = ax.imshow(
+                        image,
+                        cmap='turbo',
+                        vmin=0,
+                        vmax=simulation_max_var.get(),
+                    )
+                else:
+                    sim_artist.set_data(image)
+                    sim_artist.set_clim(0, simulation_max_var.get())
+
                 canvas.draw_idle()
                 loading_label.pack_forget()
                 status_canvas.itemconfig(status_rect, fill="green")
