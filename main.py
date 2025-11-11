@@ -2147,19 +2147,8 @@ check_log_azimuth = ttk.Checkbutton(
 )
 check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
 
-# Option to add fractional rods between integer L values
-include_rods_var = tk.BooleanVar(value=include_rods_flag)
-def toggle_rods():
-    global include_rods_flag
-    include_rods_flag = include_rods_var.get()
-    update_occupancies()
-
-check_rods = ttk.Checkbutton(
-    text="Include Rods",
-    variable=include_rods_var,
-    command=toggle_rods
-)
-check_rods.pack(side=tk.TOP, padx=5, pady=2)
+# Option to add fractional rods between integer L values. This can be enabled via
+# configuration; the GUI control has been removed to reduce interface clutter.
 
 def save_1d_snapshot():
     """
@@ -2615,7 +2604,7 @@ def update_occupancies(*args):
             intensity_threshold,
             two_theta_range,
         )
-        if include_rods_var.get():
+        if include_rods_flag:
             m2, i2 = inject_fractional_reflections(m2, i2, mx)
 
         deg_dict2 = {tuple(m2[i]): int(d2[i]) for i in range(len(m2))}
