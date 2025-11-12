@@ -801,13 +801,14 @@ simulation_controls = ttk.LabelFrame(display_controls_frame, text="Simulation Di
 simulation_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
 
-background_vmin_default = _finite_percentile(current_background_image, 1, 0.0)
-background_vmax_default = _finite_percentile(current_background_image, 99, 1.0)
-background_vmin_default, background_vmax_default = _ensure_valid_range(
-    background_vmin_default, background_vmax_default
+background_min_candidate = _finite_percentile(current_background_image, 1, 0.0)
+background_vmin_default = 0.0
+_, background_vmax_default = _ensure_valid_range(
+    background_vmin_default,
+    _finite_percentile(current_background_image, 99, 1.0),
 )
 
-background_slider_min = min(background_vmin_default, 0.0)
+background_slider_min = min(background_min_candidate, 0.0)
 background_slider_max = max(background_vmax_default * 5.0, background_slider_min + 1.0)
 background_slider_step = max((background_slider_max - background_slider_min) / 500.0, 0.01)
 
@@ -887,18 +888,27 @@ def _update_background_slider_defaults(image, reset_override=False):
     global suppress_background_limit_callback, background_limits_user_override
     if image is None:
         return
-    min_guess = _finite_percentile(image, 1, background_min_var.get())
-    max_guess = _finite_percentile(image, 99, background_max_var.get())
-    min_guess, max_guess = _ensure_valid_range(min_guess, max_guess)
-    slider_from = min(float(background_min_slider.cget("from")), min_guess, 0.0)
-    slider_to = max(float(background_min_slider.cget("to")), max_guess, 1.0)
+    min_candidate = _finite_percentile(image, 1, 0.0)
+    max_candidate = _finite_percentile(image, 99, background_max_var.get())
+    min_candidate, max_candidate = _ensure_valid_range(min_candidate, max_candidate)
+    slider_from = min(float(background_min_slider.cget("from")), min_candidate, 0.0)
+    slider_to = max(float(background_min_slider.cget("to")), max_candidate, 1.0)
     background_min_slider.configure(from_=slider_from, to=slider_to)
     background_max_slider.configure(from_=slider_from, to=slider_to)
     suppress_background_limit_callback = True
-    background_min_var.set(min_guess)
-    background_max_var.set(max_guess)
+    if reset_override or not background_limits_user_override:
+        min_value = 0.0
+        max_value = max_candidate
+    else:
+        min_value = float(background_min_var.get())
+        max_value = float(background_max_var.get())
+        min_value = min(max(min_value, slider_from), slider_to)
+        max_value = min(max(max_value, slider_from), slider_to)
+    min_value, max_value = _ensure_valid_range(min_value, max_value)
+    background_min_var.set(min_value)
+    background_max_var.set(max_value)
     suppress_background_limit_callback = False
-    background_display.set_clim(min_guess, max_guess)
+    background_display.set_clim(min_value, max_value)
     if reset_override:
         background_limits_user_override = False
 
@@ -915,15 +925,24 @@ def _update_simulation_sliders_from_image(image, reset_override=False):
     sim_max = float(np.max(finite_pixels))
     sim_min, sim_max = _ensure_valid_range(sim_min, sim_max)
     margin = 0.05 * max(abs(sim_max), 1.0)
-    new_min = sim_min - margin
-    new_max = sim_max + margin
-    slider_from = min(float(simulation_min_slider.cget("from")), new_min, 0.0)
-    slider_to = max(float(simulation_max_slider.cget("to")), new_max, 1.0)
+    lower_bound = min(sim_min - margin, 0.0)
+    upper_bound = max(sim_max + margin, 1.0)
+    slider_from = min(float(simulation_min_slider.cget("from")), lower_bound)
+    slider_to = max(float(simulation_max_slider.cget("to")), upper_bound)
     simulation_min_slider.configure(from_=slider_from, to=slider_to)
     simulation_max_slider.configure(from_=slider_from, to=slider_to)
     suppress_simulation_limit_callback = True
-    simulation_min_var.set(new_min)
-    simulation_max_var.set(new_max)
+    if reset_override or not simulation_limits_user_override:
+        min_value = 0.0
+        max_value = upper_bound
+    else:
+        min_value = float(simulation_min_var.get())
+        max_value = float(simulation_max_var.get())
+        min_value = min(max(min_value, slider_from), slider_to)
+        max_value = min(max(max_value, slider_from), slider_to)
+    min_value, max_value = _ensure_valid_range(min_value, max_value)
+    simulation_min_var.set(min_value)
+    simulation_max_var.set(max_value)
     suppress_simulation_limit_callback = False
     if reset_override:
         simulation_limits_user_override = False
@@ -957,8 +976,14 @@ def _suggest_scale_factor(sim_image, bg_image):
     bg_pixels = bg_pixels[np.isfinite(bg_pixels)]
     if sim_pixels.size == 0 or bg_pixels.size == 0:
         return 1.0
-    sim_ref = float(np.nanpercentile(sim_pixels, 99))
-    bg_ref = float(np.nanpercentile(bg_pixels, 99))
+    sim_reference_pixels = sim_pixels[sim_pixels > 0]
+    if sim_reference_pixels.size == 0:
+        sim_reference_pixels = np.abs(sim_pixels)
+    bg_reference_pixels = bg_pixels[bg_pixels > 0]
+    if bg_reference_pixels.size == 0:
+        bg_reference_pixels = np.abs(bg_pixels)
+    sim_ref = float(np.nanpercentile(sim_reference_pixels, 99))
+    bg_ref = float(np.nanpercentile(bg_reference_pixels, 99))
     if not np.isfinite(sim_ref) or abs(sim_ref) < 1e-12:
         return 1.0
     if not np.isfinite(bg_ref) or abs(bg_ref) < 1e-12:

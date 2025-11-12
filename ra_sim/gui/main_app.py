@@ -34,18 +34,17 @@ def main():
     # Setup figure
     fig, ax = setup_figure()
 
-    background_vmax_default = float(np.percentile(bg_image, 99))
+    background_vmax_default = float(np.nanpercentile(bg_image, 99))
     if not np.isfinite(background_vmax_default) or background_vmax_default <= 0:
         background_vmax_default = 1e3
 
-    background_vmin_default = float(np.percentile(bg_image, 1))
-    if (
-        not np.isfinite(background_vmin_default)
-        or background_vmin_default >= background_vmax_default
-    ):
-        background_vmin_default = 0.0
+    background_min_candidate = float(np.nanpercentile(bg_image, 1))
+    if not np.isfinite(background_min_candidate):
+        background_min_candidate = 0.0
 
-    background_slider_min_value = min(background_vmin_default, 0.0)
+    background_vmin_default = 0.0
+
+    background_slider_min_value = min(background_min_candidate, background_vmin_default)
     background_slider_max_value = max(
         background_vmax_default * 5.0, background_slider_min_value + 1.0
     )
@@ -324,8 +323,32 @@ def main():
                 nonlocal latest_result, suppress_scale_update
 
                 if not scale_factor_initialized:
-                    if np.isfinite(image_max) and image_max > 0:
-                        desired_scale = background_vmax_default / image_max
+                    desired_scale = None
+                    finite_pixels = image[np.isfinite(image)]
+                    bg_reference = (
+                        background_vmax_default if background_vmax_default > 0 else None
+                    )
+                    if finite_pixels.size and bg_reference is not None:
+                        positive_pixels = finite_pixels[finite_pixels > 0]
+                        reference_pixels = (
+                            positive_pixels if positive_pixels.size else np.abs(finite_pixels)
+                        )
+                        sim_reference = float(np.nanpercentile(reference_pixels, 99))
+                        if np.isfinite(sim_reference) and sim_reference > 0:
+                            desired_scale = bg_reference / sim_reference
+
+                    if (
+                        desired_scale is None
+                        and np.isfinite(image_max)
+                        and image_max > 0
+                        and bg_reference is not None
+                    ):
+                        desired_scale = bg_reference / image_max
+
+                    if desired_scale is None or not np.isfinite(desired_scale):
+                        desired_scale = 1.0
+
+                    if desired_scale is not None:
                         slider_min = float(scale_factor_slider.cget("from"))
                         slider_max = float(scale_factor_slider.cget("to"))
                         if desired_scale < slider_min:
@@ -356,16 +379,16 @@ def main():
                         if sim_max <= sim_min:
                             sim_max = sim_min + 1.0
                         margin = 0.05 * max(abs(sim_max), 1.0)
-                        new_min = sim_min - margin
-                        new_max = sim_max + margin
-                        if new_min < float(simulation_min_slider.cget("from")):
-                            simulation_min_slider.configure(from_=new_min)
-                            simulation_max_slider.configure(from_=new_min)
-                        if new_max > float(simulation_max_slider.cget("to")):
-                            simulation_min_slider.configure(to=new_max)
-                            simulation_max_slider.configure(to=new_max)
-                        simulation_min_var.set(new_min)
-                        simulation_max_var.set(new_max)
+                        lower_bound = min(sim_min - margin, simulation_vmin_default)
+                        upper_bound = max(sim_max + margin, simulation_vmin_default + 1.0)
+                        simulation_min_slider.configure(
+                            from_=lower_bound, to=upper_bound
+                        )
+                        simulation_max_slider.configure(
+                            from_=lower_bound, to=upper_bound
+                        )
+                        simulation_min_var.set(simulation_vmin_default)
+                        simulation_max_var.set(upper_bound)
                     simulation_limits_initialized = True
 
                 if sim_artist is None:
