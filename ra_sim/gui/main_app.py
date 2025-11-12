@@ -38,10 +38,23 @@ def main():
     if not np.isfinite(background_vmax_default) or background_vmax_default <= 0:
         background_vmax_default = 1e3
 
-    background_slider_min = max(background_vmax_default / 100.0, 1.0)
-    background_slider_max = max(background_vmax_default * 5.0, background_slider_min + 1.0)
+    background_vmin_default = float(np.percentile(bg_image, 1))
+    if (
+        not np.isfinite(background_vmin_default)
+        or background_vmin_default >= background_vmax_default
+    ):
+        background_vmin_default = 0.0
 
-    bg_artist = ax.imshow(bg_image, cmap='turbo', vmin=0, vmax=background_vmax_default)
+    background_slider_min_value = min(background_vmin_default, 0.0)
+    background_slider_max_value = max(
+        background_vmax_default * 5.0, background_slider_min_value + 1.0
+    )
+    background_slider_step = max(
+        (background_slider_max_value - background_slider_min_value) / 500.0, 0.01
+    )
+
+    bg_artist = ax.imshow(bg_image, cmap='turbo')
+    bg_artist.set_clim(background_vmin_default, background_vmax_default)
     sim_artist = None
 
     # Status indicator square
@@ -65,38 +78,134 @@ def main():
     # Loading indicator shown during long computations
     loading_label = ttk.Label(root, text="Loading...", font=("Helvetica", 12))
 
+    background_min_var = None
+    background_max_var = None
+    simulation_min_var = None
+    simulation_max_var = None
+    scale_factor_var = None
+
     def update_background_norm():
-        bg_artist.set_clim(0, background_max_var.get())
+        if background_min_var is None or background_max_var is None:
+            return
+
+        min_val = background_min_var.get()
+        max_val = background_max_var.get()
+
+        if min_val >= max_val:
+            adjustment = max(abs(max_val) * 1e-6, 1e-6)
+            background_min_var.set(max_val - adjustment)
+            return
+
+        bg_artist.set_clim(min_val, max_val)
         canvas.draw_idle()
 
     def update_simulation_norm():
+        if simulation_min_var is None or simulation_max_var is None:
+            return
+
+        min_val = simulation_min_var.get()
+        max_val = simulation_max_var.get()
+
+        if min_val >= max_val:
+            adjustment = max(abs(max_val) * 1e-6, 1e-6)
+            simulation_min_var.set(max_val - adjustment)
+            return
+
         if sim_artist is not None:
-            sim_artist.set_clim(0, simulation_max_var.get())
+            sim_artist.set_clim(min_val, max_val)
             canvas.draw_idle()
 
-    simulation_vmax_default = 1e5
-    simulation_slider_min = max(simulation_vmax_default / 100.0, 1.0)
-    simulation_slider_max = simulation_vmax_default * 10.0
+    simulation_vmax_default = background_vmax_default
+    simulation_vmin_default = 0.0
+    simulation_slider_min_value = min(
+        simulation_vmin_default, background_slider_min_value
+    )
+    simulation_slider_max_value = max(
+        background_slider_max_value, simulation_vmax_default * 10.0
+    )
+    simulation_slider_step = max(
+        (simulation_slider_max_value - simulation_slider_min_value) / 500.0, 0.01
+    )
+
+    scale_factor_initialized = False
+    simulation_limits_initialized = False
+    scale_factor_slider_min = 1e-3
+    scale_factor_slider_max = 1e3
+    scale_factor_step = 0.001
+    latest_result = None
+    suppress_scale_update = False
+
+    def apply_scaled_simulation():
+        if (
+            scale_factor_var is None
+            or simulation_min_var is None
+            or simulation_max_var is None
+            or sim_artist is None
+            or latest_result is None
+        ):
+            return
+
+        scaled_image = latest_result * scale_factor_var.get()
+        sim_artist.set_data(scaled_image)
+        sim_artist.set_clim(
+            simulation_min_var.get(), simulation_max_var.get()
+        )
+        canvas.draw_idle()
 
     # Initialize variables for sliders
-    background_max_var, _ = create_slider(
-        "Background Max Intensity",
-        background_slider_min,
-        background_slider_max,
-        background_vmax_default,
-        background_slider_min,
+    background_min_var, _ = create_slider(
+        "Background Min Intensity",
+        background_slider_min_value,
+        background_slider_max_value,
+        background_vmin_default,
+        background_slider_step,
         parent=slider_frame,
         update_callback=update_background_norm,
     )
-    simulation_max_var, _ = create_slider(
-        "Simulation Max Intensity",
-        simulation_slider_min,
-        simulation_slider_max,
-        simulation_vmax_default,
-        simulation_slider_min,
+    background_max_var, _ = create_slider(
+        "Background Max Intensity",
+        background_slider_min_value,
+        background_slider_max_value,
+        background_vmax_default,
+        background_slider_step,
+        parent=slider_frame,
+        update_callback=update_background_norm,
+    )
+    simulation_min_var, simulation_min_slider = create_slider(
+        "Simulation Min Intensity",
+        simulation_slider_min_value,
+        simulation_slider_max_value,
+        simulation_vmin_default,
+        simulation_slider_step,
         parent=slider_frame,
         update_callback=update_simulation_norm,
     )
+    simulation_max_var, simulation_max_slider = create_slider(
+        "Simulation Max Intensity",
+        simulation_slider_min_value,
+        simulation_slider_max_value,
+        simulation_vmax_default,
+        simulation_slider_step,
+        parent=slider_frame,
+        update_callback=update_simulation_norm,
+    )
+    scale_factor_var, scale_factor_slider = create_slider(
+        "Simulation Scale Factor",
+        scale_factor_slider_min,
+        scale_factor_slider_max,
+        1.0,
+        scale_factor_step,
+        parent=slider_frame,
+    )
+
+    def handle_scale_factor_change(*args):
+        if suppress_scale_update:
+            return
+        apply_scaled_simulation()
+
+    scale_factor_var.trace_add("write", handle_scale_factor_change)
+
+    update_background_norm()
 
     theta_initial_var, _ = create_slider(
         "Theta Initial", 5.0, 20.0, 6.0, 0.01, parent=slider_frame
@@ -204,19 +313,69 @@ def main():
                 geometry_params=(ai.dist, gamma, Gamma, chi, 0, zs, zb, 1),
             )
 
-            def finish(image):
+            try:
+                raw_max = float(np.nanmax(result))
+            except ValueError:
+                raw_max = float("nan")
+
+            def finish(image, image_max):
                 nonlocal is_computing, pending_update, sim_artist
+                nonlocal scale_factor_initialized, simulation_limits_initialized
+                nonlocal latest_result, suppress_scale_update
+
+                if not scale_factor_initialized:
+                    if np.isfinite(image_max) and image_max > 0:
+                        desired_scale = background_vmax_default / image_max
+                        slider_min = float(scale_factor_slider.cget("from"))
+                        slider_max = float(scale_factor_slider.cget("to"))
+                        if desired_scale < slider_min:
+                            slider_min = desired_scale
+                            scale_factor_slider.configure(from_=slider_min)
+                        if desired_scale > slider_max:
+                            slider_max = desired_scale
+                            scale_factor_slider.configure(to=slider_max)
+                        desired_scale = min(max(desired_scale, slider_min), slider_max)
+                        suppress_scale_update = True
+                        scale_factor_var.set(desired_scale)
+                        suppress_scale_update = False
+                    scale_factor_initialized = True
+
+                scale_factor = scale_factor_var.get()
+                scaled_image = image * scale_factor
+                latest_result = image
+
+                if not simulation_limits_initialized:
+                    finite_pixels = scaled_image[np.isfinite(scaled_image)]
+                    if finite_pixels.size:
+                        sim_min = float(np.min(finite_pixels))
+                        sim_max = float(np.max(finite_pixels))
+                        if not np.isfinite(sim_min):
+                            sim_min = simulation_vmin_default
+                        if not np.isfinite(sim_max):
+                            sim_max = simulation_vmax_default
+                        if sim_max <= sim_min:
+                            sim_max = sim_min + 1.0
+                        margin = 0.05 * max(abs(sim_max), 1.0)
+                        new_min = sim_min - margin
+                        new_max = sim_max + margin
+                        if new_min < float(simulation_min_slider.cget("from")):
+                            simulation_min_slider.configure(from_=new_min)
+                            simulation_max_slider.configure(from_=new_min)
+                        if new_max > float(simulation_max_slider.cget("to")):
+                            simulation_min_slider.configure(to=new_max)
+                            simulation_max_slider.configure(to=new_max)
+                        simulation_min_var.set(new_min)
+                        simulation_max_var.set(new_max)
+                    simulation_limits_initialized = True
 
                 if sim_artist is None:
-                    sim_artist = ax.imshow(
-                        image,
-                        cmap='turbo',
-                        vmin=0,
-                        vmax=simulation_max_var.get(),
-                    )
+                    sim_artist = ax.imshow(scaled_image, cmap='turbo')
                 else:
-                    sim_artist.set_data(image)
-                    sim_artist.set_clim(0, simulation_max_var.get())
+                    sim_artist.set_data(scaled_image)
+
+                sim_artist.set_clim(
+                    simulation_min_var.get(), simulation_max_var.get()
+                )
 
                 canvas.draw_idle()
                 loading_label.pack_forget()
@@ -228,7 +387,7 @@ def main():
                     pending_update = False
                     update_plot()
 
-            root.after(0, lambda: finish(result))
+            root.after(0, lambda: finish(result, raw_max))
 
         is_computing = True
         loading_label.pack(side=tk.BOTTOM, pady=5)
