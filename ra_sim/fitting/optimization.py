@@ -1532,6 +1532,64 @@ def build_measured_dict(measured_peaks):
     return measured_dict
 
 
+def _pixel_to_angles(
+    col: float,
+    row: float,
+    center: Sequence[float],
+    detector_distance: float,
+    pixel_size: float,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Convert a detector pixel position to (2θ, φ) angles in degrees.
+
+    Parameters
+    ----------
+    col, row
+        Pixel coordinates using the same convention as the simulator, where
+        ``col`` corresponds to the horizontal axis and ``row`` to the vertical
+        axis.
+    center
+        Beam centre expressed as ``(row, col)`` as used throughout the
+        simulation code.
+    detector_distance
+        Sample-to-detector distance in metres.
+    pixel_size
+        Pixel size in metres.
+    """
+
+    if center is None or len(center) < 2:
+        return None, None
+    if not np.isfinite(detector_distance) or detector_distance <= 0:
+        return None, None
+    if not np.isfinite(pixel_size) or pixel_size <= 0:
+        return None, None
+
+    try:
+        centre_row = float(center[0])
+        centre_col = float(center[1])
+    except (TypeError, ValueError, IndexError):
+        return None, None
+
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None, None
+
+    dx = (float(col) - centre_col) * pixel_size
+    dy = (centre_row - float(row)) * pixel_size
+    radius = math.hypot(dx, dy)
+
+    two_theta = math.degrees(math.atan2(radius, detector_distance))
+    phi = math.degrees(math.atan2(dx, dy))
+    return two_theta, phi
+
+
+def _angular_difference_deg(a: float, b: float) -> float:
+    """Return the signed minimal difference between two angles in degrees."""
+
+    if not (np.isfinite(a) and np.isfinite(b)):
+        return float("nan")
+    diff = float(a) - float(b)
+    return (diff + 180.0) % 360.0 - 180.0
+
+
 def simulate_and_compare_hkl(
     miller,
     intensities,
@@ -1544,18 +1602,22 @@ def simulate_and_compare_hkl(
 
     The routine performs a full-pattern simulation using
     :func:`process_peaks_parallel`, then, for each Miller index present in
-    ``measured_peaks``, finds the closest simulated peak positions.  Only
-    matches within ``pixel_tol`` pixels are retained.
+    ``measured_peaks``, compares the simulated and measured peak *angles*.
+    For every reflection we look at the maximum position extracted from the
+    radial and azimuthal 1D slices.  The residuals therefore measure the
+    difference in 2θ (radial) and φ (azimuthal) between simulation and
+    experiment; peak shapes are ignored.  ``pixel_tol`` is interpreted as a
+    tolerance on the combined angular difference (in degrees).
 
     Returns
     -------
     distances : :class:`numpy.ndarray`
-        1D array with the distance (in pixels) between each matched
-        simulated and measured peak.
+        Residuals for the matched peaks.  Entries alternate between radial
+        (2θ) and azimuthal (φ) absolute differences, all expressed in degrees.
     sim_coords : list[tuple[float, float]]
-        The coordinates of the simulated peaks that were matched.
+        Detector pixel coordinates of the simulated peaks that were matched.
     meas_coords : list[tuple[float, float]]
-        The coordinates of the measured peaks corresponding to
+        Detector pixel coordinates of the measured peaks corresponding to
         ``sim_coords``.
     sim_millers : list[tuple[int, int, int]]
         Miller indices associated with each entry in ``sim_coords``.
@@ -1609,24 +1671,55 @@ def simulate_and_compare_hkl(
     sim_millers: list[tuple[int, int, int]] = []
     meas_millers: list[tuple[int, int, int]] = []
 
+    detector_distance = float(params.get('corto_detector', 0.0))
+    pixel_size = _estimate_pixel_size(params)
+    centre = params.get('center')
+
     for i, (H, K, L) in enumerate(miller):
-        if (H, K, L) not in measured_dict:
+        key = (int(round(H)), int(round(K)), int(round(L)))
+        candidates = measured_dict.get(key)
+        if not candidates:
             continue
-        candidates = measured_dict[(H, K, L)]
+
         I0, x0, y0, I1, x1, y1 = maxpos[i]
-        for x, y in ((x0, y0), (x1, y1)):
-            if not np.isfinite(x) or not np.isfinite(y):
+        simulated_peaks: list[tuple[float, float, float, float]] = []
+        for col, row in ((x0, y0), (x1, y1)):
+            two_theta, phi = _pixel_to_angles(col, row, centre, detector_distance, pixel_size)
+            if two_theta is None or phi is None:
                 continue
-            ds = [np.hypot(x - mx, y - my) for mx, my in candidates]
-            idx = int(np.argmin(ds))
-            d = ds[idx]
-            if d <= pixel_tol:
-                sim_coords.append((x, y))
-                meas_coords.append(candidates[idx])
-                distances.append(d)
-                hkl_int = (int(round(H)), int(round(K)), int(round(L)))
-                sim_millers.append(hkl_int)
-                meas_millers.append(hkl_int)
+            simulated_peaks.append((float(col), float(row), two_theta, phi))
+
+        if not simulated_peaks:
+            continue
+
+        measured_peaks_for_reflection: list[tuple[float, float, float, float]] = []
+        for mx, my in candidates:
+            two_theta, phi = _pixel_to_angles(mx, my, centre, detector_distance, pixel_size)
+            if two_theta is None or phi is None:
+                continue
+            measured_peaks_for_reflection.append((float(mx), float(my), two_theta, phi))
+
+        if not measured_peaks_for_reflection:
+            continue
+
+        simulated_peaks.sort(key=lambda item: item[2])
+        measured_peaks_for_reflection.sort(key=lambda item: item[2])
+        pair_count = min(len(simulated_peaks), len(measured_peaks_for_reflection))
+
+        for idx in range(pair_count):
+            s_col, s_row, s_two_theta, s_phi = simulated_peaks[idx]
+            m_col, m_row, m_two_theta, m_phi = measured_peaks_for_reflection[idx]
+
+            radial_diff = abs(s_two_theta - m_two_theta)
+            azimuthal_diff = abs(_angular_difference_deg(s_phi, m_phi))
+            combined = math.hypot(radial_diff, azimuthal_diff)
+
+            if combined <= pixel_tol:
+                distances.extend([radial_diff, azimuthal_diff])
+                sim_coords.append((s_col, s_row))
+                meas_coords.append((m_col, m_row))
+                sim_millers.append(key)
+                meas_millers.append(key)
 
     return (
         np.array(distances, dtype=float),
