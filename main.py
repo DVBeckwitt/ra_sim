@@ -880,7 +880,7 @@ simulation_max_var, simulation_max_slider = create_slider(
 )
 
 scale_factor_slider_min = 1e-4
-scale_factor_slider_max = 1e4
+scale_factor_slider_max = 2.0
 scale_factor_step = 0.001
 
 simulation_scale_factor_var, scale_factor_slider = create_slider(
@@ -973,12 +973,15 @@ def _set_scale_factor_value(value, adjust_range=True, reset_override=False):
     slider_min = float(scale_factor_slider.cget("from"))
     slider_max = float(scale_factor_slider.cget("to"))
     if adjust_range:
-        if value < slider_min:
-            slider_min = value
-            scale_factor_slider.configure(from_=slider_min)
-        if value > slider_max:
-            slider_max = value
-            scale_factor_slider.configure(to=slider_max)
+        target_value = float(value)
+        if not np.isfinite(target_value):
+            target_value = 1.0
+        slider_min = 0.0
+        slider_max = max(scale_factor_step, abs(target_value) * 2.0)
+        if slider_max <= slider_min:
+            slider_max = slider_min + scale_factor_step
+        scale_factor_slider.configure(from_=slider_min)
+        scale_factor_slider.configure(to=slider_max)
     value = min(max(value, slider_min), slider_max)
     suppress_scale_factor_callback = True
     simulation_scale_factor_var.set(value)
