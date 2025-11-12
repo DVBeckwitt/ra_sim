@@ -3,9 +3,20 @@
 import tkinter as tk
 from tkinter import ttk
 
-def create_slider(label, min_val, max_val, initial_val, step_size, parent, update_callback=None):
+def create_slider(
+    label,
+    min_val,
+    max_val,
+    initial_val,
+    step_size,
+    parent,
+    update_callback=None,
+    *,
+    visible=True,
+):
     frame = ttk.Frame(parent)
-    frame.pack(pady=5, fill=tk.X)
+    if visible:
+        frame.pack(pady=5, fill=tk.X)
     label_widget = ttk.Label(frame, text=label, font=("Helvetica", 10))
     label_widget.pack(anchor=tk.W)
     slider_var = tk.DoubleVar(value=initial_val)
@@ -16,18 +27,22 @@ def create_slider(label, min_val, max_val, initial_val, step_size, parent, updat
         if update_callback is not None:
             update_callback()
 
+    slider_row = ttk.Frame(frame)
+    slider_row.pack(fill=tk.X, expand=True, padx=5)
+    slider_row.columnconfigure(0, weight=1)
+
     slider = ttk.Scale(
-        frame,
+        slider_row,
         from_=min_val,
         to=max_val,
         orient=tk.HORIZONTAL,
         variable=slider_var,
         command=slider_command,
     )
-    slider.pack(fill=tk.X, padx=5)
+    slider.grid(row=0, column=0, sticky=tk.EW)
 
-    entry = ttk.Entry(frame, textvariable=slider_var, width=10)
-    entry.pack(side=tk.RIGHT, padx=5)
+    entry = ttk.Entry(slider_row, textvariable=slider_var, width=10)
+    entry.grid(row=0, column=1, sticky=tk.E, padx=(5, 0))
 
     def apply_entry_value(event=None):
         try:

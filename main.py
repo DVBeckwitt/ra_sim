@@ -737,6 +737,7 @@ suppress_scale_factor_callback = False
 
 background_min_var = None
 background_max_var = None
+background_transparency_var = None
 simulation_min_var = None
 simulation_max_var = None
 
@@ -761,6 +762,13 @@ def _ensure_valid_range(min_val, max_val):
     return min_val, max_val
 
 
+def _apply_background_transparency():
+    if background_transparency_var is None:
+        return
+    transparency = max(0.0, min(1.0, background_transparency_var.get()))
+    background_display.set_alpha(1.0 - transparency)
+
+
 def _apply_background_limits():
     global background_limits_user_override, suppress_background_limit_callback
     if background_min_var is None or background_max_var is None:
@@ -775,6 +783,7 @@ def _apply_background_limits():
         return
     background_limits_user_override = True
     background_display.set_clim(min_val, max_val)
+    _apply_background_transparency()
     canvas.draw_idle()
 
 
@@ -820,6 +829,7 @@ background_min_var, background_min_slider = create_slider(
     background_slider_step,
     parent=background_controls,
     update_callback=_apply_background_limits,
+    visible=False,
 )
 
 background_max_var, background_max_slider = create_slider(
@@ -830,9 +840,21 @@ background_max_var, background_max_slider = create_slider(
     background_slider_step,
     parent=background_controls,
     update_callback=_apply_background_limits,
+    visible=False,
+)
+
+background_transparency_var, _ = create_slider(
+    "Background Transparency",
+    0.0,
+    1.0,
+    0.0,
+    0.01,
+    parent=background_controls,
+    update_callback=_apply_background_limits,
 )
 
 background_display.set_clim(background_vmin_default, background_vmax_default)
+_apply_background_transparency()
 
 
 simulation_slider_min = min(background_slider_min, 0.0)

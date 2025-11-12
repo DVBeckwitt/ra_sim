@@ -172,6 +172,7 @@ def main():
         background_slider_step,
         parent=background_section,
         update_callback=update_background_norm,
+        visible=False,
     )
     background_max_var, _ = create_slider(
         "Background Max Intensity",
@@ -181,6 +182,7 @@ def main():
         background_slider_step,
         parent=background_section,
         update_callback=update_background_norm,
+        visible=False,
     )
     background_transparency_var, _ = create_slider(
         "Background Transparency",
@@ -191,6 +193,7 @@ def main():
         parent=background_section,
         update_callback=update_background_norm,
     )
+    update_background_norm()
     # Simulation display controls
     simulation_section = ttk.LabelFrame(slider_frame, text="Simulation Display")
     simulation_section.pack(fill=tk.X, padx=5, pady=5)
