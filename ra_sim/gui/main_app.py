@@ -79,12 +79,17 @@ def main():
 
     background_min_var = None
     background_max_var = None
+    background_opacity_var = None
     simulation_min_var = None
     simulation_max_var = None
     scale_factor_var = None
 
     def update_background_norm():
-        if background_min_var is None or background_max_var is None:
+        if (
+            background_min_var is None
+            or background_max_var is None
+            or background_opacity_var is None
+        ):
             return
 
         min_val = background_min_var.get()
@@ -96,6 +101,7 @@ def main():
             return
 
         bg_artist.set_clim(min_val, max_val)
+        bg_artist.set_alpha(background_opacity_var.get())
         canvas.draw_idle()
 
     def update_simulation_norm():
@@ -167,6 +173,15 @@ def main():
         background_slider_max_value,
         background_vmax_default,
         background_slider_step,
+        parent=slider_frame,
+        update_callback=update_background_norm,
+    )
+    background_opacity_var, _ = create_slider(
+        "Background Opacity",
+        0.0,
+        1.0,
+        1.0,
+        0.01,
         parent=slider_frame,
         update_callback=update_background_norm,
     )
