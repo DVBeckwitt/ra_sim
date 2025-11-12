@@ -79,7 +79,7 @@ def main():
 
     background_min_var = None
     background_max_var = None
-    background_opacity_var = None
+    background_transparency_var = None
     simulation_min_var = None
     simulation_max_var = None
     scale_factor_var = None
@@ -88,7 +88,7 @@ def main():
         if (
             background_min_var is None
             or background_max_var is None
-            or background_opacity_var is None
+            or background_transparency_var is None
         ):
             return
 
@@ -101,7 +101,9 @@ def main():
             return
 
         bg_artist.set_clim(min_val, max_val)
-        bg_artist.set_alpha(background_opacity_var.get())
+        transparency = background_transparency_var.get()
+        alpha = max(0.0, min(1.0, 1.0 - transparency))
+        bg_artist.set_alpha(alpha)
         canvas.draw_idle()
 
     def update_simulation_norm():
@@ -180,11 +182,11 @@ def main():
         parent=background_section,
         update_callback=update_background_norm,
     )
-    background_opacity_var, _ = create_slider(
-        "Background Opacity",
+    background_transparency_var, _ = create_slider(
+        "Background Transparency",
         0.0,
         1.0,
-        1.0,
+        0.0,
         0.01,
         parent=background_section,
         update_callback=update_background_norm,
