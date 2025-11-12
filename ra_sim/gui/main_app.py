@@ -381,14 +381,26 @@ def main():
                         desired_scale = 1.0
 
                     if desired_scale is not None:
-                        slider_min = float(scale_factor_slider.cget("from"))
-                        slider_max = float(scale_factor_slider.cget("to"))
-                        if desired_scale < slider_min:
-                            slider_min = desired_scale
-                            scale_factor_slider.configure(from_=slider_min)
-                        if desired_scale > slider_max:
-                            slider_max = desired_scale
-                            scale_factor_slider.configure(to=slider_max)
+                        span = abs(desired_scale)
+                        if not np.isfinite(span) or span == 0.0:
+                            span = 1.0
+
+                        slider_min = max(0.0, desired_scale - span)
+                        slider_max = desired_scale + span
+
+                        slider_min = max(0.0, slider_min)
+                        slider_max = min(1.0, slider_max)
+
+                        if slider_max - slider_min < scale_factor_step:
+                            center = min(max(desired_scale, 0.0), 1.0)
+                            slider_min = max(0.0, center - scale_factor_step / 2.0)
+                            slider_max = slider_min + scale_factor_step
+                            if slider_max > 1.0:
+                                slider_max = 1.0
+                                slider_min = max(0.0, slider_max - scale_factor_step)
+
+                        scale_factor_slider.configure(from_=slider_min, to=slider_max)
+
                         desired_scale = min(max(desired_scale, slider_min), slider_max)
                         suppress_scale_update = True
                         scale_factor_var.set(desired_scale)
