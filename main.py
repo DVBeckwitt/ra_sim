@@ -1126,53 +1126,11 @@ def apply_scale_factor_to_existing_results(update_limits=False):
 _update_background_slider_defaults(current_background_image, reset_override=True)
 
 
-# Frame for caked vrange
-caked_vrange_frame = ttk.Frame(fig_frame)
-caked_vrange_frame.pack(side=tk.BOTTOM, fill=tk.X)
-
+# Track caked intensity limits without exposing separate sliders in the UI.
 caked_limits_user_override = False
 
-vmin_caked_label = ttk.Label(caked_vrange_frame, text="vmin (Caked)")
-vmin_caked_label.pack(side=tk.LEFT, padx=5)
-
 vmin_caked_var = tk.DoubleVar(value=0.0)
-def vmin_caked_slider_command(val):
-    global caked_limits_user_override
-    v = float(val)
-    vmin_caked_var.set(v)
-    caked_limits_user_override = True
-    schedule_update()
-
-vmin_caked_slider = ttk.Scale(
-    caked_vrange_frame,
-    from_=0,
-    to=1000,
-    orient=tk.HORIZONTAL,
-    variable=vmin_caked_var,
-    command=vmin_caked_slider_command
-)
-vmin_caked_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-
-vmax_caked_label = ttk.Label(caked_vrange_frame, text="vmax (Caked)")
-vmax_caked_label.pack(side=tk.LEFT, padx=5)
-
 vmax_caked_var = tk.DoubleVar(value=2000.0)
-def vmax_caked_slider_command(val):
-    global caked_limits_user_override
-    v = float(val)
-    vmax_caked_var.set(v)
-    caked_limits_user_override = True
-    schedule_update()
-
-vmax_caked_slider = ttk.Scale(
-    caked_vrange_frame,
-    from_=0,
-    to=5000,
-    orient=tk.HORIZONTAL,
-    variable=vmax_caked_var,
-    command=vmax_caked_slider_command
-)
-vmax_caked_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
 slider_frame = ttk.Frame(root, padding=10)
 slider_frame.pack(side=tk.LEFT, fill=tk.Y)
@@ -1835,18 +1793,6 @@ def do_update():
                 display_vmax = fallback_vmax
             else:
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
-
-        slider_from = min(float(vmin_caked_slider.cget("from")), vmin_val, auto_vmin, 0.0)
-        slider_to = max(
-            float(vmin_caked_slider.cget("to")),
-            vmax_val,
-            auto_vmax,
-            global_sim_max,
-            display_vmax,
-            1.0,
-        )
-        vmin_caked_slider.configure(from_=slider_from, to=slider_to)
-        vmax_caked_slider.configure(to=slider_to)
 
         background_caked_available = False
         if background_visible and current_background_image is not None:
