@@ -22,7 +22,6 @@ import numpy as np
 import sympy as sp
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib import cm
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Rectangle
 import pyFAI
@@ -80,7 +79,7 @@ from ra_sim.debug_utils import debug_print, is_debug_enabled
 from ra_sim.gui.collapsible import CollapsibleFrame
 
 
-turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
+turbo = matplotlib.colormaps.get_cmap('turbo').resampled(256)
 turbo_rgba = turbo(np.linspace(0, 1, 256))
 turbo_rgba[0] = [1.0, 1.0, 1.0, 1.0]       # make the 0-bin white
 turbo_white0 = ListedColormap(turbo_rgba, name='turbo_white0')
@@ -576,8 +575,8 @@ fig_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 canvas_frame = ttk.Frame(fig_frame)
 canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-vmax_frame = ttk.Frame(fig_frame)
-vmax_frame.pack(side=tk.BOTTOM, fill=tk.X)
+display_controls_frame = ttk.Frame(fig_frame)
+display_controls_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
 fig, ax = plt.subplots(figsize=(8, 8))
 canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(fig, master=canvas_frame)
@@ -589,9 +588,7 @@ unscaled_image_global = None
 # ── replace the original imshow call ────────────────────────────
 image_display = ax.imshow(
     global_image_buffer,
-    cmap=turbo_white0,     # ← use the custom map
-    vmin=0,
-    vmax=1000,
+    cmap=turbo_white0,
     alpha=0.5,
     zorder=1,
     origin='upper'
@@ -601,8 +598,6 @@ image_display = ax.imshow(
 background_display = ax.imshow(
     current_background_image,
     cmap='turbo',
-    vmin=0,
-    vmax=1e3,
     zorder=0,
     origin='upper'
 )
@@ -730,45 +725,386 @@ canvas.mpl_connect('button_press_event', on_canvas_click)
 
 
 # ---------------------------------------------------------------------------
-# Separate "vmax" for normal 2D vs. caked 2D images
+# Display controls for background and simulation intensity scaling
 # ---------------------------------------------------------------------------
-vmax_label = ttk.Label(vmax_frame, text="Max Value (Normal)")
-vmax_label.pack(side=tk.LEFT, padx=5)
+background_limits_user_override = False
+simulation_limits_user_override = False
+scale_factor_user_override = False
 
-vmax_var = tk.DoubleVar(value=defaults['vmax'])
+suppress_background_limit_callback = False
+suppress_simulation_limit_callback = False
+suppress_scale_factor_callback = False
 
-def vmax_slider_command(val):
-    v = float(val)
-    vmax_var.set(v)
-    # Ensure the global "Max Value" slider still constrains the caked view.
-    if show_caked_2d_var.get():
-        global caked_limits_user_override
-        previous_override_state = caked_limits_user_override
-        try:
-            current_caked_vmax = float(vmax_caked_var.get())
-        except (NameError, tk.TclError):  # widgets may not be ready yet
-            current_caked_vmax = v
-        if not math.isfinite(current_caked_vmax) or v < current_caked_vmax:
-            vmax_caked_var.set(v)
-            caked_limits_user_override = previous_override_state
-        if 'vmax_caked_slider' in globals():
-            try:
-                slider_to = float(vmax_caked_slider.cget("to"))
-            except (tk.TclError, ValueError):
-                slider_to = v
-            if v > slider_to:
-                vmax_caked_slider.configure(to=v)
-    schedule_update()
+background_min_var = None
+background_max_var = None
+simulation_min_var = None
+simulation_max_var = None
 
-vmax_slider = ttk.Scale(
-    vmax_frame,
-    from_=0,
-    to=vmax_slider_max,
-    orient=tk.HORIZONTAL,
-    variable=vmax_var,
-    command=vmax_slider_command
+
+def _finite_percentile(array, percentile, fallback):
+    if array is None:
+        return fallback
+    finite = np.asarray(array, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return fallback
+    return float(np.nanpercentile(finite, percentile))
+
+
+def _ensure_valid_range(min_val, max_val):
+    if not np.isfinite(min_val):
+        min_val = 0.0
+    if not np.isfinite(max_val):
+        max_val = max(min_val + 1.0, 1.0)
+    if max_val <= min_val:
+        max_val = min_val + max(abs(min_val) * 1e-3, 1.0)
+    return min_val, max_val
+
+
+def _apply_background_limits():
+    global background_limits_user_override, suppress_background_limit_callback
+    if background_min_var is None or background_max_var is None:
+        return
+    min_val = background_min_var.get()
+    max_val = background_max_var.get()
+    if min_val >= max_val:
+        adjustment = max(abs(max_val) * 1e-6, 1e-6)
+        suppress_background_limit_callback = True
+        background_min_var.set(max_val - adjustment)
+        suppress_background_limit_callback = False
+        return
+    background_limits_user_override = True
+    background_display.set_clim(min_val, max_val)
+    canvas.draw_idle()
+
+
+def _apply_simulation_limits():
+    global simulation_limits_user_override, suppress_simulation_limit_callback
+    if simulation_min_var is None or simulation_max_var is None:
+        return
+    min_val = simulation_min_var.get()
+    max_val = simulation_max_var.get()
+    if min_val >= max_val:
+        adjustment = max(abs(max_val) * 1e-6, 1e-6)
+        suppress_simulation_limit_callback = True
+        simulation_min_var.set(max_val - adjustment)
+        suppress_simulation_limit_callback = False
+        return
+    simulation_limits_user_override = True
+    apply_scale_factor_to_existing_results()
+
+
+background_controls = ttk.LabelFrame(display_controls_frame, text="Background Display")
+background_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+simulation_controls = ttk.LabelFrame(display_controls_frame, text="Simulation Display")
+simulation_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+
+background_min_candidate = _finite_percentile(current_background_image, 1, 0.0)
+background_vmin_default = 0.0
+_, background_vmax_default = _ensure_valid_range(
+    background_vmin_default,
+    _finite_percentile(current_background_image, 99, 1.0),
 )
-vmax_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+background_slider_min = min(background_min_candidate, 0.0)
+background_slider_max = max(background_vmax_default * 5.0, background_slider_min + 1.0)
+background_slider_step = max((background_slider_max - background_slider_min) / 500.0, 0.01)
+
+background_min_var, background_min_slider = create_slider(
+    "Background Min Intensity",
+    background_slider_min,
+    background_slider_max,
+    background_vmin_default,
+    background_slider_step,
+    parent=background_controls,
+    update_callback=_apply_background_limits,
+)
+
+background_max_var, background_max_slider = create_slider(
+    "Background Max Intensity",
+    background_slider_min,
+    background_slider_max,
+    background_vmax_default,
+    background_slider_step,
+    parent=background_controls,
+    update_callback=_apply_background_limits,
+)
+
+background_display.set_clim(background_vmin_default, background_vmax_default)
+
+
+simulation_slider_min = min(background_slider_min, 0.0)
+simulation_slider_max = max(background_slider_max, defaults['vmax'] * 5.0)
+simulation_slider_step = max((simulation_slider_max - simulation_slider_min) / 500.0, 0.01)
+
+simulation_min_var, simulation_min_slider = create_slider(
+    "Simulation Min Intensity",
+    simulation_slider_min,
+    simulation_slider_max,
+    0.0,
+    simulation_slider_step,
+    parent=simulation_controls,
+    update_callback=_apply_simulation_limits,
+)
+
+simulation_max_var, simulation_max_slider = create_slider(
+    "Simulation Max Intensity",
+    simulation_slider_min,
+    simulation_slider_max,
+    background_vmax_default,
+    simulation_slider_step,
+    parent=simulation_controls,
+    update_callback=_apply_simulation_limits,
+)
+
+scale_factor_slider_min = 1e-4
+scale_factor_slider_max = 1e4
+scale_factor_step = 0.001
+
+simulation_scale_factor_var, scale_factor_slider = create_slider(
+    "Simulation Scale Factor",
+    scale_factor_slider_min,
+    scale_factor_slider_max,
+    1.0,
+    scale_factor_step,
+    parent=simulation_controls,
+)
+
+
+def _on_scale_factor_change(*args):
+    global scale_factor_user_override
+    if suppress_scale_factor_callback:
+        return
+    scale_factor_user_override = True
+    apply_scale_factor_to_existing_results()
+
+
+simulation_scale_factor_var.trace_add("write", _on_scale_factor_change)
+
+
+def _update_background_slider_defaults(image, reset_override=False):
+    global suppress_background_limit_callback, background_limits_user_override
+    if image is None:
+        return
+    min_candidate = _finite_percentile(image, 1, 0.0)
+    max_candidate = _finite_percentile(image, 99, background_max_var.get())
+    min_candidate, max_candidate = _ensure_valid_range(min_candidate, max_candidate)
+    slider_from = min(float(background_min_slider.cget("from")), min_candidate, 0.0)
+    slider_to = max(float(background_min_slider.cget("to")), max_candidate, 1.0)
+    background_min_slider.configure(from_=slider_from, to=slider_to)
+    background_max_slider.configure(from_=slider_from, to=slider_to)
+    suppress_background_limit_callback = True
+    if reset_override or not background_limits_user_override:
+        min_value = 0.0
+        max_value = max_candidate
+    else:
+        min_value = float(background_min_var.get())
+        max_value = float(background_max_var.get())
+        min_value = min(max(min_value, slider_from), slider_to)
+        max_value = min(max(max_value, slider_from), slider_to)
+    min_value, max_value = _ensure_valid_range(min_value, max_value)
+    background_min_var.set(min_value)
+    background_max_var.set(max_value)
+    suppress_background_limit_callback = False
+    background_display.set_clim(min_value, max_value)
+    if reset_override:
+        background_limits_user_override = False
+
+
+def _update_simulation_sliders_from_image(image, reset_override=False):
+    global suppress_simulation_limit_callback, simulation_limits_user_override
+    if image is None or image.size == 0:
+        return
+    finite_pixels = np.asarray(image, dtype=float)
+    finite_pixels = finite_pixels[np.isfinite(finite_pixels)]
+    if finite_pixels.size == 0:
+        return
+    sim_min = float(np.min(finite_pixels))
+    sim_max = float(np.max(finite_pixels))
+    sim_min, sim_max = _ensure_valid_range(sim_min, sim_max)
+    margin = 0.05 * max(abs(sim_max), 1.0)
+    lower_bound = min(sim_min - margin, 0.0)
+    upper_bound = max(sim_max + margin, 1.0)
+    slider_from = min(float(simulation_min_slider.cget("from")), lower_bound)
+    slider_to = max(float(simulation_max_slider.cget("to")), upper_bound)
+    simulation_min_slider.configure(from_=slider_from, to=slider_to)
+    simulation_max_slider.configure(from_=slider_from, to=slider_to)
+    suppress_simulation_limit_callback = True
+    if reset_override or not simulation_limits_user_override:
+        min_value = 0.0
+        max_value = upper_bound
+    else:
+        min_value = float(simulation_min_var.get())
+        max_value = float(simulation_max_var.get())
+        min_value = min(max(min_value, slider_from), slider_to)
+        max_value = min(max(max_value, slider_from), slider_to)
+    min_value, max_value = _ensure_valid_range(min_value, max_value)
+    simulation_min_var.set(min_value)
+    simulation_max_var.set(max_value)
+    suppress_simulation_limit_callback = False
+    if reset_override:
+        simulation_limits_user_override = False
+
+
+def _set_scale_factor_value(value, adjust_range=True, reset_override=False):
+    global suppress_scale_factor_callback, scale_factor_user_override
+    slider_min = float(scale_factor_slider.cget("from"))
+    slider_max = float(scale_factor_slider.cget("to"))
+    if adjust_range:
+        if value < slider_min:
+            slider_min = value
+            scale_factor_slider.configure(from_=slider_min)
+        if value > slider_max:
+            slider_max = value
+            scale_factor_slider.configure(to=slider_max)
+    value = min(max(value, slider_min), slider_max)
+    suppress_scale_factor_callback = True
+    simulation_scale_factor_var.set(value)
+    suppress_scale_factor_callback = False
+    if reset_override:
+        scale_factor_user_override = False
+
+
+def _suggest_scale_factor(sim_image, bg_image):
+    sim_pixels = None if sim_image is None else np.asarray(sim_image, dtype=float)
+    bg_pixels = None if bg_image is None else np.asarray(bg_image, dtype=float)
+    if sim_pixels is None or bg_pixels is None:
+        return 1.0
+    sim_pixels = sim_pixels[np.isfinite(sim_pixels)]
+    bg_pixels = bg_pixels[np.isfinite(bg_pixels)]
+    if sim_pixels.size == 0 or bg_pixels.size == 0:
+        return 1.0
+    sim_reference_pixels = sim_pixels[sim_pixels > 0]
+    if sim_reference_pixels.size == 0:
+        sim_reference_pixels = np.abs(sim_pixels)
+    bg_reference_pixels = bg_pixels[bg_pixels > 0]
+    if bg_reference_pixels.size == 0:
+        bg_reference_pixels = np.abs(bg_pixels)
+    sim_ref = float(np.nanpercentile(sim_reference_pixels, 99))
+    bg_ref = float(np.nanpercentile(bg_reference_pixels, 99))
+    if not np.isfinite(sim_ref) or abs(sim_ref) < 1e-12:
+        return 1.0
+    if not np.isfinite(bg_ref) or abs(bg_ref) < 1e-12:
+        return 1.0
+    return bg_ref / sim_ref
+
+
+def _update_chi_square_display():
+    try:
+        if (
+            background_visible
+            and current_background_image is not None
+            and global_image_buffer.size
+        ):
+            sim_vals = np.asarray(global_image_buffer, dtype=float)
+            bg_vals = np.asarray(current_background_image, dtype=float)
+            if (
+                sim_vals.size
+                and bg_vals.size
+                and np.max(sim_vals) > 0
+                and np.max(bg_vals) > 0
+                and sim_vals.shape == bg_vals.shape
+            ):
+                norm_sim = sim_vals / np.max(sim_vals)
+                norm_bg = bg_vals / np.max(bg_vals)
+                chi_sq_val = mean_squared_error(norm_bg, norm_sim) * norm_sim.size
+                chi_square_label.config(text=f"Chi-Squared: {chi_sq_val:.2e}")
+            else:
+                chi_square_label.config(text="Chi-Squared: N/A")
+        else:
+            chi_square_label.config(text="Chi-Squared: N/A")
+    except Exception as exc:
+        chi_square_label.config(text=f"Chi-Squared Error: {exc}")
+
+
+def apply_scale_factor_to_existing_results(update_limits=False):
+    if unscaled_image_global is None:
+        background_display.set_clim(
+            background_min_var.get(),
+            background_max_var.get(),
+        )
+        if not show_caked_2d_var.get():
+            if background_visible and current_background_image is not None:
+                background_display.set_data(current_background_image)
+                background_display.set_visible(True)
+            else:
+                background_display.set_visible(False)
+        canvas.draw_idle()
+        _update_chi_square_display()
+        return
+
+    scale = simulation_scale_factor_var.get()
+    scaled_image = unscaled_image_global * scale
+    global_image_buffer[:] = scaled_image
+
+    if update_limits or not simulation_limits_user_override:
+        _update_simulation_sliders_from_image(
+            scaled_image, reset_override=update_limits
+        )
+
+    if not show_caked_2d_var.get():
+        _set_image_origin(image_display, 'upper')
+        image_display.set_extent([0, image_size, image_size, 0])
+        image_display.set_data(global_image_buffer)
+        image_display.set_clim(
+            simulation_min_var.get(),
+            simulation_max_var.get(),
+        )
+        colorbar_main.update_normal(image_display)
+    elif last_caked_image_unscaled is not None and last_caked_extent is not None:
+        _set_image_origin(image_display, 'lower')
+        scaled_caked = last_caked_image_unscaled * scale
+        image_display.set_data(scaled_caked)
+        image_display.set_extent(last_caked_extent)
+
+    if show_caked_2d_var.get():
+        image_display.set_clim(
+            float(vmin_caked_var.get()),
+            float(vmax_caked_var.get()),
+        )
+
+    if (
+        show_1d_var.get()
+        and "line_1d_rad" in globals()
+        and "line_1d_az" in globals()
+    ):
+        if (
+            last_1d_integration_data["radials_sim"] is not None
+            and last_1d_integration_data["intensities_2theta_sim"] is not None
+        ):
+            line_1d_rad.set_data(
+                last_1d_integration_data["radials_sim"],
+                last_1d_integration_data["intensities_2theta_sim"] * scale,
+            )
+        if (
+            last_1d_integration_data["azimuths_sim"] is not None
+            and last_1d_integration_data["intensities_azimuth_sim"] is not None
+        ):
+            line_1d_az.set_data(
+                last_1d_integration_data["azimuths_sim"],
+                last_1d_integration_data["intensities_azimuth_sim"] * scale,
+            )
+        if "canvas_1d" in globals():
+            canvas_1d.draw_idle()
+
+    background_display.set_clim(
+        background_min_var.get(),
+        background_max_var.get(),
+    )
+
+    if not show_caked_2d_var.get():
+        if background_visible and current_background_image is not None:
+            background_display.set_data(current_background_image)
+            background_display.set_visible(True)
+        else:
+            background_display.set_visible(False)
+
+    canvas.draw_idle()
+    _update_chi_square_display()
+_update_background_slider_defaults(current_background_image, reset_override=True)
+
 
 # Frame for caked vrange
 caked_vrange_frame = ttk.Frame(fig_frame)
@@ -1121,6 +1457,9 @@ last_1d_integration_data = {
     "simulated_2d_image": None
 }
 
+last_caked_image_unscaled = None
+last_caked_extent = None
+
 last_res2_background = None
 last_res2_sim = None
 _ai_cache = {}
@@ -1192,6 +1531,7 @@ def do_update():
     global stored_max_positions_local, stored_sim_image
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global av2, cv2
+    global last_caked_image_unscaled, last_caked_extent
 
     if update_running:
         # another update is in progress; try again shortly
@@ -1379,50 +1719,21 @@ def do_update():
         # Store the unscaled image globally
         unscaled_image_global = updated_image
 
-    def scale_image_for_display(unscaled_img):
-        if unscaled_img is None:
-            return np.zeros((image_size, image_size), dtype=np.float64)
-        disp_img = unscaled_img.copy()
-        if current_background_image is not None:
-            max_bg = np.max(current_background_image)
-            max_sim = np.max(disp_img)
-            if (max_bg > 0) and (max_sim > 0):
-                disp_img *= (max_bg / max_sim)
-        return disp_img
-
-    disp_image = scale_image_for_display(unscaled_image_global)
-    global_image_buffer[:] = disp_image
-
-    # Check if we show caked 2D
-    if show_caked_2d_var.get() and unscaled_image_global is not None:
-        image_display.set_clim(vmin_caked_var.get(), vmax_caked_var.get())
-    else:
-        image_display.set_clim(0, vmax_var.get())
-
-    image_display.set_data(global_image_buffer)
-
-    background_display.set_visible(background_visible)
-    if background_visible:
-        background_display.set_data(current_background_image)
-    else:
-        background_display.set_data(np.zeros_like(current_background_image))
-
-    try:
-        norm_sim = (global_image_buffer / np.max(global_image_buffer)
-                    if np.max(global_image_buffer) > 0 else global_image_buffer)
-        norm_bg = (current_background_image / np.max(current_background_image)
-                   if (current_background_image is not None and np.max(current_background_image) > 0)
-                   else current_background_image)
-        if norm_bg is not None and norm_bg.shape == norm_sim.shape:
-            chi_sq_val = mean_squared_error(norm_bg, norm_sim) * norm_sim.size
-            chi_square_label.config(text=f"Chi-Squared: {chi_sq_val:.2e}")
-        else:
-            chi_square_label.config(text="Chi-Squared: N/A")
-    except Exception as e:
-        chi_square_label.config(text=f"Chi-Squared: Error - {e}")
-
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
 
+    if (
+        unscaled_image_global is not None
+        and not scale_factor_user_override
+        and current_background_image is not None
+    ):
+        suggested_scale = _suggest_scale_factor(
+            unscaled_image_global, current_background_image
+        )
+        _set_scale_factor_value(
+            suggested_scale,
+            adjust_range=True,
+            reset_override=True,
+        )
     # ---------------------------------------------------------------
     # pyFAI integrator setup is relatively expensive. Cache the
     # AzimuthalIntegrator instance and only recreate it when any of the
@@ -1474,9 +1785,11 @@ def do_update():
             radial_vals = radial_vals[radial_mask]
             caked_img = caked_img[:, radial_mask]
 
-        _set_image_origin(image_display, 'lower')
-        image_display.set_data(caked_img)
-        auto_vmin, auto_vmax = _auto_caked_limits(caked_img)
+        last_caked_image_unscaled = caked_img
+
+        current_scale = simulation_scale_factor_var.get()
+        scaled_caked_for_limits = caked_img * current_scale
+        auto_vmin, auto_vmax = _auto_caked_limits(scaled_caked_for_limits)
 
         if not caked_limits_user_override:
             vmin_caked_var.set(auto_vmin)
@@ -1484,20 +1797,20 @@ def do_update():
 
         vmin_val = float(vmin_caked_var.get())
         vmax_val = float(vmax_caked_var.get())
-        global_vmax = float(vmax_var.get())
+        global_sim_max = float(simulation_max_var.get())
 
         if not math.isfinite(vmin_val):
             vmin_val = auto_vmin
         if not math.isfinite(vmax_val):
             vmax_val = auto_vmax
-        if not math.isfinite(global_vmax):
-            global_vmax = auto_vmax
+        if not math.isfinite(global_sim_max):
+            global_sim_max = auto_vmax
 
-        display_vmax = min(vmax_val, global_vmax)
+        display_vmax = min(vmax_val, global_sim_max)
         if not math.isfinite(display_vmax):
             display_vmax = auto_vmax
         if display_vmax <= vmin_val:
-            fallback_vmax = max(global_vmax, auto_vmax, vmax_val)
+            fallback_vmax = max(global_sim_max, auto_vmax, vmax_val)
             if math.isfinite(fallback_vmax) and fallback_vmax > vmin_val:
                 display_vmax = fallback_vmax
             else:
@@ -1508,14 +1821,12 @@ def do_update():
             float(vmin_caked_slider.cget("to")),
             vmax_val,
             auto_vmax,
-            global_vmax,
+            global_sim_max,
             display_vmax,
             1.0,
         )
         vmin_caked_slider.configure(from_=slider_from, to=slider_to)
         vmax_caked_slider.configure(to=slider_to)
-
-        image_display.set_clim(vmin_val, display_vmax)
 
         background_caked_available = False
         if background_visible and current_background_image is not None:
@@ -1568,12 +1879,12 @@ def do_update():
         else:
             azimuth_min, azimuth_max = -180.0, 180.0
 
-        image_display.set_extent([
+        last_caked_extent = [
             radial_min,
             radial_max,
             azimuth_min,
             azimuth_max,
-        ])
+        ]
         if background_caked_available:
             background_display.set_extent([
                 radial_min,
@@ -1581,21 +1892,16 @@ def do_update():
                 azimuth_min,
                 azimuth_max,
             ])
+        else:
+            background_display.set_visible(False)
         ax.set_xlim(0.0, 90.0)
         ax.set_ylim(-180.0, 180.0)
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
     else:
-        if unscaled_image_global is not None:
-            disp_image = scale_image_for_display(unscaled_image_global)
-            image_display.set_data(disp_image)
-        else:
-            image_display.set_data(np.zeros((image_size, image_size)))
-
-        _set_image_origin(image_display, 'upper')
-        image_display.set_clim(0, vmax_var.get())
-        image_display.set_extent([0, image_size, image_size, 0])
+        last_caked_image_unscaled = None
+        last_caked_extent = None
         ax.set_xlim(0, image_size)
         ax.set_ylim(image_size, 0)
         ax.set_xlabel('X (pixels)')
@@ -1606,10 +1912,10 @@ def do_update():
         background_display.set_extent([0, image_size, image_size, 0])
         if background_visible and current_background_image is not None:
             background_display.set_data(current_background_image)
-            bg_vmax = float(np.max(current_background_image))
-            if not math.isfinite(bg_vmax) or bg_vmax <= 0:
-                bg_vmax = 1.0
-            background_display.set_clim(0, bg_vmax)
+            background_display.set_clim(
+                background_min_var.get(),
+                background_max_var.get(),
+            )
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
@@ -1625,8 +1931,14 @@ def do_update():
             phi_min_var.get(),
             phi_max_var.get()
         )
-        line_1d_rad.set_data(rad_sim, i2t_sim)
-        line_1d_az.set_data(az_sim, i_phi_sim)
+        last_1d_integration_data["radials_sim"] = rad_sim
+        last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
+        last_1d_integration_data["azimuths_sim"] = az_sim
+        last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
+
+        scale = simulation_scale_factor_var.get()
+        line_1d_rad.set_data(rad_sim, i2t_sim * scale)
+        line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
         if background_visible and current_background_image is not None:
             bg_res2 = caking(current_background_image, ai)
@@ -1637,11 +1949,19 @@ def do_update():
                 phi_min_var.get(),
                 phi_max_var.get()
             )
+            last_1d_integration_data["radials_bg"] = rad_bg
+            last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
+            last_1d_integration_data["azimuths_bg"] = az_bg
+            last_1d_integration_data["intensities_azimuth_bg"] = i_phi_bg
             line_1d_rad_bg.set_data(rad_bg, i2t_bg)
             line_1d_az_bg.set_data(az_bg, i_phi_bg)
         else:
             line_1d_rad_bg.set_data([], [])
             line_1d_az_bg.set_data([], [])
+            last_1d_integration_data["radials_bg"] = None
+            last_1d_integration_data["intensities_2theta_bg"] = None
+            last_1d_integration_data["azimuths_bg"] = None
+            last_1d_integration_data["intensities_azimuth_bg"] = None
 
         ax_1d_radial.set_yscale('log' if log_radial_var.get() else 'linear')
         ax_1d_azim.set_yscale('log' if log_azimuth_var.get() else 'linear')
@@ -1657,29 +1977,21 @@ def do_update():
         line_1d_rad_bg.set_data([], [])
         line_1d_az_bg.set_data([], [])
         canvas_1d.draw_idle()
+        last_1d_integration_data["radials_sim"] = None
+        last_1d_integration_data["intensities_2theta_sim"] = None
+        last_1d_integration_data["azimuths_sim"] = None
+        last_1d_integration_data["intensities_azimuth_sim"] = None
+        last_1d_integration_data["radials_bg"] = None
+        last_1d_integration_data["intensities_2theta_bg"] = None
+        last_1d_integration_data["azimuths_bg"] = None
+        last_1d_integration_data["intensities_azimuth_bg"] = None
+
+    apply_scale_factor_to_existing_results(update_limits=True)
 
     update_integration_region_visuals(ai, sim_res2)
 
-    canvas.draw_idle()
-
-    try:
-        if background_visible and current_background_image is not None:
-            norm_sim = (unscaled_image_global / np.max(unscaled_image_global)
-                        if np.max(unscaled_image_global) > 0 else unscaled_image_global)
-            norm_bg = (current_background_image / np.max(current_background_image)
-                       if np.max(current_background_image) > 0 else current_background_image)
-            if norm_bg is not None and norm_bg.shape == norm_sim.shape:
-                chi_sq_val = mean_squared_error(norm_bg, norm_sim) * norm_sim.size
-                chi_square_label.config(text=f"Chi-Squared: {chi_sq_val:.2e}")
-            else:
-                chi_square_label.config(text="Chi-Squared: N/A")
-        else:
-            chi_square_label.config(text="Chi-Squared: N/A")
-    except Exception as e:
-        chi_square_label.config(text=f"Chi-Squared Error: {e}")
-    finally:
-        # mark update completion so future updates can run
-        update_running = False
+    # mark update completion so future updates can run
+    update_running = False
 
 # ── after you’ve updated background_visible in toggle_background() ──
 def toggle_background():
@@ -1695,10 +2007,13 @@ def switch_background():
     current_background_index = (current_background_index + 1) % len(background_images)
     current_background_image = background_images[current_background_index]
     background_display.set_data(current_background_image)
+    _update_background_slider_defaults(current_background_image, reset_override=True)
     schedule_update()
 
 def reset_to_defaults():
     global caked_limits_user_override
+    global simulation_limits_user_override, background_limits_user_override
+    global scale_factor_user_override, suppress_simulation_limit_callback
     theta_initial_var.set(defaults['theta_initial'])
     gamma_var.set(defaults['gamma'])
     Gamma_var.set(defaults['Gamma'])
@@ -1713,7 +2028,6 @@ def reset_to_defaults():
     eta_var.set(defaults['eta'])
     a_var.set(defaults['a'])
     c_var.set(defaults['c'])
-    vmax_var.set(defaults['vmax'])
     resolution_var.set(defaults['sampling_resolution'])
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
@@ -1726,6 +2040,19 @@ def reset_to_defaults():
     vmin_caked_var.set(0.0)
     vmax_caked_var.set(2000.0)
     caked_limits_user_override = False
+
+    background_limits_user_override = False
+    simulation_limits_user_override = False
+    scale_factor_user_override = False
+
+    _update_background_slider_defaults(current_background_image, reset_override=True)
+
+    suppress_simulation_limit_callback = True
+    simulation_min_var.set(0.0)
+    simulation_max_var.set(background_vmax_default)
+    suppress_simulation_limit_callback = False
+
+    _set_scale_factor_value(1.0, adjust_range=False, reset_override=True)
 
     # ALSO reset occupancies to default
     occ_var1.set(occ[0])
@@ -2607,8 +2934,6 @@ if has_second_cif:
 else:
     weight1_var = tk.DoubleVar(value=1.0)
     weight2_var = tk.DoubleVar(value=0.0)
-
-vmax_slider.config(command=vmax_slider_command)
 # ---------------------------------------------------------------------------
 #  OCCUPANCY SLIDERS: Sliders for occ[0], occ[1], occ[2]
 # ---------------------------------------------------------------------------
