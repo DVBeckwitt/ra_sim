@@ -829,7 +829,6 @@ background_min_var, background_min_slider = create_slider(
     background_slider_step,
     parent=background_controls,
     update_callback=_apply_background_limits,
-    visible=False,
 )
 
 background_max_var, background_max_slider = create_slider(
@@ -840,7 +839,6 @@ background_max_var, background_max_slider = create_slider(
     background_slider_step,
     parent=background_controls,
     update_callback=_apply_background_limits,
-    visible=False,
 )
 
 background_transparency_var, _ = create_slider(

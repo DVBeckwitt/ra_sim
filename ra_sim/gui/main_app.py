@@ -172,7 +172,6 @@ def main():
         background_slider_step,
         parent=background_section,
         update_callback=update_background_norm,
-        visible=False,
     )
     background_max_var, _ = create_slider(
         "Background Max Intensity",
@@ -182,7 +181,6 @@ def main():
         background_slider_step,
         parent=background_section,
         update_callback=update_background_norm,
-        visible=False,
     )
     background_transparency_var, _ = create_slider(
         "Background Transparency",
