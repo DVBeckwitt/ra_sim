@@ -134,11 +134,10 @@ def main():
         (simulation_slider_max_value - simulation_slider_min_value) / 500.0, 0.01
     )
 
-    scale_factor_initialized = False
     simulation_limits_initialized = False
-    scale_factor_slider_min = 1e-3
+    scale_factor_slider_min = 0.0
     scale_factor_slider_max = 2.0
-    scale_factor_step = 0.001
+    scale_factor_step = 0.0001
     latest_result = None
     suppress_scale_update = False
 
@@ -351,57 +350,43 @@ def main():
 
             def finish(image, image_max):
                 nonlocal is_computing, pending_update, sim_artist
-                nonlocal scale_factor_initialized, simulation_limits_initialized
+                nonlocal simulation_limits_initialized
                 nonlocal latest_result, suppress_scale_update
 
-                if not scale_factor_initialized:
-                    desired_scale = None
-                    finite_pixels = image[np.isfinite(image)]
-                    bg_reference = (
-                        background_vmax_default if background_vmax_default > 0 else None
+                bg_reference = (
+                    background_vmax_default if background_vmax_default > 0 else None
+                )
+                normalization_scale = 1.0
+                finite_pixels = image[np.isfinite(image)]
+                if finite_pixels.size and bg_reference is not None:
+                    positive_pixels = finite_pixels[finite_pixels > 0]
+                    reference_pixels = (
+                        positive_pixels if positive_pixels.size else np.abs(finite_pixels)
                     )
-                    if finite_pixels.size and bg_reference is not None:
-                        positive_pixels = finite_pixels[finite_pixels > 0]
-                        reference_pixels = (
-                            positive_pixels if positive_pixels.size else np.abs(finite_pixels)
-                        )
-                        sim_reference = float(np.nanpercentile(reference_pixels, 99))
-                        if np.isfinite(sim_reference) and sim_reference > 0:
-                            desired_scale = bg_reference / sim_reference
+                    sim_reference = float(np.nanpercentile(reference_pixels, 99))
+                    if np.isfinite(sim_reference) and sim_reference > 0:
+                        normalization_scale = bg_reference / sim_reference
 
-                    if (
-                        desired_scale is None
-                        and np.isfinite(image_max)
-                        and image_max > 0
-                        and bg_reference is not None
-                    ):
-                        desired_scale = bg_reference / image_max
+                if (
+                    (not np.isfinite(normalization_scale) or normalization_scale <= 0.0)
+                    and np.isfinite(image_max)
+                    and image_max > 0
+                    and bg_reference is not None
+                ):
+                    normalization_scale = bg_reference / image_max
 
-                    if desired_scale is None or not np.isfinite(desired_scale):
-                        desired_scale = 1.0
+                if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
+                    normalization_scale = 1.0
 
-                    if desired_scale is not None:
-                        span = abs(desired_scale)
-                        if not np.isfinite(span) or span == 0.0:
-                            span = 1.0
+                normalized_image = image * normalization_scale
+                latest_result = normalized_image
 
-                        slider_min = 0.0
-                        slider_max = max(scale_factor_step, span * 2.0)
-
-                        if slider_max <= slider_min:
-                            slider_max = slider_min + scale_factor_step
-
-                        scale_factor_slider.configure(from_=slider_min, to=slider_max)
-
-                        desired_scale = min(max(desired_scale, slider_min), slider_max)
-                        suppress_scale_update = True
-                        scale_factor_var.set(desired_scale)
-                        suppress_scale_update = False
-                    scale_factor_initialized = True
+                suppress_scale_update = True
+                scale_factor_var.set(1.0)
+                suppress_scale_update = False
 
                 scale_factor = scale_factor_var.get()
-                scaled_image = image * scale_factor
-                latest_result = image
+                scaled_image = normalized_image * scale_factor
 
                 if not simulation_limits_initialized:
                     finite_pixels = scaled_image[np.isfinite(scaled_image)]
