@@ -879,9 +879,9 @@ simulation_max_var, simulation_max_slider = create_slider(
     update_callback=_apply_simulation_limits,
 )
 
-scale_factor_slider_min = 1e-4
-scale_factor_slider_max = 1e4
-scale_factor_step = 0.001
+scale_factor_slider_min = 0.0
+scale_factor_slider_max = 2.0
+scale_factor_step = 0.0001
 
 simulation_scale_factor_var, scale_factor_slider = create_slider(
     "Simulation Scale Factor",
@@ -972,13 +972,9 @@ def _set_scale_factor_value(value, adjust_range=True, reset_override=False):
     global suppress_scale_factor_callback, scale_factor_user_override
     slider_min = float(scale_factor_slider.cget("from"))
     slider_max = float(scale_factor_slider.cget("to"))
-    if adjust_range:
-        if value < slider_min:
-            slider_min = value
-            scale_factor_slider.configure(from_=slider_min)
-        if value > slider_max:
-            slider_max = value
-            scale_factor_slider.configure(to=slider_max)
+    if not np.isfinite(value):
+        value = 1.0
+    value = float(value)
     value = min(max(value, slider_min), slider_max)
     suppress_scale_factor_callback = True
     simulation_scale_factor_var.set(value)
@@ -1694,24 +1690,37 @@ def do_update():
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
             peak_millers.append(hkl)
 
-        # Store the unscaled image globally
-        unscaled_image_global = updated_image
+    normalization_scale = 1.0
+    if current_background_image is not None and updated_image is not None:
+        normalization_scale = _suggest_scale_factor(
+            updated_image, current_background_image
+        )
+        if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
+            normalization_scale = 1.0
+
+    unscaled_image_global = None
+    if updated_image is not None:
+        unscaled_image_global = updated_image * normalization_scale
+        if peak_intensities and normalization_scale != 1.0:
+            peak_intensities[:] = [
+                intensity * normalization_scale for intensity in peak_intensities
+            ]
 
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
 
-    if (
-        unscaled_image_global is not None
-        and not scale_factor_user_override
-        and current_background_image is not None
-    ):
-        suggested_scale = _suggest_scale_factor(
-            unscaled_image_global, current_background_image
-        )
-        _set_scale_factor_value(
-            suggested_scale,
-            adjust_range=True,
-            reset_override=True,
-        )
+    if unscaled_image_global is not None:
+        if scale_factor_user_override:
+            _set_scale_factor_value(
+                simulation_scale_factor_var.get(),
+                adjust_range=False,
+                reset_override=False,
+            )
+        else:
+            _set_scale_factor_value(
+                1.0,
+                adjust_range=False,
+                reset_override=True,
+            )
     # ---------------------------------------------------------------
     # pyFAI integrator setup is relatively expensive. Cache the
     # AzimuthalIntegrator instance and only recreate it when any of the
