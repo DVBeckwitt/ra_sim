@@ -388,8 +388,16 @@ def main():
                         slider_min = max(0.0, desired_scale - span)
                         slider_max = desired_scale + span
 
-                        if slider_max <= slider_min:
-                            slider_max = slider_min + span
+                        slider_min = max(0.0, slider_min)
+                        slider_max = min(1.0, slider_max)
+
+                        if slider_max - slider_min < scale_factor_step:
+                            center = min(max(desired_scale, 0.0), 1.0)
+                            slider_min = max(0.0, center - scale_factor_step / 2.0)
+                            slider_max = slider_min + scale_factor_step
+                            if slider_max > 1.0:
+                                slider_max = 1.0
+                                slider_min = max(0.0, slider_max - scale_factor_step)
 
                         scale_factor_slider.configure(from_=slider_min, to=slider_max)
 
