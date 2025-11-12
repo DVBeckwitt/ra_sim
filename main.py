@@ -502,7 +502,65 @@ current_background_image = background_images[0]
 current_background_index = 0
 background_visible = True
 
-measured_peaks = np.load(get_path("measured_peaks"), allow_pickle=True)
+
+def _rotate_measured_peaks_clockwise(measured, rotated_shape):
+    """Rotate measured-peak coordinates to match the displayed background.
+
+    The GUI rotates detector images 90° clockwise so the simulated pattern and
+    experimental background share the same orientation.  ``measured`` contains
+    either dictionaries (``{'label': 'h,k,l', 'x': ..., 'y': ...}``) or tuples
+    ``(h, k, l, x, y[, ...])`` that were recorded in the *original* detector
+    orientation.  This helper mirrors the image rotation by remapping each
+    coordinate pair.
+    """
+
+    if measured is None:
+        return []
+
+    # ``np.rot90(image, -1)`` swaps the detector axes: the rotated image has
+    # ``rotated_shape == (orig_width, orig_height)``.  The clockwise rotation
+    # maps (x, y) → (x_new, y_new) with::
+    #
+    #     x_new = orig_height - 1 - y
+    #     y_new = x
+    #
+    # where ``x``/``y`` follow the image convention (columns, rows).
+    _, rotated_width = rotated_shape[:2]
+    original_height = rotated_width
+
+    def transform(x_val, y_val):
+        x_new = original_height - 1 - float(y_val)
+        y_new = float(x_val)
+        return x_new, y_new
+
+    rotated_entries = []
+    for entry in measured:
+        if isinstance(entry, dict):
+            updated = dict(entry)
+            if "x" in updated and "y" in updated:
+                updated["x"], updated["y"] = transform(updated["x"], updated["y"])
+            if "x_pix" in updated and "y_pix" in updated:
+                updated["x_pix"], updated["y_pix"] = transform(
+                    updated["x_pix"], updated["y_pix"]
+                )
+            rotated_entries.append(updated)
+            continue
+
+        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            seq = list(entry)
+            seq[3], seq[4] = transform(seq[3], seq[4])
+            rotated_entries.append(type(entry)(seq))
+        else:
+            rotated_entries.append(entry)
+
+    return rotated_entries
+
+
+measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
+measured_peaks = _rotate_measured_peaks_clockwise(
+    measured_peaks_raw,
+    current_background_image.shape,
+)
 
 ###############################################################################
 #                                  TK SETUP
