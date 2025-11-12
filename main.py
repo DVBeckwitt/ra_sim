@@ -22,7 +22,6 @@ import numpy as np
 import sympy as sp
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib import cm
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Rectangle
 import pyFAI
@@ -80,7 +79,7 @@ from ra_sim.debug_utils import debug_print, is_debug_enabled
 from ra_sim.gui.collapsible import CollapsibleFrame
 
 
-turbo = cm.get_cmap('turbo', 256)          # 256-step version of ‘turbo’
+turbo = matplotlib.colormaps.get_cmap('turbo').resampled(256)
 turbo_rgba = turbo(np.linspace(0, 1, 256))
 turbo_rgba[0] = [1.0, 1.0, 1.0, 1.0]       # make the 0-bin white
 turbo_white0 = ListedColormap(turbo_rgba, name='turbo_white0')
@@ -2910,8 +2909,6 @@ if has_second_cif:
 else:
     weight1_var = tk.DoubleVar(value=1.0)
     weight2_var = tk.DoubleVar(value=0.0)
-
-vmax_slider.config(command=vmax_slider_command)
 # ---------------------------------------------------------------------------
 #  OCCUPANCY SLIDERS: Sliders for occ[0], occ[1], occ[2]
 # ---------------------------------------------------------------------------
