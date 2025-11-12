@@ -3,9 +3,20 @@
 import tkinter as tk
 from tkinter import ttk
 
-def create_slider(label, min_val, max_val, initial_val, step_size, parent, update_callback=None):
+def create_slider(
+    label,
+    min_val,
+    max_val,
+    initial_val,
+    step_size,
+    parent,
+    update_callback=None,
+    *,
+    visible=True,
+):
     frame = ttk.Frame(parent)
-    frame.pack(pady=5, fill=tk.X)
+    if visible:
+        frame.pack(pady=5, fill=tk.X)
     label_widget = ttk.Label(frame, text=label, font=("Helvetica", 10))
     label_widget.pack(anchor=tk.W)
     slider_var = tk.DoubleVar(value=initial_val)

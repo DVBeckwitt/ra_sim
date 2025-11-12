@@ -191,6 +191,7 @@ def main():
         parent=background_section,
         update_callback=update_background_norm,
     )
+    update_background_norm()
     # Simulation display controls
     simulation_section = ttk.LabelFrame(slider_frame, text="Simulation Display")
     simulation_section.pack(fill=tk.X, padx=5, pady=5)
