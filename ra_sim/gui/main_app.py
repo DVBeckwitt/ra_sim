@@ -63,7 +63,7 @@ def main():
 
     # Add sliders
     slider_frame = ttk.Frame(root)
-    slider_frame.pack(side=tk.LEFT, fill=tk.Y)
+    slider_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
 
     canvas = FigureCanvasTkAgg(fig, master=root)
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -158,13 +158,17 @@ def main():
         canvas.draw_idle()
 
     # Initialize variables for sliders
+    # Background display controls
+    background_section = ttk.LabelFrame(slider_frame, text="Background Display")
+    background_section.pack(fill=tk.X, padx=5, pady=5)
+
     background_min_var, _ = create_slider(
         "Background Min Intensity",
         background_slider_min_value,
         background_slider_max_value,
         background_vmin_default,
         background_slider_step,
-        parent=slider_frame,
+        parent=background_section,
         update_callback=update_background_norm,
     )
     background_max_var, _ = create_slider(
@@ -173,7 +177,7 @@ def main():
         background_slider_max_value,
         background_vmax_default,
         background_slider_step,
-        parent=slider_frame,
+        parent=background_section,
         update_callback=update_background_norm,
     )
     background_opacity_var, _ = create_slider(
@@ -182,16 +186,20 @@ def main():
         1.0,
         1.0,
         0.01,
-        parent=slider_frame,
+        parent=background_section,
         update_callback=update_background_norm,
     )
+    # Simulation display controls
+    simulation_section = ttk.LabelFrame(slider_frame, text="Simulation Display")
+    simulation_section.pack(fill=tk.X, padx=5, pady=5)
+
     simulation_min_var, simulation_min_slider = create_slider(
         "Simulation Min Intensity",
         simulation_slider_min_value,
         simulation_slider_max_value,
         simulation_vmin_default,
         simulation_slider_step,
-        parent=slider_frame,
+        parent=simulation_section,
         update_callback=update_simulation_norm,
     )
     simulation_max_var, simulation_max_slider = create_slider(
@@ -200,16 +208,19 @@ def main():
         simulation_slider_max_value,
         simulation_vmax_default,
         simulation_slider_step,
-        parent=slider_frame,
+        parent=simulation_section,
         update_callback=update_simulation_norm,
     )
+    scale_section = ttk.LabelFrame(slider_frame, text="Simulation Scaling")
+    scale_section.pack(fill=tk.X, padx=5, pady=5)
+
     scale_factor_var, scale_factor_slider = create_slider(
         "Simulation Scale Factor",
         scale_factor_slider_min,
         scale_factor_slider_max,
         1.0,
         scale_factor_step,
-        parent=slider_frame,
+        parent=scale_section,
     )
 
     def handle_scale_factor_change(*args):
@@ -221,32 +232,35 @@ def main():
 
     update_background_norm()
 
+    geometry_section = ttk.LabelFrame(slider_frame, text="Geometry Parameters")
+    geometry_section.pack(fill=tk.X, padx=5, pady=5)
+
     theta_initial_var, _ = create_slider(
-        "Theta Initial", 5.0, 20.0, 6.0, 0.01, parent=slider_frame
+        "Theta Initial", 5.0, 20.0, 6.0, 0.01, parent=geometry_section
     )
     gamma_var, _ = create_slider(
-        "Gamma", -5, 5, ai.rot2, 0.001, parent=slider_frame
+        "Gamma", -5, 5, ai.rot2, 0.001, parent=geometry_section
     )
     Gamma_var, _ = create_slider(
-        "Detector Rotation Gamma", -5, 5, ai.rot1, 0.001, parent=slider_frame
+        "Detector Rotation Gamma", -5, 5, ai.rot1, 0.001, parent=geometry_section
     )
     chi_var, _ = create_slider(
-        "Chi", -1, 1, 0.0, 0.001, parent=slider_frame
+        "Chi", -1, 1, 0.0, 0.001, parent=geometry_section
     )
     zs_var, _ = create_slider(
-        "Zs", 0.0, 5e-3, 0.0, 0.0001, parent=slider_frame
+        "Zs", 0.0, 5e-3, 0.0, 0.0001, parent=geometry_section
     )
     zb_var, _ = create_slider(
-        "Zb", 0.0, 5e-3, -0.1e-3, 0.0001, parent=slider_frame
+        "Zb", 0.0, 5e-3, -0.1e-3, 0.0001, parent=geometry_section
     )
     eta_var, _ = create_slider(
-        "Eta (fraction)", 0.0, 1.0, 0.08, 0.001, parent=slider_frame
+        "Eta (fraction)", 0.0, 1.0, 0.08, 0.001, parent=geometry_section
     )
     sigma_mosaic_var, _ = create_slider(
-        "Sigma Mosaic (deg)", 0.0, 5.0, 3.0, 0.01, parent=slider_frame
+        "Sigma Mosaic (deg)", 0.0, 5.0, 3.0, 0.01, parent=geometry_section
     )
     gamma_mosaic_var, _ = create_slider(
-        "Gamma Mosaic (deg)", 0.0, 5.0, 0.7, 0.01, parent=slider_frame
+        "Gamma Mosaic (deg)", 0.0, 5.0, 0.7, 0.01, parent=geometry_section
     )
 
     # Flags to manage asynchronous updates
