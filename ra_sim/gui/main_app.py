@@ -124,9 +124,7 @@ def main():
 
     simulation_vmax_default = background_vmax_default
     simulation_vmin_default = 0.0
-    simulation_slider_min_value = min(
-        simulation_vmin_default, background_slider_min_value
-    )
+    simulation_slider_min_value = 0.0
     simulation_slider_max_value = max(
         background_slider_max_value, simulation_vmax_default * 10.0
     )
@@ -400,8 +398,10 @@ def main():
                         if sim_max <= sim_min:
                             sim_max = sim_min + 1.0
                         margin = 0.05 * max(abs(sim_max), 1.0)
-                        lower_bound = min(sim_min - margin, simulation_vmin_default)
-                        upper_bound = max(sim_max + margin, simulation_vmin_default + 1.0)
+                        lower_bound = simulation_vmin_default
+                        upper_bound = max(
+                            sim_max + margin, simulation_vmin_default + 1.0
+                        )
                         simulation_min_slider.configure(
                             from_=lower_bound, to=upper_bound
                         )

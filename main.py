@@ -855,7 +855,7 @@ background_display.set_clim(background_vmin_default, background_vmax_default)
 _apply_background_transparency()
 
 
-simulation_slider_min = min(background_slider_min, 0.0)
+simulation_slider_min = 0.0
 simulation_slider_max = max(background_slider_max, defaults['vmax'] * 5.0)
 simulation_slider_step = max((simulation_slider_max - simulation_slider_min) / 500.0, 0.01)
 
@@ -945,12 +945,12 @@ def _update_simulation_sliders_from_image(image, reset_override=False):
     sim_max = float(np.max(finite_pixels))
     sim_min, sim_max = _ensure_valid_range(sim_min, sim_max)
     margin = 0.05 * max(abs(sim_max), 1.0)
-    lower_bound = min(sim_min - margin, 0.0)
+    lower_bound = 0.0
     upper_bound = max(sim_max + margin, 1.0)
-    slider_from = min(float(simulation_min_slider.cget("from")), lower_bound)
     slider_to = max(float(simulation_max_slider.cget("to")), upper_bound)
-    simulation_min_slider.configure(from_=slider_from, to=slider_to)
-    simulation_max_slider.configure(from_=slider_from, to=slider_to)
+    simulation_min_slider.configure(from_=lower_bound, to=slider_to)
+    simulation_max_slider.configure(from_=lower_bound, to=slider_to)
+    slider_from = lower_bound
     suppress_simulation_limit_callback = True
     if reset_override or not simulation_limits_user_override:
         min_value = 0.0
