@@ -185,12 +185,23 @@ def _slip_phase(h: int, k: int) -> float:
 
 def _R_from_transfer(phi: float, theta: np.ndarray, rho: float, alpha: float):
     eip = np.exp(1j * phi)
+    #T = np.array(
+    #    [[rho,            0.5*(1.0-rho)*eip,      0.5*(1.0-rho)*np.conj(eip)],
+    #     [1.0-alpha,      alpha*eip,              0.0                      ],
+    #     [1.0-alpha,      0.0,                    alpha*np.conj(eip)       ]],
+    #    dtype=complex,
+    #)
+    
+    stay = rho
+    slip = 0.5 * (1.0 - rho)
+    slip_phase = slip * eip
     T = np.array(
-        [[rho,            0.5*(1.0-rho)*eip,      0.5*(1.0-rho)*np.conj(eip)],
-         [1.0-alpha,      alpha*eip,              0.0                      ],
-         [1.0-alpha,      0.0,                    alpha*np.conj(eip)       ]],
+        [[stay,           slip_phase,          slip_phase],
+         [slip_phase,  stay,         slip_phase],
+         [slip_phase,     slip_phase, stay]],
         dtype=complex,
     )
+    
     lam, R = np.linalg.eig(T)
     R_inv = np.linalg.inv(R)
 
