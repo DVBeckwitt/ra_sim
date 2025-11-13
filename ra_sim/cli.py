@@ -27,6 +27,10 @@ from ra_sim.utils.stacking_fault import (
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
 )
+from ra_sim.utils.tools import (
+    detector_two_theta_max,
+    DEFAULT_PIXEL_SIZE_M,
+)
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import process_qr_rods_parallel
 from ra_sim.utils.calculations import IndexofRefraction
@@ -132,12 +136,20 @@ def run_headless_simulation(
     lambda_override = beam_cfg.get("wavelength_angstrom")
     lambda_ang = float(lambda_override if lambda_override is not None else lambda_from_poni)
 
-    # Beam center: follow GUI default mapping from PONI to pixels (100µm)
-    pix = 100e-6
+    pixel_size_m = float(det_cfg.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
+
+    # Beam center: follow GUI default mapping from PONI to pixels
     center = np.array([
-        (poni2 / pix),
-        image_size - (poni1 / pix),
+        (poni2 / pixel_size_m),
+        image_size - (poni1 / pixel_size_m),
     ], dtype=np.float64)
+
+    two_theta_max = detector_two_theta_max(
+        image_size,
+        center,
+        D,
+        pixel_size=pixel_size_m,
+    )
 
     # HT inputs
     mx = int(ht_cfg.get("max_miller_index", 19))
@@ -148,6 +160,9 @@ def run_headless_simulation(
     # Occupancies
     occ = inst.get("occupancies", {}).get("default", [1.0, 1.0, 1.0])
 
+    # Lattice constants (mirrors GUI default of tripling c)
+    av, cv = _parse_cif_cell_a_c(cif_file)
+
     # Build HT curves and rods for the three p values
     def build_ht_cache(p_val: float):
         curves = ht_Iinf_dict(
@@ -156,8 +171,9 @@ def run_headless_simulation(
             occ=occ,
             p=float(p_val),
             L_step=0.01,
-            two_theta_max=float(det_cfg.get("two_theta_range_deg", [0, 70])[1]),
+            two_theta_max=float(two_theta_max),
             lambda_=lambda_ang,
+            c_lattice=cv,
         )
         qr = ht_dict_to_qr_dict(curves)
         return {"p": float(p_val), "qr": qr}
@@ -186,9 +202,6 @@ def run_headless_simulation(
     zs = float(sample_cfg.get("zs", 0.0))
     debye_x = float(inst.get("debye_waller", {}).get("x", 0.0))
     debye_y = float(inst.get("debye_waller", {}).get("y", 0.0))
-
-    # Lattice constants
-    av, cv = _parse_cif_cell_a_c(cif_file)
 
     # Index of refraction for active material
     n2 = IndexofRefraction()

@@ -225,6 +225,7 @@ def _get_base_curves(
     L_max: float = 10.0,
     two_theta_max: float | None = None,
     lambda_: float = 1.54,
+    c_lattice: float | None = None,
 ):
     """
     Return cached {(h,k): {"L": ..., "F2": ...}} independent of occ and p.
@@ -248,6 +249,7 @@ def _get_base_curves(
         float(L_max),
         two_theta_max,
         float(lambda_),
+        None if c_lattice is None else float(c_lattice),
     )
     cached = _HT_BASE_CACHE.get(key)
     if cached is not None:
@@ -270,6 +272,10 @@ def _get_base_curves(
             out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4.0 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2.0))
+        if c_lattice is None or not math.isfinite(float(c_lattice)) or float(c_lattice) <= 0.0:
+            c_effective = c_2h
+        else:
+            c_effective = float(c_lattice)
         for h, k in hk_list:
             const = (4.0 / 3.0) * (h*h + k*k + h*k) / (A_HEX**2)
             l_sq = (q_max / (2.0 * math.pi))**2 - const
@@ -277,7 +283,7 @@ def _get_base_curves(
                 L_vals = np.array([], dtype=float)
                 out[(h, k)] = {"L": L_vals, "F2": L_vals}
                 continue
-            L_max_local = c_2h * math.sqrt(l_sq)
+            L_max_local = c_effective * math.sqrt(l_sq)
             L_vals = np.arange(0.0, L_max_local + L_step / 2.0, L_step)
             F2 = _F2(h, k, L_vals, c_2h, energy_kev, sites)
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
@@ -297,13 +303,16 @@ def ht_Iinf_dict(
     L_max: float = 10.0,
     two_theta_max: float | None = None,
     lambda_: float = 1.54,
+    c_lattice: float | None = None,
 ):
     """
     Infinite-domain Hendricks Teller intensities using the Markov transfer model.
 
     Returns {(h,k): {'L':..., 'I':...}} with F² and C2H conventions identical
     to diffuse_cif_toggle.py. The 'occ' parameter applies a temporary CIF with
-    scaled occupancies before computing F².
+    scaled occupancies before computing F².  When ``c_lattice`` is provided the
+    two-theta clipping window is expanded or contracted according to that
+    effective c-axis length instead of the raw 2H value from the CIF.
     """
     cif_to_use = cif_path
     cleanup = None
@@ -319,6 +328,7 @@ def ht_Iinf_dict(
             L_max=L_max,
             two_theta_max=two_theta_max,
             lambda_=lambda_,
+            c_lattice=c_lattice,
         )
 
         out = {}

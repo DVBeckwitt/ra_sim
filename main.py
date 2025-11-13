@@ -52,6 +52,8 @@ from ra_sim.utils.tools import (
     detect_blobs,
     inject_fractional_reflections,
     build_intensity_dataframes,
+    detector_two_theta_max,
+    DEFAULT_PIXEL_SIZE_M,
 )
 from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
@@ -150,6 +152,7 @@ wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10)
 lambda_from_poni = wave_m * 1e10  # Convert m -> Å
 
 image_size = detector_config.get("image_size", 3000)
+pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
 resolution_sample_counts = {
     "Low": 25,
     "Medium": 250,
@@ -158,15 +161,22 @@ resolution_sample_counts = {
 num_samples = resolution_sample_counts["High"]
 write_excel = output_config.get("write_excel", write_excel)
 intensity_threshold = detector_config.get("intensity_threshold", 1.0)
-two_theta_range = tuple(detector_config.get("two_theta_range_deg", (0, 70)))
 vmax_default = detector_config.get("vmax", 1000)
 vmax_slider_max = detector_config.get("vmax_slider_max", 3000)
 
 # Approximate beam center
 center_default = [
-    (poni2 / (100e-6)),
-    image_size - (poni1 / (100e-6))
+    (poni2 / pixel_size_m),
+    image_size - (poni1 / pixel_size_m)
 ]
+
+two_theta_max = detector_two_theta_max(
+    image_size,
+    center_default,
+    Distance_CoR_to_Detector,
+    pixel_size=pixel_size_m,
+)
+two_theta_range = (0.0, two_theta_max)
 
 mx = hendricks_config.get("max_miller_index", 19)
 
@@ -290,7 +300,7 @@ defaults = {
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-def build_ht_cache(p_val, occ_vals):
+def build_ht_cache(p_val, occ_vals, c_axis):
     curves = ht_Iinf_dict(
         cif_path=cif_file,
         mx=mx,
@@ -299,16 +309,25 @@ def build_ht_cache(p_val, occ_vals):
         L_step=0.01,
         two_theta_max=two_theta_range[1],
         lambda_=lambda_,
+        c_lattice=c_axis,
     )
     qr = ht_dict_to_qr_dict(curves)
     arrays = qr_dict_to_arrays(qr)
-    return {"p": p_val, "occ": tuple(occ_vals), "qr": qr, "arrays": arrays}
+    return {
+        "p": p_val,
+        "occ": tuple(occ_vals),
+        "qr": qr,
+        "arrays": arrays,
+        "two_theta_max": two_theta_range[1],
+        "c": float(c_axis),
+    }
 
 # Precompute curves for the three p values
+default_c_axis = float(defaults['c'])
 ht_cache_multi = {
-    "p0": build_ht_cache(defaults['p0'], occ),
-    "p1": build_ht_cache(defaults['p1'], occ),
-    "p2": build_ht_cache(defaults['p2'], occ),
+    "p0": build_ht_cache(defaults['p0'], occ, default_c_axis),
+    "p1": build_ht_cache(defaults['p1'], occ, default_c_axis),
+    "p2": build_ht_cache(defaults['p2'], occ, default_c_axis),
 }
 
 def combine_qr_dicts(caches, weights):
@@ -343,10 +362,15 @@ combined_qr = combine_qr_dicts(
     weights_init,
 )
 miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
-ht_curves_cache = {"curves": combined_qr, "arrays": (miller1, intens1, degeneracy1, details1)}
+ht_curves_cache = {
+    "curves": combined_qr,
+    "arrays": (miller1, intens1, degeneracy1, details1),
+    "c": default_c_axis,
+}
 _last_occ_for_ht = list(occ)
 _last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
 _last_weights = list(weights_init)
+_last_c_for_ht = default_c_axis
 # ---- convert the dict → arrays compatible with the downstream code ----
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
@@ -1533,6 +1557,36 @@ def do_update():
     center_x_up        = float(center_x_var.get())
     center_y_up        = float(center_y_var.get())
 
+    new_two_theta_max = detector_two_theta_max(
+        image_size,
+        [center_x_up, center_y_up],
+        corto_det_up,
+        pixel_size=pixel_size_m,
+    )
+
+    global two_theta_range, _last_c_for_ht
+    need_rebuild = False
+    if not math.isclose(new_two_theta_max, two_theta_range[1], rel_tol=1e-6, abs_tol=1e-6):
+        two_theta_range = (0.0, new_two_theta_max)
+        need_rebuild = True
+    if not math.isclose(c_updated, _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9):
+        need_rebuild = True
+
+    if need_rebuild:
+        current_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
+        current_p = [p0_var.get(), p1_var.get(), p2_var.get()]
+        weight_values = [w0_var.get(), w1_var.get(), w2_var.get()]
+        weight_sum = sum(weight_values) or 1.0
+        normalized_weights = [w / weight_sum for w in weight_values]
+        _rebuild_diffraction_inputs(
+            current_occ,
+            current_p,
+            normalized_weights,
+            c_updated,
+            force=True,
+            trigger_update=False,
+        )
+
     center_marker.set_xdata([center_y_up])
     center_marker.set_ydata([center_x_up])
     center_marker.set_visible(False)
@@ -1746,14 +1800,14 @@ def do_update():
             "sig": sig,
             "ai": pyFAI.AzimuthalIntegrator(
                 dist=corto_det_up,
-                poni1=center_x_up * 100e-6,
-                poni2=center_y_up * 100e-6,
+                poni1=center_x_up * pixel_size_m,
+                poni2=center_y_up * pixel_size_m,
                 rot1=np.deg2rad(Gamma_updated),
                 rot2=np.deg2rad(gamma_updated),
                 rot3=0.0,
                 wavelength=wave_m,
-                pixel1=100e-6,
-                pixel2=100e-6,
+                pixel1=pixel_size_m,
+                pixel2=pixel_size_m,
             ),
         }
     ai = _ai_cache["ai"]
@@ -2098,9 +2152,9 @@ azimuthal_button = ttk.Button(
         ),
         [center_x_var.get(), center_y_var.get()],
         {
-            'pixel_size': 100e-6,
-            'poni1': (center_x_var.get()) * 100e-6,
-            'poni2': (center_y_var.get()) * 100e-6,
+            'pixel_size': pixel_size_m,
+            'poni1': (center_x_var.get()) * pixel_size_m,
+            'poni2': (center_y_var.get()) * pixel_size_m,
             'dist': corto_detector_var.get(),
             'rot1': np.deg2rad(Gamma_var.get()),
             'rot2': np.deg2rad(gamma_var.get()),
@@ -2920,28 +2974,36 @@ occ_var1 = tk.DoubleVar(value=occ[0])
 occ_var2 = tk.DoubleVar(value=occ[1])
 occ_var3 = tk.DoubleVar(value=occ[2])
 
-def update_occupancies(*args):
-    """Recompute Hendricks–Teller curves when occupancies or p-values change."""
+
+def _rebuild_diffraction_inputs(
+    new_occ,
+    p_vals,
+    weights,
+    c_axis,
+    *,
+    force=False,
+    trigger_update=True,
+):
+    """Refresh cached HT curves and peak lists for the current settings."""
+
     global miller, intensities, degeneracy, details
     global df_summary, df_details
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
+    global _last_c_for_ht
     global intensities_cif1, intensities_cif2
 
-    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
-    p_vals = [p0_var.get(), p1_var.get(), p2_var.get()]
-    w_raw = [w0_var.get(), w1_var.get(), w2_var.get()]
-    w_sum = sum(w_raw) or 1.0
-    weights = [w / w_sum for w in w_raw]
-
     if (
-        list(new_occ) == _last_occ_for_ht
+        not force
+        and list(new_occ) == _last_occ_for_ht
         and list(p_vals) == _last_p_triplet
         and list(weights) == _last_weights
+        and math.isclose(float(c_axis), _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
     ):
         last_simulation_signature = None
-        schedule_update()
+        if trigger_update:
+            schedule_update()
         return
 
     def get_cache(label, p_val):
@@ -2950,28 +3012,35 @@ def update_occupancies(*args):
             cache is None
             or cache["p"] != p_val
             or list(cache["occ"]) != list(new_occ)
+            or cache.get("two_theta_max") != two_theta_range[1]
+            or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
         ):
-            cache = build_ht_cache(p_val, new_occ)
+            cache = build_ht_cache(p_val, new_occ, c_axis)
             ht_cache_multi[label] = cache
         return cache
 
-    caches = [get_cache("p0", p_vals[0]),
-              get_cache("p1", p_vals[1]),
-              get_cache("p2", p_vals[2])]
+    caches = [
+        get_cache("p0", p_vals[0]),
+        get_cache("p1", p_vals[1]),
+        get_cache("p2", p_vals[2]),
+    ]
 
     combined_qr_local = combine_qr_dicts(caches, weights)
     arrays_local = qr_dict_to_arrays(combined_qr_local)
-    ht_curves_cache = {"curves": combined_qr_local, "arrays": arrays_local}
+    ht_curves_cache = {
+        "curves": combined_qr_local,
+        "arrays": arrays_local,
+        "c": float(c_axis),
+    }
     _last_occ_for_ht = list(new_occ)
     _last_p_triplet = list(p_vals)
     _last_weights = list(weights)
+    _last_c_for_ht = float(c_axis)
 
     m1, i1, d1, det1 = arrays_local
 
-    # Convert arrays → dictionaries for quick lookup
     deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}
     det_dict1 = {tuple(m1[i]): det1[i] for i in range(len(m1))}
-
 
     if has_second_cif:
         m2, i2, d2, det2 = miller_generator(
@@ -3025,17 +3094,28 @@ def update_occupancies(*args):
 
         SIM_MILLER1 = m1
         SIM_INTENS1 = i1
-        SIM_MILLER2 = np.empty((0,3), dtype=np.int32)
+        SIM_MILLER2 = np.empty((0, 3), dtype=np.int32)
         SIM_INTENS2 = np.empty((0,), dtype=np.float64)
 
-    # (Re-)build the summary and details DataFrames.
     df_summary, df_details = build_intensity_dataframes(
         miller, intensities, degeneracy, details
     )
 
-    # Reset the simulation signature so the next update is forced.
     last_simulation_signature = None
-    schedule_update()
+    if trigger_update:
+        schedule_update()
+
+
+def update_occupancies(*args):
+    """Recompute Hendricks–Teller curves when occupancies or p-values change."""
+
+    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
+    p_vals = [p0_var.get(), p1_var.get(), p2_var.get()]
+    w_raw = [w0_var.get(), w1_var.get(), w2_var.get()]
+    w_sum = sum(w_raw) or 1.0
+    weights = [w / w_sum for w in w_raw]
+
+    _rebuild_diffraction_inputs(new_occ, p_vals, weights, c_var.get())
 
 # Sliders for three disorder probabilities and weights inside a collapsible frame
 stack_frame = CollapsibleFrame(right_col, text='Stacking Probabilities')

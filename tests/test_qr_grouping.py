@@ -1,6 +1,7 @@
 import numpy as np
 from pathlib import Path
 from ra_sim.utils.stacking_fault import (
+    _cell_c_from_cif,
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
     qr_dict_to_arrays,
@@ -77,6 +78,35 @@ def test_ht_curves_include_zero_zero_when_generated_from_mx():
     assert zero_curve is not None
     assert zero_curve['L'].size > 0
     assert np.any(zero_curve['I'] > 0)
+
+
+def test_two_theta_window_scales_with_c_axis():
+    cif = Path('tests/Diffuse/PbI2_2H.cif')
+    hk = (-1, 0)
+    base_curves = ht_Iinf_dict(
+        cif_path=str(cif),
+        hk_list=[hk],
+        p=0.2,
+        L_step=0.1,
+        two_theta_max=70.0,
+        lambda_=1.54,
+    )
+    base_L = base_curves[hk]['L']
+    assert base_L.size > 0
+
+    c_2h = _cell_c_from_cif(str(cif))
+    expanded_curves = ht_Iinf_dict(
+        cif_path=str(cif),
+        hk_list=[hk],
+        p=0.2,
+        L_step=0.1,
+        two_theta_max=70.0,
+        lambda_=1.54,
+        c_lattice=c_2h * 3.0,
+    )
+    expanded_L = expanded_curves[hk]['L']
+    assert expanded_L.size >= base_L.size
+    assert expanded_L.max() > base_L.max()
 
 
 def test_combine_ht_caches_preserves_deg():

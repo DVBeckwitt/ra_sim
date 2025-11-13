@@ -25,7 +25,11 @@ from numpy.linalg   import inv
 # ───────────────── third-party / project modules ────────────────
 from CifFile                           import ReadCif
 from ra_sim.utils.calculations         import IndexofRefraction
-from ra_sim.utils.tools                import miller_generator
+from ra_sim.utils.tools                import (
+    miller_generator,
+    detector_two_theta_max,
+    DEFAULT_PIXEL_SIZE_M,
+)
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing            import parse_poni_file
@@ -63,11 +67,26 @@ def run_simulation(
     profiles=None,
     allowed_keys=None, num_miller: int = 19,
     image_size: int = 3000, num_samples: int = 500,
-    int_thresh: float = 1.0, two_theta_range=(0, 70),
+    int_thresh: float = 1.0, two_theta_range=None,
     beam_div: float = 0.05,
     sigma_mosaic_deg: float = 0.8, gamma_mosaic_deg: float = 0.3,
     bandwidth_frac: float = 0.7/100,
 ):
+    pixel_size_m = DEFAULT_PIXEL_SIZE_M
+    center = (
+        geometry["poni2"] / pixel_size_m,
+        image_size - geometry["poni1"] / pixel_size_m,
+    )
+
+    if two_theta_range is None:
+        tth_max = detector_two_theta_max(
+            image_size,
+            center,
+            float(geometry["dist"]),
+            pixel_size=pixel_size_m,
+        )
+        two_theta_range = (0.0, tth_max)
+
     # ── Miller indices (pre-compute friendly) ──
     if miller_precomputed is None:
         a_v, c_v = parse_cif(cif_path)
@@ -96,7 +115,6 @@ def run_simulation(
 
     img_buf = np.zeros((image_size, image_size), np.float64)
     n2      = IndexofRefraction()
-    center  = (geometry["poni2"]/100e-6, image_size - geometry["poni1"]/100e-6)
 
     img, hit_tables, *_ = process_peaks_parallel(
         miller, intens, image_size,
