@@ -160,6 +160,9 @@ def run_headless_simulation(
     # Occupancies
     occ = inst.get("occupancies", {}).get("default", [1.0, 1.0, 1.0])
 
+    # Lattice constants (mirrors GUI default of tripling c)
+    av, cv = _parse_cif_cell_a_c(cif_file)
+
     # Build HT curves and rods for the three p values
     def build_ht_cache(p_val: float):
         curves = ht_Iinf_dict(
@@ -170,6 +173,7 @@ def run_headless_simulation(
             L_step=0.01,
             two_theta_max=float(two_theta_max),
             lambda_=lambda_ang,
+            c_lattice=cv,
         )
         qr = ht_dict_to_qr_dict(curves)
         return {"p": float(p_val), "qr": qr}
@@ -198,9 +202,6 @@ def run_headless_simulation(
     zs = float(sample_cfg.get("zs", 0.0))
     debye_x = float(inst.get("debye_waller", {}).get("x", 0.0))
     debye_y = float(inst.get("debye_waller", {}).get("y", 0.0))
-
-    # Lattice constants
-    av, cv = _parse_cif_cell_a_c(cif_file)
 
     # Index of refraction for active material
     n2 = IndexofRefraction()

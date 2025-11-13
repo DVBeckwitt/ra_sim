@@ -300,7 +300,7 @@ defaults = {
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-def build_ht_cache(p_val, occ_vals):
+def build_ht_cache(p_val, occ_vals, c_axis):
     curves = ht_Iinf_dict(
         cif_path=cif_file,
         mx=mx,
@@ -309,6 +309,7 @@ def build_ht_cache(p_val, occ_vals):
         L_step=0.01,
         two_theta_max=two_theta_range[1],
         lambda_=lambda_,
+        c_lattice=c_axis,
     )
     qr = ht_dict_to_qr_dict(curves)
     arrays = qr_dict_to_arrays(qr)
@@ -318,13 +319,15 @@ def build_ht_cache(p_val, occ_vals):
         "qr": qr,
         "arrays": arrays,
         "two_theta_max": two_theta_range[1],
+        "c": float(c_axis),
     }
 
 # Precompute curves for the three p values
+default_c_axis = float(defaults['c'])
 ht_cache_multi = {
-    "p0": build_ht_cache(defaults['p0'], occ),
-    "p1": build_ht_cache(defaults['p1'], occ),
-    "p2": build_ht_cache(defaults['p2'], occ),
+    "p0": build_ht_cache(defaults['p0'], occ, default_c_axis),
+    "p1": build_ht_cache(defaults['p1'], occ, default_c_axis),
+    "p2": build_ht_cache(defaults['p2'], occ, default_c_axis),
 }
 
 def combine_qr_dicts(caches, weights):
@@ -359,10 +362,15 @@ combined_qr = combine_qr_dicts(
     weights_init,
 )
 miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
-ht_curves_cache = {"curves": combined_qr, "arrays": (miller1, intens1, degeneracy1, details1)}
+ht_curves_cache = {
+    "curves": combined_qr,
+    "arrays": (miller1, intens1, degeneracy1, details1),
+    "c": default_c_axis,
+}
 _last_occ_for_ht = list(occ)
 _last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
 _last_weights = list(weights_init)
+_last_c_for_ht = default_c_axis
 # ---- convert the dict → arrays compatible with the downstream code ----
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
@@ -1556,9 +1564,15 @@ def do_update():
         pixel_size=pixel_size_m,
     )
 
-    global two_theta_range
+    global two_theta_range, _last_c_for_ht
+    need_rebuild = False
     if not math.isclose(new_two_theta_max, two_theta_range[1], rel_tol=1e-6, abs_tol=1e-6):
         two_theta_range = (0.0, new_two_theta_max)
+        need_rebuild = True
+    if not math.isclose(c_updated, _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9):
+        need_rebuild = True
+
+    if need_rebuild:
         current_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
         current_p = [p0_var.get(), p1_var.get(), p2_var.get()]
         weight_values = [w0_var.get(), w1_var.get(), w2_var.get()]
@@ -1568,6 +1582,7 @@ def do_update():
             current_occ,
             current_p,
             normalized_weights,
+            c_updated,
             force=True,
             trigger_update=False,
         )
@@ -2960,7 +2975,15 @@ occ_var2 = tk.DoubleVar(value=occ[1])
 occ_var3 = tk.DoubleVar(value=occ[2])
 
 
-def _rebuild_diffraction_inputs(new_occ, p_vals, weights, *, force=False, trigger_update=True):
+def _rebuild_diffraction_inputs(
+    new_occ,
+    p_vals,
+    weights,
+    c_axis,
+    *,
+    force=False,
+    trigger_update=True,
+):
     """Refresh cached HT curves and peak lists for the current settings."""
 
     global miller, intensities, degeneracy, details
@@ -2968,6 +2991,7 @@ def _rebuild_diffraction_inputs(new_occ, p_vals, weights, *, force=False, trigge
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
+    global _last_c_for_ht
     global intensities_cif1, intensities_cif2
 
     if (
@@ -2975,6 +2999,7 @@ def _rebuild_diffraction_inputs(new_occ, p_vals, weights, *, force=False, trigge
         and list(new_occ) == _last_occ_for_ht
         and list(p_vals) == _last_p_triplet
         and list(weights) == _last_weights
+        and math.isclose(float(c_axis), _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
     ):
         last_simulation_signature = None
         if trigger_update:
@@ -2988,8 +3013,9 @@ def _rebuild_diffraction_inputs(new_occ, p_vals, weights, *, force=False, trigge
             or cache["p"] != p_val
             or list(cache["occ"]) != list(new_occ)
             or cache.get("two_theta_max") != two_theta_range[1]
+            or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
         ):
-            cache = build_ht_cache(p_val, new_occ)
+            cache = build_ht_cache(p_val, new_occ, c_axis)
             ht_cache_multi[label] = cache
         return cache
 
@@ -3001,10 +3027,15 @@ def _rebuild_diffraction_inputs(new_occ, p_vals, weights, *, force=False, trigge
 
     combined_qr_local = combine_qr_dicts(caches, weights)
     arrays_local = qr_dict_to_arrays(combined_qr_local)
-    ht_curves_cache = {"curves": combined_qr_local, "arrays": arrays_local}
+    ht_curves_cache = {
+        "curves": combined_qr_local,
+        "arrays": arrays_local,
+        "c": float(c_axis),
+    }
     _last_occ_for_ht = list(new_occ)
     _last_p_triplet = list(p_vals)
     _last_weights = list(weights)
+    _last_c_for_ht = float(c_axis)
 
     m1, i1, d1, det1 = arrays_local
 
@@ -3084,7 +3115,7 @@ def update_occupancies(*args):
     w_sum = sum(w_raw) or 1.0
     weights = [w / w_sum for w in w_raw]
 
-    _rebuild_diffraction_inputs(new_occ, p_vals, weights)
+    _rebuild_diffraction_inputs(new_occ, p_vals, weights, c_var.get())
 
 # Sliders for three disorder probabilities and weights inside a collapsible frame
 stack_frame = CollapsibleFrame(right_col, text='Stacking Probabilities')
