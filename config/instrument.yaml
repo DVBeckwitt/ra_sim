@@ -5,7 +5,7 @@ instrument:
     monte_carlo_samples: 1000
     beam_stop_half_size: 40
     intensity_threshold: 1.0
-    two_theta_range_deg: [0, 70]
+    pixel_size_m: 1.0e-4
     vmax: 1000
     vmax_slider_max: 3000
   geometry_defaults:

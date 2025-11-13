@@ -21,6 +21,73 @@ from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.utils.calculations import d_spacing, two_theta
 from ra_sim.path_config import get_temp_dir
 
+
+DEFAULT_PIXEL_SIZE_M = 100e-6
+
+
+def detector_two_theta_max(
+    image_size: int,
+    center,
+    detector_distance: float,
+    pixel_size: float = DEFAULT_PIXEL_SIZE_M,
+) -> float:
+    """Estimate the largest 2θ captured by the detector plane.
+
+    The calculation assumes a flat square detector with uniform square pixels
+    and returns the scattering angle corresponding to the furthest corner from
+    the beam centre.  The beam centre is expressed in pixel coordinates
+    ``(row, column)`` following the convention used throughout the codebase.
+
+    Parameters
+    ----------
+    image_size:
+        Linear pixel dimension of the square detector (``N`` for an ``N×N`` array).
+    center:
+        Iterable containing the beam centre in pixel coordinates ``(row, col)``.
+    detector_distance:
+        Sample-to-detector distance in metres.
+    pixel_size:
+        Physical pixel size in metres.  Defaults to :data:`DEFAULT_PIXEL_SIZE_M`.
+
+    Returns
+    -------
+    float
+        Maximum 2θ (degrees) subtended by any detector corner.  If any of the
+        inputs are non-finite or invalid, the function falls back to returning
+        ``180.0`` degrees, effectively disabling angular clipping.
+    """
+
+    if image_size is None or image_size <= 0:
+        return 180.0
+    if not math.isfinite(detector_distance) or detector_distance <= 0:
+        return 180.0
+    if not math.isfinite(pixel_size) or pixel_size <= 0:
+        pixel_size = DEFAULT_PIXEL_SIZE_M
+
+    try:
+        centre_row = float(center[0])
+        centre_col = float(center[1])
+    except (TypeError, ValueError, IndexError):
+        centre_row = (image_size - 1) / 2.0
+        centre_col = (image_size - 1) / 2.0
+
+    if not math.isfinite(centre_row) or not math.isfinite(centre_col):
+        centre_row = (image_size - 1) / 2.0
+        centre_col = (image_size - 1) / 2.0
+
+    rows = (0.0, image_size - 1.0)
+    cols = (0.0, image_size - 1.0)
+    max_radius = 0.0
+    for row in rows:
+        for col in cols:
+            dx = (col - centre_col) * pixel_size
+            dy = (centre_row - row) * pixel_size
+            radius = math.hypot(dx, dy)
+            if radius > max_radius:
+                max_radius = radius
+
+    return math.degrees(math.atan2(max_radius, detector_distance))
+
 # Cache CIF objects and temporary files so repeated updates only modify
 # in-memory data instead of reading/writing new files each time.  Keys are
 # absolute CIF paths.
