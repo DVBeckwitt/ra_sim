@@ -8,6 +8,7 @@ sharing the same UI, CIF handling, and sliders.
 import os, re, sys
 from pathlib import Path
 from collections import Counter
+from time import perf_counter
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -257,8 +258,21 @@ def compute_components_with(I_inf_func):
 
     return {"I0": comp(state["p0"]), "I1": comp(state["p1"]), "I3": comp(state["p3"])}
 
-curves = {"alg": compute_components_with(I_inf_alg),
-          "mkv": compute_components_with(I_inf_mkv)}
+curves = {"alg": {}, "mkv": {}}
+timings = {"alg": 0.0, "mkv": 0.0}
+
+
+def recompute_curves():
+    start = perf_counter()
+    curves["alg"] = compute_components_with(I_inf_alg)
+    timings["alg"] = perf_counter() - start
+
+    start = perf_counter()
+    curves["mkv"] = compute_components_with(I_inf_mkv)
+    timings["mkv"] = perf_counter() - start
+
+
+recompute_curves()
 
 def _norm_weights():
     w0, w1, w2 = state["w0"], state["w1"], state["w2"]
@@ -434,12 +448,15 @@ def refresh(_=None):
         m = state["m"]
         r = np.sqrt(m)
         Qr = 2 * np.pi / A_HEX * np.sqrt(4 * m / 3) if m else 0
-        title.set_text(f"r=√m={r:.3f}, Qr={Qr:.3f} Å^-1 | HK set: {HK_BY_M[m]}")
+        base_title = f"r=√m={r:.3f}, Qr={Qr:.3f} Å^-1 | HK set: {HK_BY_M[m]}"
     else:
         h, k = state["h"], state["k"]
         m = h*h + h*k + k*k
         Qr = 2 * np.pi / A_HEX * np.sqrt(4 * m / 3)
-        title.set_text(f"(h,k)=({h},{k}), m={m}, Qr={Qr:.3f} Å^-1")
+        base_title = f"(h,k)=({h},{k}), m={m}, Qr={Qr:.3f} Å^-1"
+
+    timing_text = f"Δt_alg={timings['alg'] * 1e3:.1f} ms | Δt_markov={timings['mkv'] * 1e3:.1f} ms"
+    title.set_text(f"{base_title}\n{timing_text}")
 
     # Legend
     handles = [line_tot_alg, line_tot_mkv] + _bragg_lines
@@ -474,8 +491,7 @@ sz = Slider(ax_z, "z(I)", 0, 1, valinit=state["I_z"], valstep=1e-3)
 def _on_z(v):
     state["I_z"] = v
     compute_F2_cache(v)
-    curves["alg"] = compute_components_with(I_inf_alg)
-    curves["mkv"] = compute_components_with(I_inf_mkv)
+    recompute_curves()
     refresh()
 sz.on_changed(_on_z)
 
@@ -488,8 +504,7 @@ m_slider = make_slider(
     "m index",
     min(ALLOWED_M), max(ALLOWED_M), state["m"], ALLOWED_M,
     lambda v: (state.update(m=int(v)),
-               (curves.__setitem__("alg", compute_components_with(I_inf_alg)),
-                curves.__setitem__("mkv", compute_components_with(I_inf_mkv))),
+               recompute_curves(),
                refresh()),
 )
 
@@ -498,8 +513,7 @@ hk_sliders = []
 def make_int_slider(rect, label, vmax, key):
     s = make_slider(rect, label, -MAX_HK, vmax, state[key], 1,
                     lambda v, k=key: (state.update({k: int(v)}),
-                                      curves.__setitem__("alg", compute_components_with(I_inf_alg)),
-                                      curves.__setitem__("mkv", compute_components_with(I_inf_mkv)),
+                                      recompute_curves(),
                                       refresh()))
     hk_sliders.append(s); s.ax.set_visible(False)
 
@@ -509,24 +523,21 @@ make_int_slider([0.60, ys[0], 0.30, 0.03], "K", MAX_HK, "k")
 # p and weights
 make_slider([0.25, ys[1], 0.45, 0.03], "p≈0", 0, 0.2, state["p0"], 1e-3,
             lambda v: (state.update(p0=v),
-                       curves.__setitem__("alg", compute_components_with(I_inf_alg)),
-                       curves.__setitem__("mkv", compute_components_with(I_inf_mkv)),
+                       recompute_curves(),
                        refresh()))
 make_slider([0.72, ys[1], 0.20, 0.03], "w(p≈0)%", 0, 100, state["w0"], 0.1,
             lambda v: (state.update(w0=v), refresh()))
 
 make_slider([0.25, ys[2], 0.45, 0.03], "p≈1", 0.8, 1, state["p1"], 1e-3,
             lambda v: (state.update(p1=v),
-                       curves.__setitem__("alg", compute_components_with(I_inf_alg)),
-                       curves.__setitem__("mkv", compute_components_with(I_inf_mkv)),
+                       recompute_curves(),
                        refresh()))
 make_slider([0.72, ys[2], 0.20, 0.03], "w(p≈1)%", 0, 100, state["w1"], 0.1,
             lambda v: (state.update(w1=v), refresh()))
 
 make_slider([0.25, ys[3], 0.45, 0.03], "p", 0, 1, state["p3"], 1e-3,
             lambda v: (state.update(p3=v),
-                       curves.__setitem__("alg", compute_components_with(I_inf_alg)),
-                       curves.__setitem__("mkv", compute_components_with(I_inf_mkv)),
+                       recompute_curves(),
                        refresh()))
 make_slider([0.72, ys[3], 0.20, 0.03], "w(p)%", 0, 100, state["w2"], 0.1,
             lambda v: (state.update(w2=v), refresh()))
@@ -543,8 +554,7 @@ def toggle_mode(_):
     m_slider.ax.set_visible(state["mode"] == "m")
     for s in hk_sliders:
         s.ax.set_visible(state["mode"] == "hk")
-    curves["alg"] = compute_components_with(I_inf_alg)
-    curves["mkv"] = compute_components_with(I_inf_mkv)
+    recompute_curves()
     refresh()
 
 b_mode = Button(plt.axes([0.60, 0.01, 0.16, 0.03]), "H/K panel")
@@ -558,8 +568,7 @@ checks = CheckButtons(chk_ax, ["F² only", "qz axis", "Components (alg)", "Compo
 def _toggle_checks(label):
     if label == "F² only":
         state["f2_only"] = not state["f2_only"]
-        curves["alg"] = compute_components_with(I_inf_alg)
-        curves["mkv"] = compute_components_with(I_inf_mkv)
+        recompute_curves()
     elif label == "qz axis":
         state["qz_axis"] = not state["qz_axis"]
     elif label == "Components (alg)":
