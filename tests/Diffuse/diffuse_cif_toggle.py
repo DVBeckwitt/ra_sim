@@ -118,6 +118,13 @@ L_GRID = np.linspace(0, L_MAX, N_L)
 QZ_GRID = 2 * np.pi / C_2H * L_GRID
 
 # -----------------------------------------------------------------------------
+# Global theta / z and Markov cache
+THETA_GRID = 2.0 * np.pi * (L_GRID / 3.0)
+Z_GRID = (1.0 - P_CLAMP) * np.exp(1j * THETA_GRID)
+
+_MKV_CACHE = {}
+
+# -----------------------------------------------------------------------------
 # Precompute F²(h,k,ℓ) for 2H single layer
 F2_cache_2H = {}
 _FIXED_PART = {}
@@ -184,36 +191,40 @@ def _class_stationary(rho: float, alpha: float):
 def _slip_phase(h: int, k: int) -> float:
     return 2.0 * np.pi * ((2*h + k) / 3.0)
 
-def _R_from_transfer(phi: float, theta: np.ndarray, rho: float, alpha: float):
-    eip = np.exp(1j * phi)
-    #T = np.array(
-    #    [[rho,            0.5*(1.0-rho)*eip,      0.5*(1.0-rho)*np.conj(eip)],
-    #     [1.0-alpha,      alpha*eip,              0.0                      ],
-    #     [1.0-alpha,      0.0,                    alpha*np.conj(eip)       ]],
-    #    dtype=complex,
-    #)
-    
-    stay = rho
-    slip = 0.5 * (1.0 - rho)
-    slip_phase = slip * eip
-    T = np.array(
-        [[stay,           slip_phase,          slip_phase],
-         [slip_phase,  stay,         slip_phase],
-         [slip_phase,     slip_phase, stay]],
-        dtype=complex,
-    )
-    
-    lam, R = np.linalg.eig(T)
-    R_inv = np.linalg.inv(R)
+def _R_from_transfer(phi: float, rho: float, alpha: float):
+    """Return R(theta) on the full L_GRID via cached eigendecomposition."""
+    key = (float(rho), float(alpha), float(phi))
+    lam, w = _MKV_CACHE.get(key, (None, None))
 
-    P_S, P_Ep, P_Em = _class_stationary(rho, alpha)
-    pi = np.array([P_S, P_Ep, P_Em], dtype=complex)
-    ones = np.ones(3, dtype=complex)
-    piR  = pi @ R
-    Rin1 = R_inv @ ones
-    w    = piR * Rin1
+    if lam is None:
+        eip = np.exp(1j * phi)
 
-    z = (1.0 - P_CLAMP) * np.exp(1j * theta)  # regularize near poles
+        stay = rho
+        slip = 0.5 * (1.0 - rho)
+        slip_phase = slip * eip
+
+        T = np.array(
+            [[stay,      slip_phase,   slip_phase],
+             [slip_phase, stay,        slip_phase],
+             [slip_phase, slip_phase,  stay      ]],
+            dtype=complex,
+        )
+
+        lam, R = np.linalg.eig(T)
+        R_inv = np.linalg.inv(R)
+
+        P_S, P_Ep, P_Em = _class_stationary(rho, alpha)
+        pi = np.array([P_S, P_Ep, P_Em], dtype=complex)
+        ones = np.ones(3, dtype=complex)
+
+        piR  = pi @ R
+        Rin1 = R_inv @ ones
+        w    = piR * Rin1
+
+        _MKV_CACHE[key] = (lam, w)
+
+    # Use precomputed Z_GRID instead of rebuilding theta each time
+    z = Z_GRID
     frac = (lam[:, None] * z[None, :]) / (1.0 - lam[:, None] * z[None, :])
     S = (w[:, None] * frac).sum(axis=0)
     Rtheta = 1.0 + 2.0 * np.real(S)
@@ -224,8 +235,7 @@ def I_inf_mkv(p, h, k, F2):
         return F2
     rho, alpha = _rho_alpha_from_p(p)
     phi = _slip_phase(h, k)
-    theta = 2.0 * np.pi * (L_GRID / 3.0)
-    Rtheta = _R_from_transfer(phi, theta, rho, alpha)
+    Rtheta = _R_from_transfer(phi, rho, alpha)
     return AREA * F2 * Rtheta
 
 # -----------------------------------------------------------------------------
