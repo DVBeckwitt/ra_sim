@@ -52,6 +52,8 @@ from ra_sim.utils.tools import (
     detect_blobs,
     inject_fractional_reflections,
     build_intensity_dataframes,
+    detector_two_theta_max,
+    DEFAULT_PIXEL_SIZE_M,
 )
 from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
@@ -150,6 +152,7 @@ wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10)
 lambda_from_poni = wave_m * 1e10  # Convert m -> Å
 
 image_size = detector_config.get("image_size", 3000)
+pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
 resolution_sample_counts = {
     "Low": 25,
     "Medium": 250,
@@ -158,15 +161,22 @@ resolution_sample_counts = {
 num_samples = resolution_sample_counts["High"]
 write_excel = output_config.get("write_excel", write_excel)
 intensity_threshold = detector_config.get("intensity_threshold", 1.0)
-two_theta_range = tuple(detector_config.get("two_theta_range_deg", (0, 70)))
 vmax_default = detector_config.get("vmax", 1000)
 vmax_slider_max = detector_config.get("vmax_slider_max", 3000)
 
 # Approximate beam center
 center_default = [
-    (poni2 / (100e-6)),
-    image_size - (poni1 / (100e-6))
+    (poni2 / pixel_size_m),
+    image_size - (poni1 / pixel_size_m)
 ]
+
+two_theta_max = detector_two_theta_max(
+    image_size,
+    center_default,
+    Distance_CoR_to_Detector,
+    pixel_size=pixel_size_m,
+)
+two_theta_range = (0.0, two_theta_max)
 
 mx = hendricks_config.get("max_miller_index", 19)
 
@@ -1746,14 +1756,14 @@ def do_update():
             "sig": sig,
             "ai": pyFAI.AzimuthalIntegrator(
                 dist=corto_det_up,
-                poni1=center_x_up * 100e-6,
-                poni2=center_y_up * 100e-6,
+                poni1=center_x_up * pixel_size_m,
+                poni2=center_y_up * pixel_size_m,
                 rot1=np.deg2rad(Gamma_updated),
                 rot2=np.deg2rad(gamma_updated),
                 rot3=0.0,
                 wavelength=wave_m,
-                pixel1=100e-6,
-                pixel2=100e-6,
+                pixel1=pixel_size_m,
+                pixel2=pixel_size_m,
             ),
         }
     ai = _ai_cache["ai"]
@@ -2098,9 +2108,9 @@ azimuthal_button = ttk.Button(
         ),
         [center_x_var.get(), center_y_var.get()],
         {
-            'pixel_size': 100e-6,
-            'poni1': (center_x_var.get()) * 100e-6,
-            'poni2': (center_y_var.get()) * 100e-6,
+            'pixel_size': pixel_size_m,
+            'poni1': (center_x_var.get()) * pixel_size_m,
+            'poni2': (center_y_var.get()) * pixel_size_m,
             'dist': corto_detector_var.get(),
             'rot1': np.deg2rad(Gamma_var.get()),
             'rot2': np.deg2rad(gamma_var.get()),
