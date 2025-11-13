@@ -857,7 +857,11 @@ _apply_background_transparency()
 
 simulation_slider_min = 0.0
 simulation_slider_max = max(background_slider_max, defaults['vmax'] * 5.0)
-simulation_slider_step = max((simulation_slider_max - simulation_slider_min) / 500.0, 0.01)
+# Ensure fine-grained control so the intensity sliders support at least 1e-4 precision.
+simulation_slider_step = min(
+    max((simulation_slider_max - simulation_slider_min) / 500.0, 1e-6),
+    1e-4,
+)
 
 simulation_min_var, simulation_min_slider = create_slider(
     "Simulation Min Intensity",
