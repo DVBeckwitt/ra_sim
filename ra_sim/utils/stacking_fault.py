@@ -1,37 +1,42 @@
-# ────────────────────────── global constants (unchanged) ──────────────────────────
-import numpy as np
+# stacking_fault.py - Markov HT with diffuse-consistent F^2, C2H, and factors
+
 import os
-A_HEX   = 4.557
+import numpy as np
+
+# Global constants
+A_HEX   = 4.557            # Å
 P_CLAMP = 1e-6
-N_P, A_C = 3, 17.98e-10
+N_P, A_C = 3, 17.98e-10    # number of sublayers, real-space area (m^2)
 AREA    = (2*np.pi)**2 / A_C * N_P
-_TWO_PI = 2 * np.pi
+_TWO_PI = 2.0 * np.pi
 
 # Cache of base L grids and F2 values keyed by parameters that do not depend
-# on occupancy or stacking probability.  Each entry is a mapping
-# ``(h,k) -> {"L": array, "F2": array}``.
+# on occupancy or stacking probability. Each entry: {(h,k): {"L": array, "F2": array}}
 _HT_BASE_CACHE: dict[tuple, dict] = {}
 
-# ───────────────────────── occupancy helper ─────────────────────────
+# ----------------------------- occupancy helper -----------------------------
 def _temp_cif_with_occ(cif_in: str, occ):
     """
     Return path of a temporary CIF in which every `_atom_site_occupancy`
-    is multiplied by `occ`.  Accepts:
-      • scalar      → global factor
-      • list/tuple  → per-site factors; if length ≠ n_sites, occ[0] used.
+    is multiplied by `occ`.
+
+    Accepts:
+      - scalar      -> global factor
+      - list/tuple  -> per-site factors; if length != n_sites, occ[0] is used.
     """
-    import tempfile, os, CifFile
-    cf          = CifFile.ReadCif(cif_in)
-    block_name  = list(cf.keys())[0]
-    block       = cf[block_name]
+    import tempfile, CifFile
+
+    cf = CifFile.ReadCif(cif_in)
+    block_name = list(cf.keys())[0]
+    block = cf[block_name]
 
     occ_field = block.get('_atom_site_occupancy')
-    if occ_field is None:                     # CIF had no occupancies
+    if occ_field is None:
         labels = block.get('_atom_site_label')
         occ_field = ['1.0'] * (len(labels) if isinstance(labels, list) else 1)
         block['_atom_site_occupancy'] = occ_field
 
-    # harmonise occ → list of factors
+    # harmonise occ -> list of factors
     if isinstance(occ, (list, tuple)):
         if len(occ) != len(occ_field):
             occ = [occ[0]] * len(occ_field)
@@ -43,19 +48,18 @@ def _temp_cif_with_occ(cif_in: str, occ):
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.cif')
     tmp.close()
-    try:             # PyCifRW ≥ 5
+    try:  # PyCifRW >= 5
         CifFile.WriteCif(cf, tmp.name)
     except AttributeError:
         with open(tmp.name, 'w') as f:
             f.write(cf.WriteOut())
-    return tmp.name, os.unlink          # unlink-fn for later cleanup
+    return tmp.name, os.unlink
 
 
-# ───────────────────────── low-level physics helpers (unchanged) ─────────────────────────
+# -------------------------- low-level physics helpers -----------------------
 def _cell_c_from_cif(cif_path: str) -> float:
-    """Return the c lattice parameter from ``cif_path``."""
+    """Return the c lattice parameter from cif_path."""
     import re
-
     pat = re.compile(r"_cell_length_c\s+([\d.]+)")
     with open(cif_path, "r", encoding="utf-8", errors="ignore") as fp:
         for ln in fp:
@@ -66,9 +70,8 @@ def _cell_c_from_cif(cif_path: str) -> float:
 
 
 def _sites_from_cif(cif_path: str):
-    """Return atomic sites from ``cif_path`` with symmetry applied."""
+    """Return atomic sites from cif_path with symmetry applied."""
     import Dans_Diffraction as dif
-
     xtl = dif.Crystal(str(cif_path))
     xtl.Symmetry.generate_matrices()
     xtl.generate_structure()
@@ -78,45 +81,142 @@ def _sites_from_cif(cif_path: str):
         for i in range(len(st.u))
     ]
 
-from .factors import F_comp
 
-def _Qmag(h, k, L, c_2h):
-    import numpy as np
-    inv_d2 = (4/3)*(h*h+k*k+h*k)/A_HEX**2 + (L**2)/c_2h**2
-    return 2*np.pi*np.sqrt(inv_d2)
+def _energy_kev_from_lambda(lambda_a: float) -> float:
+    """Convert wavelength in Å to energy in keV."""
+    return (12398.4193 / float(lambda_a)) / 1000.0
 
-def _F2(h, k, L, c_2h, energy_kev, sites):
-    """Return |F|² using tabulated form factors."""
-    import numpy as np
 
+# Scattering-factor composition identical to diffuse_cif_toggle.py
+# f0 from ionic species, dispersion corrections from neutral species at given energy.
+ION   = {"Pb": "Pb2+", "I": "I1-"}
+NEUTR = {"Pb": "Pb",   "I": "I"}
+
+def _element_key(sym: str) -> str:
+    """Map CIF site symbol to periodic table symbol used in the tables."""
+    # Handle common cases like 'Pb1', 'I1', 'I', 'Pb'
+    s = "".join(ch for ch in sym if ch.isalpha())
+    if s in ION:
+        return s
+    # Fallback: try first letter uppercase + optional second letter lowercase
+    s = sym.strip()
+    if s and s[0].isalpha():
+        cand = s[0].upper() + (s[1].lower() if len(s) > 1 and s[1].isalpha() else "")
+        if cand in ION:
+            return cand
+    raise KeyError(f"Unknown element symbol in CIF type '{sym}'")
+
+def f_comp(el_sym: str, Q: np.ndarray, energy_kev: float) -> np.ndarray:
+    """
+    Composite atomic form factor f = f0 + f' + i f''.
+
+    Parameters
+    ----------
+    el_sym : str
+        CIF site symbol (e.g. 'Pb', 'I', 'Pb1').
+    Q : ndarray
+        |Q| magnitude in Å^-1.
+    energy_kev : float
+        Photon energy in keV.
+    """
+    from Dans_Diffraction.functions_crystallography import (
+        xray_scattering_factor,
+        xray_dispersion_corrections,
+    )
+
+    key = _element_key(el_sym)
+    q = np.asarray(Q, dtype=float).reshape(-1)
+    # f0 from ionic form
+    f0 = xray_scattering_factor([ION[key]], q)[:, 0]
+    # dispersion from neutral form
+    f1, f2 = xray_dispersion_corrections([NEUTR[key]], energy_kev=[float(energy_kev)])
+    f1 = float(f1[0, 0])
+    f2 = float(f2[0, 0])
+    out = f0 + f1 + 1j * f2
+    return out.reshape(Q.shape)
+
+
+def _Qmag(h: int, k: int, L: np.ndarray, c_2h: float) -> np.ndarray:
+    """
+    |Q| for a hexagonal lattice using the diffuse_cif_toggle convention:
+    Q = 2π * sqrt( (4/3)*(h^2+k^2+hk)/a^2 + (L^2)/c^2 )
+    where L is the dimensionless ℓ coordinate and c is the 2H c parameter.
+    """
+    inv_d2 = (4.0/3.0)*(h*h + k*k + h*k)/A_HEX**2 + (L**2)/(c_2h**2)
+    return 2.0*np.pi*np.sqrt(inv_d2)
+
+
+def _F2(h: int, k: int, L: np.ndarray, c_2h: float, energy_kev: float, sites) -> np.ndarray:
+    """
+    Return |F|^2 using the same single-layer phase used in diffuse_cif_toggle:
+    phase = exp(2πi[hx + ky + L*(z/3)])
+    """
     Q = _Qmag(h, k, L, c_2h)
     F = np.zeros_like(Q, dtype=complex)
     for x, y, z, sym in sites:
-        ff = F_comp(sym, Q, energy_kev)
-        phase = np.exp(1j * _TWO_PI * (h * x + k * y + L * z))
-        F += ff * phase
+        ff = f_comp(sym, Q, energy_kev)
+        phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
+        phase_z  = np.exp(1j * _TWO_PI * (L * (float(z) / 3.0)))
+        F += ff * phase_xy * phase_z
     return np.abs(F) ** 2
 
-def _abc(p, h, k):
-    """Compute amplitude factor ``f`` and phase ``ψ`` without complex math."""
-    import numpy as np
 
-    δ = _TWO_PI * ((2 * h + k) / 3)
-    real = (1 - p) + p * np.cos(δ)
-    imag = p * np.sin(δ)
-    abs_z = np.hypot(real, imag)
-    f = np.minimum(abs_z, 1 - P_CLAMP)
-    ψ = np.arctan2(imag, real)
-    return f, ψ, δ
-
-def _I_inf(L, p, h, k, F2):
-    import numpy as np
-    f, ψ, δ = _abc(p, h, k)
-    φ = δ + _TWO_PI * L/3
-    return AREA * F2 * (1-f**2) / (1 + f**2 - 2*f*np.cos(φ-ψ))
+# -------------------------- Markov transfer-matrix HT ------------------------
+def _rho_alpha_from_p(p: float):
+    p_clamped = float(np.clip(p, 0.0, 1.0))
+    return 1.0 - p_clamped, p_clamped  # rho, alpha
 
 
+def _class_stationary(rho: float, alpha: float):
+    denom = 2.0 - alpha - rho
+    P_S = (1.0 - alpha) / denom
+    P_E = (1.0 - rho) / (2.0 * denom)
+    return P_S, P_E, P_E
 
+
+def _slip_phase(h: int, k: int) -> float:
+    return _TWO_PI * ((2*h + k) / 3.0)
+
+
+def _R_from_transfer(phi: float, theta: np.ndarray, rho: float, alpha: float) -> np.ndarray:
+    """
+    Return R(theta) for the order 2 Markov chain using the eigen-decomposition
+    of the 3x3 transfer matrix, regularized near poles.
+    """
+    eip = np.exp(1j * phi)
+    T = np.array(
+        [[rho,            0.5*(1.0-rho)*eip,      0.5*(1.0-rho)*np.conj(eip)],
+         [1.0-alpha,      alpha*eip,              0.0                      ],
+         [1.0-alpha,      0.0,                    alpha*np.conj(eip)       ]],
+        dtype=complex,
+    )
+    lam, R = np.linalg.eig(T)
+    R_inv = np.linalg.inv(R)
+
+    P_S, P_Ep, P_Em = _class_stationary(rho, alpha)
+    pi = np.array([P_S, P_Ep, P_Em], dtype=complex)
+    ones = np.ones(3, dtype=complex)
+    piR  = pi @ R
+    Rin1 = R_inv @ ones
+    w    = piR * Rin1
+
+    # Regularize z near 1 to avoid numerical blow ups
+    z = (1.0 - P_CLAMP) * np.exp(1j * theta)
+    frac = (lam[:, None] * z[None, :]) / (1.0 - lam[:, None] * z[None, :])
+    S = (w[:, None] * frac).sum(axis=0)
+    Rtheta = 1.0 + 2.0 * np.real(S)
+    return np.maximum(Rtheta, 0.0)
+
+
+def _I_inf_markov(L: np.ndarray, p: float, h: int, k: int, F2: np.ndarray) -> np.ndarray:
+    rho, alpha = _rho_alpha_from_p(p)
+    phi = _slip_phase(h, k)
+    theta = _TWO_PI * (L / 3.0)
+    Rtheta = _R_from_transfer(phi, theta, rho, alpha)
+    return AREA * F2 * Rtheta
+
+
+# ----------------------------- base curve builder ---------------------------
 def _get_base_curves(
     cif_path: str,
     hk_list=None,
@@ -126,16 +226,20 @@ def _get_base_curves(
     two_theta_max: float | None = None,
     lambda_: float = 1.54,
 ):
-    """Return cached ``{(h,k): {"L": ..., "F2": ...}}`` independent of ``occ`` and ``p``."""
-    import numpy as np, itertools, math
+    """
+    Return cached {(h,k): {"L": ..., "F2": ...}} independent of occ and p.
+
+    Conventions align with diffuse_cif_toggle:
+      - c_2h is read directly from the CIF (no 3x).
+      - Q uses 2π*sqrt(radial + (L/c)^2).
+      - Phase uses z/3 in the vertical factor.
+    """
+    import itertools, math
 
     if hk_list is None:
         if mx is None:
             raise ValueError("Specify hk_list or mx")
-        hk_list = [
-            (h, k)
-            for h, k in itertools.product(range(-mx + 1, mx), repeat=2)
-        ]
+        hk_list = [(h, k) for h, k in itertools.product(range(-mx + 1, mx), repeat=2)]
 
     key = (
         os.path.abspath(cif_path),
@@ -145,37 +249,36 @@ def _get_base_curves(
         two_theta_max,
         float(lambda_),
     )
-
     cached = _HT_BASE_CACHE.get(key)
     if cached is not None:
         return cached
 
-    c_2h = _cell_c_from_cif(cif_path) * 3 
+    c_2h = _cell_c_from_cif(cif_path)                # no *3
     sites = _sites_from_cif(cif_path)
-
     if L_step <= 0.0:
         raise ValueError("L_step must be > 0")
     if L_step < 1e-4:
         L_step = 1e-4
 
-    energy_kev = (12398.4193 / lambda_) / 1000.0
+    energy_kev = _energy_kev_from_lambda(lambda_)
     out: dict[tuple, dict] = {}
+
     if two_theta_max is None:
-        base_L = np.arange(0.0, L_max + L_step / 2, L_step)
+        base_L = np.arange(0.0, L_max + L_step / 2.0, L_step)
         for h, k in hk_list:
             F2 = _F2(h, k, base_L, c_2h, energy_kev, sites)
             out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
-        q_max = (4 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2))
+        q_max = (4.0 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2.0))
         for h, k in hk_list:
-            const = (4 / 3) * (h * h + k * k + h * k) / (A_HEX**2)
-            l_sq = (q_max / (2 * math.pi)) ** 2 - const
+            const = (4.0 / 3.0) * (h*h + k*k + h*k) / (A_HEX**2)
+            l_sq = (q_max / (2.0 * math.pi))**2 - const
             if l_sq <= 0:
                 L_vals = np.array([], dtype=float)
                 out[(h, k)] = {"L": L_vals, "F2": L_vals}
                 continue
             L_max_local = c_2h * math.sqrt(l_sq)
-            L_vals = np.arange(0.0, L_max_local + L_step / 2, L_step)
+            L_vals = np.arange(0.0, L_max_local + L_step / 2.0, L_step)
             F2 = _F2(h, k, L_vals, c_2h, energy_kev, sites)
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
@@ -183,72 +286,63 @@ def _get_base_curves(
     return out
 
 
-# ───────────────────────── revitalised public routine ─────────────────────────
+# ------------------------------- public routine -----------------------------
 def ht_Iinf_dict(
-        cif_path: str,
-        hk_list=None,                  # explicit list or None
-        mx: int|None = None,           # generate –mx+1…mx-1 if hk_list is None
-        occ=1.0,                       # occupancy scaling, same rules as miller_generator
-        p: float = 0.1,
-        L_step: float = 0.01,
-        L_max: float = 10.0,
-        two_theta_max: float | None = None,
-        lambda_: float = 1.54,
-    ):
+    cif_path: str,
+    hk_list=None,                 # explicit list or None
+    mx: int | None = None,        # generate -mx+1..mx-1 if hk_list is None
+    occ=1.0,                      # occupancy scaling
+    p: float = 0.1,
+    L_step: float = 0.01,
+    L_max: float = 10.0,
+    two_theta_max: float | None = None,
+    lambda_: float = 1.54,
+):
     """
-    Infinite-domain Hendricks–Teller intensities, now with:
-      • on-the-fly occupancy scaling (scalar / list)
-      • optional automatic HK grid via `mx` (drop h=k=0)
-      • limit by ``two_theta_max`` instead of ``L_max`` if desired
-    Returns { (h,k): {'L':…, 'I':…} }
+    Infinite-domain Hendricks Teller intensities using the Markov transfer model.
+
+    Returns {(h,k): {'L':..., 'I':...}} with F² and C2H conventions identical
+    to diffuse_cif_toggle.py. The 'occ' parameter applies a temporary CIF with
+    scaled occupancies before computing F².
     """
-    base = _get_base_curves(
-        cif_path=cif_path,
-        hk_list=hk_list,
-        mx=mx,
-        L_step=L_step,
-        L_max=L_max,
-        two_theta_max=two_theta_max,
-        lambda_=lambda_,
-    )
+    cif_to_use = cif_path
+    cleanup = None
+    try:
+        if isinstance(occ, (list, tuple)) or float(occ) != 1.0:
+            cif_to_use, cleanup = _temp_cif_with_occ(cif_path, occ)
 
-    out = {}
-    for (h, k), data in base.items():
-        L_vals = data["L"]
-        F2 = data["F2"]
-        I = _I_inf(L_vals, p, h, k, F2)
-        out[(h, k)] = {"L": L_vals.copy(), "I": I}
+        base = _get_base_curves(
+            cif_path=cif_to_use,
+            hk_list=hk_list,
+            mx=mx,
+            L_step=L_step,
+            L_max=L_max,
+            two_theta_max=two_theta_max,
+            lambda_=lambda_,
+        )
 
-    return out
+        out = {}
+        for (h, k), data in base.items():
+            L_vals = data["L"]
+            F2 = data["F2"]
+            I = _I_inf_markov(L_vals, p, h, k, F2)
+            out[(h, k)] = {"L": L_vals.copy(), "I": I}
+        return out
+    finally:
+        if cleanup is not None:
+            try:
+                cleanup(cif_to_use)
+            except Exception:
+                pass
 
 
-# ---------------------------------------------------------------------------
-# Helper: convert ``ht_Iinf_dict`` output to ``(miller, intens, degeneracy, details)``
-# ---------------------------------------------------------------------------
+# ------------------------- array and rod grouping helpers -------------------
 def ht_dict_to_arrays(ht_curves):
-    """Return arrays in the same format as :func:`miller_generator`.
-
-    Parameters
-    ----------
-    ht_curves : dict
-        Mapping ``(h, k)`` to ``{"L": array, "I": array}`` as returned by
-        :func:`ht_Iinf_dict`.
-
-    Returns
-    -------
-    miller : ndarray
-        ``(N, 3)`` array of Miller indices including fractional ``L`` values.
-    intensities : ndarray
-        ``(N,)`` array of intensities corresponding to ``miller``.
-    degeneracy : ndarray
-        ``(N,)`` array with all ones, matching :func:`miller_generator` output.
-    details : list
-        List of length ``N`` with ``[((h, k, L), intensity)]`` records.
     """
-    import numpy as np
-
+    Convert the dict output of ht_Iinf_dict to arrays compatible with
+    miller_generator style consumers.
+    """
     total = sum(len(c["L"]) for c in ht_curves.values())
-
     miller = np.empty((total, 3), dtype=np.float64)
     intens = np.empty(total, dtype=np.float64)
     degeneracy = np.ones(total, dtype=np.int32)
@@ -273,52 +367,25 @@ def ht_dict_to_arrays(ht_curves):
     return miller, intens, degeneracy, details
 
 
-# ---------------------------------------------------------------------------
-# New helpers: group HT curves by radial index (Qr rods)
-# ---------------------------------------------------------------------------
 def ht_dict_to_qr_dict(ht_curves):
-    """Combine Hendricks–Teller curves with identical radial index.
-
-    Parameters
-    ----------
-    ht_curves : dict
-        Mapping ``(h, k)`` to ``{"L": array, "I": array}``.
-
-    Returns
-    -------
-    dict
-        ``{m: {"L": array, "I": array, "hk": (h,k), "deg": int}}`` keyed by the
-        radial index ``m = h*h + h*k + k*k``. Intensities for curves with the same
-        ``m`` are summed, one representative ``(h,k)`` pair is stored, and the
-        number of contributing in-plane peaks is recorded in ``deg``. If the
-        ``L`` grids for reflections with the same radial index differ, the
-        intensities are interpolated onto the union of both grids before
-        summation.
     """
-    import numpy as np
-
+    Combine HT curves with identical radial index m = h^2 + hk + k^2.
+    """
     rods = {}
     for (h, k), curve in ht_curves.items():
         L_vals = np.asarray(curve["L"], dtype=float)
         I_vals = np.asarray(curve["I"], dtype=float)
-        m = h * h + h * k + k * k
+        m = h*h + h*k + k*k
         if m not in rods:
-            rods[m] = {
-                "L": L_vals.copy(),
-                "I": I_vals.copy(),
-                "hk": (h, k),
-                "deg": 1,
-            }
+            rods[m] = {"L": L_vals.copy(), "I": I_vals.copy(), "hk": (h, k), "deg": 1}
             continue
 
         entry = rods[m]
         if entry["L"].shape != L_vals.shape or not np.allclose(entry["L"], L_vals):
-            union_L = np.union1d(entry["L"], L_vals)
-            entry_I = np.interp(
-                union_L, entry["L"], entry["I"], left=0.0, right=0.0
-            )
-            add_I = np.interp(union_L, L_vals, I_vals, left=0.0, right=0.0)
-            entry["L"] = union_L
+            union = np.union1d(entry["L"], L_vals)
+            entry_I = np.interp(union, entry["L"], entry["I"], left=0.0, right=0.0)
+            add_I   = np.interp(union, L_vals, I_vals,      left=0.0, right=0.0)
+            entry["L"] = union
             entry["I"] = entry_I + add_I
         else:
             entry["I"] += I_vals
@@ -328,9 +395,7 @@ def ht_dict_to_qr_dict(ht_curves):
 
 
 def qr_dict_to_arrays(qr_dict):
-    """Convert a ``qr_dict`` from :func:`ht_dict_to_qr_dict` into arrays."""
-    import numpy as np
-
+    """Convert a qr_dict from ht_dict_to_qr_dict into arrays."""
     total = sum(len(v["L"]) for v in qr_dict.values())
     miller = np.empty((total, 3), dtype=np.float64)
     intens = np.empty(total, dtype=np.float64)
@@ -357,4 +422,3 @@ def qr_dict_to_arrays(qr_dict):
         idx += n
 
     return miller, intens, degeneracy, details
-
