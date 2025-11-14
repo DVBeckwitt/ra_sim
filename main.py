@@ -265,6 +265,10 @@ p_defaults = _ensure_triplet(
 w_defaults = _ensure_triplet(
     hendricks_config.get("default_w"), [50.0, 50.0, 0.0]
 )
+finite_stack_default = bool(hendricks_config.get("finite_stack", False))
+stack_layers_default = int(
+    max(1, float(hendricks_config.get("stack_layers", 50)))
+)
 
 # ---------------------------------------------------------------------------
 # Default GUI/fit parameter values. These must be defined before any calls
@@ -295,12 +299,15 @@ defaults = {
     'center_x': center_default[0],
     'center_y': center_default[1],
     'sampling_resolution': 'High',
+    'finite_stack': finite_stack_default,
+    'stack_layers': stack_layers_default,
 }
 
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-def build_ht_cache(p_val, occ_vals, c_axis):
+def build_ht_cache(p_val, occ_vals, c_axis, finite_stack_flag, stack_layers_count):
+    layers = int(max(1, stack_layers_count))
     curves = ht_Iinf_dict(
         cif_path=cif_file,
         mx=mx,
@@ -310,6 +317,8 @@ def build_ht_cache(p_val, occ_vals, c_axis):
         two_theta_max=two_theta_range[1],
         lambda_=lambda_,
         c_lattice=c_axis,
+        finite_stack=finite_stack_flag,
+        stack_layers=layers,
     )
     qr = ht_dict_to_qr_dict(curves)
     arrays = qr_dict_to_arrays(qr)
@@ -320,14 +329,34 @@ def build_ht_cache(p_val, occ_vals, c_axis):
         "arrays": arrays,
         "two_theta_max": two_theta_range[1],
         "c": float(c_axis),
+        "finite_stack": bool(finite_stack_flag),
+        "stack_layers": layers,
     }
 
 # Precompute curves for the three p values
 default_c_axis = float(defaults['c'])
 ht_cache_multi = {
-    "p0": build_ht_cache(defaults['p0'], occ, default_c_axis),
-    "p1": build_ht_cache(defaults['p1'], occ, default_c_axis),
-    "p2": build_ht_cache(defaults['p2'], occ, default_c_axis),
+    "p0": build_ht_cache(
+        defaults['p0'],
+        occ,
+        default_c_axis,
+        defaults['finite_stack'],
+        defaults['stack_layers'],
+    ),
+    "p1": build_ht_cache(
+        defaults['p1'],
+        occ,
+        default_c_axis,
+        defaults['finite_stack'],
+        defaults['stack_layers'],
+    ),
+    "p2": build_ht_cache(
+        defaults['p2'],
+        occ,
+        default_c_axis,
+        defaults['finite_stack'],
+        defaults['stack_layers'],
+    ),
 }
 
 def combine_qr_dicts(caches, weights):
@@ -366,11 +395,15 @@ ht_curves_cache = {
     "curves": combined_qr,
     "arrays": (miller1, intens1, degeneracy1, details1),
     "c": default_c_axis,
+    "finite_stack": defaults['finite_stack'],
+    "stack_layers": defaults['stack_layers'],
 }
 _last_occ_for_ht = list(occ)
 _last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
 _last_weights = list(weights_init)
 _last_c_for_ht = default_c_axis
+_last_finite_stack = bool(defaults['finite_stack'])
+_last_stack_layers = int(max(1, defaults['stack_layers']))
 # ---- convert the dict → arrays compatible with the downstream code ----
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
@@ -2097,6 +2130,9 @@ def reset_to_defaults():
     w0_var.set(defaults['w0'])
     w1_var.set(defaults['w1'])
     w2_var.set(defaults['w2'])
+    finite_stack_var.set(defaults['finite_stack'])
+    stack_layers_var.set(int(defaults['stack_layers']))
+    _sync_finite_controls()
 
     update_mosaic_cache()
     global last_simulation_signature
@@ -2973,6 +3009,9 @@ else:
 occ_var1 = tk.DoubleVar(value=occ[0])
 occ_var2 = tk.DoubleVar(value=occ[1])
 occ_var3 = tk.DoubleVar(value=occ[2])
+finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
+stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
+_layers_scale_widget = None
 
 
 def _rebuild_diffraction_inputs(
@@ -2991,8 +3030,11 @@ def _rebuild_diffraction_inputs(
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
-    global _last_c_for_ht
+    global _last_c_for_ht, _last_finite_stack, _last_stack_layers
     global intensities_cif1, intensities_cif2
+
+    finite_flag = bool(finite_stack_var.get())
+    layers = int(max(1, stack_layers_var.get()))
 
     if (
         not force
@@ -3000,6 +3042,8 @@ def _rebuild_diffraction_inputs(
         and list(p_vals) == _last_p_triplet
         and list(weights) == _last_weights
         and math.isclose(float(c_axis), _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
+        and _last_finite_stack == finite_flag
+        and (not finite_flag or _last_stack_layers == layers)
     ):
         last_simulation_signature = None
         if trigger_update:
@@ -3014,8 +3058,10 @@ def _rebuild_diffraction_inputs(
             or list(cache["occ"]) != list(new_occ)
             or cache.get("two_theta_max") != two_theta_range[1]
             or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
+            or bool(cache.get("finite_stack")) != finite_flag
+            or (finite_flag and cache.get("stack_layers") != layers)
         ):
-            cache = build_ht_cache(p_val, new_occ, c_axis)
+            cache = build_ht_cache(p_val, new_occ, c_axis, finite_flag, layers)
             ht_cache_multi[label] = cache
         return cache
 
@@ -3031,11 +3077,15 @@ def _rebuild_diffraction_inputs(
         "curves": combined_qr_local,
         "arrays": arrays_local,
         "c": float(c_axis),
+        "finite_stack": finite_flag,
+        "stack_layers": layers,
     }
     _last_occ_for_ht = list(new_occ)
     _last_p_triplet = list(p_vals)
     _last_weights = list(weights)
     _last_c_for_ht = float(c_axis)
+    _last_finite_stack = finite_flag
+    _last_stack_layers = layers
 
     m1, i1, d1, det1 = arrays_local
 
@@ -3117,9 +3167,68 @@ def update_occupancies(*args):
 
     _rebuild_diffraction_inputs(new_occ, p_vals, weights, c_var.get())
 
+
+def _sync_finite_controls():
+    global _layers_scale_widget
+    if _layers_scale_widget is None:
+        return
+    state = tk.NORMAL if finite_stack_var.get() else tk.DISABLED
+    _layers_scale_widget.configure(state=state)
+
+
+def _on_finite_toggle():
+    _sync_finite_controls()
+    update_occupancies()
+
+
+def _on_layer_slider(val):
+    try:
+        value = int(round(float(val)))
+    except (TypeError, ValueError):
+        value = stack_layers_var.get()
+    if stack_layers_var.get() != value:
+        stack_layers_var.set(value)
+    if finite_stack_var.get():
+        update_occupancies()
+
+
 # Sliders for three disorder probabilities and weights inside a collapsible frame
 stack_frame = CollapsibleFrame(right_col, text='Stacking Probabilities')
 stack_frame.pack(fill=tk.X, padx=5, pady=5)
+finite_frame = ttk.Frame(stack_frame.frame)
+finite_frame.pack(fill=tk.X, padx=5, pady=5)
+ttk.Checkbutton(
+    finite_frame,
+    text="Finite Stack",
+    variable=finite_stack_var,
+    command=_on_finite_toggle,
+).pack(anchor=tk.W, padx=5, pady=2)
+
+layers_row = ttk.Frame(finite_frame)
+layers_row.pack(fill=tk.X, padx=5, pady=2)
+ttk.Label(layers_row, text="Layers:").grid(row=0, column=0, sticky="w")
+ttk.Label(layers_row, textvariable=stack_layers_var, width=6).grid(
+    row=0,
+    column=2,
+    sticky="e",
+    padx=(5, 0),
+)
+
+layers_scale = tk.Scale(
+    layers_row,
+    from_=1,
+    to=1000,
+    orient=tk.HORIZONTAL,
+    resolution=1,
+    showvalue=False,
+    variable=stack_layers_var,
+    command=_on_layer_slider,
+)
+layers_scale.grid(row=0, column=1, sticky="ew", padx=(5, 5))
+layers_row.columnconfigure(1, weight=1)
+
+_layers_scale_widget = layers_scale
+_sync_finite_controls()
 p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
                           stack_frame.frame, update_occupancies)
 w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
