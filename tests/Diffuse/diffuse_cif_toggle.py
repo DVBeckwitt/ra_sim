@@ -515,15 +515,27 @@ def _on_z(v):
     refresh()
 sz.on_changed(_on_z)
 
-# number of layers N
-ax_N = plt.axes([0.92, 0.09, 0.05, 0.03])
+# number of layers N (only visible when finite stacks enabled)
+ax_N = plt.axes([0.92, 0.10, 0.06, 0.03])
 sN = Slider(ax_N, "N", 1, 1000, valinit=state["N_layers"], valstep=1)
+ax_N.text(0.5, 1.25, "Layers", transform=ax_N.transAxes, ha="center")
+
+def _update_N_visibility():
+    visible = bool(state.get("finite_N"))
+    sN.ax.set_visible(visible)
+    sN.label.set_visible(visible)
+    sN.valtext.set_visible(visible)
+
+
 def _on_N(v):
     state["N_layers"] = int(v)
     if state["finite_N"]:
         recompute_curves()
         refresh()
+
+
 sN.on_changed(_on_N)
+_update_N_visibility()
 
 # vertical groups
 ys = [0.34, 0.28, 0.22, 0.16]
@@ -591,7 +603,7 @@ b_mode = Button(plt.axes([0.60, 0.01, 0.16, 0.03]), "H/K panel")
 b_mode.on_clicked(toggle_mode)
 
 # Checkboxes: F² only, qz axis, components
-chk_ax = plt.axes([0.05, 0.01, 0.15, 0.18])
+chk_ax = plt.axes([0.05, 0.01, 0.18, 0.22])
 checks = CheckButtons(
     chk_ax,
     ["F² only", "qz axis", "Components (alg)", "Components (Markov)", "Finite N"],
@@ -616,6 +628,7 @@ def _toggle_checks(label):
         state["show_mkv_comp"] = not state["show_mkv_comp"]
     elif label == "Finite N":
         state["finite_N"] = not state["finite_N"]
+        _update_N_visibility()
         recompute_curves()
     refresh()
 
