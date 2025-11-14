@@ -118,11 +118,9 @@ L_GRID = np.linspace(0, L_MAX, N_L)
 QZ_GRID = 2 * np.pi / C_2H * L_GRID
 
 # -----------------------------------------------------------------------------
-# Global theta / z and Markov cache
+# Global theta / z grid
 THETA_GRID = 2.0 * np.pi * (L_GRID / 3.0)
 Z_GRID = (1.0 - P_CLAMP) * np.exp(1j * THETA_GRID)
-
-_MKV_CACHE = {}
 
 # -----------------------------------------------------------------------------
 # Precompute F²(h,k,ℓ) for 2H single layer
@@ -165,6 +163,36 @@ def _abc(p, h, k):
     ψ = np.angle(z)
     return f, ψ, δ
 
+def _finite_R_from_t(t, N):
+    """
+    Given complex step t (array) and number of layers N,
+    compute R_N = N + 2 Re[sum_{n=1}^{N-1} (N-n) t^n].
+    """
+
+    t = np.asarray(t, dtype=complex)
+    N = int(max(1, N))
+
+    if N == 1:
+        return np.ones_like(np.real(t))
+
+    one = 1.0 + 0.0j
+    mask = np.isclose(t, one)
+    out = np.empty_like(np.real(t))
+
+    if np.any(~mask):
+        t_nm = t[~mask]
+        denom = one - t_nm
+        S1 = t_nm * (1 - t_nm**(N - 1)) / denom
+        S2 = t_nm * (1 - N * t_nm**(N - 1) + (N - 1) * t_nm**N) / denom**2
+        T = N * S1 - S2
+        out_nm = N + 2.0 * np.real(T)
+        out[~mask] = out_nm
+
+    if np.any(mask):
+        out[mask] = float(N * N)
+
+    return np.maximum(out, 0.0)
+
 def I_inf_alg(p, h, k, F2):
     if state.get("f2_only"):
         return F2
@@ -174,7 +202,12 @@ def I_inf_alg(p, h, k, F2):
 
     f, ψ, δ = _abc(p_flipped, h, k)
     φ = δ + 2 * np.pi * L_GRID * (1/3)
-    return AREA * F2 * (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
+    if state.get("finite_N"):
+        t = f * np.exp(1j * (φ - ψ))
+        R = _finite_R_from_t(t, state.get("N_layers", 50))
+    else:
+        R = (1 - f**2) / (1 + f**2 - 2 * f * np.cos(φ - ψ))
+    return AREA * F2 * R
 
 # -----------------------------------------------------------------------------
 # Model B: Order-2 Markov (pair-state transfer 3x3)
@@ -192,42 +225,17 @@ def _slip_phase(h: int, k: int) -> float:
     return 2.0 * np.pi * ((2*h + k) / 3.0)
 
 def _R_from_transfer(phi: float, rho: float, alpha: float):
-    """Return R(theta) on the full L_GRID via cached eigendecomposition."""
-    key = (float(rho), float(alpha), float(phi))
-    lam, w = _MKV_CACHE.get(key, (None, None))
+    """Return R(theta) on the full L_GRID."""
+    lam = rho + (1.0 - rho) * np.exp(1j * phi)
 
-    if lam is None:
-        eip = np.exp(1j * phi)
+    if state.get("finite_N"):
+        t = lam * Z_GRID
+        Rtheta = _finite_R_from_t(t, state.get("N_layers", 50))
+    else:
+        z = Z_GRID
+        frac = (lam * z) / (1.0 - lam * z)
+        Rtheta = 1.0 + 2.0 * np.real(frac)
 
-        stay = rho
-        slip = 0.5 * (1.0 - rho)
-        slip_phase = slip * eip
-
-        T = np.array(
-            [[stay,      slip_phase,   slip_phase],
-             [slip_phase, stay,        slip_phase],
-             [slip_phase, slip_phase,  stay      ]],
-            dtype=complex,
-        )
-
-        lam, R = np.linalg.eig(T)
-        R_inv = np.linalg.inv(R)
-
-        P_S, P_Ep, P_Em = _class_stationary(rho, alpha)
-        pi = np.array([P_S, P_Ep, P_Em], dtype=complex)
-        ones = np.ones(3, dtype=complex)
-
-        piR  = pi @ R
-        Rin1 = R_inv @ ones
-        w    = piR * Rin1
-
-        _MKV_CACHE[key] = (lam, w)
-
-    # Use precomputed Z_GRID instead of rebuilding theta each time
-    z = Z_GRID
-    frac = (lam[:, None] * z[None, :]) / (1.0 - lam[:, None] * z[None, :])
-    S = (w[:, None] * frac).sum(axis=0)
-    Rtheta = 1.0 + 2.0 * np.real(S)
     return np.maximum(Rtheta, 0.0)
 
 def I_inf_mkv(p, h, k, F2):
@@ -253,6 +261,8 @@ defaults = {
     "show_bragg": False,
     "show_alg_comp": False,
     "show_mkv_comp": False,
+    "finite_N": False,
+    "N_layers": 50,
 }
 state = defaults.copy()
 
@@ -505,6 +515,16 @@ def _on_z(v):
     refresh()
 sz.on_changed(_on_z)
 
+# number of layers N
+ax_N = plt.axes([0.92, 0.09, 0.05, 0.03])
+sN = Slider(ax_N, "N", 1, 1000, valinit=state["N_layers"], valstep=1)
+def _on_N(v):
+    state["N_layers"] = int(v)
+    if state["finite_N"]:
+        recompute_curves()
+        refresh()
+sN.on_changed(_on_N)
+
 # vertical groups
 ys = [0.34, 0.28, 0.22, 0.16]
 
@@ -571,9 +591,18 @@ b_mode = Button(plt.axes([0.60, 0.01, 0.16, 0.03]), "H/K panel")
 b_mode.on_clicked(toggle_mode)
 
 # Checkboxes: F² only, qz axis, components
-chk_ax = plt.axes([0.05, 0.01, 0.15, 0.14])
-checks = CheckButtons(chk_ax, ["F² only", "qz axis", "Components (alg)", "Components (Markov)"],
-                      [state["f2_only"], state["qz_axis"], state["show_alg_comp"], state["show_mkv_comp"]])
+chk_ax = plt.axes([0.05, 0.01, 0.15, 0.18])
+checks = CheckButtons(
+    chk_ax,
+    ["F² only", "qz axis", "Components (alg)", "Components (Markov)", "Finite N"],
+    [
+        state["f2_only"],
+        state["qz_axis"],
+        state["show_alg_comp"],
+        state["show_mkv_comp"],
+        state["finite_N"],
+    ],
+)
 
 def _toggle_checks(label):
     if label == "F² only":
@@ -585,6 +614,9 @@ def _toggle_checks(label):
         state["show_alg_comp"] = not state["show_alg_comp"]
     elif label == "Components (Markov)":
         state["show_mkv_comp"] = not state["show_mkv_comp"]
+    elif label == "Finite N":
+        state["finite_N"] = not state["finite_N"]
+        recompute_curves()
     refresh()
 
 checks.on_clicked(_toggle_checks)
