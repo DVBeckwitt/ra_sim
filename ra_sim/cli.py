@@ -164,6 +164,11 @@ def run_headless_simulation(
     av, cv = _parse_cif_cell_a_c(cif_file)
 
     # Build HT curves and rods for the three p values
+    finite_stack_flag = bool(ht_cfg.get("finite_stack", False))
+    stack_layers_count = int(
+        max(1, float(ht_cfg.get("stack_layers", 50)))
+    )
+
     def build_ht_cache(p_val: float):
         curves = ht_Iinf_dict(
             cif_path=cif_file,
@@ -174,6 +179,8 @@ def run_headless_simulation(
             two_theta_max=float(two_theta_max),
             lambda_=lambda_ang,
             c_lattice=cv,
+            finite_stack=finite_stack_flag,
+            stack_layers=stack_layers_count,
         )
         qr = ht_dict_to_qr_dict(curves)
         return {"p": float(p_val), "qr": qr}

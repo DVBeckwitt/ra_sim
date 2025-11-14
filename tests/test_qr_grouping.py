@@ -109,6 +109,42 @@ def test_two_theta_window_scales_with_c_axis():
     assert expanded_L.max() > base_L.max()
 
 
+def test_finite_stack_converges_to_infinite():
+    cif = Path('tests/Diffuse/PbI2_2H.cif')
+    hk = (1, 0)
+    params = dict(
+        cif_path=str(cif),
+        hk_list=[hk],
+        p=0.35,
+        L_step=0.05,
+        L_max=2.0,
+        lambda_=1.54,
+    )
+
+    infinite = ht_Iinf_dict(**params)
+    finite_large = ht_Iinf_dict(
+        **params,
+        finite_stack=True,
+        stack_layers=600,
+    )
+    finite_small = ht_Iinf_dict(
+        **params,
+        finite_stack=True,
+        stack_layers=5,
+    )
+
+    L_inf = infinite[hk]['L']
+    assert np.allclose(L_inf, finite_large[hk]['L'])
+    assert np.allclose(L_inf, finite_small[hk]['L'])
+
+    I_inf = infinite[hk]['I']
+    I_large = finite_large[hk]['I']
+    I_small = finite_small[hk]['I']
+
+    assert np.allclose(I_large, I_inf, rtol=1e-3, atol=1e-6)
+    assert np.linalg.norm(I_small - I_inf) > 1e-2
+
+
 def test_combine_ht_caches_preserves_deg():
     cif = Path('tests/Diffuse/PbI2_2H.cif')
     hk_list = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]

@@ -178,11 +178,44 @@ def _slip_phase(h: int, k: int) -> float:
     return _TWO_PI * ((2*h + k) / 3.0)
 
 
-def _R_from_transfer(phi: float, theta: np.ndarray, rho: float, alpha: float) -> np.ndarray:
-    """
-    Return R(theta) for the order 2 Markov chain using the eigen-decomposition
-    of the 3x3 transfer matrix, regularized near poles.
-    """
+def _finite_series_sum(t: np.ndarray, N: int) -> np.ndarray:
+    """Return ∑_{n=1}^{N-1} (N-n) t^n for complex *t* (vectorised)."""
+
+    t = np.asarray(t, dtype=complex)
+    N = int(max(1, N))
+
+    if N == 1:
+        return np.zeros_like(t, dtype=complex)
+
+    one = 1.0 + 0.0j
+    mask = np.isclose(t, one)
+    out = np.empty_like(t, dtype=complex)
+
+    if np.any(~mask):
+        t_nm = t[~mask]
+        denom = one - t_nm
+        S1 = t_nm * (1 - t_nm ** (N - 1)) / denom
+        S2 = t_nm * (
+            1 - N * t_nm ** (N - 1) + (N - 1) * t_nm ** N
+        ) / (denom ** 2)
+        out[~mask] = N * S1 - S2
+
+    if np.any(mask):
+        # For t → 1 the series approaches N(N-1)/2 exactly.
+        out[mask] = (N * (N - 1) / 2.0) * one
+
+    return out
+
+
+def _R_from_transfer(
+    phi: float,
+    theta: np.ndarray,
+    rho: float,
+    alpha: float,
+    *,
+    finite_layers: int | None = None,
+) -> np.ndarray:
+    """Return R(theta) for the order 2 Markov chain."""
     eip = np.exp(1j * phi)
     T = np.array(
         [[rho,            0.5*(1.0-rho)*eip,      0.5*(1.0-rho)*np.conj(eip)],
@@ -200,19 +233,42 @@ def _R_from_transfer(phi: float, theta: np.ndarray, rho: float, alpha: float) ->
     Rin1 = R_inv @ ones
     w    = piR * Rin1
 
-    # Regularize z near 1 to avoid numerical blow ups
     z = (1.0 - P_CLAMP) * np.exp(1j * theta)
-    frac = (lam[:, None] * z[None, :]) / (1.0 - lam[:, None] * z[None, :])
-    S = (w[:, None] * frac).sum(axis=0)
-    Rtheta = 1.0 + 2.0 * np.real(S)
+
+    if finite_layers is not None:
+        N = int(max(1, finite_layers))
+        t = lam[:, None] * z[None, :]
+        series = _finite_series_sum(t, N)
+        weighted = (w[:, None] * series).sum(axis=0)
+        Rtheta = (N + 2.0 * np.real(weighted)) / N
+    else:
+        # Regularize near poles for the infinite-layer expression.
+        frac = (lam[:, None] * z[None, :]) / (1.0 - lam[:, None] * z[None, :])
+        S = (w[:, None] * frac).sum(axis=0)
+        Rtheta = 1.0 + 2.0 * np.real(S)
+
     return np.maximum(Rtheta, 0.0)
 
 
-def _I_inf_markov(L: np.ndarray, p: float, h: int, k: int, F2: np.ndarray) -> np.ndarray:
+def _I_inf_markov(
+    L: np.ndarray,
+    p: float,
+    h: int,
+    k: int,
+    F2: np.ndarray,
+    *,
+    finite_layers: int | None = None,
+) -> np.ndarray:
     rho, alpha = _rho_alpha_from_p(p)
     phi = _slip_phase(h, k)
     theta = _TWO_PI * (L / 3.0)
-    Rtheta = _R_from_transfer(phi, theta, rho, alpha)
+    Rtheta = _R_from_transfer(
+        phi,
+        theta,
+        rho,
+        alpha,
+        finite_layers=finite_layers,
+    )
     return AREA * F2 * Rtheta
 
 
@@ -304,15 +360,20 @@ def ht_Iinf_dict(
     two_theta_max: float | None = None,
     lambda_: float = 1.54,
     c_lattice: float | None = None,
+    *,
+    finite_stack: bool = False,
+    stack_layers: int = 50,
 ):
     """
-    Infinite-domain Hendricks Teller intensities using the Markov transfer model.
+    Hendricks–Teller intensities using the Markov transfer model.
 
     Returns {(h,k): {'L':..., 'I':...}} with F² and C2H conventions identical
     to diffuse_cif_toggle.py. The 'occ' parameter applies a temporary CIF with
     scaled occupancies before computing F².  When ``c_lattice`` is provided the
     two-theta clipping window is expanded or contracted according to that
     effective c-axis length instead of the raw 2H value from the CIF.
+    When ``finite_stack`` is ``True`` the per-layer finite-thickness factor for
+    ``stack_layers`` layers is applied instead of the infinite-domain limit.
     """
     cif_to_use = cif_path
     cleanup = None
@@ -332,10 +393,19 @@ def ht_Iinf_dict(
         )
 
         out = {}
+        finite_layers = int(max(1, stack_layers)) if finite_stack else None
+
         for (h, k), data in base.items():
             L_vals = data["L"]
             F2 = data["F2"]
-            I = _I_inf_markov(L_vals, p, h, k, F2)
+            I = _I_inf_markov(
+                L_vals,
+                p,
+                h,
+                k,
+                F2,
+                finite_layers=finite_layers,
+            )
             out[(h, k)] = {"L": L_vals.copy(), "I": I}
         return out
     finally:
