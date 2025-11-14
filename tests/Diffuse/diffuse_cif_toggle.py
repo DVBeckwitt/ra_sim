@@ -166,7 +166,11 @@ def _abc(p, h, k):
 def _finite_R_from_t(t, N):
     """
     Given complex step t (array) and number of layers N,
-    compute R_N = N + 2 Re[sum_{n=1}^{N-1} (N-n) t^n].
+    compute the per-layer finite factor
+
+        R_N(θ) = (1/N)[N + 2 Re ∑_{n=1}^{N-1} (N-n) t^n].
+
+    As N → ∞ with |t| < 1, this → 1 + 2 Re[t / (1 - t)].
     """
 
     t = np.asarray(t, dtype=complex)
@@ -185,11 +189,11 @@ def _finite_R_from_t(t, N):
         S1 = t_nm * (1 - t_nm**(N - 1)) / denom
         S2 = t_nm * (1 - N * t_nm**(N - 1) + (N - 1) * t_nm**N) / denom**2
         T = N * S1 - S2
-        out_nm = N + 2.0 * np.real(T)
+        out_nm = (N + 2.0 * np.real(T)) / N
         out[~mask] = out_nm
 
     if np.any(mask):
-        out[mask] = float(N * N)
+        out[mask] = float(N)
 
     return np.maximum(out, 0.0)
 
