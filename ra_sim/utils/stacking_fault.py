@@ -361,7 +361,7 @@ def ht_Iinf_dict(
     lambda_: float = 1.54,
     c_lattice: float | None = None,
     *,
-    finite_stack: bool = False,
+    finite_stack: bool = True,
     stack_layers: int = 50,
 ):
     """

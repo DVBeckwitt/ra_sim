@@ -121,7 +121,7 @@ def test_finite_stack_converges_to_infinite():
         lambda_=1.54,
     )
 
-    infinite = ht_Iinf_dict(**params)
+    infinite = ht_Iinf_dict(**params, finite_stack=False)
     finite_large = ht_Iinf_dict(
         **params,
         finite_stack=True,
