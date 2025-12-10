@@ -6,6 +6,7 @@ import os
 def load_parameters(
     path,
     theta_initial_var,
+    cor_angle_var,
     gamma_var,
     Gamma_var,
     chi_var,
@@ -32,6 +33,7 @@ def load_parameters(
         
         # Set all the old parameters
         theta_initial_var.set(params.get('theta_initial', theta_initial_var.get()))
+        cor_angle_var.set(params.get('cor_angle', cor_angle_var.get()))
         gamma_var.set(params.get('gamma', gamma_var.get()))
         Gamma_var.set(params.get('Gamma', Gamma_var.get()))
         chi_var.set(params.get('chi', chi_var.get()))
@@ -61,6 +63,7 @@ def load_parameters(
 def save_all_parameters(
     filepath,
     theta_initial_var,
+    cor_angle_var,
     gamma_var,
     Gamma_var,
     chi_var,
@@ -84,6 +87,7 @@ def save_all_parameters(
     """
     parameters = {
         'theta_initial':  theta_initial_var.get(),
+        'cor_angle':      cor_angle_var.get(),
         'gamma':          gamma_var.get(),
         'Gamma':          Gamma_var.get(),
         'chi':            chi_var.get(),

@@ -73,6 +73,7 @@ def main() -> None:
     bw_sigma     = 0.05e-3 * FWHM2SIGMA
     center       = [(poni2/100e-6), IMAGE_SIZE-(poni1/100e-6)]
     theta_initial = 6.0
+    cor_angle = 0.0
     psi          = 0.0
     zs = zb      = debye_x = debye_y = 0.0
     n2           = IndexofRefraction()
@@ -136,6 +137,7 @@ def main() -> None:
         debye_x, debye_y,
         center,
         theta_initial,
+        cor_angle,
         np.array([1.0,0.0,0.0]),
         np.array([0.0,1.0,0.0]),
         save_flag=0,

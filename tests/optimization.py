@@ -115,6 +115,7 @@ def run_simulation(
 
     img_buf = np.zeros((image_size, image_size), np.float64)
     n2      = IndexofRefraction()
+    cor_angle = geometry.get("cor_angle", 0.0)
 
     img, hit_tables, *_ = process_peaks_parallel(
         miller, intens, image_size,
@@ -123,7 +124,7 @@ def run_simulation(
         chi, 0.0, zs, zb, n2,
         bx, by, thetas, phis,
         sigma_mosaic_deg, gamma_mosaic_deg, 0.05, lams,
-        zs, zb, center, theta_initial,
+        zs, zb, center, theta_initial, cor_angle,
         np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]), 0,
     )
     return img, hit_tables, (miller, intens), profiles

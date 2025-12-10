@@ -193,7 +193,7 @@ def _simulate_with_cache(
         mosaic['eta'],
         wavelength_array,
         params['debye_x'], params['debye_y'],
-        params['center'], params['theta_initial'],
+        params['center'], params['theta_initial'], params.get('cor_angle', 0.0),
         params.get('uv1', np.array([1.0, 0.0, 0.0])),
         params.get('uv2', np.array([0.0, 1.0, 0.0])),
         save_flag=0,
@@ -341,6 +341,7 @@ def fit_mosaic_widths_separable(
     debye_x = float(params.get("debye_x", 0.0))
     debye_y = float(params.get("debye_y", 0.0))
     theta_initial = float(params.get("theta_initial", 0.0))
+    cor_angle = float(params.get("cor_angle", 0.0))
     corto_detector = float(params.get("corto_detector"))
     center = tuple(params.get("center", (image_size / 2.0, image_size / 2.0)))
     unit_x = np.asarray(params.get("uv1", np.array([1.0, 0.0, 0.0])), dtype=np.float64)
@@ -387,6 +388,7 @@ def fit_mosaic_widths_separable(
             debye_y,
             center,
             theta_initial,
+            cor_angle,
             unit_x,
             n_detector,
             0,
@@ -1637,6 +1639,7 @@ def simulate_and_compare_hkl(
     n2    = params['n2']
     center = params['center']
     theta_initial = params['theta_initial']
+    cor_angle = params.get('cor_angle', 0.0)
 
     mosaic = params['mosaic_params']
     wavelength_array = mosaic.get('wavelength_array')
@@ -1659,7 +1662,7 @@ def simulate_and_compare_hkl(
         mosaic['eta'],
         wavelength_array,
         debye_x, debye_y,
-        center, theta_initial,
+        center, theta_initial, cor_angle,
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0

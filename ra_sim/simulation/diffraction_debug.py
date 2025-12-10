@@ -300,6 +300,7 @@ def calculate_phi(
     debye_x, debye_y,
     center,
     theta_initial_deg,
+    cor_angle_deg,
     R_x_detector, R_z_detector, n_det_rot, Detector_Pos,
     e1_det, e2_det,
     R_z_R_y,
@@ -320,14 +321,28 @@ def calculate_phi(
     max_y_sign1 = np.nan
 
     rad_theta_i = theta_initial_deg*(pi/180.0)
-    R_x = np.array([
-        [1.0,              0.0,                0.0],
-        [0.0,  cos(rad_theta_i), -sin(rad_theta_i)],
-        [0.0,  sin(rad_theta_i),  cos(rad_theta_i)]
-    ])
-    R_sample = R_x @ R_z_R_y
+    cor_axis_rad = cor_angle_deg * (pi / 180.0)
+    ax = cos(cor_axis_rad)
+    ay = 0.0
+    az = sin(cor_axis_rad)
+    axis_norm = sqrt(ax * ax + ay * ay + az * az)
+    if axis_norm < 1e-12:
+        axis_norm = 1.0
+    ax /= axis_norm
+    ay /= axis_norm
+    az /= axis_norm
 
-    n_surf = R_x @ R_ZY_n
+    ct = cos(rad_theta_i)
+    st = sin(rad_theta_i)
+    one_ct = 1.0 - ct
+    R_cor = np.array([
+        [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
+        [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
+        [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
+    ])
+    R_sample = R_cor @ R_z_R_y
+
+    n_surf = R_cor @ R_ZY_n
     n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
 
     P0_rot = R_sample @ P0
@@ -494,6 +509,7 @@ def process_peaks_parallel_debug(
     wavelength_array,
     debye_x, debye_y, center,
     theta_initial_deg,
+    cor_angle_deg,
     unit_x, n_detector,
     save_flag
 ):
@@ -595,6 +611,7 @@ def process_peaks_parallel_debug(
             debye_x, debye_y,
             center,
             theta_initial_deg,
+            cor_angle_deg,
             R_x_det, R_z_det, n_det_rot, Detector_Pos,
             e1_det, e2_det,
             R_z_R_y,
@@ -643,6 +660,7 @@ def process_qr_rods_parallel_debug(
     debye_y,
     center,
     theta_initial_deg,
+    cor_angle_deg,
     unit_x,
     n_detector,
     save_flag,
@@ -681,6 +699,7 @@ def process_qr_rods_parallel_debug(
         debye_y,
         center,
         theta_initial_deg,
+        cor_angle_deg,
         unit_x,
         n_detector,
         save_flag,

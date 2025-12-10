@@ -233,6 +233,7 @@ def test_process_qr_rods_parallel_scales_with_degeneracy(monkeypatch):
         debye_y=0.0,
         center=[0.0, 0.0],
         theta_initial_deg=0.0,
+        cor_angle_deg=0.0,
         unit_x=np.array([1.0, 0.0, 0.0]),
         n_detector=np.array([0.0, 1.0, 0.0]),
         save_flag=0,

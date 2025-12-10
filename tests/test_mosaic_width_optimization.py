@@ -66,6 +66,7 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
         debye_y,
         center,
         theta_initial,
+        cor_angle,
         unit_x,
         n_detector,
         save_flag,

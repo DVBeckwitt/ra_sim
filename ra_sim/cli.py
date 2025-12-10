@@ -203,6 +203,7 @@ def run_headless_simulation(
 
     # Film/optical parameters
     theta_initial = float(sample_cfg.get("theta_initial_deg", 6.0))
+    cor_angle = float(sample_cfg.get("cor_deg", 0.0))
     chi = float(sample_cfg.get("chi_deg", 0.0))
     psi = float(sample_cfg.get("psi_deg", 0.0))
     zb = float(sample_cfg.get("zb", 0.0))
@@ -256,6 +257,7 @@ def run_headless_simulation(
         debye_y,
         center,
         theta_initial,
+        cor_angle,
         unit_x,
         n_detector,
         save_flag=0,

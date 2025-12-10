@@ -686,6 +686,7 @@ def calculate_phi(
     debye_x, debye_y,
     center,
     theta_initial_deg,
+    cor_angle_deg,
     R_x_detector, R_z_detector, n_det_rot, Detector_Pos,
     e1_det, e2_det,
     R_z_R_y,
@@ -749,16 +750,34 @@ def calculate_phi(
 
     #N = int(thickness/cv)  # Number of layers (approx)
 
-    # Build a sample rotation from "theta_initial_deg"
+    # Build a sample rotation from "theta_initial_deg" about the CoR axis
     rad_theta_i = theta_initial_deg*(pi/180.0)
-    R_x = np.array([
-        [1.0,              0.0,                0.0],
-        [0.0,  cos(rad_theta_i), -sin(rad_theta_i)],
-        [0.0,  sin(rad_theta_i),  cos(rad_theta_i)]
-    ])
-    R_sample = R_x @ R_z_R_y
+    cor_axis_rad = cor_angle_deg * (pi / 180.0)
 
-    n_surf = R_x @ R_ZY_n
+    # Build the CoR axis in the x–z plane and rotate around it with Rodrigues'
+    # formula.  See docs/cor_rotation_math.md for the derivation.  The axis is
+    # pitched away from +x by cor_axis_rad so that (ax, 0, az) = (cos φ, 0, sin φ).
+    ax = cos(cor_axis_rad)
+    ay = 0.0
+    az = sin(cor_axis_rad)
+    axis_norm = sqrt(ax * ax + ay * ay + az * az)
+    if axis_norm < 1e-12:
+        axis_norm = 1.0
+    ax /= axis_norm
+    ay /= axis_norm
+    az /= axis_norm
+
+    ct = cos(rad_theta_i)
+    st = sin(rad_theta_i)
+    one_ct = 1.0 - ct
+    R_cor = np.array([
+        [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
+        [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
+        [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
+    ])
+    R_sample = R_cor @ R_z_R_y
+
+    n_surf = R_cor @ R_ZY_n
     n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
 
     P0_rot = R_sample @ P0
@@ -1059,6 +1078,7 @@ def process_peaks_parallel(
     wavelength_array,
     debye_x, debye_y, center,
     theta_initial_deg,
+    cor_angle_deg,
     unit_x, n_detector,
     save_flag,
     record_status=False,
@@ -1188,6 +1208,7 @@ def process_peaks_parallel(
             debye_x, debye_y,
             center,
             theta_initial_deg,
+            cor_angle_deg,
             R_x_det, R_z_det, n_det_rot, Detector_Pos,
             e1_det, e2_det,
             R_z_R_y,
@@ -1232,6 +1253,7 @@ def process_qr_rods_parallel(
     debye_y,
     center,
     theta_initial_deg,
+    cor_angle_deg,
     unit_x,
     n_detector,
     save_flag,
@@ -1281,6 +1303,7 @@ def process_qr_rods_parallel(
         debye_y,
         center,
         theta_initial_deg,
+        cor_angle_deg,
         unit_x,
         n_detector,
         save_flag,
@@ -1293,7 +1316,7 @@ def process_qr_rods_parallel(
 
 def debug_detector_paths(
     beam_x_array, beam_y_array, theta_array, phi_array,
-    theta_initial_deg, chi_deg, psi_deg,
+    theta_initial_deg, cor_angle_deg, chi_deg, psi_deg,
     zb, zs,
     Distance_CoR_to_Detector, gamma_deg, Gamma_deg,
     n_detector=np.array([0.0, 1.0, 0.0]),
@@ -1311,7 +1334,9 @@ def debug_detector_paths(
     beam_x_array, beam_y_array, theta_array, phi_array : array-like
         Sampled beam parameters as used in :func:`process_peaks_parallel`.
     theta_initial_deg : float
-        Sample tilt around the x-axis.
+        Sample tilt around the CoR axis.
+    cor_angle_deg : float
+        Angle of the CoR axis relative to the +x axis.
     chi_deg, psi_deg : float
         Additional sample rotations around y and z.
     zb, zs : float
@@ -1329,6 +1354,7 @@ def debug_detector_paths(
     chi_rad   = np.radians(chi_deg)
     psi_rad   = np.radians(psi_deg)
     rad_theta_i = np.radians(theta_initial_deg)
+    cor_axis_rad = np.radians(cor_angle_deg)
 
     cg = np.cos(gamma_rad)
     sg = np.sin(gamma_rad)
@@ -1365,16 +1391,29 @@ def debug_detector_paths(
     ])
     R_z_R_y = R_z @ R_y
 
+    # Construct the pitched CoR axis in x–z and rotate with Rodrigues' formula;
+    # see docs/cor_rotation_math.md for the math details.
+    ax = np.cos(cor_axis_rad)
+    ay = 0.0
+    az = np.sin(cor_axis_rad)
+    axis_norm = np.sqrt(ax * ax + ay * ay + az * az)
+    if axis_norm < 1e-12:
+        axis_norm = 1.0
+    ax /= axis_norm
+    ay /= axis_norm
+    az /= axis_norm
+
     ct = np.cos(rad_theta_i)
     st = np.sin(rad_theta_i)
-    R_x = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, ct, -st],
-        [0.0, st,  ct]
+    one_ct = 1.0 - ct
+    R_cor = np.array([
+        [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
+        [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
+        [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
     ])
-    R_sample = R_x @ R_z_R_y
+    R_sample = R_cor @ R_z_R_y
 
-    n_surf = R_x @ (R_z_R_y @ np.array([0.0, 0.0, 1.0]))
+    n_surf = R_cor @ (R_z_R_y @ np.array([0.0, 0.0, 1.0]))
     n_surf /= np.linalg.norm(n_surf)
 
     P0 = np.array([0.0, 0.0, -zs])
