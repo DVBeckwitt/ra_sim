@@ -164,7 +164,7 @@ def run_headless_simulation(
     av, cv = _parse_cif_cell_a_c(cif_file)
 
     # Build HT curves and rods for the three p values
-    finite_stack_flag = bool(ht_cfg.get("finite_stack", False))
+    finite_stack_flag = bool(ht_cfg.get("finite_stack", True))
     stack_layers_count = int(
         max(1, float(ht_cfg.get("stack_layers", 50)))
     )

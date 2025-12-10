@@ -265,7 +265,7 @@ p_defaults = _ensure_triplet(
 w_defaults = _ensure_triplet(
     hendricks_config.get("default_w"), [50.0, 50.0, 0.0]
 )
-finite_stack_default = bool(hendricks_config.get("finite_stack", False))
+finite_stack_default = bool(hendricks_config.get("finite_stack", True))
 stack_layers_default = int(
     max(1, float(hendricks_config.get("stack_layers", 50)))
 )
@@ -628,6 +628,28 @@ fig_window = tk.Toplevel(root)
 fig_window.title("Main Figure")
 fig_frame = ttk.Frame(fig_window)
 fig_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+
+def _shutdown_gui():
+    """Close all application windows and end the Tk event loop."""
+
+    for window in (fig_window, root):
+        try:
+            if window.winfo_exists():
+                window.destroy()
+        except tk.TclError:
+            # Window is already gone or cannot be destroyed cleanly; proceed to
+            # shut down the rest of the application.
+            pass
+
+    try:
+        root.quit()
+    except tk.TclError:
+        pass
+
+
+root.protocol("WM_DELETE_WINDOW", _shutdown_gui)
+fig_window.protocol("WM_DELETE_WINDOW", _shutdown_gui)
 
 canvas_frame = ttk.Frame(fig_frame)
 canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
