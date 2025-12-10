@@ -265,7 +265,7 @@ p_defaults = _ensure_triplet(
 w_defaults = _ensure_triplet(
     hendricks_config.get("default_w"), [50.0, 50.0, 0.0]
 )
-finite_stack_default = bool(hendricks_config.get("finite_stack", False))
+finite_stack_default = bool(hendricks_config.get("finite_stack", True))
 stack_layers_default = int(
     max(1, float(hendricks_config.get("stack_layers", 50)))
 )
