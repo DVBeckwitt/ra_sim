@@ -239,7 +239,7 @@ def main():
         "Theta Initial", 5.0, 20.0, 6.0, 0.01, parent=geometry_section
     )
     cor_angle_var, _ = create_slider(
-        "CoR Axis Angle", -45.0, 45.0, 0.0, 0.01, parent=geometry_section
+        "CoR Axis Angle", -90.0, 90.0, 0.0, 0.01, parent=geometry_section
     )
     gamma_var, _ = create_slider(
         "Gamma", -5, 5, ai.rot2, 0.001, parent=geometry_section

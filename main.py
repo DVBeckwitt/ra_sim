@@ -2952,7 +2952,7 @@ theta_initial_var, theta_initial_scale = make_slider(
     'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
 )
 cor_angle_var, cor_angle_scale = make_slider(
-    'CoR Axis Angle', -45.0, 45.0, defaults['cor_angle'], 0.01, geo_frame.frame
+    'CoR Axis Angle', -90.0, 90.0, defaults['cor_angle'], 0.01, geo_frame.frame
 )
 gamma_var, gamma_scale = make_slider(
     'Gamma', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
