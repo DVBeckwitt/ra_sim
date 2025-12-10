@@ -753,6 +753,10 @@ def calculate_phi(
     # Build a sample rotation from "theta_initial_deg" about the CoR axis
     rad_theta_i = theta_initial_deg*(pi/180.0)
     cor_axis_rad = cor_angle_deg * (pi / 180.0)
+
+    # Build the CoR axis in the x–z plane and rotate around it with Rodrigues'
+    # formula.  See docs/cor_rotation_math.md for the derivation.  The axis is
+    # pitched away from +x by cor_axis_rad so that (ax, 0, az) = (cos φ, 0, sin φ).
     ax = cos(cor_axis_rad)
     ay = 0.0
     az = sin(cor_axis_rad)
@@ -1387,6 +1391,8 @@ def debug_detector_paths(
     ])
     R_z_R_y = R_z @ R_y
 
+    # Construct the pitched CoR axis in x–z and rotate with Rodrigues' formula;
+    # see docs/cor_rotation_math.md for the math details.
     ax = np.cos(cor_axis_rad)
     ay = 0.0
     az = np.sin(cor_axis_rad)
