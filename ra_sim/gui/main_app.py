@@ -238,6 +238,9 @@ def main():
     theta_initial_var, _ = create_slider(
         "Theta Initial", 5.0, 20.0, 6.0, 0.01, parent=geometry_section
     )
+    cor_angle_var, _ = create_slider(
+        "CoR Axis Angle", -45.0, 45.0, 0.0, 0.01, parent=geometry_section
+    )
     gamma_var, _ = create_slider(
         "Gamma", -5, 5, ai.rot2, 0.001, parent=geometry_section
     )
@@ -320,7 +323,7 @@ def main():
             pending_update = True
             return
 
-        def worker(theta_initial, gamma, Gamma, chi, zs, zb):
+        def worker(theta_initial, cor_angle, gamma, Gamma, chi, zs, zb):
             beam_arrays, mosaic_arrays, divergence_arrays = generate_random_profiles()
             result = simulate_diffraction_pattern(
                 miller=[(0, 0, 3), (0, 0, 6)],  # Replace with actual data
@@ -338,7 +341,7 @@ def main():
                 theta_initial=theta_initial,
                 theta_range=0.1,
                 step=0.1,
-                geometry_params=(ai.dist, gamma, Gamma, chi, 0, zs, zb, 1),
+                geometry_params=(ai.dist, gamma, Gamma, chi, cor_angle, zs, zb, 1),
             )
 
             try:
@@ -440,6 +443,7 @@ def main():
 
 
         theta_initial = theta_initial_var.get()
+        cor_angle = cor_angle_var.get()
         gamma = gamma_var.get()
         Gamma = Gamma_var.get()
         chi = chi_var.get()
@@ -448,7 +452,7 @@ def main():
 
         threading.Thread(
             target=worker,
-            args=(theta_initial, gamma, Gamma, chi, zs, zb),
+            args=(theta_initial, cor_angle, gamma, Gamma, chi, zs, zb),
             daemon=True,
         ).start()
 
@@ -464,7 +468,7 @@ def main():
         update_job = root.after(200, update_plot)
 
     # Link sliders to the throttled update function
-    for var in [theta_initial_var, gamma_var, Gamma_var, chi_var,
+    for var in [theta_initial_var, cor_angle_var, gamma_var, Gamma_var, chi_var,
                 zs_var, zb_var, eta_var, sigma_mosaic_var, gamma_mosaic_var]:
         var.trace_add("write", schedule_update)
 

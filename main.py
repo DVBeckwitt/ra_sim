@@ -193,6 +193,7 @@ gamma_mosaic = math.radians(
 eta = beam_config.get("eta", 0.0)
 
 theta_initial = sample_config.get("theta_initial_deg", 6.0)
+cor_angle = sample_config.get("cor_deg", 0.0)
 chi = sample_config.get("chi_deg", 0.0)
 psi = sample_config.get("psi_deg", 0.0)
 zb = sample_config.get("zb", 0.0)
@@ -276,6 +277,7 @@ stack_layers_default = int(
 # ---------------------------------------------------------------------------
 defaults = {
     'theta_initial': theta_initial,
+    'cor_angle': cor_angle,
     'gamma': Gamma_initial,
     'Gamma': gamma_initial,
     'chi': chi,
@@ -1603,6 +1605,7 @@ def do_update():
     chi_updated        = float(chi_var.get())
     zs_updated         = float(zs_var.get())
     zb_updated         = float(zb_var.get())
+    cor_angle_updated  = float(cor_angle_var.get())
     a_updated          = float(a_var.get())
     c_updated          = float(c_var.get())
     theta_init_up      = float(theta_initial_var.get())
@@ -1661,6 +1664,7 @@ def do_update():
             round(a_updated, 6),
             round(c_updated, 6),
             round(theta_init_up, 6),
+            round(cor_angle_updated, 6),
             round(center_x_up, 3),
             round(center_y_up, 3),
             round(mosaic_params["sigma_mosaic_deg"], 6),
@@ -1714,6 +1718,7 @@ def do_update():
                     debye_y_updated,
                     [center_x_up, center_y_up],
                     theta_init_up,
+                    cor_angle_updated,
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
@@ -1754,6 +1759,7 @@ def do_update():
                     debye_y_updated,
                     [center_x_up, center_y_up],
                     theta_init_up,
+                    cor_angle_updated,
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
@@ -2103,6 +2109,7 @@ def reset_to_defaults():
     global simulation_limits_user_override, background_limits_user_override
     global scale_factor_user_override, suppress_simulation_limit_callback
     theta_initial_var.set(defaults['theta_initial'])
+    cor_angle_var.set(defaults['cor_angle'])
     gamma_var.set(defaults['gamma'])
     Gamma_var.set(defaults['Gamma'])
     chi_var.set(defaults['chi'])
@@ -2184,6 +2191,7 @@ azimuthal_button = ttk.Button(
     command=lambda: view_azimuthal_radial(
         simulate_diffraction(
             theta_initial=theta_initial_var.get(),
+            cor_angle=cor_angle_var.get(),
             gamma=gamma_var.get(),
             Gamma=Gamma_var.get(),
             chi=chi_var.get(),
@@ -2246,6 +2254,7 @@ save_button = ttk.Button(
     command=lambda: save_all_parameters(
         get_path("parameters_file"),
         theta_initial_var,
+        cor_angle_var,
         gamma_var,
         Gamma_var,
         chi_var,
@@ -2273,6 +2282,7 @@ load_button = ttk.Button(
             text=load_parameters(
                 get_path("parameters_file"),
                 theta_initial_var,
+                cor_angle_var,
                 gamma_var,
                 Gamma_var,
                 chi_var,
@@ -2691,6 +2701,7 @@ def save_q_space_representation():
 
     param_dict = {
         "theta_initial": theta_initial_var.get(),
+        "cor_angle": cor_angle_var.get(),
         "gamma": gamma_var.get(),
         "Gamma": Gamma_var.get(),
         "chi": chi_var.get(),
@@ -2749,6 +2760,7 @@ def save_q_space_representation():
         debye_y_var.get(),
         [center_x_var.get(), center_y_var.get()],
         theta_initial_var.get(),
+        cor_angle_var.get(),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=1
@@ -2836,6 +2848,7 @@ def run_debug_simulation():
         dy_val,
         [cx_val, cy_val],
         theta_val,
+        cor_angle_var.get(),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=1
@@ -2937,6 +2950,9 @@ def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=Fals
 
 theta_initial_var, theta_initial_scale = make_slider(
     'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
+)
+cor_angle_var, cor_angle_scale = make_slider(
+    'CoR Axis Angle', -45.0, 45.0, defaults['cor_angle'], 0.01, geo_frame.frame
 )
 gamma_var, gamma_scale = make_slider(
     'Gamma', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
@@ -3340,6 +3356,7 @@ def main(write_excel_flag=None):
         load_parameters(
             params_file_path,
             theta_initial_var,
+            cor_angle_var,
             gamma_var,
             Gamma_var,
             chi_var,

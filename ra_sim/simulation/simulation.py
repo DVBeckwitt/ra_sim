@@ -9,6 +9,7 @@ from ra_sim.utils.calculations import IndexofRefraction, fresnel_transmission
 
 def simulate_diffraction(
     theta_initial,
+    cor_angle,
     gamma,
     Gamma,
     chi,
@@ -84,6 +85,7 @@ def simulate_diffraction(
         debye_y_value,
         center,
         theta_initial,
+        cor_angle,
         unit_x,
         n_detector,
         save_flag=0,

@@ -25,6 +25,7 @@ instrument:
     bandwidth_sigma_fraction: 5.0e-05
   sample_orientation:
     theta_initial_deg: 6.0
+    cor_deg: 0.0
     chi_deg: 0.0
     psi_deg: 0.0
     zb: 0.0
