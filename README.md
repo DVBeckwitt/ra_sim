@@ -54,6 +54,8 @@ python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml --fit-compr
 
 When a bundle NPZ is provided in the paths file (or via `--load-bundle`), changing `--fit-compression` or adding `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses.
 
+After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ) so you can review the results directly from the command prompt output and plot.
+
 ## Troubleshooting
 
 Set `RA_SIM_DEBUG=1` to enable verbose logging and additional diagnostic plots:

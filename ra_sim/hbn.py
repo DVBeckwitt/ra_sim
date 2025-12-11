@@ -833,6 +833,18 @@ def compute_common_center(ellipses):
     return float(xs.mean()), float(ys.mean())
 
 
+def _format_ellipse_lines(ellipses):
+    lines = []
+    for i, e in enumerate(ellipses):
+        lines.append(
+            "  "
+            f"{i}: xc={e['xc']:.2f}, yc={e['yc']:.2f}, "
+            f"a={e['a']:.2f}, b={e['b']:.2f}, "
+            f"theta={np.degrees(e['theta']):.2f} deg"
+        )
+    return "\n".join(lines)
+
+
 def plot_ellipses(img_bgsub, ellipses, save_path=None, down_factor=DOWNSAMPLE_FACTOR):
     disp = make_display_image(img_bgsub)
     h, w = disp.shape
@@ -850,6 +862,21 @@ def plot_ellipses(img_bgsub, ellipses, save_path=None, down_factor=DOWNSAMPLE_FA
         xc0, yc0 = compute_common_center(ellipses)
         ax.scatter(xc0, yc0, s=40, c="cyan", marker="x")
         print(f"Common center estimate: xc={xc0:.2f}, yc={yc0:.2f}")
+
+        # Show the fitted parameters alongside the real image overlay.
+        lines = _format_ellipse_lines(ellipses)
+        if lines:
+            ax.text(
+                0.01,
+                0.99,
+                "Ellipses (xc, yc, a, b, theta):\n" + lines,
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=8,
+                color="white",
+                bbox=dict(facecolor="black", alpha=0.4, edgecolor="none", pad=6),
+            )
 
     ax.set_xlim(0, w)
     ax.set_ylim(h, 0)
@@ -1020,6 +1047,10 @@ def run_hbn_fit(
         )
         plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path, down_factor=down_factor)
 
+        if ellipses_out:
+            print("Fitted ellipse parameters:")
+            print(_format_ellipse_lines(ellipses_out))
+
         outputs["ellipses"] = ellipses_out
         return outputs
 
@@ -1079,6 +1110,8 @@ def run_hbn_fit(
 
     if ellipses:
         plot_ellipses(img_bgsub, ellipses, save_path=out_overlay_path, down_factor=down_factor)
+        print("Fitted ellipse parameters:")
+        print(_format_ellipse_lines(ellipses))
 
     outputs["ellipses"] = ellipses
     return outputs
