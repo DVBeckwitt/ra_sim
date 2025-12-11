@@ -947,15 +947,17 @@ def run_hbn_fit(
 
     osc_path = resolved["osc"]
     dark_path = resolved["dark"]
-    bundle_from_file = resolved["bundle"]
-    bundle_path_in = load_bundle or (
-        bundle_from_file if bundle_from_file and os.path.exists(bundle_from_file) else None
-    )
-    if load_bundle_requested and bundle_path_in is None:
-        raise ValueError(
-            "--load-bundle was specified but no bundle path was provided and no "
-            "bundle/npz entry was found in the paths file."
-        )
+    bundle_from_file = resolved["bundle"] if load_bundle_requested else None
+    bundle_path_in = None
+    if load_bundle_requested:
+        bundle_path_in = load_bundle if load_bundle not in (None, "") else None
+        if bundle_path_in is None and bundle_from_file and os.path.exists(bundle_from_file):
+            bundle_path_in = bundle_from_file
+        if bundle_path_in is None:
+            raise ValueError(
+                "--load-bundle was specified but no bundle path was provided and no "
+                "bundle/npz entry was found in the paths file."
+            )
     fit_compression_requested = resolved["fit_compression"]
     fit_compression_source = None
     if fit_compression_requested is not None:
