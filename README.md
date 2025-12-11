@@ -42,6 +42,9 @@ You can run the hBN ellipse fitting workflow without the GUI through the project
 # Use the default config/hbn_paths.yaml and the compression it declares
 python -m ra_sim hbn-fit
 
+# Load the bundle listed in the paths file without retyping its path and override compression
+python -m ra_sim hbn-fit --fit-compression 1 --load-bundle
+
 # Or pick a different compression at runtime (e.g., downsample by 4x)
 python -m ra_sim hbn-fit --fit-compression 4
 

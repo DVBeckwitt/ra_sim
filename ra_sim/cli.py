@@ -297,6 +297,7 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         dark_path=args.dark,
         output_dir=args.output_dir,
         load_bundle=args.load_bundle,
+        load_bundle_requested=args.load_bundle is not None,
         highres_refine=args.highres_refine,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
@@ -345,7 +346,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     hbn_parser.add_argument(
         "--load-bundle",
-        help="Existing NPZ bundle created by the hBN workflow to reload or refine.",
+        nargs="?",
+        const="",
+        help=(
+            "Existing NPZ bundle created by the hBN workflow to reload or refine. "
+            "Omit the path to let the CLI pull the bundle location from a paths file "
+            "(defaults to config/hbn_paths.yaml)."
+        ),
     )
     hbn_parser.add_argument(
         "--highres-refine",

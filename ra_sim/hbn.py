@@ -142,9 +142,14 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--load-bundle",
-        type=str,
+        nargs="?",
+        const="",
         default=None,
-        help="Path to NPZ bundle created by this script. If given, load it instead of recomputing everything.",
+        help=(
+            "Path to NPZ bundle created by this script. If given, load it instead of "
+            "recomputing everything. You may omit the path to let the script pull the "
+            "bundle from a paths file (defaults to config/hbn_paths.yaml)."
+        ),
     )
     parser.add_argument(
         "--highres-refine",
@@ -880,6 +885,7 @@ def run_hbn_fit(
     dark_path,
     output_dir=None,
     load_bundle=None,
+    load_bundle_requested=False,
     highres_refine=False,
     reuse_profile=False,
     downsample_factor=None,
@@ -908,6 +914,11 @@ def run_hbn_fit(
     bundle_path_in = load_bundle or (
         bundle_from_file if bundle_from_file and os.path.exists(bundle_from_file) else None
     )
+    if load_bundle_requested and bundle_path_in is None:
+        raise ValueError(
+            "--load-bundle was specified but no bundle path was provided and no "
+            "bundle/npz entry was found in the paths file."
+        )
     fit_compression_requested = resolved["fit_compression"]
     fit_compression_source = None
     if fit_compression_requested is not None:
@@ -1081,6 +1092,7 @@ def main(argv=None):
         dark_path=args.dark,
         output_dir=args.output_dir,
         load_bundle=args.load_bundle,
+        load_bundle_requested=args.load_bundle is not None,
         highres_refine=args.highres_refine,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
