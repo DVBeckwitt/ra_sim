@@ -301,8 +301,6 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         highres_refine=args.highres_refine,
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
-        downsample_factor=args.downsample_factor,
-        fit_compression=args.fit_compression,
         paths_file=args.paths_file,
     )
 
@@ -315,7 +313,6 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
-    print(f"  Fit compression: {results['fit_compression']}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -374,23 +371,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Reuse an existing click profile JSON in the output directory if present.",
     )
     hbn_parser.add_argument(
-        "--downsample-factor",
-        type=int,
-        default=None,
-        help="Override the downsample factor used for interactive clicking.",
-    )
-    hbn_parser.add_argument(
-        "--fit-compression",
-        type=int,
-        default=None,
-        help="Downsample factor applied before fitting/refinement (1 keeps full resolution).",
-    )
-    hbn_parser.add_argument(
         "--paths-file",
         help=(
             "Optional YAML/JSON file containing calibrant, dark, and artifact paths "
             "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
-            "fit_profile/fit, fit_compression). If omitted, the CLI falls back to "
+            "fit_profile/fit). If omitted, the CLI falls back to "
             "config/hbn_paths.yaml when available."
         ),
     )

@@ -35,27 +35,27 @@ The application loads example images specified in `config/dir_paths.yaml`. Refin
 
 You can run the hBN ellipse fitting workflow without the GUI through the project CLI. The workflow understands a YAML/JSON paths file so you do not have to repeat calibrant and dark frame paths each time.
 
-1. Update `config/hbn_paths.yaml` with your calibrant, dark, and optional bundle/profile paths (or point `--paths-file` to a custom YAML/JSON). The file can also hold a default `fit_compression` factor (`1` keeps full 3000×3000 resolution, `4` downsamples by 4× before fitting).
-2. Launch the workflow and optionally override the compression from the command prompt:
+1. Update `config/hbn_paths.yaml` with your calibrant, dark, and optional bundle/profile paths (or point `--paths-file` to a custom YAML/JSON).
+2. Launch the workflow at full 3000×3000 resolution from the command prompt:
 
 ```bash
-# Use the default config/hbn_paths.yaml and the compression it declares
+# Use the default config/hbn_paths.yaml and process at full resolution
 python -m ra_sim hbn-fit
 
-# Load the bundle listed in the paths file without retyping its path and override compression
-python -m ra_sim hbn-fit --fit-compression 1 --load-bundle
+# Load the bundle listed in the paths file without retyping its path
+python -m ra_sim hbn-fit --load-bundle
 
-# Or pick a different compression at runtime (e.g., downsample by 4x)
-python -m ra_sim hbn-fit --fit-compression 4
+# Recompute a fresh background/fit at full resolution using stored ellipses as starting guesses
+python -m ra_sim hbn-fit --load-bundle --highres-refine --osc /path/to/calibrant.osc --dark /path/to/dark.osc
 
 # Collect a fresh set of 5 points on each of the 5 rings even when a bundle exists
 python -m ra_sim hbn-fit --reclick --osc /path/to/calibrant.osc --dark /path/to/dark.osc
 
 # Supply an alternate paths file
-python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml --fit-compression 1
+python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml
 ```
 
-When a bundle NPZ is provided in the paths file (or via `--load-bundle`), changing `--fit-compression` or adding `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses.
+When a bundle NPZ is provided in the paths file (or via `--load-bundle`), `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses at full resolution.
 
 After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ) so you can review the results directly from the command prompt output and plot.
 

@@ -8,7 +8,3 @@ dark: "/path/to/dark.osc"
 bundle: "/path/to/hbn_ellipse_bundle.npz"
 click_profile: "/path/to/hbn_ellipse_profile.json"
 fit_profile: "/path/to/hbn_ellipse_fit_profile.json"
-
-# Optional default compression factor for fitting/refinement.
-# 1 keeps the full resolution, 4 downsamples by 4x before fitting, etc.
-fit_compression: 1

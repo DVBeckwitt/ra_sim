@@ -62,9 +62,6 @@ N_ELLIPSES = 5
 # Points clicked per ellipse (>=5 recommended)
 POINTS_PER_ELLIPSE = 5
 
-# Downsample factor for interactive view only
-DOWNSAMPLE_FACTOR = 4
-
 # Log intensity for display and fitting
 USE_LOG_INTENSITY = True
 LOG_EPS = 1e-3
@@ -115,29 +112,14 @@ def parse_args(argv=None):
         help="Reuse an existing click profile JSON in the output directory if present.",
     )
     parser.add_argument(
-        "--downsample-factor",
-        type=int,
-        default=None,
-        help="Override the downsample factor used for interactive clicking.",
-    )
-    parser.add_argument(
         "--paths-file",
         type=str,
         default=None,
         help=(
             "Optional YAML/JSON file containing calibrant, dark, and artifact paths. "
             "Accepted keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
-            "fit_profile/fit, and fit_compression. If omitted, the workflow will look for "
+            "fit_profile/fit. If omitted, the workflow will look for "
             "config/hbn_paths.yaml."
-        ),
-    )
-    parser.add_argument(
-        "--fit-compression",
-        type=int,
-        default=None,
-        help=(
-            "Downsample factor applied before fitting/refinement (1 keeps full resolution, "
-            "4 downsamples to 1/4 size, etc.)."
         ),
     )
     parser.add_argument(
@@ -204,21 +186,14 @@ def make_log_image(img_bgsub):
     return img
 
 
-def make_click_image(img_bgsub, down_factor):
+def make_click_image(img_bgsub):
     img_log = make_log_image(img_bgsub)
 
     vmin, vmax = np.percentile(img_log, (0.5, 99.5))
     norm = (img_log - vmin) / (vmax - vmin + 1e-9)
     norm = np.clip(norm, 0, 1)
 
-    h, w = norm.shape
-    if down_factor < 1:
-        raise ValueError("DOWNSAMPLE_FACTOR must be >= 1")
-    small_w = max(1, w // down_factor)
-    small_h = max(1, h // down_factor)
-    print(f"Downsampling from {w}x{h} to {small_w}x{small_h} (factor {down_factor}) for clicking...")
-    small = cv2.resize(norm, (small_w, small_h), interpolation=cv2.INTER_AREA)
-    return small
+    return norm
 
 
 def make_display_image(img_bgsub):
@@ -227,22 +202,6 @@ def make_display_image(img_bgsub):
     disp = (img_log - p_low) / (p_high - p_low + 1e-9)
     disp = np.clip(disp, 0, 1)
     return disp
-
-
-def compress_image(img, factor):
-    if factor is None:
-        raise ValueError("Compression factor must not be None")
-    factor = int(factor)
-    if factor < 1:
-        raise ValueError("fit_compression must be >= 1")
-    if factor == 1:
-        return img
-
-    h, w = img.shape
-    small_w = max(1, w // factor)
-    small_h = max(1, h // factor)
-    print(f"Compressing image from {w}x{h} to {small_w}x{small_h} (factor {factor}) for fitting...")
-    return cv2.resize(img, (small_w, small_h), interpolation=cv2.INTER_AREA)
 
 
 # ------------------------------------------------------------
@@ -264,7 +223,6 @@ def resolve_hbn_paths(
     bundle_path=None,
     click_profile_path=None,
     fit_profile_path=None,
-    fit_compression=None,
     paths_file=None,
 ):
     """Return resolved paths using CLI args or a YAML/JSON file."""
@@ -282,7 +240,6 @@ def resolve_hbn_paths(
         bundle=os.path.expanduser(bundle_path) if bundle_path else None,
         click_profile=os.path.expanduser(click_profile_path) if click_profile_path else None,
         fit_profile=os.path.expanduser(fit_profile_path) if fit_profile_path else None,
-        fit_compression=fit_compression,
     )
 
     search_file = paths_file
@@ -304,11 +261,6 @@ def resolve_hbn_paths(
             resolved["click_profile"] = _pick(["click_profile", "profile", "click_profile_path"], file_data)
         if resolved["fit_profile"] is None:
             resolved["fit_profile"] = _pick(["fit_profile", "fit", "fit_profile_path"], file_data)
-        if resolved["fit_compression"] is None and file_data:
-            fc = file_data.get("fit_compression")
-            if fc is not None:
-                resolved["fit_compression"] = int(fc)
-
     resolved["paths_file"] = search_file if search_file else None
     return resolved
 
@@ -316,9 +268,8 @@ def resolve_hbn_paths(
 # ------------------------------------------------------------
 # Profile save / load
 # ------------------------------------------------------------
-def save_click_profile(path, ell_points_ds, img_shape, down_factor):
+def save_click_profile(path, ell_points_ds, img_shape):
     profile = {
-        "downsample_factor": down_factor,
         "image_shape": list(img_shape),
         "points": [
             [[float(x), float(y)] for (x, y) in ellipse_pts]
@@ -341,9 +292,8 @@ def load_click_profile(path):
     return ell_points_ds
 
 
-def save_fit_profile(path, ellipses, img_shape, down_factor):
+def save_fit_profile(path, ellipses, img_shape):
     profile = {
-        "downsample_factor": down_factor,
         "image_shape": list(img_shape),
         "ellipses": [
             {
@@ -363,7 +313,7 @@ def save_fit_profile(path, ellipses, img_shape, down_factor):
     print(f"Saved fit profile to:\n  {path}")
 
 
-def save_bundle(path, img_bgsub, img_log, ell_points_ds, ellipses, down_factor, fit_compression):
+def save_bundle(path, img_bgsub, img_log, ell_points_ds, ellipses):
     ell_points_arr = np.array(
         [np.array(pts, dtype=np.float32) for pts in ell_points_ds],
         dtype=object,
@@ -385,8 +335,6 @@ def save_bundle(path, img_bgsub, img_log, ell_points_ds, ellipses, down_factor, 
         img_log=img_log.astype(np.float32),
         ell_points_ds=ell_points_arr,
         ellipse_params=ellipse_params,
-        downsample_factor=np.array(down_factor, dtype=np.int32),
-        fit_compression=np.array(fit_compression, dtype=np.int32),
     )
     print(f"Saved bundle NPZ to:\n  {path}")
     print("Note: load with allow_pickle=True for ell_points_ds.")
@@ -398,8 +346,6 @@ def load_bundle_npz(path):
     img_log = data["img_log"]
     ell_points_arr = data["ell_points_ds"]
     ellipse_params = data["ellipse_params"]
-    down_factor = int(data["downsample_factor"])
-    fit_compression = int(data["fit_compression"]) if "fit_compression" in data else 1
 
     ell_points_ds = []
     for arr in ell_points_arr:
@@ -422,9 +368,10 @@ def load_bundle_npz(path):
     print(f"Loaded bundle from:\n  {path}")
     print(f"  image shape: {img_bgsub.shape}")
     print(f"  number of ellipses: {len(ellipses)}")
-    print(f"  downsample_factor in bundle: {down_factor}")
-    print(f"  fit_compression in bundle: {fit_compression}")
-    return img_bgsub, img_log, ell_points_ds, ellipses, down_factor, fit_compression
+    print(f"Loaded bundle from:\n  {path}")
+    print(f"  image shape: {img_bgsub.shape}")
+    print(f"  number of ellipses: {len(ellipses)}")
+    return img_bgsub, img_log, ell_points_ds, ellipses
 
 
 # ------------------------------------------------------------
@@ -494,7 +441,7 @@ def get_points_per_ellipse_with_zoom(small, n_ellipses, pts_per_ellipse):
             current_point += 1
             print(
                 f"Ellipse {current_ellipse + 1}, point {current_point}: "
-                f"x={x:.1f}, y={y:.1f} (downsampled)"
+                f"x={x:.1f}, y={y:.1f}"
             )
 
             if current_point >= pts_per_ellipse:
@@ -713,13 +660,9 @@ def refine_ellipse_with_intensity(img_log, params):
     return float(xc_new), float(yc_new), float(a_new), float(b_new), float(theta_new)
 
 
-def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub, fit_compression=1):
-    img_fit = compress_image(img_bgsub, fit_compression)
-    img_log = make_log_image(img_fit)
+def fit_ellipses_from_points(ell_points_ds, img_bgsub):
+    img_log = make_log_image(img_bgsub)
     ellipses = []
-
-    scale_to_fit = float(down_factor) / float(fit_compression)
-    scale_back = float(fit_compression)
 
     for i, pts in enumerate(ell_points_ds, 1):
         pts = np.array(pts, dtype=float)
@@ -727,9 +670,7 @@ def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub, fit_compress
             print(f"Ellipse {i}: not enough points to fit (have {pts.shape[0]}). Skipping.")
             continue
 
-        pts_full = pts * scale_to_fit
-
-        params0, _ = fit_initial_ellipse_from_points(pts_full)
+        params0, _ = fit_initial_ellipse_from_points(pts)
         print(
             f"Ellipse {i} initial fit: "
             f"xc={params0[0]:.2f}, yc={params0[1]:.2f}, "
@@ -739,11 +680,6 @@ def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub, fit_compress
 
         params_refined = refine_ellipse_with_intensity(img_log, params0)
         xc, yc, a, b, theta = params_refined
-
-        xc *= scale_back
-        yc *= scale_back
-        a *= scale_back
-        b *= scale_back
 
         ellipses.append(
             dict(
@@ -765,9 +701,7 @@ def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub, fit_compress
     return ellipses
 
 
-def refine_ellipses_from_existing(
-    ellipses_prev, img_bgsub_prev, img_bgsub_hr, img_log_hr, fit_compression=1
-):
+def refine_ellipses_from_existing(ellipses_prev, img_bgsub_prev, img_bgsub_hr, img_log_hr):
     h_prev, w_prev = img_bgsub_prev.shape
     h_hr, w_hr = img_bgsub_hr.shape
     sx = w_hr / w_prev
@@ -780,13 +714,7 @@ def refine_ellipses_from_existing(
         a0 = e["a"] * sx
         b0 = e["b"] * sy
         theta0 = e["theta"]
-        params0 = (
-            xc0 / float(fit_compression),
-            yc0 / float(fit_compression),
-            a0 / float(fit_compression),
-            b0 / float(fit_compression),
-            theta0,
-        )
+        params0 = (xc0, yc0, a0, b0, theta0)
 
         print(
             f"High res refine ellipse {i}: "
@@ -795,11 +723,6 @@ def refine_ellipses_from_existing(
         )
 
         xc, yc, a, b, theta = refine_ellipse_with_intensity(img_log_hr, params0)
-
-        xc *= float(fit_compression)
-        yc *= float(fit_compression)
-        a *= float(fit_compression)
-        b *= float(fit_compression)
 
         ellipses_hr.append(
             dict(
@@ -854,7 +777,7 @@ def _format_ellipse_lines(ellipses):
     return "\n".join(lines)
 
 
-def plot_ellipses(img_bgsub, ellipses, save_path=None, down_factor=DOWNSAMPLE_FACTOR):
+def plot_ellipses(img_bgsub, ellipses, save_path=None):
     disp = make_display_image(img_bgsub)
     h, w = disp.shape
 
@@ -890,10 +813,7 @@ def plot_ellipses(img_bgsub, ellipses, save_path=None, down_factor=DOWNSAMPLE_FA
     ax.set_xlim(0, w)
     ax.set_ylim(h, 0)
     ax.set_aspect("equal")
-    ax.set_title(
-        f"{len(ellipses)} ellipses "
-        f"(clicked points, intensity refined, downsample factor {down_factor})"
-    )
+    ax.set_title(f"{len(ellipses)} ellipses (clicked points, intensity refined)")
 
     plt.tight_layout()
     if save_path is not None:
@@ -925,11 +845,9 @@ def run_hbn_fit(
     highres_refine=False,
     reclick=False,
     reuse_profile=False,
-    downsample_factor=None,
     click_profile_path=None,
     fit_profile_path=None,
     bundle_path=None,
-    fit_compression=None,
     paths_file=None,
 ):
     resolved = resolve_hbn_paths(
@@ -938,7 +856,6 @@ def run_hbn_fit(
         bundle_path=bundle_path,
         click_profile_path=click_profile_path,
         fit_profile_path=fit_profile_path,
-        fit_compression=fit_compression,
         paths_file=paths_file,
     )
 
@@ -958,11 +875,6 @@ def run_hbn_fit(
                 "--load-bundle was specified but no bundle path was provided and no "
                 "bundle/npz entry was found in the paths file."
             )
-    fit_compression_requested = resolved["fit_compression"]
-    fit_compression_source = None
-    if fit_compression_requested is not None:
-        fit_compression_source = "command line" if fit_compression is not None else "paths file"
-    fit_compression = int(fit_compression_requested) if fit_compression_requested is not None else None
 
     output_dir = _resolve_output_dir(output_dir, bundle_path_in)
     out_tiff_path = os.path.join(output_dir, "hbn_bgsub.tiff")
@@ -989,82 +901,45 @@ def run_hbn_fit(
         "click_profile": click_profile_path,
         "fit_profile": fit_profile_path,
         "bundle": bundle_path_save,
-        "fit_compression": fit_compression,
         "ellipses": [],
     }
 
     bundle_loaded = None
-    down_factor_b = None
-    fit_compression_b = None
     if bundle_path_in is not None:
         bundle_loaded = load_bundle_npz(bundle_path_in)
-        _, _, _, _, down_factor_b, fit_compression_b = bundle_loaded
 
-    # Bundle path mode (reuse existing clicks unless the user forces a reclick)
     if bundle_loaded is not None and not reclick:
-        (
-            img_bgsub_b,
-            img_log_b,
-            ell_points_ds,
-            ellipses_b,
-            down_factor_b,
-            fit_compression_b,
-        ) = bundle_loaded
+        img_bgsub_b, img_log_b, ell_points_ds, ellipses_b = bundle_loaded
 
-        down_factor = int(downsample_factor or down_factor_b or DOWNSAMPLE_FACTOR)
-        fit_compression = int(
-            fit_compression
-            if fit_compression is not None
-            else (fit_compression_b if fit_compression_b is not None else 1)
-        )
-        if fit_compression_source is None:
-            fit_compression_source = "bundle" if fit_compression_b is not None else "default (1)"
-
-        print(f"Using fit compression {fit_compression} ({fit_compression_source}).")
-
-        should_refit = highres_refine
-        refit_reason = "--highres-refine requested" if highres_refine else ""
-        if not should_refit and fit_compression != fit_compression_b:
-            should_refit = True
-            refit_reason = (
-                "fit_compression changed from bundle "
-                f"({fit_compression_b} -> {fit_compression})"
-            )
-
-        if should_refit:
+        if highres_refine:
             if osc_path is None or dark_path is None:
                 raise ValueError(
                     "Refitting a bundle requires both --osc and --dark so the background "
                     "image can be recomputed."
                 )
 
-            print(f"Refitting bundle ellipses: {refit_reason}...")
-            img_bgsub_hr = load_and_bgsub(osc_path, dark_path)
-            img_fit_hr = compress_image(img_bgsub_hr, fit_compression)
-            img_log_hr = make_log_image(img_fit_hr)
+            print("Refitting bundle ellipses at full resolution...")
+            img_bgsub_out = load_and_bgsub(osc_path, dark_path)
+            img_log_out = make_log_image(img_bgsub_out)
             ellipses_out = refine_ellipses_from_existing(
-                ellipses_b, img_bgsub_b, img_bgsub_hr, img_log_hr, fit_compression=fit_compression
+                ellipses_b, img_bgsub_b, img_bgsub_out, img_log_out
             )
-            img_bgsub_out = img_bgsub_hr
-            img_log_out = make_log_image(img_bgsub_hr)
         else:
             img_bgsub_out = img_bgsub_b
             img_log_out = img_log_b
             ellipses_out = ellipses_b
 
         cv2.imwrite(out_tiff_path, img_bgsub_out)
-        save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape, down_factor)
-        save_fit_profile(fit_profile_path, ellipses_out, img_bgsub_out.shape, down_factor)
+        save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
+        save_fit_profile(fit_profile_path, ellipses_out, img_bgsub_out.shape)
         save_bundle(
             bundle_path_save,
             img_bgsub_out,
             img_log_out,
             ell_points_ds,
             ellipses_out,
-            down_factor,
-            fit_compression,
         )
-        plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path, down_factor=down_factor)
+        plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
 
         if ellipses_out:
             print("Fitted ellipse parameters:")
@@ -1076,32 +951,12 @@ def run_hbn_fit(
     if reclick and bundle_loaded is not None:
         print("Reclick requested: ignoring stored clicks in bundle and collecting new points.")
 
-    # Normal pipeline using OSC files
     if osc_path is None or dark_path is None:
         raise ValueError(
             "Both --osc and --dark are required unless --load-bundle is used "
             "without --highres-refine."
         )
 
-    if (
-        reclick
-        and bundle_loaded is not None
-        and fit_compression is None
-        and fit_compression_b is not None
-    ):
-        fit_compression = int(fit_compression_b)
-        if fit_compression_source is None:
-            fit_compression_source = "bundle"
-
-    if fit_compression is None:
-        fit_compression = 1
-        if fit_compression_source is None:
-            fit_compression_source = "default (1)"
-
-    print(f"Using fit compression {fit_compression} ({fit_compression_source}).")
-
-    down_factor_default = down_factor_b if reclick and down_factor_b else DOWNSAMPLE_FACTOR
-    down_factor = int(downsample_factor or down_factor_default)
     img_bgsub = load_and_bgsub(osc_path, dark_path)
 
     print(f"Saving background-subtracted image to:\n  {out_tiff_path}")
@@ -1116,23 +971,21 @@ def run_hbn_fit(
             f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
             f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
         )
-        small = make_click_image(img_bgsub, down_factor)
+        small = make_click_image(img_bgsub)
         ell_points_ds = get_points_per_ellipse_with_zoom(
             small,
             n_ellipses=N_ELLIPSES,
             pts_per_ellipse=POINTS_PER_ELLIPSE,
         )
-        save_click_profile(click_profile_path, ell_points_ds, img_bgsub.shape, down_factor)
+        save_click_profile(click_profile_path, ell_points_ds, img_bgsub.shape)
 
     ellipses = fit_ellipses_from_points(
         ell_points_ds,
-        down_factor=down_factor,
         img_bgsub=img_bgsub,
-        fit_compression=fit_compression,
     )
     print(f"Fitted {len(ellipses)} ellipses from clicked points and intensity refinement.")
 
-    save_fit_profile(fit_profile_path, ellipses, img_bgsub.shape, down_factor)
+    save_fit_profile(fit_profile_path, ellipses, img_bgsub.shape)
 
     img_log = make_log_image(img_bgsub)
     save_bundle(
@@ -1141,12 +994,10 @@ def run_hbn_fit(
         img_log,
         ell_points_ds,
         ellipses,
-        down_factor,
-        fit_compression,
     )
 
     if ellipses:
-        plot_ellipses(img_bgsub, ellipses, save_path=out_overlay_path, down_factor=down_factor)
+        plot_ellipses(img_bgsub, ellipses, save_path=out_overlay_path)
         print("Fitted ellipse parameters:")
         print(_format_ellipse_lines(ellipses))
 
@@ -1166,8 +1017,6 @@ def main(argv=None):
         highres_refine=args.highres_refine,
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
-        downsample_factor=args.downsample_factor,
-        fit_compression=args.fit_compression,
         paths_file=args.paths_file,
     )
 
@@ -1180,7 +1029,6 @@ def main(argv=None):
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
-    print(f"  Fit compression: {results['fit_compression']}")
 
 
 if __name__ == "__main__":
