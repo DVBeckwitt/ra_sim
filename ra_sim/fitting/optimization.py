@@ -1734,7 +1734,7 @@ def simulate_and_compare_hkl(
 
 
 def compute_peak_position_error_geometry_local(
-    gamma, Gamma, dist, theta_initial, zs, zb, chi, a, c,
+    gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c,
     center_x, center_y, measured_peaks,
     miller, intensities, image_size, mosaic_params, n2,
     psi, debye_x, debye_y, wavelength, pixel_tol=np.inf
@@ -1747,6 +1747,7 @@ def compute_peak_position_error_geometry_local(
         'Gamma': Gamma,
         'corto_detector': dist,
         'theta_initial': theta_initial,
+        'cor_angle': cor_angle,
         'zs': zs,
         'zb': zb,
         'chi': chi,
@@ -1800,7 +1801,7 @@ def fit_geometry_parameters(
             local[name] = v
         args = [
             local['gamma'], local['Gamma'], local['corto_detector'],
-            local['theta_initial'], local['zs'], local['zb'],
+            local['theta_initial'], local.get('cor_angle', 0.0), local['zs'], local['zb'],
             local['chi'], local['a'], local['c'],
             local['center'][0], local['center'][1]
         ]
@@ -1831,13 +1832,14 @@ def run_optimization_positions_geometry_local(
 ):
     """
     Global optimization (Differential Evolution) over geometry + beam center.
-    bounds is list of (min,max) for [gamma, Gamma, dist, theta_i,
+    bounds is list of (min,max) for [gamma, Gamma, dist, theta_i, cor_angle,
     zs, zb, chi, a, c, center_x, center_y].
     """
     def obj_glob(x):
+        gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c, center_x, center_y = x
         return np.sum(compute_peak_position_error_geometry_local(
-            x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8],
-            x[9], x[10],
+            gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c,
+            center_x, center_y,
             measured_peaks,
             miller, intensities, image_size,
             initial_params['mosaic_params'],

@@ -2315,11 +2315,13 @@ fit_zb_var    = tk.BooleanVar(value=True)
 fit_zs_var    = tk.BooleanVar(value=True)
 fit_theta_var = tk.BooleanVar(value=True)  # theta_initial
 fit_chi_var   = tk.BooleanVar(value=True)
+fit_cor_var   = tk.BooleanVar(value=True)
 
 ttk.Checkbutton(fit_frame, text="zb",    variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="zs",    variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
 
 def on_fit_geometry_click():
     # first, reconstruct the same mosaic_params dict you use in do_update()
@@ -2346,6 +2348,7 @@ def on_fit_geometry_click():
         'corto_detector':     corto_detector_var.get(),
         'gamma':              gamma_var.get(),
         'Gamma':              Gamma_var.get(),
+        'cor_angle':          cor_angle_var.get(),
     }
 
     # build the list of which of those to vary
@@ -2354,6 +2357,7 @@ def on_fit_geometry_click():
     if fit_zs_var.get():    var_names.append('zs')
     if fit_theta_var.get(): var_names.append('theta_initial')
     if fit_chi_var.get():   var_names.append('chi')
+    if fit_cor_var.get():   var_names.append('cor_angle')
     if not var_names:
         progress_label_geometry.config(text="No parameters selected!")
         return
@@ -2369,10 +2373,11 @@ def on_fit_geometry_click():
     )
 
     for name, val in zip(var_names, result.x):
-        if name == 'zb':            zb_var.set(val)
-        elif name == 'zs':          zs_var.set(val)
-        elif name == 'theta_initial': theta_initial_var.set(val)
-        elif name == 'chi':         chi_var.set(val)
+        if name == 'zb':               zb_var.set(val)
+        elif name == 'zs':             zs_var.set(val)
+        elif name == 'theta_initial':  theta_initial_var.set(val)
+        elif name == 'chi':            chi_var.set(val)
+        elif name == 'cor_angle':      cor_angle_var.set(val)
 
     schedule_update()
 
@@ -2390,6 +2395,7 @@ def on_fit_geometry_click():
         'zs': zs_var.get(),
         'theta_initial': theta_initial_var.get(),
         'chi': chi_var.get(),
+        'cor_angle': cor_angle_var.get(),
     })
 
     (
