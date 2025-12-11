@@ -127,7 +127,8 @@ def parse_args(argv=None):
         help=(
             "Optional YAML/JSON file containing calibrant, dark, and artifact paths. "
             "Accepted keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
-            "fit_profile/fit, and fit_compression."
+            "fit_profile/fit, and fit_compression. If omitted, the workflow will look for "
+            "config/hbn_paths.yaml."
         ),
     )
     parser.add_argument(
@@ -294,9 +295,7 @@ def resolve_hbn_paths(
             if fc is not None:
                 resolved["fit_compression"] = int(fc)
 
-    if resolved["fit_compression"] is None:
-        resolved["fit_compression"] = 1
-
+    resolved["paths_file"] = search_file if search_file else None
     return resolved
 
 
@@ -900,13 +899,20 @@ def run_hbn_fit(
         paths_file=paths_file,
     )
 
+    if resolved.get("paths_file"):
+        print(f"Loaded hBN paths from file:\n  {resolved['paths_file']}")
+
     osc_path = resolved["osc"]
     dark_path = resolved["dark"]
     bundle_from_file = resolved["bundle"]
     bundle_path_in = load_bundle or (
         bundle_from_file if bundle_from_file and os.path.exists(bundle_from_file) else None
     )
-    fit_compression = int(resolved["fit_compression"])
+    fit_compression_requested = resolved["fit_compression"]
+    fit_compression_source = None
+    if fit_compression_requested is not None:
+        fit_compression_source = "command line" if fit_compression is not None else "paths file"
+    fit_compression = int(fit_compression_requested) if fit_compression_requested is not None else None
 
     output_dir = _resolve_output_dir(output_dir, bundle_path_in)
     out_tiff_path = os.path.join(output_dir, "hbn_bgsub.tiff")
@@ -949,7 +955,15 @@ def run_hbn_fit(
         ) = load_bundle_npz(bundle_path_in)
 
         down_factor = int(downsample_factor or down_factor_b or DOWNSAMPLE_FACTOR)
-        fit_compression = int(fit_compression or fit_compression_b or 1)
+        fit_compression = int(
+            fit_compression
+            if fit_compression is not None
+            else (fit_compression_b if fit_compression_b is not None else 1)
+        )
+        if fit_compression_source is None:
+            fit_compression_source = "bundle" if fit_compression_b is not None else "default (1)"
+
+        print(f"Using fit compression {fit_compression} ({fit_compression_source}).")
 
         should_refit = highres_refine
         refit_reason = "--highres-refine requested" if highres_refine else ""
@@ -1004,6 +1018,13 @@ def run_hbn_fit(
             "Both --osc and --dark are required unless --load-bundle is used "
             "without --highres-refine."
         )
+
+    if fit_compression is None:
+        fit_compression = 1
+        if fit_compression_source is None:
+            fit_compression_source = "default (1)"
+
+    print(f"Using fit compression {fit_compression} ({fit_compression_source}).")
 
     down_factor = int(downsample_factor or DOWNSAMPLE_FACTOR)
     img_bgsub = load_and_bgsub(osc_path, dark_path)

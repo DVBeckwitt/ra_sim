@@ -374,7 +374,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Optional YAML/JSON file containing calibrant, dark, and artifact paths "
             "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
-            "fit_profile/fit, fit_compression)."
+            "fit_profile/fit, fit_compression). If omitted, the CLI falls back to "
+            "config/hbn_paths.yaml when available."
         ),
     )
     hbn_parser.set_defaults(func=_cmd_hbn_fit)
