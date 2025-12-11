@@ -5,7 +5,7 @@ Workflow
 1) Default mode (no --load-bundle):
    - Load hBN OSC image and dark frame, subtract background.
    - Apply log to the image for visualization and intensity use.
-   - Load a saved "click profile" if LOAD_PROFILE is True and JSON exists,
+   - Optionally reuse a saved "click profile" with --reuse-profile when a JSON exists,
      otherwise interactively collect points:
        * Left click: point on current ring
        * Right drag: zoom box
@@ -77,32 +77,52 @@ REFINE_STEP = 1.0        # radial step [pixels]
 
 
 # ------------------------------------------------------------
-# Paths
-# ------------------------------------------------------------
-file_path_hbn = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\hBN_calibrant_5m.osc"
-dark_file     = r"C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\darkImg.osc"
-
-downloads_dir        = os.path.join(os.path.expanduser("~"), "Downloads")
-os.makedirs(downloads_dir, exist_ok=True)
-out_tiff_path        = os.path.join(downloads_dir, "hbn_bgsub.tiff")
-out_overlay_path     = os.path.join(downloads_dir, "hbn_bgsub_ellipses.png")
-click_profile_path   = os.path.join(downloads_dir, "hbn_ellipse_profile.json")
-fit_profile_path     = os.path.join(downloads_dir, "hbn_ellipse_fit_profile.json")
-bundle_path          = os.path.join(downloads_dir, "hbn_ellipse_bundle.npz")
-
-
-# ------------------------------------------------------------
 # Argument parsing
 # ------------------------------------------------------------
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Fit diffraction rings with ellipses and save bundle."
+    )
+    parser.add_argument(
+        "--osc",
+        type=str,
+        default=None,
+        help=(
+            "Path to the hBN OSC image. Required unless --load-bundle is used without "
+            "--highres-refine."
+        ),
+    )
+    parser.add_argument(
+        "--dark",
+        type=str,
+        default=None,
+        help=(
+            "Path to the dark frame OSC image. Required unless --load-bundle is used "
+            "without --highres-refine."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory to write outputs (defaults to ~/Downloads).",
+    )
+    parser.add_argument(
+        "--reuse-profile",
+        action="store_true",
+        help="Reuse an existing click profile JSON in the output directory if present.",
+    )
+    parser.add_argument(
+        "--downsample-factor",
+        type=int,
+        default=None,
+        help="Override the downsample factor used for interactive clicking.",
     )
     parser.add_argument(
         "--load-bundle",
         type=str,
         default=None,
-        help="Path to NPZ bundle created by this script. If given, load it instead of recomputing everything."
+        help="Path to NPZ bundle created by this script. If given, load it instead of recomputing everything.",
     )
     parser.add_argument(
         "--highres-refine",
@@ -113,8 +133,7 @@ def parse_args():
             "starting from the bundle fit."
         ),
     )
-    return parser.parse_args()
-
+    return parser.parse_args(argv)
 
 # ------------------------------------------------------------
 # Background subtraction
@@ -678,7 +697,7 @@ def compute_common_center(ellipses):
     return float(xs.mean()), float(ys.mean())
 
 
-def plot_ellipses(img_bgsub, ellipses, save_path=None):
+def plot_ellipses(img_bgsub, ellipses, save_path=None, down_factor=DOWNSAMPLE_FACTOR):
     disp = make_display_image(img_bgsub)
     h, w = disp.shape
 
@@ -701,7 +720,7 @@ def plot_ellipses(img_bgsub, ellipses, save_path=None):
     ax.set_aspect("equal")
     ax.set_title(
         f"{len(ellipses)} ellipses "
-        f"(clicked points, intensity refined, downsample factor {DOWNSAMPLE_FACTOR})"
+        f"(clicked points, intensity refined, downsample factor {down_factor})"
     )
 
     plt.tight_layout()
@@ -714,72 +733,150 @@ def plot_ellipses(img_bgsub, ellipses, save_path=None):
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
-def main():
-    args = parse_args()
+def _resolve_output_dir(output_dir, load_bundle):
+    if output_dir:
+        resolved = output_dir
+    elif load_bundle:
+        resolved = os.path.dirname(os.path.abspath(load_bundle))
+    else:
+        resolved = os.path.join(os.path.expanduser("~"), "Downloads")
+    os.makedirs(resolved, exist_ok=True)
+    return resolved
+
+
+def run_hbn_fit(
+    osc_path,
+    dark_path,
+    output_dir=None,
+    load_bundle=None,
+    highres_refine=False,
+    reuse_profile=False,
+    downsample_factor=None,
+):
+    output_dir = _resolve_output_dir(output_dir, load_bundle)
+    out_tiff_path = os.path.join(output_dir, "hbn_bgsub.tiff")
+    out_overlay_path = os.path.join(output_dir, "hbn_bgsub_ellipses.png")
+    click_profile_path = os.path.join(output_dir, "hbn_ellipse_profile.json")
+    fit_profile_path = os.path.join(output_dir, "hbn_ellipse_fit_profile.json")
+    bundle_path = os.path.join(output_dir, "hbn_ellipse_bundle.npz")
+
+    outputs = {
+        "output_dir": output_dir,
+        "background_subtracted": out_tiff_path,
+        "overlay": out_overlay_path,
+        "click_profile": click_profile_path,
+        "fit_profile": fit_profile_path,
+        "bundle": bundle_path,
+        "ellipses": [],
+    }
 
     # Bundle path mode
-    if args.load_bundle is not None:
-        img_bgsub_b, img_log_b, ell_points_ds, ellipses_b, down_factor = load_bundle_npz(
-            args.load_bundle
-        )
+    if load_bundle is not None:
+        (
+            img_bgsub_b,
+            img_log_b,
+            ell_points_ds,
+            ellipses_b,
+            down_factor_b,
+        ) = load_bundle_npz(load_bundle)
 
-        global DOWNSAMPLE_FACTOR
-        DOWNSAMPLE_FACTOR = down_factor
+        down_factor = int(downsample_factor or down_factor_b or DOWNSAMPLE_FACTOR)
 
-        if args.highres_refine:
+        if highres_refine:
+            if osc_path is None or dark_path is None:
+                raise ValueError(
+                    "--highres-refine requires both --osc and --dark when loading a bundle."
+                )
+
             print("Running high resolution refine based on bundle fit...")
-            img_bgsub_hr = load_and_bgsub(file_path_hbn, dark_file)
+            img_bgsub_hr = load_and_bgsub(osc_path, dark_path)
             img_log_hr = make_log_image(img_bgsub_hr)
-            ellipses_hr = refine_ellipses_from_existing(
+            ellipses_out = refine_ellipses_from_existing(
                 ellipses_b, img_bgsub_b, img_bgsub_hr, img_log_hr
             )
             img_bgsub_out = img_bgsub_hr
             img_log_out = img_log_hr
-            ellipses_out = ellipses_hr
         else:
             img_bgsub_out = img_bgsub_b
             img_log_out = img_log_b
             ellipses_out = ellipses_b
 
+        cv2.imwrite(out_tiff_path, img_bgsub_out)
         save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape, down_factor)
         save_fit_profile(fit_profile_path, ellipses_out, img_bgsub_out.shape, down_factor)
         save_bundle(bundle_path, img_bgsub_out, img_log_out, ell_points_ds, ellipses_out, down_factor)
-        plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
-        return
+        plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path, down_factor=down_factor)
+
+        outputs["ellipses"] = ellipses_out
+        return outputs
 
     # Normal pipeline using OSC files
-    img_bgsub = load_and_bgsub(file_path_hbn, dark_file)
+    if osc_path is None or dark_path is None:
+        raise ValueError(
+            "Both --osc and --dark are required unless --load-bundle is used "
+            "without --highres-refine."
+        )
+
+    down_factor = int(downsample_factor or DOWNSAMPLE_FACTOR)
+    img_bgsub = load_and_bgsub(osc_path, dark_path)
 
     print(f"Saving background-subtracted image to:\n  {out_tiff_path}")
     cv2.imwrite(out_tiff_path, img_bgsub)
     print("Saved hbn_bgsub.tiff.")
 
-    if LOAD_PROFILE and os.path.exists(click_profile_path):
-        small = make_click_image(img_bgsub, DOWNSAMPLE_FACTOR)
+    if reuse_profile and os.path.exists(click_profile_path):
+        print(f"Loading existing click profile from:\n  {click_profile_path}")
         ell_points_ds = load_click_profile(click_profile_path)
     else:
-        small = make_click_image(img_bgsub, DOWNSAMPLE_FACTOR)
+        small = make_click_image(img_bgsub, down_factor)
         ell_points_ds = get_points_per_ellipse_with_zoom(
             small,
             n_ellipses=N_ELLIPSES,
             pts_per_ellipse=POINTS_PER_ELLIPSE,
         )
-        save_click_profile(click_profile_path, ell_points_ds, img_bgsub.shape, DOWNSAMPLE_FACTOR)
+        save_click_profile(click_profile_path, ell_points_ds, img_bgsub.shape, down_factor)
 
     ellipses = fit_ellipses_from_points(
         ell_points_ds,
-        down_factor=DOWNSAMPLE_FACTOR,
+        down_factor=down_factor,
         img_bgsub=img_bgsub,
     )
     print(f"Fitted {len(ellipses)} ellipses from clicked points and intensity refinement.")
 
-    save_fit_profile(fit_profile_path, ellipses, img_bgsub.shape, DOWNSAMPLE_FACTOR)
+    save_fit_profile(fit_profile_path, ellipses, img_bgsub.shape, down_factor)
 
     img_log = make_log_image(img_bgsub)
-    save_bundle(bundle_path, img_bgsub, img_log, ell_points_ds, ellipses, DOWNSAMPLE_FACTOR)
+    save_bundle(bundle_path, img_bgsub, img_log, ell_points_ds, ellipses, down_factor)
 
     if ellipses:
-        plot_ellipses(img_bgsub, ellipses, save_path=out_overlay_path)
+        plot_ellipses(img_bgsub, ellipses, save_path=out_overlay_path, down_factor=down_factor)
+
+    outputs["ellipses"] = ellipses
+    return outputs
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
+    results = run_hbn_fit(
+        osc_path=args.osc,
+        dark_path=args.dark,
+        output_dir=args.output_dir,
+        load_bundle=args.load_bundle,
+        highres_refine=args.highres_refine,
+        reuse_profile=args.reuse_profile,
+        downsample_factor=args.downsample_factor,
+    )
+
+    print("Completed hBN ellipse fitting. Outputs written to:")
+    for key in [
+        "background_subtracted",
+        "overlay",
+        "click_profile",
+        "fit_profile",
+        "bundle",
+    ]:
+        print(f"  {key.replace('_', ' ').title()}: {results[key]}")
 
 
 if __name__ == "__main__":

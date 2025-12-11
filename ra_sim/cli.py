@@ -1,12 +1,15 @@
-"""Simple CLI to run the diffraction simulation headlessly and save an image.
+"""Simple CLI to run the diffraction simulation headlessly and invoke tools.
 
 Usage examples:
 
 - Use defaults from config and write `output.png`:
-    python -m ra_sim --out output.png
+    python -m ra_sim simulate --out output.png
 
 - Override samples and image size:
-    python -m ra_sim --out out.png --samples 2000 --image-size 3000
+    python -m ra_sim simulate --out out.png --samples 2000 --image-size 3000
+
+- Run the hBN ellipse fitting workflow:
+    python -m ra_sim hbn-fit --osc /path/to/calibrant.osc --dark /path/to/dark.osc
 
 This CLI intentionally mirrors the defaults used by the GUI by reading
 instrument and file paths from `config/` via `ra_sim.path_config`.
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from typing import Dict
 
 import numpy as np
@@ -27,6 +31,7 @@ from ra_sim.utils.stacking_fault import (
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
 )
+from ra_sim.hbn import run_hbn_fit
 from ra_sim.utils.tools import (
     detector_two_theta_max,
     DEFAULT_PIXEL_SIZE_M,
@@ -276,14 +281,7 @@ def run_headless_simulation(
     return str(out_path)
 
 
-def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="Run RA-SIM headless and save an image.")
-    ap.add_argument("--out", required=True, help="Output image path (e.g., output.png)")
-    ap.add_argument("--image-size", type=int, default=None, help="Simulation image size (pixels)")
-    ap.add_argument("--samples", type=int, default=None, help="Monte Carlo samples")
-    ap.add_argument("--vmax", type=float, default=None, help="Max intensity for scaling (default from config)")
-    args = ap.parse_args(argv)
-
+def _cmd_simulate(args: argparse.Namespace) -> None:
     out_path = run_headless_simulation(
         out_path=args.out,
         image_size=args.image_size,
@@ -291,6 +289,97 @@ def main(argv: list[str] | None = None) -> None:
         vmax=args.vmax,
     )
     print(f"Wrote simulated image to {out_path}")
+
+
+def _cmd_hbn_fit(args: argparse.Namespace) -> None:
+    results = run_hbn_fit(
+        osc_path=args.osc,
+        dark_path=args.dark,
+        output_dir=args.output_dir,
+        load_bundle=args.load_bundle,
+        highres_refine=args.highres_refine,
+        reuse_profile=args.reuse_profile,
+        downsample_factor=args.downsample_factor,
+    )
+
+    print("Completed hBN ellipse fitting. Outputs written to:")
+    for key in [
+        "background_subtracted",
+        "overlay",
+        "click_profile",
+        "fit_profile",
+        "bundle",
+    ]:
+        print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="Run RA-SIM tools.")
+    subparsers = ap.add_subparsers(dest="command")
+
+    sim_parser = subparsers.add_parser(
+        "simulate",
+        help="Run the diffraction simulation headlessly and save an image.",
+    )
+    sim_parser.add_argument("--out", required=True, help="Output image path (e.g., output.png)")
+    sim_parser.add_argument("--image-size", type=int, default=None, help="Simulation image size (pixels)")
+    sim_parser.add_argument("--samples", type=int, default=None, help="Monte Carlo samples")
+    sim_parser.add_argument(
+        "--vmax", type=float, default=None, help="Max intensity for scaling (default from config)"
+    )
+    sim_parser.set_defaults(func=_cmd_simulate)
+
+    hbn_parser = subparsers.add_parser(
+        "hbn-fit", help="Run the hBN ellipse fitting workflow without the GUI."
+    )
+    hbn_parser.add_argument("--osc", help="Path to the hBN OSC image")
+    hbn_parser.add_argument("--dark", help="Path to the dark frame OSC image")
+    hbn_parser.add_argument(
+        "--output-dir",
+        help=(
+            "Directory to write hBN outputs (defaults to ~/Downloads or the bundle directory when using --load-bundle)."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--load-bundle",
+        help="Existing NPZ bundle created by the hBN workflow to reload or refine.",
+    )
+    hbn_parser.add_argument(
+        "--highres-refine",
+        action="store_true",
+        help="When loading a bundle, recompute a full resolution background subtraction and refine ellipses on it.",
+    )
+    hbn_parser.add_argument(
+        "--reuse-profile",
+        action="store_true",
+        help="Reuse an existing click profile JSON in the output directory if present.",
+    )
+    hbn_parser.add_argument(
+        "--downsample-factor",
+        type=int,
+        default=None,
+        help="Override the downsample factor used for interactive clicking.",
+    )
+    hbn_parser.set_defaults(func=_cmd_hbn_fit)
+
+    return ap
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    ap = _build_parser()
+
+    if argv and argv[0] not in {"simulate", "hbn-fit", "-h", "--help"}:
+        argv = ["simulate"] + argv
+
+    args = ap.parse_args(argv)
+
+    handler = getattr(args, "func", None)
+    if handler is None:
+        ap.print_help()
+        return
+
+    handler(args)
 
 
 if __name__ == "__main__":  # pragma: no cover
