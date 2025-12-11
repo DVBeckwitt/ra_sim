@@ -125,8 +125,18 @@ def parse_args(argv=None):
         type=str,
         default=None,
         help=(
-            "Optional YAML/JSON file containing calibrant and dark frame paths. "
-            "Accepted keys: calibrant/osc and dark/dark_file."
+            "Optional YAML/JSON file containing calibrant, dark, and artifact paths. "
+            "Accepted keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
+            "fit_profile/fit, and fit_compression."
+        ),
+    )
+    parser.add_argument(
+        "--fit-compression",
+        type=int,
+        default=None,
+        help=(
+            "Downsample factor applied before fitting/refinement (1 keeps full resolution, "
+            "4 downsamples to 1/4 size, etc.)."
         ),
     )
     parser.add_argument(
@@ -204,6 +214,22 @@ def make_display_image(img_bgsub):
     return disp
 
 
+def compress_image(img, factor):
+    if factor is None:
+        raise ValueError("Compression factor must not be None")
+    factor = int(factor)
+    if factor < 1:
+        raise ValueError("fit_compression must be >= 1")
+    if factor == 1:
+        return img
+
+    h, w = img.shape
+    small_w = max(1, w // factor)
+    small_h = max(1, h // factor)
+    print(f"Compressing image from {w}x{h} to {small_w}x{small_h} (factor {factor}) for fitting...")
+    return cv2.resize(img, (small_w, small_h), interpolation=cv2.INTER_AREA)
+
+
 # ------------------------------------------------------------
 # Path helpers
 # ------------------------------------------------------------
@@ -217,8 +243,16 @@ def _load_paths_from_file(paths_file):
     return data or {}
 
 
-def resolve_hbn_paths(osc_path=None, dark_path=None, paths_file=None):
-    """Return (osc_path, dark_path) using CLI args or a YAML/JSON file."""
+def resolve_hbn_paths(
+    osc_path=None,
+    dark_path=None,
+    bundle_path=None,
+    click_profile_path=None,
+    fit_profile_path=None,
+    fit_compression=None,
+    paths_file=None,
+):
+    """Return resolved paths using CLI args or a YAML/JSON file."""
 
     def _pick(keys, data):
         for key in keys:
@@ -227,8 +261,14 @@ def resolve_hbn_paths(osc_path=None, dark_path=None, paths_file=None):
                 return os.path.expanduser(value)
         return None
 
-    osc_resolved = os.path.expanduser(osc_path) if osc_path else None
-    dark_resolved = os.path.expanduser(dark_path) if dark_path else None
+    resolved = dict(
+        osc=os.path.expanduser(osc_path) if osc_path else None,
+        dark=os.path.expanduser(dark_path) if dark_path else None,
+        bundle=os.path.expanduser(bundle_path) if bundle_path else None,
+        click_profile=os.path.expanduser(click_profile_path) if click_profile_path else None,
+        fit_profile=os.path.expanduser(fit_profile_path) if fit_profile_path else None,
+        fit_compression=fit_compression,
+    )
 
     search_file = paths_file
     if search_file is None:
@@ -236,14 +276,28 @@ def resolve_hbn_paths(osc_path=None, dark_path=None, paths_file=None):
         if default_path.exists():
             search_file = str(default_path)
 
-    if search_file and (osc_resolved is None or dark_resolved is None):
+    file_data = None
+    if search_file:
         file_data = _load_paths_from_file(search_file)
-        if osc_resolved is None:
-            osc_resolved = _pick(["calibrant", "osc", "calibrant_path", "calibrant_file"], file_data)
-        if dark_resolved is None:
-            dark_resolved = _pick(["dark", "dark_file", "dark_path"], file_data)
+        if resolved["osc"] is None:
+            resolved["osc"] = _pick(["calibrant", "osc", "calibrant_path", "calibrant_file"], file_data)
+        if resolved["dark"] is None:
+            resolved["dark"] = _pick(["dark", "dark_file", "dark_path"], file_data)
+        if resolved["bundle"] is None:
+            resolved["bundle"] = _pick(["bundle", "npz", "bundle_path"], file_data)
+        if resolved["click_profile"] is None:
+            resolved["click_profile"] = _pick(["click_profile", "profile", "click_profile_path"], file_data)
+        if resolved["fit_profile"] is None:
+            resolved["fit_profile"] = _pick(["fit_profile", "fit", "fit_profile_path"], file_data)
+        if resolved["fit_compression"] is None and file_data:
+            fc = file_data.get("fit_compression")
+            if fc is not None:
+                resolved["fit_compression"] = int(fc)
 
-    return osc_resolved, dark_resolved
+    if resolved["fit_compression"] is None:
+        resolved["fit_compression"] = 1
+
+    return resolved
 
 
 # ------------------------------------------------------------
@@ -296,7 +350,7 @@ def save_fit_profile(path, ellipses, img_shape, down_factor):
     print(f"Saved fit profile to:\n  {path}")
 
 
-def save_bundle(path, img_bgsub, img_log, ell_points_ds, ellipses, down_factor):
+def save_bundle(path, img_bgsub, img_log, ell_points_ds, ellipses, down_factor, fit_compression):
     ell_points_arr = np.array(
         [np.array(pts, dtype=np.float32) for pts in ell_points_ds],
         dtype=object,
@@ -319,6 +373,7 @@ def save_bundle(path, img_bgsub, img_log, ell_points_ds, ellipses, down_factor):
         ell_points_ds=ell_points_arr,
         ellipse_params=ellipse_params,
         downsample_factor=np.array(down_factor, dtype=np.int32),
+        fit_compression=np.array(fit_compression, dtype=np.int32),
     )
     print(f"Saved bundle NPZ to:\n  {path}")
     print("Note: load with allow_pickle=True for ell_points_ds.")
@@ -331,6 +386,7 @@ def load_bundle_npz(path):
     ell_points_arr = data["ell_points_ds"]
     ellipse_params = data["ellipse_params"]
     down_factor = int(data["downsample_factor"])
+    fit_compression = int(data["fit_compression"]) if "fit_compression" in data else 1
 
     ell_points_ds = []
     for arr in ell_points_arr:
@@ -354,7 +410,8 @@ def load_bundle_npz(path):
     print(f"  image shape: {img_bgsub.shape}")
     print(f"  number of ellipses: {len(ellipses)}")
     print(f"  downsample_factor in bundle: {down_factor}")
-    return img_bgsub, img_log, ell_points_ds, ellipses, down_factor
+    print(f"  fit_compression in bundle: {fit_compression}")
+    return img_bgsub, img_log, ell_points_ds, ellipses, down_factor, fit_compression
 
 
 # ------------------------------------------------------------
@@ -643,9 +700,13 @@ def refine_ellipse_with_intensity(img_log, params):
     return float(xc_new), float(yc_new), float(a_new), float(b_new), float(theta_new)
 
 
-def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub):
-    img_log = make_log_image(img_bgsub)
+def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub, fit_compression=1):
+    img_fit = compress_image(img_bgsub, fit_compression)
+    img_log = make_log_image(img_fit)
     ellipses = []
+
+    scale_to_fit = float(down_factor) / float(fit_compression)
+    scale_back = float(fit_compression)
 
     for i, pts in enumerate(ell_points_ds, 1):
         pts = np.array(pts, dtype=float)
@@ -653,7 +714,7 @@ def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub):
             print(f"Ellipse {i}: not enough points to fit (have {pts.shape[0]}). Skipping.")
             continue
 
-        pts_full = pts * float(down_factor)
+        pts_full = pts * scale_to_fit
 
         params0, _ = fit_initial_ellipse_from_points(pts_full)
         print(
@@ -665,6 +726,11 @@ def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub):
 
         params_refined = refine_ellipse_with_intensity(img_log, params0)
         xc, yc, a, b, theta = params_refined
+
+        xc *= scale_back
+        yc *= scale_back
+        a *= scale_back
+        b *= scale_back
 
         ellipses.append(
             dict(
@@ -686,7 +752,9 @@ def fit_ellipses_from_points(ell_points_ds, down_factor, img_bgsub):
     return ellipses
 
 
-def refine_ellipses_from_existing(ellipses_prev, img_bgsub_prev, img_bgsub_hr, img_log_hr):
+def refine_ellipses_from_existing(
+    ellipses_prev, img_bgsub_prev, img_bgsub_hr, img_log_hr, fit_compression=1
+):
     h_prev, w_prev = img_bgsub_prev.shape
     h_hr, w_hr = img_bgsub_hr.shape
     sx = w_hr / w_prev
@@ -699,7 +767,13 @@ def refine_ellipses_from_existing(ellipses_prev, img_bgsub_prev, img_bgsub_hr, i
         a0 = e["a"] * sx
         b0 = e["b"] * sy
         theta0 = e["theta"]
-        params0 = (xc0, yc0, a0, b0, theta0)
+        params0 = (
+            xc0 / float(fit_compression),
+            yc0 / float(fit_compression),
+            a0 / float(fit_compression),
+            b0 / float(fit_compression),
+            theta0,
+        )
 
         print(
             f"High res refine ellipse {i}: "
@@ -708,6 +782,11 @@ def refine_ellipses_from_existing(ellipses_prev, img_bgsub_prev, img_bgsub_hr, i
         )
 
         xc, yc, a, b, theta = refine_ellipse_with_intensity(img_log_hr, params0)
+
+        xc *= float(fit_compression)
+        yc *= float(fit_compression)
+        a *= float(fit_compression)
+        b *= float(fit_compression)
 
         ellipses_hr.append(
             dict(
@@ -805,18 +884,47 @@ def run_hbn_fit(
     highres_refine=False,
     reuse_profile=False,
     downsample_factor=None,
+    click_profile_path=None,
+    fit_profile_path=None,
+    bundle_path=None,
+    fit_compression=None,
     paths_file=None,
 ):
-    osc_path, dark_path = resolve_hbn_paths(
-        osc_path=osc_path, dark_path=dark_path, paths_file=paths_file
+    resolved = resolve_hbn_paths(
+        osc_path=osc_path,
+        dark_path=dark_path,
+        bundle_path=bundle_path,
+        click_profile_path=click_profile_path,
+        fit_profile_path=fit_profile_path,
+        fit_compression=fit_compression,
+        paths_file=paths_file,
     )
 
-    output_dir = _resolve_output_dir(output_dir, load_bundle)
+    osc_path = resolved["osc"]
+    dark_path = resolved["dark"]
+    bundle_from_file = resolved["bundle"]
+    bundle_path_in = load_bundle or (
+        bundle_from_file if bundle_from_file and os.path.exists(bundle_from_file) else None
+    )
+    fit_compression = int(resolved["fit_compression"])
+
+    output_dir = _resolve_output_dir(output_dir, bundle_path_in)
     out_tiff_path = os.path.join(output_dir, "hbn_bgsub.tiff")
     out_overlay_path = os.path.join(output_dir, "hbn_bgsub_ellipses.png")
-    click_profile_path = os.path.join(output_dir, "hbn_ellipse_profile.json")
-    fit_profile_path = os.path.join(output_dir, "hbn_ellipse_fit_profile.json")
-    bundle_path = os.path.join(output_dir, "hbn_ellipse_bundle.npz")
+
+    click_profile_path = resolved["click_profile"] or click_profile_path
+    if click_profile_path is None:
+        click_profile_path = os.path.join(output_dir, "hbn_ellipse_profile.json")
+    fit_profile_path = resolved["fit_profile"] or fit_profile_path
+    if fit_profile_path is None:
+        fit_profile_path = os.path.join(output_dir, "hbn_ellipse_fit_profile.json")
+    bundle_path_save = resolved["bundle"] or bundle_path_in
+    if bundle_path_save is None:
+        bundle_path_save = os.path.join(output_dir, "hbn_ellipse_bundle.npz")
+
+    for p in [click_profile_path, fit_profile_path, bundle_path_save]:
+        parent = os.path.dirname(os.path.abspath(p))
+        os.makedirs(parent, exist_ok=True)
 
     outputs = {
         "output_dir": output_dir,
@@ -824,21 +932,24 @@ def run_hbn_fit(
         "overlay": out_overlay_path,
         "click_profile": click_profile_path,
         "fit_profile": fit_profile_path,
-        "bundle": bundle_path,
+        "bundle": bundle_path_save,
+        "fit_compression": fit_compression,
         "ellipses": [],
     }
 
     # Bundle path mode
-    if load_bundle is not None:
+    if bundle_path_in is not None:
         (
             img_bgsub_b,
             img_log_b,
             ell_points_ds,
             ellipses_b,
             down_factor_b,
-        ) = load_bundle_npz(load_bundle)
+            fit_compression_b,
+        ) = load_bundle_npz(bundle_path_in)
 
         down_factor = int(downsample_factor or down_factor_b or DOWNSAMPLE_FACTOR)
+        fit_compression = int(fit_compression or fit_compression_b or 1)
 
         if highres_refine:
             if osc_path is None or dark_path is None:
@@ -848,12 +959,13 @@ def run_hbn_fit(
 
             print("Running high resolution refine based on bundle fit...")
             img_bgsub_hr = load_and_bgsub(osc_path, dark_path)
-            img_log_hr = make_log_image(img_bgsub_hr)
+            img_fit_hr = compress_image(img_bgsub_hr, fit_compression)
+            img_log_hr = make_log_image(img_fit_hr)
             ellipses_out = refine_ellipses_from_existing(
-                ellipses_b, img_bgsub_b, img_bgsub_hr, img_log_hr
+                ellipses_b, img_bgsub_b, img_bgsub_hr, img_log_hr, fit_compression=fit_compression
             )
             img_bgsub_out = img_bgsub_hr
-            img_log_out = img_log_hr
+            img_log_out = make_log_image(img_bgsub_hr)
         else:
             img_bgsub_out = img_bgsub_b
             img_log_out = img_log_b
@@ -862,7 +974,15 @@ def run_hbn_fit(
         cv2.imwrite(out_tiff_path, img_bgsub_out)
         save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape, down_factor)
         save_fit_profile(fit_profile_path, ellipses_out, img_bgsub_out.shape, down_factor)
-        save_bundle(bundle_path, img_bgsub_out, img_log_out, ell_points_ds, ellipses_out, down_factor)
+        save_bundle(
+            bundle_path_save,
+            img_bgsub_out,
+            img_log_out,
+            ell_points_ds,
+            ellipses_out,
+            down_factor,
+            fit_compression,
+        )
         plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path, down_factor=down_factor)
 
         outputs["ellipses"] = ellipses_out
@@ -898,13 +1018,22 @@ def run_hbn_fit(
         ell_points_ds,
         down_factor=down_factor,
         img_bgsub=img_bgsub,
+        fit_compression=fit_compression,
     )
     print(f"Fitted {len(ellipses)} ellipses from clicked points and intensity refinement.")
 
     save_fit_profile(fit_profile_path, ellipses, img_bgsub.shape, down_factor)
 
     img_log = make_log_image(img_bgsub)
-    save_bundle(bundle_path, img_bgsub, img_log, ell_points_ds, ellipses, down_factor)
+    save_bundle(
+        bundle_path_save,
+        img_bgsub,
+        img_log,
+        ell_points_ds,
+        ellipses,
+        down_factor,
+        fit_compression,
+    )
 
     if ellipses:
         plot_ellipses(img_bgsub, ellipses, save_path=out_overlay_path, down_factor=down_factor)
@@ -924,6 +1053,7 @@ def main(argv=None):
         highres_refine=args.highres_refine,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
+        fit_compression=args.fit_compression,
         paths_file=args.paths_file,
     )
 
@@ -936,6 +1066,7 @@ def main(argv=None):
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+    print(f"  Fit compression: {results['fit_compression']}")
 
 
 if __name__ == "__main__":

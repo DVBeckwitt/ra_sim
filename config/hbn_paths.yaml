@@ -2,3 +2,13 @@
 # Update these to match your local files or pass a custom file via --paths-file.
 calibrant: "/path/to/calibrant.osc"
 dark: "/path/to/dark.osc"
+
+# Optional convenience defaults for reloading/saving artifacts.
+# If provided, these paths override the usual names in the output directory.
+bundle: "/path/to/hbn_ellipse_bundle.npz"
+click_profile: "/path/to/hbn_ellipse_profile.json"
+fit_profile: "/path/to/hbn_ellipse_fit_profile.json"
+
+# Optional default compression factor for fitting/refinement.
+# 1 keeps the full resolution, 4 downsamples by 4x before fitting, etc.
+fit_compression: 1

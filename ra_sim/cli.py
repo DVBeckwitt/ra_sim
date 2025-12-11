@@ -300,6 +300,7 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         highres_refine=args.highres_refine,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
+        fit_compression=args.fit_compression,
         paths_file=args.paths_file,
     )
 
@@ -312,6 +313,7 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+    print(f"  Fit compression: {results['fit_compression']}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -362,10 +364,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the downsample factor used for interactive clicking.",
     )
     hbn_parser.add_argument(
+        "--fit-compression",
+        type=int,
+        default=None,
+        help="Downsample factor applied before fitting/refinement (1 keeps full resolution).",
+    )
+    hbn_parser.add_argument(
         "--paths-file",
         help=(
-            "Optional YAML/JSON file containing calibrant and dark frame paths "
-            "(keys: calibrant/osc and dark/dark_file)."
+            "Optional YAML/JSON file containing calibrant, dark, and artifact paths "
+            "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
+            "fit_profile/fit, fit_compression)."
         ),
     )
     hbn_parser.set_defaults(func=_cmd_hbn_fit)
