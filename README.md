@@ -48,6 +48,9 @@ python -m ra_sim hbn-fit --fit-compression 1 --load-bundle
 # Or pick a different compression at runtime (e.g., downsample by 4x)
 python -m ra_sim hbn-fit --fit-compression 4
 
+# Collect a fresh set of 5 points on each of the 5 rings even when a bundle exists
+python -m ra_sim hbn-fit --reclick --osc /path/to/calibrant.osc --dark /path/to/dark.osc
+
 # Supply an alternate paths file
 python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml --fit-compression 1
 ```

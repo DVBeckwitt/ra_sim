@@ -299,6 +299,7 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         load_bundle=args.load_bundle,
         load_bundle_requested=args.load_bundle is not None,
         highres_refine=args.highres_refine,
+        reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
         fit_compression=args.fit_compression,
@@ -358,6 +359,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--highres-refine",
         action="store_true",
         help="When loading a bundle, recompute a full resolution background subtraction and refine ellipses on it.",
+    )
+    hbn_parser.add_argument(
+        "--reclick",
+        action="store_true",
+        help=(
+            "Force a new interactive click session even when loading a bundle (requires --osc/--dark to rebuild the "
+            "background before collecting 5 points per ellipse)."
+        ),
     )
     hbn_parser.add_argument(
         "--reuse-profile",

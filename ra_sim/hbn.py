@@ -160,6 +160,15 @@ def parse_args(argv=None):
             "starting from the bundle fit."
         ),
     )
+    parser.add_argument(
+        "--reclick",
+        action="store_true",
+        help=(
+            "Force a new interactive click session even when loading a bundle. "
+            "Requires --osc and --dark so the background image can be rebuilt before "
+            "collecting 5 points per ring."
+        ),
+    )
     return parser.parse_args(argv)
 
 # ------------------------------------------------------------
@@ -914,6 +923,7 @@ def run_hbn_fit(
     load_bundle=None,
     load_bundle_requested=False,
     highres_refine=False,
+    reclick=False,
     reuse_profile=False,
     downsample_factor=None,
     click_profile_path=None,
@@ -981,8 +991,15 @@ def run_hbn_fit(
         "ellipses": [],
     }
 
-    # Bundle path mode
+    bundle_loaded = None
+    down_factor_b = None
+    fit_compression_b = None
     if bundle_path_in is not None:
+        bundle_loaded = load_bundle_npz(bundle_path_in)
+        _, _, _, _, down_factor_b, fit_compression_b = bundle_loaded
+
+    # Bundle path mode (reuse existing clicks unless the user forces a reclick)
+    if bundle_loaded is not None and not reclick:
         (
             img_bgsub_b,
             img_log_b,
@@ -990,7 +1007,7 @@ def run_hbn_fit(
             ellipses_b,
             down_factor_b,
             fit_compression_b,
-        ) = load_bundle_npz(bundle_path_in)
+        ) = bundle_loaded
 
         down_factor = int(downsample_factor or down_factor_b or DOWNSAMPLE_FACTOR)
         fit_compression = int(
@@ -1054,12 +1071,25 @@ def run_hbn_fit(
         outputs["ellipses"] = ellipses_out
         return outputs
 
+    if reclick and bundle_loaded is not None:
+        print("Reclick requested: ignoring stored clicks in bundle and collecting new points.")
+
     # Normal pipeline using OSC files
     if osc_path is None or dark_path is None:
         raise ValueError(
             "Both --osc and --dark are required unless --load-bundle is used "
             "without --highres-refine."
         )
+
+    if (
+        reclick
+        and bundle_loaded is not None
+        and fit_compression is None
+        and fit_compression_b is not None
+    ):
+        fit_compression = int(fit_compression_b)
+        if fit_compression_source is None:
+            fit_compression_source = "bundle"
 
     if fit_compression is None:
         fit_compression = 1
@@ -1068,7 +1098,8 @@ def run_hbn_fit(
 
     print(f"Using fit compression {fit_compression} ({fit_compression_source}).")
 
-    down_factor = int(downsample_factor or DOWNSAMPLE_FACTOR)
+    down_factor_default = down_factor_b if reclick and down_factor_b else DOWNSAMPLE_FACTOR
+    down_factor = int(downsample_factor or down_factor_default)
     img_bgsub = load_and_bgsub(osc_path, dark_path)
 
     print(f"Saving background-subtracted image to:\n  {out_tiff_path}")
@@ -1079,6 +1110,10 @@ def run_hbn_fit(
         print(f"Loading existing click profile from:\n  {click_profile_path}")
         ell_points_ds = load_click_profile(click_profile_path)
     else:
+        print(
+            f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
+            f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
+        )
         small = make_click_image(img_bgsub, down_factor)
         ell_points_ds = get_points_per_ellipse_with_zoom(
             small,
@@ -1127,6 +1162,7 @@ def main(argv=None):
         load_bundle=args.load_bundle,
         load_bundle_requested=args.load_bundle is not None,
         highres_refine=args.highres_refine,
+        reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
         fit_compression=args.fit_compression,
