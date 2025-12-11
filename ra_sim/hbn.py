@@ -38,10 +38,12 @@ Workflow
 import os
 import json
 import argparse
+from pathlib import Path
 
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
+import yaml
 
 from matplotlib.patches import Rectangle
 from skimage.measure import EllipseModel
@@ -119,6 +121,15 @@ def parse_args(argv=None):
         help="Override the downsample factor used for interactive clicking.",
     )
     parser.add_argument(
+        "--paths-file",
+        type=str,
+        default=None,
+        help=(
+            "Optional YAML/JSON file containing calibrant and dark frame paths. "
+            "Accepted keys: calibrant/osc and dark/dark_file."
+        ),
+    )
+    parser.add_argument(
         "--load-bundle",
         type=str,
         default=None,
@@ -191,6 +202,48 @@ def make_display_image(img_bgsub):
     disp = (img_log - p_low) / (p_high - p_low + 1e-9)
     disp = np.clip(disp, 0, 1)
     return disp
+
+
+# ------------------------------------------------------------
+# Path helpers
+# ------------------------------------------------------------
+def _load_paths_from_file(paths_file):
+    with open(paths_file, "r", encoding="utf-8") as fh:
+        text = fh.read()
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError:
+            data = json.loads(text)
+    return data or {}
+
+
+def resolve_hbn_paths(osc_path=None, dark_path=None, paths_file=None):
+    """Return (osc_path, dark_path) using CLI args or a YAML/JSON file."""
+
+    def _pick(keys, data):
+        for key in keys:
+            value = data.get(key)
+            if value:
+                return os.path.expanduser(value)
+        return None
+
+    osc_resolved = os.path.expanduser(osc_path) if osc_path else None
+    dark_resolved = os.path.expanduser(dark_path) if dark_path else None
+
+    search_file = paths_file
+    if search_file is None:
+        default_path = Path(__file__).resolve().parents[1] / "config" / "hbn_paths.yaml"
+        if default_path.exists():
+            search_file = str(default_path)
+
+    if search_file and (osc_resolved is None or dark_resolved is None):
+        file_data = _load_paths_from_file(search_file)
+        if osc_resolved is None:
+            osc_resolved = _pick(["calibrant", "osc", "calibrant_path", "calibrant_file"], file_data)
+        if dark_resolved is None:
+            dark_resolved = _pick(["dark", "dark_file", "dark_path"], file_data)
+
+    return osc_resolved, dark_resolved
 
 
 # ------------------------------------------------------------
@@ -752,7 +805,12 @@ def run_hbn_fit(
     highres_refine=False,
     reuse_profile=False,
     downsample_factor=None,
+    paths_file=None,
 ):
+    osc_path, dark_path = resolve_hbn_paths(
+        osc_path=osc_path, dark_path=dark_path, paths_file=paths_file
+    )
+
     output_dir = _resolve_output_dir(output_dir, load_bundle)
     out_tiff_path = os.path.join(output_dir, "hbn_bgsub.tiff")
     out_overlay_path = os.path.join(output_dir, "hbn_bgsub_ellipses.png")
@@ -866,6 +924,7 @@ def main(argv=None):
         highres_refine=args.highres_refine,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
+        paths_file=args.paths_file,
     )
 
     print("Completed hBN ellipse fitting. Outputs written to:")

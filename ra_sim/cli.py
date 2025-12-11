@@ -300,6 +300,7 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         highres_refine=args.highres_refine,
         reuse_profile=args.reuse_profile,
         downsample_factor=args.downsample_factor,
+        paths_file=args.paths_file,
     )
 
     print("Completed hBN ellipse fitting. Outputs written to:")
@@ -359,6 +360,13 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Override the downsample factor used for interactive clicking.",
+    )
+    hbn_parser.add_argument(
+        "--paths-file",
+        help=(
+            "Optional YAML/JSON file containing calibrant and dark frame paths "
+            "(keys: calibrant/osc and dark/dark_file)."
+        ),
     )
     hbn_parser.set_defaults(func=_cmd_hbn_fit)
 
