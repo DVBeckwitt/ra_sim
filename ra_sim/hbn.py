@@ -951,13 +951,23 @@ def run_hbn_fit(
         down_factor = int(downsample_factor or down_factor_b or DOWNSAMPLE_FACTOR)
         fit_compression = int(fit_compression or fit_compression_b or 1)
 
-        if highres_refine:
+        should_refit = highres_refine
+        refit_reason = "--highres-refine requested" if highres_refine else ""
+        if not should_refit and fit_compression != fit_compression_b:
+            should_refit = True
+            refit_reason = (
+                "fit_compression changed from bundle "
+                f"({fit_compression_b} -> {fit_compression})"
+            )
+
+        if should_refit:
             if osc_path is None or dark_path is None:
                 raise ValueError(
-                    "--highres-refine requires both --osc and --dark when loading a bundle."
+                    "Refitting a bundle requires both --osc and --dark so the background "
+                    "image can be recomputed."
                 )
 
-            print("Running high resolution refine based on bundle fit...")
+            print(f"Refitting bundle ellipses: {refit_reason}...")
             img_bgsub_hr = load_and_bgsub(osc_path, dark_path)
             img_fit_hr = compress_image(img_bgsub_hr, fit_compression)
             img_log_hr = make_log_image(img_fit_hr)
