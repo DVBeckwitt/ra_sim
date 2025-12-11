@@ -31,6 +31,26 @@ python main.py
 
 The application loads example images specified in `config/dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
 
+## Command-line hBN ellipse fitting
+
+You can run the hBN ellipse fitting workflow without the GUI through the project CLI. The workflow understands a YAML/JSON paths file so you do not have to repeat calibrant and dark frame paths each time.
+
+1. Update `config/hbn_paths.yaml` with your calibrant, dark, and optional bundle/profile paths (or point `--paths-file` to a custom YAML/JSON). The file can also hold a default `fit_compression` factor (`1` keeps full 3000×3000 resolution, `4` downsamples by 4× before fitting).
+2. Launch the workflow and optionally override the compression from the command prompt:
+
+```bash
+# Use the default config/hbn_paths.yaml and the compression it declares
+python -m ra_sim hbn-fit
+
+# Or pick a different compression at runtime (e.g., downsample by 4x)
+python -m ra_sim hbn-fit --fit-compression 4
+
+# Supply an alternate paths file
+python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml --fit-compression 1
+```
+
+When a bundle NPZ is provided in the paths file (or via `--load-bundle`), changing `--fit-compression` or adding `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses.
+
 ## Troubleshooting
 
 Set `RA_SIM_DEBUG=1` to enable verbose logging and additional diagnostic plots:
