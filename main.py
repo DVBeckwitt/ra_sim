@@ -2272,7 +2272,7 @@ def import_hbn_tilt_from_bundle():
 
     mean_dist = None
     try:
-        _, _, _, ellipses, distance_info = load_bundle_npz(bundle_path)
+        _, _, _, ellipses, distance_info, _ = load_bundle_npz(bundle_path)
     except Exception as exc:  # pragma: no cover - GUI interaction
         progress_label.config(text=f"Failed to load bundle: {exc}")
         return

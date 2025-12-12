@@ -45,6 +45,7 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import yaml
+from scipy.optimize import minimize
 
 from matplotlib.patches import Rectangle
 from skimage.measure import EllipseModel
@@ -350,7 +351,13 @@ def load_click_profile(path):
 
 
 def save_fit_profile(
-    path, ellipses, img_shape, tilt_hint=None, expected_peaks=None, distance_info=None
+    path,
+    ellipses,
+    img_shape,
+    tilt_hint=None,
+    expected_peaks=None,
+    distance_info=None,
+    tilt_correction=None,
 ):
     profile = {
         "image_shape": list(img_shape),
@@ -373,6 +380,8 @@ def save_fit_profile(
         profile["expected_peaks"] = expected_peaks
     if distance_info:
         profile["distance_estimate_m"] = distance_info
+    if tilt_correction:
+        profile["tilt_correction"] = tilt_correction
     with open(path, "w") as f:
         json.dump(profile, f, indent=2)
     print(f"Saved fit profile to:\n  {path}")
@@ -386,6 +395,7 @@ def save_bundle(
     ellipses,
     *,
     distance_info=None,
+    tilt_correction=None,
 ):
     ell_points_arr = np.array(
         [np.array(pts, dtype=np.float32) for pts in ell_points_ds],
@@ -409,6 +419,7 @@ def save_bundle(
         ell_points_ds=ell_points_arr,
         ellipse_params=ellipse_params,
         distance_estimate_m=distance_info,
+        tilt_correction=tilt_correction,
     )
     print(f"Saved bundle NPZ to:\n  {path}")
     print("Note: load with allow_pickle=True for ell_points_ds.")
@@ -421,6 +432,7 @@ def load_bundle_npz(path):
     ell_points_arr = data["ell_points_ds"]
     ellipse_params = data["ellipse_params"]
     distance_info = data.get("distance_estimate_m")
+    tilt_correction = data.get("tilt_correction")
 
     ell_points_ds = []
     for arr in ell_points_arr:
@@ -448,12 +460,17 @@ def load_bundle_npz(path):
             distance_info = distance_info.item()
         except Exception:
             pass
+    if tilt_correction is not None:
+        try:
+            tilt_correction = tilt_correction.item()
+        except Exception:
+            pass
     if distance_info:
         print(
             "  distance estimate: "
             f"mean={distance_info.get('mean_m', float('nan')):.4f} m"
         )
-    return img_bgsub, img_log, ell_points_ds, ellipses, distance_info
+    return img_bgsub, img_log, ell_points_ds, ellipses, distance_info, tilt_correction
 
 
 def load_tilt_hint(paths_file=None):
@@ -929,7 +946,7 @@ def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
     for e, peak in zip(ellipses, peaks):
         radius_pix = _effective_radius(e["a"], e["b"])
         tth_rad = math.radians(peak["two_theta_deg"])
-        if radius_pix <= 0 or math.isclose(math.tan(tth_rad), 0.0):
+        if not math.isfinite(radius_pix) or radius_pix <= 0 or math.isclose(math.tan(tth_rad), 0.0):
             continue
         radius_m = radius_pix * pixel_size_m
         distances.append(radius_m / math.tan(tth_rad))
@@ -942,6 +959,209 @@ def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
         "mean_m": float(np.mean(distances)),
         "pixel_size_m": float(pixel_size_m),
     }
+
+
+# ------------------------------------------------------------
+# Tilt circularization helpers (adapted from hbn.py helper script)
+# ------------------------------------------------------------
+
+def _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg):
+    """Apply inverse tilt correction assuming rotations about x/y through the center."""
+
+    pts = np.asarray(pts, dtype=float)
+    if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+        return pts
+
+    xc, yc = center
+
+    max_tilt_deg = 45.0
+    tilt_x_deg = float(np.clip(tilt_x_deg, -max_tilt_deg, max_tilt_deg))
+    tilt_y_deg = float(np.clip(tilt_y_deg, -max_tilt_deg, max_tilt_deg))
+
+    tx = np.deg2rad(tilt_x_deg)
+    ty = np.deg2rad(tilt_y_deg)
+
+    cx = np.cos(tx)  # affects y
+    cy = np.cos(ty)  # affects x
+
+    scale_y = 1e3 if abs(cx) < 1e-3 else 1.0 / cx
+    scale_x = 1e3 if abs(cy) < 1e-3 else 1.0 / cy
+
+    dx = (pts[:, 0] - xc) * scale_x
+    dy = (pts[:, 1] - yc) * scale_y
+    x_corr = xc + dx
+    y_corr = yc + dy
+
+    return np.column_stack([x_corr, y_corr])
+
+
+def _circularity_cost(params_deg, ell_points_ds, center):
+    tilt_x_deg, tilt_y_deg = params_deg
+    xc, yc = center
+    total_cost = 0.0
+
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            continue
+
+        pts_corr = _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg)
+
+        dx = pts_corr[:, 0] - xc
+        dy = pts_corr[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+
+        r_mean = r.mean()
+        if r_mean < 1e-9:
+            continue
+
+        metric = np.std(r) / r_mean
+        total_cost += metric * metric
+
+    return total_cost
+
+
+def _circularity_metrics(ell_points_ds, center, tilt_x_deg, tilt_y_deg):
+    xc, yc = center
+    metrics = []
+
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            metrics.append(np.nan)
+            continue
+
+        pts_corr = _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg)
+
+        dx = pts_corr[:, 0] - xc
+        dy = pts_corr[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+        r_mean = r.mean()
+        if r_mean < 1e-9:
+            metrics.append(np.nan)
+            continue
+
+        metrics.append(float(np.std(r) / r_mean))
+
+    return metrics
+
+
+def _apply_tilt_correction_all(ell_points_ds, center, tilt_x_deg, tilt_y_deg):
+    corrected = []
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            corrected.append(np.empty((0, 2)))
+            continue
+        corrected.append(_apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg))
+    return corrected
+
+
+def _fit_ring_radii(ell_points, center):
+    xc, yc = center
+    radii = []
+    for pts in ell_points:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            radii.append(np.nan)
+            continue
+        dx = pts[:, 0] - xc
+        dy = pts[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+        radii.append(float(r.mean()))
+    return radii
+
+
+def _find_tilt_correction(ell_points_ds, center):
+    if not ell_points_ds:
+        return None
+
+    cost_zero = _circularity_cost((0.0, 0.0), ell_points_ds, center)
+
+    tx_grid = np.linspace(-10.0, 10.0, 41)
+    ty_grid = np.linspace(-10.0, 10.0, 41)
+    best_cost = np.inf
+    best_tx = 0.0
+    best_ty = 0.0
+
+    for tx in tx_grid:
+        for ty in ty_grid:
+            c = _circularity_cost((tx, ty), ell_points_ds, center)
+            if c < best_cost:
+                best_cost = c
+                best_tx = tx
+                best_ty = ty
+
+    result = minimize(
+        _circularity_cost,
+        np.array([best_tx, best_ty], dtype=float),
+        args=(ell_points_ds, center),
+        method="Nelder-Mead",
+        options=dict(maxiter=1000, xatol=1e-4, fatol=1e-8, disp=False),
+    )
+
+    tilt_x_opt, tilt_y_opt = result.x
+
+    circ_before = _circularity_metrics(ell_points_ds, center, 0.0, 0.0)
+    circ_after = _circularity_metrics(ell_points_ds, center, tilt_x_opt, tilt_y_opt)
+
+    corrected_points = _apply_tilt_correction_all(
+        ell_points_ds, center, tilt_x_opt, tilt_y_opt
+    )
+
+    radii_before = _fit_ring_radii(ell_points_ds, center)
+    radii_after = _fit_ring_radii(corrected_points, center)
+
+    return {
+        "tilt_x_deg": float(tilt_x_opt),
+        "tilt_y_deg": float(tilt_y_opt),
+        "cost_zero": float(cost_zero),
+        "cost_final": float(result.fun),
+        "circ_before": circ_before,
+        "circ_after": circ_after,
+        "radii_before": radii_before,
+        "radii_after": radii_after,
+        "corrected_points": corrected_points,
+    }
+
+
+def _serialize_tilt_correction(tilt_correction, center=None):
+    if not tilt_correction:
+        return None
+
+    serialized = {
+        "tilt_x_deg": float(tilt_correction.get("tilt_x_deg", float("nan"))),
+        "tilt_y_deg": float(tilt_correction.get("tilt_y_deg", float("nan"))),
+        "cost_zero": float(tilt_correction.get("cost_zero", float("nan"))),
+        "cost_final": float(tilt_correction.get("cost_final", float("nan"))),
+        "circ_before": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("circ_before", [])
+        ],
+        "circ_after": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("circ_after", [])
+        ],
+        "radii_before": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("radii_before", [])
+        ],
+        "radii_after": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("radii_after", [])
+        ],
+    }
+
+    if center is not None:
+        serialized["center"] = [float(center[0]), float(center[1])]
+
+    corrected_points = tilt_correction.get("corrected_points")
+    if corrected_points is not None:
+        serialized["corrected_points"] = [
+            np.asarray(pts, dtype=float).tolist() for pts in corrected_points
+        ]
+
+    return serialized
 
 
 def _format_ellipse_lines(ellipses):
@@ -998,6 +1218,87 @@ def plot_ellipses(img_bgsub, ellipses, save_path=None):
     if save_path is not None:
         fig.savefig(save_path, dpi=300)
         print(f"Saved overlay image with ellipses to:\n  {save_path}")
+    plt.show()
+
+
+def plot_tilt_correction_overlay(
+    ell_points_ds,
+    corrected_points,
+    center,
+    radii_before,
+    radii_after,
+    tilt_x_deg,
+    tilt_y_deg,
+    save_path=None,
+):
+    xc, yc = center
+    theta = np.linspace(0.0, 2.0 * np.pi, 720)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    all_pts = []
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2 and pts.size > 0:
+            all_pts.append(pts)
+    for pts in corrected_points:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2 and pts.size > 0:
+            all_pts.append(pts)
+
+    if all_pts:
+        all_xy = np.vstack(all_pts)
+        xmin, xmax = np.min(all_xy[:, 0]), np.max(all_xy[:, 0])
+        ymin, ymax = np.min(all_xy[:, 1]), np.max(all_xy[:, 1])
+    else:
+        xmin = xmax = ymin = ymax = 0.0
+
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2:
+            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.3, label="_orig_pts")
+
+    for pts in corrected_points:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2:
+            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.6, label="_corr_pts")
+
+    for r in radii_before:
+        if not np.isfinite(r) or r <= 0:
+            continue
+        x_circ = xc + r * np.cos(theta)
+        y_circ = yc + r * np.sin(theta)
+        ax.plot(x_circ, y_circ, linestyle="--", linewidth=1, label="_orig_circle")
+
+    for r in radii_after:
+        if not np.isfinite(r) or r <= 0:
+            continue
+        x_circ = xc + r * np.cos(theta)
+        y_circ = yc + r * np.sin(theta)
+        ax.plot(x_circ, y_circ, linewidth=1, label="_corr_circle")
+
+    ax.axhline(y=yc, linestyle="-.", linewidth=1.0, label="x tilt axis")
+    ax.axvline(x=xc, linestyle="-.", linewidth=1.0, label="y tilt axis")
+
+    ax.plot(xc, yc, "x", markersize=6, label="center")
+
+    ax.set_aspect("equal", adjustable="box")
+    ax.invert_yaxis()
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymax, ymin)
+
+    ax.set_title(
+        "Tilt correction overlay\n"
+        f"tilt_x={tilt_x_deg:.2f} deg, tilt_y={tilt_y_deg:.2f} deg"
+    )
+    ax.set_xlabel("x (pixels)")
+    ax.set_ylabel("y (pixels)")
+    ax.legend(loc="best")
+
+    fig.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=300)
+        print(f"Saved tilt-corrected overlay to:\n  {save_path}")
     plt.show()
 
 
@@ -1081,6 +1382,9 @@ def run_hbn_fit(
     output_dir = _resolve_output_dir(output_dir, bundle_path_in)
     out_tiff_path = os.path.join(output_dir, "hbn_bgsub.tiff")
     out_overlay_path = os.path.join(output_dir, "hbn_bgsub_ellipses.png")
+    out_tilt_overlay_path = os.path.join(
+        output_dir, "hbn_bgsub_ellipses_tilt_corrected.png"
+    )
 
     click_profile_path = resolved["click_profile"] or click_profile_path
     if click_profile_path is None:
@@ -1100,6 +1404,7 @@ def run_hbn_fit(
         "output_dir": output_dir,
         "background_subtracted": out_tiff_path,
         "overlay": out_overlay_path,
+        "tilt_overlay": out_tilt_overlay_path,
         "click_profile": click_profile_path,
         "fit_profile": fit_profile_path,
         "bundle": bundle_path_save,
@@ -1108,6 +1413,7 @@ def run_hbn_fit(
         "tilt_hint": None,
         "expected_peaks": None,
         "distance_estimate_m": None,
+        "tilt_correction": None,
         "aborted": False,
         "abort_reason": None,
     }
@@ -1122,6 +1428,8 @@ def run_hbn_fit(
     ell_points_ds = None
     ellipses_out = None
     distance_info = None
+    tilt_correction = None
+    tilt_correction_serialized = None
 
     abort_reason = None
     completed = False
@@ -1134,7 +1442,9 @@ def run_hbn_fit(
                 ell_points_ds,
                 ellipses_b,
                 distance_info,
+                tilt_correction,
             ) = bundle_loaded
+            tilt_correction_serialized = tilt_correction
 
             if highres_refine:
                 if osc_path is None or dark_path is None:
@@ -1206,10 +1516,38 @@ def run_hbn_fit(
             print(abort_reason)
             return outputs
 
+        center_common = compute_common_center(ellipses_out) if ellipses_out else None
+        tilt_correction = (
+            _find_tilt_correction(ell_points_ds, center_common)
+            if center_common is not None
+            else None
+        )
+        tilt_correction_serialized = _serialize_tilt_correction(
+            tilt_correction, center_common
+        )
+        if tilt_correction:
+            print(
+                "Tilt circularization completed: "
+                f"tilt_x={tilt_correction['tilt_x_deg']:.4f} deg, "
+                f"tilt_y={tilt_correction['tilt_y_deg']:.4f} deg, "
+                f"cost={tilt_correction['cost_final']:.6e} (zero={tilt_correction['cost_zero']:.6e})"
+            )
+
         expected_peaks = hbn_expected_peaks()
-        needs_distance_refresh = distance_info is None or reclick or highres_refine
-        if needs_distance_refresh:
-            distance_info = estimate_sample_detector_distance(ellipses_out, expected_peaks)
+        needs_distance_refresh = True
+        ellipses_for_distance = ellipses_out
+
+        if tilt_correction and center_common is not None:
+            corrected_radii = tilt_correction.get("radii_after", [])
+            ellipses_for_distance = [
+                dict(xc=center_common[0], yc=center_common[1], a=r, b=r, theta=0.0)
+                for r in corrected_radii
+            ]
+
+        distance_info = estimate_sample_detector_distance(
+            ellipses_for_distance, expected_peaks
+        )
+
         tilt_hint = estimate_detector_tilt(ellipses_out)
         if tilt_hint:
             print(
@@ -1252,6 +1590,7 @@ def run_hbn_fit(
         tilt_hint=tilt_hint,
         expected_peaks=expected_peaks,
         distance_info=distance_info,
+        tilt_correction=tilt_correction_serialized,
     )
     save_bundle(
         bundle_path_save,
@@ -1260,6 +1599,7 @@ def run_hbn_fit(
         ell_points_ds,
         ellipses_out,
         distance_info=distance_info,
+        tilt_correction=tilt_correction_serialized,
     )
 
     if prompt_save_bundle:
@@ -1272,11 +1612,27 @@ def run_hbn_fit(
                 ell_points_ds,
                 ellipses_out,
                 distance_info=distance_info,
+                tilt_correction=tilt_correction_serialized,
             )
             print(f"Saved hBN bundle via prompt to:\n  {manual_bundle_path}")
             outputs["manual_bundle"] = manual_bundle_path
 
     plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
+
+    if tilt_correction:
+        corrected_points = tilt_correction.get("corrected_points", [])
+        radii_before = tilt_correction.get("radii_before", [])
+        radii_after = tilt_correction.get("radii_after", [])
+        plot_tilt_correction_overlay(
+            ell_points_ds,
+            corrected_points,
+            center_common,
+            radii_before,
+            radii_after,
+            tilt_correction.get("tilt_x_deg", 0.0),
+            tilt_correction.get("tilt_y_deg", 0.0),
+            save_path=out_tilt_overlay_path,
+        )
 
     if ellipses_out:
         print("Fitted ellipse parameters:")
@@ -1286,6 +1642,7 @@ def run_hbn_fit(
     outputs["tilt_hint"] = tilt_hint
     outputs["expected_peaks"] = expected_peaks
     outputs["distance_estimate_m"] = distance_info
+    outputs["tilt_correction"] = tilt_correction_serialized
     return outputs
 
 
