@@ -9,7 +9,10 @@ from scipy.optimize import least_squares, differential_evolution, OptimizeResult
 from scipy.ndimage import distance_transform_edt, gaussian_filter, sobel, zoom
 from scipy.spatial import cKDTree
 
-from ra_sim.simulation.diffraction import process_peaks_parallel
+from ra_sim.simulation.diffraction import (
+    hit_tables_to_max_positions,
+    process_peaks_parallel,
+)
 from ra_sim.utils.calculations import d_spacing, two_theta
 
 RNG = np.random.default_rng(42)
@@ -178,7 +181,7 @@ def _simulate_with_cache(
     if wavelength_array is None:
         wavelength_array = params.get('lambda')
 
-    image, maxpos, _, _, _ = process_peaks_parallel(
+    image, hit_tables, *_ = process_peaks_parallel(
         miller, intensities, image_size,
         params['a'], params['c'], wavelength_array,
         buffer, params['corto_detector'],
@@ -200,7 +203,7 @@ def _simulate_with_cache(
     )
 
     image = np.asarray(image, dtype=np.float64)
-    maxpos = np.asarray(maxpos)
+    maxpos = hit_tables_to_max_positions(hit_tables)
 
     cache.store(params, image, maxpos)
     return image, maxpos
@@ -1647,7 +1650,7 @@ def simulate_and_compare_hkl(
         wavelength_array = mosaic.get('wavelength_i_array')
 
     # Full-pattern simulation
-    updated_image, maxpos, _, _, _ = process_peaks_parallel(
+    updated_image, hit_tables, *_ = process_peaks_parallel(
         miller, intensities, image_size,
         a, c, wavelength_array,
         sim_buffer, dist,
@@ -1667,6 +1670,7 @@ def simulate_and_compare_hkl(
         np.array([0.0, 1.0, 0.0]),
         save_flag=0
     )
+    maxpos = hit_tables_to_max_positions(hit_tables)
 
     distances: list[float] = []
     sim_coords: list[tuple[float, float]] = []

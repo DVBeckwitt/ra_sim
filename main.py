@@ -67,6 +67,7 @@ from ra_sim.fitting.optimization import (
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
+    hit_tables_to_max_positions,
     process_peaks_parallel,
     process_qr_rods_parallel,
 )
@@ -2897,7 +2898,7 @@ def save_q_space_representation():
         "eta": profile_cache.get("eta", 0.0)
     }
 
-    image_result, max_positions_local, q_data, q_count, _, _ = process_peaks_parallel(
+    image_result, hit_tables, q_data, q_count, _, _ = process_peaks_parallel(
         miller,
         intensities,
         image_size,
@@ -2930,6 +2931,8 @@ def save_q_space_representation():
         np.array([0.0, 1.0, 0.0]),
         save_flag=1
     )
+
+    max_positions_local = hit_tables_to_max_positions(hit_tables)
 
     current_2d_display = global_image_buffer.copy()
 
