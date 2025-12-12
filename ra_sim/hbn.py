@@ -35,6 +35,7 @@ Workflow
      refines them on this full resolution image, and saves updated JSONs, bundle, and overlay.
 """
 
+import math
 import os
 import json
 import argparse
@@ -50,6 +51,8 @@ from skimage.measure import EllipseModel
 
 import OSC_Reader
 from OSC_Reader import OSC_Reader
+from ra_sim.path_config import get_instrument_config
+from ra_sim.utils import calculations
 
 
 # ------------------------------------------------------------
@@ -73,6 +76,20 @@ LOAD_PROFILE = False
 REFINE_N_ANGLES = 360    # angular sampling along ellipse
 REFINE_DR = 10.0         # half width of radial search window [pixels]
 REFINE_STEP = 1.0        # radial step [pixels]
+
+
+# hBN reference parameters for expected peak calculation (Cu Kα, λ=1.5406 Å)
+HBN_LATTICE_A_ANG = 2.504
+HBN_LATTICE_C_ANG = 6.661
+CU_K_ALPHA_WAVELENGTH_ANG = 1.5406
+# Five low-angle peaks that typically appear in the hBN calibrant image
+HBN_HKLS = [
+    (0, 0, 2),
+    (1, 0, 0),
+    (1, 0, 1),
+    (1, 0, 2),
+    (0, 0, 4),
+]
 
 
 # ------------------------------------------------------------
@@ -204,6 +221,35 @@ def make_display_image(img_bgsub):
     return disp
 
 
+def _get_pixel_size_m(default=1e-4):
+    """Return detector pixel size in meters (defaults to 100 µm)."""
+
+    try:
+        inst_cfg = get_instrument_config()
+        return float(inst_cfg["instrument"]["detector"]["pixel_size_m"])
+    except Exception:
+        return default
+
+
+def hbn_expected_peaks():
+    """Return expected d-spacing and 2θ values for hBN with Cu Kα."""
+
+    peaks = []
+    for h, k, l in HBN_HKLS:
+        d_ang = calculations.d_spacing(h, k, l, HBN_LATTICE_A_ANG, HBN_LATTICE_C_ANG)
+        tth = calculations.two_theta(d_ang, CU_K_ALPHA_WAVELENGTH_ANG)
+        if tth is None:
+            continue
+        peaks.append(
+            {
+                "hkl": [h, k, l],
+                "d_spacing_ang": float(d_ang),
+                "two_theta_deg": float(tth),
+            }
+        )
+    return peaks
+
+
 # ------------------------------------------------------------
 # Path helpers
 # ------------------------------------------------------------
@@ -292,7 +338,9 @@ def load_click_profile(path):
     return ell_points_ds
 
 
-def save_fit_profile(path, ellipses, img_shape, tilt_hint=None):
+def save_fit_profile(
+    path, ellipses, img_shape, tilt_hint=None, expected_peaks=None, distance_info=None
+):
     profile = {
         "image_shape": list(img_shape),
         "ellipses": [
@@ -310,6 +358,10 @@ def save_fit_profile(path, ellipses, img_shape, tilt_hint=None):
     }
     if tilt_hint:
         profile["tilt_hint"] = tilt_hint
+    if expected_peaks:
+        profile["expected_peaks"] = expected_peaks
+    if distance_info:
+        profile["distance_estimate_m"] = distance_info
     with open(path, "w") as f:
         json.dump(profile, f, indent=2)
     print(f"Saved fit profile to:\n  {path}")
@@ -835,6 +887,32 @@ def estimate_detector_tilt(ellipses):
     return _estimate_tilt_components(target["a"], target["b"], target["theta"])
 
 
+def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
+    """Estimate the sample–detector distance using fitted rings and hBN peaks."""
+
+    if not ellipses or not peaks:
+        return None
+
+    pixel_size_m = pixel_size_m or _get_pixel_size_m()
+    distances = []
+    for e, peak in zip(ellipses, peaks):
+        radius_pix = _effective_radius(e["a"], e["b"])
+        tth_rad = math.radians(peak["two_theta_deg"])
+        if radius_pix <= 0 or math.isclose(math.tan(tth_rad), 0.0):
+            continue
+        radius_m = radius_pix * pixel_size_m
+        distances.append(radius_m / math.tan(tth_rad))
+
+    if not distances:
+        return None
+
+    return {
+        "per_ring_m": [float(d) for d in distances],
+        "mean_m": float(np.mean(distances)),
+        "pixel_size_m": float(pixel_size_m),
+    }
+
+
 def _format_ellipse_lines(ellipses):
     lines = []
     for i, e in enumerate(ellipses):
@@ -973,6 +1051,8 @@ def run_hbn_fit(
         "bundle": bundle_path_save,
         "ellipses": [],
         "tilt_hint": None,
+        "expected_peaks": None,
+        "distance_estimate_m": None,
     }
 
     bundle_loaded = None
@@ -1000,12 +1080,29 @@ def run_hbn_fit(
         img_log_out = img_log_b
         ellipses_out = ellipses_b
 
+    expected_peaks = hbn_expected_peaks()
+    distance_info = estimate_sample_detector_distance(ellipses_out, expected_peaks)
     tilt_hint = estimate_detector_tilt(ellipses_out)
     if tilt_hint:
         print(
             "Estimated detector tilt from hBN fit (using largest ring): "
             f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad"
         )
+    if expected_peaks:
+        print("Expected hBN peaks for Cu Kα:")
+        for i, peak in enumerate(expected_peaks, 1):
+            h, k, l = peak["hkl"]
+            print(
+                f"  Ring {i}: hkl=({h}{k}{l}) d={peak['d_spacing_ang']:.4f} Å "
+                f"2θ={peak['two_theta_deg']:.2f}°"
+            )
+    if distance_info:
+        print(
+            "Estimated sample-detector distance (using matched rings): "
+            f"mean={distance_info['mean_m']:.4f} m"
+        )
+        for i, dist in enumerate(distance_info["per_ring_m"], 1):
+            print(f"  Ring {i}: {dist:.4f} m")
     cv2.imwrite(out_tiff_path, img_bgsub_out)
     save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
     save_fit_profile(
@@ -1013,6 +1110,8 @@ def run_hbn_fit(
         ellipses_out,
         img_bgsub_out.shape,
         tilt_hint=tilt_hint,
+        expected_peaks=expected_peaks,
+        distance_info=distance_info,
     )
     save_bundle(
         bundle_path_save,
@@ -1029,6 +1128,8 @@ def run_hbn_fit(
 
     outputs["ellipses"] = ellipses_out
     outputs["tilt_hint"] = tilt_hint
+    outputs["expected_peaks"] = expected_peaks
+    outputs["distance_estimate_m"] = distance_info
     return outputs
 
     if reclick and bundle_loaded is not None:
