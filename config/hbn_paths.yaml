@@ -1,10 +1,14 @@
 # Default hBN calibrant + dark frame paths for the CLI workflow.
 # Update these to match your local files or pass a custom file via --paths-file.
-calibrant: "/path/to/calibrant.osc"
-dark: "/path/to/dark.osc"
+calibrant: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/hBN_calibrant_5m.osc"
+
+dark: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/darkImg.osc"
+
+
+
 
 # Optional convenience defaults for reloading/saving artifacts.
 # If provided, these paths override the usual names in the output directory.
-bundle: "/path/to/hbn_ellipse_bundle.npz"
-click_profile: "/path/to/hbn_ellipse_profile.json"
-fit_profile: "/path/to/hbn_ellipse_fit_profile.json"
+bundle: "C:/Users/Kenpo/Downloads/hbn_ellipse_bundle.npz"
+click_profile: "C:/Users/Kenpo/Downloads/hbn_ellipse_fit_profile.json"
+fit_profile: "C:/Users/Kenpo/Downloads/hbn_ellipse_profile.json"
