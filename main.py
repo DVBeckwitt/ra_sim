@@ -564,15 +564,16 @@ def export_initial_excel():
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 
-# Background images stay in their native orientation; only the simulation will
-# be rotated for display.  Negative ``k`` rotates clockwise, positive rotates
-# counter-clockwise. The simulation rotation is mutable so the user can rotate
-# the overlay from the GUI.
-DISPLAY_ROTATE_K = 0
-SIM_DISPLAY_ROTATE_K = -1
+# Background and simulated overlays are both rotated for display. Negative ``k``
+# rotates clockwise, positive rotates counter-clockwise. The simulation uses a
+# fixed offset relative to the background so they stay aligned without
+# additional user interaction.
+DISPLAY_ROTATE_K = -2
+SIM_DISPLAY_ROTATE_K = DISPLAY_ROTATE_K - 3
 
-# Keep the real image unflipped for the GUI
-background_images = list(background_images)
+# Keep the real images but rotate them for display so they start aligned with
+# the simulated overlay orientation.
+background_images = [np.rot90(img, DISPLAY_ROTATE_K) for img in background_images]
 
 current_background_image = background_images[0]
 current_background_index = 0
@@ -956,19 +957,6 @@ def _apply_simulation_limits():
     apply_scale_factor_to_existing_results()
 
 
-def rotate_simulation_overlay():
-    """Rotate the simulated image 90° clockwise and clear fit overlays."""
-
-    global SIM_DISPLAY_ROTATE_K
-
-    SIM_DISPLAY_ROTATE_K -= 1
-    _clear_geometry_pick_artists()
-    progress_label_geometry.config(
-        text="Simulation rotated 90°; geometry picks reset."
-    )
-    schedule_update()
-
-
 background_controls = ttk.LabelFrame(display_controls_frame, text="Background Display")
 background_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
@@ -1061,14 +1049,6 @@ simulation_scale_factor_var, scale_factor_slider = create_slider(
     scale_factor_step,
     parent=simulation_controls,
 )
-
-
-rotate_sim_button = ttk.Button(
-    simulation_controls,
-    text="Rotate Sim 90°",
-    command=rotate_simulation_overlay,
-)
-rotate_sim_button.pack(side=tk.TOP, padx=5, pady=4)
 
 
 def _on_scale_factor_change(*args):
