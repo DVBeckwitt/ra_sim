@@ -1881,7 +1881,8 @@ def main(argv=None):
         "click_profile",
         "bundle",
     ]:
-        print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+        value = results.get(key, "n/a")
+        print(f"  {key.replace('_', ' ').title()}: {value}")
 
 
 if __name__ == "__main__":

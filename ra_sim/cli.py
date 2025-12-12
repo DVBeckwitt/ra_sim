@@ -338,7 +338,8 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         "click_profile",
         "bundle",
     ]:
-        print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+        value = results.get(key, "n/a")
+        print(f"  {key.replace('_', ' ').title()}: {value}")
     if results.get("manual_bundle"):
         print(f"  Manual Bundle: {results['manual_bundle']}")
 
