@@ -564,14 +564,14 @@ def export_initial_excel():
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 
-# Rotate all displayed images/coordinates by the same ``np.rot90`` factor so the
-# simulated pattern and the background stay aligned.  Negative values rotate
-# clockwise, positive values counter-clockwise.  Use a +1 (CCW) rotation to keep
-# the simulated overlay aligned with the background.
-DISPLAY_ROTATE_K = 1
+# Background images stay in their native orientation; only the simulation will
+# be rotated for display.  Negative ``k`` rotates clockwise, positive rotates
+# counter-clockwise.
+DISPLAY_ROTATE_K = 0
+SIM_DISPLAY_ROTATE_K = -1
 
-# Rotate background images 90 degrees clockwise so orientation matches simulation
-background_images = [np.rot90(bg, DISPLAY_ROTATE_K) for bg in background_images]
+# Keep the real image unflipped for the GUI
+background_images = list(background_images)
 
 current_background_image = background_images[0]
 current_background_index = 0
@@ -662,10 +662,10 @@ def _unrotate_display_peaks(measured, rotated_shape):
     return unrotated
 
 
-def _native_to_display_coords(col: float, row: float, image_shape: tuple[int, ...]):
-    """Rotate native detector coordinates into the displayed frame."""
+def _native_sim_to_display_coords(col: float, row: float, image_shape: tuple[int, ...]):
+    """Rotate native simulation coordinates into the displayed frame."""
 
-    return _rotate_point_for_display(col, row, image_shape, DISPLAY_ROTATE_K)
+    return _rotate_point_for_display(col, row, image_shape, SIM_DISPLAY_ROTATE_K)
 
 
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
@@ -1845,7 +1845,7 @@ def do_update():
         max_positions_local = stored_max_positions_local
         updated_image       = stored_sim_image
 
-    display_image = np.rot90(updated_image, DISPLAY_ROTATE_K)
+    display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
     
     # ───── NEW: build peak lists from hit_tables ───────────────────────────
     peak_positions.clear()
@@ -1863,7 +1863,7 @@ def do_update():
                 continue
             cx = int(round(xpix))
             cy = int(round(ypix))
-            disp_cx, disp_cy = _native_to_display_coords(cx, cy, updated_image.shape)
+            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, updated_image.shape)
             peak_positions.append((disp_cx, disp_cy))      # display coords
             peak_intensities.append(I)
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
