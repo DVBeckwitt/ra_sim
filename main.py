@@ -168,7 +168,7 @@ resolution_sample_counts = {
     "Medium": 250,
     "High": 500,
 }
-num_samples = resolution_sample_counts["High"]
+num_samples = resolution_sample_counts["Low"]
 write_excel = output_config.get("write_excel", write_excel)
 intensity_threshold = detector_config.get("intensity_threshold", 1.0)
 vmax_default = detector_config.get("vmax", 1000)
@@ -310,7 +310,7 @@ defaults = {
     'w2': w_defaults[2],
     'center_x': center_default[0],
     'center_y': center_default[1],
-    'sampling_resolution': 'High',
+    'sampling_resolution': 'Low',
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
 }
@@ -2270,8 +2270,9 @@ def import_hbn_tilt_from_bundle():
     if not bundle_path:
         return
 
+    mean_dist = None
     try:
-        _, _, _, ellipses = load_bundle_npz(bundle_path)
+        _, _, _, ellipses, distance_info = load_bundle_npz(bundle_path)
     except Exception as exc:  # pragma: no cover - GUI interaction
         progress_label.config(text=f"Failed to load bundle: {exc}")
         return
@@ -2285,11 +2286,24 @@ def import_hbn_tilt_from_bundle():
     rot2_deg = float(np.degrees(tilt_hint_local["rot2_rad"]))
     Gamma_var.set(rot1_deg)
     gamma_var.set(rot2_deg)
+    if distance_info and isinstance(distance_info, dict):
+        mean_dist = distance_info.get("mean_m")
+        if mean_dist is not None:
+            try:
+                corto_detector_var.set(float(mean_dist))
+            except Exception:
+                pass
     schedule_update()
     progress_label.config(
         text=(
             "Applied hBN bundle tilt hint "
-            f"(Γ={rot1_deg:.3f}°, γ={rot2_deg:.3f}°) from {bundle_path}"
+            f"(Γ={rot1_deg:.3f}°, γ={rot2_deg:.3f}°)"
+            + (
+                f" and distance {mean_dist:.4f} m"  # type: ignore[arg-type]
+                if distance_info and mean_dist is not None
+                else ""
+            )
+            + f" from {bundle_path}"
         )
     )
 
