@@ -1787,18 +1787,6 @@ def fit_geometry_parameters(
     var_names is a list of keys in `params` to optimize.
     """
 
-    if experimental_image is not None:
-        return iterative_refinement(
-            experimental_image,
-            miller,
-            intensities,
-            image_size,
-            params,
-            var_names=var_names,
-            measured_peaks=measured_peaks,
-            config=refinement_config,
-        )
-
     def cost_fn(x):
         local = params.copy()
         for name, v in zip(var_names, x):
@@ -1826,8 +1814,22 @@ def fit_geometry_parameters(
         return D
 
     x0 = [params[name] for name in var_names]
-    res = least_squares(cost_fn, x0)
-    return res
+
+    if experimental_image is None:
+        return least_squares(cost_fn, x0)
+
+    lower_bounds = []
+    upper_bounds = []
+    theta0 = float(params.get('theta_initial', 0.0))
+    for name, val in zip(var_names, x0):
+        if name == 'theta_initial':
+            lower_bounds.append(theta0 - 0.5)
+            upper_bounds.append(theta0 + 0.5)
+        else:
+            lower_bounds.append(-np.inf)
+            upper_bounds.append(np.inf)
+
+    return least_squares(cost_fn, x0, bounds=(lower_bounds, upper_bounds))
 
 
 def run_optimization_positions_geometry_local(
