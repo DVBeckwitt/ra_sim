@@ -568,7 +568,7 @@ col_center = int(center_default[1])
 # rotates clockwise, positive rotates counter-clockwise. The simulation uses a
 # fixed offset relative to the background so they stay aligned without
 # additional user interaction.
-DISPLAY_ROTATE_K = -2
+DISPLAY_ROTATE_K = -1
 SIM_DISPLAY_ROTATE_K = DISPLAY_ROTATE_K - 3
 
 # Keep the real images but rotate them for display so they start aligned with
