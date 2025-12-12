@@ -1828,6 +1828,12 @@ def fit_geometry_parameters(
         elif name in {'zs', 'zb'}:
             lower_bounds.append(-2.0e-3)
             upper_bounds.append(2.0e-3)
+        elif name == 'chi':
+            lower_bounds.append(-1.0)
+            upper_bounds.append(1.0)
+        elif name == 'cor_angle':
+            lower_bounds.append(-5.0)
+            upper_bounds.append(5.0)
         else:
             lower_bounds.append(-np.inf)
             upper_bounds.append(np.inf)
