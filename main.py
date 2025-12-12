@@ -2427,88 +2427,164 @@ def on_fit_geometry_click():
         progress_label_geometry.config(text="No parameters selected!")
         return
 
-    # run the iterative refinement against the experimental image
-    #
-    # Geometry fitting pairs simulated peak maxima with the measured peaks
-    # that share the same HKL label (from `measured_peaks`). The pairing is
-    # done in angle space: both simulated and measured peaks are converted to
-    # (2θ, φ), sorted radially, and matched in order before the optimizer
-    # minimizes their angular deltas.
-    result = fit_geometry_parameters(
-        miller, intensities, image_size,
-        params,
-        measured_peaks,
-        var_names,
-        pixel_tol=float('inf'),
-        experimental_image=current_background_image,
-    )
+    if not peak_positions:
+        progress_label_geometry.config(text="Run a simulation first to pick peaks.")
+        return
 
-    for name, val in zip(var_names, result.x):
-        if name == 'zb':               zb_var.set(val)
-        elif name == 'zs':             zs_var.set(val)
-        elif name == 'theta_initial':  theta_initial_var.set(val)
-        elif name == 'chi':            chi_var.set(val)
-        elif name == 'cor_angle':      cor_angle_var.set(val)
+    def _nearest_simulated_peak(col: float, row: float):
+        """Return (index, distance^2) of the nearest simulated peak, or (None, inf)."""
 
-    schedule_update()
+        best_idx, best_d2 = None, float("inf")
+        for idx, (px, py) in enumerate(peak_positions):
+            if px < 0 or py < 0:
+                continue
+            d2 = (px - col) ** 2 + (py - row) ** 2
+            if d2 < best_d2:
+                best_idx, best_d2 = idx, d2
+        return best_idx, best_d2
 
-    rms = np.sqrt(np.mean(result.fun**2)) if getattr(result, 'fun', None) is not None and result.fun.size else 0.0
-    txt = "Fit complete:\n" + \
-          "\n".join(f"{n} = {v:.4f}" for n,v in zip(var_names, result.x)) + \
-          f"\nRMS residual = {rms:.2f} px"
-    progress_label_geometry.config(text=txt)
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Re-simulate with the refined parameters and export matched peaks
-    fitted_params = dict(params)
-    fitted_params.update({
-        'zb': zb_var.get(),
-        'zs': zs_var.get(),
-        'theta_initial': theta_initial_var.get(),
-        'chi': chi_var.get(),
-        'cor_angle': cor_angle_var.get(),
-    })
-
-    (
-        _,
-        sim_coords,
-        meas_coords,
-        sim_millers,
-        meas_millers,
-    ) = simulate_and_compare_hkl(
-        miller,
-        intensities,
-        image_size,
-        fitted_params,
-        measured_peaks,
-        pixel_tol=float('inf'),
-    )
-
-    export_recs = []
-    for hkl, (x, y) in zip(sim_millers, sim_coords):
-        export_recs.append({
-            'source': 'sim',
-            'hkl': tuple(int(v) for v in hkl),
-            'x': int(x),
-            'y': int(y),
-        })
-    for hkl, (x, y) in zip(meas_millers, meas_coords):
-        export_recs.append({
-            'source': 'meas',
-            'hkl': tuple(int(v) for v in hkl),
-            'x': int(x),
-            'y': int(y),
-        })
-
-    download_dir = get_dir("downloads")
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = download_dir / f"matched_peaks_{stamp}.npy"
-    np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
+    picked_pairs = []  # list[(h,k,l), (x_real, y_real)]
+    selection_state = {"expecting": "sim", "pending_hkl": None}
+    canvas_widget = canvas.get_tk_widget()
 
     progress_label_geometry.config(
-        text=(progress_label_geometry.cget('text')
-              + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}')
+        text="Click a simulated peak, then the matching real peak (right click to finish)."
     )
+    canvas_widget.configure(cursor="crosshair")
+
+    click_cid = None
+
+    def _finish_pair_collection():
+        nonlocal click_cid
+        if click_cid is not None:
+            canvas.mpl_disconnect(click_cid)
+            click_cid = None
+        canvas_widget.configure(cursor="")
+
+    def _on_geometry_pick(event):
+        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
+            return
+
+        if event.button == 3:
+            _finish_pair_collection()
+            if not picked_pairs:
+                progress_label_geometry.config(text="No peak pairs selected; fit cancelled.")
+                return
+            measured_from_clicks = [
+                {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
+                for (h, k, l), (x, y) in picked_pairs
+            ]
+            result = fit_geometry_parameters(
+                miller,
+                intensities,
+                image_size,
+                params,
+                measured_from_clicks,
+                var_names,
+                pixel_tol=float('inf'),
+                experimental_image=current_background_image,
+            )
+
+            for name, val in zip(var_names, result.x):
+                if name == 'zb':               zb_var.set(val)
+                elif name == 'zs':             zs_var.set(val)
+                elif name == 'theta_initial':  theta_initial_var.set(val)
+                elif name == 'chi':            chi_var.set(val)
+                elif name == 'cor_angle':      cor_angle_var.set(val)
+
+            schedule_update()
+
+            rms = np.sqrt(np.mean(result.fun**2)) if getattr(result, 'fun', None) is not None and result.fun.size else 0.0
+            txt = "Fit complete:\n" + \
+                  "\n".join(f"{n} = {v:.4f}" for n,v in zip(var_names, result.x)) + \
+                  f"\nRMS residual = {rms:.2f} px"
+            progress_label_geometry.config(text=txt)
+
+            fitted_params = dict(params)
+            fitted_params.update({
+                'zb': zb_var.get(),
+                'zs': zs_var.get(),
+                'theta_initial': theta_initial_var.get(),
+                'chi': chi_var.get(),
+                'cor_angle': cor_angle_var.get(),
+            })
+
+            (
+                _,
+                sim_coords,
+                meas_coords,
+                sim_millers,
+                meas_millers,
+            ) = simulate_and_compare_hkl(
+                miller,
+                intensities,
+                image_size,
+                fitted_params,
+                measured_from_clicks,
+                pixel_tol=float('inf'),
+            )
+
+            export_recs = []
+            for hkl, (x, y) in zip(sim_millers, sim_coords):
+                export_recs.append({
+                    'source': 'sim',
+                    'hkl': tuple(int(v) for v in hkl),
+                    'x': int(x),
+                    'y': int(y),
+                })
+            for hkl, (x, y) in zip(meas_millers, meas_coords):
+                export_recs.append({
+                    'source': 'meas',
+                    'hkl': tuple(int(v) for v in hkl),
+                    'x': int(x),
+                    'y': int(y),
+                })
+
+            download_dir = get_dir("downloads")
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_path = download_dir / f"matched_peaks_{stamp}.npy"
+            np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
+
+            progress_label_geometry.config(
+                text=(progress_label_geometry.cget('text')
+                      + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}')
+            )
+            return
+
+        col, row = float(event.xdata), float(event.ydata)
+
+        if selection_state["expecting"] == "sim":
+            idx, _ = _nearest_simulated_peak(col, row)
+            if idx is None:
+                progress_label_geometry.config(text="No simulated peaks available to pick.")
+                return
+            selection_state["pending_hkl"] = peak_millers[idx]
+            progress_label_geometry.config(
+                text=(
+                    f"Selected simulated peak HKL={selection_state['pending_hkl']} "
+                    "→ click matching real peak (right click to finish)."
+                )
+            )
+            selection_state["expecting"] = "real"
+            return
+
+        pending = selection_state.get("pending_hkl")
+        if pending is None:
+            selection_state["expecting"] = "sim"
+            progress_label_geometry.config(text="Pick a simulated peak first.")
+            return
+
+        picked_pairs.append((pending, (col, row)))
+        progress_label_geometry.config(
+            text=(
+                f"Recorded pair for HKL={pending} at real px=({col:.1f},{row:.1f}). "
+                "Select another simulated peak or right click to fit."
+            )
+        )
+        selection_state["expecting"] = "sim"
+
+    click_cid = canvas.mpl_connect('button_press_event', _on_geometry_pick)
+    return
 
 
 def on_fit_mosaic_click():
