@@ -33,6 +33,17 @@ python main.py
 
 The application loads example images specified in `config/dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
 
+### How GUI geometry fitting chooses what to match
+
+The geometry fit button compares annotated peaks from the experimental image to simulated peaks with the **same HKL labels**. The default `config/file_paths.yaml` points `measured_peaks` at a NumPy array where each entry is either `[h, k, l, x_pix, y_pix]` or a dict with `{"label": "h,k,l", "x": ..., "y": ...}`. During fitting, RA-Sim:
+
+1. Rotates those measured coordinates to match the displayed background.
+2. Runs a full simulation with the current geometry and finds each simulated peak’s maximum pixel position for every HKL in `miller`.
+3. For each HKL present in both measured and simulated data, converts the pixel coordinates to (2θ, φ) angles, sorts them radially, and pairs them in order.
+4. Minimizes the angular residuals (Δ2θ, Δφ) between each measured/simulated pair for the selected geometry parameters.
+
+This pairing enforces HKL correspondence: the optimizer only adjusts geometry so that a given experimental peak lines up with the simulated location of the **same reflection**, not just any nearby bright spot.
+
 ## Command-line hBN ellipse fitting
 
 You can run the hBN ellipse fitting workflow without the GUI through the project CLI. The workflow understands a YAML/JSON paths file so you do not have to repeat calibrant and dark frame paths each time.

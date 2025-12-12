@@ -2428,6 +2428,12 @@ def on_fit_geometry_click():
         return
 
     # run the iterative refinement against the experimental image
+    #
+    # Geometry fitting pairs simulated peak maxima with the measured peaks
+    # that share the same HKL label (from `measured_peaks`). The pairing is
+    # done in angle space: both simulated and measured peaks are converted to
+    # (2θ, φ), sorted radially, and matched in order before the optimizer
+    # minimizes their angular deltas.
     result = fit_geometry_parameters(
         miller, intensities, image_size,
         params,
