@@ -771,6 +771,9 @@ selected_peak_marker, = ax.plot([], [], 'ys',  # yellow square outline
                                linewidth=1.5, zorder=6)
 selected_peak_marker.set_visible(False)
 
+# Geometry click markers (sim vs real)
+geometry_pick_artists = []
+
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
@@ -2402,6 +2405,17 @@ ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT
 ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
 
 def on_fit_geometry_click():
+    global geometry_pick_artists
+
+    # Clear any previous geometry pick markers when starting a new run
+    for artist in geometry_pick_artists:
+        try:
+            artist.remove()
+        except ValueError:
+            pass
+    geometry_pick_artists.clear()
+    canvas.draw_idle()
+
     # first, reconstruct the same mosaic_params dict you use in do_update()
     mosaic_params = build_mosaic_params()
 
@@ -2455,6 +2469,41 @@ def on_fit_geometry_click():
             if d2 < best_d2:
                 best_idx, best_d2 = idx, d2
         return best_idx, best_d2
+
+    def _peak_maximum_near(col: float, row: float, search_radius: int = 5):
+        """Return the (col,row) of the brightest pixel near ``(col,row)``."""
+
+        r = int(round(row))
+        c = int(round(col))
+        r0 = max(0, r - search_radius)
+        r1 = min(current_background_image.shape[0], r + search_radius + 1)
+        c0 = max(0, c - search_radius)
+        c1 = min(current_background_image.shape[1], c + search_radius + 1)
+
+        window = np.asarray(current_background_image[r0:r1, c0:c1], dtype=float)
+        if window.size == 0 or not np.isfinite(window).any():
+            return float(col), float(row)
+
+        max_idx = np.nanargmax(window)
+        win_r, win_c = np.unravel_index(max_idx, window.shape)
+        return float(c0 + win_c), float(r0 + win_r)
+
+    def _mark_pick(col: float, row: float, label: str, color: str, marker: str):
+        point, = ax.plot([col], [row], marker, color=color, markersize=8,
+                         markerfacecolor='none', zorder=7, linestyle='None')
+        text = ax.text(
+            col,
+            row,
+            label,
+            color=color,
+            fontsize=8,
+            ha='left',
+            va='bottom',
+            zorder=8,
+            bbox=dict(facecolor='white', alpha=0.75, edgecolor='none', pad=1.0),
+        )
+        geometry_pick_artists.extend([point, text])
+        canvas.draw_idle()
 
     picked_pairs = []  # list[(h,k,l), (x_real, y_real)]
     selection_state = {"expecting": "sim", "pending_hkl": None}
@@ -2572,6 +2621,8 @@ def on_fit_geometry_click():
                 progress_label_geometry.config(text="No simulated peaks available to pick.")
                 return
             selection_state["pending_hkl"] = peak_millers[idx]
+            sim_col, sim_row = peak_positions[idx]
+            _mark_pick(sim_col, sim_row, f"{selection_state['pending_hkl']} sim", '#00b894', 'o')
             progress_label_geometry.config(
                 text=(
                     f"Selected simulated peak HKL={selection_state['pending_hkl']} "
@@ -2587,10 +2638,13 @@ def on_fit_geometry_click():
             progress_label_geometry.config(text="Pick a simulated peak first.")
             return
 
-        picked_pairs.append((pending, (col, row)))
+        peak_col, peak_row = _peak_maximum_near(col, row, search_radius=6)
+        _mark_pick(peak_col, peak_row, f"{pending} real", '#e17055', 'x')
+
+        picked_pairs.append((pending, (peak_col, peak_row)))
         progress_label_geometry.config(
             text=(
-                f"Recorded pair for HKL={pending} at real px=({col:.1f},{row:.1f}). "
+                f"Recorded pair for HKL={pending} at real px=({peak_col:.1f},{peak_row:.1f}). "
                 "Select another simulated peak or right click to fit."
             )
         )
