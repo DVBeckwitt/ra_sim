@@ -320,7 +320,13 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
+        prompt_save_bundle=getattr(args, "prompt_save_bundle", False),
     )
+
+    if results.get("aborted"):
+        reason = results.get("abort_reason") or "early termination"
+        print(f"hBN ellipse fitting did not complete: {reason}")
+        return
 
     print("Completed hBN ellipse fitting. Outputs written to:")
     for key in [
@@ -331,6 +337,8 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+    if results.get("manual_bundle"):
+        print(f"  Manual Bundle: {results['manual_bundle']}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -398,6 +406,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reuse-profile",
         action="store_true",
         help="Reuse an existing click profile JSON in the output directory if present.",
+    )
+    hbn_parser.add_argument(
+        "--prompt-save-bundle",
+        action="store_true",
+        help=(
+            "After a successful fit, open a file-save dialog to choose where to write an hBN NPZ bundle."
+        ),
     )
     hbn_parser.add_argument(
         "--paths-file",

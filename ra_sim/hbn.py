@@ -168,6 +168,14 @@ def parse_args(argv=None):
             "collecting 5 points per ring."
         ),
     )
+    parser.add_argument(
+        "--prompt-save-bundle",
+        action="store_true",
+        help=(
+            "After a successful fit, open a file-save dialog to choose where to write "
+            "an hBN NPZ bundle."
+        ),
+    )
     return parser.parse_args(argv)
 
 # ------------------------------------------------------------
@@ -984,6 +992,28 @@ def _resolve_output_dir(output_dir, load_bundle):
     return resolved
 
 
+def _prompt_save_bundle_path(default_path):
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    selected = filedialog.asksaveasfilename(
+        title="Save hBN bundle (.npz)",
+        defaultextension=".npz",
+        filetypes=[("hBN bundle", "*.npz"), ("All files", "*.*")],
+        initialdir=os.path.dirname(default_path),
+        initialfile=os.path.basename(default_path),
+    )
+    root.destroy()
+
+    if not selected:
+        return None
+    if not selected.lower().endswith(".npz"):
+        selected = f"{selected}.npz"
+    return selected
+
+
 def run_hbn_fit(
     osc_path,
     dark_path,
@@ -997,6 +1027,7 @@ def run_hbn_fit(
     fit_profile_path=None,
     bundle_path=None,
     paths_file=None,
+    prompt_save_bundle=False,
 ):
     resolved = resolve_hbn_paths(
         osc_path=osc_path,
@@ -1049,10 +1080,13 @@ def run_hbn_fit(
         "click_profile": click_profile_path,
         "fit_profile": fit_profile_path,
         "bundle": bundle_path_save,
+        "manual_bundle": None,
         "ellipses": [],
         "tilt_hint": None,
         "expected_peaks": None,
         "distance_estimate_m": None,
+        "aborted": False,
+        "abort_reason": None,
     }
 
     bundle_loaded = None
@@ -1065,92 +1099,118 @@ def run_hbn_fit(
     ell_points_ds = None
     ellipses_out = None
 
-    if bundle_loaded is not None and not reclick:
-        img_bgsub_b, img_log_b, ell_points_ds, ellipses_b = bundle_loaded
+    abort_reason = None
+    completed = False
 
-        if highres_refine:
-            if osc_path is None or dark_path is None:
-                raise ValueError(
-                    "Refitting a bundle requires both --osc and --dark so the background "
-                    "image can be recomputed."
+    try:
+        if bundle_loaded is not None and not reclick:
+            img_bgsub_b, img_log_b, ell_points_ds, ellipses_b = bundle_loaded
+
+            if highres_refine:
+                if osc_path is None or dark_path is None:
+                    raise ValueError(
+                        "Refitting a bundle requires both --osc and --dark so the background "
+                        "image can be recomputed."
+                    )
+
+                print("Refitting bundle ellipses at full resolution...")
+                img_bgsub_out = load_and_bgsub(osc_path, dark_path)
+                img_log_out = make_log_image(img_bgsub_out)
+            else:
+                img_bgsub_out = img_bgsub_b
+                img_log_out = img_log_b
+
+            ellipses_out = refine_ellipses_from_existing(
+                ellipses_b, img_bgsub_b, img_bgsub_out, img_log_out
+            )
+        else:
+            if reclick and bundle_loaded is not None:
+                print(
+                    "Reclick requested: ignoring stored clicks in bundle and collecting new points."
                 )
 
-            print("Refitting bundle ellipses at full resolution...")
+            if osc_path is None or dark_path is None:
+                raise ValueError(
+                    "Both --osc and --dark are required unless --load-bundle is used "
+                    "without --highres-refine."
+                )
+
             img_bgsub_out = load_and_bgsub(osc_path, dark_path)
+
+            if reuse_profile and os.path.exists(click_profile_path):
+                print(f"Loading existing click profile from:\n  {click_profile_path}")
+                ell_points_ds = load_click_profile(click_profile_path)
+            else:
+                print(
+                    f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
+                    f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
+                )
+                small = make_click_image(img_bgsub_out)
+                ell_points_ds = get_points_per_ellipse_with_zoom(
+                    small,
+                    n_ellipses=N_ELLIPSES,
+                    pts_per_ellipse=POINTS_PER_ELLIPSE,
+                )
+
+            expected_points = N_ELLIPSES * POINTS_PER_ELLIPSE
+            collected_points = 0 if ell_points_ds is None else sum(len(pts) for pts in ell_points_ds)
+            if collected_points < expected_points:
+                abort_reason = (
+                    "Ellipse picking did not finish; collected "
+                    f"{collected_points}/{expected_points} points. Skipping save."
+                )
+            else:
+                ellipses_out = fit_ellipses_from_points(
+                    ell_points_ds,
+                    img_bgsub=img_bgsub_out,
+                )
+                print(
+                    f"Fitted {len(ellipses_out)} ellipses from clicked points and intensity refinement."
+                )
+
             img_log_out = make_log_image(img_bgsub_out)
-        else:
-            img_bgsub_out = img_bgsub_b
-            img_log_out = img_log_b
 
-        ellipses_out = refine_ellipses_from_existing(
-            ellipses_b, img_bgsub_b, img_bgsub_out, img_log_out
-        )
-    else:
-        if reclick and bundle_loaded is not None:
-            print("Reclick requested: ignoring stored clicks in bundle and collecting new points.")
+        if abort_reason:
+            outputs["aborted"] = True
+            outputs["abort_reason"] = abort_reason
+            print(abort_reason)
+            return outputs
 
-        if osc_path is None or dark_path is None:
-            raise ValueError(
-                "Both --osc and --dark are required unless --load-bundle is used "
-                "without --highres-refine."
-            )
-
-        img_bgsub_out = load_and_bgsub(osc_path, dark_path)
-
-        print(f"Saving background-subtracted image to:\n  {out_tiff_path}")
-        cv2.imwrite(out_tiff_path, img_bgsub_out)
-        print("Saved hbn_bgsub.tiff.")
-
-        if reuse_profile and os.path.exists(click_profile_path):
-            print(f"Loading existing click profile from:\n  {click_profile_path}")
-            ell_points_ds = load_click_profile(click_profile_path)
-        else:
+        expected_peaks = hbn_expected_peaks()
+        distance_info = estimate_sample_detector_distance(ellipses_out, expected_peaks)
+        tilt_hint = estimate_detector_tilt(ellipses_out)
+        if tilt_hint:
             print(
-                f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
-                f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
+                "Estimated detector tilt from hBN fit (using largest ring): "
+                f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad"
             )
-            small = make_click_image(img_bgsub_out)
-            ell_points_ds = get_points_per_ellipse_with_zoom(
-                small,
-                n_ellipses=N_ELLIPSES,
-                pts_per_ellipse=POINTS_PER_ELLIPSE,
-            )
-            save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
-
-        ellipses_out = fit_ellipses_from_points(
-            ell_points_ds,
-            img_bgsub=img_bgsub_out,
-        )
-        print(
-            f"Fitted {len(ellipses_out)} ellipses from clicked points and intensity refinement."
-        )
-
-        img_log_out = make_log_image(img_bgsub_out)
-
-    expected_peaks = hbn_expected_peaks()
-    distance_info = estimate_sample_detector_distance(ellipses_out, expected_peaks)
-    tilt_hint = estimate_detector_tilt(ellipses_out)
-    if tilt_hint:
-        print(
-            "Estimated detector tilt from hBN fit (using largest ring): "
-            f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad"
-        )
-    if expected_peaks:
-        print("Expected hBN peaks for Cu Kα:")
-        for i, peak in enumerate(expected_peaks, 1):
-            h, k, l = peak["hkl"]
+        if expected_peaks:
+            print("Expected hBN peaks for Cu Kα:")
+            for i, peak in enumerate(expected_peaks, 1):
+                h, k, l = peak["hkl"]
+                print(
+                    f"  Ring {i}: hkl=({h}{k}{l}) d={peak['d_spacing_ang']:.4f} Å "
+                    f"2θ={peak['two_theta_deg']:.2f}°"
+                )
+        if distance_info:
             print(
-                f"  Ring {i}: hkl=({h}{k}{l}) d={peak['d_spacing_ang']:.4f} Å "
-                f"2θ={peak['two_theta_deg']:.2f}°"
+                "Estimated sample-detector distance (using matched rings): "
+                f"mean={distance_info['mean_m']:.4f} m"
             )
-    if distance_info:
-        print(
-            "Estimated sample-detector distance (using matched rings): "
-            f"mean={distance_info['mean_m']:.4f} m"
-        )
-        for i, dist in enumerate(distance_info["per_ring_m"], 1):
-            print(f"  Ring {i}: {dist:.4f} m")
+            for i, dist in enumerate(distance_info["per_ring_m"], 1):
+                print(f"  Ring {i}: {dist:.4f} m")
+        completed = True
+    except KeyboardInterrupt:
+        abort_reason = "hBN fitting interrupted by user; skipping save."
 
+    if not completed:
+        outputs["aborted"] = True
+        outputs["abort_reason"] = abort_reason
+        if abort_reason:
+            print(abort_reason)
+        return outputs
+
+    print(f"Saving background-subtracted image to:\n  {out_tiff_path}")
     cv2.imwrite(out_tiff_path, img_bgsub_out)
     save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
     save_fit_profile(
@@ -1168,6 +1228,20 @@ def run_hbn_fit(
         ell_points_ds,
         ellipses_out,
     )
+
+    if prompt_save_bundle:
+        manual_bundle_path = _prompt_save_bundle_path(bundle_path_save)
+        if manual_bundle_path:
+            save_bundle(
+                manual_bundle_path,
+                img_bgsub_out,
+                img_log_out,
+                ell_points_ds,
+                ellipses_out,
+            )
+            print(f"Saved hBN bundle via prompt to:\n  {manual_bundle_path}")
+            outputs["manual_bundle"] = manual_bundle_path
+
     plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
 
     if ellipses_out:
@@ -1194,7 +1268,13 @@ def main(argv=None):
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
+        prompt_save_bundle=args.prompt_save_bundle,
     )
+
+    if results.get("aborted"):
+        reason = results.get("abort_reason") or "early termination"
+        print(f"hBN ellipse fitting did not complete: {reason}")
+        return
 
     print("Completed hBN ellipse fitting. Outputs written to:")
     for key in [
@@ -1205,6 +1285,8 @@ def main(argv=None):
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+    if results.get("manual_bundle"):
+        print(f"  Manual Bundle: {results['manual_bundle']}")
 
 
 if __name__ == "__main__":
