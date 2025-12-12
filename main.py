@@ -566,8 +566,9 @@ col_center = int(center_default[1])
 
 # Rotate all displayed images/coordinates by the same ``np.rot90`` factor so the
 # simulated pattern and the background stay aligned.  Negative values rotate
-# clockwise, positive values counter-clockwise.
-DISPLAY_ROTATE_K = -1
+# clockwise, positive values counter-clockwise.  Use a +1 (CCW) rotation to keep
+# the simulated overlay aligned with the background.
+DISPLAY_ROTATE_K = 1
 
 # Rotate background images 90 degrees clockwise so orientation matches simulation
 background_images = [np.rot90(bg, DISPLAY_ROTATE_K) for bg in background_images]
