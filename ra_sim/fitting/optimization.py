@@ -1825,6 +1825,9 @@ def fit_geometry_parameters(
         if name == 'theta_initial':
             lower_bounds.append(theta0 - 0.5)
             upper_bounds.append(theta0 + 0.5)
+        elif name in {'zs', 'zb'}:
+            lower_bounds.append(-2.0e-3)
+            upper_bounds.append(2.0e-3)
         else:
             lower_bounds.append(-np.inf)
             upper_bounds.append(np.inf)
