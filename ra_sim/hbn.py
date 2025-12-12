@@ -1627,13 +1627,17 @@ def run_hbn_fit(
 
             if click_profile_in and not reclick:
                 if not os.path.exists(click_profile_in):
-                    raise FileNotFoundError(
-                        f"Click profile not found: {click_profile_in}"
+                    print(
+                        "Click profile not found; collecting new clicks instead:\n  "
+                        f"{click_profile_in}"
                     )
-                ell_points_ds = load_click_profile(click_profile_in)
-                if outputs["click_profile"] is None:
-                    outputs["click_profile"] = click_profile_in
-            else:
+                    click_profile_in = None
+                else:
+                    ell_points_ds = load_click_profile(click_profile_in)
+                    if outputs["click_profile"] is None:
+                        outputs["click_profile"] = click_profile_in
+
+            if ell_points_ds is None:
                 print(
                     f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
                     f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
