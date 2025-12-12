@@ -396,6 +396,9 @@ def save_bundle(
     *,
     distance_info=None,
     tilt_correction=None,
+    tilt_hint=None,
+    expected_peaks=None,
+    center=None,
 ):
     ell_points_arr = np.array(
         [np.array(pts, dtype=np.float32) for pts in ell_points_ds],
@@ -420,6 +423,9 @@ def save_bundle(
         ellipse_params=ellipse_params,
         distance_estimate_m=distance_info,
         tilt_correction=tilt_correction,
+        tilt_hint=tilt_hint,
+        expected_peaks=expected_peaks,
+        center=center,
     )
     print(f"Saved bundle NPZ to:\n  {path}")
     print("Note: load with allow_pickle=True for ell_points_ds.")
@@ -433,6 +439,9 @@ def load_bundle_npz(path):
     ellipse_params = data["ellipse_params"]
     distance_info = data.get("distance_estimate_m")
     tilt_correction = data.get("tilt_correction")
+    tilt_hint = data.get("tilt_hint")
+    expected_peaks = data.get("expected_peaks")
+    center = data.get("center")
 
     ell_points_ds = []
     for arr in ell_points_arr:
@@ -465,40 +474,78 @@ def load_bundle_npz(path):
             tilt_correction = tilt_correction.item()
         except Exception:
             pass
+    if tilt_hint is not None:
+        try:
+            tilt_hint = tilt_hint.item()
+        except Exception:
+            pass
+    if expected_peaks is not None:
+        try:
+            expected_peaks = expected_peaks.item()
+        except Exception:
+            pass
+    if center is not None:
+        try:
+            center = tuple(center.tolist()) if hasattr(center, "tolist") else tuple(center)
+        except Exception:
+            pass
     if distance_info:
         print(
             "  distance estimate: "
             f"mean={distance_info.get('mean_m', float('nan')):.4f} m"
         )
-    return img_bgsub, img_log, ell_points_ds, ellipses, distance_info, tilt_correction
+    return (
+        img_bgsub,
+        img_log,
+        ell_points_ds,
+        ellipses,
+        distance_info,
+        tilt_correction,
+        tilt_hint,
+        expected_peaks,
+        center,
+    )
 
 
 def load_tilt_hint(paths_file=None):
-    """Load the latest tilt hint from an hBN fit profile if available."""
+    """Load the latest tilt hint from an hBN bundle if available."""
 
     resolved = resolve_hbn_paths(paths_file=paths_file)
-    profile_path = resolved.get("fit_profile")
-    if not profile_path or not os.path.exists(profile_path):
+    bundle_path = resolved.get("bundle")
+    if not bundle_path or not os.path.exists(bundle_path):
         return None
 
     try:
-        with open(profile_path, "r") as fh:
-            profile = json.load(fh)
+        _, _, _, _, distance_info, tilt_correction, tilt_hint, _, _ = load_bundle_npz(
+            bundle_path
+        )
     except Exception:
         return None
 
-    tilt = profile.get("tilt_hint")
-    if not isinstance(tilt, dict):
-        return None
+    if tilt_correction:
+        tilt_hint = dict(
+            rot1_rad=float(np.deg2rad(tilt_correction.get("tilt_x_deg", 0.0))),
+            rot2_rad=float(np.deg2rad(tilt_correction.get("tilt_y_deg", 0.0))),
+        )
+        tilt_hint["tilt_rad"] = float(
+            math.hypot(tilt_hint["rot1_rad"], tilt_hint["rot2_rad"])
+        )
+    elif tilt_hint:
+        try:
+            tilt_hint = {
+                "rot1_rad": float(tilt_hint.get("rot1_rad")),
+                "rot2_rad": float(tilt_hint.get("rot2_rad")),
+                "tilt_rad": float(tilt_hint.get("tilt_rad")),
+            }
+        except (TypeError, ValueError):
+            tilt_hint = None
+    else:
+        tilt_hint = None
 
-    try:
-        return {
-            "rot1_rad": float(tilt.get("rot1_rad")),
-            "rot2_rad": float(tilt.get("rot2_rad")),
-            "tilt_rad": float(tilt.get("tilt_rad")),
-        }
-    except (TypeError, ValueError):
-        return None
+    if tilt_hint and distance_info:
+        tilt_hint["distance_m"] = distance_info.get("mean_m")
+
+    return tilt_hint
 
 
 # ------------------------------------------------------------
@@ -1442,17 +1489,11 @@ def run_hbn_fit(
         output_dir, "hbn_bgsub_ellipses_tilt_corrected.png"
     )
 
-    click_profile_path = resolved["click_profile"] or click_profile_path
-    if click_profile_path is None:
-        click_profile_path = os.path.join(output_dir, "hbn_ellipse_profile.json")
-    fit_profile_path = resolved["fit_profile"] or fit_profile_path
-    if fit_profile_path is None:
-        fit_profile_path = os.path.join(output_dir, "hbn_ellipse_fit_profile.json")
     bundle_path_save = resolved["bundle"] or bundle_path_in
     if bundle_path_save is None:
         bundle_path_save = os.path.join(output_dir, "hbn_ellipse_bundle.npz")
 
-    for p in [click_profile_path, fit_profile_path, bundle_path_save]:
+    for p in [bundle_path_save]:
         parent = os.path.dirname(os.path.abspath(p))
         os.makedirs(parent, exist_ok=True)
 
@@ -1461,10 +1502,7 @@ def run_hbn_fit(
         "background_subtracted": out_tiff_path,
         "overlay": out_overlay_path,
         "tilt_overlay": out_tilt_overlay_path,
-        "click_profile": click_profile_path,
-        "fit_profile": fit_profile_path,
         "bundle": bundle_path_save,
-        "manual_bundle": None,
         "ellipses": [],
         "tilt_hint": None,
         "expected_peaks": None,
@@ -1500,6 +1538,9 @@ def run_hbn_fit(
                 ellipses_b,
                 distance_info,
                 tilt_correction,
+                tilt_hint,
+                expected_peaks,
+                center_common,
             ) = bundle_loaded
             tilt_correction_serialized = tilt_correction
 
@@ -1534,20 +1575,19 @@ def run_hbn_fit(
 
             img_bgsub_out = load_and_bgsub(osc_path, dark_path)
 
-            if reuse_profile and os.path.exists(click_profile_path):
-                print(f"Loading existing click profile from:\n  {click_profile_path}")
-                ell_points_ds = load_click_profile(click_profile_path)
-            else:
-                print(
-                    f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
-                    f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
-                )
-                small = make_click_image(img_bgsub_out)
-                ell_points_ds = get_points_per_ellipse_with_zoom(
-                    small,
-                    n_ellipses=N_ELLIPSES,
-                    pts_per_ellipse=POINTS_PER_ELLIPSE,
-                )
+            if reuse_profile:
+                print("Reuse profile requested, but only bundle reload is supported. Collecting new clicks.")
+
+            print(
+                f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
+                f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
+            )
+            small = make_click_image(img_bgsub_out)
+            ell_points_ds = get_points_per_ellipse_with_zoom(
+                small,
+                n_ellipses=N_ELLIPSES,
+                pts_per_ellipse=POINTS_PER_ELLIPSE,
+            )
 
             expected_points = N_ELLIPSES * POINTS_PER_ELLIPSE
             collected_points = 0 if ell_points_ds is None else sum(len(pts) for pts in ell_points_ds)
@@ -1573,7 +1613,8 @@ def run_hbn_fit(
             print(abort_reason)
             return outputs
 
-        center_common = compute_common_center(ellipses_out) if ellipses_out else None
+        if ellipses_out and center_common is None:
+            center_common = compute_common_center(ellipses_out)
         tilt_correction = (
             _find_tilt_correction(ell_points_ds, center_common)
             if center_common is not None
@@ -1582,6 +1623,11 @@ def run_hbn_fit(
         tilt_correction_serialized = _serialize_tilt_correction(
             tilt_correction, center_common
         )
+        if expected_peaks is None:
+            expected_peaks = hbn_expected_peaks()
+        distance_basis = "ellipses"
+        ellipses_for_distance = ellipses_out
+
         if tilt_correction:
             print(
                 "Tilt circularization completed: "
@@ -1589,10 +1635,6 @@ def run_hbn_fit(
                 f"tilt_y={tilt_correction['tilt_y_deg']:.4f} deg, "
                 f"cost={tilt_correction['cost_final']:.6e} (zero={tilt_correction['cost_zero']:.6e})"
             )
-
-        expected_peaks = hbn_expected_peaks()
-        distance_basis = "ellipses"
-        ellipses_for_distance = ellipses_out
 
         if tilt_correction and center_common is not None:
             corrected_radii_clicks = tilt_correction.get("radii_after", [])
@@ -1628,7 +1670,8 @@ def run_hbn_fit(
             )
 
         tilt_hint_source = "ellipse fit"
-        tilt_hint = estimate_detector_tilt(ellipses_out)
+        if tilt_hint is None:
+            tilt_hint = estimate_detector_tilt(ellipses_out)
         if tilt_correction:
             tilt_hint_source = "circularization"
             tilt_hint = dict(
@@ -1675,16 +1718,6 @@ def run_hbn_fit(
 
     print(f"Saving background-subtracted image to:\n  {out_tiff_path}")
     cv2.imwrite(out_tiff_path, img_bgsub_out)
-    save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
-    save_fit_profile(
-        fit_profile_path,
-        ellipses_out,
-        img_bgsub_out.shape,
-        tilt_hint=tilt_hint,
-        expected_peaks=expected_peaks,
-        distance_info=distance_info,
-        tilt_correction=tilt_correction_serialized,
-    )
     save_bundle(
         bundle_path_save,
         img_bgsub_out,
@@ -1693,22 +1726,13 @@ def run_hbn_fit(
         ellipses_out,
         distance_info=distance_info,
         tilt_correction=tilt_correction_serialized,
+        tilt_hint=tilt_hint,
+        expected_peaks=expected_peaks,
+        center=center_common,
     )
 
     if prompt_save_bundle:
-        manual_bundle_path = _prompt_save_bundle_path(bundle_path_save)
-        if manual_bundle_path:
-            save_bundle(
-                manual_bundle_path,
-                img_bgsub_out,
-                img_log_out,
-                ell_points_ds,
-                ellipses_out,
-                distance_info=distance_info,
-                tilt_correction=tilt_correction_serialized,
-            )
-            print(f"Saved hBN bundle via prompt to:\n  {manual_bundle_path}")
-            outputs["manual_bundle"] = manual_bundle_path
+        print("prompt_save_bundle is deprecated; only the primary bundle is written.")
 
     plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
 
@@ -1768,13 +1792,9 @@ def main(argv=None):
     for key in [
         "background_subtracted",
         "overlay",
-        "click_profile",
-        "fit_profile",
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
-    if results.get("manual_bundle"):
-        print(f"  Manual Bundle: {results['manual_bundle']}")
 
 
 if __name__ == "__main__":
