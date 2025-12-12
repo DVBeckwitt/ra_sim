@@ -670,6 +670,80 @@ def _native_sim_to_display_coords(col: float, row: float, image_shape: tuple[int
     return _rotate_point_for_display(col, row, image_shape, SIM_DISPLAY_ROTATE_K)
 
 
+def _transform_points_orientation(
+    points: list[tuple[float, float]],
+    shape: tuple[int, int],
+    *,
+    k: int = 0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+) -> list[tuple[float, float]]:
+    """Apply flips/rotations to a list of (col, row) points for diagnostics."""
+
+    height, width = shape
+    transformed: list[tuple[float, float]] = []
+
+    for col, row in points:
+        col_t, row_t = float(col), float(row)
+        if flip_x:
+            col_t = width - 1.0 - col_t
+        if flip_y:
+            row_t = height - 1.0 - row_t
+        col_t, row_t = _rotate_point_for_display(col_t, row_t, shape, k)
+        transformed.append((col_t, row_t))
+
+    return transformed
+
+
+def _best_orientation_alignment(
+    sim_coords: list[tuple[float, float]],
+    meas_coords: list[tuple[float, float]],
+    shape: tuple[int, int],
+):
+    """Search over 90° rotations and axis flips to minimize RMS distance."""
+
+    if not sim_coords or not meas_coords or len(sim_coords) != len(meas_coords):
+        return None
+
+    def _describe(k: int, flip_x: bool, flip_y: bool) -> str:
+        parts: list[str] = []
+        if k % 4:
+            parts.append(f"rot{(k % 4) * 90}° CCW")
+        if flip_x:
+            parts.append("flip_x")
+        if flip_y:
+            parts.append("flip_y")
+        return " + ".join(parts) if parts else "identity"
+
+    best = None
+    for k in range(4):
+        for flip_x in (False, True):
+            for flip_y in (False, True):
+                transformed = _transform_points_orientation(
+                    meas_coords, shape, k=k, flip_x=flip_x, flip_y=flip_y
+                )
+                deltas = [
+                    math.hypot(sx - mx, sy - my)
+                    for (sx, sy), (mx, my) in zip(sim_coords, transformed)
+                ]
+                if not deltas:
+                    continue
+                rms = math.sqrt(sum(d * d for d in deltas) / len(deltas))
+                mean = sum(deltas) / len(deltas)
+                candidate = {
+                    "k": k,
+                    "flip_x": flip_x,
+                    "flip_y": flip_y,
+                    "rms": rms,
+                    "mean": mean,
+                    "label": _describe(k, flip_x, flip_y),
+                }
+                if best is None or candidate["rms"] < best["rms"]:
+                    best = candidate
+
+    return best
+
+
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
 measured_peaks = _rotate_measured_peaks_for_display(
     measured_peaks_raw,
@@ -2724,11 +2798,24 @@ def on_fit_geometry_click():
             else:
                 dist_report = "No matched peaks to report distances."
 
+            orientation_report = ""
+            best_orientation = _best_orientation_alignment(
+                sim_coords, meas_coords, (image_size, image_size)
+            )
+            if best_orientation is not None:
+                orientation_report = (
+                    "\n\nBest flip/rotation match: "
+                    f"{best_orientation['label']}"
+                    f" (RMS={best_orientation['rms']:.2f}px, "
+                    f"mean={best_orientation['mean']:.2f}px)"
+                )
+
             progress_label_geometry.config(
                 text=(
                     progress_label_geometry.cget('text')
                     + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}'
                     + f"\n\nPixel offsets:\n{dist_report}"
+                    + orientation_report
                 )
             )
             return
