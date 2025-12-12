@@ -180,6 +180,33 @@ def parse_args(argv=None):
             "an hBN NPZ bundle."
         ),
     )
+    parser.add_argument(
+        "--load-clicks",
+        type=str,
+        default=None,
+        help=(
+            "Optional JSON click profile to load instead of interactively collecting points "
+            "(keys: image_shape, points)."
+        ),
+    )
+    parser.add_argument(
+        "--save-clicks",
+        nargs="?",
+        const="",
+        default=None,
+        help=(
+            "Write the clicked points to a JSON profile after selection (defaults to "
+            "hbn_click_profile.json in the output directory when no path is provided)."
+        ),
+    )
+    parser.add_argument(
+        "--clicks-only",
+        action="store_true",
+        help=(
+            "Stop after collecting points (and saving them if requested) without fitting ellipses or "
+            "writing the full bundle."
+        ),
+    )
     return parser.parse_args(argv)
 
 # ------------------------------------------------------------
@@ -1455,6 +1482,9 @@ def run_hbn_fit(
     bundle_path=None,
     paths_file=None,
     prompt_save_bundle=False,
+    load_clicks=None,
+    save_clicks=None,
+    clicks_only=False,
 ):
     resolved = resolve_hbn_paths(
         osc_path=osc_path,
@@ -1489,11 +1519,20 @@ def run_hbn_fit(
         output_dir, "hbn_bgsub_ellipses_tilt_corrected.png"
     )
 
+    click_profile_in = load_clicks or resolved.get("click_profile")
+    click_profile_out = None
+    if save_clicks is not None or clicks_only:
+        click_profile_out = save_clicks
+        if click_profile_out in (None, ""):
+            click_profile_out = os.path.join(output_dir, "hbn_click_profile.json")
+
     bundle_path_save = resolved["bundle"] or bundle_path_in
     if bundle_path_save is None:
         bundle_path_save = os.path.join(output_dir, "hbn_ellipse_bundle.npz")
 
-    for p in [bundle_path_save]:
+    for p in [bundle_path_save, click_profile_out]:
+        if not p:
+            continue
         parent = os.path.dirname(os.path.abspath(p))
         os.makedirs(parent, exist_ok=True)
 
@@ -1503,6 +1542,7 @@ def run_hbn_fit(
         "overlay": out_overlay_path,
         "tilt_overlay": out_tilt_overlay_path,
         "bundle": bundle_path_save,
+        "click_profile": click_profile_out,
         "ellipses": [],
         "tilt_hint": None,
         "expected_peaks": None,
@@ -1511,6 +1551,8 @@ def run_hbn_fit(
         "aborted": False,
         "abort_reason": None,
     }
+
+    click_profile_saved = False
 
     bundle_loaded = None
     if bundle_path_in is not None:
@@ -1578,22 +1620,55 @@ def run_hbn_fit(
 
             img_bgsub_out = load_and_bgsub(osc_path, dark_path)
 
-            if reuse_profile:
-                print("Reuse profile requested, but only bundle reload is supported. Collecting new clicks.")
+            if reuse_profile and not click_profile_in:
+                print(
+                    "Reuse profile requested, but no click profile was provided; collecting new clicks."
+                )
 
-            print(
-                f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
-                f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
-            )
-            small = make_click_image(img_bgsub_out)
-            ell_points_ds = get_points_per_ellipse_with_zoom(
-                small,
-                n_ellipses=N_ELLIPSES,
-                pts_per_ellipse=POINTS_PER_ELLIPSE,
-            )
+            if click_profile_in and not reclick:
+                if not os.path.exists(click_profile_in):
+                    raise FileNotFoundError(
+                        f"Click profile not found: {click_profile_in}"
+                    )
+                ell_points_ds = load_click_profile(click_profile_in)
+                if outputs["click_profile"] is None:
+                    outputs["click_profile"] = click_profile_in
+            else:
+                print(
+                    f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
+                    f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
+                )
+                small = make_click_image(img_bgsub_out)
+                ell_points_ds = get_points_per_ellipse_with_zoom(
+                    small,
+                    n_ellipses=N_ELLIPSES,
+                    pts_per_ellipse=POINTS_PER_ELLIPSE,
+                )
+
+            if click_profile_out and ell_points_ds:
+                save_click_profile(click_profile_out, ell_points_ds, img_bgsub_out.shape)
+                outputs["click_profile"] = click_profile_out
+                click_profile_saved = True
 
             expected_points = N_ELLIPSES * POINTS_PER_ELLIPSE
             collected_points = 0 if ell_points_ds is None else sum(len(pts) for pts in ell_points_ds)
+
+            if clicks_only:
+                if collected_points < expected_points:
+                    abort_reason = (
+                        "Ellipse picking did not finish; collected "
+                        f"{collected_points}/{expected_points} points. Skipping save."
+                    )
+                else:
+                    print(
+                        "Click-only mode requested; returning after saving collected points."
+                    )
+                    outputs["clicks_only"] = True
+                    outputs["ellipses"] = []
+                    outputs["aborted"] = True
+                    outputs["abort_reason"] = "Click-only save requested; ellipse fitting skipped."
+                    return outputs
+
             if collected_points < expected_points:
                 abort_reason = (
                     "Ellipse picking did not finish; collected "
@@ -1609,6 +1684,11 @@ def run_hbn_fit(
                 )
 
             img_log_out = make_log_image(img_bgsub_out)
+
+        if click_profile_out and ell_points_ds and not clicks_only and not click_profile_saved:
+            save_click_profile(click_profile_out, ell_points_ds, img_bgsub_out.shape)
+            outputs["click_profile"] = click_profile_out
+            click_profile_saved = True
 
         if abort_reason:
             outputs["aborted"] = True
@@ -1784,6 +1864,9 @@ def main(argv=None):
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
         prompt_save_bundle=args.prompt_save_bundle,
+        load_clicks=args.load_clicks,
+        save_clicks=args.save_clicks,
+        clicks_only=args.clicks_only,
     )
 
     if results.get("aborted"):
@@ -1795,6 +1878,7 @@ def main(argv=None):
     for key in [
         "background_subtracted",
         "overlay",
+        "click_profile",
         "bundle",
     ]:
         print(f"  {key.replace('_', ' ').title()}: {results[key]}")
