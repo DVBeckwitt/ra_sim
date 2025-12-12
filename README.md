@@ -26,6 +26,8 @@ pip install -e .
 Launch the GUI:
 
 ```bash
+python -m ra_sim gui
+# or
 python main.py
 ```
 

@@ -1,4 +1,4 @@
-"""Simple CLI to run the diffraction simulation headlessly and invoke tools.
+"""Simple CLI to run the diffraction simulation headlessly, launch the GUI, and invoke tools.
 
 Usage examples:
 
@@ -96,6 +96,15 @@ def _combine_qr_dicts(caches: list[Dict], weights: np.ndarray) -> Dict:
                     entry["I"] += w * data["I"]
                 entry["deg"] += int(data.get("deg", 1))
     return out
+
+
+def _cmd_gui(args: argparse.Namespace) -> None:
+    """Launch the Tkinter GUI (mirrors running main.py directly)."""
+
+    import main as gui_app
+
+    write_excel_flag = None if not args.no_excel else False
+    gui_app.main(write_excel_flag=write_excel_flag)
 
 
 def run_headless_simulation(
@@ -328,6 +337,17 @@ def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Run RA-SIM tools.")
     subparsers = ap.add_subparsers(dest="command")
 
+    gui_parser = subparsers.add_parser(
+        "gui",
+        help="Launch the RA-SIM Tkinter GUI (same behavior as running main.py directly).",
+    )
+    gui_parser.add_argument(
+        "--no-excel",
+        action="store_true",
+        help="Do not write the initial intensity Excel file on startup (matches main.py option).",
+    )
+    gui_parser.set_defaults(func=_cmd_gui)
+
     sim_parser = subparsers.add_parser(
         "simulate",
         help="Run the diffraction simulation headlessly and save an image.",
@@ -397,7 +417,7 @@ def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = _build_parser()
 
-    if argv and argv[0] not in {"simulate", "hbn-fit", "-h", "--help"}:
+    if argv and argv[0] not in {"gui", "simulate", "hbn-fit", "-h", "--help"}:
         argv = ["simulate"] + argv
 
     args = ap.parse_args(argv)
