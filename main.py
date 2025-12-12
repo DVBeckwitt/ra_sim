@@ -564,7 +564,10 @@ def export_initial_excel():
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 
-DISPLAY_ROTATE_K = -1  # 90° clockwise rotation applied to everything we show
+# Rotate all displayed images/coordinates by the same ``np.rot90`` factor so the
+# simulated pattern and the background stay aligned.  Negative values rotate
+# clockwise, positive values counter-clockwise.
+DISPLAY_ROTATE_K = -1
 
 # Rotate background images 90 degrees clockwise so orientation matches simulation
 background_images = [np.rot90(bg, DISPLAY_ROTATE_K) for bg in background_images]
@@ -574,52 +577,50 @@ current_background_index = 0
 background_visible = True
 
 
-def _rotate_measured_peaks_clockwise(measured, rotated_shape):
-    """Rotate measured-peak coordinates to match the displayed background.
+def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k: int):
+    """Rotate a single (col, row) pair by ``k`` using the same rule as ``np.rot90``.
 
-    The GUI rotates detector images 90° clockwise so the simulated pattern and
-    experimental background share the same orientation.  ``measured`` contains
-    either dictionaries (``{'label': 'h,k,l', 'x': ..., 'y': ...}``) or tuples
-    ``(h, k, l, x, y[, ...])`` that were recorded in the *original* detector
-    orientation.  This helper mirrors the image rotation by remapping each
-    coordinate pair.
+    The transformation mirrors what ``np.rot90`` does to the underlying image so
+    point overlays stay aligned with whichever orientation we render.
     """
+
+    height, width = shape[:2]
+    col_new, row_new = float(col), float(row)
+
+    # Apply the 90° rotation step-by-step to mirror ``np.rot90``'s behavior for
+    # any integer ``k`` (positive for CCW, negative for CW).
+    for _ in range(k % 4):
+        row_new, col_new, height, width = width - 1 - col_new, row_new, width, height
+
+    return col_new, row_new
+
+
+def _rotate_measured_peaks_for_display(measured, rotated_shape):
+    """Rotate measured-peak coordinates to match the displayed background."""
 
     if measured is None:
         return []
-
-    # ``np.rot90(image, DISPLAY_ROTATE_K)`` swaps the detector axes: the rotated image has
-    # ``rotated_shape == (orig_width, orig_height)``.  The clockwise rotation
-    # maps (x, y) → (x_new, y_new) with::
-    #
-    #     x_new = orig_height - 1 - y
-    #     y_new = x
-    #
-    # where ``x``/``y`` follow the image convention (columns, rows).
-    _, rotated_width = rotated_shape[:2]
-    original_height = rotated_width
-
-    def transform(x_val, y_val):
-        x_new = original_height - 1 - float(y_val)
-        y_new = float(x_val)
-        return x_new, y_new
 
     rotated_entries = []
     for entry in measured:
         if isinstance(entry, dict):
             updated = dict(entry)
             if "x" in updated and "y" in updated:
-                updated["x"], updated["y"] = transform(updated["x"], updated["y"])
+                updated["x"], updated["y"] = _rotate_point_for_display(
+                    updated["x"], updated["y"], rotated_shape, DISPLAY_ROTATE_K
+                )
             if "x_pix" in updated and "y_pix" in updated:
-                updated["x_pix"], updated["y_pix"] = transform(
-                    updated["x_pix"], updated["y_pix"]
+                updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
+                    updated["x_pix"], updated["y_pix"], rotated_shape, DISPLAY_ROTATE_K
                 )
             rotated_entries.append(updated)
             continue
 
         if isinstance(entry, (list, tuple)) and len(entry) >= 5:
             seq = list(entry)
-            seq[3], seq[4] = transform(seq[3], seq[4])
+            seq[3], seq[4] = _rotate_point_for_display(
+                seq[3], seq[4], rotated_shape, DISPLAY_ROTATE_K
+            )
             rotated_entries.append(type(entry)(seq))
         else:
             rotated_entries.append(entry)
@@ -628,48 +629,31 @@ def _rotate_measured_peaks_clockwise(measured, rotated_shape):
 
 
 def _unrotate_display_peaks(measured, rotated_shape):
-    """Undo the GUI's 90° clockwise image rotation for peak coordinates.
-
-    Measured peaks selected on the GUI use the rotated orientation (clockwise
-    by 90°) of the detector image.  Geometry fitting routines, however, expect
-    coordinates in the simulator's native frame.  This helper maps the clicked
-    positions back to the original detector orientation so both measured and
-    simulated peaks are compared consistently.
-    """
+    """Undo the GUI's display rotation so coordinates return to native space."""
 
     if measured is None:
         return []
-
-    # Inverse of ``np.rot90(image, DISPLAY_ROTATE_K)``:
-    #     x_rot = orig_h - 1 - y_orig
-    #     y_rot = x_orig
-    # therefore
-    #     x_orig = y_rot
-    #     y_orig = orig_h - 1 - x_rot
-    _, rotated_width = rotated_shape[:2]
-    original_height = rotated_width
-
-    def inv_transform(x_val, y_val):
-        x_orig = float(y_val)
-        y_orig = original_height - 1 - float(x_val)
-        return x_orig, y_orig
 
     unrotated = []
     for entry in measured:
         if isinstance(entry, dict):
             updated = dict(entry)
             if "x" in updated and "y" in updated:
-                updated["x"], updated["y"] = inv_transform(updated["x"], updated["y"])
+                updated["x"], updated["y"] = _rotate_point_for_display(
+                    updated["x"], updated["y"], rotated_shape, -DISPLAY_ROTATE_K
+                )
             if "x_pix" in updated and "y_pix" in updated:
-                updated["x_pix"], updated["y_pix"] = inv_transform(
-                    updated["x_pix"], updated["y_pix"]
+                updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
+                    updated["x_pix"], updated["y_pix"], rotated_shape, -DISPLAY_ROTATE_K
                 )
             unrotated.append(updated)
             continue
 
         if isinstance(entry, (list, tuple)) and len(entry) >= 5:
             seq = list(entry)
-            seq[3], seq[4] = inv_transform(seq[3], seq[4])
+            seq[3], seq[4] = _rotate_point_for_display(
+                seq[3], seq[4], rotated_shape, -DISPLAY_ROTATE_K
+            )
             unrotated.append(type(entry)(seq))
         else:
             unrotated.append(entry)
@@ -678,19 +662,13 @@ def _unrotate_display_peaks(measured, rotated_shape):
 
 
 def _native_to_display_coords(col: float, row: float, image_shape: tuple[int, ...]):
-    """Rotate native detector coordinates into the displayed frame.
+    """Rotate native detector coordinates into the displayed frame."""
 
-    The GUI shows images that have been rotated 90° clockwise (``DISPLAY_ROTATE_K``),
-    so we mirror that same transform for simulated peak coordinates before drawing
-    them on the canvas.
-    """
-
-    original_height = image_shape[0]
-    return original_height - 1 - float(row), float(col)
+    return _rotate_point_for_display(col, row, image_shape, DISPLAY_ROTATE_K)
 
 
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
-measured_peaks = _rotate_measured_peaks_clockwise(
+measured_peaks = _rotate_measured_peaks_for_display(
     measured_peaks_raw,
     current_background_image.shape,
 )
