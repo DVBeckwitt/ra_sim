@@ -151,25 +151,6 @@ def parse_args(argv=None):
             "collecting 5 points per ring."
         ),
     )
-    parser.add_argument(
-        "--vertex-distance",
-        type=float,
-        default=None,
-        help=(
-            "Distance from the common cone vertex to the detector plane along the rotation axis. "
-            "When provided (in the same units as --pixel-size), the workflow will report a cone "
-            "angle for each fitted ring."
-        ),
-    )
-    parser.add_argument(
-        "--pixel-size",
-        type=float,
-        default=None,
-        help=(
-            "Optional physical size per pixel (same units as --vertex-distance). "
-            "If omitted, cone angles are computed using raw pixel distances."
-        ),
-    )
     return parser.parse_args(argv)
 
 # ------------------------------------------------------------
@@ -311,7 +292,7 @@ def load_click_profile(path):
     return ell_points_ds
 
 
-def save_fit_profile(path, ellipses, img_shape):
+def save_fit_profile(path, ellipses, img_shape, tilt_hint=None):
     profile = {
         "image_shape": list(img_shape),
         "ellipses": [
@@ -323,18 +304,12 @@ def save_fit_profile(path, ellipses, img_shape):
                 "b": float(e["b"]),
                 "theta_rad": float(e["theta"]),
                 "theta_deg": float(np.degrees(e["theta"])),
-                **(
-                    {
-                        "cone_angle_rad": float(e["cone_angle_rad"]),
-                        "cone_angle_deg": float(e["cone_angle_deg"]),
-                    }
-                    if "cone_angle_deg" in e
-                    else {}
-                ),
             }
             for i, e in enumerate(ellipses)
         ],
     }
+    if tilt_hint:
+        profile["tilt_hint"] = tilt_hint
     with open(path, "w") as f:
         json.dump(profile, f, indent=2)
     print(f"Saved fit profile to:\n  {path}")
@@ -395,10 +370,35 @@ def load_bundle_npz(path):
     print(f"Loaded bundle from:\n  {path}")
     print(f"  image shape: {img_bgsub.shape}")
     print(f"  number of ellipses: {len(ellipses)}")
-    print(f"Loaded bundle from:\n  {path}")
-    print(f"  image shape: {img_bgsub.shape}")
-    print(f"  number of ellipses: {len(ellipses)}")
     return img_bgsub, img_log, ell_points_ds, ellipses
+
+
+def load_tilt_hint(paths_file=None):
+    """Load the latest tilt hint from an hBN fit profile if available."""
+
+    resolved = resolve_hbn_paths(paths_file=paths_file)
+    profile_path = resolved.get("fit_profile")
+    if not profile_path or not os.path.exists(profile_path):
+        return None
+
+    try:
+        with open(profile_path, "r") as fh:
+            profile = json.load(fh)
+    except Exception:
+        return None
+
+    tilt = profile.get("tilt_hint")
+    if not isinstance(tilt, dict):
+        return None
+
+    try:
+        return {
+            "rot1_rad": float(tilt.get("rot1_rad")),
+            "rot2_rad": float(tilt.get("rot2_rad")),
+            "tilt_rad": float(tilt.get("tilt_rad")),
+        }
+    except (TypeError, ValueError):
+        return None
 
 
 # ------------------------------------------------------------
@@ -802,34 +802,47 @@ def _effective_radius(a, b):
     return 0.5 * (abs(a) + abs(b))
 
 
-def attach_cone_angles(ellipses, vertex_distance=None, pixel_size=None):
-    """Annotate ellipses with cone angles (deg/rad) when geometry is provided."""
+def _estimate_tilt_components(a, b, theta):
+    """Estimate detector tilt components (rot1, rot2) from an ellipse."""
 
-    if vertex_distance is None:
-        return ellipses
-    vertex_distance = float(vertex_distance)
-    if vertex_distance <= 0:
-        raise ValueError("--vertex-distance must be positive.")
+    a = float(abs(a))
+    b = float(abs(b))
+    if a == 0 or b == 0:
+        return None
+    if b > a:
+        a, b = b, a
 
-    scale = 1.0 if pixel_size is None else float(pixel_size)
-    for e in ellipses:
-        radius = _effective_radius(e["a"], e["b"]) * scale
-        angle_rad = float(np.arctan2(radius, vertex_distance))
-        e["cone_angle_rad"] = angle_rad
-        e["cone_angle_deg"] = float(np.degrees(angle_rad))
-    return ellipses
+    ratio = max(0.0, min(1.0, b / a))
+    tilt_mag = float(np.arccos(ratio))
+    rot1 = tilt_mag * float(np.cos(theta))
+    rot2 = tilt_mag * float(np.sin(theta))
+    return {
+        "rot1_rad": rot1,
+        "rot2_rad": rot2,
+        "tilt_rad": tilt_mag,
+        "tilt_deg": float(np.degrees(tilt_mag)),
+        "theta_rad": float(theta),
+        "theta_deg": float(np.degrees(theta)),
+    }
+
+
+def estimate_detector_tilt(ellipses):
+    """Return an estimated detector tilt hint (rot1/rot2) from fitted ellipses."""
+
+    if not ellipses:
+        return None
+    target = max(ellipses, key=lambda e: _effective_radius(e["a"], e["b"]))
+    return _estimate_tilt_components(target["a"], target["b"], target["theta"])
 
 
 def _format_ellipse_lines(ellipses):
     lines = []
     for i, e in enumerate(ellipses):
-        cone = e.get("cone_angle_deg")
         lines.append(
             "  "
             f"{i}: xc={e['xc']:.2f}, yc={e['yc']:.2f}, "
             f"a={e['a']:.2f}, b={e['b']:.2f}, "
             f"theta={np.degrees(e['theta']):.2f} deg"
-            + (f", cone={cone:.2f} deg" if cone is not None else "")
         )
     return "\n".join(lines)
 
@@ -906,8 +919,6 @@ def run_hbn_fit(
     fit_profile_path=None,
     bundle_path=None,
     paths_file=None,
-    vertex_distance=None,
-    pixel_size=None,
 ):
     resolved = resolve_hbn_paths(
         osc_path=osc_path,
@@ -961,15 +972,8 @@ def run_hbn_fit(
         "fit_profile": fit_profile_path,
         "bundle": bundle_path_save,
         "ellipses": [],
-        "vertex_distance": vertex_distance,
-        "pixel_size": pixel_size,
+        "tilt_hint": None,
     }
-
-    if vertex_distance is not None:
-        print(
-            "Assuming concentric cones with vertex-to-detector distance "
-            f"{vertex_distance} using pixel size {pixel_size or 1.0} for angle reporting."
-        )
 
     bundle_loaded = None
     if bundle_path_in is not None:
@@ -988,38 +992,44 @@ def run_hbn_fit(
             print("Refitting bundle ellipses at full resolution...")
             img_bgsub_out = load_and_bgsub(osc_path, dark_path)
             img_log_out = make_log_image(img_bgsub_out)
-            ellipses_out = refine_ellipses_from_existing(
-                ellipses_b, img_bgsub_b, img_bgsub_out, img_log_out
-            )
-        else:
-            img_bgsub_out = img_bgsub_b
-            img_log_out = img_log_b
-            ellipses_out = ellipses_b
-
-        ellipses_out = attach_cone_angles(
-            ellipses_out,
-            vertex_distance=vertex_distance,
-            pixel_size=pixel_size,
+        ellipses_out = refine_ellipses_from_existing(
+            ellipses_b, img_bgsub_b, img_bgsub_out, img_log_out
         )
+    else:
+        img_bgsub_out = img_bgsub_b
+        img_log_out = img_log_b
+        ellipses_out = ellipses_b
 
-        cv2.imwrite(out_tiff_path, img_bgsub_out)
-        save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
-        save_fit_profile(fit_profile_path, ellipses_out, img_bgsub_out.shape)
-        save_bundle(
-            bundle_path_save,
-            img_bgsub_out,
-            img_log_out,
-            ell_points_ds,
-            ellipses_out,
+    tilt_hint = estimate_detector_tilt(ellipses_out)
+    if tilt_hint:
+        print(
+            "Estimated detector tilt from hBN fit (using largest ring): "
+            f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad"
         )
-        plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
+    cv2.imwrite(out_tiff_path, img_bgsub_out)
+    save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
+    save_fit_profile(
+        fit_profile_path,
+        ellipses_out,
+        img_bgsub_out.shape,
+        tilt_hint=tilt_hint,
+    )
+    save_bundle(
+        bundle_path_save,
+        img_bgsub_out,
+        img_log_out,
+        ell_points_ds,
+        ellipses_out,
+    )
+    plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
 
-        if ellipses_out:
-            print("Fitted ellipse parameters:")
-            print(_format_ellipse_lines(ellipses_out))
+    if ellipses_out:
+        print("Fitted ellipse parameters:")
+        print(_format_ellipse_lines(ellipses_out))
 
-        outputs["ellipses"] = ellipses_out
-        return outputs
+    outputs["ellipses"] = ellipses_out
+    outputs["tilt_hint"] = tilt_hint
+    return outputs
 
     if reclick and bundle_loaded is not None:
         print("Reclick requested: ignoring stored clicks in bundle and collecting new points.")
@@ -1058,10 +1068,18 @@ def run_hbn_fit(
     )
     print(f"Fitted {len(ellipses)} ellipses from clicked points and intensity refinement.")
 
-    ellipses = attach_cone_angles(
-        ellipses, vertex_distance=vertex_distance, pixel_size=pixel_size
+    tilt_hint = estimate_detector_tilt(ellipses)
+    if tilt_hint:
+        print(
+            "Estimated detector tilt from hBN fit (using largest ring): "
+            f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad"
+        )
+    save_fit_profile(
+        fit_profile_path,
+        ellipses,
+        img_bgsub.shape,
+        tilt_hint=tilt_hint,
     )
-    save_fit_profile(fit_profile_path, ellipses, img_bgsub.shape)
 
     img_log = make_log_image(img_bgsub)
     save_bundle(
@@ -1078,6 +1096,7 @@ def run_hbn_fit(
         print(_format_ellipse_lines(ellipses))
 
     outputs["ellipses"] = ellipses
+    outputs["tilt_hint"] = tilt_hint
     return outputs
 
 
@@ -1094,8 +1113,6 @@ def main(argv=None):
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
-        vertex_distance=args.vertex_distance,
-        pixel_size=args.pixel_size,
     )
 
     print("Completed hBN ellipse fitting. Outputs written to:")

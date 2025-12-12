@@ -78,6 +78,7 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.debug_utils import debug_print, is_debug_enabled
+from ra_sim.hbn import load_tilt_hint
 from ra_sim.gui.collapsible import CollapsibleFrame
 
 
@@ -150,6 +151,15 @@ poni1 = parameters.get("Poni1", geometry_config.get("poni1_m", 0.0))
 poni2 = parameters.get("Poni2", geometry_config.get("poni2_m", 0.0))
 wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10))
 lambda_from_poni = wave_m * 1e10  # Convert m -> Å
+
+tilt_hint = load_tilt_hint()
+if tilt_hint:
+    Gamma_initial = float(tilt_hint.get("rot1_rad", Gamma_initial))
+    gamma_initial = float(tilt_hint.get("rot2_rad", gamma_initial))
+    print(
+        "Initialized detector tilt from last hBN fit profile "
+        f"(Rot1={Gamma_initial:.4f} rad, Rot2={gamma_initial:.4f} rad)."
+    )
 
 image_size = detector_config.get("image_size", 3000)
 pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))

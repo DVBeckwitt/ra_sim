@@ -31,7 +31,7 @@ from ra_sim.utils.stacking_fault import (
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
 )
-from ra_sim.hbn import run_hbn_fit
+from ra_sim.hbn import load_tilt_hint, run_hbn_fit
 from ra_sim.utils.tools import (
     detector_two_theta_max,
     DEFAULT_PIXEL_SIZE_M,
@@ -142,6 +142,15 @@ def run_headless_simulation(
     lambda_ang = float(lambda_override if lambda_override is not None else lambda_from_poni)
 
     pixel_size_m = float(det_cfg.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
+
+    tilt_hint = load_tilt_hint()
+    if tilt_hint:
+        Gamma_initial = float(tilt_hint.get("rot1_rad", Gamma_initial))
+        gamma_initial = float(tilt_hint.get("rot2_rad", gamma_initial))
+        print(
+            "Using detector tilt defaults from hBN fit profile: "
+            f"Rot1={Gamma_initial:.4f} rad, Rot2={gamma_initial:.4f} rad"
+        )
 
     # Beam center: follow GUI default mapping from PONI to pixels
     center = np.array([
@@ -302,8 +311,6 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
-        vertex_distance=args.vertex_distance,
-        pixel_size=args.pixel_size,
     )
 
     print("Completed hBN ellipse fitting. Outputs written to:")
@@ -379,22 +386,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
             "fit_profile/fit). If omitted, the CLI falls back to "
             "config/hbn_paths.yaml when available."
-        ),
-    )
-    hbn_parser.add_argument(
-        "--vertex-distance",
-        type=float,
-        help=(
-            "Distance from the common cone vertex to the detector plane along the rotation axis. "
-            "Supplying this enables reporting the cone half-angle for each fitted ring."
-        ),
-    )
-    hbn_parser.add_argument(
-        "--pixel-size",
-        type=float,
-        help=(
-            "Physical size per pixel (same units as --vertex-distance). If omitted, cone angles "
-            "are computed in pixel units."
         ),
     )
     hbn_parser.set_defaults(func=_cmd_hbn_fit)
