@@ -1813,6 +1813,77 @@ def fit_geometry_parameters(
         )
         return D
 
+    def pixel_cost_fn(x):
+        local = params.copy()
+        for name, v in zip(var_names, x):
+            local[name] = v
+
+        measured_dict = build_measured_dict(measured_peaks)
+        if not measured_dict:
+            return np.array([], dtype=float)
+
+        mosaic = local['mosaic_params']
+        wavelength_array = mosaic.get('wavelength_array')
+        if wavelength_array is None:
+            wavelength_array = mosaic.get('wavelength_i_array')
+
+        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+        _, hit_tables, *_ = process_peaks_parallel(
+            miller, intensities, image_size,
+            local['a'], local['c'], wavelength_array,
+            sim_buffer, local['corto_detector'],
+            local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0),
+            local['zs'], local['zb'], local['n2'],
+            mosaic['beam_x_array'],
+            mosaic['beam_y_array'],
+            mosaic['theta_array'],
+            mosaic['phi_array'],
+            mosaic['sigma_mosaic_deg'],
+            mosaic['gamma_mosaic_deg'],
+            mosaic['eta'],
+            wavelength_array,
+            local['debye_x'], local['debye_y'],
+            local['center'], local['theta_initial'], local.get('cor_angle', 0.0),
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            save_flag=0,
+        )
+
+        maxpos = hit_tables_to_max_positions(hit_tables)
+        residuals: list[float] = []
+
+        for idx, (H, K, L) in enumerate(miller):
+            key = (int(round(H)), int(round(K)), int(round(L)))
+            measured_list = measured_dict.get(key)
+            if not measured_list:
+                continue
+
+            I0, x0, y0, I1, x1, y1 = maxpos[idx]
+            simulated_candidates = [
+                (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
+                (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
+            ]
+            simulated_candidates = [p for p in simulated_candidates if p is not None]
+            if not simulated_candidates:
+                continue
+
+            for mx, my in measured_list:
+                best = None
+                for sx, sy in simulated_candidates:
+                    dx = sx - float(mx)
+                    dy = sy - float(my)
+                    dist = math.hypot(dx, dy)
+                    if best is None or dist < best[0]:
+                        best = (dist, dx, dy)
+
+                if best is None:
+                    continue
+
+                if best[0] <= pixel_tol:
+                    residuals.extend([best[1], best[2]])
+
+        return np.asarray(residuals, dtype=float)
+
     x0 = [params[name] for name in var_names]
 
     if experimental_image is None:
@@ -1838,7 +1909,7 @@ def fit_geometry_parameters(
             lower_bounds.append(-np.inf)
             upper_bounds.append(np.inf)
 
-    return least_squares(cost_fn, x0, bounds=(lower_bounds, upper_bounds))
+    return least_squares(pixel_cost_fn, x0, bounds=(lower_bounds, upper_bounds))
 
 
 def run_optimization_positions_geometry_local(
