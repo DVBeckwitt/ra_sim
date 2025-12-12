@@ -1,12 +1,15 @@
-"""Simple CLI to run the diffraction simulation headlessly and save an image.
+"""Simple CLI to run the diffraction simulation headlessly, launch the GUI, and invoke tools.
 
 Usage examples:
 
 - Use defaults from config and write `output.png`:
-    python -m ra_sim --out output.png
+    python -m ra_sim simulate --out output.png
 
 - Override samples and image size:
-    python -m ra_sim --out out.png --samples 2000 --image-size 3000
+    python -m ra_sim simulate --out out.png --samples 2000 --image-size 3000
+
+- Run the hBN ellipse fitting workflow:
+    python -m ra_sim hbn-fit --osc /path/to/calibrant.osc --dark /path/to/dark.osc
 
 This CLI intentionally mirrors the defaults used by the GUI by reading
 instrument and file paths from `config/` via `ra_sim.path_config`.
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from typing import Dict
 
 import numpy as np
@@ -27,6 +31,7 @@ from ra_sim.utils.stacking_fault import (
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
 )
+from ra_sim.hbn import load_tilt_hint, run_hbn_fit
 from ra_sim.utils.tools import (
     detector_two_theta_max,
     DEFAULT_PIXEL_SIZE_M,
@@ -93,6 +98,15 @@ def _combine_qr_dicts(caches: list[Dict], weights: np.ndarray) -> Dict:
     return out
 
 
+def _cmd_gui(args: argparse.Namespace) -> None:
+    """Launch the Tkinter GUI (mirrors running main.py directly)."""
+
+    import main as gui_app
+
+    write_excel_flag = None if not args.no_excel else False
+    gui_app.main(write_excel_flag=write_excel_flag)
+
+
 def run_headless_simulation(
     out_path: str,
     image_size: int | None = None,
@@ -137,6 +151,15 @@ def run_headless_simulation(
     lambda_ang = float(lambda_override if lambda_override is not None else lambda_from_poni)
 
     pixel_size_m = float(det_cfg.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
+
+    tilt_hint = load_tilt_hint()
+    if tilt_hint:
+        Gamma_initial = float(tilt_hint.get("rot1_rad", Gamma_initial))
+        gamma_initial = float(tilt_hint.get("rot2_rad", gamma_initial))
+        print(
+            "Using detector tilt defaults from hBN fit profile: "
+            f"Rot1={Gamma_initial:.4f} rad, Rot2={gamma_initial:.4f} rad"
+        )
 
     # Beam center: follow GUI default mapping from PONI to pixels
     center = np.array([
@@ -276,14 +299,7 @@ def run_headless_simulation(
     return str(out_path)
 
 
-def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="Run RA-SIM headless and save an image.")
-    ap.add_argument("--out", required=True, help="Output image path (e.g., output.png)")
-    ap.add_argument("--image-size", type=int, default=None, help="Simulation image size (pixels)")
-    ap.add_argument("--samples", type=int, default=None, help="Monte Carlo samples")
-    ap.add_argument("--vmax", type=float, default=None, help="Max intensity for scaling (default from config)")
-    args = ap.parse_args(argv)
-
+def _cmd_simulate(args: argparse.Namespace) -> None:
     out_path = run_headless_simulation(
         out_path=args.out,
         image_size=args.image_size,
@@ -291,6 +307,127 @@ def main(argv: list[str] | None = None) -> None:
         vmax=args.vmax,
     )
     print(f"Wrote simulated image to {out_path}")
+
+
+def _cmd_hbn_fit(args: argparse.Namespace) -> None:
+    results = run_hbn_fit(
+        osc_path=args.osc,
+        dark_path=args.dark,
+        output_dir=args.output_dir,
+        load_bundle=args.load_bundle,
+        load_bundle_requested=args.load_bundle is not None,
+        highres_refine=args.highres_refine,
+        reclick=args.reclick,
+        reuse_profile=args.reuse_profile,
+        paths_file=args.paths_file,
+    )
+
+    print("Completed hBN ellipse fitting. Outputs written to:")
+    for key in [
+        "background_subtracted",
+        "overlay",
+        "click_profile",
+        "fit_profile",
+        "bundle",
+    ]:
+        print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="Run RA-SIM tools.")
+    subparsers = ap.add_subparsers(dest="command")
+
+    gui_parser = subparsers.add_parser(
+        "gui",
+        help="Launch the RA-SIM Tkinter GUI (same behavior as running main.py directly).",
+    )
+    gui_parser.add_argument(
+        "--no-excel",
+        action="store_true",
+        help="Do not write the initial intensity Excel file on startup (matches main.py option).",
+    )
+    gui_parser.set_defaults(func=_cmd_gui)
+
+    sim_parser = subparsers.add_parser(
+        "simulate",
+        help="Run the diffraction simulation headlessly and save an image.",
+    )
+    sim_parser.add_argument("--out", required=True, help="Output image path (e.g., output.png)")
+    sim_parser.add_argument("--image-size", type=int, default=None, help="Simulation image size (pixels)")
+    sim_parser.add_argument("--samples", type=int, default=None, help="Monte Carlo samples")
+    sim_parser.add_argument(
+        "--vmax", type=float, default=None, help="Max intensity for scaling (default from config)"
+    )
+    sim_parser.set_defaults(func=_cmd_simulate)
+
+    hbn_parser = subparsers.add_parser(
+        "hbn-fit", help="Run the hBN ellipse fitting workflow without the GUI."
+    )
+    hbn_parser.add_argument("--osc", help="Path to the hBN OSC image")
+    hbn_parser.add_argument("--dark", help="Path to the dark frame OSC image")
+    hbn_parser.add_argument(
+        "--output-dir",
+        help=(
+            "Directory to write hBN outputs (defaults to ~/Downloads or the bundle directory when using --load-bundle)."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--load-bundle",
+        nargs="?",
+        const="",
+        help=(
+            "Existing NPZ bundle created by the hBN workflow to reload or refine. "
+            "Omit the path to let the CLI pull the bundle location from a paths file "
+            "(defaults to config/hbn_paths.yaml)."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--highres-refine",
+        action="store_true",
+        help="When loading a bundle, recompute a full resolution background subtraction and refine ellipses on it.",
+    )
+    hbn_parser.add_argument(
+        "--reclick",
+        action="store_true",
+        help=(
+            "Force a new interactive click session even when loading a bundle (requires --osc/--dark to rebuild the "
+            "background before collecting 5 points per ellipse)."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--reuse-profile",
+        action="store_true",
+        help="Reuse an existing click profile JSON in the output directory if present.",
+    )
+    hbn_parser.add_argument(
+        "--paths-file",
+        help=(
+            "Optional YAML/JSON file containing calibrant, dark, and artifact paths "
+            "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
+            "fit_profile/fit). If omitted, the CLI falls back to "
+            "config/hbn_paths.yaml when available."
+        ),
+    )
+    hbn_parser.set_defaults(func=_cmd_hbn_fit)
+
+    return ap
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    ap = _build_parser()
+
+    if argv and argv[0] not in {"gui", "simulate", "hbn-fit", "-h", "--help"}:
+        argv = ["simulate"] + argv
+
+    args = ap.parse_args(argv)
+
+    handler = getattr(args, "func", None)
+    if handler is None:
+        ap.print_help()
+        return
+
+    handler(args)
 
 
 if __name__ == "__main__":  # pragma: no cover

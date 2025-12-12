@@ -78,6 +78,7 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.debug_utils import debug_print, is_debug_enabled
+from ra_sim.hbn import estimate_detector_tilt, load_bundle_npz, load_tilt_hint
 from ra_sim.gui.collapsible import CollapsibleFrame
 
 
@@ -150,6 +151,15 @@ poni1 = parameters.get("Poni1", geometry_config.get("poni1_m", 0.0))
 poni2 = parameters.get("Poni2", geometry_config.get("poni2_m", 0.0))
 wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10))
 lambda_from_poni = wave_m * 1e10  # Convert m -> Å
+
+tilt_hint = load_tilt_hint()
+if tilt_hint:
+    Gamma_initial = float(tilt_hint.get("rot1_rad", Gamma_initial))
+    gamma_initial = float(tilt_hint.get("rot2_rad", gamma_initial))
+    print(
+        "Initialized detector tilt from last hBN fit profile "
+        f"(Rot1={Gamma_initial:.4f} rad, Rot2={gamma_initial:.4f} rad)."
+    )
 
 image_size = detector_config.get("image_size", 3000)
 pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
@@ -2249,6 +2259,41 @@ progress_label.pack(side=tk.BOTTOM, padx=5)
 chi_square_label = ttk.Label(root, text="Chi-Squared: ", font=("Helvetica", 8))
 chi_square_label.pack(side=tk.BOTTOM, padx=5)
 
+
+def import_hbn_tilt_from_bundle():
+    """Load an hBN ellipse bundle NPZ and apply its tilt hint to the GUI sliders."""
+
+    bundle_path = filedialog.askopenfilename(
+        title="Select hBN bundle (.npz)",
+        filetypes=[("hBN bundle", "*.npz"), ("All files", "*.*")],
+    )
+    if not bundle_path:
+        return
+
+    try:
+        _, _, _, ellipses = load_bundle_npz(bundle_path)
+    except Exception as exc:  # pragma: no cover - GUI interaction
+        progress_label.config(text=f"Failed to load bundle: {exc}")
+        return
+
+    tilt_hint_local = estimate_detector_tilt(ellipses)
+    if not tilt_hint_local:
+        progress_label.config(text="Bundle loaded, but no ellipses available for tilt.")
+        return
+
+    rot1_deg = float(np.degrees(tilt_hint_local["rot1_rad"]))
+    rot2_deg = float(np.degrees(tilt_hint_local["rot2_rad"]))
+    Gamma_var.set(rot1_deg)
+    gamma_var.set(rot2_deg)
+    schedule_update()
+    progress_label.config(
+        text=(
+            "Applied hBN bundle tilt hint "
+            f"(Γ={rot1_deg:.3f}°, γ={rot2_deg:.3f}°) from {bundle_path}"
+        )
+    )
+
+
 save_button = ttk.Button(
     text="Save Params",
     command=lambda: save_all_parameters(
@@ -2306,6 +2351,12 @@ load_button = ttk.Button(
     )
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
+
+import_hbn_button = ttk.Button(
+    text="Import hBN Bundle Tilt",
+    command=import_hbn_tilt_from_bundle,
+)
+import_hbn_button.pack(side=tk.TOP, padx=5, pady=2)
 
 # Frame for selecting which geometry params to fit
 fit_frame = ttk.LabelFrame(root, text="Fit geometry parameters")

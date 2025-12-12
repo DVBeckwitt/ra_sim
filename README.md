@@ -26,10 +26,40 @@ pip install -e .
 Launch the GUI:
 
 ```bash
+python -m ra_sim gui
+# or
 python main.py
 ```
 
 The application loads example images specified in `config/dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
+
+## Command-line hBN ellipse fitting
+
+You can run the hBN ellipse fitting workflow without the GUI through the project CLI. The workflow understands a YAML/JSON paths file so you do not have to repeat calibrant and dark frame paths each time.
+
+1. Update `config/hbn_paths.yaml` with your calibrant, dark, and optional bundle/profile paths (or point `--paths-file` to a custom YAML/JSON).
+2. Launch the workflow at full 3000×3000 resolution from the command prompt:
+
+```bash
+# Use the default config/hbn_paths.yaml and process at full resolution
+python -m ra_sim hbn-fit
+
+# Load the bundle listed in the paths file without retyping its path
+python -m ra_sim hbn-fit --load-bundle
+
+# Recompute a fresh background/fit at full resolution using stored ellipses as starting guesses
+python -m ra_sim hbn-fit --load-bundle --highres-refine --osc /path/to/calibrant.osc --dark /path/to/dark.osc
+
+# Collect a fresh set of 5 points on each of the 5 rings even when a bundle exists
+python -m ra_sim hbn-fit --reclick --osc /path/to/calibrant.osc --dark /path/to/dark.osc
+
+# Supply an alternate paths file
+python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml
+```
+
+When a bundle NPZ is provided in the paths file (or via `--load-bundle`), `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses at full resolution.
+
+After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ). The saved fit profile also records an estimated detector tilt; the GUI and the `simulate` CLI subcommand will use this tilt as their starting Rot1/Rot2 defaults the next time you launch a simulation.
 
 ## Troubleshooting
 
