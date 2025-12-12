@@ -151,6 +151,25 @@ def parse_args(argv=None):
             "collecting 5 points per ring."
         ),
     )
+    parser.add_argument(
+        "--vertex-distance",
+        type=float,
+        default=None,
+        help=(
+            "Distance from the common cone vertex to the detector plane along the rotation axis. "
+            "When provided (in the same units as --pixel-size), the workflow will report a cone "
+            "angle for each fitted ring."
+        ),
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=None,
+        help=(
+            "Optional physical size per pixel (same units as --vertex-distance). "
+            "If omitted, cone angles are computed using raw pixel distances."
+        ),
+    )
     return parser.parse_args(argv)
 
 # ------------------------------------------------------------
@@ -304,6 +323,14 @@ def save_fit_profile(path, ellipses, img_shape):
                 "b": float(e["b"]),
                 "theta_rad": float(e["theta"]),
                 "theta_deg": float(np.degrees(e["theta"])),
+                **(
+                    {
+                        "cone_angle_rad": float(e["cone_angle_rad"]),
+                        "cone_angle_deg": float(e["cone_angle_deg"]),
+                    }
+                    if "cone_angle_deg" in e
+                    else {}
+                ),
             }
             for i, e in enumerate(ellipses)
         ],
@@ -765,14 +792,44 @@ def compute_common_center(ellipses):
     return float(xs.mean()), float(ys.mean())
 
 
+def _effective_radius(a, b):
+    """Return an effective circle radius from ellipse semiaxes.
+
+    Using the arithmetic mean keeps the radius aligned with the measured axes while
+    staying robust to minor eccentricity from noise or tilt.
+    """
+
+    return 0.5 * (abs(a) + abs(b))
+
+
+def attach_cone_angles(ellipses, vertex_distance=None, pixel_size=None):
+    """Annotate ellipses with cone angles (deg/rad) when geometry is provided."""
+
+    if vertex_distance is None:
+        return ellipses
+    vertex_distance = float(vertex_distance)
+    if vertex_distance <= 0:
+        raise ValueError("--vertex-distance must be positive.")
+
+    scale = 1.0 if pixel_size is None else float(pixel_size)
+    for e in ellipses:
+        radius = _effective_radius(e["a"], e["b"]) * scale
+        angle_rad = float(np.arctan2(radius, vertex_distance))
+        e["cone_angle_rad"] = angle_rad
+        e["cone_angle_deg"] = float(np.degrees(angle_rad))
+    return ellipses
+
+
 def _format_ellipse_lines(ellipses):
     lines = []
     for i, e in enumerate(ellipses):
+        cone = e.get("cone_angle_deg")
         lines.append(
             "  "
             f"{i}: xc={e['xc']:.2f}, yc={e['yc']:.2f}, "
             f"a={e['a']:.2f}, b={e['b']:.2f}, "
             f"theta={np.degrees(e['theta']):.2f} deg"
+            + (f", cone={cone:.2f} deg" if cone is not None else "")
         )
     return "\n".join(lines)
 
@@ -849,6 +906,8 @@ def run_hbn_fit(
     fit_profile_path=None,
     bundle_path=None,
     paths_file=None,
+    vertex_distance=None,
+    pixel_size=None,
 ):
     resolved = resolve_hbn_paths(
         osc_path=osc_path,
@@ -902,7 +961,15 @@ def run_hbn_fit(
         "fit_profile": fit_profile_path,
         "bundle": bundle_path_save,
         "ellipses": [],
+        "vertex_distance": vertex_distance,
+        "pixel_size": pixel_size,
     }
+
+    if vertex_distance is not None:
+        print(
+            "Assuming concentric cones with vertex-to-detector distance "
+            f"{vertex_distance} using pixel size {pixel_size or 1.0} for angle reporting."
+        )
 
     bundle_loaded = None
     if bundle_path_in is not None:
@@ -928,6 +995,12 @@ def run_hbn_fit(
             img_bgsub_out = img_bgsub_b
             img_log_out = img_log_b
             ellipses_out = ellipses_b
+
+        ellipses_out = attach_cone_angles(
+            ellipses_out,
+            vertex_distance=vertex_distance,
+            pixel_size=pixel_size,
+        )
 
         cv2.imwrite(out_tiff_path, img_bgsub_out)
         save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
@@ -985,6 +1058,9 @@ def run_hbn_fit(
     )
     print(f"Fitted {len(ellipses)} ellipses from clicked points and intensity refinement.")
 
+    ellipses = attach_cone_angles(
+        ellipses, vertex_distance=vertex_distance, pixel_size=pixel_size
+    )
     save_fit_profile(fit_profile_path, ellipses, img_bgsub.shape)
 
     img_log = make_log_image(img_bgsub)
@@ -1018,6 +1094,8 @@ def main(argv=None):
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
+        vertex_distance=args.vertex_distance,
+        pixel_size=args.pixel_size,
     )
 
     print("Completed hBN ellipse fitting. Outputs written to:")

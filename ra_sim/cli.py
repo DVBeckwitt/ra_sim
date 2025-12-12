@@ -302,6 +302,8 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         reclick=args.reclick,
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
+        vertex_distance=args.vertex_distance,
+        pixel_size=args.pixel_size,
     )
 
     print("Completed hBN ellipse fitting. Outputs written to:")
@@ -377,6 +379,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
             "fit_profile/fit). If omitted, the CLI falls back to "
             "config/hbn_paths.yaml when available."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--vertex-distance",
+        type=float,
+        help=(
+            "Distance from the common cone vertex to the detector plane along the rotation axis. "
+            "Supplying this enables reporting the cone half-angle for each fitted ring."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--pixel-size",
+        type=float,
+        help=(
+            "Physical size per pixel (same units as --vertex-distance). If omitted, cone angles "
+            "are computed in pixel units."
         ),
     )
     hbn_parser.set_defaults(func=_cmd_hbn_fit)

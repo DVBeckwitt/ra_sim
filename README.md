@@ -53,11 +53,14 @@ python -m ra_sim hbn-fit --reclick --osc /path/to/calibrant.osc --dark /path/to/
 
 # Supply an alternate paths file
 python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml
+
+# Report cone half-angles (deg) for each ring assuming a shared vertex on the rotation axis
+python -m ra_sim hbn-fit --vertex-distance 0.5 --pixel-size 0.0001
 ```
 
 When a bundle NPZ is provided in the paths file (or via `--load-bundle`), `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses at full resolution.
 
-After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ) so you can review the results directly from the command prompt output and plot.
+After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ); when `--vertex-distance` is provided, the estimated cone half-angle for each ring is listed as well.
 
 ## Troubleshooting
 
