@@ -2806,8 +2806,6 @@ def on_fit_geometry_click():
                 orientation_report = (
                     "\n\nBest flip/rotation match: "
                     f"{best_orientation['label']}"
-                    f" (RMS={best_orientation['rms']:.2f}px, "
-                    f"mean={best_orientation['mean']:.2f}px)"
                 )
 
             progress_label_geometry.config(
