@@ -2643,15 +2643,11 @@ def on_fit_geometry_click():
                 pixel_tol=float('inf'),
             )
 
-            rotated_height = current_background_image.shape[1]
+            def _to_display_frame(col: float, row: float, *, k: int) -> tuple[float, float]:
+                """Rotate native coordinates into the currently displayed frame."""
 
-            def _to_display_frame(col: float, row: float) -> tuple[float, float]:
-                # Inverse transform of _unrotate_display_peaks():
-                #   x_display = orig_height - 1 - y_orig
-                #   y_display = x_orig
-                return (
-                    rotated_height - 1 - float(row),
-                    float(col),
+                return _rotate_point_for_display(
+                    float(col), float(row), (image_size, image_size), k
                 )
 
             pixel_offsets = []
@@ -2663,8 +2659,12 @@ def on_fit_geometry_click():
                 dist = math.hypot(dx, dy)
                 pixel_offsets.append((hkl, dx, dy, dist))
 
-                disp_sx, disp_sy = _to_display_frame(sx, sy)
-                disp_mx, disp_my = _to_display_frame(mx, my)
+                disp_sx, disp_sy = _to_display_frame(
+                    sx, sy, k=SIM_DISPLAY_ROTATE_K
+                )
+                disp_mx, disp_my = _to_display_frame(
+                    mx, my, k=DISPLAY_ROTATE_K
+                )
 
                 line, = ax.plot(
                     [disp_sx, disp_mx],
