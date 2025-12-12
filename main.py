@@ -6,7 +6,7 @@ import math
 import os
 
 # Enable debug messages automatically. Set RA_SIM_DEBUG=0 to disable.
-os.environ.setdefault("RA_SIM_DEBUG", "0")
+os.environ.setdefault("RA_SIM_DEBUG", "1")
 write_excel = False
 
 import re
@@ -2798,24 +2798,31 @@ def on_fit_geometry_click():
             else:
                 dist_report = "No matched peaks to report distances."
 
-            orientation_report = ""
             best_orientation = _best_orientation_alignment(
                 sim_coords, meas_coords, (image_size, image_size)
             )
-            if best_orientation is not None:
-                orientation_report = (
-                    "\n\nBest flip/rotation match: "
-                    f"{best_orientation['label']}"
-                )
+            if DEBUG_ENABLED:
+                if best_orientation is not None:
+                    orientation_report = f"Best flip/rotation match: {best_orientation['label']}"
+                else:
+                    orientation_report = "Best flip/rotation match: unavailable"
+                progress_label_geometry.config(text=orientation_report)
+            else:
+                orientation_report = ""
+                if best_orientation is not None:
+                    orientation_report = (
+                        "\n\nBest flip/rotation match: "
+                        f"{best_orientation['label']}"
+                    )
 
-            progress_label_geometry.config(
-                text=(
-                    progress_label_geometry.cget('text')
-                    + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}'
-                    + f"\n\nPixel offsets:\n{dist_report}"
-                    + orientation_report
+                progress_label_geometry.config(
+                    text=(
+                        progress_label_geometry.cget('text')
+                        + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}'
+                        + f"\n\nPixel offsets:\n{dist_report}"
+                        + orientation_report
+                    )
                 )
-            )
             return
 
         col, row = float(event.xdata), float(event.ydata)
