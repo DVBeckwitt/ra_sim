@@ -1526,6 +1526,8 @@ def run_hbn_fit(
     tilt_correction_serialized = None
     radii_after_fit = None
     center_common = None
+    tilt_hint = None
+    expected_peaks = None
 
     abort_reason = None
     completed = False
