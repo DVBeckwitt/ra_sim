@@ -321,6 +321,12 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
         prompt_save_bundle=getattr(args, "prompt_save_bundle", False),
+        load_clicks=args.load_clicks,
+        save_clicks=args.save_clicks,
+        clicks_only=args.clicks_only,
+        beam_center=(args.beam_center_x, args.beam_center_y)
+        if args.beam_center_x is not None and args.beam_center_y is not None
+        else None,
     )
 
     if results.get("aborted"):
@@ -333,10 +339,10 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         "background_subtracted",
         "overlay",
         "click_profile",
-        "fit_profile",
         "bundle",
     ]:
-        print(f"  {key.replace('_', ' ').title()}: {results[key]}")
+        value = results.get(key, "n/a")
+        print(f"  {key.replace('_', ' ').title()}: {value}")
     if results.get("manual_bundle"):
         print(f"  Manual Bundle: {results['manual_bundle']}")
 
@@ -421,6 +427,48 @@ def _build_parser() -> argparse.ArgumentParser:
             "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
             "fit_profile/fit). If omitted, the CLI falls back to "
             "config/hbn_paths.yaml when available."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--beam-center-x",
+        type=float,
+        default=None,
+        help=(
+            "Beam center x-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-y, guides will radiate from this point during clicking."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--beam-center-y",
+        type=float,
+        default=None,
+        help=(
+            "Beam center y-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-x, guides will radiate from this point during clicking."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--load-clicks",
+        help=(
+            "Optional JSON click profile to load instead of interactively collecting points "
+            "(keys: image_shape, points)."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--save-clicks",
+        nargs="?",
+        const="",
+        help=(
+            "Write the clicked points to a JSON profile after selection (defaults to "
+            "hbn_click_profile.json in the output directory when omitted)."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--clicks-only",
+        action="store_true",
+        help=(
+            "Stop after collecting points (and saving them if requested) without fitting ellipses or "
+            "writing the full bundle."
         ),
     )
     hbn_parser.set_defaults(func=_cmd_hbn_fit)

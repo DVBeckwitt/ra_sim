@@ -4,6 +4,12 @@ calibrant: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/
 
 dark: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/darkImg.osc"
 
+# Default beam center (pixels, origin at top-left). Override here if needed or
+# pass --beam-center-x/--beam-center-y on the CLI.
+beam_center:
+  - 1598
+  - 1547
+
 
 
 

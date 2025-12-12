@@ -2271,19 +2271,31 @@ def import_hbn_tilt_from_bundle():
         return
 
     mean_dist = None
+    rot1_deg = None
+    rot2_deg = None
     try:
-        _, _, _, ellipses, distance_info = load_bundle_npz(bundle_path)
+        _, _, _, ellipses, distance_info, tilt_correction, tilt_hint, _, _ = load_bundle_npz(
+            bundle_path
+        )
     except Exception as exc:  # pragma: no cover - GUI interaction
         progress_label.config(text=f"Failed to load bundle: {exc}")
         return
 
-    tilt_hint_local = estimate_detector_tilt(ellipses)
-    if not tilt_hint_local:
-        progress_label.config(text="Bundle loaded, but no ellipses available for tilt.")
-        return
+    if tilt_correction:
+        rot1_deg = float(tilt_correction.get("tilt_x_deg", 0.0))
+        rot2_deg = float(tilt_correction.get("tilt_y_deg", 0.0))
+    elif tilt_hint:
+        rot1_deg = float(np.degrees(tilt_hint.get("rot1_rad", 0.0)))
+        rot2_deg = float(np.degrees(tilt_hint.get("rot2_rad", 0.0)))
+    else:
+        tilt_hint_local = estimate_detector_tilt(ellipses)
+        if tilt_hint_local:
+            rot1_deg = float(np.degrees(tilt_hint_local["rot1_rad"]))
+            rot2_deg = float(np.degrees(tilt_hint_local["rot2_rad"]))
 
-    rot1_deg = float(np.degrees(tilt_hint_local["rot1_rad"]))
-    rot2_deg = float(np.degrees(tilt_hint_local["rot2_rad"]))
+    if rot1_deg is None or rot2_deg is None:
+        progress_label.config(text="Bundle loaded, but no tilt information was found.")
+        return
     Gamma_var.set(rot1_deg)
     gamma_var.set(rot2_deg)
     if distance_info and isinstance(distance_info, dict):

@@ -45,6 +45,7 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import yaml
+from scipy.optimize import minimize
 
 from matplotlib.patches import Rectangle
 from skimage.measure import EllipseModel
@@ -179,6 +180,51 @@ def parse_args(argv=None):
             "an hBN NPZ bundle."
         ),
     )
+    parser.add_argument(
+        "--load-clicks",
+        type=str,
+        default=None,
+        help=(
+            "Optional JSON click profile to load instead of interactively collecting points "
+            "(keys: image_shape, points)."
+        ),
+    )
+    parser.add_argument(
+        "--save-clicks",
+        nargs="?",
+        const="",
+        default=None,
+        help=(
+            "Write the clicked points to a JSON profile after selection (defaults to "
+            "hbn_click_profile.json in the output directory when no path is provided)."
+        ),
+    )
+    parser.add_argument(
+        "--clicks-only",
+        action="store_true",
+        help=(
+            "Stop after collecting points (and saving them if requested) without fitting ellipses or "
+            "writing the full bundle."
+        ),
+    )
+    parser.add_argument(
+        "--beam-center-x",
+        type=float,
+        default=None,
+        help=(
+            "Beam center x-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-y, guides will radiate from this point during clicking."
+        ),
+    )
+    parser.add_argument(
+        "--beam-center-y",
+        type=float,
+        default=None,
+        help=(
+            "Beam center y-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-x, guides will radiate from this point during clicking."
+        ),
+    )
     return parser.parse_args(argv)
 
 # ------------------------------------------------------------
@@ -297,6 +343,7 @@ def resolve_hbn_paths(
         bundle=os.path.expanduser(bundle_path) if bundle_path else None,
         click_profile=os.path.expanduser(click_profile_path) if click_profile_path else None,
         fit_profile=os.path.expanduser(fit_profile_path) if fit_profile_path else None,
+        beam_center=None,
     )
 
     search_file = paths_file
@@ -318,6 +365,18 @@ def resolve_hbn_paths(
             resolved["click_profile"] = _pick(["click_profile", "profile", "click_profile_path"], file_data)
         if resolved["fit_profile"] is None:
             resolved["fit_profile"] = _pick(["fit_profile", "fit", "fit_profile_path"], file_data)
+        if resolved["beam_center"] is None:
+            beam_x = _pick(["beam_center_x", "beam_x", "center_x", "xc"], file_data)
+            beam_y = _pick(["beam_center_y", "beam_y", "center_y", "yc"], file_data)
+            beam_center_from_list = file_data.get("beam_center") if isinstance(file_data, dict) else None
+            if beam_center_from_list and isinstance(beam_center_from_list, (list, tuple)):
+                if len(beam_center_from_list) == 2:
+                    beam_x, beam_y = beam_center_from_list
+            if beam_x is not None and beam_y is not None:
+                try:
+                    resolved["beam_center"] = (float(beam_x), float(beam_y))
+                except (TypeError, ValueError):
+                    resolved["beam_center"] = None
     resolved["paths_file"] = search_file if search_file else None
     return resolved
 
@@ -350,7 +409,13 @@ def load_click_profile(path):
 
 
 def save_fit_profile(
-    path, ellipses, img_shape, tilt_hint=None, expected_peaks=None, distance_info=None
+    path,
+    ellipses,
+    img_shape,
+    tilt_hint=None,
+    expected_peaks=None,
+    distance_info=None,
+    tilt_correction=None,
 ):
     profile = {
         "image_shape": list(img_shape),
@@ -373,6 +438,8 @@ def save_fit_profile(
         profile["expected_peaks"] = expected_peaks
     if distance_info:
         profile["distance_estimate_m"] = distance_info
+    if tilt_correction:
+        profile["tilt_correction"] = tilt_correction
     with open(path, "w") as f:
         json.dump(profile, f, indent=2)
     print(f"Saved fit profile to:\n  {path}")
@@ -386,6 +453,10 @@ def save_bundle(
     ellipses,
     *,
     distance_info=None,
+    tilt_correction=None,
+    tilt_hint=None,
+    expected_peaks=None,
+    center=None,
 ):
     ell_points_arr = np.array(
         [np.array(pts, dtype=np.float32) for pts in ell_points_ds],
@@ -409,6 +480,10 @@ def save_bundle(
         ell_points_ds=ell_points_arr,
         ellipse_params=ellipse_params,
         distance_estimate_m=distance_info,
+        tilt_correction=tilt_correction,
+        tilt_hint=tilt_hint,
+        expected_peaks=expected_peaks,
+        center=center,
     )
     print(f"Saved bundle NPZ to:\n  {path}")
     print("Note: load with allow_pickle=True for ell_points_ds.")
@@ -421,6 +496,10 @@ def load_bundle_npz(path):
     ell_points_arr = data["ell_points_ds"]
     ellipse_params = data["ellipse_params"]
     distance_info = data.get("distance_estimate_m")
+    tilt_correction = data.get("tilt_correction")
+    tilt_hint = data.get("tilt_hint")
+    expected_peaks = data.get("expected_peaks")
+    center = data.get("center")
 
     ell_points_ds = []
     for arr in ell_points_arr:
@@ -448,46 +527,91 @@ def load_bundle_npz(path):
             distance_info = distance_info.item()
         except Exception:
             pass
+    if tilt_correction is not None:
+        try:
+            tilt_correction = tilt_correction.item()
+        except Exception:
+            pass
+    if tilt_hint is not None:
+        try:
+            tilt_hint = tilt_hint.item()
+        except Exception:
+            pass
+    if expected_peaks is not None:
+        try:
+            expected_peaks = expected_peaks.item()
+        except Exception:
+            pass
+    if center is not None:
+        try:
+            center = tuple(center.tolist()) if hasattr(center, "tolist") else tuple(center)
+        except Exception:
+            pass
     if distance_info:
         print(
             "  distance estimate: "
             f"mean={distance_info.get('mean_m', float('nan')):.4f} m"
         )
-    return img_bgsub, img_log, ell_points_ds, ellipses, distance_info
+    return (
+        img_bgsub,
+        img_log,
+        ell_points_ds,
+        ellipses,
+        distance_info,
+        tilt_correction,
+        tilt_hint,
+        expected_peaks,
+        center,
+    )
 
 
 def load_tilt_hint(paths_file=None):
-    """Load the latest tilt hint from an hBN fit profile if available."""
+    """Load the latest tilt hint from an hBN bundle if available."""
 
     resolved = resolve_hbn_paths(paths_file=paths_file)
-    profile_path = resolved.get("fit_profile")
-    if not profile_path or not os.path.exists(profile_path):
+    bundle_path = resolved.get("bundle")
+    if not bundle_path or not os.path.exists(bundle_path):
         return None
 
     try:
-        with open(profile_path, "r") as fh:
-            profile = json.load(fh)
+        _, _, _, _, distance_info, tilt_correction, tilt_hint, _, _ = load_bundle_npz(
+            bundle_path
+        )
     except Exception:
         return None
 
-    tilt = profile.get("tilt_hint")
-    if not isinstance(tilt, dict):
-        return None
+    if tilt_correction:
+        tilt_hint = dict(
+            rot1_rad=float(np.deg2rad(tilt_correction.get("tilt_x_deg", 0.0))),
+            rot2_rad=float(np.deg2rad(tilt_correction.get("tilt_y_deg", 0.0))),
+        )
+        tilt_hint["tilt_rad"] = float(
+            math.hypot(tilt_hint["rot1_rad"], tilt_hint["rot2_rad"])
+        )
+    elif tilt_hint:
+        try:
+            tilt_hint = {
+                "rot1_rad": float(tilt_hint.get("rot1_rad")),
+                "rot2_rad": float(tilt_hint.get("rot2_rad")),
+                "tilt_rad": float(tilt_hint.get("tilt_rad")),
+            }
+        except (TypeError, ValueError):
+            tilt_hint = None
+    else:
+        tilt_hint = None
 
-    try:
-        return {
-            "rot1_rad": float(tilt.get("rot1_rad")),
-            "rot2_rad": float(tilt.get("rot2_rad")),
-            "tilt_rad": float(tilt.get("tilt_rad")),
-        }
-    except (TypeError, ValueError):
-        return None
+    if tilt_hint and distance_info:
+        tilt_hint["distance_m"] = distance_info.get("mean_m")
+
+    return tilt_hint
 
 
 # ------------------------------------------------------------
 # Interactive clicking with zoom
 # ------------------------------------------------------------
-def get_points_per_ellipse_with_zoom(small, n_ellipses, pts_per_ellipse):
+def get_points_per_ellipse_with_zoom(
+    small, n_ellipses, pts_per_ellipse, beam_center=None, n_slices=5
+):
     if pts_per_ellipse < 5:
         raise ValueError("Need at least 5 points per ellipse for a stable fit.")
 
@@ -522,6 +646,46 @@ def get_points_per_ellipse_with_zoom(small, n_ellipses, pts_per_ellipse):
     zooming = {"active": False, "x0": None, "y0": None}
 
     seed_scatter = ax.scatter([], [], s=20, c="red", marker="x")
+
+    center_marker = None
+    guide_lines = []
+    beam_center = (
+        tuple(beam_center)
+        if beam_center is not None and len(beam_center) == 2
+        else (w / 2.0, h / 2.0)
+    )
+
+    def draw_guides():
+        nonlocal center_marker, guide_lines
+
+        for ln in guide_lines:
+            ln.remove()
+        guide_lines = []
+
+        if center_marker is not None:
+            center_marker.remove()
+            center_marker = None
+
+        if beam_center is None or n_slices <= 0:
+            return
+
+        xc, yc = beam_center
+        radius = math.hypot(w, h)
+        angles = np.linspace(0.0, 2.0 * np.pi, n_slices, endpoint=False)
+
+        for ang in angles:
+            x1 = xc + radius * math.cos(ang)
+            y1 = yc + radius * math.sin(ang)
+            ln = ax.plot([xc, x1], [yc, y1], linestyle=":", color="cyan", alpha=0.6)[
+                0
+            ]
+            guide_lines.append(ln)
+
+        center_marker = ax.plot(
+            xc, yc, marker="+", markersize=6, markeredgewidth=1.4, color="cyan"
+        )[0]
+
+    draw_guides()
 
     def update_title():
         title_text.set_text(
@@ -918,8 +1082,24 @@ def estimate_detector_tilt(ellipses):
     return _estimate_tilt_components(target["a"], target["b"], target["theta"])
 
 
-def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
-    """Estimate the sample–detector distance using fitted rings and hBN peaks."""
+def estimate_sample_detector_distance(
+    ellipses, peaks, pixel_size_m=None, basis="ellipses"
+):
+    """Estimate the sample–detector distance using fitted rings and hBN peaks.
+
+    Parameters
+    ----------
+    ellipses : list of dict
+        Ellipse parameters (xc, yc, a, b, theta). When *basis* is "circles",
+        the entries should already represent circularized radii (a == b).
+    peaks : list of dict
+        Expected hBN peak metadata (from :func:`hbn_expected_peaks`).
+    pixel_size_m : float, optional
+        Detector pixel size in meters. If omitted, defaults to the instrument
+        configuration.
+    basis : {"ellipses", "circles"}
+        Records how the radii were produced (raw ellipse fits vs. circularized).
+    """
 
     if not ellipses or not peaks:
         return None
@@ -929,7 +1109,7 @@ def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
     for e, peak in zip(ellipses, peaks):
         radius_pix = _effective_radius(e["a"], e["b"])
         tth_rad = math.radians(peak["two_theta_deg"])
-        if radius_pix <= 0 or math.isclose(math.tan(tth_rad), 0.0):
+        if not math.isfinite(radius_pix) or radius_pix <= 0 or math.isclose(math.tan(tth_rad), 0.0):
             continue
         radius_m = radius_pix * pixel_size_m
         distances.append(radius_m / math.tan(tth_rad))
@@ -941,7 +1121,240 @@ def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
         "per_ring_m": [float(d) for d in distances],
         "mean_m": float(np.mean(distances)),
         "pixel_size_m": float(pixel_size_m),
+        "basis": str(basis),
     }
+
+
+# ------------------------------------------------------------
+# Tilt circularization helpers (adapted from hbn.py helper script)
+# ------------------------------------------------------------
+
+def _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg):
+    """Apply inverse tilt correction assuming rotations about x/y through the center."""
+
+    pts = np.asarray(pts, dtype=float)
+    if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+        return pts
+
+    xc, yc = center
+
+    max_tilt_deg = 45.0
+    tilt_x_deg = float(np.clip(tilt_x_deg, -max_tilt_deg, max_tilt_deg))
+    tilt_y_deg = float(np.clip(tilt_y_deg, -max_tilt_deg, max_tilt_deg))
+
+    tx = np.deg2rad(tilt_x_deg)
+    ty = np.deg2rad(tilt_y_deg)
+
+    cx = np.cos(tx)  # affects y
+    cy = np.cos(ty)  # affects x
+
+    scale_y = 1e3 if abs(cx) < 1e-3 else 1.0 / cx
+    scale_x = 1e3 if abs(cy) < 1e-3 else 1.0 / cy
+
+    dx = (pts[:, 0] - xc) * scale_x
+    dy = (pts[:, 1] - yc) * scale_y
+    x_corr = xc + dx
+    y_corr = yc + dy
+
+    return np.column_stack([x_corr, y_corr])
+
+
+def _circularity_cost(params_deg, ell_points_ds, center):
+    tilt_x_deg, tilt_y_deg = params_deg
+    xc, yc = center
+    total_cost = 0.0
+
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            continue
+
+        pts_corr = _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg)
+
+        dx = pts_corr[:, 0] - xc
+        dy = pts_corr[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+
+        r_mean = r.mean()
+        if r_mean < 1e-9:
+            continue
+
+        metric = np.std(r) / r_mean
+        total_cost += metric * metric
+
+    return total_cost
+
+
+def _circularity_metrics(ell_points_ds, center, tilt_x_deg, tilt_y_deg):
+    xc, yc = center
+    metrics = []
+
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            metrics.append(np.nan)
+            continue
+
+        pts_corr = _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg)
+
+        dx = pts_corr[:, 0] - xc
+        dy = pts_corr[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+        r_mean = r.mean()
+        if r_mean < 1e-9:
+            metrics.append(np.nan)
+            continue
+
+        metrics.append(float(np.std(r) / r_mean))
+
+    return metrics
+
+
+def _apply_tilt_correction_all(ell_points_ds, center, tilt_x_deg, tilt_y_deg):
+    corrected = []
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            corrected.append(np.empty((0, 2)))
+            continue
+        corrected.append(_apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg))
+    return corrected
+
+
+def _fit_ring_radii(ell_points, center):
+    xc, yc = center
+    radii = []
+    for pts in ell_points:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or pts.size == 0:
+            radii.append(np.nan)
+            continue
+        dx = pts[:, 0] - xc
+        dy = pts[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+        radii.append(float(r.mean()))
+    return radii
+
+
+def _find_tilt_correction(ell_points_ds, center):
+    if not ell_points_ds:
+        return None
+
+    cost_zero = _circularity_cost((0.0, 0.0), ell_points_ds, center)
+
+    tx_grid = np.linspace(-10.0, 10.0, 41)
+    ty_grid = np.linspace(-10.0, 10.0, 41)
+    best_cost = np.inf
+    best_tx = 0.0
+    best_ty = 0.0
+
+    for tx in tx_grid:
+        for ty in ty_grid:
+            c = _circularity_cost((tx, ty), ell_points_ds, center)
+            if c < best_cost:
+                best_cost = c
+                best_tx = tx
+                best_ty = ty
+
+    result = minimize(
+        _circularity_cost,
+        np.array([best_tx, best_ty], dtype=float),
+        args=(ell_points_ds, center),
+        method="Nelder-Mead",
+        options=dict(maxiter=1000, xatol=1e-4, fatol=1e-8, disp=False),
+    )
+
+    tilt_x_opt, tilt_y_opt = result.x
+
+    circ_before = _circularity_metrics(ell_points_ds, center, 0.0, 0.0)
+    circ_after = _circularity_metrics(ell_points_ds, center, tilt_x_opt, tilt_y_opt)
+
+    corrected_points = _apply_tilt_correction_all(
+        ell_points_ds, center, tilt_x_opt, tilt_y_opt
+    )
+
+    radii_before = _fit_ring_radii(ell_points_ds, center)
+    radii_after = _fit_ring_radii(corrected_points, center)
+
+    return {
+        "tilt_x_deg": float(tilt_x_opt),
+        "tilt_y_deg": float(tilt_y_opt),
+        "cost_zero": float(cost_zero),
+        "cost_final": float(result.fun),
+        "circ_before": circ_before,
+        "circ_after": circ_after,
+        "radii_before": radii_before,
+        "radii_after": radii_after,
+        "corrected_points": corrected_points,
+    }
+
+
+def _serialize_tilt_correction(tilt_correction, center=None):
+    if not tilt_correction:
+        return None
+
+    serialized = {
+        "tilt_x_deg": float(tilt_correction.get("tilt_x_deg", float("nan"))),
+        "tilt_y_deg": float(tilt_correction.get("tilt_y_deg", float("nan"))),
+        "cost_zero": float(tilt_correction.get("cost_zero", float("nan"))),
+        "cost_final": float(tilt_correction.get("cost_final", float("nan"))),
+        "circ_before": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("circ_before", [])
+        ],
+        "circ_after": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("circ_after", [])
+        ],
+        "radii_before": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("radii_before", [])
+        ],
+        "radii_after": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("radii_after", [])
+        ],
+        "radii_after_fit": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("radii_after_fit", [])
+        ],
+    }
+
+    if center is not None:
+        serialized["center"] = [float(center[0]), float(center[1])]
+
+    corrected_points = tilt_correction.get("corrected_points")
+    if corrected_points is not None:
+        serialized["corrected_points"] = [
+            np.asarray(pts, dtype=float).tolist() for pts in corrected_points
+        ]
+
+    return serialized
+
+
+def _circularize_fitted_ellipses(ellipses, center, tilt_x_deg, tilt_y_deg):
+    """Return circularized radii from the fitted ellipses using tilt correction."""
+
+    if not ellipses or center is None:
+        return None
+
+    xc, yc = center
+    theta = np.linspace(0.0, 2.0 * np.pi, 720)
+    radii = []
+
+    for e in ellipses:
+        x_curve = e["xc"] + e["a"] * np.cos(theta) * np.cos(e["theta"]) - e["b"] * np.sin(theta) * np.sin(e["theta"])
+        y_curve = e["yc"] + e["a"] * np.cos(theta) * np.sin(e["theta"]) + e["b"] * np.sin(theta) * np.cos(e["theta"])
+
+        pts = np.column_stack([x_curve, y_curve])
+        pts_corr = _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg)
+
+        dx = pts_corr[:, 0] - xc
+        dy = pts_corr[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+        radii.append(float(np.mean(r)))
+
+    return radii
 
 
 def _format_ellipse_lines(ellipses):
@@ -1001,6 +1414,105 @@ def plot_ellipses(img_bgsub, ellipses, save_path=None):
     plt.show()
 
 
+def plot_tilt_correction_overlay(
+    img_bgsub,
+    ellipses,
+    ell_points_ds,
+    corrected_points,
+    center,
+    radii_before,
+    radii_after,
+    tilt_x_deg,
+    tilt_y_deg,
+    distance_info=None,
+    save_path=None,
+):
+    xc, yc = center
+    theta = np.linspace(0.0, 2.0 * np.pi, 720)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    if img_bgsub is not None:
+        disp = make_display_image(img_bgsub)
+        ax.imshow(disp, cmap="gray", origin="upper")
+
+    all_pts = []
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2 and pts.size > 0:
+            all_pts.append(pts)
+    for pts in corrected_points:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2 and pts.size > 0:
+            all_pts.append(pts)
+
+    if all_pts:
+        all_xy = np.vstack(all_pts)
+        xmin, xmax = np.min(all_xy[:, 0]), np.max(all_xy[:, 0])
+        ymin, ymax = np.min(all_xy[:, 1]), np.max(all_xy[:, 1])
+    else:
+        xmin = xmax = ymin = ymax = 0.0
+
+    for e in ellipses:
+        x_curve, y_curve = ellipse_curve(e["xc"], e["yc"], e["a"], e["b"], e["theta"])
+        ax.plot(x_curve, y_curve, "r-", linewidth=1.0, label="_orig_fit")
+
+    for pts in ell_points_ds:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2:
+            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.35, label="_orig_pts")
+
+    for pts in corrected_points:
+        pts = np.asarray(pts, dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2:
+            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.7, label="_corr_pts")
+
+    for r in radii_before:
+        if not np.isfinite(r) or r <= 0:
+            continue
+        x_circ = xc + r * np.cos(theta)
+        y_circ = yc + r * np.sin(theta)
+        ax.plot(x_circ, y_circ, linestyle="--", linewidth=1, color="orange", label="_orig_circle")
+
+    for r in radii_after:
+        if not np.isfinite(r) or r <= 0:
+            continue
+        x_circ = xc + r * np.cos(theta)
+        y_circ = yc + r * np.sin(theta)
+        ax.plot(x_circ, y_circ, linewidth=1.2, color="cyan", label="_corr_circle")
+
+    ax.axhline(y=yc, linestyle="-.", linewidth=1.0, color="white", label="x tilt axis")
+    ax.axvline(x=xc, linestyle="-.", linewidth=1.0, color="white", label="y tilt axis")
+
+    ax.plot(xc, yc, "x", markersize=6, color="yellow", label="center")
+
+    ax.set_aspect("equal", adjustable="box")
+    ax.invert_yaxis()
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymax, ymin)
+
+    title = (
+        "Tilt-corrected rings on image\n"
+        f"tilt_x={tilt_x_deg:.2f} deg, tilt_y={tilt_y_deg:.2f} deg"
+    )
+    if distance_info:
+        mean_m = distance_info.get("mean_m")
+        basis = distance_info.get("basis")
+        if mean_m is not None:
+            basis_label = f" ({basis})" if basis else ""
+            title += f"\nshared distance L={mean_m:.4f} m{basis_label}"
+    ax.set_title(title)
+    ax.set_xlabel("x (pixels)")
+    ax.set_ylabel("y (pixels)")
+    ax.legend(loc="best")
+
+    fig.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=300)
+        print(f"Saved tilt-corrected overlay to:\n  {save_path}")
+    plt.show()
+
+
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
@@ -1051,7 +1563,11 @@ def run_hbn_fit(
     bundle_path=None,
     paths_file=None,
     prompt_save_bundle=False,
-):
+    load_clicks=None,
+    save_clicks=None,
+    clicks_only=False,
+    beam_center=None,
+    ):
     resolved = resolve_hbn_paths(
         osc_path=osc_path,
         dark_path=dark_path,
@@ -1066,6 +1582,8 @@ def run_hbn_fit(
 
     osc_path = resolved["osc"]
     dark_path = resolved["dark"]
+    if beam_center is None and resolved.get("beam_center") is not None:
+        beam_center = resolved["beam_center"]
     bundle_from_file = resolved["bundle"] if load_bundle_requested else None
     bundle_path_in = None
     if load_bundle_requested:
@@ -1081,18 +1599,24 @@ def run_hbn_fit(
     output_dir = _resolve_output_dir(output_dir, bundle_path_in)
     out_tiff_path = os.path.join(output_dir, "hbn_bgsub.tiff")
     out_overlay_path = os.path.join(output_dir, "hbn_bgsub_ellipses.png")
+    out_tilt_overlay_path = os.path.join(
+        output_dir, "hbn_bgsub_ellipses_tilt_corrected.png"
+    )
 
-    click_profile_path = resolved["click_profile"] or click_profile_path
-    if click_profile_path is None:
-        click_profile_path = os.path.join(output_dir, "hbn_ellipse_profile.json")
-    fit_profile_path = resolved["fit_profile"] or fit_profile_path
-    if fit_profile_path is None:
-        fit_profile_path = os.path.join(output_dir, "hbn_ellipse_fit_profile.json")
+    click_profile_in = load_clicks or resolved.get("click_profile")
+    click_profile_out = None
+    if save_clicks is not None or clicks_only:
+        click_profile_out = save_clicks
+        if click_profile_out in (None, ""):
+            click_profile_out = os.path.join(output_dir, "hbn_click_profile.json")
+
     bundle_path_save = resolved["bundle"] or bundle_path_in
     if bundle_path_save is None:
         bundle_path_save = os.path.join(output_dir, "hbn_ellipse_bundle.npz")
 
-    for p in [click_profile_path, fit_profile_path, bundle_path_save]:
+    for p in [bundle_path_save, click_profile_out]:
+        if not p:
+            continue
         parent = os.path.dirname(os.path.abspath(p))
         os.makedirs(parent, exist_ok=True)
 
@@ -1100,21 +1624,34 @@ def run_hbn_fit(
         "output_dir": output_dir,
         "background_subtracted": out_tiff_path,
         "overlay": out_overlay_path,
-        "click_profile": click_profile_path,
-        "fit_profile": fit_profile_path,
+        "tilt_overlay": out_tilt_overlay_path,
         "bundle": bundle_path_save,
-        "manual_bundle": None,
+        "click_profile": click_profile_out,
         "ellipses": [],
         "tilt_hint": None,
         "expected_peaks": None,
         "distance_estimate_m": None,
+        "tilt_correction": None,
         "aborted": False,
         "abort_reason": None,
     }
 
+    click_profile_saved = False
+
     bundle_loaded = None
+    center_from_bundle = None
+    center_common = None
     if bundle_path_in is not None:
         bundle_loaded = load_bundle_npz(bundle_path_in)
+        try:
+            center_from_bundle = bundle_loaded[8]
+        except Exception:
+            center_from_bundle = None
+        if center_common is None and center_from_bundle is not None:
+            center_common = center_from_bundle
+
+    if beam_center is not None and len(beam_center) == 2:
+        center_common = tuple(beam_center)
 
     # Shared output containers
     img_bgsub_out = None
@@ -1122,6 +1659,11 @@ def run_hbn_fit(
     ell_points_ds = None
     ellipses_out = None
     distance_info = None
+    tilt_correction = None
+    tilt_correction_serialized = None
+    radii_after_fit = None
+    tilt_hint = None
+    expected_peaks = None
 
     abort_reason = None
     completed = False
@@ -1134,7 +1676,15 @@ def run_hbn_fit(
                 ell_points_ds,
                 ellipses_b,
                 distance_info,
+                tilt_correction,
+                tilt_hint,
+                expected_peaks,
+                center_common,
             ) = bundle_loaded
+            tilt_correction_serialized = tilt_correction
+
+            if beam_center is not None and len(beam_center) == 2:
+                center_common = tuple(beam_center)
 
             if highres_refine:
                 if osc_path is None or dark_path is None:
@@ -1167,23 +1717,68 @@ def run_hbn_fit(
 
             img_bgsub_out = load_and_bgsub(osc_path, dark_path)
 
-            if reuse_profile and os.path.exists(click_profile_path):
-                print(f"Loading existing click profile from:\n  {click_profile_path}")
-                ell_points_ds = load_click_profile(click_profile_path)
-            else:
+            if reuse_profile and not click_profile_in:
+                print(
+                    "Reuse profile requested, but no click profile was provided; collecting new clicks."
+                )
+
+            if click_profile_in and not reclick:
+                if not os.path.exists(click_profile_in):
+                    print(
+                        "Click profile not found; collecting new clicks instead:\n  "
+                        f"{click_profile_in}"
+                    )
+                    click_profile_in = None
+                else:
+                    ell_points_ds = load_click_profile(click_profile_in)
+                    if outputs["click_profile"] is None:
+                        outputs["click_profile"] = click_profile_in
+
+            if ell_points_ds is None:
                 print(
                     f"Interactive picking: collect {POINTS_PER_ELLIPSE} points on each of "
                     f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
                 )
                 small = make_click_image(img_bgsub_out)
+                guide_center = center_common or center_from_bundle
+                if guide_center is not None:
+                    print(
+                        "Beam center guide enabled at "
+                        f"x={guide_center[0]:.2f}, y={guide_center[1]:.2f}; "
+                        f"drawing {N_ELLIPSES} radial guides."
+                    )
                 ell_points_ds = get_points_per_ellipse_with_zoom(
                     small,
                     n_ellipses=N_ELLIPSES,
                     pts_per_ellipse=POINTS_PER_ELLIPSE,
+                    beam_center=guide_center,
+                    n_slices=N_ELLIPSES,
                 )
+
+            if click_profile_out and ell_points_ds:
+                save_click_profile(click_profile_out, ell_points_ds, img_bgsub_out.shape)
+                outputs["click_profile"] = click_profile_out
+                click_profile_saved = True
 
             expected_points = N_ELLIPSES * POINTS_PER_ELLIPSE
             collected_points = 0 if ell_points_ds is None else sum(len(pts) for pts in ell_points_ds)
+
+            if clicks_only:
+                if collected_points < expected_points:
+                    abort_reason = (
+                        "Ellipse picking did not finish; collected "
+                        f"{collected_points}/{expected_points} points. Skipping save."
+                    )
+                else:
+                    print(
+                        "Click-only mode requested; returning after saving collected points."
+                    )
+                    outputs["clicks_only"] = True
+                    outputs["ellipses"] = []
+                    outputs["aborted"] = True
+                    outputs["abort_reason"] = "Click-only save requested; ellipse fitting skipped."
+                    return outputs
+
             if collected_points < expected_points:
                 abort_reason = (
                     "Ellipse picking did not finish; collected "
@@ -1200,21 +1795,91 @@ def run_hbn_fit(
 
             img_log_out = make_log_image(img_bgsub_out)
 
+        if click_profile_out and ell_points_ds and not clicks_only and not click_profile_saved:
+            save_click_profile(click_profile_out, ell_points_ds, img_bgsub_out.shape)
+            outputs["click_profile"] = click_profile_out
+            click_profile_saved = True
+
         if abort_reason:
             outputs["aborted"] = True
             outputs["abort_reason"] = abort_reason
             print(abort_reason)
             return outputs
 
-        expected_peaks = hbn_expected_peaks()
-        needs_distance_refresh = distance_info is None or reclick or highres_refine
-        if needs_distance_refresh:
-            distance_info = estimate_sample_detector_distance(ellipses_out, expected_peaks)
-        tilt_hint = estimate_detector_tilt(ellipses_out)
+        if ellipses_out and center_common is None:
+            center_common = compute_common_center(ellipses_out)
+        tilt_correction = (
+            _find_tilt_correction(ell_points_ds, center_common)
+            if center_common is not None
+            else None
+        )
+        tilt_correction_serialized = _serialize_tilt_correction(
+            tilt_correction, center_common
+        )
+        if expected_peaks is None:
+            expected_peaks = hbn_expected_peaks()
+        distance_basis = "ellipses"
+        ellipses_for_distance = ellipses_out
+
+        if tilt_correction:
+            print(
+                "Tilt circularization completed: "
+                f"tilt_x={tilt_correction['tilt_x_deg']:.4f} deg, "
+                f"tilt_y={tilt_correction['tilt_y_deg']:.4f} deg, "
+                f"cost={tilt_correction['cost_final']:.6e} (zero={tilt_correction['cost_zero']:.6e})"
+            )
+
+        if tilt_correction and center_common is not None:
+            corrected_radii_clicks = tilt_correction.get("radii_after", [])
+            radii_after_fit = _circularize_fitted_ellipses(
+                ellipses_out,
+                center_common,
+                tilt_correction.get("tilt_x_deg", 0.0),
+                tilt_correction.get("tilt_y_deg", 0.0),
+            )
+            if radii_after_fit is not None:
+                tilt_correction["radii_after_fit"] = radii_after_fit
+
+            radii_for_distance = (
+                radii_after_fit
+                if radii_after_fit is not None and any(np.isfinite(r) for r in radii_after_fit)
+                else corrected_radii_clicks
+            )
+
+            ellipses_for_distance = [
+                dict(xc=center_common[0], yc=center_common[1], a=r, b=r, theta=0.0)
+                for r in radii_for_distance
+                if np.isfinite(r) and r > 0
+            ]
+            distance_basis = "circles"
+
+        distance_info = estimate_sample_detector_distance(
+            ellipses_for_distance, expected_peaks, basis=distance_basis
+        )
+
+        if tilt_correction:
+            tilt_correction_serialized = _serialize_tilt_correction(
+                tilt_correction, center_common
+            )
+
+        tilt_hint_source = "ellipse fit"
+        if tilt_hint is None:
+            tilt_hint = estimate_detector_tilt(ellipses_out)
+        if tilt_correction:
+            tilt_hint_source = "circularization"
+            tilt_hint = dict(
+                rot1_rad=float(np.deg2rad(tilt_correction.get("tilt_x_deg", 0.0))),
+                rot2_rad=float(np.deg2rad(tilt_correction.get("tilt_y_deg", 0.0))),
+            )
+            tilt_hint["tilt_rad"] = float(
+                math.hypot(tilt_hint["rot1_rad"], tilt_hint["rot2_rad"])
+            )
+
         if tilt_hint:
             print(
                 "Estimated detector tilt from hBN fit (using largest ring): "
-                f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad"
+                f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad "
+                f"(source={tilt_hint_source})"
             )
         if expected_peaks:
             print("Expected hBN peaks for Cu Kα:")
@@ -1225,9 +1890,11 @@ def run_hbn_fit(
                     f"2θ={peak['two_theta_deg']:.2f}°"
                 )
         if distance_info:
+            basis_label = distance_info.get("basis", "ellipses")
             print(
                 "Estimated sample-detector distance (using matched rings): "
-                f"mean={distance_info['mean_m']:.4f} m"
+                f"mean={distance_info['mean_m']:.4f} m "
+                f"(basis={basis_label})"
             )
             for i, dist in enumerate(distance_info["per_ring_m"], 1):
                 print(f"  Ring {i}: {dist:.4f} m")
@@ -1244,15 +1911,6 @@ def run_hbn_fit(
 
     print(f"Saving background-subtracted image to:\n  {out_tiff_path}")
     cv2.imwrite(out_tiff_path, img_bgsub_out)
-    save_click_profile(click_profile_path, ell_points_ds, img_bgsub_out.shape)
-    save_fit_profile(
-        fit_profile_path,
-        ellipses_out,
-        img_bgsub_out.shape,
-        tilt_hint=tilt_hint,
-        expected_peaks=expected_peaks,
-        distance_info=distance_info,
-    )
     save_bundle(
         bundle_path_save,
         img_bgsub_out,
@@ -1260,23 +1918,36 @@ def run_hbn_fit(
         ell_points_ds,
         ellipses_out,
         distance_info=distance_info,
+        tilt_correction=tilt_correction_serialized,
+        tilt_hint=tilt_hint,
+        expected_peaks=expected_peaks,
+        center=center_common,
     )
 
     if prompt_save_bundle:
-        manual_bundle_path = _prompt_save_bundle_path(bundle_path_save)
-        if manual_bundle_path:
-            save_bundle(
-                manual_bundle_path,
-                img_bgsub_out,
-                img_log_out,
-                ell_points_ds,
-                ellipses_out,
-                distance_info=distance_info,
-            )
-            print(f"Saved hBN bundle via prompt to:\n  {manual_bundle_path}")
-            outputs["manual_bundle"] = manual_bundle_path
+        print("prompt_save_bundle is deprecated; only the primary bundle is written.")
 
     plot_ellipses(img_bgsub_out, ellipses_out, save_path=out_overlay_path)
+
+    if tilt_correction:
+        corrected_points = tilt_correction.get("corrected_points", [])
+        radii_before = tilt_correction.get("radii_before", [])
+        radii_after = tilt_correction.get("radii_after_fit") or tilt_correction.get(
+            "radii_after", []
+        )
+        plot_tilt_correction_overlay(
+            img_bgsub_out,
+            ellipses_out,
+            ell_points_ds,
+            corrected_points,
+            center_common,
+            radii_before,
+            radii_after,
+            tilt_correction.get("tilt_x_deg", 0.0),
+            tilt_correction.get("tilt_y_deg", 0.0),
+            distance_info=distance_info,
+            save_path=out_tilt_overlay_path,
+        )
 
     if ellipses_out:
         print("Fitted ellipse parameters:")
@@ -1286,6 +1957,7 @@ def run_hbn_fit(
     outputs["tilt_hint"] = tilt_hint
     outputs["expected_peaks"] = expected_peaks
     outputs["distance_estimate_m"] = distance_info
+    outputs["tilt_correction"] = tilt_correction_serialized
     return outputs
 
 
@@ -1303,6 +1975,12 @@ def main(argv=None):
         reuse_profile=args.reuse_profile,
         paths_file=args.paths_file,
         prompt_save_bundle=args.prompt_save_bundle,
+        load_clicks=args.load_clicks,
+        save_clicks=args.save_clicks,
+        clicks_only=args.clicks_only,
+        beam_center=(args.beam_center_x, args.beam_center_y)
+        if args.beam_center_x is not None and args.beam_center_y is not None
+        else None,
     )
 
     if results.get("aborted"):
@@ -1315,12 +1993,10 @@ def main(argv=None):
         "background_subtracted",
         "overlay",
         "click_profile",
-        "fit_profile",
         "bundle",
     ]:
-        print(f"  {key.replace('_', ' ').title()}: {results[key]}")
-    if results.get("manual_bundle"):
-        print(f"  Manual Bundle: {results['manual_bundle']}")
+        value = results.get(key, "n/a")
+        print(f"  {key.replace('_', ' ').title()}: {value}")
 
 
 if __name__ == "__main__":
