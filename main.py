@@ -2640,20 +2640,71 @@ def on_fit_geometry_click():
                 pixel_tol=float('inf'),
             )
 
+            rotated_height = current_background_image.shape[1]
+
+            def _to_display_frame(col: float, row: float) -> tuple[float, float]:
+                # Inverse transform of _unrotate_display_peaks():
+                #   x_display = orig_height - 1 - y_orig
+                #   y_display = x_orig
+                return (
+                    rotated_height - 1 - float(row),
+                    float(col),
+                )
+
+            pixel_offsets = []
+            for hkl, (s_xy, m_xy) in zip(sim_millers, zip(sim_coords, meas_coords)):
+                sx, sy = s_xy
+                mx, my = m_xy
+                dx = sx - mx
+                dy = sy - my
+                dist = math.hypot(dx, dy)
+                pixel_offsets.append((hkl, dx, dy, dist))
+
+                disp_sx, disp_sy = _to_display_frame(sx, sy)
+                disp_mx, disp_my = _to_display_frame(mx, my)
+
+                line, = ax.plot(
+                    [disp_sx, disp_mx],
+                    [disp_sy, disp_my],
+                    color='#0984e3',
+                    linestyle='--',
+                    linewidth=1.0,
+                    alpha=0.8,
+                    zorder=5,
+                )
+                mid_x = 0.5 * (disp_sx + disp_mx)
+                mid_y = 0.5 * (disp_sy + disp_my)
+                label = ax.text(
+                    mid_x,
+                    mid_y,
+                    f"|Δ|={dist:.1f}px",
+                    color='#2d3436',
+                    fontsize=8,
+                    ha='center',
+                    va='center',
+                    zorder=6,
+                    bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1.0),
+                )
+                geometry_pick_artists.extend([line, label])
+
+            canvas.draw_idle()
+
             export_recs = []
-            for hkl, (x, y) in zip(sim_millers, sim_coords):
+            for hkl, (x, y), (_, _, _, dist) in zip(sim_millers, sim_coords, pixel_offsets):
                 export_recs.append({
                     'source': 'sim',
                     'hkl': tuple(int(v) for v in hkl),
                     'x': int(x),
                     'y': int(y),
+                    'dist_px': float(dist),
                 })
-            for hkl, (x, y) in zip(meas_millers, meas_coords):
+            for hkl, (x, y), (_, _, _, dist) in zip(meas_millers, meas_coords, pixel_offsets):
                 export_recs.append({
                     'source': 'meas',
                     'hkl': tuple(int(v) for v in hkl),
                     'x': int(x),
                     'y': int(y),
+                    'dist_px': float(dist),
                 })
 
             download_dir = get_dir("downloads")
@@ -2661,9 +2712,21 @@ def on_fit_geometry_click():
             save_path = download_dir / f"matched_peaks_{stamp}.npy"
             np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
 
+            if pixel_offsets:
+                dist_lines = [
+                    f"HKL={hkl}: |Δ|={dist:.2f}px (dx={dx:.2f}, dy={dy:.2f})"
+                    for hkl, dx, dy, dist in pixel_offsets
+                ]
+                dist_report = "\n".join(dist_lines)
+            else:
+                dist_report = "No matched peaks to report distances."
+
             progress_label_geometry.config(
-                text=(progress_label_geometry.cget('text')
-                      + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}')
+                text=(
+                    progress_label_geometry.cget('text')
+                    + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}'
+                    + f"\n\nPixel offsets:\n{dist_report}"
+                )
             )
             return
 
