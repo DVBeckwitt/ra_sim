@@ -343,6 +343,7 @@ def resolve_hbn_paths(
         bundle=os.path.expanduser(bundle_path) if bundle_path else None,
         click_profile=os.path.expanduser(click_profile_path) if click_profile_path else None,
         fit_profile=os.path.expanduser(fit_profile_path) if fit_profile_path else None,
+        beam_center=None,
     )
 
     search_file = paths_file
@@ -364,6 +365,18 @@ def resolve_hbn_paths(
             resolved["click_profile"] = _pick(["click_profile", "profile", "click_profile_path"], file_data)
         if resolved["fit_profile"] is None:
             resolved["fit_profile"] = _pick(["fit_profile", "fit", "fit_profile_path"], file_data)
+        if resolved["beam_center"] is None:
+            beam_x = _pick(["beam_center_x", "beam_x", "center_x", "xc"], file_data)
+            beam_y = _pick(["beam_center_y", "beam_y", "center_y", "yc"], file_data)
+            beam_center_from_list = file_data.get("beam_center") if isinstance(file_data, dict) else None
+            if beam_center_from_list and isinstance(beam_center_from_list, (list, tuple)):
+                if len(beam_center_from_list) == 2:
+                    beam_x, beam_y = beam_center_from_list
+            if beam_x is not None and beam_y is not None:
+                try:
+                    resolved["beam_center"] = (float(beam_x), float(beam_y))
+                except (TypeError, ValueError):
+                    resolved["beam_center"] = None
     resolved["paths_file"] = search_file if search_file else None
     return resolved
 
@@ -1554,7 +1567,7 @@ def run_hbn_fit(
     save_clicks=None,
     clicks_only=False,
     beam_center=None,
-):
+    ):
     resolved = resolve_hbn_paths(
         osc_path=osc_path,
         dark_path=dark_path,
@@ -1569,6 +1582,8 @@ def run_hbn_fit(
 
     osc_path = resolved["osc"]
     dark_path = resolved["dark"]
+    if beam_center is None and resolved.get("beam_center") is not None:
+        beam_center = resolved["beam_center"]
     bundle_from_file = resolved["bundle"] if load_bundle_requested else None
     bundle_path_in = None
     if load_bundle_requested:
