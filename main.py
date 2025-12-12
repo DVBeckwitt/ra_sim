@@ -566,7 +566,8 @@ col_center = int(center_default[1])
 
 # Background images stay in their native orientation; only the simulation will
 # be rotated for display.  Negative ``k`` rotates clockwise, positive rotates
-# counter-clockwise.
+# counter-clockwise. The simulation rotation is mutable so the user can rotate
+# the overlay from the GUI.
 DISPLAY_ROTATE_K = 0
 SIM_DISPLAY_ROTATE_K = -1
 
@@ -817,6 +818,20 @@ selected_peak_marker.set_visible(False)
 # Geometry click markers (sim vs real)
 geometry_pick_artists = []
 
+
+def _clear_geometry_pick_artists():
+    """Remove any geometry fit markers from the plot and reset the cache."""
+
+    global geometry_pick_artists
+
+    for artist in geometry_pick_artists:
+        try:
+            artist.remove()
+        except ValueError:
+            pass
+    geometry_pick_artists.clear()
+    canvas.draw_idle()
+
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
@@ -941,6 +956,19 @@ def _apply_simulation_limits():
     apply_scale_factor_to_existing_results()
 
 
+def rotate_simulation_overlay():
+    """Rotate the simulated image 90° clockwise and clear fit overlays."""
+
+    global SIM_DISPLAY_ROTATE_K
+
+    SIM_DISPLAY_ROTATE_K -= 1
+    _clear_geometry_pick_artists()
+    progress_label_geometry.config(
+        text="Simulation rotated 90°; geometry picks reset."
+    )
+    schedule_update()
+
+
 background_controls = ttk.LabelFrame(display_controls_frame, text="Background Display")
 background_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
@@ -1033,6 +1061,14 @@ simulation_scale_factor_var, scale_factor_slider = create_slider(
     scale_factor_step,
     parent=simulation_controls,
 )
+
+
+rotate_sim_button = ttk.Button(
+    simulation_controls,
+    text="Rotate Sim 90°",
+    command=rotate_simulation_overlay,
+)
+rotate_sim_button.pack(side=tk.TOP, padx=5, pady=4)
 
 
 def _on_scale_factor_change(*args):
@@ -2451,16 +2487,7 @@ ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT
 ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
 
 def on_fit_geometry_click():
-    global geometry_pick_artists
-
-    # Clear any previous geometry pick markers when starting a new run
-    for artist in geometry_pick_artists:
-        try:
-            artist.remove()
-        except ValueError:
-            pass
-    geometry_pick_artists.clear()
-    canvas.draw_idle()
+    _clear_geometry_pick_artists()
 
     # first, reconstruct the same mosaic_params dict you use in do_update()
     mosaic_params = build_mosaic_params()
