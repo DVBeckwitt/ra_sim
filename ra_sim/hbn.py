@@ -1351,6 +1351,7 @@ def plot_tilt_correction_overlay(
     radii_after,
     tilt_x_deg,
     tilt_y_deg,
+    distance_info=None,
     save_path=None,
 ):
     xc, yc = center
@@ -1417,10 +1418,17 @@ def plot_tilt_correction_overlay(
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymax, ymin)
 
-    ax.set_title(
+    title = (
         "Tilt-corrected rings on image\n"
         f"tilt_x={tilt_x_deg:.2f} deg, tilt_y={tilt_y_deg:.2f} deg"
     )
+    if distance_info:
+        mean_m = distance_info.get("mean_m")
+        basis = distance_info.get("basis")
+        if mean_m is not None:
+            basis_label = f" ({basis})" if basis else ""
+            title += f"\nshared distance L={mean_m:.4f} m{basis_label}"
+    ax.set_title(title)
     ax.set_xlabel("x (pixels)")
     ax.set_ylabel("y (pixels)")
     ax.legend(loc="best")
@@ -1839,6 +1847,7 @@ def run_hbn_fit(
             radii_after,
             tilt_correction.get("tilt_x_deg", 0.0),
             tilt_correction.get("tilt_y_deg", 0.0),
+            distance_info=distance_info,
             save_path=out_tilt_overlay_path,
         )
 
