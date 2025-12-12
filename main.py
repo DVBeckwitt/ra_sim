@@ -632,7 +632,7 @@ def _rotate_measured_peaks_for_display(measured, rotated_shape):
 
 
 def _unrotate_display_peaks(measured, rotated_shape):
-    """Undo the GUI's display rotation so coordinates return to native space."""
+    """Map displayed peak coordinates into the simulation's native orientation."""
 
     if measured is None:
         return []
@@ -643,11 +643,11 @@ def _unrotate_display_peaks(measured, rotated_shape):
             updated = dict(entry)
             if "x" in updated and "y" in updated:
                 updated["x"], updated["y"] = _rotate_point_for_display(
-                    updated["x"], updated["y"], rotated_shape, -DISPLAY_ROTATE_K
+                    updated["x"], updated["y"], rotated_shape, -SIM_DISPLAY_ROTATE_K
                 )
             if "x_pix" in updated and "y_pix" in updated:
                 updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
-                    updated["x_pix"], updated["y_pix"], rotated_shape, -DISPLAY_ROTATE_K
+                    updated["x_pix"], updated["y_pix"], rotated_shape, -SIM_DISPLAY_ROTATE_K
                 )
             unrotated.append(updated)
             continue
@@ -655,7 +655,7 @@ def _unrotate_display_peaks(measured, rotated_shape):
         if isinstance(entry, (list, tuple)) and len(entry) >= 5:
             seq = list(entry)
             seq[3], seq[4] = _rotate_point_for_display(
-                seq[3], seq[4], rotated_shape, -DISPLAY_ROTATE_K
+                seq[3], seq[4], rotated_shape, -SIM_DISPLAY_ROTATE_K
             )
             unrotated.append(type(entry)(seq))
         else:
