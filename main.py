@@ -564,8 +564,10 @@ def export_initial_excel():
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 
+DISPLAY_ROTATE_K = -1  # 90° clockwise rotation applied to everything we show
+
 # Rotate background images 90 degrees clockwise so orientation matches simulation
-background_images = [np.rot90(bg, -1) for bg in background_images]
+background_images = [np.rot90(bg, DISPLAY_ROTATE_K) for bg in background_images]
 
 current_background_image = background_images[0]
 current_background_index = 0
@@ -586,7 +588,7 @@ def _rotate_measured_peaks_clockwise(measured, rotated_shape):
     if measured is None:
         return []
 
-    # ``np.rot90(image, -1)`` swaps the detector axes: the rotated image has
+    # ``np.rot90(image, DISPLAY_ROTATE_K)`` swaps the detector axes: the rotated image has
     # ``rotated_shape == (orig_width, orig_height)``.  The clockwise rotation
     # maps (x, y) → (x_new, y_new) with::
     #
@@ -638,7 +640,7 @@ def _unrotate_display_peaks(measured, rotated_shape):
     if measured is None:
         return []
 
-    # Inverse of ``np.rot90(image, -1)``:
+    # Inverse of ``np.rot90(image, DISPLAY_ROTATE_K)``:
     #     x_rot = orig_h - 1 - y_orig
     #     y_rot = x_orig
     # therefore
@@ -673,6 +675,18 @@ def _unrotate_display_peaks(measured, rotated_shape):
             unrotated.append(entry)
 
     return unrotated
+
+
+def _native_to_display_coords(col: float, row: float, image_shape: tuple[int, ...]):
+    """Rotate native detector coordinates into the displayed frame.
+
+    The GUI shows images that have been rotated 90° clockwise (``DISPLAY_ROTATE_K``),
+    so we mirror that same transform for simulated peak coordinates before drawing
+    them on the canvas.
+    """
+
+    original_height = image_shape[0]
+    return original_height - 1 - float(row), float(col)
 
 
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
@@ -1851,6 +1865,8 @@ def do_update():
             return do_update()          # re-enter with computation path
         max_positions_local = stored_max_positions_local
         updated_image       = stored_sim_image
+
+    display_image = np.rot90(updated_image, DISPLAY_ROTATE_K)
     
     # ───── NEW: build peak lists from hit_tables ───────────────────────────
     peak_positions.clear()
@@ -1868,22 +1884,23 @@ def do_update():
                 continue
             cx = int(round(xpix))
             cy = int(round(ypix))
-            peak_positions.append((cx, cy))      # (column,x) == (MPL x)
+            disp_cx, disp_cy = _native_to_display_coords(cx, cy, updated_image.shape)
+            peak_positions.append((disp_cx, disp_cy))      # display coords
             peak_intensities.append(I)
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
             peak_millers.append(hkl)
 
     normalization_scale = 1.0
-    if current_background_image is not None and updated_image is not None:
+    if current_background_image is not None and display_image is not None:
         normalization_scale = _suggest_scale_factor(
-            updated_image, current_background_image
+            display_image, current_background_image
         )
         if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
             normalization_scale = 1.0
 
     unscaled_image_global = None
-    if updated_image is not None:
-        unscaled_image_global = updated_image * normalization_scale
+    if display_image is not None:
+        unscaled_image_global = display_image * normalization_scale
         if peak_intensities and normalization_scale != 1.0:
             peak_intensities[:] = [
                 intensity * normalization_scale for intensity in peak_intensities
