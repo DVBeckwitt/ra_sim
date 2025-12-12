@@ -1167,6 +1167,10 @@ def _serialize_tilt_correction(tilt_correction, center=None):
             float(x) if np.isfinite(x) else float("nan")
             for x in tilt_correction.get("radii_after", [])
         ],
+        "radii_after_fit": [
+            float(x) if np.isfinite(x) else float("nan")
+            for x in tilt_correction.get("radii_after_fit", [])
+        ],
     }
 
     if center is not None:
@@ -1179,6 +1183,31 @@ def _serialize_tilt_correction(tilt_correction, center=None):
         ]
 
     return serialized
+
+
+def _circularize_fitted_ellipses(ellipses, center, tilt_x_deg, tilt_y_deg):
+    """Return circularized radii from the fitted ellipses using tilt correction."""
+
+    if not ellipses or center is None:
+        return None
+
+    xc, yc = center
+    theta = np.linspace(0.0, 2.0 * np.pi, 720)
+    radii = []
+
+    for e in ellipses:
+        x_curve = e["xc"] + e["a"] * np.cos(theta) * np.cos(e["theta"]) - e["b"] * np.sin(theta) * np.sin(e["theta"])
+        y_curve = e["yc"] + e["a"] * np.cos(theta) * np.sin(e["theta"]) + e["b"] * np.sin(theta) * np.cos(e["theta"])
+
+        pts = np.column_stack([x_curve, y_curve])
+        pts_corr = _apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg)
+
+        dx = pts_corr[:, 0] - xc
+        dy = pts_corr[:, 1] - yc
+        r = np.sqrt(dx * dx + dy * dy)
+        radii.append(float(np.mean(r)))
+
+    return radii
 
 
 def _format_ellipse_lines(ellipses):
@@ -1457,6 +1486,7 @@ def run_hbn_fit(
     distance_info = None
     tilt_correction = None
     tilt_correction_serialized = None
+    radii_after_fit = None
 
     abort_reason = None
     completed = False
@@ -1565,16 +1595,37 @@ def run_hbn_fit(
         ellipses_for_distance = ellipses_out
 
         if tilt_correction and center_common is not None:
-            corrected_radii = tilt_correction.get("radii_after", [])
+            corrected_radii_clicks = tilt_correction.get("radii_after", [])
+            radii_after_fit = _circularize_fitted_ellipses(
+                ellipses_out,
+                center_common,
+                tilt_correction.get("tilt_x_deg", 0.0),
+                tilt_correction.get("tilt_y_deg", 0.0),
+            )
+            if radii_after_fit is not None:
+                tilt_correction["radii_after_fit"] = radii_after_fit
+
+            radii_for_distance = (
+                radii_after_fit
+                if radii_after_fit is not None and any(np.isfinite(r) for r in radii_after_fit)
+                else corrected_radii_clicks
+            )
+
             ellipses_for_distance = [
                 dict(xc=center_common[0], yc=center_common[1], a=r, b=r, theta=0.0)
-                for r in corrected_radii
+                for r in radii_for_distance
+                if np.isfinite(r) and r > 0
             ]
             distance_basis = "circles"
 
         distance_info = estimate_sample_detector_distance(
             ellipses_for_distance, expected_peaks, basis=distance_basis
         )
+
+        if tilt_correction:
+            tilt_correction_serialized = _serialize_tilt_correction(
+                tilt_correction, center_common
+            )
 
         tilt_hint_source = "ellipse fit"
         tilt_hint = estimate_detector_tilt(ellipses_out)
@@ -1664,7 +1715,9 @@ def run_hbn_fit(
     if tilt_correction:
         corrected_points = tilt_correction.get("corrected_points", [])
         radii_before = tilt_correction.get("radii_before", [])
-        radii_after = tilt_correction.get("radii_after", [])
+        radii_after = tilt_correction.get("radii_after_fit") or tilt_correction.get(
+            "radii_after", []
+        )
         plot_tilt_correction_overlay(
             img_bgsub_out,
             ellipses_out,
