@@ -63,6 +63,9 @@ from ra_sim.utils import calculations
 N_ELLIPSES = 5
 
 # Points clicked per ellipse (>=5 recommended)
+# An unconstrained ellipse has five free parameters (xc, yc, a, b, theta), so
+# five non-collinear points are the minimum needed to uniquely determine it
+# without imposing extra assumptions.
 POINTS_PER_ELLIPSE = 5
 
 # Log intensity for display and fitting

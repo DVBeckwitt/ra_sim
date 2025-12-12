@@ -59,6 +59,8 @@ python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml
 
 When a bundle NPZ is provided in the paths file (or via `--load-bundle`), `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses at full resolution.
 
+**Why five clicks per ring?** An unconstrained ellipse has five free parameters (center `xc, yc`, semi-axes `a, b`, and rotation `θ`), so you need at least five non-collinear points to uniquely define it. If you click fewer than five points the fit becomes underdetermined; the workflow therefore requires five points unless you are reusing a saved click profile or bundle that already contains the necessary geometry.
+
 After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ). The saved fit profile also records an estimated detector tilt; the GUI and the `simulate` CLI subcommand will use this tilt as their starting Rot1/Rot2 defaults the next time you launch a simulation.
 
 ## Troubleshooting
