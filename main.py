@@ -625,6 +625,56 @@ def _rotate_measured_peaks_clockwise(measured, rotated_shape):
     return rotated_entries
 
 
+def _unrotate_display_peaks(measured, rotated_shape):
+    """Undo the GUI's 90° clockwise image rotation for peak coordinates.
+
+    Measured peaks selected on the GUI use the rotated orientation (clockwise
+    by 90°) of the detector image.  Geometry fitting routines, however, expect
+    coordinates in the simulator's native frame.  This helper maps the clicked
+    positions back to the original detector orientation so both measured and
+    simulated peaks are compared consistently.
+    """
+
+    if measured is None:
+        return []
+
+    # Inverse of ``np.rot90(image, -1)``:
+    #     x_rot = orig_h - 1 - y_orig
+    #     y_rot = x_orig
+    # therefore
+    #     x_orig = y_rot
+    #     y_orig = orig_h - 1 - x_rot
+    _, rotated_width = rotated_shape[:2]
+    original_height = rotated_width
+
+    def inv_transform(x_val, y_val):
+        x_orig = float(y_val)
+        y_orig = original_height - 1 - float(x_val)
+        return x_orig, y_orig
+
+    unrotated = []
+    for entry in measured:
+        if isinstance(entry, dict):
+            updated = dict(entry)
+            if "x" in updated and "y" in updated:
+                updated["x"], updated["y"] = inv_transform(updated["x"], updated["y"])
+            if "x_pix" in updated and "y_pix" in updated:
+                updated["x_pix"], updated["y_pix"] = inv_transform(
+                    updated["x_pix"], updated["y_pix"]
+                )
+            unrotated.append(updated)
+            continue
+
+        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            seq = list(entry)
+            seq[3], seq[4] = inv_transform(seq[3], seq[4])
+            unrotated.append(type(entry)(seq))
+        else:
+            unrotated.append(entry)
+
+    return unrotated
+
+
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
 measured_peaks = _rotate_measured_peaks_clockwise(
     measured_peaks_raw,
@@ -2536,12 +2586,16 @@ def on_fit_geometry_click():
                 {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
                 for (h, k, l), (x, y) in picked_pairs
             ]
+            measured_for_fit = _unrotate_display_peaks(
+                measured_from_clicks, current_background_image.shape
+            )
+
             result = fit_geometry_parameters(
                 miller,
                 intensities,
                 image_size,
                 params,
-                measured_from_clicks,
+                measured_for_fit,
                 var_names,
                 pixel_tol=float('inf'),
                 experimental_image=current_background_image,
@@ -2582,7 +2636,7 @@ def on_fit_geometry_click():
                 intensities,
                 image_size,
                 fitted_params,
-                measured_from_clicks,
+                measured_for_fit,
                 pixel_tol=float('inf'),
             )
 
