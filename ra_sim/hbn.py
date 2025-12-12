@@ -1625,6 +1625,7 @@ def run_hbn_fit(
 
     bundle_loaded = None
     center_from_bundle = None
+    center_common = None
     if bundle_path_in is not None:
         bundle_loaded = load_bundle_npz(bundle_path_in)
         try:
