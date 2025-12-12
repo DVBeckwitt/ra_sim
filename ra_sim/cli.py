@@ -324,6 +324,9 @@ def _cmd_hbn_fit(args: argparse.Namespace) -> None:
         load_clicks=args.load_clicks,
         save_clicks=args.save_clicks,
         clicks_only=args.clicks_only,
+        beam_center=(args.beam_center_x, args.beam_center_y)
+        if args.beam_center_x is not None and args.beam_center_y is not None
+        else None,
     )
 
     if results.get("aborted"):
@@ -424,6 +427,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "(keys: calibrant/osc, dark/dark_file, bundle/npz, click_profile/profile, "
             "fit_profile/fit). If omitted, the CLI falls back to "
             "config/hbn_paths.yaml when available."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--beam-center-x",
+        type=float,
+        default=None,
+        help=(
+            "Beam center x-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-y, guides will radiate from this point during clicking."
+        ),
+    )
+    hbn_parser.add_argument(
+        "--beam-center-y",
+        type=float,
+        default=None,
+        help=(
+            "Beam center y-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-x, guides will radiate from this point during clicking."
         ),
     )
     hbn_parser.add_argument(

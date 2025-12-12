@@ -207,6 +207,24 @@ def parse_args(argv=None):
             "writing the full bundle."
         ),
     )
+    parser.add_argument(
+        "--beam-center-x",
+        type=float,
+        default=None,
+        help=(
+            "Beam center x-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-y, guides will radiate from this point during clicking."
+        ),
+    )
+    parser.add_argument(
+        "--beam-center-y",
+        type=float,
+        default=None,
+        help=(
+            "Beam center y-position in pixels (origin at image top-left). When provided "
+            "with --beam-center-x, guides will radiate from this point during clicking."
+        ),
+    )
     return parser.parse_args(argv)
 
 # ------------------------------------------------------------
@@ -578,7 +596,9 @@ def load_tilt_hint(paths_file=None):
 # ------------------------------------------------------------
 # Interactive clicking with zoom
 # ------------------------------------------------------------
-def get_points_per_ellipse_with_zoom(small, n_ellipses, pts_per_ellipse):
+def get_points_per_ellipse_with_zoom(
+    small, n_ellipses, pts_per_ellipse, beam_center=None, n_slices=5
+):
     if pts_per_ellipse < 5:
         raise ValueError("Need at least 5 points per ellipse for a stable fit.")
 
@@ -613,6 +633,46 @@ def get_points_per_ellipse_with_zoom(small, n_ellipses, pts_per_ellipse):
     zooming = {"active": False, "x0": None, "y0": None}
 
     seed_scatter = ax.scatter([], [], s=20, c="red", marker="x")
+
+    center_marker = None
+    guide_lines = []
+    beam_center = (
+        tuple(beam_center)
+        if beam_center is not None and len(beam_center) == 2
+        else (w / 2.0, h / 2.0)
+    )
+
+    def draw_guides():
+        nonlocal center_marker, guide_lines
+
+        for ln in guide_lines:
+            ln.remove()
+        guide_lines = []
+
+        if center_marker is not None:
+            center_marker.remove()
+            center_marker = None
+
+        if beam_center is None or n_slices <= 0:
+            return
+
+        xc, yc = beam_center
+        radius = math.hypot(w, h)
+        angles = np.linspace(0.0, 2.0 * np.pi, n_slices, endpoint=False)
+
+        for ang in angles:
+            x1 = xc + radius * math.cos(ang)
+            y1 = yc + radius * math.sin(ang)
+            ln = ax.plot([xc, x1], [yc, y1], linestyle=":", color="cyan", alpha=0.6)[
+                0
+            ]
+            guide_lines.append(ln)
+
+        center_marker = ax.plot(
+            xc, yc, marker="+", markersize=6, markeredgewidth=1.4, color="cyan"
+        )[0]
+
+    draw_guides()
 
     def update_title():
         title_text.set_text(
@@ -1493,6 +1553,7 @@ def run_hbn_fit(
     load_clicks=None,
     save_clicks=None,
     clicks_only=False,
+    beam_center=None,
 ):
     resolved = resolve_hbn_paths(
         osc_path=osc_path,
@@ -1563,8 +1624,18 @@ def run_hbn_fit(
     click_profile_saved = False
 
     bundle_loaded = None
+    center_from_bundle = None
     if bundle_path_in is not None:
         bundle_loaded = load_bundle_npz(bundle_path_in)
+        try:
+            center_from_bundle = bundle_loaded[8]
+        except Exception:
+            center_from_bundle = None
+        if center_common is None and center_from_bundle is not None:
+            center_common = center_from_bundle
+
+    if beam_center is not None and len(beam_center) == 2:
+        center_common = tuple(beam_center)
 
     # Shared output containers
     img_bgsub_out = None
@@ -1575,7 +1646,6 @@ def run_hbn_fit(
     tilt_correction = None
     tilt_correction_serialized = None
     radii_after_fit = None
-    center_common = None
     tilt_hint = None
     expected_peaks = None
 
@@ -1596,6 +1666,9 @@ def run_hbn_fit(
                 center_common,
             ) = bundle_loaded
             tilt_correction_serialized = tilt_correction
+
+            if beam_center is not None and len(beam_center) == 2:
+                center_common = tuple(beam_center)
 
             if highres_refine:
                 if osc_path is None or dark_path is None:
@@ -1651,10 +1724,19 @@ def run_hbn_fit(
                     f"{N_ELLIPSES} rings (left click = point, right drag = zoom, 'r' = reset)."
                 )
                 small = make_click_image(img_bgsub_out)
+                guide_center = center_common or center_from_bundle
+                if guide_center is not None:
+                    print(
+                        "Beam center guide enabled at "
+                        f"x={guide_center[0]:.2f}, y={guide_center[1]:.2f}; "
+                        f"drawing {N_ELLIPSES} radial guides."
+                    )
                 ell_points_ds = get_points_per_ellipse_with_zoom(
                     small,
                     n_ellipses=N_ELLIPSES,
                     pts_per_ellipse=POINTS_PER_ELLIPSE,
+                    beam_center=guide_center,
+                    n_slices=N_ELLIPSES,
                 )
 
             if click_profile_out and ell_points_ds:
@@ -1880,6 +1962,9 @@ def main(argv=None):
         load_clicks=args.load_clicks,
         save_clicks=args.save_clicks,
         clicks_only=args.clicks_only,
+        beam_center=(args.beam_center_x, args.beam_center_y)
+        if args.beam_center_x is not None and args.beam_center_y is not None
+        else None,
     )
 
     if results.get("aborted"):
