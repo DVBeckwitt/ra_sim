@@ -3040,16 +3040,16 @@ lattice_frame.pack(fill=tk.X, padx=5, pady=5)
 mosaic_frame = CollapsibleFrame(right_col, text='Mosaic Broadening')
 mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
 
-initial_resolution = defaults.get('sampling_resolution', 'High')
+initial_resolution = defaults.get('sampling_resolution', 'Low')
 if initial_resolution not in resolution_sample_counts:
-    initial_resolution = 'High'
+    initial_resolution = 'Low'
 
 resolution_var = tk.StringVar(value=initial_resolution)
 resolution_count_var = tk.StringVar()
 
 def _refresh_resolution_display():
     count = resolution_sample_counts.get(
-        resolution_var.get(), resolution_sample_counts['High']
+        resolution_var.get(), resolution_sample_counts['Low']
     )
     resolution_count_var.set(f"{count:,} samples" if count >= 1000 else f"{count} samples")
 
@@ -3078,7 +3078,7 @@ ttk.Label(
 def on_resolution_option_change(*_):
     global num_samples
     num_samples = resolution_sample_counts.get(
-        resolution_var.get(), resolution_sample_counts['High']
+        resolution_var.get(), resolution_sample_counts['Low']
     )
     _refresh_resolution_display()
     update_mosaic_cache()
@@ -3105,7 +3105,7 @@ theta_initial_var, theta_initial_scale = make_slider(
     'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
 )
 cor_angle_var, cor_angle_scale = make_slider(
-    'CoR Axis Angle', -90.0, 90.0, defaults['cor_angle'], 0.01, geo_frame.frame
+    'CoR Axis Angle', -5.0, 5.0, defaults['cor_angle'], 0.01, geo_frame.frame
 )
 gamma_var, gamma_scale = make_slider(
     'Gamma', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
