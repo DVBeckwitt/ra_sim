@@ -935,8 +935,24 @@ def estimate_detector_tilt(ellipses):
     return _estimate_tilt_components(target["a"], target["b"], target["theta"])
 
 
-def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
-    """Estimate the sample–detector distance using fitted rings and hBN peaks."""
+def estimate_sample_detector_distance(
+    ellipses, peaks, pixel_size_m=None, basis="ellipses"
+):
+    """Estimate the sample–detector distance using fitted rings and hBN peaks.
+
+    Parameters
+    ----------
+    ellipses : list of dict
+        Ellipse parameters (xc, yc, a, b, theta). When *basis* is "circles",
+        the entries should already represent circularized radii (a == b).
+    peaks : list of dict
+        Expected hBN peak metadata (from :func:`hbn_expected_peaks`).
+    pixel_size_m : float, optional
+        Detector pixel size in meters. If omitted, defaults to the instrument
+        configuration.
+    basis : {"ellipses", "circles"}
+        Records how the radii were produced (raw ellipse fits vs. circularized).
+    """
 
     if not ellipses or not peaks:
         return None
@@ -958,6 +974,7 @@ def estimate_sample_detector_distance(ellipses, peaks, pixel_size_m=None):
         "per_ring_m": [float(d) for d in distances],
         "mean_m": float(np.mean(distances)),
         "pixel_size_m": float(pixel_size_m),
+        "basis": str(basis),
     }
 
 
@@ -1222,6 +1239,8 @@ def plot_ellipses(img_bgsub, ellipses, save_path=None):
 
 
 def plot_tilt_correction_overlay(
+    img_bgsub,
+    ellipses,
     ell_points_ds,
     corrected_points,
     center,
@@ -1235,6 +1254,10 @@ def plot_tilt_correction_overlay(
     theta = np.linspace(0.0, 2.0 * np.pi, 720)
 
     fig, ax = plt.subplots(figsize=(6, 6))
+
+    if img_bgsub is not None:
+        disp = make_display_image(img_bgsub)
+        ax.imshow(disp, cmap="gray", origin="upper")
 
     all_pts = []
     for pts in ell_points_ds:
@@ -1253,34 +1276,38 @@ def plot_tilt_correction_overlay(
     else:
         xmin = xmax = ymin = ymax = 0.0
 
+    for e in ellipses:
+        x_curve, y_curve = ellipse_curve(e["xc"], e["yc"], e["a"], e["b"], e["theta"])
+        ax.plot(x_curve, y_curve, "r-", linewidth=1.0, label="_orig_fit")
+
     for pts in ell_points_ds:
         pts = np.asarray(pts, dtype=float)
         if pts.ndim == 2 and pts.shape[1] == 2:
-            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.3, label="_orig_pts")
+            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.35, label="_orig_pts")
 
     for pts in corrected_points:
         pts = np.asarray(pts, dtype=float)
         if pts.ndim == 2 and pts.shape[1] == 2:
-            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.6, label="_corr_pts")
+            ax.plot(pts[:, 0], pts[:, 1], ".", markersize=1, alpha=0.7, label="_corr_pts")
 
     for r in radii_before:
         if not np.isfinite(r) or r <= 0:
             continue
         x_circ = xc + r * np.cos(theta)
         y_circ = yc + r * np.sin(theta)
-        ax.plot(x_circ, y_circ, linestyle="--", linewidth=1, label="_orig_circle")
+        ax.plot(x_circ, y_circ, linestyle="--", linewidth=1, color="orange", label="_orig_circle")
 
     for r in radii_after:
         if not np.isfinite(r) or r <= 0:
             continue
         x_circ = xc + r * np.cos(theta)
         y_circ = yc + r * np.sin(theta)
-        ax.plot(x_circ, y_circ, linewidth=1, label="_corr_circle")
+        ax.plot(x_circ, y_circ, linewidth=1.2, color="cyan", label="_corr_circle")
 
-    ax.axhline(y=yc, linestyle="-.", linewidth=1.0, label="x tilt axis")
-    ax.axvline(x=xc, linestyle="-.", linewidth=1.0, label="y tilt axis")
+    ax.axhline(y=yc, linestyle="-.", linewidth=1.0, color="white", label="x tilt axis")
+    ax.axvline(x=xc, linestyle="-.", linewidth=1.0, color="white", label="y tilt axis")
 
-    ax.plot(xc, yc, "x", markersize=6, label="center")
+    ax.plot(xc, yc, "x", markersize=6, color="yellow", label="center")
 
     ax.set_aspect("equal", adjustable="box")
     ax.invert_yaxis()
@@ -1288,7 +1315,7 @@ def plot_tilt_correction_overlay(
     ax.set_ylim(ymax, ymin)
 
     ax.set_title(
-        "Tilt correction overlay\n"
+        "Tilt-corrected rings on image\n"
         f"tilt_x={tilt_x_deg:.2f} deg, tilt_y={tilt_y_deg:.2f} deg"
     )
     ax.set_xlabel("x (pixels)")
@@ -1534,7 +1561,7 @@ def run_hbn_fit(
             )
 
         expected_peaks = hbn_expected_peaks()
-        needs_distance_refresh = True
+        distance_basis = "ellipses"
         ellipses_for_distance = ellipses_out
 
         if tilt_correction and center_common is not None:
@@ -1543,16 +1570,29 @@ def run_hbn_fit(
                 dict(xc=center_common[0], yc=center_common[1], a=r, b=r, theta=0.0)
                 for r in corrected_radii
             ]
+            distance_basis = "circles"
 
         distance_info = estimate_sample_detector_distance(
-            ellipses_for_distance, expected_peaks
+            ellipses_for_distance, expected_peaks, basis=distance_basis
         )
 
+        tilt_hint_source = "ellipse fit"
         tilt_hint = estimate_detector_tilt(ellipses_out)
+        if tilt_correction:
+            tilt_hint_source = "circularization"
+            tilt_hint = dict(
+                rot1_rad=float(np.deg2rad(tilt_correction.get("tilt_x_deg", 0.0))),
+                rot2_rad=float(np.deg2rad(tilt_correction.get("tilt_y_deg", 0.0))),
+            )
+            tilt_hint["tilt_rad"] = float(
+                math.hypot(tilt_hint["rot1_rad"], tilt_hint["rot2_rad"])
+            )
+
         if tilt_hint:
             print(
                 "Estimated detector tilt from hBN fit (using largest ring): "
-                f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad"
+                f"Rot1={tilt_hint['rot1_rad']:.4f} rad, Rot2={tilt_hint['rot2_rad']:.4f} rad "
+                f"(source={tilt_hint_source})"
             )
         if expected_peaks:
             print("Expected hBN peaks for Cu Kα:")
@@ -1563,9 +1603,11 @@ def run_hbn_fit(
                     f"2θ={peak['two_theta_deg']:.2f}°"
                 )
         if distance_info:
+            basis_label = distance_info.get("basis", "ellipses")
             print(
                 "Estimated sample-detector distance (using matched rings): "
-                f"mean={distance_info['mean_m']:.4f} m"
+                f"mean={distance_info['mean_m']:.4f} m "
+                f"(basis={basis_label})"
             )
             for i, dist in enumerate(distance_info["per_ring_m"], 1):
                 print(f"  Ring {i}: {dist:.4f} m")
@@ -1624,6 +1666,8 @@ def run_hbn_fit(
         radii_before = tilt_correction.get("radii_before", [])
         radii_after = tilt_correction.get("radii_after", [])
         plot_tilt_correction_overlay(
+            img_bgsub_out,
+            ellipses_out,
             ell_points_ds,
             corrected_points,
             center_common,
