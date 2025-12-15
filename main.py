@@ -2955,7 +2955,7 @@ def on_fit_geometry_click():
             ]
             native_background = _get_current_background_native()
             measured_native = _unrotate_display_peaks(
-                measured_from_clicks, native_background.shape
+                measured_from_clicks, current_background_image.shape
             )
 
             orientation_choice = {
