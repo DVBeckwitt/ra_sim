@@ -2938,11 +2938,15 @@ def on_fit_geometry_click():
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
 
-        if event.button == 3:
+        if event.button == 3 or getattr(event, "dblclick", False):
             _finish_pair_collection()
             if not picked_pairs:
                 progress_label_geometry.config(text="No peak pairs selected; fit cancelled.")
                 return
+
+            progress_label_geometry.config(text="Running geometry fit…")
+            root.update_idletasks()
+
             measured_from_clicks = [
                 {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
                 for (h, k, l), (x, y) in picked_pairs
@@ -2961,10 +2965,10 @@ def on_fit_geometry_click():
                 "label": "identity",
             }
 
-            # Always pick the best backend orientation for fitting so measured
-            # coordinates start aligned with the simulated grid. This search is
-            # backend-only and leaves the on-screen visuals untouched.
             try:
+                # Always pick the best backend orientation for fitting so measured
+                # coordinates start aligned with the simulated grid. This search is
+                # backend-only and leaves the on-screen visuals untouched.
                 (
                     _,
                     preview_sim_coords,
@@ -3000,104 +3004,110 @@ def on_fit_geometry_click():
                 # fall back to identity if diagnostics fail
                 pass
 
-            measured_for_fit = _apply_orientation_to_entries(
-                measured_native,
-                native_background.shape,
-                indexing_mode=orientation_choice["indexing_mode"],
-                k=orientation_choice["k"],
-                flip_x=orientation_choice["flip_x"],
-                flip_y=orientation_choice["flip_y"],
-                flip_order=orientation_choice["flip_order"],
-            )
-            experimental_image_for_fit = _orient_image_for_fit(
-                native_background,
-                indexing_mode=orientation_choice["indexing_mode"],
-                k=orientation_choice["k"],
-                flip_x=orientation_choice["flip_x"],
-                flip_y=orientation_choice["flip_y"],
-                flip_order=orientation_choice["flip_order"],
-            )
-
-            result = fit_geometry_parameters(
-                miller,
-                intensities,
-                image_size,
-                params,
-                measured_for_fit,
-                var_names,
-                pixel_tol=float('inf'),
-                experimental_image=experimental_image_for_fit,
-            )
-
-            for name, val in zip(var_names, result.x):
-                if name == 'zb':               zb_var.set(val)
-                elif name == 'zs':             zs_var.set(val)
-                elif name == 'theta_initial':  theta_initial_var.set(val)
-                elif name == 'chi':            chi_var.set(val)
-                elif name == 'cor_angle':      cor_angle_var.set(val)
-
-            # Keep the cached profile in sync with the fitted geometry so the
-            # next simulation uses the updated parameters even when diagnostics
-            # are disabled.
-            profile_cache = dict(profile_cache)
-            profile_cache.update(mosaic_params)
-            profile_cache.update(
-                {
-                    "theta_initial": theta_initial_var.get(),
-                    "cor_angle": cor_angle_var.get(),
-                    "chi": chi_var.get(),
-                    "zs": zs_var.get(),
-                    "zb": zb_var.get(),
-                    "gamma": gamma_var.get(),
-                    "Gamma": Gamma_var.get(),
-                    "corto_detector": corto_detector_var.get(),
-                    "a": a_var.get(),
-                    "c": c_var.get(),
-                    "center_x": center_x_var.get(),
-                    "center_y": center_y_var.get(),
-                }
-            )
-
-            # Force a fresh simulation with the fitted values.
-            last_simulation_signature = None
-            schedule_update()
-
-            rms = (
-                np.sqrt(np.mean(result.fun**2))
-                if getattr(result, "fun", None) is not None and result.fun.size
-                else 0.0
-            )
-            base_summary = (
-                "Fit complete:\n"
-                + "\n".join(
-                    f"{name} = {val:.4f}" for name, val in zip(var_names, result.x)
+            try:
+                measured_for_fit = _apply_orientation_to_entries(
+                    measured_native,
+                    native_background.shape,
+                    indexing_mode=orientation_choice["indexing_mode"],
+                    k=orientation_choice["k"],
+                    flip_x=orientation_choice["flip_x"],
+                    flip_y=orientation_choice["flip_y"],
+                    flip_order=orientation_choice["flip_order"],
                 )
-                + f"\nRMS residual = {rms:.2f} px"
-            )
+                experimental_image_for_fit = _orient_image_for_fit(
+                    native_background,
+                    indexing_mode=orientation_choice["indexing_mode"],
+                    k=orientation_choice["k"],
+                    flip_x=orientation_choice["flip_x"],
+                    flip_y=orientation_choice["flip_y"],
+                    flip_order=orientation_choice["flip_order"],
+                )
 
-            fitted_params = dict(params)
-            fitted_params.update({
-                'zb': zb_var.get(),
-                'zs': zs_var.get(),
-                'theta_initial': theta_initial_var.get(),
-                'chi': chi_var.get(),
-                'cor_angle': cor_angle_var.get(),
-            })
+                result = fit_geometry_parameters(
+                    miller,
+                    intensities,
+                    image_size,
+                    params,
+                    measured_for_fit,
+                    var_names,
+                    pixel_tol=float('inf'),
+                    experimental_image=experimental_image_for_fit,
+                )
 
-            (
-                _,
-                sim_coords,
-                meas_coords,
-                sim_millers,
-                meas_millers,
-            ) = simulate_and_compare_hkl(
-                miller,
-                intensities,
-                image_size,
-                fitted_params,
-                measured_for_fit,
-                pixel_tol=float('inf'),
-            )
+                for name, val in zip(var_names, result.x):
+                    if name == 'zb':               zb_var.set(val)
+                    elif name == 'zs':             zs_var.set(val)
+                    elif name == 'theta_initial':  theta_initial_var.set(val)
+                    elif name == 'chi':            chi_var.set(val)
+                    elif name == 'cor_angle':      cor_angle_var.set(val)
+
+                # Keep the cached profile in sync with the fitted geometry so the
+                # next simulation uses the updated parameters even when diagnostics
+                # are disabled.
+                profile_cache = dict(profile_cache)
+                profile_cache.update(mosaic_params)
+                profile_cache.update(
+                    {
+                        "theta_initial": theta_initial_var.get(),
+                        "cor_angle": cor_angle_var.get(),
+                        "chi": chi_var.get(),
+                        "zs": zs_var.get(),
+                        "zb": zb_var.get(),
+                        "gamma": gamma_var.get(),
+                        "Gamma": Gamma_var.get(),
+                        "corto_detector": corto_detector_var.get(),
+                        "a": a_var.get(),
+                        "c": c_var.get(),
+                        "center_x": center_x_var.get(),
+                        "center_y": center_y_var.get(),
+                    }
+                )
+
+                # Force a fresh simulation with the fitted values.
+                last_simulation_signature = None
+                schedule_update()
+
+                rms = (
+                    np.sqrt(np.mean(result.fun**2))
+                    if getattr(result, "fun", None) is not None and result.fun.size
+                    else 0.0
+                )
+                base_summary = (
+                    "Fit complete:\n"
+                    + "\n".join(
+                        f"{name} = {val:.4f}" for name, val in zip(var_names, result.x)
+                    )
+                    + f"\nRMS residual = {rms:.2f} px"
+                )
+
+                fitted_params = dict(params)
+                fitted_params.update({
+                    'zb': zb_var.get(),
+                    'zs': zs_var.get(),
+                    'theta_initial': theta_initial_var.get(),
+                    'chi': chi_var.get(),
+                    'cor_angle': cor_angle_var.get(),
+                })
+
+                (
+                    _,
+                    sim_coords,
+                    meas_coords,
+                    sim_millers,
+                    meas_millers,
+                ) = simulate_and_compare_hkl(
+                    miller,
+                    intensities,
+                    image_size,
+                    fitted_params,
+                    measured_for_fit,
+                    pixel_tol=float('inf'),
+                )
+            except Exception as exc:
+                progress_label_geometry.config(
+                    text=f"Geometry fit failed: {exc}"
+                )
+                return
 
             def _to_display_frame(col: float, row: float, *, k: int) -> tuple[float, float]:
                 """Rotate native coordinates into the currently displayed frame."""
