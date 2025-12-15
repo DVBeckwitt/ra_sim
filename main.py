@@ -573,16 +573,10 @@ def export_initial_excel():
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 
-# Background and simulated overlays are both rotated for display. Negative ``k``
-# rotates clockwise, positive rotates counter-clockwise. The simulation uses a
-# fixed offset relative to the background so they stay aligned without
-# additional user interaction.
-DISPLAY_ROTATE_K = -1
-SIM_DISPLAY_ROTATE_K = DISPLAY_ROTATE_K - 3
-
-# Keep the real images but rotate them for display so they start aligned with
-# the simulated overlay orientation.
-background_images = [np.rot90(img, DISPLAY_ROTATE_K) for img in background_images]
+# Background and simulated overlays share the same display orientation. ``k`` is
+# the np.rot90 factor; 0 keeps images in their native top-left origin frame.
+DISPLAY_ROTATE_K = 0
+SIM_DISPLAY_ROTATE_K = DISPLAY_ROTATE_K
 
 current_background_image = background_images[0]
 current_background_index = 0
