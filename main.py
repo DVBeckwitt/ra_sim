@@ -3068,6 +3068,65 @@ def on_fit_geometry_click():
                     flip_order=orientation_choice["flip_order"],
                 )
 
+                def _log_matches_snapshot(title: str, param_set: dict[str, float]):
+                    try:
+                        (
+                            _,
+                            pre_sim_coords,
+                            pre_meas_coords,
+                            pre_sim_millers,
+                            pre_meas_millers,
+                        ) = simulate_and_compare_hkl(
+                            miller,
+                            intensities,
+                            image_size,
+                            param_set,
+                            measured_for_fit,
+                            pixel_tol=float('inf'),
+                        )
+                        (
+                            pre_sim_centers,
+                            pre_meas_centers,
+                            pre_hkls,
+                        ) = _aggregate_match_centers(
+                            pre_sim_coords,
+                            pre_meas_coords,
+                            pre_sim_millers,
+                            pre_meas_millers,
+                        )
+                    except Exception as exc:  # pragma: no cover - debug path
+                        _log_section(title, [f"Failed to collect matches: {exc}"])
+                        return None
+
+                    if not pre_hkls:
+                        _log_section(title, ["No matched peaks found; residuals would be empty."])
+                        return []
+
+                    rows: list[str] = []
+                    distances: list[float] = []
+                    for hkl_key, sim_ctr, meas_ctr in zip(
+                        pre_hkls, pre_sim_centers, pre_meas_centers
+                    ):
+                        dx = sim_ctr[0] - meas_ctr[0]
+                        dy = sim_ctr[1] - meas_ctr[1]
+                        dist = math.hypot(dx, dy)
+                        distances.append(dist)
+                        rows.append(
+                            "HKL="
+                            f"{hkl_key}: sim=({sim_ctr[0]:.3f}, {sim_ctr[1]:.3f}), "
+                            f"meas=({meas_ctr[0]:.3f}, {meas_ctr[1]:.3f}), "
+                            f"dx={dx:.3f}, dy={dy:.3f}, |Δ|={dist:.3f}"
+                        )
+
+                    rms = math.sqrt(float(np.mean(np.square(distances)))) if distances else 0.0
+                    max_dist = max(distances) if distances else 0.0
+                    summary = [
+                        f"Matches={len(rows)}, RMS={rms:.3f} px, max={max_dist:.3f} px",
+                        *rows,
+                    ]
+                    _log_section(title, summary)
+                    return distances
+
                 _log_section(
                     "Fitting variables (start values):",
                     [
@@ -3079,6 +3138,7 @@ def on_fit_geometry_click():
                         for name in var_names
                     ],
                 )
+                _log_matches_snapshot("Matches before fit (native frame):", params)
 
                 result = fit_geometry_parameters(
                     miller,
@@ -3089,6 +3149,19 @@ def on_fit_geometry_click():
                     var_names,
                     pixel_tol=float('inf'),
                     experimental_image=experimental_image_for_fit,
+                )
+
+                _log_section(
+                    "Optimizer diagnostics:",
+                    [
+                        f"success={getattr(result, 'success', False)}",
+                        f"status={getattr(result, 'status', '')}",
+                        f"message={(getattr(result, 'message', '') or '').strip()}",
+                        f"nfev={getattr(result, 'nfev', '<unknown>')}",
+                        f"cost={float(getattr(result, 'cost', np.nan)):.6f}",
+                        f"optimality={float(getattr(result, 'optimality', np.nan)):.6f}",
+                        f"active_mask={list(getattr(result, 'active_mask', []))}",
+                    ],
                 )
 
                 for name, val in zip(var_names, result.x):
@@ -3150,6 +3223,8 @@ def on_fit_geometry_click():
                     'chi': chi_var.get(),
                     'cor_angle': cor_angle_var.get(),
                 })
+
+                _log_matches_snapshot("Matches after fit (native frame):", fitted_params)
 
                 (
                     _,
