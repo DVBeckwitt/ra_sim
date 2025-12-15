@@ -2928,6 +2928,7 @@ def on_fit_geometry_click():
     click_cid = None
 
     def _finish_pair_collection():
+        global profile_cache, last_simulation_signature
         nonlocal click_cid
         if click_cid is not None:
             canvas.mpl_disconnect(click_cid)
