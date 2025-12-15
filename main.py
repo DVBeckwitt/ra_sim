@@ -89,6 +89,8 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
+# Default to debug mode unless the user explicitly disables it.
+os.environ.setdefault("RA_SIM_DEBUG", "1")
 # Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
 DEBUG_ENABLED = is_debug_enabled()
 if DEBUG_ENABLED:
@@ -659,6 +661,59 @@ def _unrotate_display_peaks(measured, rotated_shape):
             unrotated.append(entry)
 
     return unrotated
+
+
+def _apply_orientation_to_entries(measured, rotated_shape, *, k: int = 0, flip_x: bool = False):
+    """Apply backend-only rotations/flips to measured peak entries."""
+
+    if measured is None:
+        return []
+
+    k_mod = int(k) % 4
+    if k_mod == 0 and not flip_x:
+        return list(measured)
+
+    def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
+        return _transform_points_orientation(
+            [(x_val, y_val)], rotated_shape, k=k_mod, flip_x=flip_x
+        )[0]
+
+    oriented_entries = []
+    for entry in measured:
+        if isinstance(entry, dict):
+            updated = dict(entry)
+            if "x" in updated and "y" in updated:
+                updated["x"], updated["y"] = _apply_pair(updated["x"], updated["y"])
+            if "x_pix" in updated and "y_pix" in updated:
+                updated["x_pix"], updated["y_pix"] = _apply_pair(
+                    updated["x_pix"], updated["y_pix"]
+                )
+            oriented_entries.append(updated)
+            continue
+
+        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            seq = list(entry)
+            seq[3], seq[4] = _apply_pair(seq[3], seq[4])
+            oriented_entries.append(type(entry)(seq))
+        else:
+            oriented_entries.append(entry)
+
+    return oriented_entries
+
+
+def _orient_image_for_fit(image: np.ndarray | None, *, k: int = 0, flip_x: bool = False):
+    """Return a rotated/flipped copy of ``image`` for backend fitting only."""
+
+    if image is None:
+        return None
+
+    oriented = np.asarray(image)
+    if flip_x:
+        oriented = np.flip(oriented, axis=1)
+    k_mod = int(k) % 4
+    if k_mod:
+        oriented = np.rot90(oriented, k_mod)
+    return oriented
 
 
 def _native_sim_to_display_coords(col: float, row: float, image_shape: tuple[int, ...]):
@@ -2537,6 +2592,35 @@ ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LE
 ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
 
+backend_rotation_var = tk.IntVar(value=0)
+backend_flip_y_axis_var = tk.BooleanVar(value=False)
+
+if DEBUG_ENABLED:
+    backend_orient_frame = ttk.LabelFrame(root, text="Backend orientation (debug)")
+    backend_orient_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+    ttk.Label(backend_orient_frame, text="Rotate ×90° (k):").pack(side=tk.LEFT, padx=2)
+    tk.Spinbox(
+        backend_orient_frame,
+        from_=-3,
+        to=3,
+        width=4,
+        textvariable=backend_rotation_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Checkbutton(
+        backend_orient_frame,
+        text="Flip about y-axis",
+        variable=backend_flip_y_axis_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Button(
+        backend_orient_frame,
+        text="Reset",  # return to no rotation/flip
+        command=lambda: (backend_rotation_var.set(0), backend_flip_y_axis_var.set(False)),
+    ).pack(side=tk.LEFT, padx=4)
+
+
 def on_fit_geometry_click():
     _clear_geometry_pick_artists()
 
@@ -2664,6 +2748,18 @@ def on_fit_geometry_click():
                 measured_from_clicks, current_background_image.shape
             )
 
+            backend_k = int(backend_rotation_var.get())
+            backend_flip = bool(backend_flip_y_axis_var.get())
+            measured_for_fit = _apply_orientation_to_entries(
+                measured_for_fit,
+                current_background_image.shape,
+                k=backend_k,
+                flip_x=backend_flip,
+            )
+            experimental_image_for_fit = _orient_image_for_fit(
+                current_background_image, k=backend_k, flip_x=backend_flip
+            )
+
             result = fit_geometry_parameters(
                 miller,
                 intensities,
@@ -2672,7 +2768,7 @@ def on_fit_geometry_click():
                 measured_for_fit,
                 var_names,
                 pixel_tol=float('inf'),
-                experimental_image=current_background_image,
+                experimental_image=experimental_image_for_fit,
             )
 
             for name, val in zip(var_names, result.x):
