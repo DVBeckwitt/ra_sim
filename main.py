@@ -3564,19 +3564,6 @@ def on_fit_geometry_click():
                 or ["No matched peaks"],
             )
 
-            _log_section(
-                "Fit summary:",
-                [
-                    "Parameters:" if var_names else "Parameters: <none>",
-                    *[
-                        f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)
-                    ],
-                    f"RMS residual = {rms:.6f} px",
-                    f"Applied orientation: {orientation_choice.get('label', 'identity')}",
-                    f"Matched peaks saved to: {save_path}",
-                ],
-            )
-
             try:
                 log_file.close()
             except Exception:
@@ -3604,6 +3591,19 @@ def on_fit_geometry_click():
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             save_path = download_dir / f"matched_peaks_{stamp}.npy"
             np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
+
+            _log_section(
+                "Fit summary:",
+                [
+                    "Parameters:" if var_names else "Parameters: <none>",
+                    *[
+                        f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)
+                    ],
+                    f"RMS residual = {rms:.6f} px",
+                    f"Applied orientation: {orientation_choice.get('label', 'identity')}",
+                    f"Matched peaks saved to: {save_path}",
+                ],
+            )
 
             if pixel_offsets:
                 dist_lines = [
