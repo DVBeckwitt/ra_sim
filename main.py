@@ -3008,50 +3008,53 @@ def on_fit_geometry_click():
                 "label": "identity",
             }
 
-            try:
-                # Always pick the best backend orientation for fitting so measured
-                # coordinates start aligned with the simulated grid. This search is
-                # backend-only and leaves the on-screen visuals untouched.
-                (
-                    _,
-                    preview_sim_coords,
-                    preview_meas_coords,
-                    preview_sim_millers,
-                    preview_meas_millers,
-                ) = simulate_and_compare_hkl(
-                    miller,
-                    intensities,
-                    image_size,
-                    params,
-                    measured_native,
-                    pixel_tol=float("inf"),
-                )
-                (
-                    preview_sim_centers,
-                    preview_meas_centers,
-                    _preview_hkls,
-                ) = _aggregate_match_centers(
-                    preview_sim_coords,
-                    preview_meas_coords,
-                    preview_sim_millers,
-                    preview_meas_millers,
-                )
-                best = _best_orientation_alignment(
-                    preview_sim_centers,
-                    preview_meas_centers,
-                    native_background.shape,
-                )
-                if best is not None:
-                    orientation_choice.update(best)
-                _log_section(
-                    "Orientation search result:",
-                    [
-                        ", ".join(f"{k}={v}" for k, v in orientation_choice.items())
-                    ],
-                )
-            except Exception:
-                # fall back to identity if diagnostics fail
-                _log_line("Orientation search failed; using identity transform")
+            if DEBUG_ENABLED:
+                try:
+                    # In debug mode, search for the backend orientation that best
+                    # aligns measured peaks to simulated peaks. This leaves the on-screen
+                    # visuals unchanged.
+                    (
+                        _,
+                        preview_sim_coords,
+                        preview_meas_coords,
+                        preview_sim_millers,
+                        preview_meas_millers,
+                    ) = simulate_and_compare_hkl(
+                        miller,
+                        intensities,
+                        image_size,
+                        params,
+                        measured_native,
+                        pixel_tol=float("inf"),
+                    )
+                    (
+                        preview_sim_centers,
+                        preview_meas_centers,
+                        _preview_hkls,
+                    ) = _aggregate_match_centers(
+                        preview_sim_coords,
+                        preview_meas_coords,
+                        preview_sim_millers,
+                        preview_meas_millers,
+                    )
+                    best = _best_orientation_alignment(
+                        preview_sim_centers,
+                        preview_meas_centers,
+                        native_background.shape,
+                    )
+                    if best is not None:
+                        orientation_choice.update(best)
+                    _log_section(
+                        "Orientation search result:",
+                        [
+                            ", ".join(f"{k}={v}" for k, v in orientation_choice.items())
+                        ],
+                    )
+                except Exception:
+                    # fall back to identity if diagnostics fail
+                    _log_line("Orientation search failed; using identity transform")
+            else:
+                orientation_choice["label"] = "identity"
 
             try:
                 measured_for_fit = _apply_orientation_to_entries(
