@@ -1689,44 +1689,52 @@ def simulate_and_compare_hkl(
             continue
 
         I0, x0, y0, I1, x1, y1 = maxpos[i]
-        simulated_peaks: list[tuple[float, float, float, float]] = []
+        simulated_points: list[tuple[float, float]] = []
         for col, row in ((x0, y0), (x1, y1)):
-            two_theta, phi = _pixel_to_angles(col, row, centre, detector_distance, pixel_size)
-            if two_theta is None or phi is None:
+            if not np.isfinite(col) or not np.isfinite(row):
                 continue
-            simulated_peaks.append((float(col), float(row), two_theta, phi))
+            simulated_points.append((float(col), float(row)))
 
-        if not simulated_peaks:
+        if not simulated_points:
             continue
 
-        measured_peaks_for_reflection: list[tuple[float, float, float, float]] = []
+        sim_cols, sim_rows = zip(*simulated_points)
+        sim_center_col = float(np.mean(sim_cols))
+        sim_center_row = float(np.mean(sim_rows))
+        sim_two_theta, sim_phi = _pixel_to_angles(
+            sim_center_col, sim_center_row, centre, detector_distance, pixel_size
+        )
+        if sim_two_theta is None or sim_phi is None:
+            continue
+
+        measured_points: list[tuple[float, float]] = []
         for mx, my in candidates:
-            two_theta, phi = _pixel_to_angles(mx, my, centre, detector_distance, pixel_size)
-            if two_theta is None or phi is None:
+            if not np.isfinite(mx) or not np.isfinite(my):
                 continue
-            measured_peaks_for_reflection.append((float(mx), float(my), two_theta, phi))
+            measured_points.append((float(mx), float(my)))
 
-        if not measured_peaks_for_reflection:
+        if not measured_points:
             continue
 
-        simulated_peaks.sort(key=lambda item: item[2])
-        measured_peaks_for_reflection.sort(key=lambda item: item[2])
-        pair_count = min(len(simulated_peaks), len(measured_peaks_for_reflection))
+        meas_cols, meas_rows = zip(*measured_points)
+        meas_center_col = float(np.mean(meas_cols))
+        meas_center_row = float(np.mean(meas_rows))
+        meas_two_theta, meas_phi = _pixel_to_angles(
+            meas_center_col, meas_center_row, centre, detector_distance, pixel_size
+        )
+        if meas_two_theta is None or meas_phi is None:
+            continue
 
-        for idx in range(pair_count):
-            s_col, s_row, s_two_theta, s_phi = simulated_peaks[idx]
-            m_col, m_row, m_two_theta, m_phi = measured_peaks_for_reflection[idx]
+        radial_diff = abs(sim_two_theta - meas_two_theta)
+        azimuthal_diff = abs(_angular_difference_deg(sim_phi, meas_phi))
+        combined = math.hypot(radial_diff, azimuthal_diff)
 
-            radial_diff = abs(s_two_theta - m_two_theta)
-            azimuthal_diff = abs(_angular_difference_deg(s_phi, m_phi))
-            combined = math.hypot(radial_diff, azimuthal_diff)
-
-            if combined <= pixel_tol:
-                distances.extend([radial_diff, azimuthal_diff])
-                sim_coords.append((s_col, s_row))
-                meas_coords.append((m_col, m_row))
-                sim_millers.append(key)
-                meas_millers.append(key)
+        if combined <= pixel_tol:
+            distances.extend([radial_diff, azimuthal_diff])
+            sim_coords.append((sim_center_col, sim_center_row))
+            meas_coords.append((meas_center_col, meas_center_row))
+            sim_millers.append(key)
+            meas_millers.append(key)
 
     return (
         np.array(distances, dtype=float),
