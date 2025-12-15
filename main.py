@@ -58,9 +58,10 @@ from ra_sim.io.data_loading import (
     load_parameters,
 )
 from ra_sim.fitting.optimization import (
-    simulate_and_compare_hkl,
+    build_measured_dict,
     fit_geometry_parameters,
     fit_mosaic_widths_separable,
+    simulate_and_compare_hkl,
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
