@@ -2891,20 +2891,39 @@ def on_fit_geometry_click():
                     float(col), float(row), (image_size, image_size), k
                 )
 
+            aggregated: dict[tuple[int, int, int], dict[str, list[tuple[float, float]]]] = {}
+            for hkl, sim_xy, meas_xy in zip(sim_millers, sim_coords, meas_coords):
+                hkl_key = tuple(int(v) for v in hkl)
+                entry = aggregated.setdefault(hkl_key, {"sim": [], "meas": []})
+                entry["sim"].append(sim_xy)
+                entry["meas"].append(meas_xy)
+
+            agg_sim_coords: list[tuple[float, float]] = []
+            agg_meas_coords: list[tuple[float, float]] = []
+            agg_millers: list[tuple[int, int, int]] = []
             pixel_offsets = []
-            for hkl, (s_xy, m_xy) in zip(sim_millers, zip(sim_coords, meas_coords)):
-                sx, sy = s_xy
-                mx, my = m_xy
-                dx = sx - mx
-                dy = sy - my
+
+            for hkl_key in sorted(aggregated):
+                sim_arr = np.array(aggregated[hkl_key]["sim"], dtype=float)
+                meas_arr = np.array(aggregated[hkl_key]["meas"], dtype=float)
+
+                sim_center = (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
+                meas_center = (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
+
+                agg_sim_coords.append(sim_center)
+                agg_meas_coords.append(meas_center)
+                agg_millers.append(hkl_key)
+
+                dx = sim_center[0] - meas_center[0]
+                dy = sim_center[1] - meas_center[1]
                 dist = math.hypot(dx, dy)
-                pixel_offsets.append((hkl, dx, dy, dist))
+                pixel_offsets.append((hkl_key, dx, dy, dist))
 
                 disp_sx, disp_sy = _to_display_frame(
-                    sx, sy, k=DISPLAY_ROTATE_K
+                    sim_center[0], sim_center[1], k=DISPLAY_ROTATE_K
                 )
                 disp_mx, disp_my = _to_display_frame(
-                    mx, my, k=DISPLAY_ROTATE_K
+                    meas_center[0], meas_center[1], k=DISPLAY_ROTATE_K
                 )
 
                 arrow = ax.annotate(
@@ -2929,7 +2948,7 @@ def on_fit_geometry_click():
             canvas.draw_idle()
 
             export_recs = []
-            for hkl, (x, y), (_, _, _, dist) in zip(sim_millers, sim_coords, pixel_offsets):
+            for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
                 export_recs.append({
                     'source': 'sim',
                     'hkl': tuple(int(v) for v in hkl),
@@ -2937,7 +2956,7 @@ def on_fit_geometry_click():
                     'y': int(y),
                     'dist_px': float(dist),
                 })
-            for hkl, (x, y), (_, _, _, dist) in zip(meas_millers, meas_coords, pixel_offsets):
+            for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_meas_coords, pixel_offsets):
                 export_recs.append({
                     'source': 'meas',
                     'hkl': tuple(int(v) for v in hkl),
@@ -2962,7 +2981,7 @@ def on_fit_geometry_click():
 
             if DEBUG_ENABLED:
                 best_orientation = _best_orientation_alignment(
-                    sim_coords, meas_coords, (image_size, image_size)
+                    agg_sim_coords, agg_meas_coords, (image_size, image_size)
                 )
                 if best_orientation is not None:
                     orientation_report = f"Best flip/rotation match: {best_orientation['label']}"
