@@ -663,19 +663,21 @@ def _unrotate_display_peaks(measured, rotated_shape):
     return unrotated
 
 
-def _apply_orientation_to_entries(measured, rotated_shape, *, k: int = 0, flip_x: bool = False):
+def _apply_orientation_to_entries(
+    measured, rotated_shape, *, k: int = 0, flip_x: bool = False, flip_y: bool = False
+):
     """Apply backend-only rotations/flips to measured peak entries."""
 
     if measured is None:
         return []
 
     k_mod = int(k) % 4
-    if k_mod == 0 and not flip_x:
+    if k_mod == 0 and not flip_x and not flip_y:
         return list(measured)
 
     def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
         return _transform_points_orientation(
-            [(x_val, y_val)], rotated_shape, k=k_mod, flip_x=flip_x
+            [(x_val, y_val)], rotated_shape, k=k_mod, flip_x=flip_x, flip_y=flip_y
         )[0]
 
     oriented_entries = []
@@ -701,7 +703,9 @@ def _apply_orientation_to_entries(measured, rotated_shape, *, k: int = 0, flip_x
     return oriented_entries
 
 
-def _orient_image_for_fit(image: np.ndarray | None, *, k: int = 0, flip_x: bool = False):
+def _orient_image_for_fit(
+    image: np.ndarray | None, *, k: int = 0, flip_x: bool = False, flip_y: bool = False
+):
     """Return a rotated/flipped copy of ``image`` for backend fitting only."""
 
     if image is None:
@@ -710,6 +714,8 @@ def _orient_image_for_fit(image: np.ndarray | None, *, k: int = 0, flip_x: bool 
     oriented = np.asarray(image)
     if flip_x:
         oriented = np.flip(oriented, axis=1)
+    if flip_y:
+        oriented = np.flip(oriented, axis=0)
     k_mod = int(k) % 4
     if k_mod:
         oriented = np.rot90(oriented, k_mod)
@@ -2594,6 +2600,7 @@ ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT
 
 backend_rotation_var = tk.IntVar(value=0)
 backend_flip_y_axis_var = tk.BooleanVar(value=False)
+backend_flip_x_axis_var = tk.BooleanVar(value=False)
 
 if DEBUG_ENABLED:
     backend_orient_frame = ttk.LabelFrame(root, text="Backend orientation (debug)")
@@ -2614,10 +2621,20 @@ if DEBUG_ENABLED:
         variable=backend_flip_y_axis_var,
     ).pack(side=tk.LEFT, padx=2)
 
+    ttk.Checkbutton(
+        backend_orient_frame,
+        text="Flip about x-axis",
+        variable=backend_flip_x_axis_var,
+    ).pack(side=tk.LEFT, padx=2)
+
     ttk.Button(
         backend_orient_frame,
         text="Reset",  # return to no rotation/flip
-        command=lambda: (backend_rotation_var.set(0), backend_flip_y_axis_var.set(False)),
+        command=lambda: (
+            backend_rotation_var.set(0),
+            backend_flip_y_axis_var.set(False),
+            backend_flip_x_axis_var.set(False),
+        ),
     ).pack(side=tk.LEFT, padx=4)
 
 
@@ -2749,15 +2766,20 @@ def on_fit_geometry_click():
             )
 
             backend_k = int(backend_rotation_var.get())
-            backend_flip = bool(backend_flip_y_axis_var.get())
+            backend_flip_y = bool(backend_flip_y_axis_var.get())
+            backend_flip_x = bool(backend_flip_x_axis_var.get())
             measured_for_fit = _apply_orientation_to_entries(
                 measured_for_fit,
                 current_background_image.shape,
                 k=backend_k,
-                flip_x=backend_flip,
+                flip_x=backend_flip_y,
+                flip_y=backend_flip_x,
             )
             experimental_image_for_fit = _orient_image_for_fit(
-                current_background_image, k=backend_k, flip_x=backend_flip
+                current_background_image,
+                k=backend_k,
+                flip_x=backend_flip_y,
+                flip_y=backend_flip_x,
             )
 
             result = fit_geometry_parameters(
