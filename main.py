@@ -2984,6 +2984,14 @@ def on_fit_geometry_click():
             measured_native = _unrotate_display_peaks(
                 measured_from_clicks, current_background_image.shape
             )
+            picked_frames = [
+                {
+                    "label": entry_disp.get("label"),
+                    "display": (float(entry_disp.get("x")), float(entry_disp.get("y"))),
+                    "native": (float(entry_nat.get("x")), float(entry_nat.get("y"))),
+                }
+                for entry_disp, entry_nat in zip(measured_from_clicks, measured_native)
+            ]
 
             _log_section(
                 "Unrotated measured peaks (native frame):",
@@ -3060,6 +3068,13 @@ def on_fit_geometry_click():
                     flip_y=orientation_choice["flip_y"],
                     flip_order=orientation_choice["flip_order"],
                 )
+                for frame_entry, entry_fit in zip(picked_frames, measured_for_fit):
+                    if isinstance(entry_fit, dict):
+                        frame_entry["fit"] = (
+                            float(entry_fit.get("x")), float(entry_fit.get("y"))
+                        )
+                    elif isinstance(entry_fit, (list, tuple)) and len(entry_fit) >= 5:
+                        frame_entry["fit"] = (float(entry_fit[3]), float(entry_fit[4]))
                 _log_section(
                     "Measured peaks used for fitting (after orientation):",
                     [
@@ -3078,6 +3093,109 @@ def on_fit_geometry_click():
                     flip_y=orientation_choice["flip_y"],
                     flip_order=orientation_choice["flip_order"],
                 )
+
+                def _log_assignment_snapshot(title: str, param_set: dict[str, float]):
+                    try:
+                        mosaic = param_set["mosaic_params"]
+                        wavelength_array = mosaic.get("wavelength_array")
+                        if wavelength_array is None:
+                            wavelength_array = mosaic.get("wavelength_i_array")
+
+                        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+                        _, hit_tables, *_ = process_peaks_parallel(
+                            miller,
+                            intensities,
+                            image_size,
+                            param_set["a"],
+                            param_set["c"],
+                            wavelength_array,
+                            sim_buffer,
+                            param_set["corto_detector"],
+                            param_set["gamma"],
+                            param_set["Gamma"],
+                            param_set["chi"],
+                            param_set.get("psi", 0.0),
+                            param_set["zs"],
+                            param_set["zb"],
+                            param_set["n2"],
+                            mosaic["beam_x_array"],
+                            mosaic["beam_y_array"],
+                            mosaic["theta_array"],
+                            mosaic["phi_array"],
+                            mosaic["sigma_mosaic_deg"],
+                            mosaic["gamma_mosaic_deg"],
+                            mosaic["eta"],
+                            wavelength_array,
+                            param_set["debye_x"],
+                            param_set["debye_y"],
+                            param_set["center"],
+                            param_set["theta_initial"],
+                            param_set.get("cor_angle", 0.0),
+                            np.array([1.0, 0.0, 0.0]),
+                            np.array([0.0, 1.0, 0.0]),
+                            save_flag=0,
+                        )
+
+                        maxpos = hit_tables_to_max_positions(hit_tables)
+                        measured_dict = build_measured_dict(measured_for_fit)
+
+                        rows: list[str] = []
+                        for idx, (H, K, L) in enumerate(miller):
+                            key = (int(round(H)), int(round(K)), int(round(L)))
+                            measured_list = measured_dict.get(key)
+                            if not measured_list:
+                                continue
+
+                            I0, x0, y0, I1, x1, y1 = maxpos[idx]
+                            sim_candidates = [
+                                (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
+                                (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
+                            ]
+                            sim_candidates = [p for p in sim_candidates if p is not None]
+                            if not sim_candidates:
+                                continue
+
+                            for mx, my in measured_list:
+                                best = None
+                                for sx, sy in sim_candidates:
+                                    dx = sx - float(mx)
+                                    dy = sy - float(my)
+                                    dist = math.hypot(dx, dy)
+                                    if best is None or dist < best[0]:
+                                        best = (dist, dx, dy, sx, sy)
+
+                                if best is None:
+                                    continue
+
+                                dist, dx, dy, sx, sy = best
+
+                                frame_entry = next(
+                                    (
+                                        fr
+                                        for fr in picked_frames
+                                        if math.isclose(fr.get("fit", (mx, my))[0], mx, abs_tol=1e-9)
+                                        and math.isclose(fr.get("fit", (mx, my))[1], my, abs_tol=1e-9)
+                                        and fr.get("label") == f"{key[0]},{key[1]},{key[2]}"
+                                    ),
+                                    None,
+                                )
+                                disp_part = (
+                                    f"display=({frame_entry['display'][0]:.3f}, {frame_entry['display'][1]:.3f}), "
+                                    f"native=({frame_entry['native'][0]:.3f}, {frame_entry['native'][1]:.3f}), "
+                                    f"fit=({mx:.3f}, {my:.3f})"
+                                    if frame_entry
+                                    else f"fit=({mx:.3f}, {my:.3f})"
+                                )
+
+                                rows.append(
+                                    "HKL=({},{},{}) {} -> sim=({:.3f}, {:.3f}) dx={:.3f} dy={:.3f} |Δ|={:.3f}".format(
+                                        key[0], key[1], key[2], disp_part, sx, sy, dx, dy, dist
+                                    )
+                                )
+
+                        _log_section(title, rows or ["No measured peaks matched"],)
+                    except Exception as exc:  # pragma: no cover - debug path
+                        _log_section(title, [f"Failed to record assignments: {exc}"])
 
                 def _log_pixel_match_snapshot(title: str, param_set: dict[str, float]):
                     mosaic = param_set["mosaic_params"]
@@ -3243,6 +3361,9 @@ def on_fit_geometry_click():
                 _log_pixel_match_snapshot(
                     "Pixel matches before fit (native frame):", params
                 )
+                _log_assignment_snapshot(
+                    "Match assignments before fit (native frame):", params
+                )
 
                 result = fit_geometry_parameters(
                     miller,
@@ -3331,6 +3452,9 @@ def on_fit_geometry_click():
                 _log_matches_snapshot("Matches after fit (native frame):", fitted_params)
                 _log_pixel_match_snapshot(
                     "Pixel matches after fit (native frame):", fitted_params
+                )
+                _log_assignment_snapshot(
+                    "Match assignments after fit (native frame):", fitted_params
                 )
 
                 (
