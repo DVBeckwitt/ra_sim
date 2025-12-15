@@ -738,17 +738,25 @@ def _apply_orientation_to_entries(
     if measured is None:
         return []
 
-    indexed = _apply_indexing_mode_to_entries(measured, rotated_shape, indexing_mode=indexing_mode)
+    indexed = _apply_indexing_mode_to_entries(
+        measured, rotated_shape, indexing_mode=indexing_mode
+    )
 
     k_mod = int(k) % 4
     if k_mod == 0 and not flip_x and not flip_y:
         return list(indexed)
 
+    # Points are already expressed in the requested indexing mode, so avoid
+    # double-swapping by keeping further transforms in XY and adjusting the
+    # shape to match that frame.
+    mode = (indexing_mode or "xy").lower()
+    oriented_shape = rotated_shape if mode == "xy" else (rotated_shape[1], rotated_shape[0])
+
     def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
         return _transform_points_orientation(
             [(x_val, y_val)],
-            rotated_shape,
-            indexing_mode=indexing_mode,
+            oriented_shape,
+            indexing_mode="xy",
             k=k_mod,
             flip_x=flip_x,
             flip_y=flip_y,
