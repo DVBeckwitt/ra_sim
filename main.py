@@ -2907,29 +2907,24 @@ def on_fit_geometry_click():
                     mx, my, k=DISPLAY_ROTATE_K
                 )
 
-                line, = ax.plot(
-                    [disp_sx, disp_mx],
-                    [disp_sy, disp_my],
-                    color='#0984e3',
-                    linestyle='--',
-                    linewidth=1.0,
-                    alpha=0.8,
-                    zorder=5,
-                )
-                mid_x = 0.5 * (disp_sx + disp_mx)
-                mid_y = 0.5 * (disp_sy + disp_my)
-                label = ax.text(
-                    mid_x,
-                    mid_y,
+                arrow = ax.annotate(
                     f"|Δ|={dist:.1f}px",
+                    xy=(disp_mx, disp_my),
+                    xytext=(disp_sx, disp_sy),
                     color='#2d3436',
                     fontsize=8,
                     ha='center',
                     va='center',
+                    arrowprops=dict(
+                        arrowstyle='->',
+                        color='#0984e3',
+                        lw=1.2,
+                        alpha=0.9,
+                    ),
+                    bbox=dict(facecolor='white', alpha=0.85, edgecolor='none', pad=1.0),
                     zorder=6,
-                    bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1.0),
                 )
-                geometry_pick_artists.extend([line, label])
+                geometry_pick_artists.append(arrow)
 
             canvas.draw_idle()
 
