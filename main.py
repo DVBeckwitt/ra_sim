@@ -2849,7 +2849,7 @@ def on_fit_geometry_click():
                 pixel_offsets.append((hkl, dx, dy, dist))
 
                 disp_sx, disp_sy = _to_display_frame(
-                    sx, sy, k=SIM_DISPLAY_ROTATE_K
+                    sx, sy, k=DISPLAY_ROTATE_K
                 )
                 disp_mx, disp_my = _to_display_frame(
                     mx, my, k=DISPLAY_ROTATE_K
