@@ -3062,11 +3062,18 @@ def on_fit_geometry_click():
             last_simulation_signature = None
             schedule_update()
 
-            rms = np.sqrt(np.mean(result.fun**2)) if getattr(result, 'fun', None) is not None and result.fun.size else 0.0
-            txt = "Fit complete:\n" + \
-                  "\n".join(f"{n} = {v:.4f}" for n,v in zip(var_names, result.x)) + \
-                  f"\nRMS residual = {rms:.2f} px"
-            progress_label_geometry.config(text=txt)
+            rms = (
+                np.sqrt(np.mean(result.fun**2))
+                if getattr(result, "fun", None) is not None and result.fun.size
+                else 0.0
+            )
+            base_summary = (
+                "Fit complete:\n"
+                + "\n".join(
+                    f"{name} = {val:.4f}" for name, val in zip(var_names, result.x)
+                )
+                + f"\nRMS residual = {rms:.2f} px"
+            )
 
             fitted_params = dict(params)
             fitted_params.update({
@@ -3177,19 +3184,19 @@ def on_fit_geometry_click():
             else:
                 dist_report = "No matched peaks to report distances."
 
+            orientation_report = (
+                f"Applied orientation: {orientation_choice.get('label', 'identity')}"
+            )
+
             if DEBUG_ENABLED:
-                orientation_report = (
-                    f"Applied orientation: {orientation_choice.get('label', 'identity')}"
-                )
-                progress_label_geometry.config(text=orientation_report)
+                final_text = f"{base_summary}\n{orientation_report}"
             else:
-                progress_label_geometry.config(
-                    text=(
-                        progress_label_geometry.cget('text')
-                        + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}'
-                        + f"\n\nPixel offsets:\n{dist_report}"
-                    )
+                final_text = (
+                    f"{base_summary}\n\nSaved {len(export_recs)} peak records →\n{save_path}"
+                    + f"\n\nPixel offsets:\n{dist_report}"
                 )
+
+            progress_label_geometry.config(text=final_text)
             return
 
         col, row = float(event.xdata), float(event.ydata)
