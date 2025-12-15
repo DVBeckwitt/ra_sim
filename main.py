@@ -12,6 +12,7 @@ import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 import tkinter as tk
 from tkinter import filedialog, ttk
 
