@@ -89,8 +89,8 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
-# Default to debug mode unless the user explicitly disables it.
-os.environ.setdefault("RA_SIM_DEBUG", "1")
+# Default to non-debug mode; set RA_SIM_DEBUG=1 to enable diagnostics.
+os.environ.setdefault("RA_SIM_DEBUG", "0")
 # Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
 DEBUG_ENABLED = is_debug_enabled()
 if DEBUG_ENABLED:
