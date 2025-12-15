@@ -3243,48 +3243,73 @@ def on_fit_geometry_click():
 
                     rows: list[str] = []
                     per_residual: list[float] = []
-                    for idx, (H, K, L) in enumerate(miller):
-                        key = (int(round(H)), int(round(K)), int(round(L)))
-                        measured_list = measured_dict.get(key)
-                        if not measured_list:
-                            continue
 
-                        I0, x0, y0, I1, x1, y1 = maxpos[idx]
-                        sim_candidates = [
+                    def _center_from_maxpos(entry: Sequence[float]) -> tuple[float, float] | None:
+                        _, x0, y0, _, x1, y1 = entry
+                        candidates = [
                             (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
                             (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
                         ]
-                        sim_candidates = [p for p in sim_candidates if p is not None]
-                        if not sim_candidates:
+                        candidates = [p for p in candidates if p is not None]
+                        if not candidates:
+                            return None
+                        cols, rows_local = zip(*candidates)
+                        return float(np.mean(cols)), float(np.mean(rows_local))
+
+                    simulated_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
+                    for idx, (H, K, L) in enumerate(miller):
+                        key = (int(round(H)), int(round(K)), int(round(L)))
+                        if key not in measured_dict:
+                            continue
+                        center = _center_from_maxpos(maxpos[idx])
+                        if center is not None:
+                            simulated_by_hkl.setdefault(key, []).append(center)
+
+                    for hkl_key, measured_list in measured_dict.items():
+                        sim_list = simulated_by_hkl.get(hkl_key)
+                        if not sim_list:
                             continue
 
-                        for mx, my in measured_list:
-                            best = None
-                            for sx, sy in sim_candidates:
-                                dx = sx - float(mx)
-                                dy = sy - float(my)
-                                dist = math.hypot(dx, dy)
-                                if best is None or dist < best[0]:
-                                    best = (dist, dx, dy, sx, sy)
+                        sim_arr = np.asarray(sim_list, dtype=float)
+                        sim_center = (
+                            float(sim_arr[:, 0].mean()),
+                            float(sim_arr[:, 1].mean()),
+                        )
 
-                            if best is None:
-                                continue
+                        meas_arr = np.asarray(measured_list, dtype=float)
+                        meas_center = (
+                            float(meas_arr[:, 0].mean()),
+                            float(meas_arr[:, 1].mean()),
+                        )
 
-                            dist, dx, dy, sx, sy = best
-                            per_residual.append(dist)
-                            rows.append(
-                                "HKL=({},{},{}) sim=({:.3f}, {:.3f}) meas=({:.3f}, {:.3f}) "
-                                "dx={:.3f} dy={:.3f} |Δ|={:.3f}".format(
-                                    key[0], key[1], key[2], sx, sy, mx, my, dx, dy, dist
-                                )
+                        dx = sim_center[0] - meas_center[0]
+                        dy = sim_center[1] - meas_center[1]
+                        dist = math.hypot(dx, dy)
+                        per_residual.append(dist)
+                        rows.append(
+                            "HKL=({},{},{}) sim=({:.3f}, {:.3f}) meas=({:.3f}, {:.3f}) "
+                            "dx={:.3f} dy={:.3f} |Δ|={:.3f}".format(
+                                hkl_key[0],
+                                hkl_key[1],
+                                hkl_key[2],
+                                sim_center[0],
+                                sim_center[1],
+                                meas_center[0],
+                                meas_center[1],
+                                dx,
+                                dy,
+                                dist,
                             )
+                        )
 
                     rms = math.sqrt(float(np.mean(np.square(per_residual)))) if per_residual else 0.0
                     max_dist = max(per_residual) if per_residual else 0.0
                     _log_section(
                         title,
-                        [f"matches={len(per_residual)}, RMS={rms:.3f} px, max={max_dist:.3f} px"]
-                        + rows,
+                        [
+                            f"matches={len(per_residual)}, RMS={rms:.3f} px, max={max_dist:.3f} px",
+                            *rows,
+                        ],
                     )
 
                 def _log_matches_snapshot(title: str, param_set: dict[str, float]):
