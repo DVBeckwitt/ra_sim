@@ -100,6 +100,10 @@ if DEBUG_ENABLED:
 else:
     print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
 
+# Toggle creation of backend orientation controls (kept off while automated
+# diagnostics try permutations internally).
+BACKEND_ORIENTATION_UI_ENABLED = False
+
 
 ###############################################################################
 #                          DATA & PARAMETER SETUP
@@ -675,10 +679,55 @@ def _unrotate_display_peaks(measured, rotated_shape):
     return unrotated
 
 
+def _apply_indexing_mode_to_entries(
+    measured,
+    shape: tuple[int, int],
+    *,
+    indexing_mode: str = "xy",
+):
+    """Swap x/y coordinates when using alternate indexing modes."""
+
+    if measured is None:
+        return []
+
+    _ = shape  # retained for signature parity with orientation helpers
+
+    mode = (indexing_mode or "xy").lower()
+    if mode == "xy":
+        return list(measured)
+
+    swapped_entries = []
+
+    def _swap_pair(col: float, row: float) -> tuple[float, float]:
+        return float(row), float(col)
+
+    for entry in measured:
+        if isinstance(entry, dict):
+            updated = dict(entry)
+            if "x" in updated and "y" in updated:
+                updated["x"], updated["y"] = _swap_pair(updated["x"], updated["y"])
+            if "x_pix" in updated and "y_pix" in updated:
+                updated["x_pix"], updated["y_pix"] = _swap_pair(
+                    updated["x_pix"], updated["y_pix"]
+                )
+            swapped_entries.append(updated)
+            continue
+
+        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            seq = list(entry)
+            seq[3], seq[4] = _swap_pair(seq[3], seq[4])
+            swapped_entries.append(type(entry)(seq))
+        else:
+            swapped_entries.append(entry)
+
+    return swapped_entries
+
+
 def _apply_orientation_to_entries(
     measured,
     rotated_shape,
     *,
+    indexing_mode: str = "xy",
     k: int = 0,
     flip_x: bool = False,
     flip_y: bool = False,
@@ -689,14 +738,17 @@ def _apply_orientation_to_entries(
     if measured is None:
         return []
 
+    indexed = _apply_indexing_mode_to_entries(measured, rotated_shape, indexing_mode=indexing_mode)
+
     k_mod = int(k) % 4
     if k_mod == 0 and not flip_x and not flip_y:
-        return list(measured)
+        return list(indexed)
 
     def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
         return _transform_points_orientation(
             [(x_val, y_val)],
             rotated_shape,
+            indexing_mode=indexing_mode,
             k=k_mod,
             flip_x=flip_x,
             flip_y=flip_y,
@@ -704,7 +756,7 @@ def _apply_orientation_to_entries(
         )[0]
 
     oriented_entries = []
-    for entry in measured:
+    for entry in indexed:
         if isinstance(entry, dict):
             updated = dict(entry)
             if "x" in updated and "y" in updated:
@@ -729,6 +781,7 @@ def _apply_orientation_to_entries(
 def _orient_image_for_fit(
     image: np.ndarray | None,
     *,
+    indexing_mode: str = "xy",
     k: int = 0,
     flip_x: bool = False,
     flip_y: bool = False,
@@ -740,6 +793,9 @@ def _orient_image_for_fit(
         return None
 
     oriented = np.asarray(image)
+    mode = (indexing_mode or "xy").lower()
+    if mode == "yx":
+        oriented = np.swapaxes(oriented, 0, 1)
     order = (flip_order or "yx").lower()
     if order == "xy":
         if flip_x:
@@ -767,6 +823,7 @@ def _transform_points_orientation(
     points: list[tuple[float, float]],
     shape: tuple[int, int],
     *,
+    indexing_mode: str = "xy",
     k: int = 0,
     flip_x: bool = False,
     flip_y: bool = False,
@@ -774,7 +831,12 @@ def _transform_points_orientation(
 ) -> list[tuple[float, float]]:
     """Apply flips/rotations to a list of (col, row) points for diagnostics."""
 
-    height, width = shape
+    base_height, base_width = shape
+    mode = (indexing_mode or "xy").lower()
+    if mode == "yx":
+        height, width = base_width, base_height
+    else:
+        height, width = base_height, base_width
     transformed: list[tuple[float, float]] = []
 
     order = (flip_order or "yx").lower()
@@ -796,8 +858,11 @@ def _transform_points_orientation(
     flipper = _flip_xy if order == "xy" else _flip_yx
 
     for col, row in points:
-        col_t, row_t = flipper(float(col), float(row))
-        col_t, row_t = _rotate_point_for_display(col_t, row_t, shape, k)
+        col_t, row_t = float(col), float(row)
+        if mode == "yx":
+            col_t, row_t = row_t, col_t
+        col_t, row_t = flipper(col_t, row_t)
+        col_t, row_t = _rotate_point_for_display(col_t, row_t, (height, width), k)
         transformed.append((col_t, row_t))
 
     return transformed
@@ -813,7 +878,9 @@ def _best_orientation_alignment(
     if not sim_coords or not meas_coords or len(sim_coords) != len(meas_coords):
         return None
 
-    def _describe(k: int, flip_x: bool, flip_y: bool) -> str:
+    def _describe(
+        k: int, flip_x: bool, flip_y: bool, flip_order: str, indexing_mode: str
+    ) -> str:
         parts: list[str] = []
         if k % 4:
             parts.append(f"rot{(k % 4) * 90}° CCW")
@@ -821,35 +888,84 @@ def _best_orientation_alignment(
             parts.append("flip_x")
         if flip_y:
             parts.append("flip_y")
-        return " + ".join(parts) if parts else "identity"
+        parts.append(f"order={flip_order}")
+        parts.append(f"indexing={indexing_mode}")
+        return " + ".join(parts)
 
     best = None
-    for k in range(4):
-        for flip_x in (False, True):
-            for flip_y in (False, True):
-                transformed = _transform_points_orientation(
-                    meas_coords, shape, k=k, flip_x=flip_x, flip_y=flip_y
-                )
-                deltas = [
-                    math.hypot(sx - mx, sy - my)
-                    for (sx, sy), (mx, my) in zip(sim_coords, transformed)
-                ]
-                if not deltas:
-                    continue
-                rms = math.sqrt(sum(d * d for d in deltas) / len(deltas))
-                mean = sum(deltas) / len(deltas)
-                candidate = {
-                    "k": k,
-                    "flip_x": flip_x,
-                    "flip_y": flip_y,
-                    "rms": rms,
-                    "mean": mean,
-                    "label": _describe(k, flip_x, flip_y),
-                }
-                if best is None or candidate["rms"] < best["rms"]:
-                    best = candidate
+    for indexing_mode in ("xy", "yx"):
+        for flip_order in ("yx", "xy"):
+            for k in range(4):
+                for flip_x in (False, True):
+                    for flip_y in (False, True):
+                        transformed = _transform_points_orientation(
+                            meas_coords,
+                            shape,
+                            indexing_mode=indexing_mode,
+                            k=k,
+                            flip_x=flip_x,
+                            flip_y=flip_y,
+                            flip_order=flip_order,
+                        )
+                        deltas = [
+                            math.hypot(sx - mx, sy - my)
+                            for (sx, sy), (mx, my) in zip(sim_coords, transformed)
+                        ]
+                        if not deltas:
+                            continue
+                        rms = math.sqrt(sum(d * d for d in deltas) / len(deltas))
+                        mean = sum(deltas) / len(deltas)
+                        candidate = {
+                            "k": k,
+                            "flip_x": flip_x,
+                            "flip_y": flip_y,
+                            "flip_order": flip_order,
+                            "indexing_mode": indexing_mode,
+                            "rms": rms,
+                            "mean": mean,
+                            "label": _describe(
+                                k, flip_x, flip_y, flip_order, indexing_mode
+                            ),
+                        }
+                        if best is None or candidate["rms"] < best["rms"]:
+                            best = candidate
 
     return best
+
+
+def _aggregate_match_centers(
+    sim_coords: list[tuple[float, float]],
+    meas_coords: list[tuple[float, float]],
+    sim_millers: list[tuple[int, int, int]],
+    meas_millers: list[tuple[int, int, int]],
+):
+    """Collapse matched peaks by HKL and return centroid pairs."""
+
+    aggregated: dict[tuple[int, int, int], dict[str, list[tuple[float, float]]]] = {}
+    for hkl_sim, hkl_meas, sim_xy, meas_xy in zip(
+        sim_millers, meas_millers, sim_coords, meas_coords
+    ):
+        hkl_key = tuple(int(v) for v in (hkl_sim or hkl_meas))
+        entry = aggregated.setdefault(hkl_key, {"sim": [], "meas": []})
+        entry["sim"].append(sim_xy)
+        entry["meas"].append(meas_xy)
+
+    agg_sim_coords: list[tuple[float, float]] = []
+    agg_meas_coords: list[tuple[float, float]] = []
+    agg_millers: list[tuple[int, int, int]] = []
+
+    for hkl_key in sorted(aggregated):
+        sim_arr = np.array(aggregated[hkl_key]["sim"], dtype=float)
+        meas_arr = np.array(aggregated[hkl_key]["meas"], dtype=float)
+
+        sim_center = (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
+        meas_center = (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
+
+        agg_sim_coords.append(sim_center)
+        agg_meas_coords.append(meas_center)
+        agg_millers.append(hkl_key)
+
+    return agg_sim_coords, agg_meas_coords, agg_millers
 
 
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
@@ -2653,7 +2769,7 @@ backend_flip_y_axis_var = tk.BooleanVar(value=False)
 backend_flip_x_axis_var = tk.BooleanVar(value=False)
 backend_flip_order_var = tk.StringVar(value="yx")
 
-if DEBUG_ENABLED:
+if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
     backend_orient_frame = ttk.LabelFrame(root, text="Backend orientation (debug)")
     backend_orient_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
@@ -2822,28 +2938,73 @@ def on_fit_geometry_click():
                 {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
                 for (h, k, l), (x, y) in picked_pairs
             ]
-            measured_for_fit = _unrotate_display_peaks(
-                measured_from_clicks, _get_current_background_native().shape
+            native_background = _get_current_background_native()
+            measured_native = _unrotate_display_peaks(
+                measured_from_clicks, native_background.shape
             )
 
-            backend_k = int(backend_rotation_var.get())
-            backend_flip_y = bool(backend_flip_y_axis_var.get())
-            backend_flip_x = bool(backend_flip_x_axis_var.get())
-            backend_flip_order = (backend_flip_order_var.get() or "yx").lower()
+            orientation_choice = {
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "indexing_mode": "xy",
+                "label": "identity",
+            }
+
+            if DEBUG_ENABLED:
+                try:
+                    (
+                        _,
+                        preview_sim_coords,
+                        preview_meas_coords,
+                        preview_sim_millers,
+                        preview_meas_millers,
+                    ) = simulate_and_compare_hkl(
+                        miller,
+                        intensities,
+                        image_size,
+                        params,
+                        measured_native,
+                        pixel_tol=float("inf"),
+                    )
+                    (
+                        preview_sim_centers,
+                        preview_meas_centers,
+                        _preview_hkls,
+                    ) = _aggregate_match_centers(
+                        preview_sim_coords,
+                        preview_meas_coords,
+                        preview_sim_millers,
+                        preview_meas_millers,
+                    )
+                    best = _best_orientation_alignment(
+                        preview_sim_centers,
+                        preview_meas_centers,
+                        native_background.shape,
+                    )
+                    if best is not None:
+                        orientation_choice.update(best)
+                except Exception:
+                    # fall back to identity if diagnostics fail
+                    pass
+
             measured_for_fit = _apply_orientation_to_entries(
-                measured_for_fit,
-                _get_current_background_native().shape,
-                k=backend_k,
-                flip_x=backend_flip_y,
-                flip_y=backend_flip_x,
-                flip_order=backend_flip_order,
+                measured_native,
+                native_background.shape,
+                indexing_mode=orientation_choice["indexing_mode"],
+                k=orientation_choice["k"],
+                flip_x=orientation_choice["flip_x"],
+                flip_y=orientation_choice["flip_y"],
+                flip_order=orientation_choice["flip_order"],
             )
             experimental_image_for_fit = _orient_image_for_fit(
-                _get_current_background_native(),
-                k=backend_k,
-                flip_x=backend_flip_y,
-                flip_y=backend_flip_x,
-                flip_order=backend_flip_order,
+                native_background,
+                indexing_mode=orientation_choice["indexing_mode"],
+                k=orientation_choice["k"],
+                flip_x=orientation_choice["flip_x"],
+                flip_y=orientation_choice["flip_y"],
+                flip_order=orientation_choice["flip_order"],
             )
 
             result = fit_geometry_parameters(
@@ -2903,29 +3064,19 @@ def on_fit_geometry_click():
                     float(col), float(row), (image_size, image_size), k
                 )
 
-            aggregated: dict[tuple[int, int, int], dict[str, list[tuple[float, float]]]] = {}
-            for hkl, sim_xy, meas_xy in zip(sim_millers, sim_coords, meas_coords):
-                hkl_key = tuple(int(v) for v in hkl)
-                entry = aggregated.setdefault(hkl_key, {"sim": [], "meas": []})
-                entry["sim"].append(sim_xy)
-                entry["meas"].append(meas_xy)
+            (
+                agg_sim_coords,
+                agg_meas_coords,
+                agg_millers,
+            ) = _aggregate_match_centers(
+                sim_coords, meas_coords, sim_millers, meas_millers
+            )
 
-            agg_sim_coords: list[tuple[float, float]] = []
-            agg_meas_coords: list[tuple[float, float]] = []
-            agg_millers: list[tuple[int, int, int]] = []
             pixel_offsets = []
 
-            for hkl_key in sorted(aggregated):
-                sim_arr = np.array(aggregated[hkl_key]["sim"], dtype=float)
-                meas_arr = np.array(aggregated[hkl_key]["meas"], dtype=float)
-
-                sim_center = (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
-                meas_center = (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
-
-                agg_sim_coords.append(sim_center)
-                agg_meas_coords.append(meas_center)
-                agg_millers.append(hkl_key)
-
+            for hkl_key, sim_center, meas_center in zip(
+                agg_millers, agg_sim_coords, agg_meas_coords
+            ):
                 dx = sim_center[0] - meas_center[0]
                 dy = sim_center[1] - meas_center[1]
                 dist = math.hypot(dx, dy)
@@ -2992,13 +3143,9 @@ def on_fit_geometry_click():
                 dist_report = "No matched peaks to report distances."
 
             if DEBUG_ENABLED:
-                best_orientation = _best_orientation_alignment(
-                    agg_sim_coords, agg_meas_coords, (image_size, image_size)
+                orientation_report = (
+                    f"Applied orientation: {orientation_choice.get('label', 'identity')}"
                 )
-                if best_orientation is not None:
-                    orientation_report = f"Best flip/rotation match: {best_orientation['label']}"
-                else:
-                    orientation_report = "Best flip/rotation match: unavailable"
                 progress_label_geometry.config(text=orientation_report)
             else:
                 progress_label_geometry.config(
