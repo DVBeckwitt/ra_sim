@@ -2824,6 +2824,7 @@ if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
 
 
 def on_fit_geometry_click():
+    global profile_cache, last_simulation_signature
     _clear_geometry_pick_artists()
 
     # first, reconstruct the same mosaic_params dict you use in do_update()
@@ -3035,6 +3036,30 @@ def on_fit_geometry_click():
                 elif name == 'chi':            chi_var.set(val)
                 elif name == 'cor_angle':      cor_angle_var.set(val)
 
+            # Keep the cached profile in sync with the fitted geometry so the
+            # next simulation uses the updated parameters even when diagnostics
+            # are disabled.
+            profile_cache = dict(profile_cache)
+            profile_cache.update(mosaic_params)
+            profile_cache.update(
+                {
+                    "theta_initial": theta_initial_var.get(),
+                    "cor_angle": cor_angle_var.get(),
+                    "chi": chi_var.get(),
+                    "zs": zs_var.get(),
+                    "zb": zb_var.get(),
+                    "gamma": gamma_var.get(),
+                    "Gamma": Gamma_var.get(),
+                    "corto_detector": corto_detector_var.get(),
+                    "a": a_var.get(),
+                    "c": c_var.get(),
+                    "center_x": center_x_var.get(),
+                    "center_y": center_y_var.get(),
+                }
+            )
+
+            # Force a fresh simulation with the fitted values.
+            last_simulation_signature = None
             schedule_update()
 
             rms = np.sqrt(np.mean(result.fun**2)) if getattr(result, 'fun', None) is not None and result.fun.size else 0.0
