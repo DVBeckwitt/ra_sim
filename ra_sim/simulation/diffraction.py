@@ -1226,6 +1226,36 @@ def process_peaks_parallel(
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
+def hit_tables_to_max_positions(hit_tables):
+    """Extract top-2 peak locations per reflection from ``hit_tables``.
+
+    ``process_peaks_parallel`` returns a list of pixel-hit tables, each with
+    columns ``[intensity, col, row, phi, H, K, L]``.  Older callers expect a
+    ``max_positions`` array shaped ``(N, 6)`` containing the brightest two hit
+    locations per reflection: ``(I0, x0, y0, I1, x1, y1)``.  This helper
+    restores that structure so downstream code can remain unchanged.
+    """
+
+    num_peaks = len(hit_tables)
+    max_positions = np.zeros((num_peaks, 6), dtype=np.float64)
+
+    for i, hits in enumerate(hit_tables):
+        hits_arr = np.asarray(hits)
+        if hits_arr.size == 0:
+            continue
+
+        # Sort by intensity descending and take the top two
+        sorted_hits = hits_arr[np.argsort(hits_arr[:, 0])[::-1]]
+        primary = sorted_hits[0]
+        max_positions[i, 0:3] = primary[0:3]
+
+        if sorted_hits.shape[0] > 1:
+            secondary = sorted_hits[1]
+            max_positions[i, 3:6] = secondary[0:3]
+
+    return max_positions
+
+
 def process_qr_rods_parallel(
     qr_dict,
     image_size,

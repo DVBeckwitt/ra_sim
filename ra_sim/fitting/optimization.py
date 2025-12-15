@@ -9,7 +9,10 @@ from scipy.optimize import least_squares, differential_evolution, OptimizeResult
 from scipy.ndimage import distance_transform_edt, gaussian_filter, sobel, zoom
 from scipy.spatial import cKDTree
 
-from ra_sim.simulation.diffraction import process_peaks_parallel
+from ra_sim.simulation.diffraction import (
+    hit_tables_to_max_positions,
+    process_peaks_parallel,
+)
 from ra_sim.utils.calculations import d_spacing, two_theta
 
 RNG = np.random.default_rng(42)
@@ -178,7 +181,7 @@ def _simulate_with_cache(
     if wavelength_array is None:
         wavelength_array = params.get('lambda')
 
-    image, maxpos, _, _, _ = process_peaks_parallel(
+    image, hit_tables, *_ = process_peaks_parallel(
         miller, intensities, image_size,
         params['a'], params['c'], wavelength_array,
         buffer, params['corto_detector'],
@@ -200,7 +203,7 @@ def _simulate_with_cache(
     )
 
     image = np.asarray(image, dtype=np.float64)
-    maxpos = np.asarray(maxpos)
+    maxpos = hit_tables_to_max_positions(hit_tables)
 
     cache.store(params, image, maxpos)
     return image, maxpos
@@ -1647,7 +1650,7 @@ def simulate_and_compare_hkl(
         wavelength_array = mosaic.get('wavelength_i_array')
 
     # Full-pattern simulation
-    updated_image, maxpos, _, _, _ = process_peaks_parallel(
+    updated_image, hit_tables, *_ = process_peaks_parallel(
         miller, intensities, image_size,
         a, c, wavelength_array,
         sim_buffer, dist,
@@ -1667,6 +1670,7 @@ def simulate_and_compare_hkl(
         np.array([0.0, 1.0, 0.0]),
         save_flag=0
     )
+    maxpos = hit_tables_to_max_positions(hit_tables)
 
     distances: list[float] = []
     sim_coords: list[tuple[float, float]] = []
@@ -1685,44 +1689,52 @@ def simulate_and_compare_hkl(
             continue
 
         I0, x0, y0, I1, x1, y1 = maxpos[i]
-        simulated_peaks: list[tuple[float, float, float, float]] = []
+        simulated_points: list[tuple[float, float]] = []
         for col, row in ((x0, y0), (x1, y1)):
-            two_theta, phi = _pixel_to_angles(col, row, centre, detector_distance, pixel_size)
-            if two_theta is None or phi is None:
+            if not np.isfinite(col) or not np.isfinite(row):
                 continue
-            simulated_peaks.append((float(col), float(row), two_theta, phi))
+            simulated_points.append((float(col), float(row)))
 
-        if not simulated_peaks:
+        if not simulated_points:
             continue
 
-        measured_peaks_for_reflection: list[tuple[float, float, float, float]] = []
+        sim_cols, sim_rows = zip(*simulated_points)
+        sim_center_col = float(np.mean(sim_cols))
+        sim_center_row = float(np.mean(sim_rows))
+        sim_two_theta, sim_phi = _pixel_to_angles(
+            sim_center_col, sim_center_row, centre, detector_distance, pixel_size
+        )
+        if sim_two_theta is None or sim_phi is None:
+            continue
+
+        measured_points: list[tuple[float, float]] = []
         for mx, my in candidates:
-            two_theta, phi = _pixel_to_angles(mx, my, centre, detector_distance, pixel_size)
-            if two_theta is None or phi is None:
+            if not np.isfinite(mx) or not np.isfinite(my):
                 continue
-            measured_peaks_for_reflection.append((float(mx), float(my), two_theta, phi))
+            measured_points.append((float(mx), float(my)))
 
-        if not measured_peaks_for_reflection:
+        if not measured_points:
             continue
 
-        simulated_peaks.sort(key=lambda item: item[2])
-        measured_peaks_for_reflection.sort(key=lambda item: item[2])
-        pair_count = min(len(simulated_peaks), len(measured_peaks_for_reflection))
+        meas_cols, meas_rows = zip(*measured_points)
+        meas_center_col = float(np.mean(meas_cols))
+        meas_center_row = float(np.mean(meas_rows))
+        meas_two_theta, meas_phi = _pixel_to_angles(
+            meas_center_col, meas_center_row, centre, detector_distance, pixel_size
+        )
+        if meas_two_theta is None or meas_phi is None:
+            continue
 
-        for idx in range(pair_count):
-            s_col, s_row, s_two_theta, s_phi = simulated_peaks[idx]
-            m_col, m_row, m_two_theta, m_phi = measured_peaks_for_reflection[idx]
+        radial_diff = abs(sim_two_theta - meas_two_theta)
+        azimuthal_diff = abs(_angular_difference_deg(sim_phi, meas_phi))
+        combined = math.hypot(radial_diff, azimuthal_diff)
 
-            radial_diff = abs(s_two_theta - m_two_theta)
-            azimuthal_diff = abs(_angular_difference_deg(s_phi, m_phi))
-            combined = math.hypot(radial_diff, azimuthal_diff)
-
-            if combined <= pixel_tol:
-                distances.extend([radial_diff, azimuthal_diff])
-                sim_coords.append((s_col, s_row))
-                meas_coords.append((m_col, m_row))
-                sim_millers.append(key)
-                meas_millers.append(key)
+        if combined <= pixel_tol:
+            distances.extend([radial_diff, azimuthal_diff])
+            sim_coords.append((sim_center_col, sim_center_row))
+            meas_coords.append((meas_center_col, meas_center_row))
+            sim_millers.append(key)
+            meas_millers.append(key)
 
     return (
         np.array(distances, dtype=float),
@@ -1783,18 +1795,6 @@ def fit_geometry_parameters(
     var_names is a list of keys in `params` to optimize.
     """
 
-    if experimental_image is not None:
-        return iterative_refinement(
-            experimental_image,
-            miller,
-            intensities,
-            image_size,
-            params,
-            var_names=var_names,
-            measured_peaks=measured_peaks,
-            config=refinement_config,
-        )
-
     def cost_fn(x):
         local = params.copy()
         for name, v in zip(var_names, x):
@@ -1821,9 +1821,116 @@ def fit_geometry_parameters(
         )
         return D
 
+    def pixel_cost_fn(x):
+        local = params.copy()
+        for name, v in zip(var_names, x):
+            local[name] = v
+
+        measured_dict = build_measured_dict(measured_peaks)
+        if not measured_dict:
+            return np.array([], dtype=float)
+
+        mosaic = local['mosaic_params']
+        wavelength_array = mosaic.get('wavelength_array')
+        if wavelength_array is None:
+            wavelength_array = mosaic.get('wavelength_i_array')
+
+        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+        _, hit_tables, *_ = process_peaks_parallel(
+            miller, intensities, image_size,
+            local['a'], local['c'], wavelength_array,
+            sim_buffer, local['corto_detector'],
+            local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0),
+            local['zs'], local['zb'], local['n2'],
+            mosaic['beam_x_array'],
+            mosaic['beam_y_array'],
+            mosaic['theta_array'],
+            mosaic['phi_array'],
+            mosaic['sigma_mosaic_deg'],
+            mosaic['gamma_mosaic_deg'],
+            mosaic['eta'],
+            wavelength_array,
+            local['debye_x'], local['debye_y'],
+            local['center'], local['theta_initial'], local.get('cor_angle', 0.0),
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            save_flag=0,
+        )
+
+        maxpos = hit_tables_to_max_positions(hit_tables)
+        residuals: list[float] = []
+
+        # Aggregate simulated maxima per HKL and compare them to the centroid of
+        # the measured clicks so each reflection contributes exactly one pair of
+        # residuals. This avoids exploding the residual vector when the Miller
+        # list contains repeated entries for the same HKL.
+        simulated_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
+
+        def _center_from_maxpos(entry: Sequence[float]) -> tuple[float, float] | None:
+            _, x0, y0, _, x1, y1 = entry
+            candidates = [
+                (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
+                (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
+            ]
+            candidates = [p for p in candidates if p is not None]
+            if not candidates:
+                return None
+            cols, rows = zip(*candidates)
+            return float(np.mean(cols)), float(np.mean(rows))
+
+        for idx, (H, K, L) in enumerate(miller):
+            key = (int(round(H)), int(round(K)), int(round(L)))
+            if key not in measured_dict:
+                continue
+            center = _center_from_maxpos(maxpos[idx])
+            if center is not None:
+                simulated_by_hkl.setdefault(key, []).append(center)
+
+        for hkl_key, measured_list in measured_dict.items():
+            sim_list = simulated_by_hkl.get(hkl_key)
+            if not sim_list:
+                continue
+
+            sim_arr = np.asarray(sim_list, dtype=float)
+            sim_center = (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
+
+            meas_arr = np.asarray(measured_list, dtype=float)
+            meas_center = (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
+
+            dx = sim_center[0] - meas_center[0]
+            dy = sim_center[1] - meas_center[1]
+            dist = math.hypot(dx, dy)
+            if dist <= pixel_tol:
+                residuals.extend([dx, dy])
+
+        return np.asarray(residuals, dtype=float)
+
     x0 = [params[name] for name in var_names]
-    res = least_squares(cost_fn, x0)
-    return res
+
+    if experimental_image is None:
+        return least_squares(cost_fn, x0)
+
+    lower_bounds = []
+    upper_bounds = []
+    theta0 = float(params.get('theta_initial', 0.0))
+    for name, val in zip(var_names, x0):
+        if name == 'theta_initial':
+            lower_bounds.append(theta0 - 0.5)
+            upper_bounds.append(theta0 + 0.5)
+        elif name in {'zs', 'zb'}:
+            lower_bounds.append(-2.0e-3)
+            upper_bounds.append(2.0e-3)
+        elif name == 'chi':
+            lower_bounds.append(-1.0)
+            upper_bounds.append(1.0)
+        elif name == 'cor_angle':
+            lower_bounds.append(-5.0)
+            upper_bounds.append(5.0)
+        else:
+            lower_bounds.append(-np.inf)
+            upper_bounds.append(np.inf)
+
+    return least_squares(pixel_cost_fn, x0, bounds=(lower_bounds, upper_bounds))
 
 
 def run_optimization_positions_geometry_local(

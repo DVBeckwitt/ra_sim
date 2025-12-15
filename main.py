@@ -4,9 +4,6 @@
 
 import math
 import os
-
-# Enable debug messages automatically. Set RA_SIM_DEBUG=0 to disable.
-os.environ.setdefault("RA_SIM_DEBUG", "0")
 write_excel = False
 
 import re
@@ -15,6 +12,7 @@ import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 import tkinter as tk
 from tkinter import filedialog, ttk
 
@@ -61,12 +59,14 @@ from ra_sim.io.data_loading import (
     load_parameters,
 )
 from ra_sim.fitting.optimization import (
-    simulate_and_compare_hkl,
+    build_measured_dict,
     fit_geometry_parameters,
     fit_mosaic_widths_separable,
+    simulate_and_compare_hkl,
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
+    hit_tables_to_max_positions,
     process_peaks_parallel,
     process_qr_rods_parallel,
 )
@@ -91,6 +91,8 @@ turbo_white0.set_bad('white')              # NaNs will also show white
 
 # Force TkAgg backend to ensure GUI usage
 matplotlib.use('TkAgg')
+# Default to non-debug mode; set RA_SIM_DEBUG=1 to enable diagnostics.
+os.environ.setdefault("RA_SIM_DEBUG", "0")
 # Enable extra diagnostics when the RA_SIM_DEBUG environment variable is set.
 DEBUG_ENABLED = is_debug_enabled()
 if DEBUG_ENABLED:
@@ -99,6 +101,10 @@ if DEBUG_ENABLED:
     enable_numba_logging()
 else:
     print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
+
+# Toggle creation of backend orientation controls (kept off while automated
+# diagnostics try permutations internally).
+BACKEND_ORIENTATION_UI_ENABLED = False
 
 
 ###############################################################################
@@ -137,6 +143,10 @@ if isinstance(osc_files, str):
 background_images = [read_osc(path) for path in osc_files]
 if not background_images:
     raise ValueError("No oscillation images configured in osc_files")
+
+# Preserve native-orientation copies for fitting/analysis; display variants may
+# be rotated for visualization.
+background_images_native = [np.array(img) for img in background_images]
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -563,60 +573,68 @@ def export_initial_excel():
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 
-# Rotate background images 90 degrees clockwise so orientation matches simulation
-background_images = [np.rot90(bg, -1) for bg in background_images]
+# Background and simulated overlays share the same display orientation. ``k`` is
+# the np.rot90 factor; 0 keeps images in their native top-left origin frame.
+DISPLAY_ROTATE_K = 0
+SIM_DISPLAY_ROTATE_K = DISPLAY_ROTATE_K
 
 current_background_image = background_images[0]
 current_background_index = 0
 background_visible = True
 
 
-def _rotate_measured_peaks_clockwise(measured, rotated_shape):
-    """Rotate measured-peak coordinates to match the displayed background.
+def _get_current_background_native() -> np.ndarray:
+    """Return the unrotated background image corresponding to the current index."""
 
-    The GUI rotates detector images 90° clockwise so the simulated pattern and
-    experimental background share the same orientation.  ``measured`` contains
-    either dictionaries (``{'label': 'h,k,l', 'x': ..., 'y': ...}``) or tuples
-    ``(h, k, l, x, y[, ...])`` that were recorded in the *original* detector
-    orientation.  This helper mirrors the image rotation by remapping each
-    coordinate pair.
+    if 0 <= current_background_index < len(background_images_native):
+        return background_images_native[current_background_index]
+    return current_background_image
+
+
+def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k: int):
+    """Rotate a single (col, row) pair by ``k`` using the same rule as ``np.rot90``.
+
+    The transformation mirrors what ``np.rot90`` does to the underlying image so
+    point overlays stay aligned with whichever orientation we render.
     """
+
+    height, width = shape[:2]
+    col_new, row_new = float(col), float(row)
+
+    # Apply the 90° rotation step-by-step to mirror ``np.rot90``'s behavior for
+    # any integer ``k`` (positive for CCW, negative for CW).
+    for _ in range(k % 4):
+        row_new, col_new, height, width = width - 1 - col_new, row_new, width, height
+
+    return col_new, row_new
+
+
+def _rotate_measured_peaks_for_display(measured, rotated_shape):
+    """Rotate measured-peak coordinates to match the displayed background."""
 
     if measured is None:
         return []
-
-    # ``np.rot90(image, -1)`` swaps the detector axes: the rotated image has
-    # ``rotated_shape == (orig_width, orig_height)``.  The clockwise rotation
-    # maps (x, y) → (x_new, y_new) with::
-    #
-    #     x_new = orig_height - 1 - y
-    #     y_new = x
-    #
-    # where ``x``/``y`` follow the image convention (columns, rows).
-    _, rotated_width = rotated_shape[:2]
-    original_height = rotated_width
-
-    def transform(x_val, y_val):
-        x_new = original_height - 1 - float(y_val)
-        y_new = float(x_val)
-        return x_new, y_new
 
     rotated_entries = []
     for entry in measured:
         if isinstance(entry, dict):
             updated = dict(entry)
             if "x" in updated and "y" in updated:
-                updated["x"], updated["y"] = transform(updated["x"], updated["y"])
+                updated["x"], updated["y"] = _rotate_point_for_display(
+                    updated["x"], updated["y"], rotated_shape, DISPLAY_ROTATE_K
+                )
             if "x_pix" in updated and "y_pix" in updated:
-                updated["x_pix"], updated["y_pix"] = transform(
-                    updated["x_pix"], updated["y_pix"]
+                updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
+                    updated["x_pix"], updated["y_pix"], rotated_shape, DISPLAY_ROTATE_K
                 )
             rotated_entries.append(updated)
             continue
 
         if isinstance(entry, (list, tuple)) and len(entry) >= 5:
             seq = list(entry)
-            seq[3], seq[4] = transform(seq[3], seq[4])
+            seq[3], seq[4] = _rotate_point_for_display(
+                seq[3], seq[4], rotated_shape, DISPLAY_ROTATE_K
+            )
             rotated_entries.append(type(entry)(seq))
         else:
             rotated_entries.append(entry)
@@ -624,8 +642,338 @@ def _rotate_measured_peaks_clockwise(measured, rotated_shape):
     return rotated_entries
 
 
+def _unrotate_display_peaks(measured, rotated_shape):
+    """Map displayed peak coordinates into the simulation's native orientation."""
+
+    if measured is None:
+        return []
+
+    unrotated = []
+    for entry in measured:
+        if isinstance(entry, dict):
+            updated = dict(entry)
+            if "x" in updated and "y" in updated:
+                updated["x"], updated["y"] = _rotate_point_for_display(
+                    updated["x"], updated["y"], rotated_shape, -DISPLAY_ROTATE_K
+                )
+            if "x_pix" in updated and "y_pix" in updated:
+                updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
+                    updated["x_pix"], updated["y_pix"], rotated_shape, -DISPLAY_ROTATE_K
+                )
+            unrotated.append(updated)
+            continue
+
+        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            seq = list(entry)
+            seq[3], seq[4] = _rotate_point_for_display(
+                seq[3], seq[4], rotated_shape, -DISPLAY_ROTATE_K
+            )
+            unrotated.append(type(entry)(seq))
+        else:
+            unrotated.append(entry)
+
+    return unrotated
+
+
+def _apply_indexing_mode_to_entries(
+    measured,
+    shape: tuple[int, int],
+    *,
+    indexing_mode: str = "xy",
+):
+    """Swap x/y coordinates when using alternate indexing modes."""
+
+    if measured is None:
+        return []
+
+    _ = shape  # retained for signature parity with orientation helpers
+
+    mode = (indexing_mode or "xy").lower()
+    if mode == "xy":
+        return list(measured)
+
+    swapped_entries = []
+
+    def _swap_pair(col: float, row: float) -> tuple[float, float]:
+        return float(row), float(col)
+
+    for entry in measured:
+        if isinstance(entry, dict):
+            updated = dict(entry)
+            if "x" in updated and "y" in updated:
+                updated["x"], updated["y"] = _swap_pair(updated["x"], updated["y"])
+            if "x_pix" in updated and "y_pix" in updated:
+                updated["x_pix"], updated["y_pix"] = _swap_pair(
+                    updated["x_pix"], updated["y_pix"]
+                )
+            swapped_entries.append(updated)
+            continue
+
+        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            seq = list(entry)
+            seq[3], seq[4] = _swap_pair(seq[3], seq[4])
+            swapped_entries.append(type(entry)(seq))
+        else:
+            swapped_entries.append(entry)
+
+    return swapped_entries
+
+
+def _apply_orientation_to_entries(
+    measured,
+    rotated_shape,
+    *,
+    indexing_mode: str = "xy",
+    k: int = 0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+    flip_order: str = "yx",
+):
+    """Apply backend-only rotations/flips to measured peak entries."""
+
+    if measured is None:
+        return []
+
+    indexed = _apply_indexing_mode_to_entries(
+        measured, rotated_shape, indexing_mode=indexing_mode
+    )
+
+    k_mod = int(k) % 4
+    if k_mod == 0 and not flip_x and not flip_y:
+        return list(indexed)
+
+    # Points are already expressed in the requested indexing mode, so avoid
+    # double-swapping by keeping further transforms in XY and adjusting the
+    # shape to match that frame.
+    mode = (indexing_mode or "xy").lower()
+    oriented_shape = rotated_shape if mode == "xy" else (rotated_shape[1], rotated_shape[0])
+
+    def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
+        return _transform_points_orientation(
+            [(x_val, y_val)],
+            oriented_shape,
+            indexing_mode="xy",
+            k=k_mod,
+            flip_x=flip_x,
+            flip_y=flip_y,
+            flip_order=flip_order,
+        )[0]
+
+    oriented_entries = []
+    for entry in indexed:
+        if isinstance(entry, dict):
+            updated = dict(entry)
+            if "x" in updated and "y" in updated:
+                updated["x"], updated["y"] = _apply_pair(updated["x"], updated["y"])
+            if "x_pix" in updated and "y_pix" in updated:
+                updated["x_pix"], updated["y_pix"] = _apply_pair(
+                    updated["x_pix"], updated["y_pix"]
+                )
+            oriented_entries.append(updated)
+            continue
+
+        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            seq = list(entry)
+            seq[3], seq[4] = _apply_pair(seq[3], seq[4])
+            oriented_entries.append(type(entry)(seq))
+        else:
+            oriented_entries.append(entry)
+
+    return oriented_entries
+
+
+def _orient_image_for_fit(
+    image: np.ndarray | None,
+    *,
+    indexing_mode: str = "xy",
+    k: int = 0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+    flip_order: str = "yx",
+):
+    """Return a rotated/flipped copy of ``image`` for backend fitting only."""
+
+    if image is None:
+        return None
+
+    oriented = np.asarray(image)
+    mode = (indexing_mode or "xy").lower()
+    if mode == "yx":
+        oriented = np.swapaxes(oriented, 0, 1)
+    order = (flip_order or "yx").lower()
+    if order == "xy":
+        if flip_x:
+            oriented = np.flip(oriented, axis=1)
+        if flip_y:
+            oriented = np.flip(oriented, axis=0)
+    else:
+        if flip_y:
+            oriented = np.flip(oriented, axis=0)
+        if flip_x:
+            oriented = np.flip(oriented, axis=1)
+    k_mod = int(k) % 4
+    if k_mod:
+        oriented = np.rot90(oriented, k_mod)
+    return oriented
+
+
+def _native_sim_to_display_coords(col: float, row: float, image_shape: tuple[int, ...]):
+    """Rotate native simulation coordinates into the displayed frame."""
+
+    return _rotate_point_for_display(col, row, image_shape, SIM_DISPLAY_ROTATE_K)
+
+
+def _transform_points_orientation(
+    points: list[tuple[float, float]],
+    shape: tuple[int, int],
+    *,
+    indexing_mode: str = "xy",
+    k: int = 0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+    flip_order: str = "yx",
+) -> list[tuple[float, float]]:
+    """Apply flips/rotations to a list of (col, row) points for diagnostics."""
+
+    base_height, base_width = shape
+    mode = (indexing_mode or "xy").lower()
+    if mode == "yx":
+        height, width = base_width, base_height
+    else:
+        height, width = base_height, base_width
+    transformed: list[tuple[float, float]] = []
+
+    order = (flip_order or "yx").lower()
+
+    def _flip_xy(col_t: float, row_t: float) -> tuple[float, float]:
+        if flip_x:
+            col_t = width - 1.0 - col_t
+        if flip_y:
+            row_t = height - 1.0 - row_t
+        return col_t, row_t
+
+    def _flip_yx(col_t: float, row_t: float) -> tuple[float, float]:
+        if flip_y:
+            row_t = height - 1.0 - row_t
+        if flip_x:
+            col_t = width - 1.0 - col_t
+        return col_t, row_t
+
+    flipper = _flip_xy if order == "xy" else _flip_yx
+
+    for col, row in points:
+        col_t, row_t = float(col), float(row)
+        if mode == "yx":
+            col_t, row_t = row_t, col_t
+        col_t, row_t = flipper(col_t, row_t)
+        col_t, row_t = _rotate_point_for_display(col_t, row_t, (height, width), k)
+        transformed.append((col_t, row_t))
+
+    return transformed
+
+
+def _best_orientation_alignment(
+    sim_coords: list[tuple[float, float]],
+    meas_coords: list[tuple[float, float]],
+    shape: tuple[int, int],
+):
+    """Search over 90° rotations and axis flips to minimize RMS distance."""
+
+    if not sim_coords or not meas_coords or len(sim_coords) != len(meas_coords):
+        return None
+
+    def _describe(
+        k: int, flip_x: bool, flip_y: bool, flip_order: str, indexing_mode: str
+    ) -> str:
+        parts: list[str] = []
+        if k % 4:
+            parts.append(f"rot{(k % 4) * 90}° CCW")
+        if flip_x:
+            parts.append("flip_x")
+        if flip_y:
+            parts.append("flip_y")
+        parts.append(f"order={flip_order}")
+        parts.append(f"indexing={indexing_mode}")
+        return " + ".join(parts)
+
+    best = None
+    for indexing_mode in ("xy", "yx"):
+        for flip_order in ("yx", "xy"):
+            for k in range(4):
+                for flip_x in (False, True):
+                    for flip_y in (False, True):
+                        transformed = _transform_points_orientation(
+                            meas_coords,
+                            shape,
+                            indexing_mode=indexing_mode,
+                            k=k,
+                            flip_x=flip_x,
+                            flip_y=flip_y,
+                            flip_order=flip_order,
+                        )
+                        deltas = [
+                            math.hypot(sx - mx, sy - my)
+                            for (sx, sy), (mx, my) in zip(sim_coords, transformed)
+                        ]
+                        if not deltas:
+                            continue
+                        rms = math.sqrt(sum(d * d for d in deltas) / len(deltas))
+                        mean = sum(deltas) / len(deltas)
+                        candidate = {
+                            "k": k,
+                            "flip_x": flip_x,
+                            "flip_y": flip_y,
+                            "flip_order": flip_order,
+                            "indexing_mode": indexing_mode,
+                            "rms": rms,
+                            "mean": mean,
+                            "label": _describe(
+                                k, flip_x, flip_y, flip_order, indexing_mode
+                            ),
+                        }
+                        if best is None or candidate["rms"] < best["rms"]:
+                            best = candidate
+
+    return best
+
+
+def _aggregate_match_centers(
+    sim_coords: list[tuple[float, float]],
+    meas_coords: list[tuple[float, float]],
+    sim_millers: list[tuple[int, int, int]],
+    meas_millers: list[tuple[int, int, int]],
+):
+    """Collapse matched peaks by HKL and return centroid pairs."""
+
+    aggregated: dict[tuple[int, int, int], dict[str, list[tuple[float, float]]]] = {}
+    for hkl_sim, hkl_meas, sim_xy, meas_xy in zip(
+        sim_millers, meas_millers, sim_coords, meas_coords
+    ):
+        hkl_key = tuple(int(v) for v in (hkl_sim or hkl_meas))
+        entry = aggregated.setdefault(hkl_key, {"sim": [], "meas": []})
+        entry["sim"].append(sim_xy)
+        entry["meas"].append(meas_xy)
+
+    agg_sim_coords: list[tuple[float, float]] = []
+    agg_meas_coords: list[tuple[float, float]] = []
+    agg_millers: list[tuple[int, int, int]] = []
+
+    for hkl_key in sorted(aggregated):
+        sim_arr = np.array(aggregated[hkl_key]["sim"], dtype=float)
+        meas_arr = np.array(aggregated[hkl_key]["meas"], dtype=float)
+
+        sim_center = (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
+        meas_center = (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
+
+        agg_sim_coords.append(sim_center)
+        agg_meas_coords.append(meas_center)
+        agg_millers.append(hkl_key)
+
+    return agg_sim_coords, agg_meas_coords, agg_millers
+
+
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
-measured_peaks = _rotate_measured_peaks_clockwise(
+measured_peaks = _rotate_measured_peaks_for_display(
     measured_peaks_raw,
     current_background_image.shape,
 )
@@ -769,6 +1117,23 @@ selected_peak_marker, = ax.plot([], [], 'ys',  # yellow square outline
                                markersize=8, markerfacecolor='none',
                                linewidth=1.5, zorder=6)
 selected_peak_marker.set_visible(False)
+
+# Geometry click markers (sim vs real)
+geometry_pick_artists = []
+
+
+def _clear_geometry_pick_artists():
+    """Remove any geometry fit markers from the plot and reset the cache."""
+
+    global geometry_pick_artists
+
+    for artist in geometry_pick_artists:
+        try:
+            artist.remove()
+        except ValueError:
+            pass
+    geometry_pick_artists.clear()
+    canvas.draw_idle()
 
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
@@ -1797,6 +2162,8 @@ def do_update():
             return do_update()          # re-enter with computation path
         max_positions_local = stored_max_positions_local
         updated_image       = stored_sim_image
+
+    display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
     
     # ───── NEW: build peak lists from hit_tables ───────────────────────────
     peak_positions.clear()
@@ -1814,22 +2181,23 @@ def do_update():
                 continue
             cx = int(round(xpix))
             cy = int(round(ypix))
-            peak_positions.append((cx, cy))      # (column,x) == (MPL x)
+            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, updated_image.shape)
+            peak_positions.append((disp_cx, disp_cy))      # display coords
             peak_intensities.append(I)
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
             peak_millers.append(hkl)
 
     normalization_scale = 1.0
-    if current_background_image is not None and updated_image is not None:
+    if current_background_image is not None and display_image is not None:
         normalization_scale = _suggest_scale_factor(
-            updated_image, current_background_image
+            display_image, current_background_image
         )
         if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
             normalization_scale = 1.0
 
     unscaled_image_global = None
-    if updated_image is not None:
-        unscaled_image_global = updated_image * normalization_scale
+    if display_image is not None:
+        unscaled_image_global = display_image * normalization_scale
         if peak_intensities and normalization_scale != 1.0:
             peak_intensities[:] = [
                 intensity * normalization_scale for intensity in peak_intensities
@@ -2400,7 +2768,61 @@ ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LE
 ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
 
+backend_rotation_var = tk.IntVar(value=0)
+backend_flip_y_axis_var = tk.BooleanVar(value=False)
+backend_flip_x_axis_var = tk.BooleanVar(value=False)
+backend_flip_order_var = tk.StringVar(value="yx")
+
+if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
+    backend_orient_frame = ttk.LabelFrame(root, text="Backend orientation (debug)")
+    backend_orient_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+    ttk.Label(backend_orient_frame, text="Rotate ×90° (k):").pack(side=tk.LEFT, padx=2)
+    tk.Spinbox(
+        backend_orient_frame,
+        from_=-3,
+        to=3,
+        width=4,
+        textvariable=backend_rotation_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Checkbutton(
+        backend_orient_frame,
+        text="Flip about y-axis",
+        variable=backend_flip_y_axis_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Checkbutton(
+        backend_orient_frame,
+        text="Flip about x-axis",
+        variable=backend_flip_x_axis_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Label(backend_orient_frame, text="Flip order:").pack(side=tk.LEFT, padx=2)
+    tk.OptionMenu(
+        backend_orient_frame,
+        backend_flip_order_var,
+        "yx",
+        "yx",
+        "xy",
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Button(
+        backend_orient_frame,
+        text="Reset",  # return to no rotation/flip
+        command=lambda: (
+            backend_rotation_var.set(0),
+            backend_flip_y_axis_var.set(False),
+            backend_flip_x_axis_var.set(False),
+            backend_flip_order_var.set("yx"),
+        ),
+    ).pack(side=tk.LEFT, padx=4)
+
+
 def on_fit_geometry_click():
+    global profile_cache, last_simulation_signature
+    _clear_geometry_pick_artists()
+
     # first, reconstruct the same mosaic_params dict you use in do_update()
     mosaic_params = build_mosaic_params()
 
@@ -2455,6 +2877,41 @@ def on_fit_geometry_click():
                 best_idx, best_d2 = idx, d2
         return best_idx, best_d2
 
+    def _peak_maximum_near(col: float, row: float, search_radius: int = 5):
+        """Return the (col,row) of the brightest pixel near ``(col,row)``."""
+
+        r = int(round(row))
+        c = int(round(col))
+        r0 = max(0, r - search_radius)
+        r1 = min(current_background_image.shape[0], r + search_radius + 1)
+        c0 = max(0, c - search_radius)
+        c1 = min(current_background_image.shape[1], c + search_radius + 1)
+
+        window = np.asarray(current_background_image[r0:r1, c0:c1], dtype=float)
+        if window.size == 0 or not np.isfinite(window).any():
+            return float(col), float(row)
+
+        max_idx = np.nanargmax(window)
+        win_r, win_c = np.unravel_index(max_idx, window.shape)
+        return float(c0 + win_c), float(r0 + win_r)
+
+    def _mark_pick(col: float, row: float, label: str, color: str, marker: str):
+        point, = ax.plot([col], [row], marker, color=color, markersize=8,
+                         markerfacecolor='none', zorder=7, linestyle='None')
+        text = ax.text(
+            col,
+            row,
+            label,
+            color=color,
+            fontsize=8,
+            ha='left',
+            va='bottom',
+            zorder=8,
+            bbox=dict(facecolor='white', alpha=0.75, edgecolor='none', pad=1.0),
+        )
+        geometry_pick_artists.extend([point, text])
+        canvas.draw_idle()
+
     picked_pairs = []  # list[(h,k,l), (x_real, y_real)]
     selection_state = {"expecting": "sim", "pending_hkl": None}
     canvas_widget = canvas.get_tk_widget()
@@ -2467,6 +2924,7 @@ def on_fit_geometry_click():
     click_cid = None
 
     def _finish_pair_collection():
+        global profile_cache, last_simulation_signature
         nonlocal click_cid
         if click_cid is not None:
             canvas.mpl_disconnect(click_cid)
@@ -2474,82 +2932,662 @@ def on_fit_geometry_click():
         canvas_widget.configure(cursor="")
 
     def _on_geometry_pick(event):
+        global profile_cache, last_simulation_signature
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
 
-        if event.button == 3:
+        if event.button == 3 or getattr(event, "dblclick", False):
             _finish_pair_collection()
             if not picked_pairs:
                 progress_label_geometry.config(text="No peak pairs selected; fit cancelled.")
                 return
+
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_path = get_dir("downloads") / f"geometry_fit_log_{stamp}.txt"
+            log_file = log_path.open("w", encoding="utf-8")
+
+            def _log_line(text: str = ""):
+                try:
+                    log_file.write(text + "\n")
+                    log_file.flush()
+                except Exception:
+                    pass
+
+            def _log_section(title: str, lines: list[str]):
+                _log_line(title)
+                for line in lines:
+                    _log_line(f"  {line}")
+                _log_line()
+
+            progress_label_geometry.config(text="Running geometry fit…")
+            root.update_idletasks()
+
             measured_from_clicks = [
                 {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
                 for (h, k, l), (x, y) in picked_pairs
             ]
-            result = fit_geometry_parameters(
-                miller,
-                intensities,
-                image_size,
-                params,
-                measured_from_clicks,
-                var_names,
-                pixel_tol=float('inf'),
-                experimental_image=current_background_image,
+            _log_line(f"Geometry fit started: {stamp}")
+            _log_line()
+            _log_section(
+                "Picked pairs (display frame):",
+                [
+                    f"HKL=({h},{k},{l}) display_px=({x:.3f}, {y:.3f})"
+                    for (h, k, l), (x, y) in picked_pairs
+                ],
+            )
+            native_background = _get_current_background_native()
+            measured_native = _unrotate_display_peaks(
+                measured_from_clicks, current_background_image.shape
+            )
+            picked_frames = [
+                {
+                    "label": entry_disp.get("label"),
+                    "display": (float(entry_disp.get("x")), float(entry_disp.get("y"))),
+                    "native": (float(entry_nat.get("x")), float(entry_nat.get("y"))),
+                }
+                for entry_disp, entry_nat in zip(measured_from_clicks, measured_native)
+            ]
+
+            _log_section(
+                "Unrotated measured peaks (native frame):",
+                [
+                    (
+                        "label="
+                        f"{entry.get('label')} native_px=({entry.get('x'):.3f}, {entry.get('y'):.3f})"
+                    )
+                    for entry in measured_native
+                ],
             )
 
-            for name, val in zip(var_names, result.x):
-                if name == 'zb':               zb_var.set(val)
-                elif name == 'zs':             zs_var.set(val)
-                elif name == 'theta_initial':  theta_initial_var.set(val)
-                elif name == 'chi':            chi_var.set(val)
-                elif name == 'cor_angle':      cor_angle_var.set(val)
+            orientation_choice = {
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "indexing_mode": "xy",
+                "label": "identity",
+            }
 
-            schedule_update()
+            if DEBUG_ENABLED:
+                try:
+                    # In debug mode, search for the backend orientation that best
+                    # aligns measured peaks to simulated peaks. This leaves the on-screen
+                    # visuals unchanged.
+                    (
+                        _,
+                        preview_sim_coords,
+                        preview_meas_coords,
+                        preview_sim_millers,
+                        preview_meas_millers,
+                    ) = simulate_and_compare_hkl(
+                        miller,
+                        intensities,
+                        image_size,
+                        params,
+                        measured_native,
+                        pixel_tol=float("inf"),
+                    )
+                    (
+                        preview_sim_centers,
+                        preview_meas_centers,
+                        _preview_hkls,
+                    ) = _aggregate_match_centers(
+                        preview_sim_coords,
+                        preview_meas_coords,
+                        preview_sim_millers,
+                        preview_meas_millers,
+                    )
+                    best = _best_orientation_alignment(
+                        preview_sim_centers,
+                        preview_meas_centers,
+                        native_background.shape,
+                    )
+                    if best is not None:
+                        orientation_choice.update(best)
+                    _log_section(
+                        "Orientation search result:",
+                        [
+                            ", ".join(f"{k}={v}" for k, v in orientation_choice.items())
+                        ],
+                    )
+                except Exception:
+                    # fall back to identity if diagnostics fail
+                    _log_line("Orientation search failed; using identity transform")
+            else:
+                orientation_choice["label"] = "identity"
 
-            rms = np.sqrt(np.mean(result.fun**2)) if getattr(result, 'fun', None) is not None and result.fun.size else 0.0
-            txt = "Fit complete:\n" + \
-                  "\n".join(f"{n} = {v:.4f}" for n,v in zip(var_names, result.x)) + \
-                  f"\nRMS residual = {rms:.2f} px"
-            progress_label_geometry.config(text=txt)
+            try:
+                measured_for_fit = _apply_orientation_to_entries(
+                    measured_native,
+                    native_background.shape,
+                    indexing_mode=orientation_choice["indexing_mode"],
+                    k=orientation_choice["k"],
+                    flip_x=orientation_choice["flip_x"],
+                    flip_y=orientation_choice["flip_y"],
+                    flip_order=orientation_choice["flip_order"],
+                )
+                for frame_entry, entry_fit in zip(picked_frames, measured_for_fit):
+                    if isinstance(entry_fit, dict):
+                        frame_entry["fit"] = (
+                            float(entry_fit.get("x")), float(entry_fit.get("y"))
+                        )
+                    elif isinstance(entry_fit, (list, tuple)) and len(entry_fit) >= 5:
+                        frame_entry["fit"] = (float(entry_fit[3]), float(entry_fit[4]))
+                _log_section(
+                    "Measured peaks used for fitting (after orientation):",
+                    [
+                        (
+                            "label="
+                            f"{entry.get('label')} fit_px=({entry.get('x'):.3f}, {entry.get('y'):.3f})"
+                        )
+                        for entry in measured_for_fit
+                    ],
+                )
+                experimental_image_for_fit = _orient_image_for_fit(
+                    native_background,
+                    indexing_mode=orientation_choice["indexing_mode"],
+                    k=orientation_choice["k"],
+                    flip_x=orientation_choice["flip_x"],
+                    flip_y=orientation_choice["flip_y"],
+                    flip_order=orientation_choice["flip_order"],
+                )
 
-            fitted_params = dict(params)
-            fitted_params.update({
-                'zb': zb_var.get(),
-                'zs': zs_var.get(),
-                'theta_initial': theta_initial_var.get(),
-                'chi': chi_var.get(),
-                'cor_angle': cor_angle_var.get(),
-            })
+                def _log_assignment_snapshot(title: str, param_set: dict[str, float]):
+                    try:
+                        mosaic = param_set["mosaic_params"]
+                        wavelength_array = mosaic.get("wavelength_array")
+                        if wavelength_array is None:
+                            wavelength_array = mosaic.get("wavelength_i_array")
+
+                        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+                        _, hit_tables, *_ = process_peaks_parallel(
+                            miller,
+                            intensities,
+                            image_size,
+                            param_set["a"],
+                            param_set["c"],
+                            wavelength_array,
+                            sim_buffer,
+                            param_set["corto_detector"],
+                            param_set["gamma"],
+                            param_set["Gamma"],
+                            param_set["chi"],
+                            param_set.get("psi", 0.0),
+                            param_set["zs"],
+                            param_set["zb"],
+                            param_set["n2"],
+                            mosaic["beam_x_array"],
+                            mosaic["beam_y_array"],
+                            mosaic["theta_array"],
+                            mosaic["phi_array"],
+                            mosaic["sigma_mosaic_deg"],
+                            mosaic["gamma_mosaic_deg"],
+                            mosaic["eta"],
+                            wavelength_array,
+                            param_set["debye_x"],
+                            param_set["debye_y"],
+                            param_set["center"],
+                            param_set["theta_initial"],
+                            param_set.get("cor_angle", 0.0),
+                            np.array([1.0, 0.0, 0.0]),
+                            np.array([0.0, 1.0, 0.0]),
+                            save_flag=0,
+                        )
+
+                        maxpos = hit_tables_to_max_positions(hit_tables)
+                        measured_dict = build_measured_dict(measured_for_fit)
+
+                        rows: list[str] = []
+                        for idx, (H, K, L) in enumerate(miller):
+                            key = (int(round(H)), int(round(K)), int(round(L)))
+                            measured_list = measured_dict.get(key)
+                            if not measured_list:
+                                continue
+
+                            I0, x0, y0, I1, x1, y1 = maxpos[idx]
+                            sim_candidates = [
+                                (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
+                                (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
+                            ]
+                            sim_candidates = [p for p in sim_candidates if p is not None]
+                            if not sim_candidates:
+                                continue
+
+                            for mx, my in measured_list:
+                                best = None
+                                for sx, sy in sim_candidates:
+                                    dx = sx - float(mx)
+                                    dy = sy - float(my)
+                                    dist = math.hypot(dx, dy)
+                                    if best is None or dist < best[0]:
+                                        best = (dist, dx, dy, sx, sy)
+
+                                if best is None:
+                                    continue
+
+                                dist, dx, dy, sx, sy = best
+
+                                frame_entry = next(
+                                    (
+                                        fr
+                                        for fr in picked_frames
+                                        if math.isclose(fr.get("fit", (mx, my))[0], mx, abs_tol=1e-9)
+                                        and math.isclose(fr.get("fit", (mx, my))[1], my, abs_tol=1e-9)
+                                        and fr.get("label") == f"{key[0]},{key[1]},{key[2]}"
+                                    ),
+                                    None,
+                                )
+                                disp_part = (
+                                    f"display=({frame_entry['display'][0]:.3f}, {frame_entry['display'][1]:.3f}), "
+                                    f"native=({frame_entry['native'][0]:.3f}, {frame_entry['native'][1]:.3f}), "
+                                    f"fit=({mx:.3f}, {my:.3f})"
+                                    if frame_entry
+                                    else f"fit=({mx:.3f}, {my:.3f})"
+                                )
+
+                                rows.append(
+                                    "HKL=({},{},{}) {} -> sim=({:.3f}, {:.3f}) dx={:.3f} dy={:.3f} |Δ|={:.3f}".format(
+                                        key[0], key[1], key[2], disp_part, sx, sy, dx, dy, dist
+                                    )
+                                )
+
+                        _log_section(title, rows or ["No measured peaks matched"],)
+                    except Exception as exc:  # pragma: no cover - debug path
+                        _log_section(title, [f"Failed to record assignments: {exc}"])
+
+                def _log_pixel_match_snapshot(title: str, param_set: dict[str, float]):
+                    mosaic = param_set["mosaic_params"]
+                    wavelength_array = mosaic.get("wavelength_array")
+                    if wavelength_array is None:
+                        wavelength_array = mosaic.get("wavelength_i_array")
+
+                    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+                    _, hit_tables, *_ = process_peaks_parallel(
+                        miller,
+                        intensities,
+                        image_size,
+                        param_set["a"],
+                        param_set["c"],
+                        wavelength_array,
+                        sim_buffer,
+                        param_set["corto_detector"],
+                        param_set["gamma"],
+                        param_set["Gamma"],
+                        param_set["chi"],
+                        param_set.get("psi", 0.0),
+                        param_set["zs"],
+                        param_set["zb"],
+                        param_set["n2"],
+                        mosaic["beam_x_array"],
+                        mosaic["beam_y_array"],
+                        mosaic["theta_array"],
+                        mosaic["phi_array"],
+                        mosaic["sigma_mosaic_deg"],
+                        mosaic["gamma_mosaic_deg"],
+                        mosaic["eta"],
+                        wavelength_array,
+                        param_set["debye_x"],
+                        param_set["debye_y"],
+                        param_set["center"],
+                        param_set["theta_initial"],
+                        param_set.get("cor_angle", 0.0),
+                        np.array([1.0, 0.0, 0.0]),
+                        np.array([0.0, 1.0, 0.0]),
+                        save_flag=0,
+                    )
+
+                    maxpos = hit_tables_to_max_positions(hit_tables)
+                    measured_dict = build_measured_dict(measured_for_fit)
+
+                    rows: list[str] = []
+                    per_residual: list[float] = []
+
+                    def _center_from_maxpos(entry: Sequence[float]) -> tuple[float, float] | None:
+                        _, x0, y0, _, x1, y1 = entry
+                        candidates = [
+                            (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
+                            (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
+                        ]
+                        candidates = [p for p in candidates if p is not None]
+                        if not candidates:
+                            return None
+                        cols, rows_local = zip(*candidates)
+                        return float(np.mean(cols)), float(np.mean(rows_local))
+
+                    simulated_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
+                    for idx, (H, K, L) in enumerate(miller):
+                        key = (int(round(H)), int(round(K)), int(round(L)))
+                        if key not in measured_dict:
+                            continue
+                        center = _center_from_maxpos(maxpos[idx])
+                        if center is not None:
+                            simulated_by_hkl.setdefault(key, []).append(center)
+
+                    for hkl_key, measured_list in measured_dict.items():
+                        sim_list = simulated_by_hkl.get(hkl_key)
+                        if not sim_list:
+                            continue
+
+                        sim_arr = np.asarray(sim_list, dtype=float)
+                        sim_center = (
+                            float(sim_arr[:, 0].mean()),
+                            float(sim_arr[:, 1].mean()),
+                        )
+
+                        meas_arr = np.asarray(measured_list, dtype=float)
+                        meas_center = (
+                            float(meas_arr[:, 0].mean()),
+                            float(meas_arr[:, 1].mean()),
+                        )
+
+                        dx = sim_center[0] - meas_center[0]
+                        dy = sim_center[1] - meas_center[1]
+                        dist = math.hypot(dx, dy)
+                        per_residual.append(dist)
+                        rows.append(
+                            "HKL=({},{},{}) sim=({:.3f}, {:.3f}) meas=({:.3f}, {:.3f}) "
+                            "dx={:.3f} dy={:.3f} |Δ|={:.3f}".format(
+                                hkl_key[0],
+                                hkl_key[1],
+                                hkl_key[2],
+                                sim_center[0],
+                                sim_center[1],
+                                meas_center[0],
+                                meas_center[1],
+                                dx,
+                                dy,
+                                dist,
+                            )
+                        )
+
+                    rms = math.sqrt(float(np.mean(np.square(per_residual)))) if per_residual else 0.0
+                    max_dist = max(per_residual) if per_residual else 0.0
+                    _log_section(
+                        title,
+                        [
+                            f"matches={len(per_residual)}, RMS={rms:.3f} px, max={max_dist:.3f} px",
+                            *rows,
+                        ],
+                    )
+
+                def _log_matches_snapshot(title: str, param_set: dict[str, float]):
+                    try:
+                        (
+                            _,
+                            pre_sim_coords,
+                            pre_meas_coords,
+                            pre_sim_millers,
+                            pre_meas_millers,
+                        ) = simulate_and_compare_hkl(
+                            miller,
+                            intensities,
+                            image_size,
+                            param_set,
+                            measured_for_fit,
+                            pixel_tol=float('inf'),
+                        )
+                        (
+                            pre_sim_centers,
+                            pre_meas_centers,
+                            pre_hkls,
+                        ) = _aggregate_match_centers(
+                            pre_sim_coords,
+                            pre_meas_coords,
+                            pre_sim_millers,
+                            pre_meas_millers,
+                        )
+                    except Exception as exc:  # pragma: no cover - debug path
+                        _log_section(title, [f"Failed to collect matches: {exc}"])
+                        return None
+
+                    if not pre_hkls:
+                        _log_section(title, ["No matched peaks found; residuals would be empty."])
+                        return []
+
+                    rows: list[str] = []
+                    distances: list[float] = []
+                    for hkl_key, sim_ctr, meas_ctr in zip(
+                        pre_hkls, pre_sim_centers, pre_meas_centers
+                    ):
+                        dx = sim_ctr[0] - meas_ctr[0]
+                        dy = sim_ctr[1] - meas_ctr[1]
+                        dist = math.hypot(dx, dy)
+                        distances.append(dist)
+                        rows.append(
+                            "HKL="
+                            f"{hkl_key}: sim=({sim_ctr[0]:.3f}, {sim_ctr[1]:.3f}), "
+                            f"meas=({meas_ctr[0]:.3f}, {meas_ctr[1]:.3f}), "
+                            f"dx={dx:.3f}, dy={dy:.3f}, |Δ|={dist:.3f}"
+                        )
+
+                    rms = math.sqrt(float(np.mean(np.square(distances)))) if distances else 0.0
+                    max_dist = max(distances) if distances else 0.0
+                    summary = [
+                        f"Matches={len(rows)}, RMS={rms:.3f} px, max={max_dist:.3f} px",
+                        *rows,
+                    ]
+                    _log_section(title, summary)
+                    return distances
+
+                _log_section(
+                    "Fitting variables (start values):",
+                    [
+                        (
+                            f"{name}: <missing>"
+                            if params.get(name) is None
+                            else f"{name}: {float(params.get(name)):.6f}"
+                        )
+                        for name in var_names
+                    ],
+                )
+                _log_matches_snapshot("Matches before fit (native frame):", params)
+                _log_pixel_match_snapshot(
+                    "Pixel matches before fit (native frame):", params
+                )
+                _log_assignment_snapshot(
+                    "Match assignments before fit (native frame):", params
+                )
+
+                result = fit_geometry_parameters(
+                    miller,
+                    intensities,
+                    image_size,
+                    params,
+                    measured_for_fit,
+                    var_names,
+                    pixel_tol=float('inf'),
+                    experimental_image=experimental_image_for_fit,
+                )
+
+                _log_section(
+                    "Optimizer diagnostics:",
+                    [
+                        f"success={getattr(result, 'success', False)}",
+                        f"status={getattr(result, 'status', '')}",
+                        f"message={(getattr(result, 'message', '') or '').strip()}",
+                        f"nfev={getattr(result, 'nfev', '<unknown>')}",
+                        f"cost={float(getattr(result, 'cost', np.nan)):.6f}",
+                        f"optimality={float(getattr(result, 'optimality', np.nan)):.6f}",
+                        f"active_mask={list(getattr(result, 'active_mask', []))}",
+                    ],
+                )
+
+                for name, val in zip(var_names, result.x):
+                    if name == 'zb':               zb_var.set(val)
+                    elif name == 'zs':             zs_var.set(val)
+                    elif name == 'theta_initial':  theta_initial_var.set(val)
+                    elif name == 'chi':            chi_var.set(val)
+                    elif name == 'cor_angle':      cor_angle_var.set(val)
+
+                # Keep the cached profile in sync with the fitted geometry so the
+                # next simulation uses the updated parameters even when diagnostics
+                # are disabled.
+                profile_cache = dict(profile_cache)
+                profile_cache.update(mosaic_params)
+                profile_cache.update(
+                    {
+                        "theta_initial": theta_initial_var.get(),
+                        "cor_angle": cor_angle_var.get(),
+                        "chi": chi_var.get(),
+                        "zs": zs_var.get(),
+                        "zb": zb_var.get(),
+                        "gamma": gamma_var.get(),
+                        "Gamma": Gamma_var.get(),
+                        "corto_detector": corto_detector_var.get(),
+                        "a": a_var.get(),
+                        "c": c_var.get(),
+                        "center_x": center_x_var.get(),
+                        "center_y": center_y_var.get(),
+                    }
+                )
+
+                # Force a fresh simulation with the fitted values.
+                last_simulation_signature = None
+                schedule_update()
+
+                rms = (
+                    np.sqrt(np.mean(result.fun**2))
+                    if getattr(result, "fun", None) is not None and result.fun.size
+                    else 0.0
+                )
+                _log_section(
+                    "Optimization result:",
+                    [f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)]
+                    + [f"RMS residual = {rms:.6f} px"],
+                )
+                base_summary = (
+                    "Fit complete:\n"
+                    + "\n".join(
+                        f"{name} = {val:.4f}" for name, val in zip(var_names, result.x)
+                    )
+                    + f"\nRMS residual = {rms:.2f} px"
+                )
+
+                fitted_params = dict(params)
+                fitted_params.update({
+                    'zb': zb_var.get(),
+                    'zs': zs_var.get(),
+                    'theta_initial': theta_initial_var.get(),
+                    'chi': chi_var.get(),
+                    'cor_angle': cor_angle_var.get(),
+                })
+
+                _log_matches_snapshot("Matches after fit (native frame):", fitted_params)
+                _log_pixel_match_snapshot(
+                    "Pixel matches after fit (native frame):", fitted_params
+                )
+                _log_assignment_snapshot(
+                    "Match assignments after fit (native frame):", fitted_params
+                )
+
+                (
+                    _,
+                    sim_coords,
+                    meas_coords,
+                    sim_millers,
+                    meas_millers,
+                ) = simulate_and_compare_hkl(
+                    miller,
+                    intensities,
+                    image_size,
+                    fitted_params,
+                    measured_for_fit,
+                    pixel_tol=float('inf'),
+                )
+            except Exception as exc:
+                _log_line(f"Geometry fit failed: {exc}")
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
+                progress_label_geometry.config(
+                    text=f"Geometry fit failed: {exc}"
+                )
+                return
+
+            def _to_display_frame(col: float, row: float, *, k: int) -> tuple[float, float]:
+                """Rotate native coordinates into the currently displayed frame."""
+
+                return _rotate_point_for_display(
+                    float(col), float(row), (image_size, image_size), k
+                )
 
             (
-                _,
-                sim_coords,
-                meas_coords,
-                sim_millers,
-                meas_millers,
-            ) = simulate_and_compare_hkl(
-                miller,
-                intensities,
-                image_size,
-                fitted_params,
-                measured_from_clicks,
-                pixel_tol=float('inf'),
+                agg_sim_coords,
+                agg_meas_coords,
+                agg_millers,
+            ) = _aggregate_match_centers(
+                sim_coords, meas_coords, sim_millers, meas_millers
             )
 
+            pixel_offsets = []
+
+            for hkl_key, sim_center, meas_center in zip(
+                agg_millers, agg_sim_coords, agg_meas_coords
+            ):
+                dx = sim_center[0] - meas_center[0]
+                dy = sim_center[1] - meas_center[1]
+                dist = math.hypot(dx, dy)
+                pixel_offsets.append((hkl_key, dx, dy, dist))
+
+                disp_sx, disp_sy = _to_display_frame(
+                    sim_center[0], sim_center[1], k=DISPLAY_ROTATE_K
+                )
+                disp_mx, disp_my = _to_display_frame(
+                    meas_center[0], meas_center[1], k=DISPLAY_ROTATE_K
+                )
+
+                arrow = ax.annotate(
+                    f"|Δ|={dist:.1f}px",
+                    xy=(disp_mx, disp_my),
+                    xytext=(disp_sx, disp_sy),
+                    color='#2d3436',
+                    fontsize=8,
+                    ha='center',
+                    va='center',
+                    arrowprops=dict(
+                        arrowstyle='->',
+                        color='#0984e3',
+                        lw=1.2,
+                        alpha=0.9,
+                    ),
+                    bbox=dict(facecolor='white', alpha=0.85, edgecolor='none', pad=1.0),
+                    zorder=6,
+                )
+                geometry_pick_artists.append(arrow)
+
+            canvas.draw_idle()
+
+            _log_section(
+                "Pixel offsets (native frame):",
+                [
+                    f"HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px"
+                    for hkl, dx, dy, dist in pixel_offsets
+                ]
+                or ["No matched peaks"],
+            )
+
+            try:
+                log_file.close()
+            except Exception:
+                pass
+
             export_recs = []
-            for hkl, (x, y) in zip(sim_millers, sim_coords):
+            for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
                 export_recs.append({
                     'source': 'sim',
                     'hkl': tuple(int(v) for v in hkl),
                     'x': int(x),
                     'y': int(y),
+                    'dist_px': float(dist),
                 })
-            for hkl, (x, y) in zip(meas_millers, meas_coords):
+            for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_meas_coords, pixel_offsets):
                 export_recs.append({
                     'source': 'meas',
                     'hkl': tuple(int(v) for v in hkl),
                     'x': int(x),
                     'y': int(y),
+                    'dist_px': float(dist),
                 })
 
             download_dir = get_dir("downloads")
@@ -2557,10 +3595,41 @@ def on_fit_geometry_click():
             save_path = download_dir / f"matched_peaks_{stamp}.npy"
             np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
 
-            progress_label_geometry.config(
-                text=(progress_label_geometry.cget('text')
-                      + f'\n\nSaved {len(export_recs)} peak records →\n{save_path}')
+            _log_section(
+                "Fit summary:",
+                [
+                    "Parameters:" if var_names else "Parameters: <none>",
+                    *[
+                        f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)
+                    ],
+                    f"RMS residual = {rms:.6f} px",
+                    f"Applied orientation: {orientation_choice.get('label', 'identity')}",
+                    f"Matched peaks saved to: {save_path}",
+                ],
             )
+
+            if pixel_offsets:
+                dist_lines = [
+                    f"HKL={hkl}: |Δ|={dist:.2f}px (dx={dx:.2f}, dy={dy:.2f})"
+                    for hkl, dx, dy, dist in pixel_offsets
+                ]
+                dist_report = "\n".join(dist_lines)
+            else:
+                dist_report = "No matched peaks to report distances."
+
+            orientation_report = (
+                f"Applied orientation: {orientation_choice.get('label', 'identity')}"
+            )
+
+            if DEBUG_ENABLED:
+                final_text = f"{base_summary}\n{orientation_report}\nFit log → {log_path}"
+            else:
+                final_text = (
+                    f"{base_summary}\n\nSaved {len(export_recs)} peak records →\n{save_path}"
+                    + f"\n\nPixel offsets:\n{dist_report}\nFit log → {log_path}"
+                )
+
+            progress_label_geometry.config(text=final_text)
             return
 
         col, row = float(event.xdata), float(event.ydata)
@@ -2571,6 +3640,8 @@ def on_fit_geometry_click():
                 progress_label_geometry.config(text="No simulated peaks available to pick.")
                 return
             selection_state["pending_hkl"] = peak_millers[idx]
+            sim_col, sim_row = peak_positions[idx]
+            _mark_pick(sim_col, sim_row, f"{selection_state['pending_hkl']} sim", '#00b894', 'o')
             progress_label_geometry.config(
                 text=(
                     f"Selected simulated peak HKL={selection_state['pending_hkl']} "
@@ -2586,10 +3657,13 @@ def on_fit_geometry_click():
             progress_label_geometry.config(text="Pick a simulated peak first.")
             return
 
-        picked_pairs.append((pending, (col, row)))
+        peak_col, peak_row = _peak_maximum_near(col, row, search_radius=6)
+        _mark_pick(peak_col, peak_row, f"{pending} real", '#e17055', 'x')
+
+        picked_pairs.append((pending, (peak_col, peak_row)))
         progress_label_geometry.config(
             text=(
-                f"Recorded pair for HKL={pending} at real px=({col:.1f},{row:.1f}). "
+                f"Recorded pair for HKL={pending} at real px=({peak_col:.1f},{peak_row:.1f}). "
                 "Select another simulated peak or right click to fit."
             )
         )
@@ -2633,7 +3707,7 @@ def on_fit_mosaic_click():
         )
         return
 
-    experimental_image = np.asarray(current_background_image, dtype=np.float64)
+    experimental_image = np.asarray(_get_current_background_native(), dtype=np.float64)
     if experimental_image.shape != (image_size, image_size):
         progress_label_mosaic.config(
             text=(
@@ -2897,7 +3971,7 @@ def save_q_space_representation():
         "eta": profile_cache.get("eta", 0.0)
     }
 
-    image_result, max_positions_local, q_data, q_count, _, _ = process_peaks_parallel(
+    image_result, hit_tables, q_data, q_count, _, _ = process_peaks_parallel(
         miller,
         intensities,
         image_size,
@@ -2930,6 +4004,8 @@ def save_q_space_representation():
         np.array([0.0, 1.0, 0.0]),
         save_flag=1
     )
+
+    max_positions_local = hit_tables_to_max_positions(hit_tables)
 
     current_2d_display = global_image_buffer.copy()
 
