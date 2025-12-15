@@ -664,7 +664,13 @@ def _unrotate_display_peaks(measured, rotated_shape):
 
 
 def _apply_orientation_to_entries(
-    measured, rotated_shape, *, k: int = 0, flip_x: bool = False, flip_y: bool = False
+    measured,
+    rotated_shape,
+    *,
+    k: int = 0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+    flip_order: str = "yx",
 ):
     """Apply backend-only rotations/flips to measured peak entries."""
 
@@ -677,7 +683,12 @@ def _apply_orientation_to_entries(
 
     def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
         return _transform_points_orientation(
-            [(x_val, y_val)], rotated_shape, k=k_mod, flip_x=flip_x, flip_y=flip_y
+            [(x_val, y_val)],
+            rotated_shape,
+            k=k_mod,
+            flip_x=flip_x,
+            flip_y=flip_y,
+            flip_order=flip_order,
         )[0]
 
     oriented_entries = []
@@ -704,7 +715,12 @@ def _apply_orientation_to_entries(
 
 
 def _orient_image_for_fit(
-    image: np.ndarray | None, *, k: int = 0, flip_x: bool = False, flip_y: bool = False
+    image: np.ndarray | None,
+    *,
+    k: int = 0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+    flip_order: str = "yx",
 ):
     """Return a rotated/flipped copy of ``image`` for backend fitting only."""
 
@@ -712,10 +728,17 @@ def _orient_image_for_fit(
         return None
 
     oriented = np.asarray(image)
-    if flip_x:
-        oriented = np.flip(oriented, axis=1)
-    if flip_y:
-        oriented = np.flip(oriented, axis=0)
+    order = (flip_order or "yx").lower()
+    if order == "xy":
+        if flip_x:
+            oriented = np.flip(oriented, axis=1)
+        if flip_y:
+            oriented = np.flip(oriented, axis=0)
+    else:
+        if flip_y:
+            oriented = np.flip(oriented, axis=0)
+        if flip_x:
+            oriented = np.flip(oriented, axis=1)
     k_mod = int(k) % 4
     if k_mod:
         oriented = np.rot90(oriented, k_mod)
@@ -735,18 +758,33 @@ def _transform_points_orientation(
     k: int = 0,
     flip_x: bool = False,
     flip_y: bool = False,
+    flip_order: str = "yx",
 ) -> list[tuple[float, float]]:
     """Apply flips/rotations to a list of (col, row) points for diagnostics."""
 
     height, width = shape
     transformed: list[tuple[float, float]] = []
 
-    for col, row in points:
-        col_t, row_t = float(col), float(row)
+    order = (flip_order or "yx").lower()
+
+    def _flip_xy(col_t: float, row_t: float) -> tuple[float, float]:
         if flip_x:
             col_t = width - 1.0 - col_t
         if flip_y:
             row_t = height - 1.0 - row_t
+        return col_t, row_t
+
+    def _flip_yx(col_t: float, row_t: float) -> tuple[float, float]:
+        if flip_y:
+            row_t = height - 1.0 - row_t
+        if flip_x:
+            col_t = width - 1.0 - col_t
+        return col_t, row_t
+
+    flipper = _flip_xy if order == "xy" else _flip_yx
+
+    for col, row in points:
+        col_t, row_t = flipper(float(col), float(row))
         col_t, row_t = _rotate_point_for_display(col_t, row_t, shape, k)
         transformed.append((col_t, row_t))
 
@@ -2601,6 +2639,7 @@ ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT
 backend_rotation_var = tk.IntVar(value=0)
 backend_flip_y_axis_var = tk.BooleanVar(value=False)
 backend_flip_x_axis_var = tk.BooleanVar(value=False)
+backend_flip_order_var = tk.StringVar(value="yx")
 
 if DEBUG_ENABLED:
     backend_orient_frame = ttk.LabelFrame(root, text="Backend orientation (debug)")
@@ -2627,6 +2666,15 @@ if DEBUG_ENABLED:
         variable=backend_flip_x_axis_var,
     ).pack(side=tk.LEFT, padx=2)
 
+    ttk.Label(backend_orient_frame, text="Flip order:").pack(side=tk.LEFT, padx=2)
+    tk.OptionMenu(
+        backend_orient_frame,
+        backend_flip_order_var,
+        "yx",
+        "yx",
+        "xy",
+    ).pack(side=tk.LEFT, padx=2)
+
     ttk.Button(
         backend_orient_frame,
         text="Reset",  # return to no rotation/flip
@@ -2634,6 +2682,7 @@ if DEBUG_ENABLED:
             backend_rotation_var.set(0),
             backend_flip_y_axis_var.set(False),
             backend_flip_x_axis_var.set(False),
+            backend_flip_order_var.set("yx"),
         ),
     ).pack(side=tk.LEFT, padx=4)
 
@@ -2768,18 +2817,21 @@ def on_fit_geometry_click():
             backend_k = int(backend_rotation_var.get())
             backend_flip_y = bool(backend_flip_y_axis_var.get())
             backend_flip_x = bool(backend_flip_x_axis_var.get())
+            backend_flip_order = (backend_flip_order_var.get() or "yx").lower()
             measured_for_fit = _apply_orientation_to_entries(
                 measured_for_fit,
                 current_background_image.shape,
                 k=backend_k,
                 flip_x=backend_flip_y,
                 flip_y=backend_flip_x,
+                flip_order=backend_flip_order,
             )
             experimental_image_for_fit = _orient_image_for_fit(
                 current_background_image,
                 k=backend_k,
                 flip_x=backend_flip_y,
                 flip_y=backend_flip_x,
+                flip_order=backend_flip_order,
             )
 
             result = fit_geometry_parameters(
