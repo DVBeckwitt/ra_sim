@@ -2936,6 +2936,7 @@ def on_fit_geometry_click():
         canvas_widget.configure(cursor="")
 
     def _on_geometry_pick(event):
+        global profile_cache, last_simulation_signature
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
 
