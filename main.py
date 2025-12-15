@@ -2948,13 +2948,20 @@ def on_fit_geometry_click():
 
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_path = get_dir("downloads") / f"geometry_fit_log_{stamp}.txt"
-            log_lines: list[str] = []
+            log_file = log_path.open("w", encoding="utf-8")
 
-            def _flush_log():
+            def _log_line(text: str = ""):
                 try:
-                    log_path.write_text("\n".join(log_lines))
+                    log_file.write(text + "\n")
+                    log_file.flush()
                 except Exception:
                     pass
+
+            def _log_section(title: str, lines: list[str]):
+                _log_line(title)
+                for line in lines:
+                    _log_line(f"  {line}")
+                _log_line()
 
             progress_label_geometry.config(text="Running geometry fit…")
             root.update_idletasks()
@@ -2963,20 +2970,30 @@ def on_fit_geometry_click():
                 {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
                 for (h, k, l), (x, y) in picked_pairs
             ]
-            log_lines.append(f"Geometry fit started: {stamp}")
-            log_lines.append("Picked pairs (display frame):")
-            for (h, k, l), (x, y) in picked_pairs:
-                log_lines.append(f"  HKL=({h},{k},{l}) display_px=({x:.3f}, {y:.3f})")
+            _log_line(f"Geometry fit started: {stamp}")
+            _log_line()
+            _log_section(
+                "Picked pairs (display frame):",
+                [
+                    f"HKL=({h},{k},{l}) display_px=({x:.3f}, {y:.3f})"
+                    for (h, k, l), (x, y) in picked_pairs
+                ],
+            )
             native_background = _get_current_background_native()
             measured_native = _unrotate_display_peaks(
                 measured_from_clicks, current_background_image.shape
             )
 
-            log_lines.append("Unrotated measured peaks (native frame):")
-            for entry in measured_native:
-                log_lines.append(
-                    f"  label={entry.get('label')} native_px=({entry.get('x'):.3f}, {entry.get('y'):.3f})"
-                )
+            _log_section(
+                "Unrotated measured peaks (native frame):",
+                [
+                    (
+                        "label="
+                        f"{entry.get('label')} native_px=({entry.get('x'):.3f}, {entry.get('y'):.3f})"
+                    )
+                    for entry in measured_native
+                ],
+            )
 
             orientation_choice = {
                 "k": 0,
@@ -3022,13 +3039,15 @@ def on_fit_geometry_click():
                 )
                 if best is not None:
                     orientation_choice.update(best)
-                log_lines.append(
-                    "Orientation search result: "
-                    + ", ".join(f"{k}={v}" for k, v in orientation_choice.items())
+                _log_section(
+                    "Orientation search result:",
+                    [
+                        ", ".join(f"{k}={v}" for k, v in orientation_choice.items())
+                    ],
                 )
             except Exception:
                 # fall back to identity if diagnostics fail
-                log_lines.append("Orientation search failed; using identity transform")
+                _log_line("Orientation search failed; using identity transform")
 
             try:
                 measured_for_fit = _apply_orientation_to_entries(
@@ -3049,13 +3068,17 @@ def on_fit_geometry_click():
                     flip_order=orientation_choice["flip_order"],
                 )
 
-                log_lines.append("Fitting variables (start values):")
-                for name in var_names:
-                    start_val = params.get(name)
-                    if start_val is None:
-                        log_lines.append(f"  {name}: <missing>")
-                    else:
-                        log_lines.append(f"  {name}: {float(start_val):.6f}")
+                _log_section(
+                    "Fitting variables (start values):",
+                    [
+                        (
+                            f"{name}: <missing>"
+                            if params.get(name) is None
+                            else f"{name}: {float(params.get(name)):.6f}"
+                        )
+                        for name in var_names
+                    ],
+                )
 
                 result = fit_geometry_parameters(
                     miller,
@@ -3106,10 +3129,11 @@ def on_fit_geometry_click():
                     if getattr(result, "fun", None) is not None and result.fun.size
                     else 0.0
                 )
-                log_lines.append("Optimization result:")
-                for name, val in zip(var_names, result.x):
-                    log_lines.append(f"  {name} = {val:.6f}")
-                log_lines.append(f"  RMS residual = {rms:.6f} px")
+                _log_section(
+                    "Optimization result:",
+                    [f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)]
+                    + [f"RMS residual = {rms:.6f} px"],
+                )
                 base_summary = (
                     "Fit complete:\n"
                     + "\n".join(
@@ -3142,8 +3166,11 @@ def on_fit_geometry_click():
                     pixel_tol=float('inf'),
                 )
             except Exception as exc:
-                log_lines.append(f"Geometry fit failed: {exc}")
-                _flush_log()
+                _log_line(f"Geometry fit failed: {exc}")
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
                 progress_label_geometry.config(
                     text=f"Geometry fit failed: {exc}"
                 )
@@ -3202,13 +3229,32 @@ def on_fit_geometry_click():
 
             canvas.draw_idle()
 
-            log_lines.append("Pixel offsets (native frame):")
-            for hkl, dx, dy, dist in pixel_offsets:
-                log_lines.append(
-                    f"  HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px"
-                )
+            _log_section(
+                "Pixel offsets (native frame):",
+                [
+                    f"HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px"
+                    for hkl, dx, dy, dist in pixel_offsets
+                ]
+                or ["No matched peaks"],
+            )
 
-            _flush_log()
+            _log_section(
+                "Fit summary:",
+                [
+                    "Parameters:" if var_names else "Parameters: <none>",
+                    *[
+                        f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)
+                    ],
+                    f"RMS residual = {rms:.6f} px",
+                    f"Applied orientation: {orientation_choice.get('label', 'identity')}",
+                    f"Matched peaks saved to: {save_path}",
+                ],
+            )
+
+            try:
+                log_file.close()
+            except Exception:
+                pass
 
             export_recs = []
             for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
