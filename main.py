@@ -138,6 +138,10 @@ background_images = [read_osc(path) for path in osc_files]
 if not background_images:
     raise ValueError("No oscillation images configured in osc_files")
 
+# Preserve native-orientation copies for fitting/analysis; display variants may
+# be rotated for visualization.
+background_images_native = [np.array(img) for img in background_images]
+
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
 parameters = parse_poni_file(poni_file_path)
@@ -579,6 +583,14 @@ current_background_index = 0
 background_visible = True
 
 
+def _get_current_background_native() -> np.ndarray:
+    """Return the unrotated background image corresponding to the current index."""
+
+    if 0 <= current_background_index < len(background_images_native):
+        return background_images_native[current_background_index]
+    return current_background_image
+
+
 def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k: int):
     """Rotate a single (col, row) pair by ``k`` using the same rule as ``np.rot90``.
 
@@ -642,11 +654,11 @@ def _unrotate_display_peaks(measured, rotated_shape):
             updated = dict(entry)
             if "x" in updated and "y" in updated:
                 updated["x"], updated["y"] = _rotate_point_for_display(
-                    updated["x"], updated["y"], rotated_shape, -SIM_DISPLAY_ROTATE_K
+                    updated["x"], updated["y"], rotated_shape, -DISPLAY_ROTATE_K
                 )
             if "x_pix" in updated and "y_pix" in updated:
                 updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
-                    updated["x_pix"], updated["y_pix"], rotated_shape, -SIM_DISPLAY_ROTATE_K
+                    updated["x_pix"], updated["y_pix"], rotated_shape, -DISPLAY_ROTATE_K
                 )
             unrotated.append(updated)
             continue
@@ -654,7 +666,7 @@ def _unrotate_display_peaks(measured, rotated_shape):
         if isinstance(entry, (list, tuple)) and len(entry) >= 5:
             seq = list(entry)
             seq[3], seq[4] = _rotate_point_for_display(
-                seq[3], seq[4], rotated_shape, -SIM_DISPLAY_ROTATE_K
+                seq[3], seq[4], rotated_shape, -DISPLAY_ROTATE_K
             )
             unrotated.append(type(entry)(seq))
         else:
@@ -2811,7 +2823,7 @@ def on_fit_geometry_click():
                 for (h, k, l), (x, y) in picked_pairs
             ]
             measured_for_fit = _unrotate_display_peaks(
-                measured_from_clicks, current_background_image.shape
+                measured_from_clicks, _get_current_background_native().shape
             )
 
             backend_k = int(backend_rotation_var.get())
@@ -2820,14 +2832,14 @@ def on_fit_geometry_click():
             backend_flip_order = (backend_flip_order_var.get() or "yx").lower()
             measured_for_fit = _apply_orientation_to_entries(
                 measured_for_fit,
-                current_background_image.shape,
+                _get_current_background_native().shape,
                 k=backend_k,
                 flip_x=backend_flip_y,
                 flip_y=backend_flip_x,
                 flip_order=backend_flip_order,
             )
             experimental_image_for_fit = _orient_image_for_fit(
-                current_background_image,
+                _get_current_background_native(),
                 k=backend_k,
                 flip_x=backend_flip_y,
                 flip_y=backend_flip_x,
@@ -3073,7 +3085,7 @@ def on_fit_mosaic_click():
         )
         return
 
-    experimental_image = np.asarray(current_background_image, dtype=np.float64)
+    experimental_image = np.asarray(_get_current_background_native(), dtype=np.float64)
     if experimental_image.shape != (image_size, image_size):
         progress_label_mosaic.config(
             text=(
