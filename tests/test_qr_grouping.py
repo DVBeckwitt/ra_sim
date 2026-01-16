@@ -218,6 +218,7 @@ def test_process_qr_rods_parallel_scales_with_degeneracy(monkeypatch):
         Gamma_deg=0.0,
         chi_deg=0.0,
         psi_deg=0.0,
+        psi_z_deg=0.0,
         zs=0.0,
         zb=0.0,
         n2=1,

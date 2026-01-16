@@ -229,6 +229,7 @@ def run_headless_simulation(
     cor_angle = float(sample_cfg.get("cor_deg", 0.0))
     chi = float(sample_cfg.get("chi_deg", 0.0))
     psi = float(sample_cfg.get("psi_deg", 0.0))
+    psi_z = float(sample_cfg.get("psi_z_deg", 0.0))
     zb = float(sample_cfg.get("zb", 0.0))
     zs = float(sample_cfg.get("zs", 0.0))
     debye_x = float(inst.get("debye_waller", {}).get("x", 0.0))
@@ -265,6 +266,7 @@ def run_headless_simulation(
         Gamma_initial,
         chi,
         psi,
+        psi_z,
         zs,
         zb,
         n2,

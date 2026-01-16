@@ -216,6 +216,7 @@ theta_initial = sample_config.get("theta_initial_deg", 6.0)
 cor_angle = sample_config.get("cor_deg", 0.0)
 chi = sample_config.get("chi_deg", 0.0)
 psi = sample_config.get("psi_deg", 0.0)
+psi_z = sample_config.get("psi_z_deg", 0.0)
 zb = sample_config.get("zb", 0.0)
 bw_sigma = beam_config.get("bandwidth_sigma_fraction", 0.05e-3) * fwhm2sigma
 zs = sample_config.get("zs", 0.0)
@@ -301,6 +302,7 @@ defaults = {
     'gamma': Gamma_initial,
     'Gamma': gamma_initial,
     'chi': chi,
+    'psi_z': psi_z,
     'zs': zs,
     'zb': zb,
     'debye_x': debye_x,
@@ -1978,6 +1980,7 @@ def do_update():
     gamma_updated      = float(gamma_var.get())
     Gamma_updated      = float(Gamma_var.get())
     chi_updated        = float(chi_var.get())
+    psi_z_updated      = float(psi_z_var.get())
     zs_updated         = float(zs_var.get())
     zb_updated         = float(zb_var.get())
     cor_angle_updated  = float(cor_angle_var.get())
@@ -2078,6 +2081,7 @@ def do_update():
                     Gamma_updated,
                     chi_updated,
                     psi,
+                    psi_z_updated,
                     zs_updated,
                     zb_updated,
                     n2,
@@ -2119,6 +2123,7 @@ def do_update():
                     Gamma_updated,
                     chi_updated,
                     psi,
+                    psi_z_updated,
                     zs_updated,
                     zb_updated,
                     n2,
@@ -2491,6 +2496,7 @@ def reset_to_defaults():
     gamma_var.set(defaults['gamma'])
     Gamma_var.set(defaults['Gamma'])
     chi_var.set(defaults['chi'])
+    psi_z_var.set(defaults['psi_z'])
     zs_var.set(defaults['zs'])
     zb_var.set(defaults['zb'])
     debye_x_var.set(defaults['debye_x'])
@@ -2573,6 +2579,7 @@ azimuthal_button = ttk.Button(
             gamma=gamma_var.get(),
             Gamma=Gamma_var.get(),
             chi=chi_var.get(),
+            psi_z=psi_z_var.get(),
             zs=zs_var.get(),
             zb=zb_var.get(),
             debye_x_value=debye_x_var.get(),
@@ -2833,6 +2840,7 @@ def on_fit_geometry_click():
         'c':                  c_var.get(),
         'lambda':             lambda_,          # not 'lambda_'
         'psi':                psi,
+        'psi_z':              psi_z_var.get(),
         'zs':                 zs_var.get(),
         'zb':                 zb_var.get(),
         'chi':                chi_var.get(),
@@ -3113,6 +3121,7 @@ def on_fit_geometry_click():
                             param_set["Gamma"],
                             param_set["chi"],
                             param_set.get("psi", 0.0),
+                            param_set.get("psi_z", 0.0),
                             param_set["zs"],
                             param_set["zb"],
                             param_set["n2"],
@@ -3215,6 +3224,7 @@ def on_fit_geometry_click():
                         param_set["Gamma"],
                         param_set["chi"],
                         param_set.get("psi", 0.0),
+                        param_set.get("psi_z", 0.0),
                         param_set["zs"],
                         param_set["zb"],
                         param_set["n2"],
@@ -3722,6 +3732,7 @@ def on_fit_mosaic_click():
         'c':             c_var.get(),
         'lambda':        lambda_,
         'psi':           psi,
+        'psi_z':         psi_z_var.get(),
         'zs':            zs_var.get(),
         'zb':            zb_var.get(),
         'chi':           chi_var.get(),
@@ -3944,6 +3955,7 @@ def save_q_space_representation():
         "gamma": gamma_var.get(),
         "Gamma": Gamma_var.get(),
         "chi": chi_var.get(),
+        "psi_z": psi_z_var.get(),
         "zs": zs_var.get(),
         "zb": zb_var.get(),
         "debye_x": debye_x_var.get(),
@@ -3984,6 +3996,7 @@ def save_q_space_representation():
         Gamma_var.get(),
         chi_var.get(),
         psi,
+        psi_z_var.get(),
         zs_var.get(),
         zb_var.get(),
         n2,
@@ -4074,6 +4087,7 @@ def run_debug_simulation():
         Gamma_val,
         chi_val,
         psi,
+        psi_z_var.get(),
         zs_val,
         zb_val,
         n2,
@@ -4203,6 +4217,9 @@ Gamma_var, Gamma_scale = make_slider(
 )
 chi_var, chi_scale = make_slider(
     'Chi', -1, 1, defaults['chi'], 0.001, geo_frame.frame
+)
+psi_z_var, psi_z_scale = make_slider(
+    'Goniometer Z', -5.0, 5.0, defaults['psi_z'], 0.01, geo_frame.frame
 )
 zs_var, zs_scale = make_slider(
     'Zs', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame

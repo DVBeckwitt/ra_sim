@@ -185,7 +185,7 @@ def _simulate_with_cache(
         miller, intensities, image_size,
         params['a'], params['c'], wavelength_array,
         buffer, params['corto_detector'],
-        params['gamma'], params['Gamma'], params['chi'], params.get('psi', 0.0),
+        params['gamma'], params['Gamma'], params['chi'], params.get('psi', 0.0), params.get('psi_z', 0.0),
         params['zs'], params['zb'], params['n2'],
         mosaic['beam_x_array'],
         mosaic['beam_y_array'],
@@ -336,6 +336,7 @@ def fit_mosaic_widths_separable(
     Gamma_deg = float(params.get("Gamma", 0.0))
     chi_deg = float(params.get("chi", 0.0))
     psi_deg = float(params.get("psi", 0.0))
+    psi_z_deg = float(params.get("psi_z", 0.0))
     zs = float(params.get("zs", 0.0))
     zb = float(params.get("zb", 0.0))
     n2 = params.get("n2")
@@ -376,6 +377,7 @@ def fit_mosaic_widths_separable(
             Gamma_deg,
             chi_deg,
             psi_deg,
+            psi_z_deg,
             zs,
             zb,
             n2,
@@ -1636,7 +1638,7 @@ def simulate_and_compare_hkl(
     a = params['a']; c = params['c']
     dist = params['corto_detector']
     gamma = params['gamma']; Gamma = params['Gamma']
-    chi   = params['chi']; psi = params.get('psi', 0.0)
+    chi   = params['chi']; psi = params.get('psi', 0.0); psi_z = params.get('psi_z', 0.0)
     zs    = params['zs']; zb    = params['zb']
     debye_x = params['debye_x']; debye_y = params['debye_y']
     n2    = params['n2']
@@ -1654,7 +1656,7 @@ def simulate_and_compare_hkl(
         miller, intensities, image_size,
         a, c, wavelength_array,
         sim_buffer, dist,
-        gamma, Gamma, chi, psi,
+        gamma, Gamma, chi, psi, psi_z,
         zs, zb, n2,
         mosaic['beam_x_array'],
         mosaic['beam_y_array'],
@@ -1749,7 +1751,7 @@ def compute_peak_position_error_geometry_local(
     gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c,
     center_x, center_y, measured_peaks,
     miller, intensities, image_size, mosaic_params, n2,
-    psi, debye_x, debye_y, wavelength, pixel_tol=np.inf
+    psi, psi_z, debye_x, debye_y, wavelength, pixel_tol=np.inf
 ):
     """
     Objective for DE: returns the 1D array of distances for all matched peaks.
@@ -1769,6 +1771,7 @@ def compute_peak_position_error_geometry_local(
         'lambda': wavelength,
         'n2': n2,
         'psi': psi,
+        'psi_z': psi_z,
         'debye_x': debye_x,
         'debye_y': debye_y,
         'mosaic_params': mosaic_params
@@ -1814,6 +1817,7 @@ def fit_geometry_parameters(
             mosaic_params=params['mosaic_params'],
             n2=params['n2'],
             psi=params.get('psi', 0.0),
+            psi_z=params.get('psi_z', 0.0),
             debye_x=params['debye_x'],
             debye_y=params['debye_y'],
             wavelength=params['lambda'],
@@ -1840,7 +1844,7 @@ def fit_geometry_parameters(
             miller, intensities, image_size,
             local['a'], local['c'], wavelength_array,
             sim_buffer, local['corto_detector'],
-            local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0),
+            local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),
             local['zs'], local['zb'], local['n2'],
             mosaic['beam_x_array'],
             mosaic['beam_y_array'],
@@ -1952,6 +1956,7 @@ def run_optimization_positions_geometry_local(
             initial_params['mosaic_params'],
             initial_params['n2'],
             initial_params.get('psi', 0.0),
+            initial_params.get('psi_z', 0.0),
             initial_params['debye_x'],
             initial_params['debye_y'],
             initial_params['lambda'],

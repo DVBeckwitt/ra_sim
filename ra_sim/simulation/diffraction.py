@@ -1070,7 +1070,7 @@ def calculate_phi(
 def process_peaks_parallel(
     miller, intensities, image_size,
     av, cv, lambda_, image,
-    Distance_CoR_to_Detector, gamma_deg, Gamma_deg, chi_deg, psi_deg,
+    Distance_CoR_to_Detector, gamma_deg, Gamma_deg, chi_deg, psi_deg, psi_z_deg,
     zs, zb, n2,
     beam_x_array, beam_y_array,
     theta_array, phi_array,
@@ -1105,6 +1105,7 @@ def process_peaks_parallel(
     Gamma_rad = Gamma_deg*(pi/180.0)
     chi_rad   = chi_deg*(pi/180.0)
     psi_rad   = psi_deg*(pi/180.0)
+    psi_z_rad = psi_z_deg*(pi/180.0)
 
     sigma_rad   = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
@@ -1158,12 +1159,19 @@ def process_peaks_parallel(
     ])
     c_psi= cos(psi_rad)
     s_psi= sin(psi_rad)
-    R_z= np.array([
+    R_z = np.array([
         [ c_psi, s_psi, 0.0],
         [-s_psi, c_psi, 0.0],
         [ 0.0,   0.0,   1.0]
     ])
-    R_z_R_y= R_z @ R_y
+    c_psi_z = cos(psi_z_rad)
+    s_psi_z = sin(psi_z_rad)
+    R_z_gonio = np.array([
+        [ c_psi_z, s_psi_z, 0.0],
+        [-s_psi_z, c_psi_z, 0.0],
+        [ 0.0,     0.0,     1.0]
+    ])
+    R_z_R_y = (R_z_gonio @ R_z) @ R_y
 
     n1= np.array([0.0, 0.0, 1.0], dtype=np.float64)
     R_ZY_n= R_z_R_y @ n1
@@ -1268,6 +1276,7 @@ def process_qr_rods_parallel(
     Gamma_deg,
     chi_deg,
     psi_deg,
+    psi_z_deg,
     zs,
     zb,
     n2,
@@ -1318,6 +1327,7 @@ def process_qr_rods_parallel(
         Gamma_deg,
         chi_deg,
         psi_deg,
+        psi_z_deg,
         zs,
         zb,
         n2,
@@ -1346,7 +1356,7 @@ def process_qr_rods_parallel(
 
 def debug_detector_paths(
     beam_x_array, beam_y_array, theta_array, phi_array,
-    theta_initial_deg, cor_angle_deg, chi_deg, psi_deg,
+    theta_initial_deg, cor_angle_deg, chi_deg, psi_deg, psi_z_deg,
     zb, zs,
     Distance_CoR_to_Detector, gamma_deg, Gamma_deg,
     n_detector=np.array([0.0, 1.0, 0.0]),
@@ -1367,7 +1377,7 @@ def debug_detector_paths(
         Sample tilt around the CoR axis.
     cor_angle_deg : float
         Angle of the CoR axis relative to the +x axis.
-    chi_deg, psi_deg : float
+    chi_deg, psi_deg, psi_z_deg : float
         Additional sample rotations around y and z.
     zb, zs : float
         Beam and sample offsets used in the main simulation.
@@ -1383,6 +1393,7 @@ def debug_detector_paths(
     Gamma_rad = np.radians(Gamma_deg)
     chi_rad   = np.radians(chi_deg)
     psi_rad   = np.radians(psi_deg)
+    psi_z_rad = np.radians(psi_z_deg)
     rad_theta_i = np.radians(theta_initial_deg)
     cor_axis_rad = np.radians(cor_angle_deg)
 
@@ -1412,14 +1423,21 @@ def debug_detector_paths(
         [ 0.0,   1.0,   0.0],
         [-s_chi, 0.0, c_chi]
     ])
-    c_psi= np.cos(psi_rad)
-    s_psi= np.sin(psi_rad)
+    c_psi = np.cos(psi_rad)
+    s_psi = np.sin(psi_rad)
     R_z = np.array([
         [ c_psi, s_psi, 0.0],
         [-s_psi, c_psi, 0.0],
         [ 0.0,   0.0,   1.0]
     ])
-    R_z_R_y = R_z @ R_y
+    c_psi_z = np.cos(psi_z_rad)
+    s_psi_z = np.sin(psi_z_rad)
+    R_z_gonio = np.array([
+        [ c_psi_z, s_psi_z, 0.0],
+        [-s_psi_z, c_psi_z, 0.0],
+        [ 0.0,     0.0,     1.0]
+    ])
+    R_z_R_y = (R_z_gonio @ R_z) @ R_y
 
     # Construct the pitched CoR axis in x–z and rotate with Rodrigues' formula;
     # see docs/cor_rotation_math.md for the math details.
@@ -1483,5 +1501,4 @@ def debug_detector_paths(
         out[i] = [dtheta, dphi, hit_sample, hit_det]
 
     return out
-
 

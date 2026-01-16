@@ -124,7 +124,7 @@ def main() -> None:
         a_v, c_v, λ,
         sim_buffer,
         dist,
-        rot1, rot2, chi, psi,
+        rot1, rot2, chi, psi, 0.0,
         zs, zb, n2,
         mosaic_params["beam_x_array"],
         mosaic_params["beam_y_array"],
@@ -179,4 +179,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
