@@ -32,7 +32,7 @@ def main():
     bg_image = load_background_image(bg_image_path)
 
     def rotate_display_image(image):
-        return np.rot90(image)
+        return np.rot90(image, k=3)
 
     bg_image = rotate_display_image(bg_image)
 
