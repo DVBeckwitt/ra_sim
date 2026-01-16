@@ -501,7 +501,7 @@ def calculate_phi(
 def process_peaks_parallel_debug(
     miller, intensities, image_size,
     av, cv, lambda_, image,
-    Distance_CoR_to_Detector, gamma_deg, Gamma_deg, chi_deg, psi_deg,
+    Distance_CoR_to_Detector, gamma_deg, Gamma_deg, chi_deg, psi_deg, psi_z_deg,
     zs, zb, n2,
     beam_x_array, beam_y_array,
     theta_array, phi_array,
@@ -517,6 +517,7 @@ def process_peaks_parallel_debug(
     Gamma_rad = Gamma_deg*(pi/180.0)
     chi_rad   = chi_deg*(pi/180.0)
     psi_rad   = psi_deg*(pi/180.0)
+    psi_z_rad = psi_z_deg*(pi/180.0)
 
     sigma_rad   = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)  # not used in example
@@ -571,7 +572,14 @@ def process_peaks_parallel_debug(
         [-s_psi, c_psi, 0.0],
         [ 0.0,   0.0,   1.0]
     ])
-    R_z_R_y= R_z @ R_y
+    c_psi_z = cos(psi_z_rad)
+    s_psi_z = sin(psi_z_rad)
+    R_z_gonio = np.array([
+        [ c_psi_z, s_psi_z, 0.0],
+        [-s_psi_z, c_psi_z, 0.0],
+        [ 0.0,     0.0,     1.0]
+    ])
+    R_z_R_y= (R_z_gonio @ R_z) @ R_y
 
     n1= np.array([0.0,0.0,1.0], dtype=np.float64)
     R_ZY_n= R_z_R_y @ n1

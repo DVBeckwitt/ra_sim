@@ -121,7 +121,7 @@ def run_simulation(
         miller, intens, image_size,
         *parse_cif(cif_path), geometry["wavelength"]*1e10, img_buf,
         geometry["dist"], geometry["rot1"], geometry["rot2"],
-        chi, 0.0, zs, zb, n2,
+        chi, 0.0, 0.0, zs, zb, n2,
         bx, by, thetas, phis,
         sigma_mosaic_deg, gamma_mosaic_deg, 0.05, lams,
         zs, zb, center, theta_initial, cor_angle,

@@ -28,6 +28,7 @@ instrument:
     cor_deg: 0.0
     chi_deg: 0.0
     psi_deg: 0.0
+    psi_z_deg: 0.0
     zb: 0.0
     zs: 0.0
   debye_waller:

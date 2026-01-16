@@ -51,6 +51,7 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
         geom_Gamma,
         chi,
         psi,
+        psi_z,
         zs,
         zb,
         n2,
@@ -125,6 +126,7 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
         "Gamma": 0.0,
         "chi": 0.0,
         "psi": 0.0,
+        "psi_z": 0.0,
         "zs": 0.0,
         "zb": 0.0,
         "n2": 1.0,
@@ -150,6 +152,7 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
         params["Gamma"],
         params["chi"],
         params["psi"],
+        params["psi_z"],
         params["zs"],
         params["zb"],
         params["n2"],
@@ -218,4 +221,3 @@ def test_fit_mosaic_widths_separable_recovers_true_widths(monkeypatch):
             if h == 0 and k == 0:
                 continue
             assert tth <= 65.0 + 1e-8
-
