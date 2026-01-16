@@ -31,6 +31,11 @@ def main():
     bg_image_path = get_path("gui_background_image")
     bg_image = load_background_image(bg_image_path)
 
+    def rotate_display_image(image):
+        return np.rot90(image)
+
+    bg_image = rotate_display_image(bg_image)
+
     # Setup figure
     fig, ax = setup_figure()
 
@@ -150,7 +155,7 @@ def main():
             return
 
         scaled_image = latest_result * scale_factor_var.get()
-        sim_artist.set_data(scaled_image)
+        sim_artist.set_data(rotate_display_image(scaled_image))
         sim_artist.set_clim(
             simulation_min_var.get(), simulation_max_var.get()
         )
@@ -388,6 +393,7 @@ def main():
 
                 scale_factor = scale_factor_var.get()
                 scaled_image = normalized_image * scale_factor
+                rotated_scaled_image = rotate_display_image(scaled_image)
 
                 if not simulation_limits_initialized:
                     finite_pixels = scaled_image[np.isfinite(scaled_image)]
@@ -416,9 +422,9 @@ def main():
                     simulation_limits_initialized = True
 
                 if sim_artist is None:
-                    sim_artist = ax.imshow(scaled_image, cmap='turbo')
+                    sim_artist = ax.imshow(rotated_scaled_image, cmap='turbo')
                 else:
-                    sim_artist.set_data(scaled_image)
+                    sim_artist.set_data(rotated_scaled_image)
 
                 sim_artist.set_clim(
                     simulation_min_var.get(), simulation_max_var.get()
