@@ -577,9 +577,12 @@ col_center = int(center_default[1])
 
 # Background and simulated overlays share the same display orientation. ``k`` is
 # the np.rot90 factor; 0 keeps images in their native top-left origin frame.
-DISPLAY_ROTATE_K = 0
+DISPLAY_ROTATE_K = 1
 SIM_DISPLAY_ROTATE_K = DISPLAY_ROTATE_K
 
+background_images = [
+    np.rot90(image, DISPLAY_ROTATE_K) for image in background_images
+]
 current_background_image = background_images[0]
 current_background_index = 0
 background_visible = True
