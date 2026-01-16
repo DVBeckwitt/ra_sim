@@ -144,9 +144,17 @@ background_images = [read_osc(path) for path in osc_files]
 if not background_images:
     raise ValueError("No oscillation images configured in osc_files")
 
+# Background and simulated overlays can use different display orientations.
+# ``k`` is the np.rot90 factor; -1 is 90° clockwise, 0 keeps native orientation.
+DISPLAY_ROTATE_K = -1
+SIM_DISPLAY_ROTATE_K = 0
+
 # Preserve native-orientation copies for fitting/analysis; display variants may
 # be rotated for visualization.
 background_images_native = [np.array(img) for img in background_images]
+background_images_display = [
+    np.rot90(img, DISPLAY_ROTATE_K) for img in background_images_native
+]
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -575,12 +583,8 @@ def export_initial_excel():
 row_center = int(center_default[0])
 col_center = int(center_default[1])
 
-# Background and simulated overlays share the same display orientation. ``k`` is
-# the np.rot90 factor; 0 keeps images in their native top-left origin frame.
-DISPLAY_ROTATE_K = 0
-SIM_DISPLAY_ROTATE_K = DISPLAY_ROTATE_K
-
-current_background_image = background_images[0]
+current_background_image = background_images_native[0]
+current_background_display = background_images_display[0]
 current_background_index = 0
 background_visible = True
 
@@ -591,6 +595,14 @@ def _get_current_background_native() -> np.ndarray:
     if 0 <= current_background_index < len(background_images_native):
         return background_images_native[current_background_index]
     return current_background_image
+
+
+def _get_current_background_display() -> np.ndarray:
+    """Return the rotated background image used for GUI display."""
+
+    if 0 <= current_background_index < len(background_images_display):
+        return background_images_display[current_background_index]
+    return np.rot90(_get_current_background_native(), DISPLAY_ROTATE_K)
 
 
 def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k: int):
@@ -977,7 +989,7 @@ def _aggregate_match_centers(
 measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
 measured_peaks = _rotate_measured_peaks_for_display(
     measured_peaks_raw,
-    current_background_image.shape,
+    current_background_display.shape,
 )
 
 ###############################################################################
@@ -1037,7 +1049,7 @@ image_display = ax.imshow(
 
 
 background_display = ax.imshow(
-    current_background_image,
+    current_background_display,
     cmap='turbo',
     zorder=0,
     origin='upper'
@@ -1268,11 +1280,11 @@ simulation_controls = ttk.LabelFrame(display_controls_frame, text="Simulation Di
 simulation_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
 
-background_min_candidate = _finite_percentile(current_background_image, 1, 0.0)
+background_min_candidate = _finite_percentile(current_background_display, 1, 0.0)
 background_vmin_default = 0.0
 _, background_vmax_default = _ensure_valid_range(
     background_vmin_default,
-    _finite_percentile(current_background_image, 99, 1.0),
+    _finite_percentile(current_background_display, 99, 1.0),
 )
 
 background_slider_min = min(background_min_candidate, 0.0)
@@ -1471,13 +1483,14 @@ def _suggest_scale_factor(sim_image, bg_image):
 
 def _update_chi_square_display():
     try:
+        native_background = _get_current_background_native()
         if (
             background_visible
-            and current_background_image is not None
+            and native_background is not None
             and global_image_buffer.size
         ):
             sim_vals = np.asarray(global_image_buffer, dtype=float)
-            bg_vals = np.asarray(current_background_image, dtype=float)
+            bg_vals = np.asarray(native_background, dtype=float)
             if (
                 sim_vals.size
                 and bg_vals.size
@@ -1504,8 +1517,8 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             background_max_var.get(),
         )
         if not show_caked_2d_var.get():
-            if background_visible and current_background_image is not None:
-                background_display.set_data(current_background_image)
+            if background_visible and current_background_display is not None:
+                background_display.set_data(current_background_display)
                 background_display.set_visible(True)
             else:
                 background_display.set_visible(False)
@@ -1573,15 +1586,15 @@ def apply_scale_factor_to_existing_results(update_limits=False):
     )
 
     if not show_caked_2d_var.get():
-        if background_visible and current_background_image is not None:
-            background_display.set_data(current_background_image)
+        if background_visible and current_background_display is not None:
+            background_display.set_data(current_background_display)
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
 
     canvas.draw_idle()
     _update_chi_square_display()
-_update_background_slider_defaults(current_background_image, reset_override=True)
+_update_background_slider_defaults(current_background_display, reset_override=True)
 
 
 # Track caked intensity limits without exposing separate sliders in the UI.
@@ -2193,9 +2206,10 @@ def do_update():
             peak_millers.append(hkl)
 
     normalization_scale = 1.0
-    if current_background_image is not None and display_image is not None:
+    native_background = _get_current_background_native()
+    if native_background is not None and display_image is not None:
         normalization_scale = _suggest_scale_factor(
-            display_image, current_background_image
+            display_image, native_background
         )
         if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
             normalization_scale = 1.0
@@ -2306,8 +2320,9 @@ def do_update():
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
 
         background_caked_available = False
-        if background_visible and current_background_image is not None:
-            bg_res2 = caking(current_background_image, ai)
+        native_background = _get_current_background_native()
+        if background_visible and native_background is not None:
+            bg_res2 = caking(native_background, ai)
             bg_caked = bg_res2.intensity
             bg_radial = np.asarray(bg_res2.radial, dtype=float)
             bg_azimuth = _wrap_phi_range(_adjust_phi_zero(bg_res2.azimuthal))
@@ -2387,8 +2402,8 @@ def do_update():
 
         _set_image_origin(background_display, 'upper')
         background_display.set_extent([0, image_size, image_size, 0])
-        if background_visible and current_background_image is not None:
-            background_display.set_data(current_background_image)
+        if background_visible and current_background_display is not None:
+            background_display.set_data(current_background_display)
             background_display.set_clim(
                 background_min_var.get(),
                 background_max_var.get(),
@@ -2417,8 +2432,9 @@ def do_update():
         line_1d_rad.set_data(rad_sim, i2t_sim * scale)
         line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
-        if background_visible and current_background_image is not None:
-            bg_res2 = caking(current_background_image, ai)
+        native_background = _get_current_background_native()
+        if background_visible and native_background is not None:
+            bg_res2 = caking(native_background, ai)
             i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
                 bg_res2,
                 tth_min_var.get(),
@@ -2480,11 +2496,12 @@ def toggle_background():
 
 
 def switch_background():
-    global current_background_index, current_background_image
-    current_background_index = (current_background_index + 1) % len(background_images)
-    current_background_image = background_images[current_background_index]
-    background_display.set_data(current_background_image)
-    _update_background_slider_defaults(current_background_image, reset_override=True)
+    global current_background_index, current_background_image, current_background_display
+    current_background_index = (current_background_index + 1) % len(background_images_native)
+    current_background_image = background_images_native[current_background_index]
+    current_background_display = background_images_display[current_background_index]
+    background_display.set_data(current_background_display)
+    _update_background_slider_defaults(current_background_display, reset_override=True)
     schedule_update()
 
 def reset_to_defaults():
@@ -2524,7 +2541,7 @@ def reset_to_defaults():
     simulation_limits_user_override = False
     scale_factor_user_override = False
 
-    _update_background_slider_defaults(current_background_image, reset_override=True)
+    _update_background_slider_defaults(current_background_display, reset_override=True)
 
     suppress_simulation_limit_callback = True
     simulation_min_var.set(0.0)
@@ -2891,11 +2908,11 @@ def on_fit_geometry_click():
         r = int(round(row))
         c = int(round(col))
         r0 = max(0, r - search_radius)
-        r1 = min(current_background_image.shape[0], r + search_radius + 1)
+        r1 = min(current_background_display.shape[0], r + search_radius + 1)
         c0 = max(0, c - search_radius)
-        c1 = min(current_background_image.shape[1], c + search_radius + 1)
+        c1 = min(current_background_display.shape[1], c + search_radius + 1)
 
-        window = np.asarray(current_background_image[r0:r1, c0:c1], dtype=float)
+        window = np.asarray(current_background_display[r0:r1, c0:c1], dtype=float)
         if window.size == 0 or not np.isfinite(window).any():
             return float(col), float(row)
 
@@ -2985,7 +3002,7 @@ def on_fit_geometry_click():
             )
             native_background = _get_current_background_native()
             measured_native = _unrotate_display_peaks(
-                measured_from_clicks, current_background_image.shape
+                measured_from_clicks, current_background_display.shape
             )
             picked_frames = [
                 {
