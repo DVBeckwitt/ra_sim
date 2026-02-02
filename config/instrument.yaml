@@ -43,3 +43,35 @@ instrument:
     include_rods: false
   output:
     write_excel: false
+  fit:
+    geometry:
+      # Per-parameter bounds and sensitivity settings used during geometry fitting.
+      #
+      # Bounds support three modes:
+      # - absolute: min/max are used as-is.
+      # - relative: min/max are offsets added to the current parameter value.
+      # - relative_min0: like relative, but the lower bound is clamped to >= 0.
+      bounds:
+        theta_initial: {mode: relative, min: -0.5, max: 0.5}
+        zs: {mode: absolute, min: -2.0e-3, max: 2.0e-3}
+        zb: {mode: absolute, min: -2.0e-3, max: 2.0e-3}
+        chi: {mode: absolute, min: -1.0, max: 1.0}
+        cor_angle: {mode: absolute, min: -2.0, max: 2.0}
+        gamma: {mode: relative, min: -2.0, max: 2.0}
+        Gamma: {mode: relative, min: -2.0, max: 2.0}
+        psi_z: {mode: relative, min: -2.0, max: 2.0}
+        corto_detector: {mode: relative_min0, min: -0.05, max: 0.05}
+      # Per-parameter optimizer sensitivity (scales). Use 1.0 for defaults.
+      x_scale:
+        theta_initial: 1.0
+        zs: 1.0
+        zb: 1.0
+        chi: 1.0
+        cor_angle: 1.0
+        gamma: 1.0
+        Gamma: 1.0
+        psi_z: 1.0
+        corto_detector: 1.0
+      # Set to false to avoid numba JIT during fitting (useful if numba
+      # compilation fails on your Python build).
+      use_numba: true

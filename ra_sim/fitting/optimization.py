@@ -17,6 +17,31 @@ from ra_sim.utils.calculations import d_spacing, two_theta
 
 RNG = np.random.default_rng(42)
 
+_USE_NUMBA_PROCESS_PEAKS = True
+
+
+def _set_numba_usage_from_config(
+    refinement_config: Optional[Dict[str, Dict[str, float]]],
+) -> None:
+    """Apply per-fit config flags (e.g., disable numba for fitting)."""
+
+    global _USE_NUMBA_PROCESS_PEAKS
+    if isinstance(refinement_config, dict):
+        use_numba = refinement_config.get("use_numba", True)
+        _USE_NUMBA_PROCESS_PEAKS = bool(use_numba)
+
+
+def _process_peaks_parallel_safe(*args, **kwargs):
+    """Call the numba-compiled process_peaks_parallel with a python fallback."""
+
+    global _USE_NUMBA_PROCESS_PEAKS
+    if _USE_NUMBA_PROCESS_PEAKS:
+        try:
+            return process_peaks_parallel(*args, **kwargs)
+        except Exception:
+            _USE_NUMBA_PROCESS_PEAKS = False
+    return process_peaks_parallel.py_func(*args, **kwargs)
+
 
 @dataclass
 class TubeROI:
@@ -181,7 +206,7 @@ def _simulate_with_cache(
     if wavelength_array is None:
         wavelength_array = params.get('lambda')
 
-    image, hit_tables, *_ = process_peaks_parallel(
+    image, hit_tables, *_ = _process_peaks_parallel_safe(
         miller, intensities, image_size,
         params['a'], params['c'], wavelength_array,
         buffer, params['corto_detector'],
@@ -364,7 +389,7 @@ def fit_mosaic_widths_separable(
         record_hits: bool = False,
     ) -> Tuple[np.ndarray, Optional[List[np.ndarray]]]:
         buffer.fill(0.0)
-        image, hit_tables, *_ = process_peaks_parallel(
+        image, hit_tables, *_ = _process_peaks_parallel_safe(
             miller_subset,
             intens_subset,
             image_size,
@@ -1652,7 +1677,7 @@ def simulate_and_compare_hkl(
         wavelength_array = mosaic.get('wavelength_i_array')
 
     # Full-pattern simulation
-    updated_image, hit_tables, *_ = process_peaks_parallel(
+    updated_image, hit_tables, *_ = _process_peaks_parallel_safe(
         miller, intensities, image_size,
         a, c, wavelength_array,
         sim_buffer, dist,
@@ -1798,6 +1823,8 @@ def fit_geometry_parameters(
     var_names is a list of keys in `params` to optimize.
     """
 
+    _set_numba_usage_from_config(refinement_config)
+
     def cost_fn(x):
         local = params.copy()
         for name, v in zip(var_names, x):
@@ -1840,7 +1867,7 @@ def fit_geometry_parameters(
             wavelength_array = mosaic.get('wavelength_i_array')
 
         sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-        _, hit_tables, *_ = process_peaks_parallel(
+        _, hit_tables, *_ = _process_peaks_parallel_safe(
             miller, intensities, image_size,
             local['a'], local['c'], wavelength_array,
             sim_buffer, local['corto_detector'],
@@ -1911,30 +1938,81 @@ def fit_geometry_parameters(
 
     x0 = [params[name] for name in var_names]
 
-    if experimental_image is None:
-        return least_squares(cost_fn, x0)
-
     lower_bounds = []
     upper_bounds = []
-    theta0 = float(params.get('theta_initial', 0.0))
-    for name, val in zip(var_names, x0):
-        if name == 'theta_initial':
-            lower_bounds.append(theta0 - 0.5)
-            upper_bounds.append(theta0 + 0.5)
-        elif name in {'zs', 'zb'}:
-            lower_bounds.append(-2.0e-3)
-            upper_bounds.append(2.0e-3)
-        elif name == 'chi':
-            lower_bounds.append(-1.0)
-            upper_bounds.append(1.0)
-        elif name == 'cor_angle':
-            lower_bounds.append(-5.0)
-            upper_bounds.append(5.0)
-        else:
-            lower_bounds.append(-np.inf)
-            upper_bounds.append(np.inf)
+    bounds_cfg = {}
+    x_scale_cfg = {}
+    if isinstance(refinement_config, dict):
+        bounds_cfg = refinement_config.get("bounds", {}) or {}
+        x_scale_cfg = refinement_config.get("x_scale", {}) or {}
 
-    return least_squares(pixel_cost_fn, x0, bounds=(lower_bounds, upper_bounds))
+    def _cfg_bounds(name: str, current_val: float) -> tuple[float, float]:
+        entry = bounds_cfg.get(name)
+        if entry is None:
+            return -np.inf, np.inf
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            return float(entry[0]), float(entry[1])
+        if not isinstance(entry, dict):
+            return -np.inf, np.inf
+
+        mode = str(entry.get("mode", "absolute")).lower()
+        min_raw = entry.get("min", None)
+        max_raw = entry.get("max", None)
+
+        if mode in {"relative", "rel"}:
+            if not np.isfinite(current_val):
+                return -np.inf, np.inf
+            lo = current_val + float(min_raw) if min_raw is not None else -np.inf
+            hi = current_val + float(max_raw) if max_raw is not None else np.inf
+            return lo, hi
+        if mode in {"relative_min0", "rel_min0"}:
+            if not np.isfinite(current_val):
+                return -np.inf, np.inf
+            lo = current_val + float(min_raw) if min_raw is not None else -np.inf
+            if np.isfinite(lo):
+                lo = max(0.0, lo)
+            hi = current_val + float(max_raw) if max_raw is not None else np.inf
+            return lo, hi
+
+        lo = float(min_raw) if min_raw is not None else -np.inf
+        hi = float(max_raw) if max_raw is not None else np.inf
+        return lo, hi
+
+    for name, val in zip(var_names, x0):
+        lo, hi = _cfg_bounds(name, float(val))
+        lower_bounds.append(lo)
+        upper_bounds.append(hi)
+
+    if x_scale_cfg:
+        x_scale = np.array(
+            [float(x_scale_cfg.get(name, 1.0)) for name in var_names],
+            dtype=float,
+        )
+    else:
+        x_scale = 1.0
+
+    lower_bounds = np.asarray(lower_bounds, dtype=float)
+    upper_bounds = np.asarray(upper_bounds, dtype=float)
+
+    if experimental_image is None:
+        result = least_squares(
+            cost_fn,
+            x0,
+            bounds=(lower_bounds, upper_bounds),
+            x_scale=x_scale,
+        )
+    else:
+        result = least_squares(
+            pixel_cost_fn,
+            x0,
+            bounds=(lower_bounds, upper_bounds),
+            x_scale=x_scale,
+        )
+
+    if getattr(result, "x", None) is not None:
+        result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)
+
+    return result
 
 
 def run_optimization_positions_geometry_local(

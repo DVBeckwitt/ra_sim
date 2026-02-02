@@ -105,6 +105,7 @@ else:
 # Toggle creation of backend orientation controls (kept off while automated
 # diagnostics try permutations internally).
 BACKEND_ORIENTATION_UI_ENABLED = False
+BACKGROUND_BACKEND_DEBUG_UI_ENABLED = False
 
 
 ###############################################################################
@@ -133,6 +134,7 @@ debye_config = instrument_config.get("debye_waller", {})
 occupancy_config = instrument_config.get("occupancies", {})
 hendricks_config = instrument_config.get("hendricks_teller", {})
 output_config = instrument_config.get("output", {})
+fit_config = instrument_config.get("fit", {})
 
 file_path = get_path("dark_image")
 BI = read_osc(file_path)  # Dark (background) image
@@ -587,6 +589,9 @@ current_background_image = background_images_native[0]
 current_background_display = background_images_display[0]
 current_background_index = 0
 background_visible = True
+background_backend_rotation_k = 3
+background_backend_flip_x = False
+background_backend_flip_y = False
 
 
 def _get_current_background_native() -> np.ndarray:
@@ -603,6 +608,28 @@ def _get_current_background_display() -> np.ndarray:
     if 0 <= current_background_index < len(background_images_display):
         return background_images_display[current_background_index]
     return np.rot90(_get_current_background_native(), DISPLAY_ROTATE_K)
+
+
+def _apply_background_backend_orientation(image: np.ndarray | None) -> np.ndarray | None:
+    """Apply debug-only backend rotations/flips to the background array."""
+
+    if image is None:
+        return None
+    oriented = np.asarray(image)
+    if background_backend_flip_y:
+        oriented = np.flip(oriented, axis=0)
+    if background_backend_flip_x:
+        oriented = np.flip(oriented, axis=1)
+    k_mod = int(background_backend_rotation_k) % 4
+    if k_mod:
+        oriented = np.rot90(oriented, k_mod)
+    return oriented
+
+
+def _get_current_background_backend() -> np.ndarray | None:
+    """Return the background array used for backend comparisons (debug)."""
+
+    return _apply_background_backend_orientation(_get_current_background_native())
 
 
 def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k: int):
@@ -656,11 +683,20 @@ def _rotate_measured_peaks_for_display(measured, rotated_shape):
     return rotated_entries
 
 
-def _unrotate_display_peaks(measured, rotated_shape):
-    """Map displayed peak coordinates into the simulation's native orientation."""
+def _unrotate_display_peaks(measured, rotated_shape, *, k=None):
+    """Undo a display rotation on peak coordinates.
+
+    Pass ``k`` to match the rotation applied for display (e.g. ``DISPLAY_ROTATE_K``
+    or ``SIM_DISPLAY_ROTATE_K``), so the returned points land back in that image's
+    native orientation.
+    """
 
     if measured is None:
         return []
+
+    if k is None:
+        k = DISPLAY_ROTATE_K
+    inv_k = -int(k)
 
     unrotated = []
     for entry in measured:
@@ -668,11 +704,11 @@ def _unrotate_display_peaks(measured, rotated_shape):
             updated = dict(entry)
             if "x" in updated and "y" in updated:
                 updated["x"], updated["y"] = _rotate_point_for_display(
-                    updated["x"], updated["y"], rotated_shape, -DISPLAY_ROTATE_K
+                    updated["x"], updated["y"], rotated_shape, inv_k
                 )
             if "x_pix" in updated and "y_pix" in updated:
                 updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
-                    updated["x_pix"], updated["y_pix"], rotated_shape, -DISPLAY_ROTATE_K
+                    updated["x_pix"], updated["y_pix"], rotated_shape, inv_k
                 )
             unrotated.append(updated)
             continue
@@ -680,7 +716,7 @@ def _unrotate_display_peaks(measured, rotated_shape):
         if isinstance(entry, (list, tuple)) and len(entry) >= 5:
             seq = list(entry)
             seq[3], seq[4] = _rotate_point_for_display(
-                seq[3], seq[4], rotated_shape, -DISPLAY_ROTATE_K
+                seq[3], seq[4], rotated_shape, inv_k
             )
             unrotated.append(type(entry)(seq))
         else:
@@ -1149,6 +1185,50 @@ def _clear_geometry_pick_artists():
     geometry_pick_artists.clear()
     canvas.draw_idle()
 
+
+def _background_backend_status() -> str:
+    return (
+        f"k={int(background_backend_rotation_k) % 4} "
+        f"flip_x={bool(background_backend_flip_x)} "
+        f"flip_y={bool(background_backend_flip_y)}"
+    )
+
+
+def _update_background_backend_status():
+    label = globals().get("background_backend_status_label")
+    if label is not None:
+        label.config(text=_background_backend_status())
+
+
+def _rotate_background_backend(delta_k: int):
+    global background_backend_rotation_k
+    background_backend_rotation_k = (int(background_backend_rotation_k) + int(delta_k)) % 4
+    _update_background_backend_status()
+    _update_chi_square_display()
+    schedule_update()
+
+
+def _toggle_background_backend_flip(axis: str):
+    global background_backend_flip_x, background_backend_flip_y
+    axis = (axis or "").lower()
+    if axis == "x":
+        background_backend_flip_x = not background_backend_flip_x
+    elif axis == "y":
+        background_backend_flip_y = not background_backend_flip_y
+    _update_background_backend_status()
+    _update_chi_square_display()
+    schedule_update()
+
+
+def _reset_background_backend_orientation():
+    global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
+    background_backend_rotation_k = 0
+    background_backend_flip_x = False
+    background_backend_flip_y = False
+    _update_background_backend_status()
+    _update_chi_square_display()
+    schedule_update()
+
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
@@ -1483,7 +1563,7 @@ def _suggest_scale_factor(sim_image, bg_image):
 
 def _update_chi_square_display():
     try:
-        native_background = _get_current_background_native()
+        native_background = _get_current_background_backend()
         if (
             background_visible
             and native_background is not None
@@ -2206,7 +2286,7 @@ def do_update():
             peak_millers.append(hkl)
 
     normalization_scale = 1.0
-    native_background = _get_current_background_native()
+    native_background = _get_current_background_backend()
     if native_background is not None and display_image is not None:
         normalization_scale = _suggest_scale_factor(
             display_image, native_background
@@ -2320,7 +2400,7 @@ def do_update():
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
 
         background_caked_available = False
-        native_background = _get_current_background_native()
+        native_background = _get_current_background_backend()
         if background_visible and native_background is not None:
             bg_res2 = caking(native_background, ai)
             bg_caked = bg_res2.intensity
@@ -2432,7 +2512,7 @@ def do_update():
         line_1d_rad.set_data(rad_sim, i2t_sim * scale)
         line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
-        native_background = _get_current_background_native()
+        native_background = _get_current_background_backend()
         if background_visible and native_background is not None:
             bg_res2 = caking(native_background, ai)
             i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
@@ -2783,14 +2863,58 @@ fit_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 fit_zb_var    = tk.BooleanVar(value=True)
 fit_zs_var    = tk.BooleanVar(value=True)
 fit_theta_var = tk.BooleanVar(value=True)  # theta_initial
+fit_psi_z_var = tk.BooleanVar(value=True)
 fit_chi_var   = tk.BooleanVar(value=True)
 fit_cor_var   = tk.BooleanVar(value=True)
+fit_gamma_var = tk.BooleanVar(value=True)
+fit_Gamma_var = tk.BooleanVar(value=True)
+fit_corto_var = tk.BooleanVar(value=True)
 
 ttk.Checkbutton(fit_frame, text="zb",    variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="zs",    variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="psi_z", variable=fit_psi_z_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="gamma", variable=fit_gamma_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="Gamma", variable=fit_Gamma_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="Corto", variable=fit_corto_var).pack(side=tk.LEFT, padx=2)
+
+if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
+    background_backend_frame = ttk.LabelFrame(root, text="Background Backend (debug)")
+    background_backend_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+    background_backend_status_label = ttk.Label(
+        background_backend_frame,
+        text=_background_backend_status(),
+    )
+    background_backend_status_label.pack(side=tk.LEFT, padx=4)
+
+    ttk.Button(
+        background_backend_frame,
+        text="Rot -90",
+        command=lambda: _rotate_background_backend(-1),
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        background_backend_frame,
+        text="Rot +90",
+        command=lambda: _rotate_background_backend(1),
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        background_backend_frame,
+        text="Flip X",
+        command=lambda: _toggle_background_backend_flip("x"),
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        background_backend_frame,
+        text="Flip Y",
+        command=lambda: _toggle_background_backend_flip("y"),
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        background_backend_frame,
+        text="Reset",
+        command=_reset_background_backend_orientation,
+    ).pack(side=tk.LEFT, padx=2)
 
 backend_rotation_var = tk.IntVar(value=0)
 backend_flip_y_axis_var = tk.BooleanVar(value=False)
@@ -2880,8 +3004,12 @@ def on_fit_geometry_click():
     if fit_zb_var.get():    var_names.append('zb')
     if fit_zs_var.get():    var_names.append('zs')
     if fit_theta_var.get(): var_names.append('theta_initial')
+    if fit_psi_z_var.get(): var_names.append('psi_z')
     if fit_chi_var.get():   var_names.append('chi')
     if fit_cor_var.get():   var_names.append('cor_angle')
+    if fit_gamma_var.get(): var_names.append('gamma')
+    if fit_Gamma_var.get(): var_names.append('Gamma')
+    if fit_corto_var.get(): var_names.append('corto_detector')
     if not var_names:
         progress_label_geometry.config(text="No parameters selected!")
         return
@@ -3001,8 +3129,13 @@ def on_fit_geometry_click():
                 ],
             )
             native_background = _get_current_background_native()
+            backend_background = _get_current_background_backend()
+            if backend_background is None:
+                backend_background = native_background
             measured_native = _unrotate_display_peaks(
-                measured_from_clicks, current_background_display.shape
+                measured_from_clicks,
+                current_background_display.shape,
+                k=SIM_DISPLAY_ROTATE_K,
             )
             picked_frames = [
                 {
@@ -3014,11 +3147,11 @@ def on_fit_geometry_click():
             ]
 
             _log_section(
-                "Unrotated measured peaks (native frame):",
+                "Unrotated measured peaks (fit frame):",
                 [
                     (
                         "label="
-                        f"{entry.get('label')} native_px=({entry.get('x'):.3f}, {entry.get('y'):.3f})"
+                        f"{entry.get('label')} fit_px=({entry.get('x'):.3f}, {entry.get('y'):.3f})"
                     )
                     for entry in measured_native
                 ],
@@ -3065,7 +3198,7 @@ def on_fit_geometry_click():
                     best = _best_orientation_alignment(
                         preview_sim_centers,
                         preview_meas_centers,
-                        native_background.shape,
+                        (image_size, image_size),
                     )
                     if best is not None:
                         orientation_choice.update(best)
@@ -3109,7 +3242,7 @@ def on_fit_geometry_click():
                     ],
                 )
                 experimental_image_for_fit = _orient_image_for_fit(
-                    native_background,
+                    backend_background,
                     indexing_mode=orientation_choice["indexing_mode"],
                     k=orientation_choice["k"],
                     flip_x=orientation_choice["flip_x"],
@@ -3424,6 +3557,7 @@ def on_fit_geometry_click():
                     var_names,
                     pixel_tol=float('inf'),
                     experimental_image=experimental_image_for_fit,
+                    refinement_config=fit_config.get("geometry", {}),
                 )
 
                 _log_section(
@@ -3443,8 +3577,12 @@ def on_fit_geometry_click():
                     if name == 'zb':               zb_var.set(val)
                     elif name == 'zs':             zs_var.set(val)
                     elif name == 'theta_initial':  theta_initial_var.set(val)
+                    elif name == 'psi_z':          psi_z_var.set(val)
                     elif name == 'chi':            chi_var.set(val)
                     elif name == 'cor_angle':      cor_angle_var.set(val)
+                    elif name == 'gamma':          gamma_var.set(val)
+                    elif name == 'Gamma':          Gamma_var.set(val)
+                    elif name == 'corto_detector': corto_detector_var.set(val)
 
                 # Keep the cached profile in sync with the fitted geometry so the
                 # next simulation uses the updated parameters even when diagnostics
@@ -3497,6 +3635,10 @@ def on_fit_geometry_click():
                     'theta_initial': theta_initial_var.get(),
                     'chi': chi_var.get(),
                     'cor_angle': cor_angle_var.get(),
+                    'psi_z': psi_z_var.get(),
+                    'gamma': gamma_var.get(),
+                    'Gamma': Gamma_var.get(),
+                    'corto_detector': corto_detector_var.get(),
                 })
 
                 _log_matches_snapshot("Matches after fit (native frame):", fitted_params)
@@ -3549,6 +3691,9 @@ def on_fit_geometry_click():
 
             pixel_offsets = []
 
+            # Replace the original pick markers with the fitted match locations.
+            _clear_geometry_pick_artists()
+
             for hkl_key, sim_center, meas_center in zip(
                 agg_millers, agg_sim_coords, agg_meas_coords
             ):
@@ -3558,10 +3703,25 @@ def on_fit_geometry_click():
                 pixel_offsets.append((hkl_key, dx, dy, dist))
 
                 disp_sx, disp_sy = _to_display_frame(
-                    sim_center[0], sim_center[1], k=DISPLAY_ROTATE_K
+                    sim_center[0], sim_center[1], k=SIM_DISPLAY_ROTATE_K
                 )
                 disp_mx, disp_my = _to_display_frame(
-                    meas_center[0], meas_center[1], k=DISPLAY_ROTATE_K
+                    meas_center[0], meas_center[1], k=SIM_DISPLAY_ROTATE_K
+                )
+
+                _mark_pick(
+                    disp_sx,
+                    disp_sy,
+                    f"{hkl_key} sim",
+                    '#00b894',
+                    'o',
+                )
+                _mark_pick(
+                    disp_mx,
+                    disp_my,
+                    f"{hkl_key} real",
+                    '#e17055',
+                    'x',
                 )
 
                 arrow = ax.annotate(
@@ -3734,7 +3894,7 @@ def on_fit_mosaic_click():
         )
         return
 
-    experimental_image = np.asarray(_get_current_background_native(), dtype=np.float64)
+    experimental_image = np.asarray(_get_current_background_backend(), dtype=np.float64)
     if experimental_image.shape != (image_size, image_size):
         progress_label_mosaic.config(
             text=(
@@ -3861,6 +4021,13 @@ fit_button_geometry = ttk.Button(
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
+
+clear_geometry_markers_button = ttk.Button(
+    root,
+    text="Clear Fit Markers",
+    command=_clear_geometry_pick_artists,
+)
+clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
 
 fit_button_mosaic = ttk.Button(
     root,
