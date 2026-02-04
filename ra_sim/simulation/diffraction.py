@@ -165,17 +165,23 @@ def sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples):
 
 
 @njit
+def wrap_to_pi(x):
+    while x <= -pi:
+        x += 2.0 * pi
+    while x > pi:
+        x -= 2.0 * pi
+    return x
+
+
+@njit
 def compute_intensity_array(Qx, Qy, Qz,
                             G_vec,
                             sigma,
                             gamma_pv,
-                            eta_pv,
-                            H, K,
-                            dphi, dtheta):
+                            eta_pv):
     """
-    Compute the pseudo-Voigt mosaic distribution around G_vec for each (Qx, Qy, Qz).
-    Gaussian and Lorentzian components are individually normalized, so their
-    mixture preserves unit total area without additional normalization.
+    Compute the mosaic surface density sigma(theta) on the Bragg sphere for
+    each (Qx, Qy, Qz). Uses a pseudo-Voigt in the grazing-angle offset.
 
     Parameters
     ----------
@@ -189,15 +195,11 @@ def compute_intensity_array(Qx, Qy, Qz,
         Lorentzian half-width at half-maximum (rad).
     eta_pv : float
         Mixing parameter (0=Gaussian, 1=Lorentzian).
-    H, K : int
-        Miller indices to choose the cap vs band method.
-    dphi, dtheta : float
-        Angular steps (unused here since profiles are normalized).
 
     Returns
     -------
     intensities : array-like
-        Pseudo-Voigt intensities, same shape as Qx.
+        Surface density sigma(theta), same shape as Qx.
     """
     # Unpack G and compute magnitudes
     Gx, Gy, Gz = G_vec[0], G_vec[1], G_vec[2]
@@ -205,54 +207,38 @@ def compute_intensity_array(Qx, Qy, Qz,
     if G_mag < 1e-14:
         return np.zeros_like(Qx)
 
-    Q_mag = np.sqrt(Qx*Qx + Qy*Qy + Qz*Qz)
-    Q_mag_safe = np.maximum(Q_mag, 1e-14)
     Qr = np.sqrt(Qx*Qx + Qy*Qy)
 
     # Amplitude factors for normalized 1D profiles
     A_gauss = 1.0 / (sigma * np.sqrt(2.0 * np.pi))
     A_lor   = 1.0 / (np.pi * gamma_pv)
 
-    intensities = np.zeros_like(Qx)
+    # Reference grazing angle for the reflection
+    Gr = np.sqrt(Gx*Gx + Gy*Gy)
+    theta0 = np.arctan2(np.abs(Gz), Gr)
 
-    if H == 0 and K == 0:
-        # --- CAP method (full-cone around G) ---
-        Gnorm = 1.0 / G_mag
-        Qnorm = 1.0 / Q_mag_safe
-        dot_ = (Gx*Gnorm)*(Qx*Qnorm) + (Gy*Gnorm)*(Qy*Qnorm) + (Gz*Gnorm)*(Qz*Qnorm)
-        dot_clamped = np.minimum(np.maximum(dot_, -1.0), 1.0)
-        alpha = np.arccos(dot_clamped)
+    eps = 1e-12
+    denom_base = 2.0 * np.pi * G_mag * G_mag
 
-        # Gaussian and Lorentzian contributions
-        gauss_val = A_gauss * np.exp(-0.5 * (alpha / sigma)**2)
-        lor_val   = A_lor   / (1.0 + (alpha / gamma_pv)**2)
+    intensities = np.empty_like(Qx)
+    Qx_flat = Qx.ravel()
+    Qy_flat = Qy.ravel()
+    Qz_flat = Qz.ravel()
+    Qr_flat = Qr.ravel()
+    out_flat = intensities.ravel()
 
-        # Weighted sum: preserves total = 1
-        intensities = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
+    for i in range(Qx_flat.size):
+        theta = np.arctan2(np.abs(Qz_flat[i]), Qr_flat[i])
+        dtheta = wrap_to_pi(theta - theta0)
 
-    else:
-        # --- BAND method (ring around G_z axis) ---
-        ratioQ = Qz / Q_mag_safe
-        ratioQ_clamped = np.minimum(np.maximum(ratioQ, -1.0), 1.0)
-        v_prime = np.arccos(ratioQ_clamped)
+        gauss_val = A_gauss * np.exp(-0.5 * (dtheta / sigma)**2)
+        lor_val   = A_lor   / (1.0 + (dtheta / gamma_pv)**2)
+        omega = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
 
-        ratioG = Gz / G_mag
-        ratioG_clamped = np.minimum(np.maximum(ratioG, -1.0), 1.0)
-        v_center = np.arccos(ratioG_clamped)
-
-        dv = np.abs(v_prime - v_center)
-
-        # Gaussian and Lorentzian contributions
-        gauss_val = A_gauss * np.exp(-0.5 * (dv / sigma)**2)
-        lor_val   = A_lor   / (1.0 + (dv / gamma_pv)**2)
-        intensities = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
-
-        # Heuristic weighting along the ring
-        R = np.max(Q_mag_safe)
-        f = Qr / Q_mag_safe
-        t = (1.0 - np.cos(np.pi * f)) / 2.0
-        weight = 1.0 + (2.0 * np.pi * R - 1.0) * t
-        intensities = intensities / weight
+        cos_th = np.cos(theta)
+        if cos_th < eps:
+            cos_th = eps
+        out_flat[i] = omega / (denom_base * cos_th)
 
     return intensities
 
@@ -260,7 +246,7 @@ def compute_intensity_array(Qx, Qy, Qz,
 @njit
 def Generate_PDF_Grid(
     G_vec,
-    sigma, gamma_pv, eta_pv, H,K ,
+    sigma, gamma_pv, eta_pv,
     Qrange=0.1,   # default value; will be overridden if dynamic_Qrange is True
     n_grid=51,    # grid resolution
     n_samples=10000,  # number of samples
@@ -295,7 +281,7 @@ def Generate_PDF_Grid(
     Qx_grid, Qy_grid, Qz_grid = custom_meshgrid(qx_vals, qy_vals, qz_vals)
 
     # 2) Evaluate mosaic distribution => pdf_3d
-    pdf_3d = compute_intensity_array(Qx_grid, Qy_grid, Qz_grid, G_vec, sigma, gamma_pv, eta_pv, H,K)
+    pdf_3d = compute_intensity_array(Qx_grid, Qy_grid, Qz_grid, G_vec, sigma, gamma_pv, eta_pv)
 
     # 3) Sample from this 3D pdf
     Qx_s, Qy_s, Qz_s = sample_from_pdf(Qx_grid, Qy_grid, Qz_grid, pdf_3d, n_samples)
@@ -541,12 +527,12 @@ def solve_q(
     """
     Build a 'circle' in reciprocal space for the reflection G_vec, i.e. the
     set of Q that satisfies |Q|=|G| or an intersection with Ewald sphere, then
-    filter by mosaic distribution compute_intensity_array.
+    filter by mosaic surface density compute_intensity_array.
 
     Physically: 
       - We param by angle from 0..2π,
       - Circle radius circle_r,
-      - Then for each Q on that circle, compute mosaic weighting all_int.
+      - Then for each Q on that circle, compute sigma(theta) and apply arc-length weighting.
 
     Returns
     -------
@@ -624,33 +610,10 @@ def solve_q(
     Qy_arr = Oy + circle_r*(cth*e1y + sth*e2y)
     Qz_arr = Oz + circle_r*(cth*e1z + sth*e2z)
 
-    # Compute dtheta from the parametrization
-    dtheta = 2.0 * np.pi / N_steps
-
-    # Estimate an effective φ from the Q points.
-    Q_mag_sample = np.sqrt(Qx_arr[0]*Qx_arr[0] + Qy_arr[0]*Qy_arr[0] + Qz_arr[0]*Qz_arr[0])
-    phi_vals = np.empty(N_steps, dtype=np.float64)
-    for i in range(N_steps):
-        # Clamp Qz/Q_mag to [-1,1] to avoid numerical issues.
-        ratio = Qz_arr[i] / Q_mag_sample
-        if ratio > 1.0:
-            ratio = 1.0
-        elif ratio < -1.0:
-            ratio = -1.0
-        phi_vals[i] = np.arccos(ratio)
-    phi0 = 0.0
-    for i in range(N_steps):
-        phi0 += phi_vals[i]
-    phi0 /= N_steps
-
-    # Now, equate the area element sin(φ0) dφ_eff with the circle arc length (circle_r * dθ)
-    if np.sin(phi0) < 1e-12:
-        dphi_eff = 0.0  # or some fallback value
-    else:
-        dphi_eff = circle_r * dtheta / np.sin(phi0)
-
-    # Now call compute_intensity_array with the effective dphi and dtheta.
-    all_int = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv, H, K, dphi_eff, dtheta)
+    # Compute sigma(theta) on the Bragg sphere and apply arc-length weighting.
+    sigma_arr = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv)
+    ds = circle_r * dtheta
+    all_int = sigma_arr * ds
 
     # Apply any intensity cutoff and construct the output.
     intensity_cutoff = np.exp(-100.0)
