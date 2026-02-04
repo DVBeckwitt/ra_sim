@@ -56,10 +56,11 @@ def wrap_to_pi(x):
 
 def sigma_on_sphere(x, y, z, G, sigma_rad, gamma_rad, eta):
     r = np.sqrt(x * x + y * y)
-    theta = np.arctan2(np.abs(z), r)
+    # Signed grazing angle to avoid mirrored distributions across the plane.
+    theta = np.arctan2(z, r)
 
     gr = np.sqrt(G[0] ** 2 + G[1] ** 2)
-    theta0 = np.arctan2(np.abs(G[2]), gr)
+    theta0 = np.arctan2(G[2], gr)
     dtheta = wrap_to_pi(theta - theta0)
 
     a_gauss = 1.0 / (sigma_rad * np.sqrt(2.0 * np.pi))

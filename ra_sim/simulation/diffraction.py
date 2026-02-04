@@ -215,7 +215,7 @@ def compute_intensity_array(Qx, Qy, Qz,
 
     # Reference grazing angle for the reflection
     Gr = np.sqrt(Gx*Gx + Gy*Gy)
-    theta0 = np.arctan2(np.abs(Gz), Gr)
+    theta0 = np.arctan2(Gz, Gr)
 
     eps = 1e-12
     denom_base = 2.0 * np.pi * G_mag * G_mag
@@ -228,7 +228,7 @@ def compute_intensity_array(Qx, Qy, Qz,
     out_flat = intensities.ravel()
 
     for i in range(Qx_flat.size):
-        theta = np.arctan2(np.abs(Qz_flat[i]), Qr_flat[i])
+        theta = np.arctan2(Qz_flat[i], Qr_flat[i])
         dtheta = wrap_to_pi(theta - theta0)
 
         gauss_val = A_gauss * np.exp(-0.5 * (dtheta / sigma)**2)
