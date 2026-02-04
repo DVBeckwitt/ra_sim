@@ -76,7 +76,21 @@ def sigma_on_sphere(x, y, z, G, sigma_rad, gamma_rad, eta):
     return omega / denom
 
 
-def plot_bragg_sphere(ax, H, K, L, a, c, sphere_res, sigma_deg, gamma_deg, eta):
+def plot_bragg_sphere(
+    ax,
+    H,
+    K,
+    L,
+    a,
+    c,
+    sphere_res,
+    sigma_deg,
+    gamma_deg,
+    eta,
+    color_scale,
+    vmin_pct,
+    vmax_pct,
+):
     G = compute_g_vec(H, K, L, a, c)
     R = np.sqrt(G[0] ** 2 + G[1] ** 2 + G[2] ** 2)
 
@@ -91,7 +105,24 @@ def plot_bragg_sphere(ax, H, K, L, a, c, sphere_res, sigma_deg, gamma_deg, eta):
     sigma_rad = np.deg2rad(sigma_deg)
     gamma_rad = np.deg2rad(gamma_deg)
     sigma_vals = sigma_on_sphere(x, y, z, G, sigma_rad, gamma_rad, eta)
-    sigma_norm = (sigma_vals - sigma_vals.min()) / (sigma_vals.max() - sigma_vals.min() + 1e-30)
+    sigma_vals = np.nan_to_num(sigma_vals, nan=0.0, posinf=0.0, neginf=0.0)
+
+    if color_scale == "log":
+        sigma_for_color = np.log1p(sigma_vals)
+    else:
+        sigma_for_color = sigma_vals
+
+    flat = sigma_for_color.ravel()
+    vmin = np.percentile(flat, vmin_pct)
+    vmax = np.percentile(flat, vmax_pct)
+    if vmax <= vmin:
+        vmin = sigma_for_color.min()
+        vmax = sigma_for_color.max()
+    denom = vmax - vmin
+    if denom < 1e-30:
+        denom = 1e-30
+    sigma_norm = (sigma_for_color - vmin) / denom
+    sigma_norm = np.clip(sigma_norm, 0.0, 1.0)
     colors = plt.cm.viridis(sigma_norm)
     ax.plot_surface(x, y, z, rstride=1, cstride=1, facecolors=colors, linewidth=0, antialiased=False)
     ax.scatter([G[0]], [G[1]], [G[2]], color="crimson", s=40, label="G")
@@ -125,6 +156,24 @@ def parse_args():
     parser.add_argument("--eta", type=float, default=0.1, help="Pseudo-Voigt mixing (0..1)")
     parser.add_argument("--half-range-deg", type=float, default=5.0, help="Plot range +/- (deg)")
     parser.add_argument("--sphere-res", type=int, default=60, help="Sphere resolution")
+    parser.add_argument(
+        "--color-scale",
+        choices=("log", "linear"),
+        default="log",
+        help="Color scale for sigma(theta) on the Bragg sphere.",
+    )
+    parser.add_argument(
+        "--vmin-percentile",
+        type=float,
+        default=1.0,
+        help="Lower percentile for color normalization.",
+    )
+    parser.add_argument(
+        "--vmax-percentile",
+        type=float,
+        default=99.5,
+        help="Upper percentile for color normalization.",
+    )
     return parser.parse_args()
 
 
@@ -147,6 +196,9 @@ def main():
         args.sigma_deg,
         args.gamma_deg,
         args.eta,
+        args.color_scale,
+        args.vmin_percentile,
+        args.vmax_percentile,
     )
 
     fig.tight_layout()
