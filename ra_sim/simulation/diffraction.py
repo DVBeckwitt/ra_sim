@@ -923,7 +923,8 @@ def calculate_phi(
                        * np.exp(-2.0*im_k_z_f * L_out)
 
             # external exit angles for detector mapping (existing code)
-            twotheta_t = np.arccos(_clamp(np.cos(twotheta_t_prime)* np.real(n2), -1.0, 1.0)) * np.sign(twotheta_t_prime)
+            # Fold exit angles to the detector side to avoid a hard horizon line.
+            twotheta_t = np.arccos(_clamp(np.cos(twotheta_t_prime)* np.real(n2), -1.0, 1.0))
             phi_f = np.arctan2(k_tx_prime, k_ty_prime)
             k_tx_f = k_scat*np.cos(twotheta_t)*np.sin(phi_f)
             k_ty_f = k_scat*np.cos(twotheta_t)*np.cos(phi_f)
