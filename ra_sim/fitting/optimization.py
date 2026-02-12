@@ -225,6 +225,7 @@ def _simulate_with_cache(
         params.get('uv1', np.array([1.0, 0.0, 0.0])),
         params.get('uv2', np.array([0.0, 1.0, 0.0])),
         save_flag=0,
+        optics_mode=int(params.get('optics_mode', 0)),
     )
 
     image = np.asarray(image, dtype=np.float64)

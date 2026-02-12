@@ -67,6 +67,8 @@ from ra_sim.fitting.optimization import (
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
+    OPTICS_MODE_EXACT,
+    OPTICS_MODE_FAST,
     process_peaks_parallel,
     process_qr_rods_parallel,
 )
@@ -106,8 +108,6 @@ if DEBUG_ENABLED:
     print("Debug mode active (RA_SIM_DEBUG=1)")
     from ra_sim.debug_utils import enable_numba_logging
     enable_numba_logging()
-else:
-    print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
 
 # Toggle creation of backend orientation controls (kept off while automated
 # diagnostics try permutations internally).
@@ -195,6 +195,7 @@ resolution_sample_counts = {
     "Medium": 250,
     "High": 500,
 }
+CUSTOM_SAMPLING_OPTION = "Custom"
 num_samples = resolution_sample_counts["Low"]
 write_excel = output_config.get("write_excel", write_excel)
 intensity_threshold = detector_config.get("intensity_threshold", 1.0)
@@ -342,6 +343,7 @@ defaults = {
     'sampling_resolution': 'Low',
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
+    'optics_mode': 'fast',
 }
 
 # ---------------------------------------------------------------------------
@@ -587,10 +589,6 @@ def export_initial_excel():
                 details_sheet.set_row(row, cell_format=zebra_format)
 
     print(f"Excel file saved at {excel_path}")
-
-# Beam center (for plotting and limits)
-row_center = int(center_default[0])
-col_center = int(center_default[1])
 
 current_background_image = background_images_native[0]
 current_background_display = background_images_display[0]
@@ -1081,6 +1079,7 @@ display_controls_frame = ttk.Frame(fig_frame)
 display_controls_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
 fig, ax = plt.subplots(figsize=(8, 8))
+ax.set_aspect("auto")
 canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(fig, master=canvas_frame)
 canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -1148,6 +1147,64 @@ def build_mosaic_params():
         "eta":                eta_var.get(),
     }
 
+
+def _normalize_optics_mode_label(value) -> str:
+    """Normalize optics mode to UI labels: ``'fast'`` or ``'exact'``."""
+
+    if value is None:
+        return "fast"
+    if isinstance(value, (int, np.integer)):
+        return "exact" if int(value) == OPTICS_MODE_EXACT else "fast"
+    if isinstance(value, (float, np.floating)):
+        return "exact" if int(round(float(value))) == OPTICS_MODE_EXACT else "fast"
+
+    text = str(value).strip().lower()
+    text = text.replace("–", "-").replace("—", "-")
+    text = " ".join(text.split())
+
+    if text in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "exact",
+        "precise",
+        "slow",
+        "complex_k_dwba_slab",
+        "complex-k dwba slab optics",
+        "phase-matched complex-k multilayer dwba",
+    }:
+        return "exact"
+    if text in {
+        "0",
+        "false",
+        "no",
+        "off",
+        "fast",
+        "approx",
+        "fresnel_ctr_damping",
+        "fresnel-weighted kinematic ctr absorption correction",
+        "uncoupled fresnel + ctr damping (ufd)",
+        "fast dwba-lite (fresnel + depth-sum attenuation)",
+        "ufd",
+        "dwba-lite",
+    }:
+        return "fast"
+
+    if "complex-k dwba" in text or "complex_k_dwba" in text:
+        return "exact"
+    if "fresnel" in text and "ctr" in text:
+        return "fast"
+    return "fast"
+
+
+def _current_optics_mode_flag() -> int:
+    mode_var = globals().get("optics_mode_var")
+    mode_label = _normalize_optics_mode_label(mode_var.get() if mode_var is not None else "fast")
+    if mode_label == "exact":
+        return OPTICS_MODE_EXACT
+    return OPTICS_MODE_FAST
+
 colorbar_main = fig.colorbar(image_display, ax=ax, label='Intensity', shrink=0.6, pad=0.02)
 
 # Additional colorbar axis for caked 2D (not used in basic 1D, but reserved)
@@ -1166,11 +1223,11 @@ center_marker, = ax.plot(
 )
 
 ax.set_xlim(0, image_size)
-ax.set_ylim(row_center, 0)
-plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
-plt.title('Simulated Diffraction Pattern')
-plt.xlabel('X (pixels)')
-plt.ylabel('Y (pixels)')
+ax.set_ylim(image_size, 0)
+fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+ax.set_title('Simulated Diffraction Pattern')
+ax.set_xlabel('X (pixels)')
+ax.set_ylabel('Y (pixels)')
 canvas.draw()
 
 # -----------------------------------------------------------
@@ -1448,6 +1505,8 @@ def _open_selected_peak_intersection_figure():
 
 
 def on_canvas_click(event):
+    if show_caked_2d_var.get():
+        return
     if event.inaxes is not ax or event.xdata is None:
         return                               # click was outside the image
     if not peak_positions:                   # no simulation yet
@@ -1480,10 +1539,155 @@ def on_canvas_click(event):
         clicked_native=(float(native_col), float(native_row)),
     )
 
+
+drag_select_rect = Rectangle(
+    (0.0, 0.0),
+    0.0,
+    0.0,
+    linewidth=1.8,
+    edgecolor='yellow',
+    facecolor='none',
+    linestyle='-',
+    zorder=6,
+)
+drag_select_rect.set_visible(False)
+ax.add_patch(drag_select_rect)
+
+_caked_drag_state = {
+    "active": False,
+    "x0": None,
+    "y0": None,
+    "x1": None,
+    "y1": None,
+}
+
+
+def _clamp_to_axis_view(x, y):
+    x_lo, x_hi = sorted(ax.get_xlim())
+    y_lo, y_hi = sorted(ax.get_ylim())
+    clamped_x = min(max(float(x), x_lo), x_hi)
+    clamped_y = min(max(float(y), y_lo), y_hi)
+    return clamped_x, clamped_y
+
+
+def _update_drag_rect(x0, y0, x1, y1):
+    x_min, x_max = sorted((float(x0), float(x1)))
+    y_min, y_max = sorted((float(y0), float(y1)))
+    drag_select_rect.set_xy((x_min, y_min))
+    drag_select_rect.set_width(x_max - x_min)
+    drag_select_rect.set_height(y_max - y_min)
+    drag_select_rect.set_visible(True)
+    canvas.draw_idle()
+
+
+def _set_range_from_drag(x0, y0, x1, y1):
+    tth_min, tth_max = sorted((float(x0), float(x1)))
+    phi_min, phi_max = sorted((float(y0), float(y1)))
+
+    tth_lo = float(tth_min_slider.cget("from"))
+    tth_hi = float(tth_min_slider.cget("to"))
+    phi_lo = float(phi_min_slider.cget("from"))
+    phi_hi = float(phi_min_slider.cget("to"))
+    tth_min = min(max(tth_min, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
+    tth_max = min(max(tth_max, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
+    phi_min = min(max(phi_min, min(phi_lo, phi_hi)), max(phi_lo, phi_hi))
+    phi_max = min(max(phi_max, min(phi_lo, phi_hi)), max(phi_lo, phi_hi))
+
+    if tth_max <= tth_min:
+        eps = max(abs(tth_min) * 1e-6, 1e-3)
+        tth_max = min(tth_min + eps, max(tth_lo, tth_hi))
+    if phi_max <= phi_min:
+        eps = max(abs(phi_min) * 1e-6, 1e-3)
+        phi_max = min(phi_min + eps, max(phi_lo, phi_hi))
+
+    tth_min_var.set(tth_min)
+    tth_max_var.set(tth_max)
+    phi_min_var.set(phi_min)
+    phi_max_var.set(phi_max)
+
+    schedule_range_update()
+    progress_label_positions.config(
+        text=(
+            "Integration region set: "
+            f"2θ=[{tth_min:.2f}, {tth_max:.2f}]°, "
+            f"φ=[{phi_min:.2f}, {phi_max:.2f}]°"
+        )
+    )
+
+
+def on_canvas_press(event):
+    if event.button != 1:
+        return
+    if not show_caked_2d_var.get():
+        return
+    if event.inaxes is not ax or event.xdata is None or event.ydata is None:
+        return
+    if unscaled_image_global is None:
+        progress_label_positions.config(text="Run a simulation first.")
+        return
+
+    x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
+    _caked_drag_state["active"] = True
+    _caked_drag_state["x0"] = x0
+    _caked_drag_state["y0"] = y0
+    _caked_drag_state["x1"] = x0
+    _caked_drag_state["y1"] = y0
+    _update_drag_rect(x0, y0, x0, y0)
+
+
+def on_canvas_motion(event):
+    if not _caked_drag_state["active"]:
+        return
+    if not show_caked_2d_var.get():
+        return
+
+    if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
+        x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
+        _caked_drag_state["x1"] = x1
+        _caked_drag_state["y1"] = y1
+    else:
+        x1 = _caked_drag_state["x1"]
+        y1 = _caked_drag_state["y1"]
+        if x1 is None or y1 is None:
+            return
+
+    _update_drag_rect(
+        _caked_drag_state["x0"],
+        _caked_drag_state["y0"],
+        _caked_drag_state["x1"],
+        _caked_drag_state["y1"],
+    )
+
+
+def on_canvas_release(event):
+    if event.button != 1:
+        return
+    if not _caked_drag_state["active"]:
+        return
+
+    _caked_drag_state["active"] = False
+    if show_caked_2d_var.get() and event.inaxes is ax and event.xdata is not None and event.ydata is not None:
+        x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
+        _caked_drag_state["x1"] = x1
+        _caked_drag_state["y1"] = y1
+
+    x0 = _caked_drag_state["x0"]
+    y0 = _caked_drag_state["y0"]
+    x1 = _caked_drag_state["x1"]
+    y1 = _caked_drag_state["y1"]
+    if None not in (x0, y0, x1, y1):
+        _set_range_from_drag(x0, y0, x1, y1)
+
+    drag_select_rect.set_visible(False)
+    canvas.draw_idle()
+
 # -----------------------------------------------------------
 # 3)  Bind the handler
 # -----------------------------------------------------------
 canvas.mpl_connect('button_press_event', on_canvas_click)
+canvas.mpl_connect('button_press_event', on_canvas_press)
+canvas.mpl_connect('motion_notify_event', on_canvas_motion)
+canvas.mpl_connect('button_release_event', on_canvas_release)
 
 
 # ---------------------------------------------------------------------------
@@ -1973,7 +2177,9 @@ def apply_scale_factor_to_existing_results(update_limits=False):
     scaled_image = unscaled_image_global * scale
     global_image_buffer[:] = scaled_image
 
-    if update_limits or not simulation_limits_user_override:
+    # Keep display limits stable during reruns/parameter changes unless an
+    # explicit reset path requests recomputing limits.
+    if update_limits:
         _update_simulation_sliders_from_image(
             scaled_image, reset_override=update_limits
         )
@@ -1990,14 +2196,19 @@ def apply_scale_factor_to_existing_results(update_limits=False):
     elif last_caked_image_unscaled is not None and last_caked_extent is not None:
         _set_image_origin(image_display, 'lower')
         scaled_caked = last_caked_image_unscaled * scale
+        if not simulation_limits_user_override:
+            _update_simulation_sliders_from_image(scaled_caked, reset_override=True)
         image_display.set_data(scaled_caked)
         image_display.set_extent(last_caked_extent)
 
     if show_caked_2d_var.get():
-        image_display.set_clim(
-            float(vmin_caked_var.get()),
-            float(vmax_caked_var.get()),
-        )
+        caked_min = float(simulation_min_var.get())
+        caked_max = float(simulation_max_var.get())
+        caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
+        image_display.set_clim(caked_min, caked_max)
+        if not caked_limits_user_override:
+            vmin_caked_var.set(caked_min)
+            vmax_caked_var.set(caked_max)
 
     if (
         show_1d_var.get()
@@ -2693,6 +2904,7 @@ def do_update():
     center_marker.set_visible(False)
 
     mosaic_params = build_mosaic_params()
+    optics_mode_flag = _current_optics_mode_flag()
 
 
     def get_sim_signature():
@@ -2712,7 +2924,11 @@ def do_update():
             round(center_y_up, 3),
             round(mosaic_params["sigma_mosaic_deg"], 6),
             round(mosaic_params["gamma_mosaic_deg"], 6),
-            round(mosaic_params["eta"], 6)
+            round(mosaic_params["eta"], 6),
+            int(optics_mode_flag),
+            int(num_samples),
+            int(np.size(mosaic_params["beam_x_array"])),
+            int(np.size(mosaic_params["theta_array"])),
         )
 
     # 1 – place near other globals
@@ -2768,6 +2984,7 @@ def do_update():
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
+                    optics_mode=optics_mode_flag,
                 )
             else:
                 miller_arr = data
@@ -2810,6 +3027,7 @@ def do_update():
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
+                    optics_mode=optics_mode_flag,
                 ) + (None,)
 
         img1, maxpos1, _, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
@@ -2997,19 +3215,25 @@ def do_update():
         scaled_caked_for_limits = caked_img * current_scale
         auto_vmin, auto_vmax = _auto_caked_limits(scaled_caked_for_limits)
 
+        if not simulation_limits_user_override:
+            _update_simulation_sliders_from_image(
+                scaled_caked_for_limits, reset_override=True
+            )
+
         if not caked_limits_user_override:
             vmin_caked_var.set(auto_vmin)
             vmax_caked_var.set(auto_vmax)
 
-        vmin_val = float(vmin_caked_var.get())
-        vmax_val = float(vmax_caked_var.get())
-        global_sim_max = float(simulation_max_var.get())
+        vmin_val = float(simulation_min_var.get())
+        vmax_val = float(simulation_max_var.get())
+        global_sim_max = vmax_val
 
         if not math.isfinite(vmin_val):
             vmin_val = auto_vmin
         if not math.isfinite(vmax_val):
             vmax_val = auto_vmax
-        if not math.isfinite(global_sim_max):
+        vmin_val, vmax_val = _ensure_valid_range(vmin_val, vmax_val)
+        if not math.isfinite(global_sim_max) or global_sim_max <= vmin_val:
             global_sim_max = auto_vmax
 
         display_vmax = min(vmax_val, global_sim_max)
@@ -3090,8 +3314,18 @@ def do_update():
             ])
         else:
             background_display.set_visible(False)
-        ax.set_xlim(0.0, 90.0)
-        ax.set_ylim(-180.0, 180.0)
+        if not (math.isfinite(radial_min) and math.isfinite(radial_max) and radial_max > radial_min):
+            radial_min, radial_max = 0.0, 90.0
+        if not (
+            math.isfinite(azimuth_min)
+            and math.isfinite(azimuth_max)
+            and azimuth_max > azimuth_min
+        ):
+            azimuth_min, azimuth_max = -180.0, 180.0
+
+        ax.set_xlim(radial_min, radial_max)
+        ax.set_ylim(azimuth_min, azimuth_max)
+        ax.set_aspect("auto")
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
@@ -3100,6 +3334,7 @@ def do_update():
         last_caked_extent = None
         ax.set_xlim(0, image_size)
         ax.set_ylim(image_size, 0)
+        ax.set_aspect("auto")
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
         ax.set_title('Simulated Diffraction Pattern')
@@ -3134,7 +3369,9 @@ def do_update():
     last_res2_sim = sim_res2
     last_res2_background = bg_res2
 
-    apply_scale_factor_to_existing_results(update_limits=True)
+    # Keep simulation display limits sticky across regenerated simulations.
+    # Users can still change limits manually or reset defaults explicitly.
+    apply_scale_factor_to_existing_results(update_limits=False)
 
     update_integration_region_visuals(ai, sim_res2)
 
@@ -3179,7 +3416,21 @@ def reset_to_defaults():
     eta_var.set(defaults['eta'])
     a_var.set(defaults['a'])
     c_var.set(defaults['c'])
-    resolution_var.set(defaults['sampling_resolution'])
+    default_resolution = defaults['sampling_resolution']
+    resolution_var.set(default_resolution)
+    custom_samples_var.set(
+        str(
+            int(
+                max(
+                    1,
+                    resolution_sample_counts.get(
+                        default_resolution, resolution_sample_counts['Low']
+                    ),
+                )
+            )
+        )
+    )
+    optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
     tth_min_var.set(0.0)
@@ -3271,7 +3522,8 @@ azimuthal_button = ttk.Button(
             bw_sigma=bw_sigma,
             sigma_mosaic_var=sigma_mosaic_var,
             gamma_mosaic_var=gamma_mosaic_var,
-            eta_var=eta_var
+            eta_var=eta_var,
+            optics_mode=_current_optics_mode_flag(),
         ),
         [center_x_var.get(), center_y_var.get()],
         {
@@ -3389,6 +3641,8 @@ save_button = ttk.Button(
         center_x_var,
         center_y_var,
         resolution_var,
+        custom_samples_var,
+        optics_mode_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -3417,6 +3671,8 @@ load_button = ttk.Button(
                 center_x_var,
                 center_y_var,
                 resolution_var,
+                custom_samples_var,
+                optics_mode_var,
             )
         ),
         ensure_valid_resolution_choice(),
@@ -3572,6 +3828,7 @@ def on_fit_geometry_click():
         'gamma':              gamma_var.get(),
         'Gamma':              Gamma_var.get(),
         'cor_angle':          cor_angle_var.get(),
+        'optics_mode':        _current_optics_mode_flag(),
     }
 
     # build the list of which of those to vary
@@ -3866,6 +4123,7 @@ def on_fit_geometry_click():
                             np.array([1.0, 0.0, 0.0]),
                             np.array([0.0, 1.0, 0.0]),
                             save_flag=0,
+                            optics_mode=_current_optics_mode_flag(),
                         )
 
                         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -3969,6 +4227,7 @@ def on_fit_geometry_click():
                         np.array([1.0, 0.0, 0.0]),
                         np.array([0.0, 1.0, 0.0]),
                         save_flag=0,
+                        optics_mode=_current_optics_mode_flag(),
                     )
 
                     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -4499,6 +4758,7 @@ def on_fit_mosaic_click():
         'corto_detector': corto_detector_var.get(),
         'gamma':          gamma_var.get(),
         'Gamma':          Gamma_var.get(),
+        'optics_mode':    _current_optics_mode_flag(),
     }
 
     progress_label_mosaic.config(text="Running mosaic optimization…")
@@ -4664,13 +4924,19 @@ check_1d.pack(side=tk.TOP, padx=5, pady=2)
 
 show_caked_2d_var = tk.BooleanVar(value=False)
 def toggle_caked_2d():
-    global caked_limits_user_override
+    global caked_limits_user_override, simulation_limits_user_override
     if not show_caked_2d_var.get():
         caked_limits_user_override = False
+        _caked_drag_state["active"] = False
+        drag_select_rect.set_visible(False)
+        canvas.draw_idle()
+    else:
+        # Entering caked view should start from auto-scaled simulation limits.
+        simulation_limits_user_override = False
     schedule_update()
 
 check_2d = ttk.Checkbutton(
-    text="Show 2D Caking",
+    text="Show 2D Caked Integration",
     variable=show_caked_2d_var,
     command=toggle_caked_2d
 )
@@ -4814,7 +5080,8 @@ def save_q_space_representation():
         cor_angle_var.get(),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
-        save_flag=1
+        save_flag=1,
+        optics_mode=_current_optics_mode_flag(),
     )
 
     max_positions_local = hit_tables_to_max_positions(hit_tables)
@@ -4942,24 +5209,102 @@ mosaic_frame = CollapsibleFrame(right_col, text='Mosaic Broadening')
 mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
 
 initial_resolution = defaults.get('sampling_resolution', 'Low')
-if initial_resolution not in resolution_sample_counts:
+resolution_options = [*resolution_sample_counts.keys(), CUSTOM_SAMPLING_OPTION]
+if initial_resolution not in resolution_options:
     initial_resolution = 'Low'
 
 resolution_var = tk.StringVar(value=initial_resolution)
 resolution_count_var = tk.StringVar()
+custom_samples_var = tk.StringVar(value=str(int(max(1, num_samples))))
+custom_samples_entry_widget = None
+custom_samples_apply_button = None
+
+
+def _parse_sample_count(raw_value, fallback):
+    try:
+        parsed = int(round(float(str(raw_value).strip().replace(",", ""))))
+    except (TypeError, ValueError, tk.TclError):
+        parsed = int(fallback)
+    return max(1, parsed)
+
+
+def _current_custom_sample_count(default=None):
+    fallback = int(max(1, default if default is not None else num_samples))
+    return _parse_sample_count(custom_samples_var.get(), fallback)
+
+
+def _set_custom_sample_controls_state():
+    state = tk.NORMAL if resolution_var.get() == CUSTOM_SAMPLING_OPTION else tk.DISABLED
+    if custom_samples_entry_widget is not None:
+        custom_samples_entry_widget.configure(state=state)
+    if custom_samples_apply_button is not None:
+        custom_samples_apply_button.configure(state=state)
 
 def _refresh_resolution_display():
-    count = resolution_sample_counts.get(
-        resolution_var.get(), resolution_sample_counts['Low']
-    )
+    if resolution_var.get() == CUSTOM_SAMPLING_OPTION:
+        count = _current_custom_sample_count(default=max(1, num_samples))
+        resolution_count_var.set(
+            f"{count:,} samples (custom)" if count >= 1000 else f"{count} samples (custom)"
+        )
+        return
+
+    count = resolution_sample_counts.get(resolution_var.get(), resolution_sample_counts['Low'])
     resolution_count_var.set(f"{count:,} samples" if count >= 1000 else f"{count} samples")
 
-def ensure_valid_resolution_choice():
-    if resolution_var.get() not in resolution_sample_counts:
-        resolution_var.set(defaults['sampling_resolution'])
 
-num_samples = resolution_sample_counts.get(initial_resolution, num_samples)
-_refresh_resolution_display()
+def _apply_resolution_selection(trigger_update=True):
+    global num_samples
+
+    previous_num_samples = int(num_samples)
+    if resolution_var.get() == CUSTOM_SAMPLING_OPTION:
+        selected_count = _current_custom_sample_count(default=max(1, num_samples))
+        custom_samples_var.set(str(selected_count))
+    else:
+        selected_count = int(
+            max(
+                1,
+                resolution_sample_counts.get(
+                    resolution_var.get(), resolution_sample_counts['Low']
+                ),
+            )
+        )
+
+    num_samples = selected_count
+    _refresh_resolution_display()
+    if trigger_update and num_samples != previous_num_samples:
+        update_mosaic_cache()
+        schedule_update()
+
+
+def _apply_custom_sample_count(_event=None):
+    parsed_value = _current_custom_sample_count(default=max(1, num_samples))
+    custom_samples_var.set(str(parsed_value))
+    if resolution_var.get() != CUSTOM_SAMPLING_OPTION:
+        resolution_var.set(CUSTOM_SAMPLING_OPTION)
+        return
+    _apply_resolution_selection(trigger_update=True)
+
+
+def ensure_valid_resolution_choice():
+    if resolution_var.get() not in resolution_options:
+        fallback = defaults.get('sampling_resolution', 'Low')
+        resolution_var.set(fallback if fallback in resolution_options else 'Low')
+    _set_custom_sample_controls_state()
+    _apply_resolution_selection(trigger_update=False)
+
+if initial_resolution != CUSTOM_SAMPLING_OPTION:
+    custom_samples_var.set(
+        str(
+            int(
+                max(
+                    1,
+                    resolution_sample_counts.get(
+                        initial_resolution, resolution_sample_counts['Low']
+                    ),
+                )
+            )
+        )
+    )
 
 resolution_selector_frame = ttk.Frame(mosaic_frame.frame)
 resolution_selector_frame.pack(fill=tk.X, pady=5)
@@ -4968,24 +5313,64 @@ resolution_menu = ttk.OptionMenu(
     resolution_selector_frame,
     resolution_var,
     resolution_var.get(),
-    *resolution_sample_counts.keys(),
+    *resolution_options,
 )
 resolution_menu.pack(fill=tk.X, padx=5, pady=(2, 0))
+custom_samples_row = ttk.Frame(resolution_selector_frame)
+custom_samples_row.pack(fill=tk.X, padx=5, pady=(2, 0))
+ttk.Label(custom_samples_row, text='Custom Samples').pack(side=tk.LEFT)
+custom_samples_entry_widget = ttk.Entry(
+    custom_samples_row,
+    textvariable=custom_samples_var,
+    width=10,
+    justify='right',
+)
+custom_samples_entry_widget.pack(side=tk.LEFT, padx=(6, 4))
+custom_samples_entry_widget.bind('<Return>', _apply_custom_sample_count)
+custom_samples_apply_button = ttk.Button(
+    custom_samples_row,
+    text='Apply',
+    command=_apply_custom_sample_count,
+)
+custom_samples_apply_button.pack(side=tk.LEFT)
 ttk.Label(
     resolution_selector_frame,
     textvariable=resolution_count_var,
 ).pack(anchor=tk.W, padx=5, pady=(2, 0))
 
 def on_resolution_option_change(*_):
-    global num_samples
-    num_samples = resolution_sample_counts.get(
-        resolution_var.get(), resolution_sample_counts['Low']
-    )
-    _refresh_resolution_display()
-    update_mosaic_cache()
+    _set_custom_sample_controls_state()
+    _apply_resolution_selection(trigger_update=True)
+
+_set_custom_sample_controls_state()
+_apply_resolution_selection(trigger_update=False)
+resolution_var.trace_add('write', on_resolution_option_change)
+
+optics_mode_var = tk.StringVar(value=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
+optics_mode_frame = ttk.Frame(mosaic_frame.frame)
+optics_mode_frame.pack(fill=tk.X, pady=(6, 2))
+ttk.Label(optics_mode_frame, text='Optics Transport').pack(anchor=tk.W, padx=5)
+ttk.Radiobutton(
+    optics_mode_frame,
+    text='Original Fast Approx (Fresnel + Beer-Lambert)',
+    variable=optics_mode_var,
+    value='fast',
+).pack(anchor=tk.W, padx=12)
+ttk.Radiobutton(
+    optics_mode_frame,
+    text='Complex-k DWBA slab optics (Precise)',
+    variable=optics_mode_var,
+    value='exact',
+).pack(anchor=tk.W, padx=12)
+
+
+def on_optics_mode_change(*_):
+    global last_simulation_signature
+    last_simulation_signature = None
     schedule_update()
 
-resolution_var.trace_add('write', on_resolution_option_change)
+
+optics_mode_var.trace_add('write', on_optics_mode_change)
 
 center_frame = CollapsibleFrame(right_col, text='Beam Center')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -5107,6 +5492,8 @@ occ_var3 = tk.DoubleVar(value=occ[2])
 finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
 stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
 _layers_scale_widget = None
+_layers_entry_widget = None
+_layers_entry_var = None
 
 
 def _rebuild_diffraction_inputs(
@@ -5264,11 +5651,48 @@ def update_occupancies(*args):
 
 
 def _sync_finite_controls():
-    global _layers_scale_widget
-    if _layers_scale_widget is None:
-        return
+    global _layers_scale_widget, _layers_entry_widget
     state = tk.NORMAL if finite_stack_var.get() else tk.DISABLED
-    _layers_scale_widget.configure(state=state)
+    if _layers_scale_widget is not None:
+        _layers_scale_widget.configure(state=state)
+    if _layers_entry_widget is not None:
+        _layers_entry_widget.configure(state=state)
+
+
+def _normalize_layer_value(raw_value):
+    try:
+        value = int(round(float(raw_value)))
+    except (TypeError, ValueError):
+        value = stack_layers_var.get()
+    if value < 1:
+        value = 1
+    return value
+
+
+def _sync_layer_entry_from_var(*_):
+    global _layers_entry_var
+    if _layers_entry_var is None:
+        return
+    normalized = str(int(max(1, stack_layers_var.get())))
+    if _layers_entry_var.get().strip() != normalized:
+        _layers_entry_var.set(normalized)
+
+
+def _commit_layer_entry(_event=None):
+    global _layers_scale_widget, _layers_entry_var
+    if _layers_entry_var is None:
+        return
+    value = _normalize_layer_value(_layers_entry_var.get())
+    if _layers_scale_widget is not None:
+        current_to = int(round(float(_layers_scale_widget.cget("to"))))
+        if value > current_to:
+            _layers_scale_widget.configure(to=value)
+    changed = stack_layers_var.get() != value
+    if changed:
+        stack_layers_var.set(value)
+    _sync_layer_entry_from_var()
+    if changed and finite_stack_var.get():
+        update_occupancies()
 
 
 def _on_finite_toggle():
@@ -5277,12 +5701,10 @@ def _on_finite_toggle():
 
 
 def _on_layer_slider(val):
-    try:
-        value = int(round(float(val)))
-    except (TypeError, ValueError):
-        value = stack_layers_var.get()
+    value = _normalize_layer_value(val)
     if stack_layers_var.get() != value:
         stack_layers_var.set(value)
+    _sync_layer_entry_from_var()
     if finite_stack_var.get():
         update_occupancies()
 
@@ -5302,12 +5724,16 @@ ttk.Checkbutton(
 layers_row = ttk.Frame(finite_frame)
 layers_row.pack(fill=tk.X, padx=5, pady=2)
 ttk.Label(layers_row, text="Layers:").grid(row=0, column=0, sticky="w")
-ttk.Label(layers_row, textvariable=stack_layers_var, width=6).grid(
-    row=0,
-    column=2,
-    sticky="e",
-    padx=(5, 0),
+_layers_entry_var = tk.StringVar(value=str(int(max(1, stack_layers_var.get()))))
+layers_entry = ttk.Entry(
+    layers_row,
+    textvariable=_layers_entry_var,
+    width=8,
+    justify="right",
 )
+layers_entry.grid(row=0, column=2, sticky="e", padx=(5, 0))
+layers_entry.bind("<Return>", _commit_layer_entry)
+layers_entry.bind("<FocusOut>", _commit_layer_entry)
 
 layers_scale = tk.Scale(
     layers_row,
@@ -5323,6 +5749,9 @@ layers_scale.grid(row=0, column=1, sticky="ew", padx=(5, 5))
 layers_row.columnconfigure(1, weight=1)
 
 _layers_scale_widget = layers_scale
+_layers_entry_widget = layers_entry
+stack_layers_var.trace_add("write", _sync_layer_entry_from_var)
+_sync_layer_entry_from_var()
 _sync_finite_controls()
 p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
                           stack_frame.frame, update_occupancies)
@@ -5409,6 +5838,7 @@ def main(write_excel_flag=None):
         write_excel = write_excel_flag
 
     params_file_path = get_path("parameters_file")
+    profile_loaded = False
     if os.path.exists(params_file_path):
         load_parameters(
             params_file_path,
@@ -5430,11 +5860,26 @@ def main(write_excel_flag=None):
             center_x_var,
             center_y_var,
             resolution_var,
+            custom_samples_var,
+            optics_mode_var,
         )
         ensure_valid_resolution_choice()
-        print("Loaded saved profile from", params_file_path)
+        profile_loaded = True
     else:
-        print("No saved profile found; using default parameters.")
+        ensure_valid_resolution_choice()
+
+    sample_mode = resolution_var.get()
+    sample_count = int(max(1, num_samples))
+    cif_summary = Path(cif_file).name
+    if cif_file2:
+        cif_summary = f"{cif_summary}, {Path(cif_file2).name}"
+    print(
+        "Startup ready: "
+        f"profile={'loaded' if profile_loaded else 'defaults'}; "
+        f"sampling={sample_mode} ({sample_count} samples); "
+        f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
+        f"cif={cif_summary}"
+    )
 
     export_initial_excel()
     update_mosaic_cache()

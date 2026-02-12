@@ -489,7 +489,7 @@ def save_bundle(
     print("Note: load with allow_pickle=True for ell_points_ds.")
 
 
-def load_bundle_npz(path):
+def load_bundle_npz(path, *, verbose=True):
     data = np.load(path, allow_pickle=True)
     img_bgsub = data["img_bgsub"]
     img_log = data["img_log"]
@@ -519,9 +519,10 @@ def load_bundle_npz(path):
             )
         )
 
-    print(f"Loaded bundle from:\n  {path}")
-    print(f"  image shape: {img_bgsub.shape}")
-    print(f"  number of ellipses: {len(ellipses)}")
+    if verbose:
+        print(f"Loaded bundle from:\n  {path}")
+        print(f"  image shape: {img_bgsub.shape}")
+        print(f"  number of ellipses: {len(ellipses)}")
     if distance_info is not None:
         try:
             distance_info = distance_info.item()
@@ -547,7 +548,7 @@ def load_bundle_npz(path):
             center = tuple(center.tolist()) if hasattr(center, "tolist") else tuple(center)
         except Exception:
             pass
-    if distance_info:
+    if verbose and distance_info:
         print(
             "  distance estimate: "
             f"mean={distance_info.get('mean_m', float('nan')):.4f} m"
@@ -575,7 +576,8 @@ def load_tilt_hint(paths_file=None):
 
     try:
         _, _, _, _, distance_info, tilt_correction, tilt_hint, _, _ = load_bundle_npz(
-            bundle_path
+            bundle_path,
+            verbose=False,
         )
     except Exception:
         return None

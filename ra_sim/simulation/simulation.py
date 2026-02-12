@@ -3,7 +3,7 @@
 import numpy as np
 
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction import process_peaks_parallel
+from ra_sim.simulation.diffraction import OPTICS_MODE_FAST, process_peaks_parallel
 from ra_sim.utils.calculations import IndexofRefraction, fresnel_transmission
 
 
@@ -35,6 +35,7 @@ def simulate_diffraction(
     gamma_mosaic_var,
     eta_var,
     bandwidth=0.007,
+    optics_mode=OPTICS_MODE_FAST,
 ):
     """Run a standalone diffraction simulation.
 
@@ -91,6 +92,7 @@ def simulate_diffraction(
         unit_x,
         n_detector,
         save_flag=0,
+        optics_mode=optics_mode,
     )
 
     return simulated_image

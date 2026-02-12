@@ -51,6 +51,7 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         i_peaks_index,
         record_status=False,
         thickness=0.0,
+        optics_mode=0,
     ):
         called_l_values.append(float(L))
         return (

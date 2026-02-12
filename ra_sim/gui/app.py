@@ -67,6 +67,8 @@ from ra_sim.fitting.optimization import (
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
+    OPTICS_MODE_EXACT,
+    OPTICS_MODE_FAST,
     process_peaks_parallel_safe as process_peaks_parallel,
     process_qr_rods_parallel_safe as process_qr_rods_parallel,
 )
@@ -341,6 +343,7 @@ defaults = {
     'sampling_resolution': 'Low',
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
+    'optics_mode': 'fast',
 }
 
 # ---------------------------------------------------------------------------
@@ -1145,6 +1148,64 @@ def build_mosaic_params():
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
         "eta":                eta_var.get(),
     }
+
+
+def _normalize_optics_mode_label(value) -> str:
+    """Normalize optics mode to UI labels: ``'fast'`` or ``'exact'``."""
+
+    if value is None:
+        return "fast"
+    if isinstance(value, (int, np.integer)):
+        return "exact" if int(value) == OPTICS_MODE_EXACT else "fast"
+    if isinstance(value, (float, np.floating)):
+        return "exact" if int(round(float(value))) == OPTICS_MODE_EXACT else "fast"
+
+    text = str(value).strip().lower()
+    text = text.replace("–", "-").replace("—", "-")
+    text = " ".join(text.split())
+
+    if text in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "exact",
+        "precise",
+        "slow",
+        "complex_k_dwba_slab",
+        "complex-k dwba slab optics",
+        "phase-matched complex-k multilayer dwba",
+    }:
+        return "exact"
+    if text in {
+        "0",
+        "false",
+        "no",
+        "off",
+        "fast",
+        "approx",
+        "fresnel_ctr_damping",
+        "fresnel-weighted kinematic ctr absorption correction",
+        "uncoupled fresnel + ctr damping (ufd)",
+        "fast dwba-lite (fresnel + depth-sum attenuation)",
+        "ufd",
+        "dwba-lite",
+    }:
+        return "fast"
+
+    if "complex-k dwba" in text or "complex_k_dwba" in text:
+        return "exact"
+    if "fresnel" in text and "ctr" in text:
+        return "fast"
+    return "fast"
+
+
+def _current_optics_mode_flag() -> int:
+    mode_var = globals().get("optics_mode_var")
+    mode_label = _normalize_optics_mode_label(mode_var.get() if mode_var is not None else "fast")
+    if mode_label == "exact":
+        return OPTICS_MODE_EXACT
+    return OPTICS_MODE_FAST
 
 colorbar_main = fig.colorbar(image_display, ax=ax, label='Intensity', shrink=0.6, pad=0.02)
 
@@ -1990,14 +2051,19 @@ def apply_scale_factor_to_existing_results(update_limits=False):
     elif last_caked_image_unscaled is not None and last_caked_extent is not None:
         _set_image_origin(image_display, 'lower')
         scaled_caked = last_caked_image_unscaled * scale
+        if not simulation_limits_user_override:
+            _update_simulation_sliders_from_image(scaled_caked, reset_override=True)
         image_display.set_data(scaled_caked)
         image_display.set_extent(last_caked_extent)
 
     if show_caked_2d_var.get():
-        image_display.set_clim(
-            float(vmin_caked_var.get()),
-            float(vmax_caked_var.get()),
-        )
+        caked_min = float(simulation_min_var.get())
+        caked_max = float(simulation_max_var.get())
+        caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
+        image_display.set_clim(caked_min, caked_max)
+        if not caked_limits_user_override:
+            vmin_caked_var.set(caked_min)
+            vmax_caked_var.set(caked_max)
 
     if (
         show_1d_var.get()
@@ -2567,6 +2633,7 @@ def do_update():
     center_marker.set_visible(False)
 
     mosaic_params = build_mosaic_params()
+    optics_mode_flag = _current_optics_mode_flag()
 
 
     def get_sim_signature():
@@ -2586,7 +2653,11 @@ def do_update():
             round(center_y_up, 3),
             round(mosaic_params["sigma_mosaic_deg"], 6),
             round(mosaic_params["gamma_mosaic_deg"], 6),
-            round(mosaic_params["eta"], 6)
+            round(mosaic_params["eta"], 6),
+            int(optics_mode_flag),
+            int(num_samples),
+            int(np.size(mosaic_params["beam_x_array"])),
+            int(np.size(mosaic_params["theta_array"])),
         )
 
     # 1 – place near other globals
@@ -2642,6 +2713,7 @@ def do_update():
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
+                    optics_mode=optics_mode_flag,
                 )
             else:
                 miller_arr = data
@@ -2684,6 +2756,7 @@ def do_update():
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
+                    optics_mode=optics_mode_flag,
                 ) + (None,)
 
         img1, maxpos1, _, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
@@ -2870,19 +2943,25 @@ def do_update():
         scaled_caked_for_limits = caked_img * current_scale
         auto_vmin, auto_vmax = _auto_caked_limits(scaled_caked_for_limits)
 
+        if not simulation_limits_user_override:
+            _update_simulation_sliders_from_image(
+                scaled_caked_for_limits, reset_override=True
+            )
+
         if not caked_limits_user_override:
             vmin_caked_var.set(auto_vmin)
             vmax_caked_var.set(auto_vmax)
 
-        vmin_val = float(vmin_caked_var.get())
-        vmax_val = float(vmax_caked_var.get())
-        global_sim_max = float(simulation_max_var.get())
+        vmin_val = float(simulation_min_var.get())
+        vmax_val = float(simulation_max_var.get())
+        global_sim_max = vmax_val
 
         if not math.isfinite(vmin_val):
             vmin_val = auto_vmin
         if not math.isfinite(vmax_val):
             vmax_val = auto_vmax
-        if not math.isfinite(global_sim_max):
+        vmin_val, vmax_val = _ensure_valid_range(vmin_val, vmax_val)
+        if not math.isfinite(global_sim_max) or global_sim_max <= vmin_val:
             global_sim_max = auto_vmax
 
         display_vmax = min(vmax_val, global_sim_max)
@@ -3101,6 +3180,7 @@ def reset_to_defaults():
     a_var.set(defaults['a'])
     c_var.set(defaults['c'])
     resolution_var.set(defaults['sampling_resolution'])
+    optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
     tth_min_var.set(0.0)
@@ -3192,7 +3272,8 @@ azimuthal_button = ttk.Button(
             bw_sigma=bw_sigma,
             sigma_mosaic_var=sigma_mosaic_var,
             gamma_mosaic_var=gamma_mosaic_var,
-            eta_var=eta_var
+            eta_var=eta_var,
+            optics_mode=_current_optics_mode_flag(),
         ),
         [center_x_var.get(), center_y_var.get()],
         {
@@ -3310,6 +3391,8 @@ save_button = ttk.Button(
         center_x_var,
         center_y_var,
         resolution_var,
+        None,
+        optics_mode_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -3338,6 +3421,8 @@ load_button = ttk.Button(
                 center_x_var,
                 center_y_var,
                 resolution_var,
+                None,
+                optics_mode_var,
             )
         ),
         ensure_valid_resolution_choice(),
@@ -3517,6 +3602,7 @@ def on_fit_geometry_click():
         'gamma':              gamma_var.get(),
         'Gamma':              Gamma_var.get(),
         'cor_angle':          cor_angle_var.get(),
+        'optics_mode':        _current_optics_mode_flag(),
     }
 
     # build the list of which of those to vary
@@ -3765,6 +3851,7 @@ def on_fit_geometry_click():
                             np.array([1.0, 0.0, 0.0]),
                             np.array([0.0, 1.0, 0.0]),
                             save_flag=0,
+                            optics_mode=_current_optics_mode_flag(),
                         )
 
                         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -3868,6 +3955,7 @@ def on_fit_geometry_click():
                         np.array([1.0, 0.0, 0.0]),
                         np.array([0.0, 1.0, 0.0]),
                         save_flag=0,
+                        optics_mode=_current_optics_mode_flag(),
                     )
 
                     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -4398,6 +4486,7 @@ def on_fit_mosaic_click():
         'corto_detector': corto_detector_var.get(),
         'gamma':          gamma_var.get(),
         'Gamma':          Gamma_var.get(),
+        'optics_mode':    _current_optics_mode_flag(),
     }
 
     progress_label_mosaic.config(text="Running mosaic optimization…")
@@ -4565,9 +4654,11 @@ check_1d.pack(side=tk.TOP, padx=5, pady=2)
 
 show_caked_2d_var = tk.BooleanVar(value=False)
 def toggle_caked_2d():
-    global caked_limits_user_override
+    global caked_limits_user_override, simulation_limits_user_override
     if not show_caked_2d_var.get():
         caked_limits_user_override = False
+    else:
+        simulation_limits_user_override = False
     schedule_update()
 
 check_2d = ttk.Checkbutton(
@@ -4715,7 +4806,8 @@ def save_q_space_representation():
         cor_angle_var.get(),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
-        save_flag=1
+        save_flag=1,
+        optics_mode=_current_optics_mode_flag(),
     )
 
     max_positions_local = hit_tables_to_max_positions(hit_tables)
@@ -4888,6 +4980,32 @@ def on_resolution_option_change(*_):
 
 resolution_var.trace_add('write', on_resolution_option_change)
 
+optics_mode_var = tk.StringVar(value=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
+optics_mode_frame = ttk.Frame(mosaic_frame.frame)
+optics_mode_frame.pack(fill=tk.X, pady=(6, 2))
+ttk.Label(optics_mode_frame, text='Optics Transport').pack(anchor=tk.W, padx=5)
+ttk.Radiobutton(
+    optics_mode_frame,
+    text='Original Fast Approx (Fresnel + Beer-Lambert)',
+    variable=optics_mode_var,
+    value='fast',
+).pack(anchor=tk.W, padx=12)
+ttk.Radiobutton(
+    optics_mode_frame,
+    text='Complex-k DWBA slab optics (Precise)',
+    variable=optics_mode_var,
+    value='exact',
+).pack(anchor=tk.W, padx=12)
+
+
+def on_optics_mode_change(*_):
+    global last_simulation_signature
+    last_simulation_signature = None
+    schedule_update()
+
+
+optics_mode_var.trace_add('write', on_optics_mode_change)
+
 center_frame = CollapsibleFrame(right_col, text='Beam Center')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -5008,6 +5126,8 @@ occ_var3 = tk.DoubleVar(value=occ[2])
 finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
 stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
 _layers_scale_widget = None
+_layers_entry_widget = None
+_layers_entry_var = None
 
 
 def _rebuild_diffraction_inputs(
@@ -5165,11 +5285,48 @@ def update_occupancies(*args):
 
 
 def _sync_finite_controls():
-    global _layers_scale_widget
-    if _layers_scale_widget is None:
-        return
+    global _layers_scale_widget, _layers_entry_widget
     state = tk.NORMAL if finite_stack_var.get() else tk.DISABLED
-    _layers_scale_widget.configure(state=state)
+    if _layers_scale_widget is not None:
+        _layers_scale_widget.configure(state=state)
+    if _layers_entry_widget is not None:
+        _layers_entry_widget.configure(state=state)
+
+
+def _normalize_layer_value(raw_value):
+    try:
+        value = int(round(float(raw_value)))
+    except (TypeError, ValueError):
+        value = stack_layers_var.get()
+    if value < 1:
+        value = 1
+    return value
+
+
+def _sync_layer_entry_from_var(*_):
+    global _layers_entry_var
+    if _layers_entry_var is None:
+        return
+    normalized = str(int(max(1, stack_layers_var.get())))
+    if _layers_entry_var.get().strip() != normalized:
+        _layers_entry_var.set(normalized)
+
+
+def _commit_layer_entry(_event=None):
+    global _layers_scale_widget, _layers_entry_var
+    if _layers_entry_var is None:
+        return
+    value = _normalize_layer_value(_layers_entry_var.get())
+    if _layers_scale_widget is not None:
+        current_to = int(round(float(_layers_scale_widget.cget("to"))))
+        if value > current_to:
+            _layers_scale_widget.configure(to=value)
+    changed = stack_layers_var.get() != value
+    if changed:
+        stack_layers_var.set(value)
+    _sync_layer_entry_from_var()
+    if changed and finite_stack_var.get():
+        update_occupancies()
 
 
 def _on_finite_toggle():
@@ -5178,12 +5335,10 @@ def _on_finite_toggle():
 
 
 def _on_layer_slider(val):
-    try:
-        value = int(round(float(val)))
-    except (TypeError, ValueError):
-        value = stack_layers_var.get()
+    value = _normalize_layer_value(val)
     if stack_layers_var.get() != value:
         stack_layers_var.set(value)
+    _sync_layer_entry_from_var()
     if finite_stack_var.get():
         update_occupancies()
 
@@ -5203,12 +5358,16 @@ ttk.Checkbutton(
 layers_row = ttk.Frame(finite_frame)
 layers_row.pack(fill=tk.X, padx=5, pady=2)
 ttk.Label(layers_row, text="Layers:").grid(row=0, column=0, sticky="w")
-ttk.Label(layers_row, textvariable=stack_layers_var, width=6).grid(
-    row=0,
-    column=2,
-    sticky="e",
-    padx=(5, 0),
+_layers_entry_var = tk.StringVar(value=str(int(max(1, stack_layers_var.get()))))
+layers_entry = ttk.Entry(
+    layers_row,
+    textvariable=_layers_entry_var,
+    width=8,
+    justify="right",
 )
+layers_entry.grid(row=0, column=2, sticky="e", padx=(5, 0))
+layers_entry.bind("<Return>", _commit_layer_entry)
+layers_entry.bind("<FocusOut>", _commit_layer_entry)
 
 layers_scale = tk.Scale(
     layers_row,
@@ -5224,6 +5383,9 @@ layers_scale.grid(row=0, column=1, sticky="ew", padx=(5, 5))
 layers_row.columnconfigure(1, weight=1)
 
 _layers_scale_widget = layers_scale
+_layers_entry_widget = layers_entry
+stack_layers_var.trace_add("write", _sync_layer_entry_from_var)
+_sync_layer_entry_from_var()
 _sync_finite_controls()
 p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
                           stack_frame.frame, update_occupancies)
@@ -5331,6 +5493,8 @@ def main(write_excel_flag=None):
             center_x_var,
             center_y_var,
             resolution_var,
+            None,
+            optics_mode_var,
         )
         ensure_valid_resolution_choice()
         print("Loaded saved profile from", params_file_path)

@@ -33,6 +33,15 @@ python main.py
 
 The application loads example images specified in `config/dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
 
+### Optics Transport Modes
+
+The GUI `Optics Transport` selector provides two named modes:
+
+- **Original Fast Approx (Fresnel + Beer-Lambert)** (`FRESNEL_CTR_DAMPING`, stored as `fast`): fast approximation that applies Fresnel interface weights with Beer-Lambert entry/exit attenuation.
+- **Complex-k DWBA slab optics (Precise)** (`COMPLEX_K_DWBA_SLAB`, stored as `exact`): phase-matched complex-`k` slab refraction/transmission with the full precise transport path implemented in the simulator.
+
+The fast mode is intentionally approximate and omits coherent internal multiple-reflection and full coherent internal phase-coupling terms. Use the precise mode when those effects matter.
+
 ### How GUI geometry fitting chooses what to match
 
 The geometry fit button compares annotated peaks from the experimental image to simulated peaks with the **same HKL labels**. The default `config/file_paths.yaml` points `measured_peaks` at a NumPy array where each entry is either `[h, k, l, x_pix, y_pix]` or a dict with `{"label": "h,k,l", "x": ..., "y": ...}`. During fitting, RA-Sim:

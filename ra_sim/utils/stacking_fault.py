@@ -2,6 +2,8 @@
 
 import os
 import numpy as np
+import io
+from contextlib import redirect_stdout
 
 # Global constants
 A_HEX   = 4.557            # Å
@@ -26,7 +28,10 @@ def _temp_cif_with_occ(cif_in: str, occ):
     """
     import tempfile, CifFile
 
-    cf = CifFile.ReadCif(cif_in)
+    # PyCifRW emits noisy "All blocks output." lines while serializing CIF
+    # objects. Suppress that chatter during startup cache generation.
+    with redirect_stdout(io.StringIO()):
+        cf = CifFile.ReadCif(cif_in)
     block_name = list(cf.keys())[0]
     block = cf[block_name]
 
@@ -49,10 +54,12 @@ def _temp_cif_with_occ(cif_in: str, occ):
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.cif')
     tmp.close()
     try:  # PyCifRW >= 5
-        CifFile.WriteCif(cf, tmp.name)
+        with redirect_stdout(io.StringIO()):
+            CifFile.WriteCif(cf, tmp.name)
     except AttributeError:
         with open(tmp.name, 'w') as f:
-            f.write(cf.WriteOut())
+            with redirect_stdout(io.StringIO()):
+                f.write(cf.WriteOut())
     return tmp.name, os.unlink
 
 

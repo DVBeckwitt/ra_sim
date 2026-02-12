@@ -3,6 +3,60 @@
 import numpy as np
 import os
 
+
+def _normalize_optics_mode(value, fallback="fast"):
+    """Return optics-mode label as ``'fast'`` or ``'exact'``."""
+
+    if value is None:
+        return fallback
+
+    # Support legacy numeric storage and bool-like flags.
+    if isinstance(value, (int, np.integer)):
+        return "exact" if int(value) == 1 else "fast"
+    if isinstance(value, (float, np.floating)):
+        return "exact" if int(round(float(value))) == 1 else "fast"
+
+    text = str(value).strip().lower()
+    text = text.replace("–", "-").replace("—", "-")
+    text = " ".join(text.split())
+
+    if text in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "exact",
+        "precise",
+        "slow",
+        "complex_k_dwba_slab",
+        "complex-k dwba slab optics",
+        "phase-matched complex-k multilayer dwba",
+    }:
+        return "exact"
+    if text in {
+        "0",
+        "false",
+        "no",
+        "off",
+        "fast",
+        "approx",
+        "fresnel_ctr_damping",
+        "fresnel-weighted kinematic ctr absorption correction",
+        "uncoupled fresnel + ctr damping (ufd)",
+        "fast dwba-lite (fresnel + depth-sum attenuation)",
+        "ufd",
+        "dwba-lite",
+    }:
+        return "fast"
+
+    if "complex-k dwba" in text or "complex_k_dwba" in text:
+        return "exact"
+    if "fresnel" in text and "ctr" in text:
+        return "fast"
+
+    return fallback
+
+
 def load_parameters(
     path,
     theta_initial_var,
@@ -23,6 +77,8 @@ def load_parameters(
     center_x_var,      # <--- ADDED
     center_y_var,      # <--- ADDED
     resolution_var=None,
+    custom_samples_var=None,
+    optics_mode_var=None,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
@@ -51,10 +107,29 @@ def load_parameters(
         # Set the new beam center parameters
         center_x_var.set(params.get('center_x', center_x_var.get()))
         center_y_var.set(params.get('center_y', center_y_var.get()))
+        if custom_samples_var is not None:
+            stored_custom_count = params.get(
+                'sampling_custom_count',
+                params.get('sampling_count'),
+            )
+            if stored_custom_count is not None:
+                try:
+                    parsed_custom_count = int(round(float(stored_custom_count)))
+                except (TypeError, ValueError):
+                    parsed_custom_count = None
+                if parsed_custom_count is not None and parsed_custom_count > 0:
+                    custom_samples_var.set(str(parsed_custom_count))
         if resolution_var is not None:
             stored_resolution = params.get('sampling_resolution')
             if stored_resolution:
                 resolution_var.set(stored_resolution)
+        if optics_mode_var is not None:
+            current_mode = _normalize_optics_mode(optics_mode_var.get(), fallback="fast")
+            stored_mode = _normalize_optics_mode(
+                params.get('optics_mode', current_mode),
+                fallback=current_mode,
+            )
+            optics_mode_var.set(stored_mode)
 
         return "Parameters loaded from parameters.npy"
     else:
@@ -80,6 +155,8 @@ def save_all_parameters(
     center_x_var,    # <--- ADDED
     center_y_var,    # <--- ADDED
     resolution_var=None,
+    custom_samples_var=None,
+    optics_mode_var=None,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
@@ -106,7 +183,26 @@ def save_all_parameters(
         'center_y':       center_y_var.get(),
     }
     if resolution_var is not None:
-        parameters['sampling_resolution'] = resolution_var.get()
+        resolution_value = resolution_var.get()
+        parameters['sampling_resolution'] = resolution_value
+    else:
+        resolution_value = None
+
+    if custom_samples_var is not None:
+        try:
+            custom_sample_count = int(round(float(custom_samples_var.get())))
+        except (TypeError, ValueError):
+            custom_sample_count = None
+        if custom_sample_count is not None and custom_sample_count > 0:
+            parameters['sampling_custom_count'] = custom_sample_count
+            if resolution_value == "Custom":
+                parameters['sampling_count'] = custom_sample_count
+
+    if optics_mode_var is not None:
+        parameters['optics_mode'] = _normalize_optics_mode(
+            optics_mode_var.get(),
+            fallback="fast",
+        )
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")
 

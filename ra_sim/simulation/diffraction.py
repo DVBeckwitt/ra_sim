@@ -3,9 +3,21 @@
 import numpy as np
 from numba import njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
-from ra_sim.utils.calculations import fresnel_transmission
+from ra_sim.utils.calculations import complex_sqrt, fresnel_transmission
 from numba import types
 from numba.typed import List       #  only List lives here
+
+
+# Optical transport modes
+# Canonical names:
+#   - FRESNEL_CTR_DAMPING: fast Fresnel-weighted CTR damping path
+#   - COMPLEX_K_DWBA_SLAB: precise complex-k slab optics path
+FRESNEL_CTR_DAMPING = 0
+COMPLEX_K_DWBA_SLAB = 1
+
+# Backward-compatible aliases used throughout the existing codebase.
+OPTICS_MODE_FAST = FRESNEL_CTR_DAMPING
+OPTICS_MODE_EXACT = COMPLEX_K_DWBA_SLAB
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
@@ -508,6 +520,183 @@ def _clamp(x, lo, hi):
 
 
 @njit
+def _kz_branch_decay(arg):
+    """Return sqrt(arg) with the physically decaying branch (Im(kz) >= 0)."""
+    kz = complex_sqrt(arg)
+    if kz.imag < 0.0:
+        kz = -kz
+    elif abs(kz.imag) < 1e-15 and kz.real < 0.0:
+        kz = -kz
+    return kz
+
+
+@njit
+def _fresnel_t_exact(kz_i, kz_j, eps_i, eps_j, s_polarization):
+    """Exact Fresnel transmission amplitude in kz/epsilon form."""
+    if s_polarization:
+        den = kz_i + kz_j
+        if abs(den) < 1e-30:
+            return 0j
+        return (2.0 * kz_i) / den
+
+    den = eps_j * kz_i + eps_i * kz_j
+    if abs(den) < 1e-30:
+        return 0j
+    return (2.0 * eps_j * kz_i) / den
+
+
+@njit
+def _fresnel_power_t_exact(t_amp, kz_i, kz_j, eps_i, eps_j, s_polarization):
+    """Convert exact transmission amplitude to power transmission."""
+    abs_t2 = t_amp.real * t_amp.real + t_amp.imag * t_amp.imag
+    if abs_t2 <= 0.0:
+        return 0.0
+
+    if s_polarization:
+        denom = kz_i.real
+        if abs(denom) < 1e-30:
+            return 0.0
+        ratio = kz_j.real / denom
+    else:
+        den = kz_i / eps_i
+        if abs(den) < 1e-30:
+            return 0.0
+        ratio = ((kz_j / eps_j) / den).real
+
+    out = ratio * abs_t2
+    if not np.isfinite(out) or out < 0.0:
+        return 0.0
+    return out
+
+
+@njit
+def _thickness_to_angstrom(depth):
+    """Interpret sub-mm values as meters and convert to angstrom."""
+    if depth <= 0.0:
+        return 0.0
+    # Existing defaults pass thickness in meters (e.g., 50e-9).
+    if depth < 1e-3:
+        return depth * 1.0e10
+    # Larger values are assumed to already be in angstrom.
+    return depth
+
+
+@njit
+def _ctr_discrete_finite_intensity(qz, v_sum, c_ang, n_layers):
+    """
+    Finite discrete CTR:
+      |sum_{l=0}^{N-1} exp(i (qz + iV) c l)|^2
+    with V >= 0 and c in angstrom.
+    """
+    if n_layers <= 0 or c_ang <= 0.0:
+        return 0.0
+
+    v_eff = np.maximum(v_sum, 0.0)
+    phase = qz * c_ang
+    rho = np.exp(-v_eff * c_ang)
+    rho_n = rho ** n_layers
+
+    num = 1.0 - 2.0 * rho_n * np.cos(n_layers * phase) + rho_n * rho_n
+    den = 1.0 - 2.0 * rho * np.cos(phase) + rho * rho
+    if den < 1e-30:
+        # Bragg-pole limit of the finite geometric series.
+        return float(n_layers * n_layers)
+
+    out = num / den
+    if not np.isfinite(out) or out < 0.0:
+        return 0.0
+    return out
+
+
+@njit
+def _ctr_discrete_infinite_intensity(qz, v_sum, c_ang):
+    """
+    Infinite discrete CTR:
+      |sum_{l=0}^{inf} exp(i (qz + iV) c l)|^2
+      = 1 / |1 - exp(i (qz + iV) c)|^2
+    where V > 0 for convergence.
+    """
+    if c_ang <= 0.0:
+        return 1.0
+
+    # Keep convergence explicit even if v_sum is numerically zero.
+    v_eff = np.maximum(v_sum, 1e-12 / np.maximum(c_ang, 1e-30))
+    phase = qz * c_ang
+    rho = np.exp(-v_eff * c_ang)
+
+    den = 1.0 - 2.0 * rho * np.cos(phase) + rho * rho
+    if den < 1e-30:
+        den = 1e-30
+
+    out = 1.0 / den
+    if not np.isfinite(out) or out < 0.0:
+        return 0.0
+    return out
+
+
+@njit
+def _ctr_effective_layers_from_absorption(v_sum, c_ang):
+    """
+    Semi-infinite fallback depth in layer units.
+
+    For n_layers<=0, use an absorption-limited effective finite depth to avoid
+    the undamped infinite-crystal pole in I(q,0), which otherwise drives the
+    attenuation ratio to zero near q=0.
+    """
+    if c_ang <= 0.0:
+        return 1
+
+    vc = np.maximum(v_sum, 0.0) * c_ang
+    if vc <= 1e-6:
+        n_eff = 1000000
+    else:
+        n_eff = int(np.ceil(1.0 / vc))
+
+    if n_eff < 1:
+        return 1
+    if n_eff > 1000000:
+        return 1000000
+    return n_eff
+
+
+@njit
+def _ctr_attenuation_factor(qz, v_in, v_out, c_ang, n_layers):
+    """
+    CTR-only absorption correction for fast mode.
+
+    Use the same discrete CTR model with and without damping at the same qz:
+
+      finite:    f(qz) = I_N(qz, V)   / I_N(qz, 0)
+      semi-infinite fallback (n_layers<=0):
+                 f(qz) = I_Neff(qz, V) / I_Neff(qz, 0)
+                 with Neff set by absorption depth
+
+    where V = v_in + v_out >= 0.
+    """
+    if c_ang <= 0.0:
+        return 1.0
+
+    v_sum = np.maximum(v_in + v_out, 0.0)
+    if n_layers > 0:
+        i_v = _ctr_discrete_finite_intensity(qz, v_sum, c_ang, n_layers)
+        i_0 = _ctr_discrete_finite_intensity(qz, 0.0, c_ang, n_layers)
+    else:
+        # Avoid pole-driven collapse at qz~0 for an undamped infinite
+        # denominator by using an absorption-limited effective finite depth.
+        n_eff = _ctr_effective_layers_from_absorption(v_sum, c_ang)
+        i_v = _ctr_discrete_finite_intensity(qz, v_sum, c_ang, n_eff)
+        i_0 = _ctr_discrete_finite_intensity(qz, 0.0, c_ang, n_eff)
+
+    if i_0 < 1e-30:
+        i_0 = 1e-30
+
+    out = i_v / i_0
+    if not np.isfinite(out) or out < 0.0:
+        return 0.0
+    return out
+
+
+@njit
 def transmit_angle_grazing(theta_i_plane, n2):
     """
     Grazing angle form of Snell: cos(theta_t) = cos(theta_i) / Re(n2)
@@ -692,7 +881,8 @@ def calculate_phi(
     P0, unit_x,
     save_flag, q_data, q_count, i_peaks_index,
     record_status=False,
-    thickness=0.0
+    thickness=0.0,
+    optics_mode=OPTICS_MODE_FAST,
 ):
     """
     For a single reflection (H,K,L), build a mosaic Q_grid around G_vec.
@@ -824,6 +1014,8 @@ def calculate_phi(
     kf_prime = np.empty(3, dtype=np.float64)
     plane_to_det = np.empty(3, dtype=np.float64)
 
+    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
+
     # Main loop over each beam sample in wave + mosaic
     for i_samp in prange(n_samp):
         lam_samp = wavelength_array[i_samp]
@@ -875,27 +1067,54 @@ def calculate_phi(
         phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
 
         # ---------- ENTRY REFRACTION AND kz ----------
-        th_t = transmit_angle_grazing(th_i_prime, n2)     # grazing angle in medium
         k0 = k_mag
-        # magnitude for in-plane internal wavevector (use Re(n^2))
-        k_scat = k0 * np.sqrt(np.maximum(np.real(n2*n2), 0.0))
-        k_x_scat = k_scat*np.cos(th_t)*np.sin(phi_i_prime)
-        k_y_scat = k_scat*np.cos(th_t)*np.cos(phi_i_prime)
 
-        # kz decomposition for the incident leg (sign convention: into sample)
-        re_k_z, im_k_z = ktz_components(k0, n2, th_t)
-        re_k_z = -re_k_z  # into the sample
+        if use_exact_optics:
+            eps1 = 1.0 + 0.0j
+            eps2 = n2 * n2
+            k0_sq = k0 * k0
 
-        # Fresnel transmission at entry (amplitude -> intensity).
-        # Use both s- and p-polarizations and average for an unpolarized beam.
-        # fresnel_transmission signature: (grazing_angle, refractive_index,
-        #                                s_polarization=True, incoming=True)
-        Ti_s = fresnel_transmission(th_i_prime, n2, True, True)
-        Ti_p = fresnel_transmission(th_i_prime, n2, False, True)
-        Ti2 = 0.5 * (
-            (np.real(Ti_s)*np.real(Ti_s) + np.imag(Ti_s)*np.imag(Ti_s))
-            + (np.real(Ti_p)*np.real(Ti_p) + np.imag(Ti_p)*np.imag(Ti_p))
-        )
+            # Exact interface phase-matching uses conserved k_parallel.
+            k_par_i = k0 * np.abs(np.cos(th_i_prime))
+            k_par_i_sq = k_par_i * k_par_i
+
+            kz1_i = _kz_branch_decay((k0_sq - k_par_i_sq) + 0.0j)
+            kz2_i = _kz_branch_decay((eps2 * k0_sq) - k_par_i_sq)
+
+            k_x_scat = k_par_i * np.sin(phi_i_prime)
+            k_y_scat = k_par_i * np.cos(phi_i_prime)
+            re_k_z = -np.abs(kz2_i.real)  # into sample
+            im_k_z = np.abs(kz2_i.imag)
+            k_scat = np.sqrt(np.maximum(k_par_i_sq + kz2_i.real * kz2_i.real, 0.0))
+
+            Ti_s = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, True)
+            Ti_p = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, False)
+            Ti2 = 0.5 * (
+                _fresnel_power_t_exact(Ti_s, kz1_i, kz2_i, eps1, eps2, True)
+                + _fresnel_power_t_exact(Ti_p, kz1_i, kz2_i, eps1, eps2, False)
+            )
+            th_t = np.arctan2(np.abs(kz2_i.real), np.maximum(k_par_i, 1e-30))
+        else:
+            th_t = transmit_angle_grazing(th_i_prime, n2)     # grazing angle in medium
+            # magnitude for in-plane internal wavevector (use Re(n^2))
+            k_scat = k0 * np.sqrt(np.maximum(np.real(n2*n2), 0.0))
+            k_x_scat = k_scat*np.cos(th_t)*np.sin(phi_i_prime)
+            k_y_scat = k_scat*np.cos(th_t)*np.cos(phi_i_prime)
+
+            # kz decomposition for the incident leg (sign convention: into sample)
+            re_k_z, im_k_z = ktz_components(k0, n2, th_t)
+            re_k_z = -re_k_z  # into the sample
+
+            # Fresnel transmission at entry (amplitude -> intensity).
+            # Use both s- and p-polarizations and average for an unpolarized beam.
+            # fresnel_transmission signature: (grazing_angle, refractive_index,
+            #                                s_polarization=True, incoming=True)
+            Ti_s = fresnel_transmission(th_i_prime, n2, True, True)
+            Ti_p = fresnel_transmission(th_i_prime, n2, False, True)
+            Ti2 = 0.5 * (
+                (np.real(Ti_s)*np.real(Ti_s) + np.imag(Ti_s)*np.imag(Ti_s))
+                + (np.real(Ti_p)*np.real(Ti_p) + np.imag(Ti_p)*np.imag(Ti_p))
+            )
 
         k_in_crystal[0] = k_x_scat
         k_in_crystal[1] = k_y_scat
@@ -906,12 +1125,17 @@ def calculate_phi(
         if record_status:
             statuses[i_samp] = stat
 
-        # Precompute entrance path length or penetration depth
-        L_in = safe_path_length(thickness, th_t)
-        use_pen_in = (L_in <= 0.0)
-        if use_pen_in:
-            # Semi-infinite: use effective penetration depth
-            L_in = 1.0 / np.maximum(2.0*im_k_z, 1e-30)
+        # Precompute entrance attenuation depth.
+        if use_exact_optics:
+            if thickness > 0.0:
+                L_in = thickness
+            else:
+                L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
+        else:
+            L_in = safe_path_length(thickness, th_t)
+            if L_in <= 0.0:
+                # Semi-infinite: use effective penetration depth
+                L_in = 1.0 / np.maximum(2.0*im_k_z, 1e-30)
 
         # ---------- Loop over each Q solution ----------
         for i_sol in range(All_Q.shape[0]):
@@ -936,38 +1160,78 @@ def calculate_phi(
             # refract out to air: convert internal grazing angle to external
             # get internal grazing angle for the exit leg
             th_t_out = np.abs(twotheta_t_prime)
-            # Exit transmission amplitude and kz for exit leg.
-            # Use both polarizations and average for an unpolarized beam.
-            Tf_s = fresnel_transmission(th_t_out, n2, True, False)
-            Tf_p = fresnel_transmission(th_t_out, n2, False, False)
-            Tf2 = 0.5 * (
-                (np.real(Tf_s)*np.real(Tf_s) + np.imag(Tf_s)*np.imag(Tf_s))
-                + (np.real(Tf_p)*np.real(Tf_p) + np.imag(Tf_p)*np.imag(Tf_p))
-            )
+            if use_exact_optics:
+                eps2 = n2 * n2
+                eps3 = 1.0 + 0.0j
+                k_par_f = kr
+                k_par_f_sq = k_par_f * k_par_f
+                k0_sq = k0 * k0
 
-            re_k_z_f, im_k_z_f = ktz_components(k0, n2, th_t_out)
+                kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+                kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
 
-            # path length for exit leg
-            L_out = safe_path_length(thickness, th_t_out)
-            if L_out <= 0.0:
-                L_out = 1.0 / np.maximum(2.0*im_k_z_f, 1e-30)
+                Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+                Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+                Tf2 = 0.5 * (
+                    _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+                    + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+                )
+
+                im_k_z_f = np.abs(kz2_f.imag)
+
+                if thickness > 0.0:
+                    L_out = thickness
+                else:
+                    L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
+            else:
+                # Exit transmission amplitude and kz for exit leg.
+                # Use both polarizations and average for an unpolarized beam.
+                Tf_s = fresnel_transmission(th_t_out, n2, True, False)
+                Tf_p = fresnel_transmission(th_t_out, n2, False, False)
+                Tf2 = 0.5 * (
+                    (np.real(Tf_s)*np.real(Tf_s) + np.imag(Tf_s)*np.imag(Tf_s))
+                    + (np.real(Tf_p)*np.real(Tf_p) + np.imag(Tf_p)*np.imag(Tf_p))
+                )
+
+                re_k_z_f, im_k_z_f = ktz_components(k0, n2, th_t_out)
+
+                # path length for exit leg
+                L_out = safe_path_length(thickness, th_t_out)
+                if L_out <= 0.0:
+                    L_out = 1.0 / np.maximum(2.0*im_k_z_f, 1e-30)
 
             # apply propagation and interface factors
-            prop_fac = Ti2 * Tf2 \
-                       * np.exp(-2.0*im_k_z * L_in) \
-                       * np.exp(-2.0*im_k_z_f * L_out)
+            if use_exact_optics:
+                prop_att = (
+                    np.exp(-2.0*im_k_z * L_in)
+                    * np.exp(-2.0*im_k_z_f * L_out)
+                )
+            else:
+                # Original fast-mode propagation attenuation (Beer-Lambert on
+                # entry and exit legs).
+                prop_att = (
+                    np.exp(-2.0*im_k_z * L_in)
+                    * np.exp(-2.0*im_k_z_f * L_out)
+                )
+            prop_fac = Ti2 * Tf2 * prop_att
 
             # external exit angles for detector mapping (existing code)
             # Preserve the exit-side sign so both detector half-planes remain
             # populated as theta_i changes.
-            twotheta_t = (
-                np.arccos(_clamp(np.cos(twotheta_t_prime) * np.real(n2), -1.0, 1.0))
-                * np.sign(twotheta_t_prime)
-            )
+            if use_exact_optics:
+                cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
+                twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+                k_out_mag = k0
+            else:
+                twotheta_t = (
+                    np.arccos(_clamp(np.cos(twotheta_t_prime) * np.real(n2), -1.0, 1.0))
+                    * np.sign(twotheta_t_prime)
+                )
+                k_out_mag = k_scat
             phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-            k_tx_f = k_scat*np.cos(twotheta_t)*np.sin(phi_f)
-            k_ty_f = k_scat*np.cos(twotheta_t)*np.cos(phi_f)
-            k_tz_f = k_scat*np.sin(twotheta_t)
+            k_tx_f = k_out_mag*np.cos(twotheta_t)*np.sin(phi_f)
+            k_ty_f = k_out_mag*np.cos(twotheta_t)*np.cos(phi_f)
+            k_tz_f = k_out_mag*np.sin(twotheta_t)
             kf[0] = k_tx_f
             kf[1] = k_ty_f
             kf[2] = k_tz_f
@@ -1085,7 +1349,8 @@ def process_peaks_parallel(
     unit_x, n_detector,
     save_flag,
     record_status=False,
-    thickness=50e-9
+    thickness=50e-9,
+    optics_mode=OPTICS_MODE_FAST,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an intensity
@@ -1230,7 +1495,8 @@ def process_peaks_parallel(
             unit_x,
             save_flag, q_data, q_count, i_pk,
             record_status,
-            thickness
+            thickness,
+            optics_mode,
         )
         if record_status:
             all_status[i_pk, :] = status_arr
@@ -1315,6 +1581,7 @@ def process_qr_rods_parallel(
     save_flag,
     record_status=False,
     thickness=0.0,
+    optics_mode=OPTICS_MODE_FAST,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -1365,6 +1632,7 @@ def process_qr_rods_parallel(
         save_flag,
         record_status,
         thickness,
+        optics_mode,
     )
 
     return (*result, degeneracy)
