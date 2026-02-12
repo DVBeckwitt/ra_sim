@@ -67,8 +67,8 @@ from ra_sim.fitting.optimization import (
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
-    process_peaks_parallel,
-    process_qr_rods_parallel,
+    process_peaks_parallel_safe as process_peaks_parallel,
+    process_qr_rods_parallel_safe as process_qr_rods_parallel,
 )
 from ra_sim.simulation.intersection_analysis import (
     BeamSamples as IntersectionBeamSamples,
@@ -109,8 +109,7 @@ if DEBUG_ENABLED:
 else:
     print("Debug mode off (set RA_SIM_DEBUG=1 for extra output)")
 
-# Toggle creation of backend orientation controls (kept off while automated
-# diagnostics try permutations internally).
+# Keep backend-orientation debug controls disabled and force identity transforms.
 BACKEND_ORIENTATION_UI_ENABLED = False
 BACKGROUND_BACKEND_DEBUG_UI_ENABLED = False
 
@@ -596,7 +595,7 @@ current_background_image = background_images_native[0]
 current_background_display = background_images_display[0]
 current_background_index = 0
 background_visible = True
-background_backend_rotation_k = 3
+background_backend_rotation_k = 0
 background_backend_flip_x = False
 background_backend_flip_y = False
 
@@ -618,19 +617,11 @@ def _get_current_background_display() -> np.ndarray:
 
 
 def _apply_background_backend_orientation(image: np.ndarray | None) -> np.ndarray | None:
-    """Apply debug-only backend rotations/flips to the background array."""
+    """Return identity backend orientation for background arrays."""
 
     if image is None:
         return None
-    oriented = np.asarray(image)
-    if background_backend_flip_y:
-        oriented = np.flip(oriented, axis=0)
-    if background_backend_flip_x:
-        oriented = np.flip(oriented, axis=1)
-    k_mod = int(background_backend_rotation_k) % 4
-    if k_mod:
-        oriented = np.rot90(oriented, k_mod)
-    return oriented
+    return np.asarray(image)
 
 
 def _get_current_background_backend() -> np.ndarray | None:
@@ -884,6 +875,13 @@ def _display_to_native_sim_coords(col: float, row: float, image_shape: tuple[int
     """Map displayed simulation coordinates back into native simulation frame."""
 
     return _rotate_point_for_display(col, row, image_shape, -SIM_DISPLAY_ROTATE_K)
+
+
+def _display_sim_to_native_coords(col: float, row: float, image_shape: tuple[int, ...]):
+    """Rotate displayed simulation coordinates back to native simulation frame."""
+
+    inv_k = (-SIM_DISPLAY_ROTATE_K) % 4
+    return _rotate_point_for_display(col, row, image_shape, inv_k)
 
 
 def _transform_points_orientation(
@@ -1659,16 +1657,6 @@ simulation_scale_factor_var, scale_factor_slider = create_slider(
 )
 
 
-def _get_scale_factor_value(default=1.0):
-    try:
-        scale = float(simulation_scale_factor_var.get())
-    except (tk.TclError, ValueError):
-        return default
-    if not np.isfinite(scale):
-        return default
-    return scale
-
-
 def _on_scale_factor_change(*args):
     global scale_factor_user_override
     if suppress_scale_factor_callback:
@@ -1780,6 +1768,16 @@ def _set_scale_factor_value(value, adjust_range=True, reset_override=False):
         scale_factor_user_override = False
     else:
         scale_factor_user_override = True
+
+
+def _get_scale_factor_value(default=1.0):
+    try:
+        scale = float(simulation_scale_factor_var.get())
+    except (tk.TclError, ValueError):
+        return default
+    if not np.isfinite(scale):
+        return default
+    return scale
 
 
 def _install_scale_factor_entry_bindings():
@@ -1973,7 +1971,9 @@ def apply_scale_factor_to_existing_results(update_limits=False):
     scaled_image = unscaled_image_global * scale
     global_image_buffer[:] = scaled_image
 
-    if update_limits or not simulation_limits_user_override:
+    # Keep display limits stable during reruns/parameter changes unless an
+    # explicit reset path requests recomputing limits.
+    if update_limits:
         _update_simulation_sliders_from_image(
             scaled_image, reset_override=update_limits
         )
@@ -2252,7 +2252,7 @@ phi_max_entry.bind(
 
 _sync_range_text_vars()
 
-PHI_ZERO_OFFSET_DEGREES = -90.0
+PHI_ZERO_OFFSET_DEGREES = 90.0
 
 
 def _adjust_phi_zero(phi_values):
@@ -2832,7 +2832,7 @@ def do_update():
     if _ai_cache.get("sig") != sig:
         _ai_cache = {
             "sig": sig,
-            "ai": pyFAI.AzimuthalIntegrator(
+            "ai": AzimuthalIntegrator(
                 dist=corto_det_up,
                 poni1=center_x_up * pixel_size_m,
                 poni2=center_y_up * pixel_size_m,
@@ -3055,7 +3055,8 @@ def do_update():
         last_1d_integration_data["azimuths_bg"] = None
         last_1d_integration_data["intensities_azimuth_bg"] = None
 
-    apply_scale_factor_to_existing_results(update_limits=True)
+    # Do not auto-rescale simulation display limits on every update.
+    apply_scale_factor_to_existing_results(update_limits=False)
 
     update_integration_region_visuals(ai, sim_res2)
 
@@ -3077,7 +3078,6 @@ def switch_background():
     current_background_image = background_images_native[current_background_index]
     current_background_display = background_images_display[current_background_index]
     background_display.set_data(current_background_display)
-    _update_background_slider_defaults(current_background_display, reset_override=True)
     schedule_update()
 
 def reset_to_defaults():
@@ -3417,7 +3417,7 @@ backend_flip_y_axis_var = tk.BooleanVar(value=False)
 backend_flip_x_axis_var = tk.BooleanVar(value=False)
 backend_flip_order_var = tk.StringVar(value="yx")
 
-if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
+if BACKEND_ORIENTATION_UI_ENABLED:
     backend_orient_frame = ttk.LabelFrame(root, text="Backend orientation (debug)")
     backend_orient_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
@@ -3461,6 +3461,30 @@ if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
             backend_flip_order_var.set("yx"),
         ),
     ).pack(side=tk.LEFT, padx=4)
+
+
+def _manual_orientation_choice() -> dict:
+    """Return the orientation selected in the debug orientation controls."""
+
+    try:
+        k = int(backend_rotation_var.get())
+    except (TypeError, ValueError, tk.TclError):
+        k = 0
+
+    flip_x = bool(backend_flip_x_axis_var.get())
+    flip_y = bool(backend_flip_y_axis_var.get())
+    flip_order = str(backend_flip_order_var.get()).lower()
+    if flip_order not in {"xy", "yx"}:
+        flip_order = "yx"
+
+    return {
+        "k": k,
+        "flip_x": flip_x,
+        "flip_y": flip_y,
+        "flip_order": flip_order,
+        "indexing_mode": "xy",
+        "label": f"manual(k={k}, flip_x={flip_x}, flip_y={flip_y}, order={flip_order})",
+    }
 
 
 def on_fit_geometry_click():
@@ -3662,53 +3686,7 @@ def on_fit_geometry_click():
                 "label": "identity",
             }
 
-            if DEBUG_ENABLED:
-                try:
-                    # In debug mode, search for the backend orientation that best
-                    # aligns measured peaks to simulated peaks. This leaves the on-screen
-                    # visuals unchanged.
-                    (
-                        _,
-                        preview_sim_coords,
-                        preview_meas_coords,
-                        preview_sim_millers,
-                        preview_meas_millers,
-                    ) = simulate_and_compare_hkl(
-                        miller,
-                        intensities,
-                        image_size,
-                        params,
-                        measured_native,
-                        pixel_tol=float("inf"),
-                    )
-                    (
-                        preview_sim_centers,
-                        preview_meas_centers,
-                        _preview_hkls,
-                    ) = _aggregate_match_centers(
-                        preview_sim_coords,
-                        preview_meas_coords,
-                        preview_sim_millers,
-                        preview_meas_millers,
-                    )
-                    best = _best_orientation_alignment(
-                        preview_sim_centers,
-                        preview_meas_centers,
-                        (image_size, image_size),
-                    )
-                    if best is not None:
-                        orientation_choice.update(best)
-                    _log_section(
-                        "Orientation search result:",
-                        [
-                            ", ".join(f"{k}={v}" for k, v in orientation_choice.items())
-                        ],
-                    )
-                except Exception:
-                    # fall back to identity if diagnostics fail
-                    _log_line("Orientation search failed; using identity transform")
-            else:
-                orientation_choice["label"] = "identity"
+            orientation_choice["label"] = "identity"
 
             try:
                 measured_for_fit = _apply_orientation_to_entries(
@@ -4518,8 +4496,24 @@ fit_button_geometry = ttk.Button(
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
 
-hkl_lookup_frame = ttk.Frame(root)
-hkl_lookup_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4)
+clear_geometry_markers_button = ttk.Button(
+    root,
+    text="Clear Fit Markers",
+    command=_clear_geometry_pick_artists,
+)
+clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
+
+fit_button_mosaic = ttk.Button(
+    root,
+    text="Fit Mosaic Widths",
+    command=on_fit_mosaic_click,
+)
+fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
+
+hkl_lookup_frame = ttk.LabelFrame(root, text="Peak Lookup (HKL)")
+# Make this control easy to find: pack it above the geometry/mosaic fit buttons
+# even though it is defined later in the file.
+hkl_lookup_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4, before=fit_button_geometry)
 
 selected_h_var = tk.StringVar(value="0")
 selected_k_var = tk.StringVar(value="0")
@@ -4557,20 +4551,6 @@ ttk.Button(
 
 for _entry in (h_entry, k_entry, l_entry):
     _entry.bind("<Return>", lambda _event: _select_peak_from_hkl_controls())
-
-clear_geometry_markers_button = ttk.Button(
-    root,
-    text="Clear Fit Markers",
-    command=_clear_geometry_pick_artists,
-)
-clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
-
-fit_button_mosaic = ttk.Button(
-    root,
-    text="Fit Mosaic Widths",
-    command=on_fit_mosaic_click,
-)
-fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
 
 show_1d_var = tk.BooleanVar(value=False)
 def toggle_1d_plots():

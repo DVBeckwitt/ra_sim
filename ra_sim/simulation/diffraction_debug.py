@@ -605,6 +605,9 @@ def process_peaks_parallel_debug(
         H = float(miller[i_pk, 0])
         K = float(miller[i_pk, 1])
         L = float(miller[i_pk, 2])
+        if L < 0.0:
+            max_positions[i_pk,:] = 0.0
+            continue
         reflI= intensities[i_pk]
 
         (mx0,my0,mv0, mx1,my1,mv1) = calculate_phi(

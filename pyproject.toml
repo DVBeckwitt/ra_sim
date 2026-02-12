@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ra_sim"
+version = "0.1.0"
+description = "DWBA forward simulation and refinement for 2D oriented powder diffraction"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+authors = [{ name = "RA-SIM Contributors" }]
+keywords = ["xrd", "diffraction", "dwba", "crystallography", "image-processing"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Topic :: Scientific/Engineering :: Chemistry",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+  "numpy>=1.18.0",
+  "matplotlib>=3.0.0",
+  "pyFAI>=0.19.0",
+  "fabio>=0.11.0",
+  "scipy>=1.4.0",
+  "sympy>=1.5.1",
+  "pandas>=1.0.0",
+  "numba>=0.50.0",
+  "spglib>=1.9.0",
+  "bayesian-optimization>=1.2.0",
+  "tifffile>=2020.9.3",
+  "docopt>=0.6.2",
+  "logbook>=1.5.3",
+  "scikit-image>=0.17.0",
+  "Pillow>=7.0.0",
+  "ipython>=7.0.0",
+  "jupyter>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/kenpo/ra_sim"
+Repository = "https://github.com/kenpo/ra_sim"
+
+[project.scripts]
+ra-sim = "ra_sim.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ra_sim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Keep initial enforcement focused on parser/runtime-critical issues.
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_configs = true
+show_error_codes = true
+pretty = true
+disable_error_code = ["import-untyped", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = [
+  "ra_sim.fitting.optimization",
+  "ra_sim.gui.app",
+  "ra_sim.hbn",
+  "ra_sim.simulation.diffraction",
+  "ra_sim.simulation.diffraction_debug",
+  "ra_sim.utils.calculations",
+  "ra_sim.utils.tools",
+  "ra_sim.StructureFactor.*",
+]
+ignore_errors = true

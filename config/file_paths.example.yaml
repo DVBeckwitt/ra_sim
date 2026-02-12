@@ -1,0 +1,20 @@
+# Example file paths for RA-SIM.
+# Copy this to `config/file_paths.yaml` (or point RA_SIM_CONFIG_DIR to a folder
+# containing a customized copy) and update values for your environment.
+
+dark_image: "./data/dark.osc"
+osc_files:
+  - "./data/sample_01.osc"
+geometry_poni: "./data/geometry.poni"
+cif_file: "./data/material.cif"
+measured_peaks: "./data/measured_peaks.npy"
+parameters_file: "./artifacts/parameters.npy"
+
+# GUI defaults
+gui_geometry_poni: "./data/geometry.poni"
+gui_background_image: "./data/background.asc"
+
+# Diagnostics and output
+debug_log_csv: "~/.cache/ra_sim/logs/mosaic_full_debug_log.csv"
+overlay_output: "./artifacts/overlay.png"
+file_dialog_dir: "~/.local/share/ra_sim"

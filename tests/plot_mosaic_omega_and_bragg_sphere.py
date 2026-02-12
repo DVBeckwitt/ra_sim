@@ -11,6 +11,7 @@ Notes:
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Button, Slider, TextBox
 
 
 def omega_components(dtheta_rad, sigma_rad, gamma_rad, eta):
@@ -72,7 +73,11 @@ def sigma_on_sphere(x, y, z, G, sigma_rad, gamma_rad, eta):
     omega = (1.0 - eta) * gauss + eta * lor
 
     r_g = np.sqrt(G[0] ** 2 + G[1] ** 2 + G[2] ** 2)
-    denom = 2.0 * np.pi * r_g * r_g * np.maximum(np.cos(theta), 1e-12)
+    # Keep the same geometry-normalization used by the simulation kernel.
+    # Dividing by cos(theta) creates pole amplification when eta>0 (Lorentzian
+    # tails), which collapses the color scale and makes the distribution appear
+    # to vanish.
+    denom = 2.0 * np.pi * r_g * r_g
     return omega / denom
 
 
@@ -180,28 +185,99 @@ def parse_args():
 def main():
     args = parse_args()
 
-    fig = plt.figure(figsize=(12, 5))
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax2 = fig.add_subplot(1, 2, 2, projection="3d")
+    fig = plt.figure(figsize=(13, 7))
+    gs = fig.add_gridspec(1, 2, left=0.06, right=0.98, top=0.95, bottom=0.33, wspace=0.22)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1], projection="3d")
 
-    plot_omega(ax1, args.sigma_deg, args.gamma_deg, args.eta, args.half_range_deg)
-    plot_bragg_sphere(
-        ax2,
-        args.H,
-        args.K,
-        args.L,
-        args.a,
-        args.c,
-        args.sphere_res,
-        args.sigma_deg,
-        args.gamma_deg,
-        args.eta,
-        args.color_scale,
-        args.vmin_percentile,
-        args.vmax_percentile,
+    state = {
+        "H": int(args.H),
+        "K": int(args.K),
+        "L": int(args.L),
+        "sigma_deg": float(args.sigma_deg),
+        "gamma_deg": float(args.gamma_deg),
+        "eta": float(args.eta),
+    }
+
+    def redraw():
+        ax1.cla()
+        ax2.cla()
+        plot_omega(ax1, state["sigma_deg"], state["gamma_deg"], state["eta"], args.half_range_deg)
+        plot_bragg_sphere(
+            ax2,
+            state["H"],
+            state["K"],
+            state["L"],
+            args.a,
+            args.c,
+            args.sphere_res,
+            state["sigma_deg"],
+            state["gamma_deg"],
+            state["eta"],
+            args.color_scale,
+            args.vmin_percentile,
+            args.vmax_percentile,
+        )
+        fig.suptitle(
+            (
+                f"HKL=({state['H']},{state['K']},{state['L']})   "
+                f"sigma={state['sigma_deg']:.3f} deg   "
+                f"gamma={state['gamma_deg']:.3f} deg   "
+                f"eta={state['eta']:.3f}"
+            ),
+            fontsize=11,
+        )
+        fig.canvas.draw_idle()
+
+    redraw()
+
+    ax_sigma = fig.add_axes([0.10, 0.22, 0.55, 0.03])
+    ax_gamma = fig.add_axes([0.10, 0.17, 0.55, 0.03])
+    ax_eta = fig.add_axes([0.10, 0.12, 0.55, 0.03])
+
+    sigma_slider = Slider(
+        ax_sigma, "sigma (deg)", 0.01, 5.0, valinit=state["sigma_deg"], valstep=0.01
     )
+    gamma_slider = Slider(
+        ax_gamma, "gamma (deg)", 0.01, 5.0, valinit=state["gamma_deg"], valstep=0.01
+    )
+    eta_slider = Slider(ax_eta, "eta", 0.0, 1.0, valinit=state["eta"], valstep=0.01)
 
-    fig.tight_layout()
+    def _on_profile_change(_val):
+        state["sigma_deg"] = float(sigma_slider.val)
+        state["gamma_deg"] = float(gamma_slider.val)
+        state["eta"] = float(eta_slider.val)
+        redraw()
+
+    sigma_slider.on_changed(_on_profile_change)
+    gamma_slider.on_changed(_on_profile_change)
+    eta_slider.on_changed(_on_profile_change)
+
+    ax_h = fig.add_axes([0.72, 0.205, 0.07, 0.05])
+    ax_k = fig.add_axes([0.81, 0.205, 0.07, 0.05])
+    ax_l = fig.add_axes([0.90, 0.205, 0.07, 0.05])
+    h_box = TextBox(ax_h, "H", initial=str(state["H"]))
+    k_box = TextBox(ax_k, "K", initial=str(state["K"]))
+    l_box = TextBox(ax_l, "L", initial=str(state["L"]))
+
+    ax_apply = fig.add_axes([0.72, 0.12, 0.25, 0.06])
+    apply_button = Button(ax_apply, "Apply H,K,L")
+
+    def _apply_hkl(_event=None):
+        try:
+            state["H"] = int(round(float(h_box.text.strip())))
+            state["K"] = int(round(float(k_box.text.strip())))
+            state["L"] = int(round(float(l_box.text.strip())))
+        except ValueError:
+            print("Invalid H/K/L input. Enter numeric values.")
+            return
+        redraw()
+
+    apply_button.on_clicked(_apply_hkl)
+    h_box.on_submit(_apply_hkl)
+    k_box.on_submit(_apply_hkl)
+    l_box.on_submit(_apply_hkl)
+
     plt.show()
 
 

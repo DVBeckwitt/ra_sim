@@ -217,7 +217,6 @@ def compute_intensity_array(Qx, Qy, Qz,
     Gr = np.sqrt(Gx*Gx + Gy*Gy)
     theta0 = np.arctan2(Gz, Gr)
 
-    eps = 1e-12
     denom_base = 2.0 * np.pi * G_mag * G_mag
 
     intensities = np.empty_like(Qx)
@@ -235,10 +234,10 @@ def compute_intensity_array(Qx, Qy, Qz,
         lor_val   = A_lor   / (1.0 + (dtheta / gamma_pv)**2)
         omega = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
 
-        cos_th = np.cos(theta)
-        if cos_th < eps:
-            cos_th = eps
-        out_flat[i] = omega / (denom_base * cos_th)
+        # Keep a geometry normalization that is stable for pseudo-Voigt tails.
+        # The previous 1/cos(theta) factor caused pole amplification when eta>0
+        # (Lorentzian component), which collapsed Bragg-sphere color scales.
+        out_flat[i] = omega / denom_base
 
     return intensities
 
@@ -404,6 +403,42 @@ def intersect_line_plane(P0, k_vec, P_plane, n_plane):
         return (np.nan, np.nan, np.nan, False)
     if t < 0.0:
         t = 0.0
+    ix = P0[0] + t*k_vec[0]
+    iy = P0[1] + t*k_vec[1]
+    iz = P0[2] + t*k_vec[2]
+    return (ix, iy, iz, True)
+
+
+@njit
+def intersect_infinite_line_plane(P0, k_vec, P_plane, n_plane):
+    """
+    Intersect an infinite line (start=P0, direction=k_vec) with a plane.
+    Unlike ``intersect_line_plane`` this does not reject negative t values.
+    """
+    denom = k_vec[0]*n_plane[0] + k_vec[1]*n_plane[1] + k_vec[2]*n_plane[2]
+    if abs(denom) < 1e-14:
+        # Parallel direction: project start point orthogonally onto the plane
+        # instead of declaring "no hit", avoiding artificial horizon cutoffs.
+        dist = ((P0[0] - P_plane[0]) * n_plane[0]
+              + (P0[1] - P_plane[1]) * n_plane[1]
+              + (P0[2] - P_plane[2]) * n_plane[2])
+        n_sq = (
+            n_plane[0]*n_plane[0]
+            + n_plane[1]*n_plane[1]
+            + n_plane[2]*n_plane[2]
+        )
+        if n_sq < 1e-20:
+            return (np.nan, np.nan, np.nan, False)
+        scale = dist / n_sq
+        ix = P0[0] - scale * n_plane[0]
+        iy = P0[1] - scale * n_plane[1]
+        iz = P0[2] - scale * n_plane[2]
+        return (ix, iy, iz, True)
+
+    num = ((P_plane[0] - P0[0]) * n_plane[0]
+         + (P_plane[1] - P0[1]) * n_plane[1]
+         + (P_plane[2] - P0[2]) * n_plane[2])
+    t = num / denom
     ix = P0[0] + t*k_vec[0]
     iy = P0[1] + t*k_vec[1]
     iz = P0[2] + t*k_vec[2]
@@ -923,8 +958,12 @@ def calculate_phi(
                        * np.exp(-2.0*im_k_z_f * L_out)
 
             # external exit angles for detector mapping (existing code)
-            # Fold exit angles to the detector side to avoid a hard horizon line.
-            twotheta_t = np.arccos(_clamp(np.cos(twotheta_t_prime)* np.real(n2), -1.0, 1.0))
+            # Preserve the exit-side sign so both detector half-planes remain
+            # populated as theta_i changes.
+            twotheta_t = (
+                np.arccos(_clamp(np.cos(twotheta_t_prime) * np.real(n2), -1.0, 1.0))
+                * np.sign(twotheta_t_prime)
+            )
             phi_f = np.arctan2(k_tx_prime, k_ty_prime)
             k_tx_f = k_scat*np.cos(twotheta_t)*np.sin(phi_f)
             k_ty_f = k_scat*np.cos(twotheta_t)*np.cos(phi_f)
@@ -1165,6 +1204,8 @@ def process_peaks_parallel(
         H = float(miller[i_pk, 0])
         K = float(miller[i_pk, 1])
         L = float(miller[i_pk, 2])
+        if L < 0.0:
+            continue
         reflI= intensities[i_pk]
 
         # We'll do a reflection-level call to calculate_phi
@@ -1196,6 +1237,18 @@ def process_peaks_parallel(
         hit_tables[i_pk] = pixel_hits
         miss_tables[i_pk] = missed_arr
     return image, hit_tables, q_data, q_count, all_status, miss_tables
+
+
+def process_peaks_parallel_safe(*args, **kwargs):
+    """Run ``process_peaks_parallel`` with Python fallback if JIT execution fails."""
+
+    try:
+        return process_peaks_parallel(*args, **kwargs)
+    except Exception:
+        py_runner = getattr(process_peaks_parallel, "py_func", None)
+        if callable(py_runner):
+            return py_runner(*args, **kwargs)
+        raise
 
 
 def hit_tables_to_max_positions(hit_tables):
@@ -1316,6 +1369,18 @@ def process_qr_rods_parallel(
     )
 
     return (*result, degeneracy)
+
+
+def process_qr_rods_parallel_safe(*args, **kwargs):
+    """Run ``process_qr_rods_parallel`` with Python fallback if needed."""
+
+    try:
+        return process_qr_rods_parallel(*args, **kwargs)
+    except Exception:
+        py_runner = getattr(process_qr_rods_parallel, "py_func", None)
+        if callable(py_runner):
+            return py_runner(*args, **kwargs)
+        raise
 
 
 def debug_detector_paths(
