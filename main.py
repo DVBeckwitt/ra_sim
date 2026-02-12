@@ -2116,7 +2116,7 @@ def _apply_range_entry(entry_var, value_var, slider):
     clamped = min(max(entered, min(lo, hi)), max(lo, hi))
     value_var.set(clamped)
     _sync_range_text_vars()
-    schedule_update()
+    schedule_range_update()
 
 
 def _on_range_var_write(*_args):
@@ -2130,25 +2130,25 @@ def tth_min_slider_command(val):
     val_f = float(val)
     tth_min_var.set(val_f)
     _sync_range_text_vars()
-    schedule_update()
+    schedule_range_update()
 
 def tth_max_slider_command(val):
     val_f = float(val)
     tth_max_var.set(val_f)
     _sync_range_text_vars()
-    schedule_update()
+    schedule_range_update()
 
 def phi_min_slider_command(val):
     val_f = float(val)
     phi_min_var.set(val_f)
     _sync_range_text_vars()
-    schedule_update()
+    schedule_range_update()
 
 def phi_max_slider_command(val):
     val_f = float(val)
     phi_max_var.set(val_f)
     _sync_range_text_vars()
-    schedule_update()
+    schedule_range_update()
 
 range_cf = CollapsibleFrame(plot_frame_1d, text='Integration Ranges', expanded=True)
 range_cf.pack(side=tk.TOP, fill=tk.X, pady=5)
@@ -2335,6 +2335,9 @@ def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     radial_2theta = res2.radial
     azimuth_vals = _adjust_phi_zero(res2.azimuthal)
 
+    tth_min, tth_max = sorted((float(tth_min), float(tth_max)))
+    phi_min, phi_max = sorted((float(phi_min), float(phi_max)))
+
     mask_rad = (radial_2theta >= tth_min) & (radial_2theta <= tth_max)
     radial_filtered = radial_2theta[mask_rad]
 
@@ -2436,6 +2439,104 @@ last_res2_background = None
 last_res2_sim = None
 _ai_cache = {}
 
+
+def _clear_1d_plot_cache_and_lines():
+    line_1d_rad.set_data([], [])
+    line_1d_az.set_data([], [])
+    line_1d_rad_bg.set_data([], [])
+    line_1d_az_bg.set_data([], [])
+    canvas_1d.draw_idle()
+    last_1d_integration_data["radials_sim"] = None
+    last_1d_integration_data["intensities_2theta_sim"] = None
+    last_1d_integration_data["azimuths_sim"] = None
+    last_1d_integration_data["intensities_azimuth_sim"] = None
+    last_1d_integration_data["radials_bg"] = None
+    last_1d_integration_data["intensities_2theta_bg"] = None
+    last_1d_integration_data["azimuths_bg"] = None
+    last_1d_integration_data["intensities_azimuth_bg"] = None
+
+
+def _update_1d_plots_from_caked(sim_res2, bg_res2):
+    i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
+        sim_res2,
+        tth_min_var.get(),
+        tth_max_var.get(),
+        phi_min_var.get(),
+        phi_max_var.get(),
+    )
+    last_1d_integration_data["radials_sim"] = rad_sim
+    last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
+    last_1d_integration_data["azimuths_sim"] = az_sim
+    last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
+
+    scale = _get_scale_factor_value(default=1.0)
+    line_1d_rad.set_data(rad_sim, i2t_sim * scale)
+    line_1d_az.set_data(az_sim, i_phi_sim * scale)
+
+    if bg_res2 is not None:
+        i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
+            bg_res2,
+            tth_min_var.get(),
+            tth_max_var.get(),
+            phi_min_var.get(),
+            phi_max_var.get(),
+        )
+        last_1d_integration_data["radials_bg"] = rad_bg
+        last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
+        last_1d_integration_data["azimuths_bg"] = az_bg
+        last_1d_integration_data["intensities_azimuth_bg"] = i_phi_bg
+        line_1d_rad_bg.set_data(rad_bg, i2t_bg)
+        line_1d_az_bg.set_data(az_bg, i_phi_bg)
+    else:
+        line_1d_rad_bg.set_data([], [])
+        line_1d_az_bg.set_data([], [])
+        last_1d_integration_data["radials_bg"] = None
+        last_1d_integration_data["intensities_2theta_bg"] = None
+        last_1d_integration_data["azimuths_bg"] = None
+        last_1d_integration_data["intensities_azimuth_bg"] = None
+
+    ax_1d_radial.set_yscale('log' if log_radial_var.get() else 'linear')
+    ax_1d_azim.set_yscale('log' if log_azimuth_var.get() else 'linear')
+    ax_1d_radial.relim()
+    ax_1d_radial.autoscale_view()
+    ax_1d_azim.relim()
+    ax_1d_azim.autoscale_view()
+    canvas_1d.draw_idle()
+
+
+def _refresh_integration_from_cached_results():
+    global last_res2_sim, last_res2_background
+
+    ai = _ai_cache.get("ai")
+    if not show_1d_var.get():
+        _clear_1d_plot_cache_and_lines()
+        update_integration_region_visuals(ai, last_res2_sim)
+        canvas.draw_idle()
+        return True
+
+    if unscaled_image_global is None:
+        return False
+
+    if ai is None:
+        return False
+
+    if last_res2_sim is None:
+        last_res2_sim = caking(unscaled_image_global, ai)
+
+    bg_res2 = None
+    native_background = _get_current_background_backend()
+    if background_visible and native_background is not None:
+        if last_res2_background is None:
+            last_res2_background = caking(native_background, ai)
+        bg_res2 = last_res2_background
+    else:
+        last_res2_background = None
+
+    _update_1d_plots_from_caked(last_res2_sim, bg_res2)
+    update_integration_region_visuals(ai, last_res2_sim)
+    canvas.draw_idle()
+    return True
+
 def update_mosaic_cache():
     """
     Regenerate random mosaic profiles if mosaic sliders changed.
@@ -2474,14 +2575,38 @@ line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 
 update_pending = None
+integration_update_pending = None
 update_running = False
 
 def schedule_update():
     """Throttle updates so heavy simulations don't overlap."""
-    global update_pending
+    global update_pending, integration_update_pending
+    if integration_update_pending is not None:
+        root.after_cancel(integration_update_pending)
+        integration_update_pending = None
     if update_pending is not None:
         root.after_cancel(update_pending)
     update_pending = root.after(100, do_update)
+
+
+def _run_scheduled_range_update():
+    global integration_update_pending
+    integration_update_pending = None
+
+    if update_running:
+        schedule_range_update(delay_ms=40)
+        return
+
+    if not _refresh_integration_from_cached_results():
+        schedule_update()
+
+
+def schedule_range_update(delay_ms=20):
+    """Debounced fast-path updates for integration range controls."""
+    global integration_update_pending
+    if integration_update_pending is not None:
+        root.after_cancel(integration_update_pending)
+    integration_update_pending = root.after(delay_ms, _run_scheduled_range_update)
 
 peak_positions = []
 peak_millers = []
@@ -2507,6 +2632,7 @@ def do_update():
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global av2, cv2
     global last_caked_image_unscaled, last_caked_extent
+    global last_res2_sim, last_res2_background
 
     if update_running:
         # another update is in progress; try again shortly
@@ -2848,6 +2974,7 @@ def do_update():
 
     # Caked 2D or normal 2D?
     sim_res2 = None
+    bg_res2 = None
     if show_caked_2d_var.get() and unscaled_image_global is not None:
         sim_res2 = caking(unscaled_image_global, ai)
         caked_img = sim_res2.intensity
@@ -2898,7 +3025,8 @@ def do_update():
         background_caked_available = False
         native_background = _get_current_background_backend()
         if background_visible and native_background is not None:
-            bg_res2 = caking(native_background, ai)
+            if bg_res2 is None:
+                bg_res2 = caking(native_background, ai)
             bg_caked = bg_res2.intensity
             bg_radial = np.asarray(bg_res2.radial, dtype=float)
             bg_azimuth = _wrap_phi_range(_adjust_phi_zero(bg_res2.azimuthal))
@@ -2992,68 +3120,19 @@ def do_update():
     if show_1d_var.get() and unscaled_image_global is not None:
         if sim_res2 is None:
             sim_res2 = caking(unscaled_image_global, ai)
-        i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
-            sim_res2,
-            tth_min_var.get(),
-            tth_max_var.get(),
-            phi_min_var.get(),
-            phi_max_var.get()
-        )
-        last_1d_integration_data["radials_sim"] = rad_sim
-        last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
-        last_1d_integration_data["azimuths_sim"] = az_sim
-        last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
-
-        scale = _get_scale_factor_value(default=1.0)
-        line_1d_rad.set_data(rad_sim, i2t_sim * scale)
-        line_1d_az.set_data(az_sim, i_phi_sim * scale)
 
         native_background = _get_current_background_backend()
         if background_visible and native_background is not None:
-            bg_res2 = caking(native_background, ai)
-            i2t_bg, i_phi_bg, az_bg, rad_bg = caked_up(
-                bg_res2,
-                tth_min_var.get(),
-                tth_max_var.get(),
-                phi_min_var.get(),
-                phi_max_var.get()
-            )
-            last_1d_integration_data["radials_bg"] = rad_bg
-            last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
-            last_1d_integration_data["azimuths_bg"] = az_bg
-            last_1d_integration_data["intensities_azimuth_bg"] = i_phi_bg
-            line_1d_rad_bg.set_data(rad_bg, i2t_bg)
-            line_1d_az_bg.set_data(az_bg, i_phi_bg)
+            if bg_res2 is None:
+                bg_res2 = caking(native_background, ai)
         else:
-            line_1d_rad_bg.set_data([], [])
-            line_1d_az_bg.set_data([], [])
-            last_1d_integration_data["radials_bg"] = None
-            last_1d_integration_data["intensities_2theta_bg"] = None
-            last_1d_integration_data["azimuths_bg"] = None
-            last_1d_integration_data["intensities_azimuth_bg"] = None
-
-        ax_1d_radial.set_yscale('log' if log_radial_var.get() else 'linear')
-        ax_1d_azim.set_yscale('log' if log_azimuth_var.get() else 'linear')
-
-        ax_1d_radial.relim()
-        ax_1d_radial.autoscale_view()
-        ax_1d_azim.relim()
-        ax_1d_azim.autoscale_view()
-        canvas_1d.draw_idle()
+            bg_res2 = None
+        _update_1d_plots_from_caked(sim_res2, bg_res2)
     else:
-        line_1d_rad.set_data([], [])
-        line_1d_az.set_data([], [])
-        line_1d_rad_bg.set_data([], [])
-        line_1d_az_bg.set_data([], [])
-        canvas_1d.draw_idle()
-        last_1d_integration_data["radials_sim"] = None
-        last_1d_integration_data["intensities_2theta_sim"] = None
-        last_1d_integration_data["azimuths_sim"] = None
-        last_1d_integration_data["intensities_azimuth_sim"] = None
-        last_1d_integration_data["radials_bg"] = None
-        last_1d_integration_data["intensities_2theta_bg"] = None
-        last_1d_integration_data["azimuths_bg"] = None
-        last_1d_integration_data["intensities_azimuth_bg"] = None
+        _clear_1d_plot_cache_and_lines()
+
+    last_res2_sim = sim_res2
+    last_res2_background = bg_res2
 
     apply_scale_factor_to_existing_results(update_limits=True)
 
@@ -4574,7 +4653,7 @@ fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
 
 show_1d_var = tk.BooleanVar(value=False)
 def toggle_1d_plots():
-    schedule_update()
+    schedule_range_update()
 
 check_1d = ttk.Checkbutton(
     text="Show 1D Integration",
@@ -4601,10 +4680,10 @@ log_radial_var = tk.BooleanVar(value=False)
 log_azimuth_var = tk.BooleanVar(value=False)
 
 def toggle_log_radial():
-    schedule_update()
+    schedule_range_update()
 
 def toggle_log_azimuth():
-    schedule_update()
+    schedule_range_update()
 
 check_log_radial = ttk.Checkbutton(
     text="Log Radial",

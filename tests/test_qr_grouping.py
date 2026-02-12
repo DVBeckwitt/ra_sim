@@ -186,7 +186,7 @@ def test_combine_ht_caches_preserves_deg():
     assert np.allclose(combined[1]["I"], manual_I)
 
 
-def test_process_qr_rods_parallel_scales_with_degeneracy(monkeypatch):
+def test_process_qr_rods_parallel_preserves_qr_intensity(monkeypatch):
     captured = {}
 
     def fake_process_peaks_parallel(miller, intensities, *args, **kwargs):
@@ -240,5 +240,5 @@ def test_process_qr_rods_parallel_scales_with_degeneracy(monkeypatch):
         save_flag=0,
     )
 
-    assert np.allclose(captured["intensities"], np.array([1.0, 2.0]) * 3)
+    assert np.allclose(captured["intensities"], np.array([1.0, 2.0]))
     assert np.array_equal(result[-1], np.array([3, 3], dtype=np.int32))

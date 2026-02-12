@@ -676,11 +676,15 @@ def process_qr_rods_parallel_debug(
     n_detector,
     save_flag,
 ):
-    """Wrapper to debug-process rods instead of individual reflections."""
+    """Wrapper to debug-process rods instead of individual reflections.
+
+    ``qr_dict_to_arrays`` already aggregates symmetry-equivalent HK pairs into
+    each rod intensity, so pass intensities through unchanged to avoid applying
+    degeneracy twice.
+    """
     from ra_sim.utils.stacking_fault import qr_dict_to_arrays
 
     miller, intens, degeneracy, _ = qr_dict_to_arrays(qr_dict)
-    intens = intens * degeneracy
 
     result = process_peaks_parallel_debug(
         miller,

@@ -889,9 +889,9 @@ def calculate_phi(
         # Fresnel transmission at entry (amplitude -> intensity).
         # Use both s- and p-polarizations and average for an unpolarized beam.
         # fresnel_transmission signature: (grazing_angle, refractive_index,
-        #                                s_polarization=True, direction="in")
-        Ti_s = fresnel_transmission(th_i_prime, n2, True, "in")
-        Ti_p = fresnel_transmission(th_i_prime, n2, False, "in")
+        #                                s_polarization=True, incoming=True)
+        Ti_s = fresnel_transmission(th_i_prime, n2, True, True)
+        Ti_p = fresnel_transmission(th_i_prime, n2, False, True)
         Ti2 = 0.5 * (
             (np.real(Ti_s)*np.real(Ti_s) + np.imag(Ti_s)*np.imag(Ti_s))
             + (np.real(Ti_p)*np.real(Ti_p) + np.imag(Ti_p)*np.imag(Ti_p))
@@ -938,8 +938,8 @@ def calculate_phi(
             th_t_out = np.abs(twotheta_t_prime)
             # Exit transmission amplitude and kz for exit leg.
             # Use both polarizations and average for an unpolarized beam.
-            Tf_s = fresnel_transmission(th_t_out, n2, True, "out")
-            Tf_p = fresnel_transmission(th_t_out, n2, False, "out")
+            Tf_s = fresnel_transmission(th_t_out, n2, True, False)
+            Tf_p = fresnel_transmission(th_t_out, n2, False, False)
             Tf2 = 0.5 * (
                 (np.real(Tf_s)*np.real(Tf_s) + np.imag(Tf_s)*np.imag(Tf_s))
                 + (np.real(Tf_p)*np.real(Tf_p) + np.imag(Tf_p)*np.imag(Tf_p))
@@ -1320,16 +1320,15 @@ def process_qr_rods_parallel(
 
     The Hendricks–Teller preprocessing groups symmetry-related in-plane peaks
     into ``Qr`` rods and records how many peaks contributed to each rod in the
-    ``deg`` field.  Simulation requires the total scattered intensity per rod, so
-    we scale the intensity array by this degeneracy before delegating to the
-    standard peak-processing routine.  The degeneracy array is returned so that
-    downstream code can, if needed, relate each processed reflection back to the
-    number of symmetry-equivalent HK pairs that produced it.
+    ``deg`` field.  ``qr_dict_to_arrays`` already returns rod intensities as the
+    total summed intensity over the grouped HK pairs, so we forward that array
+    unchanged to avoid double-counting.  The degeneracy array is returned so
+    downstream code can still track how many symmetry-equivalent HK pairs
+    contributed to each rod.
     """
     from ra_sim.utils.stacking_fault import qr_dict_to_arrays
 
     miller, intensities, degeneracy, _ = qr_dict_to_arrays(qr_dict)
-    intensities = intensities * degeneracy
 
     result = process_peaks_parallel(
         miller,
