@@ -55,6 +55,8 @@ Project document: [`docs/gui_views.md`](docs/gui_views.md)
 
 The simulation image is the main diffraction workspace. It shows the modeled detector pattern and is the first view to use when checking whether the overall ring/cap geometry and intensity distribution match experiment.
 
+![Simulation View](docs/images/simulation.png)
+
 ### 2) Phi-vs-Theta and Integration
 
 Use integration views next:
@@ -65,13 +67,21 @@ Use integration views next:
 
 This stage is where you validate alignment and shape in reduced coordinates before deeper refinement.
 
+![Phi-vs-Theta View](docs/images/phivstheta.png)
+
+![Integration View](docs/images/integration.png)
+
 ### 3) Calibrant
 
 Calibrant mode (hBN fitter) is for detector geometry and tilt setup from ring data. You load calibrant/dark files, fit rings, refine, and save/load NPZ bundles that feed cleaner starting geometry back into simulation.
 
+![Calibrant View](docs/images/calibrant.png)
+
 ### 4) Parameters
 
 The parameters panel controls geometry, lattice values, mosaic broadening, beam center, stacking probabilities, occupancies, and fit toggles. It is the main control surface for iterative refinement and reproducible save/load workflows.
+
+![Parameters View](docs/images/parameters.png)
 
 ### Optics Transport Modes
 
