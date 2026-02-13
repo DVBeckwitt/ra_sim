@@ -1,7 +1,13 @@
+import io
+from contextlib import redirect_stderr, redirect_stdout
 import numpy as np
 from pathlib import Path
+import Dans_Diffraction as dif
 from ra_sim.utils.stacking_fault import (
+    _F2,
     _cell_c_from_cif,
+    _energy_kev_from_lambda,
+    _sites_from_cif_with_factors,
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
     qr_dict_to_arrays,
@@ -107,6 +113,42 @@ def test_two_theta_window_scales_with_c_axis():
     expanded_L = expanded_curves[hk]['L']
     assert expanded_L.size >= base_L.size
     assert expanded_L.max() > base_L.max()
+
+
+def test_structure_factor_tracks_bragg_shape_for_three_c_indexing():
+    cif = Path('tests/Diffuse/PbI2_2H.cif')
+    c_2h = _cell_c_from_cif(str(cif))
+    c_3c = 3.0 * c_2h
+    energy_kev = _energy_kev_from_lambda(1.54)
+    sites = _sites_from_cif_with_factors(str(cif), occ_factors=1.0)
+
+    xtl = dif.Crystal(str(cif))
+    xtl.Symmetry.generate_matrices()
+    xtl.generate_structure()
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=energy_kev)
+    xtl.Scatter.integer_hkl = True
+
+    l_vals = np.arange(1, 15, dtype=float)
+    L_vals = 3.0 * l_vals
+
+    for h, k in ((1, 0), (2, 0), (1, 1)):
+        f2_vals = _F2(h, k, L_vals, c_3c, energy_kev, sites)
+        bragg_vals = np.array(
+            [
+                float(np.asarray(xtl.Scatter.intensity([h, k, int(l)])).reshape(-1)[0])
+                for l in l_vals
+            ],
+            dtype=float,
+        )
+
+        assert np.max(f2_vals) > 0.0
+        assert np.max(bragg_vals) > 0.0
+
+        f2_norm = f2_vals / np.max(f2_vals)
+        bragg_norm = bragg_vals / np.max(bragg_vals)
+        corr = float(np.corrcoef(f2_norm, bragg_norm)[0, 1])
+        assert corr > 0.995
 
 
 def test_finite_stack_converges_to_infinite():

@@ -210,22 +210,23 @@ def f_comp(el_sym: str, Q: np.ndarray, energy_kev: float) -> np.ndarray:
     return out.reshape(Q.shape)
 
 
-def _Qmag(h: int, k: int, L: np.ndarray, c_2h: float) -> np.ndarray:
+def _Qmag(h: int, k: int, L: np.ndarray, c_axis: float) -> np.ndarray:
     """
-    |Q| for a hexagonal lattice using the diffuse_cif_toggle convention:
+    |Q| for a hexagonal lattice in the active L-axis convention:
     Q = 2π * sqrt( (4/3)*(h^2+k^2+hk)/a^2 + (L^2)/c^2 )
-    where L is the dimensionless ℓ coordinate and c is the 2H c parameter.
+    where L is the dimensionless ℓ coordinate and c matches that coordinate
+    system (e.g. c_2h for legacy 2H L, or c_lattice for 3c-scaled L).
     """
-    inv_d2 = (4.0/3.0)*(h*h + k*k + h*k)/A_HEX**2 + (L**2)/(c_2h**2)
+    inv_d2 = (4.0/3.0)*(h*h + k*k + h*k)/A_HEX**2 + (L**2)/(c_axis**2)
     return 2.0*np.pi*np.sqrt(inv_d2)
 
 
-def _F2(h: int, k: int, L: np.ndarray, c_2h: float, energy_kev: float, sites) -> np.ndarray:
+def _F2(h: int, k: int, L: np.ndarray, c_axis: float, energy_kev: float, sites) -> np.ndarray:
     """
     Return |F|^2 using the same single-layer phase used in diffuse_cif_toggle:
     phase = exp(2πi[hx + ky + L*(z/3)])
     """
-    Q = _Qmag(h, k, L, c_2h)
+    Q = _Qmag(h, k, L, c_axis)
     F = np.zeros_like(Q, dtype=complex)
     for x, y, z, sym, occ in sites:
         ff = f_comp(sym, Q, energy_kev)
@@ -363,7 +364,7 @@ def _get_base_curves(
 
     Conventions align with diffuse_cif_toggle:
       - c_2h is read directly from the CIF (no 3x).
-      - Q uses 2π*sqrt(radial + (L/c)^2).
+      - Q uses 2π*sqrt(radial + (L/c)^2) with c matching the active L axis.
       - Phase uses z/3 in the vertical factor.
     """
     import itertools, math
@@ -407,17 +408,18 @@ def _get_base_curves(
     energy_kev = _energy_kev_from_lambda(lambda_)
     out: dict[tuple, dict] = {}
 
+    if c_lattice is None or not math.isfinite(float(c_lattice)) or float(c_lattice) <= 0.0:
+        c_effective = c_2h
+    else:
+        c_effective = float(c_lattice)
+
     if two_theta_max is None:
         base_L = np.arange(0.0, L_max + L_step / 2.0, L_step)
         for h, k in hk_list:
-            F2 = _F2(h, k, base_L, c_2h, energy_kev, sites)
+            F2 = _F2(h, k, base_L, c_effective, energy_kev, sites)
             out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4.0 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2.0))
-        if c_lattice is None or not math.isfinite(float(c_lattice)) or float(c_lattice) <= 0.0:
-            c_effective = c_2h
-        else:
-            c_effective = float(c_lattice)
         for h, k in hk_list:
             const = (4.0 / 3.0) * (h*h + k*k + h*k) / (A_HEX**2)
             l_sq = (q_max / (2.0 * math.pi))**2 - const
@@ -427,7 +429,7 @@ def _get_base_curves(
                 continue
             L_max_local = c_effective * math.sqrt(l_sq)
             L_vals = np.arange(0.0, L_max_local + L_step / 2.0, L_step)
-            F2 = _F2(h, k, L_vals, c_2h, energy_kev, sites)
+            F2 = _F2(h, k, L_vals, c_effective, energy_kev, sites)
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
@@ -463,8 +465,8 @@ def ht_Iinf_dict(
     to diffuse_cif_toggle.py. The 'occ' parameter is applied per generated
     structure site (symmetry-expanded), so Pb/I1/I2 can be controlled
     independently when the structure contains those three positions.
-    When ``c_lattice`` is provided the
-    two-theta clipping window is expanded or contracted according to that
+    When ``c_lattice`` is provided it defines the active L-axis convention:
+    both the two-theta clipping window and the Qz scaling inside F² use that
     effective c-axis length instead of the raw 2H value from the CIF.
     When ``finite_stack`` is ``True`` the per-layer finite-thickness factor for
     ``stack_layers`` layers is applied instead of the infinite-domain limit.
