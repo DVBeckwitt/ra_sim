@@ -47,6 +47,32 @@ run_ra_sim.bat hbn-fit
 
 The application loads example images specified in `config/dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
 
+## GUI Views (What Each One Is)
+
+Project document: [`docs/gui_views.md`](docs/gui_views.md)
+
+### 1) Simulation
+
+The simulation image is the main diffraction workspace. It shows the modeled detector pattern and is the first view to use when checking whether the overall ring/cap geometry and intensity distribution match experiment.
+
+### 2) Phi-vs-Theta and Integration
+
+Use integration views next:
+
+- Radial integration (`2theta`) compares intensity vs scattering angle.
+- Azimuthal integration (`phi`) compares intensity vs azimuth.
+- 2D caked/integration view highlights region-specific mismatch.
+
+This stage is where you validate alignment and shape in reduced coordinates before deeper refinement.
+
+### 3) Calibrant
+
+Calibrant mode (hBN fitter) is for detector geometry and tilt setup from ring data. You load calibrant/dark files, fit rings, refine, and save/load NPZ bundles that feed cleaner starting geometry back into simulation.
+
+### 4) Parameters
+
+The parameters panel controls geometry, lattice values, mosaic broadening, beam center, stacking probabilities, occupancies, and fit toggles. It is the main control surface for iterative refinement and reproducible save/load workflows.
+
 ### Optics Transport Modes
 
 The GUI `Optics Transport` selector provides two named modes:
