@@ -2,9 +2,226 @@
 
 """Main application entry point for running the Tk based GUI."""
 
-import math
 import os
+import sys
+
 write_excel = False
+
+
+def _extract_bundle_arg(argv):
+    """Extract an optional --bundle value from CLI args."""
+
+    for idx, token in enumerate(argv):
+        if token.startswith("--bundle="):
+            value = token.split("=", 1)[1].strip()
+            return value or None
+        if token == "--bundle":
+            if idx + 1 < len(argv):
+                value = str(argv[idx + 1]).strip()
+                if value and not value.startswith("-"):
+                    return value
+            return None
+    return None
+
+
+def _quick_startup_mode_dialog():
+    """Ask startup mode before heavy simulation initialization."""
+
+    try:
+        import tkinter as _tk
+        from tkinter import ttk as _ttk
+    except Exception:
+        # Headless or Tk unavailable: default to simulation behavior.
+        return "simulation"
+
+    choice = {"mode": None}
+
+    launcher = _tk.Tk()
+    launcher.title("RA-SIM Launcher")
+    launcher.configure(bg="#e8eef5")
+    launcher.resizable(False, False)
+    launcher.attributes("-topmost", True)
+
+    try:
+        style = _ttk.Style(launcher)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+    except Exception:
+        pass
+
+    panel = _tk.Frame(
+        launcher,
+        bg="#ffffff",
+        highlightbackground="#d4deeb",
+        highlightthickness=1,
+    )
+    panel.pack(fill="both", expand=True, padx=18, pady=18)
+
+    _tk.Label(
+        panel,
+        text="Choose Startup Mode",
+        font=("Segoe UI", 16, "bold"),
+        fg="#0f172a",
+        bg="#ffffff",
+    ).pack(anchor="w", padx=18, pady=(18, 4))
+    _tk.Label(
+        panel,
+        text="Select what you want to run right now.",
+        font=("Segoe UI", 10),
+        fg="#475569",
+        bg="#ffffff",
+    ).pack(anchor="w", padx=18, pady=(0, 14))
+
+    def _set_mode(mode_name):
+        choice["mode"] = mode_name
+        launcher.destroy()
+
+    sim_btn = _tk.Button(
+        panel,
+        text="Run Simulation GUI",
+        font=("Segoe UI", 11, "bold"),
+        bg="#2563eb",
+        fg="#ffffff",
+        activebackground="#1d4ed8",
+        activeforeground="#ffffff",
+        relief="flat",
+        bd=0,
+        padx=14,
+        pady=10,
+        cursor="hand2",
+        command=lambda: _set_mode("simulation"),
+    )
+    sim_btn.pack(fill="x", padx=18, pady=(0, 6))
+    _tk.Label(
+        panel,
+        text="Full RA-SIM simulation workspace and controls.",
+        font=("Segoe UI", 9),
+        fg="#64748b",
+        bg="#ffffff",
+    ).pack(anchor="w", padx=20, pady=(0, 12))
+
+    cal_btn = _tk.Button(
+        panel,
+        text="Fit Calibrant (hBN Fitter)",
+        font=("Segoe UI", 11, "bold"),
+        bg="#0f766e",
+        fg="#ffffff",
+        activebackground="#0f5f59",
+        activeforeground="#ffffff",
+        relief="flat",
+        bd=0,
+        padx=14,
+        pady=10,
+        cursor="hand2",
+        command=lambda: _set_mode("calibrant"),
+    )
+    cal_btn.pack(fill="x", padx=18, pady=(0, 6))
+    _tk.Label(
+        panel,
+        text="Open the calibrant fitting tool directly.",
+        font=("Segoe UI", 9),
+        fg="#64748b",
+        bg="#ffffff",
+    ).pack(anchor="w", padx=20, pady=(0, 16))
+
+    footer = _tk.Frame(panel, bg="#ffffff")
+    footer.pack(fill="x", padx=18, pady=(0, 16))
+    _tk.Label(
+        footer,
+        text="Keyboard: 1 = Simulation, 2 = Calibrant, Esc = Cancel",
+        font=("Segoe UI", 8),
+        fg="#64748b",
+        bg="#ffffff",
+    ).pack(side="left")
+    _tk.Button(
+        footer,
+        text="Cancel",
+        font=("Segoe UI", 9),
+        bg="#e2e8f0",
+        fg="#1e293b",
+        activebackground="#cbd5e1",
+        activeforeground="#1e293b",
+        relief="flat",
+        bd=0,
+        padx=12,
+        pady=6,
+        cursor="hand2",
+        command=lambda: _set_mode(None),
+    ).pack(side="right")
+
+    launcher.bind("<Escape>", lambda _event: _set_mode(None))
+    launcher.bind("<Return>", lambda _event: _set_mode("simulation"))
+    launcher.bind("1", lambda _event: _set_mode("simulation"))
+    launcher.bind("2", lambda _event: _set_mode("calibrant"))
+    launcher.protocol("WM_DELETE_WINDOW", lambda: _set_mode(None))
+
+    launcher.update_idletasks()
+    width = max(launcher.winfo_width(), 480)
+    height = max(launcher.winfo_height(), 330)
+    x = launcher.winfo_screenwidth() // 2 - width // 2
+    y = launcher.winfo_screenheight() // 2 - height // 2
+    launcher.geometry(f"{width}x{height}+{x}+{y}")
+    sim_btn.focus_set()
+    launcher.mainloop()
+
+    mode = choice["mode"]
+    if mode in {"simulation", "calibrant"}:
+        return mode
+    return None
+
+
+def _launch_calibrant_early(bundle_path=None):
+    """Run calibrant fitter directly from the lightweight startup path."""
+
+    import tkinter as _tk
+    from hbn_fitter.fitter import HBNFitterGUI
+
+    calibrant_root = _tk.Tk()
+    _ = HBNFitterGUI(calibrant_root, startup_bundle=bundle_path)
+    calibrant_root.mainloop()
+
+
+def _early_main_bootstrap():
+    """Handle startup routing before importing heavy simulation dependencies."""
+
+    if __name__ != "__main__":
+        return
+
+    argv = list(sys.argv[1:])
+    if argv and argv[0] in {"-h", "--help"}:
+        return
+
+    bundle_path = _extract_bundle_arg(argv)
+
+    if argv and argv[0] == "calibrant":
+        _launch_calibrant_early(bundle_path=bundle_path)
+        raise SystemExit(0)
+
+    if argv and argv[0] == "gui":
+        os.environ["RA_SIM_EARLY_STARTUP_MODE"] = "simulation"
+        return
+
+    if argv and not argv[0].startswith("--"):
+        # Preserve command-style usage via shared CLI without loading this
+        # module's heavy simulation globals.
+        from ra_sim.cli import main as cli_main
+
+        cli_main(argv)
+        raise SystemExit(0)
+
+    mode = _quick_startup_mode_dialog()
+    if mode == "calibrant":
+        _launch_calibrant_early(bundle_path=bundle_path)
+        raise SystemExit(0)
+    if mode == "simulation":
+        os.environ["RA_SIM_EARLY_STARTUP_MODE"] = "simulation"
+        return
+    raise SystemExit(0)
+
+
+_early_main_bootstrap()
+
+import math
 
 import re
 import argparse
@@ -32,7 +249,6 @@ import spglib
 import OSC_Reader
 from OSC_Reader import read_osc
 import numba
-import sys
 import pandas as pd
 import Dans_Diffraction as dif
 import CifFile
@@ -6939,7 +7155,95 @@ for idx, occ_var in enumerate(occ_vars):
     occ_entry_widgets.append(occ_entry)
 occ_entry_frame.columnconfigure(1, weight=1)
 
-def main(write_excel_flag=None):
+def _launch_calibrant_gui(startup_bundle=None):
+    """Launch the hBN calibrant fitter GUI from ``hbn_fitter/fitter.py``."""
+
+    try:
+        from hbn_fitter.fitter import HBNFitterGUI
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to import hbn_fitter GUI. Ensure hbn_fitter/fitter.py exists."
+        ) from exc
+
+    calibrant_root = tk.Tk()
+    _ = HBNFitterGUI(calibrant_root, startup_bundle=startup_bundle)
+    calibrant_root.mainloop()
+
+
+def _choose_startup_mode_gui():
+    """Ask whether to start the simulation GUI or calibrant fitter."""
+
+    selection = {"mode": None}
+
+    try:
+        root.withdraw()
+        fig_window.withdraw()
+    except tk.TclError:
+        pass
+
+    chooser = tk.Toplevel(root)
+    chooser.title("RA-SIM Startup")
+    chooser.resizable(False, False)
+    chooser.transient(root)
+    chooser.grab_set()
+
+    frame = ttk.Frame(chooser, padding=14)
+    frame.pack(fill=tk.BOTH, expand=True)
+
+    ttk.Label(
+        frame,
+        text="Choose startup mode:",
+        font=("Segoe UI", 11, "bold"),
+    ).pack(anchor="w")
+    ttk.Label(
+        frame,
+        text="Select calibrant fitting or full simulation GUI.",
+    ).pack(anchor="w", pady=(4, 10))
+
+    def _set_mode(mode_name):
+        selection["mode"] = mode_name
+        try:
+            chooser.grab_release()
+        except tk.TclError:
+            pass
+        chooser.destroy()
+
+    simulation_btn = ttk.Button(
+        frame,
+        text="Run Simulation GUI",
+        command=lambda: _set_mode("simulation"),
+    )
+    simulation_btn.pack(fill=tk.X, pady=2)
+
+    ttk.Button(
+        frame,
+        text="Fit Calibrant (hBN Fitter)",
+        command=lambda: _set_mode("calibrant"),
+    ).pack(fill=tk.X, pady=2)
+
+    ttk.Button(
+        frame,
+        text="Cancel",
+        command=lambda: _set_mode(None),
+    ).pack(fill=tk.X, pady=(8, 0))
+
+    chooser.protocol("WM_DELETE_WINDOW", lambda: _set_mode(None))
+    chooser.bind("<Escape>", lambda _event: _set_mode(None))
+    chooser.bind("<Return>", lambda _event: _set_mode("simulation"))
+
+    chooser.update_idletasks()
+    width = chooser.winfo_width()
+    height = chooser.winfo_height()
+    x = chooser.winfo_screenwidth() // 2 - width // 2
+    y = chooser.winfo_screenheight() // 2 - height // 2
+    chooser.geometry(f"{width}x{height}+{x}+{y}")
+
+    simulation_btn.focus_set()
+    root.wait_window(chooser)
+    return selection["mode"]
+
+
+def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     """Entry point for running the GUI application.
 
     Parameters
@@ -6948,11 +7252,41 @@ def main(write_excel_flag=None):
         When ``True`` the initial intensities are written to an Excel
         file in the configured downloads directory.  When ``None`` the
         value from the instrument configuration file is used.
+    startup_mode : {"prompt", "simulation", "calibrant"}, optional
+        Startup behavior. ``prompt`` shows a launcher GUI asking which mode
+        to run, ``simulation`` starts this GUI directly, and ``calibrant``
+        launches the hBN calibrant fitter.
+    calibrant_bundle : str or None, optional
+        Optional NPZ bundle path to preload when launching calibrant mode.
     """
 
     global write_excel
     if write_excel_flag is not None:
         write_excel = write_excel_flag
+
+    if startup_mode not in {"prompt", "simulation", "calibrant"}:
+        raise ValueError(
+            "startup_mode must be one of: prompt, simulation, calibrant"
+        )
+
+    resolved_mode = startup_mode
+    if resolved_mode == "prompt":
+        resolved_mode = _choose_startup_mode_gui()
+
+    if resolved_mode is None:
+        _shutdown_gui()
+        return
+
+    if resolved_mode == "calibrant":
+        _shutdown_gui()
+        _launch_calibrant_gui(startup_bundle=calibrant_bundle)
+        return
+
+    try:
+        root.deiconify()
+        fig_window.deiconify()
+    except tk.TclError:
+        pass
 
     params_file_path = get_path("parameters_file")
     profile_loaded = False
@@ -7005,17 +7339,55 @@ def main(write_excel_flag=None):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RA Simulation GUI")
+    cli_argv = list(sys.argv[1:])
+    early_mode = os.environ.get("RA_SIM_EARLY_STARTUP_MODE")
+    if cli_argv:
+        first_arg = cli_argv[0]
+        # Preserve command-style usage from this entrypoint by forwarding
+        # non-launcher commands to the shared RA-SIM CLI.
+        if first_arg not in {"gui", "calibrant", "-h", "--help"} and not first_arg.startswith("--"):
+            from ra_sim.cli import main as cli_main
+
+            cli_main(cli_argv)
+            raise SystemExit(0)
+
+    parser = argparse.ArgumentParser(description="RA Simulation launcher")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["gui", "calibrant"],
+        help=(
+            "Optional startup mode: 'gui' runs simulation directly; "
+            "'calibrant' launches the hBN fitter directly."
+        ),
+    )
     parser.add_argument(
         "--no-excel",
         action="store_true",
         help="Do not write the initial intensity Excel file",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--bundle",
+        default=None,
+        help="Optional NPZ bundle path to preload in calibrant mode.",
+    )
+    args = parser.parse_args(cli_argv)
 
     try:
         override_flag = False if args.no_excel else None
-        main(write_excel_flag=override_flag)
+        if args.command == "gui":
+            mode = "simulation"
+        elif args.command == "calibrant":
+            mode = "calibrant"
+        elif early_mode in {"simulation", "calibrant"}:
+            mode = early_mode
+        else:
+            mode = "prompt"
+        main(
+            write_excel_flag=override_flag,
+            startup_mode=mode,
+            calibrant_bundle=args.bundle,
+        )
     except Exception as exc:
         print("Unhandled exception during startup:", exc)
         import traceback

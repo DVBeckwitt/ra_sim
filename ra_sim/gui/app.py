@@ -1152,6 +1152,109 @@ def build_mosaic_params():
     }
 
 
+def _parse_hkl_from_label(label: object) -> tuple[int, int, int] | None:
+    if label is None:
+        return None
+    text = str(label).strip()
+    if not text:
+        return None
+    parts = text.split(",")
+    if len(parts) != 3:
+        return None
+    try:
+        return (
+            int(round(float(parts[0]))),
+            int(round(float(parts[1]))),
+            int(round(float(parts[2]))),
+        )
+    except Exception:
+        return None
+
+
+def _normalize_measured_peaks_for_geometry_fit(
+    measured_peaks: Sequence[object],
+) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for entry in measured_peaks:
+        if not isinstance(entry, dict):
+            continue
+        hkl = _parse_hkl_from_label(entry.get("label"))
+        if hkl is None:
+            continue
+        try:
+            x = float(entry.get("x"))
+            y = float(entry.get("y"))
+        except Exception:
+            continue
+        if not (np.isfinite(x) and np.isfinite(y)):
+            continue
+        normalized.append(
+            {
+                "hkl": hkl,
+                "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
+                "x": x,
+                "y": y,
+            }
+        )
+    return normalized
+
+
+def _store_geometry_fit_snapshot(
+    fitted_params: dict[str, object],
+    measured_for_fit: Sequence[object],
+) -> None:
+    global last_geometry_fit_params, last_geometry_matched_peaks
+
+    snapshot = dict(fitted_params)
+    mosaic = dict(snapshot.get("mosaic_params", {}) or {})
+    for key in (
+        "beam_x_array",
+        "beam_y_array",
+        "theta_array",
+        "phi_array",
+        "wavelength_array",
+        "wavelength_i_array",
+    ):
+        if key in mosaic:
+            mosaic[key] = np.asarray(mosaic[key], dtype=np.float64).copy()
+    snapshot["mosaic_params"] = mosaic
+
+    if "center" in snapshot:
+        try:
+            ctr = snapshot["center"]
+            snapshot["center"] = [float(ctr[0]), float(ctr[1])]
+        except Exception:
+            pass
+
+    for key in (
+        "a",
+        "c",
+        "lambda",
+        "psi",
+        "psi_z",
+        "zs",
+        "zb",
+        "chi",
+        "debye_x",
+        "debye_y",
+        "theta_initial",
+        "cor_angle",
+        "corto_detector",
+        "gamma",
+        "Gamma",
+    ):
+        if key in snapshot:
+            try:
+                snapshot[key] = float(snapshot[key])
+            except Exception:
+                pass
+
+    last_geometry_fit_params = snapshot
+    last_geometry_matched_peaks = _normalize_measured_peaks_for_geometry_fit(
+        measured_for_fit
+    )
+
+
 def _normalize_optics_mode_label(value) -> str:
     """Normalize optics mode to UI labels: ``'fast'`` or ``'exact'``."""
 
@@ -2485,6 +2588,8 @@ def update_integration_region_visuals(ai, sim_res2):
 
 
 profile_cache = {}
+last_geometry_fit_params = None
+last_geometry_matched_peaks = []
 last_1d_integration_data = {
     "radials_sim": None,
     "intensities_2theta_sim": None,
@@ -4294,6 +4399,7 @@ def on_fit_geometry_click():
                 'corto_detector': corto_detector_var.get(),
             }
         )
+        _store_geometry_fit_snapshot(fitted_params, measured_for_fit)
 
         (
             _,
@@ -5017,6 +5123,7 @@ def on_fit_geometry_click():
                     'Gamma': Gamma_var.get(),
                     'corto_detector': corto_detector_var.get(),
                 })
+                _store_geometry_fit_snapshot(fitted_params, measured_for_fit)
 
                 _log_matches_snapshot("Matches after fit (native frame):", fitted_params)
                 _log_pixel_match_snapshot(
@@ -5241,6 +5348,7 @@ def on_fit_mosaic_click():
     """Run the separable mosaic-width optimizer and apply the results."""
 
     global profile_cache, last_simulation_signature
+    global last_geometry_fit_params, last_geometry_matched_peaks
 
     miller_array = np.asarray(miller, dtype=np.float64)
     if miller_array.ndim != 2 or miller_array.shape[1] != 3 or miller_array.size == 0:
@@ -5256,18 +5364,21 @@ def on_fit_mosaic_click():
         )
         return
 
-    mosaic_params = build_mosaic_params()
-    required_keys = (
-        "beam_x_array",
-        "beam_y_array",
-        "theta_array",
-        "phi_array",
-        "wavelength_array",
-    )
-    missing = [key for key in required_keys if not np.asarray(mosaic_params.get(key)).size]
-    if missing:
+    if not isinstance(last_geometry_fit_params, dict):
         progress_label_mosaic.config(
-            text="Mosaic fit unavailable: run a simulation to populate mosaic samples first."
+            text=(
+                "Mosaic fit unavailable: geometry lock is missing. "
+                "Run geometry fitting first."
+            )
+        )
+        return
+
+    if not last_geometry_matched_peaks:
+        progress_label_mosaic.config(
+            text=(
+                "Mosaic fit unavailable: no geometry-matched peaks were saved. "
+                "Run geometry fitting first."
+            )
         )
         return
 
@@ -5281,28 +5392,80 @@ def on_fit_mosaic_click():
         )
         return
 
-    params = {
-        'a':             a_var.get(),
-        'c':             c_var.get(),
-        'lambda':        lambda_,
-        'psi':           psi,
-        'psi_z':         psi_z_var.get(),
-        'zs':            zs_var.get(),
-        'zb':            zb_var.get(),
-        'chi':           chi_var.get(),
-        'n2':            n2,
-        'mosaic_params': mosaic_params,
-        'debye_x':       debye_x_var.get(),
-        'debye_y':       debye_y_var.get(),
-        'center':        [center_x_var.get(), center_y_var.get()],
-        'theta_initial': theta_initial_var.get(),
-        'uv1':           np.array([1.0, 0.0, 0.0]),
-        'uv2':           np.array([0.0, 1.0, 0.0]),
-        'corto_detector': corto_detector_var.get(),
-        'gamma':          gamma_var.get(),
-        'Gamma':          Gamma_var.get(),
-        'optics_mode':    _current_optics_mode_flag(),
+    current_hkls = {
+        tuple(int(round(val)) for val in row)
+        for row in np.asarray(miller_array, dtype=np.float64)
     }
+    locked_hkls = {
+        tuple(int(v) for v in entry.get("hkl", ()))
+        for entry in last_geometry_matched_peaks
+        if isinstance(entry, dict) and entry.get("hkl") is not None
+    }
+    if not locked_hkls:
+        progress_label_mosaic.config(
+            text=(
+                "Mosaic fit unavailable: geometry-matched HKLs are missing from the lock state. "
+                "Run geometry fitting first."
+            )
+        )
+        return
+    if not locked_hkls.issubset(current_hkls):
+        progress_label_mosaic.config(
+            text=(
+                "Mosaic fit unavailable: current reflection list does not match geometry lock. "
+                "Re-run geometry fitting."
+            )
+        )
+        return
+
+    params = dict(last_geometry_fit_params)
+    frozen_mosaic = dict(params.get("mosaic_params", {}) or {})
+    required_keys = (
+        "beam_x_array",
+        "beam_y_array",
+        "theta_array",
+        "phi_array",
+        "wavelength_array",
+    )
+    missing = [key for key in required_keys if not np.asarray(frozen_mosaic.get(key)).size]
+    if missing:
+        progress_label_mosaic.config(
+            text=(
+                "Mosaic fit unavailable: geometry lock does not include full beam samples. "
+                "Re-run geometry fitting."
+            )
+        )
+        return
+
+    frozen_mosaic["sigma_mosaic_deg"] = float(sigma_mosaic_var.get())
+    frozen_mosaic["gamma_mosaic_deg"] = float(gamma_mosaic_var.get())
+    frozen_mosaic["eta"] = float(eta_var.get())
+    params["mosaic_params"] = frozen_mosaic
+
+    fallback_params = {
+        "a": a_var.get(),
+        "c": c_var.get(),
+        "lambda": lambda_,
+        "psi": psi,
+        "psi_z": psi_z_var.get(),
+        "zs": zs_var.get(),
+        "zb": zb_var.get(),
+        "chi": chi_var.get(),
+        "n2": n2,
+        "debye_x": debye_x_var.get(),
+        "debye_y": debye_y_var.get(),
+        "center": [center_x_var.get(), center_y_var.get()],
+        "theta_initial": theta_initial_var.get(),
+        "uv1": np.array([1.0, 0.0, 0.0]),
+        "uv2": np.array([0.0, 1.0, 0.0]),
+        "corto_detector": corto_detector_var.get(),
+        "gamma": gamma_var.get(),
+        "Gamma": Gamma_var.get(),
+        "cor_angle": cor_angle_var.get(),
+        "optics_mode": _current_optics_mode_flag(),
+    }
+    for key, value in fallback_params.items():
+        params.setdefault(key, value)
 
     progress_label_mosaic.config(text="Running mosaic optimization…")
     mosaic_progressbar.start(10)
@@ -5316,7 +5479,21 @@ def on_fit_mosaic_click():
             intensity_array,
             image_size,
             params,
+            num_peaks=36,
+            roi_half_width=8,
             stratify="twotheta",
+            stratify_bins=6,
+            loss="soft_l1",
+            f_scale=1.0,
+            max_nfev=80,
+            bounds=(
+                np.array([0.03, 0.03, 0.0], dtype=np.float64),
+                np.array([3.0, 3.0, 1.0], dtype=np.float64),
+            ),
+            measured_peaks=last_geometry_matched_peaks,
+            peak_source="geometry",
+            max_restarts=2,
+            roi_normalization="sqrt_npix",
         )
     except Exception as exc:  # pragma: no cover - GUI feedback path
         progress_label_mosaic.config(text=f"Mosaic fit failed: {exc}")
@@ -5338,6 +5515,40 @@ def on_fit_mosaic_click():
     gamma_mosaic_var.set(gamma_deg)
     eta_var.set(eta_val)
 
+    # Keep the live UI state aligned with the geometry-locked snapshot used
+    # during optimization so the rendered post-fit pattern matches the fit.
+    def _set_var_from_locked(var, key: str):
+        if key not in params:
+            return
+        try:
+            value = float(params[key])
+        except Exception:
+            return
+        if np.isfinite(value):
+            var.set(value)
+
+    _set_var_from_locked(a_var, "a")
+    _set_var_from_locked(c_var, "c")
+    _set_var_from_locked(zs_var, "zs")
+    _set_var_from_locked(zb_var, "zb")
+    _set_var_from_locked(chi_var, "chi")
+    _set_var_from_locked(psi_z_var, "psi_z")
+    _set_var_from_locked(theta_initial_var, "theta_initial")
+    _set_var_from_locked(cor_angle_var, "cor_angle")
+    _set_var_from_locked(gamma_var, "gamma")
+    _set_var_from_locked(Gamma_var, "Gamma")
+    _set_var_from_locked(corto_detector_var, "corto_detector")
+    locked_center = params.get("center")
+    if isinstance(locked_center, (list, tuple, np.ndarray)) and len(locked_center) >= 2:
+        try:
+            cx = float(locked_center[0])
+            cy = float(locked_center[1])
+            if np.isfinite(cx) and np.isfinite(cy):
+                center_x_var.set(cx)
+                center_y_var.set(cy)
+        except Exception:
+            pass
+
     best_params = getattr(result, "best_params", None)
     if best_params and "mosaic_params" in best_params:
         profile_cache = dict(best_params["mosaic_params"])
@@ -5358,6 +5569,8 @@ def on_fit_mosaic_click():
     if getattr(result, "fun", None) is not None and result.fun.size:
         residual_norm = float(np.linalg.norm(result.fun))
     selected_rois = list(getattr(result, "selected_rois", []) or [])
+    rejected_rois = list(getattr(result, "rejected_rois", []) or [])
+    roi_diagnostics = list(getattr(result, "roi_diagnostics", []) or [])
     roi_count = len(selected_rois)
     status = "converged" if bool(getattr(result, "success", False)) else "finished"
     message = (getattr(result, "message", "") or "").strip()
@@ -5382,12 +5595,51 @@ def on_fit_mosaic_click():
             display += f", +{remaining} more"
         peaks_summary = f"\nPeaks used: {display}"
 
+    initial_cost = float(getattr(result, "initial_cost", np.nan))
+    final_cost = float(getattr(result, "final_cost", np.nan))
+    cost_reduction = float(getattr(result, "cost_reduction", np.nan))
+    outlier_fraction = float(getattr(result, "outlier_fraction", np.nan))
+    acceptance_passed = bool(getattr(result, "acceptance_passed", False))
+    boundary_warning = str(getattr(result, "boundary_warning", "") or "").strip()
+    worst_rois = list(getattr(result, "top_worst_rois", []) or [])
+
+    if np.isfinite(cost_reduction):
+        reduction_pct = 100.0 * cost_reduction
+    else:
+        reduction_pct = float("nan")
+
+    quality_line = (
+        "Quality gates: passed"
+        if acceptance_passed
+        else "Quality gates: needs review"
+    )
+    if np.isfinite(outlier_fraction):
+        quality_line += f" (outliers={100.0 * outlier_fraction:.1f}%)"
+
+    worst_summary = ""
+    if worst_rois:
+        rows: list[str] = []
+        for diag in worst_rois[:5]:
+            hkl = tuple(diag.get("hkl", ()))
+            rms = float(diag.get("rms", np.nan))
+            if len(hkl) == 3:
+                rows.append(f"{hkl}: RMS={rms:.3f}")
+        if rows:
+            worst_summary = "\nWorst ROIs: " + ", ".join(rows)
+
+    warning_summary = f"\n{boundary_warning}" if boundary_warning else ""
+
     progress_label_mosaic.config(
         text=(
             f"Mosaic fit {status_text}\n"
             f"σ={sigma_deg:.3f}°, γ={gamma_deg:.3f}°, η={eta_val:.3f}\n"
+            f"Robust cost={final_cost:.4g} (init={initial_cost:.4g}, Δ={reduction_pct:.1f}%)\n"
             f"Residual norm={residual_norm:.2f} using {roi_count} ROIs"
+            f" ({len(rejected_rois)} rejected, {len(roi_diagnostics)} diagnosed)\n"
+            f"{quality_line}"
+            f"{warning_summary}"
             f"{peaks_summary}"
+            f"{worst_summary}"
         )
     )
 

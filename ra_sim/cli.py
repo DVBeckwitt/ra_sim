@@ -2,6 +2,9 @@
 
 Usage examples:
 
+- Choose startup mode interactively:
+    python -m ra_sim
+
 - Use defaults from config and write `output.png`:
     python -m ra_sim simulate --out output.png
 
@@ -10,6 +13,9 @@ Usage examples:
 
 - Run the hBN ellipse fitting workflow:
     python -m ra_sim hbn-fit --osc /path/to/calibrant.osc --dark /path/to/dark.osc
+
+- Launch the new calibrant fitter GUI:
+    python -m ra_sim calibrant --bundle /path/to/hbn_bundle.npz
 
 This CLI intentionally mirrors the defaults used by the GUI by reading
 instrument and file paths from `config/` via `ra_sim.path_config`.
@@ -105,6 +111,46 @@ def _cmd_gui(args: argparse.Namespace) -> None:
 
     write_excel_flag = None if not args.no_excel else False
     gui_app.main(write_excel_flag=write_excel_flag)
+
+
+def _cmd_calibrant(args: argparse.Namespace) -> None:
+    """Launch the hBN calibrant fitter GUI from `hbn_fitter/`."""
+
+    import tkinter as tk
+
+    try:
+        from hbn_fitter.fitter import HBNFitterGUI
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to import hbn_fitter GUI. Ensure `hbn_fitter/fitter.py` exists."
+        ) from exc
+
+    root = tk.Tk()
+    _ = HBNFitterGUI(root, startup_bundle=args.bundle)
+    root.mainloop()
+
+
+def _prompt_startup_mode() -> str | None:
+    """Prompt for startup mode when launched with no CLI args."""
+
+    if not sys.stdin.isatty():
+        return None
+
+    print("Select startup mode:")
+    print("  1) Fit calibrant (hBN fitter)")
+    print("  2) Run simulation GUI")
+    while True:
+        try:
+            choice = input("Enter choice [2]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("")
+            return None
+
+        if choice in {"", "2", "sim", "simulate", "simulation", "s"}:
+            return "simulation"
+        if choice in {"1", "cal", "calibrant", "fit", "f"}:
+            return "calibrant"
+        print("Please enter 1 or 2.")
 
 
 def run_headless_simulation(
@@ -364,6 +410,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     gui_parser.set_defaults(func=_cmd_gui)
 
+    calibrant_parser = subparsers.add_parser(
+        "calibrant",
+        aliases=["calibrant-fit"],
+        help="Launch the hBN calibrant fitter GUI from hbn_fitter/fitter.py.",
+    )
+    calibrant_parser.add_argument(
+        "--bundle",
+        default=None,
+        help="Optional NPZ bundle to load at startup in the calibrant fitter.",
+    )
+    calibrant_parser.set_defaults(func=_cmd_calibrant)
+
     sim_parser = subparsers.add_parser(
         "simulate",
         help="Run the diffraction simulation headlessly and save an image.",
@@ -482,7 +540,28 @@ def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = _build_parser()
 
-    if argv and argv[0] not in {"gui", "simulate", "hbn-fit", "-h", "--help"}:
+    known_commands = {
+        "gui",
+        "simulate",
+        "hbn-fit",
+        "calibrant",
+        "calibrant-fit",
+        "-h",
+        "--help",
+    }
+
+    if not argv:
+        startup_mode = _prompt_startup_mode()
+        if startup_mode == "calibrant":
+            argv = ["calibrant"]
+        elif startup_mode == "simulation":
+            argv = ["gui"]
+
+    if not argv:
+        ap.print_help()
+        return
+
+    if argv[0] not in known_commands:
         argv = ["simulate"] + argv
 
     args = ap.parse_args(argv)

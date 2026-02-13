@@ -79,6 +79,9 @@ class PeakROI:
     observed_mean: float
     num_pixels: int
     simulated_intensity: float
+    candidate_snr: float = float("nan")
+    source: str = "auto"
+    score: float = 0.0
 
 
 @dataclass
@@ -186,6 +189,149 @@ def _allowed_reflection_mask(miller: np.ndarray) -> np.ndarray:
     return (2 * hk[:, 0] + hk[:, 1]) % 3 == 0
 
 
+def _parse_hkl_label(value: str) -> Optional[Tuple[int, int, int]]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parts = text.split(",")
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(int(round(float(part.strip()))) for part in parts)  # type: ignore[return-value]
+    except Exception:
+        return None
+
+
+def _normalize_measured_peaks(
+    measured_peaks: Optional[Sequence[object]],
+) -> List[Dict[str, object]]:
+    """Normalize mixed measured-peak inputs into dicts with HKL + detector coords."""
+
+    normalized: List[Dict[str, object]] = []
+    if not measured_peaks:
+        return normalized
+
+    for entry in measured_peaks:
+        hkl: Optional[Tuple[int, int, int]] = None
+        x_val = None
+        y_val = None
+        label = None
+
+        if isinstance(entry, dict):
+            if "hkl" in entry:
+                try:
+                    raw_hkl = entry["hkl"]
+                    if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
+                        hkl = (
+                            int(round(float(raw_hkl[0]))),
+                            int(round(float(raw_hkl[1]))),
+                            int(round(float(raw_hkl[2]))),
+                        )
+                except Exception:
+                    hkl = None
+            if hkl is None:
+                hkl = _parse_hkl_label(entry.get("label"))  # type: ignore[arg-type]
+            label = entry.get("label")
+            x_val = entry.get("x")
+            y_val = entry.get("y")
+        elif isinstance(entry, (list, tuple)) and len(entry) >= 5:
+            try:
+                hkl = (
+                    int(round(float(entry[0]))),
+                    int(round(float(entry[1]))),
+                    int(round(float(entry[2]))),
+                )
+                x_val = entry[3]
+                y_val = entry[4]
+                label = f"{hkl[0]},{hkl[1]},{hkl[2]}"
+            except Exception:
+                hkl = None
+        else:
+            continue
+
+        if hkl is None:
+            continue
+        try:
+            x = float(x_val)  # type: ignore[arg-type]
+            y = float(y_val)  # type: ignore[arg-type]
+        except Exception:
+            continue
+        if not (np.isfinite(x) and np.isfinite(y)):
+            continue
+
+        normalized.append(
+            {
+                "hkl": hkl,
+                "label": str(label) if label is not None else f"{hkl[0]},{hkl[1]},{hkl[2]}",
+                "x": x,
+                "y": y,
+            }
+        )
+    return normalized
+
+
+def _local_peak_snr(
+    image: np.ndarray,
+    row: int,
+    col: int,
+    roi_half_width: int,
+) -> float:
+    """Estimate local peak SNR using robust statistics in the candidate patch."""
+
+    h, w = image.shape
+    r0 = max(0, row - roi_half_width)
+    r1 = min(h, row + roi_half_width + 1)
+    c0 = max(0, col - roi_half_width)
+    c1 = min(w, col + roi_half_width + 1)
+    if r0 >= r1 or c0 >= c1:
+        return 0.0
+
+    patch = np.asarray(image[r0:r1, c0:c1], dtype=np.float64)
+    finite = patch[np.isfinite(patch)]
+    if finite.size < 5:
+        return 0.0
+
+    baseline = float(np.median(finite))
+    mad = float(np.median(np.abs(finite - baseline)))
+    sigma = 1.4826 * mad
+    if not np.isfinite(sigma) or sigma <= 1e-12:
+        sigma = float(np.std(finite))
+    if not np.isfinite(sigma) or sigma <= 1e-12:
+        sigma = 1.0
+
+    signal = float(np.max(finite) - baseline)
+    if not np.isfinite(signal):
+        return 0.0
+    return max(0.0, signal / sigma)
+
+
+def _robust_cost(residual: np.ndarray, loss: str, f_scale: float) -> float:
+    """Compute the least_squares robust objective for a residual vector."""
+
+    residual = np.asarray(residual, dtype=np.float64)
+    if residual.size == 0:
+        return 0.0
+    f_scale = max(float(f_scale), 1e-12)
+    z = (residual / f_scale) ** 2
+    loss_key = str(loss).strip().lower()
+
+    if loss_key == "linear":
+        rho = z
+    elif loss_key == "soft_l1":
+        rho = 2.0 * (np.sqrt(1.0 + z) - 1.0)
+    elif loss_key == "huber":
+        rho = np.where(z <= 1.0, z, 2.0 * np.sqrt(z) - 1.0)
+    elif loss_key == "cauchy":
+        rho = np.log1p(z)
+    elif loss_key == "arctan":
+        rho = np.arctan(z)
+    else:
+        raise ValueError(f"Unsupported loss '{loss}'.")
+    return 0.5 * (f_scale * f_scale) * float(np.sum(rho))
+
+
 def _simulate_with_cache(
     params: Dict[str, float],
     miller: np.ndarray,
@@ -242,15 +388,19 @@ def fit_mosaic_widths_separable(
     image_size: int,
     params: Dict[str, float],
     *,
-    num_peaks: int = 40,
+    num_peaks: int = 36,
     roi_half_width: int = 8,
     min_peak_separation: Optional[float] = None,
     stratify: Optional[str] = None,
-    stratify_bins: int = 5,
+    stratify_bins: int = 6,
     loss: str = "soft_l1",
     f_scale: float = 1.0,
-    max_nfev: int = 50,
+    max_nfev: int = 80,
     bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
+    measured_peaks: Optional[Sequence[object]] = None,
+    peak_source: str = "geometry",
+    max_restarts: int = 2,
+    roi_normalization: str = "sqrt_npix",
 ) -> OptimizeResult:
     r"""Estimate mosaic pseudo-Voigt widths using separable non-linear least squares.
 
@@ -274,7 +424,7 @@ def fit_mosaic_widths_separable(
         contain the beam sample arrays plus initial values for
         ``sigma_mosaic_deg``, ``gamma_mosaic_deg`` and ``eta``.
     num_peaks:
-        Number of bright peaks to include in the separable fit.
+        Number of peaks to include in the separable fit.
     roi_half_width:
         Half-width (in pixels) of the square ROI around each selected peak.
     min_peak_separation:
@@ -288,14 +438,26 @@ def fit_mosaic_widths_separable(
         Maximum number of bins when ``stratify='twotheta'``.
     loss, f_scale, max_nfev, bounds:
         Directly forwarded to :func:`scipy.optimize.least_squares`.
+    measured_peaks:
+        Optional measured peak list from geometry fitting. Entries may be dicts
+        with ``label``/``x``/``y`` (or ``hkl``/``x``/``y``), or 5-tuples
+        ``(h, k, l, x, y)``.
+    peak_source:
+        Candidate source strategy: ``"geometry"``, ``"auto"``, or ``"hybrid"``.
+    max_restarts:
+        Number of jittered restart solves after the primary solve.
+    roi_normalization:
+        ``"sqrt_npix"`` (default) scales each ROI residual block by the square
+        root of its pixel count; ``"none"`` leaves raw residuals unchanged.
 
     Returns
     -------
     OptimizeResult
         ``x`` holds the refined ``[sigma_deg, gamma_deg, eta]`` vector.  The
         ``best_params`` attribute mirrors ``params`` with the optimized mosaic
-        values inserted, and ``selected_rois`` enumerates the ROIs used during
-        the fit.
+        values inserted, and ``selected_rois`` enumerates the ROIs used during the
+        fit. Additional attributes include diagnostics (`roi_diagnostics`,
+        `rejected_rois`, `initial_cost`, `final_cost`, ...).
     """
 
     experimental_image = np.asarray(experimental_image, dtype=np.float64)
@@ -303,6 +465,16 @@ def fit_mosaic_widths_separable(
         raise ValueError(
             "experimental_image shape must match the provided image_size"
         )
+
+    peak_source_key = str(peak_source).strip().lower()
+    if peak_source_key not in {"geometry", "auto", "hybrid"}:
+        raise ValueError("peak_source must be one of {'geometry', 'auto', 'hybrid'}")
+
+    roi_norm_key = str(roi_normalization).strip().lower()
+    if roi_norm_key not in {"sqrt_npix", "none"}:
+        raise ValueError("roi_normalization must be 'sqrt_npix' or 'none'")
+
+    max_restarts = max(0, int(max_restarts))
 
     miller = np.asarray(miller, dtype=np.float64)
     intensities = np.asarray(intensities, dtype=np.float64)
@@ -462,58 +634,158 @@ def fit_mosaic_widths_separable(
     allowed_intensities = allowed_intensities[kept_rows]
     allowed_two_theta = np.asarray(allowed_two_theta, dtype=np.float64)
 
-    _, hit_tables = _simulate(
-        allowed_miller,
-        allowed_intensities,
-        sigma0,
-        gamma0,
-        eta0,
-        full_buffer,
-        record_hits=True,
-    )
+    hkl_lookup: Dict[Tuple[int, int, int], Dict[str, float]] = {}
+    for local_idx, hkl_row in enumerate(allowed_miller):
+        hkl = tuple(int(round(v)) for v in hkl_row)
+        weight = abs(float(allowed_intensities[local_idx]))
+        prev = hkl_lookup.get(hkl)
+        if prev is None or weight > float(prev["weight"]):
+            hkl_lookup[hkl] = {
+                "reflection_index": float(allowed_indices[local_idx]),
+                "weight": weight,
+                "two_theta": float(allowed_two_theta[local_idx]),
+                "L": float(hkl[2]),
+            }
 
-    if not hit_tables:
-        raise RuntimeError("Initial simulation produced no peak information")
+    rejected_rois: List[Dict[str, object]] = []
+    candidates_auto: List[Dict[str, object]] = []
+    if peak_source_key in {"auto", "hybrid"}:
+        _, hit_tables = _simulate(
+            allowed_miller,
+            allowed_intensities,
+            sigma0,
+            gamma0,
+            eta0,
+            full_buffer,
+            record_hits=True,
+        )
 
-    candidates: List[Dict[str, float]] = []
-    for local_idx, tbl in enumerate(hit_tables):
-        arr = np.asarray(tbl, dtype=np.float64)
-        if arr.size == 0:
-            continue
-        for row in arr:
-            intensity = float(row[0])
-            col = float(row[1])
-            row_pix = float(row[2])
-            if not (np.isfinite(intensity) and np.isfinite(col) and np.isfinite(row_pix)):
+        if not hit_tables:
+            raise RuntimeError("Initial simulation produced no peak information")
+
+        for local_idx, tbl in enumerate(hit_tables):
+            arr = np.asarray(tbl, dtype=np.float64)
+            if arr.size == 0:
                 continue
-            hkl = (int(round(row[4])), int(round(row[5])), int(round(row[6])))
-            if all(v == 0 for v in hkl):
+            for row in arr:
+                intensity = float(row[0])
+                col = float(row[1])
+                row_pix = float(row[2])
+                if not (np.isfinite(intensity) and np.isfinite(col) and np.isfinite(row_pix)):
+                    continue
+                hkl = (int(round(row[4])), int(round(row[5])), int(round(row[6])))
+                if all(v == 0 for v in hkl):
+                    continue
+                h, k, _ = hkl
+                if (2 * h + k) % 3 != 0:
+                    continue
+                tth = float(allowed_two_theta[local_idx])
+                candidates_auto.append(
+                    {
+                        "reflection_index": int(allowed_indices[local_idx]),
+                        "intensity": intensity,
+                        "row": row_pix,
+                        "col": col,
+                        "hkl": hkl,
+                        "L": hkl[2],
+                        "two_theta": tth,
+                        "source": "auto",
+                    }
+                )
+
+    normalized_measured = _normalize_measured_peaks(measured_peaks)
+    candidates_geom: List[Dict[str, object]] = []
+    if peak_source_key in {"geometry", "hybrid"}:
+        if not normalized_measured and peak_source_key == "geometry":
+            raise RuntimeError(
+                "Geometry-locked mosaic fit requires measured geometry peaks; run geometry fitting first."
+            )
+
+        seen_geom: set[Tuple[int, int, int]] = set()
+        for entry in normalized_measured:
+            hkl = entry["hkl"]  # type: ignore[assignment]
+            lookup = hkl_lookup.get(hkl)  # type: ignore[arg-type]
+            if lookup is None:
+                rejected_rois.append(
+                    {
+                        "stage": "candidate",
+                        "reason": "hkl_not_in_current_reflections",
+                        "hkl": hkl,
+                        "x": float(entry["x"]),
+                        "y": float(entry["y"]),
+                        "source": "geometry",
+                    }
+                )
                 continue
-            h, k, _ = hkl
-            if (2 * h + k) % 3 != 0:
+            row_pix = float(entry["y"])
+            col = float(entry["x"])
+            key = (
+                int(lookup["reflection_index"]),
+                int(round(row_pix)),
+                int(round(col)),
+            )
+            if key in seen_geom:
                 continue
-            tth = float(allowed_two_theta[local_idx])
-            candidates.append(
+            seen_geom.add(key)
+            candidates_geom.append(
                 {
-                    "reflection_index": int(allowed_indices[local_idx]),
-                    "intensity": intensity,
+                    "reflection_index": int(lookup["reflection_index"]),
+                    "intensity": float(lookup["weight"]),
                     "row": row_pix,
                     "col": col,
                     "hkl": hkl,
-                    "L": hkl[2],
-                    "two_theta": tth,
+                    "L": int(round(lookup["L"])),
+                    "two_theta": float(lookup["two_theta"]),
+                    "source": "geometry",
                 }
             )
 
+    if peak_source_key == "geometry":
+        candidates: List[Dict[str, object]] = list(candidates_geom)
+    elif peak_source_key == "auto":
+        candidates = list(candidates_auto)
+    else:
+        candidates = list(candidates_geom)
+        seen_hybrid = {
+            (int(c["reflection_index"]), int(round(float(c["row"]))), int(round(float(c["col"]))))
+            for c in candidates
+        }
+        for cand in candidates_auto:
+            key = (
+                int(cand["reflection_index"]),
+                int(round(float(cand["row"]))),
+                int(round(float(cand["col"]))),
+            )
+            if key in seen_hybrid:
+                continue
+            seen_hybrid.add(key)
+            candidates.append(cand)
+
     if not candidates:
-        raise RuntimeError("No simulated peaks available for ROI selection")
+        raise RuntimeError("No peak candidates available for ROI selection")
+
+    for cand in candidates:
+        row_idx = int(round(float(cand["row"])))
+        col_idx = int(round(float(cand["col"])))
+        snr = _local_peak_snr(experimental_image, row_idx, col_idx, roi_half_width)
+        cand["snr"] = float(snr)
+
+    score_key = "snr" if peak_source_key in {"geometry", "hybrid"} else "intensity"
+    for cand in candidates:
+        cand["score"] = float(cand.get(score_key, cand.get("intensity", 0.0)))
 
     def _candidate_iter() -> Iterable[Dict[str, float]]:
-        key = (stratify or "none").lower()
+        default_stratify = "twotheta" if peak_source_key in {"geometry", "hybrid"} else "none"
+        key = (stratify or default_stratify).lower()
         if key not in {"none", "l", "twotheta"}:
             raise ValueError("stratify must be None, 'L', or 'twotheta'")
         sorted_candidates = sorted(
-            candidates, key=lambda c: float(c["intensity"]), reverse=True
+            candidates,
+            key=lambda c: (
+                float(c.get("score", 0.0)),
+                float(c.get("intensity", 0.0)),
+            ),
+            reverse=True,
         )
         if key == "none" or len(sorted_candidates) <= 1:
             return sorted_candidates
@@ -521,9 +793,9 @@ def fit_mosaic_widths_separable(
         if key == "l":
             groups: Dict[int, List[Dict[str, float]]] = {}
             for cand in sorted_candidates:
-                groups.setdefault(cand["L"], []).append(cand)
+                groups.setdefault(int(cand["L"]), []).append(cand)
             for group in groups.values():
-                group.sort(key=lambda c: float(c["intensity"]), reverse=True)
+                group.sort(key=lambda c: float(c["score"]), reverse=True)
             order = sorted(groups.keys(), key=lambda val: (abs(val), val))
             round_robin: List[Dict[str, float]] = []
             while True:
@@ -541,7 +813,11 @@ def fit_mosaic_widths_separable(
             return round_robin
 
         # stratify == 'twotheta'
-        tth_values = [c["two_theta"] for c in sorted_candidates if c["two_theta"] is not None]
+        tth_values = [
+            float(c["two_theta"])
+            for c in sorted_candidates
+            if c.get("two_theta") is not None and np.isfinite(float(c["two_theta"]))
+        ]
         if not tth_values or np.allclose(tth_values, tth_values[0]):
             return sorted_candidates
         num_bins = max(1, min(int(stratify_bins), len(tth_values)))
@@ -558,7 +834,7 @@ def fit_mosaic_widths_separable(
                 bin_idx = max(0, min(num_bins - 1, bin_idx))
             bins[bin_idx].append(cand)
         for group in bins.values():
-            group.sort(key=lambda c: float(c["intensity"]), reverse=True)
+            group.sort(key=lambda c: float(c["score"]), reverse=True)
         round_robin: List[Dict[str, float]] = []
         active_bins = [idx for idx in range(num_bins) if bins[idx]]
         while active_bins:
@@ -583,8 +859,8 @@ def fit_mosaic_widths_separable(
     for cand in ordered_candidates:
         if len(rois) >= num_peaks:
             break
-        row_c = cand["row"]
-        col_c = cand["col"]
+        row_c = float(cand["row"])
+        col_c = float(cand["col"])
         row_idx = int(round(row_c))
         col_idx = int(round(col_c))
         if (
@@ -593,12 +869,30 @@ def fit_mosaic_widths_separable(
             or col_idx - roi_half_width < 0
             or col_idx + roi_half_width >= image_size
         ):
+            rejected_rois.append(
+                {
+                    "stage": "roi",
+                    "reason": "out_of_bounds",
+                    "hkl": tuple(int(v) for v in cand["hkl"]),
+                    "center": (row_c, col_c),
+                    "source": str(cand.get("source", "auto")),
+                }
+            )
             continue
         if selected_centres:
             if any(
                 (row_c - r) ** 2 + (col_c - c) ** 2 < min_peak_separation_sq
                 for r, c in selected_centres
             ):
+                rejected_rois.append(
+                    {
+                        "stage": "roi",
+                        "reason": "overlap",
+                        "hkl": tuple(int(v) for v in cand["hkl"]),
+                        "center": (row_c, col_c),
+                        "source": str(cand.get("source", "auto")),
+                    }
+                )
                 continue
 
         rows = np.arange(row_idx - roi_half_width, row_idx + roi_half_width + 1, dtype=int)
@@ -607,6 +901,15 @@ def fit_mosaic_widths_separable(
         flat_patch = patch.ravel()
         valid_idx = np.flatnonzero(np.isfinite(flat_patch))
         if valid_idx.size == 0:
+            rejected_rois.append(
+                {
+                    "stage": "roi",
+                    "reason": "no_finite_pixels",
+                    "hkl": tuple(int(v) for v in cand["hkl"]),
+                    "center": (row_c, col_c),
+                    "source": str(cand.get("source", "auto")),
+                }
+            )
             continue
         observed = flat_patch.take(valid_idx)
         observed = observed.astype(np.float64, copy=False)
@@ -625,13 +928,20 @@ def fit_mosaic_widths_separable(
                 observed_sum=observed_sum,
                 observed_mean=observed_mean,
                 num_pixels=num_valid,
-                simulated_intensity=float(cand["intensity"]),
+                simulated_intensity=float(cand.get("intensity", 0.0)),
+                candidate_snr=float(cand.get("snr", np.nan)),
+                source=str(cand.get("source", "auto")),
+                score=float(cand.get("score", 0.0)),
             )
         )
         selected_centres.append((row_c, col_c))
 
     if not rois:
         raise RuntimeError("No valid ROIs were selected for mosaic fitting")
+    if peak_source_key == "geometry" and len(rois) < 8:
+        raise RuntimeError(
+            f"Geometry-locked mosaic fit needs at least 8 valid ROIs; got {len(rois)}."
+        )
 
     unique_indices = sorted({roi.reflection_index for roi in rois})
     subset_miller = np.ascontiguousarray(miller[unique_indices], dtype=np.float64)
@@ -639,7 +949,11 @@ def fit_mosaic_widths_separable(
 
     subset_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
-    def residual(theta: np.ndarray) -> np.ndarray:
+    def _evaluate_residual(
+        theta: np.ndarray,
+        *,
+        collect_diagnostics: bool = False,
+    ) -> Tuple[np.ndarray, Optional[List[Dict[str, object]]]]:
         sigma_deg, gamma_deg_local, eta_local = map(float, theta)
         sim_image, _ = _simulate(
             subset_miller,
@@ -652,48 +966,204 @@ def fit_mosaic_widths_separable(
         )
 
         residual_blocks: List[np.ndarray] = []
+        diagnostics: List[Dict[str, object]] = []
         for roi in rois:
             block = sim_image[np.ix_(roi.row_indices, roi.col_indices)]
             flat = block.ravel()
             template = flat.take(roi.flat_indices)
+            fallback_reason = ""
+            amp = 0.0
+            bkg = roi.observed_mean
+
             if template.size == 0:
-                residual_blocks.append(roi.observed - roi.observed_mean)
-                continue
-            tt = float(np.dot(template, template))
-            if tt <= 1e-16:
-                residual_blocks.append(roi.observed - roi.observed_mean)
-                continue
-            to = float(np.sum(template))
-            ty = float(np.dot(template, roi.observed))
-            oy = roi.observed_sum
-            oo = float(roi.num_pixels)
-            det = tt * oo - to * to
-            if abs(det) <= 1e-14 * tt * oo:
-                residual_blocks.append(roi.observed - roi.observed_mean)
-                continue
-            amp = (ty * oo - oy * to) / det
-            bkg = (tt * oy - to * ty) / det
-            model = amp * template + bkg
-            residual_blocks.append(roi.observed - model)
+                residual_raw = roi.observed - roi.observed_mean
+                fallback_reason = "empty_template"
+            else:
+                tt = float(np.dot(template, template))
+                if tt <= 1e-16:
+                    residual_raw = roi.observed - roi.observed_mean
+                    fallback_reason = "low_template_energy"
+                else:
+                    to = float(np.sum(template))
+                    ty = float(np.dot(template, roi.observed))
+                    oy = roi.observed_sum
+                    oo = float(roi.num_pixels)
+                    det = tt * oo - to * to
+                    if abs(det) <= 1e-14 * tt * oo:
+                        residual_raw = roi.observed - roi.observed_mean
+                        fallback_reason = "ill_conditioned_affine"
+                    else:
+                        amp = (ty * oo - oy * to) / det
+                        bkg = (tt * oy - to * ty) / det
+                        model = amp * template + bkg
+                        residual_raw = roi.observed - model
+
+            if roi_norm_key == "sqrt_npix":
+                norm = math.sqrt(max(float(roi.num_pixels), 1.0))
+            else:
+                norm = 1.0
+            residual_normed = residual_raw / norm
+            residual_blocks.append(residual_normed)
+
+            if collect_diagnostics:
+                rms = float(np.sqrt(np.mean(residual_raw * residual_raw)))
+                diagnostics.append(
+                    {
+                        "hkl": tuple(int(v) for v in roi.hkl),
+                        "reflection_index": int(roi.reflection_index),
+                        "center": (float(roi.center[0]), float(roi.center[1])),
+                        "num_pixels": int(roi.num_pixels),
+                        "source": roi.source,
+                        "candidate_snr": float(roi.candidate_snr),
+                        "score": float(roi.score),
+                        "amp": float(amp),
+                        "bkg": float(bkg),
+                        "rms": rms,
+                        "fallback_reason": fallback_reason,
+                        "normalization": roi_norm_key,
+                        "outlier": False,
+                    }
+                )
+
         if not residual_blocks:
-            return np.zeros(1, dtype=np.float64)
-        return np.concatenate(residual_blocks)
+            empty = np.zeros(1, dtype=np.float64)
+            if collect_diagnostics:
+                return empty, diagnostics
+            return empty, None
+        merged = np.concatenate(residual_blocks)
+        if collect_diagnostics:
+            return merged, diagnostics
+        return merged, None
+
+    def residual(theta: np.ndarray) -> np.ndarray:
+        out, _ = _evaluate_residual(theta, collect_diagnostics=False)
+        return out
 
     if bounds is None:
         bounds = (
-            np.array([0.01, 0.01, 0.0], dtype=np.float64),
-            np.array([5.0, 5.0, 1.0], dtype=np.float64),
+            np.array([0.03, 0.03, 0.0], dtype=np.float64),
+            np.array([3.0, 3.0, 1.0], dtype=np.float64),
         )
+    lower = np.asarray(bounds[0], dtype=np.float64).reshape(-1)
+    upper = np.asarray(bounds[1], dtype=np.float64).reshape(-1)
+    if lower.size != 3 or upper.size != 3:
+        raise ValueError("bounds must contain exactly 3 lower/upper values")
+    if np.any(~np.isfinite(lower)) or np.any(~np.isfinite(upper)):
+        raise ValueError("bounds must be finite")
+    if np.any(lower >= upper):
+        raise ValueError("each lower bound must be strictly less than upper bound")
 
     x0 = np.array([sigma0, gamma0, eta0], dtype=np.float64)
-    result = least_squares(
-        residual,
-        x0,
-        bounds=bounds,
-        loss=loss,
-        f_scale=f_scale,
-        max_nfev=int(max_nfev),
+    x0 = np.clip(x0, lower, upper)
+
+    def _run_solver(x_start: np.ndarray) -> OptimizeResult:
+        return least_squares(
+            residual,
+            np.asarray(x_start, dtype=np.float64),
+            bounds=(lower, upper),
+            loss=loss,
+            f_scale=f_scale,
+            max_nfev=int(max_nfev),
+        )
+
+    initial_residual = residual(x0)
+    initial_cost = _robust_cost(initial_residual, loss=loss, f_scale=f_scale)
+
+    result = _run_solver(x0)
+    best_result = result
+    best_cost = _robust_cost(np.asarray(result.fun, dtype=np.float64), loss=loss, f_scale=f_scale)
+    restart_history: List[Dict[str, object]] = [
+        {
+            "restart": 0,
+            "start_x": x0.tolist(),
+            "end_x": np.asarray(result.x, dtype=np.float64).tolist(),
+            "cost": float(best_cost),
+            "success": bool(result.success),
+            "message": str(result.message),
+        }
+    ]
+
+    restart_rng = np.random.default_rng(20260213)
+    for restart_idx in range(max_restarts):
+        anchor = np.asarray(best_result.x, dtype=np.float64)
+        span = np.array(
+            [
+                0.1 * max(abs(float(anchor[0])), 0.03),
+                0.1 * max(abs(float(anchor[1])), 0.03),
+                0.05,
+            ],
+            dtype=np.float64,
+        )
+        trial_start = anchor + restart_rng.uniform(-1.0, 1.0, size=3) * span
+        trial_start = np.clip(trial_start, lower, upper)
+        trial = _run_solver(trial_start)
+        trial_cost = _robust_cost(np.asarray(trial.fun, dtype=np.float64), loss=loss, f_scale=f_scale)
+        restart_history.append(
+            {
+                "restart": restart_idx + 1,
+                "start_x": np.asarray(trial_start, dtype=np.float64).tolist(),
+                "end_x": np.asarray(trial.x, dtype=np.float64).tolist(),
+                "cost": float(trial_cost),
+                "success": bool(trial.success),
+                "message": str(trial.message),
+            }
+        )
+        if trial_cost < best_cost:
+            best_result = trial
+            best_cost = trial_cost
+
+    result = best_result
+
+    final_residual, roi_diagnostics = _evaluate_residual(
+        np.asarray(result.x, dtype=np.float64),
+        collect_diagnostics=True,
     )
+    result.fun = np.asarray(final_residual, dtype=np.float64)
+    final_cost = _robust_cost(result.fun, loss=loss, f_scale=f_scale)
+
+    outlier_fraction = 0.0
+    if roi_diagnostics:
+        rms_vals = np.asarray([float(d["rms"]) for d in roi_diagnostics], dtype=np.float64)
+        med = float(np.median(rms_vals))
+        mad = float(np.median(np.abs(rms_vals - med)))
+        sigma_rms = 1.4826 * mad
+        if not np.isfinite(sigma_rms) or sigma_rms <= 1e-12:
+            sigma_rms = float(np.std(rms_vals))
+        if not np.isfinite(sigma_rms) or sigma_rms <= 1e-12:
+            sigma_rms = 0.0
+        threshold = med + 3.0 * sigma_rms if sigma_rms > 0 else med + 1e-12
+        outliers = 0
+        for diag in roi_diagnostics:
+            is_outlier = bool(float(diag["rms"]) > threshold)
+            diag["outlier"] = is_outlier
+            if is_outlier:
+                outliers += 1
+        outlier_fraction = outliers / max(len(roi_diagnostics), 1)
+
+    top_worst_rois = sorted(
+        roi_diagnostics or [],
+        key=lambda d: float(d["rms"]),
+        reverse=True,
+    )[:5]
+
+    bound_names = ("sigma_mosaic_deg", "gamma_mosaic_deg", "eta")
+    bound_hits: List[str] = []
+    for idx, name in enumerate(bound_names):
+        if math.isclose(float(result.x[idx]), float(lower[idx]), rel_tol=0.0, abs_tol=1e-6):
+            bound_hits.append(f"{name}=lower({lower[idx]:.3f})")
+        elif math.isclose(float(result.x[idx]), float(upper[idx]), rel_tol=0.0, abs_tol=1e-6):
+            bound_hits.append(f"{name}=upper({upper[idx]:.3f})")
+    boundary_warning = (
+        "Possible identifiability issue: optimizer finished at parameter bounds ("
+        + ", ".join(bound_hits)
+        + ")."
+        if bound_hits
+        else ""
+    )
+
+    cost_reduction = 0.0
+    if initial_cost > 1e-12 and np.isfinite(initial_cost):
+        cost_reduction = (initial_cost - final_cost) / initial_cost
 
     best_params = dict(params)
     best_mosaic = dict(best_params.get("mosaic_params", {}))
@@ -702,9 +1172,24 @@ def fit_mosaic_widths_separable(
     best_mosaic["eta"] = float(result.x[2])
     best_params["mosaic_params"] = best_mosaic
 
+    result.cost = float(final_cost)
     result.best_params = best_params
     result.selected_rois = rois
     result.reflection_indices = unique_indices
+    result.roi_diagnostics = roi_diagnostics or []
+    result.rejected_rois = rejected_rois
+    result.initial_cost = float(initial_cost)
+    result.final_cost = float(final_cost)
+    result.cost_reduction = float(cost_reduction)
+    result.outlier_fraction = float(outlier_fraction)
+    result.top_worst_rois = top_worst_rois
+    result.restart_history = restart_history
+    result.boundary_warning = boundary_warning
+    result.acceptance_passed = bool(
+        cost_reduction >= 0.20 and outlier_fraction <= 0.25 and not bound_hits
+    )
+    result.peak_source = peak_source_key
+    result.roi_normalization = roi_norm_key
     return result
 
 

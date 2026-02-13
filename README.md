@@ -23,12 +23,26 @@ pip install -e .
 
 ## Quick start
 
-Launch the GUI:
+Launch with a startup choice prompt (calibrant fit or simulation GUI):
+
+```bash
+python -m ra_sim
+# or on Windows
+run_ra_sim.bat
+```
+
+Or launch a specific mode directly:
 
 ```bash
 python -m ra_sim gui
-# or
+python -m ra_sim calibrant
+# or via main.py
 python main.py
+python main.py gui
+python main.py calibrant
+# command passthrough also works from main.py/.bat
+python main.py simulate --out output.png
+run_ra_sim.bat hbn-fit
 ```
 
 The application loads example images specified in `config/dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
