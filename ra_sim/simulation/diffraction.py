@@ -883,6 +883,7 @@ def calculate_phi(
     record_status=False,
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
+    forced_sample_idx=-1,
 ):
     """
     For a single reflection (H,K,L), build a mosaic Q_grid around G_vec.
@@ -1016,8 +1017,16 @@ def calculate_phi(
 
     use_exact_optics = optics_mode == OPTICS_MODE_EXACT
 
-    # Main loop over each beam sample in wave + mosaic
-    for i_samp in prange(n_samp):
+    # Main loop over each beam sample in wave + mosaic. During fitting we can
+    # optionally force a single preselected sample index per reflection.
+    loop_start = 0
+    loop_stop = n_samp
+    if 0 <= forced_sample_idx < n_samp:
+        loop_start = forced_sample_idx
+        loop_stop = forced_sample_idx + 1
+
+    best_candidate_sample_idx = -1
+    for i_samp in range(loop_start, loop_stop):
         lam_samp = wavelength_array[i_samp]
         k_mag = 2.0*pi / lam_samp
 
@@ -1279,6 +1288,7 @@ def calculate_phi(
                 best_candidate[5] = K
                 best_candidate[6] = L
                 have_candidate = True
+                best_candidate_sample_idx = i_samp
 
             if i_samp == best_idx:
                 if valid_det and 0 <= rpx < image_size and 0 <= cpx < image_size:
@@ -1322,10 +1332,19 @@ def calculate_phi(
         pixel_hits[n_hits, :] = best_candidate
         n_hits += 1
 
+    best_sample_idx = best_idx
+    if best_candidate_sample_idx >= 0:
+        best_sample_idx = best_candidate_sample_idx
+
     if record_status:
-        return pixel_hits[:n_hits], statuses, missed_kf[:n_missed]
+        return pixel_hits[:n_hits], statuses, missed_kf[:n_missed], best_sample_idx
     else:
-        return pixel_hits[:n_hits], np.empty(0, dtype=np.int64), missed_kf[:n_missed]
+        return (
+            pixel_hits[:n_hits],
+            np.empty(0, dtype=np.int64),
+            missed_kf[:n_missed],
+            best_sample_idx,
+        )
 
 
 
@@ -1351,6 +1370,8 @@ def process_peaks_parallel(
     record_status=False,
     thickness=50e-9,
     optics_mode=OPTICS_MODE_FAST,
+    single_sample_indices=None,
+    best_sample_indices_out=None,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an intensity
@@ -1474,7 +1495,12 @@ def process_peaks_parallel(
         reflI= intensities[i_pk]
 
         # We'll do a reflection-level call to calculate_phi
-        pixel_hits, status_arr, missed_arr = calculate_phi(
+        forced_idx = -1
+        if single_sample_indices is not None:
+            if i_pk < single_sample_indices.shape[0]:
+                forced_idx = int(single_sample_indices[i_pk])
+
+        pixel_hits, status_arr, missed_arr, best_sample_idx = calculate_phi(
             H, K, L, av, cv,
             wavelength_array,
             image, image_size,
@@ -1497,11 +1523,15 @@ def process_peaks_parallel(
             record_status,
             thickness,
             optics_mode,
+            forced_idx,
         )
         if record_status:
             all_status[i_pk, :] = status_arr
         hit_tables[i_pk] = pixel_hits
         miss_tables[i_pk] = missed_arr
+        if best_sample_indices_out is not None:
+            if i_pk < best_sample_indices_out.shape[0]:
+                best_sample_indices_out[i_pk] = best_sample_idx
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 

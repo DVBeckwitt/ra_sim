@@ -72,6 +72,20 @@ instrument:
         Gamma: 1.0
         psi_z: 1.0
         corto_detector: 1.0
+      # Automatic background peak association for geometry fitting.
+      auto_match:
+        search_radius_px: 18.0
+        local_max_size_px: 5
+        smooth_sigma_px: 3.0
+        min_prominence_sigma: 2.0
+        min_match_prominence_sigma: 2.5
+        k_neighbors: 8
+        max_candidate_peaks: 1200
+        fit_iterations: 3
+        min_matches: 12
+        max_display_markers: 120
+      single_ray:
+        enabled: true
       # Set to false to avoid numba JIT during fitting (useful if numba
       # compilation fails on your Python build).
       use_numba: true

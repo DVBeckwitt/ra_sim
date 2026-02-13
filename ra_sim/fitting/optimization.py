@@ -1696,7 +1696,8 @@ def simulate_and_compare_hkl(
         center, theta_initial, cor_angle,
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
-        save_flag=0
+        save_flag=0,
+        optics_mode=int(params.get('optics_mode', 0)),
     )
     maxpos = hit_tables_to_max_positions(hit_tables)
 
@@ -1777,7 +1778,7 @@ def compute_peak_position_error_geometry_local(
     gamma, Gamma, dist, theta_initial, cor_angle, zs, zb, chi, a, c,
     center_x, center_y, measured_peaks,
     miller, intensities, image_size, mosaic_params, n2,
-    psi, psi_z, debye_x, debye_y, wavelength, pixel_tol=np.inf
+    psi, psi_z, debye_x, debye_y, wavelength, pixel_tol=np.inf, optics_mode=0
 ):
     """
     Objective for DE: returns the 1D array of distances for all matched peaks.
@@ -1800,7 +1801,8 @@ def compute_peak_position_error_geometry_local(
         'psi_z': psi_z,
         'debye_x': debye_x,
         'debye_y': debye_y,
-        'mosaic_params': mosaic_params
+        'mosaic_params': mosaic_params,
+        'optics_mode': int(optics_mode),
     }
     D, *_ = simulate_and_compare_hkl(
         miller,
@@ -1826,6 +1828,16 @@ def fit_geometry_parameters(
 
     _set_numba_usage_from_config(refinement_config)
 
+    single_ray_cfg: Dict[str, float] = {}
+    use_single_ray = False
+    if experimental_image is not None:
+        if isinstance(refinement_config, dict):
+            single_ray_cfg = refinement_config.get("single_ray", {}) or {}
+        if not isinstance(single_ray_cfg, dict):
+            single_ray_cfg = {}
+        use_single_ray = bool(single_ray_cfg.get("enabled", True))
+    single_ray_indices: Optional[np.ndarray] = None
+
     def cost_fn(x):
         local = params.copy()
         for name, v in zip(var_names, x):
@@ -1842,14 +1854,15 @@ def fit_geometry_parameters(
             miller=miller,
             intensities=intensities,
             image_size=image_size,
-            mosaic_params=params['mosaic_params'],
-            n2=params['n2'],
-            psi=params.get('psi', 0.0),
-            psi_z=params.get('psi_z', 0.0),
-            debye_x=params['debye_x'],
-            debye_y=params['debye_y'],
-            wavelength=params['lambda'],
-            pixel_tol=pixel_tol
+            mosaic_params=local['mosaic_params'],
+            n2=local['n2'],
+            psi=local.get('psi', 0.0),
+            psi_z=local.get('psi_z', 0.0),
+            debye_x=local['debye_x'],
+            debye_y=local['debye_y'],
+            wavelength=local['lambda'],
+            pixel_tol=pixel_tol,
+            optics_mode=local.get('optics_mode', 0),
         )
         return D
 
@@ -1887,6 +1900,8 @@ def fit_geometry_parameters(
             np.array([1.0, 0.0, 0.0]),
             np.array([0.0, 1.0, 0.0]),
             save_flag=0,
+            optics_mode=int(local.get('optics_mode', 0)),
+            single_sample_indices=single_ray_indices,
         )
 
         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -1938,6 +1953,42 @@ def fit_geometry_parameters(
         return np.asarray(residuals, dtype=float)
 
     x0 = [params[name] for name in var_names]
+
+    if experimental_image is not None and use_single_ray:
+        try:
+            local = params.copy()
+            mosaic = local['mosaic_params']
+            wavelength_array = mosaic.get('wavelength_array')
+            if wavelength_array is None:
+                wavelength_array = mosaic.get('wavelength_i_array')
+
+            best_indices = np.full(miller.shape[0], -1, dtype=np.int64)
+            sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+            _process_peaks_parallel_safe(
+                miller, intensities, image_size,
+                local['a'], local['c'], wavelength_array,
+                sim_buffer, local['corto_detector'],
+                local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),
+                local['zs'], local['zb'], local['n2'],
+                mosaic['beam_x_array'],
+                mosaic['beam_y_array'],
+                mosaic['theta_array'],
+                mosaic['phi_array'],
+                mosaic['sigma_mosaic_deg'],
+                mosaic['gamma_mosaic_deg'],
+                mosaic['eta'],
+                wavelength_array,
+                local['debye_x'], local['debye_y'],
+                local['center'], local['theta_initial'], local.get('cor_angle', 0.0),
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.0, 1.0, 0.0]),
+                save_flag=0,
+                optics_mode=int(local.get('optics_mode', 0)),
+                best_sample_indices_out=best_indices,
+            )
+            single_ray_indices = best_indices
+        except Exception:
+            single_ray_indices = None
 
     lower_bounds = []
     upper_bounds = []
