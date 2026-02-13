@@ -132,6 +132,46 @@ def _ensure_triplet(values, fallback):
     return merged
 
 
+def _ensure_numeric_vector(values, fallback, length):
+    """Return a float vector of ``length`` using ``values`` with fallback fill."""
+
+    try:
+        target_len = int(length)
+    except (TypeError, ValueError):
+        target_len = 1
+    target_len = max(1, target_len)
+
+    out = []
+    if isinstance(values, (list, tuple, np.ndarray)):
+        for raw in values:
+            try:
+                out.append(float(raw))
+            except (TypeError, ValueError):
+                continue
+
+    if not out:
+        if isinstance(fallback, (list, tuple, np.ndarray)):
+            for raw in fallback:
+                try:
+                    out.append(float(raw))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            try:
+                out = [float(fallback)]
+            except (TypeError, ValueError):
+                out = [1.0]
+
+    if not out:
+        out = [1.0]
+
+    if len(out) < target_len:
+        out.extend([out[-1]] * (target_len - len(out)))
+    elif len(out) > target_len:
+        out = out[:target_len]
+    return out
+
+
 instrument_config = get_instrument_config().get("instrument", {})
 detector_config = instrument_config.get("detector", {})
 geometry_config = instrument_config.get("geometry_defaults", {})
@@ -248,8 +288,9 @@ n2 = IndexofRefraction()
 
 bandwidth = beam_config.get("bandwidth_percent", 0.7) / 100
 
-# NOTE: We define the default occupancy for each site:
-occ = _ensure_triplet(occupancy_config.get("default"), [1.0, 1.0, 1.0])
+# NOTE: Occupancy defaults are expanded to match CIF-generated structure sites
+# after loading the CIF below.
+occupancy_default_values = occupancy_config.get("default", [1.0, 1.0, 1.0])
 
 # When enabled, additional fractional reflections ("rods")
 # are injected between integer L values.
@@ -268,6 +309,71 @@ except KeyError:
 # read with PyCifRW
 cf    = CifFile.ReadCif(cif_file)
 blk   = cf[list(cf.keys())[0]]
+
+
+def _extract_occupancy_site_labels(cif_block, cif_path):
+    """Return occupancy labels in the same order used by SF site expansion."""
+
+    # Prefer symmetry-expanded structure labels because occupancy controls map
+    # onto those sites in the structure-factor code (e.g. Pb, I1, I2).
+    try:
+        xtl = dif.Crystal(str(cif_path))
+        xtl.Symmetry.generate_matrices()
+        xtl.generate_structure()
+        st = xtl.Structure
+
+        atom_types = [str(st.type[i]).strip() or f"site_{i + 1}" for i in range(len(st.u))]
+        atom_z = [float(st.w[i]) for i in range(len(st.u))]
+
+        counts = {}
+        totals = {}
+        for atom in atom_types:
+            totals[atom] = totals.get(atom, 0) + 1
+
+        labels = []
+        for atom, z_val in zip(atom_types, atom_z):
+            counts[atom] = counts.get(atom, 0) + 1
+            if totals[atom] > 1:
+                labels.append(f"{atom}{counts[atom]} (z={z_val:.4f})")
+            else:
+                labels.append(f"{atom} (z={z_val:.4f})")
+        if labels:
+            return labels
+    except Exception:
+        pass
+
+    # Fallback to raw CIF labels when expansion fails.
+    raw_labels = cif_block.get("_atom_site_label")
+    if raw_labels is None:
+        raw_labels = cif_block.get("_atom_site_type_symbol")
+    if raw_labels is None:
+        return []
+    if isinstance(raw_labels, str):
+        raw_labels = [raw_labels]
+
+    labels = []
+    for idx, raw in enumerate(raw_labels):
+        text = str(raw).strip()
+        labels.append(text if text else f"site_{idx + 1}")
+    return labels
+
+
+occupancy_site_labels = _extract_occupancy_site_labels(blk, cif_file)
+if occupancy_site_labels:
+    occupancy_site_count = len(occupancy_site_labels)
+else:
+    occupancy_site_count = max(
+        1,
+        len(occupancy_default_values)
+        if isinstance(occupancy_default_values, (list, tuple, np.ndarray))
+        else 1,
+    )
+occ = _ensure_numeric_vector(
+    occupancy_default_values,
+    [1.0],
+    occupancy_site_count,
+)
+occ = [min(1.0, max(0.0, float(v))) for v in occ]
 
 # pull the raw text
 a_text = blk["_cell_length_a"]
@@ -1303,6 +1409,47 @@ def _reset_background_backend_orientation():
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
 selected_hkl_target = None
+hkl_pick_armed = False
+hkl_pick_button_var = None
+_suppress_drag_press_once = False
+
+
+def _update_hkl_pick_button_label():
+    if "hkl_pick_button_var" not in globals() or hkl_pick_button_var is None:
+        return
+    if hkl_pick_armed:
+        hkl_pick_button_var.set("Pick HKL on Image (Armed)")
+    else:
+        hkl_pick_button_var.set("Pick HKL on Image")
+
+
+def _set_hkl_pick_mode(enabled: bool, *, message: str | None = None):
+    global hkl_pick_armed
+    hkl_pick_armed = bool(enabled)
+    _update_hkl_pick_button_label()
+    if message:
+        progress_label_positions.config(text=message)
+
+
+def _toggle_hkl_pick_mode():
+    if hkl_pick_armed:
+        _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
+        return
+
+    if show_caked_2d_var.get():
+        progress_label_positions.config(
+            text="Switch off 2D caked view before picking HKL in the image."
+        )
+        return
+
+    if unscaled_image_global is None:
+        progress_label_positions.config(text="Run a simulation first.")
+        return
+
+    _set_hkl_pick_mode(
+        True,
+        message="HKL image-pick armed: click near a Bragg peak in raw camera view.",
+    )
 
 
 def _select_peak_by_index(
@@ -1421,7 +1568,7 @@ def _open_selected_peak_intersection_figure():
 
     if selected_peak_record is None:
         progress_label_positions.config(
-            text="Select a Bragg peak first (click a peak or use HKL controls)."
+            text="Select a Bragg peak first (arm Pick HKL on Image or use HKL controls)."
         )
         return
 
@@ -1505,9 +1652,19 @@ def _open_selected_peak_intersection_figure():
 
 
 def on_canvas_click(event):
+    global _suppress_drag_press_once
+
+    if event.button == 3 and hkl_pick_armed:
+        _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
+        return
+
+    if event.button != 1:
+        return
     if show_caked_2d_var.get():
         return
-    if event.inaxes is not ax or event.xdata is None:
+    if not hkl_pick_armed:
+        return
+    if event.inaxes is not ax or event.xdata is None or event.ydata is None:
         return                               # click was outside the image
     if not peak_positions:                   # no simulation yet
         progress_label_positions.config(text="Run a simulation first.")
@@ -1531,13 +1688,16 @@ def on_canvas_click(event):
 
     sim_shape = global_image_buffer.shape if global_image_buffer.size else (image_size, image_size)
     native_col, native_row = _display_to_native_sim_coords(cx, cy, sim_shape)
-    _select_peak_by_index(
+    picked = _select_peak_by_index(
         best_i,
         prefix=f"Nearest peak (Δ={best_d2**0.5:.1f}px)",
         sync_hkl_vars=True,
         clicked_display=(float(cx), float(cy)),
         clicked_native=(float(native_col), float(native_row)),
     )
+    if picked:
+        _set_hkl_pick_mode(False)
+        _suppress_drag_press_once = True
 
 
 drag_select_rect = Rectangle(
@@ -1553,12 +1713,17 @@ drag_select_rect = Rectangle(
 drag_select_rect.set_visible(False)
 ax.add_patch(drag_select_rect)
 
-_caked_drag_state = {
+_drag_select_state = {
     "active": False,
+    "mode": None,
     "x0": None,
     "y0": None,
     "x1": None,
     "y1": None,
+    "tth0": None,
+    "phi0": None,
+    "tth1": None,
+    "phi1": None,
 }
 
 
@@ -1577,6 +1742,57 @@ def _update_drag_rect(x0, y0, x1, y1):
     drag_select_rect.set_width(x_max - x_min)
     drag_select_rect.set_height(y_max - y_min)
     drag_select_rect.set_visible(True)
+    canvas.draw_idle()
+
+
+def _display_to_detector_angles(col: float, row: float, ai):
+    two_theta, phi_vals = _get_detector_angular_maps(ai)
+    if two_theta is None or phi_vals is None:
+        return None
+
+    height, width = two_theta.shape[:2]
+    if height <= 0 or width <= 0:
+        return None
+
+    col_idx = min(max(int(round(float(col))), 0), width - 1)
+    row_idx = min(max(int(round(float(row))), 0), height - 1)
+
+    tth = float(two_theta[row_idx, col_idx])
+    phi = float(phi_vals[row_idx, col_idx])
+    if not (np.isfinite(tth) and np.isfinite(phi)):
+        return None
+    return tth, phi
+
+
+def _update_raw_drag_preview(ai):
+    tth0 = _drag_select_state["tth0"]
+    phi0 = _drag_select_state["phi0"]
+    tth1 = _drag_select_state["tth1"]
+    phi1 = _drag_select_state["phi1"]
+    if None in (tth0, phi0, tth1, phi1):
+        return
+
+    two_theta, phi_vals = _get_detector_angular_maps(ai)
+    if two_theta is None or phi_vals is None:
+        return
+
+    tth_min, tth_max = sorted((float(tth0), float(tth1)))
+    phi_min, phi_max = sorted((float(phi0), float(phi1)))
+    mask = (
+        (two_theta >= tth_min)
+        & (two_theta <= tth_max)
+        & (phi_vals >= phi_min)
+        & (phi_vals <= phi_max)
+    )
+
+    drag_select_rect.set_visible(False)
+    integration_region_rect.set_visible(False)
+    if np.any(mask):
+        integration_region_overlay.set_data(mask.astype(float))
+        integration_region_overlay.set_extent(image_display.get_extent())
+        integration_region_overlay.set_visible(True)
+    else:
+        integration_region_overlay.set_visible(False)
     canvas.draw_idle()
 
 
@@ -1616,9 +1832,13 @@ def _set_range_from_drag(x0, y0, x1, y1):
 
 
 def on_canvas_press(event):
-    if event.button != 1:
+    global _suppress_drag_press_once
+
+    if _suppress_drag_press_once:
+        _suppress_drag_press_once = False
         return
-    if not show_caked_2d_var.get():
+
+    if event.button != 1:
         return
     if event.inaxes is not ax or event.xdata is None or event.ydata is None:
         return
@@ -1626,58 +1846,149 @@ def on_canvas_press(event):
         progress_label_positions.config(text="Run a simulation first.")
         return
 
+    if show_caked_2d_var.get():
+        x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
+        _drag_select_state["active"] = True
+        _drag_select_state["mode"] = "caked"
+        _drag_select_state["x0"] = x0
+        _drag_select_state["y0"] = y0
+        _drag_select_state["x1"] = x0
+        _drag_select_state["y1"] = y0
+        _drag_select_state["tth0"] = None
+        _drag_select_state["phi0"] = None
+        _drag_select_state["tth1"] = None
+        _drag_select_state["phi1"] = None
+        _update_drag_rect(x0, y0, x0, y0)
+        return
+
+    if hkl_pick_armed:
+        return
+
+    ai = _ai_cache.get("ai")
+    if ai is None:
+        return
+
     x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
-    _caked_drag_state["active"] = True
-    _caked_drag_state["x0"] = x0
-    _caked_drag_state["y0"] = y0
-    _caked_drag_state["x1"] = x0
-    _caked_drag_state["y1"] = y0
-    _update_drag_rect(x0, y0, x0, y0)
+    angles = _display_to_detector_angles(x0, y0, ai)
+    if angles is None:
+        return
+    tth0, phi0 = angles
+
+    _drag_select_state["active"] = True
+    _drag_select_state["mode"] = "raw"
+    _drag_select_state["x0"] = x0
+    _drag_select_state["y0"] = y0
+    _drag_select_state["x1"] = x0
+    _drag_select_state["y1"] = y0
+    _drag_select_state["tth0"] = tth0
+    _drag_select_state["phi0"] = phi0
+    _drag_select_state["tth1"] = tth0
+    _drag_select_state["phi1"] = phi0
+    _update_raw_drag_preview(ai)
 
 
 def on_canvas_motion(event):
-    if not _caked_drag_state["active"]:
+    if not _drag_select_state["active"]:
         return
-    if not show_caked_2d_var.get():
+
+    mode = _drag_select_state["mode"]
+    if mode == "caked":
+        if not show_caked_2d_var.get():
+            return
+
+        if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
+            x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
+            _drag_select_state["x1"] = x1
+            _drag_select_state["y1"] = y1
+        else:
+            x1 = _drag_select_state["x1"]
+            y1 = _drag_select_state["y1"]
+            if x1 is None or y1 is None:
+                return
+
+        _update_drag_rect(
+            _drag_select_state["x0"],
+            _drag_select_state["y0"],
+            _drag_select_state["x1"],
+            _drag_select_state["y1"],
+        )
+        return
+
+    if mode != "raw" or show_caked_2d_var.get():
+        return
+
+    ai = _ai_cache.get("ai")
+    if ai is None:
         return
 
     if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
         x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
-        _caked_drag_state["x1"] = x1
-        _caked_drag_state["y1"] = y1
-    else:
-        x1 = _caked_drag_state["x1"]
-        y1 = _caked_drag_state["y1"]
-        if x1 is None or y1 is None:
-            return
+        angles = _display_to_detector_angles(x1, y1, ai)
+        if angles is not None:
+            tth1, phi1 = angles
+            _drag_select_state["x1"] = x1
+            _drag_select_state["y1"] = y1
+            _drag_select_state["tth1"] = tth1
+            _drag_select_state["phi1"] = phi1
 
-    _update_drag_rect(
-        _caked_drag_state["x0"],
-        _caked_drag_state["y0"],
-        _caked_drag_state["x1"],
-        _caked_drag_state["y1"],
-    )
+    _update_raw_drag_preview(ai)
 
 
 def on_canvas_release(event):
     if event.button != 1:
         return
-    if not _caked_drag_state["active"]:
+    if not _drag_select_state["active"]:
         return
 
-    _caked_drag_state["active"] = False
-    if show_caked_2d_var.get() and event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-        x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
-        _caked_drag_state["x1"] = x1
-        _caked_drag_state["y1"] = y1
+    mode = _drag_select_state["mode"]
+    _drag_select_state["active"] = False
 
-    x0 = _caked_drag_state["x0"]
-    y0 = _caked_drag_state["y0"]
-    x1 = _caked_drag_state["x1"]
-    y1 = _caked_drag_state["y1"]
-    if None not in (x0, y0, x1, y1):
-        _set_range_from_drag(x0, y0, x1, y1)
+    if mode == "caked":
+        if show_caked_2d_var.get() and event.inaxes is ax and event.xdata is not None and event.ydata is not None:
+            x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
+            _drag_select_state["x1"] = x1
+            _drag_select_state["y1"] = y1
 
+        x0 = _drag_select_state["x0"]
+        y0 = _drag_select_state["y0"]
+        x1 = _drag_select_state["x1"]
+        y1 = _drag_select_state["y1"]
+        if None not in (x0, y0, x1, y1):
+            _set_range_from_drag(x0, y0, x1, y1)
+        _drag_select_state["mode"] = None
+        drag_select_rect.set_visible(False)
+        canvas.draw_idle()
+        return
+
+    if mode == "raw":
+        ai = _ai_cache.get("ai")
+        if (
+            not show_caked_2d_var.get()
+            and ai is not None
+            and event.inaxes is ax
+            and event.xdata is not None
+            and event.ydata is not None
+        ):
+            x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
+            angles = _display_to_detector_angles(x1, y1, ai)
+            if angles is not None:
+                tth1, phi1 = angles
+                _drag_select_state["x1"] = x1
+                _drag_select_state["y1"] = y1
+                _drag_select_state["tth1"] = tth1
+                _drag_select_state["phi1"] = phi1
+
+        tth0 = _drag_select_state["tth0"]
+        phi0 = _drag_select_state["phi0"]
+        tth1 = _drag_select_state["tth1"]
+        phi1 = _drag_select_state["phi1"]
+        if None not in (tth0, phi0, tth1, phi1):
+            _set_range_from_drag(tth0, phi0, tth1, phi1)
+        else:
+            update_integration_region_visuals(ai, last_res2_sim)
+            canvas.draw_idle()
+
+    _drag_select_state["mode"] = None
     drag_select_rect.set_visible(False)
     canvas.draw_idle()
 
@@ -2562,6 +2873,39 @@ def caked_up(res2, tth_min, tth_max, phi_min, phi_max):
     return intensity_vs_2theta, intensity_vs_phi, azimuth_sub, radial_filtered
 
 
+def _get_detector_angular_maps(ai):
+    if ai is None:
+        return None, None
+
+    detector_shape = getattr(global_image_buffer, "shape", None)
+    if detector_shape is None or len(detector_shape) < 2:
+        return None, None
+    if detector_shape[0] <= 0 or detector_shape[1] <= 0:
+        return None, None
+
+    if _ai_cache.get("detector_shape") != detector_shape:
+        try:
+            two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
+        except TypeError:
+            two_theta = np.rad2deg(ai.twoThetaArray(shape=detector_shape))
+
+        try:
+            phi_vals = ai.chiArray(shape=detector_shape, unit="deg")
+        except TypeError:
+            phi_vals = np.rad2deg(ai.chiArray(shape=detector_shape))
+
+        _ai_cache["detector_shape"] = detector_shape
+        _ai_cache["detector_two_theta"] = two_theta
+        _ai_cache["detector_phi"] = phi_vals
+
+    two_theta = _ai_cache.get("detector_two_theta")
+    phi_vals = _ai_cache.get("detector_phi")
+    if two_theta is None or phi_vals is None:
+        return None, None
+
+    return two_theta, _adjust_phi_zero(phi_vals)
+
+
 def update_integration_region_visuals(ai, sim_res2):
     show_region = show_1d_var.get() and unscaled_image_global is not None
 
@@ -2589,30 +2933,10 @@ def update_integration_region_visuals(ai, sim_res2):
         integration_region_overlay.set_visible(False)
         return
 
-    detector_shape = global_image_buffer.shape
-    if _ai_cache.get("detector_shape") != detector_shape:
-        try:
-            two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
-        except TypeError:
-            two_theta = np.rad2deg(ai.twoThetaArray(shape=detector_shape))
-
-        try:
-            phi_vals = ai.chiArray(shape=detector_shape, unit="deg")
-        except TypeError:
-            phi_vals = np.rad2deg(ai.chiArray(shape=detector_shape))
-
-        _ai_cache["detector_shape"] = detector_shape
-        _ai_cache["detector_two_theta"] = two_theta
-        _ai_cache["detector_phi"] = phi_vals
-
-    two_theta = _ai_cache.get("detector_two_theta")
-    phi_vals = _ai_cache.get("detector_phi")
-
+    two_theta, phi_vals = _get_detector_angular_maps(ai)
     if two_theta is None or phi_vals is None:
         integration_region_overlay.set_visible(False)
         return
-
-    phi_vals = _adjust_phi_zero(phi_vals)
 
     mask = (
         (two_theta >= tth_min)
@@ -2885,7 +3209,7 @@ def do_update():
         need_rebuild = True
 
     if need_rebuild:
-        current_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
+        current_occ = [occ_var.get() for occ_var in occ_vars]
         current_p = [p0_var.get(), p1_var.get(), p2_var.get()]
         weight_values = [w0_var.get(), w1_var.get(), w2_var.get()]
         weight_sum = sum(weight_values) or 1.0
@@ -3456,10 +3780,10 @@ def reset_to_defaults():
 
     _set_scale_factor_value(1.0, adjust_range=False, reset_override=True)
 
-    # ALSO reset occupancies to default
-    occ_var1.set(occ[0])
-    occ_var2.set(occ[1])
-    occ_var3.set(occ[2])
+    # ALSO reset occupancies to defaults for all configured structure sites.
+    for idx, occ_var in enumerate(occ_vars):
+        default_occ = occ[idx] if idx < len(occ) else occ[-1]
+        occ_var.set(default_occ)
     p0_var.set(defaults['p0'])
     p1_var.set(defaults['p1'])
     p2_var.set(defaults['p2'])
@@ -4882,6 +5206,14 @@ ttk.Button(
     command=_select_peak_from_hkl_controls,
 ).pack(side=tk.LEFT, padx=(0, 4))
 
+hkl_pick_button_var = tk.StringVar(value="Pick HKL on Image")
+ttk.Button(
+    hkl_lookup_frame,
+    textvariable=hkl_pick_button_var,
+    command=_toggle_hkl_pick_mode,
+).pack(side=tk.LEFT, padx=(0, 4))
+_update_hkl_pick_button_label()
+
 ttk.Button(
     hkl_lookup_frame,
     text="Clear",
@@ -4927,12 +5259,14 @@ def toggle_caked_2d():
     global caked_limits_user_override, simulation_limits_user_override
     if not show_caked_2d_var.get():
         caked_limits_user_override = False
-        _caked_drag_state["active"] = False
-        drag_select_rect.set_visible(False)
-        canvas.draw_idle()
     else:
         # Entering caked view should start from auto-scaled simulation limits.
         simulation_limits_user_override = False
+        _set_hkl_pick_mode(False)
+    _drag_select_state["active"] = False
+    _drag_select_state["mode"] = None
+    drag_select_rect.set_visible(False)
+    canvas.draw_idle()
     schedule_update()
 
 check_2d = ttk.Checkbutton(
@@ -5484,16 +5818,27 @@ else:
     weight1_var = tk.DoubleVar(value=1.0)
     weight2_var = tk.DoubleVar(value=0.0)
 # ---------------------------------------------------------------------------
-#  OCCUPANCY SLIDERS: Sliders for occ[0], occ[1], occ[2]
+#  OCCUPANCY CONTROLS: one control per structure site in the loaded CIF.
 # ---------------------------------------------------------------------------
-occ_var1 = tk.DoubleVar(value=occ[0])
-occ_var2 = tk.DoubleVar(value=occ[1])
-occ_var3 = tk.DoubleVar(value=occ[2])
+occ_vars = [tk.DoubleVar(value=float(val)) for val in occ]
 finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
 stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
 _layers_scale_widget = None
 _layers_entry_widget = None
 _layers_entry_var = None
+
+
+def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
+    """Build a user-facing occupancy label with expanded structure site name."""
+
+    idx = int(site_idx)
+    atom_name = (
+        occupancy_site_labels[idx]
+        if idx < len(occupancy_site_labels)
+        else "not in structure"
+    )
+    prefix = "Input Occupancy" if input_label else "Occupancy"
+    return f"{prefix} Site {idx + 1} ({atom_name})"
 
 
 def _rebuild_diffraction_inputs(
@@ -5641,9 +5986,30 @@ def _rebuild_diffraction_inputs(
 def update_occupancies(*args):
     """Recompute Hendricks–Teller curves when occupancies or p-values change."""
 
-    new_occ = [occ_var1.get(), occ_var2.get(), occ_var3.get()]
-    p_vals = [p0_var.get(), p1_var.get(), p2_var.get()]
-    w_raw = [w0_var.get(), w1_var.get(), w2_var.get()]
+    try:
+        new_occ = [float(var.get()) for var in occ_vars]
+    except (tk.TclError, ValueError):
+        return
+
+    if not all(np.isfinite(v) for v in new_occ):
+        return
+
+    # Keep occupancies physically meaningful and reflect clamped values in the UI.
+    clamped_occ = [min(1.0, max(0.0, v)) for v in new_occ]
+    for var, val in zip(occ_vars, clamped_occ):
+        try:
+            current = float(var.get())
+        except (tk.TclError, ValueError):
+            current = val
+        if not math.isclose(current, val, rel_tol=1e-12, abs_tol=1e-12):
+            var.set(val)
+    new_occ = clamped_occ
+
+    try:
+        p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+        w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+    except (tk.TclError, ValueError):
+        return
     w_sum = sum(w_raw) or 1.0
     weights = [w / w_sum for w in w_raw]
 
@@ -5770,57 +6136,39 @@ w2_var, _ = create_slider('w(p)%', 0.0, 100.0, defaults['w2'], 0.1,
 occ_frame = CollapsibleFrame(right_col, text='Site Occupancies')
 occ_frame.pack(fill=tk.X, padx=5, pady=5)
 
-ttk.Label(occ_frame.frame, text="Occupancy Site 1").pack(padx=5, pady=2)
-occ_scale1 = ttk.Scale(
-    occ_frame.frame,
-    from_=0.0,
-    to=1.0,
-    orient=tk.HORIZONTAL,
-    variable=occ_var1,
-    command=update_occupancies
-)
-occ_scale1.pack(fill=tk.X, padx=5, pady=2)
-
-ttk.Label(occ_frame.frame, text="Occupancy Site 2").pack(padx=5, pady=2)
-occ_scale2 = ttk.Scale(
-    occ_frame.frame,
-    from_=0.0,
-    to=1.0,
-    orient=tk.HORIZONTAL,
-    variable=occ_var2,
-    command=update_occupancies
-)
-occ_scale2.pack(fill=tk.X, padx=5, pady=2)
-
-ttk.Label(occ_frame.frame, text="Occupancy Site 3").pack(padx=5, pady=2)
-occ_scale3 = ttk.Scale(
-    occ_frame.frame,
-    from_=0.0,
-    to=1.0,
-    orient=tk.HORIZONTAL,
-    variable=occ_var3,
-    command=update_occupancies
-)
-occ_scale3.pack(fill=tk.X, padx=5, pady=2)
+occ_scale_widgets = []
+for idx, occ_var in enumerate(occ_vars):
+    ttk.Label(
+        occ_frame.frame,
+        text=_occupancy_label_text(idx),
+    ).pack(padx=5, pady=2)
+    occ_scale = ttk.Scale(
+        occ_frame.frame,
+        from_=0.0,
+        to=1.0,
+        orient=tk.HORIZONTAL,
+        variable=occ_var,
+        command=update_occupancies,
+    )
+    occ_scale.pack(fill=tk.X, padx=5, pady=2)
+    occ_scale_widgets.append(occ_scale)
 
 # --- Add numeric input fields and a Force Update button ---
 occ_entry_frame = ttk.Frame(occ_frame.frame)
 occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
+occ_entry_widgets = []
 
-# Occupancy input for Site 1.
-ttk.Label(occ_entry_frame, text="Input Occupancy Site 1:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
-occ_entry1 = ttk.Entry(occ_entry_frame, textvariable=occ_var1, width=5)
-occ_entry1.grid(row=0, column=1, padx=5, pady=2)
-
-# Occupancy input for Site 2.
-ttk.Label(occ_entry_frame, text="Input Occupancy Site 2:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
-occ_entry2 = ttk.Entry(occ_entry_frame, textvariable=occ_var2, width=5)
-occ_entry2.grid(row=1, column=1, padx=5, pady=2)
-
-# Occupancy input for Site 3.
-ttk.Label(occ_entry_frame, text="Input Occupancy Site 3:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
-occ_entry3 = ttk.Entry(occ_entry_frame, textvariable=occ_var3, width=5)
-occ_entry3.grid(row=2, column=1, padx=5, pady=2)
+for idx, occ_var in enumerate(occ_vars):
+    ttk.Label(
+        occ_entry_frame,
+        text=_occupancy_label_text(idx, input_label=True) + ":",
+    ).grid(row=idx, column=0, sticky="w", padx=5, pady=2)
+    occ_entry = ttk.Entry(occ_entry_frame, textvariable=occ_var, width=7)
+    occ_entry.grid(row=idx, column=1, padx=5, pady=2, sticky="ew")
+    occ_entry.bind("<Return>", update_occupancies)
+    occ_entry.bind("<FocusOut>", update_occupancies)
+    occ_entry_widgets.append(occ_entry)
+occ_entry_frame.columnconfigure(1, weight=1)
 
 def main(write_excel_flag=None):
     """Entry point for running the GUI application.

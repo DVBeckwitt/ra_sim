@@ -1,6 +1,7 @@
 # stacking_fault.py - Markov HT with diffuse-consistent F^2, C2H, and factors
 
 import os
+import re
 import numpy as np
 import io
 from contextlib import redirect_stdout
@@ -12,9 +13,10 @@ N_P, A_C = 3, 17.98e-10    # number of sublayers, real-space area (m^2)
 AREA    = (2*np.pi)**2 / A_C * N_P
 _TWO_PI = 2.0 * np.pi
 
-# Cache of base L grids and F2 values keyed by parameters that do not depend
-# on occupancy or stacking probability. Each entry: {(h,k): {"L": array, "F2": array}}
+# Cache of base L grids and F2 values keyed by geometry and occupancy mapping.
+# Each entry: {(h,k): {"L": array, "F2": array}}
 _HT_BASE_CACHE: dict[tuple, dict] = {}
+_HT_BASE_CACHE_MAX_ENTRIES = 24
 
 # ----------------------------- occupancy helper -----------------------------
 def _temp_cif_with_occ(cif_in: str, occ):
@@ -24,7 +26,7 @@ def _temp_cif_with_occ(cif_in: str, occ):
 
     Accepts:
       - scalar      -> global factor
-      - list/tuple  -> per-site factors; if length != n_sites, occ[0] is used.
+      - list/tuple  -> per-site factors; truncated/extended as needed.
     """
     import tempfile, CifFile
 
@@ -41,15 +43,32 @@ def _temp_cif_with_occ(cif_in: str, occ):
         occ_field = ['1.0'] * (len(labels) if isinstance(labels, list) else 1)
         block['_atom_site_occupancy'] = occ_field
 
-    # harmonise occ -> list of factors
-    if isinstance(occ, (list, tuple)):
-        if len(occ) != len(occ_field):
-            occ = [occ[0]] * len(occ_field)
-    else:
-        occ = [occ] * len(occ_field)
+    def _parse_cif_float(raw):
+        txt = str(raw).strip()
+        try:
+            return float(txt)
+        except (TypeError, ValueError):
+            # CIF numeric fields can include uncertainty suffixes like 0.50(2).
+            m = re.match(r"[-+0-9.eE]+", txt)
+            if m is None:
+                return 1.0
+            return float(m.group(0))
 
-    for i, fac in enumerate(occ):
-        occ_field[i] = str(float(occ_field[i]) * float(fac))
+    n_sites = len(occ_field)
+
+    # Harmonize occupancy factors to per-site values.
+    if isinstance(occ, (list, tuple)):
+        factors = [float(v) for v in occ]
+        if len(factors) < n_sites:
+            fill = factors[-1] if factors else 1.0
+            factors.extend([fill] * (n_sites - len(factors)))
+        else:
+            factors = factors[:n_sites]
+    else:
+        factors = [float(occ)] * n_sites
+
+    for i, fac in enumerate(factors):
+        occ_field[i] = str(_parse_cif_float(occ_field[i]) * fac)
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.cif')
     tmp.close()
@@ -77,15 +96,48 @@ def _cell_c_from_cif(cif_path: str) -> float:
 
 
 def _sites_from_cif(cif_path: str):
-    """Return atomic sites from cif_path with symmetry applied."""
+    """Return atomic sites with occupancy from cif_path with symmetry applied."""
+    return _sites_from_cif_with_factors(cif_path, occ_factors=1.0)
+
+
+def _normalize_occ_factors(occ_factors, n_sites: int) -> np.ndarray:
+    """Return one occupancy scale factor per generated structure site."""
+
+    n_sites = int(max(1, n_sites))
+    if isinstance(occ_factors, (list, tuple, np.ndarray)):
+        values = [float(v) for v in occ_factors]
+        if not values:
+            values = [1.0]
+        if len(values) < n_sites:
+            values.extend([values[-1]] * (n_sites - len(values)))
+        else:
+            values = values[:n_sites]
+        return np.asarray(values, dtype=np.float64)
+
+    return np.full(n_sites, float(occ_factors), dtype=np.float64)
+
+
+def _sites_from_cif_with_factors(cif_path: str, occ_factors=1.0):
+    """Return atomic sites with per-generated-site occupancy factors applied."""
     import Dans_Diffraction as dif
     xtl = dif.Crystal(str(cif_path))
     xtl.Symmetry.generate_matrices()
     xtl.generate_structure()
     st = xtl.Structure
+    n_sites = len(st.u)
+    occ_vals = getattr(st, "occupancy", None)
+    if occ_vals is None:
+        occ_vals = np.ones(n_sites, dtype=np.float64)
+    site_factors = _normalize_occ_factors(occ_factors, n_sites)
     return [
-        (float(st.u[i]), float(st.v[i]), float(st.w[i]), str(st.type[i]))
-        for i in range(len(st.u))
+        (
+            float(st.u[i]),
+            float(st.v[i]),
+            float(st.w[i]),
+            str(st.type[i]),
+            float(occ_vals[i]) * float(site_factors[i]),
+        )
+        for i in range(n_sites)
     ]
 
 
@@ -94,24 +146,28 @@ def _energy_kev_from_lambda(lambda_a: float) -> float:
     return (12398.4193 / float(lambda_a)) / 1000.0
 
 
-# Scattering-factor composition identical to diffuse_cif_toggle.py
-# f0 from ionic species, dispersion corrections from neutral species at given energy.
-ION   = {"Pb": "Pb2+", "I": "I1-"}
-NEUTR = {"Pb": "Pb",   "I": "I"}
+# Prefer known ionic scattering-factor labels when available; fall back to
+# neutral-element labels for all other species.
+IONIC_F0_LABELS = {
+    "Pb": "Pb2+",
+    "I": "I1-",
+}
 
 def _element_key(sym: str) -> str:
-    """Map CIF site symbol to periodic table symbol used in the tables."""
-    # Handle common cases like 'Pb1', 'I1', 'I', 'Pb'
-    s = "".join(ch for ch in sym if ch.isalpha())
-    if s in ION:
-        return s
-    # Fallback: try first letter uppercase + optional second letter lowercase
-    s = sym.strip()
-    if s and s[0].isalpha():
-        cand = s[0].upper() + (s[1].lower() if len(s) > 1 and s[1].isalpha() else "")
-        if cand in ION:
-            return cand
-    raise KeyError(f"Unknown element symbol in CIF type '{sym}'")
+    """Map CIF site symbol to a periodic-table element key."""
+
+    text = str(sym).strip()
+    m = re.match(r"([A-Za-z]{1,2})", text)
+    if m:
+        token = m.group(1)
+    else:
+        letters = "".join(ch for ch in text if ch.isalpha())
+        if not letters:
+            raise KeyError(f"Unknown element symbol in CIF type '{sym}'")
+        token = letters[:2]
+
+    token = token[0].upper() + (token[1].lower() if len(token) > 1 else "")
+    return token
 
 def f_comp(el_sym: str, Q: np.ndarray, energy_kev: float) -> np.ndarray:
     """
@@ -131,14 +187,25 @@ def f_comp(el_sym: str, Q: np.ndarray, energy_kev: float) -> np.ndarray:
         xray_dispersion_corrections,
     )
 
-    key = _element_key(el_sym)
+    element = _element_key(el_sym)
     q = np.asarray(Q, dtype=float).reshape(-1)
-    # f0 from ionic form
-    f0 = xray_scattering_factor([ION[key]], q)[:, 0]
-    # dispersion from neutral form
-    f1, f2 = xray_dispersion_corrections([NEUTR[key]], energy_kev=[float(energy_kev)])
-    f1 = float(f1[0, 0])
-    f2 = float(f2[0, 0])
+
+    # f0: prefer configured ionic label, otherwise neutral element symbol.
+    f0_label = IONIC_F0_LABELS.get(element, element)
+    try:
+        f0 = xray_scattering_factor([f0_label], q)[:, 0]
+    except Exception:
+        f0 = xray_scattering_factor([element], q)[:, 0]
+
+    # f' + i f'': use neutral element label when available.
+    try:
+        f1, f2 = xray_dispersion_corrections([element], energy_kev=[float(energy_kev)])
+        f1 = float(f1[0, 0])
+        f2 = float(f2[0, 0])
+    except Exception:
+        f1 = 0.0
+        f2 = 0.0
+
     out = f0 + f1 + 1j * f2
     return out.reshape(Q.shape)
 
@@ -160,11 +227,11 @@ def _F2(h: int, k: int, L: np.ndarray, c_2h: float, energy_kev: float, sites) ->
     """
     Q = _Qmag(h, k, L, c_2h)
     F = np.zeros_like(Q, dtype=complex)
-    for x, y, z, sym in sites:
+    for x, y, z, sym, occ in sites:
         ff = f_comp(sym, Q, energy_kev)
         phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
         phase_z  = np.exp(1j * _TWO_PI * (L * (float(z) / 3.0)))
-        F += ff * phase_xy * phase_z
+        F += float(occ) * ff * phase_xy * phase_z
     return np.abs(F) ** 2
 
 
@@ -289,9 +356,10 @@ def _get_base_curves(
     two_theta_max: float | None = None,
     lambda_: float = 1.54,
     c_lattice: float | None = None,
+    occ_factors=1.0,
 ):
     """
-    Return cached {(h,k): {"L": ..., "F2": ...}} independent of occ and p.
+    Return cached {(h,k): {"L": ..., "F2": ...}} for a given occupancy mapping.
 
     Conventions align with diffuse_cif_toggle:
       - c_2h is read directly from the CIF (no 3x).
@@ -305,6 +373,16 @@ def _get_base_curves(
             raise ValueError("Specify hk_list or mx")
         hk_list = [(h, k) for h, k in itertools.product(range(-mx + 1, mx), repeat=2)]
 
+    if isinstance(occ_factors, (list, tuple, np.ndarray)):
+        occ_key = tuple(
+            np.round(
+                np.asarray(occ_factors, dtype=np.float64).reshape(-1),
+                12,
+            ).tolist()
+        )
+    else:
+        occ_key = float(occ_factors)
+
     key = (
         os.path.abspath(cif_path),
         tuple(hk_list),
@@ -313,13 +391,14 @@ def _get_base_curves(
         two_theta_max,
         float(lambda_),
         None if c_lattice is None else float(c_lattice),
+        occ_key,
     )
     cached = _HT_BASE_CACHE.get(key)
     if cached is not None:
         return cached
 
     c_2h = _cell_c_from_cif(cif_path)                # no *3
-    sites = _sites_from_cif(cif_path)
+    sites = _sites_from_cif_with_factors(cif_path, occ_factors=occ_factors)
     if L_step <= 0.0:
         raise ValueError("L_step must be > 0")
     if L_step < 1e-4:
@@ -352,6 +431,12 @@ def _get_base_curves(
             out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
+    # Bound cache growth because occupancy sliders can produce many unique keys.
+    while len(_HT_BASE_CACHE) > _HT_BASE_CACHE_MAX_ENTRIES:
+        try:
+            _HT_BASE_CACHE.pop(next(iter(_HT_BASE_CACHE)))
+        except StopIteration:
+            break
     return out
 
 
@@ -360,7 +445,7 @@ def ht_Iinf_dict(
     cif_path: str,
     hk_list=None,                 # explicit list or None
     mx: int | None = None,        # generate -mx+1..mx-1 if hk_list is None
-    occ=1.0,                      # occupancy scaling
+    occ=1.0,                      # occupancy scaling per generated structure site
     p: float = 0.1,
     L_step: float = 0.01,
     L_max: float = 10.0,
@@ -375,52 +460,43 @@ def ht_Iinf_dict(
     Hendricks–Teller intensities using the Markov transfer model.
 
     Returns {(h,k): {'L':..., 'I':...}} with F² and C2H conventions identical
-    to diffuse_cif_toggle.py. The 'occ' parameter applies a temporary CIF with
-    scaled occupancies before computing F².  When ``c_lattice`` is provided the
+    to diffuse_cif_toggle.py. The 'occ' parameter is applied per generated
+    structure site (symmetry-expanded), so Pb/I1/I2 can be controlled
+    independently when the structure contains those three positions.
+    When ``c_lattice`` is provided the
     two-theta clipping window is expanded or contracted according to that
     effective c-axis length instead of the raw 2H value from the CIF.
     When ``finite_stack`` is ``True`` the per-layer finite-thickness factor for
     ``stack_layers`` layers is applied instead of the infinite-domain limit.
     """
-    cif_to_use = cif_path
-    cleanup = None
-    try:
-        if isinstance(occ, (list, tuple)) or float(occ) != 1.0:
-            cif_to_use, cleanup = _temp_cif_with_occ(cif_path, occ)
+    base = _get_base_curves(
+        cif_path=cif_path,
+        hk_list=hk_list,
+        mx=mx,
+        L_step=L_step,
+        L_max=L_max,
+        two_theta_max=two_theta_max,
+        lambda_=lambda_,
+        c_lattice=c_lattice,
+        occ_factors=occ,
+    )
 
-        base = _get_base_curves(
-            cif_path=cif_to_use,
-            hk_list=hk_list,
-            mx=mx,
-            L_step=L_step,
-            L_max=L_max,
-            two_theta_max=two_theta_max,
-            lambda_=lambda_,
-            c_lattice=c_lattice,
+    out = {}
+    finite_layers = int(max(1, stack_layers)) if finite_stack else None
+
+    for (h, k), data in base.items():
+        L_vals = data["L"]
+        F2 = data["F2"]
+        I = _I_inf_markov(
+            L_vals,
+            p,
+            h,
+            k,
+            F2,
+            finite_layers=finite_layers,
         )
-
-        out = {}
-        finite_layers = int(max(1, stack_layers)) if finite_stack else None
-
-        for (h, k), data in base.items():
-            L_vals = data["L"]
-            F2 = data["F2"]
-            I = _I_inf_markov(
-                L_vals,
-                p,
-                h,
-                k,
-                F2,
-                finite_layers=finite_layers,
-            )
-            out[(h, k)] = {"L": L_vals.copy(), "I": I}
-        return out
-    finally:
-        if cleanup is not None:
-            try:
-                cleanup(cif_to_use)
-            except Exception:
-                pass
+        out[(h, k)] = {"L": L_vals.copy(), "I": I}
+    return out
 
 
 # ------------------------- array and rod grouping helpers -------------------

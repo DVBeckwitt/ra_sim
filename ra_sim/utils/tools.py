@@ -3,6 +3,9 @@
 import itertools
 import json
 import math
+import re
+import io as pyio
+from contextlib import redirect_stdout
 from PIL import Image
 
 import matplotlib.pyplot as plt
@@ -102,7 +105,8 @@ def _prepare_temp_cif(cif_path: str, occ) -> str:
 
     abs_path = os.path.abspath(cif_path)
     if abs_path not in _CIF_CACHE:
-        cf = CifFile.ReadCif(abs_path)
+        with redirect_stdout(pyio.StringIO()):
+            cf = CifFile.ReadCif(abs_path)
         block_name = list(cf.keys())[0]
         block = cf[block_name]
         occ_field = block.get("_atom_site_occupancy")
@@ -122,25 +126,39 @@ def _prepare_temp_cif(cif_path: str, occ) -> str:
     for i, val in enumerate(orig_vals):
         occ_field[i] = val
 
-    if isinstance(occ, (list, tuple)):
-        if len(occ) == len(occ_field):
-            for i in range(len(occ_field)):
-                occ_field[i] = str(float(orig_vals[i]) * float(occ[i]))
+    def _parse_cif_float(raw):
+        txt = str(raw).strip()
+        try:
+            return float(txt)
+        except (TypeError, ValueError):
+            m = re.match(r"[-+0-9.eE]+", txt)
+            if m is None:
+                return 1.0
+            return float(m.group(0))
+
+    n_sites = len(occ_field)
+    if isinstance(occ, (list, tuple, np.ndarray)):
+        factors = [float(v) for v in occ]
+        if not factors:
+            factors = [1.0]
+        if len(factors) < n_sites:
+            factors.extend([factors[-1]] * (n_sites - len(factors)))
         else:
-            fac = float(occ[0])
-            for i in range(len(occ_field)):
-                occ_field[i] = str(float(orig_vals[i]) * fac)
+            factors = factors[:n_sites]
     else:
-        fac = float(occ)
-        for i in range(len(occ_field)):
-            occ_field[i] = str(float(orig_vals[i]) * fac)
+        factors = [float(occ)] * n_sites
+
+    for i in range(n_sites):
+        occ_field[i] = str(_parse_cif_float(orig_vals[i]) * factors[i])
 
     tmp_path = _TMP_CIF_PATH[abs_path]
     try:
-        CifFile.WriteCif(cf, tmp_path)
+        with redirect_stdout(pyio.StringIO()):
+            CifFile.WriteCif(cf, tmp_path)
     except AttributeError:
         with open(tmp_path, "w") as f:
-            f.write(cf.WriteOut())
+            with redirect_stdout(pyio.StringIO()):
+                f.write(cf.WriteOut())
     return tmp_path
 
 def detect_blobs(
@@ -376,16 +394,15 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     and normalize intensities. This version updates the occupancy values in the
     atom-site loop by writing a temporary CIF file with the new occupancies.
     
-    The occupancy modification uses the given occupancy array: if occ is a list 
-    (or tuple) and its length matches the number of occupancy entries in the CIF, 
-    each occupancy is multiplied by the corresponding occ value; otherwise, occ[0]
-    (or occ if a single number) is used uniformly.
+    The occupancy modification uses the given occupancy array: if ``occ`` is a
+    sequence it is applied per CIF site (truncated or extended using its last
+    value when lengths differ); if ``occ`` is scalar it is applied uniformly.
     
     Parameters:
       mx                 : maximum index bound (h,k: -mx+1...mx-1, l: 1...mx-1)
       cif_file           : path to the CIF file
-      occ                : occupancy multiplier(s); if list and its length equals that of the occupancy
-                           entries in the CIF, each is applied individually, otherwise the first element is used uniformly.
+      occ                : occupancy multiplier(s); if list, values are applied
+                           per site (truncated/extended as needed).
       lambda_            : X-ray wavelength in Å.
       energy             : energy in keV (default 8.047)
       intensity_threshold: minimum intensity to keep a reflection.
