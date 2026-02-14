@@ -1,16 +1,22 @@
 # RA Simulation
 
-RA Simulation is an open-source Distorted-Wave Born Approximation (DWBA) forward model for quantitative analysis of diffraction from two-dimensional oriented powders. It refines full area-detector images by jointly modeling detector geometry, mosaic orientation distributions, stacking disorder, and crystallographic structure factors. It accompanies the manuscript "Quantitative simulation and refinement of diffraction from 2D oriented powders."
-
-## GUI Screenshots
-
 ![Simulation View](docs/images/simulation.png)
+
+The Simulation view is the main diffraction workspace. It shows the forward-modeled detector pattern and is the first place to check beam center, tilt, ring or cap placement, and coarse intensity agreement with experiment.
 
 ![Phi-vs-Theta View](docs/images/phivstheta.png)
 
+The Phi-vs-Theta view maps the pattern into reduced coordinates. Use it to confirm that features land at the right scattering angle and azimuth before tuning higher-order details.
+
 ![Integration View](docs/images/integration.png)
 
+The Integration view compares reduced 1D and 2D summaries, such as radial (2theta) and azimuthal (phi) integrations and caked intensity. Use it to localize mismatch by angle or sector and to verify that alignment errors are not masked by full-image comparisons.
+
 ![Calibrant View](docs/images/calibrant.png)
+
+The Calibrant view (hBN fitter) is for detector geometry and tilt from ring data. Load calibrant and dark files, fit rings, refine geometry, then save or load NPZ bundles that provide clean starting geometry for subsequent sample simulations.
+
+RA Simulation is an open-source Distorted-Wave Born Approximation (DWBA) forward model for quantitative analysis of diffraction from two-dimensional oriented powders. It refines full area-detector images by jointly modeling detector geometry, mosaic orientation distributions, stacking disorder, and crystallographic structure factors. It accompanies the manuscript "Quantitative simulation and refinement of diffraction from 2D oriented powders."
 
 ## Features
 
@@ -59,50 +65,36 @@ run_ra_sim.bat hbn-fit
 
 The application loads example images specified in `config/dir_paths.yaml`. A typical workflow is: refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. Unit tests live in `tests` and run with `pytest`.
 
-## GUI Views (What Each One Is)
+## GUI views
 
 Project document: [`docs/gui_views.md`](docs/gui_views.md)
 
-### 1) Simulation
+- **Simulation**  
+  The main diffraction workspace for matching full detector images. Use it first to validate ring or cap placement, intensity scale, and the largest systematic geometry errors.
 
-The simulation image is the main diffraction workspace. It shows the modeled detector pattern and is the first view to use when checking whether the overall ring or cap geometry and the coarse intensity distribution match experiment.
+- **Phi-vs-Theta**  
+  A reduced-coordinate view for validating azimuthal and radial placement. It is the fastest way to see systematic shifts in 2theta or phi across the pattern.
 
-![Simulation View](docs/images/simulation.png)
+- **Integration**  
+  Radial (2theta) and azimuthal (phi) integrations plus caked intensity. Use it to isolate where mismatch lives and to confirm that improvements in the full image are real in reduced coordinates.
 
-### 2) Phi-vs-Theta and Integration
+- **Calibrant**  
+  Geometry and tilt refinement using ring data (hBN fitter). Save NPZ bundles so refined geometry transfers cleanly into sample simulation.
 
-Use the integration views next:
+- **Parameters**  
+  The control surface for geometry, lattice values, mosaic broadening, stacking probabilities, occupancies, and fit toggles. Use it for reproducible iteration via save and load.
 
-- Radial integration (`2theta`) compares intensity versus scattering angle.
-- Azimuthal integration (`phi`) compares intensity versus azimuth.
-- 2D caked (integration) view highlights region-specific mismatch.
-
-This stage validates alignment and shape in reduced coordinates before deeper refinement.
-
-![Phi-vs-Theta View](docs/images/phivstheta.png)
-
-![Integration View](docs/images/integration.png)
-
-### 3) Calibrant
-
-Calibrant mode (hBN fitter) sets detector geometry and tilt from ring data. Load calibrant and dark files, fit rings, refine, then save or load NPZ bundles that feed clean starting geometry back into simulation.
-
-![Calibrant View](docs/images/calibrant.png)
-
-### 4) Parameters
-
-The parameters panel controls geometry, lattice values, mosaic broadening, beam center, stacking probabilities, occupancies, and fit toggles. It is the main control surface for iterative refinement and reproducible save and load workflows.
-
-![Parameters View](docs/images/parameters.png)
-
-## Optics Transport Modes
+## Optics transport modes
 
 The GUI `Optics Transport` selector provides two named modes:
 
-- **Original Fast Approx (Fresnel + Beer-Lambert)** (`FRESNEL_CTR_DAMPING`, stored as `fast`): applies Fresnel interface weights with Beer-Lambert entry and exit attenuation.
-- **Complex-k DWBA slab optics (Precise)** (`COMPLEX_K_DWBA_SLAB`, stored as `exact`): phase-matched complex-k slab refraction and transmission with the full transport path implemented in the simulator.
+- **Original Fast Approx (Fresnel + Beer-Lambert)** (`FRESNEL_CTR_DAMPING`, stored as `fast`)  
+  Applies Fresnel interface weights with Beer-Lambert entry and exit attenuation.
 
-The fast mode is intentionally approximate and omits coherent internal multiple-reflection and full coherent internal phase-coupling terms. Use the precise mode when those effects matter.
+- **Complex-k DWBA slab optics (Precise)** (`COMPLEX_K_DWBA_SLAB`, stored as `exact`)  
+  Uses phase-matched complex-k slab refraction and transmission with the full transport path implemented in the simulator.
+
+The fast mode is intentionally approximate and omits coherent internal multiple-reflection and full coherent internal phase-coupling terms. Use the precise mode when those effects control intensity or fringe structure in your data.
 
 ## How GUI geometry fitting chooses what to match
 
@@ -141,7 +133,7 @@ python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml
 
 When a bundle NPZ is provided in the paths file (or via `--load-bundle`), `--highres-refine` rebuilds the background and refits using the saved ellipses as starting guesses at full resolution.
 
-**Why five clicks per ring?** An unconstrained ellipse has five free parameters (center `xc, yc`, semi-axes `a, b`, and rotation `theta`). You need at least five non-collinear points to uniquely define it. Fewer points underdetermine the fit, so the workflow requires five unless you reuse a saved click profile or bundle that already contains the needed geometry.
+**Why five clicks per ring?** An unconstrained ellipse has five free parameters: center `(xc, yc)`, semi-axes `(a, b)`, and rotation `theta`. You need at least five non-collinear points to uniquely define it. Fewer points underdetermine the fit, so the workflow requires five unless you reuse a saved click profile or bundle that already contains the needed geometry.
 
 After each run, the overlay figure shows fitted ellipses over the background-subtracted image and annotates `(xc, yc, a, b, theta)`. The saved fit profile also records an estimated detector tilt. The GUI and the `simulate` CLI subcommand use this tilt as starting `Rot1` and `Rot2` defaults for the next simulation.
 
@@ -157,7 +149,7 @@ set RA_SIM_DEBUG=1     # Windows CMD
 
 ## Limitations
 
-A common critique is that some datasets demand fully dynamical diffraction or more complete internal multiple-reflection physics than a practical DWBA workflow provides. The practical rebuttal is that RA Simulation exposes a precise slab-transport option and supports end-to-end refinement against full detector images, which often makes the dominant systematic errors visible and reducible in the fit.
+A common critique is that some datasets demand fully dynamical diffraction or more complete internal multiple-reflection physics than a practical DWBA workflow provides. The practical rebuttal is that RA Simulation exposes a precise slab-transport option and supports end-to-end refinement against full detector images, which often makes the dominant systematic errors visible and reducible within a controlled model.
 
 ## Citation
 
