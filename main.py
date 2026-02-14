@@ -441,10 +441,22 @@ tilt_hint = load_tilt_hint()
 if tilt_hint:
     Gamma_initial = float(tilt_hint.get("rot1_rad", Gamma_initial))
     gamma_initial = float(tilt_hint.get("rot2_rad", gamma_initial))
+    hinted_distance = tilt_hint.get("distance_m")
+    try:
+        hinted_distance = float(hinted_distance)
+    except (TypeError, ValueError):
+        hinted_distance = None
+    if hinted_distance is not None and np.isfinite(hinted_distance):
+        Distance_CoR_to_Detector = hinted_distance
     print(
         "Initialized detector tilt from last hBN fit profile "
         f"(Rot1={Gamma_initial:.4f} rad, Rot2={gamma_initial:.4f} rad)."
     )
+    if hinted_distance is not None and np.isfinite(hinted_distance):
+        print(
+            "Initialized detector distance from last hBN fit profile "
+            f"(Dist={hinted_distance:.4f} m)."
+        )
 
 image_size = detector_config.get("image_size", 3000)
 pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
@@ -4239,19 +4251,13 @@ fit_theta_var = tk.BooleanVar(value=True)  # theta_initial
 fit_psi_z_var = tk.BooleanVar(value=True)
 fit_chi_var   = tk.BooleanVar(value=True)
 fit_cor_var   = tk.BooleanVar(value=True)
-fit_gamma_var = tk.BooleanVar(value=True)
-fit_Gamma_var = tk.BooleanVar(value=True)
-fit_corto_var = tk.BooleanVar(value=True)
 
-ttk.Checkbutton(fit_frame, text="zb",    variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="zs",    variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="psi_z", variable=fit_psi_z_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="gamma", variable=fit_gamma_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="Gamma", variable=fit_Gamma_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="Corto", variable=fit_corto_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="z_b beam offset", variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="z_s sample offset", variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="θ sample tilt", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="ψ goniometer yaw", variable=fit_psi_z_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="χ sample pitch", variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="φ axis angle", variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     background_backend_frame = ttk.LabelFrame(root, text="Background Backend (debug)")
@@ -4639,9 +4645,6 @@ def on_fit_geometry_click():
     if fit_psi_z_var.get(): var_names.append('psi_z')
     if fit_chi_var.get():   var_names.append('chi')
     if fit_cor_var.get():   var_names.append('cor_angle')
-    if fit_gamma_var.get(): var_names.append('gamma')
-    if fit_Gamma_var.get(): var_names.append('Gamma')
-    if fit_corto_var.get(): var_names.append('corto_detector')
     if not var_names:
         progress_label_geometry.config(text="No parameters selected!")
         return
@@ -6707,28 +6710,28 @@ def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=Fals
     return var, scale
 
 theta_initial_var, theta_initial_scale = make_slider(
-    'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
+    'θ sample tilt', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
 )
 cor_angle_var, cor_angle_scale = make_slider(
-    'CoR Axis Angle', -5.0, 5.0, defaults['cor_angle'], 0.01, geo_frame.frame
+    'φ axis angle', -5.0, 5.0, defaults['cor_angle'], 0.01, geo_frame.frame
 )
 gamma_var, gamma_scale = make_slider(
-    'Gamma', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
+    'γ detector pitch', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
 )
 Gamma_var, Gamma_scale = make_slider(
-    'Detector Rotation Γ', -4, 4, defaults['Gamma'], 0.001, geo_frame.frame
+    'Γ detector yaw', -4, 4, defaults['Gamma'], 0.001, geo_frame.frame
 )
 chi_var, chi_scale = make_slider(
-    'Chi', -1, 1, defaults['chi'], 0.001, geo_frame.frame
+    'χ sample pitch', -1, 1, defaults['chi'], 0.001, geo_frame.frame
 )
 psi_z_var, psi_z_scale = make_slider(
-    'Goniometer Z', -5.0, 5.0, defaults['psi_z'], 0.01, geo_frame.frame
+    'ψ goniometer yaw', -5.0, 5.0, defaults['psi_z'], 0.01, geo_frame.frame
 )
 zs_var, zs_scale = make_slider(
-    'Zs', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame
+    'z_s sample offset', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame
 )
 zb_var, zb_scale = make_slider(
-    'Zb', -2.0e-3, 2e-3, defaults['zb'], 0.0001, geo_frame.frame
+    'z_b beam offset', -2.0e-3, 2e-3, defaults['zb'], 0.0001, geo_frame.frame
 )
 debye_x_var, debye_x_scale = make_slider(
     'Debye Qz', 0.0, 1.0, defaults['debye_x'], 0.001, debye_frame.frame
@@ -6737,7 +6740,7 @@ debye_y_var, debye_y_scale = make_slider(
     'Debye Qr', 0.0, 1.0, defaults['debye_y'], 0.001, debye_frame.frame
 )
 corto_detector_var, corto_detector_scale = make_slider(
-    'CortoDetector', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, detector_frame.frame
+    'δ detector distance', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, detector_frame.frame
 )
 a_var, a_scale = make_slider(
     'a (Å)', 3.5, 8.0, defaults['a'], 0.01, lattice_frame.frame
