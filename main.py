@@ -304,6 +304,7 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
+from ra_sim.gui.diffuse_cif_toggle import open_diffuse_cif_toggle_algebraic
 from ra_sim.debug_utils import debug_print, is_debug_enabled
 from ra_sim.hbn import (
     build_hbn_geometry_debug_trace,
@@ -1749,6 +1750,8 @@ def _select_peak_by_index(
     sync_hkl_vars: bool = True,
     clicked_display: tuple[float, float] | None = None,
     clicked_native: tuple[float, float] | None = None,
+    selected_display: tuple[float, float] | None = None,
+    selected_native: tuple[float, float] | None = None,
 ):
     global selected_hkl_target, selected_peak_record
     if idx < 0 or idx >= len(peak_positions):
@@ -1757,8 +1760,13 @@ def _select_peak_by_index(
     px, py = peak_positions[idx]
     H, K, L = peak_millers[idx]
     I = peak_intensities[idx]
+    disp_col, disp_row = (
+        (float(selected_display[0]), float(selected_display[1]))
+        if selected_display is not None
+        else (float(px), float(py))
+    )
 
-    selected_peak_marker.set_data([px], [py])
+    selected_peak_marker.set_data([disp_col], [disp_row])
     selected_peak_marker.set_visible(True)
 
     selected_hkl_target = (int(H), int(K), int(L))
@@ -1768,6 +1776,15 @@ def _select_peak_by_index(
             selected_peak_record["clicked_display_col"] = float(clicked_display[0])
             selected_peak_record["clicked_display_row"] = float(clicked_display[1])
         if clicked_native is not None:
+            selected_peak_record["clicked_native_col"] = float(clicked_native[0])
+            selected_peak_record["clicked_native_row"] = float(clicked_native[1])
+        if selected_display is not None:
+            selected_peak_record["selected_display_col"] = float(selected_display[0])
+            selected_peak_record["selected_display_row"] = float(selected_display[1])
+        if selected_native is not None:
+            selected_peak_record["selected_native_col"] = float(selected_native[0])
+            selected_peak_record["selected_native_row"] = float(selected_native[1])
+        elif clicked_native is not None:
             selected_peak_record["selected_native_col"] = float(clicked_native[0])
             selected_peak_record["selected_native_row"] = float(clicked_native[1])
         else:
@@ -1782,7 +1799,7 @@ def _select_peak_by_index(
             selected_l_var.set(str(int(L)))
 
     progress_label_positions.config(
-        text=f"{prefix}: HKL=({H} {K} {L})  pixel=({px},{py})  I={I:.2g}"
+        text=f"{prefix}: HKL=({H} {K} {L})  pixel=({disp_col:.1f},{disp_row:.1f})  I={I:.2g}"
     )
     canvas.draw_idle()
     return True
@@ -1941,6 +1958,143 @@ def _open_selected_peak_intersection_figure():
         )
 
 
+def _brightest_hit_native_from_table(hit_table) -> tuple[float, float] | None:
+    """Return (native_col, native_row) for the strongest valid hit row."""
+
+    try:
+        arr = np.asarray(hit_table, dtype=float)
+    except Exception:
+        return None
+
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 3:
+        return None
+
+    finite_mask = (
+        np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
+    )
+    if not np.any(finite_mask):
+        return None
+
+    valid = arr[finite_mask]
+    best_idx = int(np.argmax(valid[:, 0]))
+    return float(valid[best_idx, 1]), float(valid[best_idx, 2])
+
+
+def _simulate_ideal_hkl_native_center(
+    h: int,
+    k: int,
+    l: int,
+    av: float,
+    cv: float,
+) -> tuple[float, float] | None:
+    """Simulate a single HKL and return its no-mosaic/no-divergence center."""
+
+    optics_mode_flag = _current_optics_mode_flag()
+
+    def _run_single(
+        beam_x: np.ndarray,
+        beam_y: np.ndarray,
+        theta_arr: np.ndarray,
+        phi_arr: np.ndarray,
+        wavelength_arr: np.ndarray,
+        *,
+        forced_sample_indices: np.ndarray | None = None,
+    ) -> tuple[float, float] | None:
+        image_buf = np.zeros((int(image_size), int(image_size)), dtype=np.float64)
+        miller_arr = np.array([[float(h), float(k), float(l)]], dtype=np.float64)
+        intens_arr = np.array([1.0], dtype=np.float64)
+        try:
+            _image, hit_tables, *_ = process_peaks_parallel(
+                miller_arr,
+                intens_arr,
+                int(image_size),
+                float(av),
+                float(cv),
+                float(lambda_),
+                image_buf,
+                float(corto_detector_var.get()),
+                float(gamma_var.get()),
+                float(Gamma_var.get()),
+                float(chi_var.get()),
+                float(psi),
+                float(psi_z_var.get()),
+                float(zs_var.get()),
+                float(zb_var.get()),
+                n2,
+                beam_x,
+                beam_y,
+                theta_arr,
+                phi_arr,
+                1e-6,  # near-zero mosaic spread (avoid singular zero width)
+                1e-6,  # near-zero mosaic spread (avoid singular zero width)
+                0.0,  # pure Gaussian in the zero-width limit
+                wavelength_arr,
+                float(debye_x_var.get()),
+                float(debye_y_var.get()),
+                [float(center_x_var.get()), float(center_y_var.get())],
+                float(theta_initial_var.get()),
+                float(cor_angle_var.get()),
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.0, 1.0, 0.0]),
+                save_flag=0,
+                record_status=False,
+                optics_mode=optics_mode_flag,
+                single_sample_indices=forced_sample_indices,
+            )
+        except Exception:
+            return None
+
+        if hit_tables is None or len(hit_tables) == 0:
+            return None
+        return _brightest_hit_native_from_table(hit_tables[0])
+
+    # First try the strict no-divergence/no-offset beam sample.
+    strict_center = _run_single(
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([float(lambda_)], dtype=np.float64),
+    )
+    if strict_center is not None:
+        return strict_center
+
+    # Fallback: force the least-divergent sampled beam state from the profile.
+    beam_x = np.asarray(profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
+    beam_y = np.asarray(profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
+    theta_arr = np.asarray(profile_cache.get("theta_array", []), dtype=np.float64).ravel()
+    phi_arr = np.asarray(profile_cache.get("phi_array", []), dtype=np.float64).ravel()
+    wavelength_arr = np.asarray(
+        profile_cache.get("wavelength_array", []), dtype=np.float64
+    ).ravel()
+
+    n_samp = beam_x.size
+    if (
+        n_samp == 0
+        or beam_y.size != n_samp
+        or theta_arr.size != n_samp
+        or phi_arr.size != n_samp
+        or wavelength_arr.size != n_samp
+    ):
+        return None
+
+    metric = theta_arr * theta_arr + phi_arr * phi_arr
+    valid_metric = np.where(np.isfinite(metric), metric, np.inf)
+    best_idx = int(np.argmin(valid_metric))
+    if not np.isfinite(valid_metric[best_idx]):
+        return None
+
+    forced = np.array([best_idx], dtype=np.int64)
+    return _run_single(
+        beam_x,
+        beam_y,
+        theta_arr,
+        phi_arr,
+        wavelength_arr,
+        forced_sample_indices=forced,
+    )
+
+
 def on_canvas_click(event):
     global _suppress_drag_press_once
 
@@ -1960,30 +2114,82 @@ def on_canvas_click(event):
         progress_label_positions.config(text="Run a simulation first.")
         return
 
-    # (x,y) from Matplotlib → integer detector pixels
-    cx, cy = int(round(event.xdata)), int(round(event.ydata))
+    click_col = float(event.xdata)
+    click_row = float(event.ydata)
 
     # Find nearest stored peak
     best_i, best_d2 = -1, float("inf")
+    best_i_val = float("-inf")
     for i, (px, py) in enumerate(peak_positions):
         if px < 0:              # invalid entries kept as (-1,-1)
             continue
-        d2 = (px - cx)**2 + (py - cy)**2
-        if d2 < best_d2:
+        d2 = (px - click_col) ** 2 + (py - click_row) ** 2
+        val = peak_intensities[i]
+        score_val = float(val) if np.isfinite(val) else float("-inf")
+        if d2 < best_d2 - 1e-9 or (abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val):
             best_i, best_d2 = i, d2
+            best_i_val = score_val
 
     if best_i == -1:
         progress_label_positions.config(text="No peaks on screen.")
         return
+    if best_d2 > float(HKL_PICK_MAX_DISTANCE_PX) ** 2:
+        progress_label_positions.config(
+            text=(
+                f"No simulated peak within {HKL_PICK_MAX_DISTANCE_PX:.0f}px "
+                f"(nearest is {best_d2**0.5:.1f}px away)."
+            )
+        )
+        return
 
+    cx, cy = int(round(click_col)), int(round(click_row))
     sim_shape = global_image_buffer.shape if global_image_buffer.size else (image_size, image_size)
-    native_col, native_row = _display_to_native_sim_coords(cx, cy, sim_shape)
+    clicked_native_col, clicked_native_row = _display_to_native_sim_coords(cx, cy, sim_shape)
+    selected_display = None
+    selected_native = None
+
+    if best_i < len(peak_records) and isinstance(peak_records[best_i], dict):
+        peak_record = peak_records[best_i]
+        try:
+            rec_h, rec_k, rec_l = tuple(int(np.rint(v)) for v in peak_millers[best_i])
+            rec_av = float(peak_record.get("av", float(a_var.get())))
+            rec_cv = float(peak_record.get("cv", float(c_var.get())))
+            ideal_native = _simulate_ideal_hkl_native_center(
+                rec_h, rec_k, rec_l, rec_av, rec_cv
+            )
+            if ideal_native is not None:
+                selected_native = ideal_native
+                selected_display = _native_sim_to_display_coords(
+                    ideal_native[0],
+                    ideal_native[1],
+                    sim_shape,
+                )
+        except Exception:
+            selected_display = None
+            selected_native = None
+
+    if selected_native is None and best_i < len(peak_records) and isinstance(peak_records[best_i], dict):
+        selected_native = (
+            float(peak_records[best_i].get("native_col", clicked_native_col)),
+            float(peak_records[best_i].get("native_row", clicked_native_row)),
+        )
+
+    prefix = f"Nearest peak (Δ={best_d2**0.5:.1f}px)"
+    if selected_display is not None:
+        snapped_dist = math.hypot(
+            float(selected_display[0]) - click_col,
+            float(selected_display[1]) - click_row,
+        )
+        prefix = f"Ideal HKL center (click Δ={snapped_dist:.1f}px)"
+
     picked = _select_peak_by_index(
         best_i,
-        prefix=f"Nearest peak (Δ={best_d2**0.5:.1f}px)",
+        prefix=prefix,
         sync_hkl_vars=True,
-        clicked_display=(float(cx), float(cy)),
-        clicked_native=(float(native_col), float(native_row)),
+        clicked_display=(click_col, click_row),
+        clicked_native=(float(clicked_native_col), float(clicked_native_row)),
+        selected_display=selected_display,
+        selected_native=selected_native,
     )
     if picked:
         _set_hkl_pick_mode(False)
@@ -3438,6 +3644,9 @@ peak_millers = []
 peak_intensities = []
 peak_records = []
 selected_peak_record = None
+HKL_PICK_MAX_HITS_PER_REFLECTION = 2
+HKL_PICK_MIN_SEPARATION_PX = 2.0
+HKL_PICK_MAX_DISTANCE_PX = 12.0
 
 prev_background_visible = True
 last_bg_signature = None
@@ -3694,21 +3903,43 @@ def do_update():
     peak_intensities.clear()
     peak_records.clear()
 
+    max_hits_per_reflection = max(1, int(HKL_PICK_MAX_HITS_PER_REFLECTION))
+    min_sep_sq = float(HKL_PICK_MIN_SEPARATION_PX) ** 2
+
     # hit_tables is a numba.typed.List of 2-D arrays, one per reflection
     for table_idx, tbl in enumerate(max_positions_local):
-        if tbl.shape[0] == 0:          # nothing recorded for this HKL
+        tbl_arr = np.asarray(tbl, dtype=float)
+        if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0:
             continue
         av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
-        # each row → (I  xpix  ypix  ϕ  H  K  L)
-        for row_idx, row in enumerate(tbl):
+        row_order = np.argsort(tbl_arr[:, 0])[::-1]
+        chosen_rows: list[tuple[int, np.ndarray, int, int, float, float]] = []
+
+        # Keep only the strongest distinct hit locations per reflection.
+        for row_idx in row_order:
+            row = tbl_arr[row_idx]
             I, xpix, ypix, _phi, H, K, L = row
-            if not (np.isfinite(xpix) and np.isfinite(ypix)):
+            if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
                 continue
             cx = int(round(xpix))
             cy = int(round(ypix))
             disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, updated_image.shape)
+            too_close = False
+            for _, _, _, _, prev_col, prev_row in chosen_rows:
+                d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
+                if d2 < min_sep_sq:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
+            if len(chosen_rows) >= max_hits_per_reflection:
+                break
+
+        for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
+            I, _xpix, _ypix, _phi, H, K, L = row
             peak_positions.append((disp_cx, disp_cy))      # display coords
-            peak_intensities.append(I)
+            peak_intensities.append(float(I))
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
             peak_millers.append(hkl)
             peak_records.append(
@@ -3792,11 +4023,11 @@ def do_update():
             "sig": sig,
             "ai": pyFAI.AzimuthalIntegrator(
                 dist=corto_det_up,
-                # GUI center vars are (row, col); convert to pyFAI PONI axes.
-                poni1=(image_size - center_y_up) * pixel_size_m,
-                poni2=center_x_up * pixel_size_m,
-                rot1=np.deg2rad(Gamma_updated),
-                rot2=np.deg2rad(gamma_updated),
+                # Keep the legacy row/col mapping aligned with simulation pixels.
+                poni1=center_x_up * pixel_size_m,
+                poni2=center_y_up * pixel_size_m,
+                rot1=0.0,
+                rot2=0.0,
                 rot3=0.0,
                 wavelength=wave_m,
                 pixel1=pixel_size_m,
@@ -4266,11 +4497,11 @@ azimuthal_button = ttk.Button(
         [center_x_var.get(), center_y_var.get()],
         {
             'pixel_size': pixel_size_m,
-            'poni1': (image_size - center_y_var.get()) * pixel_size_m,
-            'poni2': (center_x_var.get()) * pixel_size_m,
+            'poni1': (center_x_var.get()) * pixel_size_m,
+            'poni2': (center_y_var.get()) * pixel_size_m,
             'dist': corto_detector_var.get(),
-            'rot1': np.deg2rad(Gamma_var.get()),
-            'rot2': np.deg2rad(gamma_var.get()),
+            'rot1': 0.0,
+            'rot2': 0.0,
             'rot3': 0.0,
             'wavelength': wave_m
         }
@@ -7751,6 +7982,49 @@ def _apply_primary_cif_from_entry(_event=None):
     _apply_primary_cif_path(cif_file_var.get())
 
 
+def _open_diffuse_cif_toggle():
+    """Open algebraic HT diffuse viewer using the active simulation inputs."""
+
+    active_cif = str(cif_file)
+    if not Path(active_cif).is_file():
+        progress_label.config(text=f"CIF file not found: {active_cif}")
+        return
+
+    try:
+        occ_vals = _current_occupancy_values()
+        p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+        w_vals = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+        c_axis = float(c_var.get())
+        finite_flag = bool(finite_stack_var.get())
+        layer_count = int(max(1, stack_layers_var.get()))
+    except (tk.TclError, ValueError) as exc:
+        progress_label.config(text=f"Failed to read diffuse HT inputs: {exc}")
+        return
+
+    two_theta_max = None
+    try:
+        two_theta_max = float(two_theta_range[1])
+    except Exception:
+        two_theta_max = None
+
+    try:
+        open_diffuse_cif_toggle_algebraic(
+            cif_path=active_cif,
+            occ=occ_vals,
+            p_values=p_vals,
+            w_values=w_vals,
+            c_lattice=c_axis,
+            lambda_angstrom=float(lambda_),
+            mx=int(mx),
+            two_theta_max=two_theta_max,
+            finite_stack=finite_flag,
+            stack_layers=layer_count,
+        )
+        progress_label.config(text=f"Opened diffuse HT viewer: {Path(active_cif).name}")
+    except Exception as exc:
+        progress_label.config(text=f"Failed to open diffuse HT viewer: {exc}")
+
+
 _rebuild_occupancy_controls()
 
 cif_file_var = tk.StringVar(value=str(cif_file))
@@ -7767,6 +8041,9 @@ ttk.Button(cif_actions, text="Browse...", command=_browse_primary_cif).pack(
 )
 ttk.Button(cif_actions, text="Apply", command=_apply_primary_cif_from_entry).pack(
     side=tk.LEFT
+)
+ttk.Button(cif_actions, text="Diffuse HT...", command=_open_diffuse_cif_toggle).pack(
+    side=tk.LEFT, padx=(5, 0)
 )
 
 def _launch_calibrant_gui(startup_bundle=None):
