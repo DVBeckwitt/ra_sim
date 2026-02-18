@@ -4193,20 +4193,23 @@ class HBNFitterGUI:
         points_ds_save = self._points_for_fit(self.points_ds, downsample=self.down)
         points_raw_save = self._points_for_fit(self.points_raw_ds, downsample=self.down)
         points_sigma_save = self._sigma_for_fit(self.points_sigma_ds, downsample=self.down)
-        tilt_x_deg = float(opt.get("tilt_x_deg", np.nan))
-        tilt_y_deg = float(opt.get("tilt_y_deg", np.nan))
+        tilt_x_deg_internal = float(opt.get("tilt_x_deg", np.nan))
+        tilt_y_deg_internal = float(opt.get("tilt_y_deg", np.nan))
+        tilt_x_deg_npz = float(tilt_x_deg_internal)
+        # NPZ exchange convention: detector pitch (tilt_y) is exported with opposite sign.
+        tilt_y_deg_npz = -float(tilt_y_deg_internal) if np.isfinite(tilt_y_deg_internal) else np.nan
         tilt_correction = None
         tilt_hint = None
-        if np.isfinite(tilt_x_deg) and np.isfinite(tilt_y_deg):
+        if np.isfinite(tilt_x_deg_npz) and np.isfinite(tilt_y_deg_npz):
             tilt_correction = {
-                "tilt_x_deg": tilt_x_deg,
-                "tilt_y_deg": tilt_y_deg,
+                "tilt_x_deg": tilt_x_deg_npz,
+                "tilt_y_deg": tilt_y_deg_npz,
                 "source": "hbn_fitter",
                 "simulation_gamma_sign_from_tilt_x": int(SIM_GAMMA_SIGN_FROM_TILT_X),
                 "simulation_Gamma_sign_from_tilt_y": int(SIM_GAMMA_SIGN_FROM_TILT_Y),
             }
-            rot1_rad = float(np.deg2rad(tilt_x_deg))
-            rot2_rad = float(np.deg2rad(tilt_y_deg))
+            rot1_rad = float(np.deg2rad(tilt_x_deg_npz))
+            rot2_rad = float(np.deg2rad(tilt_y_deg_npz))
             tilt_hint = {
                 "rot1_rad": rot1_rad,
                 "rot2_rad": rot2_rad,
@@ -4254,8 +4257,10 @@ class HBNFitterGUI:
             "center_prior": np.asarray(opt.get("center_prior", (np.nan, np.nan)), dtype=np.float64),
             "center_prior_sigma_px": np.array(float(opt.get("center_prior_sigma_px", np.nan)), dtype=np.float64),
             "center_drift_limit_px": np.array(float(opt.get("center_drift_limit_px", np.nan)), dtype=np.float64),
-            "tilt_x_deg": np.array(tilt_x_deg, dtype=np.float64),
-            "tilt_y_deg": np.array(tilt_y_deg, dtype=np.float64),
+            "tilt_x_deg": np.array(tilt_x_deg_npz, dtype=np.float64),
+            "tilt_y_deg": np.array(tilt_y_deg_npz, dtype=np.float64),
+            "tilt_x_deg_internal": np.array(tilt_x_deg_internal, dtype=np.float64),
+            "tilt_y_deg_internal": np.array(tilt_y_deg_internal, dtype=np.float64),
             "cost_zero": np.array(float(opt.get("cost_zero", np.nan)), dtype=np.float64),
             "cost_final": np.array(float(opt.get("cost_final", np.nan)), dtype=np.float64),
             "circ_before": np.asarray(opt.get("circ_before", np.array([], dtype=float)), dtype=np.float64),
@@ -4394,8 +4399,8 @@ class HBNFitterGUI:
             self.center_y.set(f"{center[1]:.3f}")
         self._center_user_defined = center_src_in == "ui_entry"
 
-        tx = npz_scalar(d, "tilt_x_deg", np.nan)
-        ty = npz_scalar(d, "tilt_y_deg", np.nan)
+        tx = npz_scalar(d, "tilt_x_deg_internal", npz_scalar(d, "tilt_x_deg", np.nan))
+        ty = npz_scalar(d, "tilt_y_deg_internal", npz_scalar(d, "tilt_y_deg", np.nan))
         corrected = obj_to_ndarrays(d["ell_points_corrected"]) if "ell_points_corrected" in d else (
             obj_to_ndarrays(d["ell_points_corr"]) if "ell_points_corr" in d else []
         )
