@@ -20,20 +20,52 @@ DEFAULT_DIRS = {
     "temp_root": str(Path.home() / ".cache" / "ra_sim"),
 }
 
-with open(_YAML_PATH, "r", encoding="utf-8") as fh:
-    PATHS = yaml.safe_load(fh)
+def _escape_backslashes_in_double_quoted_yaml(text: str) -> str:
+    """Escape ``\\`` inside double-quoted YAML scalars.
+
+    This allows Windows paths like:
+    ``"C:\\Users\\Kenpo\\...\\file.osc"``
+    to be accepted even when users do not manually escape backslashes.
+    """
+
+    out_chars = []
+    in_double = False
+    prev = ""
+    for ch in text:
+        if ch == '"' and prev != "\\":
+            in_double = not in_double
+            out_chars.append(ch)
+        elif in_double and ch == "\\":
+            out_chars.append("\\\\")
+        else:
+            out_chars.append(ch)
+        prev = ch
+    return "".join(out_chars)
+
+
+def _load_yaml_with_windows_path_fallback(path: Path) -> dict:
+    """Load YAML, retrying with Windows-path backslash escaping if needed."""
+
+    raw = path.read_text(encoding="utf-8")
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        sanitized = _escape_backslashes_in_double_quoted_yaml(raw)
+        data = yaml.safe_load(sanitized)
+    return data or {}
+
+
+PATHS = _load_yaml_with_windows_path_fallback(_YAML_PATH)
 
 if _DIR_YAML_PATH.exists():
-    with open(_DIR_YAML_PATH, "r", encoding="utf-8") as fh:
-        yaml_dirs = yaml.safe_load(fh)
+    yaml_dirs = _load_yaml_with_windows_path_fallback(_DIR_YAML_PATH)
 else:
     yaml_dirs = {}
 
 DIRS = {**DEFAULT_DIRS, **yaml_dirs}
 
 if _MATERIALS_YAML_PATH.exists():
-    with open(_MATERIALS_YAML_PATH, "r", encoding="utf-8") as fh:
-        _materials_raw = yaml.safe_load(fh) or {}
+    _materials_raw = _load_yaml_with_windows_path_fallback(_MATERIALS_YAML_PATH)
 else:  # pragma: no cover - configuration file is optional in tests
     _materials_raw = {}
 
@@ -42,8 +74,7 @@ _MATERIALS = _materials_raw.get("materials", {})
 _DEFAULT_MATERIAL = _materials_raw.get("default_material")
 
 if _INSTRUMENT_YAML_PATH.exists():
-    with open(_INSTRUMENT_YAML_PATH, "r", encoding="utf-8") as fh:
-        _instrument_raw = yaml.safe_load(fh) or {}
+    _instrument_raw = _load_yaml_with_windows_path_fallback(_INSTRUMENT_YAML_PATH)
 else:  # pragma: no cover - configuration file is optional in tests
     _instrument_raw = {}
 
@@ -56,6 +87,21 @@ def get_path(key: str) -> str:
     if isinstance(value, str):
         return os.path.expanduser(value)
     return value
+
+
+def get_path_first(*keys: str):
+    """Return the first configured path among *keys*.
+
+    This is useful for smooth key migrations in ``file_paths.yaml`` where a
+    newer explicit key name should take priority but legacy keys are still
+    accepted.
+    """
+
+    for key in keys:
+        if key in PATHS and PATHS.get(key) is not None:
+            return get_path(key)
+    joined = ", ".join(repr(k) for k in keys)
+    raise KeyError(f"No path configured for any of: {joined}")
 
 
 def get_dir(key: str) -> Path:

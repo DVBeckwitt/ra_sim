@@ -72,6 +72,23 @@ instrument:
         Gamma: 1.0
         psi_z: 1.0
         corto_detector: 1.0
+      # Solver settings for geometry least-squares.
+      # - loss: robust residual model used by scipy.optimize.least_squares
+      # - f_scale_px: soft transition scale in pixels for robust losses
+      # - max_nfev: max objective evaluations per local solve
+      # - restarts: random multi-start retries to escape local minima
+      # - restart_jitter: fractional perturbation size per restart
+      # - missing_pair_penalty_px: penalty when an HKL has measured peaks
+      #   but no simulated points are matchable.
+      # - weighted_matching: downweight large point-pair residuals.
+      solver:
+        loss: soft_l1
+        f_scale_px: 8.0
+        max_nfev: 140
+        restarts: 4
+        restart_jitter: 0.15
+        missing_pair_penalty_px: 20.0
+        weighted_matching: true
       # Automatic background peak association for geometry fitting.
       auto_match:
         search_radius_px: 18.0

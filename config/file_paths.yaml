@@ -1,15 +1,18 @@
 # Centralized file paths used across the project
 # Update these paths to match your local environment
 
-dark_image: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/darkImg.osc"
-osc_files:
-  - "C:/Users/Kenpo/OneDrive - University of Missouri/David and Paul/PbI2/Catalog/3.18.24/B_4deg_2m.osc"
-  - "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/Bi2Se3_10d_5m.osc"
-  - "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/Bi2Se3_15d_5m.osc"
-  - "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL_4_12_24/Varying/Images/Bi2Se3_30d_2m.osc"
+# OSC dark frame read at startup (currently loaded but not applied in simulation math).
+simulation_dark_osc_file: "C:/Users/Kenpo/OneDrive/Research/Rigaku XRD/ORNL.07.25.2024/Varying/Images/darkImg.osc"
+
+# OSC backgrounds used by the simulator.
+# Order matters for "Switch Background":
+#   [0] initial startup background, then [1], [2], ... and loops back to [0].
+simulation_background_osc_files:
+  - "C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_5m_5d.osc"
+  - "C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_10d_5m.osc"
+  - "C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Varying\Images\Bi2Se3_15d_5m.osc"
 geometry_poni: "C:/Users/Kenpo/OneDrive - University of Missouri/David and Paul/PbI2/Catalog/3.18.24/geometry.poni"
-cif_file: "C:/Users/Kenpo/OneDrive/Research/Misc. Calculations/PbI2/Polytypes SF/PbI2_2H.cif"
-#cif_file2: "C:/Users/Kenpo/OneDrive/Research/Misc. Calculations/PbI2/Polytypes SF/PbI2_6H.cif"
+cif_file: "C:\Users\Kenpo\OneDrive\Research\Rigaku XRD\ORNL.07.25.2024\Analysis\Bi2Se3\Bi2Se3.cif"
 measured_peaks: "C:/Users/Kenpo/OneDrive/Documents/GitHub/blobs.npy"
 parameters_file: "C:/Users/Kenpo/parameters.npy"
 

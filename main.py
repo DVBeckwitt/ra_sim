@@ -305,7 +305,13 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.debug_utils import debug_print, is_debug_enabled
-from ra_sim.hbn import estimate_detector_tilt, load_bundle_npz, load_tilt_hint
+from ra_sim.hbn import (
+    build_hbn_geometry_debug_trace,
+    convert_hbn_bundle_geometry_to_simulation,
+    format_hbn_geometry_debug_trace,
+    load_bundle_npz,
+    load_tilt_hint,
+)
 from ra_sim.gui.collapsible import CollapsibleFrame
 
 
@@ -331,12 +337,18 @@ if DEBUG_ENABLED:
 # diagnostics try permutations internally).
 BACKEND_ORIENTATION_UI_ENABLED = False
 BACKGROUND_BACKEND_DEBUG_UI_ENABLED = False
+HBN_GEOMETRY_DEBUG_ENABLED = False
 
 
 ###############################################################################
 #                          DATA & PARAMETER SETUP
 ###############################################################################
-from ra_sim.path_config import get_path, get_dir, get_instrument_config
+from ra_sim.path_config import (
+    get_path,
+    get_path_first,
+    get_dir,
+    get_instrument_config,
+)
 
 
 def _ensure_triplet(values, fallback):
@@ -401,20 +413,28 @@ hendricks_config = instrument_config.get("hendricks_teller", {})
 output_config = instrument_config.get("output", {})
 fit_config = instrument_config.get("fit", {})
 
-file_path = get_path("dark_image")
+file_path = get_path_first("simulation_dark_osc_file", "dark_image")
 BI = read_osc(file_path)  # Dark (background) image
 
-osc_files = get_path("osc_files")
+osc_files = get_path_first("simulation_background_osc_files", "osc_files")
 if isinstance(osc_files, str):
     osc_files = [osc_files]
 background_images = [read_osc(path) for path in osc_files]
 if not background_images:
-    raise ValueError("No oscillation images configured in osc_files")
+    raise ValueError(
+        "No oscillation images configured in simulation_background_osc_files/osc_files"
+    )
 
 # Background and simulated overlays can use different display orientations.
 # ``k`` is the np.rot90 factor; -1 is 90° clockwise, 0 keeps native orientation.
 DISPLAY_ROTATE_K = -1
 SIM_DISPLAY_ROTATE_K = 0
+# hBN fitter bundles are in native OSC orientation (no rot90).
+HBN_FITTER_ROTATE_K = 0
+# Simulation geometry runs in native simulation pixels; convert hBN bundle
+# geometry so that the displayed simulation (after SIM_DISPLAY_ROTATE_K) lands
+# in the same frame as the displayed background (after DISPLAY_ROTATE_K).
+SIMULATION_GEOMETRY_ROTATE_K = DISPLAY_ROTATE_K - SIM_DISPLAY_ROTATE_K
 
 # Preserve native-orientation copies for fitting/analysis; display variants may
 # be rotated for visualization.
@@ -438,9 +458,35 @@ wave_m = parameters.get("Wavelength", geometry_config.get("wavelength_m", 1e-10)
 lambda_from_poni = wave_m * 1e10  # Convert m -> Å
 
 tilt_hint = load_tilt_hint()
+hinted_center_row = None
+hinted_center_col = None
 if tilt_hint:
-    Gamma_initial = float(tilt_hint.get("rot1_rad", Gamma_initial))
-    gamma_initial = float(tilt_hint.get("rot2_rad", gamma_initial))
+    hinted_gamma = tilt_hint.get("gamma_deg")
+    hinted_Gamma = tilt_hint.get("Gamma_deg")
+    hinted_center_row = tilt_hint.get("center_row")
+    hinted_center_col = tilt_hint.get("center_col")
+    try:
+        hinted_gamma = float(hinted_gamma)
+        hinted_Gamma = float(hinted_Gamma)
+    except (TypeError, ValueError):
+        hinted_gamma = None
+        hinted_Gamma = None
+    try:
+        hinted_center_row = float(hinted_center_row)
+        hinted_center_col = float(hinted_center_col)
+    except (TypeError, ValueError):
+        hinted_center_row = None
+        hinted_center_col = None
+    if hinted_center_row is not None and hinted_center_col is not None:
+        if not (np.isfinite(hinted_center_row) and np.isfinite(hinted_center_col)):
+            hinted_center_row = None
+            hinted_center_col = None
+    if hinted_gamma is not None and np.isfinite(hinted_gamma):
+        # Historical naming here is swapped: defaults['gamma'] reads Gamma_initial.
+        Gamma_initial = hinted_gamma
+    if hinted_Gamma is not None and np.isfinite(hinted_Gamma):
+        # Historical naming here is swapped: defaults['Gamma'] reads gamma_initial.
+        gamma_initial = hinted_Gamma
     hinted_distance = tilt_hint.get("distance_m")
     try:
         hinted_distance = float(hinted_distance)
@@ -448,9 +494,14 @@ if tilt_hint:
         hinted_distance = None
     if hinted_distance is not None and np.isfinite(hinted_distance):
         Distance_CoR_to_Detector = hinted_distance
+    center_text = ""
+    if hinted_center_row is not None and hinted_center_col is not None:
+        center_text = (
+            f", center(row={hinted_center_row:.3f}, col={hinted_center_col:.3f})"
+        )
     print(
         "Initialized detector tilt from last hBN fit profile "
-        f"(Rot1={Gamma_initial:.4f} rad, Rot2={gamma_initial:.4f} rad)."
+        f"(sim γ={Gamma_initial:.4f} deg, sim Γ={gamma_initial:.4f} deg{center_text})."
     )
     if hinted_distance is not None and np.isfinite(hinted_distance):
         print(
@@ -477,6 +528,8 @@ center_default = [
     (poni2 / pixel_size_m),
     image_size - (poni1 / pixel_size_m)
 ]
+if hinted_center_row is not None and hinted_center_col is not None:
+    center_default = [hinted_center_row, hinted_center_col]
 
 two_theta_max = detector_two_theta_max(
     image_size,
@@ -606,29 +659,36 @@ occ = _ensure_numeric_vector(
 occ = [min(1.0, max(0.0, float(v))) for v in occ]
 
 # pull the raw text
-a_text = blk["_cell_length_a"]
-b_text = blk["_cell_length_b"]
-c_text = blk["_cell_length_c"]
+a_text = blk.get("_cell_length_a")
+b_text = blk.get("_cell_length_b")
+c_text = blk.get("_cell_length_c")
 
 # strip the '(uncertainty)' and cast
 def parse_cif_num(txt):
     # match leading numeric part, e.g. '4.14070' out of '4.14070(3)'
-    m = re.match(r"[-+0-9\.Ee]+", txt)
+    if txt is None:
+        raise ValueError("Missing CIF numeric value")
+    if isinstance(txt, (int, float)):
+        return float(txt)
+    m = re.match(r"[-+0-9\.Ee]+", str(txt).strip())
     if not m:
         raise ValueError(f"Can't parse '{txt}' as a number")
     return float(m.group(0))
 
+if a_text is None or b_text is None or c_text is None:
+    raise ValueError("CIF is missing one or more required cell-length fields (_a/_b/_c).")
+
 av = parse_cif_num(a_text)
 bv = parse_cif_num(b_text)
-cv = parse_cif_num(c_text) * 3
+cv = parse_cif_num(c_text)
 
 if cif_file2:
     cf2  = CifFile.ReadCif(cif_file2)
     blk2 = cf2[list(cf2.keys())[0]]
     a2_text = blk2.get("_cell_length_a")
     c2_text = blk2.get("_cell_length_c")
-    av2 = parse_cif_num(a2_text) if a2_text else av
-    cv2 = parse_cif_num(c2_text) if c2_text else cv
+    av2 = parse_cif_num(a2_text) if a2_text is not None else av
+    cv2 = parse_cif_num(c2_text) if c2_text is not None else cv
 else:
     av2 = None
     cv2 = None
@@ -1821,8 +1881,8 @@ def _open_selected_peak_intersection_figure():
 
         geometry = IntersectionGeometry(
             image_size=int(image_size),
-            center_col=float(center_x_var.get()),
-            center_row=float(center_y_var.get()),
+            center_col=float(center_y_var.get()),
+            center_row=float(center_x_var.get()),
             distance_cor_to_detector=float(corto_detector_var.get()),
             gamma_deg=float(gamma_var.get()),
             Gamma_deg=float(Gamma_var.get()),
@@ -3732,8 +3792,9 @@ def do_update():
             "sig": sig,
             "ai": pyFAI.AzimuthalIntegrator(
                 dist=corto_det_up,
-                poni1=center_x_up * pixel_size_m,
-                poni2=center_y_up * pixel_size_m,
+                # GUI center vars are (row, col); convert to pyFAI PONI axes.
+                poni1=(image_size - center_y_up) * pixel_size_m,
+                poni2=center_x_up * pixel_size_m,
                 rot1=np.deg2rad(Gamma_updated),
                 rot2=np.deg2rad(gamma_updated),
                 rot3=0.0,
@@ -3941,13 +4002,120 @@ def toggle_background():
     schedule_update()
 
 
+def _set_background_file_status_text():
+    """Refresh the background-file status line shown in the GUI."""
+
+    if "background_file_status_var" not in globals():
+        return
+    if not osc_files:
+        background_file_status_var.set("Background: no files loaded")
+        return
+
+    idx = int(current_background_index) % len(osc_files)
+    current_name = Path(str(osc_files[idx])).name
+    background_file_status_var.set(
+        f"Background {idx + 1}/{len(osc_files)}: {current_name}"
+    )
+
+
+def _load_background_files(file_paths, *, select_index=0):
+    """Replace background images from selected OSC file paths."""
+
+    global osc_files, background_images, background_images_native, background_images_display
+    global current_background_index, current_background_image, current_background_display
+
+    normalized_paths = []
+    for raw_path in file_paths:
+        text_path = str(raw_path).strip().strip('"').strip("'")
+        if not text_path:
+            continue
+        candidate = Path(text_path).expanduser()
+        if not candidate.is_file():
+            raise FileNotFoundError(f"File not found: {candidate}")
+        normalized_paths.append(str(candidate))
+
+    if not normalized_paths:
+        raise ValueError("No background files selected.")
+
+    expected_shape = (int(image_size), int(image_size))
+    loaded_native = []
+    for file_path_local in normalized_paths:
+        try:
+            raw_image = read_osc(file_path_local)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to read background file '{file_path_local}': {exc}"
+            ) from exc
+
+        image_array = np.asarray(raw_image)
+        if image_array.ndim < 2:
+            raise ValueError(
+                f"Background '{Path(file_path_local).name}' is not a 2D image."
+            )
+        image_shape = tuple(int(v) for v in image_array.shape[:2])
+        if image_shape != expected_shape:
+            raise ValueError(
+                f"Background '{Path(file_path_local).name}' has shape {image_shape}, "
+                f"expected {expected_shape}."
+            )
+        loaded_native.append(np.array(image_array))
+
+    osc_files = list(normalized_paths)
+    background_images = [np.array(img) for img in loaded_native]
+    background_images_native = [np.array(img) for img in loaded_native]
+    background_images_display = [
+        np.rot90(img, DISPLAY_ROTATE_K) for img in background_images_native
+    ]
+
+    index = int(select_index)
+    index = max(0, min(index, len(background_images_native) - 1))
+    current_background_index = index
+    current_background_image = background_images_native[index]
+    current_background_display = background_images_display[index]
+
+    background_display.set_data(current_background_display)
+    _update_background_slider_defaults(current_background_display, reset_override=True)
+    _set_background_file_status_text()
+    schedule_update()
+
+
+def _browse_background_files():
+    """Choose one or more OSC backgrounds and load them into the GUI."""
+
+    try:
+        if osc_files:
+            initial_dir = str(Path(str(osc_files[current_background_index])).expanduser().parent)
+        else:
+            initial_dir = str(get_dir("file_dialog_dir"))
+    except Exception:
+        initial_dir = str(get_dir("file_dialog_dir"))
+
+    selected = filedialog.askopenfilenames(
+        title="Select Background OSC Files",
+        initialdir=initial_dir,
+        filetypes=[("OSC files", "*.osc *.OSC"), ("All files", "*.*")],
+    )
+    if not selected:
+        return
+
+    try:
+        _load_background_files(selected, select_index=0)
+        progress_label.config(text=f"Loaded {len(osc_files)} background file(s).")
+    except Exception as exc:
+        progress_label.config(text=f"Failed to load background files: {exc}")
+
+
 def switch_background():
     global current_background_index, current_background_image, current_background_display
+    if not background_images_native:
+        progress_label.config(text="No background images loaded.")
+        return
     current_background_index = (current_background_index + 1) % len(background_images_native)
     current_background_image = background_images_native[current_background_index]
     current_background_display = background_images_display[current_background_index]
     background_display.set_data(current_background_display)
     _update_background_slider_defaults(current_background_display, reset_override=True)
+    _set_background_file_status_text()
     schedule_update()
 
 def reset_to_defaults():
@@ -4041,6 +4209,22 @@ switch_button = ttk.Button(
 )
 switch_button.pack(side=tk.TOP, padx=5, pady=2)
 
+load_backgrounds_button = ttk.Button(
+    text="Load Background Files...",
+    command=_browse_background_files,
+)
+load_backgrounds_button.pack(side=tk.TOP, padx=5, pady=2)
+
+background_file_status_var = tk.StringVar(value="")
+background_file_status_label = ttk.Label(
+    root,
+    textvariable=background_file_status_var,
+    wraplength=300,
+    justify=tk.LEFT,
+)
+background_file_status_label.pack(side=tk.TOP, padx=5, pady=(0, 2))
+_set_background_file_status_text()
+
 reset_button_top = ttk.Button(
     text="Reset to Defaults",
     command=reset_to_defaults
@@ -4082,8 +4266,8 @@ azimuthal_button = ttk.Button(
         [center_x_var.get(), center_y_var.get()],
         {
             'pixel_size': pixel_size_m,
-            'poni1': (center_x_var.get()) * pixel_size_m,
-            'poni2': (center_y_var.get()) * pixel_size_m,
+            'poni1': (image_size - center_y_var.get()) * pixel_size_m,
+            'poni2': (center_x_var.get()) * pixel_size_m,
             'dist': corto_detector_var.get(),
             'rot1': np.deg2rad(Gamma_var.get()),
             'rot2': np.deg2rad(gamma_var.get()),
@@ -4112,6 +4296,36 @@ progress_label.pack(side=tk.BOTTOM, padx=5)
 chi_square_label = ttk.Label(root, text="Chi-Squared: ", font=("Helvetica", 8))
 chi_square_label.pack(side=tk.BOTTOM, padx=5)
 
+last_hbn_geometry_debug_report = (
+    "No hBN geometry debug report yet.\n"
+    "Import an hBN bundle to generate one."
+)
+
+
+def show_last_hbn_geometry_debug():
+    """Display the most recent hBN->simulation geometry debug report."""
+
+    win = tk.Toplevel(root)
+    win.title("hBN Geometry Debug")
+    win.geometry("980x560")
+
+    frame = ttk.Frame(win, padding=8)
+    frame.pack(fill=tk.BOTH, expand=True)
+
+    text = tk.Text(frame, wrap=tk.NONE)
+    text.grid(row=0, column=0, sticky="nsew")
+    y_scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+    y_scroll.grid(row=0, column=1, sticky="ns")
+    x_scroll = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=text.xview)
+    x_scroll.grid(row=1, column=0, sticky="ew")
+    text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+    frame.rowconfigure(0, weight=1)
+    frame.columnconfigure(0, weight=1)
+
+    text.insert("1.0", str(last_hbn_geometry_debug_report))
+    text.configure(state=tk.DISABLED)
+
 
 def import_hbn_tilt_from_bundle():
     """Load an hBN ellipse bundle NPZ and apply its tilt hint to the GUI sliders."""
@@ -4123,51 +4337,185 @@ def import_hbn_tilt_from_bundle():
     if not bundle_path:
         return
 
+    global last_hbn_geometry_debug_report
     mean_dist = None
-    rot1_deg = None
-    rot2_deg = None
+    tilt_x_deg = None
+    tilt_y_deg = None
+    source_rotate_k = int(HBN_FITTER_ROTATE_K)
+    gamma_sign_from_tilt_x = 1
+    gamma_sign_from_tilt_y = 1
+    imported_center = None
+
+    def _normalize_sign(value, default=1):
+        try:
+            iv = int(value)
+        except Exception:
+            iv = int(default)
+        if iv < 0:
+            return -1
+        if iv > 0:
+            return 1
+        return -1 if int(default) < 0 else 1
+
     try:
-        _, _, _, ellipses, distance_info, tilt_correction, tilt_hint, _, _ = load_bundle_npz(
+        _, _, _, _, distance_info, tilt_correction, tilt_hint, _, imported_center = load_bundle_npz(
             bundle_path
         )
     except Exception as exc:  # pragma: no cover - GUI interaction
         progress_label.config(text=f"Failed to load bundle: {exc}")
         return
 
-    if tilt_correction:
-        rot1_deg = float(tilt_correction.get("tilt_x_deg", 0.0))
-        rot2_deg = float(tilt_correction.get("tilt_y_deg", 0.0))
-    elif tilt_hint:
-        rot1_deg = float(np.degrees(tilt_hint.get("rot1_rad", 0.0)))
-        rot2_deg = float(np.degrees(tilt_hint.get("rot2_rad", 0.0)))
-    else:
-        tilt_hint_local = estimate_detector_tilt(ellipses)
-        if tilt_hint_local:
-            rot1_deg = float(np.degrees(tilt_hint_local["rot1_rad"]))
-            rot2_deg = float(np.degrees(tilt_hint_local["rot2_rad"]))
+    if isinstance(tilt_correction, dict):
+        try:
+            tx = float(tilt_correction.get("tilt_x_deg"))
+            ty = float(tilt_correction.get("tilt_y_deg"))
+            if np.isfinite(tx) and np.isfinite(ty):
+                tilt_x_deg = tx
+                tilt_y_deg = ty
+        except (TypeError, ValueError):
+            pass
+        source_rotate_k = int(
+            tilt_correction.get("sim_background_rotate_k", source_rotate_k)
+        )
+        gamma_sign_from_tilt_x = _normalize_sign(
+            tilt_correction.get("simulation_gamma_sign_from_tilt_x", gamma_sign_from_tilt_x),
+            gamma_sign_from_tilt_x,
+        )
+        gamma_sign_from_tilt_y = _normalize_sign(
+            tilt_correction.get("simulation_Gamma_sign_from_tilt_y", gamma_sign_from_tilt_y),
+            gamma_sign_from_tilt_y,
+        )
 
-    if rot1_deg is None or rot2_deg is None:
+    if (tilt_x_deg is None or tilt_y_deg is None) and isinstance(tilt_hint, dict):
+        try:
+            rx = float(tilt_hint.get("rot1_rad"))
+            ry = float(tilt_hint.get("rot2_rad"))
+            if np.isfinite(rx) and np.isfinite(ry):
+                tilt_x_deg = float(np.degrees(rx))
+                tilt_y_deg = float(np.degrees(ry))
+        except (TypeError, ValueError):
+            pass
+        source_rotate_k = int(tilt_hint.get("sim_background_rotate_k", source_rotate_k))
+        gamma_sign_from_tilt_x = _normalize_sign(
+            tilt_hint.get("simulation_gamma_sign_from_tilt_x", gamma_sign_from_tilt_x),
+            gamma_sign_from_tilt_x,
+        )
+        gamma_sign_from_tilt_y = _normalize_sign(
+            tilt_hint.get("simulation_Gamma_sign_from_tilt_y", gamma_sign_from_tilt_y),
+            gamma_sign_from_tilt_y,
+        )
+
+    if tilt_x_deg is None or tilt_y_deg is None:
         progress_label.config(text="Bundle loaded, but no tilt information was found.")
         return
-    Gamma_var.set(rot1_deg)
-    gamma_var.set(rot2_deg)
+
+    gamma_sign_from_tilt_x = -_normalize_sign(gamma_sign_from_tilt_x, 1)
+
+    converted = convert_hbn_bundle_geometry_to_simulation(
+        tilt_x_deg=float(tilt_x_deg),
+        tilt_y_deg=float(tilt_y_deg),
+        center_xy=imported_center,
+        source_rotate_k=int(source_rotate_k),
+        target_rotate_k=int(SIMULATION_GEOMETRY_ROTATE_K),
+        image_size=(int(image_size), int(image_size)),
+        simulation_gamma_sign_from_tilt_x=int(gamma_sign_from_tilt_x),
+        simulation_Gamma_sign_from_tilt_y=int(gamma_sign_from_tilt_y),
+    )
+
+    def _ensure_slider_includes(slider_widget, value, pad=0.1):
+        try:
+            lo = float(slider_widget.cget("from"))
+            hi = float(slider_widget.cget("to"))
+        except Exception:
+            return False
+        if lo > hi:
+            lo, hi = hi, lo
+        val = float(value)
+        new_lo = lo
+        new_hi = hi
+        if val < lo:
+            new_lo = val - float(pad)
+        if val > hi:
+            new_hi = val + float(pad)
+        if math.isclose(new_lo, lo, rel_tol=0.0, abs_tol=1e-12) and math.isclose(
+            new_hi, hi, rel_tol=0.0, abs_tol=1e-12
+        ):
+            return False
+        slider_widget.configure(from_=new_lo, to=new_hi)
+        return True
+
+    gamma_sim_deg = float(converted["gamma_deg"])
+    Gamma_sim_deg = float(converted["Gamma_deg"])
+    angle_range_expanded = False
+    angle_range_expanded |= _ensure_slider_includes(gamma_scale, gamma_sim_deg, pad=0.1)
+    angle_range_expanded |= _ensure_slider_includes(Gamma_scale, Gamma_sim_deg, pad=0.1)
+    gamma_var.set(gamma_sim_deg)
+    Gamma_var.set(Gamma_sim_deg)
     if distance_info and isinstance(distance_info, dict):
         mean_dist = distance_info.get("mean_m")
         if mean_dist is not None:
             try:
+                _ensure_slider_includes(corto_detector_scale, float(mean_dist), pad=0.001)
                 corto_detector_var.set(float(mean_dist))
             except Exception:
                 pass
+    center_text = ""
+    center_row = converted.get("center_row")
+    center_col = converted.get("center_col")
+    if center_row is not None and center_col is not None:
+        try:
+            center_row = float(center_row)
+            center_col = float(center_col)
+            if np.isfinite(center_row) and np.isfinite(center_col):
+                _ensure_slider_includes(center_x_scale, center_row, pad=5.0)
+                _ensure_slider_includes(center_y_scale, center_col, pad=5.0)
+                center_x_var.set(center_row)
+                center_y_var.set(center_col)
+                center_text = (
+                    f" and center (row={center_row:.2f}, col={center_col:.2f}) px"
+                )
+        except Exception:
+            pass
+    applied_center_row = None
+    applied_center_col = None
+    try:
+        applied_center_row = float(center_x_var.get())
+        applied_center_col = float(center_y_var.get())
+    except Exception:
+        applied_center_row = None
+        applied_center_col = None
+
+    debug_text = ""
+    if HBN_GEOMETRY_DEBUG_ENABLED:
+        debug_trace = build_hbn_geometry_debug_trace(
+            npz_center_xy=imported_center,
+            source_rotate_k=int(source_rotate_k),
+            target_rotate_k=int(SIMULATION_GEOMETRY_ROTATE_K),
+            image_size=(int(image_size), int(image_size)),
+            tilt_x_deg=float(tilt_x_deg),
+            tilt_y_deg=float(tilt_y_deg),
+            simulation_gamma_sign_from_tilt_x=int(gamma_sign_from_tilt_x),
+            simulation_Gamma_sign_from_tilt_y=int(gamma_sign_from_tilt_y),
+            simulation_center_row=applied_center_row,
+            simulation_center_col=applied_center_col,
+        )
+        last_hbn_geometry_debug_report = format_hbn_geometry_debug_trace(debug_trace)
+        print(last_hbn_geometry_debug_report)
+        debug_text = " [debug report updated]"
+
     schedule_update()
     progress_label.config(
         text=(
             "Applied hBN bundle tilt hint "
-            f"(Γ={rot1_deg:.3f}°, γ={rot2_deg:.3f}°)"
+            f"(γ={gamma_sim_deg:.3f}°, Γ={Gamma_sim_deg:.3f}°)"
+            + (" [range expanded]" if angle_range_expanded else "")
             + (
                 f" and distance {mean_dist:.4f} m"  # type: ignore[arg-type]
                 if distance_info and mean_dist is not None
                 else ""
             )
+            + center_text
+            + debug_text
             + f" from {bundle_path}"
         )
     )
@@ -4240,6 +4588,13 @@ import_hbn_button = ttk.Button(
     command=import_hbn_tilt_from_bundle,
 )
 import_hbn_button.pack(side=tk.TOP, padx=5, pady=2)
+
+if HBN_GEOMETRY_DEBUG_ENABLED:
+    show_hbn_debug_button = ttk.Button(
+        text="Show hBN Geometry Debug",
+        command=show_last_hbn_geometry_debug,
+    )
+    show_hbn_debug_button.pack(side=tk.TOP, padx=5, pady=2)
 
 # Frame for selecting which geometry params to fit
 fit_frame = ttk.LabelFrame(root, text="Fit geometry parameters")
@@ -6697,7 +7052,16 @@ optics_mode_var.trace_add('write', on_optics_mode_change)
 center_frame = CollapsibleFrame(right_col, text='Beam Center')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
-def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=False):
+def make_slider(
+    label_str,
+    min_val,
+    max_val,
+    init_val,
+    step,
+    parent,
+    mosaic=False,
+    **slider_kwargs,
+):
     var, scale = create_slider(
         label_str,
         min_val,
@@ -6705,7 +7069,8 @@ def make_slider(label_str, min_val, max_val, init_val, step, parent, mosaic=Fals
         init_val,
         step,
         parent,
-        on_mosaic_slider_change if mosaic else schedule_update
+        on_mosaic_slider_change if mosaic else schedule_update,
+        **slider_kwargs,
     )
     return var, scale
 
@@ -6716,10 +7081,22 @@ cor_angle_var, cor_angle_scale = make_slider(
     'φ axis angle', -5.0, 5.0, defaults['cor_angle'], 0.01, geo_frame.frame
 )
 gamma_var, gamma_scale = make_slider(
-    'γ detector pitch', -4, 4, defaults['gamma'], 0.001, geo_frame.frame
+    'γ detector pitch',
+    -4,
+    4,
+    defaults['gamma'],
+    0.001,
+    geo_frame.frame,
+    allow_range_expand=True,
 )
 Gamma_var, Gamma_scale = make_slider(
-    'Γ detector yaw', -4, 4, defaults['Gamma'], 0.001, geo_frame.frame
+    'Γ detector yaw',
+    -4,
+    4,
+    defaults['Gamma'],
+    0.001,
+    geo_frame.frame,
+    allow_range_expand=True,
 )
 chi_var, chi_scale = make_slider(
     'χ sample pitch', -1, 1, defaults['chi'], 0.001, geo_frame.frame
@@ -6743,10 +7120,24 @@ corto_detector_var, corto_detector_scale = make_slider(
     'δ detector distance', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, detector_frame.frame
 )
 a_var, a_scale = make_slider(
-    'a (Å)', 3.5, 8.0, defaults['a'], 0.01, lattice_frame.frame
+    'a (Å)',
+    3.5,
+    8.0,
+    defaults['a'],
+    0.01,
+    lattice_frame.frame,
+    allow_range_expand=True,
+    range_expand_pad=0.1,
 )
 c_var, c_scale = make_slider(
-    'c (Å)', 20.0, 40.0, defaults['c'], 0.01, lattice_frame.frame
+    'c (Å)',
+    20.0,
+    40.0,
+    defaults['c'],
+    0.01,
+    lattice_frame.frame,
+    allow_range_expand=True,
+    range_expand_pad=0.5,
 )
 sigma_mosaic_var, sigma_mosaic_scale = make_slider(
     'σ Mosaic (deg)', 0.0, 5.0, defaults['sigma_mosaic_deg'], 0.01, mosaic_frame.frame, mosaic=True
@@ -6757,18 +7148,19 @@ gamma_mosaic_var, gamma_mosaic_scale = make_slider(
 eta_var, eta_scale = make_slider(
     'η (fraction)', 0.0, 1.0, defaults['eta'], 0.001, mosaic_frame.frame, mosaic=True
 )
+beam_center_slider_max = max(3000.0, float(image_size))
 center_x_var, center_x_scale = make_slider(
     'Beam Center Row',
-    center_default[0]-100.0,
-    center_default[0]+100.0,
+    0.0,
+    beam_center_slider_max,
     defaults['center_x'],
     1.0,
     center_frame.frame
 )
 center_y_var, center_y_scale = make_slider(
     'Beam Center Col',
-    center_default[1]-100.0,
-    center_default[1]+100.0,
+    0.0,
+    beam_center_slider_max,
     defaults['center_y'],
     1.0,
     center_frame.frame
@@ -7125,38 +7517,257 @@ occ_frame = CollapsibleFrame(right_col, text='Site Occupancies')
 occ_frame.pack(fill=tk.X, padx=5, pady=5)
 
 occ_scale_widgets = []
-for idx, occ_var in enumerate(occ_vars):
-    ttk.Label(
-        occ_frame.frame,
-        text=_occupancy_label_text(idx),
-    ).pack(padx=5, pady=2)
-    occ_scale = ttk.Scale(
-        occ_frame.frame,
-        from_=0.0,
-        to=1.0,
-        orient=tk.HORIZONTAL,
-        variable=occ_var,
-        command=update_occupancies,
-    )
-    occ_scale.pack(fill=tk.X, padx=5, pady=2)
-    occ_scale_widgets.append(occ_scale)
+occ_label_widgets = []
+occ_entry_widgets = []
+occ_entry_label_widgets = []
+
+occ_slider_frame = ttk.Frame(occ_frame.frame)
+occ_slider_frame.pack(fill=tk.X, padx=0, pady=0)
 
 # --- Add numeric input fields and a Force Update button ---
 occ_entry_frame = ttk.Frame(occ_frame.frame)
 occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
-occ_entry_widgets = []
 
-for idx, occ_var in enumerate(occ_vars):
-    ttk.Label(
-        occ_entry_frame,
-        text=_occupancy_label_text(idx, input_label=True) + ":",
-    ).grid(row=idx, column=0, sticky="w", padx=5, pady=2)
-    occ_entry = ttk.Entry(occ_entry_frame, textvariable=occ_var, width=7)
-    occ_entry.grid(row=idx, column=1, padx=5, pady=2, sticky="ew")
-    occ_entry.bind("<Return>", update_occupancies)
-    occ_entry.bind("<FocusOut>", update_occupancies)
-    occ_entry_widgets.append(occ_entry)
-occ_entry_frame.columnconfigure(1, weight=1)
+
+def _rebuild_occupancy_controls():
+    """Recreate occupancy sliders/entries for the current ``occ_vars`` list."""
+
+    global occ_scale_widgets, occ_label_widgets, occ_entry_widgets, occ_entry_label_widgets
+
+    for child in occ_slider_frame.winfo_children():
+        child.destroy()
+    for child in occ_entry_frame.winfo_children():
+        child.destroy()
+
+    occ_scale_widgets = []
+    occ_label_widgets = []
+    occ_entry_widgets = []
+    occ_entry_label_widgets = []
+
+    for idx, occ_var in enumerate(occ_vars):
+        occ_label = ttk.Label(
+            occ_slider_frame,
+            text=_occupancy_label_text(idx),
+        )
+        occ_label.pack(padx=5, pady=2)
+        occ_label_widgets.append(occ_label)
+        occ_scale = ttk.Scale(
+            occ_slider_frame,
+            from_=0.0,
+            to=1.0,
+            orient=tk.HORIZONTAL,
+            variable=occ_var,
+            command=update_occupancies,
+        )
+        occ_scale.pack(fill=tk.X, padx=5, pady=2)
+        occ_scale_widgets.append(occ_scale)
+
+    for idx, occ_var in enumerate(occ_vars):
+        occ_entry_label = ttk.Label(
+            occ_entry_frame,
+            text=_occupancy_label_text(idx, input_label=True) + ":",
+        )
+        occ_entry_label.grid(row=idx, column=0, sticky="w", padx=5, pady=2)
+        occ_entry_label_widgets.append(occ_entry_label)
+        occ_entry = ttk.Entry(occ_entry_frame, textvariable=occ_var, width=7)
+        occ_entry.grid(row=idx, column=1, padx=5, pady=2, sticky="ew")
+        occ_entry.bind("<Return>", update_occupancies)
+        occ_entry.bind("<FocusOut>", update_occupancies)
+        occ_entry_widgets.append(occ_entry)
+
+    occ_entry_frame.columnconfigure(1, weight=1)
+
+
+def _current_occupancy_values():
+    """Return the occupancy values currently shown in the controls."""
+
+    values = []
+    for idx, occ_var in enumerate(occ_vars):
+        try:
+            value = float(occ_var.get())
+        except (tk.TclError, ValueError):
+            fallback = occ[idx] if idx < len(occ) else 1.0
+            value = float(fallback)
+        values.append(min(1.0, max(0.0, value)))
+    return values
+
+
+def _apply_primary_cif_path(raw_path):
+    """Load a new primary CIF file and rebuild diffraction inputs."""
+
+    global cif_file, cf, blk, occupancy_site_labels, occupancy_site_count
+    global occ, occ_vars
+    global ht_cache_multi, last_simulation_signature
+    global defaults, av, cv, av2, cv2
+
+    text_path = str(raw_path).strip().strip('"').strip("'")
+    if not text_path:
+        progress_label.config(text="No CIF file path provided.")
+        return
+
+    candidate = Path(text_path).expanduser()
+    if not candidate.is_file():
+        progress_label.config(text=f"CIF file not found: {candidate}")
+        return
+
+    old_cif_file = cif_file
+    old_cf = cf
+    old_blk = blk
+    old_labels = list(occupancy_site_labels)
+    old_occ = list(occ)
+    old_occ_values = _current_occupancy_values()
+    old_av = float(av)
+    old_cv = float(cv)
+    old_av2 = av2
+    old_cv2 = cv2
+    old_default_a = float(defaults.get("a", old_av))
+    old_default_c = float(defaults.get("c", old_cv))
+    try:
+        old_slider_a = float(a_var.get())
+    except Exception:
+        old_slider_a = old_default_a
+    try:
+        old_slider_c = float(c_var.get())
+    except Exception:
+        old_slider_c = old_default_c
+
+    try:
+        new_cf = CifFile.ReadCif(str(candidate))
+        keys = list(new_cf.keys())
+        if not keys:
+            raise ValueError("No CIF data blocks found.")
+        new_blk = new_cf[keys[0]]
+        new_a_text = new_blk.get("_cell_length_a")
+        new_c_text = new_blk.get("_cell_length_c")
+        if new_a_text is None or new_c_text is None:
+            raise ValueError("CIF is missing _cell_length_a/_cell_length_c fields.")
+        new_av = float(parse_cif_num(new_a_text))
+        new_cv = float(parse_cif_num(new_c_text))
+
+        new_labels = _extract_occupancy_site_labels(new_blk, str(candidate))
+        site_count = len(new_labels) if new_labels else max(1, len(old_occ_values))
+        new_occ_values = _ensure_numeric_vector(old_occ_values, [1.0], site_count)
+        new_occ_values = [min(1.0, max(0.0, float(v))) for v in new_occ_values]
+
+        try:
+            p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+        except (tk.TclError, ValueError):
+            p_vals = [float(defaults['p0']), float(defaults['p1']), float(defaults['p2'])]
+        try:
+            w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+        except (tk.TclError, ValueError):
+            w_raw = [float(defaults['w0']), float(defaults['w1']), float(defaults['w2'])]
+        w_sum = sum(w_raw) or 1.0
+        weights = [w / w_sum for w in w_raw]
+
+        c_axis = float(new_cv)
+
+        cif_file = str(candidate)
+        cf = new_cf
+        blk = new_blk
+        occupancy_site_labels = new_labels
+        occupancy_site_count = site_count
+        occ = list(new_occ_values)
+
+        if len(occ_vars) != site_count:
+            occ_vars = [tk.DoubleVar(value=float(v)) for v in new_occ_values]
+        else:
+            for occ_var, value in zip(occ_vars, new_occ_values):
+                occ_var.set(float(value))
+        _rebuild_occupancy_controls()
+
+        cif_file_var.set(cif_file)
+        ht_cache_multi = {}
+        _rebuild_diffraction_inputs(
+            new_occ_values,
+            p_vals,
+            weights,
+            c_axis,
+            force=True,
+            trigger_update=True,
+        )
+        av = float(new_av)
+        cv = float(new_cv)
+        defaults["a"] = av
+        defaults["c"] = cv
+        if has_second_cif:
+            if blk2.get("_cell_length_a") is None:
+                av2 = av
+            if blk2.get("_cell_length_c") is None:
+                cv2 = cv
+        a_var.set(av)
+        c_var.set(cv)
+        last_simulation_signature = None
+        progress_label.config(text=f"Loaded CIF: {Path(cif_file).name}")
+    except Exception as exc:
+        cif_file = old_cif_file
+        cf = old_cf
+        blk = old_blk
+        occupancy_site_labels = old_labels
+        occupancy_site_count = len(old_labels) if old_labels else max(1, len(old_occ_values))
+        occ = old_occ if old_occ else list(old_occ_values)
+        av = old_av
+        cv = old_cv
+        av2 = old_av2
+        cv2 = old_cv2
+        defaults["a"] = old_default_a
+        defaults["c"] = old_default_c
+
+        if len(occ_vars) != len(old_occ_values):
+            occ_vars = [tk.DoubleVar(value=float(v)) for v in old_occ_values]
+        else:
+            for occ_var, value in zip(occ_vars, old_occ_values):
+                occ_var.set(float(value))
+        _rebuild_occupancy_controls()
+        a_var.set(float(old_slider_a))
+        c_var.set(float(old_slider_c))
+
+        cif_file_var.set(old_cif_file)
+        progress_label.config(text=f"Failed to load CIF: {exc}")
+
+
+def _browse_primary_cif():
+    """Open a file picker and apply the selected primary CIF path."""
+
+    try:
+        initial_dir = str(Path(cif_file).expanduser().parent)
+    except Exception:
+        initial_dir = str(get_dir("file_dialog_dir"))
+
+    selected = filedialog.askopenfilename(
+        title="Select Primary CIF",
+        initialdir=initial_dir,
+        filetypes=[("CIF files", "*.cif *.CIF"), ("All files", "*.*")],
+    )
+    if not selected:
+        return
+    cif_file_var.set(selected)
+    _apply_primary_cif_path(selected)
+
+
+def _apply_primary_cif_from_entry(_event=None):
+    """Apply the CIF path currently entered in the CIF control."""
+
+    _apply_primary_cif_path(cif_file_var.get())
+
+
+_rebuild_occupancy_controls()
+
+cif_file_var = tk.StringVar(value=str(cif_file))
+cif_frame = CollapsibleFrame(right_col, text='Primary CIF')
+cif_frame.pack(fill=tk.X, padx=5, pady=5)
+ttk.Label(cif_frame.frame, text="Path").pack(anchor=tk.W, padx=5, pady=(2, 0))
+cif_entry = ttk.Entry(cif_frame.frame, textvariable=cif_file_var)
+cif_entry.pack(fill=tk.X, padx=5, pady=(2, 5))
+cif_entry.bind("<Return>", _apply_primary_cif_from_entry)
+cif_actions = ttk.Frame(cif_frame.frame)
+cif_actions.pack(fill=tk.X, padx=5, pady=(0, 5))
+ttk.Button(cif_actions, text="Browse...", command=_browse_primary_cif).pack(
+    side=tk.LEFT, padx=(0, 5)
+)
+ttk.Button(cif_actions, text="Apply", command=_apply_primary_cif_from_entry).pack(
+    side=tk.LEFT
+)
 
 def _launch_calibrant_gui(startup_bundle=None):
     """Launch the hBN calibrant fitter GUI from ``hbn_fitter/fitter.py``."""

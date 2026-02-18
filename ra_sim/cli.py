@@ -48,10 +48,7 @@ from ra_sim.utils.calculations import IndexofRefraction
 
 
 def _parse_cif_cell_a_c(cif_file: str) -> tuple[float, float]:
-    """Return (a, c) from a CIF file using PyCifRW, following main.py pattern.
-
-    Multiplies `c` by 3 to align with existing GUI assumptions.
-    """
+    """Return (a, c) from a CIF file using PyCifRW."""
     import CifFile
     import re
 
@@ -59,7 +56,9 @@ def _parse_cif_cell_a_c(cif_file: str) -> tuple[float, float]:
     blk = cf[list(cf.keys())[0]]
 
     def _parse_num(txt: str) -> float:
-        m = re.match(r"[-+0-9\.Ee]+", txt)
+        if isinstance(txt, (int, float)):
+            return float(txt)
+        m = re.match(r"[-+0-9\.Ee]+", str(txt).strip())
         if not m:
             raise ValueError(f"Can't parse '{txt}' as a number from CIF")
         return float(m.group(0))
@@ -70,7 +69,7 @@ def _parse_cif_cell_a_c(cif_file: str) -> tuple[float, float]:
         raise ValueError("CIF is missing _cell_length_a/_c fields")
 
     a = _parse_num(a_text)
-    c = _parse_num(c_text) * 3.0
+    c = _parse_num(c_text)
     return a, c
 
 
@@ -200,12 +199,34 @@ def run_headless_simulation(
 
     tilt_hint = load_tilt_hint()
     if tilt_hint:
-        Gamma_initial = float(tilt_hint.get("rot1_rad", Gamma_initial))
-        gamma_initial = float(tilt_hint.get("rot2_rad", gamma_initial))
+        hinted_gamma = tilt_hint.get("gamma_deg")
+        hinted_Gamma = tilt_hint.get("Gamma_deg")
+        try:
+            hinted_gamma = float(hinted_gamma)
+            hinted_Gamma = float(hinted_Gamma)
+        except (TypeError, ValueError):
+            hinted_gamma = None
+            hinted_Gamma = None
+        if hinted_gamma is not None and np.isfinite(hinted_gamma):
+            gamma_initial = hinted_gamma
+        if hinted_Gamma is not None and np.isfinite(hinted_Gamma):
+            Gamma_initial = hinted_Gamma
+        hinted_distance = tilt_hint.get("distance_m")
+        try:
+            hinted_distance = float(hinted_distance)
+        except (TypeError, ValueError):
+            hinted_distance = None
+        if hinted_distance is not None and np.isfinite(hinted_distance):
+            D = hinted_distance
         print(
             "Using detector tilt defaults from hBN fit profile: "
-            f"Rot1={Gamma_initial:.4f} rad, Rot2={gamma_initial:.4f} rad"
+            f"sim γ={gamma_initial:.4f} deg, sim Γ={Gamma_initial:.4f} deg"
         )
+        if hinted_distance is not None and np.isfinite(hinted_distance):
+            print(
+                "Using detector distance default from hBN fit profile: "
+                f"Dist={hinted_distance:.4f} m"
+            )
 
     # Beam center: follow GUI default mapping from PONI to pixels
     center = np.array([
@@ -229,7 +250,7 @@ def run_headless_simulation(
     # Occupancies
     occ = inst.get("occupancies", {}).get("default", [1.0, 1.0, 1.0])
 
-    # Lattice constants (mirrors GUI default of tripling c)
+    # Lattice constants from CIF
     av, cv = _parse_cif_cell_a_c(cif_file)
 
     # Build HT curves and rods for the three p values

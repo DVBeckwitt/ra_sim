@@ -3,6 +3,7 @@
 
 import argparse
 import datetime as dt
+import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -32,11 +33,24 @@ DEFAULT_LOG_EPS = 1e-3
 DEFAULT_CLICK_SEARCH_ALONG = 12.0
 DEFAULT_CLICK_SEARCH_ACROSS = 3.0
 DEFAULT_CLICK_SEARCH_STEP = 0.5
+DEFAULT_SNAP_MIN_PEAK_SNR = 0.35
+DEFAULT_SNAP_MIN_POSTERIOR = -2.5
+DEFAULT_SNAP_MIN_MARGIN = 0.08
+DEFAULT_SNAP_W_PEAK = 1.0
+DEFAULT_SNAP_W_RESID = 1.0
+DEFAULT_SNAP_W_ACROSS = 1.0
+DEFAULT_SNAP_W_CLICK_DIST = 0.65
+DEFAULT_SNAP_UNCERT_RADII_PX = (0.0, 1.0, 2.0, 3.0)
+DEFAULT_SNAP_UNCERT_N_ANGLES = 8
+DEFAULT_SNAP_UNCERT_MIN_PX = 0.20
+DEFAULT_SNAP_UNCERT_MAX_PX = 12.0
 DEFAULT_PV_MIN_SAMPLES = 7
 DEFAULT_PV_MAXFEV = 400
 DEFAULT_SUBPIXEL_PATCH_HALF = 1
-DEFAULT_PRECISION_PICK_SIZE_DS = 20.0
+DEFAULT_PRECISION_PICK_SIZE_DS = 40.0
 DEFAULT_EDIT_SELECT_RADIUS_DS = 6.0
+DEFAULT_PREVIEW_MIN_INTERVAL_S = 0.03
+DEFAULT_PREVIEW_MIN_MOVE_PX = 0.8
 DEFAULT_CENTER_DRIFT_LIMIT_PX = 35.0
 DEFAULT_CENTER_PRIOR_SIGMA_PX = 12.0
 FINAL_REFINE_DOWNSAMPLE = 1
@@ -59,6 +73,18 @@ OPT_GRID_SIZE_WARM = 17
 OPT_GRID_SPAN_WARM = 4.0
 OPT_NELDER_MAXITER = 500
 OPT_POWELL_MAXITER = 250
+PROJECTIVE_TILT_MAX_DEG = 25.0
+PROJECTIVE_DIST_MIN_PX = 120.0
+PROJECTIVE_DIST_MAX_MULT = 20.0
+PROJECTIVE_DIST_PRIOR_SIGMA_LOG = 0.9
+
+# Keep hBN fitter inputs in native OSC orientation (no np.rot90).
+SIM_BACKGROUND_ROTATE_K = 0
+# Area-detector CCW-positive convention for exported simulation rotations:
+# - left/right tilt -> +Gamma when CCW viewed from image top
+# - up/down tilt   -> +gamma when CCW viewed from image left->right
+SIM_GAMMA_SIGN_FROM_TILT_X = 1
+SIM_GAMMA_SIGN_FROM_TILT_Y = 1
 
 
 def safe_int(text, default, minimum=1):
@@ -103,11 +129,23 @@ def pts_to_obj(points):
     return np.array([np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in points], dtype=object)
 
 
+def scalars_to_obj(values):
+    return np.array([np.asarray(v, dtype=np.float32).reshape(-1) for v in values], dtype=object)
+
+
 def obj_to_pts_list(obj):
     out = []
     for p in obj:
         arr = np.asarray(p, dtype=float).reshape(-1, 2)
         out.append([(float(x), float(y)) for x, y in arr])
+    return out
+
+
+def obj_to_scalar_lists(obj):
+    out = []
+    for v in obj:
+        arr = np.asarray(v, dtype=float).reshape(-1)
+        out.append([float(x) for x in arr])
     return out
 
 
@@ -254,20 +292,98 @@ def robust_fit_ellipse(points, residual_threshold_px=2.5, max_trials=300):
     return params, inliers
 
 
-def fit_initial_ellipse(pts):
-    params, inliers = robust_fit_ellipse(pts, residual_threshold_px=3.0, max_trials=250)
-    if params is not None:
-        return params
+def _wrap_angle_pi(theta):
+    return float((float(theta) + np.pi) % (2.0 * np.pi) - np.pi)
 
-    x = pts[:, 0]
-    y = pts[:, 1]
-    return (
-        float(x.mean()),
-        float(y.mean()),
-        max(float((x.max() - x.min()) / 2), 1.0),
-        max(float((y.max() - y.min()) / 2), 1.0),
-        0.0,
-    )
+
+def _sanitize_point_sigma(point_sigma_px, n, default_sigma=1.0):
+    n = int(max(int(n), 0))
+    if n == 0:
+        return np.array([], dtype=float)
+    arr = np.asarray(point_sigma_px, dtype=float).reshape(-1) if point_sigma_px is not None else np.array([], dtype=float)
+    out = np.full(n, np.nan, dtype=float)
+    m = min(n, arr.size)
+    if m > 0:
+        out[:m] = arr[:m]
+    valid = np.isfinite(out) & (out > 0.0)
+    if np.any(valid):
+        ref = float(np.median(out[valid]))
+    else:
+        ref = float(default_sigma)
+    ref = float(np.clip(ref, 0.20, 10.0))
+    out[~valid] = ref
+    out = np.clip(out, 0.15, 20.0)
+    return out
+
+
+def weighted_refine_ellipse(points, params0, point_sigma_px=None, maxiter=120):
+    pts = np.asarray(points, dtype=float).reshape(-1, 2)
+    if pts.shape[0] < 5:
+        return tuple(float(v) for v in params0)
+
+    x0, y0, a0, b0, th0 = [float(v) for v in params0]
+    a0 = max(abs(a0), 1e-3)
+    b0 = max(abs(b0), 1e-3)
+    th0 = _wrap_angle_pi(th0)
+
+    sig = _sanitize_point_sigma(point_sigma_px, pts.shape[0], default_sigma=1.0)
+    w = 1.0 / np.clip(sig, 0.15, 20.0) ** 2
+    w = w / max(float(np.median(w[np.isfinite(w)])) if np.any(np.isfinite(w)) else 1.0, 1e-6)
+    delta = float(np.clip(np.median(sig), 0.6, 4.0))
+    span = float(max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), 4.0))
+
+    def obj(z):
+        xc, yc, loga, logb, th = [float(v) for v in z]
+        a = max(np.exp(loga), 1e-4)
+        b = max(np.exp(logb), 1e-4)
+        th = _wrap_angle_pi(th)
+        if not (np.isfinite(xc) and np.isfinite(yc) and np.isfinite(a) and np.isfinite(b) and np.isfinite(th)):
+            return np.inf
+
+        resid = ellipse_residuals_px(pts, (xc, yc, a, b, th))
+        if resid.size != pts.shape[0]:
+            return np.inf
+        u = resid / max(delta, 1e-6)
+        rho = (np.sqrt(1.0 + u * u) - 1.0) * (delta * delta)
+        loss = float(np.mean(w * rho))
+
+        # Keep the local weighted refinement near the robust seed.
+        reg_center = 2e-4 * (((xc - x0) / max(span, 1.0)) ** 2 + ((yc - y0) / max(span, 1.0)) ** 2)
+        reg_axes = 1e-4 * (((np.log(a / a0)) ** 2) + ((np.log(b / b0)) ** 2))
+        return float(loss + reg_center + reg_axes)
+
+    z0 = np.array([x0, y0, np.log(a0), np.log(b0), th0], dtype=float)
+    try:
+        res = minimize(
+            obj,
+            z0,
+            method="Powell",
+            options={"maxiter": int(maxiter), "xtol": 1e-3, "ftol": 1e-8, "disp": False},
+        )
+        if res.success and np.all(np.isfinite(res.x)):
+            xc, yc, loga, logb, th = [float(v) for v in res.x]
+            a = max(np.exp(loga), 1e-4)
+            b = max(np.exp(logb), 1e-4)
+            if np.isfinite(xc) and np.isfinite(yc) and np.isfinite(a) and np.isfinite(b):
+                return (float(xc), float(yc), float(a), float(b), _wrap_angle_pi(th))
+    except Exception:
+        pass
+    return (float(x0), float(y0), float(a0), float(b0), float(th0))
+
+
+def fit_initial_ellipse(pts, point_sigma_px=None):
+    params, inliers = robust_fit_ellipse(pts, residual_threshold_px=3.0, max_trials=250)
+    if params is None:
+        x = pts[:, 0]
+        y = pts[:, 1]
+        params = (
+            float(x.mean()),
+            float(y.mean()),
+            max(float((x.max() - x.min()) / 2), 1.0),
+            max(float((y.max() - y.min()) / 2), 1.0),
+            0.0,
+        )
+    return weighted_refine_ellipse(pts, params, point_sigma_px=point_sigma_px, maxiter=80)
 
 
 def bilinear_sample(img, x, y):
@@ -453,33 +569,59 @@ def snap_points_to_ring(
     search_across=DEFAULT_CLICK_SEARCH_ACROSS,
     search_step=DEFAULT_CLICK_SEARCH_STEP,
     use_pseudovoigt=True,
+    enforce_confidence=False,
+    min_peak_snr=DEFAULT_SNAP_MIN_PEAK_SNR,
+    min_posterior=DEFAULT_SNAP_MIN_POSTERIOR,
+    min_margin=DEFAULT_SNAP_MIN_MARGIN,
+    score_w_peak=DEFAULT_SNAP_W_PEAK,
+    score_w_resid=DEFAULT_SNAP_W_RESID,
+    score_w_across=DEFAULT_SNAP_W_ACROSS,
+    score_w_click_dist=DEFAULT_SNAP_W_CLICK_DIST,
+    return_meta=False,
 ):
     pts = np.asarray(points_full, dtype=float).reshape(-1, 2)
     if pts.shape[0] == 0:
-        return np.empty((0, 2), dtype=float)
+        empty = np.empty((0, 2), dtype=float)
+        return (empty, []) if return_meta else empty
 
     h, w = img_log.shape
     xc, yc, a, b, theta = [float(v) for v in params]
-    c, s = np.cos(theta), np.sin(theta)
     scale = max(0.5 * (abs(a) + abs(b)), 1.0)
+    sigma_resid = max(1.5, 0.03 * scale, 0.25 * max(abs(float(search_step)), 1e-6))
+    sigma_v = max(0.75, 0.45 * max(float(search_across), 0.5))
+    sigma_d = max(1.0, 0.55 * max(float(search_along), 1.0))
 
     snapped = []
+    meta = []
+    along = np.arange(-search_along, search_along + search_step, search_step)
+    across = np.arange(-search_across, search_across + search_step, search_step)
+
     for px, py in pts:
         vx = px - xc
         vy = py - yc
         vr = np.hypot(vx, vy)
         if vr < 1e-6:
+            snapped.append((float(px), float(py)))
+            meta.append(
+                {
+                    "used_snap": False,
+                    "reason": "near_center",
+                    "best_posterior": np.nan,
+                    "posterior_margin": np.nan,
+                    "best_peak_snr": np.nan,
+                    "best_resid_px": np.nan,
+                    "best_tangent_offset_px": np.nan,
+                    "best_click_distance_px": np.nan,
+                    "candidate_count": 0,
+                }
+            )
             continue
         nx = vx / vr
         ny = vy / vr
         tx = -ny
         ty = nx
 
-        best_score = -np.inf
-        best_x = px
-        best_y = py
-        along = np.arange(-search_along, search_along + search_step, search_step)
-        across = np.arange(-search_across, search_across + search_step, search_step)
+        candidates = []
 
         for v in across:
             u_valid = []
@@ -494,6 +636,11 @@ def snap_points_to_ring(
 
             if len(u_valid) < DEFAULT_PV_MIN_SAMPLES:
                 continue
+
+            y_prof = np.asarray(y_valid, dtype=float)
+            y_med = float(np.median(y_prof))
+            y_mad = float(np.median(np.abs(y_prof - y_med)))
+            y_sigma = max(1.4826 * y_mad, 1e-6)
 
             if use_pseudovoigt:
                 u_peak, y_peak, _ = find_profile_peak_pseudovoigt(u_valid, y_valid)
@@ -511,18 +658,109 @@ def snap_points_to_ring(
                 np.array([[x_peak, y_peak_xy]], dtype=float),
                 (xc, yc, a, b, theta),
             )[0]
-            # Prioritize pseudo-Voigt peak height while keeping points near the current ring.
-            score = float(y_peak) - 0.20 * (resid / scale) - 0.01 * (v * v)
-            if score > best_score:
-                best_score = score
-                best_x = float(x_peak)
-                best_y = float(y_peak_xy)
+            click_dist = float(np.hypot(float(u_peak), float(v)))
+            peak_snr = float((float(y_peak) - y_med) / y_sigma)
+            log_post = (
+                float(score_w_peak) * peak_snr
+                - 0.5 * float(score_w_resid) * ((float(resid) / sigma_resid) ** 2)
+                - 0.5 * float(score_w_across) * ((float(v) / sigma_v) ** 2)
+                - 0.5 * float(score_w_click_dist) * ((click_dist / sigma_d) ** 2)
+            )
 
-        snapped.append((best_x, best_y))
+            candidates.append(
+                {
+                    "x": float(x_peak),
+                    "y": float(y_peak_xy),
+                    "posterior": float(log_post),
+                    "peak_snr": float(peak_snr),
+                    "resid_px": float(resid),
+                    "tangent_offset_px": float(v),
+                    "click_distance_px": float(click_dist),
+                }
+            )
 
-    if not snapped:
-        return np.empty((0, 2), dtype=float)
-    return np.asarray(snapped, dtype=float)
+        if not candidates:
+            snapped.append((float(px), float(py)))
+            meta.append(
+                {
+                    "used_snap": False,
+                    "reason": "no_candidates",
+                    "best_posterior": np.nan,
+                    "posterior_margin": np.nan,
+                    "best_peak_snr": np.nan,
+                    "best_resid_px": np.nan,
+                    "best_tangent_offset_px": np.nan,
+                    "best_click_distance_px": np.nan,
+                    "candidate_count": 0,
+                }
+            )
+            continue
+
+        candidates.sort(key=lambda c: c["posterior"], reverse=True)
+        best = candidates[0]
+        second = candidates[1] if len(candidates) > 1 else None
+        posterior_margin = (
+            float(best["posterior"] - second["posterior"]) if second is not None else np.inf
+        )
+
+        use_snap = True
+        reason = "accepted"
+        if enforce_confidence:
+            resid_limit = max(2.5, 0.02 * scale)
+            dist_limit = max(1.5, 0.90 * float(search_along))
+            alt_sep_limit = max(1.25, 1.5 * abs(float(search_step)))
+            if float(best["posterior"]) < float(min_posterior):
+                use_snap = False
+                reason = "low_posterior"
+            elif np.isfinite(posterior_margin) and float(posterior_margin) < float(min_margin):
+                # Margins can be small on broad/flat rings; only reject if
+                # the alternatives are materially separated and geometry is weak.
+                alt_sep = (
+                    float(np.hypot(float(best["x"]) - float(second["x"]), float(best["y"]) - float(second["y"])))
+                    if second is not None
+                    else 0.0
+                )
+                is_geom_weak = (
+                    float(best["resid_px"]) > float(resid_limit)
+                    and float(best["click_distance_px"]) > float(dist_limit)
+                )
+                if np.isfinite(alt_sep) and float(alt_sep) > float(alt_sep_limit) and is_geom_weak:
+                    use_snap = False
+                    reason = "ambiguous_posterior"
+
+            # Ring-constrained snapping should not fail just because signal contrast is modest.
+            # Only reject weak-SNR candidates when they are also geometrically implausible.
+            if use_snap and (
+                float(best["peak_snr"]) < float(min_peak_snr)
+                and float(best["resid_px"]) > float(resid_limit)
+                and float(best["click_distance_px"]) > float(dist_limit)
+            ):
+                use_snap = False
+                reason = "low_peak_snr"
+
+        if use_snap:
+            snapped.append((float(best["x"]), float(best["y"])))
+        else:
+            snapped.append((float(px), float(py)))
+
+        meta.append(
+            {
+                "used_snap": bool(use_snap),
+                "reason": str(reason),
+                "best_posterior": float(best["posterior"]),
+                "posterior_margin": float(posterior_margin),
+                "best_peak_snr": float(best["peak_snr"]),
+                "best_resid_px": float(best["resid_px"]),
+                "best_tangent_offset_px": float(best["tangent_offset_px"]),
+                "best_click_distance_px": float(best["click_distance_px"]),
+                "candidate_count": int(len(candidates)),
+            }
+        )
+
+    snapped_arr = np.asarray(snapped, dtype=float).reshape(-1, 2)
+    if return_meta:
+        return snapped_arr, meta
+    return snapped_arr
 
 
 def refine_ellipse(
@@ -533,6 +771,7 @@ def refine_ellipse(
     step,
     n_iter=DEFAULT_REFINE_ITERS,
     seed_points=None,
+    seed_sigma_px=None,
     use_pseudovoigt=True,
 ):
     current = tuple(float(v) for v in params)
@@ -591,6 +830,7 @@ def refine_ellipse(
             break
 
         fit_points = peaks
+        fit_sigma = None
         if seed_points is not None:
             anchors = snap_points_to_ring(
                 img_log,
@@ -602,14 +842,28 @@ def refine_ellipse(
                 use_pseudovoigt=use_pseudovoigt,
             )
             if anchors.shape[0] >= 5:
-                # Give selected-point neighborhoods a stronger voice in the fit.
-                fit_points = np.vstack([peaks, anchors, anchors, anchors])
+                if seed_sigma_px is not None:
+                    # Use pointwise snap uncertainty in the ellipse update.
+                    s_anchor = _sanitize_point_sigma(seed_sigma_px, anchors.shape[0], default_sigma=1.0)
+                    s_peak = np.full(peaks.shape[0], float(np.median(s_anchor)), dtype=float)
+                    fit_points = np.vstack([peaks, anchors])
+                    fit_sigma = np.r_[s_peak, s_anchor]
+                else:
+                    # Backward-compatible behavior when no uncertainty is available.
+                    fit_points = np.vstack([peaks, anchors, anchors, anchors])
+                    fit_sigma = None
 
         # Residual threshold scales mildly with search window, then robustly clips.
         ransac_thr = max(2.0, 0.35 * float(dr))
         new_params, inliers = robust_fit_ellipse(fit_points, residual_threshold_px=ransac_thr, max_trials=300)
         if new_params is None:
             break
+        new_params = weighted_refine_ellipse(
+            fit_points,
+            new_params,
+            point_sigma_px=fit_sigma,
+            maxiter=90,
+        )
 
         prev = np.asarray(current, dtype=float)
         nxt = np.asarray(new_params, dtype=float)
@@ -633,6 +887,7 @@ def fit_ellipses(
     img_log=None,
     n_iter=DEFAULT_REFINE_ITERS,
     use_pseudovoigt=True,
+    point_sigma_ds=None,
 ):
     if img_log is None:
         img_log = make_log_image(img_bgsub)
@@ -661,6 +916,16 @@ def fit_ellipses(
         if arr.shape[0] < 5:
             continue
         arr_full = arr * float(downsample)
+        ring_sigma = None
+        if point_sigma_ds is not None and ring_idx - 1 < len(point_sigma_ds):
+            s_arr = np.asarray(point_sigma_ds[ring_idx - 1], dtype=float).reshape(-1)
+            if s_arr.size > 0:
+                # Incoming sigma is in fit-space px when called from GUI fit path.
+                ring_sigma = _sanitize_point_sigma(
+                    s_arr * float(downsample),
+                    arr_full.shape[0],
+                    default_sigma=1.0,
+                )
         p0 = prior_by_ring.get(int(ring_idx))
         if p0 is not None:
             resid0 = ellipse_residuals_px(arr_full, p0)
@@ -669,7 +934,7 @@ def fit_ellipses(
             if (not np.isfinite(med_resid0)) or med_resid0 > max(30.0, 0.45 * ring_scale):
                 p0 = None
         if p0 is None:
-            p0 = fit_initial_ellipse(arr_full)
+            p0 = fit_initial_ellipse(arr_full, point_sigma_px=ring_sigma)
 
         snapped0 = snap_points_to_ring(
             img_log,
@@ -681,7 +946,7 @@ def fit_ellipses(
             use_pseudovoigt=use_pseudovoigt,
         )
         if snapped0.shape[0] >= 5:
-            p1 = fit_initial_ellipse(snapped0)
+            p1 = fit_initial_ellipse(snapped0, point_sigma_px=ring_sigma)
         else:
             p1 = p0
 
@@ -693,6 +958,7 @@ def fit_ellipses(
             step,
             n_iter=n_iter,
             seed_points=arr_full,
+            seed_sigma_px=ring_sigma,
             use_pseudovoigt=use_pseudovoigt,
         )
         out.append({"xc": xc, "yc": yc, "a": a, "b": b, "theta": theta, "ring_index": int(ring_idx)})
@@ -946,6 +1212,350 @@ def apply_tilt_xy(pts, center, tilt_x_deg, tilt_y_deg):
     return np.column_stack([xc + dx, yc + dy])
 
 
+def _rotation_from_tilts_xy(tilt_x_deg, tilt_y_deg):
+    tx = np.deg2rad(np.clip(float(tilt_x_deg), -45.0, 45.0))
+    ty = np.deg2rad(np.clip(float(tilt_y_deg), -45.0, 45.0))
+    cx, sx = np.cos(tx), np.sin(tx)
+    cy, sy = np.cos(ty), np.sin(ty)
+    rx = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, cx, -sx],
+            [0.0, sx, cx],
+        ],
+        dtype=float,
+    )
+    ry = np.array(
+        [
+            [cy, 0.0, sy],
+            [0.0, 1.0, 0.0],
+            [-sy, 0.0, cy],
+        ],
+        dtype=float,
+    )
+    return ry @ rx
+
+
+def _robust_sigma_1d(values):
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        return np.nan
+    med = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - med)))
+    sigma = 1.4826 * mad
+    if np.isfinite(sigma) and sigma > 1e-9:
+        return float(sigma)
+    return float(np.std(arr))
+
+
+def apply_tilt_projective(pts, center, tilt_x_deg, tilt_y_deg, distance_px):
+    arr = np.asarray(pts, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 2 or arr.size == 0:
+        return arr
+
+    xc, yc = float(center[0]), float(center[1])
+    d = max(float(distance_px), 1e-3)
+    rot = _rotation_from_tilts_xy(tilt_x_deg, tilt_y_deg)
+    ex = rot[:, 0]
+    ey = rot[:, 1]
+    center_vec = np.array([0.0, 0.0, d], dtype=float)
+
+    dx = arr[:, 0] - xc
+    dy = arr[:, 1] - yc
+    p3 = center_vec[None, :] + dx[:, None] * ex[None, :] + dy[:, None] * ey[None, :]
+
+    z = p3[:, 2]
+    out = arr.copy()
+    good = np.isfinite(z) & (z > 1e-6)
+    if np.any(good):
+        s = d / z[good]
+        out[good, 0] = xc + p3[good, 0] * s
+        out[good, 1] = yc + p3[good, 1] * s
+    return out
+
+
+def circularity_cost_projective(params, point_sets, center, weights=None):
+    tx, ty, distance_px = [float(v) for v in params]
+    if not np.isfinite(distance_px) or distance_px <= 1e-3:
+        return np.inf
+
+    xc, yc = float(center[0]), float(center[1])
+    w = _prepare_ring_weights(weights, len(point_sets))
+    cost = 0.0
+    wsum = 0.0
+    for i, pts in enumerate(point_sets):
+        arr = np.asarray(pts, dtype=float)
+        if arr.ndim != 2 or arr.shape[1] != 2 or arr.size == 0:
+            continue
+        corr = apply_tilt_projective(arr, center, tx, ty, distance_px)
+        r = np.hypot(corr[:, 0] - xc, corr[:, 1] - yc)
+        r = r[np.isfinite(r)]
+        if r.size < 3:
+            continue
+        m = float(np.median(r))
+        sig = _robust_sigma_1d(r)
+        if m > 1e-9 and np.isfinite(sig):
+            c = sig / m
+            wi = float(w[i]) if i < w.size else 1.0
+            cost += wi * c * c
+            wsum += wi
+    if wsum <= 1e-12:
+        return np.inf
+    return float(cost / wsum)
+
+
+def circularity_metrics_projective(point_sets, center, tx, ty, distance_px):
+    xc, yc = float(center[0]), float(center[1])
+    vals = []
+    for pts in point_sets:
+        arr = np.asarray(pts, dtype=float)
+        if arr.ndim != 2 or arr.shape[1] != 2 or arr.size == 0:
+            vals.append(np.nan)
+            continue
+        corr = apply_tilt_projective(arr, center, tx, ty, distance_px)
+        r = np.hypot(corr[:, 0] - xc, corr[:, 1] - yc)
+        r = r[np.isfinite(r)]
+        if r.size < 3:
+            vals.append(np.nan)
+            continue
+        m = float(np.median(r))
+        sig = _robust_sigma_1d(r)
+        vals.append(float(sig / m) if m > 1e-9 and np.isfinite(sig) else np.nan)
+    return np.asarray(vals, dtype=float)
+
+
+def optimize_tilts_projective(
+    point_sets,
+    center,
+    weights=None,
+    optimize_center=True,
+    center_prior=None,
+    center_prior_sigma_px=DEFAULT_CENTER_PRIOR_SIGMA_PX,
+    center_drift_limit_px=DEFAULT_CENTER_DRIFT_LIMIT_PX,
+    initial_tilts=None,
+):
+    if not point_sets:
+        raise ValueError("No point sets available for optimization.")
+    weights_arr = _prepare_ring_weights(weights, len(point_sets))
+
+    valid = []
+    for p in point_sets:
+        arr = np.asarray(p, dtype=float)
+        if arr.ndim == 2 and arr.shape[1] == 2 and arr.size > 0:
+            valid.append(arr)
+    if not valid:
+        raise ValueError("No valid points available for projective optimization.")
+
+    all_pts = np.vstack(valid)
+    xmin, xmax = float(np.min(all_pts[:, 0])), float(np.max(all_pts[:, 0]))
+    ymin, ymax = float(np.min(all_pts[:, 1])), float(np.max(all_pts[:, 1]))
+    sx = max(xmax - xmin, 1.0)
+    sy = max(ymax - ymin, 1.0)
+    span_max = max(sx, sy, 1.0)
+
+    cx0, cy0 = float(center[0]), float(center[1])
+    ring_r = []
+    for arr in valid:
+        rr = np.hypot(arr[:, 0] - cx0, arr[:, 1] - cy0)
+        rr = rr[np.isfinite(rr)]
+        if rr.size > 0:
+            ring_r.append(float(np.median(rr)))
+    if ring_r:
+        r_med = float(np.median(np.asarray(ring_r, dtype=float)))
+    else:
+        r_med = 0.25 * span_max
+    if not np.isfinite(r_med) or r_med <= 0.0:
+        r_med = 0.25 * span_max
+
+    dist0 = float(np.clip(4.0 * r_med, PROJECTIVE_DIST_MIN_PX, PROJECTIVE_DIST_MAX_MULT * span_max))
+    dist_lo = float(max(PROJECTIVE_DIST_MIN_PX, 0.5 * r_med, 0.15 * span_max))
+    dist_hi = float(max(dist_lo + 1.0, PROJECTIVE_DIST_MAX_MULT * span_max))
+    logd_lo = float(np.log(max(dist_lo, 1e-3)))
+    logd_hi = float(np.log(max(dist_hi, dist_lo + 1e-3)))
+    dist_prior_sigma = float(max(PROJECTIVE_DIST_PRIOR_SIGMA_LOG, 0.1))
+
+    center_opt = (cx0, cy0)
+    prior_center = None
+    if center_prior is not None:
+        try:
+            prior_center = (float(center_prior[0]), float(center_prior[1]))
+            if not (np.isfinite(prior_center[0]) and np.isfinite(prior_center[1])):
+                prior_center = None
+        except Exception:
+            prior_center = None
+
+    prior_sigma = float(center_prior_sigma_px) if center_prior_sigma_px is not None else np.nan
+    if not np.isfinite(prior_sigma) or prior_sigma <= 0:
+        prior_sigma = DEFAULT_CENTER_PRIOR_SIGMA_PX
+    drift_limit = float(center_drift_limit_px) if center_drift_limit_px is not None else np.nan
+    if not np.isfinite(drift_limit) or drift_limit <= 0:
+        drift_limit = DEFAULT_CENTER_DRIFT_LIMIT_PX
+
+    def _cost_with_distance_prior(cx, cy, tx, ty, dist):
+        if not (np.isfinite(cx) and np.isfinite(cy) and np.isfinite(tx) and np.isfinite(ty) and np.isfinite(dist)):
+            return np.inf
+        if dist <= 1e-3:
+            return np.inf
+        base = circularity_cost_projective((tx, ty, dist), point_sets, (cx, cy), weights=weights_arr)
+        if not np.isfinite(base):
+            return np.inf
+        lnd = np.log(dist / dist0)
+        return float(base + 1e-3 * (lnd / dist_prior_sigma) ** 2)
+
+    # Stage 1: coarse tilt grid with fixed center and nominal distance.
+    grid_n = int(OPT_GRID_SIZE_COLD)
+    grid_span = float(OPT_GRID_SPAN_COLD)
+    best = (0.0, 0.0, dist0, _cost_with_distance_prior(center_opt[0], center_opt[1], 0.0, 0.0, dist0))
+    if initial_tilts is not None:
+        try:
+            tx0 = float(initial_tilts[0])
+            ty0 = float(initial_tilts[1])
+            if np.isfinite(tx0) and np.isfinite(ty0):
+                tx0 = float(np.clip(tx0, -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+                ty0 = float(np.clip(ty0, -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+                c0 = _cost_with_distance_prior(center_opt[0], center_opt[1], tx0, ty0, dist0)
+                if np.isfinite(c0):
+                    best = (tx0, ty0, dist0, float(c0))
+                    grid_n = int(OPT_GRID_SIZE_WARM)
+                    grid_span = float(OPT_GRID_SPAN_WARM)
+        except Exception:
+            pass
+    tx_center = best[0] if np.isfinite(best[0]) else 0.0
+    ty_center = best[1] if np.isfinite(best[1]) else 0.0
+    tx_grid = np.linspace(
+        max(-PROJECTIVE_TILT_MAX_DEG, tx_center - grid_span),
+        min(PROJECTIVE_TILT_MAX_DEG, tx_center + grid_span),
+        max(grid_n, 7),
+    )
+    ty_grid = np.linspace(
+        max(-PROJECTIVE_TILT_MAX_DEG, ty_center - grid_span),
+        min(PROJECTIVE_TILT_MAX_DEG, ty_center + grid_span),
+        max(grid_n, 7),
+    )
+    for tx in tx_grid:
+        for ty in ty_grid:
+            c = _cost_with_distance_prior(center_opt[0], center_opt[1], tx, ty, dist0)
+            if c < best[3]:
+                best = (float(tx), float(ty), float(dist0), float(c))
+
+    # Stage 2: local tilt+distance refinement with fixed center.
+    def cost3(p3):
+        tx, ty, logd = [float(v) for v in p3]
+        tx = float(np.clip(tx, -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+        ty = float(np.clip(ty, -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+        logd = float(np.clip(logd, logd_lo, logd_hi))
+        dist = float(np.exp(logd))
+        return _cost_with_distance_prior(center_opt[0], center_opt[1], tx, ty, dist)
+
+    res_tilt = minimize(
+        cost3,
+        np.array([best[0], best[1], np.log(best[2])], dtype=float),
+        method="Powell",
+        bounds=[
+            (-PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG),
+            (-PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG),
+            (logd_lo, logd_hi),
+        ],
+        options={"maxiter": int(OPT_POWELL_MAXITER), "xtol": 1e-3, "ftol": 1e-8, "disp": False},
+    )
+
+    tx = float(best[0])
+    ty = float(best[1])
+    dist_opt = float(best[2])
+    if res_tilt.success and np.all(np.isfinite(res_tilt.x)):
+        tx = float(np.clip(res_tilt.x[0], -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+        ty = float(np.clip(res_tilt.x[1], -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+        dist_opt = float(np.exp(np.clip(res_tilt.x[2], logd_lo, logd_hi)))
+
+    # Stage 3: jointly refine center + tilts + distance.
+    res_center = None
+    if optimize_center:
+        mx = max(20.0, 0.2 * sx)
+        my = max(20.0, 0.2 * sy)
+        bounds_base = [
+            (xmin - mx, xmax + mx),
+            (ymin - my, ymax + my),
+            (-PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG),
+            (-PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG),
+            (logd_lo, logd_hi),
+        ]
+
+        if prior_center is not None:
+            cxp, cyp = prior_center
+            cx_lo = max(bounds_base[0][0], cxp - drift_limit)
+            cx_hi = min(bounds_base[0][1], cxp + drift_limit)
+            cy_lo = max(bounds_base[1][0], cyp - drift_limit)
+            cy_hi = min(bounds_base[1][1], cyp + drift_limit)
+            if cx_hi - cx_lo > 1e-6 and cy_hi - cy_lo > 1e-6:
+                bounds = [
+                    (cx_lo, cx_hi),
+                    (cy_lo, cy_hi),
+                    bounds_base[2],
+                    bounds_base[3],
+                    bounds_base[4],
+                ]
+            else:
+                bounds = bounds_base
+        else:
+            bounds = bounds_base
+
+        prior_scale = max(_cost_with_distance_prior(center_opt[0], center_opt[1], tx, ty, dist_opt), 1e-6)
+
+        def cost5(p5):
+            cx, cy, txx, tyy, logd = [float(v) for v in p5]
+            txx = float(np.clip(txx, -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+            tyy = float(np.clip(tyy, -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+            logd = float(np.clip(logd, logd_lo, logd_hi))
+            dist = float(np.exp(logd))
+            base = _cost_with_distance_prior(cx, cy, txx, tyy, dist)
+            if prior_center is not None:
+                dxn = (cx - prior_center[0]) / prior_sigma
+                dyn = (cy - prior_center[1]) / prior_sigma
+                base += prior_scale * (dxn * dxn + dyn * dyn)
+            return base
+
+        x0_center = prior_center if prior_center is not None else center_opt
+        x0 = np.array([x0_center[0], x0_center[1], tx, ty, np.log(dist_opt)], dtype=float)
+        res_center = minimize(
+            cost5,
+            x0,
+            method="Powell",
+            bounds=bounds,
+            options={"maxiter": int(OPT_POWELL_MAXITER), "xtol": 1e-3, "ftol": 1e-8, "disp": False},
+        )
+        if res_center.success and np.all(np.isfinite(res_center.x)):
+            center_opt = (float(res_center.x[0]), float(res_center.x[1]))
+            tx = float(np.clip(res_center.x[2], -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+            ty = float(np.clip(res_center.x[3], -PROJECTIVE_TILT_MAX_DEG, PROJECTIVE_TILT_MAX_DEG))
+            dist_opt = float(np.exp(np.clip(res_center.x[4], logd_lo, logd_hi)))
+
+    corrected = [apply_tilt_projective(p, center_opt, tx, ty, dist_opt) for p in point_sets]
+    return {
+        "center_initial": (float(center[0]), float(center[1])),
+        "center": center_opt,
+        "tilt_x_deg": tx,
+        "tilt_y_deg": ty,
+        "distance_px": float(dist_opt),
+        "cost_zero": circularity_cost_projective((0.0, 0.0, dist_opt), point_sets, center_opt, weights=weights_arr),
+        "cost_final": circularity_cost_projective((tx, ty, dist_opt), point_sets, center_opt, weights=weights_arr),
+        "circ_before": circularity_metrics_projective(point_sets, center_opt, 0.0, 0.0, dist_opt),
+        "circ_after": circularity_metrics_projective(point_sets, center_opt, tx, ty, dist_opt),
+        "radii_before": ring_radii(point_sets, center_opt),
+        "radii_after": ring_radii(corrected, center_opt),
+        "corrected_points": corrected,
+        "ring_weights": weights_arr.astype(float),
+        "center_prior": (np.nan, np.nan) if prior_center is None else prior_center,
+        "center_prior_sigma_px": float(prior_sigma),
+        "center_drift_limit_px": float(drift_limit),
+        "optimizer_success": bool(res_tilt.success if res_center is None else res_center.success and res_tilt.success),
+        "optimizer_message": str(
+            res_tilt.message if res_center is None else f"{res_tilt.message} | {res_center.message}"
+        ),
+        "optimizer_kind": "projective_v1",
+    }
+
+
 def _prepare_ring_weights(weights, n):
     if n <= 0:
         return np.array([], dtype=float)
@@ -1173,6 +1783,8 @@ def optimize_tilts(
         "center_drift_limit_px": float(drift_limit),
         "optimizer_success": bool(res_tilt.success if res_center is None else res_center.success and res_tilt.success),
         "optimizer_message": str(res_tilt.message if res_center is None else f"{res_tilt.message} | {res_center.message}"),
+        "optimizer_kind": "legacy_v1",
+        "distance_px": np.nan,
     }
 
 
@@ -1203,6 +1815,7 @@ class HBNFitterGUI:
         self.down = DEFAULT_DOWNSAMPLE
         self.points_ds = []
         self.points_raw_ds = []
+        self.points_sigma_ds = []
         self.ellipses = []
         self.fit_quality = None
         self.optim = None
@@ -1224,13 +1837,23 @@ class HBNFitterGUI:
         self._precision_ring_idx = None
         self._precision_restore_limits = None
         self._precision_preview_xy = None
+        self._precision_preview_snap_xy = None
         self._precision_preview_artist = None
+        self._precision_preview_snap_artist = None
+        self._precision_preview_link_artist = None
+        self._precision_preview_last_t = 0.0
+        self._precision_preview_last_xy = None
         self._drag_edit_active = False
         self._drag_edit_ring_idx = None
         self._drag_edit_point_idx = None
         self._drag_edit_restore_limits = None
         self._drag_edit_preview_xy = None
+        self._drag_edit_preview_snap_xy = None
         self._drag_edit_preview_artist = None
+        self._drag_edit_preview_snap_artist = None
+        self._drag_edit_preview_link_artist = None
+        self._drag_edit_preview_last_t = 0.0
+        self._drag_edit_preview_last_xy = None
         self._show_suggested_regions = False
         self.suggested_regions = []
 
@@ -1335,6 +1958,7 @@ class HBNFitterGUI:
         if clear or not self.points_ds:
             self.points_ds = [[] for _ in range(n)]
             self.points_raw_ds = [[] for _ in range(n)]
+            self.points_sigma_ds = [[] for _ in range(n)]
         else:
             if len(self.points_ds) < n:
                 self.points_ds.extend([[] for _ in range(n - len(self.points_ds))])
@@ -1346,8 +1970,40 @@ class HBNFitterGUI:
                 self.points_raw_ds.extend([[] for _ in range(n - len(self.points_raw_ds))])
             elif len(self.points_raw_ds) > n:
                 self.points_raw_ds = self.points_raw_ds[:n]
+            if not self.points_sigma_ds:
+                self.points_sigma_ds = [[np.nan] * len(r) for r in self.points_ds]
+            elif len(self.points_sigma_ds) < n:
+                self.points_sigma_ds.extend([[] for _ in range(n - len(self.points_sigma_ds))])
+            elif len(self.points_sigma_ds) > n:
+                self.points_sigma_ds = self.points_sigma_ds[:n]
+        self._sync_point_sigma_shape()
         nxt = self._next_ring(0)
         self.active_ring = 0 if nxt is None else nxt
+
+    def _sync_point_sigma_shape(self):
+        n = len(self.points_ds)
+        if not self.points_sigma_ds:
+            self.points_sigma_ds = [[] for _ in range(n)]
+        if len(self.points_sigma_ds) < n:
+            self.points_sigma_ds.extend([[] for _ in range(n - len(self.points_sigma_ds))])
+        elif len(self.points_sigma_ds) > n:
+            self.points_sigma_ds = self.points_sigma_ds[:n]
+
+        for i in range(n):
+            target = len(self.points_ds[i])
+            ring = list(self.points_sigma_ds[i]) if self.points_sigma_ds[i] is not None else []
+            if len(ring) < target:
+                ring.extend([np.nan] * (target - len(ring)))
+            elif len(ring) > target:
+                ring = ring[:target]
+            clean = []
+            for v in ring:
+                try:
+                    fv = float(v)
+                except Exception:
+                    fv = np.nan
+                clean.append(fv if np.isfinite(fv) and fv > 0.0 else np.nan)
+            self.points_sigma_ds[i] = clean
 
     def _next_ring(self, start):
         if not self.points_ds:
@@ -1432,13 +2088,93 @@ class HBNFitterGUI:
         k = int(np.argmax(d))
         return float(np.mod(a[k] + 0.5 * d[k], 2.0 * np.pi))
 
-    def _suggest_region_for_ring(self, ring_idx0):
-        if self.img_log is None:
+    def _best_snap_from_seeds(
+        self,
+        img_log_full,
+        params,
+        seeds_xy,
+        search_along,
+        search_across,
+        search_step,
+    ):
+        if img_log_full is None or params is None:
             return None
 
-        ds = max(float(self.down), 1.0)
-        pts_ds = np.asarray(self.points_ds[ring_idx0], dtype=float).reshape(-1, 2)
-        pts_full = pts_ds * ds if pts_ds.size else np.empty((0, 2), dtype=float)
+        try:
+            scale = max(0.5 * (abs(float(params[2])) + abs(float(params[3]))), 1.0)
+        except Exception:
+            scale = 1.0
+
+        def _score_from_meta(meta):
+            m = meta or {}
+            post = float(m.get("best_posterior", np.nan))
+            margin = float(m.get("posterior_margin", np.nan))
+            snr = float(m.get("best_peak_snr", np.nan))
+            resid = float(m.get("best_resid_px", np.nan))
+            cdist = float(m.get("best_click_distance_px", np.nan))
+            if not np.isfinite(post):
+                post = -1e6
+            if not np.isfinite(margin):
+                margin = 0.0
+            if not np.isfinite(snr):
+                snr = 0.0
+            if not np.isfinite(resid):
+                resid = 1e3
+            if not np.isfinite(cdist):
+                cdist = 1e3
+            return (
+                post
+                + 0.22 * np.clip(snr, -2.0, 14.0)
+                + 0.10 * np.clip(margin, 0.0, 10.0)
+                - 0.07 * (resid / max(scale, 1.0))
+                - 0.025 * cdist
+            )
+
+        def _snap_once(x_seed, y_seed, along, across, step):
+            snapped, meta = snap_points_to_ring(
+                img_log_full,
+                np.array([[float(x_seed), float(y_seed)]], dtype=float),
+                params,
+                search_along=float(along),
+                search_across=float(across),
+                search_step=float(step),
+                use_pseudovoigt=True,
+                enforce_confidence=False,
+                return_meta=True,
+            )
+            if snapped.shape[0] < 1 or not np.all(np.isfinite(snapped[0])):
+                return None
+            m = meta[0] if meta else {}
+            score = float(_score_from_meta(m))
+            return (float(snapped[0, 0]), float(snapped[0, 1]), score, m)
+
+        best = None
+        for x0, y0 in seeds_xy:
+            primary = _snap_once(x0, y0, search_along, search_across, search_step)
+            if primary is None:
+                continue
+
+            fine_step = float(np.clip(0.55 * float(search_step), 0.20, 0.35))
+            fine = _snap_once(
+                primary[0],
+                primary[1],
+                max(0.60 * float(search_along), 8.0),
+                max(0.60 * float(search_across), 2.5),
+                fine_step,
+            )
+            cand = primary if fine is None or primary[2] >= fine[2] else fine
+            if best is None or cand[2] > best[2]:
+                best = cand
+        return best
+
+    def _suggest_region_for_ring(self, ring_idx0):
+        img_log_full = self._get_fullres_log_image()
+        if img_log_full is None:
+            return None
+
+        pts_full = np.asarray(self.points_ds[ring_idx0], dtype=float).reshape(-1, 2)
+        if pts_full.size == 0:
+            pts_full = np.empty((0, 2), dtype=float)
 
         params = self._ring_ellipse_params(ring_idx0)
         if params is None and pts_full.shape[0] >= 5:
@@ -1447,6 +2183,7 @@ class HBNFitterGUI:
         if params is not None:
             xc, yc, a, b, theta = [float(v) for v in params]
             c, s = np.cos(theta), np.sin(theta)
+            mean_r = max(0.5 * (abs(a) + abs(b)), 10.0)
             if pts_full.shape[0] >= 1:
                 dx = pts_full[:, 0] - xc
                 dy = pts_full[:, 1] - yc
@@ -1457,25 +2194,30 @@ class HBNFitterGUI:
             else:
                 t0 = 0.0
 
-            ct, st = np.cos(t0), np.sin(t0)
-            x0 = xc + a * ct * c - b * st * s
-            y0 = yc + a * ct * s + b * st * c
-            snapped = snap_points_to_ring(
-                self.img_log,
-                np.array([[x0, y0]], dtype=float),
-                params,
-                search_along=max(DEFAULT_CLICK_SEARCH_ALONG, 8.0),
-                search_across=max(DEFAULT_CLICK_SEARCH_ACROSS, 2.5),
-                search_step=DEFAULT_CLICK_SEARCH_STEP,
-                use_pseudovoigt=False,
-            )
-            if snapped.shape[0] >= 1 and np.all(np.isfinite(snapped[0])):
-                x_full, y_full = float(snapped[0, 0]), float(snapped[0, 1])
-            else:
-                x_full, y_full = float(x0), float(y0)
+            dth = float(np.clip(10.0 / max(mean_r, 1.0), 0.020, 0.18))
+            offsets = np.array([0.0, -1.0, 1.0, -2.0, 2.0, -3.0, 3.0, -4.0, 4.0], dtype=float) * dth
+            t_candidates = [t0 + float(off) for off in offsets]
+            seeds_xy = []
+            for tt in t_candidates:
+                ct, st = np.cos(tt), np.sin(tt)
+                xs = xc + a * ct * c - b * st * s
+                ys = yc + a * ct * s + b * st * c
+                seeds_xy.append((float(xs), float(ys)))
 
-            mean_r = max(0.5 * (abs(a) + abs(b)), 10.0)
-            r_full = float(np.clip(0.025 * mean_r, 5.0, 14.0))
+            best = self._best_snap_from_seeds(
+                img_log_full,
+                params,
+                seeds_xy,
+                search_along=max(DEFAULT_CLICK_SEARCH_ALONG, 18.0),
+                search_across=max(DEFAULT_CLICK_SEARCH_ACROSS, 5.0),
+                search_step=min(DEFAULT_CLICK_SEARCH_STEP, 0.35),
+            )
+            if best is not None:
+                x_full, y_full = float(best[0]), float(best[1])
+            else:
+                x_full, y_full = float(seeds_xy[0][0]), float(seeds_xy[0][1])
+
+            r_full = float(np.clip(0.035 * mean_r, 10.0, 26.0))
         else:
             cx, cy = self._default_center_full()
             if not (np.isfinite(cx) and np.isfinite(cy)):
@@ -1487,31 +2229,32 @@ class HBNFitterGUI:
                 rr = float(max(rr, 20.0))
             else:
                 t0 = 0.0
-                rr = 0.25 * float(min(self.img_log.shape[0], self.img_log.shape[1]))
+                rr = 0.25 * float(min(img_log_full.shape[0], img_log_full.shape[1]))
 
-            x0 = float(cx + rr * np.cos(t0))
-            y0 = float(cy + rr * np.sin(t0))
+            dth = float(np.clip(10.0 / max(rr, 1.0), 0.025, 0.20))
+            offsets = np.array([0.0, -1.0, 1.0, -2.0, 2.0, -3.0, 3.0, -4.0, 4.0], dtype=float) * dth
+            t_candidates = [t0 + float(off) for off in offsets]
+            seeds_xy = [(float(cx + rr * np.cos(tt)), float(cy + rr * np.sin(tt))) for tt in t_candidates]
             params_c = (float(cx), float(cy), float(rr), float(rr), 0.0)
-            snapped = snap_points_to_ring(
-                self.img_log,
-                np.array([[x0, y0]], dtype=float),
+            best = self._best_snap_from_seeds(
+                img_log_full,
                 params_c,
-                search_along=max(DEFAULT_CLICK_SEARCH_ALONG, 8.0),
-                search_across=max(DEFAULT_CLICK_SEARCH_ACROSS, 2.5),
-                search_step=DEFAULT_CLICK_SEARCH_STEP,
-                use_pseudovoigt=False,
+                seeds_xy,
+                search_along=max(DEFAULT_CLICK_SEARCH_ALONG, 18.0),
+                search_across=max(DEFAULT_CLICK_SEARCH_ACROSS, 5.0),
+                search_step=min(DEFAULT_CLICK_SEARCH_STEP, 0.35),
             )
-            if snapped.shape[0] >= 1 and np.all(np.isfinite(snapped[0])):
-                x_full, y_full = float(snapped[0, 0]), float(snapped[0, 1])
+            if best is not None:
+                x_full, y_full = float(best[0]), float(best[1])
             else:
-                x_full, y_full = x0, y0
-            r_full = float(np.clip(0.04 * rr, 6.0, 16.0))
+                x_full, y_full = seeds_xy[0]
+            r_full = float(np.clip(0.055 * rr, 10.0, 28.0))
 
         return {
             "ring_index": int(ring_idx0 + 1),
-            "x_ds": float(x_full / ds),
-            "y_ds": float(y_full / ds),
-            "r_ds": float(max(r_full / ds, 2.0)),
+            "x_ds": float(x_full),
+            "y_ds": float(y_full),
+            "r_ds": float(max(r_full, 2.0)),
         }
 
     def _update_suggested_regions(self):
@@ -1627,7 +2370,7 @@ class HBNFitterGUI:
             "angle_shift_deg": float(np.median(np.asarray(dt, dtype=float))),
         }
 
-    def _rescale_point_lists_ds(self, scale):
+    def _scale_point_lists(self, scale):
         if not np.isfinite(scale) or abs(float(scale) - 1.0) < 1e-12:
             return
 
@@ -1645,6 +2388,45 @@ class HBNFitterGUI:
         self.points_ds = _rescale(self.points_ds)
         if self.points_raw_ds:
             self.points_raw_ds = _rescale(self.points_raw_ds)
+        if self.points_sigma_ds:
+            scaled = []
+            for ring in self.points_sigma_ds:
+                arr = np.asarray(ring, dtype=float).reshape(-1)
+                if arr.size == 0:
+                    scaled.append([])
+                    continue
+                arr = arr * float(scale)
+                arr[~np.isfinite(arr)] = np.nan
+                scaled.append([float(v) if np.isfinite(v) and v > 0.0 else np.nan for v in arr])
+            self.points_sigma_ds = scaled
+        self._sync_point_sigma_shape()
+
+    def _points_for_fit(self, points=None, downsample=None):
+        ds = max(float(self.down if downsample is None else downsample), 1.0)
+        src = self.points_ds if points is None else points
+        out = []
+        for ring in src:
+            arr = np.asarray(ring, dtype=float).reshape(-1, 2)
+            if arr.size == 0:
+                out.append([])
+                continue
+            arr_fit = arr / ds
+            out.append([(float(x), float(y)) for x, y in arr_fit])
+        return out
+
+    def _sigma_for_fit(self, sigmas=None, downsample=None):
+        ds = max(float(self.down if downsample is None else downsample), 1.0)
+        src = self.points_sigma_ds if sigmas is None else sigmas
+        out = []
+        for ring in src:
+            arr = np.asarray(ring, dtype=float).reshape(-1)
+            if arr.size == 0:
+                out.append([])
+                continue
+            arr_fit = arr / ds
+            arr_fit[~np.isfinite(arr_fit)] = np.nan
+            out.append([float(v) if np.isfinite(v) and v > 0.0 else np.nan for v in arr_fit])
+        return out
 
     def _apply_downsample_from_ui(self, reset_view=False):
         new_down = safe_int(self.downsample.get(), self.down, minimum=1)
@@ -1653,17 +2435,10 @@ class HBNFitterGUI:
         if int(new_down) == int(old_down):
             return False
 
-        old_down_f = float(old_down)
-        new_down_f = float(new_down)
-        scale = old_down_f / new_down_f
-
-        if self.points_ds:
-            self._rescale_point_lists_ds(scale)
-            self._init_points(clear=False)
-
         self.down = int(new_down)
         if self.img_log is not None:
-            self.img_disp = build_display(self.img_log, self.down)
+            # Viewer always stays full-resolution; downsample only affects fitting.
+            self.img_disp = build_display(self.img_log, 1)
 
         self._cancel_precision_pick()
         self._cancel_drag_edit()
@@ -1671,15 +2446,26 @@ class HBNFitterGUI:
         self._pan_anchor = None
 
         if self.ellipses and self.points_ds and self.img_log is not None:
-            self.fit_quality = compute_fit_confidence(self.img_log, self.points_ds, self.ellipses, self.down)
+            fit_points_ds = self._points_for_fit()
+            self.fit_quality = compute_fit_confidence(self.img_log, fit_points_ds, self.ellipses, self.down)
         elif not self.ellipses:
             self.fit_quality = None
         self._update_fit_text()
         self._update_progress()
 
         if self.img_disp is not None:
-            self.refresh_plot(reset_view=bool(reset_view), view_scale=scale)
+            self.refresh_plot(reset_view=bool(reset_view), view_scale=1.0)
         return True
+
+    def _ring_snap_sigma_map(self, point_sigmas=None):
+        src = self.points_sigma_ds if point_sigmas is None else point_sigmas
+        out = {}
+        for i, ring in enumerate(src, start=1):
+            arr = np.asarray(ring, dtype=float).reshape(-1)
+            arr = arr[np.isfinite(arr) & (arr > 0.0)]
+            if arr.size > 0:
+                out[int(i)] = float(np.median(arr))
+        return out
 
     def _build_optimizer_sets(self, dense, ellipses=None, points_ds=None, downsample=None, fit_quality=None):
         dense = safe_int(dense, DEFAULT_DENSE_POINTS, minimum=60)
@@ -1694,11 +2480,10 @@ class HBNFitterGUI:
                 ring_ids.append(int(e.get("ring_index", i)))
         else:
             pts_src = self.points_ds if points_ds is None else points_ds
-            ds = self.down if downsample is None else downsample
             for i, p in enumerate(pts_src, start=1):
                 arr = np.asarray(p, dtype=float)
                 if arr.shape[0] >= 5:
-                    sets.append(arr * float(ds))
+                    sets.append(arr)
                     ring_ids.append(int(i))
 
         if not sets:
@@ -1738,6 +2523,22 @@ class HBNFitterGUI:
                             w_full.append(1.0)
                     if w_full:
                         weights = np.asarray(w_full, dtype=float)
+        sigma_map = self._ring_snap_sigma_map()
+        if sigma_map:
+            sig = np.asarray([sigma_map.get(int(rid), np.nan) for rid in ring_ids], dtype=float)
+            valid = np.isfinite(sig) & (sig > 0.0)
+            if np.any(valid):
+                ref = float(np.median(sig[valid]))
+                ref = float(np.clip(ref, 0.35, 4.0))
+                w_sigma = np.ones(len(ring_ids), dtype=float)
+                denom = np.clip(sig[valid], 0.20, DEFAULT_SNAP_UNCERT_MAX_PX)
+                w_sigma[valid] = np.clip((ref / denom) ** 2, 0.25, 4.0)
+                if weights is None:
+                    weights = w_sigma
+                else:
+                    weights = np.asarray(weights, dtype=float).reshape(-1) * w_sigma
+                    weights = np.clip(weights, 0.15, 4.0)
+
         return sets, ring_ids, weights
 
     def _apply_optimization_result(self, optim, ring_ids, source):
@@ -1782,10 +2583,33 @@ class HBNFitterGUI:
             cx, cy = np.nan, np.nan
         if np.isfinite(cx) and np.isfinite(cy):
             return float(cx), float(cy)
-        if self.img_log is not None:
-            h, w = self.img_log.shape
+        img_log_full = self._get_fullres_log_image()
+        if img_log_full is not None:
+            h, w = img_log_full.shape
             return 0.5 * float(w - 1), 0.5 * float(h - 1)
         return np.nan, np.nan
+
+    def _get_fullres_log_image(self):
+        if self.img_bgsub is not None:
+            bg = np.asarray(self.img_bgsub, dtype=np.float32)
+            if bg.ndim == 2 and bg.size > 0:
+                needs_rebuild = True
+                if self.img_log is not None:
+                    log = np.asarray(self.img_log, dtype=np.float32)
+                    if log.ndim == 2 and log.shape == bg.shape:
+                        self.img_log = log
+                        needs_rebuild = False
+                if needs_rebuild:
+                    self.img_log = make_log_image(bg)
+                return self.img_log
+
+        if self.img_log is None:
+            return None
+        log = np.asarray(self.img_log, dtype=np.float32)
+        if log.ndim != 2 or log.size == 0:
+            return None
+        self.img_log = log
+        return self.img_log
 
     def _ring_ellipse_params(self, ring_idx0):
         rid = int(ring_idx0 + 1)
@@ -1795,39 +2619,212 @@ class HBNFitterGUI:
                 return (float(e["xc"]), float(e["yc"]), float(e["a"]), float(e["b"]), float(e["theta"]))
         return None
 
-    def _snap_click_point_ds(self, ring_idx0, x_ds, y_ds):
-        if self.img_log is None:
-            return float(x_ds), float(y_ds)
+    def _estimate_snap_uncertainty_px(
+        self,
+        img_log_full,
+        params,
+        x_seed,
+        y_seed,
+        x_snap,
+        y_snap,
+        search_along,
+        search_across,
+        search_step,
+    ):
+        base = {
+            "snap_sigma_px": np.nan,
+            "snap_seed_count": 0,
+            "snap_seed_spread_px": np.nan,
+            "snap_seed_bias_px": np.nan,
+        }
+        if img_log_full is None or params is None:
+            return base
 
-        ds = max(float(self.down), 1.0)
-        px = float(x_ds) * ds
-        py = float(y_ds) * ds
+        seeds = []
+        for r in DEFAULT_SNAP_UNCERT_RADII_PX:
+            rr = float(max(r, 0.0))
+            if rr <= 1e-12:
+                seeds.append((float(x_seed), float(y_seed), 0.0))
+                continue
+            n_ang = int(max(DEFAULT_SNAP_UNCERT_N_ANGLES, 4))
+            for k in range(n_ang):
+                t = (2.0 * np.pi * float(k)) / float(n_ang)
+                seeds.append(
+                    (
+                        float(x_seed + rr * np.cos(t)),
+                        float(y_seed + rr * np.sin(t)),
+                        rr,
+                    )
+                )
+
+        along_u = float(min(float(search_along), 10.0))
+        across_u = float(min(float(search_across), 3.0))
+        step_u = float(max(float(search_step), 0.75))
+
+        samples = []
+        posts = []
+        radii = []
+        for xs, ys, rr in seeds:
+            snapped, meta = snap_points_to_ring(
+                img_log_full,
+                np.array([[float(xs), float(ys)]], dtype=float),
+                params,
+                search_along=along_u,
+                search_across=across_u,
+                search_step=step_u,
+                use_pseudovoigt=False,
+                enforce_confidence=False,
+                return_meta=True,
+            )
+            if snapped.shape[0] < 1 or not np.all(np.isfinite(snapped[0])):
+                continue
+            m0 = meta[0] if meta else {}
+            samples.append((float(snapped[0, 0]), float(snapped[0, 1])))
+            posts.append(float(m0.get("best_posterior", np.nan)))
+            radii.append(float(rr))
+
+        n = len(samples)
+        base["snap_seed_count"] = int(n)
+        if n < 2:
+            return base
+
+        arr = np.asarray(samples, dtype=float).reshape(-1, 2)
+        p = np.asarray(posts, dtype=float).reshape(-1)
+        r = np.asarray(radii, dtype=float).reshape(-1)
+        p_finite = np.where(np.isfinite(p), p, np.nanmin(p[np.isfinite(p)]) if np.any(np.isfinite(p)) else 0.0)
+        p_max = float(np.max(p_finite)) if p_finite.size > 0 else 0.0
+        w_post = np.exp(np.clip(p_finite - p_max, -8.0, 0.0))
+        w_rad = 1.0 / (1.0 + (r / 2.0) ** 2)
+        w = w_post * w_rad
+        w_sum = float(np.sum(w))
+        if not np.isfinite(w_sum) or w_sum <= 1e-12:
+            w = np.ones(arr.shape[0], dtype=float)
+            w_sum = float(np.sum(w))
+        w = w / max(w_sum, 1e-12)
+
+        mu_x = float(np.sum(w * arr[:, 0]))
+        mu_y = float(np.sum(w * arr[:, 1]))
+        d_mu = np.hypot(arr[:, 0] - mu_x, arr[:, 1] - mu_y)
+        scatter = float(np.sqrt(max(np.sum(w * (d_mu ** 2)), 0.0)))
+        bias = float(np.hypot(mu_x - float(x_snap), mu_y - float(y_snap)))
+        spread_from_snap = float(np.sqrt(max(np.sum(w * ((np.hypot(arr[:, 0] - float(x_snap), arr[:, 1] - float(y_snap))) ** 2)), 0.0)))
+        sigma = float(np.sqrt(scatter * scatter + bias * bias))
+        sigma = float(np.clip(sigma, DEFAULT_SNAP_UNCERT_MIN_PX, DEFAULT_SNAP_UNCERT_MAX_PX))
+
+        base["snap_sigma_px"] = sigma
+        base["snap_seed_spread_px"] = spread_from_snap
+        base["snap_seed_bias_px"] = bias
+        return base
+
+    def _snap_click_point_ds(
+        self,
+        ring_idx0,
+        x_ds,
+        y_ds,
+        enforce_confidence=True,
+        return_meta=False,
+        preview_fast=False,
+    ):
+        base_meta = {
+            "used_snap": False,
+            "reason": "manual",
+            "best_posterior": np.nan,
+            "posterior_margin": np.nan,
+            "best_peak_snr": np.nan,
+            "best_resid_px": np.nan,
+            "best_tangent_offset_px": np.nan,
+            "best_click_distance_px": np.nan,
+            "candidate_count": 0,
+            "snap_sigma_px": np.nan,
+            "snap_seed_count": 0,
+            "snap_seed_spread_px": np.nan,
+            "snap_seed_bias_px": np.nan,
+        }
+
+        def _return(xv, yv, meta_override=None):
+            meta_out = dict(base_meta)
+            if meta_override:
+                meta_out.update(meta_override)
+            if return_meta:
+                return float(xv), float(yv), meta_out
+            return float(xv), float(yv)
+
+        img_log_full = self._get_fullres_log_image()
+        if img_log_full is None:
+            return _return(x_ds, y_ds, {"reason": "image_unavailable"})
+
+        px = float(x_ds)
+        py = float(y_ds)
         params = self._ring_ellipse_params(ring_idx0)
 
         if params is None:
             candidate = list(self.points_ds[ring_idx0]) + [(float(x_ds), float(y_ds))]
             if len(candidate) >= 5:
-                arr_full = np.asarray(candidate, dtype=float) * ds
+                arr_full = np.asarray(candidate, dtype=float)
                 params = fit_initial_ellipse(arr_full)
 
         if params is None:
             cx, cy = self._default_center_full()
             if not (np.isfinite(cx) and np.isfinite(cy)):
-                return float(x_ds), float(y_ds)
+                return _return(x_ds, y_ds, {"reason": "center_unavailable"})
             rr = max(np.hypot(px - cx, py - cy), 3.0)
             params = (float(cx), float(cy), float(rr), float(rr), 0.0)
 
-        snapped = snap_points_to_ring(
-            self.img_log,
+        search_along = float(DEFAULT_CLICK_SEARCH_ALONG)
+        search_across = float(DEFAULT_CLICK_SEARCH_ACROSS)
+        search_step = float(DEFAULT_CLICK_SEARCH_STEP)
+        use_pv = True
+        conf_gate = bool(enforce_confidence)
+        if preview_fast:
+            # Lightweight live preview during mouse motion; final commit still
+            # runs full-accuracy snapping.
+            search_along = float(min(DEFAULT_CLICK_SEARCH_ALONG, 10.0))
+            search_across = float(min(DEFAULT_CLICK_SEARCH_ACROSS, 2.5))
+            search_step = float(max(DEFAULT_CLICK_SEARCH_STEP, 1.0))
+            use_pv = False
+            conf_gate = False
+
+        snapped, snap_meta = snap_points_to_ring(
+            img_log_full,
             np.array([[px, py]], dtype=float),
             params,
-            search_along=DEFAULT_CLICK_SEARCH_ALONG,
-            search_across=DEFAULT_CLICK_SEARCH_ACROSS,
-            search_step=DEFAULT_CLICK_SEARCH_STEP,
+            search_along=search_along,
+            search_across=search_across,
+            search_step=search_step,
+            use_pseudovoigt=use_pv,
+            enforce_confidence=conf_gate,
+            return_meta=True,
         )
         if snapped.shape[0] >= 1 and np.all(np.isfinite(snapped[0])):
-            return float(snapped[0, 0] / ds), float(snapped[0, 1] / ds)
-        return float(x_ds), float(y_ds)
+            meta0 = snap_meta[0] if snap_meta else {"reason": "missing_meta"}
+            if not preview_fast:
+                extra = self._estimate_snap_uncertainty_px(
+                    img_log_full,
+                    params,
+                    float(px),
+                    float(py),
+                    float(snapped[0, 0]),
+                    float(snapped[0, 1]),
+                    search_along,
+                    search_across,
+                    search_step,
+                )
+                meta0 = dict(meta0)
+                meta0.update(extra)
+                if not np.isfinite(float(meta0.get("snap_sigma_px", np.nan))):
+                    resid = float(meta0.get("best_resid_px", np.nan))
+                    cdist = float(meta0.get("best_click_distance_px", np.nan))
+                    fallback = np.nan
+                    if np.isfinite(resid) or np.isfinite(cdist):
+                        rr = max(float(resid), 0.0) if np.isfinite(resid) else 0.0
+                        dd = max(float(cdist), 0.0) if np.isfinite(cdist) else 0.0
+                        fallback = np.sqrt((0.40 * rr) ** 2 + (0.12 * dd) ** 2)
+                    if np.isfinite(fallback):
+                        meta0["snap_sigma_px"] = float(
+                            np.clip(fallback, DEFAULT_SNAP_UNCERT_MIN_PX, DEFAULT_SNAP_UNCERT_MAX_PX)
+                        )
+            return _return(snapped[0, 0], snapped[0, 1], meta0)
+        return _return(x_ds, y_ds, {"reason": "invalid_snap"})
 
     def _nearest_existing_point_ds(self, x_ds, y_ds, max_dist_ds=DEFAULT_EDIT_SELECT_RADIUS_DS):
         if not self.points_ds:
@@ -1858,7 +2855,7 @@ class HBNFitterGUI:
                 best = (int(ring_idx), int(j), float(np.sqrt(d2j)))
         return best
 
-    def _show_drag_edit_preview(self, x_ds, y_ds):
+    def _show_drag_edit_preview(self, x_ds, y_ds, x_snap=None, y_snap=None):
         if self._drag_edit_preview_artist is None or self._drag_edit_preview_artist.axes is not self.ax:
             (artist,) = self.ax.plot(
                 [x_ds],
@@ -1876,18 +2873,99 @@ class HBNFitterGUI:
             self._drag_edit_preview_artist.set_data([x_ds], [y_ds])
             self._drag_edit_preview_artist.set_visible(True)
 
+        if (
+            x_snap is None
+            or y_snap is None
+            or not (np.isfinite(float(x_snap)) and np.isfinite(float(y_snap)))
+        ):
+            if self._drag_edit_preview_snap_artist is not None:
+                self._drag_edit_preview_snap_artist.set_visible(False)
+            if self._drag_edit_preview_link_artist is not None:
+                self._drag_edit_preview_link_artist.set_visible(False)
+            return
+
+        if self._drag_edit_preview_snap_artist is None or self._drag_edit_preview_snap_artist.axes is not self.ax:
+            (s_artist,) = self.ax.plot(
+                [x_snap],
+                [y_snap],
+                marker="o",
+                markerfacecolor="none",
+                markeredgecolor="cyan",
+                markersize=9,
+                markeredgewidth=1.8,
+                linestyle="none",
+                zorder=12,
+            )
+            self._drag_edit_preview_snap_artist = s_artist
+        else:
+            self._drag_edit_preview_snap_artist.set_data([x_snap], [y_snap])
+            self._drag_edit_preview_snap_artist.set_visible(True)
+
+        if self._drag_edit_preview_link_artist is None or self._drag_edit_preview_link_artist.axes is not self.ax:
+            (l_artist,) = self.ax.plot(
+                [x_ds, x_snap],
+                [y_ds, y_snap],
+                "-",
+                color="cyan",
+                linewidth=1.1,
+                alpha=0.75,
+                zorder=11,
+            )
+            self._drag_edit_preview_link_artist = l_artist
+        else:
+            self._drag_edit_preview_link_artist.set_data([x_ds, x_snap], [y_ds, y_snap])
+            self._drag_edit_preview_link_artist.set_visible(True)
+
     def _cancel_drag_edit(self):
         self._drag_edit_active = False
         self._drag_edit_ring_idx = None
         self._drag_edit_point_idx = None
         self._drag_edit_restore_limits = None
         self._drag_edit_preview_xy = None
+        self._drag_edit_preview_snap_xy = None
+        self._drag_edit_preview_last_t = 0.0
+        self._drag_edit_preview_last_xy = None
         if self._drag_edit_preview_artist is not None:
             try:
                 self._drag_edit_preview_artist.remove()
             except Exception:
                 self._drag_edit_preview_artist.set_visible(False)
             self._drag_edit_preview_artist = None
+        if self._drag_edit_preview_snap_artist is not None:
+            try:
+                self._drag_edit_preview_snap_artist.remove()
+            except Exception:
+                self._drag_edit_preview_snap_artist.set_visible(False)
+            self._drag_edit_preview_snap_artist = None
+        if self._drag_edit_preview_link_artist is not None:
+            try:
+                self._drag_edit_preview_link_artist.remove()
+            except Exception:
+                self._drag_edit_preview_link_artist.set_visible(False)
+            self._drag_edit_preview_link_artist = None
+
+    def _snap_status_detail(self, x_raw, y_raw, x_snap, y_snap, meta):
+        info = meta if isinstance(meta, dict) else {}
+        used = bool(info.get("used_snap", False))
+        reason = str(info.get("reason", "manual"))
+        delta = float(np.hypot(float(x_snap) - float(x_raw), float(y_snap) - float(y_raw)))
+        snr = float(info.get("best_peak_snr", np.nan))
+        margin = float(info.get("posterior_margin", np.nan))
+        sigma = float(info.get("snap_sigma_px", np.nan))
+
+        if not used:
+            if np.isfinite(sigma):
+                return f"snap=off ({reason}), d={delta:.2f}px, sigma={sigma:.2f}px"
+            return f"snap=off ({reason}), d={delta:.2f}px"
+
+        parts = [f"snap=on, d={delta:.2f}px"]
+        if np.isfinite(snr):
+            parts.append(f"snr={snr:.2f}")
+        if np.isfinite(margin) and margin < 1e6:
+            parts.append(f"margin={margin:.2f}")
+        if np.isfinite(sigma):
+            parts.append(f"sigma={sigma:.2f}px")
+        return ", ".join(parts)
 
     def _start_drag_edit(self, x_ds, y_ds):
         hit = self._nearest_existing_point_ds(x_ds, y_ds)
@@ -1906,13 +2984,23 @@ class HBNFitterGUI:
         self._drag_edit_point_idx = int(point_idx)
         self._drag_edit_restore_limits = (tuple(self.ax.get_xlim()), tuple(self.ax.get_ylim()))
         self._drag_edit_preview_xy = (float(x0), float(y0))
+        x0_snap, y0_snap = self._snap_click_point_ds(
+            int(ring_idx),
+            float(x0),
+            float(y0),
+            enforce_confidence=False,
+            preview_fast=True,
+        )
+        self._drag_edit_preview_snap_xy = (float(x0_snap), float(y0_snap))
+        self._drag_edit_preview_last_t = time.perf_counter()
+        self._drag_edit_preview_last_xy = (float(x0), float(y0))
         self._set_precision_box(float(x0), float(y0), size_ds=DEFAULT_PRECISION_PICK_SIZE_DS)
-        self._show_drag_edit_preview(float(x0), float(y0))
+        self._show_drag_edit_preview(float(x0), float(y0), float(x0_snap), float(y0_snap))
         ring_total = len(self.points_ds)
         ring_n = len(self.points_ds[ring_idx])
         self.status.set(
             f"Editing ring {ring_idx + 1}/{ring_total}, point {point_idx + 1}/{ring_n} "
-            f"(picked at d={dist_ds:.2f}px(ds)). 20x20 zoom active; drag and release to place."
+            f"(picked at d={dist_ds:.2f}px). 40x40 zoom active; drag and release to place (auto-snap)."
         )
         self.canvas.draw_idle()
 
@@ -1924,26 +3012,43 @@ class HBNFitterGUI:
 
         while len(self.points_raw_ds) <= ring_idx:
             self.points_raw_ds.append([])
+        while len(self.points_sigma_ds) <= ring_idx:
+            self.points_sigma_ds.append([])
         raw_ring = self.points_raw_ds[ring_idx]
+        sigma_ring = self.points_sigma_ds[ring_idx]
         while len(raw_ring) < point_idx:
             raw_ring.append(tuple(self.points_ds[ring_idx][len(raw_ring)]))
+        while len(sigma_ring) < point_idx:
+            sigma_ring.append(np.nan)
 
-        # User requested exact manual placement with no data snapping.
-        x_snap, y_snap = float(x_raw), float(y_raw)
+        x_snap, y_snap, snap_meta = self._snap_click_point_ds(
+            int(ring_idx),
+            float(x_raw),
+            float(y_raw),
+            enforce_confidence=True,
+            return_meta=True,
+        )
         if point_idx < len(raw_ring):
             raw_ring[point_idx] = (float(x_raw), float(y_raw))
         else:
             raw_ring.append((float(x_raw), float(y_raw)))
         self.points_ds[ring_idx][point_idx] = (float(x_snap), float(y_snap))
+        sigma_px = float(snap_meta.get("snap_sigma_px", np.nan)) if isinstance(snap_meta, dict) else np.nan
+        if point_idx < len(sigma_ring):
+            sigma_ring[point_idx] = sigma_px if np.isfinite(sigma_px) and sigma_px > 0.0 else np.nan
+        else:
+            sigma_ring.append(sigma_px if np.isfinite(sigma_px) and sigma_px > 0.0 else np.nan)
+        self._sync_point_sigma_shape()
 
         if self._show_suggested_regions:
             self._update_suggested_regions()
 
         ring_total = len(self.points_ds)
         ring_n = len(self.points_ds[ring_idx])
+        snap_detail = self._snap_status_detail(float(x_raw), float(y_raw), float(x_snap), float(y_snap), snap_meta)
         self.status.set(
             f"Moved ring {ring_idx + 1}/{ring_total}, point {point_idx + 1}/{ring_n}. "
-            f"placed=({x_snap:.1f},{y_snap:.1f}) px(ds)."
+            f"placed=({x_snap:.1f},{y_snap:.1f}) px, {snap_detail}."
         )
         self.refresh_plot()
         if restore_limits is not None:
@@ -1964,7 +3069,37 @@ class HBNFitterGUI:
         else:
             self.ax.set_ylim(y_ds + half, y_ds - half)
 
-    def _show_precision_preview(self, x_ds, y_ds):
+    def _preview_motion_due(self, mode, x_ds, y_ds):
+        now = float(time.perf_counter())
+        if mode == "precision":
+            last_t = float(self._precision_preview_last_t)
+            last_xy = self._precision_preview_last_xy
+        else:
+            last_t = float(self._drag_edit_preview_last_t)
+            last_xy = self._drag_edit_preview_last_xy
+
+        due = False
+        if last_xy is None:
+            due = True
+        else:
+            dx = float(x_ds) - float(last_xy[0])
+            dy = float(y_ds) - float(last_xy[1])
+            if (dx * dx + dy * dy) >= float(DEFAULT_PREVIEW_MIN_MOVE_PX * DEFAULT_PREVIEW_MIN_MOVE_PX):
+                due = True
+        if not due and (now - last_t) >= float(DEFAULT_PREVIEW_MIN_INTERVAL_S):
+            due = True
+        if not due:
+            return False
+
+        if mode == "precision":
+            self._precision_preview_last_t = now
+            self._precision_preview_last_xy = (float(x_ds), float(y_ds))
+        else:
+            self._drag_edit_preview_last_t = now
+            self._drag_edit_preview_last_xy = (float(x_ds), float(y_ds))
+        return True
+
+    def _show_precision_preview(self, x_ds, y_ds, x_snap=None, y_snap=None):
         if self._precision_preview_artist is None or self._precision_preview_artist.axes is not self.ax:
             (artist,) = self.ax.plot(
                 [x_ds],
@@ -1981,6 +3116,49 @@ class HBNFitterGUI:
             self._precision_preview_artist.set_data([x_ds], [y_ds])
             self._precision_preview_artist.set_visible(True)
 
+        if (
+            x_snap is None
+            or y_snap is None
+            or not (np.isfinite(float(x_snap)) and np.isfinite(float(y_snap)))
+        ):
+            if self._precision_preview_snap_artist is not None:
+                self._precision_preview_snap_artist.set_visible(False)
+            if self._precision_preview_link_artist is not None:
+                self._precision_preview_link_artist.set_visible(False)
+            return
+
+        if self._precision_preview_snap_artist is None or self._precision_preview_snap_artist.axes is not self.ax:
+            (s_artist,) = self.ax.plot(
+                [x_snap],
+                [y_snap],
+                marker="o",
+                markerfacecolor="none",
+                markeredgecolor="cyan",
+                markersize=9,
+                markeredgewidth=1.8,
+                linestyle="none",
+                zorder=12,
+            )
+            self._precision_preview_snap_artist = s_artist
+        else:
+            self._precision_preview_snap_artist.set_data([x_snap], [y_snap])
+            self._precision_preview_snap_artist.set_visible(True)
+
+        if self._precision_preview_link_artist is None or self._precision_preview_link_artist.axes is not self.ax:
+            (l_artist,) = self.ax.plot(
+                [x_ds, x_snap],
+                [y_ds, y_snap],
+                "-",
+                color="cyan",
+                linewidth=1.1,
+                alpha=0.75,
+                zorder=11,
+            )
+            self._precision_preview_link_artist = l_artist
+        else:
+            self._precision_preview_link_artist.set_data([x_ds, x_snap], [y_ds, y_snap])
+            self._precision_preview_link_artist.set_visible(True)
+
     def _restore_view_limits(self, limits):
         if limits is None:
             return
@@ -1996,29 +3174,55 @@ class HBNFitterGUI:
         self._precision_ring_idx = None
         self._precision_restore_limits = None
         self._precision_preview_xy = None
+        self._precision_preview_snap_xy = None
+        self._precision_preview_last_t = 0.0
+        self._precision_preview_last_xy = None
         if self._precision_preview_artist is not None:
             try:
                 self._precision_preview_artist.remove()
             except Exception:
                 self._precision_preview_artist.set_visible(False)
             self._precision_preview_artist = None
+        if self._precision_preview_snap_artist is not None:
+            try:
+                self._precision_preview_snap_artist.remove()
+            except Exception:
+                self._precision_preview_snap_artist.set_visible(False)
+            self._precision_preview_snap_artist = None
+        if self._precision_preview_link_artist is not None:
+            try:
+                self._precision_preview_link_artist.remove()
+            except Exception:
+                self._precision_preview_link_artist.set_visible(False)
+            self._precision_preview_link_artist = None
 
     def _commit_point(self, ring_idx, x_raw, y_raw, restore_limits=None):
         cap = safe_int(self.points_per_ring.get(), DEFAULT_POINTS_PER_RING, minimum=1)
         ring_total = len(self.points_ds)
         point_idx = len(self.points_ds[ring_idx]) + 1
-        # User requested exact manual placement with no data snapping.
-        x_snap, y_snap = float(x_raw), float(y_raw)
+        x_snap, y_snap, snap_meta = self._snap_click_point_ds(
+            int(ring_idx),
+            float(x_raw),
+            float(y_raw),
+            enforce_confidence=True,
+            return_meta=True,
+        )
         self.points_raw_ds[ring_idx].append((x_raw, y_raw))
         self.points_ds[ring_idx].append((x_snap, y_snap))
+        sigma_px = float(snap_meta.get("snap_sigma_px", np.nan)) if isinstance(snap_meta, dict) else np.nan
+        while len(self.points_sigma_ds) <= ring_idx:
+            self.points_sigma_ds.append([])
+        self.points_sigma_ds[ring_idx].append(sigma_px if np.isfinite(sigma_px) and sigma_px > 0.0 else np.nan)
+        self._sync_point_sigma_shape()
         nxt = self._next_ring(ring_idx)
         self.active_ring = ring_idx if nxt is None else nxt
         self._update_progress()
         if self._show_suggested_regions:
             self._update_suggested_regions()
+        snap_detail = self._snap_status_detail(float(x_raw), float(y_raw), float(x_snap), float(y_snap), snap_meta)
         self.status.set(
             f"Added point {point_idx}/{cap} to ring {ring_idx + 1}/{ring_total}. "
-            f"placed=({x_snap:.1f},{y_snap:.1f}) px(ds)."
+            f"placed=({x_snap:.1f},{y_snap:.1f}) px, {snap_detail}."
         )
         self.refresh_plot()
         if restore_limits is not None:
@@ -2164,7 +3368,8 @@ class HBNFitterGUI:
 
         self.down = safe_int(self.downsample.get(), DEFAULT_DOWNSAMPLE, minimum=1)
         self.downsample.set(str(self.down))
-        self.img_disp = build_display(self.img_log, self.down)
+        # Keep viewer full-resolution; downsample is used only for fitting math.
+        self.img_disp = build_display(self.img_log, 1)
         self._init_points(clear=True)
         self.ellipses = []
         self.fit_quality = None
@@ -2218,12 +3423,12 @@ class HBNFitterGUI:
                 ring_total = len(self.points_ds)
                 self.status.set(
                     f"Pick mode ON. Ring {self.active_ring + 1}/{ring_total}, point {next_pt}/{cap}. "
-                    "Hold left=precision pick (20x20), wheel=zoom, right-drag=pan."
+                    "Hold left=precision pick (40x40), wheel=zoom, right-drag=pan."
                 )
                 if changed_ds:
                     self.status.set(
                         f"Downsample set to x{self.down}. Pick mode ON. Ring {self.active_ring + 1}/{ring_total}, "
-                        f"point {next_pt}/{cap}. Hold left=precision pick (20x20), wheel=zoom, right-drag=pan."
+                        f"point {next_pt}/{cap}. Hold left=precision pick (40x40), wheel=zoom, right-drag=pan."
                     )
         else:
             self._pan_active = False
@@ -2321,8 +3526,8 @@ class HBNFitterGUI:
         if self.center_pick_mode:
             x_ds = float(event.xdata)
             y_ds = float(event.ydata)
-            x_full = x_ds * float(max(self.down, 1))
-            y_full = y_ds * float(max(self.down, 1))
+            x_full = x_ds
+            y_full = y_ds
             self.center_x.set(f"{x_full:.3f}")
             self.center_y.set(f"{y_full:.3f}")
             self._center_user_defined = True
@@ -2351,14 +3556,24 @@ class HBNFitterGUI:
         self._precision_ring_idx = int(idx)
         self._precision_restore_limits = (tuple(self.ax.get_xlim()), tuple(self.ax.get_ylim()))
         self._precision_preview_xy = (x, y)
+        x_snap, y_snap = self._snap_click_point_ds(
+            int(idx),
+            float(x),
+            float(y),
+            enforce_confidence=False,
+            preview_fast=True,
+        )
+        self._precision_preview_snap_xy = (float(x_snap), float(y_snap))
+        self._precision_preview_last_t = time.perf_counter()
+        self._precision_preview_last_xy = (float(x), float(y))
         self._set_precision_box(x, y, size_ds=DEFAULT_PRECISION_PICK_SIZE_DS)
-        self._show_precision_preview(x, y)
+        self._show_precision_preview(x, y, x_snap, y_snap)
         ring_total = len(self.points_ds)
         point_idx = len(self.points_ds[idx]) + 1
         cap = safe_int(self.points_per_ring.get(), DEFAULT_POINTS_PER_RING, minimum=1)
         self.status.set(
             f"Precision pick: ring {idx + 1}/{ring_total}, point {point_idx}/{cap}. "
-            "Drag while holding left inside 20x20 zoom, release to place."
+            "Drag while holding left inside 40x40 zoom, release to place."
         )
         self.canvas.draw_idle()
 
@@ -2417,7 +3632,21 @@ class HBNFitterGUI:
             x = float(event.xdata)
             y = float(event.ydata)
             self._precision_preview_xy = (x, y)
-            self._show_precision_preview(x, y)
+            if not self._preview_motion_due("precision", x, y):
+                return
+            ring_idx = self._precision_ring_idx
+            if ring_idx is not None:
+                x_snap, y_snap = self._snap_click_point_ds(
+                    int(ring_idx),
+                    x,
+                    y,
+                    enforce_confidence=False,
+                    preview_fast=True,
+                )
+                self._precision_preview_snap_xy = (float(x_snap), float(y_snap))
+                self._show_precision_preview(x, y, x_snap, y_snap)
+            else:
+                self._show_precision_preview(x, y)
             self.canvas.draw_idle()
             return
 
@@ -2429,7 +3658,21 @@ class HBNFitterGUI:
             x = float(event.xdata)
             y = float(event.ydata)
             self._drag_edit_preview_xy = (x, y)
-            self._show_drag_edit_preview(x, y)
+            if not self._preview_motion_due("drag", x, y):
+                return
+            ring_idx = self._drag_edit_ring_idx
+            if ring_idx is not None:
+                x_snap, y_snap = self._snap_click_point_ds(
+                    int(ring_idx),
+                    x,
+                    y,
+                    enforce_confidence=False,
+                    preview_fast=True,
+                )
+                self._drag_edit_preview_snap_xy = (float(x_snap), float(y_snap))
+                self._show_drag_edit_preview(x, y, x_snap, y_snap)
+            else:
+                self._show_drag_edit_preview(x, y)
             self.canvas.draw_idle()
             return
 
@@ -2500,6 +3743,9 @@ class HBNFitterGUI:
                 self.points_ds[i].pop()
                 if i < len(self.points_raw_ds) and self.points_raw_ds[i]:
                     self.points_raw_ds[i].pop()
+                if i < len(self.points_sigma_ds) and self.points_sigma_ds[i]:
+                    self.points_sigma_ds[i].pop()
+                self._sync_point_sigma_shape()
                 self.active_ring = i
                 self._update_progress()
                 self.status.set(f"Removed last point from ring {i + 1}.")
@@ -2575,8 +3821,10 @@ class HBNFitterGUI:
         self.root.update_idletasks()
         self.fit_quality = None
         self._update_fit_text()
+        points_fit_ds = self._points_for_fit()
+        sigma_fit_ds = self._sigma_for_fit()
         self.ellipses = fit_ellipses(
-            self.points_ds,
+            points_fit_ds,
             self.down,
             self.img_bgsub,
             na,
@@ -2586,6 +3834,7 @@ class HBNFitterGUI:
             img_log=self.img_log,
             n_iter=n_iter,
             use_pseudovoigt=use_pv,
+            point_sigma_ds=sigma_fit_ds,
         )
         if not self.ellipses:
             messagebox.showerror("Fit Failed", "No ellipses fitted.")
@@ -2593,7 +3842,7 @@ class HBNFitterGUI:
             return
         self.fit_quality = compute_fit_confidence(
             self.img_log,
-            self.points_ds,
+            points_fit_ds,
             self.ellipses,
             self.down,
         )
@@ -2668,8 +3917,10 @@ class HBNFitterGUI:
         )
         self.root.update_idletasks()
 
+        points_fit_ds = self._points_for_fit()
+        sigma_fit_ds = self._sigma_for_fit()
         refined = fit_ellipses(
-            self.points_ds,
+            points_fit_ds,
             self.down,
             self.img_bgsub,
             na,
@@ -2678,6 +3929,7 @@ class HBNFitterGUI:
             initial_ellipses=prior_ellipses,
             img_log=self.img_log,
             n_iter=iters,
+            point_sigma_ds=sigma_fit_ds,
         )
         if not refined:
             messagebox.showerror("Further Refine", "Refinement failed.")
@@ -2685,7 +3937,7 @@ class HBNFitterGUI:
 
         fitq_refined = compute_fit_confidence(
             self.img_log,
-            self.points_ds,
+            points_fit_ds,
             refined,
             self.down,
         )
@@ -2695,7 +3947,7 @@ class HBNFitterGUI:
         st_v = float(max(st * FINAL_VERIFY_STEP_MULT, 0.10))
         dr_v = float(max(4.0, min(dr, 6.0)))
         refined_v = fit_ellipses(
-            self.points_ds,
+            points_fit_ds,
             self.down,
             self.img_bgsub,
             na_v,
@@ -2704,12 +3956,13 @@ class HBNFitterGUI:
             initial_ellipses=[dict(e) for e in refined],
             img_log=self.img_log,
             n_iter=max(iters, FINAL_REFINE_ITERS),
+            point_sigma_ds=sigma_fit_ds,
         )
         use_verified = bool(refined_v)
         if use_verified:
             fitq_verified = compute_fit_confidence(
                 self.img_log,
-                self.points_ds,
+                points_fit_ds,
                 refined_v,
                 self.down,
             )
@@ -2817,13 +4070,17 @@ class HBNFitterGUI:
         if not sets:
             messagebox.showerror("Optimize Failed", "No valid rings for optimization.")
             return
+        sigma_map = self._ring_snap_sigma_map()
+        ring_sigma = np.asarray([sigma_map.get(int(rid), np.nan) for rid in ring_ids], dtype=float)
 
         try:
             center, source = self._get_center(strict=True)
         except Exception as exc:
             messagebox.showerror("Optimize Failed", str(exc))
             return
-        self.status.set("Running optimization...")
+        use_projective = bool(self.ellipses)
+        method_label = "projective" if use_projective else "legacy"
+        self.status.set(f"Running optimization ({method_label})...")
         self.root.update_idletasks()
         if source == "ui_entry":
             center_prior = center
@@ -2834,16 +4091,47 @@ class HBNFitterGUI:
             drift_limit = DEFAULT_CENTER_DRIFT_LIMIT_PX
             prior_sigma = DEFAULT_CENTER_PRIOR_SIGMA_PX
 
-        self.optim = optimize_tilts(
-            sets,
-            center,
-            weights=weights,
-            optimize_center=True,
-            center_prior=center_prior,
-            center_prior_sigma_px=prior_sigma,
-            center_drift_limit_px=drift_limit,
-            initial_tilts=initial_tilts,
-        )
+        try:
+            if use_projective:
+                self.optim = optimize_tilts_projective(
+                    sets,
+                    center,
+                    weights=weights,
+                    optimize_center=True,
+                    center_prior=center_prior,
+                    center_prior_sigma_px=prior_sigma,
+                    center_drift_limit_px=drift_limit,
+                    initial_tilts=initial_tilts,
+                )
+            else:
+                self.optim = optimize_tilts(
+                    sets,
+                    center,
+                    weights=weights,
+                    optimize_center=True,
+                    center_prior=center_prior,
+                    center_prior_sigma_px=prior_sigma,
+                    center_drift_limit_px=drift_limit,
+                    initial_tilts=initial_tilts,
+                )
+        except Exception as exc:
+            if not use_projective:
+                messagebox.showerror("Optimize Failed", str(exc))
+                return
+            self.status.set(f"Projective optimization failed ({exc}). Falling back to legacy.")
+            self.root.update_idletasks()
+            self.optim = optimize_tilts(
+                sets,
+                center,
+                weights=weights,
+                optimize_center=True,
+                center_prior=center_prior,
+                center_prior_sigma_px=prior_sigma,
+                center_drift_limit_px=drift_limit,
+                initial_tilts=initial_tilts,
+            )
+            self.optim["optimizer_kind"] = "legacy_fallback"
+        self.optim["ring_snap_sigma_px"] = ring_sigma
         self._apply_optimization_result(self.optim, ring_ids, source)
         cxo, cyo = self.optim.get("center", (np.nan, np.nan))
         if np.isfinite(cxo) and np.isfinite(cyo):
@@ -2896,19 +4184,57 @@ class HBNFitterGUI:
         self.status.set(f"Saved overlay: {p}")
 
     def save_bundle(self, path):
-        if self.img_log is None:
-            self.img_log = make_log_image(self.img_bgsub)
+        img_log_full = self._get_fullres_log_image()
+        if img_log_full is None:
+            raise RuntimeError("Full-resolution log image unavailable for save.")
         center, center_src = self._get_center(strict=False)
         opt = self.optim or {}
         fitq = self.fit_quality or {}
+        points_ds_save = self._points_for_fit(self.points_ds, downsample=self.down)
+        points_raw_save = self._points_for_fit(self.points_raw_ds, downsample=self.down)
+        points_sigma_save = self._sigma_for_fit(self.points_sigma_ds, downsample=self.down)
+        tilt_x_deg = float(opt.get("tilt_x_deg", np.nan))
+        tilt_y_deg = float(opt.get("tilt_y_deg", np.nan))
+        tilt_correction = None
+        tilt_hint = None
+        if np.isfinite(tilt_x_deg) and np.isfinite(tilt_y_deg):
+            tilt_correction = {
+                "tilt_x_deg": tilt_x_deg,
+                "tilt_y_deg": tilt_y_deg,
+                "source": "hbn_fitter",
+                "simulation_gamma_sign_from_tilt_x": int(SIM_GAMMA_SIGN_FROM_TILT_X),
+                "simulation_Gamma_sign_from_tilt_y": int(SIM_GAMMA_SIGN_FROM_TILT_Y),
+            }
+            rot1_rad = float(np.deg2rad(tilt_x_deg))
+            rot2_rad = float(np.deg2rad(tilt_y_deg))
+            tilt_hint = {
+                "rot1_rad": rot1_rad,
+                "rot2_rad": rot2_rad,
+                "tilt_rad": float(np.hypot(rot1_rad, rot2_rad)),
+                "simulation_gamma_sign_from_tilt_x": int(SIM_GAMMA_SIGN_FROM_TILT_X),
+                "simulation_Gamma_sign_from_tilt_y": int(SIM_GAMMA_SIGN_FROM_TILT_Y),
+            }
         bundle = {
             "npz_format_version": np.array(2, dtype=np.int32),
             "created_utc": np.array(dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"),
+            "sim_background_rotate_k": np.array(int(SIM_BACKGROUND_ROTATE_K), dtype=np.int32),
+            "tilt_correction_kind": np.array("to_flat"),
+            "tilt_model": np.array("RzRx"),
+            "tilt_frame": np.array("simulation_background_display"),
+            "simulation_gamma_sign_from_tilt_x": np.array(
+                int(SIM_GAMMA_SIGN_FROM_TILT_X), dtype=np.int32
+            ),
+            "simulation_Gamma_sign_from_tilt_y": np.array(
+                int(SIM_GAMMA_SIGN_FROM_TILT_Y), dtype=np.int32
+            ),
             "img_bgsub": self.img_bgsub.astype(np.float32),
-            "img_log": self.img_log.astype(np.float32),
+            "img_log": img_log_full.astype(np.float32),
             "downsample_factor": np.array(self.down, dtype=np.int32),
-            "ell_points_ds": pts_to_obj(self.points_ds),
-            "ell_points_raw_ds": pts_to_obj(self.points_raw_ds),
+            "point_coord_frame": np.array("downsampled"),
+            "point_sigma_coord_frame": np.array("downsampled"),
+            "ell_points_ds": pts_to_obj(points_ds_save),
+            "ell_points_raw_ds": pts_to_obj(points_raw_save),
+            "ell_points_sigma_px": scalars_to_obj(points_sigma_save),
             "ellipse_params": ellipses_to_array(self.ellipses),
             "ellipse_ring_indices": ellipse_ring_indices(self.ellipses),
             "fit_confidence_overall": np.array(float(fitq.get("overall_confidence", np.nan)), dtype=np.float64),
@@ -2928,8 +4254,8 @@ class HBNFitterGUI:
             "center_prior": np.asarray(opt.get("center_prior", (np.nan, np.nan)), dtype=np.float64),
             "center_prior_sigma_px": np.array(float(opt.get("center_prior_sigma_px", np.nan)), dtype=np.float64),
             "center_drift_limit_px": np.array(float(opt.get("center_drift_limit_px", np.nan)), dtype=np.float64),
-            "tilt_x_deg": np.array(float(opt.get("tilt_x_deg", np.nan)), dtype=np.float64),
-            "tilt_y_deg": np.array(float(opt.get("tilt_y_deg", np.nan)), dtype=np.float64),
+            "tilt_x_deg": np.array(tilt_x_deg, dtype=np.float64),
+            "tilt_y_deg": np.array(tilt_y_deg, dtype=np.float64),
             "cost_zero": np.array(float(opt.get("cost_zero", np.nan)), dtype=np.float64),
             "cost_final": np.array(float(opt.get("cost_final", np.nan)), dtype=np.float64),
             "circ_before": np.asarray(opt.get("circ_before", np.array([], dtype=float)), dtype=np.float64),
@@ -2937,11 +4263,21 @@ class HBNFitterGUI:
             "radii_before": np.asarray(opt.get("radii_before", np.array([], dtype=float)), dtype=np.float64),
             "radii_after": np.asarray(opt.get("radii_after", np.array([], dtype=float)), dtype=np.float64),
             "ring_weights": np.asarray(opt.get("ring_weights", np.array([], dtype=float)), dtype=np.float64),
+            "ring_snap_sigma_px": np.asarray(opt.get("ring_snap_sigma_px", np.array([], dtype=float)), dtype=np.float64),
             "optimizer_ring_ids": np.asarray(opt.get("ring_ids", np.array([], dtype=np.int32)), dtype=np.int32),
+            "optimizer_kind": np.array(str(opt.get("optimizer_kind", "legacy")), dtype="<U32"),
+            "projective_distance_px": np.array(float(opt.get("distance_px", np.nan)), dtype=np.float64),
             "ell_points_corrected": pts_to_obj(opt.get("corrected_points", [])),
             "ell_points_corr": pts_to_obj(opt.get("corrected_points", [])),
             "input_hbn_path": np.array(self.hbn_path.get().strip()),
             "input_dark_path": np.array(self.dark_path.get().strip()),
+            # Legacy RA-SIM bundle schema compatibility:
+            # downstream loaders expect these keys from ra_sim.hbn.save_bundle.
+            "center": np.asarray(center, dtype=np.float64),
+            "tilt_correction": tilt_correction,
+            "tilt_hint": tilt_hint,
+            "distance_estimate_m": opt.get("distance_estimate_m"),
+            "expected_peaks": opt.get("expected_peaks"),
         }
         np.savez(path, **bundle)
 
@@ -2956,16 +4292,48 @@ class HBNFitterGUI:
             raise KeyError("Bundle missing img_bgsub")
 
         self.img_bgsub = np.asarray(d["img_bgsub"], dtype=np.float32)
-        self.img_log = np.asarray(d["img_log"], dtype=np.float32) if "img_log" in d else make_log_image(self.img_bgsub)
+        # Always rebuild log intensity for display/fitting consistency, even for legacy bundles.
+        self.img_log = make_log_image(self.img_bgsub)
+        self._get_fullres_log_image()
         self.down = safe_int(npz_scalar(d, "downsample_factor", self.downsample.get()), DEFAULT_DOWNSAMPLE, minimum=1)
         self.downsample.set(str(self.down))
-        self.img_disp = build_display(self.img_log, self.down)
+        self.img_disp = build_display(self.img_log, 1)
 
         self.points_ds = obj_to_pts_list(d["ell_points_ds"]) if "ell_points_ds" in d else []
         if "ell_points_raw_ds" in d:
             self.points_raw_ds = obj_to_pts_list(d["ell_points_raw_ds"])
         else:
             self.points_raw_ds = [list(r) for r in self.points_ds]
+        if "ell_points_sigma_px" in d:
+            self.points_sigma_ds = obj_to_scalar_lists(d["ell_points_sigma_px"])
+        else:
+            self.points_sigma_ds = [[np.nan] * len(r) for r in self.points_ds]
+        coord_frame = npz_string(d, "point_coord_frame", "downsampled").strip().lower()
+        sigma_coord_frame = npz_string(d, "point_sigma_coord_frame", coord_frame).strip().lower()
+        if coord_frame != "full":
+            scl = float(max(self.down, 1))
+            if sigma_coord_frame == "full":
+                sigma_keep = [list(r) for r in self.points_sigma_ds]
+                self.points_sigma_ds = [[np.nan] * len(r) for r in self.points_ds]
+                self._scale_point_lists(scl)
+                self.points_sigma_ds = sigma_keep
+            else:
+                self._scale_point_lists(scl)
+        elif sigma_coord_frame != "full":
+            # Legacy bundles may provide sigma in downsampled frame while points are full.
+            # Scale only the sigma vectors to keep units consistent.
+            if self.points_sigma_ds:
+                s = float(max(self.down, 1))
+                for i, ring in enumerate(self.points_sigma_ds):
+                    arr = np.asarray(ring, dtype=float).reshape(-1)
+                    if arr.size == 0:
+                        self.points_sigma_ds[i] = []
+                        continue
+                    arr = arr * s
+                    arr[~np.isfinite(arr)] = np.nan
+                    self.points_sigma_ds[i] = [
+                        float(v) if np.isfinite(v) and float(v) > 0.0 else np.nan for v in arr
+                    ]
         self.ellipses = array_to_ellipses(d["ellipse_params"]) if "ellipse_params" in d else []
         if self.ellipses:
             ring_idx_arr = d["ellipse_ring_indices"] if "ellipse_ring_indices" in d else None
@@ -2973,6 +4341,7 @@ class HBNFitterGUI:
         n = max(len(self.points_ds), len(self.ellipses), 1)
         self.num_rings.set(str(n))
         self._init_points(clear=False)
+        self._sync_point_sigma_shape()
         self.fit_quality = None
         self._clear_suggested_regions()
         self.pick_mode = False
@@ -3062,8 +4431,13 @@ class HBNFitterGUI:
                 "radii_before": np.asarray(d["radii_before"], dtype=float) if "radii_before" in d else np.array([], dtype=float),
                 "radii_after": np.asarray(d["radii_after"], dtype=float) if "radii_after" in d else np.array([], dtype=float),
                 "ring_weights": ring_weights,
+                "ring_snap_sigma_px": np.asarray(d["ring_snap_sigma_px"], dtype=float)
+                if "ring_snap_sigma_px" in d
+                else np.array([], dtype=float),
                 "ring_ids": ring_ids,
                 "corrected_points": corrected,
+                "optimizer_kind": npz_string(d, "optimizer_kind", "legacy"),
+                "distance_px": npz_scalar(d, "projective_distance_px", np.nan),
             }
             self.opt_text.set(f"tilt_x={tx:.4f} deg, tilt_y={ty:.4f} deg, cost={self.optim['cost_final']:.3e}")
         else:
@@ -3096,7 +4470,8 @@ class HBNFitterGUI:
                 "downsample_score": npz_scalar(d, "fit_downsample_score", np.nan),
             }
         elif self.ellipses and self.points_ds:
-            self.fit_quality = compute_fit_confidence(self.img_log, self.points_ds, self.ellipses, self.down)
+            points_fit_ds = self._points_for_fit()
+            self.fit_quality = compute_fit_confidence(self.img_log, points_fit_ds, self.ellipses, self.down)
 
         self._update_progress()
         self._update_fit_text()
@@ -3123,8 +4498,10 @@ class HBNFitterGUI:
             return
 
         h, w = self.img_disp.shape
-        f = float(self.down)
-        self.ax.imshow(self.img_disp, cmap="gray", origin="upper")
+        f = 1.0
+        # Display with the same vertical orientation as OSC Viewer while
+        # keeping the underlying array unchanged.
+        self.ax.imshow(self.img_disp, cmap="gray", origin="lower", interpolation="nearest", resample=False)
 
         for i, pts in enumerate(self.points_ds):
             snap_arr = np.asarray(pts, dtype=float)
@@ -3174,34 +4551,105 @@ class HBNFitterGUI:
                 if not (np.isfinite(x_ds) and np.isfinite(y_ds) and np.isfinite(r_ds) and r_ds > 0):
                     continue
                 c = cm.tab10((rid - 1) % 10)
+                accent = "#00E5FF"
+                glow = Circle(
+                    (x_ds, y_ds),
+                    1.75 * r_ds,
+                    fill=True,
+                    linewidth=0.0,
+                    facecolor=accent,
+                    alpha=0.16,
+                    zorder=4,
+                )
+                self.ax.add_patch(glow)
+                halo = Circle(
+                    (x_ds, y_ds),
+                    1.28 * r_ds,
+                    fill=False,
+                    linestyle="-",
+                    linewidth=3.0,
+                    edgecolor="black",
+                    alpha=0.75,
+                    zorder=5,
+                )
+                self.ax.add_patch(halo)
+                patch_outer = Circle(
+                    (x_ds, y_ds),
+                    1.15 * r_ds,
+                    fill=False,
+                    linestyle="-",
+                    linewidth=2.8,
+                    edgecolor="white",
+                    alpha=0.95,
+                    zorder=6,
+                )
+                self.ax.add_patch(patch_outer)
                 patch = Circle(
                     (x_ds, y_ds),
                     r_ds,
                     fill=False,
                     linestyle="--",
-                    linewidth=1.3,
-                    edgecolor=c,
-                    alpha=0.9,
+                    linewidth=3.0,
+                    edgecolor=accent,
+                    alpha=1.0,
+                    zorder=7,
                 )
                 self.ax.add_patch(patch)
+                for ch_color, ch_lw, ch_alpha, ch_z in (
+                    ("black", 2.8, 0.72, 8),
+                    ("white", 1.6, 0.95, 9),
+                ):
+                    self.ax.plot(
+                        [x_ds - 0.95 * r_ds, x_ds + 0.95 * r_ds],
+                        [y_ds, y_ds],
+                        "-",
+                        color=ch_color,
+                        linewidth=ch_lw,
+                        alpha=ch_alpha,
+                        zorder=ch_z,
+                    )
+                    self.ax.plot(
+                        [x_ds, x_ds],
+                        [y_ds - 0.95 * r_ds, y_ds + 0.95 * r_ds],
+                        "-",
+                        color=ch_color,
+                        linewidth=ch_lw,
+                        alpha=ch_alpha,
+                        zorder=ch_z,
+                    )
                 self.ax.plot(
                     [x_ds],
                     [y_ds],
                     marker="*",
-                    color=c,
-                    markersize=9,
-                    markeredgewidth=0.8,
+                    color=accent,
+                    markersize=18,
+                    markeredgewidth=1.6,
+                    markeredgecolor="black",
                     linestyle="none",
+                    zorder=10,
+                )
+                self.ax.plot(
+                    [x_ds],
+                    [y_ds],
+                    marker="o",
+                    color=c,
+                    markersize=4,
+                    markeredgewidth=0.0,
+                    linestyle="none",
+                    zorder=11,
                 )
                 self.ax.text(
-                    x_ds + 1.1 * r_ds,
+                    x_ds + 1.3 * r_ds,
                     y_ds,
-                    f"R{rid}",
-                    color=c,
-                    fontsize=8,
+                    f"R{rid} target",
+                    color="black",
+                    fontsize=9,
+                    fontweight="bold",
                     ha="left",
                     va="center",
-                    alpha=0.95,
+                    alpha=1.0,
+                    bbox=dict(boxstyle="round,pad=0.20", fc=accent, ec="black", lw=1.0, alpha=0.97),
+                    zorder=12,
                 )
 
         try:
@@ -3271,11 +4719,11 @@ class HBNFitterGUI:
 
         if not use_prev:
             self.ax.set_xlim(0, max(w - 1, 1))
-            self.ax.set_ylim(max(h - 1, 1), 0)
+            self.ax.set_ylim(0, max(h - 1, 1))
 
         self.ax.set_aspect("equal", adjustable="box")
-        self.ax.set_xlabel("x (downsampled px)")
-        self.ax.set_ylabel("y (downsampled px)")
+        self.ax.set_xlabel("x (full-res px)")
+        self.ax.set_ylabel("y (full-res px)")
         self.canvas.draw_idle()
 
 

@@ -2323,6 +2323,79 @@ def fit_geometry_parameters(
         use_single_ray = bool(single_ray_cfg.get("enabled", True))
     single_ray_indices: Optional[np.ndarray] = None
 
+    solver_cfg: Dict[str, float] = {}
+    if isinstance(refinement_config, dict):
+        solver_cfg = refinement_config.get("solver", {}) or {}
+    if not isinstance(solver_cfg, dict):
+        solver_cfg = {}
+
+    solver_loss = str(
+        solver_cfg.get("loss", "soft_l1" if experimental_image is not None else "linear")
+    ).strip().lower()
+    if solver_loss not in {"linear", "soft_l1", "huber", "cauchy", "arctan"}:
+        solver_loss = "soft_l1" if experimental_image is not None else "linear"
+
+    solver_f_scale = float(
+        solver_cfg.get("f_scale_px", 6.0 if experimental_image is not None else 1.0)
+    )
+    solver_f_scale = max(solver_f_scale, 1e-6)
+
+    solver_max_nfev = int(solver_cfg.get("max_nfev", 120 if experimental_image is not None else 60))
+    solver_max_nfev = max(20, solver_max_nfev)
+
+    solver_restarts = int(solver_cfg.get("restarts", 4 if experimental_image is not None else 0))
+    solver_restarts = max(0, solver_restarts)
+
+    solver_restart_jitter = float(solver_cfg.get("restart_jitter", 0.15))
+    solver_restart_jitter = max(0.0, solver_restart_jitter)
+
+    missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
+    missing_pair_penalty = max(0.0, missing_pair_penalty)
+
+    weighted_matching = bool(solver_cfg.get("weighted_matching", True))
+
+    def _build_point_matches(
+        simulated_points: Sequence[Tuple[float, float]],
+        measured_points: Sequence[Tuple[float, float]],
+        *,
+        max_distance: float = np.inf,
+    ) -> List[Tuple[np.ndarray, np.ndarray, float]]:
+        """Greedy one-to-one matching between measured and simulated peak points."""
+
+        if not simulated_points or not measured_points:
+            return []
+
+        sim = np.asarray(simulated_points, dtype=float)
+        meas = np.asarray(measured_points, dtype=float)
+        if sim.ndim != 2 or meas.ndim != 2 or sim.shape[1] != 2 or meas.shape[1] != 2:
+            return []
+
+        dist = np.linalg.norm(meas[:, None, :] - sim[None, :, :], axis=2)
+        if not np.isfinite(max_distance):
+            mask = np.isfinite(dist)
+        else:
+            mask = np.isfinite(dist) & (dist <= float(max_distance))
+        candidate_pairs = np.argwhere(mask)
+        if candidate_pairs.size == 0:
+            return []
+
+        candidate_dist = dist[candidate_pairs[:, 0], candidate_pairs[:, 1]]
+        order = np.argsort(candidate_dist)
+
+        used_meas: set[int] = set()
+        used_sim: set[int] = set()
+        matches: List[Tuple[np.ndarray, np.ndarray, float]] = []
+        for idx in order:
+            m_idx = int(candidate_pairs[idx, 0])
+            s_idx = int(candidate_pairs[idx, 1])
+            if m_idx in used_meas or s_idx in used_sim:
+                continue
+            d = float(candidate_dist[idx])
+            matches.append((sim[s_idx], meas[m_idx], d))
+            used_meas.add(m_idx)
+            used_sim.add(s_idx)
+        return matches
+
     def cost_fn(x):
         local = params.copy()
         for name, v in zip(var_names, x):
@@ -2391,50 +2464,50 @@ def fit_geometry_parameters(
 
         maxpos = hit_tables_to_max_positions(hit_tables)
         residuals: list[float] = []
-
-        # Aggregate simulated maxima per HKL and compare them to the centroid of
-        # the measured clicks so each reflection contributes exactly one pair of
-        # residuals. This avoids exploding the residual vector when the Miller
-        # list contains repeated entries for the same HKL.
         simulated_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
-
-        def _center_from_maxpos(entry: Sequence[float]) -> tuple[float, float] | None:
-            _, x0, y0, _, x1, y1 = entry
-            candidates = [
-                (float(x0), float(y0)) if np.isfinite(x0) and np.isfinite(y0) else None,
-                (float(x1), float(y1)) if np.isfinite(x1) and np.isfinite(y1) else None,
-            ]
-            candidates = [p for p in candidates if p is not None]
-            if not candidates:
-                return None
-            cols, rows = zip(*candidates)
-            return float(np.mean(cols)), float(np.mean(rows))
-
         for idx, (H, K, L) in enumerate(miller):
             key = (int(round(H)), int(round(K)), int(round(L)))
             if key not in measured_dict:
                 continue
-            center = _center_from_maxpos(maxpos[idx])
-            if center is not None:
-                simulated_by_hkl.setdefault(key, []).append(center)
+            _, x0, y0, _, x1, y1 = maxpos[idx]
+            for col, row in ((x0, y0), (x1, y1)):
+                if np.isfinite(col) and np.isfinite(row):
+                    simulated_by_hkl.setdefault(key, []).append((float(col), float(row)))
 
+        missing_pairs = 0
         for hkl_key, measured_list in measured_dict.items():
-            sim_list = simulated_by_hkl.get(hkl_key)
+            sim_list = simulated_by_hkl.get(hkl_key, [])
+            measured_points = [
+                (float(mx), float(my))
+                for mx, my in measured_list
+                if np.isfinite(mx) and np.isfinite(my)
+            ]
+            if not measured_points:
+                continue
             if not sim_list:
+                missing_pairs += len(measured_points)
                 continue
 
-            sim_arr = np.asarray(sim_list, dtype=float)
-            sim_center = (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
-
-            meas_arr = np.asarray(measured_list, dtype=float)
-            meas_center = (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
-
-            dx = sim_center[0] - meas_center[0]
-            dy = sim_center[1] - meas_center[1]
-            dist = math.hypot(dx, dy)
-            if dist <= pixel_tol:
+            matches = _build_point_matches(
+                sim_list,
+                measured_points,
+                max_distance=pixel_tol,
+            )
+            missing_pairs += max(0, len(measured_points) - len(matches))
+            for sim_pt, meas_pt, pair_dist in matches:
+                dx = float(sim_pt[0] - meas_pt[0])
+                dy = float(sim_pt[1] - meas_pt[1])
+                if weighted_matching:
+                    w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
+                    dx *= w
+                    dy *= w
                 residuals.extend([dx, dy])
 
+        if missing_pairs > 0 and missing_pair_penalty > 0.0:
+            residuals.extend([missing_pair_penalty] * missing_pairs)
+
+        if not residuals:
+            return np.array([max(1.0, missing_pair_penalty)], dtype=float)
         return np.asarray(residuals, dtype=float)
 
     x0 = [params[name] for name in var_names]
@@ -2520,31 +2593,103 @@ def fit_geometry_parameters(
         lower_bounds.append(lo)
         upper_bounds.append(hi)
 
+    lower_bounds = np.asarray(lower_bounds, dtype=float)
+    upper_bounds = np.asarray(upper_bounds, dtype=float)
+    x0_arr = np.asarray(x0, dtype=float)
+    span = upper_bounds - lower_bounds
+    finite_span = np.isfinite(span) & (span > 1e-12)
+    fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
+    auto_scale = np.where(finite_span, span, fallback_scale)
+    auto_scale = np.maximum(auto_scale, 1e-6)
+
     if x_scale_cfg:
-        x_scale = np.array(
+        configured_scale = np.array(
             [float(x_scale_cfg.get(name, 1.0)) for name in var_names],
             dtype=float,
         )
+        configured_scale = np.where(
+            np.isfinite(configured_scale) & (configured_scale > 0.0),
+            configured_scale,
+            1.0,
+        )
+        # Treat all-ones as a "use defaults" sentinel and infer useful
+        # per-parameter scales from bounds/initial magnitudes.
+        if np.allclose(configured_scale, 1.0):
+            x_scale = auto_scale
+        else:
+            x_scale = configured_scale
     else:
-        x_scale = 1.0
+        x_scale = auto_scale
 
-    lower_bounds = np.asarray(lower_bounds, dtype=float)
-    upper_bounds = np.asarray(upper_bounds, dtype=float)
+    residual_fn = pixel_cost_fn if experimental_image is not None else cost_fn
 
-    if experimental_image is None:
-        result = least_squares(
-            cost_fn,
-            x0,
+    def _run_solver(x_start: np.ndarray) -> OptimizeResult:
+        return least_squares(
+            residual_fn,
+            np.asarray(x_start, dtype=float),
             bounds=(lower_bounds, upper_bounds),
             x_scale=x_scale,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+            max_nfev=solver_max_nfev,
         )
-    else:
-        result = least_squares(
-            pixel_cost_fn,
-            x0,
-            bounds=(lower_bounds, upper_bounds),
-            x_scale=x_scale,
-        )
+
+    result = _run_solver(x0_arr)
+    best_result = result
+    best_cost = _robust_cost(
+        np.asarray(result.fun, dtype=float),
+        loss=solver_loss,
+        f_scale=solver_f_scale,
+    )
+    restart_history: List[Dict[str, object]] = [
+        {
+            "restart": 0,
+            "start_x": x0_arr.tolist(),
+            "end_x": np.asarray(result.x, dtype=float).tolist(),
+            "cost": float(best_cost),
+            "success": bool(result.success),
+            "message": str(result.message),
+        }
+    ]
+
+    if solver_restarts > 0 and x0_arr.size > 0:
+        restart_rng = np.random.default_rng(20260214)
+        restart_scale = np.where(finite_span, span, fallback_scale)
+        restart_scale = np.maximum(restart_scale, 1e-6)
+
+        for restart_idx in range(solver_restarts):
+            anchor = np.asarray(best_result.x, dtype=float)
+            perturb = restart_rng.uniform(-1.0, 1.0, size=anchor.shape)
+            trial_start = anchor + solver_restart_jitter * restart_scale * perturb
+            trial_start = np.clip(trial_start, lower_bounds, upper_bounds)
+            if np.allclose(trial_start, anchor, atol=1e-12, rtol=0.0):
+                continue
+
+            trial = _run_solver(trial_start)
+            trial_cost = _robust_cost(
+                np.asarray(trial.fun, dtype=float),
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+            )
+            restart_history.append(
+                {
+                    "restart": restart_idx + 1,
+                    "start_x": np.asarray(trial_start, dtype=float).tolist(),
+                    "end_x": np.asarray(trial.x, dtype=float).tolist(),
+                    "cost": float(trial_cost),
+                    "success": bool(trial.success),
+                    "message": str(trial.message),
+                }
+            )
+            if trial_cost < best_cost:
+                best_result = trial
+                best_cost = trial_cost
+
+    result = best_result
+    result.restart_history = restart_history
+    result.robust_cost = float(best_cost)
+    result.solver_loss = solver_loss
+    result.solver_f_scale = float(solver_f_scale)
 
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)

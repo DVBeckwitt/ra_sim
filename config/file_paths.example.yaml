@@ -2,8 +2,13 @@
 # Copy this to `config/file_paths.yaml` (or point RA_SIM_CONFIG_DIR to a folder
 # containing a customized copy) and update values for your environment.
 
-dark_image: "./data/dark.osc"
-osc_files:
+# OSC dark frame read at startup (currently loaded but not applied in simulation math).
+simulation_dark_osc_file: "./data/dark.osc"
+
+# OSC backgrounds used by the simulator.
+# Order matters for "Switch Background":
+#   [0] initial startup background, then [1], [2], ... and loops back to [0].
+simulation_background_osc_files:
   - "./data/sample_01.osc"
 geometry_poni: "./data/geometry.poni"
 cif_file: "./data/material.cif"
