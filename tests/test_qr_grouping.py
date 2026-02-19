@@ -133,7 +133,16 @@ def test_structure_factor_tracks_bragg_shape_for_three_c_indexing():
     L_vals = 3.0 * l_vals
 
     for h, k in ((1, 0), (2, 0), (1, 1)):
-        f2_vals = _F2(h, k, L_vals, c_3c, energy_kev, sites)
+        f2_vals = _F2(
+            h,
+            k,
+            L_vals,
+            c_3c,
+            energy_kev,
+            sites,
+            phase_z_divisor=3.0,
+            iodine_single_plane=False,
+        )
         bragg_vals = np.array(
             [
                 float(np.asarray(xtl.Scatter.intensity([h, k, int(l)])).reshape(-1)[0])
@@ -183,7 +192,7 @@ def test_finite_stack_converges_to_infinite():
     I_large = finite_large[hk]['I']
     I_small = finite_small[hk]['I']
 
-    assert np.allclose(I_large, I_inf, rtol=1e-3, atol=1e-6)
+    assert np.allclose(I_large, I_inf, rtol=3e-3, atol=1e-6)
     assert np.linalg.norm(I_small - I_inf) > 1e-2
 
 

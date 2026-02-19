@@ -34,8 +34,11 @@ from PIL import Image
 from ra_sim.path_config import get_instrument_config, get_path
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.utils.stacking_fault import (
+    DEFAULT_PHASE_DELTA_EXPRESSION,
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
+    normalize_phase_delta_expression,
+    validate_phase_delta_expression,
 )
 from ra_sim.hbn import load_tilt_hint, run_hbn_fit
 from ra_sim.utils.tools import (
@@ -258,6 +261,11 @@ def run_headless_simulation(
     stack_layers_count = int(
         max(1, float(ht_cfg.get("stack_layers", 50)))
     )
+    phase_delta_expression = normalize_phase_delta_expression(
+        ht_cfg.get("phase_delta_expression", DEFAULT_PHASE_DELTA_EXPRESSION),
+        fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
+    )
+    phase_delta_expression = validate_phase_delta_expression(phase_delta_expression)
 
     def build_ht_cache(p_val: float):
         curves = ht_Iinf_dict(
@@ -269,6 +277,7 @@ def run_headless_simulation(
             two_theta_max=float(two_theta_max),
             lambda_=lambda_ang,
             c_lattice=cv,
+            phase_delta_expression=phase_delta_expression,
             finite_stack=finite_stack_flag,
             stack_layers=stack_layers_count,
         )

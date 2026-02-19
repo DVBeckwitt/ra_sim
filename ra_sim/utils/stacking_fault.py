@@ -1,5 +1,6 @@
-# stacking_fault.py - Markov HT with diffuse-consistent F^2, C2H, and factors
+# stacking_fault.py - analytical HT with diffuse-consistent F^2, C2H, and factors
 
+import ast
 import os
 import re
 import numpy as np
@@ -13,10 +14,184 @@ N_P, A_C = 3, 17.98e-10    # number of sublayers, real-space area (m^2)
 AREA    = (2*np.pi)**2 / A_C * N_P
 _TWO_PI = 2.0 * np.pi
 
+DEFAULT_PHASE_DELTA_EXPRESSION = "2*pi*((2*h + k)/3)"
+
 # Cache of base L grids and F2 values keyed by geometry and occupancy mapping.
 # Each entry: {(h,k): {"L": array, "F2": array}}
 _HT_BASE_CACHE: dict[tuple, dict] = {}
 _HT_BASE_CACHE_MAX_ENTRIES = 24
+
+_PHASE_DELTA_EXPR_CACHE: dict[str, object] = {}
+_ALLOWED_PHASE_DELTA_FUNCS = {
+    "sin": np.sin,
+    "cos": np.cos,
+    "tan": np.tan,
+    "arcsin": np.arcsin,
+    "arccos": np.arccos,
+    "arctan": np.arctan,
+    "sinh": np.sinh,
+    "cosh": np.cosh,
+    "tanh": np.tanh,
+    "exp": np.exp,
+    "sqrt": np.sqrt,
+    "log": np.log,
+    "log10": np.log10,
+    "abs": np.abs,
+    "minimum": np.minimum,
+    "maximum": np.maximum,
+    "clip": np.clip,
+    "where": np.where,
+    "real": np.real,
+    "imag": np.imag,
+    "angle": np.angle,
+}
+_ALLOWED_PHASE_DELTA_NAMES = {"h", "k", "L", "p", "pi"} | set(
+    _ALLOWED_PHASE_DELTA_FUNCS.keys()
+)
+_ALLOWED_PHASE_DELTA_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Call,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Pow,
+    ast.Mod,
+    ast.FloorDiv,
+    ast.USub,
+    ast.UAdd,
+)
+
+
+def normalize_phase_delta_expression(
+    expression: str | None,
+    *,
+    fallback: str = DEFAULT_PHASE_DELTA_EXPRESSION,
+) -> str:
+    """Return a normalized phase-delta expression string."""
+
+    text = fallback if expression is None else str(expression)
+    text = text.strip()
+    if not text:
+        text = str(fallback).strip()
+    return text
+
+
+class _PhaseDeltaExprValidator(ast.NodeVisitor):
+    """Validate expression AST against a restricted whitelist."""
+
+    def generic_visit(self, node):
+        if not isinstance(node, _ALLOWED_PHASE_DELTA_NODES):
+            raise ValueError(
+                f"Unsupported expression construct: {type(node).__name__}"
+            )
+        super().generic_visit(node)
+
+    def visit_Name(self, node: ast.Name):
+        if node.id not in _ALLOWED_PHASE_DELTA_NAMES:
+            raise ValueError(f"Unsupported name '{node.id}' in phase expression")
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise ValueError("Only direct function calls are allowed")
+        if node.func.id not in _ALLOWED_PHASE_DELTA_FUNCS:
+            raise ValueError(
+                f"Function '{node.func.id}' is not allowed in phase expression"
+            )
+        if node.keywords:
+            raise ValueError("Keyword arguments are not allowed in phase expression")
+        self.generic_visit(node)
+
+
+def _compile_phase_delta_expression(expression: str | None):
+    """Compile and cache a validated phase-delta expression."""
+
+    normalized = normalize_phase_delta_expression(expression)
+    cached = _PHASE_DELTA_EXPR_CACHE.get(normalized)
+    if cached is not None:
+        return cached, normalized
+
+    try:
+        tree = ast.parse(normalized, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"Invalid phase expression syntax: {exc.msg}") from exc
+
+    _PhaseDeltaExprValidator().visit(tree)
+    compiled = compile(tree, "<phase_delta_expression>", "eval")
+    _PHASE_DELTA_EXPR_CACHE[normalized] = compiled
+    return compiled, normalized
+
+
+def validate_phase_delta_expression(expression: str | None) -> str:
+    """Validate expression and return normalized text."""
+
+    compiled, normalized = _compile_phase_delta_expression(expression)
+    L_test = np.asarray([0.0, 0.5], dtype=float)
+    namespace = dict(_ALLOWED_PHASE_DELTA_FUNCS)
+    namespace.update(
+        {"h": 1.0, "k": 0.0, "L": L_test, "p": 0.25, "pi": np.pi}
+    )
+    try:
+        raw = eval(compiled, {"__builtins__": {}}, namespace)
+    except Exception as exc:
+        raise ValueError(f"Phase expression evaluation failed: {exc}") from exc
+
+    arr = np.asarray(raw, dtype=float)
+    try:
+        np.broadcast_to(arr, L_test.shape)
+    except ValueError as exc:
+        raise ValueError(
+            "Phase expression must evaluate to a scalar or match L shape"
+        ) from exc
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("Phase expression must produce finite values")
+    return normalized
+
+
+def evaluate_phase_delta_expression(
+    expression: str | None,
+    h: int,
+    k: int,
+    L: np.ndarray,
+    p: float,
+) -> np.ndarray:
+    """Evaluate custom delta(h, k, L, p) expression in radians."""
+
+    compiled, normalized = _compile_phase_delta_expression(expression)
+    L_vals = np.asarray(L, dtype=float)
+    namespace = dict(_ALLOWED_PHASE_DELTA_FUNCS)
+    namespace.update(
+        {
+            "h": float(h),
+            "k": float(k),
+            "L": L_vals,
+            "p": float(p),
+            "pi": np.pi,
+        }
+    )
+    try:
+        raw = eval(compiled, {"__builtins__": {}}, namespace)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to evaluate phase expression '{normalized}': {exc}"
+        ) from exc
+
+    delta = np.asarray(raw, dtype=float)
+    try:
+        delta = np.broadcast_to(delta, L_vals.shape).astype(float, copy=False)
+    except ValueError as exc:
+        raise ValueError(
+            "Phase expression must evaluate to a scalar or match L shape"
+        ) from exc
+    if not np.all(np.isfinite(delta)):
+        raise ValueError("Phase expression must produce finite values")
+    return delta
 
 # ----------------------------- occupancy helper -----------------------------
 def _temp_cif_with_occ(cif_in: str, occ):
@@ -118,6 +293,91 @@ def _cell_a_c_from_cif(cif_path: str) -> tuple[float, float]:
     return _parse_cif_num(a_raw), _parse_cif_num(c_raw)
 
 
+def _cif_cache_signature(cif_path: str) -> tuple[str, int | None, int | None]:
+    """Return a cache signature that changes when the CIF file content changes."""
+
+    abs_path = os.path.abspath(str(cif_path))
+    try:
+        st = os.stat(abs_path)
+        return abs_path, int(st.st_mtime_ns), int(st.st_size)
+    except OSError:
+        return abs_path, None, None
+
+
+def _infer_iodine_z_like_diffuse(cif_path: str, sites=None) -> float | None:
+    """Infer iodine z parameter in the same way diffuse_cif_toggle.py does.
+
+    diffuse_cif_toggle.py tries to find a line whose stripped text starts with 'I1'
+    and then reads the 5th whitespace-separated token as the z value.
+    If that fails, fall back to the first iodine site z from the generated structure.
+    Returns None if iodine is not present or no value can be inferred.
+    """
+
+    # 1) Text scan for a tokenized 'I1' row.
+    try:
+        with open(cif_path, "r", encoding="utf-8", errors="ignore") as fp:
+            for ln in fp:
+                s = ln.strip()
+                if s.startswith("I1"):
+                    parts = s.split()
+                    if len(parts) >= 5:
+                        try:
+                            return float(parts[4])
+                        except Exception:
+                            break
+    except Exception:
+        pass
+
+    # 1b) Robust fallback for CIF loop formatting variations:
+    # try _atom_site_label/_atom_site_fract_z columns and match I1-like labels.
+    try:
+        import CifFile
+
+        cf = CifFile.ReadCif(cif_path)
+        keys = list(cf.keys())
+        if keys:
+            blk = cf[keys[0]]
+            labels = blk.get("_atom_site_label")
+            z_vals = blk.get("_atom_site_fract_z")
+            if labels is not None and z_vals is not None:
+                if not isinstance(labels, (list, tuple)):
+                    labels = [labels]
+                if not isinstance(z_vals, (list, tuple)):
+                    z_vals = [z_vals]
+
+                i1_candidate = None
+                iodine_candidate = None
+                for label_raw, z_raw in zip(labels, z_vals):
+                    label = str(label_raw).strip().strip("'\"")
+                    if not label:
+                        continue
+                    z_val = _parse_cif_num(z_raw)
+                    if label.startswith("I1"):
+                        i1_candidate = z_val
+                        break
+                    if iodine_candidate is None and label[:1].upper() == "I":
+                        iodine_candidate = z_val
+
+                if i1_candidate is not None:
+                    return float(i1_candidate)
+                if iodine_candidate is not None:
+                    return float(iodine_candidate)
+    except Exception:
+        pass
+
+    # 2) Fallback: use the first iodine z from the generated structure sites.
+    try:
+        if sites is None:
+            sites = _sites_from_cif_with_factors(cif_path, occ_factors=1.0)
+        for _x, _y, z, sym, _occ in sites:
+            if _element_key(sym) == "I":
+                return float(z)
+    except Exception:
+        pass
+
+    return None
+
+
 def _sites_from_cif(cif_path: str):
     """Return atomic sites with occupancy from cif_path with symmetry applied."""
     return _sites_from_cif_with_factors(cif_path, occ_factors=1.0)
@@ -148,9 +408,7 @@ def _sites_from_cif_with_factors(cif_path: str, occ_factors=1.0):
     xtl.generate_structure()
     st = xtl.Structure
     n_sites = len(st.u)
-    occ_vals = getattr(st, "occupancy", None)
-    if occ_vals is None:
-        occ_vals = np.ones(n_sites, dtype=np.float64)
+    occ_vals = np.ones(n_sites, dtype=np.float64)  # match diffuse_cif_toggle: ignore CIF occupancy
     site_factors = _normalize_occ_factors(occ_factors, n_sites)
     return [
         (
@@ -284,21 +542,54 @@ def _F2(
     *,
     a_axis: float = A_HEX,
     phase_z_divisor: float = 1.0,
+    iodine_single_plane: bool = True,
+    iodine_z: float | None = None,
 ) -> np.ndarray:
-    """Return |F|^2 using CIF-consistent fractional coordinates."""
+    """Return |F|^2.
 
-    return np.abs(
-        _F_complex(
-            h,
-            k,
-            L,
-            c_axis,
-            energy_kev,
-            sites,
-            a_axis=a_axis,
-            phase_z_divisor=phase_z_divisor,
-        )
-    ) ** 2
+    By default this matches the diffuse_cif_toggle iodine treatment:
+    iodine contributions are collapsed onto one shared z-plane (``iodine_z`` or
+    the first iodine z found in ``sites``). Set ``iodine_single_plane=False`` to
+    recover the generic per-site z-phase sum.
+    """
+
+    if not bool(iodine_single_plane):
+        return np.abs(
+            _F_complex(
+                h,
+                k,
+                L,
+                c_axis,
+                energy_kev,
+                sites,
+                a_axis=a_axis,
+                phase_z_divisor=phase_z_divisor,
+            )
+        ) ** 2
+
+    L_vals = np.asarray(L, dtype=float)
+    Q = _Qmag(h, k, L_vals, c_axis, a_axis=a_axis)
+    fixed = np.zeros_like(Q, dtype=complex)
+    iodine_factor = np.zeros_like(Q, dtype=complex)
+    z_div = float(phase_z_divisor) if float(phase_z_divisor) != 0.0 else 1.0
+    iodine_z_eff = None if iodine_z is None else float(iodine_z)
+
+    for x, y, z, sym, occ in sites:
+        ff = f_comp(sym, Q, energy_kev)
+        phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
+        if _element_key(sym) == "I":
+            iodine_factor += float(occ) * ff * phase_xy
+            if iodine_z_eff is None:
+                iodine_z_eff = float(z)
+        else:
+            phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z) / z_div)))
+            fixed += float(occ) * ff * phase_xy * phase_z
+
+    if iodine_z_eff is None:
+        return np.abs(fixed) ** 2
+
+    phase_z_I = np.exp(1j * _TWO_PI * (L_vals * (iodine_z_eff / z_div)))
+    return np.abs(fixed + iodine_factor * phase_z_I) ** 2
 
 
 # -------------------------- Markov transfer-matrix HT ------------------------
@@ -347,6 +638,85 @@ def _finite_series_sum(t: np.ndarray, N: int) -> np.ndarray:
     return out
 
 
+def _finite_R_from_t(t: np.ndarray, n_layers: int) -> np.ndarray:
+    """Finite-domain correction from the legacy analytical HT expression."""
+
+    t = np.asarray(t, dtype=complex)
+    n = int(max(1, n_layers))
+    if n == 1:
+        return np.ones_like(np.real(t), dtype=float)
+
+    one = 1.0 + 0.0j
+    mask = np.isclose(t, one)
+    out = np.empty_like(np.real(t), dtype=float)
+
+    if np.any(~mask):
+        t_nm = t[~mask]
+        denom = one - t_nm
+        s1 = t_nm * (1 - t_nm ** (n - 1)) / denom
+        s2 = t_nm * (1 - n * t_nm ** (n - 1) + (n - 1) * t_nm ** n) / (denom ** 2)
+        series = n * s1 - s2
+        out[~mask] = (n + 2.0 * np.real(series)) / n
+
+    if np.any(mask):
+        out[mask] = float(n)
+
+    return np.maximum(out, 0.0)
+
+
+def analytical_ht_intensity_for_pair(
+    L_vals,
+    F2_vals,
+    h: int,
+    k: int,
+    p: float,
+    *,
+    phase_delta_expression: str | None = None,
+    finite_layers: int | None = None,
+    f2_only: bool = False,
+) -> np.ndarray:
+    """Return analytical HT intensity for one (h, k) rod.
+
+    Matches the algebraic HT implementation used in diffuse_cif_toggle.py:
+      - p is flipped (p -> 1 - p) before forming z
+      - R uses the same infinite- or finite-layer closed forms
+      - no extra clipping/regularization beyond P_CLAMP
+    """
+
+    F2_vals = np.asarray(F2_vals, dtype=float)
+    if f2_only:
+        return F2_vals
+
+    L_vals = np.asarray(L_vals, dtype=float)
+
+    # Match diffuse_cif_toggle.py convention: flip p -> 1 - p
+    p_flipped = 1.0 - float(p)
+
+    # Allow custom delta(h,k,L,p) but pass the *flipped* p so delta uses the same p
+    # that appears in z, consistent with the diffuse algebra.
+    delta = evaluate_phase_delta_expression(
+        phase_delta_expression,
+        h,
+        k,
+        L_vals,
+        p_flipped,
+    )
+
+    z = (1.0 - p_flipped) + p_flipped * np.exp(1j * delta)
+    f_val = np.minimum(np.abs(z), 1.0 - float(P_CLAMP))
+    psi = np.angle(z)
+    phi = delta + _TWO_PI * L_vals * (1.0 / 3.0)
+
+    if finite_layers is None:
+        R = (1.0 - f_val**2) / (1.0 + f_val**2 - 2.0 * f_val * np.cos(phi - psi))
+    else:
+        t = f_val * np.exp(1j * (phi - psi))
+        R = _finite_R_from_t(t, int(max(1, finite_layers)))
+
+    return float(AREA) * F2_vals * R
+
+
+# Legacy Markov transfer helpers are kept for backwards compatibility.
 def _R_from_transfer(
     phi: float,
     theta: np.ndarray,
@@ -420,19 +790,23 @@ def _get_base_curves(
     L_step: float = 0.01,
     L_max: float = 10.0,
     two_theta_max: float | None = None,
-    lambda_: float = 1.54,
+    lambda_: float = 1.5406,
     a_lattice: float | None = None,
     c_lattice: float | None = None,
     occ_factors=1.0,
     phase_z_divisor: float = 3.0,
+    iodine_z: float | None = None,
+    iodine_single_plane: bool = True,
     include_f_components: bool = False,
 ):
     """
     Return cached {(h,k): {"L": ..., "F2": ...}} for a given occupancy mapping.
 
     Conventions align with diffuse_cif_toggle:
-      - a/c are read directly from the CIF (no 3x scaling).
-      - Q uses 2π*sqrt(radial + (L/c)^2) with c matching the active L axis.
+      - a/c used for |Q| (and optional two-theta clipping) are a_lattice/c_lattice when
+        provided, otherwise the CIF a/c (no 3x scaling).
+      - With iodine_single_plane=True (default), iodine contributions are collapsed onto one
+        shared z-plane (iodine_z or the first iodine z found in the CIF), matching diffuse_cif_toggle.
       - Phase uses z/phase_z_divisor in the vertical factor (legacy default:
         phase_z_divisor=3.0).
     """
@@ -453,8 +827,9 @@ def _get_base_curves(
     else:
         occ_key = float(occ_factors)
 
+    cif_signature = _cif_cache_signature(cif_path)
     key = (
-        os.path.abspath(cif_path),
+        cif_signature,
         tuple(hk_list),
         float(L_step),
         float(L_max),
@@ -464,6 +839,8 @@ def _get_base_curves(
         None if c_lattice is None else float(c_lattice),
         occ_key,
         float(phase_z_divisor),
+        None if iodine_z is None else float(iodine_z),
+        bool(iodine_single_plane),
         bool(include_f_components),
     )
     cached = _HT_BASE_CACHE.get(key)
@@ -471,17 +848,34 @@ def _get_base_curves(
         return cached
 
     a_cif, c_cif = _cell_a_c_from_cif(cif_path)
-    sites = _sites_from_cif_with_factors(cif_path, occ_factors=occ_factors)
+    # Match diffuse_cif_toggle.py: ignore CIF occupancy and any external occupancy scaling in F².
+    sites = _sites_from_cif_with_factors(cif_path, occ_factors=1.0)
     if L_step <= 0.0:
         raise ValueError("L_step must be > 0")
     if L_step < 1e-4:
         L_step = 1e-4
 
     energy_kev = _energy_kev_from_lambda(lambda_)
+    # Match diffuse_cif_toggle.py F² behaviour: treat iodine as a single plane at
+    # z = iodine_z (default inferred from the CIF) by removing iodine z from the
+    # per-site phase and applying one shared exp(2π i L * (iodine_z/phase_z_divisor)).
+    iodine_z_eff = None
+    iodine_active = False
+    if bool(iodine_single_plane):
+        iodine_z_eff = iodine_z
+        if iodine_z_eff is None:
+            iodine_z_eff = _infer_iodine_z_like_diffuse(cif_path, sites=sites)
+        if iodine_z_eff is not None:
+            try:
+                iodine_active = any(_element_key(sym) == "I" for (_x, _y, _z, sym, _occ) in sites)
+            except Exception:
+                iodine_active = False
+
     out: dict[tuple, dict] = {}
 
     if a_lattice is None or not math.isfinite(float(a_lattice)) or float(a_lattice) <= 0.0:
-        a_effective = a_cif
+        # Match diffuse_cif_toggle.py: default to the module's A_HEX constant unless overridden.
+        a_effective = float(A_HEX)
     else:
         a_effective = float(a_lattice)
 
@@ -490,79 +884,85 @@ def _get_base_curves(
     else:
         c_effective = float(c_lattice)
 
+
+    # Use one consistent set of lattice constants for both the two-theta window
+    # and |Q| used inside F(L). "effective" already falls back to CIF a/c when
+    # overrides are not provided, matching diffuse_cif_toggle's behavior.
+    a_form_factor = float(a_effective)
+    c_form_factor = float(c_effective)
+
+    def _F_like_diffuse(h: int, k: int, L_vals: np.ndarray):
+        """Return F(L) with optional iodine single-plane treatment."""
+        if not iodine_active:
+            # Match diffuse_cif_toggle.py: ignore occupancy scaling inside F(L).
+            Q = _Qmag(h, k, L_vals, c_form_factor, a_axis=a_form_factor)
+            F = np.zeros_like(Q, dtype=complex)
+            z_div = float(phase_z_divisor) if float(phase_z_divisor) != 0.0 else 1.0
+            for x, y, z, sym, _occ in sites:
+                ff = f_comp(sym, Q, energy_kev)
+                phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
+                phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z) / z_div)))
+                F += ff * phase_xy * phase_z
+            return F
+
+        Q = _Qmag(h, k, L_vals, c_form_factor, a_axis=a_form_factor)
+        fixed = np.zeros_like(Q, dtype=complex)
+        iodine_factor = np.zeros_like(Q, dtype=complex)
+        z_div = float(phase_z_divisor) if float(phase_z_divisor) != 0.0 else 1.0
+
+        for x, y, z, sym, occ in sites:
+            ff = f_comp(sym, Q, energy_kev)
+            phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
+            if _element_key(sym) == "I":
+                iodine_factor += ff * phase_xy
+            else:
+                phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z) / z_div)))
+                fixed += ff * phase_xy * phase_z
+
+        phase_z_I = np.exp(1j * _TWO_PI * (L_vals * (float(iodine_z_eff) / z_div)))
+        return fixed + iodine_factor * phase_z_I
+
+    def _F2_like_diffuse(h: int, k: int, L_vals: np.ndarray):
+        F = _F_like_diffuse(h, k, L_vals)
+        return np.abs(F) ** 2, F
+
     if two_theta_max is None:
         base_L = np.arange(0.0, L_max + L_step / 2.0, L_step)
         for h, k in hk_list:
             if include_f_components:
-                F = _F_complex(
-                    h,
-                    k,
-                    base_L,
-                    c_effective,
-                    energy_kev,
-                    sites,
-                    a_axis=a_effective,
-                    phase_z_divisor=phase_z_divisor,
-                )
+                F2, F = _F2_like_diffuse(h, k, base_L)
                 out[(h, k)] = {
                     "L": base_L.copy(),
-                    "F2": np.abs(F) ** 2,
+                    "F2": F2,
                     "F_real": np.real(F),
                     "F_imag": np.imag(F),
                     "F_abs": np.abs(F),
                 }
             else:
-                F2 = _F2(
-                    h,
-                    k,
-                    base_L,
-                    c_effective,
-                    energy_kev,
-                    sites,
-                    a_axis=a_effective,
-                    phase_z_divisor=phase_z_divisor,
-                )
+                F2, _F = _F2_like_diffuse(h, k, base_L)
                 out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4.0 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2.0))
         for h, k in hk_list:
-            const = (4.0 / 3.0) * (h*h + k*k + h*k) / (a_effective**2)
+            const = (4.0 / 3.0) * (h*h + k*k + h*k) / (a_form_factor**2)
             l_sq = (q_max / (2.0 * math.pi))**2 - const
             if l_sq <= 0:
                 L_vals = np.array([], dtype=float)
                 out[(h, k)] = {"L": L_vals, "F2": L_vals}
                 continue
-            L_max_local = c_effective * math.sqrt(l_sq)
+            L_max_local = c_form_factor * math.sqrt(l_sq)
             L_vals = np.arange(0.0, L_max_local + L_step / 2.0, L_step)
             if include_f_components:
-                F = _F_complex(
-                    h,
-                    k,
-                    L_vals,
-                    c_effective,
-                    energy_kev,
-                    sites,
-                    a_axis=a_effective,
-                    phase_z_divisor=phase_z_divisor,
-                )
+                F2, F = _F2_like_diffuse(h, k, L_vals)
                 out[(h, k)] = {
                     "L": L_vals.copy(),
-                    "F2": np.abs(F) ** 2,
+                    "F2": F2,
                     "F_real": np.real(F),
                     "F_imag": np.imag(F),
                     "F_abs": np.abs(F),
                 }
             else:
-                F2 = _F2(
-                    h,
-                    k,
-                    L_vals,
-                    c_effective,
-                    energy_kev,
-                    sites,
-                    a_axis=a_effective,
-                    phase_z_divisor=phase_z_divisor,
-                )
+                F2, _F = _F2_like_diffuse(h, k, L_vals)
                 out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
@@ -585,16 +985,18 @@ def ht_Iinf_dict(
     L_step: float = 0.01,
     L_max: float = 10.0,
     two_theta_max: float | None = None,
-    lambda_: float = 1.54,
+    lambda_: float = 1.5406,
     a_lattice: float | None = None,
     c_lattice: float | None = None,
     phase_z_divisor: float = 3.0,
+    iodine_z: float | None = None,
+    phase_delta_expression: str | None = None,
     *,
-    finite_stack: bool = True,
+    finite_stack: bool = False,
     stack_layers: int = 50,
 ):
     """
-    Hendricks–Teller intensities using the Markov transfer model.
+    Hendricks–Teller intensities using the analytical HT expression.
 
     Returns {(h,k): {'L':..., 'I':...}} with F² and C2H conventions identical
     to diffuse_cif_toggle.py. The 'occ' parameter is applied per generated
@@ -607,9 +1009,16 @@ def ht_Iinf_dict(
     used for |Q| and two-theta clipping.
     ``phase_z_divisor`` controls vertical phase scaling in F². The default
     (3.0) matches the legacy algebraic HT convention.
+    ``iodine_z`` optionally pins the iodine z-plane used in F². When ``None``,
+    the value is inferred from the CIF in the same way as diffuse_cif_toggle.
+    ``phase_delta_expression`` defines delta(h, k, L, p) in radians for the
+    analytical HT correlation term. The default expression is
+    ``2*pi*((2*h + k)/3)``.
     When ``finite_stack`` is ``True`` the per-layer finite-thickness factor for
     ``stack_layers`` layers is applied instead of the infinite-domain limit.
     """
+    phase_expr = validate_phase_delta_expression(phase_delta_expression)
+
     base = _get_base_curves(
         cif_path=cif_path,
         hk_list=hk_list,
@@ -622,6 +1031,7 @@ def ht_Iinf_dict(
         c_lattice=c_lattice,
         occ_factors=occ,
         phase_z_divisor=phase_z_divisor,
+        iodine_z=iodine_z,
     )
 
     out = {}
@@ -630,12 +1040,13 @@ def ht_Iinf_dict(
     for (h, k), data in base.items():
         L_vals = data["L"]
         F2 = data["F2"]
-        I = _I_inf_markov(
+        I = analytical_ht_intensity_for_pair(
             L_vals,
-            p,
+            F2,
             h,
             k,
-            F2,
+            p,
+            phase_delta_expression=phase_expr,
             finite_layers=finite_layers,
         )
         out[(h, k)] = {"L": L_vals.copy(), "I": I}

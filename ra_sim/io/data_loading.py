@@ -79,6 +79,8 @@ def load_parameters(
     resolution_var=None,
     custom_samples_var=None,
     optics_mode_var=None,
+    phase_delta_expr_var=None,
+    iodine_z_var=None,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
@@ -130,6 +132,19 @@ def load_parameters(
                 fallback=current_mode,
             )
             optics_mode_var.set(stored_mode)
+        if iodine_z_var is not None:
+            stored_iodine = params.get('iodine_z')
+            if stored_iodine is not None:
+                try:
+                    iodine_val = float(stored_iodine)
+                except (TypeError, ValueError):
+                    iodine_val = None
+                if iodine_val is not None and np.isfinite(iodine_val):
+                    iodine_z_var.set(float(np.clip(iodine_val, 0.0, 1.0)))
+        if phase_delta_expr_var is not None:
+            stored_expr = params.get('phase_delta_expression')
+            if stored_expr is not None:
+                phase_delta_expr_var.set(str(stored_expr))
 
         return "Parameters loaded from parameters.npy"
     else:
@@ -157,6 +172,8 @@ def save_all_parameters(
     resolution_var=None,
     custom_samples_var=None,
     optics_mode_var=None,
+    phase_delta_expr_var=None,
+    iodine_z_var=None,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
@@ -203,6 +220,10 @@ def save_all_parameters(
             optics_mode_var.get(),
             fallback="fast",
         )
+    if iodine_z_var is not None:
+        parameters['iodine_z'] = float(iodine_z_var.get())
+    if phase_delta_expr_var is not None:
+        parameters['phase_delta_expression'] = str(phase_delta_expr_var.get())
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")
 

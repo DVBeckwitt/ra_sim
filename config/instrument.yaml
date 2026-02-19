@@ -39,6 +39,7 @@ instrument:
   hendricks_teller:
     default_p: [0.01, 0.99, 0.5]
     default_w: [50.0, 50.0, 0.0]
+    phase_delta_expression: "2*pi*((2*h + k)/3)"
     max_miller_index: 19
     include_rods: false
   output:

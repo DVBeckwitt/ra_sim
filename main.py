@@ -254,10 +254,14 @@ import Dans_Diffraction as dif
 import CifFile
 
 from ra_sim.utils.stacking_fault import (
+    DEFAULT_PHASE_DELTA_EXPRESSION,
+    _infer_iodine_z_like_diffuse,
     ht_Iinf_dict,
     ht_dict_to_arrays,
     ht_dict_to_qr_dict,
+    normalize_phase_delta_expression,
     qr_dict_to_arrays,
+    validate_phase_delta_expression,
 )
 
 from ra_sim.utils.calculations import IndexofRefraction
@@ -705,13 +709,30 @@ p_defaults = _ensure_triplet(
 w_defaults = _ensure_triplet(
     hendricks_config.get("default_w"), [50.0, 50.0, 0.0]
 )
-phase_z_divisor_default = float(hendricks_config.get("phase_z_divisor", 3.0))
-if not np.isfinite(phase_z_divisor_default) or phase_z_divisor_default <= 0.0:
-    phase_z_divisor_default = 3.0
+phase_delta_expression_default = normalize_phase_delta_expression(
+    hendricks_config.get(
+        "phase_delta_expression",
+        DEFAULT_PHASE_DELTA_EXPRESSION,
+    ),
+    fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
+)
+try:
+    phase_delta_expression_default = validate_phase_delta_expression(
+        phase_delta_expression_default
+    )
+except ValueError:
+    phase_delta_expression_default = DEFAULT_PHASE_DELTA_EXPRESSION
 finite_stack_default = bool(hendricks_config.get("finite_stack", True))
 stack_layers_default = int(
     max(1, float(hendricks_config.get("stack_layers", 50)))
 )
+try:
+    iodine_z_default = _infer_iodine_z_like_diffuse(str(cif_file))
+except Exception:
+    iodine_z_default = None
+if iodine_z_default is None or not np.isfinite(float(iodine_z_default)):
+    iodine_z_default = 0.0
+iodine_z_default = float(np.clip(float(iodine_z_default), 0.0, 1.0))
 
 # ---------------------------------------------------------------------------
 # Default GUI/fit parameter values. These must be defined before any calls
@@ -741,7 +762,8 @@ defaults = {
     'w0': w_defaults[0],
     'w1': w_defaults[1],
     'w2': w_defaults[2],
-    'phase_z_divisor': phase_z_divisor_default,
+    'iodine_z': iodine_z_default,
+    'phase_delta_expression': phase_delta_expression_default,
     'center_x': center_default[0],
     'center_y': center_default[1],
     'sampling_resolution': 'Low',
@@ -758,9 +780,10 @@ def build_ht_cache(
     occ_vals,
     a_axis,
     c_axis,
+    iodine_z,
     finite_stack_flag,
     stack_layers_count,
-    phase_z_divisor,
+    phase_delta_expression,
 ):
     layers = int(max(1, stack_layers_count))
     curves = ht_Iinf_dict(
@@ -773,7 +796,8 @@ def build_ht_cache(
         lambda_=lambda_,
         a_lattice=a_axis,
         c_lattice=c_axis,
-        phase_z_divisor=phase_z_divisor,
+        iodine_z=iodine_z,
+        phase_delta_expression=phase_delta_expression,
         finite_stack=finite_stack_flag,
         stack_layers=layers,
     )
@@ -787,7 +811,8 @@ def build_ht_cache(
         "two_theta_max": two_theta_range[1],
         "a": float(a_axis),
         "c": float(c_axis),
-        "phase_z_divisor": float(phase_z_divisor),
+        "iodine_z": float(iodine_z),
+        "phase_delta_expression": str(phase_delta_expression),
         "finite_stack": bool(finite_stack_flag),
         "stack_layers": layers,
     }
@@ -801,27 +826,30 @@ ht_cache_multi = {
         occ,
         default_a_axis,
         default_c_axis,
+        defaults['iodine_z'],
         defaults['finite_stack'],
         defaults['stack_layers'],
-        defaults['phase_z_divisor'],
+        defaults['phase_delta_expression'],
     ),
     "p1": build_ht_cache(
         defaults['p1'],
         occ,
         default_a_axis,
         default_c_axis,
+        defaults['iodine_z'],
         defaults['finite_stack'],
         defaults['stack_layers'],
-        defaults['phase_z_divisor'],
+        defaults['phase_delta_expression'],
     ),
     "p2": build_ht_cache(
         defaults['p2'],
         occ,
         default_a_axis,
         default_c_axis,
+        defaults['iodine_z'],
         defaults['finite_stack'],
         defaults['stack_layers'],
-        defaults['phase_z_divisor'],
+        defaults['phase_delta_expression'],
     ),
 }
 
@@ -862,7 +890,8 @@ ht_curves_cache = {
     "arrays": (miller1, intens1, degeneracy1, details1),
     "a": default_a_axis,
     "c": default_c_axis,
-    "phase_z_divisor": float(defaults['phase_z_divisor']),
+    "iodine_z": float(defaults['iodine_z']),
+    "phase_delta_expression": str(defaults['phase_delta_expression']),
     "finite_stack": defaults['finite_stack'],
     "stack_layers": defaults['stack_layers'],
 }
@@ -871,7 +900,8 @@ _last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
 _last_weights = list(weights_init)
 _last_a_for_ht = default_a_axis
 _last_c_for_ht = default_c_axis
-_last_phase_z_divisor = float(defaults['phase_z_divisor'])
+_last_iodine_z_for_ht = float(defaults['iodine_z'])
+_last_phase_delta_expression = str(defaults['phase_delta_expression'])
 _last_finite_stack = bool(defaults['finite_stack'])
 _last_stack_layers = int(max(1, defaults['stack_layers']))
 # ---- convert the dict → arrays compatible with the downstream code ----
@@ -3631,24 +3661,46 @@ def on_mosaic_slider_change(*args):
     schedule_update()
 
 
-def _current_phase_z_divisor() -> float:
-    """Return the active HT vertical phase divisor from GUI state."""
+def _current_phase_delta_expression() -> str:
+    """Return the active HT delta-phase expression from GUI state."""
 
-    fallback = float(defaults.get("phase_z_divisor", 3.0))
-    var = globals().get("phase_z_divisor_var")
+    fallback = normalize_phase_delta_expression(
+        defaults.get("phase_delta_expression", DEFAULT_PHASE_DELTA_EXPRESSION),
+        fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
+    )
+    var = globals().get("phase_delta_expr_var")
     if var is None:
-        return fallback if fallback > 0.0 else 3.0
+        return fallback
+
+    try:
+        value = str(var.get())
+    except Exception:
+        value = fallback
+
+    candidate = normalize_phase_delta_expression(value, fallback=fallback)
+    try:
+        return validate_phase_delta_expression(candidate)
+    except ValueError:
+        return fallback
+
+
+def _current_iodine_z() -> float:
+    """Return the active iodine z slider value clamped to [0, 1]."""
+
+    fallback = float(defaults.get("iodine_z", 0.0))
+    if not np.isfinite(fallback):
+        fallback = 0.0
+    var = globals().get("iodine_z_var")
+    if var is None:
+        return float(np.clip(fallback, 0.0, 1.0))
 
     try:
         value = float(var.get())
     except Exception:
         value = fallback
-
-    if not np.isfinite(value) or value <= 0.0:
+    if not np.isfinite(value):
         value = fallback
-    if not np.isfinite(value) or value <= 0.0:
-        value = 3.0
-    return float(value)
+    return float(np.clip(value, 0.0, 1.0))
 
 
 line_rmin, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
@@ -3750,8 +3802,9 @@ def do_update():
         pixel_size=pixel_size_m,
     )
 
-    global two_theta_range, _last_a_for_ht, _last_c_for_ht, _last_phase_z_divisor
-    phase_z_divisor_current = _current_phase_z_divisor()
+    global two_theta_range, _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht, _last_phase_delta_expression
+    phase_delta_expression_current = _current_phase_delta_expression()
+    iodine_z_current = _current_iodine_z()
     need_rebuild = False
     if not math.isclose(new_two_theta_max, two_theta_range[1], rel_tol=1e-6, abs_tol=1e-6):
         two_theta_range = (0.0, new_two_theta_max)
@@ -3760,12 +3813,9 @@ def do_update():
         need_rebuild = True
     if not math.isclose(a_updated, _last_a_for_ht, rel_tol=1e-9, abs_tol=1e-9):
         need_rebuild = True
-    if not math.isclose(
-        phase_z_divisor_current,
-        _last_phase_z_divisor,
-        rel_tol=1e-9,
-        abs_tol=1e-9,
-    ):
+    if not math.isclose(iodine_z_current, _last_iodine_z_for_ht, rel_tol=1e-9, abs_tol=1e-9):
+        need_rebuild = True
+    if phase_delta_expression_current != _last_phase_delta_expression:
         need_rebuild = True
 
     if need_rebuild:
@@ -4481,8 +4531,12 @@ def reset_to_defaults():
     w0_var.set(defaults['w0'])
     w1_var.set(defaults['w1'])
     w2_var.set(defaults['w2'])
+    iodine_z_var.set(float(defaults['iodine_z']))
     finite_stack_var.set(defaults['finite_stack'])
     stack_layers_var.set(int(defaults['stack_layers']))
+    phase_delta_expr_var.set(str(defaults['phase_delta_expression']))
+    if _phase_delta_entry_var is not None:
+        _phase_delta_entry_var.set(_current_phase_delta_expression())
     _sync_finite_controls()
 
     update_mosaic_cache()
@@ -4838,6 +4892,8 @@ save_button = ttk.Button(
         resolution_var,
         custom_samples_var,
         optics_mode_var,
+        phase_delta_expr_var,
+        iodine_z_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -4868,8 +4924,11 @@ load_button = ttk.Button(
                 resolution_var,
                 custom_samples_var,
                 optics_mode_var,
+                phase_delta_expr_var,
+                iodine_z_var,
             )
         ),
+        (_phase_delta_entry_var.set(_current_phase_delta_expression()) if _phase_delta_entry_var is not None else None),
         ensure_valid_resolution_choice(),
         schedule_update()
     )
@@ -7496,11 +7555,12 @@ else:
 occ_vars = [tk.DoubleVar(value=float(val)) for val in occ]
 finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
 stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
-phase_z_divisor_var = tk.DoubleVar(value=float(defaults['phase_z_divisor']))
+iodine_z_var = tk.DoubleVar(value=float(defaults['iodine_z']))
+phase_delta_expr_var = tk.StringVar(value=str(defaults['phase_delta_expression']))
 _layers_scale_widget = None
 _layers_entry_widget = None
 _layers_entry_var = None
-_phase_z_entry_var = None
+_phase_delta_entry_var = None
 
 
 def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
@@ -7533,13 +7593,14 @@ def _rebuild_diffraction_inputs(
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
-    global _last_a_for_ht, _last_c_for_ht, _last_phase_z_divisor
+    global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht, _last_phase_delta_expression
     global _last_finite_stack, _last_stack_layers
     global intensities_cif1, intensities_cif2
 
     finite_flag = bool(finite_stack_var.get())
     layers = int(max(1, stack_layers_var.get()))
-    phase_z_divisor_current = _current_phase_z_divisor()
+    iodine_z_current = _current_iodine_z()
+    phase_delta_expression_current = _current_phase_delta_expression()
 
     if (
         not force
@@ -7548,12 +7609,8 @@ def _rebuild_diffraction_inputs(
         and list(weights) == _last_weights
         and math.isclose(float(a_axis), _last_a_for_ht, rel_tol=1e-9, abs_tol=1e-9)
         and math.isclose(float(c_axis), _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
-        and math.isclose(
-            float(phase_z_divisor_current),
-            _last_phase_z_divisor,
-            rel_tol=1e-9,
-            abs_tol=1e-9,
-        )
+        and math.isclose(iodine_z_current, _last_iodine_z_for_ht, rel_tol=1e-9, abs_tol=1e-9)
+        and phase_delta_expression_current == _last_phase_delta_expression
         and _last_finite_stack == finite_flag
         and (not finite_flag or _last_stack_layers == layers)
     ):
@@ -7571,12 +7628,8 @@ def _rebuild_diffraction_inputs(
             or cache.get("two_theta_max") != two_theta_range[1]
             or not math.isclose(cache.get("a", float("nan")), float(a_axis), rel_tol=1e-9, abs_tol=1e-9)
             or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
-            or not math.isclose(
-                cache.get("phase_z_divisor", float("nan")),
-                float(phase_z_divisor_current),
-                rel_tol=1e-9,
-                abs_tol=1e-9,
-            )
+            or not math.isclose(cache.get("iodine_z", float("nan")), iodine_z_current, rel_tol=1e-9, abs_tol=1e-9)
+            or cache.get("phase_delta_expression", "") != phase_delta_expression_current
             or bool(cache.get("finite_stack")) != finite_flag
             or (finite_flag and cache.get("stack_layers") != layers)
         ):
@@ -7585,9 +7638,10 @@ def _rebuild_diffraction_inputs(
                 new_occ,
                 a_axis,
                 c_axis,
+                iodine_z_current,
                 finite_flag,
                 layers,
-                phase_z_divisor_current,
+                phase_delta_expression_current,
             )
             ht_cache_multi[label] = cache
         return cache
@@ -7605,7 +7659,8 @@ def _rebuild_diffraction_inputs(
         "arrays": arrays_local,
         "a": float(a_axis),
         "c": float(c_axis),
-        "phase_z_divisor": float(phase_z_divisor_current),
+        "iodine_z": float(iodine_z_current),
+        "phase_delta_expression": phase_delta_expression_current,
         "finite_stack": finite_flag,
         "stack_layers": layers,
     }
@@ -7614,7 +7669,8 @@ def _rebuild_diffraction_inputs(
     _last_weights = list(weights)
     _last_a_for_ht = float(a_axis)
     _last_c_for_ht = float(c_axis)
-    _last_phase_z_divisor = float(phase_z_divisor_current)
+    _last_iodine_z_for_ht = float(iodine_z_current)
+    _last_phase_delta_expression = phase_delta_expression_current
     _last_finite_stack = finite_flag
     _last_stack_layers = layers
 
@@ -7739,18 +7795,10 @@ def _normalize_layer_value(raw_value):
     return value
 
 
-def _normalize_phase_z_divisor_value(raw_value):
-    try:
-        value = float(raw_value)
-    except (TypeError, ValueError):
-        value = _current_phase_z_divisor()
-    if not np.isfinite(value) or value <= 0.0:
-        value = _current_phase_z_divisor()
-    if not np.isfinite(value) or value <= 0.0:
-        value = float(defaults.get("phase_z_divisor", 3.0))
-    if not np.isfinite(value) or value <= 0.0:
-        value = 3.0
-    return float(value)
+def _normalize_phase_delta_expression_value(raw_value):
+    fallback = _current_phase_delta_expression()
+    normalized = normalize_phase_delta_expression(raw_value, fallback=fallback)
+    return validate_phase_delta_expression(normalized)
 
 
 def _sync_layer_entry_from_var(*_):
@@ -7779,21 +7827,27 @@ def _commit_layer_entry(_event=None):
         update_occupancies()
 
 
-def _commit_phase_z_divisor_entry(_event=None):
-    global _phase_z_entry_var
-    if _phase_z_entry_var is None:
+def _commit_phase_delta_expression_entry(_event=None):
+    global _phase_delta_entry_var
+    if _phase_delta_entry_var is None:
         return
-    value = _normalize_phase_z_divisor_value(_phase_z_entry_var.get())
+
     try:
-        current = float(phase_z_divisor_var.get())
-    except (tk.TclError, ValueError):
-        current = _current_phase_z_divisor()
-    if not math.isclose(current, value, rel_tol=1e-12, abs_tol=1e-12):
-        phase_z_divisor_var.set(value)
-        _phase_z_entry_var.set(f"{value:.6g}")
-        update_occupancies()
+        value = _normalize_phase_delta_expression_value(_phase_delta_entry_var.get())
+    except ValueError as exc:
+        _phase_delta_entry_var.set(_current_phase_delta_expression())
+        progress_label.config(text=f"Invalid phase delta equation: {exc}")
         return
-    _phase_z_entry_var.set(f"{value:.6g}")
+
+    current = _current_phase_delta_expression()
+    if current != value:
+        phase_delta_expr_var.set(value)
+        _phase_delta_entry_var.set(value)
+        update_occupancies()
+        progress_label.config(text="Updated phase delta equation.")
+        return
+
+    _phase_delta_entry_var.set(value)
 
 
 def _on_finite_toggle():
@@ -7856,17 +7910,18 @@ _sync_layer_entry_from_var()
 _sync_finite_controls()
 phase_row = ttk.Frame(finite_frame)
 phase_row.pack(fill=tk.X, padx=5, pady=2)
-ttk.Label(phase_row, text="Phase z divisor:").pack(side=tk.LEFT)
-_phase_z_entry_var = tk.StringVar(value=f"{_current_phase_z_divisor():.6g}")
+ttk.Label(phase_row, text="Phase delta equation:").pack(side=tk.LEFT)
+_phase_delta_entry_var = tk.StringVar(value=_current_phase_delta_expression())
 phase_entry = ttk.Entry(
     phase_row,
-    textvariable=_phase_z_entry_var,
-    width=10,
-    justify="right",
+    textvariable=_phase_delta_entry_var,
+    width=36,
 )
 phase_entry.pack(side=tk.RIGHT)
-phase_entry.bind("<Return>", _commit_phase_z_divisor_entry)
-phase_entry.bind("<FocusOut>", _commit_phase_z_divisor_entry)
+phase_entry.bind("<Return>", _commit_phase_delta_expression_entry)
+phase_entry.bind("<FocusOut>", _commit_phase_delta_expression_entry)
+iodine_z_var, _ = create_slider('z(I)', 0.0, 1.0, defaults['iodine_z'], 0.001,
+                          stack_frame.frame, update_occupancies)
 p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
                           stack_frame.frame, update_occupancies)
 w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
@@ -7990,6 +8045,7 @@ def _apply_primary_cif_path(raw_path):
     old_cv2 = cv2
     old_default_a = float(defaults.get("a", old_av))
     old_default_c = float(defaults.get("c", old_cv))
+    old_default_iodine = float(defaults.get("iodine_z", 0.0))
     try:
         old_slider_a = float(a_var.get())
     except Exception:
@@ -7998,6 +8054,10 @@ def _apply_primary_cif_path(raw_path):
         old_slider_c = float(c_var.get())
     except Exception:
         old_slider_c = old_default_c
+    try:
+        old_slider_iodine = float(iodine_z_var.get())
+    except Exception:
+        old_slider_iodine = old_default_iodine
 
     try:
         new_cf = CifFile.ReadCif(str(candidate))
@@ -8011,6 +8071,13 @@ def _apply_primary_cif_path(raw_path):
             raise ValueError("CIF is missing _cell_length_a/_cell_length_c fields.")
         new_av = float(parse_cif_num(new_a_text))
         new_cv = float(parse_cif_num(new_c_text))
+        try:
+            new_iodine_z = _infer_iodine_z_like_diffuse(str(candidate))
+        except Exception:
+            new_iodine_z = None
+        if new_iodine_z is None or not np.isfinite(float(new_iodine_z)):
+            new_iodine_z = old_slider_iodine
+        new_iodine_z = float(np.clip(float(new_iodine_z), 0.0, 1.0))
 
         new_labels = _extract_occupancy_site_labels(new_blk, str(candidate))
         site_count = len(new_labels) if new_labels else max(1, len(old_occ_values))
@@ -8045,6 +8112,7 @@ def _apply_primary_cif_path(raw_path):
         _rebuild_occupancy_controls()
 
         cif_file_var.set(cif_file)
+        iodine_z_var.set(float(new_iodine_z))
         ht_cache_multi = {}
         _rebuild_diffraction_inputs(
             new_occ_values,
@@ -8059,6 +8127,7 @@ def _apply_primary_cif_path(raw_path):
         cv = float(new_cv)
         defaults["a"] = av
         defaults["c"] = cv
+        defaults["iodine_z"] = float(new_iodine_z)
         if has_second_cif:
             if blk2.get("_cell_length_a") is None:
                 av2 = av
@@ -8081,6 +8150,7 @@ def _apply_primary_cif_path(raw_path):
         cv2 = old_cv2
         defaults["a"] = old_default_a
         defaults["c"] = old_default_c
+        defaults["iodine_z"] = old_default_iodine
 
         if len(occ_vars) != len(old_occ_values):
             occ_vars = [tk.DoubleVar(value=float(v)) for v in old_occ_values]
@@ -8090,6 +8160,7 @@ def _apply_primary_cif_path(raw_path):
         _rebuild_occupancy_controls()
         a_var.set(float(old_slider_a))
         c_var.set(float(old_slider_c))
+        iodine_z_var.set(float(old_slider_iodine))
 
         cif_file_var.set(old_cif_file)
         progress_label.config(text=f"Failed to load CIF: {exc}")
@@ -8158,7 +8229,8 @@ def _open_diffuse_cif_toggle():
             two_theta_max=two_theta_max,
             finite_stack=finite_flag,
             stack_layers=layer_count,
-            phase_z_divisor=_current_phase_z_divisor(),
+            iodine_z=_current_iodine_z(),
+            phase_delta_expression=_current_phase_delta_expression(),
         )
         progress_label.config(text=f"Opened diffuse HT viewer: {Path(active_cif).name}")
     except Exception as exc:
@@ -8220,7 +8292,8 @@ def _export_diffuse_ht_txt():
             two_theta_max=two_theta_max,
             finite_stack=finite_flag,
             stack_layers=layer_count,
-            phase_z_divisor=_current_phase_z_divisor(),
+            iodine_z=_current_iodine_z(),
+            phase_delta_expression=_current_phase_delta_expression(),
         )
         progress_label.config(
             text=(
@@ -8414,7 +8487,11 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             resolution_var,
             custom_samples_var,
             optics_mode_var,
+            phase_delta_expr_var,
+            iodine_z_var,
         )
+        if _phase_delta_entry_var is not None:
+            _phase_delta_entry_var.set(_current_phase_delta_expression())
         ensure_valid_resolution_choice()
         profile_loaded = True
     else:
