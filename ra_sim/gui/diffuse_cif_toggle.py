@@ -5,11 +5,15 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 from time import perf_counter
-import re
 
 import numpy as np
 
-from ra_sim.utils.stacking_fault import AREA, P_CLAMP, _get_base_curves
+from ra_sim.utils.stacking_fault import (
+    AREA,
+    P_CLAMP,
+    _cell_a_c_from_cif,
+    _get_base_curves,
+)
 
 
 def _as_triplet(values, fallback):
@@ -25,33 +29,10 @@ def _as_triplet(values, fallback):
     return [float(seq[0]), float(seq[1]), float(seq[2])]
 
 
-def _parse_cif_num(raw_value):
-    """Parse a CIF numeric field, handling uncertainty suffixes."""
-
-    if isinstance(raw_value, (int, float, np.integer, np.floating)):
-        return float(raw_value)
-    text = str(raw_value).strip()
-    match = re.match(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", text)
-    if match is None:
-        raise ValueError(f"Unable to parse CIF numeric value: {raw_value!r}")
-    return float(match.group(0))
-
-
 def _read_lattice_from_cif(cif_path):
     """Return (a, c) from the active CIF file."""
 
-    import CifFile
-
-    cf = CifFile.ReadCif(str(cif_path))
-    keys = list(cf.keys())
-    if not keys:
-        raise ValueError(f"No CIF data blocks found in {cif_path}")
-    block = cf[keys[0]]
-    a_raw = block.get("_cell_length_a")
-    c_raw = block.get("_cell_length_c")
-    if a_raw is None or c_raw is None:
-        raise ValueError("CIF is missing _cell_length_a/_cell_length_c")
-    return _parse_cif_num(a_raw), _parse_cif_num(c_raw)
+    return _cell_a_c_from_cif(str(cif_path))
 
 
 def _normalize_weights(weights):
@@ -62,6 +43,18 @@ def _normalize_weights(weights):
     if not np.isfinite(denom) or abs(denom) < 1e-12:
         return np.array([1.0, 0.0, 0.0], dtype=float)
     return w / denom
+
+
+def _normalize_phase_z_divisor(value, fallback=3.0):
+    """Return a positive finite phase-z divisor."""
+
+    try:
+        phase_div = float(value)
+    except Exception:
+        phase_div = float(fallback)
+    if not np.isfinite(phase_div) or phase_div <= 0.0:
+        phase_div = float(fallback)
+    return float(phase_div)
 
 
 def _finite_R_from_t(t, n_layers):
@@ -158,18 +151,273 @@ def _weighted_total(components, weights):
     return total_x, total_y
 
 
+def _hex_d_spacing(h, k, l_val, a_axis, c_axis):
+    """Return hexagonal d-spacing in Angstrom for one (h, k, l)."""
+
+    inv_d2 = (4.0 / 3.0) * (h * h + h * k + k * k) / (a_axis * a_axis)
+    inv_d2 += (l_val * l_val) / (c_axis * c_axis)
+    if inv_d2 <= 0.0:
+        return float("nan")
+    return float(1.0 / np.sqrt(inv_d2))
+
+
+def _two_theta_deg_from_d(d_angstrom, lambda_angstrom):
+    """Return 2theta in degrees from d-spacing and wavelength."""
+
+    if not np.isfinite(d_angstrom) or d_angstrom <= 0.0:
+        return float("nan")
+    arg = float(lambda_angstrom) / (2.0 * float(d_angstrom))
+    if arg < -1.0 or arg > 1.0:
+        return float("nan")
+    return float(2.0 * np.degrees(np.arcsin(arg)))
+
+
+def _hex_multiplicity(h, k):
+    """Approximate hexagonal reflection multiplicity for exported rows."""
+
+    h = int(h)
+    k = int(k)
+    if h == 0 and k == 0:
+        return 2
+    if h == 0 or k == 0 or h == -k:
+        return 6
+    return 12
+
+
+def _format_legacy_value(value, width, precision, fmt="f"):
+    """Format one numeric column using legacy nan text for invalid values."""
+
+    if not np.isfinite(value):
+        return f"{'-nan(ind)':>{width}}"
+    return f"{float(value):{width}.{precision}{fmt}}"
+
+
+def _build_algebraic_ht_export_rows(
+    *,
+    cif_path,
+    occ,
+    p_values,
+    w_values,
+    a_lattice=None,
+    c_lattice=None,
+    lambda_angstrom=None,
+    mx=None,
+    two_theta_max=None,
+    finite_stack=False,
+    stack_layers=50,
+    phase_z_divisor=3.0,
+):
+    """Return row dictionaries for the algebraic HT text export."""
+
+    cif_path = str(Path(str(cif_path)).expanduser())
+    if not Path(cif_path).is_file():
+        raise FileNotFoundError(f"CIF file not found: {cif_path}")
+    if lambda_angstrom is None or mx is None:
+        raise ValueError("lambda_angstrom and mx are required.")
+
+    p_triplet = _as_triplet(p_values, [0.01, 0.99, 0.5])
+    w_triplet = _as_triplet(w_values, [50.0, 50.0, 0.0])
+    weights = _normalize_weights(w_triplet)
+    hk_limit = int(max(2, int(mx)))
+
+    a_cif = None
+    c_cif = None
+    try:
+        a_cif, c_cif = _read_lattice_from_cif(cif_path)
+    except Exception:
+        pass
+
+    try:
+        a_axis_for_recip = float(a_lattice)
+        if not np.isfinite(a_axis_for_recip) or a_axis_for_recip <= 0.0:
+            raise ValueError
+    except Exception:
+        a_axis_for_recip = float(a_cif) if a_cif is not None else 4.557
+
+    try:
+        c_axis_for_recip = float(c_lattice)
+        if not np.isfinite(c_axis_for_recip) or c_axis_for_recip <= 0.0:
+            raise ValueError
+    except Exception:
+        c_axis_for_recip = float(c_cif) if c_cif is not None else 1.0
+    phase_div = _normalize_phase_z_divisor(phase_z_divisor, fallback=3.0)
+
+    base = _get_base_curves(
+        cif_path=cif_path,
+        mx=hk_limit,
+        L_step=0.01,
+        L_max=10.0,
+        two_theta_max=two_theta_max,
+        lambda_=float(lambda_angstrom),
+        a_lattice=float(a_axis_for_recip),
+        c_lattice=float(c_axis_for_recip),
+        occ_factors=occ,
+        phase_z_divisor=phase_div,
+        include_f_components=True,
+    )
+
+    finite_layers = int(max(1, stack_layers)) if finite_stack else None
+    rows = []
+
+    for (h, k), data in sorted(base.items()):
+        h = int(h)
+        k = int(k)
+        if h < 0 or k < 0:
+            continue
+
+        L_vals = np.asarray(data.get("L", []), dtype=float)
+        F2_vals = np.asarray(data.get("F2", []), dtype=float)
+        if L_vals.size == 0 or F2_vals.size == 0:
+            continue
+
+        f_real_vals = np.asarray(
+            data.get("F_real", np.full_like(L_vals, np.nan)),
+            dtype=float,
+        )
+        f_imag_vals = np.asarray(
+            data.get("F_imag", np.full_like(L_vals, np.nan)),
+            dtype=float,
+        )
+        f_abs_vals = np.asarray(
+            data.get("F_abs", np.sqrt(np.maximum(F2_vals, 0.0))),
+            dtype=float,
+        )
+
+        i0_vals = _algebraic_I_for_pair(
+            L_vals,
+            F2_vals,
+            h,
+            k,
+            p_triplet[0],
+            finite_layers=finite_layers,
+            f2_only=False,
+        )
+        i1_vals = _algebraic_I_for_pair(
+            L_vals,
+            F2_vals,
+            h,
+            k,
+            p_triplet[1],
+            finite_layers=finite_layers,
+            f2_only=False,
+        )
+        i2_vals = _algebraic_I_for_pair(
+            L_vals,
+            F2_vals,
+            h,
+            k,
+            p_triplet[2],
+            finite_layers=finite_layers,
+            f2_only=False,
+        )
+        total_i = weights[0] * i0_vals + weights[1] * i1_vals + weights[2] * i2_vals
+        multiplicity = _hex_multiplicity(h, k)
+
+        l_int = np.rint(L_vals).astype(int)
+        integer_mask = np.isclose(L_vals, l_int, atol=1e-10)
+        valid_indices = np.where(integer_mask & (l_int >= 1))[0]
+
+        for idx in valid_indices:
+            l_val = float(l_int[idx])
+            d_val = _hex_d_spacing(h, k, float(l_val), a_axis_for_recip, c_axis_for_recip)
+            two_theta_val = _two_theta_deg_from_d(d_val, float(lambda_angstrom))
+            rows.append(
+                {
+                    "h": h,
+                    "k": k,
+                    "l": float(l_val),
+                    "d": float(d_val),
+                    "f_real": float(f_real_vals[idx]),
+                    "f_imag": float(f_imag_vals[idx]),
+                    "f_abs": float(f_abs_vals[idx]),
+                    "two_theta": float(two_theta_val),
+                    "intensity": float(total_i[idx]),
+                    "multiplicity": int(multiplicity),
+                }
+            )
+
+    rows.sort(
+        key=lambda row: (
+            float(row["two_theta"]) if np.isfinite(row["two_theta"]) else float("inf"),
+            int(row["h"]),
+            int(row["k"]),
+            float(row["l"]),
+        )
+    )
+    return rows
+
+
+def export_algebraic_ht_txt(
+    *,
+    output_path,
+    cif_path,
+    occ,
+    p_values,
+    w_values,
+    a_lattice=None,
+    c_lattice=None,
+    lambda_angstrom=None,
+    mx=None,
+    two_theta_max=None,
+    finite_stack=False,
+    stack_layers=50,
+    phase_z_divisor=3.0,
+):
+    """Write algebraic HT values to a legacy fixed-width text table."""
+
+    rows = _build_algebraic_ht_export_rows(
+        cif_path=cif_path,
+        occ=occ,
+        p_values=p_values,
+        w_values=w_values,
+        a_lattice=a_lattice,
+        c_lattice=c_lattice,
+        lambda_angstrom=lambda_angstrom,
+        mx=mx,
+        two_theta_max=two_theta_max,
+        finite_stack=finite_stack,
+        stack_layers=stack_layers,
+        phase_z_divisor=phase_z_divisor,
+    )
+
+    out_path = Path(str(output_path)).expanduser()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    header = "   h    k    l      d (Å)      F(real)      F(imag)          |F|         2θ          I    M"
+    lines = [header]
+    for row in rows:
+        line = (
+            f"{int(row['h']):4d}"
+            f"{int(row['k']):5d}"
+            f"{int(round(float(row['l']))):5d}"
+            f"{_format_legacy_value(row['d'], 12, 6)}"
+            f"{_format_legacy_value(row['f_real'], 13, 6)}"
+            f"{_format_legacy_value(row['f_imag'], 13, 6)}"
+            f"{_format_legacy_value(row['f_abs'], 12, 4)}"
+            f"{_format_legacy_value(row['two_theta'], 11, 5)}"
+            f"{_format_legacy_value(row['intensity'], 13, 6, fmt='g')}"
+            f"{int(row['multiplicity']):5d}"
+        )
+        lines.append(line)
+
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return int(len(rows))
+
+
 def open_diffuse_cif_toggle_algebraic(
     *,
     cif_path,
     occ,
     p_values,
     w_values,
-    c_lattice,
-    lambda_angstrom,
-    mx,
+    a_lattice=None,
+    c_lattice=None,
+    lambda_angstrom=None,
+    mx=None,
     two_theta_max=None,
     finite_stack=False,
     stack_layers=50,
+    phase_z_divisor=3.0,
 ):
     """Open an interactive diffuse viewer using algebraic HT only."""
 
@@ -179,16 +427,34 @@ def open_diffuse_cif_toggle_algebraic(
     cif_path = str(Path(str(cif_path)).expanduser())
     if not Path(cif_path).is_file():
         raise FileNotFoundError(f"CIF file not found: {cif_path}")
+    if lambda_angstrom is None or mx is None:
+        raise ValueError("lambda_angstrom and mx are required.")
 
     p_triplet = _as_triplet(p_values, [0.01, 0.99, 0.5])
     w_triplet = _as_triplet(w_values, [50.0, 50.0, 0.0])
     hk_limit = int(max(2, int(mx)))
 
+    a_cif = None
+    c_cif = None
     try:
-        a_axis_for_recip, c_axis_for_recip = _read_lattice_from_cif(cif_path)
+        a_cif, c_cif = _read_lattice_from_cif(cif_path)
     except Exception:
-        a_axis_for_recip = 4.557
-        c_axis_for_recip = float(c_lattice) if float(c_lattice) > 0.0 else 1.0
+        pass
+
+    try:
+        a_axis_for_recip = float(a_lattice)
+        if not np.isfinite(a_axis_for_recip) or a_axis_for_recip <= 0.0:
+            raise ValueError
+    except Exception:
+        a_axis_for_recip = float(a_cif) if a_cif is not None else 4.557
+
+    try:
+        c_axis_for_recip = float(c_lattice)
+        if not np.isfinite(c_axis_for_recip) or c_axis_for_recip <= 0.0:
+            raise ValueError
+    except Exception:
+        c_axis_for_recip = float(c_cif) if c_cif is not None else 1.0
+    phase_div = _normalize_phase_z_divisor(phase_z_divisor, fallback=3.0)
 
     base = _get_base_curves(
         cif_path=cif_path,
@@ -197,10 +463,10 @@ def open_diffuse_cif_toggle_algebraic(
         L_max=10.0,
         two_theta_max=two_theta_max,
         lambda_=float(lambda_angstrom),
-        # Use reciprocal scaling from the active CIF so l<->qz conversion
-        # is tied to whichever structure is currently loaded.
+        a_lattice=float(a_axis_for_recip),
         c_lattice=float(c_axis_for_recip),
         occ_factors=occ,
+        phase_z_divisor=phase_div,
     )
 
     curve_map = {}

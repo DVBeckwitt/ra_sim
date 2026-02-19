@@ -85,14 +85,37 @@ def _temp_cif_with_occ(cif_in: str, occ):
 # -------------------------- low-level physics helpers -----------------------
 def _cell_c_from_cif(cif_path: str) -> float:
     """Return the c lattice parameter from cif_path."""
-    import re
-    pat = re.compile(r"_cell_length_c\s+([\d.]+)")
-    with open(cif_path, "r", encoding="utf-8", errors="ignore") as fp:
-        for ln in fp:
-            m = pat.match(ln)
-            if m:
-                return float(m.group(1))
-    raise ValueError(f"_cell_length_c not found in {cif_path}")
+    _a, c = _cell_a_c_from_cif(cif_path)
+    return float(c)
+
+
+def _parse_cif_num(raw) -> float:
+    """Parse CIF numeric values, including uncertainty suffixes."""
+
+    if isinstance(raw, (int, float, np.integer, np.floating)):
+        return float(raw)
+    txt = str(raw).strip()
+    m = re.match(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", txt)
+    if m is None:
+        raise ValueError(f"Unable to parse CIF numeric value: {raw!r}")
+    return float(m.group(0))
+
+
+def _cell_a_c_from_cif(cif_path: str) -> tuple[float, float]:
+    """Return (a, c) lattice parameters from a CIF using PyCifRW."""
+
+    import CifFile
+
+    cf = CifFile.ReadCif(cif_path)
+    keys = list(cf.keys())
+    if not keys:
+        raise ValueError(f"No CIF data blocks found in {cif_path}")
+    blk = cf[keys[0]]
+    a_raw = blk.get("_cell_length_a")
+    c_raw = blk.get("_cell_length_c")
+    if a_raw is None or c_raw is None:
+        raise ValueError(f"_cell_length_a/_cell_length_c not found in {cif_path}")
+    return _parse_cif_num(a_raw), _parse_cif_num(c_raw)
 
 
 def _sites_from_cif(cif_path: str):
@@ -210,30 +233,72 @@ def f_comp(el_sym: str, Q: np.ndarray, energy_kev: float) -> np.ndarray:
     return out.reshape(Q.shape)
 
 
-def _Qmag(h: int, k: int, L: np.ndarray, c_axis: float) -> np.ndarray:
+def _Qmag(
+    h: int,
+    k: int,
+    L: np.ndarray,
+    c_axis: float,
+    a_axis: float = A_HEX,
+) -> np.ndarray:
     """
     |Q| for a hexagonal lattice in the active L-axis convention:
     Q = 2π * sqrt( (4/3)*(h^2+k^2+hk)/a^2 + (L^2)/c^2 )
     where L is the dimensionless ℓ coordinate and c matches that coordinate
     system (e.g. c_2h for legacy 2H L, or c_lattice for 3c-scaled L).
     """
-    inv_d2 = (4.0/3.0)*(h*h + k*k + h*k)/A_HEX**2 + (L**2)/(c_axis**2)
+    inv_d2 = (4.0/3.0)*(h*h + k*k + h*k)/(a_axis**2) + (L**2)/(c_axis**2)
     return 2.0*np.pi*np.sqrt(inv_d2)
 
 
-def _F2(h: int, k: int, L: np.ndarray, c_axis: float, energy_kev: float, sites) -> np.ndarray:
-    """
-    Return |F|^2 using the same single-layer phase used in diffuse_cif_toggle:
-    phase = exp(2πi[hx + ky + L*(z/3)])
-    """
-    Q = _Qmag(h, k, L, c_axis)
+def _F_complex(
+    h: int,
+    k: int,
+    L: np.ndarray,
+    c_axis: float,
+    energy_kev: float,
+    sites,
+    *,
+    a_axis: float = A_HEX,
+    phase_z_divisor: float = 1.0,
+) -> np.ndarray:
+    """Return complex F for the supplied reciprocal-space coordinates."""
+
+    Q = _Qmag(h, k, L, c_axis, a_axis=a_axis)
     F = np.zeros_like(Q, dtype=complex)
+    z_div = float(phase_z_divisor) if float(phase_z_divisor) != 0.0 else 1.0
     for x, y, z, sym, occ in sites:
         ff = f_comp(sym, Q, energy_kev)
         phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
-        phase_z  = np.exp(1j * _TWO_PI * (L * (float(z) / 3.0)))
+        phase_z = np.exp(1j * _TWO_PI * (L * (float(z) / z_div)))
         F += float(occ) * ff * phase_xy * phase_z
-    return np.abs(F) ** 2
+    return F
+
+
+def _F2(
+    h: int,
+    k: int,
+    L: np.ndarray,
+    c_axis: float,
+    energy_kev: float,
+    sites,
+    *,
+    a_axis: float = A_HEX,
+    phase_z_divisor: float = 1.0,
+) -> np.ndarray:
+    """Return |F|^2 using CIF-consistent fractional coordinates."""
+
+    return np.abs(
+        _F_complex(
+            h,
+            k,
+            L,
+            c_axis,
+            energy_kev,
+            sites,
+            a_axis=a_axis,
+            phase_z_divisor=phase_z_divisor,
+        )
+    ) ** 2
 
 
 # -------------------------- Markov transfer-matrix HT ------------------------
@@ -356,16 +421,20 @@ def _get_base_curves(
     L_max: float = 10.0,
     two_theta_max: float | None = None,
     lambda_: float = 1.54,
+    a_lattice: float | None = None,
     c_lattice: float | None = None,
     occ_factors=1.0,
+    phase_z_divisor: float = 3.0,
+    include_f_components: bool = False,
 ):
     """
     Return cached {(h,k): {"L": ..., "F2": ...}} for a given occupancy mapping.
 
     Conventions align with diffuse_cif_toggle:
-      - c_2h is read directly from the CIF (no 3x).
+      - a/c are read directly from the CIF (no 3x scaling).
       - Q uses 2π*sqrt(radial + (L/c)^2) with c matching the active L axis.
-      - Phase uses z/3 in the vertical factor.
+      - Phase uses z/phase_z_divisor in the vertical factor (legacy default:
+        phase_z_divisor=3.0).
     """
     import itertools, math
 
@@ -391,14 +460,17 @@ def _get_base_curves(
         float(L_max),
         two_theta_max,
         float(lambda_),
+        None if a_lattice is None else float(a_lattice),
         None if c_lattice is None else float(c_lattice),
         occ_key,
+        float(phase_z_divisor),
+        bool(include_f_components),
     )
     cached = _HT_BASE_CACHE.get(key)
     if cached is not None:
         return cached
 
-    c_2h = _cell_c_from_cif(cif_path)                # no *3
+    a_cif, c_cif = _cell_a_c_from_cif(cif_path)
     sites = _sites_from_cif_with_factors(cif_path, occ_factors=occ_factors)
     if L_step <= 0.0:
         raise ValueError("L_step must be > 0")
@@ -408,20 +480,53 @@ def _get_base_curves(
     energy_kev = _energy_kev_from_lambda(lambda_)
     out: dict[tuple, dict] = {}
 
+    if a_lattice is None or not math.isfinite(float(a_lattice)) or float(a_lattice) <= 0.0:
+        a_effective = a_cif
+    else:
+        a_effective = float(a_lattice)
+
     if c_lattice is None or not math.isfinite(float(c_lattice)) or float(c_lattice) <= 0.0:
-        c_effective = c_2h
+        c_effective = c_cif
     else:
         c_effective = float(c_lattice)
 
     if two_theta_max is None:
         base_L = np.arange(0.0, L_max + L_step / 2.0, L_step)
         for h, k in hk_list:
-            F2 = _F2(h, k, base_L, c_effective, energy_kev, sites)
-            out[(h, k)] = {"L": base_L.copy(), "F2": F2}
+            if include_f_components:
+                F = _F_complex(
+                    h,
+                    k,
+                    base_L,
+                    c_effective,
+                    energy_kev,
+                    sites,
+                    a_axis=a_effective,
+                    phase_z_divisor=phase_z_divisor,
+                )
+                out[(h, k)] = {
+                    "L": base_L.copy(),
+                    "F2": np.abs(F) ** 2,
+                    "F_real": np.real(F),
+                    "F_imag": np.imag(F),
+                    "F_abs": np.abs(F),
+                }
+            else:
+                F2 = _F2(
+                    h,
+                    k,
+                    base_L,
+                    c_effective,
+                    energy_kev,
+                    sites,
+                    a_axis=a_effective,
+                    phase_z_divisor=phase_z_divisor,
+                )
+                out[(h, k)] = {"L": base_L.copy(), "F2": F2}
     else:
         q_max = (4.0 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2.0))
         for h, k in hk_list:
-            const = (4.0 / 3.0) * (h*h + k*k + h*k) / (A_HEX**2)
+            const = (4.0 / 3.0) * (h*h + k*k + h*k) / (a_effective**2)
             l_sq = (q_max / (2.0 * math.pi))**2 - const
             if l_sq <= 0:
                 L_vals = np.array([], dtype=float)
@@ -429,8 +534,36 @@ def _get_base_curves(
                 continue
             L_max_local = c_effective * math.sqrt(l_sq)
             L_vals = np.arange(0.0, L_max_local + L_step / 2.0, L_step)
-            F2 = _F2(h, k, L_vals, c_effective, energy_kev, sites)
-            out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
+            if include_f_components:
+                F = _F_complex(
+                    h,
+                    k,
+                    L_vals,
+                    c_effective,
+                    energy_kev,
+                    sites,
+                    a_axis=a_effective,
+                    phase_z_divisor=phase_z_divisor,
+                )
+                out[(h, k)] = {
+                    "L": L_vals.copy(),
+                    "F2": np.abs(F) ** 2,
+                    "F_real": np.real(F),
+                    "F_imag": np.imag(F),
+                    "F_abs": np.abs(F),
+                }
+            else:
+                F2 = _F2(
+                    h,
+                    k,
+                    L_vals,
+                    c_effective,
+                    energy_kev,
+                    sites,
+                    a_axis=a_effective,
+                    phase_z_divisor=phase_z_divisor,
+                )
+                out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
 
     _HT_BASE_CACHE[key] = out
     # Bound cache growth because occupancy sliders can produce many unique keys.
@@ -453,7 +586,9 @@ def ht_Iinf_dict(
     L_max: float = 10.0,
     two_theta_max: float | None = None,
     lambda_: float = 1.54,
+    a_lattice: float | None = None,
     c_lattice: float | None = None,
+    phase_z_divisor: float = 3.0,
     *,
     finite_stack: bool = True,
     stack_layers: int = 50,
@@ -468,6 +603,10 @@ def ht_Iinf_dict(
     When ``c_lattice`` is provided it defines the active L-axis convention:
     both the two-theta clipping window and the Qz scaling inside F² use that
     effective c-axis length instead of the raw 2H value from the CIF.
+    ``a_lattice`` optionally overrides the active in-plane lattice constant
+    used for |Q| and two-theta clipping.
+    ``phase_z_divisor`` controls vertical phase scaling in F². The default
+    (3.0) matches the legacy algebraic HT convention.
     When ``finite_stack`` is ``True`` the per-layer finite-thickness factor for
     ``stack_layers`` layers is applied instead of the infinite-domain limit.
     """
@@ -479,8 +618,10 @@ def ht_Iinf_dict(
         L_max=L_max,
         two_theta_max=two_theta_max,
         lambda_=lambda_,
+        a_lattice=a_lattice,
         c_lattice=c_lattice,
         occ_factors=occ,
+        phase_z_divisor=phase_z_divisor,
     )
 
     out = {}

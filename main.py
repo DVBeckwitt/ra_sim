@@ -304,7 +304,10 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
-from ra_sim.gui.diffuse_cif_toggle import open_diffuse_cif_toggle_algebraic
+from ra_sim.gui.diffuse_cif_toggle import (
+    open_diffuse_cif_toggle_algebraic,
+    export_algebraic_ht_txt,
+)
 from ra_sim.debug_utils import debug_print, is_debug_enabled
 from ra_sim.hbn import (
     build_hbn_geometry_debug_trace,
@@ -702,6 +705,9 @@ p_defaults = _ensure_triplet(
 w_defaults = _ensure_triplet(
     hendricks_config.get("default_w"), [50.0, 50.0, 0.0]
 )
+phase_z_divisor_default = float(hendricks_config.get("phase_z_divisor", 3.0))
+if not np.isfinite(phase_z_divisor_default) or phase_z_divisor_default <= 0.0:
+    phase_z_divisor_default = 3.0
 finite_stack_default = bool(hendricks_config.get("finite_stack", True))
 stack_layers_default = int(
     max(1, float(hendricks_config.get("stack_layers", 50)))
@@ -735,6 +741,7 @@ defaults = {
     'w0': w_defaults[0],
     'w1': w_defaults[1],
     'w2': w_defaults[2],
+    'phase_z_divisor': phase_z_divisor_default,
     'center_x': center_default[0],
     'center_y': center_default[1],
     'sampling_resolution': 'Low',
@@ -746,7 +753,15 @@ defaults = {
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-def build_ht_cache(p_val, occ_vals, c_axis, finite_stack_flag, stack_layers_count):
+def build_ht_cache(
+    p_val,
+    occ_vals,
+    a_axis,
+    c_axis,
+    finite_stack_flag,
+    stack_layers_count,
+    phase_z_divisor,
+):
     layers = int(max(1, stack_layers_count))
     curves = ht_Iinf_dict(
         cif_path=cif_file,
@@ -756,7 +771,9 @@ def build_ht_cache(p_val, occ_vals, c_axis, finite_stack_flag, stack_layers_coun
         L_step=0.01,
         two_theta_max=two_theta_range[1],
         lambda_=lambda_,
+        a_lattice=a_axis,
         c_lattice=c_axis,
+        phase_z_divisor=phase_z_divisor,
         finite_stack=finite_stack_flag,
         stack_layers=layers,
     )
@@ -768,34 +785,43 @@ def build_ht_cache(p_val, occ_vals, c_axis, finite_stack_flag, stack_layers_coun
         "qr": qr,
         "arrays": arrays,
         "two_theta_max": two_theta_range[1],
+        "a": float(a_axis),
         "c": float(c_axis),
+        "phase_z_divisor": float(phase_z_divisor),
         "finite_stack": bool(finite_stack_flag),
         "stack_layers": layers,
     }
 
 # Precompute curves for the three p values
+default_a_axis = float(defaults['a'])
 default_c_axis = float(defaults['c'])
 ht_cache_multi = {
     "p0": build_ht_cache(
         defaults['p0'],
         occ,
+        default_a_axis,
         default_c_axis,
         defaults['finite_stack'],
         defaults['stack_layers'],
+        defaults['phase_z_divisor'],
     ),
     "p1": build_ht_cache(
         defaults['p1'],
         occ,
+        default_a_axis,
         default_c_axis,
         defaults['finite_stack'],
         defaults['stack_layers'],
+        defaults['phase_z_divisor'],
     ),
     "p2": build_ht_cache(
         defaults['p2'],
         occ,
+        default_a_axis,
         default_c_axis,
         defaults['finite_stack'],
         defaults['stack_layers'],
+        defaults['phase_z_divisor'],
     ),
 }
 
@@ -834,14 +860,18 @@ miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
 ht_curves_cache = {
     "curves": combined_qr,
     "arrays": (miller1, intens1, degeneracy1, details1),
+    "a": default_a_axis,
     "c": default_c_axis,
+    "phase_z_divisor": float(defaults['phase_z_divisor']),
     "finite_stack": defaults['finite_stack'],
     "stack_layers": defaults['stack_layers'],
 }
 _last_occ_for_ht = list(occ)
 _last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
 _last_weights = list(weights_init)
+_last_a_for_ht = default_a_axis
 _last_c_for_ht = default_c_axis
+_last_phase_z_divisor = float(defaults['phase_z_divisor'])
 _last_finite_stack = bool(defaults['finite_stack'])
 _last_stack_layers = int(max(1, defaults['stack_layers']))
 # ---- convert the dict → arrays compatible with the downstream code ----
@@ -3600,6 +3630,27 @@ def on_mosaic_slider_change(*args):
     update_mosaic_cache()
     schedule_update()
 
+
+def _current_phase_z_divisor() -> float:
+    """Return the active HT vertical phase divisor from GUI state."""
+
+    fallback = float(defaults.get("phase_z_divisor", 3.0))
+    var = globals().get("phase_z_divisor_var")
+    if var is None:
+        return fallback if fallback > 0.0 else 3.0
+
+    try:
+        value = float(var.get())
+    except Exception:
+        value = fallback
+
+    if not np.isfinite(value) or value <= 0.0:
+        value = fallback
+    if not np.isfinite(value) or value <= 0.0:
+        value = 3.0
+    return float(value)
+
+
 line_rmin, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
 line_rmax, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
 line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
@@ -3699,12 +3750,22 @@ def do_update():
         pixel_size=pixel_size_m,
     )
 
-    global two_theta_range, _last_c_for_ht
+    global two_theta_range, _last_a_for_ht, _last_c_for_ht, _last_phase_z_divisor
+    phase_z_divisor_current = _current_phase_z_divisor()
     need_rebuild = False
     if not math.isclose(new_two_theta_max, two_theta_range[1], rel_tol=1e-6, abs_tol=1e-6):
         two_theta_range = (0.0, new_two_theta_max)
         need_rebuild = True
     if not math.isclose(c_updated, _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9):
+        need_rebuild = True
+    if not math.isclose(a_updated, _last_a_for_ht, rel_tol=1e-9, abs_tol=1e-9):
+        need_rebuild = True
+    if not math.isclose(
+        phase_z_divisor_current,
+        _last_phase_z_divisor,
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    ):
         need_rebuild = True
 
     if need_rebuild:
@@ -3717,6 +3778,7 @@ def do_update():
             current_occ,
             current_p,
             normalized_weights,
+            a_updated,
             c_updated,
             force=True,
             trigger_update=False,
@@ -7434,9 +7496,11 @@ else:
 occ_vars = [tk.DoubleVar(value=float(val)) for val in occ]
 finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
 stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
+phase_z_divisor_var = tk.DoubleVar(value=float(defaults['phase_z_divisor']))
 _layers_scale_widget = None
 _layers_entry_widget = None
 _layers_entry_var = None
+_phase_z_entry_var = None
 
 
 def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
@@ -7456,6 +7520,7 @@ def _rebuild_diffraction_inputs(
     new_occ,
     p_vals,
     weights,
+    a_axis,
     c_axis,
     *,
     force=False,
@@ -7468,18 +7533,27 @@ def _rebuild_diffraction_inputs(
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
-    global _last_c_for_ht, _last_finite_stack, _last_stack_layers
+    global _last_a_for_ht, _last_c_for_ht, _last_phase_z_divisor
+    global _last_finite_stack, _last_stack_layers
     global intensities_cif1, intensities_cif2
 
     finite_flag = bool(finite_stack_var.get())
     layers = int(max(1, stack_layers_var.get()))
+    phase_z_divisor_current = _current_phase_z_divisor()
 
     if (
         not force
         and list(new_occ) == _last_occ_for_ht
         and list(p_vals) == _last_p_triplet
         and list(weights) == _last_weights
+        and math.isclose(float(a_axis), _last_a_for_ht, rel_tol=1e-9, abs_tol=1e-9)
         and math.isclose(float(c_axis), _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
+        and math.isclose(
+            float(phase_z_divisor_current),
+            _last_phase_z_divisor,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        )
         and _last_finite_stack == finite_flag
         and (not finite_flag or _last_stack_layers == layers)
     ):
@@ -7495,11 +7569,26 @@ def _rebuild_diffraction_inputs(
             or cache["p"] != p_val
             or list(cache["occ"]) != list(new_occ)
             or cache.get("two_theta_max") != two_theta_range[1]
+            or not math.isclose(cache.get("a", float("nan")), float(a_axis), rel_tol=1e-9, abs_tol=1e-9)
             or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
+            or not math.isclose(
+                cache.get("phase_z_divisor", float("nan")),
+                float(phase_z_divisor_current),
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
             or bool(cache.get("finite_stack")) != finite_flag
             or (finite_flag and cache.get("stack_layers") != layers)
         ):
-            cache = build_ht_cache(p_val, new_occ, c_axis, finite_flag, layers)
+            cache = build_ht_cache(
+                p_val,
+                new_occ,
+                a_axis,
+                c_axis,
+                finite_flag,
+                layers,
+                phase_z_divisor_current,
+            )
             ht_cache_multi[label] = cache
         return cache
 
@@ -7514,14 +7603,18 @@ def _rebuild_diffraction_inputs(
     ht_curves_cache = {
         "curves": combined_qr_local,
         "arrays": arrays_local,
+        "a": float(a_axis),
         "c": float(c_axis),
+        "phase_z_divisor": float(phase_z_divisor_current),
         "finite_stack": finite_flag,
         "stack_layers": layers,
     }
     _last_occ_for_ht = list(new_occ)
     _last_p_triplet = list(p_vals)
     _last_weights = list(weights)
+    _last_a_for_ht = float(a_axis)
     _last_c_for_ht = float(c_axis)
+    _last_phase_z_divisor = float(phase_z_divisor_current)
     _last_finite_stack = finite_flag
     _last_stack_layers = layers
 
@@ -7624,7 +7717,7 @@ def update_occupancies(*args):
     w_sum = sum(w_raw) or 1.0
     weights = [w / w_sum for w in w_raw]
 
-    _rebuild_diffraction_inputs(new_occ, p_vals, weights, c_var.get())
+    _rebuild_diffraction_inputs(new_occ, p_vals, weights, a_var.get(), c_var.get())
 
 
 def _sync_finite_controls():
@@ -7644,6 +7737,20 @@ def _normalize_layer_value(raw_value):
     if value < 1:
         value = 1
     return value
+
+
+def _normalize_phase_z_divisor_value(raw_value):
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = _current_phase_z_divisor()
+    if not np.isfinite(value) or value <= 0.0:
+        value = _current_phase_z_divisor()
+    if not np.isfinite(value) or value <= 0.0:
+        value = float(defaults.get("phase_z_divisor", 3.0))
+    if not np.isfinite(value) or value <= 0.0:
+        value = 3.0
+    return float(value)
 
 
 def _sync_layer_entry_from_var(*_):
@@ -7670,6 +7777,23 @@ def _commit_layer_entry(_event=None):
     _sync_layer_entry_from_var()
     if changed and finite_stack_var.get():
         update_occupancies()
+
+
+def _commit_phase_z_divisor_entry(_event=None):
+    global _phase_z_entry_var
+    if _phase_z_entry_var is None:
+        return
+    value = _normalize_phase_z_divisor_value(_phase_z_entry_var.get())
+    try:
+        current = float(phase_z_divisor_var.get())
+    except (tk.TclError, ValueError):
+        current = _current_phase_z_divisor()
+    if not math.isclose(current, value, rel_tol=1e-12, abs_tol=1e-12):
+        phase_z_divisor_var.set(value)
+        _phase_z_entry_var.set(f"{value:.6g}")
+        update_occupancies()
+        return
+    _phase_z_entry_var.set(f"{value:.6g}")
 
 
 def _on_finite_toggle():
@@ -7730,6 +7854,19 @@ _layers_entry_widget = layers_entry
 stack_layers_var.trace_add("write", _sync_layer_entry_from_var)
 _sync_layer_entry_from_var()
 _sync_finite_controls()
+phase_row = ttk.Frame(finite_frame)
+phase_row.pack(fill=tk.X, padx=5, pady=2)
+ttk.Label(phase_row, text="Phase z divisor:").pack(side=tk.LEFT)
+_phase_z_entry_var = tk.StringVar(value=f"{_current_phase_z_divisor():.6g}")
+phase_entry = ttk.Entry(
+    phase_row,
+    textvariable=_phase_z_entry_var,
+    width=10,
+    justify="right",
+)
+phase_entry.pack(side=tk.RIGHT)
+phase_entry.bind("<Return>", _commit_phase_z_divisor_entry)
+phase_entry.bind("<FocusOut>", _commit_phase_z_divisor_entry)
 p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
                           stack_frame.frame, update_occupancies)
 w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
@@ -7913,6 +8050,7 @@ def _apply_primary_cif_path(raw_path):
             new_occ_values,
             p_vals,
             weights,
+            new_av,
             c_axis,
             force=True,
             trigger_update=True,
@@ -8013,16 +8151,85 @@ def _open_diffuse_cif_toggle():
             occ=occ_vals,
             p_values=p_vals,
             w_values=w_vals,
+            a_lattice=float(a_var.get()),
             c_lattice=c_axis,
             lambda_angstrom=float(lambda_),
             mx=int(mx),
             two_theta_max=two_theta_max,
             finite_stack=finite_flag,
             stack_layers=layer_count,
+            phase_z_divisor=_current_phase_z_divisor(),
         )
         progress_label.config(text=f"Opened diffuse HT viewer: {Path(active_cif).name}")
     except Exception as exc:
         progress_label.config(text=f"Failed to open diffuse HT viewer: {exc}")
+
+
+def _export_diffuse_ht_txt():
+    """Export algebraic HT values to a fixed-width text table."""
+
+    active_cif = str(cif_file)
+    if not Path(active_cif).is_file():
+        progress_label.config(text=f"CIF file not found: {active_cif}")
+        return
+
+    try:
+        occ_vals = _current_occupancy_values()
+        p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+        w_vals = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+        a_axis = float(a_var.get())
+        c_axis = float(c_var.get())
+        finite_flag = bool(finite_stack_var.get())
+        layer_count = int(max(1, stack_layers_var.get()))
+    except (tk.TclError, ValueError) as exc:
+        progress_label.config(text=f"Failed to read algebraic HT export inputs: {exc}")
+        return
+
+    try:
+        two_theta_max = float(two_theta_range[1])
+    except Exception:
+        two_theta_max = None
+
+    default_name = f"{Path(active_cif).stem}_algebraic_ht.txt"
+    try:
+        initial_dir = str(get_dir("downloads"))
+    except Exception:
+        initial_dir = str(Path(active_cif).expanduser().parent)
+
+    save_path = filedialog.asksaveasfilename(
+        title="Export Algebraic HT Table",
+        defaultextension=".txt",
+        initialdir=initial_dir,
+        initialfile=default_name,
+        filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+    )
+    if not save_path:
+        return
+
+    try:
+        row_count = export_algebraic_ht_txt(
+            output_path=save_path,
+            cif_path=active_cif,
+            occ=occ_vals,
+            p_values=p_vals,
+            w_values=w_vals,
+            a_lattice=a_axis,
+            c_lattice=c_axis,
+            lambda_angstrom=float(lambda_),
+            mx=int(mx),
+            two_theta_max=two_theta_max,
+            finite_stack=finite_flag,
+            stack_layers=layer_count,
+            phase_z_divisor=_current_phase_z_divisor(),
+        )
+        progress_label.config(
+            text=(
+                f"Exported algebraic HT table ({row_count} rows): "
+                f"{Path(save_path).name}"
+            )
+        )
+    except Exception as exc:
+        progress_label.config(text=f"Failed to export algebraic HT table: {exc}")
 
 
 _rebuild_occupancy_controls()
@@ -8043,6 +8250,9 @@ ttk.Button(cif_actions, text="Apply", command=_apply_primary_cif_from_entry).pac
     side=tk.LEFT
 )
 ttk.Button(cif_actions, text="Diffuse HT...", command=_open_diffuse_cif_toggle).pack(
+    side=tk.LEFT, padx=(5, 0)
+)
+ttk.Button(cif_actions, text="Export HT .txt...", command=_export_diffuse_ht_txt).pack(
     side=tk.LEFT, padx=(5, 0)
 )
 
