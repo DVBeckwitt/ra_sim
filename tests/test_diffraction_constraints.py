@@ -52,12 +52,14 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         record_status=False,
         thickness=0.0,
         optics_mode=0,
+        forced_sample_idx=-1,
     ):
         called_l_values.append(float(L))
         return (
             np.empty((0, 7), dtype=np.float64),
             np.empty(0, dtype=np.int64),
             np.empty((0, 3), dtype=np.float64),
+            0,
         )
 
     monkeypatch.setattr(diffraction, "calculate_phi", fake_calculate_phi)

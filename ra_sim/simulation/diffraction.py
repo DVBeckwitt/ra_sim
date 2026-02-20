@@ -1,7 +1,7 @@
 """Core diffraction routines used by the simulator."""
 
 import numpy as np
-from numba import njit, prange
+from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.utils.calculations import complex_sqrt, fresnel_transmission
 from numba import types
@@ -18,6 +18,19 @@ COMPLEX_K_DWBA_SLAB = 1
 # Backward-compatible aliases used throughout the existing codebase.
 OPTICS_MODE_FAST = FRESNEL_CTR_DAMPING
 OPTICS_MODE_EXACT = COMPLEX_K_DWBA_SLAB
+
+# solve_q hot-loop constants
+DEFAULT_SOLVE_Q_STEPS = 1000
+_DEFAULT_SOLVE_Q_DTHETA = (2.0 * np.pi) / DEFAULT_SOLVE_Q_STEPS
+_DEFAULT_SOLVE_Q_COS = np.cos(
+    _DEFAULT_SOLVE_Q_DTHETA * np.arange(DEFAULT_SOLVE_Q_STEPS, dtype=np.float64)
+)
+_DEFAULT_SOLVE_Q_SIN = np.sin(
+    _DEFAULT_SOLVE_Q_DTHETA * np.arange(DEFAULT_SOLVE_Q_STEPS, dtype=np.float64)
+)
+_INTENSITY_CUTOFF = float(np.exp(-100.0))
+# Keep thread-local image buffers bounded to avoid runaway allocations.
+_THREAD_LOCAL_IMAGE_MAX_BYTES = 768 * 1024 * 1024
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
@@ -743,7 +756,7 @@ def safe_path_length(thickness_m, theta_plane):
 # 4) solve_q
 # =============================================================================
 
-@njit
+@njit(fastmath=True)
 def solve_q(
     k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H, K, L,
     N_steps=1000
@@ -766,6 +779,9 @@ def solve_q(
         0 for success or a negative code indicating the failure reason.
     """
     status = 0
+    if N_steps <= 0:
+        return np.zeros((0, 4), dtype=np.float64), status
+
     G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
     if G_sq < 1e-14:
         status = -1
@@ -825,11 +841,17 @@ def solve_q(
     e2y /= e2_len
     e2z /= e2_len
 
-    # Parameterize the circle
-    dtheta = 2.0*np.pi / N_steps
-    theta_arr = dtheta * np.arange(N_steps)
-    cth = np.cos(theta_arr)
-    sth = np.sin(theta_arr)
+    # Parameterize the circle.
+    if N_steps == DEFAULT_SOLVE_Q_STEPS:
+        dtheta = _DEFAULT_SOLVE_Q_DTHETA
+        cth = _DEFAULT_SOLVE_Q_COS
+        sth = _DEFAULT_SOLVE_Q_SIN
+    else:
+        dtheta = 2.0*np.pi / N_steps
+        theta_arr = dtheta * np.arange(N_steps)
+        cth = np.cos(theta_arr)
+        sth = np.sin(theta_arr)
+
     Qx_arr = Ox + circle_r*(cth*e1x + sth*e2x)
     Qy_arr = Oy + circle_r*(cth*e1y + sth*e2y)
     Qz_arr = Oz + circle_r*(cth*e1z + sth*e2z)
@@ -840,10 +862,7 @@ def solve_q(
     all_int = sigma_arr * ds
 
     # Apply any intensity cutoff and construct the output.
-    intensity_cutoff = np.exp(-100.0)
-    mask = mask = (all_int > intensity_cutoff)
-    valid_idx = np.nonzero(mask)[0]
-
+    valid_idx = np.nonzero(all_int > _INTENSITY_CUTOFF)[0]
     out = np.zeros((valid_idx.size, 4), dtype=np.float64)
     for i in range(valid_idx.size):
         idx = valid_idx[i]
@@ -852,14 +871,13 @@ def solve_q(
         out[i, 2] = Qz_arr[idx]
         out[i, 3] = all_int[idx]
 
-    status = 0
     return out, status
 
 # =============================================================================
 # 5) CALCULATE_PHI
 # =============================================================================
 
-@njit
+@njit(fastmath=True)
 def calculate_phi(
     H, K, L, av, cv,
     wavelength_array,
@@ -919,6 +937,19 @@ def calculate_phi(
     # )
     n_samp = beam_x_array.size
 
+    beam_z_offsets = beam_y_array - zb
+    cos_theta = np.cos(theta_array)
+    sin_theta = np.sin(theta_array)
+    cos_phi = np.cos(phi_array)
+    sin_phi = np.sin(phi_array)
+    k_in_x_arr = cos_theta * sin_phi
+    k_in_y_arr = cos_theta * cos_phi
+    k_in_z_arr = sin_theta
+    debye_x_sq = debye_x * debye_x
+    debye_y_sq = debye_y * debye_y
+    pixel_scale = 1.0 / 100e-6
+    n2_sq = n2 * n2
+
     max_hits = max(n_samp * 2, 16)  # Ensure capacity even for very small samples
     pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
     missed_kf = np.empty((max_hits, 3), dtype=np.float64)
@@ -972,13 +1003,14 @@ def calculate_phi(
     P0_rot = R_sample @ P0
     P0_rot[0] = 0.0
 
-    best_idx   = 0
-    best_angle = theta_array[0]**2 + phi_array[0]**2
-    for ii in range(1, n_samp):
-        metric = theta_array[ii]**2 + phi_array[ii]**2
-        if metric < best_angle:
-            best_angle = metric
-            best_idx   = ii
+    best_idx = 0
+    if n_samp > 0:
+        best_angle = theta_array[0] * theta_array[0] + phi_array[0] * phi_array[0]
+        for ii in range(1, n_samp):
+            metric = theta_array[ii] * theta_array[ii] + phi_array[ii] * phi_array[ii]
+            if metric < best_angle:
+                best_angle = metric
+                best_idx = ii
 
 
     # Build a local reference for the beam incidence
@@ -1016,6 +1048,10 @@ def calculate_phi(
     plane_to_det = np.empty(3, dtype=np.float64)
 
     use_exact_optics = optics_mode == OPTICS_MODE_EXACT
+    eps1 = 1.0 + 0.0j
+    eps2 = n2_sq
+    eps3 = 1.0 + 0.0j
+    n2_sq_real = np.real(n2_sq)
 
     # Main loop over each beam sample in wave + mosaic. During fitting we can
     # optionally force a single preselected sample index per reflection.
@@ -1030,18 +1066,13 @@ def calculate_phi(
         lam_samp = wavelength_array[i_samp]
         k_mag = 2.0*pi / lam_samp
 
-        bx = beam_x_array[i_samp]
-        by = beam_y_array[i_samp]
-        beam_start[0] = bx
+        beam_start[0] = beam_x_array[i_samp]
         beam_start[1] = -20e-3
-        beam_start[2] = -zb + by
+        beam_start[2] = beam_z_offsets[i_samp]
 
-        dtheta = theta_array[i_samp]
-        dphi   = phi_array[i_samp]
-
-        k_in[0] = cos(dtheta)*sin(dphi)
-        k_in[1] = cos(dtheta)*cos(dphi)
-        k_in[2] = sin(dtheta)
+        k_in[0] = k_in_x_arr[i_samp]
+        k_in[1] = k_in_y_arr[i_samp]
+        k_in[2] = k_in_z_arr[i_samp]
 
         # Intersect the beam with the sample plane
         ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
@@ -1077,12 +1108,9 @@ def calculate_phi(
 
         # ---------- ENTRY REFRACTION AND kz ----------
         k0 = k_mag
+        k0_sq = k0 * k0
 
         if use_exact_optics:
-            eps1 = 1.0 + 0.0j
-            eps2 = n2 * n2
-            k0_sq = k0 * k0
-
             # Exact interface phase-matching uses conserved k_parallel.
             k_par_i = k0 * np.abs(np.cos(th_i_prime))
             k_par_i_sq = k_par_i * k_par_i
@@ -1106,7 +1134,7 @@ def calculate_phi(
         else:
             th_t = transmit_angle_grazing(th_i_prime, n2)     # grazing angle in medium
             # magnitude for in-plane internal wavevector (use Re(n^2))
-            k_scat = k0 * np.sqrt(np.maximum(np.real(n2*n2), 0.0))
+            k_scat = k0 * np.sqrt(np.maximum(n2_sq_real, 0.0))
             k_x_scat = k_scat*np.cos(th_t)*np.sin(phi_i_prime)
             k_y_scat = k_scat*np.cos(th_t)*np.cos(phi_i_prime)
 
@@ -1130,7 +1158,18 @@ def calculate_phi(
         k_in_crystal[2] = re_k_z
 
         # ---------- Solve allowed Q on the circle (unchanged) ----------
-        All_Q, stat = solve_q(k_in_crystal, k_scat, G_vec, sigma_rad, gamma_pv, eta_pv, H, K, L, 1000)
+        All_Q, stat = solve_q(
+            k_in_crystal,
+            k_scat,
+            G_vec,
+            sigma_rad,
+            gamma_pv,
+            eta_pv,
+            H,
+            K,
+            L,
+            DEFAULT_SOLVE_Q_STEPS,
+        )
         if record_status:
             statuses[i_samp] = stat
 
@@ -1170,11 +1209,8 @@ def calculate_phi(
             # get internal grazing angle for the exit leg
             th_t_out = np.abs(twotheta_t_prime)
             if use_exact_optics:
-                eps2 = n2 * n2
-                eps3 = 1.0 + 0.0j
                 k_par_f = kr
                 k_par_f_sq = k_par_f * k_par_f
-                k0_sq = k0 * k0
 
                 kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
                 kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
@@ -1210,18 +1246,10 @@ def calculate_phi(
                     L_out = 1.0 / np.maximum(2.0*im_k_z_f, 1e-30)
 
             # apply propagation and interface factors
-            if use_exact_optics:
-                prop_att = (
-                    np.exp(-2.0*im_k_z * L_in)
-                    * np.exp(-2.0*im_k_z_f * L_out)
-                )
-            else:
-                # Original fast-mode propagation attenuation (Beer-Lambert on
-                # entry and exit legs).
-                prop_att = (
-                    np.exp(-2.0*im_k_z * L_in)
-                    * np.exp(-2.0*im_k_z_f * L_out)
-                )
+            prop_att = (
+                np.exp(-2.0 * im_k_z * L_in)
+                * np.exp(-2.0 * im_k_z_f * L_out)
+            )
             prop_fac = Ti2 * Tf2 * prop_att
 
             # external exit angles for detector mapping (existing code)
@@ -1263,8 +1291,8 @@ def calculate_phi(
             x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
             y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
 
-            rpx = int(round(center[0] - y_det/100e-6))
-            cpx = int(round(center[1] + x_det/100e-6))
+            rpx = int(round(center[0] - y_det * pixel_scale))
+            cpx = int(round(center[1] + x_det * pixel_scale))
             if not (0 <= rpx < image_size and 0 <= cpx < image_size):
                 continue
 
@@ -1274,8 +1302,8 @@ def calculate_phi(
             #  3) incoherent -> the mosaic average from Q_grid
             #  4) exponent dampings -> Debye or extra broadening
             val = (reflection_intensity * I_Q * prop_fac
-                * exp(-Qz*Qz * debye_x*debye_x)
-                * exp(-(Qx*Qx + Qy*Qy) * debye_y*debye_y))
+                * exp(-Qz * Qz * debye_x_sq)
+                * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq))
             image[rpx, cpx] += val
 
             if val > best_candidate_val:
@@ -1291,19 +1319,18 @@ def calculate_phi(
                 best_candidate_sample_idx = i_samp
 
             if i_samp == best_idx:
-                if valid_det and 0 <= rpx < image_size and 0 <= cpx < image_size:
-                    if n_hits < max_hits:
-                        # save       I_Q⋅extras        x-pix     y-pix      φf
-                        pixel_hits[n_hits, 0] = val
-                        pixel_hits[n_hits, 1] = cpx
-                        pixel_hits[n_hits, 2] = rpx
-                        pixel_hits[n_hits, 3] = phi_f
-                        pixel_hits[n_hits, 4] = H
-                        pixel_hits[n_hits, 5] = K
-                        pixel_hits[n_hits, 6] = L
+                if n_hits < max_hits:
+                    # save       I_Q⋅extras        x-pix     y-pix      φf
+                    pixel_hits[n_hits, 0] = val
+                    pixel_hits[n_hits, 1] = cpx
+                    pixel_hits[n_hits, 2] = rpx
+                    pixel_hits[n_hits, 3] = phi_f
+                    pixel_hits[n_hits, 4] = H
+                    pixel_hits[n_hits, 5] = K
+                    pixel_hits[n_hits, 6] = L
 
-                        n_hits += 1
-                    recorded_nominal_hit = True
+                    n_hits += 1
+                recorded_nominal_hit = True
                 
             # Optionally store Q-data
             if save_flag==1 and q_count[i_peaks_index]< q_data.shape[1]:
@@ -1484,6 +1511,18 @@ def process_peaks_parallel(
         miss_tables.append(np.empty((0, 3), dtype=np.float64))
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
 
+    # Use per-thread image accumulation when affordable, then reduce once.
+    # This avoids concurrent scatter-add contention on the shared detector image.
+    n_threads = get_num_threads()
+    use_thread_local_image = False
+    image_partials = np.zeros((1, 1, 1), dtype=np.float64)
+    if n_threads > 1 and num_peaks > 1 and image_size > 0:
+        bytes_per_image = image_size * image_size * 8
+        total_bytes = n_threads * bytes_per_image
+        if total_bytes <= _THREAD_LOCAL_IMAGE_MAX_BYTES:
+            image_partials = np.zeros((n_threads, image_size, image_size), dtype=np.float64)
+            use_thread_local_image = True
+
     # prange over each reflection
     for i_pk in prange(num_peaks):
         # Ensure HKL values remain floating point to allow fractional indices
@@ -1500,38 +1539,99 @@ def process_peaks_parallel(
             if i_pk < single_sample_indices.shape[0]:
                 forced_idx = int(single_sample_indices[i_pk])
 
-        pixel_hits, status_arr, missed_arr, best_sample_idx = calculate_phi(
-            H, K, L, av, cv,
-            wavelength_array,
-            image, image_size,
-            gamma_rad, Gamma_rad, chi_rad, psi_rad,
-            zs, zb, n2,
-            beam_x_array, beam_y_array,
-            theta_array, phi_array,
-            reflI, sigma_rad, gamma_rad_m, eta_pv,
-            debye_x, debye_y,
-            center,
-            theta_initial_deg,
-            cor_angle_deg,
-            R_x_det, R_z_det, n_det_rot, Detector_Pos,
-            e1_det, e2_det,
-            R_z_R_y,
-            R_ZY_n,
-            P0,
-            unit_x,
-            save_flag, q_data, q_count, i_pk,
-            record_status,
-            thickness,
-            optics_mode,
-            forced_idx,
-        )
+        if use_thread_local_image:
+            tid = get_thread_id()
+            if 0 <= tid < image_partials.shape[0]:
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
+                    H, K, L, av, cv,
+                    wavelength_array,
+                    image_partials[tid], image_size,
+                    gamma_rad, Gamma_rad, chi_rad, psi_rad,
+                    zs, zb, n2,
+                    beam_x_array, beam_y_array,
+                    theta_array, phi_array,
+                    reflI, sigma_rad, gamma_rad_m, eta_pv,
+                    debye_x, debye_y,
+                    center,
+                    theta_initial_deg,
+                    cor_angle_deg,
+                    R_x_det, R_z_det, n_det_rot, Detector_Pos,
+                    e1_det, e2_det,
+                    R_z_R_y,
+                    R_ZY_n,
+                    P0,
+                    unit_x,
+                    save_flag, q_data, q_count, i_pk,
+                    record_status,
+                    thickness,
+                    optics_mode,
+                    forced_idx,
+                )
+            else:
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
+                    H, K, L, av, cv,
+                    wavelength_array,
+                    image, image_size,
+                    gamma_rad, Gamma_rad, chi_rad, psi_rad,
+                    zs, zb, n2,
+                    beam_x_array, beam_y_array,
+                    theta_array, phi_array,
+                    reflI, sigma_rad, gamma_rad_m, eta_pv,
+                    debye_x, debye_y,
+                    center,
+                    theta_initial_deg,
+                    cor_angle_deg,
+                    R_x_det, R_z_det, n_det_rot, Detector_Pos,
+                    e1_det, e2_det,
+                    R_z_R_y,
+                    R_ZY_n,
+                    P0,
+                    unit_x,
+                    save_flag, q_data, q_count, i_pk,
+                    record_status,
+                    thickness,
+                    optics_mode,
+                    forced_idx,
+                )
+        else:
+            pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
+                H, K, L, av, cv,
+                wavelength_array,
+                image, image_size,
+                gamma_rad, Gamma_rad, chi_rad, psi_rad,
+                zs, zb, n2,
+                beam_x_array, beam_y_array,
+                theta_array, phi_array,
+                reflI, sigma_rad, gamma_rad_m, eta_pv,
+                debye_x, debye_y,
+                center,
+                theta_initial_deg,
+                cor_angle_deg,
+                R_x_det, R_z_det, n_det_rot, Detector_Pos,
+                e1_det, e2_det,
+                R_z_R_y,
+                R_ZY_n,
+                P0,
+                unit_x,
+                save_flag, q_data, q_count, i_pk,
+                record_status,
+                thickness,
+                optics_mode,
+                forced_idx,
+            )
         if record_status:
             all_status[i_pk, :] = status_arr
         hit_tables[i_pk] = pixel_hits
         miss_tables[i_pk] = missed_arr
         if best_sample_indices_out is not None:
             if i_pk < best_sample_indices_out.shape[0]:
-                best_sample_indices_out[i_pk] = best_sample_idx
+                best_sample_indices_out[i_pk] = best_sample_idx_out
+
+    if use_thread_local_image:
+        for tid in range(image_partials.shape[0]):
+            for r in range(image_size):
+                for c in range(image_size):
+                    image[r, c] += image_partials[tid, r, c]
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 

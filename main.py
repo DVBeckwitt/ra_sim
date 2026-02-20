@@ -1326,6 +1326,9 @@ SIM_MILLER1 = miller1_sim
 SIM_INTENS1 = intensities1_sim
 SIM_MILLER2 = miller2_sim
 SIM_INTENS2 = intensities2_sim
+# Primary HT simulation uses Qr rods (m-grouped) for speed, while HKL arrays
+# above are retained for selector/degeneracy lookup.
+SIM_PRIMARY_QR = combined_qr
 
 # Build summary and details dataframes using the helper.
 df_summary, df_details = build_intensity_dataframes(
@@ -2343,10 +2346,36 @@ def _select_peak_by_hkl(
             progress_label_positions.config(text="Run a simulation first.")
         return False
 
+    def _m_idx(hkl_triplet: tuple[int, int, int]) -> int:
+        h0, k0, _l0 = hkl_triplet
+        return int(h0 * h0 + h0 * k0 + k0 * k0)
+
     matches = [
         idx for idx, hkl in enumerate(peak_millers)
         if tuple(int(np.rint(v)) for v in hkl) == target and peak_positions[idx][0] >= 0
     ]
+
+    # When primary simulation runs on Qr rods, only one representative HKL is
+    # present per m/L in peak_millers. Fall back to m/L matching so any
+    # degenerate HKL can still select the corresponding rod peak.
+    if not matches:
+        m_target = _m_idx(target)
+        l_target = int(target[2])
+        matches = [
+            idx
+            for idx, hkl in enumerate(peak_millers)
+            if (
+                peak_positions[idx][0] >= 0
+                and int(np.rint(hkl[2])) == l_target
+                and _m_idx(
+                    (
+                        int(np.rint(hkl[0])),
+                        int(np.rint(hkl[1])),
+                        int(np.rint(hkl[2])),
+                    )
+                ) == m_target
+            )
+        ]
 
     if not matches:
         if not silent_if_missing:
@@ -4272,7 +4301,7 @@ def do_update():
     global update_pending, update_running, last_simulation_signature
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
-    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
+    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
     global av2, cv2
     global last_caked_image_unscaled, last_caked_extent
     global last_res2_sim, last_res2_background
@@ -4484,7 +4513,12 @@ def do_update():
                     optics_mode=optics_mode_flag,
                 ) + (None,)
 
-        img1, maxpos1, _, _, _, _, _ = run_one(SIM_MILLER1, SIM_INTENS1, a_updated, c_updated)
+        primary_data = (
+            SIM_PRIMARY_QR
+            if isinstance(SIM_PRIMARY_QR, dict) and len(SIM_PRIMARY_QR) > 0
+            else SIM_MILLER1
+        )
+        img1, maxpos1, _, _, _, _, _ = run_one(primary_data, SIM_INTENS1, a_updated, c_updated)
         if SIM_MILLER2.size > 0:
             img2, maxpos2, _, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
         else:
@@ -8146,7 +8180,7 @@ def _rebuild_diffraction_inputs(
     global miller, intensities, degeneracy, details
     global df_summary, df_details
     global last_simulation_signature
-    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
+    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
     global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
     global _last_phi_l_divisor, _last_phase_delta_expression
@@ -8281,6 +8315,7 @@ def _rebuild_diffraction_inputs(
 
         SIM_MILLER1 = m1
         SIM_INTENS1 = i1
+        SIM_PRIMARY_QR = combined_qr_local
         SIM_MILLER2 = m2
         SIM_INTENS2 = i2
 
@@ -8302,6 +8337,7 @@ def _rebuild_diffraction_inputs(
 
         SIM_MILLER1 = m1
         SIM_INTENS1 = i1
+        SIM_PRIMARY_QR = combined_qr_local
         SIM_MILLER2 = np.empty((0, 3), dtype=np.int32)
         SIM_INTENS2 = np.empty((0,), dtype=np.float64)
 

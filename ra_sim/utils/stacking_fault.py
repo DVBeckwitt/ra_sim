@@ -15,7 +15,7 @@ AREA    = (2*np.pi)**2 / A_C * N_P
 _TWO_PI = 2.0 * np.pi
 
 DEFAULT_PHASE_DELTA_EXPRESSION = "2*pi*((2*h + k)/3)"
-DEFAULT_PHI_L_DIVISOR = 3.0
+DEFAULT_PHI_L_DIVISOR = 1.0
 
 # Cache of base L grids and F2 values keyed by geometry and occupancy mapping.
 # Each entry: {(h,k): {"L": array, "F2": array}}
@@ -810,6 +810,48 @@ def _I_inf_markov(
 
 
 # ----------------------------- base curve builder ---------------------------
+def _hk_radial_index(h: int, k: int) -> int:
+    """Hexagonal in-plane radial class index m = h^2 + hk + k^2."""
+
+    return int(h * h + h * k + k * k)
+
+
+def _normalize_complex_phase_vector(
+    values: np.ndarray,
+    *,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    """Normalize complex coefficients by a stable anchor phase.
+
+    This turns globally phase-shifted coefficient vectors into the same canonical
+    representation, so we can safely reuse |F|^2 when a reflection differs only
+    by an overall complex phase factor.
+    """
+
+    arr = np.asarray(values, dtype=np.complex128).reshape(-1)
+    if arr.size == 0:
+        return arr
+
+    nz = np.flatnonzero(np.abs(arr) > float(eps))
+    if nz.size == 0:
+        return np.zeros_like(arr, dtype=np.complex128)
+
+    anchor = arr[int(nz[0])]
+    if abs(anchor) <= float(eps):
+        return arr.copy()
+    return arr / anchor
+
+
+def _complex_phase_signature_key(values: np.ndarray, *, digits: int = 12) -> bytes:
+    """Quantized byte-key for complex vectors used in reflection dedup lookup."""
+
+    arr = np.asarray(values, dtype=np.complex128).reshape(-1)
+    packed = np.empty((arr.size, 2), dtype=np.float64)
+    packed[:, 0] = np.round(np.real(arr), int(digits))
+    packed[:, 1] = np.round(np.imag(arr), int(digits))
+    return packed.tobytes()
+
+
 def _get_base_curves(
     cif_path: str,
     hk_list=None,
@@ -821,7 +863,7 @@ def _get_base_curves(
     a_lattice: float | None = None,
     c_lattice: float | None = None,
     occ_factors=1.0,
-    phase_z_divisor: float = 3.0,
+    phase_z_divisor: float = DEFAULT_PHI_L_DIVISOR,
     iodine_z: float | None = None,
     iodine_single_plane: bool = True,
     include_f_components: bool = False,
@@ -834,15 +876,16 @@ def _get_base_curves(
         provided, otherwise the CIF a/c (no 3x scaling).
       - With iodine_single_plane=True (default), iodine contributions are collapsed onto one
         shared z-plane (iodine_z or the first iodine z found in the CIF), matching diffuse_cif_toggle.
-      - Phase uses z/phase_z_divisor in the vertical factor (legacy default:
-        phase_z_divisor=3.0).
+      - Phase uses z/phase_z_divisor in the vertical factor.
     """
-    import itertools, math
+    import itertools
+    import math
 
     if hk_list is None:
         if mx is None:
             raise ValueError("Specify hk_list or mx")
         hk_list = [(h, k) for h, k in itertools.product(range(-mx + 1, mx), repeat=2)]
+    hk_list = [(int(h), int(k)) for (h, k) in hk_list]
 
     if isinstance(occ_factors, (list, tuple, np.ndarray)):
         occ_key = tuple(
@@ -874,31 +917,13 @@ def _get_base_curves(
     if cached is not None:
         return cached
 
-    a_cif, c_cif = _cell_a_c_from_cif(cif_path)
+    _a_cif, c_cif = _cell_a_c_from_cif(cif_path)
     # Match diffuse_cif_toggle.py: ignore CIF occupancy and any external occupancy scaling in F².
     sites = _sites_from_cif_with_factors(cif_path, occ_factors=1.0)
     if L_step <= 0.0:
         raise ValueError("L_step must be > 0")
     if L_step < 1e-4:
         L_step = 1e-4
-
-    energy_kev = _energy_kev_from_lambda(lambda_)
-    # Match diffuse_cif_toggle.py F² behaviour: treat iodine as a single plane at
-    # z = iodine_z (default inferred from the CIF) by removing iodine z from the
-    # per-site phase and applying one shared exp(2π i L * (iodine_z/phase_z_divisor)).
-    iodine_z_eff = None
-    iodine_active = False
-    if bool(iodine_single_plane):
-        iodine_z_eff = iodine_z
-        if iodine_z_eff is None:
-            iodine_z_eff = _infer_iodine_z_like_diffuse(cif_path, sites=sites)
-        if iodine_z_eff is not None:
-            try:
-                iodine_active = any(_element_key(sym) == "I" for (_x, _y, _z, sym, _occ) in sites)
-            except Exception:
-                iodine_active = False
-
-    out: dict[tuple, dict] = {}
 
     if a_lattice is None or not math.isfinite(float(a_lattice)) or float(a_lattice) <= 0.0:
         # Match diffuse_cif_toggle.py: default to the module's A_HEX constant unless overridden.
@@ -911,86 +936,191 @@ def _get_base_curves(
     else:
         c_effective = float(c_lattice)
 
+    # Keep legacy diffuse behavior:
+    # - two-theta clipping uses the "active" lattice values (possibly overridden)
+    # - |Q| used inside F(L) stays on the legacy diffuse reference axes
+    #   (A_HEX and CIF c), independent of the active windowing axes.
+    a_window_factor = float(a_effective)
+    c_window_factor = float(c_effective)
+    a_form_factor = float(A_HEX)
+    c_form_factor = float(c_cif)
+    energy_kev = _energy_kev_from_lambda(lambda_)
 
-    # Use one consistent set of lattice constants for both the two-theta window
-    # and |Q| used inside F(L). "effective" already falls back to CIF a/c when
-    # overrides are not provided, matching diffuse_cif_toggle's behavior.
-    a_form_factor = float(a_effective)
-    c_form_factor = float(c_effective)
+    z_div = float(phase_z_divisor)
+    if (not np.isfinite(z_div)) or abs(z_div) < 1e-14:
+        z_div = 1.0
 
-    def _F_like_diffuse(h: int, k: int, L_vals: np.ndarray):
-        """Return F(L) with optional iodine single-plane treatment."""
-        if not iodine_active:
-            # Match diffuse_cif_toggle.py: ignore occupancy scaling inside F(L).
-            Q = _Qmag(h, k, L_vals, c_form_factor, a_axis=a_form_factor)
-            F = np.zeros_like(Q, dtype=complex)
-            z_div = float(phase_z_divisor) if float(phase_z_divisor) != 0.0 else 1.0
-            for x, y, z, sym, _occ in sites:
-                ff = f_comp(sym, Q, energy_kev)
-                phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
-                phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z) / z_div)))
-                F += ff * phase_xy * phase_z
-            return F
+    site_count = len(sites)
+    site_x = np.empty(site_count, dtype=np.float64)
+    site_y = np.empty(site_count, dtype=np.float64)
+    site_z = np.empty(site_count, dtype=np.float64)
+    site_element: list[str] = []
+    for idx, (x, y, z, sym, _occ) in enumerate(sites):
+        site_x[idx] = float(x)
+        site_y[idx] = float(y)
+        site_z[idx] = float(z)
+        site_element.append(_element_key(sym))
+    site_is_iodine = np.asarray([el == "I" for el in site_element], dtype=bool)
 
-        Q = _Qmag(h, k, L_vals, c_form_factor, a_axis=a_form_factor)
-        fixed = np.zeros_like(Q, dtype=complex)
-        iodine_factor = np.zeros_like(Q, dtype=complex)
-        z_div = float(phase_z_divisor) if float(phase_z_divisor) != 0.0 else 1.0
+    # Match diffuse_cif_toggle.py F² behaviour: treat iodine as a single plane at
+    # z = iodine_z (default inferred from the CIF) by removing iodine z from the
+    # per-site phase and applying one shared exp(2π i L * (iodine_z/phase_z_divisor)).
+    iodine_z_eff = None
+    iodine_active = False
+    if bool(iodine_single_plane) and bool(np.any(site_is_iodine)):
+        iodine_z_eff = iodine_z
+        if iodine_z_eff is None:
+            iodine_z_eff = _infer_iodine_z_like_diffuse(cif_path, sites=sites)
+        if iodine_z_eff is not None:
+            iodine_active = True
 
-        for x, y, z, sym, occ in sites:
-            ff = f_comp(sym, Q, energy_kev)
-            phase_xy = np.exp(1j * _TWO_PI * (h * x + k * y))
-            if _element_key(sym) == "I":
-                iodine_factor += ff * phase_xy
-            else:
-                phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z) / z_div)))
-                fixed += ff * phase_xy * phase_z
+    # Preserve site-encounter order for deterministic behavior.
+    unique_elements = list(dict.fromkeys(site_element))
+    if iodine_active and "I" not in unique_elements:
+        unique_elements.append("I")
 
-        phase_z_I = np.exp(1j * _TWO_PI * (L_vals * (float(iodine_z_eff) / z_div)))
-        return fixed + iodine_factor * phase_z_I
-
-    def _F2_like_diffuse(h: int, k: int, L_vals: np.ndarray):
-        F = _F_like_diffuse(h, k, L_vals)
-        return np.abs(F) ** 2, F
-
+    base_L = None
+    q_max = None
     if two_theta_max is None:
-        base_L = np.arange(0.0, L_max + L_step / 2.0, L_step)
-        for h, k in hk_list:
-            if include_f_components:
-                F2, F = _F2_like_diffuse(h, k, base_L)
-                out[(h, k)] = {
-                    "L": base_L.copy(),
-                    "F2": F2,
-                    "F_real": np.real(F),
-                    "F_imag": np.imag(F),
-                    "F_abs": np.abs(F),
-                }
-            else:
-                F2, _F = _F2_like_diffuse(h, k, base_L)
-                out[(h, k)] = {"L": base_L.copy(), "F2": F2}
+        base_L = np.arange(0.0, L_max + L_step / 2.0, L_step, dtype=float)
     else:
         q_max = (4.0 * math.pi / lambda_) * math.sin(math.radians(two_theta_max / 2.0))
-        for h, k in hk_list:
-            const = (4.0 / 3.0) * (h*h + k*k + h*k) / (a_form_factor**2)
-            l_sq = (q_max / (2.0 * math.pi))**2 - const
-            if l_sq <= 0:
+
+    L_grid_cache: dict[int, np.ndarray] = {}
+
+    def _L_for_m(m: int) -> np.ndarray:
+        cached_L = L_grid_cache.get(m)
+        if cached_L is not None:
+            return cached_L
+
+        if base_L is not None:
+            L_vals = base_L
+        else:
+            const = (4.0 / 3.0) * float(m) / (a_window_factor**2)
+            l_sq = (float(q_max) / (2.0 * math.pi))**2 - const
+            if l_sq <= 0.0:
                 L_vals = np.array([], dtype=float)
-                out[(h, k)] = {"L": L_vals, "F2": L_vals}
-                continue
-            L_max_local = c_form_factor * math.sqrt(l_sq)
-            L_vals = np.arange(0.0, L_max_local + L_step / 2.0, L_step)
-            if include_f_components:
-                F2, F = _F2_like_diffuse(h, k, L_vals)
-                out[(h, k)] = {
-                    "L": L_vals.copy(),
-                    "F2": F2,
-                    "F_real": np.real(F),
-                    "F_imag": np.imag(F),
-                    "F_abs": np.abs(F),
-                }
             else:
-                F2, _F = _F2_like_diffuse(h, k, L_vals)
-                out[(h, k)] = {"L": L_vals.copy(), "F2": F2}
+                L_max_local = c_window_factor * math.sqrt(l_sq)
+                L_vals = np.arange(0.0, L_max_local + L_step / 2.0, L_step, dtype=float)
+
+        L_grid_cache[m] = L_vals
+        return L_vals
+
+    # Per-radial-class cache:
+    # - form factors ff(Q) by element
+    # - z-phase factors by site
+    # - optional iodine z-phase
+    # - reflection-level dedup cache by normalized in-plane phase signature
+    m_state_cache: dict[int, dict] = {}
+
+    def _state_for_m(m: int) -> dict:
+        state = m_state_cache.get(m)
+        if state is not None:
+            return state
+
+        L_vals = _L_for_m(m)
+        state = {
+            "L": L_vals,
+            "ff_by_element": {},
+            "phase_z_by_site": [],
+            "phase_z_iodine": None,
+            "signature_cache": {},
+        }
+        if L_vals.size > 0:
+            q_term = (4.0 / 3.0) * float(m) / (a_form_factor**2)
+            Q_vals = 2.0 * np.pi * np.sqrt(q_term + (L_vals * L_vals) / (c_form_factor**2))
+
+            ff_by_element = {}
+            for elem in unique_elements:
+                ff_by_element[elem] = np.asarray(
+                    f_comp(elem, Q_vals, energy_kev),
+                    dtype=np.complex128,
+                )
+            state["ff_by_element"] = ff_by_element
+
+            phase_z_by_site = []
+            phase_z_cache: dict[float, np.ndarray] = {}
+            for z_val in site_z:
+                z_key = round(float(z_val), 12)
+                phase_z = phase_z_cache.get(z_key)
+                if phase_z is None:
+                    phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z_val) / z_div)))
+                    phase_z_cache[z_key] = phase_z
+                phase_z_by_site.append(phase_z)
+            state["phase_z_by_site"] = phase_z_by_site
+
+            if iodine_active:
+                state["phase_z_iodine"] = np.exp(
+                    1j * _TWO_PI * (L_vals * (float(iodine_z_eff) / z_div))
+                )
+
+        m_state_cache[m] = state
+        return state
+
+    out: dict[tuple, dict] = {}
+    for h, k in hk_list:
+        m = _hk_radial_index(h, k)
+        state = _state_for_m(m)
+        L_vals = state["L"]
+
+        if L_vals.size == 0:
+            L_empty = np.array([], dtype=float)
+            out[(h, k)] = {"L": L_empty, "F2": L_empty}
+            continue
+
+        phase_xy = np.exp(1j * _TWO_PI * (float(h) * site_x + float(k) * site_y))
+        coeff_norm = _normalize_complex_phase_vector(phase_xy)
+        signature_key = _complex_phase_signature_key(coeff_norm)
+
+        reused_curve = None
+        candidates = state["signature_cache"].get(signature_key)
+        if candidates is not None:
+            for prev_norm, prev_curve in candidates:
+                if np.allclose(coeff_norm, prev_norm, rtol=0.0, atol=1e-11):
+                    reused_curve = prev_curve
+                    break
+
+        if reused_curve is None:
+            F = np.zeros(L_vals.shape, dtype=np.complex128)
+            ff_by_element = state["ff_by_element"]
+            phase_z_by_site = state["phase_z_by_site"]
+
+            if iodine_active and state["phase_z_iodine"] is not None:
+                iodine_coeff = 0.0 + 0.0j
+                for idx in range(site_count):
+                    if site_is_iodine[idx]:
+                        iodine_coeff += phase_xy[idx]
+                    else:
+                        el = site_element[idx]
+                        F += ff_by_element[el] * phase_xy[idx] * phase_z_by_site[idx]
+                F += ff_by_element["I"] * iodine_coeff * state["phase_z_iodine"]
+            else:
+                for idx in range(site_count):
+                    el = site_element[idx]
+                    F += ff_by_element[el] * phase_xy[idx] * phase_z_by_site[idx]
+
+            curve = {
+                "F2": np.abs(F) ** 2,
+            }
+            if include_f_components:
+                curve["F_real"] = np.real(F)
+                curve["F_imag"] = np.imag(F)
+                curve["F_abs"] = np.abs(F)
+
+            entries = state["signature_cache"].setdefault(signature_key, [])
+            entries.append((coeff_norm.copy(), curve))
+            reused_curve = curve
+
+        out_entry = {
+            "L": np.asarray(L_vals, dtype=float).copy(),
+            "F2": np.asarray(reused_curve["F2"], dtype=float).copy(),
+        }
+        if include_f_components:
+            out_entry["F_real"] = np.asarray(reused_curve["F_real"], dtype=float).copy()
+            out_entry["F_imag"] = np.asarray(reused_curve["F_imag"], dtype=float).copy()
+            out_entry["F_abs"] = np.asarray(reused_curve["F_abs"], dtype=float).copy()
+        out[(h, k)] = out_entry
 
     _HT_BASE_CACHE[key] = out
     # Bound cache growth because occupancy sliders can produce many unique keys.
@@ -1044,7 +1174,7 @@ def ht_Iinf_dict(
     analytical HT correlation term. The default expression is
     ``2*pi*((2*h + k)/3)``.
     ``phi_l_divisor`` sets the out-of-plane term in the HT phase as
-    ``phi = delta + 2*pi*L/phi_l_divisor``. The legacy default is ``3.0``.
+    ``phi = delta + 2*pi*L/phi_l_divisor``.
     When ``finite_stack`` is ``True`` the per-layer finite-thickness factor for
     ``stack_layers`` layers is applied instead of the infinite-domain limit.
     """

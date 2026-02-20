@@ -43,7 +43,7 @@ def _legacy_algebraic_reference(L_vals, F2_vals, h, k, p, *, finite_layers=None)
     z = (1.0 - p_flipped) + p_flipped * np.exp(1j * delta)
     f_val = min(float(np.abs(z)), 1.0 - float(P_CLAMP))
     psi = float(np.angle(z))
-    phi = delta + 2.0 * np.pi * L_vals * (1.0 / 3.0)
+    phi = delta + 2.0 * np.pi * L_vals * (1.0 / DEFAULT_PHI_L_DIVISOR)
 
     if finite_layers is None:
         denom = 1.0 + f_val * f_val - 2.0 * f_val * np.cos(phi - psi)
