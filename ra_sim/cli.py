@@ -35,8 +35,10 @@ from ra_sim.path_config import get_instrument_config, get_path
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.utils.stacking_fault import (
     DEFAULT_PHASE_DELTA_EXPRESSION,
+    DEFAULT_PHI_L_DIVISOR,
     ht_Iinf_dict,
     ht_dict_to_qr_dict,
+    normalize_phi_l_divisor,
     normalize_phase_delta_expression,
     validate_phase_delta_expression,
 )
@@ -266,6 +268,10 @@ def run_headless_simulation(
         fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
     )
     phase_delta_expression = validate_phase_delta_expression(phase_delta_expression)
+    phi_l_divisor = normalize_phi_l_divisor(
+        ht_cfg.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR),
+        fallback=DEFAULT_PHI_L_DIVISOR,
+    )
 
     def build_ht_cache(p_val: float):
         curves = ht_Iinf_dict(
@@ -277,7 +283,9 @@ def run_headless_simulation(
             two_theta_max=float(two_theta_max),
             lambda_=lambda_ang,
             c_lattice=cv,
+            phase_z_divisor=phi_l_divisor,
             phase_delta_expression=phase_delta_expression,
+            phi_l_divisor=phi_l_divisor,
             finite_stack=finite_stack_flag,
             stack_layers=stack_layers_count,
         )

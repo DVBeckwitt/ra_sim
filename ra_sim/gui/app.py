@@ -41,7 +41,6 @@ from ra_sim.utils.stacking_fault import (
     ht_Iinf_dict,
     ht_dict_to_arrays,
     ht_dict_to_qr_dict,
-    qr_dict_to_arrays,
 )
 
 from ra_sim.utils.calculations import IndexofRefraction
@@ -413,7 +412,7 @@ defaults = {
 # ---------------------------------------------------------------------------
 def build_ht_cache(p_val, occ_vals, c_axis, finite_stack_flag, stack_layers_count):
     layers = int(max(1, stack_layers_count))
-    curves = ht_Iinf_dict(
+    curves_raw = ht_Iinf_dict(
         cif_path=cif_file,
         mx=mx,
         occ=occ_vals,
@@ -425,11 +424,20 @@ def build_ht_cache(p_val, occ_vals, c_axis, finite_stack_flag, stack_layers_coun
         finite_stack=finite_stack_flag,
         stack_layers=layers,
     )
+    curves = {}
+    for hk, data in curves_raw.items():
+        L_vals = np.asarray(data["L"], dtype=float)
+        I_vals = np.asarray(data["I"], dtype=float)
+        keep = np.isfinite(L_vals) & np.isfinite(I_vals) & (L_vals > 0.0)
+        if not np.any(keep):
+            continue
+        curves[hk] = {"L": L_vals[keep], "I": I_vals[keep]}
     qr = ht_dict_to_qr_dict(curves)
-    arrays = qr_dict_to_arrays(qr)
+    arrays = ht_dict_to_arrays(curves)
     return {
         "p": p_val,
         "occ": tuple(occ_vals),
+        "ht": curves,
         "qr": qr,
         "arrays": arrays,
         "two_theta_max": two_theta_range[1],
@@ -464,21 +472,19 @@ ht_cache_multi = {
     ),
 }
 
-def combine_qr_dicts(caches, weights):
+def combine_ht_dicts(caches, weights):
     import numpy as np
     out = {}
     for cache, w in zip(caches, weights):
-        qr = cache["qr"]
-        for m, data in qr.items():
-            if m not in out:
-                out[m] = {
+        ht_curves = cache["ht"]
+        for hk, data in ht_curves.items():
+            if hk not in out:
+                out[hk] = {
                     "L": data["L"].copy(),
                     "I": w * data["I"].copy(),
-                    "hk": data["hk"],
-                    "deg": data.get("deg", 1),
                 }
             else:
-                entry = out[m]
+                entry = out[hk]
                 if entry["L"].shape != data["L"].shape or not np.allclose(entry["L"], data["L"]):
                     union_L = np.union1d(entry["L"], data["L"])
                     entry_I = np.interp(union_L, entry["L"], entry["I"], left=0.0, right=0.0)
@@ -491,13 +497,15 @@ def combine_qr_dicts(caches, weights):
 
 weights_init = np.array([defaults['w0'], defaults['w1'], defaults['w2']], dtype=float)
 weights_init /= weights_init.sum() if weights_init.sum() else 1.0
-combined_qr = combine_qr_dicts(
+combined_ht = combine_ht_dicts(
     [ht_cache_multi['p0'], ht_cache_multi['p1'], ht_cache_multi['p2']],
     weights_init,
 )
-miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
+combined_qr = ht_dict_to_qr_dict(combined_ht)
+miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(combined_ht)
 ht_curves_cache = {
-    "curves": combined_qr,
+    "curves": combined_ht,
+    "qr_curves": combined_qr,
     "arrays": (miller1, intens1, degeneracy1, details1),
     "c": default_c_axis,
     "finite_stack": defaults['finite_stack'],
@@ -1472,6 +1480,109 @@ def _reset_background_backend_orientation():
 selected_hkl_target = None
 
 
+def _nearest_integer_hkl(h: float, k: float, l: float) -> tuple[int, int, int]:
+    return (
+        int(np.rint(float(h))),
+        int(np.rint(float(k))),
+        int(np.rint(float(l))),
+    )
+
+
+def _format_hkl_triplet(h: int, k: int, l: int) -> str:
+    return f"({int(h)} {int(k)} {int(l)})"
+
+
+def _source_miller_for_label(source_label: str | None) -> np.ndarray:
+    label = str(source_label or "primary").lower()
+    if label == "secondary" and isinstance(SIM_MILLER2, np.ndarray) and SIM_MILLER2.size:
+        return np.asarray(SIM_MILLER2, dtype=float)
+    if isinstance(SIM_MILLER1, np.ndarray) and SIM_MILLER1.size:
+        return np.asarray(SIM_MILLER1, dtype=float)
+    return np.empty((0, 3), dtype=float)
+
+
+def _degenerate_hkls_for_qr(
+    h: int,
+    k: int,
+    l: int,
+    *,
+    source_label: str | None,
+) -> list[tuple[int, int, int]]:
+    source_miller = _source_miller_for_label(source_label)
+    if source_miller.ndim != 2 or source_miller.shape[1] < 3 or source_miller.shape[0] == 0:
+        return []
+
+    finite = np.isfinite(source_miller[:, 0]) & np.isfinite(source_miller[:, 1]) & np.isfinite(source_miller[:, 2])
+    if not np.any(finite):
+        return []
+    source_int = np.rint(source_miller[finite, :3]).astype(np.int64, copy=False)
+
+    h_vals = source_int[:, 0]
+    k_vals = source_int[:, 1]
+    l_vals = source_int[:, 2]
+    m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
+    m_target = int(h * h + h * k + k * k)
+
+    mask = (l_vals == int(l)) & (m_vals == m_target)
+    if not np.any(mask):
+        rod_mask = m_vals == m_target
+        if not np.any(rod_mask):
+            return []
+        nearest_l = int(l_vals[rod_mask][np.argmin(np.abs(l_vals[rod_mask] - int(l)))])
+        mask = rod_mask & (l_vals == nearest_l)
+
+    out: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for hh, kk, ll in source_int[mask]:
+        key = (int(hh), int(kk), int(ll))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((int(hh), int(kk), int(ll)))
+
+    out.sort(key=lambda vals: (vals[0], vals[1], vals[2]))
+    return out
+
+
+def _selected_peak_qr_and_degenerates(
+    H: float,
+    K: float,
+    L: float,
+    selected_peak: dict | None,
+) -> tuple[float, list[tuple[int, int, int]]]:
+    h_raw, k_raw, l_raw = float(H), float(K), float(L)
+    source_label = "primary"
+    a_used = float(av)
+    if isinstance(selected_peak, dict):
+        raw_hkl = selected_peak.get("hkl_raw")
+        if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
+            h_raw = float(raw_hkl[0])
+            k_raw = float(raw_hkl[1])
+            l_raw = float(raw_hkl[2])
+        source_label = str(selected_peak.get("source_label", "primary"))
+        try:
+            a_used = float(selected_peak.get("av", av))
+        except (TypeError, ValueError):
+            a_used = float(av)
+
+    h_int, k_int, l_int = _nearest_integer_hkl(h_raw, k_raw, l_raw)
+    m_val = float(h_int * h_int + h_int * k_int + k_int * k_int)
+    if a_used > 0.0 and np.isfinite(a_used) and m_val >= 0.0:
+        qr_val = (2.0 * np.pi / a_used) * np.sqrt((4.0 / 3.0) * m_val)
+    else:
+        qr_val = float("nan")
+
+    deg_hkls = _degenerate_hkls_for_qr(
+        h_int,
+        k_int,
+        l_int,
+        source_label=source_label,
+    )
+    if not deg_hkls:
+        deg_hkls = [(h_int, k_int, l_int)]
+    return float(qr_val), deg_hkls
+
+
 def _select_peak_by_index(
     idx: int,
     *,
@@ -1527,8 +1638,24 @@ def _select_peak_by_index(
         if "selected_l_var" in globals():
             selected_l_var.set(str(int(L)))
 
+    qr_val, deg_hkls = _selected_peak_qr_and_degenerates(H, K, L, selected_peak_record)
+    if selected_peak_record is not None:
+        selected_peak_record["qr"] = float(qr_val)
+        selected_peak_record["degenerate_hkls"] = [
+            (int(hv), int(kv), int(lv)) for hv, kv, lv in deg_hkls
+        ]
+
+    shown_deg = deg_hkls[:12]
+    deg_text = ", ".join(_format_hkl_triplet(hv, kv, lv) for hv, kv, lv in shown_deg)
+    if len(deg_hkls) > len(shown_deg):
+        deg_text += f", ... (+{len(deg_hkls) - len(shown_deg)} more)"
+    qr_text = f"  Qr={qr_val:.4f} A^-1" if np.isfinite(qr_val) else ""
+
     progress_label_positions.config(
-        text=f"{prefix}: HKL=({H} {K} {L})  pixel=({disp_col:.1f},{disp_row:.1f})  I={I:.2g}"
+        text=(
+            f"{prefix}: HKL=({int(H)} {int(K)} {int(L)})  pixel=({disp_col:.1f},{disp_row:.1f})  "
+            f"I={I:.2g}{qr_text}  HKLs@same Qr,L: {deg_text}"
+        )
     )
     canvas.draw_idle()
     return True
@@ -3134,7 +3261,7 @@ def do_update():
                     optics_mode=optics_mode_flag,
                 ) + (None,)
 
-        img1, maxpos1, _, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
+        img1, maxpos1, _, _, _, _, _ = run_one(SIM_MILLER1, SIM_INTENS1, a_updated, c_updated)
         if SIM_MILLER2.size > 0:
             img2, maxpos2, _, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
         else:
@@ -3222,6 +3349,13 @@ def do_update():
             peak_positions.append((disp_cx, disp_cy))      # display coords
             peak_intensities.append(float(I))
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
+            hkl_raw = (float(H), float(K), float(L))
+            m_val = float(H * H + H * K + K * K)
+            qr_val = (
+                (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
+                if float(av_used) > 0.0 and np.isfinite(float(av_used)) and m_val >= 0.0
+                else float("nan")
+            )
             peak_millers.append(hkl)
             peak_records.append(
                 {
@@ -3230,7 +3364,9 @@ def do_update():
                     "native_col": float(cx),
                     "native_row": float(cy),
                     "hkl": hkl,
+                    "hkl_raw": hkl_raw,
                     "intensity": float(I),
+                    "qr": float(qr_val),
                     "phi": float(_phi),
                     "source_table_index": int(table_idx),
                     "source_row_index": int(row_idx),
@@ -6753,10 +6889,12 @@ def _rebuild_diffraction_inputs(
         get_cache("p2", p_vals[2]),
     ]
 
-    combined_qr_local = combine_qr_dicts(caches, weights)
-    arrays_local = qr_dict_to_arrays(combined_qr_local)
+    combined_ht_local = combine_ht_dicts(caches, weights)
+    combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
+    arrays_local = ht_dict_to_arrays(combined_ht_local)
     ht_curves_cache = {
-        "curves": combined_qr_local,
+        "curves": combined_ht_local,
+        "qr_curves": combined_qr_local,
         "arrays": arrays_local,
         "c": float(c_axis),
         "finite_stack": finite_flag,

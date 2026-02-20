@@ -10,10 +10,12 @@ import numpy as np
 
 from ra_sim.utils.stacking_fault import (
     DEFAULT_PHASE_DELTA_EXPRESSION,
+    DEFAULT_PHI_L_DIVISOR,
     _cell_a_c_from_cif,
     _get_base_curves,
     _infer_iodine_z_like_diffuse,
     analytical_ht_intensity_for_pair,
+    normalize_phi_l_divisor,
     normalize_phase_delta_expression,
     validate_phase_delta_expression,
 )
@@ -177,6 +179,7 @@ def _build_algebraic_ht_export_rows(
     except Exception:
         c_axis_for_recip = float(c_cif) if c_cif is not None else 1.0
     phase_expr = _normalize_phase_delta_expression(phase_delta_expression)
+    phi_div = normalize_phi_l_divisor(phi_l_divisor, fallback=DEFAULT_PHI_L_DIVISOR)
     if iodine_z is None:
         iodine_z_value = _infer_iodine_z_like_diffuse(cif_path)
     else:
@@ -198,7 +201,7 @@ def _build_algebraic_ht_export_rows(
         a_lattice=float(a_axis_for_recip),
         c_lattice=float(c_axis_for_recip),
         occ_factors=occ,
-        phase_z_divisor=3.0,
+        phase_z_divisor=phi_div,
         iodine_z=iodine_z_value,
         include_f_components=True,
     )
@@ -237,6 +240,7 @@ def _build_algebraic_ht_export_rows(
             k,
             p_triplet[0],
             phase_delta_expression=phase_expr,
+            phi_l_divisor=phi_div,
             finite_layers=finite_layers,
             f2_only=False,
         )
@@ -247,6 +251,7 @@ def _build_algebraic_ht_export_rows(
             k,
             p_triplet[1],
             phase_delta_expression=phase_expr,
+            phi_l_divisor=phi_div,
             finite_layers=finite_layers,
             f2_only=False,
         )
@@ -257,6 +262,7 @@ def _build_algebraic_ht_export_rows(
             k,
             p_triplet[2],
             phase_delta_expression=phase_expr,
+            phi_l_divisor=phi_div,
             finite_layers=finite_layers,
             f2_only=False,
         )
@@ -313,6 +319,7 @@ def export_algebraic_ht_txt(
     stack_layers=50,
     iodine_z=None,
     phase_delta_expression=None,
+    phi_l_divisor=DEFAULT_PHI_L_DIVISOR,
 ):
     """Write algebraic HT values to a legacy fixed-width text table."""
 
@@ -330,6 +337,7 @@ def export_algebraic_ht_txt(
         stack_layers=stack_layers,
         iodine_z=iodine_z,
         phase_delta_expression=phase_delta_expression,
+        phi_l_divisor=phi_l_divisor,
     )
 
     out_path = Path(str(output_path)).expanduser()
@@ -371,6 +379,7 @@ def open_diffuse_cif_toggle_algebraic(
     stack_layers=50,
     iodine_z=None,
     phase_delta_expression=None,
+    phi_l_divisor=DEFAULT_PHI_L_DIVISOR,
 ):
     """Open an interactive diffuse viewer using algebraic HT only."""
 
@@ -408,6 +417,7 @@ def open_diffuse_cif_toggle_algebraic(
     except Exception:
         c_axis_for_recip = float(c_cif) if c_cif is not None else 1.0
     phase_expr = _normalize_phase_delta_expression(phase_delta_expression)
+    phi_div = normalize_phi_l_divisor(phi_l_divisor, fallback=DEFAULT_PHI_L_DIVISOR)
     if iodine_z is None:
         iodine_z_default = _infer_iodine_z_like_diffuse(cif_path)
     else:
@@ -425,12 +435,14 @@ def open_diffuse_cif_toggle_algebraic(
             mx=hk_limit,
             L_step=0.01,
             L_max=10.0,
-            two_theta_max=two_theta_max,
+            # Keep diffuse HT plots on the canonical full L domain [0, 10]
+            # regardless of detector two-theta clipping used by simulation.
+            two_theta_max=None,
             lambda_=float(lambda_angstrom),
             a_lattice=float(a_axis_for_recip),
             c_lattice=float(c_axis_for_recip),
             occ_factors=occ,
-            phase_z_divisor=3.0,
+            phase_z_divisor=phi_div,
             iodine_z=iodine_z_current,
         )
 
@@ -478,7 +490,6 @@ def open_diffuse_cif_toggle_algebraic(
         "w0": float(w_triplet[0]),
         "w1": float(w_triplet[1]),
         "w2": float(w_triplet[2]),
-        "I_z": float(iodine_z_default if iodine_z_default is not None else 0.0),
         "L_lo": 0.0,
         "L_hi": float(L_max),
         "qz_axis": False,
@@ -537,6 +548,7 @@ def open_diffuse_cif_toggle_algebraic(
                     k,
                     p_val,
                     phase_delta_expression=phase_expr,
+                    phi_l_divisor=phi_div,
                     finite_layers=finite_layers,
                     f2_only=bool(state["f2_only"]),
                 )
@@ -558,29 +570,10 @@ def open_diffuse_cif_toggle_algebraic(
             round(float(state["p0"]), 6),
             round(float(state["p1"]), 6),
             round(float(state["p2"]), 6),
-            round(float(state["I_z"]), 6),
             bool(state["f2_only"]),
             bool(state["finite_N"]),
             int(state["N_layers"]),
         )
-
-    def _rebuild_curves_for_iodine(iodine_z_current):
-        curve_map_new, pairs_by_m_new, allowed_m_new, _ = _build_curve_data(iodine_z_current)
-        curve_store["curve_map"] = curve_map_new
-        curve_store["pairs_by_m"] = pairs_by_m_new
-        curve_store["allowed_m"] = allowed_m_new
-
-        if int(state["m"]) not in pairs_by_m_new:
-            state["m"] = int(allowed_m_new[0])
-        if state["mode"] == "m":
-            first_pair_local = pairs_by_m_new[int(state["m"])][0]
-        else:
-            first_pair_local = pairs_by_m_new[int(allowed_m_new[0])][0]
-        if (int(state["h"]), int(state["k"])) not in curve_map_new:
-            state["h"] = int(first_pair_local[0])
-            state["k"] = int(first_pair_local[1])
-
-        cache["key"] = None
 
     def _line_data(x_vals, y_vals):
         if x_vals.size == 0 or y_vals.size == 0:
@@ -711,23 +704,6 @@ def open_diffuse_cif_toggle_algebraic(
     )
     l_range.on_changed(lambda vals: (state.update(L_lo=float(vals[0]), L_hi=float(vals[1])), refresh()))
     sliders.append(l_range)
-
-    iodine_axis = plt.axes([0.92, 0.05, 0.06, 0.03])
-    iodine_slider = Slider(
-        iodine_axis,
-        "z(I)",
-        0.0,
-        1.0,
-        valinit=float(state["I_z"]),
-        valstep=1e-3,
-    )
-    iodine_slider.on_changed(
-        lambda value: (
-            state.update(I_z=float(value)),
-            _rebuild_curves_for_iodine(float(value)),
-            refresh(),
-        )
-    )
 
     rows = [0.34, 0.28, 0.22, 0.16]
 
@@ -892,7 +868,6 @@ def open_diffuse_cif_toggle_algebraic(
         "refresh": refresh,
         "sliders": sliders,
         "range_slider": l_range,
-        "iodine_slider": iodine_slider,
         "m_slider": m_slider,
         "hk_sliders": hk_sliders,
         "finite_slider": finite_slider,

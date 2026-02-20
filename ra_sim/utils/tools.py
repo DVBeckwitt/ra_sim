@@ -390,9 +390,13 @@ import Dans_Diffraction as dif
 def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
                      intensity_threshold=1.0, two_theta_range=(0,70)):
     """
-    Generate Miller indices, compute 2θ and intensities, group reflections,
-    and normalize intensities. This version updates the occupancy values in the
-    atom-site loop by writing a temporary CIF file with the new occupancies.
+    Generate Miller indices, compute 2θ and intensities, and normalize
+    intensities for every allowed ``(h, k, l)`` combination.
+
+    The returned arrays include all sampled reflections with ``l > 0`` that pass
+    the two-theta and intensity filters (no symmetry collapsing/grouping). This
+    version updates the occupancy values in the atom-site loop by writing a
+    temporary CIF file with the new occupancies.
     
     The occupancy modification uses the given occupancy array: if ``occ`` is a
     sequence it is applied per CIF site (truncated or extended using its last
@@ -409,13 +413,11 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
       two_theta_range    : allowed 2θ range (degrees)
     
     Returns:
-      miller:       (N, 3) array of representative Miller indices.
+      miller:       (N, 3) array of Miller indices.
       intensities:  (N,) array of normalized intensities.
-      degeneracy:   (N,) array of multiplicities.
-      details:      list of length N; each element is a list of tuples ((h,k,l), normalized intensity)
-                    for the reflections in that group.
+      degeneracy:   (N,) array of multiplicities (all ones).
+      details:      list of length N; each element is ``[((h,k,l), normalized intensity)]``.
     """
-    from collections import defaultdict
     import numpy as np, math
     import Dans_Diffraction as dif
 
@@ -443,8 +445,7 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
     xtl.Scatter.setup_scatter(scattering_type='xray', energy_kev=energy)
     xtl.Scatter.integer_hkl = True
 
-    groups = defaultdict(list)  # For reflections with (h,k) ≠ (0,0)
-    zeros = []                  # For (0,0,l) reflections
+    kept = []
 
     for (h, k, l) in raw_miller:
         d = d_spacing(h, k, l, xtl.Cell.a, xtl.Cell.c)
@@ -458,43 +459,26 @@ def miller_generator(mx, cif_file, occ, lambda_, energy=8.047,
             continue
         if intensity_val < intensity_threshold:
             continue
-        if h == 0 and k == 0:
-            zeros.append(((h, k, l), intensity_val))
-        else:
-            key = (h*h + k*k, l)
-            groups[key].append(((h, k, l), intensity_val))
-    
-    grouped_results = []
-    for key, items in groups.items():
-        rep_miller = items[0][0]
-        multiplicity = len(items)
-        total_intensity = sum(item[1] for item in items)
-        details_list = [(hk, intensity) for (hk, intensity) in items]
-        grouped_results.append((rep_miller, total_intensity, multiplicity, details_list))
-    zeros_group = [
-        (((h, k, l)), intensity, 1, [((h, k, l), intensity)])
-        for ((h, k, l), intensity) in zeros
-    ]
-    combined = grouped_results + zeros_group
-    if not combined:
+        kept.append(((h, k, l), float(intensity_val)))
+
+    if not kept:
         return (np.empty((0, 3), dtype=np.int32),
                 np.empty((0,), dtype=np.float64),
                 np.empty((0,), dtype=np.int32),
                 [])
-    max_total_intensity = max(item[1] for item in combined)
-    normalized_combined = []
-    for rep_miller, total_intensity, multiplicity, details_list in combined:
-        normalized_total = round(total_intensity * 100 / max_total_intensity, 2)
-        normalized_details = [
-            (hk, round(indiv_intensity * 100 / max_total_intensity, 2))
-            for hk, indiv_intensity in details_list
-        ]
-        normalized_combined.append((rep_miller, normalized_total, multiplicity, normalized_details))
-    
-    miller_arr = np.array([item[0] for item in normalized_combined], dtype=np.int32)
-    intensities_arr = np.array([item[1] for item in normalized_combined], dtype=np.float64)
-    degeneracy_arr = np.array([item[2] for item in normalized_combined], dtype=np.int32)
-    normalized_details = [item[3] for item in normalized_combined]
+
+    max_intensity = max(item[1] for item in kept)
+    scale = 100.0 / max_intensity if max_intensity > 0 else 0.0
+
+    miller_arr = np.array([item[0] for item in kept], dtype=np.int32)
+    intensities_arr = np.array(
+        [round(item[1] * scale, 2) for item in kept], dtype=np.float64
+    )
+    degeneracy_arr = np.ones(len(kept), dtype=np.int32)
+    normalized_details = [
+        [(item[0], round(item[1] * scale, 2))]
+        for item in kept
+    ]
     
     return miller_arr, intensities_arr, degeneracy_arr, normalized_details
 

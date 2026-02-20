@@ -81,6 +81,7 @@ def load_parameters(
     optics_mode_var=None,
     phase_delta_expr_var=None,
     iodine_z_var=None,
+    phi_l_divisor_var=None,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
@@ -145,6 +146,15 @@ def load_parameters(
             stored_expr = params.get('phase_delta_expression')
             if stored_expr is not None:
                 phase_delta_expr_var.set(str(stored_expr))
+        if phi_l_divisor_var is not None:
+            stored_divisor = params.get('phi_l_divisor')
+            if stored_divisor is not None:
+                try:
+                    divisor_val = float(stored_divisor)
+                except (TypeError, ValueError):
+                    divisor_val = None
+                if divisor_val is not None and np.isfinite(divisor_val) and divisor_val > 0.0:
+                    phi_l_divisor_var.set(float(divisor_val))
 
         return "Parameters loaded from parameters.npy"
     else:
@@ -174,6 +184,7 @@ def save_all_parameters(
     optics_mode_var=None,
     phase_delta_expr_var=None,
     iodine_z_var=None,
+    phi_l_divisor_var=None,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
@@ -224,6 +235,13 @@ def save_all_parameters(
         parameters['iodine_z'] = float(iodine_z_var.get())
     if phase_delta_expr_var is not None:
         parameters['phase_delta_expression'] = str(phase_delta_expr_var.get())
+    if phi_l_divisor_var is not None:
+        try:
+            phi_divisor = float(phi_l_divisor_var.get())
+        except (TypeError, ValueError):
+            phi_divisor = None
+        if phi_divisor is not None and np.isfinite(phi_divisor) and phi_divisor > 0.0:
+            parameters['phi_l_divisor'] = float(phi_divisor)
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")
 

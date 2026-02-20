@@ -5,6 +5,7 @@ from ra_sim.utils.stacking_fault import (
     AREA,
     P_CLAMP,
     DEFAULT_PHASE_DELTA_EXPRESSION,
+    DEFAULT_PHI_L_DIVISOR,
     analytical_ht_intensity_for_pair,
     validate_phase_delta_expression,
 )
@@ -96,6 +97,42 @@ def test_custom_phase_expression_changes_intensity_profile():
         phase_delta_expression="2*pi*((2*h + k)/3) + 0.3*sin(2*pi*L)",
     )
 
+    assert not np.allclose(default_i, custom_i)
+
+
+def test_custom_phi_l_divisor_changes_intensity_profile():
+    h, k, p = 1, 0, 0.42
+    L_vals = np.linspace(0.0, 3.0, 200)
+    F2_vals = 1.0 + 0.25 * np.sin(L_vals)
+
+    default_i = analytical_ht_intensity_for_pair(
+        L_vals,
+        F2_vals,
+        h,
+        k,
+        p,
+        phase_delta_expression=DEFAULT_PHASE_DELTA_EXPRESSION,
+    )
+    explicit_default_i = analytical_ht_intensity_for_pair(
+        L_vals,
+        F2_vals,
+        h,
+        k,
+        p,
+        phase_delta_expression=DEFAULT_PHASE_DELTA_EXPRESSION,
+        phi_l_divisor=DEFAULT_PHI_L_DIVISOR,
+    )
+    custom_i = analytical_ht_intensity_for_pair(
+        L_vals,
+        F2_vals,
+        h,
+        k,
+        p,
+        phase_delta_expression=DEFAULT_PHASE_DELTA_EXPRESSION,
+        phi_l_divisor=6.0,
+    )
+
+    assert np.allclose(default_i, explicit_default_i, rtol=1e-12, atol=1e-12)
     assert not np.allclose(default_i, custom_i)
 
 

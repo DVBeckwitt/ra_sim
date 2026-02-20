@@ -225,8 +225,10 @@ import math
 
 import re
 import argparse
+import io
 import tempfile
 from collections import defaultdict, namedtuple
+from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
@@ -255,12 +257,13 @@ import CifFile
 
 from ra_sim.utils.stacking_fault import (
     DEFAULT_PHASE_DELTA_EXPRESSION,
+    DEFAULT_PHI_L_DIVISOR,
     _infer_iodine_z_like_diffuse,
     ht_Iinf_dict,
     ht_dict_to_arrays,
     ht_dict_to_qr_dict,
+    normalize_phi_l_divisor,
     normalize_phase_delta_expression,
-    qr_dict_to_arrays,
     validate_phase_delta_expression,
 )
 
@@ -579,7 +582,7 @@ n2 = IndexofRefraction()
 
 bandwidth = beam_config.get("bandwidth_percent", 0.7) / 100
 
-# NOTE: Occupancy defaults are expanded to match CIF-generated structure sites
+# NOTE: Occupancy defaults are sized to the GUI's unique atom-site controls
 # after loading the CIF below.
 occupancy_default_values = occupancy_config.get("default", [1.0, 1.0, 1.0])
 
@@ -602,54 +605,68 @@ cf    = CifFile.ReadCif(cif_file)
 blk   = cf[list(cf.keys())[0]]
 
 
-def _extract_occupancy_site_labels(cif_block, cif_path):
-    """Return occupancy labels in the same order used by SF site expansion."""
+def _normalize_occupancy_label(raw_label, fallback_idx):
+    text = str(raw_label).strip().strip("'\"")
+    if text:
+        return text
+    return f"site_{fallback_idx + 1}"
 
-    # Prefer symmetry-expanded structure labels because occupancy controls map
-    # onto those sites in the structure-factor code (e.g. Pb, I1, I2).
+
+def _extract_occupancy_site_metadata(cif_block, cif_path):
+    """Return (unique labels, expanded-site -> unique-label index mapping)."""
+
+    # Preferred path: use symmetry-expanded structure labels from Dans_Diffraction.
+    # This gives a reliable mapping from user-facing unique sites to the expanded
+    # per-site occupancy array consumed in stacking_fault.ht_Iinf_dict.
     try:
         xtl = dif.Crystal(str(cif_path))
         xtl.Symmetry.generate_matrices()
         xtl.generate_structure()
         st = xtl.Structure
+        n_sites = len(st.u)
 
-        atom_types = [str(st.type[i]).strip() or f"site_{i + 1}" for i in range(len(st.u))]
-        atom_z = [float(st.w[i]) for i in range(len(st.u))]
+        labels_src = getattr(st, "label", None)
+        if labels_src is None or len(labels_src) != n_sites:
+            labels_src = getattr(st, "type", None)
+        if labels_src is None or len(labels_src) != n_sites:
+            labels_src = [f"site_{idx + 1}" for idx in range(n_sites)]
 
-        counts = {}
-        totals = {}
-        for atom in atom_types:
-            totals[atom] = totals.get(atom, 0) + 1
+        unique_labels = []
+        label_to_idx = {}
+        expanded_to_unique = []
 
-        labels = []
-        for atom, z_val in zip(atom_types, atom_z):
-            counts[atom] = counts.get(atom, 0) + 1
-            if totals[atom] > 1:
-                labels.append(f"{atom}{counts[atom]} (z={z_val:.4f})")
-            else:
-                labels.append(f"{atom} (z={z_val:.4f})")
-        if labels:
-            return labels
+        for idx in range(n_sites):
+            label = _normalize_occupancy_label(labels_src[idx], idx)
+            mapped = label_to_idx.get(label)
+            if mapped is None:
+                mapped = len(unique_labels)
+                unique_labels.append(label)
+                label_to_idx[label] = mapped
+            expanded_to_unique.append(mapped)
+
+        if unique_labels:
+            return unique_labels, expanded_to_unique
     except Exception:
         pass
 
-    # Fallback to raw CIF labels when expansion fails.
+    # Fallback: use raw CIF labels and expose one control per unique label.
     raw_labels = cif_block.get("_atom_site_label")
     if raw_labels is None:
         raw_labels = cif_block.get("_atom_site_type_symbol")
     if raw_labels is None:
-        return []
+        return [], []
     if isinstance(raw_labels, str):
         raw_labels = [raw_labels]
 
-    labels = []
+    unique_labels = []
     for idx, raw in enumerate(raw_labels):
-        text = str(raw).strip()
-        labels.append(text if text else f"site_{idx + 1}")
-    return labels
+        label = _normalize_occupancy_label(raw, idx)
+        if label not in unique_labels:
+            unique_labels.append(label)
+    return unique_labels, []
 
 
-occupancy_site_labels = _extract_occupancy_site_labels(blk, cif_file)
+occupancy_site_labels, occupancy_site_expanded_map = _extract_occupancy_site_metadata(blk, cif_file)
 if occupancy_site_labels:
     occupancy_site_count = len(occupancy_site_labels)
 else:
@@ -665,6 +682,300 @@ occ = _ensure_numeric_vector(
     occupancy_site_count,
 )
 occ = [min(1.0, max(0.0, float(v))) for v in occ]
+
+
+def _expand_occupancy_values_for_generated_sites(occ_values):
+    """Map unique-site occupancies to generated per-site occupancies for HT."""
+
+    target_len = len(occupancy_site_labels)
+    if target_len <= 0:
+        if isinstance(occ_values, (list, tuple, np.ndarray)):
+            target_len = max(1, len(occ_values))
+        else:
+            target_len = 1
+    normalized = _ensure_numeric_vector(occ_values, [1.0], target_len)
+    normalized = [min(1.0, max(0.0, float(v))) for v in normalized]
+
+    if not occupancy_site_expanded_map:
+        return normalized
+
+    fallback = normalized[-1] if normalized else 1.0
+    expanded = []
+    for raw_idx in occupancy_site_expanded_map:
+        idx = int(raw_idx)
+        if 0 <= idx < len(normalized):
+            expanded.append(float(normalized[idx]))
+        else:
+            expanded.append(float(fallback))
+    return expanded
+
+
+def _as_cif_list(raw_value):
+    """Return a CIF loop field as a mutable Python list."""
+
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, str):
+        return [raw_value]
+    if isinstance(raw_value, list):
+        return raw_value
+    if isinstance(raw_value, tuple):
+        return list(raw_value)
+    if isinstance(raw_value, np.ndarray):
+        return raw_value.tolist()
+    try:
+        return list(raw_value)
+    except TypeError:
+        return [raw_value]
+
+
+def _parse_cif_float_or_default(raw_value, default=0.0):
+    """Parse CIF numeric values with uncertainty suffix support."""
+
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        text = str(raw_value).strip().strip("'\"")
+        if not text:
+            return float(default)
+
+        frac_match = re.fullmatch(
+            r"([-+]?\d+(?:\.\d+)?)\s*/\s*([-+]?\d+(?:\.\d+)?)",
+            text,
+        )
+        if frac_match:
+            try:
+                numer = float(frac_match.group(1))
+                denom = float(frac_match.group(2))
+                if denom != 0.0:
+                    return float(numer / denom)
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+
+        m = re.match(r"[-+0-9\.Ee]+", text)
+        if not m:
+            return float(default)
+        try:
+            return float(m.group(0))
+        except (TypeError, ValueError):
+            return float(default)
+
+
+def _extract_atom_site_fractional_metadata(cif_block):
+    """Return atom-site fractional coordinates from raw CIF loop rows."""
+
+    x_vals = _as_cif_list(cif_block.get("_atom_site_fract_x"))
+    y_vals = _as_cif_list(cif_block.get("_atom_site_fract_y"))
+    z_vals = _as_cif_list(cif_block.get("_atom_site_fract_z"))
+    if not x_vals or not y_vals or not z_vals:
+        return []
+
+    labels = _as_cif_list(cif_block.get("_atom_site_label"))
+    if not labels:
+        labels = _as_cif_list(cif_block.get("_atom_site_type_symbol"))
+
+    n_sites = max(len(x_vals), len(y_vals), len(z_vals))
+    base_labels = []
+    for idx in range(n_sites):
+        if idx < len(labels):
+            label = _normalize_occupancy_label(labels[idx], idx)
+        else:
+            label = f"site_{idx + 1}"
+        base_labels.append(label)
+
+    totals = {}
+    for label in base_labels:
+        totals[label] = totals.get(label, 0) + 1
+
+    seen = {}
+    rows = []
+    for idx, base_label in enumerate(base_labels):
+        seen[base_label] = seen.get(base_label, 0) + 1
+        if totals[base_label] > 1:
+            display = f"{base_label} #{seen[base_label]}"
+        else:
+            display = base_label
+
+        x_val = _parse_cif_float_or_default(x_vals[idx] if idx < len(x_vals) else 0.0)
+        y_val = _parse_cif_float_or_default(y_vals[idx] if idx < len(y_vals) else 0.0)
+        z_val = _parse_cif_float_or_default(z_vals[idx] if idx < len(z_vals) else 0.0)
+        rows.append(
+            {
+                "row_index": int(idx),
+                "label": str(display),
+                "x": float(x_val),
+                "y": float(y_val),
+                "z": float(z_val),
+            }
+        )
+
+    return rows
+
+
+atom_site_fractional_metadata = _extract_atom_site_fractional_metadata(blk)
+atom_site_fract_vars = []
+_atom_site_override_temp_path = None
+_atom_site_override_source_path = None
+_atom_site_override_signature = None
+
+
+def _atom_site_fractional_default_values():
+    return [
+        (float(row["x"]), float(row["y"]), float(row["z"]))
+        for row in atom_site_fractional_metadata
+    ]
+
+
+def _current_atom_site_fractional_values():
+    """Return current atom-site fractional coordinates from GUI state."""
+
+    defaults_xyz = _atom_site_fractional_default_values()
+    if not atom_site_fract_vars:
+        return defaults_xyz
+
+    values = []
+    for idx, axis_vars in enumerate(atom_site_fract_vars):
+        fallback = defaults_xyz[idx] if idx < len(defaults_xyz) else (0.0, 0.0, 0.0)
+        try:
+            x_val = float(axis_vars["x"].get())
+        except (tk.TclError, ValueError, TypeError, KeyError):
+            x_val = float(fallback[0])
+        if not np.isfinite(x_val):
+            x_val = float(fallback[0])
+        try:
+            y_val = float(axis_vars["y"].get())
+        except (tk.TclError, ValueError, TypeError, KeyError):
+            y_val = float(fallback[1])
+        if not np.isfinite(y_val):
+            y_val = float(fallback[1])
+        try:
+            z_val = float(axis_vars["z"].get())
+        except (tk.TclError, ValueError, TypeError, KeyError):
+            z_val = float(fallback[2])
+        if not np.isfinite(z_val):
+            z_val = float(fallback[2])
+        values.append((x_val, y_val, z_val))
+    return values
+
+
+def _atom_site_fractional_signature(values):
+    flat = []
+    for x_val, y_val, z_val in values:
+        flat.extend(
+            [
+                round(float(x_val), 12),
+                round(float(y_val), 12),
+                round(float(z_val), 12),
+            ]
+        )
+    return tuple(flat)
+
+
+def _atom_site_fractional_defaults_signature():
+    return _atom_site_fractional_signature(_atom_site_fractional_default_values())
+
+
+def _atom_site_fractional_values_are_default(values):
+    defaults_xyz = _atom_site_fractional_default_values()
+    if len(values) != len(defaults_xyz):
+        return False
+    for (x_cur, y_cur, z_cur), (x_def, y_def, z_def) in zip(values, defaults_xyz):
+        if not math.isclose(float(x_cur), float(x_def), rel_tol=1e-9, abs_tol=1e-9):
+            return False
+        if not math.isclose(float(y_cur), float(y_def), rel_tol=1e-9, abs_tol=1e-9):
+            return False
+        if not math.isclose(float(z_cur), float(z_def), rel_tol=1e-9, abs_tol=1e-9):
+            return False
+    return True
+
+
+def _active_primary_cif_path(atom_site_values=None):
+    """Return primary CIF path with optional atom-site coordinate overrides."""
+
+    global _atom_site_override_temp_path
+    global _atom_site_override_source_path
+    global _atom_site_override_signature
+
+    source_path = str(cif_file)
+    if not atom_site_fractional_metadata:
+        return source_path
+
+    current_values = (
+        _current_atom_site_fractional_values()
+        if atom_site_values is None
+        else list(atom_site_values)
+    )
+    if _atom_site_fractional_values_are_default(current_values):
+        return source_path
+
+    signature = _atom_site_fractional_signature(current_values)
+    abs_source = os.path.abspath(source_path)
+    if (
+        _atom_site_override_temp_path
+        and _atom_site_override_source_path == abs_source
+        and _atom_site_override_signature == signature
+        and Path(_atom_site_override_temp_path).is_file()
+    ):
+        return _atom_site_override_temp_path
+
+    with redirect_stdout(io.StringIO()):
+        cf_local = CifFile.ReadCif(abs_source)
+    keys = list(cf_local.keys())
+    if not keys:
+        return source_path
+    block = cf_local[keys[0]]
+
+    x_vals = _as_cif_list(block.get("_atom_site_fract_x"))
+    y_vals = _as_cif_list(block.get("_atom_site_fract_y"))
+    z_vals = _as_cif_list(block.get("_atom_site_fract_z"))
+    if not x_vals or not y_vals or not z_vals:
+        return source_path
+
+    n_rows = max(len(x_vals), len(y_vals), len(z_vals))
+    if len(x_vals) < n_rows:
+        fill = str(x_vals[-1]) if x_vals else "0.0"
+        x_vals.extend([fill] * (n_rows - len(x_vals)))
+    if len(y_vals) < n_rows:
+        fill = str(y_vals[-1]) if y_vals else "0.0"
+        y_vals.extend([fill] * (n_rows - len(y_vals)))
+    if len(z_vals) < n_rows:
+        fill = str(z_vals[-1]) if z_vals else "0.0"
+        z_vals.extend([fill] * (n_rows - len(z_vals)))
+
+    for row_data, (x_val, y_val, z_val) in zip(atom_site_fractional_metadata, current_values):
+        row_idx = int(row_data.get("row_index", -1))
+        if row_idx < 0 or row_idx >= n_rows:
+            continue
+        x_vals[row_idx] = f"{float(x_val):.12g}"
+        y_vals[row_idx] = f"{float(y_val):.12g}"
+        z_vals[row_idx] = f"{float(z_val):.12g}"
+
+    block["_atom_site_fract_x"] = x_vals
+    block["_atom_site_fract_y"] = y_vals
+    block["_atom_site_fract_z"] = z_vals
+
+    if _atom_site_override_temp_path is None or _atom_site_override_source_path != abs_source:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".cif")
+        tmp.close()
+        _atom_site_override_temp_path = tmp.name
+
+    try:
+        with redirect_stdout(io.StringIO()):
+            CifFile.WriteCif(cf_local, _atom_site_override_temp_path)
+    except AttributeError:
+        with open(_atom_site_override_temp_path, "w", encoding="utf-8") as fh:
+            with redirect_stdout(io.StringIO()):
+                fh.write(cf_local.WriteOut())
+
+    _atom_site_override_source_path = abs_source
+    _atom_site_override_signature = signature
+    return _atom_site_override_temp_path
+
+
+def _reset_atom_site_override_cache():
+    global _atom_site_override_source_path, _atom_site_override_signature
+    _atom_site_override_source_path = None
+    _atom_site_override_signature = None
 
 # pull the raw text
 a_text = blk.get("_cell_length_a")
@@ -722,6 +1033,13 @@ try:
     )
 except ValueError:
     phase_delta_expression_default = DEFAULT_PHASE_DELTA_EXPRESSION
+phi_l_divisor_default = normalize_phi_l_divisor(
+    hendricks_config.get(
+        "phi_l_divisor",
+        DEFAULT_PHI_L_DIVISOR,
+    ),
+    fallback=DEFAULT_PHI_L_DIVISOR,
+)
 finite_stack_default = bool(hendricks_config.get("finite_stack", True))
 stack_layers_default = int(
     max(1, float(hendricks_config.get("stack_layers", 50)))
@@ -764,6 +1082,7 @@ defaults = {
     'w2': w_defaults[2],
     'iodine_z': iodine_z_default,
     'phase_delta_expression': phase_delta_expression_default,
+    'phi_l_divisor': float(phi_l_divisor_default),
     'center_x': center_default[0],
     'center_y': center_default[1],
     'sampling_resolution': 'Low',
@@ -781,40 +1100,58 @@ def build_ht_cache(
     a_axis,
     c_axis,
     iodine_z,
+    phi_l_divisor,
     finite_stack_flag,
     stack_layers_count,
     phase_delta_expression,
+    *,
+    cif_path_override=None,
 ):
     layers = int(max(1, stack_layers_count))
-    curves = ht_Iinf_dict(
-        cif_path=cif_file,
+    occ_expanded = _expand_occupancy_values_for_generated_sites(occ_vals)
+    active_cif_path = str(cif_path_override) if cif_path_override is not None else str(cif_file)
+    curves_raw = ht_Iinf_dict(
+        cif_path=active_cif_path,
         mx=mx,
-        occ=occ_vals,
+        occ=occ_expanded,
         p=p_val,
         L_step=0.01,
         two_theta_max=two_theta_range[1],
         lambda_=lambda_,
         a_lattice=a_axis,
         c_lattice=c_axis,
+        phase_z_divisor=phi_l_divisor,
         iodine_z=iodine_z,
         phase_delta_expression=phase_delta_expression,
+        phi_l_divisor=phi_l_divisor,
         finite_stack=finite_stack_flag,
         stack_layers=layers,
     )
+    curves = {}
+    for hk, data in curves_raw.items():
+        L_vals = np.asarray(data["L"], dtype=float)
+        I_vals = np.asarray(data["I"], dtype=float)
+        keep = np.isfinite(L_vals) & np.isfinite(I_vals) & (L_vals > 0.0)
+        if not np.any(keep):
+            continue
+        curves[hk] = {"L": L_vals[keep], "I": I_vals[keep]}
     qr = ht_dict_to_qr_dict(curves)
-    arrays = qr_dict_to_arrays(qr)
+    arrays = ht_dict_to_arrays(curves)
     return {
         "p": p_val,
         "occ": tuple(occ_vals),
+        "ht": curves,
         "qr": qr,
         "arrays": arrays,
         "two_theta_max": two_theta_range[1],
         "a": float(a_axis),
         "c": float(c_axis),
         "iodine_z": float(iodine_z),
+        "phi_l_divisor": float(phi_l_divisor),
         "phase_delta_expression": str(phase_delta_expression),
         "finite_stack": bool(finite_stack_flag),
         "stack_layers": layers,
+        "cif_path": active_cif_path,
     }
 
 # Precompute curves for the three p values
@@ -827,6 +1164,7 @@ ht_cache_multi = {
         default_a_axis,
         default_c_axis,
         defaults['iodine_z'],
+        defaults['phi_l_divisor'],
         defaults['finite_stack'],
         defaults['stack_layers'],
         defaults['phase_delta_expression'],
@@ -837,6 +1175,7 @@ ht_cache_multi = {
         default_a_axis,
         default_c_axis,
         defaults['iodine_z'],
+        defaults['phi_l_divisor'],
         defaults['finite_stack'],
         defaults['stack_layers'],
         defaults['phase_delta_expression'],
@@ -847,27 +1186,26 @@ ht_cache_multi = {
         default_a_axis,
         default_c_axis,
         defaults['iodine_z'],
+        defaults['phi_l_divisor'],
         defaults['finite_stack'],
         defaults['stack_layers'],
         defaults['phase_delta_expression'],
     ),
 }
 
-def combine_qr_dicts(caches, weights):
+def combine_ht_dicts(caches, weights):
     import numpy as np
     out = {}
     for cache, w in zip(caches, weights):
-        qr = cache["qr"]
-        for m, data in qr.items():
-            if m not in out:
-                out[m] = {
+        ht_curves = cache["ht"]
+        for hk, data in ht_curves.items():
+            if hk not in out:
+                out[hk] = {
                     "L": data["L"].copy(),
                     "I": w * data["I"].copy(),
-                    "hk": data["hk"],
-                    "deg": data.get("deg", 1),
                 }
             else:
-                entry = out[m]
+                entry = out[hk]
                 if entry["L"].shape != data["L"].shape or not np.allclose(entry["L"], data["L"]):
                     union_L = np.union1d(entry["L"], data["L"])
                     entry_I = np.interp(union_L, entry["L"], entry["I"], left=0.0, right=0.0)
@@ -880,17 +1218,20 @@ def combine_qr_dicts(caches, weights):
 
 weights_init = np.array([defaults['w0'], defaults['w1'], defaults['w2']], dtype=float)
 weights_init /= weights_init.sum() if weights_init.sum() else 1.0
-combined_qr = combine_qr_dicts(
+combined_ht = combine_ht_dicts(
     [ht_cache_multi['p0'], ht_cache_multi['p1'], ht_cache_multi['p2']],
     weights_init,
 )
-miller1, intens1, degeneracy1, details1 = qr_dict_to_arrays(combined_qr)
+combined_qr = ht_dict_to_qr_dict(combined_ht)
+miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(combined_ht)
 ht_curves_cache = {
-    "curves": combined_qr,
+    "curves": combined_ht,
+    "qr_curves": combined_qr,
     "arrays": (miller1, intens1, degeneracy1, details1),
     "a": default_a_axis,
     "c": default_c_axis,
     "iodine_z": float(defaults['iodine_z']),
+    "phi_l_divisor": float(defaults['phi_l_divisor']),
     "phase_delta_expression": str(defaults['phase_delta_expression']),
     "finite_stack": defaults['finite_stack'],
     "stack_layers": defaults['stack_layers'],
@@ -901,9 +1242,11 @@ _last_weights = list(weights_init)
 _last_a_for_ht = default_a_axis
 _last_c_for_ht = default_c_axis
 _last_iodine_z_for_ht = float(defaults['iodine_z'])
+_last_phi_l_divisor = float(defaults['phi_l_divisor'])
 _last_phase_delta_expression = str(defaults['phase_delta_expression'])
 _last_finite_stack = bool(defaults['finite_stack'])
 _last_stack_layers = int(max(1, defaults['stack_layers']))
+_last_atom_site_fractional_signature = _atom_site_fractional_defaults_signature()
 # ---- convert the dict → arrays compatible with the downstream code ----
 debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
 debug_print("miller1 sample:", miller1[:5])
@@ -1803,6 +2146,109 @@ def _toggle_hkl_pick_mode():
     )
 
 
+def _nearest_integer_hkl(h: float, k: float, l: float) -> tuple[int, int, int]:
+    return (
+        int(np.rint(float(h))),
+        int(np.rint(float(k))),
+        int(np.rint(float(l))),
+    )
+
+
+def _format_hkl_triplet(h: int, k: int, l: int) -> str:
+    return f"({int(h)} {int(k)} {int(l)})"
+
+
+def _source_miller_for_label(source_label: str | None) -> np.ndarray:
+    label = str(source_label or "primary").lower()
+    if label == "secondary" and isinstance(SIM_MILLER2, np.ndarray) and SIM_MILLER2.size:
+        return np.asarray(SIM_MILLER2, dtype=float)
+    if isinstance(SIM_MILLER1, np.ndarray) and SIM_MILLER1.size:
+        return np.asarray(SIM_MILLER1, dtype=float)
+    return np.empty((0, 3), dtype=float)
+
+
+def _degenerate_hkls_for_qr(
+    h: int,
+    k: int,
+    l: int,
+    *,
+    source_label: str | None,
+) -> list[tuple[int, int, int]]:
+    source_miller = _source_miller_for_label(source_label)
+    if source_miller.ndim != 2 or source_miller.shape[1] < 3 or source_miller.shape[0] == 0:
+        return []
+
+    finite = np.isfinite(source_miller[:, 0]) & np.isfinite(source_miller[:, 1]) & np.isfinite(source_miller[:, 2])
+    if not np.any(finite):
+        return []
+    source_int = np.rint(source_miller[finite, :3]).astype(np.int64, copy=False)
+
+    h_vals = source_int[:, 0]
+    k_vals = source_int[:, 1]
+    l_vals = source_int[:, 2]
+    m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
+    m_target = int(h * h + h * k + k * k)
+
+    mask = (l_vals == int(l)) & (m_vals == m_target)
+    if not np.any(mask):
+        rod_mask = m_vals == m_target
+        if not np.any(rod_mask):
+            return []
+        nearest_l = int(l_vals[rod_mask][np.argmin(np.abs(l_vals[rod_mask] - int(l)))])
+        mask = rod_mask & (l_vals == nearest_l)
+
+    out: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for hh, kk, ll in source_int[mask]:
+        key = (int(hh), int(kk), int(ll))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((int(hh), int(kk), int(ll)))
+
+    out.sort(key=lambda vals: (vals[0], vals[1], vals[2]))
+    return out
+
+
+def _selected_peak_qr_and_degenerates(
+    H: float,
+    K: float,
+    L: float,
+    selected_peak: dict | None,
+) -> tuple[float, list[tuple[int, int, int]]]:
+    h_raw, k_raw, l_raw = float(H), float(K), float(L)
+    source_label = "primary"
+    a_used = float(av)
+    if isinstance(selected_peak, dict):
+        raw_hkl = selected_peak.get("hkl_raw")
+        if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
+            h_raw = float(raw_hkl[0])
+            k_raw = float(raw_hkl[1])
+            l_raw = float(raw_hkl[2])
+        source_label = str(selected_peak.get("source_label", "primary"))
+        try:
+            a_used = float(selected_peak.get("av", av))
+        except (TypeError, ValueError):
+            a_used = float(av)
+
+    h_int, k_int, l_int = _nearest_integer_hkl(h_raw, k_raw, l_raw)
+    m_val = float(h_int * h_int + h_int * k_int + k_int * k_int)
+    if a_used > 0.0 and np.isfinite(a_used) and m_val >= 0.0:
+        qr_val = (2.0 * np.pi / a_used) * np.sqrt((4.0 / 3.0) * m_val)
+    else:
+        qr_val = float("nan")
+
+    deg_hkls = _degenerate_hkls_for_qr(
+        h_int,
+        k_int,
+        l_int,
+        source_label=source_label,
+    )
+    if not deg_hkls:
+        deg_hkls = [(h_int, k_int, l_int)]
+    return float(qr_val), deg_hkls
+
+
 def _select_peak_by_index(
     idx: int,
     *,
@@ -1858,8 +2304,24 @@ def _select_peak_by_index(
         if "selected_l_var" in globals():
             selected_l_var.set(str(int(L)))
 
+    qr_val, deg_hkls = _selected_peak_qr_and_degenerates(H, K, L, selected_peak_record)
+    if selected_peak_record is not None:
+        selected_peak_record["qr"] = float(qr_val)
+        selected_peak_record["degenerate_hkls"] = [
+            (int(hv), int(kv), int(lv)) for hv, kv, lv in deg_hkls
+        ]
+
+    shown_deg = deg_hkls[:12]
+    deg_text = ", ".join(_format_hkl_triplet(hv, kv, lv) for hv, kv, lv in shown_deg)
+    if len(deg_hkls) > len(shown_deg):
+        deg_text += f", ... (+{len(deg_hkls) - len(shown_deg)} more)"
+    qr_text = f"  Qr={qr_val:.4f} A^-1" if np.isfinite(qr_val) else ""
+
     progress_label_positions.config(
-        text=f"{prefix}: HKL=({H} {K} {L})  pixel=({disp_col:.1f},{disp_row:.1f})  I={I:.2g}"
+        text=(
+            f"{prefix}: HKL=({int(H)} {int(K)} {int(L)})  pixel=({disp_col:.1f},{disp_row:.1f})  "
+            f"I={I:.2g}{qr_text}  HKLs@same Qr,L: {deg_text}"
+        )
     )
     canvas.draw_idle()
     return True
@@ -2041,13 +2503,13 @@ def _brightest_hit_native_from_table(hit_table) -> tuple[float, float] | None:
 
 
 def _simulate_ideal_hkl_native_center(
-    h: int,
-    k: int,
-    l: int,
+    h: float,
+    k: float,
+    l: float,
     av: float,
     cv: float,
 ) -> tuple[float, float] | None:
-    """Simulate a single HKL and return its no-mosaic/no-divergence center."""
+    """Simulate a single HKL (integer or fractional) and return its ideal center."""
 
     optics_mode_flag = _current_optics_mode_flag()
 
@@ -2211,19 +2673,33 @@ def on_canvas_click(event):
     if best_i < len(peak_records) and isinstance(peak_records[best_i], dict):
         peak_record = peak_records[best_i]
         try:
-            rec_h, rec_k, rec_l = tuple(int(np.rint(v)) for v in peak_millers[best_i])
+            raw_hkl = peak_record.get("hkl_raw")
+            if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
+                rec_h = float(raw_hkl[0])
+                rec_k = float(raw_hkl[1])
+                rec_l = float(raw_hkl[2])
+            else:
+                rec_h, rec_k, rec_l = tuple(float(v) for v in peak_millers[best_i])
             rec_av = float(peak_record.get("av", float(a_var.get())))
             rec_cv = float(peak_record.get("cv", float(c_var.get())))
             ideal_native = _simulate_ideal_hkl_native_center(
                 rec_h, rec_k, rec_l, rec_av, rec_cv
             )
             if ideal_native is not None:
-                selected_native = ideal_native
-                selected_display = _native_sim_to_display_coords(
+                ideal_display = _native_sim_to_display_coords(
                     ideal_native[0],
                     ideal_native[1],
                     sim_shape,
                 )
+                base_display = peak_positions[best_i]
+                snap_delta = math.hypot(
+                    float(ideal_display[0]) - float(base_display[0]),
+                    float(ideal_display[1]) - float(base_display[1]),
+                )
+                snap_limit = max(4.0, float(HKL_PICK_MIN_SEPARATION_PX) * 2.0)
+                if snap_delta <= snap_limit:
+                    selected_native = ideal_native
+                    selected_display = ideal_display
         except Exception:
             selected_display = None
             selected_native = None
@@ -3684,18 +4160,47 @@ def _current_phase_delta_expression() -> str:
         return fallback
 
 
-def _current_iodine_z() -> float:
-    """Return the active iodine z slider value clamped to [0, 1]."""
+def _current_phi_l_divisor() -> float:
+    """Return the active HT L-divisor used in ``phi = delta + 2*pi*L/div``."""
+
+    fallback = normalize_phi_l_divisor(
+        defaults.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR),
+        fallback=DEFAULT_PHI_L_DIVISOR,
+    )
+    var = globals().get("phi_l_divisor_var")
+    if var is None:
+        return fallback
+
+    try:
+        value = var.get()
+    except Exception:
+        value = fallback
+    return normalize_phi_l_divisor(value, fallback=fallback)
+
+
+def _current_iodine_z(active_cif_path=None) -> float:
+    """Return iodine z inferred from the active CIF (clamped to [0, 1])."""
 
     fallback = float(defaults.get("iodine_z", 0.0))
     if not np.isfinite(fallback):
         fallback = 0.0
-    var = globals().get("iodine_z_var")
-    if var is None:
-        return float(np.clip(fallback, 0.0, 1.0))
 
+    cif_path = str(active_cif_path) if active_cif_path is not None else None
+    if not cif_path:
+        try:
+            cif_path = _active_primary_cif_path()
+        except Exception:
+            cif_path = str(cif_file)
+
+    value = None
     try:
-        value = float(var.get())
+        value = _infer_iodine_z_like_diffuse(cif_path)
+    except Exception:
+        value = None
+    if value is None:
+        value = fallback
+    try:
+        value = float(value)
     except Exception:
         value = fallback
     if not np.isfinite(value):
@@ -3747,7 +4252,8 @@ peak_millers = []
 peak_intensities = []
 peak_records = []
 selected_peak_record = None
-HKL_PICK_MAX_HITS_PER_REFLECTION = 2
+# 0 disables the cap and keeps all distinct per-reflection hit candidates.
+HKL_PICK_MAX_HITS_PER_REFLECTION = 0
 HKL_PICK_MIN_SEPARATION_PX = 2.0
 HKL_PICK_MAX_DISTANCE_PX = 12.0
 
@@ -3802,9 +4308,13 @@ def do_update():
         pixel_size=pixel_size_m,
     )
 
-    global two_theta_range, _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht, _last_phase_delta_expression
+    global two_theta_range, _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
+    global _last_phi_l_divisor, _last_phase_delta_expression
+    global _last_atom_site_fractional_signature
     phase_delta_expression_current = _current_phase_delta_expression()
+    phi_l_divisor_current = _current_phi_l_divisor()
     iodine_z_current = _current_iodine_z()
+    atom_site_signature = _atom_site_fractional_signature(_current_atom_site_fractional_values())
     need_rebuild = False
     if not math.isclose(new_two_theta_max, two_theta_range[1], rel_tol=1e-6, abs_tol=1e-6):
         two_theta_range = (0.0, new_two_theta_max)
@@ -3815,7 +4325,16 @@ def do_update():
         need_rebuild = True
     if not math.isclose(iodine_z_current, _last_iodine_z_for_ht, rel_tol=1e-9, abs_tol=1e-9):
         need_rebuild = True
+    if not math.isclose(
+        float(phi_l_divisor_current),
+        float(_last_phi_l_divisor),
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    ):
+        need_rebuild = True
     if phase_delta_expression_current != _last_phase_delta_expression:
+        need_rebuild = True
+    if atom_site_signature != _last_atom_site_fractional_signature:
         need_rebuild = True
 
     if need_rebuild:
@@ -3965,7 +4484,7 @@ def do_update():
                     optics_mode=optics_mode_flag,
                 ) + (None,)
 
-        img1, maxpos1, _, _, _, _, _ = run_one(ht_curves_cache["curves"], None, a_updated, c_updated)
+        img1, maxpos1, _, _, _, _, _ = run_one(SIM_MILLER1, SIM_INTENS1, a_updated, c_updated)
         if SIM_MILLER2.size > 0:
             img2, maxpos2, _, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
         else:
@@ -4015,7 +4534,11 @@ def do_update():
     peak_intensities.clear()
     peak_records.clear()
 
-    max_hits_per_reflection = max(1, int(HKL_PICK_MAX_HITS_PER_REFLECTION))
+    try:
+        max_hits_raw = int(HKL_PICK_MAX_HITS_PER_REFLECTION)
+    except Exception:
+        max_hits_raw = 0
+    max_hits_per_reflection = max_hits_raw if max_hits_raw > 0 else None
     min_sep_sq = float(HKL_PICK_MIN_SEPARATION_PX) ** 2
 
     # hit_tables is a numba.typed.List of 2-D arrays, one per reflection
@@ -4045,7 +4568,10 @@ def do_update():
             if too_close:
                 continue
             chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
-            if len(chosen_rows) >= max_hits_per_reflection:
+            if (
+                max_hits_per_reflection is not None
+                and len(chosen_rows) >= max_hits_per_reflection
+            ):
                 break
 
         for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
@@ -4053,6 +4579,13 @@ def do_update():
             peak_positions.append((disp_cx, disp_cy))      # display coords
             peak_intensities.append(float(I))
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
+            hkl_raw = (float(H), float(K), float(L))
+            m_val = float(H * H + H * K + K * K)
+            qr_val = (
+                (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
+                if float(av_used) > 0.0 and np.isfinite(float(av_used)) and m_val >= 0.0
+                else float("nan")
+            )
             peak_millers.append(hkl)
             peak_records.append(
                 {
@@ -4061,7 +4594,9 @@ def do_update():
                     "native_col": float(cx),
                     "native_row": float(cy),
                     "hkl": hkl,
+                    "hkl_raw": hkl_raw,
                     "intensity": float(I),
+                    "qr": float(qr_val),
                     "phi": float(_phi),
                     "source_table_index": int(table_idx),
                     "source_row_index": int(row_idx),
@@ -4521,22 +5056,32 @@ def reset_to_defaults():
 
     _set_scale_factor_value(1.0, adjust_range=False, reset_override=True)
 
-    # ALSO reset occupancies to defaults for all configured structure sites.
+    # ALSO reset occupancies to defaults for all configured unique atom sites.
     for idx, occ_var in enumerate(occ_vars):
         default_occ = occ[idx] if idx < len(occ) else occ[-1]
         occ_var.set(default_occ)
+    for idx, axis_vars in enumerate(atom_site_fract_vars):
+        if idx >= len(atom_site_fractional_metadata):
+            break
+        row = atom_site_fractional_metadata[idx]
+        axis_vars["x"].set(float(row["x"]))
+        axis_vars["y"].set(float(row["y"]))
+        axis_vars["z"].set(float(row["z"]))
+    _reset_atom_site_override_cache()
     p0_var.set(defaults['p0'])
     p1_var.set(defaults['p1'])
     p2_var.set(defaults['p2'])
     w0_var.set(defaults['w0'])
     w1_var.set(defaults['w1'])
     w2_var.set(defaults['w2'])
-    iodine_z_var.set(float(defaults['iodine_z']))
     finite_stack_var.set(defaults['finite_stack'])
     stack_layers_var.set(int(defaults['stack_layers']))
     phase_delta_expr_var.set(str(defaults['phase_delta_expression']))
+    phi_l_divisor_var.set(float(defaults['phi_l_divisor']))
     if _phase_delta_entry_var is not None:
         _phase_delta_entry_var.set(_current_phase_delta_expression())
+    if _phi_l_divisor_entry_var is not None:
+        _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
     _sync_finite_controls()
 
     update_mosaic_cache()
@@ -4892,8 +5437,8 @@ save_button = ttk.Button(
         resolution_var,
         custom_samples_var,
         optics_mode_var,
-        phase_delta_expr_var,
-        iodine_z_var,
+        phase_delta_expr_var=phase_delta_expr_var,
+        phi_l_divisor_var=phi_l_divisor_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -4924,11 +5469,12 @@ load_button = ttk.Button(
                 resolution_var,
                 custom_samples_var,
                 optics_mode_var,
-                phase_delta_expr_var,
-                iodine_z_var,
+                phase_delta_expr_var=phase_delta_expr_var,
+                phi_l_divisor_var=phi_l_divisor_var,
             )
         ),
         (_phase_delta_entry_var.set(_current_phase_delta_expression()) if _phase_delta_entry_var is not None else None),
+        (_phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}") if _phi_l_divisor_entry_var is not None else None),
         ensure_valid_resolution_choice(),
         schedule_update()
     )
@@ -7553,24 +8099,33 @@ else:
 #  OCCUPANCY CONTROLS: one control per structure site in the loaded CIF.
 # ---------------------------------------------------------------------------
 occ_vars = [tk.DoubleVar(value=float(val)) for val in occ]
+atom_site_fract_vars = [
+    {
+        "x": tk.DoubleVar(value=float(row["x"])),
+        "y": tk.DoubleVar(value=float(row["y"])),
+        "z": tk.DoubleVar(value=float(row["z"])),
+    }
+    for row in atom_site_fractional_metadata
+]
 finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
 stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
-iodine_z_var = tk.DoubleVar(value=float(defaults['iodine_z']))
 phase_delta_expr_var = tk.StringVar(value=str(defaults['phase_delta_expression']))
+phi_l_divisor_var = tk.DoubleVar(value=float(defaults['phi_l_divisor']))
 _layers_scale_widget = None
 _layers_entry_widget = None
 _layers_entry_var = None
 _phase_delta_entry_var = None
+_phi_l_divisor_entry_var = None
 
 
 def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
-    """Build a user-facing occupancy label with expanded structure site name."""
+    """Build a user-facing occupancy label for a unique atom site."""
 
     idx = int(site_idx)
     atom_name = (
         occupancy_site_labels[idx]
         if idx < len(occupancy_site_labels)
-        else "not in structure"
+        else "not in CIF"
     )
     prefix = "Input Occupancy" if input_label else "Occupancy"
     return f"{prefix} Site {idx + 1} ({atom_name})"
@@ -7593,14 +8148,19 @@ def _rebuild_diffraction_inputs(
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
-    global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht, _last_phase_delta_expression
-    global _last_finite_stack, _last_stack_layers
+    global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
+    global _last_phi_l_divisor, _last_phase_delta_expression
+    global _last_finite_stack, _last_stack_layers, _last_atom_site_fractional_signature
     global intensities_cif1, intensities_cif2
 
     finite_flag = bool(finite_stack_var.get())
     layers = int(max(1, stack_layers_var.get()))
-    iodine_z_current = _current_iodine_z()
     phase_delta_expression_current = _current_phase_delta_expression()
+    phi_l_divisor_current = _current_phi_l_divisor()
+    atom_site_values = _current_atom_site_fractional_values()
+    atom_site_signature = _atom_site_fractional_signature(atom_site_values)
+    active_cif_path = _active_primary_cif_path(atom_site_values)
+    iodine_z_current = _current_iodine_z(active_cif_path)
 
     if (
         not force
@@ -7610,9 +8170,11 @@ def _rebuild_diffraction_inputs(
         and math.isclose(float(a_axis), _last_a_for_ht, rel_tol=1e-9, abs_tol=1e-9)
         and math.isclose(float(c_axis), _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
         and math.isclose(iodine_z_current, _last_iodine_z_for_ht, rel_tol=1e-9, abs_tol=1e-9)
+        and math.isclose(float(phi_l_divisor_current), float(_last_phi_l_divisor), rel_tol=1e-9, abs_tol=1e-9)
         and phase_delta_expression_current == _last_phase_delta_expression
         and _last_finite_stack == finite_flag
         and (not finite_flag or _last_stack_layers == layers)
+        and atom_site_signature == _last_atom_site_fractional_signature
     ):
         last_simulation_signature = None
         if trigger_update:
@@ -7629,9 +8191,11 @@ def _rebuild_diffraction_inputs(
             or not math.isclose(cache.get("a", float("nan")), float(a_axis), rel_tol=1e-9, abs_tol=1e-9)
             or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
             or not math.isclose(cache.get("iodine_z", float("nan")), iodine_z_current, rel_tol=1e-9, abs_tol=1e-9)
+            or not math.isclose(cache.get("phi_l_divisor", float("nan")), float(phi_l_divisor_current), rel_tol=1e-9, abs_tol=1e-9)
             or cache.get("phase_delta_expression", "") != phase_delta_expression_current
             or bool(cache.get("finite_stack")) != finite_flag
             or (finite_flag and cache.get("stack_layers") != layers)
+            or cache.get("cif_path", str(cif_file)) != active_cif_path
         ):
             cache = build_ht_cache(
                 p_val,
@@ -7639,9 +8203,11 @@ def _rebuild_diffraction_inputs(
                 a_axis,
                 c_axis,
                 iodine_z_current,
+                phi_l_divisor_current,
                 finite_flag,
                 layers,
                 phase_delta_expression_current,
+                cif_path_override=active_cif_path,
             )
             ht_cache_multi[label] = cache
         return cache
@@ -7652,14 +8218,17 @@ def _rebuild_diffraction_inputs(
         get_cache("p2", p_vals[2]),
     ]
 
-    combined_qr_local = combine_qr_dicts(caches, weights)
-    arrays_local = qr_dict_to_arrays(combined_qr_local)
+    combined_ht_local = combine_ht_dicts(caches, weights)
+    combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
+    arrays_local = ht_dict_to_arrays(combined_ht_local)
     ht_curves_cache = {
-        "curves": combined_qr_local,
+        "curves": combined_ht_local,
+        "qr_curves": combined_qr_local,
         "arrays": arrays_local,
         "a": float(a_axis),
         "c": float(c_axis),
         "iodine_z": float(iodine_z_current),
+        "phi_l_divisor": float(phi_l_divisor_current),
         "phase_delta_expression": phase_delta_expression_current,
         "finite_stack": finite_flag,
         "stack_layers": layers,
@@ -7670,9 +8239,11 @@ def _rebuild_diffraction_inputs(
     _last_a_for_ht = float(a_axis)
     _last_c_for_ht = float(c_axis)
     _last_iodine_z_for_ht = float(iodine_z_current)
+    _last_phi_l_divisor = float(phi_l_divisor_current)
     _last_phase_delta_expression = phase_delta_expression_current
     _last_finite_stack = finite_flag
     _last_stack_layers = layers
+    _last_atom_site_fractional_signature = atom_site_signature
 
     m1, i1, d1, det1 = arrays_local
 
@@ -7801,6 +8372,10 @@ def _normalize_phase_delta_expression_value(raw_value):
     return validate_phase_delta_expression(normalized)
 
 
+def _normalize_phi_l_divisor_value(raw_value):
+    return normalize_phi_l_divisor(raw_value, fallback=_current_phi_l_divisor())
+
+
 def _sync_layer_entry_from_var(*_):
     global _layers_entry_var
     if _layers_entry_var is None:
@@ -7848,6 +8423,32 @@ def _commit_phase_delta_expression_entry(_event=None):
         return
 
     _phase_delta_entry_var.set(value)
+
+
+def _sync_phi_l_divisor_entry_from_var(*_):
+    global _phi_l_divisor_entry_var
+    if _phi_l_divisor_entry_var is None:
+        return
+    normalized = f"{_current_phi_l_divisor():.6g}"
+    if _phi_l_divisor_entry_var.get().strip() != normalized:
+        _phi_l_divisor_entry_var.set(normalized)
+
+
+def _commit_phi_l_divisor_entry(_event=None):
+    global _phi_l_divisor_entry_var
+    if _phi_l_divisor_entry_var is None:
+        return
+
+    value = _normalize_phi_l_divisor_value(_phi_l_divisor_entry_var.get())
+    current = _current_phi_l_divisor()
+    if not math.isclose(current, value, rel_tol=1e-12, abs_tol=1e-12):
+        phi_l_divisor_var.set(float(value))
+        _sync_phi_l_divisor_entry_from_var()
+        update_occupancies()
+        progress_label.config(text="Updated HT phi L divisor.")
+        return
+
+    _sync_phi_l_divisor_entry_from_var()
 
 
 def _on_finite_toggle():
@@ -7908,6 +8509,21 @@ _layers_entry_widget = layers_entry
 stack_layers_var.trace_add("write", _sync_layer_entry_from_var)
 _sync_layer_entry_from_var()
 _sync_finite_controls()
+phi_div_row = ttk.Frame(finite_frame)
+phi_div_row.pack(fill=tk.X, padx=5, pady=2)
+ttk.Label(phi_div_row, text="Phi L divisor:").pack(side=tk.LEFT)
+_phi_l_divisor_entry_var = tk.StringVar(value=f"{_current_phi_l_divisor():.6g}")
+phi_div_entry = ttk.Entry(
+    phi_div_row,
+    textvariable=_phi_l_divisor_entry_var,
+    width=12,
+    justify="right",
+)
+phi_div_entry.pack(side=tk.RIGHT)
+phi_div_entry.bind("<Return>", _commit_phi_l_divisor_entry)
+phi_div_entry.bind("<FocusOut>", _commit_phi_l_divisor_entry)
+phi_l_divisor_var.trace_add("write", _sync_phi_l_divisor_entry_from_var)
+_sync_phi_l_divisor_entry_from_var()
 phase_row = ttk.Frame(finite_frame)
 phase_row.pack(fill=tk.X, padx=5, pady=2)
 ttk.Label(phase_row, text="Phase delta equation:").pack(side=tk.LEFT)
@@ -7920,8 +8536,6 @@ phase_entry = ttk.Entry(
 phase_entry.pack(side=tk.RIGHT)
 phase_entry.bind("<Return>", _commit_phase_delta_expression_entry)
 phase_entry.bind("<FocusOut>", _commit_phase_delta_expression_entry)
-iodine_z_var, _ = create_slider('z(I)', 0.0, 1.0, defaults['iodine_z'], 0.001,
-                          stack_frame.frame, update_occupancies)
 p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
                           stack_frame.frame, update_occupancies)
 w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
@@ -7950,6 +8564,13 @@ occ_slider_frame.pack(fill=tk.X, padx=0, pady=0)
 # --- Add numeric input fields and a Force Update button ---
 occ_entry_frame = ttk.Frame(occ_frame.frame)
 occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
+
+# Fractional atom-site coordinate controls from raw CIF rows.
+atom_site_frame = CollapsibleFrame(right_col, text='Atom Site Fractional Coordinates')
+atom_site_frame.pack(fill=tk.X, padx=5, pady=5)
+atom_site_table_frame = ttk.Frame(atom_site_frame.frame)
+atom_site_table_frame.pack(fill=tk.X, padx=5, pady=5)
+atom_site_coord_entry_widgets = []
 
 
 def _rebuild_occupancy_controls():
@@ -8015,13 +8636,69 @@ def _current_occupancy_values():
     return values
 
 
+def _atom_site_fractional_label_text(site_idx: int) -> str:
+    idx = int(site_idx)
+    if idx < len(atom_site_fractional_metadata):
+        return str(atom_site_fractional_metadata[idx].get("label", f"site_{idx + 1}"))
+    return f"site_{idx + 1}"
+
+
+def _rebuild_atom_site_fractional_controls():
+    """Recreate x/y/z entry controls for atom-site fractional coordinates."""
+
+    global atom_site_coord_entry_widgets
+    for child in atom_site_table_frame.winfo_children():
+        child.destroy()
+    atom_site_coord_entry_widgets = []
+
+    if not atom_site_fract_vars:
+        ttk.Label(
+            atom_site_table_frame,
+            text="No _atom_site_fract_x/_y/_z loop found in the active CIF.",
+        ).grid(row=0, column=0, sticky="w", padx=2, pady=2)
+        return
+
+    ttk.Label(atom_site_table_frame, text="Site").grid(row=0, column=0, sticky="w", padx=2, pady=2)
+    ttk.Label(atom_site_table_frame, text="x").grid(row=0, column=1, sticky="w", padx=2, pady=2)
+    ttk.Label(atom_site_table_frame, text="y").grid(row=0, column=2, sticky="w", padx=2, pady=2)
+    ttk.Label(atom_site_table_frame, text="z").grid(row=0, column=3, sticky="w", padx=2, pady=2)
+
+    for idx, axis_vars in enumerate(atom_site_fract_vars):
+        ttk.Label(
+            atom_site_table_frame,
+            text=_atom_site_fractional_label_text(idx),
+        ).grid(row=idx + 1, column=0, sticky="w", padx=2, pady=2)
+
+        entry_x = ttk.Entry(atom_site_table_frame, textvariable=axis_vars["x"], width=10)
+        entry_y = ttk.Entry(atom_site_table_frame, textvariable=axis_vars["y"], width=10)
+        entry_z = ttk.Entry(atom_site_table_frame, textvariable=axis_vars["z"], width=10)
+        entry_x.grid(row=idx + 1, column=1, padx=2, pady=2, sticky="ew")
+        entry_y.grid(row=idx + 1, column=2, padx=2, pady=2, sticky="ew")
+        entry_z.grid(row=idx + 1, column=3, padx=2, pady=2, sticky="ew")
+        entry_x.bind("<Return>", update_occupancies)
+        entry_y.bind("<Return>", update_occupancies)
+        entry_z.bind("<Return>", update_occupancies)
+        entry_x.bind("<FocusOut>", update_occupancies)
+        entry_y.bind("<FocusOut>", update_occupancies)
+        entry_z.bind("<FocusOut>", update_occupancies)
+        atom_site_coord_entry_widgets.extend([entry_x, entry_y, entry_z])
+
+    atom_site_table_frame.columnconfigure(0, weight=1)
+    atom_site_table_frame.columnconfigure(1, weight=1)
+    atom_site_table_frame.columnconfigure(2, weight=1)
+    atom_site_table_frame.columnconfigure(3, weight=1)
+
+
 def _apply_primary_cif_path(raw_path):
     """Load a new primary CIF file and rebuild diffraction inputs."""
 
     global cif_file, cf, blk, occupancy_site_labels, occupancy_site_count
+    global occupancy_site_expanded_map
+    global atom_site_fractional_metadata, atom_site_fract_vars
     global occ, occ_vars
     global ht_cache_multi, last_simulation_signature
     global defaults, av, cv, av2, cv2
+    global _last_atom_site_fractional_signature
 
     text_path = str(raw_path).strip().strip('"').strip("'")
     if not text_path:
@@ -8037,8 +8714,11 @@ def _apply_primary_cif_path(raw_path):
     old_cf = cf
     old_blk = blk
     old_labels = list(occupancy_site_labels)
+    old_expanded_map = list(occupancy_site_expanded_map)
     old_occ = list(occ)
     old_occ_values = _current_occupancy_values()
+    old_atom_site_metadata = [dict(row) for row in atom_site_fractional_metadata]
+    old_atom_site_values = _current_atom_site_fractional_values()
     old_av = float(av)
     old_cv = float(cv)
     old_av2 = av2
@@ -8054,11 +8734,6 @@ def _apply_primary_cif_path(raw_path):
         old_slider_c = float(c_var.get())
     except Exception:
         old_slider_c = old_default_c
-    try:
-        old_slider_iodine = float(iodine_z_var.get())
-    except Exception:
-        old_slider_iodine = old_default_iodine
-
     try:
         new_cf = CifFile.ReadCif(str(candidate))
         keys = list(new_cf.keys())
@@ -8076,13 +8751,21 @@ def _apply_primary_cif_path(raw_path):
         except Exception:
             new_iodine_z = None
         if new_iodine_z is None or not np.isfinite(float(new_iodine_z)):
-            new_iodine_z = old_slider_iodine
+            new_iodine_z = old_default_iodine
         new_iodine_z = float(np.clip(float(new_iodine_z), 0.0, 1.0))
 
-        new_labels = _extract_occupancy_site_labels(new_blk, str(candidate))
+        new_labels, new_expanded_map = _extract_occupancy_site_metadata(new_blk, str(candidate))
         site_count = len(new_labels) if new_labels else max(1, len(old_occ_values))
         new_occ_values = _ensure_numeric_vector(old_occ_values, [1.0], site_count)
         new_occ_values = [min(1.0, max(0.0, float(v))) for v in new_occ_values]
+        new_atom_site_metadata = _extract_atom_site_fractional_metadata(new_blk)
+        if new_atom_site_metadata:
+            new_atom_site_values = [
+                (float(row["x"]), float(row["y"]), float(row["z"]))
+                for row in new_atom_site_metadata
+            ]
+        else:
+            new_atom_site_values = []
 
         try:
             p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
@@ -8101,18 +8784,32 @@ def _apply_primary_cif_path(raw_path):
         cf = new_cf
         blk = new_blk
         occupancy_site_labels = new_labels
+        occupancy_site_expanded_map = list(new_expanded_map)
         occupancy_site_count = site_count
         occ = list(new_occ_values)
+        atom_site_fractional_metadata = [dict(row) for row in new_atom_site_metadata]
 
         if len(occ_vars) != site_count:
             occ_vars = [tk.DoubleVar(value=float(v)) for v in new_occ_values]
         else:
             for occ_var, value in zip(occ_vars, new_occ_values):
                 occ_var.set(float(value))
+        atom_site_fract_vars = [
+            {
+                "x": tk.DoubleVar(value=float(x_val)),
+                "y": tk.DoubleVar(value=float(y_val)),
+                "z": tk.DoubleVar(value=float(z_val)),
+            }
+            for (x_val, y_val, z_val) in new_atom_site_values
+        ]
         _rebuild_occupancy_controls()
+        _rebuild_atom_site_fractional_controls()
 
         cif_file_var.set(cif_file)
-        iodine_z_var.set(float(new_iodine_z))
+        _reset_atom_site_override_cache()
+        _last_atom_site_fractional_signature = _atom_site_fractional_signature(
+            _current_atom_site_fractional_values()
+        )
         ht_cache_multi = {}
         _rebuild_diffraction_inputs(
             new_occ_values,
@@ -8142,8 +8839,10 @@ def _apply_primary_cif_path(raw_path):
         cf = old_cf
         blk = old_blk
         occupancy_site_labels = old_labels
+        occupancy_site_expanded_map = old_expanded_map
         occupancy_site_count = len(old_labels) if old_labels else max(1, len(old_occ_values))
         occ = old_occ if old_occ else list(old_occ_values)
+        atom_site_fractional_metadata = [dict(row) for row in old_atom_site_metadata]
         av = old_av
         cv = old_cv
         av2 = old_av2
@@ -8157,10 +8856,22 @@ def _apply_primary_cif_path(raw_path):
         else:
             for occ_var, value in zip(occ_vars, old_occ_values):
                 occ_var.set(float(value))
+        atom_site_fract_vars = [
+            {
+                "x": tk.DoubleVar(value=float(x_val)),
+                "y": tk.DoubleVar(value=float(y_val)),
+                "z": tk.DoubleVar(value=float(z_val)),
+            }
+            for (x_val, y_val, z_val) in old_atom_site_values
+        ]
         _rebuild_occupancy_controls()
+        _rebuild_atom_site_fractional_controls()
+        _reset_atom_site_override_cache()
+        _last_atom_site_fractional_signature = _atom_site_fractional_signature(
+            _current_atom_site_fractional_values()
+        )
         a_var.set(float(old_slider_a))
         c_var.set(float(old_slider_c))
-        iodine_z_var.set(float(old_slider_iodine))
 
         cif_file_var.set(old_cif_file)
         progress_label.config(text=f"Failed to load CIF: {exc}")
@@ -8194,13 +8905,14 @@ def _apply_primary_cif_from_entry(_event=None):
 def _open_diffuse_cif_toggle():
     """Open algebraic HT diffuse viewer using the active simulation inputs."""
 
-    active_cif = str(cif_file)
+    source_cif = str(cif_file)
+    active_cif = _active_primary_cif_path()
     if not Path(active_cif).is_file():
-        progress_label.config(text=f"CIF file not found: {active_cif}")
+        progress_label.config(text=f"CIF file not found: {source_cif}")
         return
 
     try:
-        occ_vals = _current_occupancy_values()
+        occ_vals = _expand_occupancy_values_for_generated_sites(_current_occupancy_values())
         p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
         w_vals = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
         c_axis = float(c_var.get())
@@ -8229,10 +8941,11 @@ def _open_diffuse_cif_toggle():
             two_theta_max=two_theta_max,
             finite_stack=finite_flag,
             stack_layers=layer_count,
-            iodine_z=_current_iodine_z(),
+            iodine_z=_current_iodine_z(active_cif),
             phase_delta_expression=_current_phase_delta_expression(),
+            phi_l_divisor=_current_phi_l_divisor(),
         )
-        progress_label.config(text=f"Opened diffuse HT viewer: {Path(active_cif).name}")
+        progress_label.config(text=f"Opened diffuse HT viewer: {Path(source_cif).name}")
     except Exception as exc:
         progress_label.config(text=f"Failed to open diffuse HT viewer: {exc}")
 
@@ -8240,13 +8953,14 @@ def _open_diffuse_cif_toggle():
 def _export_diffuse_ht_txt():
     """Export algebraic HT values to a fixed-width text table."""
 
-    active_cif = str(cif_file)
+    source_cif = str(cif_file)
+    active_cif = _active_primary_cif_path()
     if not Path(active_cif).is_file():
-        progress_label.config(text=f"CIF file not found: {active_cif}")
+        progress_label.config(text=f"CIF file not found: {source_cif}")
         return
 
     try:
-        occ_vals = _current_occupancy_values()
+        occ_vals = _expand_occupancy_values_for_generated_sites(_current_occupancy_values())
         p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
         w_vals = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
         a_axis = float(a_var.get())
@@ -8262,11 +8976,11 @@ def _export_diffuse_ht_txt():
     except Exception:
         two_theta_max = None
 
-    default_name = f"{Path(active_cif).stem}_algebraic_ht.txt"
+    default_name = f"{Path(source_cif).stem}_algebraic_ht.txt"
     try:
         initial_dir = str(get_dir("downloads"))
     except Exception:
-        initial_dir = str(Path(active_cif).expanduser().parent)
+        initial_dir = str(Path(source_cif).expanduser().parent)
 
     save_path = filedialog.asksaveasfilename(
         title="Export Algebraic HT Table",
@@ -8292,8 +9006,9 @@ def _export_diffuse_ht_txt():
             two_theta_max=two_theta_max,
             finite_stack=finite_flag,
             stack_layers=layer_count,
-            iodine_z=_current_iodine_z(),
+            iodine_z=_current_iodine_z(active_cif),
             phase_delta_expression=_current_phase_delta_expression(),
+            phi_l_divisor=_current_phi_l_divisor(),
         )
         progress_label.config(
             text=(
@@ -8306,6 +9021,7 @@ def _export_diffuse_ht_txt():
 
 
 _rebuild_occupancy_controls()
+_rebuild_atom_site_fractional_controls()
 
 cif_file_var = tk.StringVar(value=str(cif_file))
 cif_frame = CollapsibleFrame(right_col, text='Primary CIF')
@@ -8487,11 +9203,13 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             resolution_var,
             custom_samples_var,
             optics_mode_var,
-            phase_delta_expr_var,
-            iodine_z_var,
+            phase_delta_expr_var=phase_delta_expr_var,
+            phi_l_divisor_var=phi_l_divisor_var,
         )
         if _phase_delta_entry_var is not None:
             _phase_delta_entry_var.set(_current_phase_delta_expression())
+        if _phi_l_divisor_entry_var is not None:
+            _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
         ensure_valid_resolution_choice()
         profile_loaded = True
     else:

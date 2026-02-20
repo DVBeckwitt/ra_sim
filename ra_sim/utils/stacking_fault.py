@@ -15,6 +15,7 @@ AREA    = (2*np.pi)**2 / A_C * N_P
 _TWO_PI = 2.0 * np.pi
 
 DEFAULT_PHASE_DELTA_EXPRESSION = "2*pi*((2*h + k)/3)"
+DEFAULT_PHI_L_DIVISOR = 3.0
 
 # Cache of base L grids and F2 values keyed by geometry and occupancy mapping.
 # Each entry: {(h,k): {"L": array, "F2": array}}
@@ -80,6 +81,29 @@ def normalize_phase_delta_expression(
     if not text:
         text = str(fallback).strip()
     return text
+
+
+def normalize_phi_l_divisor(
+    value: float | str | None,
+    *,
+    fallback: float = DEFAULT_PHI_L_DIVISOR,
+) -> float:
+    """Return a finite positive divisor used in the HT out-of-plane phase."""
+
+    try:
+        fallback_val = float(fallback)
+    except (TypeError, ValueError):
+        fallback_val = float(DEFAULT_PHI_L_DIVISOR)
+    if not np.isfinite(fallback_val) or fallback_val <= 0.0:
+        fallback_val = float(DEFAULT_PHI_L_DIVISOR)
+
+    try:
+        out = float(fallback_val if value is None else value)
+    except (TypeError, ValueError):
+        out = fallback_val
+    if not np.isfinite(out) or out <= 0.0:
+        out = fallback_val
+    return float(out)
 
 
 class _PhaseDeltaExprValidator(ast.NodeVisitor):
@@ -672,6 +696,7 @@ def analytical_ht_intensity_for_pair(
     p: float,
     *,
     phase_delta_expression: str | None = None,
+    phi_l_divisor: float = DEFAULT_PHI_L_DIVISOR,
     finite_layers: int | None = None,
     f2_only: bool = False,
 ) -> np.ndarray:
@@ -705,7 +730,8 @@ def analytical_ht_intensity_for_pair(
     z = (1.0 - p_flipped) + p_flipped * np.exp(1j * delta)
     f_val = np.minimum(np.abs(z), 1.0 - float(P_CLAMP))
     psi = np.angle(z)
-    phi = delta + _TWO_PI * L_vals * (1.0 / 3.0)
+    phi_div = normalize_phi_l_divisor(phi_l_divisor)
+    phi = delta + _TWO_PI * L_vals * (1.0 / phi_div)
 
     if finite_layers is None:
         R = (1.0 - f_val**2) / (1.0 + f_val**2 - 2.0 * f_val * np.cos(phi - psi))
@@ -767,11 +793,12 @@ def _I_inf_markov(
     k: int,
     F2: np.ndarray,
     *,
+    phi_l_divisor: float = DEFAULT_PHI_L_DIVISOR,
     finite_layers: int | None = None,
 ) -> np.ndarray:
     rho, alpha = _rho_alpha_from_p(p)
     phi = _slip_phase(h, k)
-    theta = _TWO_PI * (L / 3.0)
+    theta = _TWO_PI * (L / normalize_phi_l_divisor(phi_l_divisor))
     Rtheta = _R_from_transfer(
         phi,
         theta,
@@ -988,9 +1015,10 @@ def ht_Iinf_dict(
     lambda_: float = 1.5406,
     a_lattice: float | None = None,
     c_lattice: float | None = None,
-    phase_z_divisor: float = 3.0,
+    phase_z_divisor: float | None = None,
     iodine_z: float | None = None,
     phase_delta_expression: str | None = None,
+    phi_l_divisor: float = DEFAULT_PHI_L_DIVISOR,
     *,
     finite_stack: bool = False,
     stack_layers: int = 50,
@@ -1007,17 +1035,25 @@ def ht_Iinf_dict(
     effective c-axis length instead of the raw 2H value from the CIF.
     ``a_lattice`` optionally overrides the active in-plane lattice constant
     used for |Q| and two-theta clipping.
-    ``phase_z_divisor`` controls vertical phase scaling in F². The default
-    (3.0) matches the legacy algebraic HT convention.
+    ``phase_z_divisor`` controls vertical phase scaling in F². When omitted it
+    defaults to ``phi_l_divisor`` so the F² vertical phase and HT correlation
+    phase use the same L-axis convention.
     ``iodine_z`` optionally pins the iodine z-plane used in F². When ``None``,
     the value is inferred from the CIF in the same way as diffuse_cif_toggle.
     ``phase_delta_expression`` defines delta(h, k, L, p) in radians for the
     analytical HT correlation term. The default expression is
     ``2*pi*((2*h + k)/3)``.
+    ``phi_l_divisor`` sets the out-of-plane term in the HT phase as
+    ``phi = delta + 2*pi*L/phi_l_divisor``. The legacy default is ``3.0``.
     When ``finite_stack`` is ``True`` the per-layer finite-thickness factor for
     ``stack_layers`` layers is applied instead of the infinite-domain limit.
     """
     phase_expr = validate_phase_delta_expression(phase_delta_expression)
+    phi_div = normalize_phi_l_divisor(phi_l_divisor)
+    if phase_z_divisor is None:
+        phase_z_div = phi_div
+    else:
+        phase_z_div = normalize_phi_l_divisor(phase_z_divisor, fallback=phi_div)
 
     base = _get_base_curves(
         cif_path=cif_path,
@@ -1030,7 +1066,7 @@ def ht_Iinf_dict(
         a_lattice=a_lattice,
         c_lattice=c_lattice,
         occ_factors=occ,
-        phase_z_divisor=phase_z_divisor,
+        phase_z_divisor=phase_z_div,
         iodine_z=iodine_z,
     )
 
@@ -1047,6 +1083,7 @@ def ht_Iinf_dict(
             k,
             p,
             phase_delta_expression=phase_expr,
+            phi_l_divisor=phi_div,
             finite_layers=finite_layers,
         )
         out[(h, k)] = {"L": L_vals.copy(), "I": I}
