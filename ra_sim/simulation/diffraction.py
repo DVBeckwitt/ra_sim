@@ -759,7 +759,8 @@ def safe_path_length(thickness_m, theta_plane):
 @njit(fastmath=True)
 def solve_q(
     k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H, K, L,
-    N_steps=1000
+    N_steps=1000,
+    adaptive=True,
 ):
     """
     Build a 'circle' in reciprocal space for the reflection G_vec, i.e. the
@@ -780,7 +781,9 @@ def solve_q(
     """
     status = 0
     if N_steps <= 0:
-        return np.zeros((0, 4), dtype=np.float64), status
+        N_steps = DEFAULT_SOLVE_Q_STEPS
+    if N_steps < 16:
+        N_steps = 16
 
     G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
     if G_sq < 1e-14:
@@ -841,25 +844,103 @@ def solve_q(
     e2y /= e2_len
     e2z /= e2_len
 
-    # Parameterize the circle.
-    if N_steps == DEFAULT_SOLVE_Q_STEPS:
-        dtheta = _DEFAULT_SOLVE_Q_DTHETA
-        cth = _DEFAULT_SOLVE_Q_COS
-        sth = _DEFAULT_SOLVE_Q_SIN
+    # Adaptive path: start coarse and refine only arc bins that carry weight.
+    use_adaptive = bool(adaptive) and (N_steps >= 128)
+    if use_adaptive:
+        coarse_steps = max(64, N_steps // 4)
+        if coarse_steps > N_steps:
+            coarse_steps = N_steps
     else:
-        dtheta = 2.0*np.pi / N_steps
-        theta_arr = dtheta * np.arange(N_steps)
-        cth = np.cos(theta_arr)
-        sth = np.sin(theta_arr)
+        coarse_steps = N_steps
 
-    Qx_arr = Ox + circle_r*(cth*e1x + sth*e2x)
-    Qy_arr = Oy + circle_r*(cth*e1y + sth*e2y)
-    Qz_arr = Oz + circle_r*(cth*e1z + sth*e2z)
+    if coarse_steps == DEFAULT_SOLVE_Q_STEPS:
+        dtheta_coarse = _DEFAULT_SOLVE_Q_DTHETA
+        cth_coarse = _DEFAULT_SOLVE_Q_COS
+        sth_coarse = _DEFAULT_SOLVE_Q_SIN
+    else:
+        dtheta_coarse = 2.0 * np.pi / coarse_steps
+        theta_arr_coarse = dtheta_coarse * np.arange(coarse_steps)
+        cth_coarse = np.cos(theta_arr_coarse)
+        sth_coarse = np.sin(theta_arr_coarse)
 
-    # Compute sigma(theta) on the Bragg sphere and apply arc-length weighting.
-    sigma_arr = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv)
-    ds = circle_r * dtheta
-    all_int = sigma_arr * ds
+    Qx_coarse = Ox + circle_r * (cth_coarse * e1x + sth_coarse * e2x)
+    Qy_coarse = Oy + circle_r * (cth_coarse * e1y + sth_coarse * e2y)
+    Qz_coarse = Oz + circle_r * (cth_coarse * e1z + sth_coarse * e2z)
+
+    sigma_coarse = compute_intensity_array(
+        Qx_coarse,
+        Qy_coarse,
+        Qz_coarse,
+        G_vec,
+        sigma,
+        gamma_pv,
+        eta_pv,
+    )
+    all_int_coarse = sigma_coarse * (circle_r * dtheta_coarse)
+
+    if not use_adaptive:
+        Qx_arr = Qx_coarse
+        Qy_arr = Qy_coarse
+        Qz_arr = Qz_coarse
+        all_int = all_int_coarse
+    else:
+        max_coarse_int = 0.0
+        for i in range(all_int_coarse.size):
+            if all_int_coarse[i] > max_coarse_int:
+                max_coarse_int = all_int_coarse[i]
+        adaptive_gate = max(_INTENSITY_CUTOFF, 0.02 * max_coarse_int)
+
+        active_bins = np.zeros(coarse_steps, dtype=np.uint8)
+        for i in range(coarse_steps):
+            if all_int_coarse[i] > adaptive_gate:
+                active_bins[i] = 1
+                active_bins[(i - 1) % coarse_steps] = 1
+                active_bins[(i + 1) % coarse_steps] = 1
+
+        refine_factor = max(2, N_steps // coarse_steps)
+        max_refined_pts = coarse_steps * refine_factor
+        Qx_ref = np.empty(max_refined_pts, dtype=np.float64)
+        Qy_ref = np.empty(max_refined_pts, dtype=np.float64)
+        Qz_ref = np.empty(max_refined_pts, dtype=np.float64)
+        dtheta_ref = np.empty(max_refined_pts, dtype=np.float64)
+
+        n_ref = 0
+        for i in range(coarse_steps):
+            if active_bins[i] == 1:
+                local_dtheta = dtheta_coarse / refine_factor
+                for j in range(refine_factor):
+                    theta_val = (i + (j / refine_factor)) * dtheta_coarse
+                    ct = np.cos(theta_val)
+                    st = np.sin(theta_val)
+                    Qx_ref[n_ref] = Ox + circle_r * (ct * e1x + st * e2x)
+                    Qy_ref[n_ref] = Oy + circle_r * (ct * e1y + st * e2y)
+                    Qz_ref[n_ref] = Oz + circle_r * (ct * e1z + st * e2z)
+                    dtheta_ref[n_ref] = local_dtheta
+                    n_ref += 1
+            else:
+                theta_val = i * dtheta_coarse
+                ct = np.cos(theta_val)
+                st = np.sin(theta_val)
+                Qx_ref[n_ref] = Ox + circle_r * (ct * e1x + st * e2x)
+                Qy_ref[n_ref] = Oy + circle_r * (ct * e1y + st * e2y)
+                Qz_ref[n_ref] = Oz + circle_r * (ct * e1z + st * e2z)
+                dtheta_ref[n_ref] = dtheta_coarse
+                n_ref += 1
+
+        Qx_arr = Qx_ref[:n_ref]
+        Qy_arr = Qy_ref[:n_ref]
+        Qz_arr = Qz_ref[:n_ref]
+
+        sigma_ref = compute_intensity_array(
+            Qx_arr,
+            Qy_arr,
+            Qz_arr,
+            G_vec,
+            sigma,
+            gamma_pv,
+            eta_pv,
+        )
+        all_int = sigma_ref * (circle_r * dtheta_ref[:n_ref])
 
     # Apply any intensity cutoff and construct the output.
     valid_idx = np.nonzero(all_int > _INTENSITY_CUTOFF)[0]
@@ -872,6 +953,86 @@ def solve_q(
         out[i, 3] = all_int[idx]
 
     return out, status
+
+
+@njit(fastmath=True)
+def _prepare_reflection_invariant_geometry(
+    theta_initial_deg,
+    cor_angle_deg,
+    R_z_R_y,
+    R_ZY_n,
+    P0,
+    theta_array,
+    phi_array,
+):
+    """Build sample-geometry quantities reused by every reflection."""
+
+    rad_theta_i = theta_initial_deg * (pi / 180.0)
+    cor_axis_rad = cor_angle_deg * (pi / 180.0)
+
+    ax = cos(cor_axis_rad)
+    ay = 0.0
+    az = sin(cor_axis_rad)
+    axis_norm = sqrt(ax * ax + ay * ay + az * az)
+    if axis_norm < 1e-12:
+        axis_norm = 1.0
+    ax /= axis_norm
+    ay /= axis_norm
+    az /= axis_norm
+
+    ct = cos(rad_theta_i)
+    st = sin(rad_theta_i)
+    one_ct = 1.0 - ct
+    R_cor = np.array(
+        [
+            [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
+            [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
+            [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
+        ]
+    )
+    R_sample = R_cor @ R_z_R_y
+
+    n_surf = R_cor @ R_ZY_n
+    n_surf /= sqrt(n_surf[0] * n_surf[0] + n_surf[1] * n_surf[1] + n_surf[2] * n_surf[2])
+
+    P0_rot = R_sample @ P0
+    P0_rot[0] = 0.0
+
+    n_samp = theta_array.size
+    best_idx = 0
+    if n_samp > 0:
+        best_angle = theta_array[0] * theta_array[0] + phi_array[0] * phi_array[0]
+        for ii in range(1, n_samp):
+            metric = theta_array[ii] * theta_array[ii] + phi_array[ii] * phi_array[ii]
+            if metric < best_angle:
+                best_angle = metric
+                best_idx = ii
+
+    u_ref = np.array([0.0, 0.0, -1.0])
+    e1_temp = np.cross(n_surf, u_ref)
+    e1_norm = sqrt(e1_temp[0] * e1_temp[0] + e1_temp[1] * e1_temp[1] + e1_temp[2] * e1_temp[2])
+    if e1_norm < 1e-12:
+        alt_refs = [
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            np.array([0.0, 0.0, 1.0]),
+        ]
+        for ar in alt_refs:
+            cross_tmp = np.cross(n_surf, ar)
+            cross_norm_tmp = sqrt(
+                cross_tmp[0] * cross_tmp[0]
+                + cross_tmp[1] * cross_tmp[1]
+                + cross_tmp[2] * cross_tmp[2]
+            )
+            if cross_norm_tmp > 1e-12:
+                e1_temp = cross_tmp / cross_norm_tmp
+                break
+    else:
+        e1_temp /= e1_norm
+
+    e2_temp = np.cross(n_surf, e1_temp)
+    return R_sample, n_surf, P0_rot, e1_temp, e2_temp, best_idx
+
 
 # =============================================================================
 # 5) CALCULATE_PHI
@@ -890,18 +1051,21 @@ def calculate_phi(
     sigma_rad, gamma_pv, eta_pv,
     debye_x, debye_y,
     center,
-    theta_initial_deg,
-    cor_angle_deg,
     R_x_detector, R_z_detector, n_det_rot, Detector_Pos,
     e1_det, e2_det,
-    R_z_R_y,
-    R_ZY_n,
-    P0, unit_x,
+    R_sample, n_surf, P0_rot, e1_temp, e2_temp,
+    best_idx,
+    use_exact_optics,
+    n2_sq,
+    n2_sq_real,
+    unit_x,
     save_flag, q_data, q_count, i_peaks_index,
     record_status=False,
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
     forced_sample_idx=-1,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_adaptive=True,
 ):
     """
     For a single reflection (H,K,L), build a mosaic Q_grid around G_vec.
@@ -966,76 +1130,6 @@ def calculate_phi(
     if record_status:
         statuses = np.zeros(n_samp, dtype=np.int64)
 
-    #thickness = 500.0  # film thickness in Å
-
-    #N = int(thickness/cv)  # Number of layers (approx)
-
-    # Build a sample rotation from "theta_initial_deg" about the CoR axis
-    rad_theta_i = theta_initial_deg*(pi/180.0)
-    cor_axis_rad = cor_angle_deg * (pi / 180.0)
-
-    # Build the CoR axis in the x–z plane and rotate around it with Rodrigues'
-    # formula.  See docs/cor_rotation_math.md for the derivation.  The axis is
-    # pitched away from +x by cor_axis_rad so that (ax, 0, az) = (cos φ, 0, sin φ).
-    ax = cos(cor_axis_rad)
-    ay = 0.0
-    az = sin(cor_axis_rad)
-    axis_norm = sqrt(ax * ax + ay * ay + az * az)
-    if axis_norm < 1e-12:
-        axis_norm = 1.0
-    ax /= axis_norm
-    ay /= axis_norm
-    az /= axis_norm
-
-    ct = cos(rad_theta_i)
-    st = sin(rad_theta_i)
-    one_ct = 1.0 - ct
-    R_cor = np.array([
-        [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
-        [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
-        [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
-    ])
-    R_sample = R_cor @ R_z_R_y
-
-    n_surf = R_cor @ R_ZY_n
-    n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
-
-    P0_rot = R_sample @ P0
-    P0_rot[0] = 0.0
-
-    best_idx = 0
-    if n_samp > 0:
-        best_angle = theta_array[0] * theta_array[0] + phi_array[0] * phi_array[0]
-        for ii in range(1, n_samp):
-            metric = theta_array[ii] * theta_array[ii] + phi_array[ii] * phi_array[ii]
-            if metric < best_angle:
-                best_angle = metric
-                best_idx = ii
-
-
-    # Build a local reference for the beam incidence
-    u_ref = np.array([0.0, 0.0, -1.0])
-    e1_temp = np.cross(n_surf, u_ref)
-    e1_norm = sqrt(e1_temp[0]*e1_temp[0] + e1_temp[1]*e1_temp[1] + e1_temp[2]*e1_temp[2])
-    if e1_norm < 1e-12:
-        # fallback if cross is degenerate
-        alt_refs = [
-            np.array([1.0,0.0,0.0]),
-            np.array([0.0,1.0,0.0]),
-            np.array([0.0,0.0,1.0])
-        ]
-        for ar in alt_refs:
-            cross_tmp = np.cross(n_surf, ar)
-            cross_norm_tmp = sqrt(cross_tmp[0]*cross_tmp[0] + cross_tmp[1]*cross_tmp[1] + cross_tmp[2]*cross_tmp[2])
-            if cross_norm_tmp > 1e-12:
-                e1_temp = cross_tmp / cross_norm_tmp
-                break
-
-    else:
-        e1_temp /= e1_norm
-
-    e2_temp = np.cross(n_surf, e1_temp)
-
     # Preallocate small arrays used inside the loop to avoid dynamic
     # allocations when parallelizing with ``prange``.
     beam_start = np.empty(3, dtype=np.float64)
@@ -1047,11 +1141,9 @@ def calculate_phi(
     kf_prime = np.empty(3, dtype=np.float64)
     plane_to_det = np.empty(3, dtype=np.float64)
 
-    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
     eps1 = 1.0 + 0.0j
     eps2 = n2_sq
     eps3 = 1.0 + 0.0j
-    n2_sq_real = np.real(n2_sq)
 
     # Main loop over each beam sample in wave + mosaic. During fitting we can
     # optionally force a single preselected sample index per reflection.
@@ -1168,7 +1260,8 @@ def calculate_phi(
             H,
             K,
             L,
-            DEFAULT_SOLVE_Q_STEPS,
+            solve_q_steps,
+            solve_q_adaptive,
         )
         if record_status:
             statuses[i_samp] = stat
@@ -1399,6 +1492,9 @@ def process_peaks_parallel(
     optics_mode=OPTICS_MODE_FAST,
     single_sample_indices=None,
     best_sample_indices_out=None,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_adaptive=True,
+    q_data_max_solutions=0,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an intensity
@@ -1497,7 +1593,13 @@ def process_peaks_parallel(
     P0= np.array([0.0, 0.0, -zs], dtype=np.float64)
     num_peaks= miller.shape[0]
 
-    max_solutions= 2000000
+    max_solutions = int(q_data_max_solutions)
+    if max_solutions <= 0:
+        est_steps = int(max(16, solve_q_steps))
+        est_total = est_steps * max(1, beam_x_array.size)
+        if solve_q_adaptive:
+            est_total = max(est_steps, est_total // 2)
+        max_solutions = min(max(est_total, 1024), 200000)
     if save_flag==1:
         q_data= np.full((num_peaks, max_solutions, 5), np.nan, dtype=np.float64)
         q_count= np.zeros(num_peaks, dtype=np.int64)
@@ -1522,6 +1624,19 @@ def process_peaks_parallel(
         if total_bytes <= _THREAD_LOCAL_IMAGE_MAX_BYTES:
             image_partials = np.zeros((n_threads, image_size, image_size), dtype=np.float64)
             use_thread_local_image = True
+
+    R_sample, n_surf, P0_rot, e1_temp, e2_temp, best_idx = _prepare_reflection_invariant_geometry(
+        theta_initial_deg,
+        cor_angle_deg,
+        R_z_R_y,
+        R_ZY_n,
+        P0,
+        theta_array,
+        phi_array,
+    )
+    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
+    n2_sq = n2 * n2
+    n2_sq_real = np.real(n2_sq)
 
     # prange over each reflection
     for i_pk in prange(num_peaks):
@@ -1553,19 +1668,21 @@ def process_peaks_parallel(
                     reflI, sigma_rad, gamma_rad_m, eta_pv,
                     debye_x, debye_y,
                     center,
-                    theta_initial_deg,
-                    cor_angle_deg,
                     R_x_det, R_z_det, n_det_rot, Detector_Pos,
                     e1_det, e2_det,
-                    R_z_R_y,
-                    R_ZY_n,
-                    P0,
+                    R_sample, n_surf, P0_rot, e1_temp, e2_temp,
+                    best_idx,
+                    use_exact_optics,
+                    n2_sq,
+                    n2_sq_real,
                     unit_x,
                     save_flag, q_data, q_count, i_pk,
                     record_status,
                     thickness,
                     optics_mode,
                     forced_idx,
+                    solve_q_steps,
+                    solve_q_adaptive,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
@@ -1579,19 +1696,21 @@ def process_peaks_parallel(
                     reflI, sigma_rad, gamma_rad_m, eta_pv,
                     debye_x, debye_y,
                     center,
-                    theta_initial_deg,
-                    cor_angle_deg,
                     R_x_det, R_z_det, n_det_rot, Detector_Pos,
                     e1_det, e2_det,
-                    R_z_R_y,
-                    R_ZY_n,
-                    P0,
+                    R_sample, n_surf, P0_rot, e1_temp, e2_temp,
+                    best_idx,
+                    use_exact_optics,
+                    n2_sq,
+                    n2_sq_real,
                     unit_x,
                     save_flag, q_data, q_count, i_pk,
                     record_status,
                     thickness,
                     optics_mode,
                     forced_idx,
+                    solve_q_steps,
+                    solve_q_adaptive,
                 )
         else:
             pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
@@ -1605,19 +1724,21 @@ def process_peaks_parallel(
                 reflI, sigma_rad, gamma_rad_m, eta_pv,
                 debye_x, debye_y,
                 center,
-                theta_initial_deg,
-                cor_angle_deg,
                 R_x_det, R_z_det, n_det_rot, Detector_Pos,
                 e1_det, e2_det,
-                R_z_R_y,
-                R_ZY_n,
-                P0,
+                R_sample, n_surf, P0_rot, e1_temp, e2_temp,
+                best_idx,
+                use_exact_optics,
+                n2_sq,
+                n2_sq_real,
                 unit_x,
                 save_flag, q_data, q_count, i_pk,
                 record_status,
                 thickness,
                 optics_mode,
                 forced_idx,
+                solve_q_steps,
+                solve_q_adaptive,
             )
         if record_status:
             all_status[i_pk, :] = status_arr
@@ -1629,9 +1750,7 @@ def process_peaks_parallel(
 
     if use_thread_local_image:
         for tid in range(image_partials.shape[0]):
-            for r in range(image_size):
-                for c in range(image_size):
-                    image[r, c] += image_partials[tid, r, c]
+            image += image_partials[tid]
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
@@ -1712,6 +1831,11 @@ def process_qr_rods_parallel(
     record_status=False,
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
+    single_sample_indices=None,
+    best_sample_indices_out=None,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_adaptive=True,
+    q_data_max_solutions=0,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -1763,6 +1887,11 @@ def process_qr_rods_parallel(
         record_status,
         thickness,
         optics_mode,
+        single_sample_indices,
+        best_sample_indices_out,
+        solve_q_steps,
+        solve_q_adaptive,
+        q_data_max_solutions,
     )
 
     return (*result, degeneracy)

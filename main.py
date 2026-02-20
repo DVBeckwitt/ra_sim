@@ -291,6 +291,7 @@ from ra_sim.fitting.optimization import (
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
+    DEFAULT_SOLVE_Q_STEPS,
     hit_tables_to_max_positions,
     OPTICS_MODE_EXACT,
     OPTICS_MODE_FAST,
@@ -1089,6 +1090,10 @@ defaults = {
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
     'optics_mode': 'fast',
+    'solve_q_steps': int(max(16, float(hendricks_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)))),
+    'adaptive_solve_q': bool(hendricks_config.get("adaptive_solve_q", True)),
+    'prune_sigma_from_max': float(hendricks_config.get("prune_sigma_from_max", 2.0)),
+    'fast_preview': bool(hendricks_config.get("fast_preview", True)),
 }
 
 # ---------------------------------------------------------------------------
@@ -1216,6 +1221,54 @@ def combine_ht_dicts(caches, weights):
                     entry["I"] += w * data["I"]
     return out
 
+
+def miller_arrays_to_qr_dict(
+    miller_arr: np.ndarray,
+    intens_arr: np.ndarray,
+) -> dict:
+    """Group arbitrary HKL arrays into Qr rods keyed by m = h^2 + hk + k^2."""
+
+    miller_vals = np.asarray(miller_arr, dtype=float)
+    intens_vals = np.asarray(intens_arr, dtype=float).reshape(-1)
+    if miller_vals.ndim != 2 or miller_vals.shape[0] == 0 or intens_vals.size == 0:
+        return {}
+    if miller_vals.shape[0] != intens_vals.shape[0]:
+        return {}
+
+    temp = {}
+    for row, inten in zip(miller_vals, intens_vals):
+        if row.shape[0] < 3 or not np.isfinite(inten) or float(inten) <= 0.0:
+            continue
+        h_i = int(np.rint(float(row[0])))
+        k_i = int(np.rint(float(row[1])))
+        l_i = float(row[2])
+        if not np.isfinite(l_i) or l_i < 0.0:
+            continue
+        m = int(h_i * h_i + h_i * k_i + k_i * k_i)
+        entry = temp.setdefault(
+            m,
+            {"hk": (h_i, k_i), "L_map": {}, "hk_set": set()},
+        )
+        l_key = float(np.round(l_i, 8))
+        entry["L_map"][l_key] = float(entry["L_map"].get(l_key, 0.0) + float(inten))
+        entry["hk_set"].add((h_i, k_i))
+
+    out = {}
+    for m, data in sorted(temp.items()):
+        items = sorted(data["L_map"].items(), key=lambda kv: kv[0])
+        if not items:
+            continue
+        L_vals = np.array([float(kv[0]) for kv in items], dtype=float)
+        I_vals = np.array([float(kv[1]) for kv in items], dtype=float)
+        out[m] = {
+            "hk": tuple(data["hk"]),
+            "L": L_vals,
+            "I": I_vals,
+            "deg": int(max(1, len(data["hk_set"]))),
+        }
+    return out
+
+
 weights_init = np.array([defaults['w0'], defaults['w1'], defaults['w2']], dtype=float)
 weights_init /= weights_init.sum() if weights_init.sum() else 1.0
 combined_ht = combine_ht_dicts(
@@ -1329,6 +1382,11 @@ SIM_INTENS2 = intensities2_sim
 # Primary HT simulation uses Qr rods (m-grouped) for speed, while HKL arrays
 # above are retained for selector/degeneracy lookup.
 SIM_PRIMARY_QR = combined_qr
+SIM_SECONDARY_QR = (
+    miller_arrays_to_qr_dict(SIM_MILLER2, SIM_INTENS2)
+    if isinstance(SIM_MILLER2, np.ndarray) and SIM_MILLER2.size
+    else {}
+)
 
 # Build summary and details dataframes using the helper.
 df_summary, df_details = build_intensity_dataframes(
@@ -2008,6 +2066,192 @@ def _current_optics_mode_flag() -> int:
         return OPTICS_MODE_EXACT
     return OPTICS_MODE_FAST
 
+
+def _current_solve_q_steps() -> int:
+    var = globals().get("solve_q_steps_var")
+    if var is None:
+        return int(DEFAULT_SOLVE_Q_STEPS)
+    try:
+        value = int(round(float(var.get())))
+    except Exception:
+        value = int(DEFAULT_SOLVE_Q_STEPS)
+    return int(max(16, value))
+
+
+def _current_solve_q_adaptive() -> bool:
+    var = globals().get("adaptive_solve_q_var")
+    if var is None:
+        return True
+    try:
+        return bool(var.get())
+    except Exception:
+        return True
+
+
+def _current_prune_sigma_from_max() -> float:
+    var = globals().get("prune_sigma_from_max_var")
+    if var is None:
+        return 2.0
+    try:
+        value = float(var.get())
+    except Exception:
+        value = 2.0
+    if not np.isfinite(value):
+        value = 2.0
+    return float(max(0.0, value))
+
+
+def _current_fast_preview_enabled() -> bool:
+    var = globals().get("fast_preview_var")
+    if var is None:
+        return True
+    try:
+        return bool(var.get())
+    except Exception:
+        return True
+
+
+def _prune_threshold_from_intensities(values: np.ndarray, sigma_from_max: float) -> float:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    finite = arr[np.isfinite(arr)]
+    finite = finite[finite > 0.0]
+    if finite.size == 0:
+        return 0.0
+    # Intensities are typically heavy-tailed; use log-domain spread so
+    # "N sigma from max" does not collapse to only the brightest reflection.
+    log_i = np.log10(finite)
+    log_max = float(np.max(log_i))
+    log_std = float(np.std(log_i))
+    sigma_val = float(max(0.0, sigma_from_max))
+    log_threshold = log_max - sigma_val * log_std
+    threshold = float(10.0 ** log_threshold)
+    if not np.isfinite(threshold):
+        threshold = 0.0
+    max_i = float(np.max(finite))
+    if threshold > max_i:
+        threshold = max_i
+    return float(max(0.0, threshold))
+
+
+def _prune_miller_intensity_arrays(
+    miller_arr: np.ndarray,
+    intens_arr: np.ndarray,
+    sigma_from_max: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    miller_vals = np.asarray(miller_arr, dtype=float)
+    intens_vals = np.asarray(intens_arr, dtype=float).reshape(-1)
+    if miller_vals.ndim != 2 or miller_vals.shape[0] == 0 or intens_vals.size == 0:
+        return miller_vals, intens_vals
+    if miller_vals.shape[0] != intens_vals.shape[0]:
+        return miller_vals, intens_vals
+
+    l_vals = np.asarray(miller_vals[:, 2], dtype=float)
+    valid_l = np.isfinite(l_vals) & (l_vals >= 0.0)
+    threshold = _prune_threshold_from_intensities(intens_vals[valid_l], sigma_from_max)
+    mask = (
+        valid_l
+        & np.isfinite(intens_vals)
+        & (intens_vals >= threshold)
+        & (intens_vals > 0.0)
+    )
+    if not np.any(mask):
+        candidates = np.where(
+            valid_l & np.isfinite(intens_vals) & (intens_vals > 0.0),
+            intens_vals,
+            -np.inf,
+        )
+        best_idx = int(np.argmax(candidates))
+        if np.isfinite(candidates[best_idx]):
+            mask = np.zeros_like(intens_vals, dtype=bool)
+            mask[best_idx] = True
+        else:
+            # Nothing viable above the sample horizon; leave arrays unchanged.
+            return miller_vals, intens_vals
+    return miller_vals[mask], intens_vals[mask]
+
+
+def _prune_qr_dict(
+    qr_dict: dict,
+    sigma_from_max: float,
+) -> dict:
+    if not isinstance(qr_dict, dict) or not qr_dict:
+        return {}
+
+    all_int = []
+    for data in qr_dict.values():
+        L_vals = np.asarray(data.get("L", []), dtype=float).reshape(-1)
+        vals = np.asarray(data.get("I", []), dtype=float).reshape(-1)
+        if vals.size and L_vals.size == vals.shape[0]:
+            valid = np.isfinite(L_vals) & (L_vals >= 0.0) & np.isfinite(vals)
+            if np.any(valid):
+                all_int.append(vals[valid])
+    if not all_int:
+        return qr_dict
+
+    threshold = _prune_threshold_from_intensities(np.concatenate(all_int), sigma_from_max)
+    out = {}
+    for m, data in qr_dict.items():
+        L_vals = np.asarray(data.get("L", []), dtype=float).reshape(-1)
+        I_vals = np.asarray(data.get("I", []), dtype=float).reshape(-1)
+        if L_vals.size == 0 or I_vals.size == 0 or L_vals.shape[0] != I_vals.shape[0]:
+            continue
+        mask = (
+            np.isfinite(L_vals)
+            & (L_vals >= 0.0)
+            & np.isfinite(I_vals)
+            & (I_vals >= threshold)
+            & (I_vals > 0.0)
+        )
+        if not np.any(mask):
+            continue
+        out[m] = {
+            "hk": tuple(data.get("hk", (0, 0))),
+            "L": L_vals[mask].copy(),
+            "I": I_vals[mask].copy(),
+            "deg": int(data.get("deg", 1)),
+        }
+
+    if out:
+        return out
+
+    best_m = None
+    best_i = -np.inf
+    best_idx = -1
+    for m, data in qr_dict.items():
+        L_vals = np.asarray(data.get("L", []), dtype=float).reshape(-1)
+        I_vals = np.asarray(data.get("I", []), dtype=float).reshape(-1)
+        if I_vals.size == 0 or L_vals.size != I_vals.shape[0]:
+            continue
+        candidates = np.where(
+            np.isfinite(L_vals) & (L_vals >= 0.0) & np.isfinite(I_vals),
+            I_vals,
+            -np.inf,
+        )
+        idx = int(np.argmax(candidates))
+        val = float(candidates[idx]) if 0 <= idx < candidates.shape[0] else -np.inf
+        if val > best_i:
+            best_i = val
+            best_m = m
+            best_idx = idx
+
+    if best_m is None or best_idx < 0:
+        return {}
+
+    src = qr_dict[best_m]
+    L_vals = np.asarray(src.get("L", []), dtype=float).reshape(-1)
+    I_vals = np.asarray(src.get("I", []), dtype=float).reshape(-1)
+    if best_idx >= L_vals.shape[0] or best_idx >= I_vals.shape[0]:
+        return {}
+    return {
+        best_m: {
+            "hk": tuple(src.get("hk", (0, 0))),
+            "L": np.array([L_vals[best_idx]], dtype=float),
+            "I": np.array([I_vals[best_idx]], dtype=float),
+            "deg": int(src.get("deg", 1)),
+        }
+    }
+
+
 colorbar_main = fig.colorbar(image_display, ax=ax, label='Intensity', shrink=0.6, pad=0.02)
 
 # Additional colorbar axis for caked 2D (not used in basic 1D, but reserved)
@@ -2591,6 +2835,8 @@ def _simulate_ideal_hkl_native_center(
                 record_status=False,
                 optics_mode=optics_mode_flag,
                 single_sample_indices=forced_sample_indices,
+                solve_q_steps=_current_solve_q_steps(),
+                solve_q_adaptive=_current_solve_q_adaptive(),
             )
         except Exception:
             return None
@@ -4245,16 +4491,34 @@ line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 update_pending = None
 integration_update_pending = None
 update_running = False
+force_full_next_update = False
+preview_full_update_pending = None
+best_sample_indices_primary = None
+best_sample_indices_secondary = None
 
-def schedule_update():
+def schedule_update(*, force_full: bool = False):
     """Throttle updates so heavy simulations don't overlap."""
     global update_pending, integration_update_pending
+    global force_full_next_update, preview_full_update_pending
     if integration_update_pending is not None:
         root.after_cancel(integration_update_pending)
         integration_update_pending = None
+    if preview_full_update_pending is not None:
+        root.after_cancel(preview_full_update_pending)
+        preview_full_update_pending = None
     if update_pending is not None:
         root.after_cancel(update_pending)
+    if force_full:
+        force_full_next_update = True
+    else:
+        force_full_next_update = False
     update_pending = root.after(100, do_update)
+
+
+def _schedule_forced_full_update():
+    global preview_full_update_pending
+    preview_full_update_pending = None
+    schedule_update(force_full=True)
 
 
 def _run_scheduled_range_update():
@@ -4301,7 +4565,9 @@ def do_update():
     global update_pending, update_running, last_simulation_signature
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
-    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
+    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR, SIM_SECONDARY_QR
+    global force_full_next_update, preview_full_update_pending
+    global best_sample_indices_primary, best_sample_indices_secondary
     global av2, cv2
     global last_caked_image_unscaled, last_caked_extent
     global last_res2_sim, last_res2_background
@@ -4329,6 +4595,11 @@ def do_update():
     corto_det_up       = float(corto_detector_var.get())
     center_x_up        = float(center_x_var.get())
     center_y_up        = float(center_y_var.get())
+    solve_q_steps_current = _current_solve_q_steps()
+    solve_q_adaptive_current = _current_solve_q_adaptive()
+    prune_sigma_current = _current_prune_sigma_from_max()
+    fast_preview_enabled = _current_fast_preview_enabled()
+    preview_mode_requested = fast_preview_enabled and (not force_full_next_update)
 
     new_two_theta_max = detector_two_theta_max(
         image_size,
@@ -4412,16 +4683,15 @@ def do_update():
             int(num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
             int(np.size(mosaic_params["theta_array"])),
+            int(solve_q_steps_current),
+            int(bool(solve_q_adaptive_current)),
+            round(prune_sigma_current, 6),
         )
 
-    # 1 – place near other globals
-
-    # … inside do_update() …
-    global stored_max_positions_local        # <- add
-
     new_sim_sig = get_sim_signature()
+    must_recompute = bool(force_full_next_update) or (new_sim_sig != last_simulation_signature)
     global peak_positions, peak_millers, peak_intensities, peak_records, selected_peak_record
-    if new_sim_sig != last_simulation_signature:
+    if must_recompute:
         last_simulation_signature = new_sim_sig
         peak_positions.clear()
         peak_millers.clear()
@@ -4429,13 +4699,33 @@ def do_update():
         peak_records.clear()
         selected_peak_record = None
 
-        def run_one(data, intens_arr, a_val, c_val):
+        def _reflection_count(data_obj) -> int:
+            if isinstance(data_obj, dict):
+                return int(sum(len(np.asarray(v.get("L", []), dtype=float).reshape(-1)) for v in data_obj.values()))
+            arr = np.asarray(data_obj)
+            if arr.ndim != 2:
+                return 0
+            return int(arr.shape[0])
+
+        def run_one(
+            data,
+            intens_arr,
+            a_val,
+            c_val,
+            *,
+            forced_samples=None,
+            capture_best=False,
+        ):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
+            n_reflections = _reflection_count(data)
+            best_out = None
+            if capture_best and n_reflections > 0:
+                best_out = np.full(n_reflections, -1, dtype=np.int32)
             if isinstance(data, dict):
                 if DEBUG_ENABLED:
                     n_pts = sum(len(v["L"]) for v in data.values())
                     debug_print("process_qr_rods_parallel with", n_pts, "points")
-                return process_qr_rods_parallel(
+                result = process_qr_rods_parallel(
                     data,
                     image_size,
                     a_val,
@@ -4468,7 +4758,12 @@ def do_update():
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
                     optics_mode=optics_mode_flag,
+                    single_sample_indices=forced_samples,
+                    best_sample_indices_out=best_out,
+                    solve_q_steps=solve_q_steps_current,
+                    solve_q_adaptive=solve_q_adaptive_current,
                 )
+                return result, best_out
             else:
                 miller_arr = data
                 if DEBUG_ENABLED:
@@ -4477,7 +4772,7 @@ def do_update():
                         debug_print("Non-finite miller indices detected")
                     if not np.all(np.isfinite(intens_arr)):
                         debug_print("Non-finite intensities detected")
-                return process_peaks_parallel(
+                result = process_peaks_parallel(
                     miller_arr,
                     intens_arr,
                     image_size,
@@ -4511,19 +4806,137 @@ def do_update():
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
                     optics_mode=optics_mode_flag,
+                    single_sample_indices=forced_samples,
+                    best_sample_indices_out=best_out,
+                    solve_q_steps=solve_q_steps_current,
+                    solve_q_adaptive=solve_q_adaptive_current,
                 ) + (None,)
+                return result, best_out
 
-        primary_data = (
+        primary_data_raw = (
             SIM_PRIMARY_QR
             if isinstance(SIM_PRIMARY_QR, dict) and len(SIM_PRIMARY_QR) > 0
             else SIM_MILLER1
         )
-        img1, maxpos1, _, _, _, _, _ = run_one(primary_data, SIM_INTENS1, a_updated, c_updated)
-        if SIM_MILLER2.size > 0:
-            img2, maxpos2, _, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
+        primary_data = primary_data_raw
+        if isinstance(primary_data_raw, dict):
+            primary_data = _prune_qr_dict(primary_data_raw, prune_sigma_current)
+            primary_intens = SIM_INTENS1
         else:
+            primary_data, primary_intens = _prune_miller_intensity_arrays(
+                primary_data_raw,
+                SIM_INTENS1,
+                prune_sigma_current,
+            )
+        if _reflection_count(primary_data) == 0 and _reflection_count(primary_data_raw) > 0:
+            primary_data = primary_data_raw
+        primary_pruned = _reflection_count(primary_data) < _reflection_count(primary_data_raw)
+
+        primary_count = _reflection_count(primary_data)
+        primary_forced = None
+        if (
+            preview_mode_requested
+            and isinstance(best_sample_indices_primary, np.ndarray)
+            and best_sample_indices_primary.shape[0] == primary_count
+            and primary_count > 0
+        ):
+            primary_forced = np.asarray(best_sample_indices_primary, dtype=np.int32)
+        primary_capture_best = primary_forced is None
+        (img1, maxpos1, _, _, _, _, _), best_primary_out = run_one(
+            primary_data,
+            primary_intens,
+            a_updated,
+            c_updated,
+            forced_samples=primary_forced,
+            capture_best=primary_capture_best,
+        )
+        if best_primary_out is not None:
+            best_sample_indices_primary = np.asarray(best_primary_out, dtype=np.int32)
+
+        secondary_data_raw = (
+            SIM_SECONDARY_QR
+            if isinstance(SIM_SECONDARY_QR, dict) and len(SIM_SECONDARY_QR) > 0
+            else SIM_MILLER2
+        )
+        secondary_active = (
+            isinstance(secondary_data_raw, dict) and len(secondary_data_raw) > 0
+        ) or (
+            isinstance(secondary_data_raw, np.ndarray) and secondary_data_raw.size > 0
+        )
+        secondary_pruned = False
+        if secondary_active:
+            secondary_data = secondary_data_raw
+            if isinstance(secondary_data_raw, dict):
+                secondary_data = _prune_qr_dict(secondary_data_raw, prune_sigma_current)
+                secondary_intens = SIM_INTENS2
+            else:
+                secondary_data, secondary_intens = _prune_miller_intensity_arrays(
+                    secondary_data_raw,
+                    SIM_INTENS2,
+                    prune_sigma_current,
+                )
+            if _reflection_count(secondary_data) == 0 and _reflection_count(secondary_data_raw) > 0:
+                secondary_data = secondary_data_raw
+            secondary_pruned = _reflection_count(secondary_data) < _reflection_count(secondary_data_raw)
+
+            secondary_count = _reflection_count(secondary_data)
+            secondary_forced = None
+            if (
+                preview_mode_requested
+                and isinstance(best_sample_indices_secondary, np.ndarray)
+                and best_sample_indices_secondary.shape[0] == secondary_count
+                and secondary_count > 0
+            ):
+                secondary_forced = np.asarray(best_sample_indices_secondary, dtype=np.int32)
+            secondary_capture_best = secondary_forced is None
+            (img2, maxpos2, _, _, _, _, _), best_secondary_out = run_one(
+                secondary_data,
+                secondary_intens,
+                av2,
+                cv2,
+                forced_samples=secondary_forced,
+                capture_best=secondary_capture_best,
+            )
+            if best_secondary_out is not None:
+                best_sample_indices_secondary = np.asarray(best_secondary_out, dtype=np.int32)
+        else:
+            secondary_forced = None
             img2 = np.zeros_like(img1)
             maxpos2 = []
+
+        if (np.sum(img1) + np.sum(img2) <= 0.0) and (primary_pruned or secondary_pruned):
+            primary_forced = None
+            (img1, maxpos1, _, _, _, _, _), best_primary_out = run_one(
+                primary_data_raw,
+                SIM_INTENS1,
+                a_updated,
+                c_updated,
+                forced_samples=None,
+                capture_best=True,
+            )
+            if best_primary_out is not None:
+                best_sample_indices_primary = np.asarray(best_primary_out, dtype=np.int32)
+
+            if secondary_active:
+                secondary_forced = None
+                (img2, maxpos2, _, _, _, _, _), best_secondary_out = run_one(
+                    secondary_data_raw,
+                    SIM_INTENS2,
+                    av2,
+                    cv2,
+                    forced_samples=None,
+                    capture_best=True,
+                )
+                if best_secondary_out is not None:
+                    best_sample_indices_secondary = np.asarray(best_secondary_out, dtype=np.int32)
+
+        preview_used = (primary_forced is not None) or (secondary_forced is not None)
+        if preview_used:
+            if preview_full_update_pending is not None:
+                root.after_cancel(preview_full_update_pending)
+            preview_full_update_pending = root.after(250, _schedule_forced_full_update)
+        else:
+            force_full_next_update = False
 
         w1 = weight1_var.get()
         w2 = weight2_var.get()
@@ -4553,6 +4966,7 @@ def do_update():
         max_positions_local = stored_max_positions_local
         peak_table_lattice_local = stored_peak_table_lattice
         updated_image       = stored_sim_image
+        force_full_next_update = False
 
     if not peak_table_lattice_local or len(peak_table_lattice_local) != len(max_positions_local):
         peak_table_lattice_local = [
@@ -5704,6 +6118,8 @@ def _simulate_hkl_peak_centers_for_fit(
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
         optics_mode=int(param_set.get("optics_mode", 0)),
+        solve_q_steps=_current_solve_q_steps(),
+        solve_q_adaptive=_current_solve_q_adaptive(),
     )
 
     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -6723,6 +7139,8 @@ def on_fit_geometry_click():
                             np.array([0.0, 1.0, 0.0]),
                             save_flag=0,
                             optics_mode=_current_optics_mode_flag(),
+                            solve_q_steps=_current_solve_q_steps(),
+                            solve_q_adaptive=_current_solve_q_adaptive(),
                         )
 
                         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -6827,6 +7245,8 @@ def on_fit_geometry_click():
                         np.array([0.0, 1.0, 0.0]),
                         save_flag=0,
                         optics_mode=_current_optics_mode_flag(),
+                        solve_q_steps=_current_solve_q_steps(),
+                        solve_q_adaptive=_current_solve_q_adaptive(),
                     )
 
                     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -7691,6 +8111,8 @@ def save_q_space_representation():
         np.array([0.0, 1.0, 0.0]),
         save_flag=1,
         optics_mode=_current_optics_mode_flag(),
+        solve_q_steps=_current_solve_q_steps(),
+        solve_q_adaptive=_current_solve_q_adaptive(),
     )
 
     max_positions_local = hit_tables_to_max_positions(hit_tables)
@@ -7981,6 +8403,51 @@ def on_optics_mode_change(*_):
 
 optics_mode_var.trace_add('write', on_optics_mode_change)
 
+perf_frame = ttk.Frame(mosaic_frame.frame)
+perf_frame.pack(fill=tk.X, pady=(6, 2))
+ttk.Label(perf_frame, text='Performance Controls').pack(anchor=tk.W, padx=5)
+
+solve_steps_default = int(max(16, defaults.get('solve_q_steps', DEFAULT_SOLVE_Q_STEPS)))
+solve_q_steps_var, solve_q_steps_scale = create_slider(
+    'solve_q max steps',
+    64,
+    4096,
+    solve_steps_default,
+    16,
+    perf_frame,
+    schedule_update,
+)
+
+prune_sigma_default = float(defaults.get('prune_sigma_from_max', 2.0))
+if not np.isfinite(prune_sigma_default):
+    prune_sigma_default = 2.0
+prune_sigma_default = float(max(0.0, prune_sigma_default))
+prune_sigma_from_max_var, prune_sigma_scale = create_slider(
+    'Prune σ from max',
+    0.0,
+    8.0,
+    prune_sigma_default,
+    0.1,
+    perf_frame,
+    schedule_update,
+)
+
+adaptive_solve_q_var = tk.BooleanVar(value=bool(defaults.get('adaptive_solve_q', True)))
+ttk.Checkbutton(
+    perf_frame,
+    text='Adaptive solve_q sampling',
+    variable=adaptive_solve_q_var,
+    command=schedule_update,
+).pack(anchor=tk.W, padx=8, pady=(2, 0))
+
+fast_preview_var = tk.BooleanVar(value=bool(defaults.get('fast_preview', True)))
+ttk.Checkbutton(
+    perf_frame,
+    text='Fast preview while adjusting sliders',
+    variable=fast_preview_var,
+    command=schedule_update,
+).pack(anchor=tk.W, padx=8, pady=(2, 0))
+
 center_frame = CollapsibleFrame(right_col, text='Beam Center')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -8180,7 +8647,7 @@ def _rebuild_diffraction_inputs(
     global miller, intensities, degeneracy, details
     global df_summary, df_details
     global last_simulation_signature
-    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
+    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR, SIM_SECONDARY_QR
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
     global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
     global _last_phi_l_divisor, _last_phase_delta_expression
@@ -8318,6 +8785,7 @@ def _rebuild_diffraction_inputs(
         SIM_PRIMARY_QR = combined_qr_local
         SIM_MILLER2 = m2
         SIM_INTENS2 = i2
+        SIM_SECONDARY_QR = miller_arrays_to_qr_dict(SIM_MILLER2, SIM_INTENS2)
 
         degeneracy = np.array(
             [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
@@ -8340,6 +8808,7 @@ def _rebuild_diffraction_inputs(
         SIM_PRIMARY_QR = combined_qr_local
         SIM_MILLER2 = np.empty((0, 3), dtype=np.int32)
         SIM_INTENS2 = np.empty((0,), dtype=np.float64)
+        SIM_SECONDARY_QR = {}
 
     df_summary, df_details = build_intensity_dataframes(
         miller, intensities, degeneracy, details
