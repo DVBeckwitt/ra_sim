@@ -5,8 +5,12 @@ from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.utils.calculations import complex_sqrt, fresnel_transmission
 from numba import types
-from numba.typed import List       #  only List lives here
+from numba.typed import Dict, List
 
+_SOLVE_Q_CACHE_KEY_TYPE = types.UniTuple(types.int64, 13)
+_SOLVE_Q_CACHE_VAL_TYPE = types.float64[:, ::1]
+_DET_PROJ_CACHE_KEY_TYPE = types.UniTuple(types.int64, 10)
+_DET_PROJ_CACHE_VAL_TYPE = types.float64[::1]
 
 # Optical transport modes
 # Canonical names:
@@ -29,6 +33,17 @@ _DEFAULT_SOLVE_Q_SIN = np.sin(
     _DEFAULT_SOLVE_Q_DTHETA * np.arange(DEFAULT_SOLVE_Q_STEPS, dtype=np.float64)
 )
 _INTENSITY_CUTOFF = float(np.exp(-100.0))
+_QUANTIZATION_SIGMA_PIXELS = 0.6
+_QUANTIZATION_MIN_MARGIN_PIXELS = 0.02
+_NEAR_CRITICAL_KZ_RATIO = 2e-3
+_NEAR_SOLVE_Q_BRANCH_EPS = 1e-10
+_DETECTOR_GRAZING_COS_EPS = 2e-3
+_CENTROID_SHIFT_BUDGET_PX = 0.02
+_FWHM_SHIFT_BUDGET_FRAC = 5e-3
+_INTEGRATED_INTENSITY_SHIFT_BUDGET_FRAC = 5e-3
+_FWHM_REFERENCE_PIXELS = 4.0
+_DET_PROJ_GRAZING_COS_EPS = 5e-3
+_DET_PROJ_MIN_BOUNDARY_MARGIN_PX = 0.12
 # Keep thread-local image buffers bounded to avoid runaway allocations.
 _THREAD_LOCAL_IMAGE_MAX_BYTES = 768 * 1024 * 1024
 # =============================================================================
@@ -956,6 +971,71 @@ def solve_q(
 
 
 @njit(fastmath=True)
+def _solve_q_feasibility_status(k_in_crystal, k_scat, G_vec):
+    """Cheap exact feasibility checks mirroring ``solve_q`` preconditions."""
+
+    G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
+    if G_sq < 1e-14:
+        return -1
+
+    Ax = -k_in_crystal[0]
+    Ay = -k_in_crystal[1]
+    Az = -k_in_crystal[2]
+    A_sq = Ax*Ax + Ay*Ay + Az*Az
+    if A_sq < 1e-14:
+        return -2
+
+    A_len = sqrt(A_sq)
+    c = (G_sq + A_sq - k_scat*k_scat) / (2.0*A_len)
+    circle_r_sq = G_sq - c*c
+    if circle_r_sq < 0.0:
+        return -3
+
+    return 0
+
+
+@njit(fastmath=True)
+def _solve_q_circle_radius_sq(k_in_crystal, k_scat, G_vec):
+    """Return the exact circle-radius-squared term used by solve_q geometry."""
+
+    G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
+    Ax = -k_in_crystal[0]
+    Ay = -k_in_crystal[1]
+    Az = -k_in_crystal[2]
+    A_sq = Ax*Ax + Ay*Ay + Az*Az
+    A_len = sqrt(np.maximum(A_sq, 1e-30))
+    c = (G_sq + A_sq - k_scat*k_scat) / (2.0*A_len)
+    return G_sq - c*c
+
+
+@njit(fastmath=True)
+def _quantize_component(value, inv_step):
+    return int(np.rint(value * inv_step))
+
+
+@njit(fastmath=True)
+def _coarse_detector_coords(i_plane, kf_dir, detector_pos, n_det, det_e1, det_e2):
+    dx, dy, dz, ok = intersect_line_plane(i_plane, kf_dir, detector_pos, n_det)
+    if not ok:
+        return 0.0, 0.0, False
+
+    rx = dx - detector_pos[0]
+    ry = dy - detector_pos[1]
+    rz = dz - detector_pos[2]
+    x_det = rx * det_e1[0] + ry * det_e1[1] + rz * det_e1[2]
+    y_det = rx * det_e2[0] + ry * det_e2[1] + rz * det_e2[2]
+    return x_det, y_det, True
+
+
+@njit(fastmath=True)
+def _nearest_pixel_boundary_margin(x_det, y_det, pixel_scale):
+    cpx_f = x_det * pixel_scale
+    rpx_f = -y_det * pixel_scale
+    frac_c = np.abs(cpx_f - np.rint(cpx_f))
+    frac_r = np.abs(rpx_f - np.rint(rpx_f))
+    return 0.5 - max(frac_c, frac_r)
+
+@njit(fastmath=True)
 def _prepare_reflection_invariant_geometry(
     theta_initial_deg,
     cor_angle_deg,
@@ -1066,6 +1146,11 @@ def calculate_phi(
     forced_sample_idx=-1,
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     solve_q_adaptive=True,
+    quantization_sigma_pixels=_QUANTIZATION_SIGMA_PIXELS,
+    quantization_min_margin_pixels=_QUANTIZATION_MIN_MARGIN_PIXELS,
+    centroid_shift_budget_px=_CENTROID_SHIFT_BUDGET_PX,
+    fwhm_shift_budget_frac=_FWHM_SHIFT_BUDGET_FRAC,
+    integrated_intensity_shift_budget_frac=_INTEGRATED_INTENSITY_SHIFT_BUDGET_FRAC,
 ):
     """
     For a single reflection (H,K,L), build a mosaic Q_grid around G_vec.
@@ -1087,8 +1172,9 @@ def calculate_phi(
     missed_kf : ndarray
         Outgoing wavevectors that failed to intersect the detector plane.
     """
+    hkl_inplane = H*H + H*K + K*K
     gz0 = 2.0*pi*(L/cv)
-    gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
+    gr0 = 4.0*pi/av * sqrt(hkl_inplane/3.0)
     G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
 
     # # Build a random mosaic distribution around G_vec
@@ -1109,10 +1195,47 @@ def calculate_phi(
     k_in_x_arr = cos_theta * sin_phi
     k_in_y_arr = cos_theta * cos_phi
     k_in_z_arr = sin_theta
+    k_mag_arr = (2.0 * pi) / wavelength_array
+    k0_sq_arr = k_mag_arr * k_mag_arr
     debye_x_sq = debye_x * debye_x
     debye_y_sq = debye_y * debye_y
     pixel_scale = 1.0 / 100e-6
     n2_sq = n2 * n2
+    n2_real = np.real(n2)
+    inv_sqrt_eps = 1e-24
+
+    # Geometry invariants for this pose (hoisted out of beam / Q loops).
+    beam_start_y = -20e-3
+    n_surf_x = n_surf[0]
+    n_surf_y = n_surf[1]
+    n_surf_z = n_surf[2]
+    e1x = e1_temp[0]
+    e1y = e1_temp[1]
+    e1z = e1_temp[2]
+    e2x = e2_temp[0]
+    e2y = e2_temp[1]
+    e2z = e2_temp[2]
+    det_pos_x = Detector_Pos[0]
+    det_pos_y = Detector_Pos[1]
+    det_pos_z = Detector_Pos[2]
+    det_e1x = e1_det[0]
+    det_e1y = e1_det[1]
+    det_e1z = e1_det[2]
+    det_e2x = e2_det[0]
+    det_e2y = e2_det[1]
+    det_e2z = e2_det[2]
+    det_nx = n_det_rot[0]
+    det_ny = n_det_rot[1]
+    det_nz = n_det_rot[2]
+    r00 = R_sample[0, 0]
+    r01 = R_sample[0, 1]
+    r02 = R_sample[0, 2]
+    r10 = R_sample[1, 0]
+    r11 = R_sample[1, 1]
+    r12 = R_sample[1, 2]
+    r20 = R_sample[2, 0]
+    r21 = R_sample[2, 1]
+    r22 = R_sample[2, 2]
 
     max_hits = max(n_samp * 2, 16)  # Ensure capacity even for very small samples
     pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
@@ -1137,6 +1260,7 @@ def calculate_phi(
     I_plane = np.empty(3, dtype=np.float64)
     proj_incident = np.empty(3, dtype=np.float64)
     k_in_crystal = np.empty(3, dtype=np.float64)
+    canonical_k_in = np.empty(3, dtype=np.float64)
     kf = np.empty(3, dtype=np.float64)
     kf_prime = np.empty(3, dtype=np.float64)
     plane_to_det = np.empty(3, dtype=np.float64)
@@ -1144,6 +1268,23 @@ def calculate_phi(
     eps1 = 1.0 + 0.0j
     eps2 = n2_sq
     eps3 = 1.0 + 0.0j
+    reflection_scale = reflection_intensity
+
+    # Quantized detector-aware solve_q cache (stores only solve_q outputs + status).
+    solve_q_cache = Dict.empty(key_type=_SOLVE_Q_CACHE_KEY_TYPE, value_type=_SOLVE_Q_CACHE_VAL_TYPE)
+    solve_q_status_cache = Dict.empty(key_type=_SOLVE_Q_CACHE_KEY_TYPE, value_type=types.int64)
+    det_proj_cache = Dict.empty(key_type=_DET_PROJ_CACHE_KEY_TYPE, value_type=_DET_PROJ_CACHE_VAL_TYPE)
+
+    # Signature changes when detector/sample geometry changes; cache is local to
+    # this reflection call, so this primarily documents detector-aware coupling.
+    geometry_signature = (
+        det_pos_x + det_pos_y + det_pos_z
+        + n_surf_x + n_surf_y + n_surf_z
+        + det_nx + det_ny + det_nz
+        + det_e1x + det_e1y + det_e1z
+        + det_e2x + det_e2y + det_e2z
+        + r00 + r11 + r22
+    )
 
     # Main loop over each beam sample in wave + mosaic. During fitting we can
     # optionally force a single preselected sample index per reflection.
@@ -1154,12 +1295,32 @@ def calculate_phi(
         loop_stop = forced_sample_idx + 1
 
     best_candidate_sample_idx = -1
+
+    # Quantized-cache diagnostics (logged when record_status=True).
+    fallback_count = 0
+    fallback_critical_count = 0
+    fallback_branch_count = 0
+    fallback_grazing_count = 0
+    fallback_boundary_count = 0
+    quantized_reuse_count = 0
+    quantized_miss_count = 0
+    quantized_store_count = 0
+    quantized_candidate_count = 0
+    sum_pred_centroid_shift = 0.0
+    max_pred_centroid_shift = 0.0
+    centroid_budget_fail_count = 0
+    fwhm_budget_fail_count = 0
+    intensity_budget_fail_count = 0
+    det_proj_cache_hit_count = 0
+    det_proj_cache_store_count = 0
+    det_proj_cache_bypass_count = 0
+
     for i_samp in range(loop_start, loop_stop):
-        lam_samp = wavelength_array[i_samp]
-        k_mag = 2.0*pi / lam_samp
+        k_mag = k_mag_arr[i_samp]
+        k0_sq = k0_sq_arr[i_samp]
 
         beam_start[0] = beam_x_array[i_samp]
-        beam_start[1] = -20e-3
+        beam_start[1] = beam_start_y
         beam_start[2] = beam_z_offsets[i_samp]
 
         k_in[0] = k_in_x_arr[i_samp]
@@ -1176,12 +1337,16 @@ def calculate_phi(
         I_plane[0] = ix
         I_plane[1] = iy
         I_plane[2] = iz
-        kn_dot = k_in[0]*n_surf[0] + k_in[1]*n_surf[1] + k_in[2]*n_surf[2]
+        kn_dot = k_in[0]*n_surf_x + k_in[1]*n_surf_y + k_in[2]*n_surf_z
+        if kn_dot <= 1e-12:
+            if record_status:
+                statuses[i_samp] = -11
+            continue
         th_i_prime = (pi/2.0) - acos(kn_dot)
 
-        proj_incident[0] = k_in[0] - kn_dot*n_surf[0]
-        proj_incident[1] = k_in[1] - kn_dot*n_surf[1]
-        proj_incident[2] = k_in[2] - kn_dot*n_surf[2]
+        proj_incident[0] = k_in[0] - kn_dot*n_surf_x
+        proj_incident[1] = k_in[1] - kn_dot*n_surf_y
+        proj_incident[2] = k_in[2] - kn_dot*n_surf_z
         pln = sqrt(proj_incident[0]*proj_incident[0]
                  + proj_incident[1]*proj_incident[1]
                  + proj_incident[2]*proj_incident[2])
@@ -1194,13 +1359,12 @@ def calculate_phi(
             proj_incident[1] = 0.0
             proj_incident[2] = 0.0
 
-        p1 = proj_incident[0]*e1_temp[0] + proj_incident[1]*e1_temp[1] + proj_incident[2]*e1_temp[2]
-        p2 = proj_incident[0]*e2_temp[0] + proj_incident[1]*e2_temp[1] + proj_incident[2]*e2_temp[2]
+        p1 = proj_incident[0]*e1x + proj_incident[1]*e1y + proj_incident[2]*e1z
+        p2 = proj_incident[0]*e2x + proj_incident[1]*e2y + proj_incident[2]*e2z
         phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
 
         # ---------- ENTRY REFRACTION AND kz ----------
         k0 = k_mag
-        k0_sq = k0 * k0
 
         if use_exact_optics:
             # Exact interface phase-matching uses conserved k_parallel.
@@ -1249,22 +1413,207 @@ def calculate_phi(
         k_in_crystal[1] = k_y_scat
         k_in_crystal[2] = re_k_z
 
-        # ---------- Solve allowed Q on the circle (unchanged) ----------
-        All_Q, stat = solve_q(
-            k_in_crystal,
-            k_scat,
-            G_vec,
-            sigma_rad,
-            gamma_pv,
-            eta_pv,
-            H,
-            K,
-            L,
-            solve_q_steps,
-            solve_q_adaptive,
+        # Deterministic early rejection before entering solve_q.
+        # These checks are exact mirror preconditions from solve_q.
+        stat = _solve_q_feasibility_status(k_in_crystal, k_scat, G_vec)
+        if stat != 0:
+            if record_status:
+                statuses[i_samp] = stat
+            continue
+
+        # ---------- Solve allowed Q on the circle (detector-aware quantized cache) ----------
+        mirror_x = k_in_crystal[0] < 0.0
+        mirror_y = k_in_crystal[1] < 0.0
+        canonical_k_in[0] = np.abs(k_in_crystal[0])
+        canonical_k_in[1] = np.abs(k_in_crystal[1])
+        canonical_k_in[2] = k_in_crystal[2]
+
+        # Local detector-aware Jacobian for k_in -> detector (u,v in pixel units).
+        # This makes quantization anisotropic and orientation-sensitive.
+        kf_cx = canonical_k_in[0] + G_vec[0]
+        kf_cy = canonical_k_in[1] + G_vec[1]
+        kf_cz = canonical_k_in[2] + G_vec[2]
+        kf_prime[0] = r00*kf_cx + r01*kf_cy + r02*kf_cz
+        kf_prime[1] = r10*kf_cx + r11*kf_cy + r12*kf_cz
+        kf_prime[2] = r20*kf_cx + r21*kf_cy + r22*kf_cz
+
+        x0_det, y0_det, coarse_ok = _coarse_detector_coords(
+            I_plane, kf_prime, Detector_Pos, n_det_rot, e1_det, e2_det
         )
+
+        delta_k = np.maximum(1e-6, 1e-4 * np.maximum(k_scat, 1.0))
+        sensitivity_kx = 1e-12
+        sensitivity_ky = 1e-12
+        boundary_margin = 0.5
+
+        # Automatic exact fallback triggers in sensitive regions.
+        # 1) near critical-angle optics (internal normal component nearly zero)
+        critical_kz_limit = _NEAR_CRITICAL_KZ_RATIO * np.maximum(k_scat, 1.0)
+        near_critical_optics = np.abs(re_k_z) < critical_kz_limit
+
+        # 2) near solve_q branch transition (circle radius tends to zero)
+        circle_r_sq = _solve_q_circle_radius_sq(k_in_crystal, k_scat, G_vec)
+        scale_sq = np.maximum(
+            G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2],
+            k_scat*k_scat,
+        )
+        near_solve_q_branch = np.abs(circle_r_sq) < (_NEAR_SOLVE_Q_BRANCH_EPS * np.maximum(scale_sq, 1.0))
+
+        # 3) near detector grazing intersections
+        kf_norm = sqrt(kf_prime[0]*kf_prime[0] + kf_prime[1]*kf_prime[1] + kf_prime[2]*kf_prime[2])
+        det_dot = np.abs(kf_prime[0]*det_nx + kf_prime[1]*det_ny + kf_prime[2]*det_nz)
+        near_detector_grazing = det_dot < (_DETECTOR_GRAZING_COS_EPS * np.maximum(kf_norm, 1e-30))
+
+        if coarse_ok:
+            # Direction perturbation columns in the lab frame.
+            kf[0] = kf_prime[0] + delta_k * r00
+            kf[1] = kf_prime[1] + delta_k * r10
+            kf[2] = kf_prime[2] + delta_k * r20
+            x1_det, y1_det, ok_x = _coarse_detector_coords(
+                I_plane, kf, Detector_Pos, n_det_rot, e1_det, e2_det
+            )
+            if ok_x:
+                du_dkx = ((x1_det - x0_det) * pixel_scale) / delta_k
+                dv_dkx = ((-y1_det + y0_det) * pixel_scale) / delta_k
+                sensitivity_kx = sqrt(du_dkx*du_dkx + dv_dkx*dv_dkx)
+
+            kf[0] = kf_prime[0] + delta_k * r01
+            kf[1] = kf_prime[1] + delta_k * r11
+            kf[2] = kf_prime[2] + delta_k * r21
+            x2_det, y2_det, ok_y = _coarse_detector_coords(
+                I_plane, kf, Detector_Pos, n_det_rot, e1_det, e2_det
+            )
+            if ok_y:
+                du_dky = ((x2_det - x0_det) * pixel_scale) / delta_k
+                dv_dky = ((-y2_det + y0_det) * pixel_scale) / delta_k
+                sensitivity_ky = sqrt(du_dky*du_dky + dv_dky*dv_dky)
+
+            boundary_margin = _nearest_pixel_boundary_margin(x0_det, y0_det, pixel_scale)
+
+        step_kx = quantization_sigma_pixels / np.maximum(sensitivity_kx, 1e-12)
+        step_ky = quantization_sigma_pixels / np.maximum(sensitivity_ky, 1e-12)
+        q_idx_x = _quantize_component(canonical_k_in[0], 1.0 / np.maximum(step_kx, 1e-18))
+        q_idx_y = _quantize_component(canonical_k_in[1], 1.0 / np.maximum(step_ky, 1e-18))
+        q_idx_z = _quantize_component(canonical_k_in[2], 1e6)
+        q_idx_ks = _quantize_component(k_scat, 1e6)
+        h_i = int(np.rint(H))
+        k_i = int(np.rint(K))
+        l_i = int(np.rint(L))
+        sigma_i = _quantize_component(sigma_rad, 1e9)
+        gamma_i = _quantize_component(gamma_pv, 1e9)
+        eta_i = _quantize_component(eta_pv, 1e9)
+        step_i = int(solve_q_steps)
+        adapt_i = 1 if solve_q_adaptive else 0
+        geo_i = _quantize_component(geometry_signature, 1e6)
+
+        solve_q_key = (
+            q_idx_x,
+            q_idx_y,
+            q_idx_z,
+            q_idx_ks,
+            h_i,
+            k_i,
+            l_i,
+            sigma_i,
+            gamma_i,
+            eta_i,
+            step_i,
+            adapt_i,
+            geo_i,
+        )
+
+        can_reuse_quantized = False
+        predicted_shift = 1e12
+        predicted_fwhm_shift_frac = 1e12
+        predicted_intensity_shift_frac = 1e12
+        near_pixel_boundary = True
+        half_step_kx = 0.5 * step_kx
+        half_step_ky = 0.5 * step_ky
+        if coarse_ok:
+            predicted_shift = sqrt(
+                (sensitivity_kx * half_step_kx) * (sensitivity_kx * half_step_kx)
+                + (sensitivity_ky * half_step_ky) * (sensitivity_ky * half_step_ky)
+            )
+            near_pixel_boundary = predicted_shift >= (boundary_margin - quantization_min_margin_pixels)
+            predicted_fwhm_shift_frac = predicted_shift / np.maximum(_FWHM_REFERENCE_PIXELS, 1e-12)
+            predicted_intensity_shift_frac = predicted_fwhm_shift_frac
+
+        over_centroid_budget = predicted_shift > centroid_shift_budget_px
+        over_fwhm_budget = predicted_fwhm_shift_frac > fwhm_shift_budget_frac
+        over_intensity_budget = predicted_intensity_shift_frac > integrated_intensity_shift_budget_frac
+
+        sensitive_region = (
+            near_critical_optics
+            or near_solve_q_branch
+            or near_detector_grazing
+            or near_pixel_boundary
+            or over_centroid_budget
+            or over_fwhm_budget
+            or over_intensity_budget
+        )
+        if coarse_ok and not sensitive_region:
+            can_reuse_quantized = True
+
+        if coarse_ok:
+            quantized_candidate_count += 1
+            sum_pred_centroid_shift += predicted_shift
+            if predicted_shift > max_pred_centroid_shift:
+                max_pred_centroid_shift = predicted_shift
+            if over_centroid_budget:
+                centroid_budget_fail_count += 1
+            if over_fwhm_budget:
+                fwhm_budget_fail_count += 1
+            if over_intensity_budget:
+                intensity_budget_fail_count += 1
+
+        if can_reuse_quantized and solve_q_key in solve_q_cache:
+            quantized_reuse_count += 1
+            all_q_canonical = solve_q_cache[solve_q_key]
+            stat = solve_q_status_cache[solve_q_key]
+        else:
+            if can_reuse_quantized:
+                quantized_miss_count += 1
+            all_q_canonical, stat = solve_q(
+                canonical_k_in,
+                k_scat,
+                G_vec,
+                sigma_rad,
+                gamma_pv,
+                eta_pv,
+                H,
+                K,
+                L,
+                solve_q_steps,
+                solve_q_adaptive,
+            )
+            if can_reuse_quantized:
+                solve_q_cache[solve_q_key] = all_q_canonical
+                solve_q_status_cache[solve_q_key] = stat
+                quantized_store_count += 1
+            else:
+                fallback_count += 1
+                if near_critical_optics:
+                    fallback_critical_count += 1
+                if near_solve_q_branch:
+                    fallback_branch_count += 1
+                if near_detector_grazing:
+                    fallback_grazing_count += 1
+                if near_pixel_boundary:
+                    fallback_boundary_count += 1
+
+        if mirror_x or mirror_y:
+            All_Q = all_q_canonical.copy()
+            if mirror_x:
+                All_Q[:, 0] *= -1.0
+            if mirror_y:
+                All_Q[:, 1] *= -1.0
+        else:
+            All_Q = all_q_canonical
+
         if record_status:
             statuses[i_samp] = stat
+        if stat != 0 or All_Q.shape[0] == 0:
+            continue
 
         # Precompute entrance attenuation depth.
         if use_exact_optics:
@@ -1279,6 +1628,11 @@ def calculate_phi(
                 L_in = 1.0 / np.maximum(2.0*im_k_z, 1e-30)
 
         # ---------- Loop over each Q solution ----------
+        if use_exact_optics:
+            k_out_mag = k0
+        else:
+            k_out_mag = k_scat
+
         for i_sol in range(All_Q.shape[0]):
             Qx = All_Q[i_sol, 0]
             Qy = All_Q[i_sol, 1]
@@ -1292,21 +1646,15 @@ def calculate_phi(
             k_ty_prime = Qy + k_y_scat
             k_tz_prime = Qz + re_k_z
 
-            kr = sqrt(k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime)
-            if kr < 1e-12:
-                twotheta_t_prime = 0.0
-            else:
-                twotheta_t_prime = np.arctan(k_tz_prime/kr)
+            kr_sq = k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime
+            sign_t = 1.0
+            if k_tz_prime < 0.0:
+                sign_t = -1.0
 
             # refract out to air: convert internal grazing angle to external
-            # get internal grazing angle for the exit leg
-            th_t_out = np.abs(twotheta_t_prime)
             if use_exact_optics:
-                k_par_f = kr
-                k_par_f_sq = k_par_f * k_par_f
-
-                kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
-                kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
+                kz2_f = _kz_branch_decay((eps2 * k0_sq) - kr_sq)
+                kz3_f = _kz_branch_decay((k0_sq - kr_sq) + 0.0j)
 
                 Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
                 Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
@@ -1316,12 +1664,29 @@ def calculate_phi(
                 )
 
                 im_k_z_f = np.abs(kz2_f.imag)
-
                 if thickness > 0.0:
                     L_out = thickness
                 else:
                     L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
+
+                if kr_sq <= inv_sqrt_eps:
+                    k_tx_f = 0.0
+                    k_ty_f = 0.0
+                else:
+                    k_tx_f = k_tx_prime
+                    k_ty_f = k_ty_prime
+                kz_out_sq = np.maximum(k0_sq - kr_sq, 0.0)
+                k_tz_f = sign_t * sqrt(kz_out_sq)
             else:
+                if kr_sq <= inv_sqrt_eps:
+                    th_t_out = pi * 0.5
+                    cos_in = 0.0
+                else:
+                    kr = sqrt(kr_sq)
+                    inv_k_t = 1.0 / sqrt(kr_sq + k_tz_prime*k_tz_prime)
+                    cos_in = kr * inv_k_t
+                    th_t_out = np.arctan(np.abs(k_tz_prime) / np.maximum(kr, 1e-30))
+
                 # Exit transmission amplitude and kz for exit leg.
                 # Use both polarizations and average for an unpolarized beam.
                 Tf_s = fresnel_transmission(th_t_out, n2, True, False)
@@ -1338,38 +1703,97 @@ def calculate_phi(
                 if L_out <= 0.0:
                     L_out = 1.0 / np.maximum(2.0*im_k_z_f, 1e-30)
 
+                cos_out = _clamp(cos_in * n2_real, -1.0, 1.0)
+                sin_out = sign_t * sqrt(np.maximum(1.0 - cos_out*cos_out, 0.0))
+                if kr_sq <= inv_sqrt_eps:
+                    k_tx_f = 0.0
+                    k_ty_f = 0.0
+                else:
+                    kr = sqrt(kr_sq)
+                    out_xy_scale = (k_out_mag * cos_out) / np.maximum(kr, 1e-30)
+                    k_tx_f = out_xy_scale * k_tx_prime
+                    k_ty_f = out_xy_scale * k_ty_prime
+                k_tz_f = k_out_mag * sin_out
+
             # apply propagation and interface factors
             prop_att = (
                 np.exp(-2.0 * im_k_z * L_in)
                 * np.exp(-2.0 * im_k_z_f * L_out)
             )
             prop_fac = Ti2 * Tf2 * prop_att
-
-            # external exit angles for detector mapping (existing code)
-            # Preserve the exit-side sign so both detector half-planes remain
-            # populated as theta_i changes.
-            if use_exact_optics:
-                cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
-                twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-                k_out_mag = k0
-            else:
-                twotheta_t = (
-                    np.arccos(_clamp(np.cos(twotheta_t_prime) * np.real(n2), -1.0, 1.0))
-                    * np.sign(twotheta_t_prime)
-                )
-                k_out_mag = k_scat
-            phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-            k_tx_f = k_out_mag*np.cos(twotheta_t)*np.sin(phi_f)
-            k_ty_f = k_out_mag*np.cos(twotheta_t)*np.cos(phi_f)
-            k_tz_f = k_out_mag*np.sin(twotheta_t)
+            sample_scale = reflection_scale * prop_fac
             kf[0] = k_tx_f
             kf[1] = k_ty_f
             kf[2] = k_tz_f
-            kf_prime[0] = R_sample[0,0]*kf[0] + R_sample[0,1]*kf[1] + R_sample[0,2]*kf[2]
-            kf_prime[1] = R_sample[1,0]*kf[0] + R_sample[1,1]*kf[1] + R_sample[1,2]*kf[2]
-            kf_prime[2] = R_sample[2,0]*kf[0] + R_sample[2,1]*kf[1] + R_sample[2,2]*kf[2]
+            kf_prime[0] = r00*kf[0] + r01*kf[1] + r02*kf[2]
+            kf_prime[1] = r10*kf[0] + r11*kf[1] + r12*kf[2]
+            kf_prime[2] = r20*kf[0] + r21*kf[1] + r22*kf[2]
 
-            dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
+            # Detector-projection cache (separate from solve_q cache) with stricter
+            # geometry-sensitive reuse guards.
+            proj_x, proj_y, proj_ok = _coarse_detector_coords(
+                I_plane, kf_prime, Detector_Pos, n_det_rot, e1_det, e2_det
+            )
+            kf_norm = sqrt(kf_prime[0]*kf_prime[0] + kf_prime[1]*kf_prime[1] + kf_prime[2]*kf_prime[2])
+            det_cos = np.abs(kf_prime[0]*det_nx + kf_prime[1]*det_ny + kf_prime[2]*det_nz) / np.maximum(kf_norm, 1e-30)
+            coarse_margin = 0.0
+            if proj_ok:
+                coarse_margin = _nearest_pixel_boundary_margin(proj_x, proj_y, pixel_scale)
+            allow_det_proj_reuse = (
+                proj_ok
+                and det_cos > _DET_PROJ_GRAZING_COS_EPS
+                and coarse_margin > _DET_PROJ_MIN_BOUNDARY_MARGIN_PX
+            )
+
+            if allow_det_proj_reuse:
+                det_proj_key = (
+                    _quantize_component(I_plane[0], 1e7),
+                    _quantize_component(I_plane[1], 1e7),
+                    _quantize_component(I_plane[2], 1e7),
+                    _quantize_component(kf_prime[0], 1e8),
+                    _quantize_component(kf_prime[1], 1e8),
+                    _quantize_component(kf_prime[2], 1e8),
+                    _quantize_component(det_pos_x + det_pos_y + det_pos_z, 1e6),
+                    _quantize_component(det_nx + det_ny + det_nz, 1e6),
+                    _quantize_component(det_e1x + det_e1y + det_e1z, 1e6),
+                    _quantize_component(det_e2x + det_e2y + det_e2z, 1e6),
+                )
+                if det_proj_key in det_proj_cache:
+                    det_proj_cache_hit_count += 1
+                    det_entry = det_proj_cache[det_proj_key]
+                    valid_det = det_entry[0] > 0.5
+                    x_det = det_entry[1]
+                    y_det = det_entry[2]
+                else:
+                    dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
+                    if valid_det:
+                        plane_to_det[0] = dx - det_pos_x
+                        plane_to_det[1] = dy - det_pos_y
+                        plane_to_det[2] = dz - det_pos_z
+                        x_det = plane_to_det[0]*det_e1x + plane_to_det[1]*det_e1y + plane_to_det[2]*det_e1z
+                        y_det = plane_to_det[0]*det_e2x + plane_to_det[1]*det_e2y + plane_to_det[2]*det_e2z
+                    else:
+                        x_det = 0.0
+                        y_det = 0.0
+                    det_proj_cache[det_proj_key] = np.array([
+                        1.0 if valid_det else 0.0,
+                        x_det,
+                        y_det,
+                    ], dtype=np.float64)
+                    det_proj_cache_store_count += 1
+            else:
+                det_proj_cache_bypass_count += 1
+                dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
+                if valid_det:
+                    plane_to_det[0] = dx - det_pos_x
+                    plane_to_det[1] = dy - det_pos_y
+                    plane_to_det[2] = dz - det_pos_z
+                    x_det = plane_to_det[0]*det_e1x + plane_to_det[1]*det_e1y + plane_to_det[2]*det_e1z
+                    y_det = plane_to_det[0]*det_e2x + plane_to_det[1]*det_e2y + plane_to_det[2]*det_e2z
+                else:
+                    x_det = 0.0
+                    y_det = 0.0
+
             if not valid_det:
                 if n_missed < max_hits:
                     missed_kf[n_missed, 0] = kf_prime[0]
@@ -1377,12 +1801,6 @@ def calculate_phi(
                     missed_kf[n_missed, 2] = kf_prime[2]
                     n_missed += 1
                 continue
-
-            plane_to_det[0] = dx - Detector_Pos[0]
-            plane_to_det[1] = dy - Detector_Pos[1]
-            plane_to_det[2] = dz - Detector_Pos[2]
-            x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
-            y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
 
             rpx = int(round(center[0] - y_det * pixel_scale))
             cpx = int(round(center[1] + x_det * pixel_scale))
@@ -1394,10 +1812,12 @@ def calculate_phi(
             #  2) I_Q -> partial mosaic weighting from solve_q circle
             #  3) incoherent -> the mosaic average from Q_grid
             #  4) exponent dampings -> Debye or extra broadening
-            val = (reflection_intensity * I_Q * prop_fac
+            val = (sample_scale * I_Q
                 * exp(-Qz * Qz * debye_x_sq)
                 * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq))
             image[rpx, cpx] += val
+
+            phi_f = np.arctan2(k_tx_prime, k_ty_prime)
 
             if val > best_candidate_val:
                 best_candidate_val = val
@@ -1457,6 +1877,32 @@ def calculate_phi(
         best_sample_idx = best_candidate_sample_idx
 
     if record_status:
+        mean_pred_centroid_shift = 0.0
+        if quantized_candidate_count > 0:
+            mean_pred_centroid_shift = sum_pred_centroid_shift / quantized_candidate_count
+
+        print(
+            "quantized_cache_stats",
+            H,
+            K,
+            L,
+            quantized_reuse_count,
+            quantized_miss_count,
+            quantized_store_count,
+            fallback_count,
+            fallback_critical_count,
+            fallback_branch_count,
+            fallback_grazing_count,
+            fallback_boundary_count,
+            mean_pred_centroid_shift,
+            max_pred_centroid_shift,
+            centroid_budget_fail_count,
+            fwhm_budget_fail_count,
+            intensity_budget_fail_count,
+            det_proj_cache_hit_count,
+            det_proj_cache_store_count,
+            det_proj_cache_bypass_count,
+        )
         return pixel_hits[:n_hits], statuses, missed_kf[:n_missed], best_sample_idx
     else:
         return (
@@ -1495,6 +1941,11 @@ def process_peaks_parallel(
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     solve_q_adaptive=True,
     q_data_max_solutions=0,
+    quantization_sigma_pixels=_QUANTIZATION_SIGMA_PIXELS,
+    quantization_min_margin_pixels=_QUANTIZATION_MIN_MARGIN_PIXELS,
+    centroid_shift_budget_px=_CENTROID_SHIFT_BUDGET_PX,
+    fwhm_shift_budget_frac=_FWHM_SHIFT_BUDGET_FRAC,
+    integrated_intensity_shift_budget_frac=_INTEGRATED_INTENSITY_SHIFT_BUDGET_FRAC,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an intensity
@@ -1683,6 +2134,11 @@ def process_peaks_parallel(
                     forced_idx,
                     solve_q_steps,
                     solve_q_adaptive,
+                    quantization_sigma_pixels,
+                    quantization_min_margin_pixels,
+                    centroid_shift_budget_px,
+                    fwhm_shift_budget_frac,
+                    integrated_intensity_shift_budget_frac,
                 )
             else:
                 pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
@@ -1711,6 +2167,11 @@ def process_peaks_parallel(
                     forced_idx,
                     solve_q_steps,
                     solve_q_adaptive,
+                    quantization_sigma_pixels,
+                    quantization_min_margin_pixels,
+                    centroid_shift_budget_px,
+                    fwhm_shift_budget_frac,
+                    integrated_intensity_shift_budget_frac,
                 )
         else:
             pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
@@ -1739,6 +2200,11 @@ def process_peaks_parallel(
                 forced_idx,
                 solve_q_steps,
                 solve_q_adaptive,
+                quantization_sigma_pixels,
+                quantization_min_margin_pixels,
+                centroid_shift_budget_px,
+                fwhm_shift_budget_frac,
+                integrated_intensity_shift_budget_frac,
             )
         if record_status:
             all_status[i_pk, :] = status_arr
@@ -2056,4 +2522,3 @@ def debug_detector_paths(
         out[i] = [dtheta, dphi, hit_sample, hit_det]
 
     return out
-
