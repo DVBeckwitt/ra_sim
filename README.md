@@ -133,6 +133,48 @@ When a bundle NPZ is provided in the paths file (or via `--load-bundle`), `--hig
 
 After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ). The saved fit profile also records an estimated detector tilt; the GUI and the `simulate` CLI subcommand will use this tilt as their starting Rot1/Rot2 defaults the next time you launch a simulation.
 
+## Baseline profiling (Phase 0)
+
+For optimization work, a fixed dataset and fixed random seed are provided:
+
+- Dataset: `tests/benchmarks/reference_dataset.npz`
+- Seed: `tests/benchmarks/reference_seed.json`
+
+Regenerate the fixed dataset (optional):
+
+```bash
+python scripts/benchmarks/create_reference_dataset.py
+```
+
+Run the baseline profiler (times `process_peaks_parallel`, internal `calculate_phi`/`solve_q`, detector projection, pixel deposition, and plotting separately):
+
+```bash
+python scripts/benchmarks/profile_diffraction_baseline.py
+```
+
+Save a baseline artifact for future regression checks:
+
+```bash
+python scripts/benchmarks/profile_diffraction_baseline.py --artifact-out tests/benchmarks/reference_baseline_artifact.npz
+```
+
+Run validation against that baseline and report:
+- max/mean pixel residual
+- peak centroid shift (px)
+- FWHM shift (%)
+- integrated intensity shift (%)
+
+```bash
+python scripts/benchmarks/validate_diffraction_baseline.py --baseline-artifact tests/benchmarks/reference_baseline_artifact.npz
+```
+
+For deterministic pixel-level comparisons, pin Numba threads in both commands:
+
+```bash
+python scripts/benchmarks/profile_diffraction_baseline.py --artifact-out tests/benchmarks/reference_baseline_artifact.npz --numba-threads 1
+python scripts/benchmarks/validate_diffraction_baseline.py --baseline-artifact tests/benchmarks/reference_baseline_artifact.npz --numba-threads 1
+```
+
 ## Troubleshooting
 
 Set `RA_SIM_DEBUG=1` to enable verbose logging and additional diagnostic plots:

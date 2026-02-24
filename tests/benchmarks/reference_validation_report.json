@@ -1,0 +1,30 @@
+{
+  "baseline_artifact": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\ra_sim\\tests\\benchmarks\\reference_baseline_artifact.npz",
+  "candidate_source": "generated-in-memory",
+  "dataset_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\ra_sim\\tests\\benchmarks\\reference_dataset.npz",
+  "seed_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\ra_sim\\tests\\benchmarks\\reference_seed.json",
+  "random_seed": 20260224,
+  "numba_threads": 1,
+  "pixel_residual_max": 0.0,
+  "pixel_residual_mean": 0.0,
+  "peak_centroid_shift_px_mean": 0.0,
+  "peak_centroid_shift_px_max": 0.0,
+  "peak_centroid_shift_count": 5.0,
+  "fwhm_shift_pct_mean": 0.0,
+  "fwhm_shift_pct_mean_abs": 0.0,
+  "fwhm_shift_pct_max_abs": 0.0,
+  "fwhm_shift_count": 5.0,
+  "integrated_intensity_shift_pct_mean": 0.0,
+  "integrated_intensity_shift_pct_mean_abs": 0.0,
+  "integrated_intensity_shift_pct_max_abs": 0.0,
+  "integrated_intensity_shift_count": 5.0,
+  "profile_counter_labels": [
+    "calculate_phi_cycles",
+    "solve_q_cycles",
+    "solve_q_calls",
+    "detector_projection_cycles",
+    "detector_projection_calls",
+    "pixel_deposition_cycles",
+    "pixel_deposition_calls"
+  ]
+}

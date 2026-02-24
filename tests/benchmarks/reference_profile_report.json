@@ -1,0 +1,28 @@
+{
+  "dataset_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\ra_sim\\tests\\benchmarks\\reference_dataset.npz",
+  "seed_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\ra_sim\\tests\\benchmarks\\reference_seed.json",
+  "random_seed": 20260224,
+  "num_reflections": 162,
+  "num_samples": 1200,
+  "process_peaks_parallel_s": 11.166728499985766,
+  "calculate_phi_s": 3.440558134636082,
+  "solve_q_s": 2.856773177526801,
+  "solve_q_calls": 194400.0,
+  "detector_projection_s": 0.20993271997112378,
+  "detector_projection_calls": 3666674.0,
+  "pixel_deposition_s": 0.0020363476412762205,
+  "pixel_deposition_calls": 232380.0,
+  "plotting_s": 0.26452560001052916,
+  "cycle_frequency_hz": 2995073079.063075,
+  "numba_threads": 1,
+  "artifact_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\ra_sim\\tests\\benchmarks\\reference_baseline_artifact.npz",
+  "profile_counter_labels": [
+    "calculate_phi_cycles",
+    "solve_q_cycles",
+    "solve_q_calls",
+    "detector_projection_cycles",
+    "detector_projection_calls",
+    "pixel_deposition_cycles",
+    "pixel_deposition_calls"
+  ]
+}

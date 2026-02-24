@@ -307,9 +307,6 @@ def _solve_for_best_beam_sample(
             sigma_rad,
             gamma_rad,
             eta,
-            float(h),
-            float(k),
-            float(l),
             1000,
         )
         if int(status) != 0 or all_q.shape[0] == 0:
