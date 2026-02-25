@@ -3,7 +3,11 @@
 import numpy as np
 from numba import get_num_threads, get_thread_id, njit, prange
 from math import sin, cos, sqrt, pi, exp, acos
-from ra_sim.utils.calculations import complex_sqrt, fresnel_transmission
+from ra_sim.utils.calculations import (
+    IndexofRefraction,
+    complex_sqrt,
+    fresnel_transmission,
+)
 from numba import types
 from numba.typed import List       #  only List lives here
 
@@ -884,6 +888,7 @@ def calculate_phi(
     image, image_size,
     gamma_rad, Gamma_rad, chi_rad, psi_rad,
     zs, zb, n2,
+    n2_array,
     beam_x_array, beam_y_array,
     theta_array, phi_array,
     reflection_intensity,
@@ -948,8 +953,6 @@ def calculate_phi(
     debye_x_sq = debye_x * debye_x
     debye_y_sq = debye_y * debye_y
     pixel_scale = 1.0 / 100e-6
-    n2_sq = n2 * n2
-
     max_hits = max(n_samp * 2, 16)  # Ensure capacity even for very small samples
     pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
     missed_kf = np.empty((max_hits, 3), dtype=np.float64)
@@ -1049,9 +1052,7 @@ def calculate_phi(
 
     use_exact_optics = optics_mode == OPTICS_MODE_EXACT
     eps1 = 1.0 + 0.0j
-    eps2 = n2_sq
     eps3 = 1.0 + 0.0j
-    n2_sq_real = np.real(n2_sq)
 
     # Main loop over each beam sample in wave + mosaic. During fitting we can
     # optionally force a single preselected sample index per reflection.
@@ -1065,6 +1066,12 @@ def calculate_phi(
     for i_samp in range(loop_start, loop_stop):
         lam_samp = wavelength_array[i_samp]
         k_mag = 2.0*pi / lam_samp
+        n2_samp = n2
+        if i_samp < n2_array.size:
+            n2_samp = n2_array[i_samp]
+        n2_sq = n2_samp * n2_samp
+        n2_sq_real = np.real(n2_sq)
+        eps2 = n2_sq
 
         beam_start[0] = beam_x_array[i_samp]
         beam_start[1] = -20e-3
@@ -1132,7 +1139,7 @@ def calculate_phi(
             )
             th_t = np.arctan2(np.abs(kz2_i.real), np.maximum(k_par_i, 1e-30))
         else:
-            th_t = transmit_angle_grazing(th_i_prime, n2)     # grazing angle in medium
+            th_t = transmit_angle_grazing(th_i_prime, n2_samp)  # grazing angle in medium
             # magnitude for in-plane internal wavevector (use Re(n^2))
             k_scat = k0 * np.sqrt(np.maximum(n2_sq_real, 0.0))
             k_x_scat = k_scat*np.cos(th_t)*np.sin(phi_i_prime)
@@ -1146,8 +1153,8 @@ def calculate_phi(
             # Use both s- and p-polarizations and average for an unpolarized beam.
             # fresnel_transmission signature: (grazing_angle, refractive_index,
             #                                s_polarization=True, incoming=True)
-            Ti_s = fresnel_transmission(th_i_prime, n2, True, True)
-            Ti_p = fresnel_transmission(th_i_prime, n2, False, True)
+            Ti_s = fresnel_transmission(th_i_prime, n2_samp, True, True)
+            Ti_p = fresnel_transmission(th_i_prime, n2_samp, False, True)
             Ti2 = 0.5 * (
                 (np.real(Ti_s)*np.real(Ti_s) + np.imag(Ti_s)*np.imag(Ti_s))
                 + (np.real(Ti_p)*np.real(Ti_p) + np.imag(Ti_p)*np.imag(Ti_p))
@@ -1231,14 +1238,14 @@ def calculate_phi(
             else:
                 # Exit transmission amplitude and kz for exit leg.
                 # Use both polarizations and average for an unpolarized beam.
-                Tf_s = fresnel_transmission(th_t_out, n2, True, False)
-                Tf_p = fresnel_transmission(th_t_out, n2, False, False)
+                Tf_s = fresnel_transmission(th_t_out, n2_samp, True, False)
+                Tf_p = fresnel_transmission(th_t_out, n2_samp, False, False)
                 Tf2 = 0.5 * (
                     (np.real(Tf_s)*np.real(Tf_s) + np.imag(Tf_s)*np.imag(Tf_s))
                     + (np.real(Tf_p)*np.real(Tf_p) + np.imag(Tf_p)*np.imag(Tf_p))
                 )
 
-                re_k_z_f, im_k_z_f = ktz_components(k0, n2, th_t_out)
+                re_k_z_f, im_k_z_f = ktz_components(k0, n2_samp, th_t_out)
 
                 # path length for exit leg
                 L_out = safe_path_length(thickness, th_t_out)
@@ -1261,7 +1268,7 @@ def calculate_phi(
                 k_out_mag = k0
             else:
                 twotheta_t = (
-                    np.arccos(_clamp(np.cos(twotheta_t_prime) * np.real(n2), -1.0, 1.0))
+                    np.arccos(_clamp(np.cos(twotheta_t_prime) * np.real(n2_samp), -1.0, 1.0))
                     * np.sign(twotheta_t_prime)
                 )
                 k_out_mag = k_scat
@@ -1510,6 +1517,18 @@ def process_peaks_parallel(
         hit_tables.append(np.empty((0, 7), dtype=np.float64))
         miss_tables.append(np.empty((0, 3), dtype=np.float64))
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
+    n_samp = beam_x_array.size
+    n2_sample_array = np.empty(n_samp, dtype=np.complex128)
+    if wavelength_array.size == n_samp:
+        for i_samp in range(n_samp):
+            lam_angstrom = wavelength_array[i_samp]
+            if np.isfinite(lam_angstrom) and lam_angstrom > 0.0:
+                n2_sample_array[i_samp] = IndexofRefraction(lam_angstrom * 1.0e-10)
+            else:
+                n2_sample_array[i_samp] = n2
+    else:
+        for i_samp in range(n_samp):
+            n2_sample_array[i_samp] = n2
 
     # Use per-thread image accumulation when affordable, then reduce once.
     # This avoids concurrent scatter-add contention on the shared detector image.
@@ -1548,6 +1567,7 @@ def process_peaks_parallel(
                     image_partials[tid], image_size,
                     gamma_rad, Gamma_rad, chi_rad, psi_rad,
                     zs, zb, n2,
+                    n2_sample_array,
                     beam_x_array, beam_y_array,
                     theta_array, phi_array,
                     reflI, sigma_rad, gamma_rad_m, eta_pv,
@@ -1574,6 +1594,7 @@ def process_peaks_parallel(
                     image, image_size,
                     gamma_rad, Gamma_rad, chi_rad, psi_rad,
                     zs, zb, n2,
+                    n2_sample_array,
                     beam_x_array, beam_y_array,
                     theta_array, phi_array,
                     reflI, sigma_rad, gamma_rad_m, eta_pv,
@@ -1600,6 +1621,7 @@ def process_peaks_parallel(
                 image, image_size,
                 gamma_rad, Gamma_rad, chi_rad, psi_rad,
                 zs, zb, n2,
+                n2_sample_array,
                 beam_x_array, beam_y_array,
                 theta_array, phi_array,
                 reflI, sigma_rad, gamma_rad_m, eta_pv,

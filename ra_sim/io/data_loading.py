@@ -82,6 +82,7 @@ def load_parameters(
     phase_delta_expr_var=None,
     iodine_z_var=None,
     phi_l_divisor_var=None,
+    sf_prune_bias_var=None,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
@@ -155,6 +156,15 @@ def load_parameters(
                     divisor_val = None
                 if divisor_val is not None and np.isfinite(divisor_val) and divisor_val > 0.0:
                     phi_l_divisor_var.set(float(divisor_val))
+        if sf_prune_bias_var is not None:
+            stored_bias = params.get('sf_prune_bias')
+            if stored_bias is not None:
+                try:
+                    bias_val = float(stored_bias)
+                except (TypeError, ValueError):
+                    bias_val = None
+                if bias_val is not None and np.isfinite(bias_val):
+                    sf_prune_bias_var.set(float(np.clip(bias_val, -2.0, 2.0)))
 
         return "Parameters loaded from parameters.npy"
     else:
@@ -185,6 +195,7 @@ def save_all_parameters(
     phase_delta_expr_var=None,
     iodine_z_var=None,
     phi_l_divisor_var=None,
+    sf_prune_bias_var=None,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
@@ -242,6 +253,13 @@ def save_all_parameters(
             phi_divisor = None
         if phi_divisor is not None and np.isfinite(phi_divisor) and phi_divisor > 0.0:
             parameters['phi_l_divisor'] = float(phi_divisor)
+    if sf_prune_bias_var is not None:
+        try:
+            sf_prune_bias = float(sf_prune_bias_var.get())
+        except (TypeError, ValueError):
+            sf_prune_bias = None
+        if sf_prune_bias is not None and np.isfinite(sf_prune_bias):
+            parameters['sf_prune_bias'] = float(np.clip(sf_prune_bias, -2.0, 2.0))
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")
 

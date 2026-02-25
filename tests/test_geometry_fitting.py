@@ -137,3 +137,45 @@ def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
 
     assert distances.size == 2
     assert optics_seen == [2]
+
+
+def test_fit_geometry_parameters_supports_center_component_variables(monkeypatch):
+    target_row = 2.5
+    target_col = 5.5
+    centers_seen = []
+
+    def fake_compute(*args, **kwargs):
+        center_row = float(args[10])
+        center_col = float(args[11])
+        centers_seen.append((center_row, center_col))
+        return np.array(
+            [center_row - target_row, center_col - target_col],
+            dtype=np.float64,
+        )
+
+    monkeypatch.setattr(
+        opt, "compute_peak_position_error_geometry_local", fake_compute
+    )
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[],
+        var_names=["center_x", "center_y"],
+        experimental_image=None,
+    )
+
+    assert result.success
+    assert abs(float(result.x[0]) - target_row) < 1e-8
+    assert abs(float(result.x[1]) - target_col) < 1e-8
+    assert any(
+        abs(row - target_row) < 1e-3 and abs(col - target_col) < 1e-3
+        for row, col in centers_seen
+    )

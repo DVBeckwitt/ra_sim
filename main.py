@@ -570,7 +570,6 @@ bw_sigma = beam_config.get("bandwidth_sigma_fraction", 0.05e-3) * fwhm2sigma
 zs = sample_config.get("zs", 0.0)
 debye_x = debye_config.get("x", 0.0)
 debye_y = debye_config.get("y", 0.0)
-n2 = IndexofRefraction()
 
 # Print the computed complex index of refraction on startup and exit
 #print("Computed complex index of refraction n2:", n2)
@@ -585,9 +584,13 @@ occupancy_default_values = occupancy_config.get("default", [1.0, 1.0, 1.0])
 # When enabled, additional fractional reflections ("rods")
 # are injected between integer L values.
 include_rods_flag = hendricks_config.get("include_rods", False)
+sf_prune_bias_default = float(
+    np.clip(hendricks_config.get("sf_prune_bias", 0.0), -1.0, 1.0)
+)
 
 lambda_override = beam_config.get("wavelength_angstrom")
 lambda_ = lambda_override if lambda_override is not None else lambda_from_poni
+n2 = IndexofRefraction(float(lambda_) * 1.0e-10)
 
 # Parameters and file paths.
 cif_file = get_path("cif_file")
@@ -1082,6 +1085,7 @@ defaults = {
     'center_x': center_default[0],
     'center_y': center_default[1],
     'sampling_resolution': 'Low',
+    'sf_prune_bias': sf_prune_bias_default,
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
     'optics_mode': 'fast',
@@ -1341,6 +1345,260 @@ disabled_bragg_qr_l_values: set[tuple[str, int, int]] = set()
 BRAGG_QR_L_KEY_SCALE = int(1_000_000)
 BRAGG_QR_L_INVALID_KEY = int(np.iinfo(np.int64).min)
 
+SF_PRUNE_BIAS_MIN = -2.0
+SF_PRUNE_BIAS_MAX = 2.0
+_SF_PRUNE_RETAIN_BASE = 0.9997
+_SF_PRUNE_RETAIN_MAX = 0.99998
+_SF_PRUNE_RETAIN_MIN = 0.90
+_SF_PRUNE_REL_FLOOR_BASE = 3.0e-5
+_SF_PRUNE_REL_FLOOR_MIN = 1.0e-8
+_SF_PRUNE_REL_FLOOR_MAX = 8.0e-2
+_SF_PRUNE_MIN_KEEP_BASE = 18
+
+sf_prune_stats = {
+    "qr_total": 0,
+    "qr_kept": 0,
+    "hkl_primary_total": 0,
+    "hkl_primary_kept": 0,
+    "hkl_secondary_total": 0,
+    "hkl_secondary_kept": 0,
+}
+
+
+def _clip_sf_prune_bias(value) -> float:
+    try:
+        bias = float(value)
+    except (TypeError, ValueError):
+        bias = float(defaults.get("sf_prune_bias", 0.0))
+    if not np.isfinite(bias):
+        bias = float(defaults.get("sf_prune_bias", 0.0))
+    return float(np.clip(bias, SF_PRUNE_BIAS_MIN, SF_PRUNE_BIAS_MAX))
+
+
+def _current_sf_prune_bias() -> float:
+    var = globals().get("sf_prune_bias_var")
+    if var is None:
+        return _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0))
+    try:
+        return _clip_sf_prune_bias(var.get())
+    except Exception:
+        return _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0))
+
+
+def _sf_prune_profile_from_bias(bias: float) -> tuple[float, float, int, int]:
+    bias_clipped = _clip_sf_prune_bias(bias)
+
+    if bias_clipped >= 0.0:
+        extra_aggressive = max(0.0, bias_clipped - 1.0)
+        retain_fraction = (
+            _SF_PRUNE_RETAIN_BASE
+            - 0.0045 * bias_clipped
+            - 0.0200 * (extra_aggressive ** 1.35)
+        )
+    else:
+        retain_fraction = _SF_PRUNE_RETAIN_BASE + 0.00028 * ((-bias_clipped) ** 1.1)
+    retain_fraction = float(
+        np.clip(retain_fraction, _SF_PRUNE_RETAIN_MIN, _SF_PRUNE_RETAIN_MAX)
+    )
+
+    extra_aggressive = max(0.0, bias_clipped - 1.0)
+    rel_floor_exp = (1.8 * bias_clipped) + (2.2 * extra_aggressive)
+    rel_floor = _SF_PRUNE_REL_FLOOR_BASE * (10.0 ** rel_floor_exp)
+    rel_floor = float(np.clip(rel_floor, _SF_PRUNE_REL_FLOOR_MIN, _SF_PRUNE_REL_FLOOR_MAX))
+
+    min_keep = int(
+        round(
+            _SF_PRUNE_MIN_KEEP_BASE
+            - 8.0 * bias_clipped
+            - 10.0 * extra_aggressive
+        )
+    )
+    min_keep = int(max(3, min_keep))
+
+    neighbor_span = 1 if bias_clipped <= 0.7 else 0
+    return retain_fraction, rel_floor, min_keep, neighbor_span
+
+
+def _prune_l_intensity_curve(
+    l_vals: np.ndarray,
+    i_vals: np.ndarray,
+    *,
+    bias: float,
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    l_arr = np.asarray(l_vals, dtype=np.float64).reshape(-1)
+    i_arr = np.asarray(i_vals, dtype=np.float64).reshape(-1)
+    row_count = min(l_arr.shape[0], i_arr.shape[0])
+    if row_count <= 0:
+        return (
+            np.empty((0,), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            0,
+            0,
+        )
+
+    l_arr = l_arr[:row_count]
+    i_arr = i_arr[:row_count]
+    finite_mask = np.isfinite(l_arr) & np.isfinite(i_arr) & (i_arr > 0.0)
+    if not np.any(finite_mask):
+        return (
+            np.empty((0,), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            row_count,
+            0,
+        )
+
+    l_valid = l_arr[finite_mask]
+    i_valid = i_arr[finite_mask]
+    total_count = int(i_valid.shape[0])
+    if total_count <= 8:
+        return l_valid.copy(), i_valid.copy(), total_count, total_count
+
+    retain_fraction, rel_floor, min_keep, neighbor_span = _sf_prune_profile_from_bias(bias)
+    order = np.argsort(i_valid)[::-1]
+    keep_mask = np.zeros(total_count, dtype=bool)
+
+    top_n = min(total_count, max(1, min_keep))
+    keep_mask[order[:top_n]] = True
+
+    i_max = float(i_valid[order[0]])
+    if i_max > 0.0:
+        keep_mask |= i_valid >= (i_max * rel_floor)
+
+    total_mass = float(np.sum(i_valid))
+    if total_mass > 0.0:
+        target_mass = retain_fraction * total_mass
+        cum_mass = np.cumsum(i_valid[order])
+        mass_n = int(np.searchsorted(cum_mass, target_mass, side="left")) + 1
+        keep_mask[order[:mass_n]] = True
+
+    if neighbor_span > 0:
+        expanded_mask = keep_mask.copy()
+        for delta in range(1, neighbor_span + 1):
+            expanded_mask[:-delta] |= keep_mask[delta:]
+            expanded_mask[delta:] |= keep_mask[:-delta]
+        keep_mask = expanded_mask
+
+    keep_idx = np.nonzero(keep_mask)[0]
+    if keep_idx.size == 0:
+        keep_idx = order[:1]
+
+    keep_idx = np.sort(keep_idx)
+    kept_count = int(keep_idx.size)
+    return (
+        l_valid[keep_idx].copy(),
+        i_valid[keep_idx].copy(),
+        total_count,
+        kept_count,
+    )
+
+
+def _prune_reflection_rows(
+    miller_arr: np.ndarray,
+    intens_arr: np.ndarray,
+    *,
+    bias: float,
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    arr = np.asarray(miller_arr, dtype=np.float64)
+    intens = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            0,
+            0,
+        )
+
+    row_count = min(arr.shape[0], intens.shape[0])
+    if row_count <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            0,
+            0,
+        )
+
+    arr = arr[:row_count, :]
+    intens = intens[:row_count]
+    finite_mask = (
+        np.isfinite(arr[:, 0])
+        & np.isfinite(arr[:, 1])
+        & np.isfinite(arr[:, 2])
+        & np.isfinite(intens)
+        & (intens > 0.0)
+    )
+    if not np.any(finite_mask):
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            row_count,
+            0,
+        )
+
+    arr_valid = arr[finite_mask, :]
+    intens_valid = intens[finite_mask]
+    total_count = int(intens_valid.shape[0])
+    if total_count <= 8:
+        return arr_valid.copy(), intens_valid.copy(), total_count, total_count
+
+    retain_fraction, rel_floor, min_keep, _ = _sf_prune_profile_from_bias(bias)
+    order = np.argsort(intens_valid)[::-1]
+    keep_mask = np.zeros(total_count, dtype=bool)
+
+    top_n = min(total_count, max(1, min_keep))
+    keep_mask[order[:top_n]] = True
+
+    i_max = float(intens_valid[order[0]])
+    if i_max > 0.0:
+        keep_mask |= intens_valid >= (i_max * rel_floor)
+
+    total_mass = float(np.sum(intens_valid))
+    if total_mass > 0.0:
+        target_mass = retain_fraction * total_mass
+        cum_mass = np.cumsum(intens_valid[order])
+        mass_n = int(np.searchsorted(cum_mass, target_mass, side="left")) + 1
+        keep_mask[order[:mass_n]] = True
+
+    keep_idx = np.nonzero(keep_mask)[0]
+    if keep_idx.size == 0:
+        keep_idx = order[:1]
+    keep_idx = np.sort(keep_idx)
+    kept_count = int(keep_idx.size)
+
+    return (
+        arr_valid[keep_idx, :].copy(),
+        intens_valid[keep_idx].copy(),
+        total_count,
+        kept_count,
+    )
+
+
+def _update_sf_prune_status_label() -> None:
+    status_var = globals().get("sf_prune_status_var")
+    if status_var is None:
+        return
+
+    qr_total = int(sf_prune_stats.get("qr_total", 0))
+    qr_kept = int(sf_prune_stats.get("qr_kept", 0))
+    hk_total = int(sf_prune_stats.get("hkl_primary_total", 0))
+    hk_kept = int(sf_prune_stats.get("hkl_primary_kept", 0))
+    bias = _current_sf_prune_bias()
+
+    if qr_total > 0:
+        pct = (100.0 * qr_kept / qr_total) if qr_total else 0.0
+        status_var.set(
+            f"SF pruning keeps {qr_kept:,}/{qr_total:,} rod points ({pct:.1f}%), bias={bias:+.2f}"
+        )
+        return
+
+    if hk_total > 0:
+        pct = (100.0 * hk_kept / hk_total) if hk_total else 0.0
+        status_var.set(
+            f"SF pruning keeps {hk_kept:,}/{hk_total:,} HKL points ({pct:.1f}%), bias={bias:+.2f}"
+        )
+        return
+
+    status_var.set(f"SF pruning bias={bias:+.2f}")
+
 
 def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
     label = str(source_label or "primary").strip().lower()
@@ -1498,8 +1756,11 @@ def _prune_disabled_bragg_qr_filters() -> None:
     }
 
 
-def _filtered_primary_qr_dict() -> dict[int, dict[str, object]]:
+def _filtered_primary_qr_dict() -> tuple[dict[int, dict[str, object]], int, int]:
     out: dict[int, dict[str, object]] = {}
+    total_before_prune = 0
+    total_after_prune = 0
+    prune_bias = _current_sf_prune_bias()
     disabled_primary_m = {
         int(m_idx)
         for src, m_idx in disabled_bragg_qr_groups
@@ -1539,19 +1800,29 @@ def _filtered_primary_qr_dict() -> dict[int, dict[str, object]]:
             l_vals = l_vals[keep_mask]
             i_vals = i_vals[keep_mask]
 
+        pruned_l, pruned_i, src_count, kept_count = _prune_l_intensity_curve(
+            l_vals,
+            i_vals,
+            bias=prune_bias,
+        )
+        total_before_prune += int(src_count)
+        total_after_prune += int(kept_count)
+        if kept_count <= 0:
+            continue
+
         filtered = dict(entry)
-        filtered["L"] = l_vals.copy()
-        filtered["I"] = i_vals.copy()
+        filtered["L"] = pruned_l
+        filtered["I"] = pruned_i
         out[m_int] = filtered
 
-    return out
+    return out, total_before_prune, total_after_prune
 
 
 def _filtered_miller_and_intensities(
     miller_arr: np.ndarray,
     intens_arr: np.ndarray,
     source_label: str,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, int, int]:
     arr = np.asarray(miller_arr, dtype=np.float64)
     intens = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
 
@@ -1559,6 +1830,8 @@ def _filtered_miller_and_intensities(
         return (
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
+            0,
+            0,
         )
 
     row_count = min(arr.shape[0], intens.shape[0])
@@ -1566,6 +1839,8 @@ def _filtered_miller_and_intensities(
         return (
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
+            0,
+            0,
         )
 
     arr = arr[:row_count, :]
@@ -1581,12 +1856,9 @@ def _filtered_miller_and_intensities(
         for src, m_idx, l_key in disabled_bragg_qr_l_values
         if _normalize_bragg_qr_source_label(src) == source_norm
     ]
-    if not disabled_m and not disabled_l_pairs:
-        return arr.copy(), intens.copy()
-
     m_vals = _m_indices_from_miller_array(arr, unique=False)
     if m_vals.shape[0] != arr.shape[0]:
-        return arr.copy(), intens.copy()
+        return arr.copy(), intens.copy(), int(arr.shape[0]), int(arr.shape[0])
 
     keep_mask = np.ones(arr.shape[0], dtype=bool)
     if disabled_m:
@@ -1598,7 +1870,32 @@ def _filtered_miller_and_intensities(
         for m_idx, l_key in disabled_l_pairs:
             keep_mask &= ~((m_vals == int(m_idx)) & (l_keys == int(l_key)))
 
-    return arr[keep_mask].copy(), intens[keep_mask].copy()
+    filtered_arr = arr[keep_mask]
+    filtered_intens = intens[keep_mask]
+    total_after_manual = int(filtered_arr.shape[0])
+    if total_after_manual <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            int(arr.shape[0]),
+            0,
+        )
+
+    # Keep secondary CIF reflections unchanged; only primary SF gets adaptive pruning.
+    if source_norm != "primary":
+        return (
+            filtered_arr.copy(),
+            filtered_intens.copy(),
+            total_after_manual,
+            total_after_manual,
+        )
+
+    pruned_arr, pruned_intens, src_count, kept_count = _prune_reflection_rows(
+        filtered_arr,
+        filtered_intens,
+        bias=_current_sf_prune_bias(),
+    )
+    return pruned_arr, pruned_intens, int(src_count), int(kept_count)
 
 
 def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
@@ -1607,20 +1904,30 @@ def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
     global last_simulation_signature
     global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
     global selected_peak_record
+    global sf_prune_stats
 
     _prune_disabled_bragg_qr_filters()
 
-    SIM_PRIMARY_QR = _filtered_primary_qr_dict()
-    SIM_MILLER1, SIM_INTENS1 = _filtered_miller_and_intensities(
+    SIM_PRIMARY_QR, qr_total, qr_kept = _filtered_primary_qr_dict()
+    SIM_MILLER1, SIM_INTENS1, hkl_primary_total, hkl_primary_kept = _filtered_miller_and_intensities(
         SIM_MILLER1_ALL,
         SIM_INTENS1_ALL,
         "primary",
     )
-    SIM_MILLER2, SIM_INTENS2 = _filtered_miller_and_intensities(
+    SIM_MILLER2, SIM_INTENS2, hkl_secondary_total, hkl_secondary_kept = _filtered_miller_and_intensities(
         SIM_MILLER2_ALL,
         SIM_INTENS2_ALL,
         "secondary",
     )
+    sf_prune_stats = {
+        "qr_total": int(qr_total),
+        "qr_kept": int(qr_kept),
+        "hkl_primary_total": int(hkl_primary_total),
+        "hkl_primary_kept": int(hkl_primary_kept),
+        "hkl_secondary_total": int(hkl_secondary_total),
+        "hkl_secondary_kept": int(hkl_secondary_kept),
+    }
+    _update_sf_prune_status_label()
 
     last_simulation_signature = None
     stored_max_positions_local = None
@@ -2156,6 +2463,153 @@ def _best_orientation_alignment(
                             best = candidate
 
     return best
+
+
+def _orientation_metrics(
+    sim_coords: list[tuple[float, float]],
+    meas_coords: list[tuple[float, float]],
+    shape: tuple[int, int],
+    *,
+    indexing_mode: str,
+    k: int,
+    flip_x: bool,
+    flip_y: bool,
+    flip_order: str,
+):
+    """Return RMS/mean/max distance after transforming measured coordinates."""
+
+    transformed = _transform_points_orientation(
+        meas_coords,
+        shape,
+        indexing_mode=indexing_mode,
+        k=k,
+        flip_x=flip_x,
+        flip_y=flip_y,
+        flip_order=flip_order,
+    )
+    deltas = [
+        math.hypot(sx - mx, sy - my)
+        for (sx, sy), (mx, my) in zip(sim_coords, transformed)
+    ]
+    if not deltas:
+        return {
+            "rms": float("nan"),
+            "mean": float("nan"),
+            "max": float("nan"),
+            "count": 0,
+        }
+    arr = np.asarray(deltas, dtype=float)
+    return {
+        "rms": float(np.sqrt(np.mean(arr * arr))),
+        "mean": float(np.mean(arr)),
+        "max": float(np.max(arr)),
+        "count": int(arr.size),
+    }
+
+
+def _select_fit_orientation(
+    sim_coords: list[tuple[float, float]],
+    meas_coords: list[tuple[float, float]],
+    shape: tuple[int, int],
+    *,
+    cfg: dict[str, object] | None = None,
+):
+    """Choose a measured-peak orientation transform that best aligns to simulation."""
+
+    identity = {
+        "k": 0,
+        "flip_x": False,
+        "flip_y": False,
+        "flip_order": "yx",
+        "indexing_mode": "xy",
+        "label": "identity",
+    }
+    config = cfg if isinstance(cfg, dict) else {}
+    enabled = bool(config.get("enabled", True))
+    min_improvement = max(0.0, float(config.get("min_improvement_px", 0.25)))
+    max_rms = float(config.get("max_rms_px", np.inf))
+
+    diagnostics = {
+        "enabled": bool(enabled),
+        "pairs": int(min(len(sim_coords), len(meas_coords))),
+        "identity_rms_px": float("nan"),
+        "best_rms_px": float("nan"),
+        "best_label": "identity",
+        "chosen_label": "identity",
+        "improvement_px": float("nan"),
+        "reason": "identity_fallback",
+    }
+
+    if not sim_coords or not meas_coords or len(sim_coords) != len(meas_coords):
+        diagnostics["reason"] = "insufficient_pairs"
+        return identity, diagnostics
+
+    identity_metrics = _orientation_metrics(
+        sim_coords,
+        meas_coords,
+        shape,
+        indexing_mode="xy",
+        k=0,
+        flip_x=False,
+        flip_y=False,
+        flip_order="yx",
+    )
+    diagnostics["identity_rms_px"] = float(identity_metrics["rms"])
+
+    best = _best_orientation_alignment(sim_coords, meas_coords, shape)
+    if best is None:
+        diagnostics["reason"] = "no_candidate"
+        return identity, diagnostics
+
+    best_metrics = _orientation_metrics(
+        sim_coords,
+        meas_coords,
+        shape,
+        indexing_mode=str(best.get("indexing_mode", "xy")),
+        k=int(best.get("k", 0)),
+        flip_x=bool(best.get("flip_x", False)),
+        flip_y=bool(best.get("flip_y", False)),
+        flip_order=str(best.get("flip_order", "yx")),
+    )
+    best_rms = float(best_metrics["rms"])
+    identity_rms = float(identity_metrics["rms"])
+    improvement = identity_rms - best_rms
+
+    diagnostics.update(
+        {
+            "best_rms_px": best_rms,
+            "best_label": str(best.get("label", "candidate")),
+            "improvement_px": float(improvement),
+        }
+    )
+
+    if not enabled:
+        diagnostics["reason"] = "disabled_by_config"
+        return identity, diagnostics
+
+    if not np.isfinite(best_rms):
+        diagnostics["reason"] = "best_rms_not_finite"
+        return identity, diagnostics
+
+    if np.isfinite(max_rms) and best_rms > max_rms:
+        diagnostics["reason"] = "best_rms_above_threshold"
+        return identity, diagnostics
+
+    if not np.isfinite(improvement) or improvement < min_improvement:
+        diagnostics["reason"] = "insufficient_improvement"
+        return identity, diagnostics
+
+    chosen = {
+        "k": int(best.get("k", 0)),
+        "flip_x": bool(best.get("flip_x", False)),
+        "flip_y": bool(best.get("flip_y", False)),
+        "flip_order": str(best.get("flip_order", "yx")),
+        "indexing_mode": str(best.get("indexing_mode", "xy")),
+        "label": str(best.get("label", "candidate")),
+    }
+    diagnostics["chosen_label"] = str(chosen["label"])
+    diagnostics["reason"] = "selected_best"
+    return chosen, diagnostics
 
 
 def _aggregate_match_centers(
@@ -5198,31 +5652,75 @@ def _refresh_integration_from_cached_results():
 
 def update_mosaic_cache():
     """
-    Regenerate random mosaic profiles if mosaic sliders changed.
+    Keep the current random beam/mosaic samples unless sampling inputs changed.
+
+    This preserves the same sampled beam positions/divergence across normal
+    simulation updates so changing unrelated sliders does not re-randomize the
+    detector pattern.
     """
     global profile_cache
-    (beam_x_array,
-     beam_y_array,
-     theta_array,
-     phi_array,
-     wavelength_array) = generate_random_profiles(
-         num_samples=num_samples,
-         divergence_sigma=divergence_sigma,
-         bw_sigma=bw_sigma,
-         lambda0=lambda_,
-         bandwidth=bandwidth
-     )
+    sampling_signature = (
+        int(num_samples),
+        float(divergence_sigma),
+        float(bw_sigma),
+        float(lambda_),
+        float(bandwidth),
+    )
 
-    profile_cache = {
-        "beam_x_array": beam_x_array,
-        "beam_y_array": beam_y_array,
-        "theta_array": theta_array,
-        "phi_array": phi_array,
-        "wavelength_array": wavelength_array,
-        "sigma_mosaic_deg": sigma_mosaic_var.get(),
-        "gamma_mosaic_deg": gamma_mosaic_var.get(),
-        "eta": eta_var.get()
-    }
+    beam_x_cached = np.asarray(profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
+    beam_y_cached = np.asarray(profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
+    theta_cached = np.asarray(profile_cache.get("theta_array", []), dtype=np.float64).ravel()
+    phi_cached = np.asarray(profile_cache.get("phi_array", []), dtype=np.float64).ravel()
+    wavelength_cached = np.asarray(profile_cache.get("wavelength_array", []), dtype=np.float64).ravel()
+
+    has_cached_samples = (
+        beam_x_cached.size > 0
+        and beam_x_cached.size == int(num_samples)
+        and beam_y_cached.size == beam_x_cached.size
+        and theta_cached.size == beam_x_cached.size
+        and phi_cached.size == beam_x_cached.size
+        and wavelength_cached.size == beam_x_cached.size
+    )
+
+    cached_signature = profile_cache.get("_sampling_signature")
+    should_resample = not has_cached_samples
+    if has_cached_samples:
+        if cached_signature is None:
+            # Existing externally-provided samples: keep them and adopt the
+            # current signature so future explicit sampling-input changes can
+            # trigger a re-sample.
+            profile_cache["_sampling_signature"] = sampling_signature
+        else:
+            should_resample = tuple(cached_signature) != sampling_signature
+
+    if should_resample:
+        (beam_x_array,
+         beam_y_array,
+         theta_array,
+         phi_array,
+         wavelength_array) = generate_random_profiles(
+             num_samples=num_samples,
+             divergence_sigma=divergence_sigma,
+             bw_sigma=bw_sigma,
+             lambda0=lambda_,
+             bandwidth=bandwidth
+         )
+        profile_cache = {
+            "beam_x_array": beam_x_array,
+            "beam_y_array": beam_y_array,
+            "theta_array": theta_array,
+            "phi_array": phi_array,
+            "wavelength_array": wavelength_array,
+            "_sampling_signature": sampling_signature,
+        }
+
+    profile_cache.update(
+        {
+            "sigma_mosaic_deg": sigma_mosaic_var.get(),
+            "gamma_mosaic_deg": gamma_mosaic_var.get(),
+            "eta": eta_var.get(),
+        }
+    )
 
 def on_mosaic_slider_change(*args):
     update_mosaic_cache()
@@ -5472,6 +5970,9 @@ def do_update():
             round(mosaic_params["sigma_mosaic_deg"], 6),
             round(mosaic_params["gamma_mosaic_deg"], 6),
             round(mosaic_params["eta"], 6),
+            round(_current_sf_prune_bias(), 3),
+            int(sf_prune_stats.get("qr_kept", 0)),
+            int(sf_prune_stats.get("hkl_primary_kept", 0)),
             int(optics_mode_flag),
             int(num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
@@ -6147,6 +6648,7 @@ def reset_to_defaults():
         )
     )
     optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
+    sf_prune_bias_var.set(_clip_sf_prune_bias(defaults.get('sf_prune_bias', 0.0)))
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
     tth_min_var.set(0.0)
@@ -6555,6 +7057,7 @@ save_button = ttk.Button(
         optics_mode_var,
         phase_delta_expr_var=phase_delta_expr_var,
         phi_l_divisor_var=phi_l_divisor_var,
+        sf_prune_bias_var=sf_prune_bias_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -6587,6 +7090,7 @@ load_button = ttk.Button(
                 optics_mode_var,
                 phase_delta_expr_var=phase_delta_expr_var,
                 phi_l_divisor_var=phi_l_divisor_var,
+                sf_prune_bias_var=sf_prune_bias_var,
             )
         ),
         (_phase_delta_entry_var.set(_current_phase_delta_expression()) if _phase_delta_entry_var is not None else None),
@@ -6620,6 +7124,11 @@ fit_theta_var = tk.BooleanVar(value=True)  # theta_initial
 fit_psi_z_var = tk.BooleanVar(value=True)
 fit_chi_var   = tk.BooleanVar(value=True)
 fit_cor_var   = tk.BooleanVar(value=True)
+fit_gamma_var = tk.BooleanVar(value=True)
+fit_Gamma_var = tk.BooleanVar(value=True)
+fit_dist_var = tk.BooleanVar(value=True)
+fit_center_x_var = tk.BooleanVar(value=False)
+fit_center_y_var = tk.BooleanVar(value=False)
 
 ttk.Checkbutton(fit_frame, text="z_b beam offset", variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="z_s sample offset", variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
@@ -6627,6 +7136,11 @@ ttk.Checkbutton(fit_frame, text="θ sample tilt", variable=fit_theta_var).pack(s
 ttk.Checkbutton(fit_frame, text="ψ goniometer yaw", variable=fit_psi_z_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="χ sample pitch", variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="φ axis angle", variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="γ detector tilt", variable=fit_gamma_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="Γ detector tilt", variable=fit_Gamma_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="distance", variable=fit_dist_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(fit_frame, text="center col", variable=fit_center_y_var).pack(side=tk.LEFT, padx=2)
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     background_backend_frame = ttk.LabelFrame(root, text="Background Backend (debug)")
@@ -6843,6 +7357,12 @@ def _auto_match_background_peaks(
     fallback_percentile = min(100.0, max(50.0, fallback_percentile))
     min_confidence = float(config.get("min_confidence", 0.0))
     max_candidate_peaks = max(50, int(config.get("max_candidate_peaks", 1200)))
+    ambiguity_ratio_min = max(1.0, float(config.get("ambiguity_ratio_min", 1.15)))
+    ambiguity_margin_px = max(0.0, float(config.get("ambiguity_margin_px", 2.0)))
+    distance_sigma_clip = max(0.0, float(config.get("distance_sigma_clip", 3.5)))
+    max_match_distance_px = float(config.get("max_match_distance_px", np.inf))
+    if not np.isfinite(max_match_distance_px):
+        max_match_distance_px = np.inf
 
     img = np.asarray(background_image, dtype=float)
     valid_mask = np.isfinite(img)
@@ -6874,8 +7394,12 @@ def _auto_match_background_peaks(
     if rows.size == 0:
         return [], {
             "simulated_count": float(len(simulated_peaks)),
-            "sigma_est": sigma_est,
+            "sigma_est": float(sigma_est),
             "candidate_count": 0.0,
+            "within_radius_count": 0.0,
+            "unambiguous_count": 0.0,
+            "matched_pre_clip_count": 0.0,
+            "clipped_count": 0.0,
         }
 
     candidate_coords = np.column_stack((cols.astype(float), rows.astype(float)))
@@ -6897,6 +7421,10 @@ def _auto_match_background_peaks(
             "simulated_count": float(len(simulated_peaks)),
             "candidate_count": float(n_cand),
             "sigma_est": float(sigma_est),
+            "within_radius_count": 0.0,
+            "unambiguous_count": 0.0,
+            "matched_pre_clip_count": 0.0,
+            "clipped_count": 0.0,
         }
 
     sim_coords = np.zeros((n_sim, 2), dtype=float)
@@ -6904,47 +7432,75 @@ def _auto_match_background_peaks(
         sim_coords[i, 0] = float(entry["sim_col"])
         sim_coords[i, 1] = float(entry["sim_row"])
 
-    matches: list[dict[str, object]] = []
     sim_tree = cKDTree(sim_coords)
-    cand_dists_to_owner, cand_owner_idx = sim_tree.query(candidate_coords, k=1)
-    cand_dists_to_owner = np.asarray(cand_dists_to_owner, dtype=float)
-    cand_owner_idx = np.asarray(cand_owner_idx, dtype=int)
+    k_query = min(max(2, k_neighbors), n_sim) if n_sim > 1 else 1
+    cand_dists, cand_idx = sim_tree.query(candidate_coords, k=k_query)
+    cand_dists = np.asarray(cand_dists, dtype=float)
+    cand_idx = np.asarray(cand_idx, dtype=int)
+    if cand_dists.ndim == 1:
+        cand_dists = cand_dists[:, np.newaxis]
+        cand_idx = cand_idx[:, np.newaxis]
+
+    owner_dist = cand_dists[:, 0]
+    owner_idx = cand_idx[:, 0]
+    within_radius = np.isfinite(owner_dist) & (owner_dist <= search_radius)
+
+    if cand_dists.shape[1] >= 2:
+        second_dist = cand_dists[:, 1]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = second_dist / np.maximum(owner_dist, 1e-9)
+        unambiguous = (
+            ~np.isfinite(second_dist)
+            | ((second_dist - owner_dist) >= ambiguity_margin_px)
+            | (ratio >= ambiguity_ratio_min)
+        )
+    else:
+        unambiguous = np.ones_like(within_radius, dtype=bool)
+
+    candidate_allowed = within_radius & unambiguous
 
     best_cand_for_sim = np.full(n_sim, -1, dtype=int)
     best_dist_for_sim = np.full(n_sim, np.inf, dtype=float)
     best_prom_for_sim = np.full(n_sim, -np.inf, dtype=float)
 
-    for cand_idx in range(n_cand):
-        owner = int(cand_owner_idx[cand_idx])
+    for cand_i in range(n_cand):
+        if not candidate_allowed[cand_i]:
+            continue
+        owner = int(owner_idx[cand_i])
         if owner < 0 or owner >= n_sim:
             continue
-        prom_sigma = float(candidate_prom_sigma[cand_idx])
+
+        prom_sigma = float(candidate_prom_sigma[cand_i])
         if prom_sigma < min_match_prominence_sigma:
             continue
-        dist = float(cand_dists_to_owner[cand_idx])
+
+        dist = float(owner_dist[cand_i])
         current_best = best_dist_for_sim[owner]
         if (dist + 1e-12) < current_best or (
             abs(dist - current_best) <= 1e-12 and prom_sigma > best_prom_for_sim[owner]
         ):
             best_dist_for_sim[owner] = dist
             best_prom_for_sim[owner] = prom_sigma
-            best_cand_for_sim[owner] = cand_idx
+            best_cand_for_sim[owner] = cand_i
 
+    pre_clip_matches: list[dict[str, object]] = []
     for sim_idx in range(n_sim):
-        cand_idx = int(best_cand_for_sim[sim_idx])
-        if cand_idx < 0:
+        cand_i = int(best_cand_for_sim[sim_idx])
+        if cand_i < 0:
             continue
         entry = ordered_simulated[sim_idx]
         sim_col = float(entry["sim_col"])
         sim_row = float(entry["sim_row"])
-        col = float(candidate_coords[cand_idx, 0])
-        row = float(candidate_coords[cand_idx, 1])
+        col = float(candidate_coords[cand_i, 0])
+        row = float(candidate_coords[cand_i, 1])
         dist_px = float(best_dist_for_sim[sim_idx])
         prom_sigma = float(best_prom_for_sim[sim_idx])
         confidence = max(0.0, prom_sigma) / (1.0 + max(0.0, dist_px))
         if confidence < min_confidence:
             continue
-        matches.append(
+        if dist_px > max_match_distance_px:
+            continue
+        pre_clip_matches.append(
             {
                 "hkl": tuple(int(v) for v in entry["hkl"]),
                 "label": str(entry["label"]),
@@ -6959,16 +7515,54 @@ def _auto_match_background_peaks(
             }
         )
 
+    matches = list(pre_clip_matches)
+    clipped_count = 0
+    clip_limit = np.inf
+    if matches:
+        dists = np.asarray([float(m["distance_px"]) for m in matches], dtype=float)
+        dist_med = float(np.median(dists))
+        dist_mad = float(np.median(np.abs(dists - dist_med)))
+        dist_sigma = 1.4826 * dist_mad
+        clip_limit = search_radius
+        if np.isfinite(max_match_distance_px):
+            clip_limit = min(clip_limit, float(max_match_distance_px))
+        if np.isfinite(distance_sigma_clip):
+            if np.isfinite(dist_sigma) and dist_sigma > 1e-9:
+                clip_limit = min(clip_limit, dist_med + distance_sigma_clip * dist_sigma)
+            else:
+                clip_limit = min(clip_limit, dist_med + max(1.0, distance_sigma_clip))
+        matches = [
+            m for m in matches if float(m["distance_px"]) <= float(clip_limit) + 1e-9
+        ]
+        clipped_count = max(0, len(pre_clip_matches) - len(matches))
+    else:
+        dist_med = float("nan")
+        dist_sigma = float("nan")
+
+    match_dists = np.asarray([float(m["distance_px"]) for m in matches], dtype=float)
+    match_conf = np.asarray([float(m["confidence"]) for m in matches], dtype=float)
+
     stats = {
         "simulated_count": float(len(simulated_peaks)),
         "candidate_count": float(candidate_coords.shape[0]),
+        "within_radius_count": float(np.count_nonzero(within_radius)),
+        "unambiguous_count": float(np.count_nonzero(candidate_allowed)),
+        "matched_pre_clip_count": float(len(pre_clip_matches)),
         "matched_count": float(len(matches)),
+        "clipped_count": float(clipped_count),
         "sigma_est": float(sigma_est),
         "prominence_center": float(prom_center),
         "search_radius_px": float(search_radius),
-        "mean_match_distance_px": float(
-            np.mean([m["distance_px"] for m in matches]) if matches else np.nan
-        ),
+        "k_query_used": float(k_query),
+        "ambiguity_ratio_min": float(ambiguity_ratio_min),
+        "ambiguity_margin_px": float(ambiguity_margin_px),
+        "distance_sigma_clip": float(distance_sigma_clip),
+        "distance_clip_limit_px": float(clip_limit) if np.isfinite(clip_limit) else float("nan"),
+        "distance_median_pre_clip_px": float(dist_med) if np.isfinite(dist_med) else float("nan"),
+        "distance_sigma_pre_clip_px": float(dist_sigma) if np.isfinite(dist_sigma) else float("nan"),
+        "mean_match_distance_px": float(np.mean(match_dists)) if match_dists.size else float("nan"),
+        "p90_match_distance_px": float(np.percentile(match_dists, 90.0)) if match_dists.size else float("nan"),
+        "median_match_confidence": float(np.median(match_conf)) if match_conf.size else float("nan"),
     }
     return matches, stats
 
@@ -6996,6 +7590,8 @@ def on_fit_geometry_click():
         'debye_x':            debye_x_var.get(),
         'debye_y':            debye_y_var.get(),
         'center':             [center_x_var.get(), center_y_var.get()],
+        'center_x':           center_x_var.get(),
+        'center_y':           center_y_var.get(),
         'theta_initial':      theta_initial_var.get(),
         'uv1':                np.array([1.0,0.0,0.0]),
         'uv2':                np.array([0.0,1.0,0.0]),
@@ -7014,6 +7610,11 @@ def on_fit_geometry_click():
     if fit_psi_z_var.get(): var_names.append('psi_z')
     if fit_chi_var.get():   var_names.append('chi')
     if fit_cor_var.get():   var_names.append('cor_angle')
+    if fit_gamma_var.get(): var_names.append('gamma')
+    if fit_Gamma_var.get(): var_names.append('Gamma')
+    if fit_dist_var.get():  var_names.append('corto_detector')
+    if fit_center_x_var.get(): var_names.append('center_x')
+    if fit_center_y_var.get(): var_names.append('center_y')
     if not var_names:
         progress_label_geometry.config(text="No parameters selected!")
         return
@@ -7024,6 +7625,9 @@ def on_fit_geometry_click():
     auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
     if not isinstance(auto_match_cfg, dict):
         auto_match_cfg = {}
+    orientation_cfg = geometry_refine_cfg.get("orientation", {}) or {}
+    if not isinstance(orientation_cfg, dict):
+        orientation_cfg = {}
 
     native_background = _get_current_background_native()
     backend_background = _get_current_background_backend()
@@ -7158,8 +7762,16 @@ def on_fit_geometry_click():
             [
                 f"simulated_peaks={int(match_stats.get('simulated_count', len(simulated_peaks)))}",
                 f"candidate_peaks={int(match_stats.get('candidate_count', 0))}",
+                f"within_radius_candidates={int(match_stats.get('within_radius_count', 0))}",
+                f"unambiguous_candidates={int(match_stats.get('unambiguous_count', 0))}",
+                f"matched_pre_clip={int(match_stats.get('matched_pre_clip_count', 0))}",
+                f"clipped_matches={int(match_stats.get('clipped_count', 0))}",
                 f"matched_peaks={len(matched_pairs)}",
                 f"prominence_sigma_est={float(match_stats.get('sigma_est', np.nan)):.6f}",
+                f"distance_clip_limit_px={float(match_stats.get('distance_clip_limit_px', np.nan)):.3f}",
+                f"mean_match_distance_px={float(match_stats.get('mean_match_distance_px', np.nan)):.3f}",
+                f"p90_match_distance_px={float(match_stats.get('p90_match_distance_px', np.nan)):.3f}",
+                f"median_match_confidence={float(match_stats.get('median_match_confidence', np.nan)):.3f}",
             ],
         )
         _log_section(
@@ -7183,14 +7795,42 @@ def on_fit_geometry_click():
             k=SIM_DISPLAY_ROTATE_K,
         )
 
-        orientation_choice = {
-            "k": 0,
-            "flip_x": False,
-            "flip_y": False,
-            "flip_order": "yx",
-            "indexing_mode": "xy",
-            "label": "identity",
-        }
+        sim_orientation_points: list[tuple[float, float]] = []
+        meas_orientation_points: list[tuple[float, float]] = []
+        for pair_entry, measured_entry in zip(matched_pairs, measured_native):
+            if not isinstance(measured_entry, dict):
+                continue
+            try:
+                sx = float(pair_entry["sim_x"])
+                sy = float(pair_entry["sim_y"])
+                mx = float(measured_entry["x"])
+                my = float(measured_entry["y"])
+            except Exception:
+                continue
+            if not (np.isfinite(sx) and np.isfinite(sy) and np.isfinite(mx) and np.isfinite(my)):
+                continue
+            sim_orientation_points.append((sx, sy))
+            meas_orientation_points.append((mx, my))
+
+        orientation_choice, orientation_diag = _select_fit_orientation(
+            sim_orientation_points,
+            meas_orientation_points,
+            tuple(int(v) for v in native_background.shape[:2]),
+            cfg=orientation_cfg,
+        )
+        _log_section(
+            "Orientation diagnostics:",
+            [
+                f"pairs={orientation_diag.get('pairs', 0)}",
+                f"enabled={orientation_diag.get('enabled', True)}",
+                f"identity_rms_px={float(orientation_diag.get('identity_rms_px', np.nan)):.4f}",
+                f"best_label={orientation_diag.get('best_label', 'identity')}",
+                f"best_rms_px={float(orientation_diag.get('best_rms_px', np.nan)):.4f}",
+                f"improvement_px={float(orientation_diag.get('improvement_px', np.nan)):.4f}",
+                f"chosen={orientation_choice.get('label', 'identity')}",
+                f"reason={orientation_diag.get('reason', 'n/a')}",
+            ],
+        )
 
         measured_for_fit = _apply_orientation_to_entries(
             measured_native,
@@ -7231,6 +7871,21 @@ def on_fit_geometry_click():
         current_matched_pairs = list(matched_pairs)
         current_measured_for_fit = list(measured_for_fit)
 
+        def _set_fit_param(target: dict[str, object], name: str, value: float) -> None:
+            val = float(value)
+            target[name] = val
+            if name == "center_x" or name == "center_y":
+                center_pair = list(target.get("center", [center_x_var.get(), center_y_var.get()]))
+                if len(center_pair) < 2:
+                    center_pair = [center_x_var.get(), center_y_var.get()]
+                if name == "center_x":
+                    center_pair[0] = val
+                else:
+                    center_pair[1] = val
+                target["center"] = [float(center_pair[0]), float(center_pair[1])]
+                target["center_x"] = float(center_pair[0])
+                target["center_y"] = float(center_pair[1])
+
         for iter_idx in range(fit_iterations):
             progress_label_geometry.config(
                 text=(
@@ -7259,7 +7914,7 @@ def on_fit_geometry_click():
                 break
 
             for name, val in zip(var_names, result.x):
-                current_fit_params[name] = float(val)
+                _set_fit_param(current_fit_params, name, float(val))
 
             iter_rms = (
                 float(np.sqrt(np.mean(result.fun ** 2)))
@@ -7270,7 +7925,9 @@ def on_fit_geometry_click():
                 (
                     f"iter={iter_idx + 1}: matches={len(current_matched_pairs)}, "
                     f"cost={float(getattr(result, 'cost', np.nan)):.6f}, "
-                    f"RMS={iter_rms:.4f}px"
+                    f"RMS={iter_rms:.4f}px, "
+                    f"robust_cost={float(getattr(result, 'robust_cost', np.nan)):.6f}, "
+                    f"orientation={orientation_choice.get('label', 'identity')}"
                 )
             )
 
@@ -7317,9 +7974,53 @@ def on_fit_geometry_click():
                     display_background.shape,
                     k=SIM_DISPLAY_ROTATE_K,
                 )
+                sim_iter_points: list[tuple[float, float]] = []
+                meas_iter_points: list[tuple[float, float]] = []
+                for pair_entry, measured_entry in zip(matched_iter, measured_iter_native):
+                    if not isinstance(measured_entry, dict):
+                        continue
+                    try:
+                        sx = float(pair_entry["sim_x"])
+                        sy = float(pair_entry["sim_y"])
+                        mx = float(measured_entry["x"])
+                        my = float(measured_entry["y"])
+                    except Exception:
+                        continue
+                    if not (
+                        np.isfinite(sx)
+                        and np.isfinite(sy)
+                        and np.isfinite(mx)
+                        and np.isfinite(my)
+                    ):
+                        continue
+                    sim_iter_points.append((sx, sy))
+                    meas_iter_points.append((mx, my))
+
+                orientation_choice, orientation_diag_iter = _select_fit_orientation(
+                    sim_iter_points,
+                    meas_iter_points,
+                    tuple(int(v) for v in native_background.shape[:2]),
+                    cfg=orientation_cfg,
+                )
+                iteration_logs.append(
+                    (
+                        f"iter={iter_idx + 1}: rematch orientation={orientation_choice.get('label', 'identity')} "
+                        f"(identity_rms={float(orientation_diag_iter.get('identity_rms_px', np.nan)):.4f}px, "
+                        f"best_rms={float(orientation_diag_iter.get('best_rms_px', np.nan)):.4f}px, "
+                        f"reason={orientation_diag_iter.get('reason', 'n/a')})"
+                    )
+                )
                 measured_iter_for_fit = _apply_orientation_to_entries(
                     measured_iter_native,
                     native_background.shape,
+                    indexing_mode=orientation_choice["indexing_mode"],
+                    k=orientation_choice["k"],
+                    flip_x=orientation_choice["flip_x"],
+                    flip_y=orientation_choice["flip_y"],
+                    flip_order=orientation_choice["flip_order"],
+                )
+                experimental_image_for_fit = _orient_image_for_fit(
+                    backend_background,
                     indexing_mode=orientation_choice["indexing_mode"],
                     k=orientation_choice["k"],
                     flip_x=orientation_choice["flip_x"],
@@ -7354,13 +8055,26 @@ def on_fit_geometry_click():
             [
                 f"iterations={len(iteration_logs)}",
                 *iteration_logs,
+                f"final_orientation={orientation_choice.get('label', 'identity')}",
                 f"success={getattr(result, 'success', False)}",
                 f"status={getattr(result, 'status', '')}",
                 f"message={(getattr(result, 'message', '') or '').strip()}",
                 f"nfev={getattr(result, 'nfev', '<unknown>')}",
                 f"cost={float(getattr(result, 'cost', np.nan)):.6f}",
+                f"robust_cost={float(getattr(result, 'robust_cost', np.nan)):.6f}",
+                f"solver_loss={getattr(result, 'solver_loss', '<unknown>')}",
+                f"solver_f_scale={float(getattr(result, 'solver_f_scale', np.nan)):.6f}",
                 f"optimality={float(getattr(result, 'optimality', np.nan)):.6f}",
                 f"active_mask={list(getattr(result, 'active_mask', []))}",
+                *[
+                    "restart[{idx}] cost={cost:.6f} success={success} msg={msg}".format(
+                        idx=int(entry.get("restart", -1)),
+                        cost=float(entry.get("cost", np.nan)),
+                        success=bool(entry.get("success", False)),
+                        msg=str(entry.get("message", "")).strip(),
+                    )
+                    for entry in (getattr(result, "restart_history", []) or [])
+                ],
             ],
         )
 
@@ -7384,6 +8098,10 @@ def on_fit_geometry_click():
                 Gamma_var.set(val)
             elif name == 'corto_detector':
                 corto_detector_var.set(val)
+            elif name == 'center_x':
+                center_x_var.set(val)
+            elif name == 'center_y':
+                center_y_var.set(val)
 
         profile_cache = dict(profile_cache)
         profile_cache.update(mosaic_params)
@@ -7430,6 +8148,9 @@ def on_fit_geometry_click():
                 'gamma': gamma_var.get(),
                 'Gamma': Gamma_var.get(),
                 'corto_detector': corto_detector_var.get(),
+                'center': [center_x_var.get(), center_y_var.get()],
+                'center_x': center_x_var.get(),
+                'center_y': center_y_var.get(),
             }
         )
 
@@ -7546,6 +8267,9 @@ def on_fit_geometry_click():
             [
                 f"auto_matched_peaks={len(matched_pairs)}",
                 f"auto_simulated_peaks={int(match_stats.get('simulated_count', len(simulated_peaks)))}",
+                f"auto_distance_p90_px={float(match_stats.get('p90_match_distance_px', np.nan)):.3f}",
+                f"auto_distance_clip_limit_px={float(match_stats.get('distance_clip_limit_px', np.nan)):.3f}",
+                f"orientation={orientation_choice.get('label', 'identity')}",
                 *[f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)],
                 f"RMS residual = {rms:.6f} px",
                 f"Matched peaks saved to: {save_path}",
@@ -7556,6 +8280,7 @@ def on_fit_geometry_click():
             "Auto geometry fit complete:\n"
             + "\n".join(f"{name} = {val:.4f}" for name, val in zip(var_names, result.x))
             + f"\nRMS residual = {rms:.2f} px"
+            + f"\nOrientation = {orientation_choice.get('label', 'identity')}"
         )
         progress_label_geometry.config(
             text=(
@@ -7716,16 +8441,63 @@ def on_fit_geometry_click():
                 ],
             )
 
-            orientation_choice = {
-                "k": 0,
-                "flip_x": False,
-                "flip_y": False,
-                "flip_order": "yx",
-                "indexing_mode": "xy",
-                "label": "identity",
-            }
+            sim_orientation_points: list[tuple[float, float]] = []
+            meas_orientation_points: list[tuple[float, float]] = []
+            try:
+                simulated_for_orientation = _simulate_hkl_peak_centers_for_fit(
+                    miller_array,
+                    intensity_array,
+                    image_size,
+                    params,
+                )
+                simulated_lookup = {
+                    str(entry.get("label")): (
+                        float(entry.get("sim_col")),
+                        float(entry.get("sim_row")),
+                    )
+                    for entry in simulated_for_orientation
+                }
+            except Exception:
+                simulated_lookup = {}
 
-            orientation_choice["label"] = "identity"
+            for entry in measured_native:
+                if not isinstance(entry, dict):
+                    continue
+                label = str(entry.get("label", ""))
+                sim_pt = simulated_lookup.get(label)
+                if sim_pt is None:
+                    continue
+                try:
+                    mx = float(entry.get("x"))
+                    my = float(entry.get("y"))
+                    sx = float(sim_pt[0])
+                    sy = float(sim_pt[1])
+                except Exception:
+                    continue
+                if not (np.isfinite(mx) and np.isfinite(my) and np.isfinite(sx) and np.isfinite(sy)):
+                    continue
+                sim_orientation_points.append((sx, sy))
+                meas_orientation_points.append((mx, my))
+
+            orientation_choice, orientation_diag = _select_fit_orientation(
+                sim_orientation_points,
+                meas_orientation_points,
+                tuple(int(v) for v in native_background.shape[:2]),
+                cfg=orientation_cfg,
+            )
+            _log_section(
+                "Orientation diagnostics:",
+                [
+                    f"pairs={orientation_diag.get('pairs', 0)}",
+                    f"enabled={orientation_diag.get('enabled', True)}",
+                    f"identity_rms_px={float(orientation_diag.get('identity_rms_px', np.nan)):.4f}",
+                    f"best_label={orientation_diag.get('best_label', 'identity')}",
+                    f"best_rms_px={float(orientation_diag.get('best_rms_px', np.nan)):.4f}",
+                    f"improvement_px={float(orientation_diag.get('improvement_px', np.nan)):.4f}",
+                    f"chosen={orientation_choice.get('label', 'identity')}",
+                    f"reason={orientation_diag.get('reason', 'n/a')}",
+                ],
+            )
 
             try:
                 measured_for_fit = _apply_orientation_to_entries(
@@ -8078,13 +8850,26 @@ def on_fit_geometry_click():
                 _log_section(
                     "Optimizer diagnostics:",
                     [
+                        f"orientation={orientation_choice.get('label', 'identity')}",
                         f"success={getattr(result, 'success', False)}",
                         f"status={getattr(result, 'status', '')}",
                         f"message={(getattr(result, 'message', '') or '').strip()}",
                         f"nfev={getattr(result, 'nfev', '<unknown>')}",
                         f"cost={float(getattr(result, 'cost', np.nan)):.6f}",
+                        f"robust_cost={float(getattr(result, 'robust_cost', np.nan)):.6f}",
+                        f"solver_loss={getattr(result, 'solver_loss', '<unknown>')}",
+                        f"solver_f_scale={float(getattr(result, 'solver_f_scale', np.nan)):.6f}",
                         f"optimality={float(getattr(result, 'optimality', np.nan)):.6f}",
                         f"active_mask={list(getattr(result, 'active_mask', []))}",
+                        *[
+                            "restart[{idx}] cost={cost:.6f} success={success} msg={msg}".format(
+                                idx=int(entry.get("restart", -1)),
+                                cost=float(entry.get("cost", np.nan)),
+                                success=bool(entry.get("success", False)),
+                                msg=str(entry.get("message", "")).strip(),
+                            )
+                            for entry in (getattr(result, "restart_history", []) or [])
+                        ],
                     ],
                 )
 
@@ -8098,6 +8883,8 @@ def on_fit_geometry_click():
                     elif name == 'gamma':          gamma_var.set(val)
                     elif name == 'Gamma':          Gamma_var.set(val)
                     elif name == 'corto_detector': corto_detector_var.set(val)
+                    elif name == 'center_x':       center_x_var.set(val)
+                    elif name == 'center_y':       center_y_var.set(val)
 
                 # Keep the cached profile in sync with the fitted geometry so the
                 # next simulation uses the updated parameters even when diagnostics
@@ -8154,6 +8941,9 @@ def on_fit_geometry_click():
                     'gamma': gamma_var.get(),
                     'Gamma': Gamma_var.get(),
                     'corto_detector': corto_detector_var.get(),
+                    'center': [center_x_var.get(), center_y_var.get()],
+                    'center_x': center_x_var.get(),
+                    'center_y': center_y_var.get(),
                 })
 
                 _log_matches_snapshot("Matches after fit (native frame):", fitted_params)
@@ -9069,6 +9859,51 @@ def on_optics_mode_change(*_):
 
 optics_mode_var.trace_add('write', on_optics_mode_change)
 
+
+def on_sf_prune_bias_change(*_):
+    global last_simulation_signature
+
+    try:
+        raw_value = float(sf_prune_bias_var.get())
+    except (tk.TclError, ValueError, TypeError):
+        raw_value = float(defaults.get("sf_prune_bias", 0.0))
+
+    clipped_value = _clip_sf_prune_bias(raw_value)
+    if not np.isclose(raw_value, clipped_value, rtol=0.0, atol=1e-12):
+        sf_prune_bias_var.set(clipped_value)
+        return
+
+    _apply_bragg_qr_filters(trigger_update=False)
+    last_simulation_signature = None
+    schedule_update()
+
+
+sf_prune_var_frame = ttk.Frame(mosaic_frame.frame)
+sf_prune_var_frame.pack(fill=tk.X, pady=(2, 2))
+ttk.Label(sf_prune_var_frame, text="Structure-Factor Pruning").pack(anchor=tk.W, padx=5)
+ttk.Label(
+    sf_prune_var_frame,
+    text="Bias: -2.0 keeps more, 0.0 recommended default, +2.0 prunes much harder.",
+).pack(anchor=tk.W, padx=5)
+sf_prune_bias_var, sf_prune_bias_scale = create_slider(
+    "SF Prune Bias",
+    SF_PRUNE_BIAS_MIN,
+    SF_PRUNE_BIAS_MAX,
+    _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0)),
+    0.01,
+    sf_prune_var_frame,
+    update_callback=None,
+)
+sf_prune_status_var = tk.StringVar(value="")
+ttk.Label(
+    sf_prune_var_frame,
+    textvariable=sf_prune_status_var,
+    wraplength=420,
+    justify=tk.LEFT,
+).pack(anchor=tk.W, padx=5, pady=(0, 2))
+sf_prune_bias_var.trace_add('write', on_sf_prune_bias_change)
+_update_sf_prune_status_label()
+
 center_frame = CollapsibleFrame(right_col, text='Beam Center')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -9269,6 +10104,7 @@ def _rebuild_diffraction_inputs(
     global df_summary, df_details
     global last_simulation_signature
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
+    global SIM_MILLER1_ALL, SIM_INTENS1_ALL, SIM_MILLER2_ALL, SIM_INTENS2_ALL, SIM_PRIMARY_QR_ALL
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
     global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
     global _last_phi_l_divisor, _last_phase_delta_expression
@@ -10331,6 +11167,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             optics_mode_var,
             phase_delta_expr_var=phase_delta_expr_var,
             phi_l_divisor_var=phi_l_divisor_var,
+            sf_prune_bias_var=sf_prune_bias_var,
         )
         if _phase_delta_entry_var is not None:
             _phase_delta_entry_var.set(_current_phase_delta_expression())
@@ -10350,6 +11187,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         "Startup ready: "
         f"profile={'loaded' if profile_loaded else 'defaults'}; "
         f"sampling={sample_mode} ({sample_count} samples); "
+        f"sf_prune={_current_sf_prune_bias():+.2f}; "
         f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
         f"cif={cif_summary}"
     )

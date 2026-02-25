@@ -2354,6 +2354,61 @@ def fit_geometry_parameters(
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", True))
 
+    try:
+        center_seed = params.get("center", (0.0, 0.0))
+        center_row_default = float(center_seed[0])
+        center_col_default = float(center_seed[1])
+    except Exception:
+        center_row_default = 0.0
+        center_col_default = 0.0
+    if not np.isfinite(center_row_default):
+        center_row_default = 0.0
+    if not np.isfinite(center_col_default):
+        center_col_default = 0.0
+
+    params = dict(params)
+    params["center"] = [center_row_default, center_col_default]
+    params.setdefault("center_x", center_row_default)
+    params.setdefault("center_y", center_col_default)
+
+    def _safe_float(value: object, fallback: float) -> float:
+        try:
+            out = float(value)
+        except (TypeError, ValueError):
+            return float(fallback)
+        if not np.isfinite(out):
+            return float(fallback)
+        return out
+
+    def _apply_trial_params(x: Sequence[float]) -> Dict[str, object]:
+        local = params.copy()
+        center_pair = local.get("center", [center_row_default, center_col_default])
+        try:
+            center_row = _safe_float(center_pair[0], center_row_default)
+            center_col = _safe_float(center_pair[1], center_col_default)
+        except Exception:
+            center_row = center_row_default
+            center_col = center_col_default
+
+        center_row = _safe_float(local.get("center_x", center_row), center_row)
+        center_col = _safe_float(local.get("center_y", center_col), center_col)
+
+        for name, v in zip(var_names, x):
+            val = float(v)
+            if name == "center_x":
+                center_row = val
+                local["center_x"] = val
+            elif name == "center_y":
+                center_col = val
+                local["center_y"] = val
+            else:
+                local[name] = val
+
+        local["center"] = [float(center_row), float(center_col)]
+        local["center_x"] = float(center_row)
+        local["center_y"] = float(center_col)
+        return local
+
     def _build_point_matches(
         simulated_points: Sequence[Tuple[float, float]],
         measured_points: Sequence[Tuple[float, float]],
@@ -2397,9 +2452,7 @@ def fit_geometry_parameters(
         return matches
 
     def cost_fn(x):
-        local = params.copy()
-        for name, v in zip(var_names, x):
-            local[name] = v
+        local = _apply_trial_params(x)
         args = [
             local['gamma'], local['Gamma'], local['corto_detector'],
             local['theta_initial'], local.get('cor_angle', 0.0), local['zs'], local['zb'],
@@ -2425,9 +2478,7 @@ def fit_geometry_parameters(
         return D
 
     def pixel_cost_fn(x):
-        local = params.copy()
-        for name, v in zip(var_names, x):
-            local[name] = v
+        local = _apply_trial_params(x)
 
         measured_dict = build_measured_dict(measured_peaks)
         if not measured_dict:
@@ -2510,11 +2561,24 @@ def fit_geometry_parameters(
             return np.array([max(1.0, missing_pair_penalty)], dtype=float)
         return np.asarray(residuals, dtype=float)
 
-    x0 = [params[name] for name in var_names]
+    def _initial_value(name: str) -> float:
+        if name == "center_x":
+            return _safe_float(
+                params.get("center_x", params.get("center", [center_row_default, center_col_default])[0]),
+                center_row_default,
+            )
+        if name == "center_y":
+            return _safe_float(
+                params.get("center_y", params.get("center", [center_row_default, center_col_default])[1]),
+                center_col_default,
+            )
+        return _safe_float(params.get(name, 0.0), 0.0)
+
+    x0 = [_initial_value(name) for name in var_names]
 
     if experimental_image is not None and use_single_ray:
         try:
-            local = params.copy()
+            local = _apply_trial_params(np.asarray(x0, dtype=float))
             mosaic = local['mosaic_params']
             wavelength_array = mosaic.get('wavelength_array')
             if wavelength_array is None:
@@ -2559,6 +2623,9 @@ def fit_geometry_parameters(
     def _cfg_bounds(name: str, current_val: float) -> tuple[float, float]:
         entry = bounds_cfg.get(name)
         if entry is None:
+            if name == "center_x" or name == "center_y":
+                hi = max(float(image_size) - 1.0, 0.0)
+                return 0.0, hi
             return -np.inf, np.inf
         if isinstance(entry, (list, tuple)) and len(entry) >= 2:
             return float(entry[0]), float(entry[1])

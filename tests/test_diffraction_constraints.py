@@ -1,6 +1,7 @@
 import numpy as np
 
 from ra_sim.simulation import diffraction
+from ra_sim.utils.calculations import IndexofRefraction
 
 
 def test_process_peaks_parallel_skips_negative_l(monkeypatch):
@@ -22,6 +23,7 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         zs,
         zb,
         n2,
+        n2_array,
         beam_x_array,
         beam_y_array,
         theta_array,
@@ -105,6 +107,120 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
     )
 
     assert called_l_values == [1.0]
+
+
+def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
+    captured_n2 = []
+
+    def fake_calculate_phi(
+        H,
+        K,
+        L,
+        av,
+        cv,
+        wavelength_array,
+        image,
+        image_size,
+        gamma_rad,
+        Gamma_rad,
+        chi_rad,
+        psi_rad,
+        zs,
+        zb,
+        n2,
+        n2_array,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        reflection_intensity,
+        sigma_rad,
+        gamma_pv,
+        eta_pv,
+        debye_x,
+        debye_y,
+        center,
+        theta_initial_deg,
+        cor_angle_deg,
+        R_x_detector,
+        R_z_detector,
+        n_det_rot,
+        Detector_Pos,
+        e1_det,
+        e2_det,
+        R_z_R_y,
+        R_ZY_n,
+        P0,
+        unit_x,
+        save_flag,
+        q_data,
+        q_count,
+        i_peaks_index,
+        record_status=False,
+        thickness=0.0,
+        optics_mode=0,
+        forced_sample_idx=-1,
+    ):
+        captured_n2.append(np.asarray(n2_array, dtype=np.complex128).copy())
+        return (
+            np.empty((0, 7), dtype=np.float64),
+            np.empty(0, dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+            0,
+        )
+
+    monkeypatch.setattr(diffraction, "calculate_phi", fake_calculate_phi)
+
+    miller = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    wavelengths = np.array([1.0, 1.6], dtype=np.float64)  # Angstrom
+    image_size = 16
+    image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    diffraction.process_peaks_parallel.py_func(
+        miller,
+        intensities,
+        image_size,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        np.array([0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0], dtype=np.float64),
+        0.5,
+        0.5,
+        0.0,
+        wavelengths,
+        0.0,
+        0.0,
+        [8.0, 8.0],
+        6.0,
+        0.0,
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=0,
+    )
+
+    assert captured_n2, "calculate_phi should be called once for the positive-L peak"
+    expected = np.array(
+        [
+            IndexofRefraction(wavelengths[0] * 1.0e-10),
+            IndexofRefraction(wavelengths[1] * 1.0e-10),
+        ],
+        dtype=np.complex128,
+    )
+    np.testing.assert_allclose(captured_n2[0], expected, rtol=1e-12, atol=0.0)
 
 
 def test_debug_detector_paths_ignores_cor_angle_for_theta_i():

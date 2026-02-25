@@ -69,8 +69,17 @@ def IoR(lambda_, rho_e, r, mu):
     return delta, beta
 
 @njit
-def IndexofRefraction():
-    """Return the complex X-ray index of refraction for the active material."""
+def IndexofRefraction(lambda_m=LAMBDA_DEFAULT):
+    """Return the complex X-ray index of refraction for the active material.
+
+    Parameters
+    ----------
+    lambda_m:
+        Wavelength in meters. Defaults to the configured reference wavelength.
+    """
+
+    if not np.isfinite(lambda_m) or lambda_m <= 0.0:
+        lambda_m = LAMBDA_DEFAULT
 
     # Linear attenuation coefficient (m^-1)
     mu_cm = _DENSITY * _WEIGHTED_MASS_ATTENUATION
@@ -83,8 +92,8 @@ def IndexofRefraction():
     rho_e = _TOTAL_ATOMIC_NUMBER * (n_formulas * N_A)
 
     # delta and beta
-    delta = (R_E * (LAMBDA_DEFAULT ** 2) * rho_e) / (2.0 * math.pi)
-    beta = (mu_m * LAMBDA_DEFAULT) / (4.0 * math.pi)
+    delta = (R_E * (lambda_m ** 2) * rho_e) / (2.0 * math.pi)
+    beta = (mu_m * lambda_m) / (4.0 * math.pi)
 
     return 1.0 - delta + 1.0j * beta
 

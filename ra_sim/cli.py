@@ -319,8 +319,8 @@ def run_headless_simulation(
     debye_x = float(inst.get("debye_waller", {}).get("x", 0.0))
     debye_y = float(inst.get("debye_waller", {}).get("y", 0.0))
 
-    # Index of refraction for active material
-    n2 = IndexofRefraction()
+    # Index of refraction for active material at the nominal beam wavelength.
+    n2 = IndexofRefraction(lambda_ang * 1.0e-10)
 
     # Fixed axes like GUI
     unit_x = np.array([1.0, 0.0, 0.0])
