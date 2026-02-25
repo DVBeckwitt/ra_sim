@@ -3,6 +3,9 @@
 import numpy as np
 import os
 
+SOLVE_Q_STEPS_MIN = 32
+SOLVE_Q_STEPS_MAX = 8192
+
 
 def _normalize_optics_mode(value, fallback="fast"):
     """Return optics-mode label as ``'fast'`` or ``'exact'``."""
@@ -78,16 +81,29 @@ def load_parameters(
     center_y_var,      # <--- ADDED
     resolution_var=None,
     custom_samples_var=None,
+    bandwidth_percent_var=None,
     optics_mode_var=None,
     phase_delta_expr_var=None,
     iodine_z_var=None,
     phi_l_divisor_var=None,
     sf_prune_bias_var=None,
+    solve_q_steps_var=None,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
     return a message. This now includes center_x and center_y.
     """
+    # Backward compatibility for legacy positional callsites that passed
+    # ``optics_mode_var`` in the old argument slot (now bandwidth).
+    if optics_mode_var is None and bandwidth_percent_var is not None:
+        try:
+            legacy_mode = str(bandwidth_percent_var.get())
+        except Exception:
+            legacy_mode = ""
+        if _normalize_optics_mode(legacy_mode, fallback="") in {"fast", "exact"}:
+            optics_mode_var = bandwidth_percent_var
+            bandwidth_percent_var = None
+
     if os.path.exists(path):
         params = np.load(path, allow_pickle=True).item()
         
@@ -123,6 +139,15 @@ def load_parameters(
                     parsed_custom_count = None
                 if parsed_custom_count is not None and parsed_custom_count > 0:
                     custom_samples_var.set(str(parsed_custom_count))
+        if bandwidth_percent_var is not None:
+            stored_bandwidth = params.get('bandwidth_percent')
+            if stored_bandwidth is not None:
+                try:
+                    bandwidth_val = float(stored_bandwidth)
+                except (TypeError, ValueError):
+                    bandwidth_val = None
+                if bandwidth_val is not None and np.isfinite(bandwidth_val):
+                    bandwidth_percent_var.set(float(np.clip(bandwidth_val, 0.0, 10.0)))
         if resolution_var is not None:
             stored_resolution = params.get('sampling_resolution')
             if stored_resolution:
@@ -165,6 +190,16 @@ def load_parameters(
                     bias_val = None
                 if bias_val is not None and np.isfinite(bias_val):
                     sf_prune_bias_var.set(float(np.clip(bias_val, -2.0, 2.0)))
+        if solve_q_steps_var is not None:
+            stored_steps = params.get('solve_q_steps')
+            if stored_steps is not None:
+                try:
+                    steps_val = int(round(float(stored_steps)))
+                except (TypeError, ValueError):
+                    steps_val = None
+                if steps_val is not None and np.isfinite(steps_val):
+                    steps_clipped = int(np.clip(steps_val, SOLVE_Q_STEPS_MIN, SOLVE_Q_STEPS_MAX))
+                    solve_q_steps_var.set(float(steps_clipped))
 
         return "Parameters loaded from parameters.npy"
     else:
@@ -191,16 +226,29 @@ def save_all_parameters(
     center_y_var,    # <--- ADDED
     resolution_var=None,
     custom_samples_var=None,
+    bandwidth_percent_var=None,
     optics_mode_var=None,
     phase_delta_expr_var=None,
     iodine_z_var=None,
     phi_l_divisor_var=None,
     sf_prune_bias_var=None,
+    solve_q_steps_var=None,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
     includes beam center (center_x, center_y).
     """
+    # Backward compatibility for legacy positional callsites that passed
+    # ``optics_mode_var`` in the old argument slot (now bandwidth).
+    if optics_mode_var is None and bandwidth_percent_var is not None:
+        try:
+            legacy_mode = str(bandwidth_percent_var.get())
+        except Exception:
+            legacy_mode = ""
+        if _normalize_optics_mode(legacy_mode, fallback="") in {"fast", "exact"}:
+            optics_mode_var = bandwidth_percent_var
+            bandwidth_percent_var = None
+
     parameters = {
         'theta_initial':  theta_initial_var.get(),
         'cor_angle':      cor_angle_var.get(),
@@ -236,6 +284,13 @@ def save_all_parameters(
             parameters['sampling_custom_count'] = custom_sample_count
             if resolution_value == "Custom":
                 parameters['sampling_count'] = custom_sample_count
+    if bandwidth_percent_var is not None:
+        try:
+            bandwidth_percent = float(bandwidth_percent_var.get())
+        except (TypeError, ValueError):
+            bandwidth_percent = None
+        if bandwidth_percent is not None and np.isfinite(bandwidth_percent):
+            parameters['bandwidth_percent'] = float(np.clip(bandwidth_percent, 0.0, 10.0))
 
     if optics_mode_var is not None:
         parameters['optics_mode'] = _normalize_optics_mode(
@@ -260,6 +315,15 @@ def save_all_parameters(
             sf_prune_bias = None
         if sf_prune_bias is not None and np.isfinite(sf_prune_bias):
             parameters['sf_prune_bias'] = float(np.clip(sf_prune_bias, -2.0, 2.0))
+    if solve_q_steps_var is not None:
+        try:
+            solve_q_steps = int(round(float(solve_q_steps_var.get())))
+        except (TypeError, ValueError):
+            solve_q_steps = None
+        if solve_q_steps is not None and np.isfinite(solve_q_steps):
+            parameters['solve_q_steps'] = int(
+                np.clip(solve_q_steps, SOLVE_Q_STEPS_MIN, SOLVE_Q_STEPS_MAX)
+            )
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")
 

@@ -25,6 +25,8 @@ OPTICS_MODE_EXACT = COMPLEX_K_DWBA_SLAB
 
 # solve_q hot-loop constants
 DEFAULT_SOLVE_Q_STEPS = 1000
+MIN_SOLVE_Q_STEPS = 32
+MAX_SOLVE_Q_STEPS = 8192
 _DEFAULT_SOLVE_Q_DTHETA = (2.0 * np.pi) / DEFAULT_SOLVE_Q_STEPS
 _DEFAULT_SOLVE_Q_COS = np.cos(
     _DEFAULT_SOLVE_Q_DTHETA * np.arange(DEFAULT_SOLVE_Q_STEPS, dtype=np.float64)
@@ -583,7 +585,20 @@ def _fresnel_power_t_exact(t_amp, kz_i, kz_j, eps_i, eps_j, s_polarization):
     out = ratio * abs_t2
     if not np.isfinite(out) or out < 0.0:
         return 0.0
+    # For passive interfaces the transmitted power fraction should stay bounded.
+    if out > 1.0:
+        return 1.0
     return out
+
+
+@njit
+def _sanitize_transmission_power(power):
+    """Clamp transmission-like power factors to a stable physical range."""
+    if not np.isfinite(power) or power <= 0.0:
+        return 0.0
+    if power > 1.0:
+        return 1.0
+    return power
 
 
 @njit
@@ -906,6 +921,7 @@ def calculate_phi(
     record_status=False,
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     forced_sample_idx=-1,
 ):
     """
@@ -1092,6 +1108,10 @@ def calculate_phi(
         I_plane[1] = iy
         I_plane[2] = iz
         kn_dot = k_in[0]*n_surf[0] + k_in[1]*n_surf[1] + k_in[2]*n_surf[2]
+        if kn_dot > 1.0:
+            kn_dot = 1.0
+        elif kn_dot < -1.0:
+            kn_dot = -1.0
         th_i_prime = (pi/2.0) - acos(kn_dot)
 
         proj_incident[0] = k_in[0] - kn_dot*n_surf[0]
@@ -1137,6 +1157,7 @@ def calculate_phi(
                 _fresnel_power_t_exact(Ti_s, kz1_i, kz2_i, eps1, eps2, True)
                 + _fresnel_power_t_exact(Ti_p, kz1_i, kz2_i, eps1, eps2, False)
             )
+            Ti2 = _sanitize_transmission_power(Ti2)
             th_t = np.arctan2(np.abs(kz2_i.real), np.maximum(k_par_i, 1e-30))
         else:
             th_t = transmit_angle_grazing(th_i_prime, n2_samp)  # grazing angle in medium
@@ -1146,7 +1167,7 @@ def calculate_phi(
             k_y_scat = k_scat*np.cos(th_t)*np.cos(phi_i_prime)
 
             # kz decomposition for the incident leg (sign convention: into sample)
-            re_k_z, im_k_z = ktz_components(k0, n2, th_t)
+            re_k_z, im_k_z = ktz_components(k0, n2_samp, th_t)
             re_k_z = -re_k_z  # into the sample
 
             # Fresnel transmission at entry (amplitude -> intensity).
@@ -1159,6 +1180,7 @@ def calculate_phi(
                 (np.real(Ti_s)*np.real(Ti_s) + np.imag(Ti_s)*np.imag(Ti_s))
                 + (np.real(Ti_p)*np.real(Ti_p) + np.imag(Ti_p)*np.imag(Ti_p))
             )
+            Ti2 = _sanitize_transmission_power(Ti2)
 
         k_in_crystal[0] = k_x_scat
         k_in_crystal[1] = k_y_scat
@@ -1175,7 +1197,7 @@ def calculate_phi(
             H,
             K,
             L,
-            DEFAULT_SOLVE_Q_STEPS,
+            solve_q_steps,
         )
         if record_status:
             statuses[i_samp] = stat
@@ -1228,6 +1250,7 @@ def calculate_phi(
                     _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
                     + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
                 )
+                Tf2 = _sanitize_transmission_power(Tf2)
 
                 im_k_z_f = np.abs(kz2_f.imag)
 
@@ -1244,6 +1267,7 @@ def calculate_phi(
                     (np.real(Tf_s)*np.real(Tf_s) + np.imag(Tf_s)*np.imag(Tf_s))
                     + (np.real(Tf_p)*np.real(Tf_p) + np.imag(Tf_p)*np.imag(Tf_p))
                 )
+                Tf2 = _sanitize_transmission_power(Tf2)
 
                 re_k_z_f, im_k_z_f = ktz_components(k0, n2_samp, th_t_out)
 
@@ -1257,7 +1281,11 @@ def calculate_phi(
                 np.exp(-2.0 * im_k_z * L_in)
                 * np.exp(-2.0 * im_k_z_f * L_out)
             )
+            if not np.isfinite(prop_att) or prop_att <= 0.0:
+                continue
             prop_fac = Ti2 * Tf2 * prop_att
+            if not np.isfinite(prop_fac) or prop_fac <= 0.0:
+                continue
 
             # external exit angles for detector mapping (existing code)
             # Preserve the exit-side sign so both detector half-planes remain
@@ -1297,6 +1325,8 @@ def calculate_phi(
             plane_to_det[2] = dz - Detector_Pos[2]
             x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
             y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
+            if not np.isfinite(x_det) or not np.isfinite(y_det):
+                continue
 
             rpx = int(round(center[0] - y_det * pixel_scale))
             cpx = int(round(center[1] + x_det * pixel_scale))
@@ -1311,6 +1341,8 @@ def calculate_phi(
             val = (reflection_intensity * I_Q * prop_fac
                 * exp(-Qz * Qz * debye_x_sq)
                 * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq))
+            if not np.isfinite(val) or val <= 0.0:
+                continue
             image[rpx, cpx] += val
 
             if val > best_candidate_val:
@@ -1404,6 +1436,7 @@ def process_peaks_parallel(
     record_status=False,
     thickness=50e-9,
     optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     single_sample_indices=None,
     best_sample_indices_out=None,
 ):
@@ -1432,6 +1465,11 @@ def process_peaks_parallel(
 
     sigma_rad   = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
+    solve_q_steps_i = int(solve_q_steps)
+    if solve_q_steps_i < MIN_SOLVE_Q_STEPS:
+        solve_q_steps_i = MIN_SOLVE_Q_STEPS
+    elif solve_q_steps_i > MAX_SOLVE_Q_STEPS:
+        solve_q_steps_i = MAX_SOLVE_Q_STEPS
 
     # Build transforms for the detector
     cg = cos(gamma_rad)
@@ -1530,20 +1568,16 @@ def process_peaks_parallel(
         for i_samp in range(n_samp):
             n2_sample_array[i_samp] = n2
 
-    # Use per-thread image accumulation when affordable, then reduce once.
-    # This avoids concurrent scatter-add contention on the shared detector image.
-    n_threads = get_num_threads()
+    # Serial reflection loop below writes directly into ``image``.
+    # Keep thread-local accumulation disabled here to avoid relying on
+    # ``get_thread_id`` outside a parallel ``prange`` context.
     use_thread_local_image = False
     image_partials = np.zeros((1, 1, 1), dtype=np.float64)
-    if n_threads > 1 and num_peaks > 1 and image_size > 0:
-        bytes_per_image = image_size * image_size * 8
-        total_bytes = n_threads * bytes_per_image
-        if total_bytes <= _THREAD_LOCAL_IMAGE_MAX_BYTES:
-            image_partials = np.zeros((n_threads, image_size, image_size), dtype=np.float64)
-            use_thread_local_image = True
 
-    # prange over each reflection
-    for i_pk in prange(num_peaks):
+    # Keep this loop serial for correctness: writing numba typed lists and
+    # per-reflection diagnostics from parallel workers produced non-deterministic
+    # image corruption (extreme outliers/NaNs) on multi-threaded runs.
+    for i_pk in range(num_peaks):
         # Ensure HKL values remain floating point to allow fractional indices
         H = float(miller[i_pk, 0])
         K = float(miller[i_pk, 1])
@@ -1585,6 +1619,7 @@ def process_peaks_parallel(
                     record_status,
                     thickness,
                     optics_mode,
+                    solve_q_steps_i,
                     forced_idx,
                 )
             else:
@@ -1612,6 +1647,7 @@ def process_peaks_parallel(
                     record_status,
                     thickness,
                     optics_mode,
+                    solve_q_steps_i,
                     forced_idx,
                 )
         else:
@@ -1639,6 +1675,7 @@ def process_peaks_parallel(
                 record_status,
                 thickness,
                 optics_mode,
+                solve_q_steps_i,
                 forced_idx,
             )
         if record_status:
@@ -1734,6 +1771,7 @@ def process_qr_rods_parallel(
     record_status=False,
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -1785,6 +1823,7 @@ def process_qr_rods_parallel(
         record_status,
         thickness,
         optics_mode,
+        solve_q_steps,
     )
 
     return (*result, degeneracy)

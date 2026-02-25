@@ -21,6 +21,11 @@ instrument:
     sigma_mosaic_fwhm_deg: 0.8
     gamma_mosaic_fwhm_deg: 0.7
     eta: 0.0
+    # Number of angular samples used when tracing the Ewald/Bragg intersection
+    # circle in solve_q. Lower values prune more arc points for faster runs.
+    solve_q_steps: 1000
+    # Relative wavelength spread (percent). Also exposed in the main GUI as
+    # "Bandwidth (%)" and persisted in saved parameter profiles.
     bandwidth_percent: 0.7
     bandwidth_sigma_fraction: 5.0e-05
   sample_orientation:

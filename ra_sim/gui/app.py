@@ -4281,7 +4281,7 @@ save_button = ttk.Button(
         center_y_var,
         resolution_var,
         None,
-        optics_mode_var,
+        optics_mode_var=optics_mode_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -4311,7 +4311,7 @@ load_button = ttk.Button(
                 center_y_var,
                 resolution_var,
                 None,
-                optics_mode_var,
+                optics_mode_var=optics_mode_var,
             )
         ),
         ensure_valid_resolution_choice(),
@@ -7666,7 +7666,7 @@ def main(write_excel_flag=None):
             center_y_var,
             resolution_var,
             None,
-            optics_mode_var,
+            optics_mode_var=optics_mode_var,
         )
         ensure_valid_resolution_choice()
         print("Loaded saved profile from", params_file_path)

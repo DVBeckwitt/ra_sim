@@ -52,6 +52,7 @@ class MosaicParams:
     sigma_mosaic_deg: float
     gamma_mosaic_deg: float
     eta: float
+    solve_q_steps: int = 1000
 
 
 @dataclass(frozen=True)
@@ -242,6 +243,7 @@ def _solve_for_best_beam_sample(
     sigma_rad = float(np.deg2rad(mosaic.sigma_mosaic_deg))
     gamma_rad = float(np.deg2rad(mosaic.gamma_mosaic_deg))
     eta = float(mosaic.eta)
+    solve_q_steps = int(np.clip(int(getattr(mosaic, "solve_q_steps", 1000)), 32, 8192))
 
     best_ctx = None
     best_dist2 = np.inf
@@ -310,7 +312,7 @@ def _solve_for_best_beam_sample(
             float(h),
             float(k),
             float(l),
-            1000,
+            solve_q_steps,
         )
         if int(status) != 0 or all_q.shape[0] == 0:
             continue

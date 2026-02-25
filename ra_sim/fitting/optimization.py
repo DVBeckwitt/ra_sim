@@ -35,12 +35,27 @@ def _process_peaks_parallel_safe(*args, **kwargs):
     """Call the numba-compiled process_peaks_parallel with a python fallback."""
 
     global _USE_NUMBA_PROCESS_PEAKS
+
+    def _invoke(fn):
+        try:
+            return fn(*args, **kwargs)
+        except TypeError as exc:
+            # Test doubles and older callsites may not accept the new keyword.
+            if "solve_q_steps" in kwargs and "unexpected keyword" in str(exc):
+                reduced_kwargs = dict(kwargs)
+                reduced_kwargs.pop("solve_q_steps", None)
+                return fn(*args, **reduced_kwargs)
+            raise
+
     if _USE_NUMBA_PROCESS_PEAKS:
         try:
-            return process_peaks_parallel(*args, **kwargs)
+            return _invoke(process_peaks_parallel)
         except Exception:
             _USE_NUMBA_PROCESS_PEAKS = False
-    return process_peaks_parallel.py_func(*args, **kwargs)
+    py_runner = getattr(process_peaks_parallel, "py_func", None)
+    if callable(py_runner):
+        return _invoke(py_runner)
+    return _invoke(process_peaks_parallel)
 
 
 @dataclass
@@ -372,6 +387,7 @@ def _simulate_with_cache(
         params.get('uv2', np.array([0.0, 1.0, 0.0])),
         save_flag=0,
         optics_mode=int(params.get('optics_mode', 0)),
+        solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
     )
 
     image = np.asarray(image, dtype=np.float64)
@@ -513,6 +529,7 @@ def fit_mosaic_widths_separable(
     sigma0 = float(mosaic_params.get("sigma_mosaic_deg", 0.5))
     gamma0 = float(mosaic_params.get("gamma_mosaic_deg", 0.5))
     eta0 = float(mosaic_params.get("eta", 0.05))
+    solve_q_steps = int(np.clip(int(mosaic_params.get("solve_q_steps", 1000)), 32, 8192))
 
     roi_half_width = int(roi_half_width)
     if roi_half_width <= 0:
@@ -595,6 +612,7 @@ def fit_mosaic_widths_separable(
             unit_x,
             n_detector,
             0,
+            solve_q_steps=solve_q_steps,
         )
         image = np.asarray(image, dtype=np.float64)
         if not record_hits:
@@ -2183,6 +2201,7 @@ def simulate_and_compare_hkl(
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
         optics_mode=int(params.get('optics_mode', 0)),
+        solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
     )
     maxpos = hit_tables_to_max_positions(hit_tables)
 
@@ -2510,6 +2529,7 @@ def fit_geometry_parameters(
             np.array([0.0, 1.0, 0.0]),
             save_flag=0,
             optics_mode=int(local.get('optics_mode', 0)),
+            solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
             single_sample_indices=single_ray_indices,
         )
 
@@ -2606,6 +2626,7 @@ def fit_geometry_parameters(
                 np.array([0.0, 1.0, 0.0]),
                 save_flag=0,
                 optics_mode=int(local.get('optics_mode', 0)),
+                solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
                 best_sample_indices_out=best_indices,
             )
             single_ray_indices = best_indices

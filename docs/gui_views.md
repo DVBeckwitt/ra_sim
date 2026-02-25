@@ -48,7 +48,7 @@ The parameter/control panel is where you drive the model:
 
 - Geometry (`theta`, `Gamma`, detector rotation, `chi`, `zs`, `zb`, etc.).
 - Lattice parameters (`a`, `c`).
-- Mosaic broadening and beam center controls.
+- Mosaic broadening, beam center, and beam spectral bandwidth (`Bandwidth (%)`) controls.
 - Stacking probabilities and site occupancies.
 - Fit toggles and save/load parameter actions.
 

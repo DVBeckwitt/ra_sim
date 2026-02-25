@@ -301,6 +301,11 @@ def run_headless_simulation(
     divergence_sigma = math.radians(divergence_fwhm * fwhm2sigma)
     bw_sigma = float(beam_cfg.get("bandwidth_sigma_fraction", 0.05e-3)) * fwhm2sigma
     bandwidth = float(beam_cfg.get("bandwidth_percent", 0.7)) / 100.0
+    try:
+        solve_q_steps = int(round(float(beam_cfg.get("solve_q_steps", 1000))))
+    except (TypeError, ValueError):
+        solve_q_steps = 1000
+    solve_q_steps = int(np.clip(solve_q_steps, 32, 8192))
 
     (beam_x_array,
      beam_y_array,
@@ -372,6 +377,7 @@ def run_headless_simulation(
         save_flag=0,
         record_status=False,
         thickness=0.0,
+        solve_q_steps=solve_q_steps,
     )
 
     # Save as 16-bit PNG scaled to `vmax` for reasonable visualization

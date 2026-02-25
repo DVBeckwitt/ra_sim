@@ -36,6 +36,7 @@ def simulate_diffraction(
     eta_var,
     bandwidth=0.007,
     optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=1000,
 ):
     """Run a standalone diffraction simulation.
 
@@ -93,6 +94,7 @@ def simulate_diffraction(
         n_detector,
         save_flag=0,
         optics_mode=optics_mode,
+        solve_q_steps=solve_q_steps,
     )
 
     return simulated_image

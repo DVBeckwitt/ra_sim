@@ -43,6 +43,7 @@ class MosaicParams:
     sigma_mosaic_deg: float
     gamma_mosaic_deg: float
     eta: float
+    solve_q_steps: int = 1000
 
 
 @dataclass

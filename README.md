@@ -79,7 +79,7 @@ Calibrant mode (hBN fitter) is for detector geometry and tilt setup from ring da
 
 ### 4) Parameters
 
-The parameters panel controls geometry, lattice values, mosaic broadening, beam center, stacking probabilities, occupancies, and fit toggles. It is the main control surface for iterative refinement and reproducible save/load workflows.
+The parameters panel controls geometry, lattice values, mosaic broadening, beam center, beam spectral bandwidth (`Bandwidth (%)`), stacking probabilities, occupancies, and fit toggles. It is the main control surface for iterative refinement and reproducible save/load workflows.
 
 ![Parameters View](docs/images/parameters.png)
 

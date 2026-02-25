@@ -283,6 +283,9 @@ from ra_sim.fitting.optimization import (
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
+    DEFAULT_SOLVE_Q_STEPS,
+    MAX_SOLVE_Q_STEPS,
+    MIN_SOLVE_Q_STEPS,
     hit_tables_to_max_positions,
     OPTICS_MODE_EXACT,
     OPTICS_MODE_FAST,
@@ -575,7 +578,8 @@ debye_y = debye_config.get("y", 0.0)
 #print("Computed complex index of refraction n2:", n2)
 #sys.exit(0)
 
-bandwidth = beam_config.get("bandwidth_percent", 0.7) / 100
+bandwidth_percent_default = float(beam_config.get("bandwidth_percent", 0.7))
+bandwidth = bandwidth_percent_default / 100.0
 
 # NOTE: Occupancy defaults are sized to the GUI's unique atom-site controls
 # after loading the CIF below.
@@ -586,6 +590,15 @@ occupancy_default_values = occupancy_config.get("default", [1.0, 1.0, 1.0])
 include_rods_flag = hendricks_config.get("include_rods", False)
 sf_prune_bias_default = float(
     np.clip(hendricks_config.get("sf_prune_bias", 0.0), -1.0, 1.0)
+)
+try:
+    solve_q_steps_default = int(
+        round(float(beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)))
+    )
+except (TypeError, ValueError):
+    solve_q_steps_default = int(DEFAULT_SOLVE_Q_STEPS)
+solve_q_steps_default = int(
+    np.clip(solve_q_steps_default, MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS)
 )
 
 lambda_override = beam_config.get("wavelength_angstrom")
@@ -1085,7 +1098,9 @@ defaults = {
     'center_x': center_default[0],
     'center_y': center_default[1],
     'sampling_resolution': 'Low',
+    'bandwidth_percent': float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
     'sf_prune_bias': sf_prune_bias_default,
+    'solve_q_steps': solve_q_steps_default,
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
     'optics_mode': 'fast',
@@ -2756,6 +2771,7 @@ def build_mosaic_params():
         "sigma_mosaic_deg":   sigma_mosaic_var.get(),
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
         "eta":                eta_var.get(),
+        "solve_q_steps":      _current_solve_q_steps(),
     }
 
 
@@ -3291,6 +3307,7 @@ def _open_selected_peak_intersection_figure():
             sigma_mosaic_deg=float(sigma_mosaic_var.get()),
             gamma_mosaic_deg=float(gamma_mosaic_var.get()),
             eta=float(eta_var.get()),
+            solve_q_steps=_current_solve_q_steps(),
         )
 
         analysis = analyze_reflection_intersection(
@@ -4107,6 +4124,7 @@ def _simulate_ideal_hkl_native_center(
                 save_flag=0,
                 record_status=False,
                 optics_mode=optics_mode_flag,
+                solve_q_steps=_current_solve_q_steps(),
                 single_sample_indices=forced_sample_indices,
             )
         except Exception:
@@ -5650,6 +5668,51 @@ def _refresh_integration_from_cached_results():
     canvas.draw_idle()
     return True
 
+
+def _clip_bandwidth_percent(value) -> float:
+    fallback = float(defaults.get("bandwidth_percent", bandwidth * 100.0))
+    try:
+        bw_percent = float(value)
+    except (TypeError, ValueError, tk.TclError):
+        bw_percent = fallback
+    if not np.isfinite(bw_percent):
+        bw_percent = fallback
+    return float(np.clip(bw_percent, 0.0, 10.0))
+
+
+def _current_bandwidth_fraction() -> float:
+    var = globals().get("bandwidth_percent_var")
+    if var is None:
+        return float(max(0.0, bandwidth))
+    try:
+        bw_percent = var.get()
+    except Exception:
+        bw_percent = defaults.get("bandwidth_percent", bandwidth * 100.0)
+    return _clip_bandwidth_percent(bw_percent) / 100.0
+
+
+def _clip_solve_q_steps(value) -> int:
+    fallback = int(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
+    try:
+        parsed = int(round(float(value)))
+    except (TypeError, ValueError, tk.TclError):
+        parsed = fallback
+    if not np.isfinite(parsed):
+        parsed = fallback
+    return int(np.clip(parsed, MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS))
+
+
+def _current_solve_q_steps() -> int:
+    var = globals().get("solve_q_steps_var")
+    if var is None:
+        return _clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
+    try:
+        raw = var.get()
+    except Exception:
+        raw = defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)
+    return _clip_solve_q_steps(raw)
+
+
 def update_mosaic_cache():
     """
     Keep the current random beam/mosaic samples unless sampling inputs changed.
@@ -5659,12 +5722,13 @@ def update_mosaic_cache():
     detector pattern.
     """
     global profile_cache
+    active_bandwidth = _current_bandwidth_fraction()
     sampling_signature = (
         int(num_samples),
         float(divergence_sigma),
         float(bw_sigma),
         float(lambda_),
-        float(bandwidth),
+        float(active_bandwidth),
     )
 
     beam_x_cached = np.asarray(profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
@@ -5703,7 +5767,7 @@ def update_mosaic_cache():
              divergence_sigma=divergence_sigma,
              bw_sigma=bw_sigma,
              lambda0=lambda_,
-             bandwidth=bandwidth
+             bandwidth=active_bandwidth
          )
         profile_cache = {
             "beam_x_array": beam_x_array,
@@ -5719,6 +5783,8 @@ def update_mosaic_cache():
             "sigma_mosaic_deg": sigma_mosaic_var.get(),
             "gamma_mosaic_deg": gamma_mosaic_var.get(),
             "eta": eta_var.get(),
+            "solve_q_steps": _current_solve_q_steps(),
+            "bandwidth_percent": active_bandwidth * 100.0,
         }
     )
 
@@ -5970,6 +6036,8 @@ def do_update():
             round(mosaic_params["sigma_mosaic_deg"], 6),
             round(mosaic_params["gamma_mosaic_deg"], 6),
             round(mosaic_params["eta"], 6),
+            int(mosaic_params["solve_q_steps"]),
+            round(_current_bandwidth_fraction(), 8),
             round(_current_sf_prune_bias(), 3),
             int(sf_prune_stats.get("qr_kept", 0)),
             int(sf_prune_stats.get("hkl_primary_kept", 0)),
@@ -6035,6 +6103,7 @@ def do_update():
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
                     optics_mode=optics_mode_flag,
+                    solve_q_steps=int(mosaic_params["solve_q_steps"]),
                 )
             else:
                 miller_arr = np.asarray(data, dtype=np.float64)
@@ -6086,6 +6155,7 @@ def do_update():
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
                     optics_mode=optics_mode_flag,
+                    solve_q_steps=int(mosaic_params["solve_q_steps"]),
                 ) + (None,)
 
         primary_data = (
@@ -6631,6 +6701,7 @@ def reset_to_defaults():
     sigma_mosaic_var.set(defaults['sigma_mosaic_deg'])
     gamma_mosaic_var.set(defaults['gamma_mosaic_deg'])
     eta_var.set(defaults['eta'])
+    bandwidth_percent_var.set(_clip_bandwidth_percent(defaults.get('bandwidth_percent', bandwidth * 100.0)))
     a_var.set(defaults['a'])
     c_var.set(defaults['c'])
     default_resolution = defaults['sampling_resolution']
@@ -6649,6 +6720,7 @@ def reset_to_defaults():
     )
     optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
     sf_prune_bias_var.set(_clip_sf_prune_bias(defaults.get('sf_prune_bias', 0.0)))
+    solve_q_steps_var.set(float(_clip_solve_q_steps(defaults.get('solve_q_steps', DEFAULT_SOLVE_Q_STEPS))))
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
     tth_min_var.set(0.0)
@@ -6771,7 +6843,9 @@ azimuthal_button = ttk.Button(
             sigma_mosaic_var=sigma_mosaic_var,
             gamma_mosaic_var=gamma_mosaic_var,
             eta_var=eta_var,
+            bandwidth=_current_bandwidth_fraction(),
             optics_mode=_current_optics_mode_flag(),
+            solve_q_steps=_current_solve_q_steps(),
         ),
         [center_x_var.get(), center_y_var.get()],
         {
@@ -7054,10 +7128,12 @@ save_button = ttk.Button(
         center_y_var,
         resolution_var,
         custom_samples_var,
-        optics_mode_var,
+        bandwidth_percent_var=bandwidth_percent_var,
+        optics_mode_var=optics_mode_var,
         phase_delta_expr_var=phase_delta_expr_var,
         phi_l_divisor_var=phi_l_divisor_var,
         sf_prune_bias_var=sf_prune_bias_var,
+        solve_q_steps_var=solve_q_steps_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -7087,10 +7163,12 @@ load_button = ttk.Button(
                 center_y_var,
                 resolution_var,
                 custom_samples_var,
-                optics_mode_var,
+                bandwidth_percent_var=bandwidth_percent_var,
+                optics_mode_var=optics_mode_var,
                 phase_delta_expr_var=phase_delta_expr_var,
                 phi_l_divisor_var=phi_l_divisor_var,
                 sf_prune_bias_var=sf_prune_bias_var,
+                solve_q_steps_var=solve_q_steps_var,
             )
         ),
         (_phase_delta_entry_var.set(_current_phase_delta_expression()) if _phase_delta_entry_var is not None else None),
@@ -7300,6 +7378,7 @@ def _simulate_hkl_peak_centers_for_fit(
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
         optics_mode=int(param_set.get("optics_mode", 0)),
+        solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
     )
 
     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -8577,6 +8656,7 @@ def on_fit_geometry_click():
                             np.array([0.0, 1.0, 0.0]),
                             save_flag=0,
                             optics_mode=_current_optics_mode_flag(),
+                            solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
                         )
 
                         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -8681,6 +8761,7 @@ def on_fit_geometry_click():
                         np.array([0.0, 1.0, 0.0]),
                         save_flag=0,
                         optics_mode=_current_optics_mode_flag(),
+                        solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
                     )
 
                     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -9516,6 +9597,7 @@ def save_q_space_representation():
         "sigma_mosaic_deg": sigma_mosaic_var.get(),
         "gamma_mosaic_deg": gamma_mosaic_var.get(),
         "eta": eta_var.get(),
+        "solve_q_steps": _current_solve_q_steps(),
         "a": a_var.get(),
         "c": c_var.get(),
         "center_x": center_x_var.get(),
@@ -9532,7 +9614,8 @@ def save_q_space_representation():
         "wavelength_array": profile_cache.get("wavelength_array", []),
         "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
-        "eta": profile_cache.get("eta", 0.0)
+        "eta": profile_cache.get("eta", 0.0),
+        "solve_q_steps": profile_cache.get("solve_q_steps", _current_solve_q_steps()),
     }
 
     image_result, hit_tables, q_data, q_count, _, _ = process_peaks_parallel(
@@ -9569,6 +9652,7 @@ def save_q_space_representation():
         np.array([0.0, 1.0, 0.0]),
         save_flag=1,
         optics_mode=_current_optics_mode_flag(),
+        solve_q_steps=int(mosaic_params["solve_q_steps"]),
     )
 
     max_positions_local = hit_tables_to_max_positions(hit_tables)
@@ -9623,7 +9707,8 @@ def run_debug_simulation():
         "wavelength_array": profile_cache.get("wavelength_array", []),
         "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
-        "eta": profile_cache.get("eta", 0.0)
+        "eta": profile_cache.get("eta", 0.0),
+        "solve_q_steps": profile_cache.get("solve_q_steps", _current_solve_q_steps()),
     }
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
@@ -9878,6 +9963,23 @@ def on_sf_prune_bias_change(*_):
     schedule_update()
 
 
+def on_solve_q_steps_change(*_):
+    global last_simulation_signature
+
+    try:
+        raw_value = float(solve_q_steps_var.get())
+    except (tk.TclError, ValueError, TypeError):
+        raw_value = float(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
+
+    clipped_value = _clip_solve_q_steps(raw_value)
+    if not np.isclose(raw_value, float(clipped_value), rtol=0.0, atol=1e-12):
+        solve_q_steps_var.set(float(clipped_value))
+        return
+
+    last_simulation_signature = None
+    schedule_update()
+
+
 sf_prune_var_frame = ttk.Frame(mosaic_frame.frame)
 sf_prune_var_frame.pack(fill=tk.X, pady=(2, 2))
 ttk.Label(sf_prune_var_frame, text="Structure-Factor Pruning").pack(anchor=tk.W, padx=5)
@@ -9903,8 +10005,25 @@ ttk.Label(
 ).pack(anchor=tk.W, padx=5, pady=(0, 2))
 sf_prune_bias_var.trace_add('write', on_sf_prune_bias_change)
 _update_sf_prune_status_label()
+ttk.Label(
+    sf_prune_var_frame,
+    text=(
+        "Q-circle sampling (pruning): lower values prune more arc points and "
+        "speed up simulation."
+    ),
+).pack(anchor=tk.W, padx=5, pady=(4, 0))
+solve_q_steps_var, solve_q_steps_scale = create_slider(
+    "Q-circle Samples",
+    float(MIN_SOLVE_Q_STEPS),
+    float(MAX_SOLVE_Q_STEPS),
+    float(_clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))),
+    1.0,
+    sf_prune_var_frame,
+    update_callback=None,
+)
+solve_q_steps_var.trace_add('write', on_solve_q_steps_change)
 
-center_frame = CollapsibleFrame(right_col, text='Beam Center')
+center_frame = CollapsibleFrame(right_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
 def make_slider(
@@ -10011,6 +10130,15 @@ center_x_var, center_x_scale = make_slider(
     defaults['center_x'],
     1.0,
     center_frame.frame
+)
+bandwidth_percent_var, bandwidth_percent_scale = make_slider(
+    'Bandwidth (%)',
+    0.0,
+    5.0,
+    _clip_bandwidth_percent(defaults.get('bandwidth_percent', bandwidth * 100.0)),
+    0.01,
+    center_frame.frame,
+    mosaic=True,
 )
 center_y_var, center_y_scale = make_slider(
     'Beam Center Col',
@@ -11164,10 +11292,12 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             center_y_var,
             resolution_var,
             custom_samples_var,
-            optics_mode_var,
+            bandwidth_percent_var=bandwidth_percent_var,
+            optics_mode_var=optics_mode_var,
             phase_delta_expr_var=phase_delta_expr_var,
             phi_l_divisor_var=phi_l_divisor_var,
             sf_prune_bias_var=sf_prune_bias_var,
+            solve_q_steps_var=solve_q_steps_var,
         )
         if _phase_delta_entry_var is not None:
             _phase_delta_entry_var.set(_current_phase_delta_expression())
@@ -11188,6 +11318,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         f"profile={'loaded' if profile_loaded else 'defaults'}; "
         f"sampling={sample_mode} ({sample_count} samples); "
         f"sf_prune={_current_sf_prune_bias():+.2f}; "
+        f"q_steps={_current_solve_q_steps()}; "
         f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
         f"cif={cif_summary}"
     )
