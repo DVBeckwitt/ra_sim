@@ -236,22 +236,14 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 import numpy as np
-import sympy as sp
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Rectangle
 import pyFAI
-from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-from scipy.optimize import differential_evolution, least_squares
 from scipy.ndimage import gaussian_filter, maximum_filter
 from scipy.spatial import cKDTree
-from skimage.metrics import mean_squared_error
-import spglib
-import OSC_Reader
 from OSC_Reader import read_osc
-import numba
-import pandas as pd
 import Dans_Diffraction as dif
 import CifFile
 
@@ -424,14 +416,10 @@ hendricks_config = instrument_config.get("hendricks_teller", {})
 output_config = instrument_config.get("output", {})
 fit_config = instrument_config.get("fit", {})
 
-file_path = get_path_first("simulation_dark_osc_file", "dark_image")
-BI = read_osc(file_path)  # Dark (background) image
-
 osc_files = get_path_first("simulation_background_osc_files", "osc_files")
 if isinstance(osc_files, str):
     osc_files = [osc_files]
-background_images = [read_osc(path) for path in osc_files]
-if not background_images:
+if not osc_files:
     raise ValueError(
         "No oscillation images configured in simulation_background_osc_files/osc_files"
     )
@@ -447,12 +435,20 @@ HBN_FITTER_ROTATE_K = 0
 # in the same frame as the displayed background (after DISPLAY_ROTATE_K).
 SIMULATION_GEOMETRY_ROTATE_K = DISPLAY_ROTATE_K - SIM_DISPLAY_ROTATE_K
 
-# Preserve native-orientation copies for fitting/analysis; display variants may
-# be rotated for visualization.
-background_images_native = [np.array(img) for img in background_images]
-background_images_display = [
-    np.rot90(img, DISPLAY_ROTATE_K) for img in background_images_native
-]
+# Preserve native-orientation copies for fitting/analysis. Load only the first
+# background at startup and lazy-load the rest on demand to improve first paint.
+_initial_background_native = np.asarray(read_osc(str(osc_files[0])))
+if _initial_background_native.ndim < 2:
+    raise ValueError(
+        f"Background '{Path(str(osc_files[0])).name}' is not a 2D image."
+    )
+
+background_images = [None] * len(osc_files)
+background_images_native = [None] * len(osc_files)
+background_images_display = [None] * len(osc_files)
+background_images[0] = np.array(_initial_background_native)
+background_images_native[0] = np.array(_initial_background_native)
+background_images_display[0] = np.rot90(background_images_native[0], DISPLAY_ROTATE_K)
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -1655,6 +1651,8 @@ def export_initial_excel():
     if not write_excel:
         return
 
+    import pandas as pd
+
     download_dir = get_dir("downloads")
     excel_path = download_dir / "miller_intensities.xlsx"
 
@@ -1716,11 +1714,52 @@ background_backend_flip_x = False
 background_backend_flip_y = False
 
 
+def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return cached background arrays for *index*, loading from disk if needed."""
+
+    idx = int(index)
+    if idx < 0 or idx >= len(osc_files):
+        raise IndexError(f"Background index out of range: {idx}")
+
+    native_cached = background_images_native[idx]
+    display_cached = background_images_display[idx]
+    if native_cached is not None and display_cached is not None:
+        return np.asarray(native_cached), np.asarray(display_cached)
+
+    file_path_local = str(osc_files[idx])
+    raw_image = read_osc(file_path_local)
+    image_array = np.asarray(raw_image)
+    if image_array.ndim < 2:
+        raise ValueError(
+            f"Background '{Path(file_path_local).name}' is not a 2D image."
+        )
+
+    first_native = np.asarray(background_images_native[0])
+    expected_shape = tuple(int(v) for v in first_native.shape[:2])
+    image_shape = tuple(int(v) for v in image_array.shape[:2])
+    if image_shape != expected_shape:
+        raise ValueError(
+            f"Background '{Path(file_path_local).name}' has shape {image_shape}, "
+            f"expected {expected_shape}."
+        )
+
+    native = np.array(image_array)
+    display = np.rot90(native, DISPLAY_ROTATE_K)
+    background_images[idx] = native
+    background_images_native[idx] = native
+    background_images_display[idx] = display
+    return native, display
+
+
 def _get_current_background_native() -> np.ndarray:
     """Return the unrotated background image corresponding to the current index."""
 
     if 0 <= current_background_index < len(background_images_native):
-        return background_images_native[current_background_index]
+        try:
+            native, _ = _load_background_image_by_index(current_background_index)
+            return native
+        except Exception:
+            return np.asarray(current_background_image)
     return current_background_image
 
 
@@ -1728,7 +1767,11 @@ def _get_current_background_display() -> np.ndarray:
     """Return the rotated background image used for GUI display."""
 
     if 0 <= current_background_index < len(background_images_display):
-        return background_images_display[current_background_index]
+        try:
+            _, display = _load_background_image_by_index(current_background_index)
+            return display
+        except Exception:
+            return np.asarray(current_background_display)
     return np.rot90(_get_current_background_native(), DISPLAY_ROTATE_K)
 
 
@@ -2149,12 +2192,9 @@ def _aggregate_match_centers(
 
     return agg_sim_coords, agg_meas_coords, agg_millers
 
-
-measured_peaks_raw = np.load(get_path("measured_peaks"), allow_pickle=True)
-measured_peaks = _rotate_measured_peaks_for_display(
-    measured_peaks_raw,
-    current_background_display.shape,
-)
+# Measured peaks are collected interactively in the current GUI workflow.
+# Keep this list for compatibility, but avoid loading a large file at startup.
+measured_peaks = []
 
 ###############################################################################
 #                                  TK SETUP
@@ -4542,7 +4582,7 @@ def _update_chi_square_display():
             ):
                 norm_sim = sim_vals / np.max(sim_vals)
                 norm_bg = bg_vals / np.max(bg_vals)
-                chi_sq_val = mean_squared_error(norm_bg, norm_sim) * norm_sim.size
+                chi_sq_val = float(np.mean(np.square(norm_bg - norm_sim)) * norm_sim.size)
                 chi_square_label.config(text=f"Chi-Squared: {chi_sq_val:.2e}")
             else:
                 chi_square_label.config(text="Chi-Squared: N/A")
@@ -6053,12 +6093,20 @@ def _browse_background_files():
 
 def switch_background():
     global current_background_index, current_background_image, current_background_display
-    if not background_images_native:
+    if not osc_files:
         progress_label.config(text="No background images loaded.")
         return
-    current_background_index = (current_background_index + 1) % len(background_images_native)
-    current_background_image = background_images_native[current_background_index]
-    current_background_display = background_images_display[current_background_index]
+
+    next_index = (current_background_index + 1) % len(osc_files)
+    try:
+        next_native, next_display = _load_background_image_by_index(next_index)
+    except Exception as exc:
+        progress_label.config(text=f"Failed to switch background: {exc}")
+        return
+
+    current_background_index = next_index
+    current_background_image = next_native
+    current_background_display = next_display
     background_display.set_data(current_background_display)
     _update_background_slider_defaults(current_background_display, reset_override=True)
     _set_background_file_status_text()
@@ -10306,9 +10354,17 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         f"cif={cif_summary}"
     )
 
-    export_initial_excel()
-    update_mosaic_cache()
-    do_update()
+    def _run_initial_startup_work():
+        try:
+            progress_label.config(text="Initializing simulation...")
+            export_initial_excel()
+            update_mosaic_cache()
+            do_update()
+        except Exception as exc:
+            progress_label.config(text=f"Startup initialization failed: {exc}")
+
+    # Let Tk paint the windows first, then run the expensive initial update.
+    root.after_idle(_run_initial_startup_work)
     root.mainloop()
 
 
