@@ -3042,11 +3042,11 @@ update_pending = None
 update_running = False
 
 def schedule_update():
-    """Throttle updates so heavy simulations don't overlap."""
+    """Queue a throttled simulation/redraw update."""
     global update_pending
     if update_pending is not None:
         root.after_cancel(update_pending)
-    update_pending = root.after(100, do_update)
+    update_pending = root.after(1000, do_update)
 
 peak_positions = []
 peak_millers = []
@@ -3078,7 +3078,7 @@ def do_update():
 
     if update_running:
         # another update is in progress; try again shortly
-        update_pending = root.after(100, do_update)
+        update_pending = root.after(1000, do_update)
         return
 
     update_pending = None

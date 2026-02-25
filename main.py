@@ -4247,14 +4247,14 @@ integration_update_pending = None
 update_running = False
 
 def schedule_update():
-    """Throttle updates so heavy simulations don't overlap."""
+    """Queue a throttled simulation/redraw update."""
     global update_pending, integration_update_pending
     if integration_update_pending is not None:
         root.after_cancel(integration_update_pending)
         integration_update_pending = None
     if update_pending is not None:
         root.after_cancel(update_pending)
-    update_pending = root.after(100, do_update)
+    update_pending = root.after(1000, do_update)
 
 
 def _run_scheduled_range_update():
@@ -4262,19 +4262,20 @@ def _run_scheduled_range_update():
     integration_update_pending = None
 
     if update_running:
-        schedule_range_update(delay_ms=40)
+        schedule_range_update(delay_ms=1000)
         return
 
     if not _refresh_integration_from_cached_results():
         schedule_update()
 
 
-def schedule_range_update(delay_ms=20):
-    """Debounced fast-path updates for integration range controls."""
+def schedule_range_update(delay_ms=1000):
+    """Queue throttled redraw-only integration updates."""
     global integration_update_pending
     if integration_update_pending is not None:
         root.after_cancel(integration_update_pending)
-    integration_update_pending = root.after(delay_ms, _run_scheduled_range_update)
+    delay = max(1000, int(delay_ms))
+    integration_update_pending = root.after(delay, _run_scheduled_range_update)
 
 peak_positions = []
 peak_millers = []
@@ -4308,7 +4309,7 @@ def do_update():
 
     if update_running:
         # another update is in progress; try again shortly
-        update_pending = root.after(100, do_update)
+        update_pending = root.after(1000, do_update)
         return
 
     update_pending = None
