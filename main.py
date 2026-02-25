@@ -1322,13 +1322,327 @@ else:
     debug_print("single CIF miller count:", miller.shape[0])
 
 # Save simulation data for later use
-SIM_MILLER1 = miller1_sim
-SIM_INTENS1 = intensities1_sim
-SIM_MILLER2 = miller2_sim
-SIM_INTENS2 = intensities2_sim
+SIM_MILLER1_ALL = np.asarray(miller1_sim, dtype=np.float64)
+SIM_INTENS1_ALL = np.asarray(intensities1_sim, dtype=np.float64)
+SIM_MILLER2_ALL = np.asarray(miller2_sim, dtype=np.float64)
+SIM_INTENS2_ALL = np.asarray(intensities2_sim, dtype=np.float64)
 # Primary HT simulation uses Qr rods (m-grouped) for speed, while HKL arrays
 # above are retained for selector/degeneracy lookup.
-SIM_PRIMARY_QR = combined_qr
+SIM_PRIMARY_QR_ALL = combined_qr
+
+# Active simulation arrays (possibly filtered by the Bragg Qr manager).
+SIM_MILLER1 = SIM_MILLER1_ALL.copy()
+SIM_INTENS1 = SIM_INTENS1_ALL.copy()
+SIM_MILLER2 = SIM_MILLER2_ALL.copy()
+SIM_INTENS2 = SIM_INTENS2_ALL.copy()
+SIM_PRIMARY_QR = {}
+
+# Tracks disabled Qr groups by (source_label, m-index).
+disabled_bragg_qr_groups: set[tuple[str, int]] = set()
+# Tracks disabled L values by (source_label, m-index, quantized_l_key).
+disabled_bragg_qr_l_values: set[tuple[str, int, int]] = set()
+
+BRAGG_QR_L_KEY_SCALE = int(1_000_000)
+BRAGG_QR_L_INVALID_KEY = int(np.iinfo(np.int64).min)
+
+
+def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
+    label = str(source_label or "primary").strip().lower()
+    return "secondary" if label == "secondary" else "primary"
+
+
+def _l_value_to_key(l_value: float) -> int:
+    try:
+        val = float(l_value)
+    except (TypeError, ValueError):
+        return BRAGG_QR_L_INVALID_KEY
+    if not np.isfinite(val):
+        return BRAGG_QR_L_INVALID_KEY
+    return int(np.rint(val * BRAGG_QR_L_KEY_SCALE))
+
+
+def _l_key_to_value(l_key: int) -> float:
+    key = int(l_key)
+    if key == BRAGG_QR_L_INVALID_KEY:
+        return float("nan")
+    return float(key / BRAGG_QR_L_KEY_SCALE)
+
+
+def _l_keys_from_l_array(l_vals: np.ndarray) -> np.ndarray:
+    arr = np.asarray(l_vals, dtype=np.float64).reshape(-1)
+    out = np.full(arr.shape, BRAGG_QR_L_INVALID_KEY, dtype=np.int64)
+    finite_mask = np.isfinite(arr)
+    if np.any(finite_mask):
+        out[finite_mask] = np.rint(arr[finite_mask] * BRAGG_QR_L_KEY_SCALE).astype(
+            np.int64,
+            copy=False,
+        )
+    return out
+
+
+def _source_all_miller_for_label(source_label: str | None) -> np.ndarray:
+    label = _normalize_bragg_qr_source_label(source_label)
+    if label == "secondary":
+        return np.asarray(SIM_MILLER2_ALL, dtype=np.float64)
+    return np.asarray(SIM_MILLER1_ALL, dtype=np.float64)
+
+
+def _m_indices_from_miller_array(miller_arr: np.ndarray, *, unique: bool = False) -> np.ndarray:
+    arr = np.asarray(miller_arr, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
+        return np.empty((0,), dtype=np.int64)
+
+    finite_mask = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1])
+    if not np.any(finite_mask):
+        return np.empty((0,), dtype=np.int64)
+
+    hk_rows = arr[finite_mask, :2]
+    h_vals = np.rint(hk_rows[:, 0]).astype(np.int64, copy=False)
+    k_vals = np.rint(hk_rows[:, 1]).astype(np.int64, copy=False)
+    m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
+    if unique:
+        return np.unique(m_vals)
+    return m_vals
+
+
+def _copy_qr_dict(qr_dict: dict | None) -> dict[int, dict[str, object]]:
+    out: dict[int, dict[str, object]] = {}
+    if not isinstance(qr_dict, dict):
+        return out
+
+    for m_raw, data in qr_dict.items():
+        try:
+            m_idx = int(m_raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        out[m_idx] = {
+            "L": np.asarray(data.get("L", []), dtype=np.float64).copy(),
+            "I": np.asarray(data.get("I", []), dtype=np.float64).copy(),
+            "hk": tuple(data.get("hk", (0, 0))),
+            "deg": int(data.get("deg", 1)),
+        }
+    return out
+
+
+def _available_bragg_qr_group_keys() -> set[tuple[str, int]]:
+    keys: set[tuple[str, int]] = set()
+
+    if isinstance(SIM_PRIMARY_QR_ALL, dict):
+        for m_raw in SIM_PRIMARY_QR_ALL.keys():
+            try:
+                m_idx = int(m_raw)
+            except (TypeError, ValueError):
+                continue
+            keys.add(("primary", m_idx))
+
+    for source_label in ("primary", "secondary"):
+        m_vals = _m_indices_from_miller_array(
+            _source_all_miller_for_label(source_label),
+            unique=True,
+        )
+        for m_val in m_vals:
+            keys.add((source_label, int(m_val)))
+
+    return keys
+
+
+def _available_bragg_qr_l_keys() -> set[tuple[str, int, int]]:
+    keys: set[tuple[str, int, int]] = set()
+
+    if isinstance(SIM_PRIMARY_QR_ALL, dict):
+        for m_idx, entry in _copy_qr_dict(SIM_PRIMARY_QR_ALL).items():
+            l_keys = _l_keys_from_l_array(entry.get("L", []))
+            for l_key in l_keys:
+                lk = int(l_key)
+                if lk == BRAGG_QR_L_INVALID_KEY:
+                    continue
+                keys.add(("primary", int(m_idx), lk))
+
+    for source_label in ("primary", "secondary"):
+        arr = np.asarray(_source_all_miller_for_label(source_label), dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 3:
+            continue
+        finite_mask = (
+            np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
+        )
+        if not np.any(finite_mask):
+            continue
+        rows = arr[finite_mask, :3]
+        h_vals = np.rint(rows[:, 0]).astype(np.int64, copy=False)
+        k_vals = np.rint(rows[:, 1]).astype(np.int64, copy=False)
+        m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
+        l_keys = _l_keys_from_l_array(rows[:, 2])
+        for m_idx, l_key in zip(m_vals, l_keys):
+            lk = int(l_key)
+            if lk == BRAGG_QR_L_INVALID_KEY:
+                continue
+            keys.add((_normalize_bragg_qr_source_label(source_label), int(m_idx), lk))
+
+    return keys
+
+
+def _prune_disabled_bragg_qr_filters() -> None:
+    global disabled_bragg_qr_groups, disabled_bragg_qr_l_values
+
+    available_groups = _available_bragg_qr_group_keys()
+    disabled_bragg_qr_groups = {
+        (_normalize_bragg_qr_source_label(src), int(m_idx))
+        for src, m_idx in disabled_bragg_qr_groups
+        if (_normalize_bragg_qr_source_label(src), int(m_idx)) in available_groups
+    }
+
+    available_l = _available_bragg_qr_l_keys()
+    disabled_bragg_qr_l_values = {
+        (_normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
+        for src, m_idx, l_key in disabled_bragg_qr_l_values
+        if (_normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
+        in available_l
+    }
+
+
+def _filtered_primary_qr_dict() -> dict[int, dict[str, object]]:
+    out: dict[int, dict[str, object]] = {}
+    disabled_primary_m = {
+        int(m_idx)
+        for src, m_idx in disabled_bragg_qr_groups
+        if _normalize_bragg_qr_source_label(src) == "primary"
+    }
+    disabled_primary_l: dict[int, set[int]] = defaultdict(set)
+    for src, m_idx, l_key in disabled_bragg_qr_l_values:
+        if _normalize_bragg_qr_source_label(src) != "primary":
+            continue
+        disabled_primary_l[int(m_idx)].add(int(l_key))
+
+    for m_idx, entry in _copy_qr_dict(SIM_PRIMARY_QR_ALL).items():
+        m_int = int(m_idx)
+        if m_int in disabled_primary_m:
+            continue
+
+        l_vals = np.asarray(entry.get("L", []), dtype=np.float64).reshape(-1)
+        i_vals = np.asarray(entry.get("I", []), dtype=np.float64).reshape(-1)
+        row_count = min(l_vals.shape[0], i_vals.shape[0])
+        if row_count <= 0:
+            continue
+
+        l_vals = l_vals[:row_count]
+        i_vals = i_vals[:row_count]
+
+        disabled_l_for_m = disabled_primary_l.get(m_int)
+        if disabled_l_for_m:
+            l_keys = _l_keys_from_l_array(l_vals)
+            disabled_arr = np.fromiter(
+                disabled_l_for_m,
+                dtype=np.int64,
+                count=len(disabled_l_for_m),
+            )
+            keep_mask = ~np.isin(l_keys, disabled_arr)
+            if not np.any(keep_mask):
+                continue
+            l_vals = l_vals[keep_mask]
+            i_vals = i_vals[keep_mask]
+
+        filtered = dict(entry)
+        filtered["L"] = l_vals.copy()
+        filtered["I"] = i_vals.copy()
+        out[m_int] = filtered
+
+    return out
+
+
+def _filtered_miller_and_intensities(
+    miller_arr: np.ndarray,
+    intens_arr: np.ndarray,
+    source_label: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    arr = np.asarray(miller_arr, dtype=np.float64)
+    intens = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
+
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+        )
+
+    row_count = min(arr.shape[0], intens.shape[0])
+    if row_count <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+        )
+
+    arr = arr[:row_count, :]
+    intens = intens[:row_count]
+    source_norm = _normalize_bragg_qr_source_label(source_label)
+    disabled_m = {
+        int(m_idx)
+        for src, m_idx in disabled_bragg_qr_groups
+        if _normalize_bragg_qr_source_label(src) == source_norm
+    }
+    disabled_l_pairs = [
+        (int(m_idx), int(l_key))
+        for src, m_idx, l_key in disabled_bragg_qr_l_values
+        if _normalize_bragg_qr_source_label(src) == source_norm
+    ]
+    if not disabled_m and not disabled_l_pairs:
+        return arr.copy(), intens.copy()
+
+    m_vals = _m_indices_from_miller_array(arr, unique=False)
+    if m_vals.shape[0] != arr.shape[0]:
+        return arr.copy(), intens.copy()
+
+    keep_mask = np.ones(arr.shape[0], dtype=bool)
+    if disabled_m:
+        disabled_arr = np.fromiter(disabled_m, dtype=np.int64, count=len(disabled_m))
+        keep_mask &= ~np.isin(m_vals, disabled_arr)
+
+    if disabled_l_pairs:
+        l_keys = _l_keys_from_l_array(arr[:, 2])
+        for m_idx, l_key in disabled_l_pairs:
+            keep_mask &= ~((m_vals == int(m_idx)) & (l_keys == int(l_key)))
+
+    return arr[keep_mask].copy(), intens[keep_mask].copy()
+
+
+def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
+    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
+    global SIM_MILLER1_ALL, SIM_INTENS1_ALL, SIM_MILLER2_ALL, SIM_INTENS2_ALL, SIM_PRIMARY_QR_ALL
+    global last_simulation_signature
+    global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
+    global selected_peak_record
+
+    _prune_disabled_bragg_qr_filters()
+
+    SIM_PRIMARY_QR = _filtered_primary_qr_dict()
+    SIM_MILLER1, SIM_INTENS1 = _filtered_miller_and_intensities(
+        SIM_MILLER1_ALL,
+        SIM_INTENS1_ALL,
+        "primary",
+    )
+    SIM_MILLER2, SIM_INTENS2 = _filtered_miller_and_intensities(
+        SIM_MILLER2_ALL,
+        SIM_INTENS2_ALL,
+        "secondary",
+    )
+
+    last_simulation_signature = None
+    stored_max_positions_local = None
+    stored_sim_image = None
+    stored_peak_table_lattice = None
+    selected_peak_record = None
+
+    refresh_window_fn = globals().get("_refresh_bragg_qr_toggle_window")
+    if callable(refresh_window_fn):
+        refresh_window_fn()
+
+    if trigger_update:
+        schedule_update_fn = globals().get("schedule_update")
+        if callable(schedule_update_fn):
+            schedule_update_fn()
+
+
+_apply_bragg_qr_filters(trigger_update=False)
 
 # Build summary and details dataframes using the helper.
 df_summary, df_details = build_intensity_dataframes(
@@ -2109,6 +2423,14 @@ selected_hkl_target = None
 hkl_pick_armed = False
 hkl_pick_button_var = None
 _suppress_drag_press_once = False
+bragg_qr_toggle_window = None
+bragg_qr_toggle_listbox = None
+bragg_qr_toggle_status_label = None
+bragg_qr_toggle_index_keys: list[tuple[str, int]] = []
+bragg_qr_l_toggle_listbox = None
+bragg_qr_l_toggle_status_label = None
+bragg_qr_l_toggle_index_keys: list[int] = []
+bragg_qr_l_selected_group_key: tuple[str, int] | None = None
 
 
 def _update_hkl_pick_button_label():
@@ -2507,6 +2829,707 @@ def _open_selected_peak_intersection_figure():
         progress_label_positions.config(
             text=f"Intersection analysis failed for selected peak: {exc}"
         )
+
+
+def _qr_value_for_m(m_idx: int, lattice_a: float) -> float:
+    try:
+        m_val = float(m_idx)
+        a_val = float(lattice_a)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(m_val) or not np.isfinite(a_val) or a_val <= 0.0 or m_val < 0.0:
+        return float("nan")
+    return float((2.0 * np.pi / a_val) * np.sqrt((4.0 / 3.0) * m_val))
+
+
+def _hk_pairs_grouped_by_m(source_label: str) -> dict[int, list[tuple[int, int]]]:
+    grouped: dict[int, set[tuple[int, int]]] = defaultdict(set)
+    miller_arr = _source_all_miller_for_label(source_label)
+    arr = np.asarray(miller_arr, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
+        return {}
+
+    for row in arr:
+        h_val = row[0]
+        k_val = row[1]
+        if not (np.isfinite(h_val) and np.isfinite(k_val)):
+            continue
+        h_int = int(np.rint(float(h_val)))
+        k_int = int(np.rint(float(k_val)))
+        m_idx = int(h_int * h_int + h_int * k_int + k_int * k_int)
+        grouped[m_idx].add((h_int, k_int))
+
+    return {
+        int(m_idx): sorted(pairs, key=lambda pair: (pair[0], pair[1]))
+        for m_idx, pairs in grouped.items()
+    }
+
+
+def _build_bragg_qr_entries() -> list[dict[str, object]]:
+    try:
+        primary_a = float(a_var.get())
+    except Exception:
+        primary_a = float(av)
+
+    secondary_a = primary_a
+    try:
+        if av2 is not None:
+            secondary_candidate = float(av2)
+            if np.isfinite(secondary_candidate) and secondary_candidate > 0.0:
+                secondary_a = secondary_candidate
+    except Exception:
+        secondary_a = primary_a
+
+    primary_hk = _hk_pairs_grouped_by_m("primary")
+    secondary_hk = _hk_pairs_grouped_by_m("secondary")
+
+    primary_m_values = set(primary_hk.keys())
+    if isinstance(SIM_PRIMARY_QR_ALL, dict):
+        for m_raw in SIM_PRIMARY_QR_ALL.keys():
+            try:
+                primary_m_values.add(int(m_raw))
+            except (TypeError, ValueError):
+                continue
+
+    secondary_m_values = set(secondary_hk.keys())
+    entries: list[dict[str, object]] = []
+    for source_label, m_values, lattice_a, hk_map in (
+        ("primary", primary_m_values, primary_a, primary_hk),
+        ("secondary", secondary_m_values, secondary_a, secondary_hk),
+    ):
+        for m_idx in sorted(m_values):
+            hk_pairs = hk_map.get(m_idx, [])
+            preview_pairs = hk_pairs[:8]
+            preview = ", ".join(f"({h} {k})" for h, k in preview_pairs)
+            if len(hk_pairs) > len(preview_pairs):
+                preview += f", +{len(hk_pairs) - len(preview_pairs)}"
+            if not preview:
+                preview = "n/a"
+            entries.append(
+                {
+                    "key": (source_label, int(m_idx)),
+                    "source": source_label,
+                    "m": int(m_idx),
+                    "qr": _qr_value_for_m(int(m_idx), lattice_a),
+                    "hk_preview": preview,
+                }
+            )
+
+    return entries
+
+
+def _selected_bragg_qr_window_keys() -> list[tuple[str, int]]:
+    if bragg_qr_toggle_listbox is None:
+        return []
+
+    keys: list[tuple[str, int]] = []
+    for idx in bragg_qr_toggle_listbox.curselection():
+        if 0 <= idx < len(bragg_qr_toggle_index_keys):
+            keys.append(bragg_qr_toggle_index_keys[idx])
+    return keys
+
+
+def _selected_primary_bragg_qr_window_key() -> tuple[str, int] | None:
+    selected = _selected_bragg_qr_window_keys()
+    if selected:
+        source_label, m_idx = selected[0]
+        return (_normalize_bragg_qr_source_label(source_label), int(m_idx))
+
+    if bragg_qr_l_selected_group_key is None:
+        return None
+    return (
+        _normalize_bragg_qr_source_label(bragg_qr_l_selected_group_key[0]),
+        int(bragg_qr_l_selected_group_key[1]),
+    )
+
+
+def _selected_bragg_qr_l_window_keys() -> list[int]:
+    if bragg_qr_l_toggle_listbox is None:
+        return []
+
+    out: list[int] = []
+    for idx in bragg_qr_l_toggle_listbox.curselection():
+        if 0 <= idx < len(bragg_qr_l_toggle_index_keys):
+            out.append(int(bragg_qr_l_toggle_index_keys[idx]))
+    return out
+
+
+def _l_value_map_for_qr(source_label: str, m_idx: int) -> dict[int, float]:
+    source_norm = _normalize_bragg_qr_source_label(source_label)
+    m_target = int(m_idx)
+    out: dict[int, float] = {}
+
+    arr = np.asarray(_source_all_miller_for_label(source_norm), dtype=np.float64)
+    if arr.ndim == 2 and arr.shape[0] > 0 and arr.shape[1] >= 3:
+        finite_mask = (
+            np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
+        )
+        if np.any(finite_mask):
+            rows = arr[finite_mask, :3]
+            h_vals = np.rint(rows[:, 0]).astype(np.int64, copy=False)
+            k_vals = np.rint(rows[:, 1]).astype(np.int64, copy=False)
+            m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
+            l_keys = _l_keys_from_l_array(rows[:, 2])
+            for mm, l_key in zip(m_vals, l_keys):
+                lk = int(l_key)
+                if int(mm) != m_target or lk == BRAGG_QR_L_INVALID_KEY:
+                    continue
+                if lk not in out:
+                    out[lk] = _l_key_to_value(lk)
+
+    if source_norm == "primary" and isinstance(SIM_PRIMARY_QR_ALL, dict):
+        for m_raw, data in SIM_PRIMARY_QR_ALL.items():
+            try:
+                mm = int(m_raw)
+            except (TypeError, ValueError):
+                continue
+            if mm != m_target or not isinstance(data, dict):
+                continue
+            l_vals = np.asarray(data.get("L", []), dtype=np.float64).reshape(-1)
+            l_keys = _l_keys_from_l_array(l_vals)
+            for l_key in l_keys:
+                lk = int(l_key)
+                if lk == BRAGG_QR_L_INVALID_KEY:
+                    continue
+                if lk not in out:
+                    out[lk] = _l_key_to_value(lk)
+            break
+
+    return out
+
+
+def _refresh_bragg_qr_l_toggle_listbox() -> None:
+    global bragg_qr_l_toggle_index_keys, bragg_qr_l_selected_group_key
+
+    if bragg_qr_l_toggle_listbox is None:
+        return
+
+    selected_l_keys = set(_selected_bragg_qr_l_window_keys())
+    bragg_qr_l_toggle_listbox.delete(0, tk.END)
+    bragg_qr_l_toggle_index_keys = []
+
+    selected_group = _selected_primary_bragg_qr_window_key()
+    if selected_group is None:
+        bragg_qr_l_toggle_listbox.insert(
+            tk.END,
+            "Select a Qr group on the left to view L values.",
+        )
+        if bragg_qr_l_toggle_status_label is not None:
+            bragg_qr_l_toggle_status_label.config(text="No Qr group selected.")
+        bragg_qr_l_selected_group_key = None
+        return
+
+    source_label, m_idx = selected_group
+    bragg_qr_l_selected_group_key = (source_label, int(m_idx))
+    l_value_map = _l_value_map_for_qr(source_label, int(m_idx))
+
+    if not l_value_map:
+        bragg_qr_l_toggle_listbox.insert(
+            tk.END,
+            "No L values available for the selected Qr group.",
+        )
+        if bragg_qr_l_toggle_status_label is not None:
+            bragg_qr_l_toggle_status_label.config(
+                text=f"{source_label} m={int(m_idx)} has no L entries."
+            )
+        return
+
+    group_disabled = (
+        _normalize_bragg_qr_source_label(source_label),
+        int(m_idx),
+    ) in disabled_bragg_qr_groups
+
+    enabled_count = 0
+    for l_key, l_val in sorted(l_value_map.items(), key=lambda item: item[1]):
+        l_disabled = (
+            _normalize_bragg_qr_source_label(source_label),
+            int(m_idx),
+            int(l_key),
+        ) in disabled_bragg_qr_l_values
+        is_enabled = (not group_disabled) and (not l_disabled)
+        if is_enabled:
+            enabled_count += 1
+        state_text = "ON " if is_enabled else "OFF"
+        line = f"[{state_text}] L={float(l_val):.4f}"
+        bragg_qr_l_toggle_listbox.insert(tk.END, line)
+        bragg_qr_l_toggle_index_keys.append(int(l_key))
+
+    for idx, l_key in enumerate(bragg_qr_l_toggle_index_keys):
+        if int(l_key) in selected_l_keys:
+            bragg_qr_l_toggle_listbox.selection_set(idx)
+
+    if bragg_qr_l_toggle_status_label is not None:
+        suffix = " | Qr group disabled" if group_disabled else ""
+        bragg_qr_l_toggle_status_label.config(
+            text=(
+                f"Selected: {source_label} m={int(m_idx)} | "
+                f"Enabled L: {enabled_count} / {len(bragg_qr_l_toggle_index_keys)}"
+                f"{suffix}"
+            )
+        )
+
+
+def _on_bragg_qr_selection_changed(_event=None) -> None:
+    global bragg_qr_l_selected_group_key
+
+    selected = _selected_bragg_qr_window_keys()
+    if selected:
+        source_label, m_idx = selected[0]
+        bragg_qr_l_selected_group_key = (
+            _normalize_bragg_qr_source_label(source_label),
+            int(m_idx),
+        )
+    else:
+        bragg_qr_l_selected_group_key = None
+    _refresh_bragg_qr_l_toggle_listbox()
+
+
+def _refresh_bragg_qr_toggle_window() -> None:
+    global bragg_qr_toggle_index_keys
+
+    if bragg_qr_toggle_window is None:
+        return
+    try:
+        if not bragg_qr_toggle_window.winfo_exists():
+            return
+    except tk.TclError:
+        return
+    if bragg_qr_toggle_listbox is None:
+        return
+
+    selected_keys = set(_selected_bragg_qr_window_keys())
+    entries = _build_bragg_qr_entries()
+
+    bragg_qr_toggle_listbox.delete(0, tk.END)
+    bragg_qr_toggle_index_keys = []
+    enabled_count = 0
+
+    for entry in entries:
+        key = entry["key"]
+        is_enabled = key not in disabled_bragg_qr_groups
+        if is_enabled:
+            enabled_count += 1
+        state_text = "ON " if is_enabled else "OFF"
+        qr_val = float(entry["qr"])
+        qr_text = f"{qr_val:.4f}" if np.isfinite(qr_val) else "nan"
+        line = (
+            f"[{state_text}] {entry['source']:<9} "
+            f"Qr={qr_text} A^-1  m={int(entry['m']):>3}  HK={entry['hk_preview']}"
+        )
+        bragg_qr_toggle_listbox.insert(tk.END, line)
+        bragg_qr_toggle_index_keys.append(key)
+
+    if not entries:
+        bragg_qr_toggle_listbox.insert(
+            tk.END,
+            "No Bragg Qr groups are available for the current simulation.",
+        )
+
+    if bragg_qr_toggle_status_label is not None:
+        bragg_qr_toggle_status_label.config(
+            text=f"Enabled: {enabled_count} / {len(entries)}"
+        )
+
+    for idx, key in enumerate(bragg_qr_toggle_index_keys):
+        if key in selected_keys:
+            bragg_qr_toggle_listbox.selection_set(idx)
+
+    if bragg_qr_toggle_index_keys and not bragg_qr_toggle_listbox.curselection():
+        default_idx = 0
+        if bragg_qr_l_selected_group_key in bragg_qr_toggle_index_keys:
+            default_idx = bragg_qr_toggle_index_keys.index(bragg_qr_l_selected_group_key)
+        bragg_qr_toggle_listbox.selection_set(default_idx)
+        bragg_qr_toggle_listbox.see(default_idx)
+
+    _on_bragg_qr_selection_changed()
+
+
+def _set_bragg_qr_groups_enabled(
+    group_keys: list[tuple[str, int]],
+    enabled: bool,
+) -> None:
+    global disabled_bragg_qr_groups
+
+    normalized_keys: list[tuple[str, int]] = []
+    for source_label, m_idx in group_keys:
+        normalized_keys.append(
+            (
+                _normalize_bragg_qr_source_label(source_label),
+                int(m_idx),
+            )
+        )
+    if not normalized_keys:
+        return
+
+    changed = False
+    for key in normalized_keys:
+        if enabled:
+            if key in disabled_bragg_qr_groups:
+                disabled_bragg_qr_groups.remove(key)
+                changed = True
+        else:
+            if key not in disabled_bragg_qr_groups:
+                disabled_bragg_qr_groups.add(key)
+                changed = True
+
+    if not changed:
+        _refresh_bragg_qr_toggle_window()
+        return
+
+    _apply_bragg_qr_filters(trigger_update=True)
+    if "progress_label_positions" in globals():
+        action = "Enabled" if enabled else "Disabled"
+        progress_label_positions.config(
+            text=f"{action} {len(normalized_keys)} Bragg Qr group(s)."
+        )
+
+
+def _set_bragg_qr_l_values_enabled(
+    group_key: tuple[str, int] | None,
+    l_keys: list[int],
+    enabled: bool,
+) -> None:
+    global disabled_bragg_qr_l_values
+
+    if group_key is None:
+        if bragg_qr_l_toggle_status_label is not None:
+            bragg_qr_l_toggle_status_label.config(text="Select a Qr group first.")
+        return
+    if not l_keys:
+        if bragg_qr_l_toggle_status_label is not None:
+            bragg_qr_l_toggle_status_label.config(text="Select one or more L values.")
+        return
+
+    source_label = _normalize_bragg_qr_source_label(group_key[0])
+    m_idx = int(group_key[1])
+
+    changed = False
+    for l_key in l_keys:
+        lk = int(l_key)
+        if lk == BRAGG_QR_L_INVALID_KEY:
+            continue
+        key = (source_label, m_idx, lk)
+        if enabled:
+            if key in disabled_bragg_qr_l_values:
+                disabled_bragg_qr_l_values.remove(key)
+                changed = True
+        else:
+            if key not in disabled_bragg_qr_l_values:
+                disabled_bragg_qr_l_values.add(key)
+                changed = True
+
+    if not changed:
+        _refresh_bragg_qr_toggle_window()
+        return
+
+    _apply_bragg_qr_filters(trigger_update=True)
+    if "progress_label_positions" in globals():
+        action = "Enabled" if enabled else "Disabled"
+        progress_label_positions.config(
+            text=(
+                f"{action} {len(l_keys)} L value(s) for "
+                f"{source_label} m={m_idx}."
+            )
+        )
+
+
+def _disable_selected_bragg_qr_groups() -> None:
+    keys = _selected_bragg_qr_window_keys()
+    if not keys:
+        if bragg_qr_toggle_status_label is not None:
+            bragg_qr_toggle_status_label.config(text="Select one or more Qr groups.")
+        return
+    _set_bragg_qr_groups_enabled(keys, enabled=False)
+
+
+def _enable_selected_bragg_qr_groups() -> None:
+    keys = _selected_bragg_qr_window_keys()
+    if not keys:
+        if bragg_qr_toggle_status_label is not None:
+            bragg_qr_toggle_status_label.config(text="Select one or more Qr groups.")
+        return
+    _set_bragg_qr_groups_enabled(keys, enabled=True)
+
+
+def _toggle_selected_bragg_qr_groups(_event=None) -> None:
+    global disabled_bragg_qr_groups
+
+    keys = _selected_bragg_qr_window_keys()
+    if not keys:
+        return
+
+    changed = False
+    for source_label, m_idx in keys:
+        key = (_normalize_bragg_qr_source_label(source_label), int(m_idx))
+        if key in disabled_bragg_qr_groups:
+            disabled_bragg_qr_groups.remove(key)
+        else:
+            disabled_bragg_qr_groups.add(key)
+        changed = True
+
+    if changed:
+        _apply_bragg_qr_filters(trigger_update=True)
+
+
+def _disable_selected_bragg_qr_l_values() -> None:
+    group_key = _selected_primary_bragg_qr_window_key()
+    l_keys = _selected_bragg_qr_l_window_keys()
+    _set_bragg_qr_l_values_enabled(group_key, l_keys, enabled=False)
+
+
+def _enable_selected_bragg_qr_l_values() -> None:
+    group_key = _selected_primary_bragg_qr_window_key()
+    l_keys = _selected_bragg_qr_l_window_keys()
+    _set_bragg_qr_l_values_enabled(group_key, l_keys, enabled=True)
+
+
+def _toggle_selected_bragg_qr_l_values(_event=None) -> None:
+    group_key = _selected_primary_bragg_qr_window_key()
+    if group_key is None:
+        return
+    l_keys = _selected_bragg_qr_l_window_keys()
+    if not l_keys:
+        return
+
+    source_label = _normalize_bragg_qr_source_label(group_key[0])
+    m_idx = int(group_key[1])
+    changed = False
+    for l_key in l_keys:
+        key = (source_label, m_idx, int(l_key))
+        if key in disabled_bragg_qr_l_values:
+            disabled_bragg_qr_l_values.remove(key)
+        else:
+            disabled_bragg_qr_l_values.add(key)
+        changed = True
+
+    if changed:
+        _apply_bragg_qr_filters(trigger_update=True)
+
+
+def _disable_all_bragg_qr_groups() -> None:
+    keys = [entry["key"] for entry in _build_bragg_qr_entries()]
+    if not keys:
+        return
+    _set_bragg_qr_groups_enabled(keys, enabled=False)
+
+
+def _enable_all_bragg_qr_groups() -> None:
+    global disabled_bragg_qr_groups
+
+    if not disabled_bragg_qr_groups:
+        _refresh_bragg_qr_toggle_window()
+        return
+
+    disabled_bragg_qr_groups.clear()
+    _apply_bragg_qr_filters(trigger_update=True)
+    if "progress_label_positions" in globals():
+        progress_label_positions.config(text="Enabled all Bragg Qr groups.")
+
+
+def _disable_all_bragg_qr_l_values_for_selected_qr() -> None:
+    group_key = _selected_primary_bragg_qr_window_key()
+    if group_key is None:
+        if bragg_qr_l_toggle_status_label is not None:
+            bragg_qr_l_toggle_status_label.config(text="Select a Qr group first.")
+        return
+
+    l_value_map = _l_value_map_for_qr(group_key[0], int(group_key[1]))
+    l_keys = [int(key) for key in l_value_map.keys()]
+    if not l_keys:
+        if bragg_qr_l_toggle_status_label is not None:
+            bragg_qr_l_toggle_status_label.config(text="No L values available.")
+        return
+    _set_bragg_qr_l_values_enabled(group_key, l_keys, enabled=False)
+
+
+def _enable_all_bragg_qr_l_values_for_selected_qr() -> None:
+    global disabled_bragg_qr_l_values
+
+    group_key = _selected_primary_bragg_qr_window_key()
+    if group_key is None:
+        if bragg_qr_l_toggle_status_label is not None:
+            bragg_qr_l_toggle_status_label.config(text="Select a Qr group first.")
+        return
+
+    source_label = _normalize_bragg_qr_source_label(group_key[0])
+    m_idx = int(group_key[1])
+    filtered = {
+        (src, mm, lk)
+        for src, mm, lk in disabled_bragg_qr_l_values
+        if not (
+            _normalize_bragg_qr_source_label(src) == source_label and int(mm) == m_idx
+        )
+    }
+    if len(filtered) == len(disabled_bragg_qr_l_values):
+        _refresh_bragg_qr_toggle_window()
+        return
+
+    disabled_bragg_qr_l_values = filtered
+    _apply_bragg_qr_filters(trigger_update=True)
+    if "progress_label_positions" in globals():
+        progress_label_positions.config(
+            text=f"Enabled all L values for {source_label} m={m_idx}."
+        )
+
+
+def _close_bragg_qr_toggle_window() -> None:
+    global bragg_qr_toggle_window, bragg_qr_toggle_listbox
+    global bragg_qr_toggle_status_label, bragg_qr_toggle_index_keys
+    global bragg_qr_l_toggle_listbox, bragg_qr_l_toggle_status_label
+    global bragg_qr_l_toggle_index_keys, bragg_qr_l_selected_group_key
+
+    if bragg_qr_toggle_window is not None:
+        try:
+            bragg_qr_toggle_window.destroy()
+        except tk.TclError:
+            pass
+
+    bragg_qr_toggle_window = None
+    bragg_qr_toggle_listbox = None
+    bragg_qr_toggle_status_label = None
+    bragg_qr_toggle_index_keys = []
+    bragg_qr_l_toggle_listbox = None
+    bragg_qr_l_toggle_status_label = None
+    bragg_qr_l_toggle_index_keys = []
+    bragg_qr_l_selected_group_key = None
+
+
+def _open_bragg_qr_toggle_window() -> None:
+    global bragg_qr_toggle_window, bragg_qr_toggle_listbox, bragg_qr_toggle_status_label
+    global bragg_qr_l_toggle_listbox, bragg_qr_l_toggle_status_label
+
+    if bragg_qr_toggle_window is not None:
+        try:
+            if bragg_qr_toggle_window.winfo_exists():
+                bragg_qr_toggle_window.lift()
+                bragg_qr_toggle_window.focus_force()
+                _refresh_bragg_qr_toggle_window()
+                return
+        except tk.TclError:
+            pass
+
+    window = tk.Toplevel(root)
+    window.title("Bragg Qr Group Manager")
+    window.geometry("1020x520")
+    window.minsize(740, 360)
+    window.transient(root)
+
+    frame = ttk.Frame(window, padding=10)
+    frame.pack(fill=tk.BOTH, expand=True)
+
+    ttk.Label(
+        frame,
+        text="Enable/disable Bragg peaks grouped by identical Qr (same m = h^2 + hk + k^2).",
+        wraplength=900,
+        justify=tk.LEFT,
+    ).pack(anchor=tk.W, pady=(0, 6))
+
+    lists_container = ttk.Frame(frame)
+    lists_container.pack(fill=tk.BOTH, expand=True)
+
+    qr_frame = ttk.LabelFrame(lists_container, text="Qr Groups")
+    qr_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+    l_frame = ttk.LabelFrame(lists_container, text="L Values of Selected Qr")
+    l_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+
+    bragg_qr_toggle_status_label = ttk.Label(qr_frame, text="")
+    bragg_qr_toggle_status_label.pack(anchor=tk.W, pady=(0, 6), padx=6)
+
+    qr_list_frame = ttk.Frame(qr_frame)
+    qr_list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+    qr_y_scroll = ttk.Scrollbar(qr_list_frame, orient=tk.VERTICAL)
+    qr_y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    bragg_qr_toggle_listbox = tk.Listbox(
+        qr_list_frame,
+        selectmode=tk.EXTENDED,
+        exportselection=False,
+        yscrollcommand=qr_y_scroll.set,
+    )
+    bragg_qr_toggle_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    qr_y_scroll.config(command=bragg_qr_toggle_listbox.yview)
+
+    bragg_qr_toggle_listbox.bind("<Double-Button-1>", _toggle_selected_bragg_qr_groups)
+    bragg_qr_toggle_listbox.bind("<space>", _toggle_selected_bragg_qr_groups)
+    bragg_qr_toggle_listbox.bind("<<ListboxSelect>>", _on_bragg_qr_selection_changed)
+
+    bragg_qr_l_toggle_status_label = ttk.Label(l_frame, text="")
+    bragg_qr_l_toggle_status_label.pack(anchor=tk.W, pady=(0, 6), padx=6)
+
+    l_list_frame = ttk.Frame(l_frame)
+    l_list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+    l_y_scroll = ttk.Scrollbar(l_list_frame, orient=tk.VERTICAL)
+    l_y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    bragg_qr_l_toggle_listbox = tk.Listbox(
+        l_list_frame,
+        selectmode=tk.EXTENDED,
+        exportselection=False,
+        yscrollcommand=l_y_scroll.set,
+    )
+    bragg_qr_l_toggle_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    l_y_scroll.config(command=bragg_qr_l_toggle_listbox.yview)
+
+    bragg_qr_l_toggle_listbox.bind("<Double-Button-1>", _toggle_selected_bragg_qr_l_values)
+    bragg_qr_l_toggle_listbox.bind("<space>", _toggle_selected_bragg_qr_l_values)
+
+    qr_actions = ttk.Frame(frame)
+    qr_actions.pack(fill=tk.X, pady=(10, 0))
+    ttk.Button(
+        qr_actions,
+        text="Enable Selected",
+        command=_enable_selected_bragg_qr_groups,
+    ).pack(side=tk.LEFT, padx=(0, 5))
+    ttk.Button(
+        qr_actions,
+        text="Disable Selected",
+        command=_disable_selected_bragg_qr_groups,
+    ).pack(side=tk.LEFT, padx=(0, 10))
+    ttk.Button(
+        qr_actions,
+        text="Enable All",
+        command=_enable_all_bragg_qr_groups,
+    ).pack(side=tk.LEFT, padx=(0, 5))
+    ttk.Button(
+        qr_actions,
+        text="Disable All",
+        command=_disable_all_bragg_qr_groups,
+    ).pack(side=tk.LEFT, padx=(0, 18))
+
+    l_actions = ttk.Frame(frame)
+    l_actions.pack(fill=tk.X, pady=(8, 0))
+    ttk.Button(
+        l_actions,
+        text="Enable Selected L",
+        command=_enable_selected_bragg_qr_l_values,
+    ).pack(side=tk.LEFT, padx=(0, 5))
+    ttk.Button(
+        l_actions,
+        text="Disable Selected L",
+        command=_disable_selected_bragg_qr_l_values,
+    ).pack(side=tk.LEFT, padx=(0, 10))
+    ttk.Button(
+        l_actions,
+        text="Enable All L (Selected Qr)",
+        command=_enable_all_bragg_qr_l_values_for_selected_qr,
+    ).pack(side=tk.LEFT, padx=(0, 5))
+    ttk.Button(
+        l_actions,
+        text="Disable All L (Selected Qr)",
+        command=_disable_all_bragg_qr_l_values_for_selected_qr,
+    ).pack(side=tk.LEFT, padx=(0, 18))
+    ttk.Button(
+        l_actions,
+        text="Refresh",
+        command=_refresh_bragg_qr_toggle_window,
+    ).pack(side=tk.LEFT)
+    ttk.Button(
+        l_actions,
+        text="Close",
+        command=_close_bragg_qr_toggle_window,
+    ).pack(side=tk.RIGHT)
+
+    bragg_qr_toggle_window = window
+    bragg_qr_toggle_window.protocol("WM_DELETE_WINDOW", _close_bragg_qr_toggle_window)
+    _refresh_bragg_qr_toggle_window()
 
 
 def _brightest_hit_native_from_table(hit_table) -> tuple[float, float] | None:
@@ -4433,6 +5456,8 @@ def do_update():
         def run_one(data, intens_arr, a_val, c_val):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
             if isinstance(data, dict):
+                if len(data) == 0:
+                    return buf, [], None, None, None, None, None
                 if DEBUG_ENABLED:
                     n_pts = sum(len(v["L"]) for v in data.values())
                     debug_print("process_qr_rods_parallel with", n_pts, "points")
@@ -4471,16 +5496,24 @@ def do_update():
                     optics_mode=optics_mode_flag,
                 )
             else:
-                miller_arr = data
+                miller_arr = np.asarray(data, dtype=np.float64)
+                intens_vals = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
+                if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
+                    return buf, [], None, None, None, None, None
+                row_count = min(miller_arr.shape[0], intens_vals.shape[0])
+                if row_count <= 0:
+                    return buf, [], None, None, None, None, None
+                miller_arr = miller_arr[:row_count, :]
+                intens_vals = intens_vals[:row_count]
                 if DEBUG_ENABLED:
                     debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
                     if not np.all(np.isfinite(miller_arr)):
                         debug_print("Non-finite miller indices detected")
-                    if not np.all(np.isfinite(intens_arr)):
+                    if not np.all(np.isfinite(intens_vals)):
                         debug_print("Non-finite intensities detected")
                 return process_peaks_parallel(
                     miller_arr,
-                    intens_arr,
+                    intens_vals,
                     image_size,
                     a_val,
                     c_val,
@@ -7502,6 +8535,12 @@ ttk.Button(
     command=_open_selected_peak_intersection_figure,
 ).pack(side=tk.LEFT, padx=(0, 4))
 
+ttk.Button(
+    hkl_lookup_frame,
+    text="Bragg Qr Groups",
+    command=_open_bragg_qr_toggle_window,
+).pack(side=tk.LEFT, padx=(0, 4))
+
 for _entry in (h_entry, k_entry, l_entry):
     _entry.bind("<Return>", lambda _event: _select_peak_from_hkl_controls())
 
@@ -8314,11 +9353,11 @@ def _rebuild_diffraction_inputs(
         if max_I > 0:
             intensities = intensities * (100.0 / max_I)
 
-        SIM_MILLER1 = m1
-        SIM_INTENS1 = i1
-        SIM_PRIMARY_QR = combined_qr_local
-        SIM_MILLER2 = m2
-        SIM_INTENS2 = i2
+        SIM_MILLER1_ALL = np.asarray(m1, dtype=np.float64)
+        SIM_INTENS1_ALL = np.asarray(i1, dtype=np.float64)
+        SIM_PRIMARY_QR_ALL = combined_qr_local
+        SIM_MILLER2_ALL = np.asarray(m2, dtype=np.float64)
+        SIM_INTENS2_ALL = np.asarray(i2, dtype=np.float64)
 
         degeneracy = np.array(
             [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
@@ -8336,11 +9375,13 @@ def _rebuild_diffraction_inputs(
         degeneracy = d1
         details = det1
 
-        SIM_MILLER1 = m1
-        SIM_INTENS1 = i1
-        SIM_PRIMARY_QR = combined_qr_local
-        SIM_MILLER2 = np.empty((0, 3), dtype=np.int32)
-        SIM_INTENS2 = np.empty((0,), dtype=np.float64)
+        SIM_MILLER1_ALL = np.asarray(m1, dtype=np.float64)
+        SIM_INTENS1_ALL = np.asarray(i1, dtype=np.float64)
+        SIM_PRIMARY_QR_ALL = combined_qr_local
+        SIM_MILLER2_ALL = np.empty((0, 3), dtype=np.float64)
+        SIM_INTENS2_ALL = np.empty((0,), dtype=np.float64)
+
+    _apply_bragg_qr_filters(trigger_update=False)
 
     df_summary, df_details = build_intensity_dataframes(
         miller, intensities, degeneracy, details
