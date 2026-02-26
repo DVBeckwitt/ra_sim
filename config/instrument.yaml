@@ -21,9 +21,14 @@ instrument:
     sigma_mosaic_fwhm_deg: 0.8
     gamma_mosaic_fwhm_deg: 0.7
     eta: 0.0
-    # Number of angular samples used when tracing the Ewald/Bragg intersection
-    # circle in solve_q. Lower values prune more arc points for faster runs.
+    # Maximum adaptive interval budget for Ewald/Bragg arc integration.
+    # Higher values allow finer arc refinement at increased runtime.
     solve_q_steps: 1000
+    # Relative integration tolerance for adaptive Ewald/Bragg arc refinement.
+    # Lower values are stricter (more accurate, slower).
+    solve_q_rel_tol: 5.0e-4
+    # Arc solver mode: adaptive (robust, slower) or uniform (fast).
+    solve_q_mode: adaptive
     # Relative wavelength spread (percent). Also exposed in the main GUI as
     # "Bandwidth (%)" and persisted in saved parameter profiles.
     bandwidth_percent: 0.7

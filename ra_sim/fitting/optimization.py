@@ -41,9 +41,18 @@ def _process_peaks_parallel_safe(*args, **kwargs):
             return fn(*args, **kwargs)
         except TypeError as exc:
             # Test doubles and older callsites may not accept the new keyword.
-            if "solve_q_steps" in kwargs and "unexpected keyword" in str(exc):
+            if (
+                (
+                    "solve_q_steps" in kwargs
+                    or "solve_q_rel_tol" in kwargs
+                    or "solve_q_mode" in kwargs
+                )
+                and "unexpected keyword" in str(exc)
+            ):
                 reduced_kwargs = dict(kwargs)
                 reduced_kwargs.pop("solve_q_steps", None)
+                reduced_kwargs.pop("solve_q_rel_tol", None)
+                reduced_kwargs.pop("solve_q_mode", None)
                 return fn(*args, **reduced_kwargs)
             raise
 
@@ -388,6 +397,8 @@ def _simulate_with_cache(
         save_flag=0,
         optics_mode=int(params.get('optics_mode', 0)),
         solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
+        solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
+        solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
     )
 
     image = np.asarray(image, dtype=np.float64)
@@ -530,6 +541,12 @@ def fit_mosaic_widths_separable(
     gamma0 = float(mosaic_params.get("gamma_mosaic_deg", 0.5))
     eta0 = float(mosaic_params.get("eta", 0.05))
     solve_q_steps = int(np.clip(int(mosaic_params.get("solve_q_steps", 1000)), 32, 8192))
+    solve_q_rel_tol = float(
+        np.clip(float(mosaic_params.get("solve_q_rel_tol", 5.0e-4)), 1.0e-6, 5.0e-2)
+    )
+    solve_q_mode = int(mosaic_params.get("solve_q_mode", 1))
+    if solve_q_mode != 0:
+        solve_q_mode = 1
 
     roi_half_width = int(roi_half_width)
     if roi_half_width <= 0:
@@ -613,6 +630,8 @@ def fit_mosaic_widths_separable(
             n_detector,
             0,
             solve_q_steps=solve_q_steps,
+            solve_q_rel_tol=solve_q_rel_tol,
+            solve_q_mode=solve_q_mode,
         )
         image = np.asarray(image, dtype=np.float64)
         if not record_hits:
@@ -2202,6 +2221,8 @@ def simulate_and_compare_hkl(
         save_flag=0,
         optics_mode=int(params.get('optics_mode', 0)),
         solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
+        solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
+        solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
     )
     maxpos = hit_tables_to_max_positions(hit_tables)
 
@@ -2530,6 +2551,8 @@ def fit_geometry_parameters(
             save_flag=0,
             optics_mode=int(local.get('optics_mode', 0)),
             solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
+            solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
+            solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
             single_sample_indices=single_ray_indices,
         )
 
@@ -2627,6 +2650,8 @@ def fit_geometry_parameters(
                 save_flag=0,
                 optics_mode=int(local.get('optics_mode', 0)),
                 solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
+                solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
+                solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
                 best_sample_indices_out=best_indices,
             )
             single_ray_indices = best_indices

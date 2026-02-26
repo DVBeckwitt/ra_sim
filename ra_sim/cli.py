@@ -48,7 +48,12 @@ from ra_sim.utils.tools import (
     DEFAULT_PIXEL_SIZE_M,
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction import process_qr_rods_parallel
+from ra_sim.simulation.diffraction import (
+    DEFAULT_SOLVE_Q_MODE,
+    SOLVE_Q_MODE_ADAPTIVE,
+    SOLVE_Q_MODE_UNIFORM,
+    process_qr_rods_parallel,
+)
 from ra_sim.utils.calculations import IndexofRefraction
 
 
@@ -306,6 +311,22 @@ def run_headless_simulation(
     except (TypeError, ValueError):
         solve_q_steps = 1000
     solve_q_steps = int(np.clip(solve_q_steps, 32, 8192))
+    try:
+        solve_q_rel_tol = float(beam_cfg.get("solve_q_rel_tol", 5.0e-4))
+    except (TypeError, ValueError):
+        solve_q_rel_tol = 5.0e-4
+    solve_q_rel_tol = float(np.clip(solve_q_rel_tol, 1.0e-6, 5.0e-2))
+    mode_raw = beam_cfg.get("solve_q_mode", "adaptive")
+    if isinstance(mode_raw, (int, np.integer, float, np.floating)):
+        solve_q_mode = SOLVE_Q_MODE_UNIFORM if int(round(float(mode_raw))) == 0 else SOLVE_Q_MODE_ADAPTIVE
+    else:
+        mode_txt = str(mode_raw).strip().lower()
+        if mode_txt in {"uniform", "fast", "0"}:
+            solve_q_mode = SOLVE_Q_MODE_UNIFORM
+        elif mode_txt in {"adaptive", "robust", "1"}:
+            solve_q_mode = SOLVE_Q_MODE_ADAPTIVE
+        else:
+            solve_q_mode = DEFAULT_SOLVE_Q_MODE
 
     (beam_x_array,
      beam_y_array,
@@ -378,6 +399,8 @@ def run_headless_simulation(
         record_status=False,
         thickness=0.0,
         solve_q_steps=solve_q_steps,
+        solve_q_rel_tol=solve_q_rel_tol,
+        solve_q_mode=solve_q_mode,
     )
 
     # Save as 16-bit PNG scaled to `vmax` for reasonable visualization

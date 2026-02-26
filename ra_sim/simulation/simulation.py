@@ -3,7 +3,12 @@
 import numpy as np
 
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
-from ra_sim.simulation.diffraction import OPTICS_MODE_FAST, process_peaks_parallel
+from ra_sim.simulation.diffraction import (
+    DEFAULT_SOLVE_Q_MODE,
+    DEFAULT_SOLVE_Q_REL_TOL,
+    OPTICS_MODE_FAST,
+    process_peaks_parallel,
+)
 from ra_sim.utils.calculations import IndexofRefraction, fresnel_transmission
 
 
@@ -37,6 +42,8 @@ def simulate_diffraction(
     bandwidth=0.007,
     optics_mode=OPTICS_MODE_FAST,
     solve_q_steps=1000,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
 ):
     """Run a standalone diffraction simulation.
 
@@ -95,6 +102,8 @@ def simulate_diffraction(
         save_flag=0,
         optics_mode=optics_mode,
         solve_q_steps=solve_q_steps,
+        solve_q_rel_tol=solve_q_rel_tol,
+        solve_q_mode=solve_q_mode,
     )
 
     return simulated_image

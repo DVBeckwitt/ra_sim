@@ -34,7 +34,16 @@ _DEFAULT_SOLVE_Q_COS = np.cos(
 _DEFAULT_SOLVE_Q_SIN = np.sin(
     _DEFAULT_SOLVE_Q_DTHETA * np.arange(DEFAULT_SOLVE_Q_STEPS, dtype=np.float64)
 )
+DEFAULT_SOLVE_Q_BASE_INTERVALS = 48
+MIN_SOLVE_Q_BASE_INTERVALS = 8
+DEFAULT_SOLVE_Q_REL_TOL = 5.0e-4
+MIN_SOLVE_Q_REL_TOL = 1.0e-6
+MAX_SOLVE_Q_REL_TOL = 5.0e-2
+SOLVE_Q_MODE_UNIFORM = 0
+SOLVE_Q_MODE_ADAPTIVE = 1
+DEFAULT_SOLVE_Q_MODE = SOLVE_Q_MODE_ADAPTIVE
 _INTENSITY_CUTOFF = float(np.exp(-100.0))
+_SOLVE_Q_ABS_ERR_TOL = 1.0e-20
 # Keep thread-local image buffers bounded to avoid runaway allocations.
 _THREAD_LOCAL_IMAGE_MAX_BYTES = 768 * 1024 * 1024
 # =============================================================================
@@ -240,9 +249,16 @@ def compute_intensity_array(Qx, Qy, Qz,
 
     Qr = np.sqrt(Qx*Qx + Qy*Qy)
 
+    sigma_eff = sigma
+    if sigma_eff < 1e-12:
+        sigma_eff = 1e-12
+    gamma_eff = gamma_pv
+    if gamma_eff < 1e-12:
+        gamma_eff = 1e-12
+
     # Amplitude factors for normalized 1D profiles
-    A_gauss = 1.0 / (sigma * np.sqrt(2.0 * np.pi))
-    A_lor   = 1.0 / (np.pi * gamma_pv)
+    A_gauss = 1.0 / (sigma_eff * np.sqrt(2.0 * np.pi))
+    A_lor   = 1.0 / (np.pi * gamma_eff)
 
     # Reference grazing angle for the reflection
     Gr = np.sqrt(Gx*Gx + Gy*Gy)
@@ -261,8 +277,8 @@ def compute_intensity_array(Qx, Qy, Qz,
         theta = np.arctan2(Qz_flat[i], Qr_flat[i])
         dtheta = wrap_to_pi(theta - theta0)
 
-        gauss_val = A_gauss * np.exp(-0.5 * (dtheta / sigma)**2)
-        lor_val   = A_lor   / (1.0 + (dtheta / gamma_pv)**2)
+        gauss_val = A_gauss * np.exp(-0.5 * (dtheta / sigma_eff)**2)
+        lor_val   = A_lor   / (1.0 + (dtheta / gamma_eff)**2)
         omega = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
 
         # Keep a geometry normalization that is stable for pseudo-Voigt tails.
@@ -776,9 +792,284 @@ def safe_path_length(thickness_m, theta_plane):
 # =============================================================================
 
 @njit(fastmath=True)
+def _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv):
+    Gx = G_vec[0]
+    Gy = G_vec[1]
+    Gz = G_vec[2]
+    G_mag = sqrt(Gx * Gx + Gy * Gy + Gz * Gz)
+    if G_mag < 1e-14:
+        return 0.0
+
+    sigma_eff = sigma
+    if sigma_eff < 1e-12:
+        sigma_eff = 1e-12
+    gamma_eff = gamma_pv
+    if gamma_eff < 1e-12:
+        gamma_eff = 1e-12
+
+    Qr = sqrt(Qx * Qx + Qy * Qy)
+    Gr = sqrt(Gx * Gx + Gy * Gy)
+    theta0 = np.arctan2(Gz, Gr)
+    theta = np.arctan2(Qz, Qr)
+    dtheta = wrap_to_pi(theta - theta0)
+
+    A_gauss = 1.0 / (sigma_eff * sqrt(2.0 * pi))
+    A_lor = 1.0 / (pi * gamma_eff)
+    gauss_val = A_gauss * exp(-0.5 * (dtheta / sigma_eff) * (dtheta / sigma_eff))
+    lor_val = A_lor / (1.0 + (dtheta / gamma_eff) * (dtheta / gamma_eff))
+    omega = (1.0 - eta_pv) * gauss_val + eta_pv * lor_val
+
+    denom_base = 2.0 * pi * G_mag * G_mag
+    return omega / denom_base
+
+
+@njit(fastmath=True)
+def _circle_point(phi, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z):
+    cphi = cos(phi)
+    sphi = sin(phi)
+    Qx = Ox + circle_r * (cphi * e1x + sphi * e2x)
+    Qy = Oy + circle_r * (cphi * e1y + sphi * e2y)
+    Qz = Oz + circle_r * (cphi * e1z + sphi * e2z)
+    return Qx, Qy, Qz
+
+
+@njit(fastmath=True)
+def _circle_density(
+    phi,
+    Ox,
+    Oy,
+    Oz,
+    circle_r,
+    e1x,
+    e1y,
+    e1z,
+    e2x,
+    e2y,
+    e2z,
+    G_vec,
+    sigma,
+    gamma_pv,
+    eta_pv,
+):
+    Qx, Qy, Qz = _circle_point(phi, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z)
+    return _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv)
+
+
+@njit(fastmath=True)
+def _interval_mass_error(phi_a, phi_b, f_a, f_m, f_b, circle_r):
+    dphi = phi_b - phi_a
+    mass = circle_r * dphi * (f_a + 4.0 * f_m + f_b) / 6.0
+    trap = circle_r * dphi * (f_a + f_b) * 0.5
+    err = abs(mass - trap)
+    return mass, err
+
+
+@njit(fastmath=True)
+def _solve_q_adaptive(
+    Ox,
+    Oy,
+    Oz,
+    circle_r,
+    e1x,
+    e1y,
+    e1z,
+    e2x,
+    e2y,
+    e2z,
+    G_vec,
+    sigma,
+    gamma_pv,
+    eta_pv,
+    max_intervals,
+    base_intervals,
+    rel_err_tol,
+):
+    if max_intervals <= 0:
+        return np.zeros((0, 4), dtype=np.float64)
+
+    n_base = base_intervals
+    if n_base < MIN_SOLVE_Q_BASE_INTERVALS:
+        n_base = MIN_SOLVE_Q_BASE_INTERVALS
+    if n_base > max_intervals:
+        n_base = max_intervals
+    if n_base < 1:
+        n_base = 1
+
+    phi_a = np.empty(max_intervals, dtype=np.float64)
+    phi_b = np.empty(max_intervals, dtype=np.float64)
+    f_a = np.empty(max_intervals, dtype=np.float64)
+    f_m = np.empty(max_intervals, dtype=np.float64)
+    f_b = np.empty(max_intervals, dtype=np.float64)
+    mass_arr = np.empty(max_intervals, dtype=np.float64)
+    err_arr = np.empty(max_intervals, dtype=np.float64)
+
+    n_intervals = n_base
+    total_mass = 0.0
+    total_err = 0.0
+    dphi0 = (2.0 * pi) / n_base
+    for i in range(n_base):
+        a = i * dphi0
+        b = (i + 1) * dphi0
+        m = 0.5 * (a + b)
+
+        fa = _circle_density(
+            a, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, G_vec, sigma, gamma_pv, eta_pv
+        )
+        fm = _circle_density(
+            m, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, G_vec, sigma, gamma_pv, eta_pv
+        )
+        fb = _circle_density(
+            b, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, G_vec, sigma, gamma_pv, eta_pv
+        )
+
+        mass_i, err_i = _interval_mass_error(a, b, fa, fm, fb, circle_r)
+        phi_a[i] = a
+        phi_b[i] = b
+        f_a[i] = fa
+        f_m[i] = fm
+        f_b[i] = fb
+        mass_arr[i] = mass_i
+        err_arr[i] = err_i
+        total_mass += mass_i
+        total_err += err_i
+
+    err_tol = _SOLVE_Q_ABS_ERR_TOL + rel_err_tol * abs(total_mass)
+
+    while n_intervals < max_intervals and total_err > err_tol:
+        split_idx = 0
+        max_err = err_arr[0]
+        for i in range(1, n_intervals):
+            if err_arr[i] > max_err:
+                max_err = err_arr[i]
+                split_idx = i
+        if max_err <= 0.0:
+            break
+
+        a = phi_a[split_idx]
+        b = phi_b[split_idx]
+        m = 0.5 * (a + b)
+        q1 = 0.5 * (a + m)
+        q3 = 0.5 * (m + b)
+
+        fa = f_a[split_idx]
+        fm = f_m[split_idx]
+        fb = f_b[split_idx]
+        fq1 = _circle_density(
+            q1, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, G_vec, sigma, gamma_pv, eta_pv
+        )
+        fq3 = _circle_density(
+            q3, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z, G_vec, sigma, gamma_pv, eta_pv
+        )
+
+        old_mass = mass_arr[split_idx]
+        old_err = err_arr[split_idx]
+
+        left_mass, left_err = _interval_mass_error(a, m, fa, fq1, fm, circle_r)
+        right_mass, right_err = _interval_mass_error(m, b, fm, fq3, fb, circle_r)
+
+        phi_a[split_idx] = a
+        phi_b[split_idx] = m
+        f_a[split_idx] = fa
+        f_m[split_idx] = fq1
+        f_b[split_idx] = fm
+        mass_arr[split_idx] = left_mass
+        err_arr[split_idx] = left_err
+
+        phi_a[n_intervals] = m
+        phi_b[n_intervals] = b
+        f_a[n_intervals] = fm
+        f_m[n_intervals] = fq3
+        f_b[n_intervals] = fb
+        mass_arr[n_intervals] = right_mass
+        err_arr[n_intervals] = right_err
+
+        total_mass += (left_mass + right_mass - old_mass)
+        total_err += (left_err + right_err - old_err)
+        n_intervals += 1
+        err_tol = _SOLVE_Q_ABS_ERR_TOL + rel_err_tol * abs(total_mass)
+
+    n_valid = 0
+    for i in range(n_intervals):
+        if mass_arr[i] > _INTENSITY_CUTOFF:
+            n_valid += 1
+
+    out = np.zeros((n_valid, 4), dtype=np.float64)
+    out_idx = 0
+    for i in range(n_intervals):
+        mass_i = mass_arr[i]
+        if mass_i <= _INTENSITY_CUTOFF:
+            continue
+        phi_m = 0.5 * (phi_a[i] + phi_b[i])
+        Qx, Qy, Qz = _circle_point(phi_m, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z)
+        out[out_idx, 0] = Qx
+        out[out_idx, 1] = Qy
+        out[out_idx, 2] = Qz
+        out[out_idx, 3] = mass_i
+        out_idx += 1
+
+    return out
+
+
+@njit(fastmath=True)
+def _solve_q_uniform(
+    Ox,
+    Oy,
+    Oz,
+    circle_r,
+    e1x,
+    e1y,
+    e1z,
+    e2x,
+    e2y,
+    e2z,
+    G_vec,
+    sigma,
+    gamma_pv,
+    eta_pv,
+    n_steps,
+):
+    if n_steps <= 0:
+        return np.zeros((0, 4), dtype=np.float64)
+
+    if n_steps == DEFAULT_SOLVE_Q_STEPS:
+        dtheta = _DEFAULT_SOLVE_Q_DTHETA
+        cth = _DEFAULT_SOLVE_Q_COS
+        sth = _DEFAULT_SOLVE_Q_SIN
+    else:
+        dtheta = 2.0 * np.pi / n_steps
+        theta_arr = dtheta * np.arange(n_steps)
+        cth = np.cos(theta_arr)
+        sth = np.sin(theta_arr)
+
+    Qx_arr = Ox + circle_r * (cth * e1x + sth * e2x)
+    Qy_arr = Oy + circle_r * (cth * e1y + sth * e2y)
+    Qz_arr = Oz + circle_r * (cth * e1z + sth * e2z)
+
+    sigma_arr = compute_intensity_array(
+        Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv
+    )
+    ds = circle_r * dtheta
+    all_int = sigma_arr * ds
+
+    valid_idx = np.nonzero(all_int > _INTENSITY_CUTOFF)[0]
+    out = np.zeros((valid_idx.size, 4), dtype=np.float64)
+    for i in range(valid_idx.size):
+        idx = valid_idx[i]
+        out[i, 0] = Qx_arr[idx]
+        out[i, 1] = Qy_arr[idx]
+        out[i, 2] = Qz_arr[idx]
+        out[i, 3] = all_int[idx]
+
+    return out
+
+
+@njit(fastmath=True)
 def solve_q(
     k_in_crystal, k_scat, G_vec, sigma, gamma_pv, eta_pv, H, K, L,
-    N_steps=1000
+    N_steps=DEFAULT_SOLVE_Q_STEPS,
+    base_intervals=DEFAULT_SOLVE_Q_BASE_INTERVALS,
+    rel_err_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
 ):
     """
     Build a 'circle' in reciprocal space for the reflection G_vec, i.e. the
@@ -786,9 +1077,11 @@ def solve_q(
     filter by mosaic surface density compute_intensity_array.
 
     Physically: 
-      - We param by angle from 0..2π,
-      - Circle radius circle_r,
-      - Then for each Q on that circle, compute sigma(theta) and apply arc-length weighting.
+      - In uniform mode, sample the full circle at fixed angular steps.
+      - In adaptive mode, refine intervals deterministically where the
+        pseudo-Voigt profile varies most.
+      - Adaptive mode uses Simpson-weighted interval masses to preserve long
+        Lorentzian tails without stochastic noise.
 
     Returns
     -------
@@ -800,6 +1093,10 @@ def solve_q(
     status = 0
     if N_steps <= 0:
         return np.zeros((0, 4), dtype=np.float64), status
+    if base_intervals <= 0:
+        return np.zeros((0, 4), dtype=np.float64), status
+    if rel_err_tol < 0.0:
+        rel_err_tol = 0.0
 
     G_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
     if G_sq < 1e-14:
@@ -860,35 +1157,45 @@ def solve_q(
     e2y /= e2_len
     e2z /= e2_len
 
-    # Parameterize the circle.
-    if N_steps == DEFAULT_SOLVE_Q_STEPS:
-        dtheta = _DEFAULT_SOLVE_Q_DTHETA
-        cth = _DEFAULT_SOLVE_Q_COS
-        sth = _DEFAULT_SOLVE_Q_SIN
+    mode_i = int(solve_q_mode)
+    if mode_i == SOLVE_Q_MODE_UNIFORM:
+        out = _solve_q_uniform(
+            Ox,
+            Oy,
+            Oz,
+            circle_r,
+            e1x,
+            e1y,
+            e1z,
+            e2x,
+            e2y,
+            e2z,
+            G_vec,
+            sigma,
+            gamma_pv,
+            eta_pv,
+            int(N_steps),
+        )
     else:
-        dtheta = 2.0*np.pi / N_steps
-        theta_arr = dtheta * np.arange(N_steps)
-        cth = np.cos(theta_arr)
-        sth = np.sin(theta_arr)
-
-    Qx_arr = Ox + circle_r*(cth*e1x + sth*e2x)
-    Qy_arr = Oy + circle_r*(cth*e1y + sth*e2y)
-    Qz_arr = Oz + circle_r*(cth*e1z + sth*e2z)
-
-    # Compute sigma(theta) on the Bragg sphere and apply arc-length weighting.
-    sigma_arr = compute_intensity_array(Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv)
-    ds = circle_r * dtheta
-    all_int = sigma_arr * ds
-
-    # Apply any intensity cutoff and construct the output.
-    valid_idx = np.nonzero(all_int > _INTENSITY_CUTOFF)[0]
-    out = np.zeros((valid_idx.size, 4), dtype=np.float64)
-    for i in range(valid_idx.size):
-        idx = valid_idx[i]
-        out[i, 0] = Qx_arr[idx]
-        out[i, 1] = Qy_arr[idx]
-        out[i, 2] = Qz_arr[idx]
-        out[i, 3] = all_int[idx]
+        out = _solve_q_adaptive(
+            Ox,
+            Oy,
+            Oz,
+            circle_r,
+            e1x,
+            e1y,
+            e1z,
+            e2x,
+            e2y,
+            e2z,
+            G_vec,
+            sigma,
+            gamma_pv,
+            eta_pv,
+            int(N_steps),
+            int(base_intervals),
+            float(rel_err_tol),
+        )
 
     return out, status
 
@@ -922,6 +1229,8 @@ def calculate_phi(
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     forced_sample_idx=-1,
 ):
     """
@@ -1198,6 +1507,9 @@ def calculate_phi(
             K,
             L,
             solve_q_steps,
+            DEFAULT_SOLVE_Q_BASE_INTERVALS,
+            solve_q_rel_tol,
+            solve_q_mode,
         )
         if record_status:
             statuses[i_samp] = stat
@@ -1437,6 +1749,8 @@ def process_peaks_parallel(
     thickness=50e-9,
     optics_mode=OPTICS_MODE_FAST,
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     single_sample_indices=None,
     best_sample_indices_out=None,
 ):
@@ -1470,6 +1784,14 @@ def process_peaks_parallel(
         solve_q_steps_i = MIN_SOLVE_Q_STEPS
     elif solve_q_steps_i > MAX_SOLVE_Q_STEPS:
         solve_q_steps_i = MAX_SOLVE_Q_STEPS
+    solve_q_rel_tol_i = float(solve_q_rel_tol)
+    if solve_q_rel_tol_i < MIN_SOLVE_Q_REL_TOL:
+        solve_q_rel_tol_i = MIN_SOLVE_Q_REL_TOL
+    elif solve_q_rel_tol_i > MAX_SOLVE_Q_REL_TOL:
+        solve_q_rel_tol_i = MAX_SOLVE_Q_REL_TOL
+    solve_q_mode_i = int(solve_q_mode)
+    if solve_q_mode_i != SOLVE_Q_MODE_UNIFORM:
+        solve_q_mode_i = SOLVE_Q_MODE_ADAPTIVE
 
     # Build transforms for the detector
     cg = cos(gamma_rad)
@@ -1620,6 +1942,8 @@ def process_peaks_parallel(
                     thickness,
                     optics_mode,
                     solve_q_steps_i,
+                    solve_q_rel_tol_i,
+                    solve_q_mode_i,
                     forced_idx,
                 )
             else:
@@ -1648,6 +1972,8 @@ def process_peaks_parallel(
                     thickness,
                     optics_mode,
                     solve_q_steps_i,
+                    solve_q_rel_tol_i,
+                    solve_q_mode_i,
                     forced_idx,
                 )
         else:
@@ -1676,6 +2002,8 @@ def process_peaks_parallel(
                 thickness,
                 optics_mode,
                 solve_q_steps_i,
+                solve_q_rel_tol_i,
+                solve_q_mode_i,
                 forced_idx,
             )
         if record_status:
@@ -1772,6 +2100,8 @@ def process_qr_rods_parallel(
     thickness=0.0,
     optics_mode=OPTICS_MODE_FAST,
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -1824,6 +2154,8 @@ def process_qr_rods_parallel(
         thickness,
         optics_mode,
         solve_q_steps,
+        solve_q_rel_tol,
+        solve_q_mode,
     )
 
     return (*result, degeneracy)

@@ -5,6 +5,8 @@ import os
 
 SOLVE_Q_STEPS_MIN = 32
 SOLVE_Q_STEPS_MAX = 8192
+SOLVE_Q_REL_TOL_MIN = 1.0e-6
+SOLVE_Q_REL_TOL_MAX = 5.0e-2
 
 
 def _normalize_optics_mode(value, fallback="fast"):
@@ -60,6 +62,25 @@ def _normalize_optics_mode(value, fallback="fast"):
     return fallback
 
 
+def _normalize_solve_q_mode(value, fallback="adaptive"):
+    """Return solve-q mode label as ``'uniform'`` or ``'adaptive'``."""
+
+    if value is None:
+        return fallback
+
+    if isinstance(value, (int, np.integer)):
+        return "uniform" if int(value) == 0 else "adaptive"
+    if isinstance(value, (float, np.floating)):
+        return "uniform" if int(round(float(value))) == 0 else "adaptive"
+
+    text = str(value).strip().lower()
+    if text in {"uniform", "fast", "0"}:
+        return "uniform"
+    if text in {"adaptive", "robust", "1"}:
+        return "adaptive"
+    return fallback
+
+
 def load_parameters(
     path,
     theta_initial_var,
@@ -88,6 +109,8 @@ def load_parameters(
     phi_l_divisor_var=None,
     sf_prune_bias_var=None,
     solve_q_steps_var=None,
+    solve_q_rel_tol_var=None,
+    solve_q_mode_var=None,
 ):
     """
     Load slider parameters from a .npy file (dictionary). If the file does not exist,
@@ -200,6 +223,24 @@ def load_parameters(
                 if steps_val is not None and np.isfinite(steps_val):
                     steps_clipped = int(np.clip(steps_val, SOLVE_Q_STEPS_MIN, SOLVE_Q_STEPS_MAX))
                     solve_q_steps_var.set(float(steps_clipped))
+        if solve_q_rel_tol_var is not None:
+            stored_tol = params.get('solve_q_rel_tol')
+            if stored_tol is not None:
+                try:
+                    tol_val = float(stored_tol)
+                except (TypeError, ValueError):
+                    tol_val = None
+                if tol_val is not None and np.isfinite(tol_val):
+                    solve_q_rel_tol_var.set(
+                        float(np.clip(tol_val, SOLVE_Q_REL_TOL_MIN, SOLVE_Q_REL_TOL_MAX))
+                    )
+        if solve_q_mode_var is not None:
+            current_mode = _normalize_solve_q_mode(solve_q_mode_var.get(), fallback="adaptive")
+            stored_mode = _normalize_solve_q_mode(
+                params.get('solve_q_mode', current_mode),
+                fallback=current_mode,
+            )
+            solve_q_mode_var.set(stored_mode)
 
         return "Parameters loaded from parameters.npy"
     else:
@@ -233,6 +274,8 @@ def save_all_parameters(
     phi_l_divisor_var=None,
     sf_prune_bias_var=None,
     solve_q_steps_var=None,
+    solve_q_rel_tol_var=None,
+    solve_q_mode_var=None,
 ):
     """
     Save all slider parameters into a .npy file as a dictionary. This now
@@ -324,6 +367,20 @@ def save_all_parameters(
             parameters['solve_q_steps'] = int(
                 np.clip(solve_q_steps, SOLVE_Q_STEPS_MIN, SOLVE_Q_STEPS_MAX)
             )
+    if solve_q_rel_tol_var is not None:
+        try:
+            solve_q_rel_tol = float(solve_q_rel_tol_var.get())
+        except (TypeError, ValueError):
+            solve_q_rel_tol = None
+        if solve_q_rel_tol is not None and np.isfinite(solve_q_rel_tol):
+            parameters['solve_q_rel_tol'] = float(
+                np.clip(solve_q_rel_tol, SOLVE_Q_REL_TOL_MIN, SOLVE_Q_REL_TOL_MAX)
+            )
+    if solve_q_mode_var is not None:
+        parameters['solve_q_mode'] = _normalize_solve_q_mode(
+            solve_q_mode_var.get(),
+            fallback="adaptive",
+        )
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")
 

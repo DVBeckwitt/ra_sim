@@ -9,6 +9,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .diffraction import (
+    DEFAULT_SOLVE_Q_REL_TOL,
+    DEFAULT_SOLVE_Q_MODE,
+    MAX_SOLVE_Q_REL_TOL,
+    MIN_SOLVE_Q_REL_TOL,
+    SOLVE_Q_MODE_ADAPTIVE,
+    SOLVE_Q_MODE_UNIFORM,
     compute_intensity_array,
     intersect_infinite_line_plane,
     intersect_line_plane,
@@ -53,6 +59,8 @@ class MosaicParams:
     gamma_mosaic_deg: float
     eta: float
     solve_q_steps: int = 1000
+    solve_q_rel_tol: float = DEFAULT_SOLVE_Q_REL_TOL
+    solve_q_mode: int = DEFAULT_SOLVE_Q_MODE
 
 
 @dataclass(frozen=True)
@@ -244,6 +252,16 @@ def _solve_for_best_beam_sample(
     gamma_rad = float(np.deg2rad(mosaic.gamma_mosaic_deg))
     eta = float(mosaic.eta)
     solve_q_steps = int(np.clip(int(getattr(mosaic, "solve_q_steps", 1000)), 32, 8192))
+    solve_q_rel_tol = float(
+        np.clip(
+            float(getattr(mosaic, "solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
+            MIN_SOLVE_Q_REL_TOL,
+            MAX_SOLVE_Q_REL_TOL,
+        )
+    )
+    solve_q_mode = int(getattr(mosaic, "solve_q_mode", DEFAULT_SOLVE_Q_MODE))
+    if solve_q_mode != SOLVE_Q_MODE_UNIFORM:
+        solve_q_mode = SOLVE_Q_MODE_ADAPTIVE
 
     best_ctx = None
     best_dist2 = np.inf
@@ -313,6 +331,8 @@ def _solve_for_best_beam_sample(
             float(k),
             float(l),
             solve_q_steps,
+            rel_err_tol=solve_q_rel_tol,
+            solve_q_mode=solve_q_mode,
         )
         if int(status) != 0 or all_q.shape[0] == 0:
             continue

@@ -283,9 +283,15 @@ from ra_sim.fitting.optimization import (
 )
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
+    DEFAULT_SOLVE_Q_REL_TOL,
+    DEFAULT_SOLVE_Q_MODE,
     DEFAULT_SOLVE_Q_STEPS,
+    MAX_SOLVE_Q_REL_TOL,
     MAX_SOLVE_Q_STEPS,
+    MIN_SOLVE_Q_REL_TOL,
     MIN_SOLVE_Q_STEPS,
+    SOLVE_Q_MODE_ADAPTIVE,
+    SOLVE_Q_MODE_UNIFORM,
     hit_tables_to_max_positions,
     OPTICS_MODE_EXACT,
     OPTICS_MODE_FAST,
@@ -600,6 +606,28 @@ except (TypeError, ValueError):
 solve_q_steps_default = int(
     np.clip(solve_q_steps_default, MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS)
 )
+try:
+    solve_q_rel_tol_default = float(
+        beam_config.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)
+    )
+except (TypeError, ValueError):
+    solve_q_rel_tol_default = float(DEFAULT_SOLVE_Q_REL_TOL)
+solve_q_rel_tol_default = float(
+    np.clip(solve_q_rel_tol_default, MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL)
+)
+solve_q_mode_raw = beam_config.get("solve_q_mode", "adaptive")
+if isinstance(solve_q_mode_raw, (int, np.integer, float, np.floating)):
+    solve_q_mode_default = (
+        SOLVE_Q_MODE_UNIFORM
+        if int(round(float(solve_q_mode_raw))) == SOLVE_Q_MODE_UNIFORM
+        else SOLVE_Q_MODE_ADAPTIVE
+    )
+else:
+    solve_q_mode_text = str(solve_q_mode_raw).strip().lower()
+    if solve_q_mode_text in {"uniform", "fast", "0"}:
+        solve_q_mode_default = SOLVE_Q_MODE_UNIFORM
+    else:
+        solve_q_mode_default = SOLVE_Q_MODE_ADAPTIVE
 
 lambda_override = beam_config.get("wavelength_angstrom")
 lambda_ = lambda_override if lambda_override is not None else lambda_from_poni
@@ -1101,6 +1129,8 @@ defaults = {
     'bandwidth_percent': float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
     'sf_prune_bias': sf_prune_bias_default,
     'solve_q_steps': solve_q_steps_default,
+    'solve_q_rel_tol': solve_q_rel_tol_default,
+    'solve_q_mode': solve_q_mode_default,
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
     'optics_mode': 'fast',
@@ -2772,6 +2802,8 @@ def build_mosaic_params():
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
         "eta":                eta_var.get(),
         "solve_q_steps":      _current_solve_q_steps(),
+        "solve_q_rel_tol":    _current_solve_q_rel_tol(),
+        "solve_q_mode":       _current_solve_q_mode_flag(),
     }
 
 
@@ -3308,6 +3340,8 @@ def _open_selected_peak_intersection_figure():
             gamma_mosaic_deg=float(gamma_mosaic_var.get()),
             eta=float(eta_var.get()),
             solve_q_steps=_current_solve_q_steps(),
+            solve_q_rel_tol=_current_solve_q_rel_tol(),
+            solve_q_mode=_current_solve_q_mode_flag(),
         )
 
         analysis = analyze_reflection_intersection(
@@ -4125,6 +4159,8 @@ def _simulate_ideal_hkl_native_center(
                 record_status=False,
                 optics_mode=optics_mode_flag,
                 solve_q_steps=_current_solve_q_steps(),
+                solve_q_rel_tol=_current_solve_q_rel_tol(),
+                solve_q_mode=_current_solve_q_mode_flag(),
                 single_sample_indices=forced_sample_indices,
             )
         except Exception:
@@ -5713,6 +5749,59 @@ def _current_solve_q_steps() -> int:
     return _clip_solve_q_steps(raw)
 
 
+def _clip_solve_q_rel_tol(value) -> float:
+    fallback = float(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, tk.TclError):
+        parsed = fallback
+    if not np.isfinite(parsed):
+        parsed = fallback
+    return float(np.clip(parsed, MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL))
+
+
+def _current_solve_q_rel_tol() -> float:
+    var = globals().get("solve_q_rel_tol_var")
+    if var is None:
+        return _clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
+    try:
+        raw = var.get()
+    except Exception:
+        raw = defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)
+    return _clip_solve_q_rel_tol(raw)
+
+
+def _normalize_solve_q_mode_label(value) -> str:
+    if isinstance(value, (int, np.integer, float, np.floating)):
+        return "uniform" if int(round(float(value))) == SOLVE_Q_MODE_UNIFORM else "adaptive"
+
+    text = str(value).strip().lower()
+    if text in {"uniform", "fast", "0"}:
+        return "uniform"
+    if text in {"adaptive", "robust", "1"}:
+        return "adaptive"
+    return "adaptive"
+
+
+def _solve_q_mode_flag_from_label(label: str) -> int:
+    return (
+        SOLVE_Q_MODE_UNIFORM
+        if _normalize_solve_q_mode_label(label) == "uniform"
+        else SOLVE_Q_MODE_ADAPTIVE
+    )
+
+
+def _current_solve_q_mode_flag() -> int:
+    var = globals().get("solve_q_mode_var")
+    if var is None:
+        return _solve_q_mode_flag_from_label(defaults.get("solve_q_mode", SOLVE_Q_MODE_ADAPTIVE))
+    try:
+        raw = var.get()
+    except Exception:
+        raw = defaults.get("solve_q_mode", SOLVE_Q_MODE_ADAPTIVE)
+    return _solve_q_mode_flag_from_label(raw)
+
+
 def update_mosaic_cache():
     """
     Keep the current random beam/mosaic samples unless sampling inputs changed.
@@ -5784,6 +5873,8 @@ def update_mosaic_cache():
             "gamma_mosaic_deg": gamma_mosaic_var.get(),
             "eta": eta_var.get(),
             "solve_q_steps": _current_solve_q_steps(),
+            "solve_q_rel_tol": _current_solve_q_rel_tol(),
+            "solve_q_mode": _current_solve_q_mode_flag(),
             "bandwidth_percent": active_bandwidth * 100.0,
         }
     )
@@ -6037,6 +6128,8 @@ def do_update():
             round(mosaic_params["gamma_mosaic_deg"], 6),
             round(mosaic_params["eta"], 6),
             int(mosaic_params["solve_q_steps"]),
+            round(float(mosaic_params["solve_q_rel_tol"]), 8),
+            int(mosaic_params["solve_q_mode"]),
             round(_current_bandwidth_fraction(), 8),
             round(_current_sf_prune_bias(), 3),
             int(sf_prune_stats.get("qr_kept", 0)),
@@ -6104,6 +6197,8 @@ def do_update():
                     save_flag=0,
                     optics_mode=optics_mode_flag,
                     solve_q_steps=int(mosaic_params["solve_q_steps"]),
+                    solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
+                    solve_q_mode=int(mosaic_params["solve_q_mode"]),
                 )
             else:
                 miller_arr = np.asarray(data, dtype=np.float64)
@@ -6156,6 +6251,8 @@ def do_update():
                     save_flag=0,
                     optics_mode=optics_mode_flag,
                     solve_q_steps=int(mosaic_params["solve_q_steps"]),
+                    solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
+                    solve_q_mode=int(mosaic_params["solve_q_mode"]),
                 ) + (None,)
 
         primary_data = (
@@ -6720,7 +6817,11 @@ def reset_to_defaults():
     )
     optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
     sf_prune_bias_var.set(_clip_sf_prune_bias(defaults.get('sf_prune_bias', 0.0)))
+    solve_q_mode_var.set(_normalize_solve_q_mode_label(defaults.get('solve_q_mode', SOLVE_Q_MODE_ADAPTIVE)))
     solve_q_steps_var.set(float(_clip_solve_q_steps(defaults.get('solve_q_steps', DEFAULT_SOLVE_Q_STEPS))))
+    solve_q_rel_tol_var.set(
+        float(_clip_solve_q_rel_tol(defaults.get('solve_q_rel_tol', DEFAULT_SOLVE_Q_REL_TOL)))
+    )
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
     tth_min_var.set(0.0)
@@ -6846,6 +6947,8 @@ azimuthal_button = ttk.Button(
             bandwidth=_current_bandwidth_fraction(),
             optics_mode=_current_optics_mode_flag(),
             solve_q_steps=_current_solve_q_steps(),
+            solve_q_rel_tol=_current_solve_q_rel_tol(),
+            solve_q_mode=_current_solve_q_mode_flag(),
         ),
         [center_x_var.get(), center_y_var.get()],
         {
@@ -7134,6 +7237,8 @@ save_button = ttk.Button(
         phi_l_divisor_var=phi_l_divisor_var,
         sf_prune_bias_var=sf_prune_bias_var,
         solve_q_steps_var=solve_q_steps_var,
+        solve_q_rel_tol_var=solve_q_rel_tol_var,
+        solve_q_mode_var=solve_q_mode_var,
     )
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
@@ -7169,6 +7274,8 @@ load_button = ttk.Button(
                 phi_l_divisor_var=phi_l_divisor_var,
                 sf_prune_bias_var=sf_prune_bias_var,
                 solve_q_steps_var=solve_q_steps_var,
+                solve_q_rel_tol_var=solve_q_rel_tol_var,
+                solve_q_mode_var=solve_q_mode_var,
             )
         ),
         (_phase_delta_entry_var.set(_current_phase_delta_expression()) if _phase_delta_entry_var is not None else None),
@@ -7379,6 +7486,8 @@ def _simulate_hkl_peak_centers_for_fit(
         save_flag=0,
         optics_mode=int(param_set.get("optics_mode", 0)),
         solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
+        solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
+        solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
     )
 
     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -8657,6 +8766,8 @@ def on_fit_geometry_click():
                             save_flag=0,
                             optics_mode=_current_optics_mode_flag(),
                             solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
+                            solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
+                            solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
                         )
 
                         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -8762,6 +8873,8 @@ def on_fit_geometry_click():
                         save_flag=0,
                         optics_mode=_current_optics_mode_flag(),
                         solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
+                        solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
+                        solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
                     )
 
                     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -9598,6 +9711,8 @@ def save_q_space_representation():
         "gamma_mosaic_deg": gamma_mosaic_var.get(),
         "eta": eta_var.get(),
         "solve_q_steps": _current_solve_q_steps(),
+        "solve_q_rel_tol": _current_solve_q_rel_tol(),
+        "solve_q_mode": _current_solve_q_mode_flag(),
         "a": a_var.get(),
         "c": c_var.get(),
         "center_x": center_x_var.get(),
@@ -9616,6 +9731,8 @@ def save_q_space_representation():
         "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": profile_cache.get("eta", 0.0),
         "solve_q_steps": profile_cache.get("solve_q_steps", _current_solve_q_steps()),
+        "solve_q_rel_tol": profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
+        "solve_q_mode": profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
     }
 
     image_result, hit_tables, q_data, q_count, _, _ = process_peaks_parallel(
@@ -9653,6 +9770,8 @@ def save_q_space_representation():
         save_flag=1,
         optics_mode=_current_optics_mode_flag(),
         solve_q_steps=int(mosaic_params["solve_q_steps"]),
+        solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
+        solve_q_mode=int(mosaic_params["solve_q_mode"]),
     )
 
     max_positions_local = hit_tables_to_max_positions(hit_tables)
@@ -9709,6 +9828,8 @@ def run_debug_simulation():
         "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": profile_cache.get("eta", 0.0),
         "solve_q_steps": profile_cache.get("solve_q_steps", _current_solve_q_steps()),
+        "solve_q_rel_tol": profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
+        "solve_q_mode": profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
     }
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
@@ -9980,6 +10101,45 @@ def on_solve_q_steps_change(*_):
     schedule_update()
 
 
+def on_solve_q_rel_tol_change(*_):
+    global last_simulation_signature
+
+    try:
+        raw_value = float(solve_q_rel_tol_var.get())
+    except (tk.TclError, ValueError, TypeError):
+        raw_value = float(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
+
+    clipped_value = _clip_solve_q_rel_tol(raw_value)
+    if not np.isclose(raw_value, float(clipped_value), rtol=0.0, atol=1e-12):
+        solve_q_rel_tol_var.set(float(clipped_value))
+        return
+
+    last_simulation_signature = None
+    schedule_update()
+
+
+def _set_solve_q_control_states():
+    mode = _normalize_solve_q_mode_label(solve_q_mode_var.get())
+    tol_state = "disabled" if mode == "uniform" else "normal"
+    try:
+        solve_q_rel_tol_scale.configure(state=tol_state)
+    except Exception:
+        pass
+
+
+def on_solve_q_mode_change(*_):
+    global last_simulation_signature
+
+    normalized = _normalize_solve_q_mode_label(solve_q_mode_var.get())
+    if normalized != solve_q_mode_var.get():
+        solve_q_mode_var.set(normalized)
+        return
+
+    _set_solve_q_control_states()
+    last_simulation_signature = None
+    schedule_update()
+
+
 sf_prune_var_frame = ttk.Frame(mosaic_frame.frame)
 sf_prune_var_frame.pack(fill=tk.X, pady=(2, 2))
 ttk.Label(sf_prune_var_frame, text="Structure-Factor Pruning").pack(anchor=tk.W, padx=5)
@@ -10008,12 +10168,30 @@ _update_sf_prune_status_label()
 ttk.Label(
     sf_prune_var_frame,
     text=(
-        "Q-circle sampling (pruning): lower values prune more arc points and "
-        "speed up simulation."
+        "Uniform mode uses fixed arc sampling (fast). Adaptive mode uses "
+        "max-interval budget + relative tolerance (robust tails, slower)."
     ),
 ).pack(anchor=tk.W, padx=5, pady=(4, 0))
+solve_q_mode_var = tk.StringVar(
+    value=_normalize_solve_q_mode_label(defaults.get("solve_q_mode", SOLVE_Q_MODE_ADAPTIVE))
+)
+mode_row = ttk.Frame(sf_prune_var_frame)
+mode_row.pack(fill=tk.X, padx=5, pady=(2, 2))
+ttk.Label(mode_row, text="Arc Integration Mode").pack(anchor=tk.W)
+ttk.Radiobutton(
+    mode_row,
+    text="Uniform Fast",
+    variable=solve_q_mode_var,
+    value="uniform",
+).pack(anchor=tk.W, padx=10)
+ttk.Radiobutton(
+    mode_row,
+    text="Adaptive Robust",
+    variable=solve_q_mode_var,
+    value="adaptive",
+).pack(anchor=tk.W, padx=10)
 solve_q_steps_var, solve_q_steps_scale = create_slider(
-    "Q-circle Samples",
+    "Arc Max Intervals",
     float(MIN_SOLVE_Q_STEPS),
     float(MAX_SOLVE_Q_STEPS),
     float(_clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))),
@@ -10022,6 +10200,18 @@ solve_q_steps_var, solve_q_steps_scale = create_slider(
     update_callback=None,
 )
 solve_q_steps_var.trace_add('write', on_solve_q_steps_change)
+solve_q_rel_tol_var, solve_q_rel_tol_scale = create_slider(
+    "Arc Relative Tol",
+    float(MIN_SOLVE_Q_REL_TOL),
+    float(MAX_SOLVE_Q_REL_TOL),
+    float(_clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))),
+    1e-6,
+    sf_prune_var_frame,
+    update_callback=None,
+)
+solve_q_rel_tol_var.trace_add('write', on_solve_q_rel_tol_change)
+solve_q_mode_var.trace_add('write', on_solve_q_mode_change)
+_set_solve_q_control_states()
 
 center_frame = CollapsibleFrame(right_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -11298,6 +11488,8 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             phi_l_divisor_var=phi_l_divisor_var,
             sf_prune_bias_var=sf_prune_bias_var,
             solve_q_steps_var=solve_q_steps_var,
+            solve_q_rel_tol_var=solve_q_rel_tol_var,
+            solve_q_mode_var=solve_q_mode_var,
         )
         if _phase_delta_entry_var is not None:
             _phase_delta_entry_var.set(_current_phase_delta_expression())
@@ -11318,7 +11510,9 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         f"profile={'loaded' if profile_loaded else 'defaults'}; "
         f"sampling={sample_mode} ({sample_count} samples); "
         f"sf_prune={_current_sf_prune_bias():+.2f}; "
+        f"q_mode={_normalize_solve_q_mode_label(solve_q_mode_var.get())}; "
         f"q_steps={_current_solve_q_steps()}; "
+        f"q_tol={_current_solve_q_rel_tol():.2e}; "
         f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
         f"cif={cif_summary}"
     )

@@ -66,6 +66,8 @@ def simulate(
         record_status=request.record_status,
         thickness=request.thickness,
         solve_q_steps=request.mosaic.solve_q_steps,
+        solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
+        solve_q_mode=request.mosaic.solve_q_mode,
     )
 
     return SimulationResult(
@@ -124,6 +126,8 @@ def simulate_qr_rods(
         record_status=request.record_status,
         thickness=request.thickness,
         solve_q_steps=request.mosaic.solve_q_steps,
+        solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
+        solve_q_mode=request.mosaic.solve_q_mode,
     )
 
     return SimulationResult(
