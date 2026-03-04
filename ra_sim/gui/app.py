@@ -12,6 +12,7 @@ import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Sequence
 import tkinter as tk
 from tkinter import filedialog, ttk
@@ -3274,6 +3275,9 @@ def do_update():
 
     update_pending = None
     update_running = True
+    update_start_time = perf_counter()
+    image_generation_elapsed_ms = 0.0
+    image_generation_cached = True
 
     gamma_updated      = float(gamma_var.get())
     Gamma_updated      = float(Gamma_var.get())
@@ -3367,6 +3371,8 @@ def do_update():
         peak_intensities.clear()
         peak_records.clear()
         selected_peak_record = None
+        image_generation_cached = False
+        image_generation_start_time = perf_counter()
 
         def run_one(data, intens_arr, a_val, c_val):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
@@ -3477,6 +3483,9 @@ def do_update():
         stored_max_positions_local = max_positions_local
         stored_peak_table_lattice = peak_table_lattice_local
         stored_sim_image = updated_image
+        image_generation_elapsed_ms = (
+            perf_counter() - image_generation_start_time
+        ) * 1e3
     else:
         # fall back to the cached arrays
         if stored_max_positions_local is None:
@@ -3494,6 +3503,7 @@ def do_update():
             for _ in max_positions_local
         ]
 
+    redraw_update_start_time = perf_counter()
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
     
     # ───── NEW: build peak lists from hit_tables ───────────────────────────
@@ -3864,6 +3874,21 @@ def do_update():
 
     update_integration_region_visuals(ai, sim_res2)
 
+    redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
+    total_update_elapsed_ms = (perf_counter() - update_start_time) * 1e3
+    image_generation_text = (
+        "cached" if image_generation_cached else f"{image_generation_elapsed_ms:.1f} ms"
+    )
+    if "update_timing_label" in globals():
+        update_timing_label.config(
+            text=(
+                "Timing | image generation: "
+                f"{image_generation_text} | redraw/update: "
+                f"{redraw_update_elapsed_ms:.1f} ms | total: "
+                f"{total_update_elapsed_ms:.1f} ms"
+            )
+        )
+
     # mark update completion so future updates can run
     update_running = False
 
@@ -4029,6 +4054,13 @@ progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
 
 progress_label = ttk.Label(root, text="", font=("Helvetica", 8))
 progress_label.pack(side=tk.BOTTOM, padx=5)
+
+update_timing_label = ttk.Label(
+    root,
+    text="Timing | image generation: n/a | redraw/update: n/a | total: n/a",
+    font=("Helvetica", 8),
+)
+update_timing_label.pack(side=tk.BOTTOM, padx=5)
 
 chi_square_label = ttk.Label(root, text="Chi-Squared: ", font=("Helvetica", 8))
 chi_square_label.pack(side=tk.BOTTOM, padx=5)

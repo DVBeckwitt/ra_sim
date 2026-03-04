@@ -231,6 +231,7 @@ from collections import defaultdict, namedtuple
 from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Sequence
 import tkinter as tk
 from tkinter import filedialog, ttk
@@ -2933,7 +2934,8 @@ def _rotate_background_backend(delta_k: int):
     global background_backend_rotation_k
     background_backend_rotation_k = (int(background_backend_rotation_k) + int(delta_k)) % 4
     _update_background_backend_status()
-    _update_chi_square_display()
+    _mark_chi_square_dirty()
+    _update_chi_square_display(force=True)
     schedule_update()
 
 
@@ -2945,7 +2947,8 @@ def _toggle_background_backend_flip(axis: str):
     elif axis == "y":
         background_backend_flip_y = not background_backend_flip_y
     _update_background_backend_status()
-    _update_chi_square_display()
+    _mark_chi_square_dirty()
+    _update_chi_square_display(force=True)
     schedule_update()
 
 
@@ -2955,7 +2958,8 @@ def _reset_background_backend_orientation():
     background_backend_flip_x = False
     background_backend_flip_y = False
     _update_background_backend_status()
-    _update_chi_square_display()
+    _mark_chi_square_dirty()
+    _update_chi_square_display(force=True)
     schedule_update()
 
 # -----------------------------------------------------------
@@ -3005,6 +3009,12 @@ def _toggle_hkl_pick_mode():
 
     if unscaled_image_global is None:
         progress_label_positions.config(text="Run a simulation first.")
+        return
+
+    if not _ensure_peak_overlay_data(force=False) or not peak_positions:
+        progress_label_positions.config(
+            text="No simulated peaks available yet. Run/update the simulation first."
+        )
         return
 
     _set_hkl_pick_mode(
@@ -3203,6 +3213,7 @@ def _select_peak_by_hkl(
     silent_if_missing: bool = False,
 ):
     global selected_hkl_target, selected_peak_record
+    _ensure_peak_overlay_data(force=False)
     target = (int(h), int(k), int(l))
 
     if not peak_positions:
@@ -4232,6 +4243,7 @@ def on_canvas_click(event):
         return
     if event.inaxes is not ax or event.xdata is None or event.ydata is None:
         return                               # click was outside the image
+    _ensure_peak_overlay_data(force=False)
     if not peak_positions:                   # no simulation yet
         progress_label_positions.config(text="Run a simulation first.")
         return
@@ -4969,8 +4981,19 @@ def _suggest_scale_factor(sim_image, bg_image):
     bg_pixels = None if bg_image is None else np.asarray(bg_image, dtype=float)
     if sim_pixels is None or bg_pixels is None:
         return 1.0
+
+    # Percentiles over every pixel are expensive on full detector images.
+    # Subsample finite values to keep this nearly constant-time.
     sim_pixels = sim_pixels[np.isfinite(sim_pixels)]
     bg_pixels = bg_pixels[np.isfinite(bg_pixels)]
+    max_samples = 200_000
+    if sim_pixels.size > max_samples:
+        sim_step = max(1, sim_pixels.size // max_samples)
+        sim_pixels = sim_pixels[::sim_step]
+    if bg_pixels.size > max_samples:
+        bg_step = max(1, bg_pixels.size // max_samples)
+        bg_pixels = bg_pixels[::bg_step]
+
     if sim_pixels.size == 0 or bg_pixels.size == 0:
         return 1.0
     sim_reference_pixels = sim_pixels[sim_pixels > 0]
@@ -4986,6 +5009,11 @@ def _suggest_scale_factor(sim_image, bg_image):
     if not np.isfinite(bg_ref) or abs(bg_ref) < 1e-12:
         return 1.0
     return bg_ref / sim_ref
+
+
+def _mark_chi_square_dirty():
+    global chi_square_update_token
+    chi_square_update_token = int(globals().get("chi_square_update_token", 0)) + 1
 
 
 def _auto_match_scale_factor_to_radial_peak():
@@ -5071,9 +5099,35 @@ ttk.Button(
 ).pack(anchor=tk.W, padx=5, pady=(0, 6))
 
 
-def _update_chi_square_display():
+def _update_chi_square_display(force=False):
+    state = globals().setdefault(
+        "chi_square_state",
+        {
+            "last_ts": 0.0,
+            "last_token": -1,
+            "last_text": "Chi-Squared: N/A",
+        },
+    )
+    now = perf_counter()
+    # Throttle to avoid repeatedly scanning full detector arrays during slider
+    # drags; keep the last displayed value between refreshes.
+    if (not force) and (
+        (now - float(state.get("last_ts", 0.0))) < CHI_SQUARE_UPDATE_INTERVAL_S
+    ):
+        last_text = str(state.get("last_text", "Chi-Squared: N/A"))
+        chi_square_label.config(text=last_text)
+        return
+
+    token = int(globals().get("chi_square_update_token", 0))
+    if (not force) and token == int(state.get("last_token", -1)):
+        last_text = str(state.get("last_text", "Chi-Squared: N/A"))
+        chi_square_label.config(text=last_text)
+        state["last_ts"] = now
+        return
+
     try:
         native_background = _get_current_background_backend()
+        text = "Chi-Squared: N/A"
         if (
             background_visible
             and native_background is not None
@@ -5088,20 +5142,46 @@ def _update_chi_square_display():
                 and np.max(bg_vals) > 0
                 and sim_vals.shape == bg_vals.shape
             ):
+                # Subsample large arrays for responsive UI updates.
+                max_points = 250_000
+                if sim_vals.ndim == 2 and sim_vals.size > max_points:
+                    stride = int(max(1, np.sqrt(sim_vals.size / float(max_points))))
+                    sim_vals = sim_vals[::stride, ::stride]
+                    bg_vals = bg_vals[::stride, ::stride]
                 norm_sim = sim_vals / np.max(sim_vals)
                 norm_bg = bg_vals / np.max(bg_vals)
                 chi_sq_val = float(np.mean(np.square(norm_bg - norm_sim)) * norm_sim.size)
-                chi_square_label.config(text=f"Chi-Squared: {chi_sq_val:.2e}")
-            else:
-                chi_square_label.config(text="Chi-Squared: N/A")
-        else:
-            chi_square_label.config(text="Chi-Squared: N/A")
+                text = f"Chi-Squared: {chi_sq_val:.2e}"
     except Exception as exc:
-        chi_square_label.config(text=f"Chi-Squared Error: {exc}")
+        text = f"Chi-Squared Error: {exc}"
+
+    state["last_ts"] = now
+    state["last_token"] = token
+    state["last_text"] = text
+    chi_square_label.config(text=text)
 
 
 def apply_scale_factor_to_existing_results(update_limits=False):
+    chi_state = globals().setdefault(
+        "chi_square_state",
+        {
+            "last_ts": 0.0,
+            "last_token": -1,
+            "last_text": "Chi-Squared: N/A",
+        },
+    )
     if unscaled_image_global is None:
+        chi_square_sig = (
+            None,
+            bool(background_visible),
+            int(current_background_index),
+            int(background_backend_rotation_k) % 4,
+            bool(background_backend_flip_x),
+            bool(background_backend_flip_y),
+        )
+        if chi_state.get("buffer_sig") != chi_square_sig:
+            chi_state["buffer_sig"] = chi_square_sig
+            _mark_chi_square_dirty()
         background_display.set_clim(
             background_min_var.get(),
             background_max_var.get(),
@@ -5117,8 +5197,24 @@ def apply_scale_factor_to_existing_results(update_limits=False):
         return
 
     scale = _get_scale_factor_value(default=1.0)
-    scaled_image = unscaled_image_global * scale
-    global_image_buffer[:] = scaled_image
+    if abs(float(scale) - 1.0) <= 1e-12:
+        np.copyto(global_image_buffer, unscaled_image_global, casting="unsafe")
+    else:
+        np.multiply(unscaled_image_global, float(scale), out=global_image_buffer)
+    scaled_image = global_image_buffer
+    base_unscaled_sig = globals().get("last_unscaled_image_signature")
+    chi_square_sig = (
+        base_unscaled_sig,
+        round(float(scale), 9),
+        bool(background_visible),
+        int(current_background_index),
+        int(background_backend_rotation_k) % 4,
+        bool(background_backend_flip_x),
+        bool(background_backend_flip_y),
+    )
+    if chi_state.get("buffer_sig") != chi_square_sig:
+        chi_state["buffer_sig"] = chi_square_sig
+        _mark_chi_square_dirty()
 
     # Keep display limits stable during reruns/parameter changes unless an
     # explicit reset path requests recomputing limits.
@@ -5960,6 +6056,10 @@ line_rmax, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5
 line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 
+UPDATE_DEBOUNCE_MS = 120
+RANGE_UPDATE_DEBOUNCE_MS = 120
+CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
+
 update_pending = None
 integration_update_pending = None
 update_running = False
@@ -5972,7 +6072,7 @@ def schedule_update():
         integration_update_pending = None
     if update_pending is not None:
         root.after_cancel(update_pending)
-    update_pending = root.after(1000, do_update)
+    update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
 
 
 def _run_scheduled_range_update():
@@ -5980,19 +6080,19 @@ def _run_scheduled_range_update():
     integration_update_pending = None
 
     if update_running:
-        schedule_range_update(delay_ms=1000)
+        schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS)
         return
 
     if not _refresh_integration_from_cached_results():
         schedule_update()
 
 
-def schedule_range_update(delay_ms=1000):
+def schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS):
     """Queue throttled redraw-only integration updates."""
     global integration_update_pending
     if integration_update_pending is not None:
         root.after_cancel(integration_update_pending)
-    delay = max(1000, int(delay_ms))
+    delay = max(RANGE_UPDATE_DEBOUNCE_MS, int(delay_ms))
     integration_update_pending = root.after(delay, _run_scheduled_range_update)
 
 peak_positions = []
@@ -6012,6 +6112,156 @@ last_simulation_signature = None
 stored_max_positions_local = None
 stored_sim_image = None
 stored_peak_table_lattice = None
+last_unscaled_image_signature = None
+normalization_scale_cache = {"sig": None, "value": 1.0}
+peak_overlay_cache = {
+    "sig": None,
+    "positions": [],
+    "millers": [],
+    "intensities": [],
+    "records": [],
+}
+caking_cache = {
+    "sim_sig": None,
+    "sim_res2": None,
+    "bg_sig": None,
+    "bg_res2": None,
+}
+chi_square_update_token = 0
+chi_square_state = {
+    "last_ts": 0.0,
+    "last_token": -1,
+    "last_text": "Chi-Squared: N/A",
+}
+
+
+def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
+    """Ensure peak overlay lists are available for the current simulation cache."""
+
+    global peak_positions, peak_millers, peak_intensities, peak_records
+
+    if stored_max_positions_local is None or stored_sim_image is None:
+        peak_positions.clear()
+        peak_millers.clear()
+        peak_intensities.clear()
+        peak_records.clear()
+        return False
+
+    max_positions_local = stored_max_positions_local
+    updated_image = stored_sim_image
+    peak_table_lattice_local = stored_peak_table_lattice
+
+    if (
+        not peak_table_lattice_local
+        or len(peak_table_lattice_local) != len(max_positions_local)
+    ):
+        peak_table_lattice_local = [
+            (float(a_var.get()), float(c_var.get()), "primary")
+            for _ in max_positions_local
+        ]
+
+    peak_sig = (
+        last_simulation_signature,
+        id(max_positions_local),
+        len(max_positions_local),
+        tuple(updated_image.shape),
+        int(HKL_PICK_MAX_HITS_PER_REFLECTION),
+        float(HKL_PICK_MIN_SEPARATION_PX),
+    )
+    peak_cached = (not force) and peak_overlay_cache.get("sig") == peak_sig
+
+    peak_positions.clear()
+    peak_millers.clear()
+    peak_intensities.clear()
+    peak_records.clear()
+
+    if peak_cached:
+        peak_positions.extend(list(peak_overlay_cache.get("positions", ())))
+        peak_millers.extend(list(peak_overlay_cache.get("millers", ())))
+        peak_intensities.extend(list(peak_overlay_cache.get("intensities", ())))
+        peak_records.extend(dict(rec) for rec in peak_overlay_cache.get("records", ()))
+        return True
+
+    try:
+        max_hits_raw = int(HKL_PICK_MAX_HITS_PER_REFLECTION)
+    except Exception:
+        max_hits_raw = 0
+    max_hits_per_reflection = max_hits_raw if max_hits_raw > 0 else None
+    min_sep_sq = float(HKL_PICK_MIN_SEPARATION_PX) ** 2
+
+    for table_idx, tbl in enumerate(max_positions_local):
+        tbl_arr = np.asarray(tbl, dtype=float)
+        if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0:
+            continue
+        av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
+        row_order = np.argsort(tbl_arr[:, 0])[::-1]
+        chosen_rows: list[tuple[int, np.ndarray, int, int, float, float]] = []
+
+        for row_idx in row_order:
+            row = tbl_arr[row_idx]
+            I, xpix, ypix, _phi, H, K, L = row
+            if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
+                continue
+            cx = int(round(xpix))
+            cy = int(round(ypix))
+            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, updated_image.shape)
+            too_close = False
+            for _, _, _, _, prev_col, prev_row in chosen_rows:
+                d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
+                if d2 < min_sep_sq:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
+            if (
+                max_hits_per_reflection is not None
+                and len(chosen_rows) >= max_hits_per_reflection
+            ):
+                break
+
+        for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
+            I, _xpix, _ypix, _phi, H, K, L = row
+            peak_positions.append((disp_cx, disp_cy))
+            peak_intensities.append(float(I))
+            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
+            hkl_raw = (float(H), float(K), float(L))
+            m_val = float(H * H + H * K + K * K)
+            qr_val = (
+                (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
+                if float(av_used) > 0.0 and np.isfinite(float(av_used)) and m_val >= 0.0
+                else float("nan")
+            )
+            peak_millers.append(hkl)
+            peak_records.append(
+                {
+                    "display_col": float(disp_cx),
+                    "display_row": float(disp_cy),
+                    "native_col": float(cx),
+                    "native_row": float(cy),
+                    "hkl": hkl,
+                    "hkl_raw": hkl_raw,
+                    "intensity": float(I),
+                    "qr": float(qr_val),
+                    "phi": float(_phi),
+                    "source_table_index": int(table_idx),
+                    "source_row_index": int(row_idx),
+                    "source_label": str(source_label),
+                    "av": float(av_used),
+                    "cv": float(cv_used),
+                }
+            )
+
+    peak_overlay_cache.update(
+        {
+            "sig": peak_sig,
+            "positions": list(peak_positions),
+            "millers": list(peak_millers),
+            "intensities": list(peak_intensities),
+            "records": [dict(rec) for rec in peak_records],
+        }
+    )
+    return True
 
 ###############################################################################
 #                              MAIN UPDATE
@@ -6024,14 +6274,18 @@ def do_update():
     global av2, cv2
     global last_caked_image_unscaled, last_caked_extent
     global last_res2_sim, last_res2_background
+    global last_unscaled_image_signature
 
     if update_running:
         # another update is in progress; try again shortly
-        update_pending = root.after(1000, do_update)
+        update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
         return
 
     update_pending = None
     update_running = True
+    update_start_time = perf_counter()
+    image_generation_elapsed_ms = 0.0
+    image_generation_cached = True
 
     gamma_updated      = float(gamma_var.get())
     Gamma_updated      = float(Gamma_var.get())
@@ -6154,6 +6408,8 @@ def do_update():
         peak_intensities.clear()
         peak_records.clear()
         selected_peak_record = None
+        image_generation_cached = False
+        image_generation_start_time = perf_counter()
 
         def run_one(data, intens_arr, a_val, c_val):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
@@ -6285,6 +6541,9 @@ def do_update():
         stored_max_positions_local = max_positions_local
         stored_peak_table_lattice = peak_table_lattice_local
         stored_sim_image = updated_image
+        image_generation_elapsed_ms = (
+            perf_counter() - image_generation_start_time
+        ) * 1e3
     else:
         # fall back to the cached arrays
         if stored_max_positions_local is None:
@@ -6302,85 +6561,18 @@ def do_update():
             for _ in max_positions_local
         ]
 
+    redraw_update_start_time = perf_counter()
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
-    
-    # ───── NEW: build peak lists from hit_tables ───────────────────────────
-    peak_positions.clear()
-    peak_millers.clear()
-    peak_intensities.clear()
-    peak_records.clear()
-
-    try:
-        max_hits_raw = int(HKL_PICK_MAX_HITS_PER_REFLECTION)
-    except Exception:
-        max_hits_raw = 0
-    max_hits_per_reflection = max_hits_raw if max_hits_raw > 0 else None
-    min_sep_sq = float(HKL_PICK_MIN_SEPARATION_PX) ** 2
-
-    # hit_tables is a numba.typed.List of 2-D arrays, one per reflection
-    for table_idx, tbl in enumerate(max_positions_local):
-        tbl_arr = np.asarray(tbl, dtype=float)
-        if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0:
-            continue
-        av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
-        row_order = np.argsort(tbl_arr[:, 0])[::-1]
-        chosen_rows: list[tuple[int, np.ndarray, int, int, float, float]] = []
-
-        # Keep only the strongest distinct hit locations per reflection.
-        for row_idx in row_order:
-            row = tbl_arr[row_idx]
-            I, xpix, ypix, _phi, H, K, L = row
-            if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
-                continue
-            cx = int(round(xpix))
-            cy = int(round(ypix))
-            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, updated_image.shape)
-            too_close = False
-            for _, _, _, _, prev_col, prev_row in chosen_rows:
-                d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
-                if d2 < min_sep_sq:
-                    too_close = True
-                    break
-            if too_close:
-                continue
-            chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
-            if (
-                max_hits_per_reflection is not None
-                and len(chosen_rows) >= max_hits_per_reflection
-            ):
-                break
-
-        for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
-            I, _xpix, _ypix, _phi, H, K, L = row
-            peak_positions.append((disp_cx, disp_cy))      # display coords
-            peak_intensities.append(float(I))
-            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
-            hkl_raw = (float(H), float(K), float(L))
-            m_val = float(H * H + H * K + K * K)
-            qr_val = (
-                (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
-                if float(av_used) > 0.0 and np.isfinite(float(av_used)) and m_val >= 0.0
-                else float("nan")
-            )
-            peak_millers.append(hkl)
-            peak_records.append(
-                {
-                    "display_col": float(disp_cx),
-                    "display_row": float(disp_cy),
-                    "native_col": float(cx),
-                    "native_row": float(cy),
-                    "hkl": hkl,
-                    "hkl_raw": hkl_raw,
-                    "intensity": float(I),
-                    "qr": float(qr_val),
-                    "phi": float(_phi),
-                    "source_table_index": int(table_idx),
-                    "source_row_index": int(row_idx),
-                    "source_label": str(source_label),
-                    "av": float(av_used),
-                    "cv": float(cv_used),
-                }
-            )
+    need_peak_overlay = bool(
+        hkl_pick_armed or selected_hkl_target is not None or selected_peak_record is not None
+    )
+    if need_peak_overlay:
+        _ensure_peak_overlay_data(force=False)
+    else:
+        peak_positions.clear()
+        peak_millers.clear()
+        peak_intensities.clear()
+        peak_records.clear()
 
     if selected_hkl_target is not None:
         _select_peak_by_hkl(
@@ -6394,15 +6586,44 @@ def do_update():
     normalization_scale = 1.0
     native_background = _get_current_background_backend()
     if native_background is not None and display_image is not None:
-        normalization_scale = _suggest_scale_factor(
-            display_image, native_background
+        normalization_sig = (
+            new_sim_sig,
+            int(current_background_index),
+            id(current_background_image),
+            int(background_backend_rotation_k) % 4,
+            bool(background_backend_flip_x),
+            bool(background_backend_flip_y),
+            tuple(display_image.shape),
+            tuple(np.asarray(native_background).shape),
         )
+        if normalization_scale_cache.get("sig") == normalization_sig:
+            normalization_scale = float(normalization_scale_cache.get("value", 1.0))
+        else:
+            normalization_scale = _suggest_scale_factor(
+                display_image, native_background
+            )
+            normalization_scale_cache["sig"] = normalization_sig
+            normalization_scale_cache["value"] = float(normalization_scale)
         if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
             normalization_scale = 1.0
 
     unscaled_image_global = None
+    last_unscaled_image_signature = None
     if display_image is not None:
-        unscaled_image_global = display_image * normalization_scale
+        if abs(float(normalization_scale) - 1.0) <= 1e-12:
+            unscaled_image_global = display_image
+        else:
+            unscaled_image_global = display_image * normalization_scale
+        last_unscaled_image_signature = (
+            new_sim_sig,
+            round(float(normalization_scale), 9),
+            tuple(display_image.shape),
+            int(current_background_index),
+            id(current_background_image),
+            int(background_backend_rotation_k) % 4,
+            bool(background_backend_flip_x),
+            bool(background_backend_flip_y),
+        )
         if peak_intensities and normalization_scale != 1.0:
             peak_intensities[:] = [
                 intensity * normalization_scale for intensity in peak_intensities
@@ -6458,12 +6679,36 @@ def do_update():
             ),
         }
     ai = _ai_cache["ai"]
+    sim_caking_sig = (
+        new_sim_sig,
+        sig,
+        round(float(normalization_scale), 9),
+    )
+    bg_caking_sig = None
+    if native_background is not None:
+        bg_caking_sig = (
+            sig,
+            int(current_background_index),
+            id(current_background_image),
+            int(background_backend_rotation_k) % 4,
+            bool(background_backend_flip_x),
+            bool(background_backend_flip_y),
+            tuple(np.asarray(native_background).shape),
+        )
 
     # Caked 2D or normal 2D?
     sim_res2 = None
     bg_res2 = None
     if show_caked_2d_var.get() and unscaled_image_global is not None:
-        sim_res2 = caking(unscaled_image_global, ai)
+        if (
+            caking_cache.get("sim_sig") == sim_caking_sig
+            and caking_cache.get("sim_res2") is not None
+        ):
+            sim_res2 = caking_cache["sim_res2"]
+        else:
+            sim_res2 = caking(unscaled_image_global, ai)
+            caking_cache["sim_sig"] = sim_caking_sig
+            caking_cache["sim_res2"] = sim_res2
         caked_img = sim_res2.intensity
         radial_vals = np.asarray(sim_res2.radial, dtype=float)
         azimuth_vals = _wrap_phi_range(_adjust_phi_zero(sim_res2.azimuthal))
@@ -6516,10 +6761,16 @@ def do_update():
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
 
         background_caked_available = False
-        native_background = _get_current_background_backend()
         if background_visible and native_background is not None:
-            if bg_res2 is None:
+            if (
+                caking_cache.get("bg_sig") == bg_caking_sig
+                and caking_cache.get("bg_res2") is not None
+            ):
+                bg_res2 = caking_cache["bg_res2"]
+            else:
                 bg_res2 = caking(native_background, ai)
+                caking_cache["bg_sig"] = bg_caking_sig
+                caking_cache["bg_res2"] = bg_res2
             bg_caked = bg_res2.intensity
             bg_radial = np.asarray(bg_res2.radial, dtype=float)
             bg_azimuth = _wrap_phi_range(_adjust_phi_zero(bg_res2.azimuthal))
@@ -6623,12 +6874,26 @@ def do_update():
     # 1D integration
     if show_1d_var.get() and unscaled_image_global is not None:
         if sim_res2 is None:
-            sim_res2 = caking(unscaled_image_global, ai)
+            if (
+                caking_cache.get("sim_sig") == sim_caking_sig
+                and caking_cache.get("sim_res2") is not None
+            ):
+                sim_res2 = caking_cache["sim_res2"]
+            else:
+                sim_res2 = caking(unscaled_image_global, ai)
+                caking_cache["sim_sig"] = sim_caking_sig
+                caking_cache["sim_res2"] = sim_res2
 
-        native_background = _get_current_background_backend()
         if background_visible and native_background is not None:
-            if bg_res2 is None:
+            if (
+                caking_cache.get("bg_sig") == bg_caking_sig
+                and caking_cache.get("bg_res2") is not None
+            ):
+                bg_res2 = caking_cache["bg_res2"]
+            else:
                 bg_res2 = caking(native_background, ai)
+                caking_cache["bg_sig"] = bg_caking_sig
+                caking_cache["bg_res2"] = bg_res2
         else:
             bg_res2 = None
         _update_1d_plots_from_caked(sim_res2, bg_res2)
@@ -6643,6 +6908,21 @@ def do_update():
     apply_scale_factor_to_existing_results(update_limits=False)
 
     update_integration_region_visuals(ai, sim_res2)
+
+    redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
+    total_update_elapsed_ms = (perf_counter() - update_start_time) * 1e3
+    image_generation_text = (
+        "cached" if image_generation_cached else f"{image_generation_elapsed_ms:.1f} ms"
+    )
+    if "update_timing_label" in globals():
+        update_timing_label.config(
+            text=(
+                "Timing | image generation: "
+                f"{image_generation_text} | redraw/update: "
+                f"{redraw_update_elapsed_ms:.1f} ms | total: "
+                f"{total_update_elapsed_ms:.1f} ms"
+            )
+        )
 
     # mark update completion so future updates can run
     update_running = False
@@ -6979,6 +7259,13 @@ progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
 
 progress_label = ttk.Label(root, text="", font=("Helvetica", 8))
 progress_label.pack(side=tk.BOTTOM, padx=5)
+
+update_timing_label = ttk.Label(
+    root,
+    text="Timing | image generation: n/a | redraw/update: n/a | total: n/a",
+    font=("Helvetica", 8),
+)
+update_timing_label.pack(side=tk.BOTTOM, padx=5)
 
 chi_square_label = ttk.Label(root, text="Chi-Squared: ", font=("Helvetica", 8))
 chi_square_label.pack(side=tk.BOTTOM, padx=5)
@@ -8655,6 +8942,10 @@ def on_fit_geometry_click():
             log_file.close()
         except Exception:
             pass
+
+    if not _ensure_peak_overlay_data(force=False) or not peak_positions:
+        progress_label_geometry.config(text="No simulated peaks available to pick.")
+        return
 
     def _nearest_simulated_peak(col: float, row: float):
         """Return (index, distance^2) of the nearest simulated peak, or (None, inf)."""
