@@ -1890,6 +1890,65 @@ def process_peaks_parallel(
         for i_samp in range(n_samp):
             n2_sample_array[i_samp] = n2
 
+    # Group reflections by identical (Gr, Gz, SF, forced sample). The first
+    # source reflection in each group runs ``calculate_phi`` once with a
+    # multiplicity-scaled SF so image energy matches an explicit per-peak sum.
+    source_index_for_peak = np.full(num_peaks, -1, dtype=np.int64)
+    source_multiplicity = np.ones(num_peaks, dtype=np.int64)
+    group_gr = np.empty(num_peaks, dtype=np.float64)
+    group_gz = np.empty(num_peaks, dtype=np.float64)
+    group_sf = np.empty(num_peaks, dtype=np.float64)
+    group_forced_idx = np.empty(num_peaks, dtype=np.int64)
+    group_src_idx = np.empty(num_peaks, dtype=np.int64)
+    group_mult = np.empty(num_peaks, dtype=np.int64)
+    group_count = 0
+
+    for i_pk in range(num_peaks):
+        H = float(miller[i_pk, 0])
+        K = float(miller[i_pk, 1])
+        L = float(miller[i_pk, 2])
+        if L < 0.0:
+            continue
+
+        reflI = intensities[i_pk]
+        forced_idx = -1
+        if single_sample_indices is not None:
+            if i_pk < single_sample_indices.shape[0]:
+                forced_idx = int(single_sample_indices[i_pk])
+
+        gz_key = 2.0 * pi * (L / cv)
+        gr_key = 4.0 * pi / av * sqrt((H * H + H * K + K * K) / 3.0)
+
+        group_idx = -1
+        for i_grp in range(group_count):
+            if group_forced_idx[i_grp] != forced_idx:
+                continue
+            if abs(gr_key - group_gr[i_grp]) > (1.0e-12 * (1.0 + abs(gr_key))):
+                continue
+            if abs(gz_key - group_gz[i_grp]) > (1.0e-12 * (1.0 + abs(gz_key))):
+                continue
+            if abs(reflI - group_sf[i_grp]) > (1.0e-12 * (1.0 + abs(reflI))):
+                continue
+            group_idx = i_grp
+            break
+
+        if group_idx >= 0:
+            source_index_for_peak[i_pk] = group_src_idx[group_idx]
+            group_mult[group_idx] += 1
+        else:
+            group_gr[group_count] = gr_key
+            group_gz[group_count] = gz_key
+            group_sf[group_count] = reflI
+            group_forced_idx[group_count] = forced_idx
+            group_src_idx[group_count] = i_pk
+            group_mult[group_count] = 1
+            source_index_for_peak[i_pk] = i_pk
+            group_count += 1
+
+    for i_grp in range(group_count):
+        src_i = group_src_idx[i_grp]
+        source_multiplicity[src_i] = group_mult[i_grp]
+
     # Serial reflection loop below writes directly into ``image``.
     # Keep thread-local accumulation disabled here to avoid relying on
     # ``get_thread_id`` outside a parallel ``prange`` context.
@@ -1914,6 +1973,57 @@ def process_peaks_parallel(
             if i_pk < single_sample_indices.shape[0]:
                 forced_idx = int(single_sample_indices[i_pk])
 
+        src_idx = source_index_for_peak[i_pk]
+        if src_idx >= 0 and src_idx != i_pk:
+            cached_src = src_idx
+            src_hits = hit_tables[cached_src]
+            n_src_hits = src_hits.shape[0]
+            pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+            for i_hit in range(n_src_hits):
+                pixel_hits[i_hit, 0] = src_hits[i_hit, 0]
+                pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
+                pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
+                pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
+                pixel_hits[i_hit, 4] = H
+                pixel_hits[i_hit, 5] = K
+                pixel_hits[i_hit, 6] = L
+            hit_tables[i_pk] = pixel_hits
+
+            src_miss = miss_tables[cached_src]
+            n_src_miss = src_miss.shape[0]
+            missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
+            for i_miss in range(n_src_miss):
+                missed_arr[i_miss, 0] = src_miss[i_miss, 0]
+                missed_arr[i_miss, 1] = src_miss[i_miss, 1]
+                missed_arr[i_miss, 2] = src_miss[i_miss, 2]
+            miss_tables[i_pk] = missed_arr
+
+            if record_status:
+                all_status[i_pk, :] = all_status[cached_src, :]
+
+            if save_flag == 1:
+                src_q_count = q_count[cached_src]
+                q_count[i_pk] = src_q_count
+                for i_q in range(src_q_count):
+                    q_data[i_pk, i_q, 0] = q_data[cached_src, i_q, 0]
+                    q_data[i_pk, i_q, 1] = q_data[cached_src, i_q, 1]
+                    q_data[i_pk, i_q, 2] = q_data[cached_src, i_q, 2]
+                    q_data[i_pk, i_q, 3] = q_data[cached_src, i_q, 3]
+                    q_data[i_pk, i_q, 4] = q_data[cached_src, i_q, 4]
+
+            if best_sample_indices_out is not None:
+                if (
+                    i_pk < best_sample_indices_out.shape[0]
+                    and cached_src < best_sample_indices_out.shape[0]
+                ):
+                    best_sample_indices_out[i_pk] = best_sample_indices_out[cached_src]
+            continue
+
+        reflI_eff = reflI
+        mult_i = source_multiplicity[i_pk]
+        if mult_i > 1:
+            reflI_eff = reflI * float(mult_i)
+
         if use_thread_local_image:
             tid = get_thread_id()
             if 0 <= tid < image_partials.shape[0]:
@@ -1926,7 +2036,7 @@ def process_peaks_parallel(
                     n2_sample_array,
                     beam_x_array, beam_y_array,
                     theta_array, phi_array,
-                    reflI, sigma_rad, gamma_rad_m, eta_pv,
+                    reflI_eff, sigma_rad, gamma_rad_m, eta_pv,
                     debye_x, debye_y,
                     center,
                     theta_initial_deg,
@@ -1956,7 +2066,7 @@ def process_peaks_parallel(
                     n2_sample_array,
                     beam_x_array, beam_y_array,
                     theta_array, phi_array,
-                    reflI, sigma_rad, gamma_rad_m, eta_pv,
+                    reflI_eff, sigma_rad, gamma_rad_m, eta_pv,
                     debye_x, debye_y,
                     center,
                     theta_initial_deg,
@@ -1986,7 +2096,7 @@ def process_peaks_parallel(
                 n2_sample_array,
                 beam_x_array, beam_y_array,
                 theta_array, phi_array,
-                reflI, sigma_rad, gamma_rad_m, eta_pv,
+                reflI_eff, sigma_rad, gamma_rad_m, eta_pv,
                 debye_x, debye_y,
                 center,
                 theta_initial_deg,
@@ -2006,6 +2116,14 @@ def process_peaks_parallel(
                 solve_q_mode_i,
                 forced_idx,
             )
+        if mult_i > 1:
+            inv_mult = 1.0 / float(mult_i)
+            for i_hit in range(pixel_hits.shape[0]):
+                pixel_hits[i_hit, 0] *= inv_mult
+            if save_flag == 1:
+                qn = q_count[i_pk]
+                for i_q in range(qn):
+                    q_data[i_pk, i_q, 3] *= inv_mult
         if record_status:
             all_status[i_pk, :] = status_arr
         hit_tables[i_pk] = pixel_hits
