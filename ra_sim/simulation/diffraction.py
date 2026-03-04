@@ -1513,13 +1513,23 @@ def _calculate_phi_from_precomputed(
     debye_x_sq = debye_x * debye_x
     debye_y_sq = debye_y * debye_y
     pixel_scale = 1.0 / 100e-6
-    max_hits = max(n_samp * 2, 16)
-    pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
-    missed_kf = np.empty((max_hits, 3), dtype=np.float64)
+    save_flag_eff = int(save_flag)
+    capture_aux = True
+    if save_flag_eff >= 2:
+        save_flag_eff -= 2
+        capture_aux = False
+    if capture_aux:
+        max_hits = max(n_samp * 2, 16)
+        pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
+        missed_kf = np.empty((max_hits, 3), dtype=np.float64)
+    else:
+        max_hits = 0
+        pixel_hits = np.empty((0, 7), dtype=np.float64)
+        missed_kf = np.empty((0, 3), dtype=np.float64)
     n_hits = 0
     n_missed = 0
 
-    best_candidate = np.zeros(7, dtype=np.float64)
+    best_candidate = np.empty(7, dtype=np.float64)
     best_candidate_val = -1.0
     have_candidate = False
     recorded_nominal_hit = False
@@ -1689,7 +1699,7 @@ def _calculate_phi_from_precomputed(
                 I_plane, kf_prime, Detector_Pos, n_det_rot
             )
             if not valid_det:
-                if n_missed < max_hits:
+                if capture_aux and n_missed < max_hits:
                     missed_kf[n_missed, 0] = kf_prime[0]
                     missed_kf[n_missed, 1] = kf_prime[1]
                     missed_kf[n_missed, 2] = kf_prime[2]
@@ -1731,17 +1741,18 @@ def _calculate_phi_from_precomputed(
 
             if val > best_candidate_val:
                 best_candidate_val = val
-                best_candidate[0] = val
-                best_candidate[1] = cpx
-                best_candidate[2] = rpx
-                best_candidate[3] = phi_f
-                best_candidate[4] = H
-                best_candidate[5] = K
-                best_candidate[6] = L
+                if capture_aux:
+                    best_candidate[0] = val
+                    best_candidate[1] = cpx
+                    best_candidate[2] = rpx
+                    best_candidate[3] = phi_f
+                    best_candidate[4] = H
+                    best_candidate[5] = K
+                    best_candidate[6] = L
                 have_candidate = True
                 best_candidate_sample_idx = i_samp
 
-            if i_samp == best_idx:
+            if capture_aux and i_samp == best_idx:
                 if n_hits < max_hits:
                     pixel_hits[n_hits, 0] = val
                     pixel_hits[n_hits, 1] = cpx
@@ -1753,7 +1764,7 @@ def _calculate_phi_from_precomputed(
                     n_hits += 1
                 recorded_nominal_hit = True
 
-            if save_flag == 1 and q_count[i_peaks_index] < q_data.shape[1]:
+            if save_flag_eff == 1 and q_count[i_peaks_index] < q_data.shape[1]:
                 idx = q_count[i_peaks_index]
                 q_data[i_peaks_index, idx, 0] = Qx
                 q_data[i_peaks_index, idx, 1] = Qy
@@ -1761,23 +1772,24 @@ def _calculate_phi_from_precomputed(
                 q_data[i_peaks_index, idx, 3] = val
                 q_count[i_peaks_index] += 1
 
-    add_candidate = False
-    if have_candidate:
-        add_candidate = not recorded_nominal_hit
-        if not add_candidate:
-            duplicate = False
-            for idx in range(n_hits):
-                if (
-                    abs(pixel_hits[idx, 1] - best_candidate[1]) < 0.5
-                    and abs(pixel_hits[idx, 2] - best_candidate[2]) < 0.5
-                ):
-                    duplicate = True
-                    break
-            if not duplicate:
-                add_candidate = True
-    if add_candidate and n_hits < max_hits:
-        pixel_hits[n_hits, :] = best_candidate
-        n_hits += 1
+    if capture_aux:
+        add_candidate = False
+        if have_candidate:
+            add_candidate = not recorded_nominal_hit
+            if not add_candidate:
+                duplicate = False
+                for idx in range(n_hits):
+                    if (
+                        abs(pixel_hits[idx, 1] - best_candidate[1]) < 0.5
+                        and abs(pixel_hits[idx, 2] - best_candidate[2]) < 0.5
+                    ):
+                        duplicate = True
+                        break
+                if not duplicate:
+                    add_candidate = True
+        if add_candidate and n_hits < max_hits:
+            pixel_hits[n_hits, :] = best_candidate
+            n_hits += 1
 
     best_sample_idx = best_idx
     if best_candidate_sample_idx >= 0:
@@ -2050,6 +2062,10 @@ def process_peaks_parallel(
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
     collect_tables = bool(collect_hit_tables)
+    collect_aux_outputs = collect_tables
+    core_save_flag = int(save_flag)
+    if not collect_aux_outputs:
+        core_save_flag += 2
     hit_tables = List.empty_list(types.float64[:, ::1])
     miss_tables = List.empty_list(types.float64[:, ::1])
     if collect_tables:
@@ -2242,7 +2258,7 @@ def process_peaks_parallel(
                 sample_n2_array,
                 sample_eps2_array,
                 best_idx_precomputed,
-                save_flag,
+                core_save_flag,
                 q_data,
                 q_count,
                 i_pk,
@@ -2365,7 +2381,7 @@ def process_peaks_parallel(
                 sample_n2_array,
                 sample_eps2_array,
                 best_idx_precomputed,
-                save_flag,
+                core_save_flag,
                 q_data,
                 q_count,
                 i_pk,
