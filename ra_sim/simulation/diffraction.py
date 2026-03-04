@@ -2091,17 +2091,15 @@ def process_peaks_parallel(
         P0,
     )
 
-    # Group reflections by identical (Gr, Gz, SF, forced sample). The first
-    # source reflection in each group runs the reflection core once with a
-    # multiplicity-scaled SF so image energy matches an explicit per-peak sum.
+    # Group reflections by identical (Gr, Gz, forced sample). We run each
+    # source group once with the summed SF, then scale per-peak outputs.
     source_index_for_peak = np.full(num_peaks, -1, dtype=np.int64)
-    source_multiplicity = np.ones(num_peaks, dtype=np.int64)
+    source_total_sf = np.zeros(num_peaks, dtype=np.float64)
     group_gr = np.empty(num_peaks, dtype=np.float64)
     group_gz = np.empty(num_peaks, dtype=np.float64)
-    group_sf = np.empty(num_peaks, dtype=np.float64)
     group_forced_idx = np.empty(num_peaks, dtype=np.int64)
     group_src_idx = np.empty(num_peaks, dtype=np.int64)
-    group_mult = np.empty(num_peaks, dtype=np.int64)
+    group_total_sf = np.empty(num_peaks, dtype=np.float64)
     group_count = 0
 
     for i_pk in range(num_peaks):
@@ -2128,27 +2126,24 @@ def process_peaks_parallel(
                 continue
             if abs(gz_key - group_gz[i_grp]) > (1.0e-12 * (1.0 + abs(gz_key))):
                 continue
-            if abs(reflI - group_sf[i_grp]) > (1.0e-12 * (1.0 + abs(reflI))):
-                continue
             group_idx = i_grp
             break
 
         if group_idx >= 0:
             source_index_for_peak[i_pk] = group_src_idx[group_idx]
-            group_mult[group_idx] += 1
+            group_total_sf[group_idx] += reflI
         else:
             group_gr[group_count] = gr_key
             group_gz[group_count] = gz_key
-            group_sf[group_count] = reflI
             group_forced_idx[group_count] = forced_idx
             group_src_idx[group_count] = i_pk
-            group_mult[group_count] = 1
+            group_total_sf[group_count] = reflI
             source_index_for_peak[i_pk] = i_pk
             group_count += 1
 
     for i_grp in range(group_count):
         src_i = group_src_idx[i_grp]
-        source_multiplicity[src_i] = group_mult[i_grp]
+        source_total_sf[src_i] = group_total_sf[i_grp]
 
     # Build the compact list of source peaks (the unique reflections we compute).
     source_indices = np.empty(group_count, dtype=np.int64)
@@ -2194,17 +2189,20 @@ def process_peaks_parallel(
             H = float(miller[i_pk, 0])
             K = float(miller[i_pk, 1])
             L = float(miller[i_pk, 2])
-            reflI = intensities[i_pk]
 
             forced_idx = -1
             if single_sample_indices is not None:
                 if i_pk < single_sample_indices.shape[0]:
                     forced_idx = int(single_sample_indices[i_pk])
 
-            reflI_eff = reflI
-            mult_i = source_multiplicity[i_pk]
-            if mult_i > 1:
-                reflI_eff = reflI * float(mult_i)
+            reflI_eff = source_total_sf[i_pk]
+            if reflI_eff <= 0.0:
+                src_hit_counts[i_src] = 0
+                src_miss_counts[i_src] = 0
+                src_best_sample[i_src] = -1
+                if record_status:
+                    src_status[i_src, :] = 0
+                continue
 
             tid = get_thread_id()
             if tid < 0 or tid >= image_partials.shape[0]:
@@ -2288,12 +2286,6 @@ def process_peaks_parallel(
                 pixel_hits[j, 4] = src_hits[i_src, j, 4]
                 pixel_hits[j, 5] = src_hits[i_src, j, 5]
                 pixel_hits[j, 6] = src_hits[i_src, j, 6]
-
-            mult_i = source_multiplicity[i_pk]
-            if mult_i > 1:
-                inv_mult = 1.0 / float(mult_i)
-                for i_hit in range(pixel_hits.shape[0]):
-                    pixel_hits[i_hit, 0] *= inv_mult
             hit_tables[i_pk] = pixel_hits
 
             nm = int(src_miss_counts[i_src])
@@ -2316,17 +2308,24 @@ def process_peaks_parallel(
             H = float(miller[i_pk, 0])
             K = float(miller[i_pk, 1])
             L = float(miller[i_pk, 2])
-            reflI = intensities[i_pk]
 
             forced_idx = -1
             if single_sample_indices is not None:
                 if i_pk < single_sample_indices.shape[0]:
                     forced_idx = int(single_sample_indices[i_pk])
 
-            reflI_eff = reflI
-            mult_i = source_multiplicity[i_pk]
-            if mult_i > 1:
-                reflI_eff = reflI * float(mult_i)
+            reflI_eff = source_total_sf[i_pk]
+            if reflI_eff <= 0.0:
+                hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+                miss_tables[i_pk] = np.empty((0, 3), dtype=np.float64)
+                if record_status:
+                    all_status[i_pk, :] = 0
+                if best_sample_indices_out is not None:
+                    if i_pk < best_sample_indices_out.shape[0]:
+                        best_sample_indices_out[i_pk] = -1
+                if save_flag == 1:
+                    q_count[i_pk] = 0
+                continue
 
             pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
                 H,
@@ -2364,14 +2363,6 @@ def process_peaks_parallel(
                 solve_q_mode_i,
                 forced_idx,
             )
-            if mult_i > 1:
-                inv_mult = 1.0 / float(mult_i)
-                for i_hit in range(pixel_hits.shape[0]):
-                    pixel_hits[i_hit, 0] *= inv_mult
-                if save_flag == 1:
-                    qn = q_count[i_pk]
-                    for i_q in range(qn):
-                        q_data[i_pk, i_q, 3] *= inv_mult
 
             if record_status:
                 all_status[i_pk, :] = status_arr
@@ -2381,7 +2372,7 @@ def process_peaks_parallel(
                 if i_pk < best_sample_indices_out.shape[0]:
                     best_sample_indices_out[i_pk] = best_sample_idx_out
 
-    # Expand duplicate peaks from their unique source entries.
+    # Expand non-source peaks from source templates, scaling by each peak SF.
     for i_pk in range(num_peaks):
         H = float(miller[i_pk, 0])
         K = float(miller[i_pk, 1])
@@ -2393,18 +2384,27 @@ def process_peaks_parallel(
         if src_idx < 0 or src_idx == i_pk:
             continue
 
-        src_hits = hit_tables[src_idx]
-        n_src_hits = src_hits.shape[0]
-        pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
-        for i_hit in range(n_src_hits):
-            pixel_hits[i_hit, 0] = src_hits[i_hit, 0]
-            pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
-            pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
-            pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
-            pixel_hits[i_hit, 4] = H
-            pixel_hits[i_hit, 5] = K
-            pixel_hits[i_hit, 6] = L
-        hit_tables[i_pk] = pixel_hits
+        total_sf = source_total_sf[src_idx]
+        peak_sf = intensities[i_pk]
+        scale = 0.0
+        if total_sf > 0.0 and peak_sf > 0.0:
+            scale = peak_sf / total_sf
+
+        if scale > 0.0:
+            src_hits = hit_tables[src_idx]
+            n_src_hits = src_hits.shape[0]
+            pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+            for i_hit in range(n_src_hits):
+                pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
+                pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
+                pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
+                pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
+                pixel_hits[i_hit, 4] = H
+                pixel_hits[i_hit, 5] = K
+                pixel_hits[i_hit, 6] = L
+            hit_tables[i_pk] = pixel_hits
+        else:
+            hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
 
         src_miss = miss_tables[src_idx]
         n_src_miss = src_miss.shape[0]
@@ -2419,14 +2419,17 @@ def process_peaks_parallel(
             all_status[i_pk, :] = all_status[src_idx, :]
 
         if save_flag == 1:
-            src_q_count = q_count[src_idx]
-            q_count[i_pk] = src_q_count
-            for i_q in range(src_q_count):
-                q_data[i_pk, i_q, 0] = q_data[src_idx, i_q, 0]
-                q_data[i_pk, i_q, 1] = q_data[src_idx, i_q, 1]
-                q_data[i_pk, i_q, 2] = q_data[src_idx, i_q, 2]
-                q_data[i_pk, i_q, 3] = q_data[src_idx, i_q, 3]
-                q_data[i_pk, i_q, 4] = q_data[src_idx, i_q, 4]
+            if scale > 0.0:
+                src_q_count = q_count[src_idx]
+                q_count[i_pk] = src_q_count
+                for i_q in range(src_q_count):
+                    q_data[i_pk, i_q, 0] = q_data[src_idx, i_q, 0]
+                    q_data[i_pk, i_q, 1] = q_data[src_idx, i_q, 1]
+                    q_data[i_pk, i_q, 2] = q_data[src_idx, i_q, 2]
+                    q_data[i_pk, i_q, 3] = q_data[src_idx, i_q, 3] * scale
+                    q_data[i_pk, i_q, 4] = q_data[src_idx, i_q, 4]
+            else:
+                q_count[i_pk] = 0
 
         if best_sample_indices_out is not None:
             if (
@@ -2434,6 +2437,43 @@ def process_peaks_parallel(
                 and src_idx < best_sample_indices_out.shape[0]
             ):
                 best_sample_indices_out[i_pk] = best_sample_indices_out[src_idx]
+
+    # Scale source rows down from group-total SF to per-peak SF.
+    for i_src in range(source_count):
+        i_pk = source_indices[i_src]
+        H = float(miller[i_pk, 0])
+        K = float(miller[i_pk, 1])
+        L = float(miller[i_pk, 2])
+        total_sf = source_total_sf[i_pk]
+        peak_sf = intensities[i_pk]
+
+        scale = 0.0
+        if total_sf > 0.0 and peak_sf > 0.0:
+            scale = peak_sf / total_sf
+
+        if scale <= 0.0:
+            hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+            if save_flag == 1:
+                q_count[i_pk] = 0
+            continue
+
+        src_hits = hit_tables[i_pk]
+        n_src_hits = src_hits.shape[0]
+        pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+        for i_hit in range(n_src_hits):
+            pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
+            pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
+            pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
+            pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
+            pixel_hits[i_hit, 4] = H
+            pixel_hits[i_hit, 5] = K
+            pixel_hits[i_hit, 6] = L
+        hit_tables[i_pk] = pixel_hits
+
+        if save_flag == 1 and abs(scale - 1.0) > 1e-15:
+            qn = q_count[i_pk]
+            for i_q in range(qn):
+                q_data[i_pk, i_q, 3] *= scale
 
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
