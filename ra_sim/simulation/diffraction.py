@@ -2150,158 +2150,184 @@ def process_peaks_parallel(
         src_i = group_src_idx[i_grp]
         source_multiplicity[src_i] = group_mult[i_grp]
 
-    # Serial reflection loop below writes directly into ``image``.
-    # Keep thread-local accumulation disabled here to avoid relying on
-    # ``get_thread_id`` outside a parallel ``prange`` context.
-    use_thread_local_image = False
-    image_partials = np.zeros((1, 1, 1), dtype=np.float64)
-
-    # Keep this loop serial for correctness: writing numba typed lists and
-    # per-reflection diagnostics from parallel workers produced non-deterministic
-    # image corruption (extreme outliers/NaNs) on multi-threaded runs.
+    # Build the compact list of source peaks (the unique reflections we compute).
+    source_indices = np.empty(group_count, dtype=np.int64)
+    source_count = 0
     for i_pk in range(num_peaks):
-        # Ensure HKL values remain floating point to allow fractional indices
-        H = float(miller[i_pk, 0])
-        K = float(miller[i_pk, 1])
-        L = float(miller[i_pk, 2])
-        if L < 0.0:
-            continue
-        reflI= intensities[i_pk]
+        if source_index_for_peak[i_pk] == i_pk:
+            if float(miller[i_pk, 2]) >= 0.0:
+                source_indices[source_count] = i_pk
+                source_count += 1
 
-        # We'll do a reflection-level call to calculate_phi
-        forced_idx = -1
-        if single_sample_indices is not None:
-            if i_pk < single_sample_indices.shape[0]:
-                forced_idx = int(single_sample_indices[i_pk])
+    # Decide whether to parallelize source-peak evaluation.
+    thread_count = get_num_threads()
+    if thread_count < 1:
+        thread_count = 1
+    bytes_needed = (
+        float(thread_count)
+        * float(image_size)
+        * float(image_size)
+        * 8.0
+    )
+    can_use_thread_local = bytes_needed <= float(_THREAD_LOCAL_IMAGE_MAX_BYTES)
+    parallel_sources = (
+        source_count > 1
+        and save_flag != 1
+        and can_use_thread_local
+    )
 
-        src_idx = source_index_for_peak[i_pk]
-        if src_idx >= 0 and src_idx != i_pk:
-            cached_src = src_idx
-            src_hits = hit_tables[cached_src]
-            n_src_hits = src_hits.shape[0]
-            pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
-            for i_hit in range(n_src_hits):
-                pixel_hits[i_hit, 0] = src_hits[i_hit, 0]
-                pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
-                pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
-                pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
-                pixel_hits[i_hit, 4] = H
-                pixel_hits[i_hit, 5] = K
-                pixel_hits[i_hit, 6] = L
+    if parallel_sources:
+        image_partials = np.zeros((thread_count, image_size, image_size), dtype=np.float64)
+        max_hits = max(n_samp * 2, 16)
+        src_hit_counts = np.zeros(source_count, dtype=np.int64)
+        src_hits = np.zeros((source_count, max_hits, 7), dtype=np.float64)
+        src_miss_counts = np.zeros(source_count, dtype=np.int64)
+        src_miss = np.zeros((source_count, max_hits, 3), dtype=np.float64)
+        src_best_sample = np.full(source_count, -1, dtype=np.int64)
+        if record_status:
+            src_status = np.zeros((source_count, n_samp), dtype=np.int64)
+        else:
+            src_status = np.zeros((1, 1), dtype=np.int64)
+
+        for i_src in prange(source_count):
+            i_pk = source_indices[i_src]
+            H = float(miller[i_pk, 0])
+            K = float(miller[i_pk, 1])
+            L = float(miller[i_pk, 2])
+            reflI = intensities[i_pk]
+
+            forced_idx = -1
+            if single_sample_indices is not None:
+                if i_pk < single_sample_indices.shape[0]:
+                    forced_idx = int(single_sample_indices[i_pk])
+
+            reflI_eff = reflI
+            mult_i = source_multiplicity[i_pk]
+            if mult_i > 1:
+                reflI_eff = reflI * float(mult_i)
+
+            tid = get_thread_id()
+            if tid < 0 or tid >= image_partials.shape[0]:
+                tid = 0
+            pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
+                H,
+                K,
+                L,
+                av,
+                cv,
+                image_partials[tid],
+                image_size,
+                reflI_eff,
+                sigma_rad,
+                gamma_rad_m,
+                eta_pv,
+                debye_x,
+                debye_y,
+                center,
+                R_sample_precomputed,
+                n_det_rot,
+                Detector_Pos,
+                e1_det,
+                e2_det,
+                sample_terms,
+                sample_n2_array,
+                sample_eps2_array,
+                best_idx_precomputed,
+                save_flag,
+                q_data,
+                q_count,
+                i_pk,
+                record_status,
+                thickness,
+                optics_mode,
+                solve_q_steps_i,
+                solve_q_rel_tol_i,
+                solve_q_mode_i,
+                forced_idx,
+            )
+            nh = pixel_hits.shape[0]
+            if nh > max_hits:
+                nh = max_hits
+            src_hit_counts[i_src] = nh
+            for j in range(nh):
+                src_hits[i_src, j, 0] = pixel_hits[j, 0]
+                src_hits[i_src, j, 1] = pixel_hits[j, 1]
+                src_hits[i_src, j, 2] = pixel_hits[j, 2]
+                src_hits[i_src, j, 3] = pixel_hits[j, 3]
+                src_hits[i_src, j, 4] = pixel_hits[j, 4]
+                src_hits[i_src, j, 5] = pixel_hits[j, 5]
+                src_hits[i_src, j, 6] = pixel_hits[j, 6]
+
+            nm = missed_arr.shape[0]
+            if nm > max_hits:
+                nm = max_hits
+            src_miss_counts[i_src] = nm
+            for j in range(nm):
+                src_miss[i_src, j, 0] = missed_arr[j, 0]
+                src_miss[i_src, j, 1] = missed_arr[j, 1]
+                src_miss[i_src, j, 2] = missed_arr[j, 2]
+
+            src_best_sample[i_src] = best_sample_idx_out
+            if record_status:
+                src_status[i_src, :] = status_arr
+
+        for tid in range(image_partials.shape[0]):
+            for r in range(image_size):
+                for c in range(image_size):
+                    image[r, c] += image_partials[tid, r, c]
+
+        for i_src in range(source_count):
+            i_pk = source_indices[i_src]
+            nh = int(src_hit_counts[i_src])
+            pixel_hits = np.empty((nh, 7), dtype=np.float64)
+            for j in range(nh):
+                pixel_hits[j, 0] = src_hits[i_src, j, 0]
+                pixel_hits[j, 1] = src_hits[i_src, j, 1]
+                pixel_hits[j, 2] = src_hits[i_src, j, 2]
+                pixel_hits[j, 3] = src_hits[i_src, j, 3]
+                pixel_hits[j, 4] = src_hits[i_src, j, 4]
+                pixel_hits[j, 5] = src_hits[i_src, j, 5]
+                pixel_hits[j, 6] = src_hits[i_src, j, 6]
+
+            mult_i = source_multiplicity[i_pk]
+            if mult_i > 1:
+                inv_mult = 1.0 / float(mult_i)
+                for i_hit in range(pixel_hits.shape[0]):
+                    pixel_hits[i_hit, 0] *= inv_mult
             hit_tables[i_pk] = pixel_hits
 
-            src_miss = miss_tables[cached_src]
-            n_src_miss = src_miss.shape[0]
-            missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
-            for i_miss in range(n_src_miss):
-                missed_arr[i_miss, 0] = src_miss[i_miss, 0]
-                missed_arr[i_miss, 1] = src_miss[i_miss, 1]
-                missed_arr[i_miss, 2] = src_miss[i_miss, 2]
+            nm = int(src_miss_counts[i_src])
+            missed_arr = np.empty((nm, 3), dtype=np.float64)
+            for j in range(nm):
+                missed_arr[j, 0] = src_miss[i_src, j, 0]
+                missed_arr[j, 1] = src_miss[i_src, j, 1]
+                missed_arr[j, 2] = src_miss[i_src, j, 2]
             miss_tables[i_pk] = missed_arr
 
             if record_status:
-                all_status[i_pk, :] = all_status[cached_src, :]
-
-            if save_flag == 1:
-                src_q_count = q_count[cached_src]
-                q_count[i_pk] = src_q_count
-                for i_q in range(src_q_count):
-                    q_data[i_pk, i_q, 0] = q_data[cached_src, i_q, 0]
-                    q_data[i_pk, i_q, 1] = q_data[cached_src, i_q, 1]
-                    q_data[i_pk, i_q, 2] = q_data[cached_src, i_q, 2]
-                    q_data[i_pk, i_q, 3] = q_data[cached_src, i_q, 3]
-                    q_data[i_pk, i_q, 4] = q_data[cached_src, i_q, 4]
-
+                all_status[i_pk, :] = src_status[i_src, :]
             if best_sample_indices_out is not None:
-                if (
-                    i_pk < best_sample_indices_out.shape[0]
-                    and cached_src < best_sample_indices_out.shape[0]
-                ):
-                    best_sample_indices_out[i_pk] = best_sample_indices_out[cached_src]
-            continue
+                if i_pk < best_sample_indices_out.shape[0]:
+                    best_sample_indices_out[i_pk] = src_best_sample[i_src]
+    else:
+        # Serial source loop (supports q_data recording when save_flag==1).
+        for i_src in range(source_count):
+            i_pk = source_indices[i_src]
+            H = float(miller[i_pk, 0])
+            K = float(miller[i_pk, 1])
+            L = float(miller[i_pk, 2])
+            reflI = intensities[i_pk]
 
-        reflI_eff = reflI
-        mult_i = source_multiplicity[i_pk]
-        if mult_i > 1:
-            reflI_eff = reflI * float(mult_i)
+            forced_idx = -1
+            if single_sample_indices is not None:
+                if i_pk < single_sample_indices.shape[0]:
+                    forced_idx = int(single_sample_indices[i_pk])
 
-        if use_thread_local_image:
-            tid = get_thread_id()
-            if 0 <= tid < image_partials.shape[0]:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
-                    H,
-                    K,
-                    L,
-                    av,
-                    cv,
-                    image_partials[tid],
-                    image_size,
-                    reflI_eff,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    debye_x,
-                    debye_y,
-                    center,
-                    R_sample_precomputed,
-                    n_det_rot,
-                    Detector_Pos,
-                    e1_det,
-                    e2_det,
-                    sample_terms,
-                    sample_n2_array,
-                    sample_eps2_array,
-                    best_idx_precomputed,
-                    save_flag,
-                    q_data,
-                    q_count,
-                    i_pk,
-                    record_status,
-                    thickness,
-                    optics_mode,
-                    solve_q_steps_i,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    forced_idx,
-                )
-            else:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
-                    H,
-                    K,
-                    L,
-                    av,
-                    cv,
-                    image,
-                    image_size,
-                    reflI_eff,
-                    sigma_rad,
-                    gamma_rad_m,
-                    eta_pv,
-                    debye_x,
-                    debye_y,
-                    center,
-                    R_sample_precomputed,
-                    n_det_rot,
-                    Detector_Pos,
-                    e1_det,
-                    e2_det,
-                    sample_terms,
-                    sample_n2_array,
-                    sample_eps2_array,
-                    best_idx_precomputed,
-                    save_flag,
-                    q_data,
-                    q_count,
-                    i_pk,
-                    record_status,
-                    thickness,
-                    optics_mode,
-                    solve_q_steps_i,
-                    solve_q_rel_tol_i,
-                    solve_q_mode_i,
-                    forced_idx,
-                )
-        else:
+            reflI_eff = reflI
+            mult_i = source_multiplicity[i_pk]
+            if mult_i > 1:
+                reflI_eff = reflI * float(mult_i)
+
             pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
                 H,
                 K,
@@ -2338,27 +2364,77 @@ def process_peaks_parallel(
                 solve_q_mode_i,
                 forced_idx,
             )
-        if mult_i > 1:
-            inv_mult = 1.0 / float(mult_i)
-            for i_hit in range(pixel_hits.shape[0]):
-                pixel_hits[i_hit, 0] *= inv_mult
-            if save_flag == 1:
-                qn = q_count[i_pk]
-                for i_q in range(qn):
-                    q_data[i_pk, i_q, 3] *= inv_mult
-        if record_status:
-            all_status[i_pk, :] = status_arr
-        hit_tables[i_pk] = pixel_hits
-        miss_tables[i_pk] = missed_arr
-        if best_sample_indices_out is not None:
-            if i_pk < best_sample_indices_out.shape[0]:
-                best_sample_indices_out[i_pk] = best_sample_idx_out
+            if mult_i > 1:
+                inv_mult = 1.0 / float(mult_i)
+                for i_hit in range(pixel_hits.shape[0]):
+                    pixel_hits[i_hit, 0] *= inv_mult
+                if save_flag == 1:
+                    qn = q_count[i_pk]
+                    for i_q in range(qn):
+                        q_data[i_pk, i_q, 3] *= inv_mult
 
-    if use_thread_local_image:
-        for tid in range(image_partials.shape[0]):
-            for r in range(image_size):
-                for c in range(image_size):
-                    image[r, c] += image_partials[tid, r, c]
+            if record_status:
+                all_status[i_pk, :] = status_arr
+            hit_tables[i_pk] = pixel_hits
+            miss_tables[i_pk] = missed_arr
+            if best_sample_indices_out is not None:
+                if i_pk < best_sample_indices_out.shape[0]:
+                    best_sample_indices_out[i_pk] = best_sample_idx_out
+
+    # Expand duplicate peaks from their unique source entries.
+    for i_pk in range(num_peaks):
+        H = float(miller[i_pk, 0])
+        K = float(miller[i_pk, 1])
+        L = float(miller[i_pk, 2])
+        if L < 0.0:
+            continue
+
+        src_idx = source_index_for_peak[i_pk]
+        if src_idx < 0 or src_idx == i_pk:
+            continue
+
+        src_hits = hit_tables[src_idx]
+        n_src_hits = src_hits.shape[0]
+        pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+        for i_hit in range(n_src_hits):
+            pixel_hits[i_hit, 0] = src_hits[i_hit, 0]
+            pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
+            pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
+            pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
+            pixel_hits[i_hit, 4] = H
+            pixel_hits[i_hit, 5] = K
+            pixel_hits[i_hit, 6] = L
+        hit_tables[i_pk] = pixel_hits
+
+        src_miss = miss_tables[src_idx]
+        n_src_miss = src_miss.shape[0]
+        missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
+        for i_miss in range(n_src_miss):
+            missed_arr[i_miss, 0] = src_miss[i_miss, 0]
+            missed_arr[i_miss, 1] = src_miss[i_miss, 1]
+            missed_arr[i_miss, 2] = src_miss[i_miss, 2]
+        miss_tables[i_pk] = missed_arr
+
+        if record_status:
+            all_status[i_pk, :] = all_status[src_idx, :]
+
+        if save_flag == 1:
+            src_q_count = q_count[src_idx]
+            q_count[i_pk] = src_q_count
+            for i_q in range(src_q_count):
+                q_data[i_pk, i_q, 0] = q_data[src_idx, i_q, 0]
+                q_data[i_pk, i_q, 1] = q_data[src_idx, i_q, 1]
+                q_data[i_pk, i_q, 2] = q_data[src_idx, i_q, 2]
+                q_data[i_pk, i_q, 3] = q_data[src_idx, i_q, 3]
+                q_data[i_pk, i_q, 4] = q_data[src_idx, i_q, 4]
+
+        if best_sample_indices_out is not None:
+            if (
+                i_pk < best_sample_indices_out.shape[0]
+                and src_idx < best_sample_indices_out.shape[0]
+            ):
+                best_sample_indices_out[i_pk] = best_sample_indices_out[src_idx]
+
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
 
