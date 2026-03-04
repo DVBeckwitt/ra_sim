@@ -316,7 +316,7 @@ def run_headless_simulation(
     except (TypeError, ValueError):
         solve_q_rel_tol = 5.0e-4
     solve_q_rel_tol = float(np.clip(solve_q_rel_tol, 1.0e-6, 5.0e-2))
-    mode_raw = beam_cfg.get("solve_q_mode", "adaptive")
+    mode_raw = beam_cfg.get("solve_q_mode", "uniform")
     if isinstance(mode_raw, (int, np.integer, float, np.floating)):
         solve_q_mode = SOLVE_Q_MODE_UNIFORM if int(round(float(mode_raw))) == 0 else SOLVE_Q_MODE_ADAPTIVE
     else:

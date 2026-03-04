@@ -62,7 +62,7 @@ def _normalize_optics_mode(value, fallback="fast"):
     return fallback
 
 
-def _normalize_solve_q_mode(value, fallback="adaptive"):
+def _normalize_solve_q_mode(value, fallback="uniform"):
     """Return solve-q mode label as ``'uniform'`` or ``'adaptive'``."""
 
     if value is None:
@@ -235,7 +235,7 @@ def load_parameters(
                         float(np.clip(tol_val, SOLVE_Q_REL_TOL_MIN, SOLVE_Q_REL_TOL_MAX))
                     )
         if solve_q_mode_var is not None:
-            current_mode = _normalize_solve_q_mode(solve_q_mode_var.get(), fallback="adaptive")
+            current_mode = _normalize_solve_q_mode(solve_q_mode_var.get(), fallback="uniform")
             stored_mode = _normalize_solve_q_mode(
                 params.get('solve_q_mode', current_mode),
                 fallback=current_mode,
@@ -379,7 +379,7 @@ def save_all_parameters(
     if solve_q_mode_var is not None:
         parameters['solve_q_mode'] = _normalize_solve_q_mode(
             solve_q_mode_var.get(),
-            fallback="adaptive",
+            fallback="uniform",
         )
     np.save(filepath, parameters)
     print(f"Parameters saved successfully to {filepath}")

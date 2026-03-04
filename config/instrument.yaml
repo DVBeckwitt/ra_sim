@@ -28,7 +28,7 @@ instrument:
     # Lower values are stricter (more accurate, slower).
     solve_q_rel_tol: 5.0e-4
     # Arc solver mode: adaptive (robust, slower) or uniform (fast).
-    solve_q_mode: adaptive
+    solve_q_mode: uniform
     # Relative wavelength spread (percent). Also exposed in the main GUI as
     # "Bandwidth (%)" and persisted in saved parameter profiles.
     bandwidth_percent: 0.7

@@ -45,7 +45,7 @@ class MosaicParams:
     eta: float
     solve_q_steps: int = 1000
     solve_q_rel_tol: float = 5.0e-4
-    solve_q_mode: int = 1
+    solve_q_mode: int = 0
 
 
 @dataclass

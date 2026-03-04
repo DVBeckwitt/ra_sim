@@ -4810,6 +4810,119 @@ def _auto_match_background_peaks(
     return matches, stats
 
 
+def _auto_match_background_peaks_with_relaxation(
+    simulated_peaks: list[dict[str, object]],
+    background_image: np.ndarray,
+    cfg: dict[str, object] | None = None,
+    *,
+    min_matches: int = 1,
+) -> tuple[
+    list[dict[str, object]],
+    dict[str, float],
+    dict[str, object],
+    list[dict[str, float | str]],
+]:
+    """Retry auto-match with progressively looser thresholds when needed."""
+
+    base_cfg = dict(cfg) if isinstance(cfg, dict) else {}
+    target_min_matches = max(1, int(min_matches))
+    attempts: list[dict[str, float | str]] = []
+
+    def _run_attempt(
+        attempt_cfg: dict[str, object], label: str
+    ) -> tuple[list[dict[str, object]], dict[str, float]]:
+        matches_i, stats_i = _auto_match_background_peaks(
+            simulated_peaks,
+            background_image,
+            attempt_cfg,
+        )
+        attempts.append(
+            {
+                "label": label,
+                "matches": float(len(matches_i)),
+                "search_radius_px": float(attempt_cfg.get("search_radius_px", np.nan)),
+                "min_match_prominence_sigma": float(
+                    attempt_cfg.get(
+                        "min_match_prominence_sigma",
+                        attempt_cfg.get("min_prominence_sigma", np.nan),
+                    )
+                ),
+                "max_candidate_peaks": float(attempt_cfg.get("max_candidate_peaks", np.nan)),
+                "within_radius_count": float(stats_i.get("within_radius_count", np.nan)),
+                "matched_pre_clip_count": float(
+                    stats_i.get("matched_pre_clip_count", np.nan)
+                ),
+                "clipped_count": float(stats_i.get("clipped_count", np.nan)),
+            }
+        )
+        return matches_i, stats_i
+
+    best_matches, best_stats = _run_attempt(base_cfg, "base")
+    best_cfg = dict(base_cfg)
+
+    if len(best_matches) >= target_min_matches:
+        return best_matches, best_stats, best_cfg, attempts
+
+    if not bool(base_cfg.get("relax_on_low_matches", True)):
+        return best_matches, best_stats, best_cfg, attempts
+
+    base_radius = max(1.0, float(base_cfg.get("search_radius_px", 18.0)))
+    base_match_prom = float(
+        base_cfg.get(
+            "min_match_prominence_sigma",
+            base_cfg.get("min_prominence_sigma", 2.0),
+        )
+    )
+    base_max_candidates = max(50, int(base_cfg.get("max_candidate_peaks", 1200)))
+    base_ambiguity_margin = max(0.0, float(base_cfg.get("ambiguity_margin_px", 2.0)))
+    base_ambiguity_ratio = max(1.0, float(base_cfg.get("ambiguity_ratio_min", 1.15)))
+    base_distance_sigma_clip = max(0.0, float(base_cfg.get("distance_sigma_clip", 3.5)))
+
+    relax_steps = max(1, min(6, int(base_cfg.get("relax_steps", 3))))
+    radius_growth = max(0.1, float(base_cfg.get("relax_radius_growth", 0.65)))
+    prominence_step = max(0.0, float(base_cfg.get("relax_prominence_step", 0.4)))
+    candidate_growth = max(0.0, float(base_cfg.get("relax_candidate_growth", 0.35)))
+
+    for step in range(1, relax_steps + 1):
+        relax_cfg = dict(base_cfg)
+        relax_cfg["search_radius_px"] = float(
+            min(120.0, max(base_radius, base_radius * (1.0 + radius_growth * step)))
+        )
+        relax_cfg["min_match_prominence_sigma"] = float(
+            max(0.0, base_match_prom - prominence_step * step)
+        )
+        relax_cfg["max_candidate_peaks"] = int(
+            min(
+                5000,
+                max(
+                    base_max_candidates,
+                    round(base_max_candidates * (1.0 + candidate_growth * step)),
+                ),
+            )
+        )
+        relax_cfg["ambiguity_margin_px"] = float(max(0.0, base_ambiguity_margin - 0.5 * step))
+        relax_cfg["ambiguity_ratio_min"] = float(max(1.0, base_ambiguity_ratio - 0.05 * step))
+        relax_cfg["distance_sigma_clip"] = float(
+            max(base_distance_sigma_clip, 3.5 + 0.5 * step)
+        )
+
+        matches_i, stats_i = _run_attempt(relax_cfg, f"relax_{step}")
+        best_is_improved = len(matches_i) > len(best_matches)
+        if len(matches_i) == len(best_matches):
+            best_conf = float(best_stats.get("median_match_confidence", -np.inf))
+            cand_conf = float(stats_i.get("median_match_confidence", -np.inf))
+            best_is_improved = cand_conf > best_conf
+        if best_is_improved:
+            best_matches = matches_i
+            best_stats = stats_i
+            best_cfg = relax_cfg
+
+        if len(best_matches) >= target_min_matches:
+            break
+
+    return best_matches, best_stats, best_cfg, attempts
+
+
 def on_fit_geometry_click():
     global profile_cache, last_simulation_signature
     _clear_geometry_pick_artists()
@@ -4917,23 +5030,32 @@ def on_fit_geometry_click():
         )
         return
 
-    matched_pairs, match_stats = _auto_match_background_peaks(
-        simulated_peaks,
-        np.asarray(display_background, dtype=float),
-        auto_match_cfg,
-    )
-
     default_min_matches = max(6, len(var_names) + 2)
     min_matches = int(auto_match_cfg.get("min_matches", default_min_matches))
     min_matches = max(1, min_matches)
 
+    matched_pairs, match_stats, effective_auto_match_cfg, auto_match_attempts = (
+        _auto_match_background_peaks_with_relaxation(
+            simulated_peaks,
+            np.asarray(display_background, dtype=float),
+            auto_match_cfg,
+            min_matches=min_matches,
+        )
+    )
+
     if len(matched_pairs) < min_matches:
         simulated_count = int(match_stats.get("simulated_count", len(simulated_peaks)))
+        best_radius = float(
+            effective_auto_match_cfg.get(
+                "search_radius_px", auto_match_cfg.get("search_radius_px", 18.0)
+            )
+        )
         progress_label_geometry.config(
             text=(
                 "Geometry fit cancelled: auto-match found "
                 f"{len(matched_pairs)}/{simulated_count} confident peaks "
-                f"(need at least {min_matches})."
+                f"(need at least {min_matches}); "
+                f"best radius={best_radius:.1f}px. Try Auto-Match Scale, then retry."
             )
         )
         return
@@ -4995,10 +5117,34 @@ def on_fit_geometry_click():
         _log_line(f"Geometry fit started: {stamp}")
         _log_line()
         _log_section(
-            "Auto-match configuration:",
+            "Auto-match requested configuration:",
             [
                 f"{key}={value}" for key, value in sorted(auto_match_cfg.items())
             ] or ["<defaults>"],
+        )
+        _log_section(
+            "Auto-match effective configuration:",
+            [
+                f"{key}={value}"
+                for key, value in sorted(effective_auto_match_cfg.items())
+            ] or ["<defaults>"],
+        )
+        _log_section(
+            "Auto-match attempts:",
+            [
+                (
+                    f"{entry.get('label', 'attempt')}: "
+                    f"matches={int(float(entry.get('matches', 0.0)))} "
+                    f"radius={float(entry.get('search_radius_px', np.nan)):.2f}px "
+                    f"min_prom={float(entry.get('min_match_prominence_sigma', np.nan)):.2f}σ "
+                    f"cands={int(float(entry.get('max_candidate_peaks', 0.0)))} "
+                    f"within={int(float(entry.get('within_radius_count', 0.0)))} "
+                    f"pre_clip={int(float(entry.get('matched_pre_clip_count', 0.0)))} "
+                    f"clipped={int(float(entry.get('clipped_count', 0.0)))}"
+                )
+                for entry in auto_match_attempts
+            ]
+            or ["<none>"],
         )
         _log_section(
             "Auto-match summary:",
@@ -5190,16 +5336,36 @@ def on_fit_geometry_click():
                     )
                     break
 
-                matched_iter, stats_iter = _auto_match_background_peaks(
-                    sim_iter,
-                    np.asarray(display_background, dtype=float),
-                    auto_match_cfg,
+                matched_iter, stats_iter, _, rematch_attempts = (
+                    _auto_match_background_peaks_with_relaxation(
+                        sim_iter,
+                        np.asarray(display_background, dtype=float),
+                        auto_match_cfg,
+                        min_matches=min_matches,
+                    )
                 )
                 if len(matched_iter) < min_matches:
+                    best_attempt = (
+                        max(
+                            rematch_attempts,
+                            key=lambda entry: float(entry.get("matches", 0.0)),
+                        )
+                        if rematch_attempts
+                        else None
+                    )
+                    best_attempt_note = ""
+                    if best_attempt is not None:
+                        best_attempt_note = (
+                            "; best_attempt="
+                            f"{best_attempt.get('label', 'n/a')}"
+                            f"({int(float(best_attempt.get('matches', 0.0)))} matches, "
+                            f"radius={float(best_attempt.get('search_radius_px', np.nan)):.1f}px)"
+                        )
                     iteration_logs.append(
                         (
                             f"iter={iter_idx + 1}: rematch skipped "
-                            f"({len(matched_iter)} < min_matches={min_matches})"
+                            f"({len(matched_iter)} < min_matches={min_matches}"
+                            f"{best_attempt_note})"
                         )
                     )
                     break
