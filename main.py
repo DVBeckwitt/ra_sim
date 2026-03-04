@@ -3012,9 +3012,14 @@ def _toggle_hkl_pick_mode():
         return
 
     if not _ensure_peak_overlay_data(force=False) or not peak_positions:
-        progress_label_positions.config(
-            text="No simulated peaks available yet. Run/update the simulation first."
+        _set_hkl_pick_mode(
+            True,
+            message=(
+                "Preparing simulated peak map for HKL picking... "
+                "wait for the next update."
+            ),
         )
+        schedule_update()
         return
 
     _set_hkl_pick_mode(
@@ -3217,8 +3222,12 @@ def _select_peak_by_hkl(
     target = (int(h), int(k), int(l))
 
     if not peak_positions:
+        if not silent_if_missing and unscaled_image_global is not None:
+            schedule_update()
         if not silent_if_missing:
-            progress_label_positions.config(text="Run a simulation first.")
+            progress_label_positions.config(
+                text="Preparing simulated peak map... try again after update."
+            )
         return False
 
     def _m_idx(hkl_triplet: tuple[int, int, int]) -> int:
@@ -4245,7 +4254,10 @@ def on_canvas_click(event):
         return                               # click was outside the image
     _ensure_peak_overlay_data(force=False)
     if not peak_positions:                   # no simulation yet
-        progress_label_positions.config(text="Run a simulation first.")
+        schedule_update()
+        progress_label_positions.config(
+            text="Preparing simulated peak map... click again after update."
+        )
         return
 
     click_col = float(event.xdata)
@@ -6112,6 +6124,12 @@ last_simulation_signature = None
 stored_max_positions_local = None
 stored_sim_image = None
 stored_peak_table_lattice = None
+stored_primary_sim_image = None
+stored_secondary_sim_image = None
+stored_primary_max_positions = None
+stored_secondary_max_positions = None
+stored_primary_peak_table_lattice = None
+stored_secondary_peak_table_lattice = None
 last_unscaled_image_signature = None
 normalization_scale_cache = {"sig": None, "value": 1.0}
 peak_overlay_cache = {
@@ -6270,6 +6288,10 @@ def do_update():
     global update_pending, update_running, last_simulation_signature
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
+    global stored_primary_sim_image, stored_secondary_sim_image
+    global stored_primary_max_positions, stored_secondary_max_positions
+    global stored_primary_peak_table_lattice, stored_secondary_peak_table_lattice
+    global peak_positions, peak_millers, peak_intensities, peak_records, selected_peak_record
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
     global av2, cv2
     global last_caked_image_unscaled, last_caked_extent
@@ -6361,6 +6383,11 @@ def do_update():
 
     mosaic_params = build_mosaic_params()
     optics_mode_flag = _current_optics_mode_flag()
+    collect_hit_tables_requested = bool(
+        hkl_pick_armed
+        or selected_hkl_target is not None
+        or selected_peak_record is not None
+    )
 
 
     def get_sim_signature():
@@ -6392,6 +6419,7 @@ def do_update():
             int(num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
             int(np.size(mosaic_params["theta_array"])),
+            int(collect_hit_tables_requested),
         )
 
     # 1 – place near other globals
@@ -6400,7 +6428,6 @@ def do_update():
     global stored_max_positions_local        # <- add
 
     new_sim_sig = get_sim_signature()
-    global peak_positions, peak_millers, peak_intensities, peak_records, selected_peak_record
     if new_sim_sig != last_simulation_signature:
         last_simulation_signature = new_sim_sig
         peak_positions.clear()
@@ -6455,6 +6482,7 @@ def do_update():
                     solve_q_steps=int(mosaic_params["solve_q_steps"]),
                     solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
                     solve_q_mode=int(mosaic_params["solve_q_mode"]),
+                    collect_hit_tables=collect_hit_tables_requested,
                 )
             else:
                 miller_arr = np.asarray(data, dtype=np.float64)
@@ -6509,51 +6537,117 @@ def do_update():
                     solve_q_steps=int(mosaic_params["solve_q_steps"]),
                     solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
                     solve_q_mode=int(mosaic_params["solve_q_mode"]),
+                    collect_hit_tables=collect_hit_tables_requested,
                 ) + (None,)
 
-        primary_data = (
-            SIM_PRIMARY_QR
-            if isinstance(SIM_PRIMARY_QR, dict) and len(SIM_PRIMARY_QR) > 0
-            else SIM_MILLER1
-        )
-        img1, maxpos1, _, _, _, _, _ = run_one(primary_data, SIM_INTENS1, a_updated, c_updated)
-        if SIM_MILLER2.size > 0:
-            img2, maxpos2, _, _, _, _, _ = run_one(SIM_MILLER2, SIM_INTENS2, av2, cv2)
-        else:
-            img2 = np.zeros_like(img1)
-            maxpos2 = []
+        w1 = float(weight1_var.get())
+        w2 = float(weight2_var.get())
+        run_primary = abs(w1) > 1e-12
+        run_secondary = bool(SIM_MILLER2.size > 0 and abs(w2) > 1e-12)
 
-        w1 = weight1_var.get()
-        w2 = weight2_var.get()
-        updated_image = w1 * img1 + w2 * img2
-        max_positions_local = list(maxpos1) + list(maxpos2)
-        peak_table_lattice_local = [
+        img1 = np.zeros((image_size, image_size), dtype=np.float64)
+        img2 = np.zeros((image_size, image_size), dtype=np.float64)
+        maxpos1 = []
+        maxpos2 = []
+
+        if run_primary:
+            primary_data = (
+                SIM_PRIMARY_QR
+                if isinstance(SIM_PRIMARY_QR, dict) and len(SIM_PRIMARY_QR) > 0
+                else SIM_MILLER1
+            )
+            img1, maxpos1, _, _, _, _, _ = run_one(
+                primary_data,
+                SIM_INTENS1,
+                a_updated,
+                c_updated,
+            )
+
+        if run_secondary:
+            img2, maxpos2, _, _, _, _, _ = run_one(
+                SIM_MILLER2,
+                SIM_INTENS2,
+                av2,
+                cv2,
+            )
+
+        primary_max_positions_local = list(maxpos1)
+        secondary_max_positions_local = list(maxpos2)
+        primary_peak_table_lattice_local = [
             (float(a_updated), float(c_updated), "primary")
             for _ in maxpos1
         ]
-        if maxpos2:
+        secondary_peak_table_lattice_local = []
+        if secondary_max_positions_local:
             sec_a = float(av2) if av2 is not None else float(a_updated)
             sec_c = float(cv2) if cv2 is not None else float(c_updated)
-            peak_table_lattice_local.extend(
+            secondary_peak_table_lattice_local = [
                 (sec_a, sec_c, "secondary")
-                for _ in maxpos2
-            )
-        stored_max_positions_local = max_positions_local
-        stored_peak_table_lattice = peak_table_lattice_local
+                for _ in secondary_max_positions_local
+            ]
+
+        stored_primary_sim_image = img1
+        stored_secondary_sim_image = img2
+        stored_primary_max_positions = primary_max_positions_local
+        stored_secondary_max_positions = secondary_max_positions_local
+        stored_primary_peak_table_lattice = primary_peak_table_lattice_local
+        stored_secondary_peak_table_lattice = secondary_peak_table_lattice_local
+
+        updated_image = w1 * stored_primary_sim_image + w2 * stored_secondary_sim_image
+        max_positions_local = []
+        peak_table_lattice_local = []
+        if run_primary:
+            max_positions_local.extend(stored_primary_max_positions)
+            peak_table_lattice_local.extend(stored_primary_peak_table_lattice)
+        if run_secondary:
+            max_positions_local.extend(stored_secondary_max_positions)
+            peak_table_lattice_local.extend(stored_secondary_peak_table_lattice)
+
+        stored_max_positions_local = list(max_positions_local)
+        stored_peak_table_lattice = list(peak_table_lattice_local)
         stored_sim_image = updated_image
         image_generation_elapsed_ms = (
             perf_counter() - image_generation_start_time
         ) * 1e3
     else:
         # fall back to the cached arrays
-        if stored_max_positions_local is None:
+        if stored_primary_sim_image is None and stored_secondary_sim_image is None:
             # first run after programme start – force a simulation
             last_simulation_signature = None
             update_running = False
             return do_update()          # re-enter with computation path
-        max_positions_local = stored_max_positions_local
-        peak_table_lattice_local = stored_peak_table_lattice
-        updated_image       = stored_sim_image
+
+        w1 = float(weight1_var.get())
+        w2 = float(weight2_var.get())
+        run_primary = bool(stored_primary_sim_image is not None and abs(w1) > 1e-12)
+        run_secondary = bool(stored_secondary_sim_image is not None and abs(w2) > 1e-12)
+
+        img1 = (
+            stored_primary_sim_image
+            if stored_primary_sim_image is not None
+            else np.zeros((image_size, image_size), dtype=np.float64)
+        )
+        img2 = (
+            stored_secondary_sim_image
+            if stored_secondary_sim_image is not None
+            else np.zeros((image_size, image_size), dtype=np.float64)
+        )
+
+        updated_image = w1 * img1 + w2 * img2
+        max_positions_local = []
+        peak_table_lattice_local = []
+        if run_primary and stored_primary_max_positions is not None:
+            max_positions_local.extend(stored_primary_max_positions)
+            if stored_primary_peak_table_lattice is not None:
+                peak_table_lattice_local.extend(stored_primary_peak_table_lattice)
+        if run_secondary and stored_secondary_max_positions is not None:
+            max_positions_local.extend(stored_secondary_max_positions)
+            if stored_secondary_peak_table_lattice is not None:
+                peak_table_lattice_local.extend(stored_secondary_peak_table_lattice)
+
+        stored_max_positions_local = list(max_positions_local)
+        stored_peak_table_lattice = list(peak_table_lattice_local)
+        stored_sim_image = updated_image
 
     if not peak_table_lattice_local or len(peak_table_lattice_local) != len(max_positions_local):
         peak_table_lattice_local = [
@@ -10810,7 +10904,7 @@ if has_second_cif:
 
     def update_weights(*args):
         """Recompute intensities using the current CIF weights."""
-        global intensities, df_summary, last_simulation_signature
+        global intensities, df_summary
         w1 = weight1_var.get()
         w2 = weight2_var.get()
         intensities = w1 * intensities_cif1 + w2 * intensities_cif2
@@ -10819,7 +10913,6 @@ if has_second_cif:
             intensities = intensities * (100.0 / max_I)
 
         df_summary['Intensity'] = intensities
-        last_simulation_signature = None
         schedule_update()
 
     weight1_var.trace_add('write', update_weights)

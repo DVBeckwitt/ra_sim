@@ -1929,6 +1929,7 @@ def process_peaks_parallel(
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     single_sample_indices=None,
     best_sample_indices_out=None,
+    collect_hit_tables=True,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an
@@ -2048,11 +2049,13 @@ def process_peaks_parallel(
     else:
         q_data= np.zeros((1,1,5), dtype=np.float64)
         q_count= np.zeros(1, dtype=np.int64)
+    collect_tables = bool(collect_hit_tables)
     hit_tables = List.empty_list(types.float64[:, ::1])
     miss_tables = List.empty_list(types.float64[:, ::1])
-    for _ in range(num_peaks):
-        hit_tables.append(np.empty((0, 7), dtype=np.float64))
-        miss_tables.append(np.empty((0, 3), dtype=np.float64))
+    if collect_tables:
+        for _ in range(num_peaks):
+            hit_tables.append(np.empty((0, 7), dtype=np.float64))
+            miss_tables.append(np.empty((0, 3), dtype=np.float64))
     all_status = np.zeros((num_peaks, beam_x_array.size), dtype=np.int64)
     n_samp = beam_x_array.size
     n2_sample_array = np.empty(n_samp, dtype=np.complex128)
@@ -2173,11 +2176,18 @@ def process_peaks_parallel(
 
     if parallel_sources:
         image_partials = np.zeros((thread_count, image_size, image_size), dtype=np.float64)
-        max_hits = max(n_samp * 2, 16)
-        src_hit_counts = np.zeros(source_count, dtype=np.int64)
-        src_hits = np.zeros((source_count, max_hits, 7), dtype=np.float64)
-        src_miss_counts = np.zeros(source_count, dtype=np.int64)
-        src_miss = np.zeros((source_count, max_hits, 3), dtype=np.float64)
+        if collect_tables:
+            max_hits = max(n_samp * 2, 16)
+            src_hit_counts = np.zeros(source_count, dtype=np.int64)
+            src_hits = np.zeros((source_count, max_hits, 7), dtype=np.float64)
+            src_miss_counts = np.zeros(source_count, dtype=np.int64)
+            src_miss = np.zeros((source_count, max_hits, 3), dtype=np.float64)
+        else:
+            max_hits = 1
+            src_hit_counts = np.zeros(1, dtype=np.int64)
+            src_hits = np.zeros((1, 1, 7), dtype=np.float64)
+            src_miss_counts = np.zeros(1, dtype=np.int64)
+            src_miss = np.zeros((1, 1, 3), dtype=np.float64)
         src_best_sample = np.full(source_count, -1, dtype=np.int64)
         if record_status:
             src_status = np.zeros((source_count, n_samp), dtype=np.int64)
@@ -2197,8 +2207,9 @@ def process_peaks_parallel(
 
             reflI_eff = source_total_sf[i_pk]
             if reflI_eff <= 0.0:
-                src_hit_counts[i_src] = 0
-                src_miss_counts[i_src] = 0
+                if collect_tables:
+                    src_hit_counts[i_src] = 0
+                    src_miss_counts[i_src] = 0
                 src_best_sample[i_src] = -1
                 if record_status:
                     src_status[i_src, :] = 0
@@ -2243,27 +2254,28 @@ def process_peaks_parallel(
                 solve_q_mode_i,
                 forced_idx,
             )
-            nh = pixel_hits.shape[0]
-            if nh > max_hits:
-                nh = max_hits
-            src_hit_counts[i_src] = nh
-            for j in range(nh):
-                src_hits[i_src, j, 0] = pixel_hits[j, 0]
-                src_hits[i_src, j, 1] = pixel_hits[j, 1]
-                src_hits[i_src, j, 2] = pixel_hits[j, 2]
-                src_hits[i_src, j, 3] = pixel_hits[j, 3]
-                src_hits[i_src, j, 4] = pixel_hits[j, 4]
-                src_hits[i_src, j, 5] = pixel_hits[j, 5]
-                src_hits[i_src, j, 6] = pixel_hits[j, 6]
+            if collect_tables:
+                nh = pixel_hits.shape[0]
+                if nh > max_hits:
+                    nh = max_hits
+                src_hit_counts[i_src] = nh
+                for j in range(nh):
+                    src_hits[i_src, j, 0] = pixel_hits[j, 0]
+                    src_hits[i_src, j, 1] = pixel_hits[j, 1]
+                    src_hits[i_src, j, 2] = pixel_hits[j, 2]
+                    src_hits[i_src, j, 3] = pixel_hits[j, 3]
+                    src_hits[i_src, j, 4] = pixel_hits[j, 4]
+                    src_hits[i_src, j, 5] = pixel_hits[j, 5]
+                    src_hits[i_src, j, 6] = pixel_hits[j, 6]
 
-            nm = missed_arr.shape[0]
-            if nm > max_hits:
-                nm = max_hits
-            src_miss_counts[i_src] = nm
-            for j in range(nm):
-                src_miss[i_src, j, 0] = missed_arr[j, 0]
-                src_miss[i_src, j, 1] = missed_arr[j, 1]
-                src_miss[i_src, j, 2] = missed_arr[j, 2]
+                nm = missed_arr.shape[0]
+                if nm > max_hits:
+                    nm = max_hits
+                src_miss_counts[i_src] = nm
+                for j in range(nm):
+                    src_miss[i_src, j, 0] = missed_arr[j, 0]
+                    src_miss[i_src, j, 1] = missed_arr[j, 1]
+                    src_miss[i_src, j, 2] = missed_arr[j, 2]
 
             src_best_sample[i_src] = best_sample_idx_out
             if record_status:
@@ -2276,25 +2288,26 @@ def process_peaks_parallel(
 
         for i_src in range(source_count):
             i_pk = source_indices[i_src]
-            nh = int(src_hit_counts[i_src])
-            pixel_hits = np.empty((nh, 7), dtype=np.float64)
-            for j in range(nh):
-                pixel_hits[j, 0] = src_hits[i_src, j, 0]
-                pixel_hits[j, 1] = src_hits[i_src, j, 1]
-                pixel_hits[j, 2] = src_hits[i_src, j, 2]
-                pixel_hits[j, 3] = src_hits[i_src, j, 3]
-                pixel_hits[j, 4] = src_hits[i_src, j, 4]
-                pixel_hits[j, 5] = src_hits[i_src, j, 5]
-                pixel_hits[j, 6] = src_hits[i_src, j, 6]
-            hit_tables[i_pk] = pixel_hits
+            if collect_tables:
+                nh = int(src_hit_counts[i_src])
+                pixel_hits = np.empty((nh, 7), dtype=np.float64)
+                for j in range(nh):
+                    pixel_hits[j, 0] = src_hits[i_src, j, 0]
+                    pixel_hits[j, 1] = src_hits[i_src, j, 1]
+                    pixel_hits[j, 2] = src_hits[i_src, j, 2]
+                    pixel_hits[j, 3] = src_hits[i_src, j, 3]
+                    pixel_hits[j, 4] = src_hits[i_src, j, 4]
+                    pixel_hits[j, 5] = src_hits[i_src, j, 5]
+                    pixel_hits[j, 6] = src_hits[i_src, j, 6]
+                hit_tables[i_pk] = pixel_hits
 
-            nm = int(src_miss_counts[i_src])
-            missed_arr = np.empty((nm, 3), dtype=np.float64)
-            for j in range(nm):
-                missed_arr[j, 0] = src_miss[i_src, j, 0]
-                missed_arr[j, 1] = src_miss[i_src, j, 1]
-                missed_arr[j, 2] = src_miss[i_src, j, 2]
-            miss_tables[i_pk] = missed_arr
+                nm = int(src_miss_counts[i_src])
+                missed_arr = np.empty((nm, 3), dtype=np.float64)
+                for j in range(nm):
+                    missed_arr[j, 0] = src_miss[i_src, j, 0]
+                    missed_arr[j, 1] = src_miss[i_src, j, 1]
+                    missed_arr[j, 2] = src_miss[i_src, j, 2]
+                miss_tables[i_pk] = missed_arr
 
             if record_status:
                 all_status[i_pk, :] = src_status[i_src, :]
@@ -2316,8 +2329,9 @@ def process_peaks_parallel(
 
             reflI_eff = source_total_sf[i_pk]
             if reflI_eff <= 0.0:
-                hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
-                miss_tables[i_pk] = np.empty((0, 3), dtype=np.float64)
+                if collect_tables:
+                    hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+                    miss_tables[i_pk] = np.empty((0, 3), dtype=np.float64)
                 if record_status:
                     all_status[i_pk, :] = 0
                 if best_sample_indices_out is not None:
@@ -2366,114 +2380,127 @@ def process_peaks_parallel(
 
             if record_status:
                 all_status[i_pk, :] = status_arr
-            hit_tables[i_pk] = pixel_hits
-            miss_tables[i_pk] = missed_arr
+            if collect_tables:
+                hit_tables[i_pk] = pixel_hits
+                miss_tables[i_pk] = missed_arr
             if best_sample_indices_out is not None:
                 if i_pk < best_sample_indices_out.shape[0]:
                     best_sample_indices_out[i_pk] = best_sample_idx_out
 
-    # Expand non-source peaks from source templates, scaling by each peak SF.
-    for i_pk in range(num_peaks):
-        H = float(miller[i_pk, 0])
-        K = float(miller[i_pk, 1])
-        L = float(miller[i_pk, 2])
-        if L < 0.0:
-            continue
+    need_expand_templates = (
+        collect_tables
+        or record_status
+        or save_flag == 1
+        or best_sample_indices_out is not None
+    )
+    if need_expand_templates:
+        # Expand non-source peaks from source templates, scaling by each peak SF.
+        for i_pk in range(num_peaks):
+            H = float(miller[i_pk, 0])
+            K = float(miller[i_pk, 1])
+            L = float(miller[i_pk, 2])
+            if L < 0.0:
+                continue
 
-        src_idx = source_index_for_peak[i_pk]
-        if src_idx < 0 or src_idx == i_pk:
-            continue
+            src_idx = source_index_for_peak[i_pk]
+            if src_idx < 0 or src_idx == i_pk:
+                continue
 
-        total_sf = source_total_sf[src_idx]
-        peak_sf = intensities[i_pk]
-        scale = 0.0
-        if total_sf > 0.0 and peak_sf > 0.0:
-            scale = peak_sf / total_sf
+            total_sf = source_total_sf[src_idx]
+            peak_sf = intensities[i_pk]
+            scale = 0.0
+            if total_sf > 0.0 and peak_sf > 0.0:
+                scale = peak_sf / total_sf
 
-        if scale > 0.0:
-            src_hits = hit_tables[src_idx]
-            n_src_hits = src_hits.shape[0]
-            pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
-            for i_hit in range(n_src_hits):
-                pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
-                pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
-                pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
-                pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
-                pixel_hits[i_hit, 4] = H
-                pixel_hits[i_hit, 5] = K
-                pixel_hits[i_hit, 6] = L
-            hit_tables[i_pk] = pixel_hits
-        else:
-            hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+            if collect_tables:
+                if scale > 0.0:
+                    src_hits = hit_tables[src_idx]
+                    n_src_hits = src_hits.shape[0]
+                    pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+                    for i_hit in range(n_src_hits):
+                        pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
+                        pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
+                        pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
+                        pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
+                        pixel_hits[i_hit, 4] = H
+                        pixel_hits[i_hit, 5] = K
+                        pixel_hits[i_hit, 6] = L
+                    hit_tables[i_pk] = pixel_hits
+                else:
+                    hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
 
-        src_miss = miss_tables[src_idx]
-        n_src_miss = src_miss.shape[0]
-        missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
-        for i_miss in range(n_src_miss):
-            missed_arr[i_miss, 0] = src_miss[i_miss, 0]
-            missed_arr[i_miss, 1] = src_miss[i_miss, 1]
-            missed_arr[i_miss, 2] = src_miss[i_miss, 2]
-        miss_tables[i_pk] = missed_arr
+                src_miss = miss_tables[src_idx]
+                n_src_miss = src_miss.shape[0]
+                missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
+                for i_miss in range(n_src_miss):
+                    missed_arr[i_miss, 0] = src_miss[i_miss, 0]
+                    missed_arr[i_miss, 1] = src_miss[i_miss, 1]
+                    missed_arr[i_miss, 2] = src_miss[i_miss, 2]
+                miss_tables[i_pk] = missed_arr
 
-        if record_status:
-            all_status[i_pk, :] = all_status[src_idx, :]
+            if record_status:
+                all_status[i_pk, :] = all_status[src_idx, :]
 
-        if save_flag == 1:
-            if scale > 0.0:
-                src_q_count = q_count[src_idx]
-                q_count[i_pk] = src_q_count
-                for i_q in range(src_q_count):
-                    q_data[i_pk, i_q, 0] = q_data[src_idx, i_q, 0]
-                    q_data[i_pk, i_q, 1] = q_data[src_idx, i_q, 1]
-                    q_data[i_pk, i_q, 2] = q_data[src_idx, i_q, 2]
-                    q_data[i_pk, i_q, 3] = q_data[src_idx, i_q, 3] * scale
-                    q_data[i_pk, i_q, 4] = q_data[src_idx, i_q, 4]
-            else:
-                q_count[i_pk] = 0
-
-        if best_sample_indices_out is not None:
-            if (
-                i_pk < best_sample_indices_out.shape[0]
-                and src_idx < best_sample_indices_out.shape[0]
-            ):
-                best_sample_indices_out[i_pk] = best_sample_indices_out[src_idx]
-
-    # Scale source rows down from group-total SF to per-peak SF.
-    for i_src in range(source_count):
-        i_pk = source_indices[i_src]
-        H = float(miller[i_pk, 0])
-        K = float(miller[i_pk, 1])
-        L = float(miller[i_pk, 2])
-        total_sf = source_total_sf[i_pk]
-        peak_sf = intensities[i_pk]
-
-        scale = 0.0
-        if total_sf > 0.0 and peak_sf > 0.0:
-            scale = peak_sf / total_sf
-
-        if scale <= 0.0:
-            hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
             if save_flag == 1:
-                q_count[i_pk] = 0
-            continue
+                if scale > 0.0:
+                    src_q_count = q_count[src_idx]
+                    q_count[i_pk] = src_q_count
+                    for i_q in range(src_q_count):
+                        q_data[i_pk, i_q, 0] = q_data[src_idx, i_q, 0]
+                        q_data[i_pk, i_q, 1] = q_data[src_idx, i_q, 1]
+                        q_data[i_pk, i_q, 2] = q_data[src_idx, i_q, 2]
+                        q_data[i_pk, i_q, 3] = q_data[src_idx, i_q, 3] * scale
+                        q_data[i_pk, i_q, 4] = q_data[src_idx, i_q, 4]
+                else:
+                    q_count[i_pk] = 0
 
-        src_hits = hit_tables[i_pk]
-        n_src_hits = src_hits.shape[0]
-        pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
-        for i_hit in range(n_src_hits):
-            pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
-            pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
-            pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
-            pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
-            pixel_hits[i_hit, 4] = H
-            pixel_hits[i_hit, 5] = K
-            pixel_hits[i_hit, 6] = L
-        hit_tables[i_pk] = pixel_hits
+            if best_sample_indices_out is not None:
+                if (
+                    i_pk < best_sample_indices_out.shape[0]
+                    and src_idx < best_sample_indices_out.shape[0]
+                ):
+                    best_sample_indices_out[i_pk] = best_sample_indices_out[src_idx]
 
-        if save_flag == 1 and abs(scale - 1.0) > 1e-15:
-            qn = q_count[i_pk]
-            for i_q in range(qn):
-                q_data[i_pk, i_q, 3] *= scale
+    need_source_scaling = collect_tables or save_flag == 1
+    if need_source_scaling:
+        # Scale source rows down from group-total SF to per-peak SF.
+        for i_src in range(source_count):
+            i_pk = source_indices[i_src]
+            H = float(miller[i_pk, 0])
+            K = float(miller[i_pk, 1])
+            L = float(miller[i_pk, 2])
+            total_sf = source_total_sf[i_pk]
+            peak_sf = intensities[i_pk]
+
+            scale = 0.0
+            if total_sf > 0.0 and peak_sf > 0.0:
+                scale = peak_sf / total_sf
+
+            if scale <= 0.0:
+                if collect_tables:
+                    hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
+                if save_flag == 1:
+                    q_count[i_pk] = 0
+                continue
+
+            if collect_tables:
+                src_hits = hit_tables[i_pk]
+                n_src_hits = src_hits.shape[0]
+                pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+                for i_hit in range(n_src_hits):
+                    pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
+                    pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
+                    pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
+                    pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
+                    pixel_hits[i_hit, 4] = H
+                    pixel_hits[i_hit, 5] = K
+                    pixel_hits[i_hit, 6] = L
+                hit_tables[i_pk] = pixel_hits
+
+            if save_flag == 1 and abs(scale - 1.0) > 1e-15:
+                qn = q_count[i_pk]
+                for i_q in range(qn):
+                    q_data[i_pk, i_q, 3] *= scale
 
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 
@@ -2558,6 +2585,7 @@ def process_qr_rods_parallel(
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    collect_hit_tables=True,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -2612,6 +2640,7 @@ def process_qr_rods_parallel(
         solve_q_steps,
         solve_q_rel_tol,
         solve_q_mode,
+        collect_hit_tables=collect_hit_tables,
     )
 
     return (*result, degeneracy)
