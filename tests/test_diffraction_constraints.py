@@ -7,27 +7,14 @@ from ra_sim.utils.calculations import IndexofRefraction
 def test_process_peaks_parallel_skips_negative_l(monkeypatch):
     called_l_values = []
 
-    def fake_calculate_phi(
+    def fake_calculate_phi_precomputed(
         H,
         K,
         L,
         av,
         cv,
-        wavelength_array,
         image,
         image_size,
-        gamma_rad,
-        Gamma_rad,
-        chi_rad,
-        psi_rad,
-        zs,
-        zb,
-        n2,
-        n2_array,
-        beam_x_array,
-        beam_y_array,
-        theta_array,
-        phi_array,
         reflection_intensity,
         sigma_rad,
         gamma_pv,
@@ -35,18 +22,15 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         debye_x,
         debye_y,
         center,
-        theta_initial_deg,
-        cor_angle_deg,
-        R_x_detector,
-        R_z_detector,
+        R_sample,
         n_det_rot,
         Detector_Pos,
         e1_det,
         e2_det,
-        R_z_R_y,
-        R_ZY_n,
-        P0,
-        unit_x,
+        sample_terms,
+        n2_samp_array,
+        eps2_array,
+        best_idx,
         save_flag,
         q_data,
         q_count,
@@ -54,6 +38,9 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         record_status=False,
         thickness=0.0,
         optics_mode=0,
+        solve_q_steps=1000,
+        solve_q_rel_tol=5e-4,
+        solve_q_mode=0,
         forced_sample_idx=-1,
     ):
         called_l_values.append(float(L))
@@ -64,7 +51,11 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
             0,
         )
 
-    monkeypatch.setattr(diffraction, "calculate_phi", fake_calculate_phi)
+    monkeypatch.setattr(
+        diffraction,
+        "_calculate_phi_from_precomputed",
+        fake_calculate_phi_precomputed,
+    )
 
     miller = np.array([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], dtype=np.float64)
     intensities = np.array([1.0, 1.0], dtype=np.float64)
@@ -112,27 +103,41 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
 def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
     captured_n2 = []
 
-    def fake_calculate_phi(
-        H,
-        K,
-        L,
-        av,
-        cv,
+    def fake_precompute_sample_terms(
         wavelength_array,
-        image,
-        image_size,
-        gamma_rad,
-        Gamma_rad,
-        chi_rad,
-        psi_rad,
-        zs,
-        zb,
         n2,
         n2_array,
         beam_x_array,
         beam_y_array,
         theta_array,
         phi_array,
+        zb,
+        thickness,
+        optics_mode,
+        theta_initial_deg,
+        cor_angle_deg,
+        R_z_R_y,
+        R_ZY_n,
+        P0,
+    ):
+        captured_n2.append(np.asarray(n2_array, dtype=np.complex128).copy())
+        n_samp = beam_x_array.size
+        return (
+            np.eye(3, dtype=np.float64),
+            np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64),
+            np.asarray(n2_array, dtype=np.complex128).copy(),
+            np.asarray(n2_array, dtype=np.complex128).copy() ** 2,
+            0,
+        )
+
+    def fake_calculate_phi_precomputed(
+        H,
+        K,
+        L,
+        av,
+        cv,
+        image,
+        image_size,
         reflection_intensity,
         sigma_rad,
         gamma_pv,
@@ -140,18 +145,15 @@ def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
         debye_x,
         debye_y,
         center,
-        theta_initial_deg,
-        cor_angle_deg,
-        R_x_detector,
-        R_z_detector,
+        R_sample,
         n_det_rot,
         Detector_Pos,
         e1_det,
         e2_det,
-        R_z_R_y,
-        R_ZY_n,
-        P0,
-        unit_x,
+        sample_terms,
+        n2_samp_array,
+        eps2_array,
+        best_idx,
         save_flag,
         q_data,
         q_count,
@@ -159,9 +161,11 @@ def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
         record_status=False,
         thickness=0.0,
         optics_mode=0,
+        solve_q_steps=1000,
+        solve_q_rel_tol=5e-4,
+        solve_q_mode=0,
         forced_sample_idx=-1,
     ):
-        captured_n2.append(np.asarray(n2_array, dtype=np.complex128).copy())
         return (
             np.empty((0, 7), dtype=np.float64),
             np.empty(0, dtype=np.int64),
@@ -169,7 +173,16 @@ def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
             0,
         )
 
-    monkeypatch.setattr(diffraction, "calculate_phi", fake_calculate_phi)
+    monkeypatch.setattr(
+        diffraction,
+        "_precompute_sample_terms",
+        fake_precompute_sample_terms,
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "_calculate_phi_from_precomputed",
+        fake_calculate_phi_precomputed,
+    )
 
     miller = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
     intensities = np.array([1.0], dtype=np.float64)
@@ -212,7 +225,7 @@ def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
         save_flag=0,
     )
 
-    assert captured_n2, "calculate_phi should be called once for the positive-L peak"
+    assert captured_n2, "precompute should be called with wavelength-specific n2 values"
     expected = np.array(
         [
             IndexofRefraction(wavelengths[0] * 1.0e-10),

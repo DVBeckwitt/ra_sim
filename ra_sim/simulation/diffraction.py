@@ -46,6 +46,22 @@ _INTENSITY_CUTOFF = float(np.exp(-100.0))
 _SOLVE_Q_ABS_ERR_TOL = 1.0e-20
 # Keep thread-local image buffers bounded to avoid runaway allocations.
 _THREAD_LOCAL_IMAGE_MAX_BYTES = 768 * 1024 * 1024
+
+# Per-sample precompute table columns (reflection-invariant terms).
+_SAMPLE_COL_VALID = 0
+_SAMPLE_COL_I_PLANE_X = 1
+_SAMPLE_COL_I_PLANE_Y = 2
+_SAMPLE_COL_I_PLANE_Z = 3
+_SAMPLE_COL_KX_SCAT = 4
+_SAMPLE_COL_KY_SCAT = 5
+_SAMPLE_COL_RE_KZ = 6
+_SAMPLE_COL_IM_KZ = 7
+_SAMPLE_COL_K_SCAT = 8
+_SAMPLE_COL_K0 = 9
+_SAMPLE_COL_TI2 = 10
+_SAMPLE_COL_L_IN = 11
+_SAMPLE_COL_N2_REAL = 12
+_SAMPLE_COLS = 13
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
@@ -1199,6 +1215,583 @@ def solve_q(
 
     return out, status
 
+
+@njit(fastmath=True)
+def _build_sample_rotation(theta_initial_deg, cor_angle_deg, R_z_R_y, R_ZY_n, P0):
+    """Build reflection-invariant sample frame for the current geometry."""
+    rad_theta_i = theta_initial_deg * (pi / 180.0)
+    cor_axis_rad = cor_angle_deg * (pi / 180.0)
+
+    # CoR axis in the x-z plane.
+    ax = cos(cor_axis_rad)
+    ay = 0.0
+    az = sin(cor_axis_rad)
+    axis_norm = sqrt(ax * ax + ay * ay + az * az)
+    if axis_norm < 1e-12:
+        axis_norm = 1.0
+    ax /= axis_norm
+    ay /= axis_norm
+    az /= axis_norm
+
+    ct = cos(rad_theta_i)
+    st = sin(rad_theta_i)
+    one_ct = 1.0 - ct
+    R_cor = np.array(
+        [
+            [
+                ct + ax * ax * one_ct,
+                ax * ay * one_ct - az * st,
+                ax * az * one_ct + ay * st,
+            ],
+            [
+                ay * ax * one_ct + az * st,
+                ct + ay * ay * one_ct,
+                ay * az * one_ct - ax * st,
+            ],
+            [
+                az * ax * one_ct - ay * st,
+                az * ay * one_ct + ax * st,
+                ct + az * az * one_ct,
+            ],
+        ]
+    )
+    R_sample = R_cor @ R_z_R_y
+
+    n_surf = R_cor @ R_ZY_n
+    n_surf /= sqrt(
+        n_surf[0] * n_surf[0] + n_surf[1] * n_surf[1] + n_surf[2] * n_surf[2]
+    )
+
+    P0_rot = R_sample @ P0
+    P0_rot[0] = 0.0
+    return R_sample, n_surf, P0_rot
+
+
+@njit(fastmath=True)
+def _precompute_sample_terms(
+    wavelength_array,
+    n2,
+    n2_array,
+    beam_x_array,
+    beam_y_array,
+    theta_array,
+    phi_array,
+    zb,
+    thickness,
+    optics_mode,
+    theta_initial_deg,
+    cor_angle_deg,
+    R_z_R_y,
+    R_ZY_n,
+    P0,
+):
+    """Precompute sample- and beam-dependent terms shared by all reflections."""
+    n_samp = beam_x_array.size
+    sample_terms = np.zeros((n_samp, _SAMPLE_COLS), dtype=np.float64)
+    n2_samp_out = np.empty(n_samp, dtype=np.complex128)
+    eps2_out = np.empty(n_samp, dtype=np.complex128)
+
+    R_sample, n_surf, P0_rot = _build_sample_rotation(
+        theta_initial_deg,
+        cor_angle_deg,
+        R_z_R_y,
+        R_ZY_n,
+        P0,
+    )
+
+    best_idx = 0
+    if n_samp > 0:
+        best_angle = theta_array[0] * theta_array[0] + phi_array[0] * phi_array[0]
+        for ii in range(1, n_samp):
+            metric = theta_array[ii] * theta_array[ii] + phi_array[ii] * phi_array[ii]
+            if metric < best_angle:
+                best_angle = metric
+                best_idx = ii
+
+    # Build local incidence basis around the sample normal.
+    u_ref = np.array([0.0, 0.0, -1.0])
+    e1_temp = np.cross(n_surf, u_ref)
+    e1_norm = sqrt(
+        e1_temp[0] * e1_temp[0] + e1_temp[1] * e1_temp[1] + e1_temp[2] * e1_temp[2]
+    )
+    if e1_norm < 1e-12:
+        alt_refs = [
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            np.array([0.0, 0.0, 1.0]),
+        ]
+        for ar in alt_refs:
+            cross_tmp = np.cross(n_surf, ar)
+            cross_norm_tmp = sqrt(
+                cross_tmp[0] * cross_tmp[0]
+                + cross_tmp[1] * cross_tmp[1]
+                + cross_tmp[2] * cross_tmp[2]
+            )
+            if cross_norm_tmp > 1e-12:
+                e1_temp = cross_tmp / cross_norm_tmp
+                break
+    else:
+        e1_temp /= e1_norm
+    e2_temp = np.cross(n_surf, e1_temp)
+
+    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
+    eps1 = 1.0 + 0.0j
+
+    for i_samp in range(n_samp):
+        lam_samp = wavelength_array[i_samp]
+        k0 = 2.0 * pi / lam_samp
+
+        n2_samp = n2
+        if i_samp < n2_array.size:
+            n2_samp = n2_array[i_samp]
+        eps2 = n2_samp * n2_samp
+        n2_sq_real = np.real(eps2)
+
+        n2_samp_out[i_samp] = n2_samp
+        eps2_out[i_samp] = eps2
+        sample_terms[i_samp, _SAMPLE_COL_K0] = k0
+        sample_terms[i_samp, _SAMPLE_COL_N2_REAL] = np.real(n2_samp)
+
+        dtheta = theta_array[i_samp]
+        dphi = phi_array[i_samp]
+        k_in_x = cos(dtheta) * sin(dphi)
+        k_in_y = cos(dtheta) * cos(dphi)
+        k_in_z = sin(dtheta)
+
+        beam_start = np.array(
+            [beam_x_array[i_samp], -20e-3, beam_y_array[i_samp] - zb],
+            dtype=np.float64,
+        )
+        k_in = np.array([k_in_x, k_in_y, k_in_z], dtype=np.float64)
+
+        ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
+        if not valid_int:
+            continue
+
+        sample_terms[i_samp, _SAMPLE_COL_VALID] = 1.0
+        sample_terms[i_samp, _SAMPLE_COL_I_PLANE_X] = ix
+        sample_terms[i_samp, _SAMPLE_COL_I_PLANE_Y] = iy
+        sample_terms[i_samp, _SAMPLE_COL_I_PLANE_Z] = iz
+
+        kn_dot = k_in_x * n_surf[0] + k_in_y * n_surf[1] + k_in_z * n_surf[2]
+        if kn_dot > 1.0:
+            kn_dot = 1.0
+        elif kn_dot < -1.0:
+            kn_dot = -1.0
+        th_i_prime = (pi / 2.0) - acos(kn_dot)
+
+        proj_incident_x = k_in_x - kn_dot * n_surf[0]
+        proj_incident_y = k_in_y - kn_dot * n_surf[1]
+        proj_incident_z = k_in_z - kn_dot * n_surf[2]
+        pln = sqrt(
+            proj_incident_x * proj_incident_x
+            + proj_incident_y * proj_incident_y
+            + proj_incident_z * proj_incident_z
+        )
+        if pln > 1e-12:
+            proj_incident_x /= pln
+            proj_incident_y /= pln
+            proj_incident_z /= pln
+        else:
+            proj_incident_x = 0.0
+            proj_incident_y = 0.0
+            proj_incident_z = 0.0
+
+        p1 = (
+            proj_incident_x * e1_temp[0]
+            + proj_incident_y * e1_temp[1]
+            + proj_incident_z * e1_temp[2]
+        )
+        p2 = (
+            proj_incident_x * e2_temp[0]
+            + proj_incident_y * e2_temp[1]
+            + proj_incident_z * e2_temp[2]
+        )
+        phi_i_prime = (pi / 2.0) - np.arctan2(p2, p1)
+
+        if use_exact_optics:
+            k0_sq = k0 * k0
+            k_par_i = k0 * np.abs(np.cos(th_i_prime))
+            k_par_i_sq = k_par_i * k_par_i
+
+            kz1_i = _kz_branch_decay((k0_sq - k_par_i_sq) + 0.0j)
+            kz2_i = _kz_branch_decay((eps2 * k0_sq) - k_par_i_sq)
+
+            k_x_scat = k_par_i * np.sin(phi_i_prime)
+            k_y_scat = k_par_i * np.cos(phi_i_prime)
+            re_k_z = -np.abs(kz2_i.real)
+            im_k_z = np.abs(kz2_i.imag)
+            k_scat = np.sqrt(np.maximum(k_par_i_sq + kz2_i.real * kz2_i.real, 0.0))
+
+            Ti_s = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, True)
+            Ti_p = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, False)
+            Ti2 = 0.5 * (
+                _fresnel_power_t_exact(Ti_s, kz1_i, kz2_i, eps1, eps2, True)
+                + _fresnel_power_t_exact(Ti_p, kz1_i, kz2_i, eps1, eps2, False)
+            )
+            Ti2 = _sanitize_transmission_power(Ti2)
+
+            if thickness > 0.0:
+                L_in = thickness
+            else:
+                L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
+        else:
+            th_t = transmit_angle_grazing(th_i_prime, n2_samp)
+            k_scat = k0 * np.sqrt(np.maximum(n2_sq_real, 0.0))
+            k_x_scat = k_scat * np.cos(th_t) * np.sin(phi_i_prime)
+            k_y_scat = k_scat * np.cos(th_t) * np.cos(phi_i_prime)
+
+            re_k_z, im_k_z = ktz_components(k0, n2_samp, th_t)
+            re_k_z = -re_k_z
+
+            Ti_s = fresnel_transmission(th_i_prime, n2_samp, True, True)
+            Ti_p = fresnel_transmission(th_i_prime, n2_samp, False, True)
+            Ti2 = 0.5 * (
+                (np.real(Ti_s) * np.real(Ti_s) + np.imag(Ti_s) * np.imag(Ti_s))
+                + (np.real(Ti_p) * np.real(Ti_p) + np.imag(Ti_p) * np.imag(Ti_p))
+            )
+            Ti2 = _sanitize_transmission_power(Ti2)
+
+            L_in = safe_path_length(thickness, th_t)
+            if L_in <= 0.0:
+                L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
+
+        sample_terms[i_samp, _SAMPLE_COL_KX_SCAT] = k_x_scat
+        sample_terms[i_samp, _SAMPLE_COL_KY_SCAT] = k_y_scat
+        sample_terms[i_samp, _SAMPLE_COL_RE_KZ] = re_k_z
+        sample_terms[i_samp, _SAMPLE_COL_IM_KZ] = im_k_z
+        sample_terms[i_samp, _SAMPLE_COL_K_SCAT] = k_scat
+        sample_terms[i_samp, _SAMPLE_COL_TI2] = Ti2
+        sample_terms[i_samp, _SAMPLE_COL_L_IN] = L_in
+
+    return R_sample, sample_terms, n2_samp_out, eps2_out, best_idx
+
+
+@njit(fastmath=True)
+def _calculate_phi_from_precomputed(
+    H,
+    K,
+    L,
+    av,
+    cv,
+    image,
+    image_size,
+    reflection_intensity,
+    sigma_rad,
+    gamma_pv,
+    eta_pv,
+    debye_x,
+    debye_y,
+    center,
+    R_sample,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
+    sample_terms,
+    n2_samp_array,
+    eps2_array,
+    best_idx,
+    save_flag,
+    q_data,
+    q_count,
+    i_peaks_index,
+    record_status=False,
+    thickness=0.0,
+    optics_mode=OPTICS_MODE_FAST,
+    solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+    solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+    solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    forced_sample_idx=-1,
+):
+    """Reflection core using precomputed sample-geometry terms."""
+    gz0 = 2.0 * pi * (L / cv)
+    gr0 = 4.0 * pi / av * sqrt((H * H + H * K + K * K) / 3.0)
+    G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
+
+    n_samp = sample_terms.shape[0]
+    debye_x_sq = debye_x * debye_x
+    debye_y_sq = debye_y * debye_y
+    pixel_scale = 1.0 / 100e-6
+    max_hits = max(n_samp * 2, 16)
+    pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
+    missed_kf = np.empty((max_hits, 3), dtype=np.float64)
+    n_hits = 0
+    n_missed = 0
+
+    best_candidate = np.zeros(7, dtype=np.float64)
+    best_candidate_val = -1.0
+    have_candidate = False
+    recorded_nominal_hit = False
+    if record_status:
+        statuses = np.zeros(n_samp, dtype=np.int64)
+
+    k_in_crystal = np.empty(3, dtype=np.float64)
+    I_plane = np.empty(3, dtype=np.float64)
+    kf = np.empty(3, dtype=np.float64)
+    kf_prime = np.empty(3, dtype=np.float64)
+    plane_to_det = np.empty(3, dtype=np.float64)
+
+    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
+    eps3 = 1.0 + 0.0j
+
+    loop_start = 0
+    loop_stop = n_samp
+    if 0 <= forced_sample_idx < n_samp:
+        loop_start = forced_sample_idx
+        loop_stop = forced_sample_idx + 1
+
+    best_candidate_sample_idx = -1
+    for i_samp in range(loop_start, loop_stop):
+        if sample_terms[i_samp, _SAMPLE_COL_VALID] <= 0.5:
+            if record_status:
+                statuses[i_samp] = -10
+            continue
+
+        I_plane[0] = sample_terms[i_samp, _SAMPLE_COL_I_PLANE_X]
+        I_plane[1] = sample_terms[i_samp, _SAMPLE_COL_I_PLANE_Y]
+        I_plane[2] = sample_terms[i_samp, _SAMPLE_COL_I_PLANE_Z]
+        k_x_scat = sample_terms[i_samp, _SAMPLE_COL_KX_SCAT]
+        k_y_scat = sample_terms[i_samp, _SAMPLE_COL_KY_SCAT]
+        re_k_z = sample_terms[i_samp, _SAMPLE_COL_RE_KZ]
+        im_k_z = sample_terms[i_samp, _SAMPLE_COL_IM_KZ]
+        k_scat = sample_terms[i_samp, _SAMPLE_COL_K_SCAT]
+        k0 = sample_terms[i_samp, _SAMPLE_COL_K0]
+        Ti2 = sample_terms[i_samp, _SAMPLE_COL_TI2]
+        L_in = sample_terms[i_samp, _SAMPLE_COL_L_IN]
+        n2_samp = n2_samp_array[i_samp]
+        eps2 = eps2_array[i_samp]
+
+        k_in_crystal[0] = k_x_scat
+        k_in_crystal[1] = k_y_scat
+        k_in_crystal[2] = re_k_z
+
+        All_Q, stat = solve_q(
+            k_in_crystal,
+            k_scat,
+            G_vec,
+            sigma_rad,
+            gamma_pv,
+            eta_pv,
+            H,
+            K,
+            L,
+            solve_q_steps,
+            DEFAULT_SOLVE_Q_BASE_INTERVALS,
+            solve_q_rel_tol,
+            solve_q_mode,
+        )
+        if record_status:
+            statuses[i_samp] = stat
+
+        for i_sol in range(All_Q.shape[0]):
+            Qx = All_Q[i_sol, 0]
+            Qy = All_Q[i_sol, 1]
+            Qz = All_Q[i_sol, 2]
+            I_Q = All_Q[i_sol, 3]
+            if I_Q < 1e-5:
+                continue
+
+            k_tx_prime = Qx + k_x_scat
+            k_ty_prime = Qy + k_y_scat
+            k_tz_prime = Qz + re_k_z
+
+            kr = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
+            if kr < 1e-12:
+                twotheta_t_prime = 0.0
+            else:
+                twotheta_t_prime = np.arctan(k_tz_prime / kr)
+
+            th_t_out = np.abs(twotheta_t_prime)
+            if use_exact_optics:
+                k0_sq = k0 * k0
+                k_par_f = kr
+                k_par_f_sq = k_par_f * k_par_f
+
+                kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+                kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
+
+                Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+                Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+                Tf2 = 0.5 * (
+                    _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+                    + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+                )
+                Tf2 = _sanitize_transmission_power(Tf2)
+
+                im_k_z_f = np.abs(kz2_f.imag)
+                if thickness > 0.0:
+                    L_out = thickness
+                else:
+                    L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
+            else:
+                Tf_s = fresnel_transmission(th_t_out, n2_samp, True, False)
+                Tf_p = fresnel_transmission(th_t_out, n2_samp, False, False)
+                Tf2 = 0.5 * (
+                    (np.real(Tf_s) * np.real(Tf_s) + np.imag(Tf_s) * np.imag(Tf_s))
+                    + (np.real(Tf_p) * np.real(Tf_p) + np.imag(Tf_p) * np.imag(Tf_p))
+                )
+                Tf2 = _sanitize_transmission_power(Tf2)
+
+                re_k_z_f, im_k_z_f = ktz_components(k0, n2_samp, th_t_out)
+
+                L_out = safe_path_length(thickness, th_t_out)
+                if L_out <= 0.0:
+                    L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
+
+            prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
+            if not np.isfinite(prop_att) or prop_att <= 0.0:
+                continue
+            prop_fac = Ti2 * Tf2 * prop_att
+            if not np.isfinite(prop_fac) or prop_fac <= 0.0:
+                continue
+
+            if use_exact_optics:
+                cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
+                twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+                k_out_mag = k0
+            else:
+                twotheta_t = (
+                    np.arccos(
+                        _clamp(
+                            np.cos(twotheta_t_prime)
+                            * sample_terms[i_samp, _SAMPLE_COL_N2_REAL],
+                            -1.0,
+                            1.0,
+                        )
+                    )
+                    * np.sign(twotheta_t_prime)
+                )
+                k_out_mag = k_scat
+
+            phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+            kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
+            kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
+            kf[2] = k_out_mag * np.sin(twotheta_t)
+
+            kf_prime[0] = (
+                R_sample[0, 0] * kf[0]
+                + R_sample[0, 1] * kf[1]
+                + R_sample[0, 2] * kf[2]
+            )
+            kf_prime[1] = (
+                R_sample[1, 0] * kf[0]
+                + R_sample[1, 1] * kf[1]
+                + R_sample[1, 2] * kf[2]
+            )
+            kf_prime[2] = (
+                R_sample[2, 0] * kf[0]
+                + R_sample[2, 1] * kf[1]
+                + R_sample[2, 2] * kf[2]
+            )
+
+            dx, dy, dz, valid_det = intersect_line_plane(
+                I_plane, kf_prime, Detector_Pos, n_det_rot
+            )
+            if not valid_det:
+                if n_missed < max_hits:
+                    missed_kf[n_missed, 0] = kf_prime[0]
+                    missed_kf[n_missed, 1] = kf_prime[1]
+                    missed_kf[n_missed, 2] = kf_prime[2]
+                    n_missed += 1
+                continue
+
+            plane_to_det[0] = dx - Detector_Pos[0]
+            plane_to_det[1] = dy - Detector_Pos[1]
+            plane_to_det[2] = dz - Detector_Pos[2]
+            x_det = (
+                plane_to_det[0] * e1_det[0]
+                + plane_to_det[1] * e1_det[1]
+                + plane_to_det[2] * e1_det[2]
+            )
+            y_det = (
+                plane_to_det[0] * e2_det[0]
+                + plane_to_det[1] * e2_det[1]
+                + plane_to_det[2] * e2_det[2]
+            )
+            if not np.isfinite(x_det) or not np.isfinite(y_det):
+                continue
+
+            rpx = int(round(center[0] - y_det * pixel_scale))
+            cpx = int(round(center[1] + x_det * pixel_scale))
+            if not (0 <= rpx < image_size and 0 <= cpx < image_size):
+                continue
+
+            val = (
+                reflection_intensity
+                * I_Q
+                * prop_fac
+                * exp(-Qz * Qz * debye_x_sq)
+                * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq)
+            )
+            if not np.isfinite(val) or val <= 0.0:
+                continue
+
+            image[rpx, cpx] += val
+
+            if val > best_candidate_val:
+                best_candidate_val = val
+                best_candidate[0] = val
+                best_candidate[1] = cpx
+                best_candidate[2] = rpx
+                best_candidate[3] = phi_f
+                best_candidate[4] = H
+                best_candidate[5] = K
+                best_candidate[6] = L
+                have_candidate = True
+                best_candidate_sample_idx = i_samp
+
+            if i_samp == best_idx:
+                if n_hits < max_hits:
+                    pixel_hits[n_hits, 0] = val
+                    pixel_hits[n_hits, 1] = cpx
+                    pixel_hits[n_hits, 2] = rpx
+                    pixel_hits[n_hits, 3] = phi_f
+                    pixel_hits[n_hits, 4] = H
+                    pixel_hits[n_hits, 5] = K
+                    pixel_hits[n_hits, 6] = L
+                    n_hits += 1
+                recorded_nominal_hit = True
+
+            if save_flag == 1 and q_count[i_peaks_index] < q_data.shape[1]:
+                idx = q_count[i_peaks_index]
+                q_data[i_peaks_index, idx, 0] = Qx
+                q_data[i_peaks_index, idx, 1] = Qy
+                q_data[i_peaks_index, idx, 2] = Qz
+                q_data[i_peaks_index, idx, 3] = val
+                q_count[i_peaks_index] += 1
+
+    add_candidate = False
+    if have_candidate:
+        add_candidate = not recorded_nominal_hit
+        if not add_candidate:
+            duplicate = False
+            for idx in range(n_hits):
+                if (
+                    abs(pixel_hits[idx, 1] - best_candidate[1]) < 0.5
+                    and abs(pixel_hits[idx, 2] - best_candidate[2]) < 0.5
+                ):
+                    duplicate = True
+                    break
+            if not duplicate:
+                add_candidate = True
+    if add_candidate and n_hits < max_hits:
+        pixel_hits[n_hits, :] = best_candidate
+        n_hits += 1
+
+    best_sample_idx = best_idx
+    if best_candidate_sample_idx >= 0:
+        best_sample_idx = best_candidate_sample_idx
+
+    if record_status:
+        return pixel_hits[:n_hits], statuses, missed_kf[:n_missed], best_sample_idx
+    return (
+        pixel_hits[:n_hits],
+        np.empty(0, dtype=np.int64),
+        missed_kf[:n_missed],
+        best_sample_idx,
+    )
+
 # =============================================================================
 # 5) CALCULATE_PHI
 # =============================================================================
@@ -1253,476 +1846,59 @@ def calculate_phi(
     missed_kf : ndarray
         Outgoing wavevectors that failed to intersect the detector plane.
     """
-    gz0 = 2.0*pi*(L/cv)
-    gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
-    G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
-
-    # # Build a random mosaic distribution around G_vec
-    # Q_grid = Generate_PDF_Grid(
-    #     G_vec,
-    #     sigma_rad, gamma_pv, eta_pv,
-    #     Qrange=1,   # half-width in Q around G_vec
-    #     n_grid=51,  # grid resolution
-    #     n_samples=2000
-    # )
-    n_samp = beam_x_array.size
-
-    beam_z_offsets = beam_y_array - zb
-    cos_theta = np.cos(theta_array)
-    sin_theta = np.sin(theta_array)
-    cos_phi = np.cos(phi_array)
-    sin_phi = np.sin(phi_array)
-    k_in_x_arr = cos_theta * sin_phi
-    k_in_y_arr = cos_theta * cos_phi
-    k_in_z_arr = sin_theta
-    debye_x_sq = debye_x * debye_x
-    debye_y_sq = debye_y * debye_y
-    pixel_scale = 1.0 / 100e-6
-    max_hits = max(n_samp * 2, 16)  # Ensure capacity even for very small samples
-    pixel_hits = np.empty((max_hits, 7), dtype=np.float64)
-    missed_kf = np.empty((max_hits, 3), dtype=np.float64)
-    n_hits = 0                     # running counter
-    n_missed = 0
-
-    # Track the strongest valid hit so we can fall back when the nominal
-    # best beam sample does not intersect the detector.  This avoids losing
-    # reflections such as 00L where only off-axis beam samples produce a hit.
-    best_candidate = np.zeros(7, dtype=np.float64)
-    best_candidate_val = -1.0
-    have_candidate = False
-    recorded_nominal_hit = False
-    if record_status:
-        statuses = np.zeros(n_samp, dtype=np.int64)
-
-    #thickness = 500.0  # film thickness in Å
-
-    #N = int(thickness/cv)  # Number of layers (approx)
-
-    # Build a sample rotation from "theta_initial_deg" about the CoR axis
-    rad_theta_i = theta_initial_deg*(pi/180.0)
-    cor_axis_rad = cor_angle_deg * (pi / 180.0)
-
-    # Build the CoR axis in the x–z plane and rotate around it with Rodrigues'
-    # formula.  See docs/cor_rotation_math.md for the derivation.  The axis is
-    # pitched away from +x by cor_axis_rad so that (ax, 0, az) = (cos φ, 0, sin φ).
-    ax = cos(cor_axis_rad)
-    ay = 0.0
-    az = sin(cor_axis_rad)
-    axis_norm = sqrt(ax * ax + ay * ay + az * az)
-    if axis_norm < 1e-12:
-        axis_norm = 1.0
-    ax /= axis_norm
-    ay /= axis_norm
-    az /= axis_norm
-
-    ct = cos(rad_theta_i)
-    st = sin(rad_theta_i)
-    one_ct = 1.0 - ct
-    R_cor = np.array([
-        [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
-        [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
-        [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
-    ])
-    R_sample = R_cor @ R_z_R_y
-
-    n_surf = R_cor @ R_ZY_n
-    n_surf /= sqrt(n_surf[0]*n_surf[0] + n_surf[1]*n_surf[1] + n_surf[2]*n_surf[2])
-
-    P0_rot = R_sample @ P0
-    P0_rot[0] = 0.0
-
-    best_idx = 0
-    if n_samp > 0:
-        best_angle = theta_array[0] * theta_array[0] + phi_array[0] * phi_array[0]
-        for ii in range(1, n_samp):
-            metric = theta_array[ii] * theta_array[ii] + phi_array[ii] * phi_array[ii]
-            if metric < best_angle:
-                best_angle = metric
-                best_idx = ii
-
-
-    # Build a local reference for the beam incidence
-    u_ref = np.array([0.0, 0.0, -1.0])
-    e1_temp = np.cross(n_surf, u_ref)
-    e1_norm = sqrt(e1_temp[0]*e1_temp[0] + e1_temp[1]*e1_temp[1] + e1_temp[2]*e1_temp[2])
-    if e1_norm < 1e-12:
-        # fallback if cross is degenerate
-        alt_refs = [
-            np.array([1.0,0.0,0.0]),
-            np.array([0.0,1.0,0.0]),
-            np.array([0.0,0.0,1.0])
-        ]
-        for ar in alt_refs:
-            cross_tmp = np.cross(n_surf, ar)
-            cross_norm_tmp = sqrt(cross_tmp[0]*cross_tmp[0] + cross_tmp[1]*cross_tmp[1] + cross_tmp[2]*cross_tmp[2])
-            if cross_norm_tmp > 1e-12:
-                e1_temp = cross_tmp / cross_norm_tmp
-                break
-
-    else:
-        e1_temp /= e1_norm
-
-    e2_temp = np.cross(n_surf, e1_temp)
-
-    # Preallocate small arrays used inside the loop to avoid dynamic
-    # allocations when parallelizing with ``prange``.
-    beam_start = np.empty(3, dtype=np.float64)
-    k_in = np.empty(3, dtype=np.float64)
-    I_plane = np.empty(3, dtype=np.float64)
-    proj_incident = np.empty(3, dtype=np.float64)
-    k_in_crystal = np.empty(3, dtype=np.float64)
-    kf = np.empty(3, dtype=np.float64)
-    kf_prime = np.empty(3, dtype=np.float64)
-    plane_to_det = np.empty(3, dtype=np.float64)
-
-    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
-    eps1 = 1.0 + 0.0j
-    eps3 = 1.0 + 0.0j
-
-    # Main loop over each beam sample in wave + mosaic. During fitting we can
-    # optionally force a single preselected sample index per reflection.
-    loop_start = 0
-    loop_stop = n_samp
-    if 0 <= forced_sample_idx < n_samp:
-        loop_start = forced_sample_idx
-        loop_stop = forced_sample_idx + 1
-
-    best_candidate_sample_idx = -1
-    for i_samp in range(loop_start, loop_stop):
-        lam_samp = wavelength_array[i_samp]
-        k_mag = 2.0*pi / lam_samp
-        n2_samp = n2
-        if i_samp < n2_array.size:
-            n2_samp = n2_array[i_samp]
-        n2_sq = n2_samp * n2_samp
-        n2_sq_real = np.real(n2_sq)
-        eps2 = n2_sq
-
-        beam_start[0] = beam_x_array[i_samp]
-        beam_start[1] = -20e-3
-        beam_start[2] = beam_z_offsets[i_samp]
-
-        k_in[0] = k_in_x_arr[i_samp]
-        k_in[1] = k_in_y_arr[i_samp]
-        k_in[2] = k_in_z_arr[i_samp]
-
-        # Intersect the beam with the sample plane
-        ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
-        if not valid_int:
-            if record_status:
-                statuses[i_samp] = -10
-            continue
-
-        I_plane[0] = ix
-        I_plane[1] = iy
-        I_plane[2] = iz
-        kn_dot = k_in[0]*n_surf[0] + k_in[1]*n_surf[1] + k_in[2]*n_surf[2]
-        if kn_dot > 1.0:
-            kn_dot = 1.0
-        elif kn_dot < -1.0:
-            kn_dot = -1.0
-        th_i_prime = (pi/2.0) - acos(kn_dot)
-
-        proj_incident[0] = k_in[0] - kn_dot*n_surf[0]
-        proj_incident[1] = k_in[1] - kn_dot*n_surf[1]
-        proj_incident[2] = k_in[2] - kn_dot*n_surf[2]
-        pln = sqrt(proj_incident[0]*proj_incident[0]
-                 + proj_incident[1]*proj_incident[1]
-                 + proj_incident[2]*proj_incident[2])
-        if pln > 1e-12:
-            proj_incident[0] /= pln
-            proj_incident[1] /= pln
-            proj_incident[2] /= pln
-        else:
-            proj_incident[0] = 0.0
-            proj_incident[1] = 0.0
-            proj_incident[2] = 0.0
-
-        p1 = proj_incident[0]*e1_temp[0] + proj_incident[1]*e1_temp[1] + proj_incident[2]*e1_temp[2]
-        p2 = proj_incident[0]*e2_temp[0] + proj_incident[1]*e2_temp[1] + proj_incident[2]*e2_temp[2]
-        phi_i_prime = (pi/2.0) - np.arctan2(p2, p1)
-
-        # ---------- ENTRY REFRACTION AND kz ----------
-        k0 = k_mag
-        k0_sq = k0 * k0
-
-        if use_exact_optics:
-            # Exact interface phase-matching uses conserved k_parallel.
-            k_par_i = k0 * np.abs(np.cos(th_i_prime))
-            k_par_i_sq = k_par_i * k_par_i
-
-            kz1_i = _kz_branch_decay((k0_sq - k_par_i_sq) + 0.0j)
-            kz2_i = _kz_branch_decay((eps2 * k0_sq) - k_par_i_sq)
-
-            k_x_scat = k_par_i * np.sin(phi_i_prime)
-            k_y_scat = k_par_i * np.cos(phi_i_prime)
-            re_k_z = -np.abs(kz2_i.real)  # into sample
-            im_k_z = np.abs(kz2_i.imag)
-            k_scat = np.sqrt(np.maximum(k_par_i_sq + kz2_i.real * kz2_i.real, 0.0))
-
-            Ti_s = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, True)
-            Ti_p = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, False)
-            Ti2 = 0.5 * (
-                _fresnel_power_t_exact(Ti_s, kz1_i, kz2_i, eps1, eps2, True)
-                + _fresnel_power_t_exact(Ti_p, kz1_i, kz2_i, eps1, eps2, False)
-            )
-            Ti2 = _sanitize_transmission_power(Ti2)
-            th_t = np.arctan2(np.abs(kz2_i.real), np.maximum(k_par_i, 1e-30))
-        else:
-            th_t = transmit_angle_grazing(th_i_prime, n2_samp)  # grazing angle in medium
-            # magnitude for in-plane internal wavevector (use Re(n^2))
-            k_scat = k0 * np.sqrt(np.maximum(n2_sq_real, 0.0))
-            k_x_scat = k_scat*np.cos(th_t)*np.sin(phi_i_prime)
-            k_y_scat = k_scat*np.cos(th_t)*np.cos(phi_i_prime)
-
-            # kz decomposition for the incident leg (sign convention: into sample)
-            re_k_z, im_k_z = ktz_components(k0, n2_samp, th_t)
-            re_k_z = -re_k_z  # into the sample
-
-            # Fresnel transmission at entry (amplitude -> intensity).
-            # Use both s- and p-polarizations and average for an unpolarized beam.
-            # fresnel_transmission signature: (grazing_angle, refractive_index,
-            #                                s_polarization=True, incoming=True)
-            Ti_s = fresnel_transmission(th_i_prime, n2_samp, True, True)
-            Ti_p = fresnel_transmission(th_i_prime, n2_samp, False, True)
-            Ti2 = 0.5 * (
-                (np.real(Ti_s)*np.real(Ti_s) + np.imag(Ti_s)*np.imag(Ti_s))
-                + (np.real(Ti_p)*np.real(Ti_p) + np.imag(Ti_p)*np.imag(Ti_p))
-            )
-            Ti2 = _sanitize_transmission_power(Ti2)
-
-        k_in_crystal[0] = k_x_scat
-        k_in_crystal[1] = k_y_scat
-        k_in_crystal[2] = re_k_z
-
-        # ---------- Solve allowed Q on the circle (unchanged) ----------
-        All_Q, stat = solve_q(
-            k_in_crystal,
-            k_scat,
-            G_vec,
-            sigma_rad,
-            gamma_pv,
-            eta_pv,
-            H,
-            K,
-            L,
-            solve_q_steps,
-            DEFAULT_SOLVE_Q_BASE_INTERVALS,
-            solve_q_rel_tol,
-            solve_q_mode,
-        )
-        if record_status:
-            statuses[i_samp] = stat
-
-        # Precompute entrance attenuation depth.
-        if use_exact_optics:
-            if thickness > 0.0:
-                L_in = thickness
-            else:
-                L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
-        else:
-            L_in = safe_path_length(thickness, th_t)
-            if L_in <= 0.0:
-                # Semi-infinite: use effective penetration depth
-                L_in = 1.0 / np.maximum(2.0*im_k_z, 1e-30)
-
-        # ---------- Loop over each Q solution ----------
-        for i_sol in range(All_Q.shape[0]):
-            Qx = All_Q[i_sol, 0]
-            Qy = All_Q[i_sol, 1]
-            Qz = All_Q[i_sol, 2]
-            I_Q = All_Q[i_sol, 3]
-            if I_Q < 1e-5:
-                continue
-
-            # internal scattered direction before exiting
-            k_tx_prime = Qx + k_x_scat
-            k_ty_prime = Qy + k_y_scat
-            k_tz_prime = Qz + re_k_z
-
-            kr = sqrt(k_tx_prime*k_tx_prime + k_ty_prime*k_ty_prime)
-            if kr < 1e-12:
-                twotheta_t_prime = 0.0
-            else:
-                twotheta_t_prime = np.arctan(k_tz_prime/kr)
-
-            # refract out to air: convert internal grazing angle to external
-            # get internal grazing angle for the exit leg
-            th_t_out = np.abs(twotheta_t_prime)
-            if use_exact_optics:
-                k_par_f = kr
-                k_par_f_sq = k_par_f * k_par_f
-
-                kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
-                kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
-
-                Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
-                Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
-                Tf2 = 0.5 * (
-                    _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
-                    + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
-                )
-                Tf2 = _sanitize_transmission_power(Tf2)
-
-                im_k_z_f = np.abs(kz2_f.imag)
-
-                if thickness > 0.0:
-                    L_out = thickness
-                else:
-                    L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
-            else:
-                # Exit transmission amplitude and kz for exit leg.
-                # Use both polarizations and average for an unpolarized beam.
-                Tf_s = fresnel_transmission(th_t_out, n2_samp, True, False)
-                Tf_p = fresnel_transmission(th_t_out, n2_samp, False, False)
-                Tf2 = 0.5 * (
-                    (np.real(Tf_s)*np.real(Tf_s) + np.imag(Tf_s)*np.imag(Tf_s))
-                    + (np.real(Tf_p)*np.real(Tf_p) + np.imag(Tf_p)*np.imag(Tf_p))
-                )
-                Tf2 = _sanitize_transmission_power(Tf2)
-
-                re_k_z_f, im_k_z_f = ktz_components(k0, n2_samp, th_t_out)
-
-                # path length for exit leg
-                L_out = safe_path_length(thickness, th_t_out)
-                if L_out <= 0.0:
-                    L_out = 1.0 / np.maximum(2.0*im_k_z_f, 1e-30)
-
-            # apply propagation and interface factors
-            prop_att = (
-                np.exp(-2.0 * im_k_z * L_in)
-                * np.exp(-2.0 * im_k_z_f * L_out)
-            )
-            if not np.isfinite(prop_att) or prop_att <= 0.0:
-                continue
-            prop_fac = Ti2 * Tf2 * prop_att
-            if not np.isfinite(prop_fac) or prop_fac <= 0.0:
-                continue
-
-            # external exit angles for detector mapping (existing code)
-            # Preserve the exit-side sign so both detector half-planes remain
-            # populated as theta_i changes.
-            if use_exact_optics:
-                cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
-                twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-                k_out_mag = k0
-            else:
-                twotheta_t = (
-                    np.arccos(_clamp(np.cos(twotheta_t_prime) * np.real(n2_samp), -1.0, 1.0))
-                    * np.sign(twotheta_t_prime)
-                )
-                k_out_mag = k_scat
-            phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-            k_tx_f = k_out_mag*np.cos(twotheta_t)*np.sin(phi_f)
-            k_ty_f = k_out_mag*np.cos(twotheta_t)*np.cos(phi_f)
-            k_tz_f = k_out_mag*np.sin(twotheta_t)
-            kf[0] = k_tx_f
-            kf[1] = k_ty_f
-            kf[2] = k_tz_f
-            kf_prime[0] = R_sample[0,0]*kf[0] + R_sample[0,1]*kf[1] + R_sample[0,2]*kf[2]
-            kf_prime[1] = R_sample[1,0]*kf[0] + R_sample[1,1]*kf[1] + R_sample[1,2]*kf[2]
-            kf_prime[2] = R_sample[2,0]*kf[0] + R_sample[2,1]*kf[1] + R_sample[2,2]*kf[2]
-
-            dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
-            if not valid_det:
-                if n_missed < max_hits:
-                    missed_kf[n_missed, 0] = kf_prime[0]
-                    missed_kf[n_missed, 1] = kf_prime[1]
-                    missed_kf[n_missed, 2] = kf_prime[2]
-                    n_missed += 1
-                continue
-
-            plane_to_det[0] = dx - Detector_Pos[0]
-            plane_to_det[1] = dy - Detector_Pos[1]
-            plane_to_det[2] = dz - Detector_Pos[2]
-            x_det = plane_to_det[0]*e1_det[0] + plane_to_det[1]*e1_det[1] + plane_to_det[2]*e1_det[2]
-            y_det = plane_to_det[0]*e2_det[0] + plane_to_det[1]*e2_det[1] + plane_to_det[2]*e2_det[2]
-            if not np.isfinite(x_det) or not np.isfinite(y_det):
-                continue
-
-            rpx = int(round(center[0] - y_det * pixel_scale))
-            cpx = int(round(center[1] + x_det * pixel_scale))
-            if not (0 <= rpx < image_size and 0 <= cpx < image_size):
-                continue
-
-            # Combine:
-            #  1) reflection_intensity -> structure/basis factor
-            #  2) I_Q -> partial mosaic weighting from solve_q circle
-            #  3) incoherent -> the mosaic average from Q_grid
-            #  4) exponent dampings -> Debye or extra broadening
-            val = (reflection_intensity * I_Q * prop_fac
-                * exp(-Qz * Qz * debye_x_sq)
-                * exp(-(Qx * Qx + Qy * Qy) * debye_y_sq))
-            if not np.isfinite(val) or val <= 0.0:
-                continue
-            image[rpx, cpx] += val
-
-            if val > best_candidate_val:
-                best_candidate_val = val
-                best_candidate[0] = val
-                best_candidate[1] = cpx
-                best_candidate[2] = rpx
-                best_candidate[3] = phi_f
-                best_candidate[4] = H
-                best_candidate[5] = K
-                best_candidate[6] = L
-                have_candidate = True
-                best_candidate_sample_idx = i_samp
-
-            if i_samp == best_idx:
-                if n_hits < max_hits:
-                    # save       I_Q⋅extras        x-pix     y-pix      φf
-                    pixel_hits[n_hits, 0] = val
-                    pixel_hits[n_hits, 1] = cpx
-                    pixel_hits[n_hits, 2] = rpx
-                    pixel_hits[n_hits, 3] = phi_f
-                    pixel_hits[n_hits, 4] = H
-                    pixel_hits[n_hits, 5] = K
-                    pixel_hits[n_hits, 6] = L
-
-                    n_hits += 1
-                recorded_nominal_hit = True
-                
-            # Optionally store Q-data
-            if save_flag==1 and q_count[i_peaks_index]< q_data.shape[1]:
-                idx = q_count[i_peaks_index]
-                q_data[i_peaks_index, idx,0] = Qx
-                q_data[i_peaks_index, idx,1] = Qy
-                q_data[i_peaks_index, idx,2] = Qz
-                q_data[i_peaks_index, idx,3] = val
-                q_count[i_peaks_index]+=1
-
-    add_candidate = False
-    if have_candidate:
-        add_candidate = not recorded_nominal_hit
-        if not add_candidate:
-            duplicate = False
-            for idx in range(n_hits):
-                if (
-                    abs(pixel_hits[idx, 1] - best_candidate[1]) < 0.5
-                    and abs(pixel_hits[idx, 2] - best_candidate[2]) < 0.5
-                ):
-                    duplicate = True
-                    break
-            if not duplicate:
-                add_candidate = True
-    if add_candidate and n_hits < max_hits:
-        pixel_hits[n_hits, :] = best_candidate
-        n_hits += 1
-
-    best_sample_idx = best_idx
-    if best_candidate_sample_idx >= 0:
-        best_sample_idx = best_candidate_sample_idx
-
-    if record_status:
-        return pixel_hits[:n_hits], statuses, missed_kf[:n_missed], best_sample_idx
-    else:
-        return (
-            pixel_hits[:n_hits],
-            np.empty(0, dtype=np.int64),
-            missed_kf[:n_missed],
-            best_sample_idx,
-        )
+    R_sample, sample_terms, n2_samp_array, eps2_array, best_idx = _precompute_sample_terms(
+        wavelength_array,
+        n2,
+        n2_array,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        zb,
+        thickness,
+        optics_mode,
+        theta_initial_deg,
+        cor_angle_deg,
+        R_z_R_y,
+        R_ZY_n,
+        P0,
+    )
+    return _calculate_phi_from_precomputed(
+        H,
+        K,
+        L,
+        av,
+        cv,
+        image,
+        image_size,
+        reflection_intensity,
+        sigma_rad,
+        gamma_pv,
+        eta_pv,
+        debye_x,
+        debye_y,
+        center,
+        R_sample,
+        n_det_rot,
+        Detector_Pos,
+        e1_det,
+        e2_det,
+        sample_terms,
+        n2_samp_array,
+        eps2_array,
+        best_idx,
+        save_flag,
+        q_data,
+        q_count,
+        i_peaks_index,
+        record_status,
+        thickness,
+        optics_mode,
+        solve_q_steps,
+        solve_q_rel_tol,
+        solve_q_mode,
+        forced_sample_idx,
+    )
 
 
 
@@ -1755,8 +1931,9 @@ def process_peaks_parallel(
     best_sample_indices_out=None,
 ):
     """
-    High-level loop over multiple reflections from 'miller', each with an intensity
-    from 'intensities'. For each reflection, call 'calculate_phi(...).'
+    High-level loop over multiple reflections from 'miller', each with an
+    intensity from 'intensities'. Reflection-invariant sample/beam terms are
+    precomputed once, then reused for each reflection core evaluation.
 
     parallel=True: We do a prange over each reflection. Each reflection is processed
     independently, building the mosaic, computing geometry, and depositing
@@ -1890,8 +2067,32 @@ def process_peaks_parallel(
         for i_samp in range(n_samp):
             n2_sample_array[i_samp] = n2
 
+    (
+        R_sample_precomputed,
+        sample_terms,
+        sample_n2_array,
+        sample_eps2_array,
+        best_idx_precomputed,
+    ) = _precompute_sample_terms(
+        wavelength_array,
+        n2,
+        n2_sample_array,
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        zb,
+        thickness,
+        optics_mode,
+        theta_initial_deg,
+        cor_angle_deg,
+        R_z_R_y,
+        R_ZY_n,
+        P0,
+    )
+
     # Group reflections by identical (Gr, Gz, SF, forced sample). The first
-    # source reflection in each group runs ``calculate_phi`` once with a
+    # source reflection in each group runs the reflection core once with a
     # multiplicity-scaled SF so image energy matches an explicit per-peak sum.
     source_index_for_peak = np.full(num_peaks, -1, dtype=np.int64)
     source_multiplicity = np.ones(num_peaks, dtype=np.int64)
@@ -2027,27 +2228,34 @@ def process_peaks_parallel(
         if use_thread_local_image:
             tid = get_thread_id()
             if 0 <= tid < image_partials.shape[0]:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
-                    H, K, L, av, cv,
-                    wavelength_array,
-                    image_partials[tid], image_size,
-                    gamma_rad, Gamma_rad, chi_rad, psi_rad,
-                    zs, zb, n2,
-                    n2_sample_array,
-                    beam_x_array, beam_y_array,
-                    theta_array, phi_array,
-                    reflI_eff, sigma_rad, gamma_rad_m, eta_pv,
-                    debye_x, debye_y,
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
+                    H,
+                    K,
+                    L,
+                    av,
+                    cv,
+                    image_partials[tid],
+                    image_size,
+                    reflI_eff,
+                    sigma_rad,
+                    gamma_rad_m,
+                    eta_pv,
+                    debye_x,
+                    debye_y,
                     center,
-                    theta_initial_deg,
-                    cor_angle_deg,
-                    R_x_det, R_z_det, n_det_rot, Detector_Pos,
-                    e1_det, e2_det,
-                    R_z_R_y,
-                    R_ZY_n,
-                    P0,
-                    unit_x,
-                    save_flag, q_data, q_count, i_pk,
+                    R_sample_precomputed,
+                    n_det_rot,
+                    Detector_Pos,
+                    e1_det,
+                    e2_det,
+                    sample_terms,
+                    sample_n2_array,
+                    sample_eps2_array,
+                    best_idx_precomputed,
+                    save_flag,
+                    q_data,
+                    q_count,
+                    i_pk,
                     record_status,
                     thickness,
                     optics_mode,
@@ -2057,27 +2265,34 @@ def process_peaks_parallel(
                     forced_idx,
                 )
             else:
-                pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
-                    H, K, L, av, cv,
-                    wavelength_array,
-                    image, image_size,
-                    gamma_rad, Gamma_rad, chi_rad, psi_rad,
-                    zs, zb, n2,
-                    n2_sample_array,
-                    beam_x_array, beam_y_array,
-                    theta_array, phi_array,
-                    reflI_eff, sigma_rad, gamma_rad_m, eta_pv,
-                    debye_x, debye_y,
+                pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
+                    H,
+                    K,
+                    L,
+                    av,
+                    cv,
+                    image,
+                    image_size,
+                    reflI_eff,
+                    sigma_rad,
+                    gamma_rad_m,
+                    eta_pv,
+                    debye_x,
+                    debye_y,
                     center,
-                    theta_initial_deg,
-                    cor_angle_deg,
-                    R_x_det, R_z_det, n_det_rot, Detector_Pos,
-                    e1_det, e2_det,
-                    R_z_R_y,
-                    R_ZY_n,
-                    P0,
-                    unit_x,
-                    save_flag, q_data, q_count, i_pk,
+                    R_sample_precomputed,
+                    n_det_rot,
+                    Detector_Pos,
+                    e1_det,
+                    e2_det,
+                    sample_terms,
+                    sample_n2_array,
+                    sample_eps2_array,
+                    best_idx_precomputed,
+                    save_flag,
+                    q_data,
+                    q_count,
+                    i_pk,
                     record_status,
                     thickness,
                     optics_mode,
@@ -2087,27 +2302,34 @@ def process_peaks_parallel(
                     forced_idx,
                 )
         else:
-            pixel_hits, status_arr, missed_arr, best_sample_idx_out = calculate_phi(
-                H, K, L, av, cv,
-                wavelength_array,
-                image, image_size,
-                gamma_rad, Gamma_rad, chi_rad, psi_rad,
-                zs, zb, n2,
-                n2_sample_array,
-                beam_x_array, beam_y_array,
-                theta_array, phi_array,
-                reflI_eff, sigma_rad, gamma_rad_m, eta_pv,
-                debye_x, debye_y,
+            pixel_hits, status_arr, missed_arr, best_sample_idx_out = _calculate_phi_from_precomputed(
+                H,
+                K,
+                L,
+                av,
+                cv,
+                image,
+                image_size,
+                reflI_eff,
+                sigma_rad,
+                gamma_rad_m,
+                eta_pv,
+                debye_x,
+                debye_y,
                 center,
-                theta_initial_deg,
-                cor_angle_deg,
-                R_x_det, R_z_det, n_det_rot, Detector_Pos,
-                e1_det, e2_det,
-                R_z_R_y,
-                R_ZY_n,
-                P0,
-                unit_x,
-                save_flag, q_data, q_count, i_pk,
+                R_sample_precomputed,
+                n_det_rot,
+                Detector_Pos,
+                e1_det,
+                e2_det,
+                sample_terms,
+                sample_n2_array,
+                sample_eps2_array,
+                best_idx_precomputed,
+                save_flag,
+                q_data,
+                q_count,
+                i_pk,
                 record_status,
                 thickness,
                 optics_mode,

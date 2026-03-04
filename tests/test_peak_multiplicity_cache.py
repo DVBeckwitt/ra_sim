@@ -46,7 +46,7 @@ def _run_process(
         wavelength,
         0.0,
         0.0,
-        [8.0, 8.0],
+        np.array([8.0, 8.0], dtype=np.float64),
         6.0,
         0.0,
         np.array([1.0, 0.0, 0.0], dtype=np.float64),
@@ -59,27 +59,14 @@ def _run_process(
 def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
     call_count = 0
 
-    def fake_calculate_phi(
+    def fake_calculate_phi_precomputed(
         H,
         K,
         L,
         av,
         cv,
-        wavelength_array,
         image,
         image_size,
-        gamma_rad,
-        Gamma_rad,
-        chi_rad,
-        psi_rad,
-        zs,
-        zb,
-        n2,
-        n2_array,
-        beam_x_array,
-        beam_y_array,
-        theta_array,
-        phi_array,
         reflection_intensity,
         sigma_rad,
         gamma_pv,
@@ -87,18 +74,15 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
         debye_x,
         debye_y,
         center,
-        theta_initial_deg,
-        cor_angle_deg,
-        R_x_detector,
-        R_z_detector,
+        R_sample,
         n_det_rot,
         Detector_Pos,
         e1_det,
         e2_det,
-        R_z_R_y,
-        R_ZY_n,
-        P0,
-        unit_x,
+        sample_terms,
+        n2_samp_array,
+        eps2_array,
+        best_idx,
         save_flag,
         q_data,
         q_count,
@@ -120,7 +104,11 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
             0,
         )
 
-    monkeypatch.setattr(diffraction, "calculate_phi", fake_calculate_phi)
+    monkeypatch.setattr(
+        diffraction,
+        "_calculate_phi_from_precomputed",
+        fake_calculate_phi_precomputed,
+    )
 
     # (1,0,1) and (0,1,1) have identical Gr and Gz for hexagonal metric.
     miller = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=np.float64)
@@ -143,27 +131,14 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
 def test_process_peaks_parallel_cache_respects_forced_sample_index(monkeypatch):
     call_count = 0
 
-    def fake_calculate_phi(
+    def fake_calculate_phi_precomputed(
         H,
         K,
         L,
         av,
         cv,
-        wavelength_array,
         image,
         image_size,
-        gamma_rad,
-        Gamma_rad,
-        chi_rad,
-        psi_rad,
-        zs,
-        zb,
-        n2,
-        n2_array,
-        beam_x_array,
-        beam_y_array,
-        theta_array,
-        phi_array,
         reflection_intensity,
         sigma_rad,
         gamma_pv,
@@ -171,18 +146,15 @@ def test_process_peaks_parallel_cache_respects_forced_sample_index(monkeypatch):
         debye_x,
         debye_y,
         center,
-        theta_initial_deg,
-        cor_angle_deg,
-        R_x_detector,
-        R_z_detector,
+        R_sample,
         n_det_rot,
         Detector_Pos,
         e1_det,
         e2_det,
-        R_z_R_y,
-        R_ZY_n,
-        P0,
-        unit_x,
+        sample_terms,
+        n2_samp_array,
+        eps2_array,
+        best_idx,
         save_flag,
         q_data,
         q_count,
@@ -204,7 +176,11 @@ def test_process_peaks_parallel_cache_respects_forced_sample_index(monkeypatch):
             int(forced_sample_idx),
         )
 
-    monkeypatch.setattr(diffraction, "calculate_phi", fake_calculate_phi)
+    monkeypatch.setattr(
+        diffraction,
+        "_calculate_phi_from_precomputed",
+        fake_calculate_phi_precomputed,
+    )
 
     miller = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=np.float64)
     intensities = np.array([2.5, 2.5], dtype=np.float64)
@@ -221,27 +197,14 @@ def test_process_peaks_parallel_cache_respects_forced_sample_index(monkeypatch):
 
 
 def test_process_peaks_parallel_cache_matches_uncached_image(monkeypatch):
-    def fake_calculate_phi(
+    def fake_calculate_phi_precomputed(
         H,
         K,
         L,
         av,
         cv,
-        wavelength_array,
         image,
         image_size,
-        gamma_rad,
-        Gamma_rad,
-        chi_rad,
-        psi_rad,
-        zs,
-        zb,
-        n2,
-        n2_array,
-        beam_x_array,
-        beam_y_array,
-        theta_array,
-        phi_array,
         reflection_intensity,
         sigma_rad,
         gamma_pv,
@@ -249,18 +212,15 @@ def test_process_peaks_parallel_cache_matches_uncached_image(monkeypatch):
         debye_x,
         debye_y,
         center,
-        theta_initial_deg,
-        cor_angle_deg,
-        R_x_detector,
-        R_z_detector,
+        R_sample,
         n_det_rot,
         Detector_Pos,
         e1_det,
         e2_det,
-        R_z_R_y,
-        R_ZY_n,
-        P0,
-        unit_x,
+        sample_terms,
+        n2_samp_array,
+        eps2_array,
+        best_idx,
         save_flag,
         q_data,
         q_count,
@@ -284,7 +244,11 @@ def test_process_peaks_parallel_cache_matches_uncached_image(monkeypatch):
             0,
         )
 
-    monkeypatch.setattr(diffraction, "calculate_phi", fake_calculate_phi)
+    monkeypatch.setattr(
+        diffraction,
+        "_calculate_phi_from_precomputed",
+        fake_calculate_phi_precomputed,
+    )
 
     miller = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=np.float64)
     intensities = np.array([2.5, 2.5], dtype=np.float64)
