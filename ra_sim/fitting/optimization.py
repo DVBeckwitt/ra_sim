@@ -2071,19 +2071,29 @@ def iterative_refinement(
     )
 
 
-def build_measured_dict(measured_peaks):
-    """
-    Convert a list of measured-peak dicts into a mapping
-    from (h,k,l) -> list of (x,y) positions.
-    """
-    measured_dict = {}
-    for p in measured_peaks:
-        if isinstance(p, dict) and 'label' in p:
-            h, k, l = map(int, p['label'].split(','))
-            x, y = float(p['x']), float(p['y'])
-        else:
-            h, k, l, x, y = p
-        measured_dict.setdefault((h, k, l), []).append((x, y))
+def build_measured_dict(
+    measured_peaks: Optional[Sequence[object]],
+) -> Dict[Tuple[int, int, int], List[Tuple[float, float]]]:
+    """Return measured peaks grouped by HKL, skipping malformed entries."""
+
+    measured_dict: Dict[Tuple[int, int, int], List[Tuple[float, float]]] = {}
+    for entry in _normalize_measured_peaks(measured_peaks):
+        raw_hkl = entry.get("hkl")
+        if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
+            continue
+        try:
+            hkl_key = (
+                int(raw_hkl[0]),
+                int(raw_hkl[1]),
+                int(raw_hkl[2]),
+            )
+            x = float(entry.get("x"))
+            y = float(entry.get("y"))
+        except Exception:
+            continue
+        if not (np.isfinite(x) and np.isfinite(y)):
+            continue
+        measured_dict.setdefault(hkl_key, []).append((x, y))
     return measured_dict
 
 

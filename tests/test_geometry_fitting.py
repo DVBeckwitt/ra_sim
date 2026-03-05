@@ -179,3 +179,48 @@ def test_fit_geometry_parameters_supports_center_component_variables(monkeypatch
         abs(row - target_row) < 1e-3 and abs(col - target_col) < 1e-3
         for row, col in centers_seen
     )
+
+
+def test_build_measured_dict_skips_malformed_entries():
+    measured = [
+        {"label": "1,0,0", "x": 4.0, "y": 5.0},
+        {"label": "bad-label", "x": 1.0, "y": 2.0},
+        {"hkl": (2, 1, 0), "x": "6.0", "y": "7.0"},
+        (3, 0, 0, 8.0, 9.0),
+        {"label": "4,0,0", "x": np.nan, "y": 1.0},
+        (1, 2),
+    ]
+
+    measured_dict = opt.build_measured_dict(measured)
+
+    assert measured_dict == {
+        (1, 0, 0): [(4.0, 5.0)],
+        (2, 1, 0): [(6.0, 7.0)],
+        (3, 0, 0): [(8.0, 9.0)],
+    }
+
+
+def test_fit_geometry_parameters_tolerates_bad_measured_labels(monkeypatch):
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process_peaks)
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {"label": "not,a,peak", "x": 2.0, "y": 2.0},
+        {"label": "1,0,0", "x": 4.0, "y": 4.0},
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+    )
+
+    assert result.success
