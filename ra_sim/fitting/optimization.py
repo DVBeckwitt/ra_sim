@@ -2246,6 +2246,40 @@ def simulate_and_compare_hkl(
     pixel_size = _estimate_pixel_size(params)
     centre = params.get('center')
 
+    def _match_points(
+        simulated_points: list[tuple[float, float]],
+        measured_points: list[tuple[float, float]],
+    ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        if not simulated_points or not measured_points:
+            return []
+
+        sim_arr = np.asarray(simulated_points, dtype=float)
+        meas_arr = np.asarray(measured_points, dtype=float)
+        if sim_arr.ndim != 2 or meas_arr.ndim != 2 or sim_arr.shape[1] != 2 or meas_arr.shape[1] != 2:
+            return []
+
+        dist = np.linalg.norm(meas_arr[:, None, :] - sim_arr[None, :, :], axis=2)
+        candidate_pairs = np.argwhere(np.isfinite(dist))
+        if candidate_pairs.size == 0:
+            return []
+
+        candidate_dist = dist[candidate_pairs[:, 0], candidate_pairs[:, 1]]
+        order = np.argsort(candidate_dist)
+        used_meas: set[int] = set()
+        used_sim: set[int] = set()
+        matches: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        for idx in order:
+            meas_idx = int(candidate_pairs[idx, 0])
+            sim_idx = int(candidate_pairs[idx, 1])
+            if meas_idx in used_meas or sim_idx in used_sim:
+                continue
+            sim_pt = (float(sim_arr[sim_idx, 0]), float(sim_arr[sim_idx, 1]))
+            meas_pt = (float(meas_arr[meas_idx, 0]), float(meas_arr[meas_idx, 1]))
+            matches.append((sim_pt, meas_pt))
+            used_meas.add(meas_idx)
+            used_sim.add(sim_idx)
+        return matches
+
     for i, (H, K, L) in enumerate(miller):
         key = (int(round(H)), int(round(K)), int(round(L)))
         candidates = measured_dict.get(key)
@@ -2280,25 +2314,39 @@ def simulate_and_compare_hkl(
         if not measured_points:
             continue
 
-        meas_cols, meas_rows = zip(*measured_points)
-        meas_center_col = float(np.mean(meas_cols))
-        meas_center_row = float(np.mean(meas_rows))
-        meas_two_theta, meas_phi = _pixel_to_angles(
-            meas_center_col, meas_center_row, centre, detector_distance, pixel_size
-        )
-        if meas_two_theta is None or meas_phi is None:
-            continue
+        point_matches = _match_points(simulated_points, measured_points)
+        if not point_matches:
+            sim_center_col = float(simulated_points[0][0])
+            sim_center_row = float(simulated_points[0][1])
+            meas_center_col = float(measured_points[0][0])
+            meas_center_row = float(measured_points[0][1])
+            point_matches = [
+                (
+                    (sim_center_col, sim_center_row),
+                    (meas_center_col, meas_center_row),
+                )
+            ]
 
-        radial_diff = abs(sim_two_theta - meas_two_theta)
-        azimuthal_diff = abs(_angular_difference_deg(sim_phi, meas_phi))
-        combined = math.hypot(radial_diff, azimuthal_diff)
+        for (sim_center_col, sim_center_row), (meas_center_col, meas_center_row) in point_matches:
+            sim_two_theta, sim_phi = _pixel_to_angles(
+                sim_center_col, sim_center_row, centre, detector_distance, pixel_size
+            )
+            meas_two_theta, meas_phi = _pixel_to_angles(
+                meas_center_col, meas_center_row, centre, detector_distance, pixel_size
+            )
+            if sim_two_theta is None or sim_phi is None or meas_two_theta is None or meas_phi is None:
+                continue
 
-        if combined <= pixel_tol:
-            distances.extend([radial_diff, azimuthal_diff])
-            sim_coords.append((sim_center_col, sim_center_row))
-            meas_coords.append((meas_center_col, meas_center_row))
-            sim_millers.append(key)
-            meas_millers.append(key)
+            radial_diff = abs(sim_two_theta - meas_two_theta)
+            azimuthal_diff = abs(_angular_difference_deg(sim_phi, meas_phi))
+            combined = math.hypot(radial_diff, azimuthal_diff)
+
+            if combined <= pixel_tol:
+                distances.extend([radial_diff, azimuthal_diff])
+                sim_coords.append((sim_center_col, sim_center_row))
+                meas_coords.append((meas_center_col, meas_center_row))
+                sim_millers.append(key)
+                meas_millers.append(key)
 
     return (
         np.array(distances, dtype=float),

@@ -8368,20 +8368,21 @@ if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
 
 
 def _center_from_maxpos_entry(entry: Sequence[float]) -> tuple[float, float] | None:
-    """Return the centroid of finite primary/secondary maxima in ``entry``."""
+    """Return the strongest finite max position stored in ``entry``."""
 
     if entry is None or len(entry) < 6:
         return None
-    _, x0, y0, _, x1, y1 = entry
-    candidates: list[tuple[float, float]] = []
-    if np.isfinite(x0) and np.isfinite(y0):
-        candidates.append((float(x0), float(y0)))
-    if np.isfinite(x1) and np.isfinite(y1):
-        candidates.append((float(x1), float(y1)))
-    if not candidates:
-        return None
-    cols, rows = zip(*candidates)
-    return float(np.mean(cols)), float(np.mean(rows))
+    i0, x0, y0, i1, x1, y1 = entry
+    primary_valid = np.isfinite(x0) and np.isfinite(y0)
+    secondary_valid = np.isfinite(x1) and np.isfinite(y1)
+
+    if primary_valid and (not secondary_valid or not np.isfinite(i1) or float(i0) >= float(i1)):
+        return float(x0), float(y0)
+    if secondary_valid:
+        return float(x1), float(y1)
+    if primary_valid:
+        return float(x0), float(y0)
+    return None
 
 
 def _aggregate_simulated_peaks_from_max_positions(
@@ -8924,7 +8925,6 @@ def _draw_live_geometry_preview_overlay(
     _clear_geometry_preview_artists(redraw=False)
 
     limit = max(1, int(max_display_markers))
-    label_limit = min(limit, 20)
     image_shape = (int(image_size), int(image_size))
 
     for idx, entry in enumerate(matched_pairs or []):
@@ -8943,15 +8943,9 @@ def _draw_live_geometry_preview_overlay(
         if not all(np.isfinite(v) for v in (sim_col, sim_row, bg_col, bg_row)):
             continue
 
-        sim_display = _rotate_point_for_display(
-            sim_col,
-            sim_row,
-            image_shape,
-            SIM_DISPLAY_ROTATE_K,
-        )
         sim_pt, = ax.plot(
-            [float(sim_display[0])],
-            [float(sim_display[1])],
+            [float(sim_col)],
+            [float(sim_row)],
             "s",
             color="#0984e3",
             markersize=8,
@@ -8970,8 +8964,8 @@ def _draw_live_geometry_preview_overlay(
             zorder=5,
         )
         link, = ax.plot(
-            [float(sim_display[0]), float(bg_col)],
-            [float(sim_display[1]), float(bg_row)],
+            [float(sim_col), float(bg_col)],
+            [float(sim_row), float(bg_row)],
             color="#636e72",
             linestyle=":",
             linewidth=1.0,
@@ -8980,19 +8974,24 @@ def _draw_live_geometry_preview_overlay(
         )
         geometry_preview_artists.extend([sim_pt, bg_pt, link])
 
-        if idx < label_limit:
-            text = ax.text(
-                0.5 * float(sim_display[0] + bg_col),
-                0.5 * float(sim_display[1] + bg_row),
-                f"{hkl_key}",
+        label = ax.annotate(
+            f"{hkl_key}",
+            xy=(float(bg_col), float(bg_row)),
+            xytext=(float(sim_col), float(sim_row)),
+            color="#636e72",
+            fontsize=8,
+            ha="center",
+            va="center",
+            arrowprops=dict(
+                arrowstyle="->",
                 color="#636e72",
-                fontsize=8,
-                ha="center",
-                va="center",
-                zorder=6,
-                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=0.8),
-            )
-            geometry_preview_artists.append(text)
+                lw=1.0,
+                linestyle=":",
+                alpha=0.8,
+            ),
+            zorder=6,
+        )
+        geometry_preview_artists.append(label)
 
     canvas.draw_idle()
 
@@ -9034,53 +9033,31 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     min_matches = max(1, min_matches)
 
     simulated_peaks: list[dict[str, object]] = []
-    cached_alignment_ok = True
-    cached_max_positions: list[Sequence[float]] = []
-    cached_miller_parts: list[np.ndarray] = []
-    cached_intensity_parts: list[np.ndarray] = []
-
-    primary_hit_tables = list(stored_primary_max_positions or [])
-    secondary_hit_tables = list(stored_secondary_max_positions or [])
-    primary_miller = np.asarray(SIM_MILLER1, dtype=float)
-    primary_intensity = np.asarray(SIM_INTENS1, dtype=float).reshape(-1)
-    secondary_miller = np.asarray(SIM_MILLER2, dtype=float)
-    secondary_intensity = np.asarray(SIM_INTENS2, dtype=float).reshape(-1)
-
-    if primary_hit_tables:
-        if (
-            primary_miller.ndim != 2
-            or primary_miller.shape[0] != len(primary_hit_tables)
-            or primary_intensity.shape[0] < len(primary_hit_tables)
-        ):
-            cached_alignment_ok = False
-        else:
-            cached_max_positions.extend(
-                list(hit_tables_to_max_positions(primary_hit_tables))
+    if _ensure_peak_overlay_data(force=False):
+        for idx, rec in enumerate(peak_records):
+            if not isinstance(rec, dict):
+                continue
+            try:
+                disp_col = float(rec["display_col"])
+                disp_row = float(rec["display_row"])
+                hkl_key = tuple(int(np.rint(v)) for v in rec["hkl"])
+                weight = float(rec.get("intensity", 0.0))
+            except Exception:
+                continue
+            if not all(np.isfinite(v) for v in (disp_col, disp_row, weight)):
+                continue
+            simulated_peaks.append(
+                {
+                    "hkl": hkl_key,
+                    "label": f"{hkl_key[0]},{hkl_key[1]},{hkl_key[2]}",
+                    "sim_col": disp_col,
+                    "sim_row": disp_row,
+                    "weight": max(0.0, weight),
+                    "source_peak_index": int(idx),
+                }
             )
-            cached_miller_parts.append(primary_miller)
-            cached_intensity_parts.append(primary_intensity[: primary_miller.shape[0]])
 
-    if secondary_hit_tables:
-        if (
-            secondary_miller.ndim != 2
-            or secondary_miller.shape[0] != len(secondary_hit_tables)
-            or secondary_intensity.shape[0] < len(secondary_hit_tables)
-        ):
-            cached_alignment_ok = False
-        else:
-            cached_max_positions.extend(
-                list(hit_tables_to_max_positions(secondary_hit_tables))
-            )
-            cached_miller_parts.append(secondary_miller)
-            cached_intensity_parts.append(secondary_intensity[: secondary_miller.shape[0]])
-
-    if cached_alignment_ok and cached_max_positions and cached_miller_parts:
-        simulated_peaks = _aggregate_simulated_peaks_from_max_positions(
-            cached_max_positions,
-            np.vstack(cached_miller_parts),
-            np.concatenate(cached_intensity_parts),
-        )
-    elif stored_max_positions_local:
+    if not simulated_peaks and stored_max_positions_local:
         try:
             simulated_peaks = _simulate_hkl_peak_centers_for_fit(
                 np.asarray(miller, dtype=np.float64),
@@ -9088,6 +9065,18 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
                 image_size,
                 _current_geometry_fit_params(),
             )
+            for entry in simulated_peaks:
+                try:
+                    sim_col = float(entry.get("sim_col", np.nan))
+                    sim_row = float(entry.get("sim_row", np.nan))
+                except Exception:
+                    continue
+                entry["sim_col"] = float(
+                    _native_sim_to_display_coords(sim_col, sim_row, (image_size, image_size))[0]
+                )
+                entry["sim_row"] = float(
+                    _native_sim_to_display_coords(sim_col, sim_row, (image_size, image_size))[1]
+                )
         except Exception as exc:
             _clear_geometry_preview_artists()
             if update_status:
