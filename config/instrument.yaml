@@ -113,6 +113,10 @@ instrument:
         min_match_prominence_sigma: 2.5
         k_neighbors: 8
         max_candidate_peaks: 1200
+        # Guardrails: cancel auto-fit if relaxed matches are too far from
+        # simulated seeds in the display frame.
+        max_mean_distance_px: 22.0
+        max_p90_distance_px: 35.0
         fit_iterations: 3
         min_matches: 12
         max_display_markers: 120
