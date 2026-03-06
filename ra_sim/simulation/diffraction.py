@@ -1217,6 +1217,211 @@ def solve_q(
 
 
 @njit(fastmath=True)
+def _circle_frame_components(k_in_crystal, k_scat, g_vec):
+    """Return the Bragg-circle frame used to classify solutions around G."""
+
+    g_sq = g_vec[0] * g_vec[0] + g_vec[1] * g_vec[1] + g_vec[2] * g_vec[2]
+    if g_sq < 1e-14:
+        return (
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    ax = -k_in_crystal[0]
+    ay = -k_in_crystal[1]
+    az = -k_in_crystal[2]
+    a_sq = ax * ax + ay * ay + az * az
+    if a_sq < 1e-14:
+        return (
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+    a_len = sqrt(a_sq)
+
+    c = (g_sq + a_sq - k_scat * k_scat) / (2.0 * a_len)
+    circle_r_sq = g_sq - c * c
+    if circle_r_sq < 0.0:
+        return (
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    ahx = ax / a_len
+    ahy = ay / a_len
+    ahz = az / a_len
+
+    ox = c * ahx
+    oy = c * ahy
+    oz = c * ahz
+
+    anchor_x = 1.0
+    anchor_y = 0.0
+    anchor_z = 0.0
+    dot_a = anchor_x * ahx + anchor_y * ahy + anchor_z * ahz
+    if abs(dot_a) > 0.9999:
+        anchor_x = 0.0
+        anchor_y = 1.0
+        anchor_z = 0.0
+        dot_a = anchor_x * ahx + anchor_y * ahy + anchor_z * ahz
+
+    e1x = anchor_x - dot_a * ahx
+    e1y = anchor_y - dot_a * ahy
+    e1z = anchor_z - dot_a * ahz
+    e1_len = sqrt(e1x * e1x + e1y * e1y + e1z * e1z)
+    if e1_len < 1e-14:
+        return (
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+    e1x /= e1_len
+    e1y /= e1_len
+    e1z /= e1_len
+
+    e2x = ahz * e1y - ahy * e1z
+    e2y = ahx * e1z - ahz * e1x
+    e2z = ahy * e1x - ahx * e1y
+    e2_len = sqrt(e2x * e2x + e2y * e2y + e2z * e2z)
+    if e2_len < 1e-14:
+        return (
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+    e2x /= e2_len
+    e2y /= e2_len
+    e2z /= e2_len
+
+    return True, ox, oy, oz, e1x, e1y, e1z, e2x, e2y, e2z
+
+
+@njit(fastmath=True)
+def _select_g_peak_solution_indices(all_q, k_in_crystal, k_scat, g_vec):
+    """Keep the strongest mosaic-intensity solution(s) on either side of G."""
+
+    count = all_q.shape[0]
+    out = np.full(2, -1, dtype=np.int64)
+    if count <= 0:
+        return out, 0
+
+    best_idx = 0
+    best_iq = all_q[0, 3]
+    for idx in range(1, count):
+        iq = all_q[idx, 3]
+        if iq > best_iq:
+            best_iq = iq
+            best_idx = idx
+
+    gr_sq = g_vec[0] * g_vec[0] + g_vec[1] * g_vec[1]
+    if gr_sq <= 1e-14 or count == 1:
+        out[0] = best_idx
+        return out, 1
+
+    (
+        ok,
+        ox,
+        oy,
+        oz,
+        e1x,
+        e1y,
+        e1z,
+        e2x,
+        e2y,
+        e2z,
+    ) = _circle_frame_components(k_in_crystal, k_scat, g_vec)
+    if not ok:
+        out[0] = best_idx
+        return out, 1
+
+    grx = g_vec[0] - ox
+    gry = g_vec[1] - oy
+    grz = g_vec[2] - oz
+    g_a1 = grx * e1x + gry * e1y + grz * e1z
+    g_a2 = grx * e2x + gry * e2y + grz * e2z
+    g_angle = np.arctan2(g_a2, g_a1)
+
+    best_neg_idx = -1
+    best_pos_idx = -1
+    best_neg_iq = -1.0
+    best_pos_iq = -1.0
+    best_neg_abs = np.inf
+    best_pos_abs = np.inf
+
+    for idx in range(count):
+        iq = all_q[idx, 3]
+        if not np.isfinite(iq) or iq <= 0.0:
+            continue
+        rx = all_q[idx, 0] - ox
+        ry = all_q[idx, 1] - oy
+        rz = all_q[idx, 2] - oz
+        a1 = rx * e1x + ry * e1y + rz * e1z
+        a2 = rx * e2x + ry * e2y + rz * e2z
+        delta = wrap_to_pi(np.arctan2(a2, a1) - g_angle)
+        abs_delta = abs(delta)
+
+        if delta < 0.0:
+            if iq > best_neg_iq or (abs(iq - best_neg_iq) <= 1e-18 and abs_delta < best_neg_abs):
+                best_neg_iq = iq
+                best_neg_abs = abs_delta
+                best_neg_idx = idx
+        else:
+            if iq > best_pos_iq or (abs(iq - best_pos_iq) <= 1e-18 and abs_delta < best_pos_abs):
+                best_pos_iq = iq
+                best_pos_abs = abs_delta
+                best_pos_idx = idx
+
+    n_keep = 0
+    if best_neg_idx >= 0:
+        out[n_keep] = best_neg_idx
+        n_keep += 1
+    if best_pos_idx >= 0 and best_pos_idx != best_neg_idx:
+        out[n_keep] = best_pos_idx
+        n_keep += 1
+    if n_keep <= 0:
+        out[0] = best_idx
+        return out, 1
+    return out, n_keep
+
+
+@njit(fastmath=True)
 def _build_sample_rotation(theta_initial_deg, cor_angle_deg, R_z_R_y, R_ZY_n, P0):
     """Build reflection-invariant sample frame for the current geometry."""
     rad_theta_i = theta_initial_deg * (pi / 180.0)
@@ -1302,10 +1507,16 @@ def _precompute_sample_terms(
     best_idx = 0
     if n_samp > 0:
         best_angle = theta_array[0] * theta_array[0] + phi_array[0] * phi_array[0]
+        best_beam = beam_x_array[0] * beam_x_array[0] + beam_y_array[0] * beam_y_array[0]
         for ii in range(1, n_samp):
             metric = theta_array[ii] * theta_array[ii] + phi_array[ii] * phi_array[ii]
+            beam_metric = beam_x_array[ii] * beam_x_array[ii] + beam_y_array[ii] * beam_y_array[ii]
             if metric < best_angle:
                 best_angle = metric
+                best_beam = beam_metric
+                best_idx = ii
+            elif abs(metric - best_angle) <= 1e-18 and beam_metric < best_beam:
+                best_beam = beam_metric
                 best_idx = ii
 
     # Build local incidence basis around the sample normal.
@@ -1550,6 +1761,9 @@ def _calculate_phi_from_precomputed(
     if 0 <= forced_sample_idx < n_samp:
         loop_start = forced_sample_idx
         loop_stop = forced_sample_idx + 1
+    record_sample_idx = best_idx
+    if 0 <= forced_sample_idx < n_samp:
+        record_sample_idx = forced_sample_idx
 
     best_candidate_sample_idx = -1
     for i_samp in range(loop_start, loop_stop):
@@ -1594,6 +1808,16 @@ def _calculate_phi_from_precomputed(
         if record_status:
             statuses[i_samp] = stat
 
+        selected_sol_idx = np.full(2, -1, dtype=np.int64)
+        selected_sol_count = 0
+        if capture_aux and i_samp == record_sample_idx:
+            selected_sol_idx, selected_sol_count = _select_g_peak_solution_indices(
+                All_Q,
+                k_in_crystal,
+                k_scat,
+                G_vec,
+            )
+
         for i_sol in range(All_Q.shape[0]):
             Qx = All_Q[i_sol, 0]
             Qy = All_Q[i_sol, 1]
@@ -1601,6 +1825,13 @@ def _calculate_phi_from_precomputed(
             I_Q = All_Q[i_sol, 3]
             if I_Q < 1e-5:
                 continue
+
+            record_this_solution = False
+            if capture_aux and i_samp == record_sample_idx:
+                for keep_idx in range(selected_sol_count):
+                    if i_sol == selected_sol_idx[keep_idx]:
+                        record_this_solution = True
+                        break
 
             k_tx_prime = Qx + k_x_scat
             k_ty_prime = Qy + k_y_scat
@@ -1739,7 +1970,7 @@ def _calculate_phi_from_precomputed(
 
             image[rpx, cpx] += val
 
-            if val > best_candidate_val:
+            if record_this_solution and val > best_candidate_val:
                 best_candidate_val = val
                 if capture_aux:
                     best_candidate[0] = val
@@ -1752,7 +1983,7 @@ def _calculate_phi_from_precomputed(
                 have_candidate = True
                 best_candidate_sample_idx = i_samp
 
-            if capture_aux and i_samp == best_idx:
+            if record_this_solution:
                 if n_hits < max_hits:
                     pixel_hits[n_hits, 0] = val
                     pixel_hits[n_hits, 1] = cpx
@@ -1776,23 +2007,12 @@ def _calculate_phi_from_precomputed(
         add_candidate = False
         if have_candidate:
             add_candidate = not recorded_nominal_hit
-            if not add_candidate:
-                duplicate = False
-                for idx in range(n_hits):
-                    if (
-                        abs(pixel_hits[idx, 1] - best_candidate[1]) < 0.5
-                        and abs(pixel_hits[idx, 2] - best_candidate[2]) < 0.5
-                    ):
-                        duplicate = True
-                        break
-                if not duplicate:
-                    add_candidate = True
         if add_candidate and n_hits < max_hits:
             pixel_hits[n_hits, :] = best_candidate
             n_hits += 1
 
     best_sample_idx = best_idx
-    if best_candidate_sample_idx >= 0:
+    if not recorded_nominal_hit and best_candidate_sample_idx >= 0:
         best_sample_idx = best_candidate_sample_idx
 
     if record_status:
