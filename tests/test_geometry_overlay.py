@@ -72,11 +72,6 @@ def test_build_geometry_fit_overlay_records_inverts_orientation_before_display()
     }
     native_sim = (2.0, 8.0)
     native_bg = (4.0, 6.0)
-    fit_sim = transform_points_orientation(
-        [native_sim],
-        native_shape,
-        **orientation_choice,
-    )[0]
     fit_bg = transform_points_orientation(
         [native_bg],
         native_shape,
@@ -109,8 +104,8 @@ def test_build_geometry_fit_overlay_records_inverts_orientation_before_display()
                 "match_status": "matched",
                 "overlay_match_index": 5,
                 "hkl": (2, 1, 0),
-                "simulated_x": fit_sim[0],
-                "simulated_y": fit_sim[1],
+                "simulated_x": native_sim[0],
+                "simulated_y": native_sim[1],
                 "measured_x": fit_bg[0],
                 "measured_y": fit_bg[1],
                 "distance_px": 3.0,
@@ -128,6 +123,57 @@ def test_build_geometry_fit_overlay_records_inverts_orientation_before_display()
 
     frame_diag, frame_warning = compute_geometry_overlay_frame_diagnostics(records)
     assert frame_diag["paired_records"] == pytest.approx(1.0)
+    assert frame_diag["sim_display_med_px"] == pytest.approx(0.0)
+    assert frame_diag["bg_display_med_px"] == pytest.approx(0.0)
+    assert frame_warning == ""
+
+
+def test_build_geometry_fit_overlay_records_matches_real_world_orientation_case():
+    native_shape = (3072, 3072)
+    orientation_choice = {
+        "indexing_mode": "xy",
+        "k": 1,
+        "flip_x": True,
+        "flip_y": True,
+        "flip_order": "yx",
+    }
+    initial_sim_display = (1827.0, 1362.0)
+    initial_bg_display = (1820.992, 1375.983)
+
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (-1, 0, 5),
+                "sim_display": initial_sim_display,
+                "bg_display": initial_bg_display,
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (-1, 0, 5),
+                "simulated_x": 1827.0,
+                "simulated_y": 1362.0,
+                "measured_x": 1820.992,
+                "measured_y": 1375.983,
+                "distance_px": 15.219,
+            }
+        ],
+        native_shape=native_shape,
+        orientation_choice=orientation_choice,
+        sim_display_rotate_k=0,
+        background_display_rotate_k=-1,
+    )
+
+    assert len(records) == 1
+    assert records[0]["simulated_frame"] == "sim_native"
+    assert records[0]["measured_frame"] == "fit_oriented"
+    assert records[0]["final_sim_display"] == pytest.approx(initial_sim_display)
+    assert records[0]["final_bg_display"] == pytest.approx(initial_bg_display)
+
+    frame_diag, frame_warning = compute_geometry_overlay_frame_diagnostics(records)
     assert frame_diag["sim_display_med_px"] == pytest.approx(0.0)
     assert frame_diag["bg_display_med_px"] == pytest.approx(0.0)
     assert frame_warning == ""

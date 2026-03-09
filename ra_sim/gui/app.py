@@ -1584,6 +1584,18 @@ def _clear_geometry_pick_artists():
     canvas.draw_idle()
 
 
+def _clear_all_geometry_overlay_artists():
+    """Clear all geometry-fit overlays so the image can be inspected cleanly."""
+
+    _clear_geometry_pick_artists()
+    try:
+        progress_label_geometry.config(
+            text="Geometry overlays cleared. Run Fit Geometry again to redraw them."
+        )
+    except Exception:
+        pass
+
+
 def _draw_geometry_fit_overlay(
     overlay_records: Sequence[dict[str, object]] | None,
     *,
@@ -5991,6 +6003,7 @@ def on_fit_geometry_click():
         _log_section(
             "Overlay frame diagnostics:",
             [
+                "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
                 f"overlay_records={len(overlay_records)}",
                 f"paired_records={int(frame_diag.get('paired_records', 0))}",
                 f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
@@ -6809,6 +6822,7 @@ def on_fit_geometry_click():
             _log_section(
                 "Overlay frame diagnostics:",
                 [
+                    "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
                     f"overlay_records={len(overlay_records)}",
                     f"paired_records={int(frame_diag.get('paired_records', 0))}",
                     f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
@@ -7276,8 +7290,8 @@ fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_cl
 
 clear_geometry_markers_button = ttk.Button(
     root,
-    text="Clear Fit Markers",
-    command=_clear_geometry_pick_artists,
+    text="Clear Geometry Overlays",
+    command=_clear_all_geometry_overlay_artists,
 )
 clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
 

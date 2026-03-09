@@ -3387,6 +3387,12 @@ def _clear_all_geometry_overlay_artists():
     _clear_geometry_pick_artists(redraw=False)
     _clear_geometry_preview_artists(redraw=False)
     canvas.draw_idle()
+    try:
+        progress_label_geometry.config(
+            text="Geometry overlays cleared. Run Fit Geometry again to redraw them."
+        )
+    except Exception:
+        pass
 
 
 def _live_geometry_preview_signature() -> tuple[object, ...]:
@@ -11780,6 +11786,7 @@ def on_fit_geometry_click():
         _log_section(
             "Overlay frame diagnostics:",
             [
+                "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
                 f"overlay_records={len(overlay_records)}",
                 f"paired_records={int(frame_diag.get('paired_records', 0))}",
                 f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
@@ -12643,6 +12650,7 @@ def on_fit_geometry_click():
             _log_section(
                 "Overlay frame diagnostics:",
                 [
+                    "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
                     f"overlay_records={len(overlay_records)}",
                     f"paired_records={int(frame_diag.get('paired_records', 0))}",
                     f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
@@ -13052,7 +13060,7 @@ for _entry in (h_entry, k_entry, l_entry):
 
 clear_geometry_markers_button = ttk.Button(
     root,
-    text="Clear Geometry Markers",
+    text="Clear Geometry Overlays",
     command=_clear_all_geometry_overlay_artists,
 )
 clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
