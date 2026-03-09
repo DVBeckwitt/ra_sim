@@ -117,6 +117,10 @@ instrument:
         # simulated seeds in the display frame.
         max_mean_distance_px: 22.0
         max_p90_distance_px: 35.0
+        # Keep the initially matched background peaks fixed during fitting.
+        # Set true only if you explicitly want to re-run auto-match after each
+        # optimizer pass.
+        rematch_between_iterations: false
         fit_iterations: 3
         min_matches: 12
         max_display_markers: 120

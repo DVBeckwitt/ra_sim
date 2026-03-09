@@ -242,7 +242,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Rectangle
 import pyFAI
-from scipy.ndimage import gaussian_filter, maximum_filter, label
 from OSC_Reader import read_osc
 import Dans_Diffraction as dif
 import CifFile
@@ -281,6 +280,10 @@ from ra_sim.fitting.optimization import (
     fit_mosaic_widths_separable,
     simulate_and_compare_hkl,
 )
+from ra_sim.fitting.background_peak_matching import (
+    build_background_peak_context,
+    match_simulated_peaks_to_peak_context,
+)
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction import (
     DEFAULT_SOLVE_Q_REL_TOL,
@@ -311,6 +314,11 @@ from ra_sim.simulation.diffraction_debug import (
     dump_debug_log,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
+from ra_sim.gui.geometry_overlay import (
+    build_geometry_fit_overlay_records,
+    compute_geometry_overlay_frame_diagnostics,
+    normalize_initial_geometry_pairs_display,
+)
 from ra_sim.gui.sliders import create_slider
 from ra_sim.gui.diffuse_cif_toggle import (
     open_diffuse_cif_toggle_algebraic,
@@ -2850,31 +2858,25 @@ def _inverse_orientation_transform(
 
 
 def _draw_geometry_fit_overlay(
-    initial_pairs_display: Sequence[dict[str, object]] | None,
-    agg_sim_coords: Sequence[tuple[float, float]],
-    agg_meas_coords: Sequence[tuple[float, float]],
-    agg_millers: Sequence[tuple[int, int, int]],
+    overlay_records: Sequence[dict[str, object]] | None,
     *,
     max_display_markers: int = 120,
-    orientation_choice: dict[str, object] | None = None,
-    native_shape: tuple[int, int] | None = None,
 ) -> None:
-    """Draw initial picks, fitted picks, and movement vectors for geometry fit."""
-
-    initial_by_hkl = _aggregate_initial_geometry_display_pairs(initial_pairs_display)
+    """Draw one fixed-background/fitted-simulation overlay record per match."""
 
     _clear_geometry_pick_artists()
 
-    limit = max(1, int(max_display_markers))
-    image_shape = (int(image_size), int(image_size))
-    native_frame_shape = (
-        tuple(int(v) for v in native_shape[:2])
-        if native_shape is not None
-        else image_shape
-    )
-    inverse_orientation = _inverse_orientation_transform(
-        native_frame_shape, orientation_choice
-    )
+    def _parse_point(value: object) -> tuple[float, float] | None:
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+            return None
+        try:
+            col = float(value[0])
+            row = float(value[1])
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
 
     def _plot_marker(
         col: float,
@@ -2944,50 +2946,19 @@ def _draw_geometry_fit_overlay(
         )
         geometry_pick_artists.append(arrow)
 
-    for idx, (hkl_key_raw, sim_center, meas_center) in enumerate(
-        zip(agg_millers, agg_sim_coords, agg_meas_coords)
-    ):
-        if idx >= limit:
+    limit = max(1, int(max_display_markers))
+    for idx, entry in enumerate(overlay_records or []):
+        if idx >= limit or not isinstance(entry, dict):
             break
-        hkl_key = _normalize_hkl_key(hkl_key_raw)
-        if hkl_key is None:
+
+        initial_sim_display = _parse_point(entry.get("initial_sim_display"))
+        initial_bg_display = _parse_point(entry.get("initial_bg_display"))
+        final_sim_display = _parse_point(entry.get("final_sim_display"))
+        final_bg_display = _parse_point(entry.get("final_bg_display"))
+        if final_sim_display is None or final_bg_display is None:
             continue
 
-        try:
-            sim_col = float(sim_center[0])
-            sim_row = float(sim_center[1])
-            meas_col = float(meas_center[0])
-            meas_row = float(meas_center[1])
-        except Exception:
-            continue
-        if not all(
-            np.isfinite(v) for v in (sim_col, sim_row, meas_col, meas_row)
-        ):
-            continue
-
-        final_sim_display = _rotate_point_for_display(
-            sim_col, sim_row, image_shape, SIM_DISPLAY_ROTATE_K
-        )
-        meas_native = _transform_points_orientation(
-            [(meas_col, meas_row)],
-            native_frame_shape,
-            indexing_mode=str(inverse_orientation.get("indexing_mode", "xy")),
-            k=int(inverse_orientation.get("k", 0)),
-            flip_x=bool(inverse_orientation.get("flip_x", False)),
-            flip_y=bool(inverse_orientation.get("flip_y", False)),
-            flip_order=str(inverse_orientation.get("flip_order", "yx")),
-        )[0]
-        final_bg_display = _rotate_point_for_display(
-            float(meas_native[0]),
-            float(meas_native[1]),
-            native_frame_shape,
-            DISPLAY_ROTATE_K,
-        )
-
-        initial_entry = initial_by_hkl.get(hkl_key, {})
-        initial_sim_display = initial_entry.get("sim_display")
-        initial_bg_display = initial_entry.get("bg_display")
-
+        label = str(entry.get("hkl", entry.get("label", "match")))
         if initial_sim_display is not None:
             _plot_marker(
                 initial_sim_display[0],
@@ -3020,38 +2991,22 @@ def _draw_geometry_fit_overlay(
                 "^",
                 zorder=7,
             )
-            bg_shift = math.hypot(
-                final_bg_display[0] - initial_bg_display[0],
-                final_bg_display[1] - initial_bg_display[1],
-            )
-            if bg_shift > 0.25:
-                _plot_arrow(
-                    initial_bg_display,
-                    final_bg_display,
-                    color="#f39c12",
-                    linestyle="--",
-                    lw=1.0,
-                    alpha=0.8,
-                )
 
         _plot_marker(
             final_sim_display[0],
             final_sim_display[1],
-            f"{hkl_key} fit sim",
+            f"{label} fit sim",
             "#00b894",
             "o",
             zorder=8,
         )
-        _plot_marker(
-            final_bg_display[0],
-            final_bg_display[1],
-            f"{hkl_key} fit bg",
-            "#e17055",
-            "x",
-            zorder=8,
-        )
 
-        residual_dist = math.hypot(sim_col - meas_col, sim_row - meas_row)
+        residual_dist = float(entry.get("overlay_distance_px", np.nan))
+        if not np.isfinite(residual_dist):
+            residual_dist = math.hypot(
+                final_sim_display[0] - final_bg_display[0],
+                final_sim_display[1] - final_bg_display[1],
+            )
         _plot_arrow(
             final_sim_display,
             final_bg_display,
@@ -3072,18 +3027,18 @@ def _draw_initial_geometry_pairs_overlay(
 ) -> None:
     """Draw only the initially selected simulation/background peak pairs."""
 
-    initial_by_hkl = _aggregate_initial_geometry_display_pairs(initial_pairs_display)
+    initial_pairs = normalize_initial_geometry_pairs_display(initial_pairs_display)
     _clear_geometry_pick_artists()
 
     limit = max(1, int(max_display_markers))
-    for idx, hkl_key in enumerate(sorted(initial_by_hkl)):
+    for idx, entry in enumerate(initial_pairs):
         if idx >= limit:
             break
-        entry = initial_by_hkl.get(hkl_key, {})
         sim_display = entry.get("sim_display")
         bg_display = entry.get("bg_display")
         if sim_display is None and bg_display is None:
             continue
+        hkl_label = str(entry.get("hkl", entry.get("label", idx)))
 
         if sim_display is not None:
             sim_pt, = ax.plot(
@@ -3112,7 +3067,7 @@ def _draw_initial_geometry_pairs_overlay(
 
         if sim_display is not None and bg_display is not None:
             link = ax.annotate(
-                f"{hkl_key}",
+                hkl_label,
                 xy=(float(bg_display[0]), float(bg_display[1])),
                 xytext=(float(sim_display[0]), float(sim_display[1])),
                 color="#636e72",
@@ -3134,104 +3089,11 @@ def _draw_initial_geometry_pairs_overlay(
 
 
 def _geometry_overlay_frame_diagnostics(
-    initial_pairs_display: Sequence[dict[str, object]] | None,
-    agg_meas_coords: Sequence[tuple[float, float]],
-    agg_millers: Sequence[tuple[int, int, int]],
-    *,
-    orientation_choice: dict[str, object] | None = None,
-    native_shape: tuple[int, int] | None = None,
+    overlay_records: Sequence[dict[str, object]] | None,
 ) -> tuple[dict[str, float], str]:
-    """Compare fitted background overlay alignment in SIM vs DISPLAY frames."""
+    """Compare per-match fitted overlay alignment in display space."""
 
-    initial_by_hkl = _aggregate_initial_geometry_display_pairs(initial_pairs_display)
-    sim_frame_dists: list[float] = []
-    bg_frame_dists: list[float] = []
-    image_shape = (
-        tuple(int(v) for v in native_shape[:2])
-        if native_shape is not None
-        else (int(image_size), int(image_size))
-    )
-    inverse_orientation = _inverse_orientation_transform(
-        image_shape, orientation_choice
-    )
-
-    for hkl_raw, meas_center in zip(agg_millers, agg_meas_coords):
-        hkl_key = _normalize_hkl_key(hkl_raw)
-        if hkl_key is None:
-            continue
-        entry = initial_by_hkl.get(hkl_key)
-        if not entry:
-            continue
-        init_bg = entry.get("bg_display")
-        if init_bg is None:
-            continue
-        try:
-            meas_col = float(meas_center[0])
-            meas_row = float(meas_center[1])
-            init_col = float(init_bg[0])
-            init_row = float(init_bg[1])
-        except Exception:
-            continue
-        if not all(
-            np.isfinite(v) for v in (meas_col, meas_row, init_col, init_row)
-        ):
-            continue
-
-        meas_native = _transform_points_orientation(
-            [(meas_col, meas_row)],
-            image_shape,
-            indexing_mode=str(inverse_orientation.get("indexing_mode", "xy")),
-            k=int(inverse_orientation.get("k", 0)),
-            flip_x=bool(inverse_orientation.get("flip_x", False)),
-            flip_y=bool(inverse_orientation.get("flip_y", False)),
-            flip_order=str(inverse_orientation.get("flip_order", "yx")),
-        )[0]
-
-        meas_sim_display = _rotate_point_for_display(
-            float(meas_native[0]), float(meas_native[1]), image_shape, SIM_DISPLAY_ROTATE_K
-        )
-        meas_bg_display = _rotate_point_for_display(
-            float(meas_native[0]), float(meas_native[1]), image_shape, DISPLAY_ROTATE_K
-        )
-        sim_frame_dists.append(
-            float(np.hypot(meas_sim_display[0] - init_col, meas_sim_display[1] - init_row))
-        )
-        bg_frame_dists.append(
-            float(np.hypot(meas_bg_display[0] - init_col, meas_bg_display[1] - init_row))
-        )
-
-    stats: dict[str, float] = {
-        "paired_hkls": float(len(sim_frame_dists)),
-        "sim_display_med_px": float(np.median(sim_frame_dists))
-        if sim_frame_dists
-        else float("nan"),
-        "bg_display_med_px": float(np.median(bg_frame_dists))
-        if bg_frame_dists
-        else float("nan"),
-        "sim_display_p90_px": float(np.percentile(sim_frame_dists, 90.0))
-        if sim_frame_dists
-        else float("nan"),
-        "bg_display_p90_px": float(np.percentile(bg_frame_dists, 90.0))
-        if bg_frame_dists
-        else float("nan"),
-    }
-
-    warning = ""
-    sim_med = float(stats["sim_display_med_px"])
-    bg_med = float(stats["bg_display_med_px"])
-    if (
-        len(sim_frame_dists) >= 3
-        and np.isfinite(sim_med)
-        and np.isfinite(bg_med)
-        and sim_med - bg_med > 40.0
-        and bg_med <= 0.6 * sim_med
-    ):
-        warning = (
-            "Frame mismatch suspect: fitted background points align better in DISPLAY_ROTATE_K "
-            f"({DISPLAY_ROTATE_K}) than SIM_DISPLAY_ROTATE_K ({SIM_DISPLAY_ROTATE_K})."
-        )
-
-    return stats, warning
+    return compute_geometry_overlay_frame_diagnostics(overlay_records)
 
 # Measured peaks are collected interactively in the current GUI workflow.
 # Keep this list for compatibility, but avoid loading a large file at startup.
@@ -3472,6 +3334,7 @@ geometry_q_group_status_label = None
 geometry_q_group_row_vars: dict[tuple[object, ...], tk.BooleanVar] = {}
 geometry_q_group_cached_entries: list[dict[str, object]] = []
 geometry_q_group_refresh_requested = False
+geometry_preview_skip_once = False
 geometry_auto_match_background_cache_key = None
 geometry_auto_match_background_cache_data = None
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
@@ -3899,6 +3762,149 @@ def _filter_geometry_fit_simulated_peaks(
         filtered.append(entry)
 
     return filtered, int(excluded_count), int(len(available_keys))
+
+
+def _geometry_fit_seed_representative_sort_key(
+    entry: dict[str, object] | None,
+) -> tuple[object, ...]:
+    """Return a stable ordering key for degenerate geometry-fit seeds."""
+
+    if not isinstance(entry, dict):
+        return (2, "")
+    try:
+        return (0, int(entry.get("source_peak_index")))
+    except Exception:
+        pass
+    hkl_key = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+    if hkl_key is not None:
+        return (1, int(hkl_key[0]), int(hkl_key[1]), int(hkl_key[2]))
+    return (2, str(entry.get("label", "")))
+
+
+def _geometry_fit_seed_sim_point(
+    entry: dict[str, object] | None,
+) -> tuple[float, float] | None:
+    """Return the simulated detector point for a geometry-fit seed entry."""
+
+    if not isinstance(entry, dict):
+        return None
+    try:
+        sim_col = float(entry.get("sim_col", np.nan))
+        sim_row = float(entry.get("sim_row", np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return None
+    return float(sim_col), float(sim_row)
+
+
+def _geometry_fit_seed_cluster_anchor(
+    entries: Sequence[dict[str, object]],
+) -> tuple[float, float] | None:
+    """Return the mean simulated point for a cluster of seed entries."""
+
+    cols: list[float] = []
+    rows: list[float] = []
+    for entry in entries:
+        point = _geometry_fit_seed_sim_point(entry)
+        if point is None:
+            continue
+        cols.append(float(point[0]))
+        rows.append(float(point[1]))
+    if not cols or not rows:
+        return None
+    return float(np.mean(np.asarray(cols, dtype=float))), float(
+        np.mean(np.asarray(rows, dtype=float))
+    )
+
+
+def _collapse_geometry_fit_simulated_peaks(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    *,
+    merge_radius_px: float = 6.0,
+) -> tuple[list[dict[str, object]], int]:
+    """Collapse only overlapping degenerate seeds within each Qr/Qz group."""
+
+    grouped_entries: dict[object, list[dict[str, object]]] = {}
+    ordered_keys: list[object] = []
+    ungrouped_index = 0
+    merge_radius = max(0.0, float(merge_radius_px))
+
+    for raw_entry in simulated_peaks or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        group_key = entry.get("q_group_key")
+        if group_key is None:
+            group_key = ("ungrouped", ungrouped_index)
+            ungrouped_index += 1
+        if group_key not in grouped_entries:
+            grouped_entries[group_key] = []
+            ordered_keys.append(group_key)
+        grouped_entries[group_key].append(entry)
+
+    collapsed: list[dict[str, object]] = []
+    collapsed_degenerate_count = 0
+
+    for group_key in ordered_keys:
+        entries = grouped_entries.get(group_key, [])
+        if not entries:
+            continue
+
+        clusters: list[list[dict[str, object]]] = []
+        cluster_anchors: list[tuple[float, float] | None] = []
+        for entry in entries:
+            point = _geometry_fit_seed_sim_point(entry)
+            chosen_cluster_idx = None
+            chosen_cluster_dist = float("inf")
+            if point is not None and merge_radius > 0.0:
+                for cluster_idx, anchor in enumerate(cluster_anchors):
+                    if anchor is None:
+                        continue
+                    dist = float(math.hypot(point[0] - anchor[0], point[1] - anchor[1]))
+                    if dist <= merge_radius and dist < chosen_cluster_dist:
+                        chosen_cluster_idx = cluster_idx
+                        chosen_cluster_dist = dist
+            if chosen_cluster_idx is None:
+                clusters.append([entry])
+                cluster_anchors.append(point)
+                continue
+            clusters[chosen_cluster_idx].append(entry)
+            cluster_anchors[chosen_cluster_idx] = _geometry_fit_seed_cluster_anchor(
+                clusters[chosen_cluster_idx]
+            )
+
+        for cluster_entries in clusters:
+            representative = min(
+                cluster_entries,
+                key=_geometry_fit_seed_representative_sort_key,
+            )
+            merged = dict(representative)
+            degenerate_hkls: list[tuple[int, int, int]] = []
+            seen_hkls: set[tuple[int, int, int]] = set()
+            total_weight = 0.0
+
+            for entry in cluster_entries:
+                hkl_key = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+                if hkl_key is not None and hkl_key not in seen_hkls:
+                    seen_hkls.add(hkl_key)
+                    degenerate_hkls.append(hkl_key)
+                try:
+                    weight = float(entry.get("weight", 0.0))
+                except Exception:
+                    weight = 0.0
+                if np.isfinite(weight) and weight > 0.0:
+                    total_weight += float(weight)
+                else:
+                    total_weight += 1.0
+
+            merged["weight"] = float(total_weight)
+            merged["degenerate_count"] = int(len(cluster_entries))
+            merged["degenerate_hkls"] = list(degenerate_hkls)
+            collapsed_degenerate_count += max(0, len(cluster_entries) - 1)
+            collapsed.append(merged)
+
+    return collapsed, int(collapsed_degenerate_count)
 
 
 def _build_geometry_q_group_entries() -> list[dict[str, object]]:
@@ -8132,6 +8138,7 @@ def do_update():
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
     global geometry_q_group_refresh_requested
+    global geometry_preview_skip_once
     global stored_primary_sim_image, stored_secondary_sim_image
     global stored_primary_max_positions, stored_secondary_max_positions
     global stored_primary_peak_table_lattice, stored_secondary_peak_table_lattice
@@ -8861,8 +8868,13 @@ def do_update():
 
     update_integration_region_visuals(ai, sim_res2)
     if _live_geometry_preview_enabled():
-        _refresh_live_geometry_preview(update_status=True)
+        if geometry_preview_skip_once:
+            geometry_preview_skip_once = False
+            _clear_geometry_preview_artists()
+        else:
+            _refresh_live_geometry_preview(update_status=True)
     else:
+        geometry_preview_skip_once = False
         _clear_geometry_preview_artists()
 
     redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
@@ -9941,7 +9953,7 @@ def _auto_match_background_context(
     background_image: object,
     cfg: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Return cached background peakness data for seeded-ascent auto-matching."""
+    """Return cached background peakness data for seed-local auto-matching."""
 
     global geometry_auto_match_background_cache_key, geometry_auto_match_background_cache_data
 
@@ -9991,126 +10003,17 @@ def _auto_match_background_context(
         _auto_match_console(config, f"context cache hit shape={bg_key[1]}")
         return dict(config), geometry_auto_match_background_cache_data
 
-    img = np.asarray(background_image, dtype=np.float32)
-    valid_mask = np.isfinite(img)
-    if img.ndim != 2 or not np.any(valid_mask):
-        cache_data = {"img_valid": False}
-        geometry_auto_match_background_cache_key = cache_key
-        geometry_auto_match_background_cache_data = cache_data
-        return dict(config), cache_data
-
-    height, width = img.shape
-    _auto_match_console(config, f"context build start shape=({height},{width})")
-    baseline = np.float32(np.median(img[valid_mask]))
-    work = np.where(valid_mask, img, baseline).astype(np.float32, copy=False)
-    _auto_match_console(config, "context smooth fine start")
-    fine = gaussian_filter(work, sigma=climb_sigma, mode="nearest") if climb_sigma > 0.0 else work
-    broad_sigma = smooth_sigma if smooth_sigma > 0.0 else max(2.0, climb_sigma + 1.5)
-    _auto_match_console(config, f"context smooth broad start sigma={broad_sigma:.2f}")
-    broad = gaussian_filter(work, sigma=broad_sigma, mode="nearest")
-    peakness = fine - broad
-    _auto_match_console(config, f"context local-max start size={local_max_size}")
-    local_max = peakness == maximum_filter(peakness, size=local_max_size, mode="nearest")
-
-    prom_vals = peakness[valid_mask]
-    prom_center = float(np.median(prom_vals))
-    mad = float(np.median(np.abs(prom_vals - prom_center)))
-    sigma_est = 1.4826 * mad
-    if not np.isfinite(sigma_est) or sigma_est <= 1e-12:
-        sigma_est = float(np.std(prom_vals))
-    if not np.isfinite(sigma_est) or sigma_est <= 1e-12:
-        sigma_est = 1.0
-
-    candidate_floor = prom_center + min_prominence_sigma * sigma_est
-    candidate_mask = local_max & valid_mask & (peakness >= candidate_floor)
-    if not np.any(candidate_mask):
-        fallback_floor = float(np.percentile(prom_vals, fallback_percentile))
-        candidate_mask = local_max & valid_mask & (peakness >= fallback_floor)
+    cache_data = build_background_peak_context(
+        background_image,
+        config,
+        logger=lambda text: _auto_match_console(config, text),
+    )
     _auto_match_console(
         config,
-        f"context candidates nonzero={int(np.count_nonzero(candidate_mask))}",
+        "context build done "
+        f"summits={len(cache_data.get('summit_records', []))} "
+        f"sigma_est={float(cache_data.get('sigma_est', np.nan)):.4f}",
     )
-
-    summit_records: list[dict[str, object]] = []
-    if np.any(candidate_mask):
-        _auto_match_console(config, "context label start")
-        candidate_labels, candidate_count_raw = label(
-            candidate_mask.astype(np.uint8),
-            structure=np.ones((3, 3), dtype=np.uint8),
-        )
-        _auto_match_console(
-            config,
-            f"context label done candidate_components={int(candidate_count_raw)}",
-        )
-        rr, cc = np.nonzero(candidate_labels > 0)
-        if rr.size > 0:
-            label_vals = candidate_labels[rr, cc].astype(np.int32, copy=False)
-            peak_vals = peakness[rr, cc]
-            intensity_vals = work[rr, cc]
-            order = np.lexsort((intensity_vals, peak_vals, label_vals))
-            labels_sorted = label_vals[order]
-            group_end = np.ones(labels_sorted.shape, dtype=bool)
-            if labels_sorted.size > 1:
-                group_end[:-1] = labels_sorted[:-1] != labels_sorted[1:]
-            best_order = order[group_end]
-            best_rows = rr[best_order]
-            best_cols = cc[best_order]
-            best_labels = label_vals[best_order]
-            best_peak_vals = peakness[best_rows, best_cols]
-            best_intensity_vals = work[best_rows, best_cols]
-            progress_every = max(1, int(config.get("context_progress_every", 2000)))
-            total_best = int(best_labels.size)
-            for idx, summit_id in enumerate(best_labels, start=1):
-                peak_row = int(best_rows[idx - 1])
-                peak_col = int(best_cols[idx - 1])
-                prom_sigma = float(
-                    (best_peak_vals[idx - 1] - prom_center) / (sigma_est + 1e-12)
-                )
-                bg_intensity = float(best_intensity_vals[idx - 1])
-                summit_records.append(
-                    {
-                        "summit_id": int(summit_id),
-                        "row": float(peak_row),
-                        "col": float(peak_col),
-                        "center_row": float(peak_row),
-                        "center_col": float(peak_col),
-                        "center_refined": False,
-                        "prominence_sigma": float(prom_sigma),
-                        "background_intensity": float(bg_intensity),
-                    }
-                )
-                if idx == 1 or idx % progress_every == 0 or idx == total_best:
-                    _auto_match_console(
-                        config,
-                        f"context refine processed={idx}/{total_best}",
-                    )
-        summit_records.sort(
-            key=lambda info: (
-                float(info.get("prominence_sigma", -np.inf)),
-                float(info.get("background_intensity", -np.inf)),
-            ),
-            reverse=True,
-        )
-    else:
-        candidate_labels = np.zeros_like(work, dtype=np.int32)
-    _auto_match_console(
-        config,
-        f"context build done summits={len(summit_records)} sigma_est={sigma_est:.4f}",
-    )
-
-    cache_data = {
-        "img_valid": True,
-        "work": work,
-        "fine": fine,
-        "peakness": peakness,
-        "valid_mask": valid_mask,
-        "candidate_labels": candidate_labels,
-        "summit_records": summit_records,
-        "sigma_est": float(sigma_est),
-        "prominence_center": float(prom_center),
-        "height": int(height),
-        "width": int(width),
-    }
     geometry_auto_match_background_cache_key = cache_key
     geometry_auto_match_background_cache_data = cache_data
     return dict(config), cache_data
@@ -10121,10 +10024,10 @@ def _auto_match_background_peaks(
     background_image: np.ndarray,
     cfg: dict[str, object] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, float]]:
-    """Match simulated seeds to background hilltops via seeded ascent on peakness."""
+    """Match simulated seeds to nearby background peaks using local assignment."""
 
     config = dict(cfg) if isinstance(cfg, dict) else {}
-    _auto_match_console(config, f"seeded-ascent start seeds={len(simulated_peaks)}")
+    _auto_match_console(config, f"seed-local match start seeds={len(simulated_peaks)}")
     context_offset_col = 0.0
     context_offset_row = 0.0
     context_simulated: list[dict[str, object]] = []
@@ -10195,351 +10098,20 @@ def _auto_match_background_peaks(
         context_simulated.append(local_entry)
 
     config, bg_ctx = _auto_match_background_context(raw_background, config)
-    min_match_prominence_sigma = float(
-        config.get(
-            "min_match_prominence_sigma",
-            config.get("min_prominence_sigma", 2.0),
-        )
-    )
-    min_confidence = float(config.get("min_confidence", 0.0))
-    max_candidate_peaks = max(50, int(config.get("max_candidate_peaks", 1200)))
-    distance_sigma_clip = max(0.0, float(config.get("distance_sigma_clip", 3.5)))
-    max_match_distance_px = float(config.get("max_match_distance_px", np.inf))
-    if not np.isfinite(max_match_distance_px):
-        max_match_distance_px = np.inf
-    max_walk_distance_px = float(config.get("max_walk_distance_px", np.inf))
-    if not np.isfinite(max_walk_distance_px) or max_walk_distance_px <= 0.0:
-        max_walk_distance_px = np.inf
-    ascent_epsilon = max(1e-9, float(config.get("ascent_epsilon", 1e-6)))
     if not bool(bg_ctx.get("img_valid", False)):
         return [], {"simulated_count": float(len(simulated_peaks))}
-
-    valid_mask = np.asarray(bg_ctx.get("valid_mask", []), dtype=bool)
-    work = np.asarray(bg_ctx.get("work", []), dtype=float)
-    fine = np.asarray(bg_ctx.get("fine", []), dtype=float)
-    peakness = np.asarray(bg_ctx.get("peakness", []), dtype=float)
-    candidate_labels = np.asarray(bg_ctx.get("candidate_labels", []), dtype=int)
-    sigma_est = float(bg_ctx.get("sigma_est", np.nan))
-    prom_center = float(bg_ctx.get("prominence_center", np.nan))
-    height = int(bg_ctx.get("height", work.shape[0] if work.ndim == 2 else 0))
-    width = int(bg_ctx.get("width", work.shape[1] if work.ndim == 2 else 0))
-    max_walk_steps = max(
-        8,
-        int(config.get("max_walk_steps", max(height, width) * 2)),
-    )
-
-    summit_records = list(bg_ctx.get("summit_records", []))
-    if not summit_records:
-        _auto_match_console(config, "no candidate summits found")
-        return [], {
-            "simulated_count": float(len(simulated_peaks)),
-            "sigma_est": float(sigma_est),
-            "candidate_count": 0.0,
-            "qualified_summit_count": 0.0,
-            "claimed_summit_count": 0.0,
-            "conflicted_match_count": 0.0,
-            "matched_pre_clip_count": 0.0,
-            "clipped_count": 0.0,
-            "mean_walk_steps": float("nan"),
-        }
-
-    qualified_summits = {
-        int(record["summit_id"]): dict(record)
-        for record in summit_records
-        if float(record.get("prominence_sigma", -np.inf)) >= min_match_prominence_sigma
-    }
-    _auto_match_console(
-        config,
-        f"summits total={len(summit_records)} qualified={len(qualified_summits)}",
-    )
-
-    if not qualified_summits:
-        _auto_match_console(config, "no qualified summits survived prominence threshold")
-        return [], {
-            "simulated_count": float(len(simulated_peaks)),
-            "candidate_count": float(len(summit_records)),
-            "qualified_summit_count": 0.0,
-            "claimed_summit_count": 0.0,
-            "conflicted_match_count": 0.0,
-            "matched_pre_clip_count": 0.0,
-            "clipped_count": 0.0,
-            "sigma_est": float(sigma_est),
-            "prominence_center": float(prom_center),
-            "distance_sigma_clip": float(distance_sigma_clip),
-            "distance_clip_limit_px": float("nan"),
-            "distance_median_pre_clip_px": float("nan"),
-            "distance_sigma_pre_clip_px": float("nan"),
-            "mean_match_distance_px": float("nan"),
-            "p90_match_distance_px": float("nan"),
-            "median_match_confidence": float("nan"),
-            "mean_walk_steps": float("nan"),
-            "mean_net_ascent_sigma": float("nan"),
-        }
-
-    ordered_simulated = sorted(
+    matches, stats = match_simulated_peaks_to_peak_context(
         context_simulated,
-        key=lambda entry: float(entry.get("weight", 0.0)),
-        reverse=True,
+        bg_ctx,
+        config,
+        context_offset_col=context_offset_col,
+        context_offset_row=context_offset_row,
+        logger=lambda text: _auto_match_console(config, text),
     )
-
-    def _nearest_qualified_summit_label(row_idx: int, col_idx: int) -> int:
-        snap_radius = max(1, int(config.get("summit_snap_radius_px", config.get("local_max_size_px", 5))))
-        r0 = max(0, int(row_idx) - snap_radius)
-        r1 = min(height, int(row_idx) + snap_radius + 1)
-        c0 = max(0, int(col_idx) - snap_radius)
-        c1 = min(width, int(col_idx) + snap_radius + 1)
-        patch_labels = candidate_labels[r0:r1, c0:c1]
-        best_label = 0
-        best_key = (np.inf, -np.inf, -np.inf)
-        for summit_id in np.unique(patch_labels):
-            summit_id = int(summit_id)
-            if summit_id <= 0 or summit_id not in qualified_summits:
-                continue
-            info = qualified_summits[summit_id]
-            summit_dist = float(
-                np.hypot(
-                    float(info.get("row", np.nan)) - float(row_idx),
-                    float(info.get("col", np.nan)) - float(col_idx),
-                )
-            )
-            key = (
-                summit_dist,
-                -float(info.get("prominence_sigma", -np.inf)),
-                -float(info.get("background_intensity", -np.inf)),
-            )
-            if key < best_key:
-                best_key = key
-                best_label = summit_id
-        return int(best_label)
-
-    def _climb_to_summit(seed_col: float, seed_row: float) -> tuple[int, int, int]:
-        current_col = int(np.clip(round(float(seed_col)), 0, width - 1))
-        current_row = int(np.clip(round(float(seed_row)), 0, height - 1))
-        if not bool(valid_mask[current_row, current_col]):
-            local_valid = np.argwhere(valid_mask)
-            if local_valid.size == 0:
-                return current_row, current_col, 0
-            nearest_idx = int(
-                np.argmin(
-                    (local_valid[:, 0] - float(seed_row)) ** 2
-                    + (local_valid[:, 1] - float(seed_col)) ** 2
-                )
-            )
-            current_row = int(local_valid[nearest_idx, 0])
-            current_col = int(local_valid[nearest_idx, 1])
-        visited = {(current_row, current_col)}
-        for step_idx in range(max_walk_steps):
-            curr_peak = float(peakness[current_row, current_col])
-            curr_intensity = float(work[current_row, current_col])
-            best_row = current_row
-            best_col = current_col
-            best_peak = curr_peak
-            best_intensity = curr_intensity
-
-            r0 = max(0, current_row - 1)
-            r1 = min(height, current_row + 2)
-            c0 = max(0, current_col - 1)
-            c1 = min(width, current_col + 2)
-            for rr in range(r0, r1):
-                for cc in range(c0, c1):
-                    if not bool(valid_mask[rr, cc]):
-                        continue
-                    cand_peak = float(peakness[rr, cc])
-                    cand_intensity = float(work[rr, cc])
-                    if (
-                        (cand_peak - best_peak) > ascent_epsilon
-                        or (
-                            abs(cand_peak - best_peak) <= ascent_epsilon
-                            and (cand_intensity - best_intensity) > ascent_epsilon
-                        )
-                    ):
-                        best_row = int(rr)
-                        best_col = int(cc)
-                        best_peak = cand_peak
-                        best_intensity = cand_intensity
-
-            should_move = (
-                (best_peak - curr_peak) > ascent_epsilon
-                or (
-                    abs(best_peak - curr_peak) <= ascent_epsilon
-                    and (best_intensity - curr_intensity) > ascent_epsilon
-                )
-            )
-            if not should_move:
-                return current_row, current_col, step_idx
-            if (best_row, best_col) in visited:
-                return current_row, current_col, step_idx
-            current_row = int(best_row)
-            current_col = int(best_col)
-            visited.add((current_row, current_col))
-
-        return current_row, current_col, max_walk_steps
-
-    claimed_by_summit: dict[int, list[dict[str, object]]] = {}
-    walk_steps_used: list[float] = []
-    net_ascent_values: list[float] = []
-    progress_every = max(1, int(config.get("console_progress_every", 25)))
-
-    for seed_idx, entry in enumerate(ordered_simulated, start=1):
-        sim_col_local = float(entry.get("sim_col_local", entry.get("sim_col", np.nan)))
-        sim_row_local = float(entry.get("sim_row_local", entry.get("sim_row", np.nan)))
-        sim_col = float(entry.get("sim_col_global", entry.get("sim_col", np.nan)))
-        sim_row = float(entry.get("sim_row_global", entry.get("sim_row", np.nan)))
-        summit_row, summit_col, walk_steps = _climb_to_summit(sim_col_local, sim_row_local)
-        summit_id = int(candidate_labels[summit_row, summit_col])
-        if summit_id not in qualified_summits:
-            summit_id = _nearest_qualified_summit_label(summit_row, summit_col)
-        if summit_id not in qualified_summits:
-            continue
-
-        info = qualified_summits[summit_id]
-        if not bool(info.get("center_refined", False)):
-            peak_row = int(round(float(info.get("row", 0.0))))
-            peak_col = int(round(float(info.get("col", 0.0))))
-            center_col, center_row = _auto_match_refine_peak_center(
-                peakness,
-                fine,
-                peak_row,
-                peak_col,
-            )
-            info["center_col"] = float(center_col)
-            info["center_row"] = float(center_row)
-            info["center_refined"] = True
-            qualified_summits[summit_id] = info
-        match_col = float(info["center_col"]) + context_offset_col
-        match_row = float(info["center_row"]) + context_offset_row
-        walk_distance = float(
-            np.hypot(
-                float(info["col"]) + context_offset_col - sim_col,
-                float(info["row"]) + context_offset_row - sim_row,
-            )
-        )
-        if walk_distance > max_walk_distance_px:
-            continue
-        dist_px = float(np.hypot(match_col - sim_col, match_row - sim_row))
-        if dist_px > max_match_distance_px:
-            continue
-
-        prom_sigma = float(info["prominence_sigma"])
-        bg_intensity = float(info["background_intensity"])
-        confidence = max(0.0, prom_sigma) / (1.0 + max(0.0, dist_px))
-        if confidence < min_confidence:
-            continue
-
-        seed_col_px = int(np.clip(round(sim_col_local), 0, width - 1))
-        seed_row_px = int(np.clip(round(sim_row_local), 0, height - 1))
-        net_ascent_sigma = float(
-            (
-                peakness[int(info["row"]), int(info["col"])]
-                - peakness[seed_row_px, seed_col_px]
-            )
-            / (sigma_est + 1e-12)
-        )
-
-        match_entry = {
-            "summit_id": int(summit_id),
-            "hkl": tuple(int(v) for v in entry["hkl"]),
-            "label": str(entry["label"]),
-            "x": float(match_col),
-            "y": float(match_row),
-            "sim_x": float(sim_col),
-            "sim_y": float(sim_row),
-            "background_intensity": float(bg_intensity),
-            "distance_px": float(dist_px),
-            "prominence_sigma": float(prom_sigma),
-            "confidence": float(confidence),
-            "weight": float(entry.get("weight", 0.0)),
-            "walk_steps": int(walk_steps),
-            "walk_distance_px": float(walk_distance),
-            "net_ascent_sigma": float(net_ascent_sigma),
-            "source_peak_index": entry.get("source_peak_index"),
-            "source_label": entry.get("source_label"),
-            "source_table_index": entry.get("source_table_index"),
-            "source_row_index": entry.get("source_row_index"),
-            "hkl_raw": entry.get("hkl_raw"),
-            "qr": entry.get("qr"),
-            "qz": entry.get("qz"),
-            "q_group_key": entry.get("q_group_key"),
-        }
-        claimed_by_summit.setdefault(int(summit_id), []).append(match_entry)
-        walk_steps_used.append(float(walk_steps))
-        net_ascent_values.append(float(net_ascent_sigma))
-        if seed_idx == 1 or seed_idx % progress_every == 0 or seed_idx == len(ordered_simulated):
-            _auto_match_console(
-                config,
-                f"walked seeds={seed_idx}/{len(ordered_simulated)} "
-                f"claimed={len(claimed_by_summit)}",
-            )
-
-    pre_clip_matches: list[dict[str, object]] = []
-    conflicted_match_count = 0
-    for summit_id, contenders in claimed_by_summit.items():
-        if not contenders:
-            continue
-        contenders.sort(
-            key=lambda match: (
-                float(match.get("background_intensity", -np.inf)),
-                float(match.get("prominence_sigma", -np.inf)),
-                -float(match.get("distance_px", np.inf)),
-                float(match.get("weight", -np.inf)),
-            ),
-            reverse=True,
-        )
-        pre_clip_matches.append(dict(contenders[0]))
-        conflicted_match_count += max(0, len(contenders) - 1)
-
-    matches = list(pre_clip_matches)
-    clipped_count = 0
-    clip_limit = np.inf
-    if matches:
-        dists = np.asarray([float(m["distance_px"]) for m in matches], dtype=float)
-        dist_med = float(np.median(dists))
-        dist_mad = float(np.median(np.abs(dists - dist_med)))
-        dist_sigma = 1.4826 * dist_mad
-        if np.isfinite(max_match_distance_px):
-            clip_limit = min(clip_limit, float(max_match_distance_px))
-        if np.isfinite(distance_sigma_clip):
-            if np.isfinite(dist_sigma) and dist_sigma > 1e-9:
-                clip_limit = min(clip_limit, dist_med + distance_sigma_clip * dist_sigma)
-            else:
-                clip_limit = min(clip_limit, dist_med + max(1.0, distance_sigma_clip))
-        matches = [
-            m for m in matches if float(m["distance_px"]) <= float(clip_limit) + 1e-9
-        ]
-        clipped_count = max(0, len(pre_clip_matches) - len(matches))
-    else:
-        dist_med = float("nan")
-        dist_sigma = float("nan")
-
-    match_dists = np.asarray([float(m["distance_px"]) for m in matches], dtype=float)
-    match_conf = np.asarray([float(m["confidence"]) for m in matches], dtype=float)
-
-    stats = {
-        "simulated_count": float(len(simulated_peaks)),
-        "candidate_count": float(len(summit_records)),
-        "qualified_summit_count": float(len(qualified_summits)),
-        "claimed_summit_count": float(len(claimed_by_summit)),
-        "conflicted_match_count": float(conflicted_match_count),
-        "matched_pre_clip_count": float(len(pre_clip_matches)),
-        "matched_count": float(len(matches)),
-        "clipped_count": float(clipped_count),
-        "sigma_est": float(sigma_est),
-        "prominence_center": float(prom_center),
-        "search_radius_px": float("nan"),
-        "distance_sigma_clip": float(distance_sigma_clip),
-        "distance_clip_limit_px": float(clip_limit) if np.isfinite(clip_limit) else float("nan"),
-        "distance_median_pre_clip_px": float(dist_med) if np.isfinite(dist_med) else float("nan"),
-        "distance_sigma_pre_clip_px": float(dist_sigma) if np.isfinite(dist_sigma) else float("nan"),
-        "mean_match_distance_px": float(np.mean(match_dists)) if match_dists.size else float("nan"),
-        "p90_match_distance_px": float(np.percentile(match_dists, 90.0)) if match_dists.size else float("nan"),
-        "median_match_confidence": float(np.median(match_conf)) if match_conf.size else float("nan"),
-        "mean_walk_steps": float(np.mean(walk_steps_used)) if walk_steps_used else float("nan"),
-        "mean_net_ascent_sigma": float(np.mean(net_ascent_values)) if net_ascent_values else float("nan"),
-    }
     _auto_match_console(
         config,
-        f"done matches={len(matches)} pre_clip={len(pre_clip_matches)} "
-        f"conflicts={conflicted_match_count}",
+        f"done matches={len(matches)} pre_clip={int(stats.get('matched_pre_clip_count', 0.0))} "
+        f"conflicts={int(stats.get('conflicted_match_count', 0.0))}",
     )
     return matches, stats
 
@@ -10867,12 +10439,13 @@ def _render_live_geometry_preview_state(*, update_status: bool = True) -> bool:
     quality_fail = bool(geometry_preview_state.get("quality_fail", False))
     q_group_total = int(geometry_preview_state.get("q_group_total", 0))
     q_group_excluded = int(geometry_preview_state.get("q_group_excluded", 0))
+    collapsed_deg = int(geometry_preview_state.get("collapsed_degenerate_peaks", 0))
     active_pairs, excluded_count = _filter_live_preview_matches(pairs)
     shown_count = min(len(pairs), max(1, int(max_display_markers)))
     summary = (
         "Live auto-match preview: "
         f"{len(active_pairs)}/{simulated_count} active peaks "
-        f"(need {min_matches}, seeded-ascent"
+        f"(need {min_matches}, local-peak match"
     )
     if np.isfinite(best_radius):
         summary += f", limit={best_radius:.1f}px"
@@ -10885,6 +10458,8 @@ def _render_live_geometry_preview_state(*, update_status: bool = True) -> bool:
         summary += f" Excluded={excluded_count}."
     if q_group_total > 0:
         summary += f" Qr/Qz groups on={max(0, q_group_total - q_group_excluded)}/{q_group_total}."
+    if collapsed_deg > 0:
+        summary += f" Degenerate collapsed={collapsed_deg}."
     if len(active_pairs) < min_matches:
         summary += " Geometry fit would stop on the minimum-match gate."
     elif quality_fail:
@@ -10989,8 +10564,28 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
                 "q_group_total": int(q_group_total),
                 "q_group_excluded": int(_geometry_q_group_excluded_count()),
                 "excluded_q_peaks": int(excluded_q_peaks),
+                "collapsed_degenerate_peaks": 0,
             }
         )
+        return False
+    simulated_peaks, collapsed_deg_preview = _collapse_geometry_fit_simulated_peaks(
+        simulated_peaks,
+        merge_radius_px=float(
+            preview_auto_match_cfg.get(
+                "degenerate_merge_radius_px",
+                min(
+                    6.0,
+                    0.33 * float(preview_auto_match_cfg.get("search_radius_px", 18.0)),
+                ),
+            )
+        ),
+    )
+    if not simulated_peaks:
+        _clear_geometry_preview_artists()
+        if update_status:
+            progress_label_geometry.config(
+                text="Live auto-match preview unavailable: no geometry-fit seeds remain after Qr/Qz collapse."
+            )
         return False
 
     matched_pairs, match_stats, effective_auto_match_cfg, auto_match_attempts = (
@@ -11029,6 +10624,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             "q_group_total": int(q_group_total),
             "q_group_excluded": int(_geometry_q_group_excluded_count()),
             "excluded_q_peaks": int(excluded_q_peaks),
+            "collapsed_degenerate_peaks": int(collapsed_deg_preview),
         }
     )
 
@@ -11055,7 +10651,7 @@ def _on_live_geometry_preview_toggle():
 
 
 def on_fit_geometry_click():
-    global profile_cache, last_simulation_signature
+    global profile_cache, last_simulation_signature, geometry_preview_skip_once
     _clear_geometry_pick_artists()
     _clear_geometry_preview_artists()
 
@@ -11146,12 +10742,6 @@ def on_fit_geometry_click():
             text="Geometry fit unavailable: no Qr/Qz groups are selected for fitting."
         )
         return
-    _cmd_line(
-        "prepared: "
-        f"simulated_peaks={len(simulated_peaks)} "
-        f"q_groups_on={max(0, q_group_total - _geometry_q_group_excluded_count())}/{q_group_total}"
-    )
-
     default_min_matches = max(6, len(var_names) + 2)
     min_matches = int(auto_match_cfg.get("min_matches", default_min_matches))
     min_matches = max(1, min_matches)
@@ -11162,7 +10752,33 @@ def on_fit_geometry_click():
         "context_margin_px",
         max(256.0, 10.0 * float(auto_match_cfg.get("search_radius_px", 18.0))),
     )
-    _cmd_line(f"auto-match: seeded-ascent start (min_matches={min_matches})")
+    raw_simulated_peak_count = len(simulated_peaks)
+    simulated_peaks, collapsed_deg_fit = _collapse_geometry_fit_simulated_peaks(
+        simulated_peaks,
+        merge_radius_px=float(
+            fit_auto_match_cfg.get(
+                "degenerate_merge_radius_px",
+                min(
+                    6.0,
+                    0.33 * float(fit_auto_match_cfg.get("search_radius_px", 18.0)),
+                ),
+            )
+        ),
+    )
+    if not simulated_peaks:
+        _cmd_line("aborted: no geometry-fit seeds remain after Qr/Qz collapse")
+        progress_label_geometry.config(
+            text="Geometry fit unavailable: no geometry-fit seeds remain after collapsing degenerate Qr/Qz peaks."
+        )
+        return
+    _cmd_line(
+        "prepared: "
+        f"simulated_peaks={len(simulated_peaks)} "
+        f"(collapsed={collapsed_deg_fit} from {raw_simulated_peak_count}) "
+        f"q_groups_on={max(0, q_group_total - _geometry_q_group_excluded_count())}/{q_group_total}"
+    )
+
+    _cmd_line(f"auto-match: local-peak match start (min_matches={min_matches})")
 
     matched_pairs, match_stats, effective_auto_match_cfg, auto_match_attempts = (
         _auto_match_background_peaks_with_relaxation(
@@ -11194,7 +10810,7 @@ def on_fit_geometry_click():
         simulated_count = int(match_stats.get("simulated_count", len(simulated_peaks)))
         progress_label_geometry.config(
             text=(
-                "Geometry fit cancelled: seeded-ascent auto-match found "
+                "Geometry fit cancelled: local-peak auto-match found "
                 f"{len(matched_pairs)}/{simulated_count} active peaks "
                 f"(need at least {min_matches})."
                 + (
@@ -11246,6 +10862,26 @@ def on_fit_geometry_click():
         )
         return
 
+    def _attach_overlay_match_indices(
+        pairs: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        normalized_pairs: list[dict[str, object]] = []
+        for pair_idx, raw_entry in enumerate(pairs or []):
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = dict(raw_entry)
+            try:
+                overlay_idx = int(entry.get("overlay_match_index", pair_idx))
+            except Exception:
+                overlay_idx = int(pair_idx)
+            if overlay_idx < 0:
+                overlay_idx = int(pair_idx)
+            entry["overlay_match_index"] = int(overlay_idx)
+            normalized_pairs.append(entry)
+        return normalized_pairs
+
+    matched_pairs = _attach_overlay_match_indices(matched_pairs)
+
     initial_auto_pairs_display: list[dict[str, object]] = []
     for entry in matched_pairs:
         hkl_key = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
@@ -11268,6 +10904,7 @@ def on_fit_geometry_click():
         )
         initial_auto_pairs_display.append(
             {
+                "overlay_match_index": int(entry.get("overlay_match_index", len(initial_auto_pairs_display))),
                 "hkl": hkl_key,
                 "sim_display": (float(sim_display[0]), float(sim_display[1])),
                 "bg_display": (bg_col, bg_row),
@@ -11298,6 +10935,149 @@ def on_fit_geometry_click():
             _log_line(f"  {line}")
         _log_line()
 
+    def _log_format_hkl(entry: object) -> str:
+        if not isinstance(entry, dict):
+            return "n/a"
+        hkl_key = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+        return str(hkl_key) if hkl_key is not None else str(entry.get("label", "n/a"))
+
+    def _log_format_point(entry: object, x_key: str = "x", y_key: str = "y") -> str:
+        if not isinstance(entry, dict):
+            return "n/a"
+        try:
+            x_val = float(entry.get(x_key, np.nan))
+            y_val = float(entry.get(y_key, np.nan))
+        except Exception:
+            return "n/a"
+        if not (np.isfinite(x_val) and np.isfinite(y_val)):
+            return "n/a"
+        return f"({x_val:.3f},{y_val:.3f})"
+
+    def _log_radius_to_center(
+        entry: object,
+        *,
+        center_pair: tuple[float, float] | None = None,
+    ) -> str:
+        if center_pair is None or not isinstance(entry, dict):
+            return "n/a"
+        try:
+            x_val = float(entry.get("x", np.nan))
+            y_val = float(entry.get("y", np.nan))
+            center_row = float(center_pair[0])
+            center_col = float(center_pair[1])
+        except Exception:
+            return "n/a"
+        if not (
+            np.isfinite(x_val)
+            and np.isfinite(y_val)
+            and np.isfinite(center_row)
+            and np.isfinite(center_col)
+        ):
+            return "n/a"
+        return f"{math.hypot(x_val - center_col, y_val - center_row):.3f}px"
+
+    def _log_source_descriptor(entry: object) -> str:
+        if not isinstance(entry, dict):
+            return "src=n/a"
+        parts: list[str] = []
+        if entry.get("source_label") is not None:
+            parts.append(f"label={entry.get('source_label')}")
+        if entry.get("source_table_index") is not None:
+            parts.append(f"table={entry.get('source_table_index')}")
+        if entry.get("source_row_index") is not None:
+            parts.append(f"row={entry.get('source_row_index')}")
+        if entry.get("source_peak_index") is not None:
+            parts.append(f"peak={entry.get('source_peak_index')}")
+        return "src=" + (",".join(parts) if parts else "n/a")
+
+    def _log_fixed_peak_frames(
+        display_entries: Sequence[dict[str, object]] | None,
+        native_entries: Sequence[dict[str, object]] | None,
+        fit_entries: Sequence[dict[str, object]] | None,
+        *,
+        center_pair: tuple[float, float] | None = None,
+    ) -> list[str]:
+        lines: list[str] = []
+        count = max(
+            len(display_entries or []),
+            len(native_entries or []),
+            len(fit_entries or []),
+        )
+        for idx in range(count):
+            display_entry = (
+                dict(display_entries[idx])
+                if display_entries is not None and idx < len(display_entries)
+                else None
+            )
+            native_entry = (
+                dict(native_entries[idx])
+                if native_entries is not None and idx < len(native_entries)
+                else None
+            )
+            fit_entry = (
+                dict(fit_entries[idx])
+                if fit_entries is not None and idx < len(fit_entries)
+                else None
+            )
+            base_entry = display_entry or native_entry or fit_entry or {}
+            try:
+                sim_x = float(base_entry.get("sim_x", np.nan))
+                sim_y = float(base_entry.get("sim_y", np.nan))
+                sim_text = (
+                    f"({sim_x:.3f},{sim_y:.3f})"
+                    if np.isfinite(sim_x) and np.isfinite(sim_y)
+                    else "n/a"
+                )
+            except Exception:
+                sim_text = "n/a"
+            overlay_match_index = base_entry.get("overlay_match_index")
+            lines.append(
+                f"idx={idx} overlay={overlay_match_index if overlay_match_index is not None else 'n/a'} "
+                f"HKL={_log_format_hkl(base_entry)} {_log_source_descriptor(base_entry)} "
+                f"sim_display={sim_text} "
+                f"meas_display={_log_format_point(display_entry)} "
+                f"meas_native={_log_format_point(native_entry)} "
+                f"meas_fit={_log_format_point(fit_entry)} "
+                f"fit_r={_log_radius_to_center(fit_entry, center_pair=center_pair)}"
+            )
+        return lines or ["<none>"]
+
+    def _log_point_match_diagnostics(entries: object) -> list[str]:
+        if not isinstance(entries, list) or not entries:
+            return ["<none>"]
+        lines: list[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            hkl_key = entry.get("hkl", "n/a")
+            src_text = (
+                f"table={entry.get('source_table_index', 'n/a')},"
+                f"row={entry.get('source_row_index', 'n/a')}"
+            )
+            try:
+                meas_x = float(entry.get("measured_x", np.nan))
+                meas_y = float(entry.get("measured_y", np.nan))
+                sim_x = float(entry.get("simulated_x", np.nan))
+                sim_y = float(entry.get("simulated_y", np.nan))
+                dist_px = float(entry.get("distance_px", np.nan))
+                meas_r = float(entry.get("measured_radius_px", np.nan))
+                sim_r = float(entry.get("simulated_radius_px", np.nan))
+            except Exception:
+                meas_x = meas_y = sim_x = sim_y = dist_px = meas_r = sim_r = float("nan")
+            lines.append(
+                f"idx={entry.get('match_input_index', 'n/a')} "
+                f"overlay={entry.get('overlay_match_index', 'n/a')} HKL={hkl_key} "
+                f"label={entry.get('label', 'n/a')} src={src_text} "
+                f"resolution={entry.get('resolution_kind', 'n/a')}/"
+                f"{entry.get('resolution_reason', 'n/a')} "
+                f"status={entry.get('match_status', 'n/a')} "
+                f"kind={entry.get('match_kind', 'n/a')} "
+                f"meas=({meas_x:.3f},{meas_y:.3f}) "
+                f"sim=({sim_x:.3f},{sim_y:.3f}) "
+                f"d={dist_px:.3f}px meas_r={meas_r:.3f}px sim_r={sim_r:.3f}px"
+            )
+        return lines or ["<none>"]
+
     progress_label_geometry.config(text="Running geometry fit (auto-matched peaks)…")
     root.update_idletasks()
     _cmd_line(
@@ -11305,14 +11085,26 @@ def on_fit_geometry_click():
     )
 
     try:
-        measured_from_display = [
-            {
-                "label": str(entry["label"]),
-                "x": float(entry["x"]),
-                "y": float(entry["y"]),
-            }
-            for entry in matched_pairs
-        ]
+        measured_from_display = []
+        for entry in matched_pairs:
+            try:
+                x_val = float(entry["x"])
+                y_val = float(entry["y"])
+            except Exception:
+                continue
+            if not (np.isfinite(x_val) and np.isfinite(y_val)):
+                continue
+            normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+            measured_entry = dict(entry)
+            measured_entry["label"] = str(entry["label"])
+            measured_entry["x"] = x_val
+            measured_entry["y"] = y_val
+            measured_entry["overlay_match_index"] = int(
+                entry.get("overlay_match_index", len(measured_from_display))
+            )
+            if normalized_hkl is not None:
+                measured_entry["hkl"] = normalized_hkl
+            measured_from_display.append(measured_entry)
 
         _log_line(f"Geometry fit started: {stamp}")
         _log_line()
@@ -11359,6 +11151,7 @@ def on_fit_geometry_click():
                 f"matched_peaks={len(matched_pairs)}",
                 f"excluded_live_preview_peaks={int(match_stats.get('excluded_count', 0))}",
                 f"excluded_q_group_peaks={int(excluded_q_peaks)}",
+                f"collapsed_degenerate_peaks={int(collapsed_deg_fit)}",
                 f"excluded_q_groups={_geometry_q_group_excluded_count()}",
                 f"available_q_groups={int(q_group_total)}",
                 f"prominence_sigma_est={float(match_stats.get('sigma_est', np.nan)):.6f}",
@@ -11455,6 +11248,18 @@ def on_fit_geometry_click():
             flip_y=orientation_choice["flip_y"],
             flip_order=orientation_choice["flip_order"],
         )
+        _log_section(
+            "Fixed peak frame transforms:",
+            _log_fixed_peak_frames(
+                measured_from_display,
+                measured_native,
+                measured_for_fit,
+                center_pair=(
+                    float(params.get("center_x", params["center"][0])),
+                    float(params.get("center_y", params["center"][1])),
+                ),
+            ),
+        )
 
         _log_section(
             "Fitting variables (start values):",
@@ -11470,6 +11275,15 @@ def on_fit_geometry_click():
 
         fit_iterations = int(auto_match_cfg.get("fit_iterations", 3))
         fit_iterations = max(1, min(8, fit_iterations))
+        rematch_between_iterations = bool(
+            auto_match_cfg.get("rematch_between_iterations", False)
+        )
+        if not rematch_between_iterations and fit_iterations > 1:
+            _cmd_line(
+                "auto-match: background peaks fixed after initial selection; "
+                "skipping iterative rematch"
+            )
+            fit_iterations = 1
 
         result = None
         iteration_logs: list[str] = []
@@ -11576,6 +11390,30 @@ def on_fit_geometry_click():
                         f"iter={iter_idx + 1}: rematch skipped (no Qr/Qz groups selected)"
                     )
                     break
+                sim_iter, collapsed_deg_iter = _collapse_geometry_fit_simulated_peaks(
+                    sim_iter,
+                    merge_radius_px=float(
+                        fit_auto_match_cfg.get(
+                            "degenerate_merge_radius_px",
+                            min(
+                                6.0,
+                                0.33
+                                * float(fit_auto_match_cfg.get("search_radius_px", 18.0)),
+                            ),
+                        )
+                    ),
+                )
+                if not sim_iter:
+                    _cmd_line(
+                        f"iter {iter_idx + 1}/{fit_iterations}: rematch skipped (no seeds remain after Qr/Qz collapse)"
+                    )
+                    iteration_logs.append(
+                        f"iter={iter_idx + 1}: rematch skipped (no seeds remain after Qr/Qz collapse)"
+                    )
+                    break
+                iteration_logs.append(
+                    f"iter={iter_idx + 1}: rematch seeds={len(sim_iter)} (collapsed={collapsed_deg_iter})"
+                )
 
                 matched_iter, stats_iter, _, rematch_attempts = (
                     _auto_match_background_peaks_with_relaxation(
@@ -11589,6 +11427,7 @@ def on_fit_geometry_click():
                     matched_iter,
                     stats_iter,
                 )
+                matched_iter = _attach_overlay_match_indices(matched_iter)
                 if len(matched_iter) < min_matches:
                     best_attempt = (
                         max(
@@ -11630,14 +11469,28 @@ def on_fit_geometry_click():
                     )
                     break
 
-                measured_iter_display = [
-                    {
-                        "label": str(entry["label"]),
-                        "x": float(entry["x"]),
-                        "y": float(entry["y"]),
-                    }
-                    for entry in matched_iter
-                ]
+                measured_iter_display = []
+                for entry in matched_iter:
+                    try:
+                        x_val = float(entry["x"])
+                        y_val = float(entry["y"])
+                    except Exception:
+                        continue
+                    if not (np.isfinite(x_val) and np.isfinite(y_val)):
+                        continue
+                    normalized_hkl = _normalize_hkl_key(
+                        entry.get("hkl", entry.get("label"))
+                    )
+                    measured_entry = dict(entry)
+                    measured_entry["label"] = str(entry["label"])
+                    measured_entry["x"] = x_val
+                    measured_entry["y"] = y_val
+                    measured_entry["overlay_match_index"] = int(
+                        entry.get("overlay_match_index", len(measured_iter_display))
+                    )
+                    if normalized_hkl is not None:
+                        measured_entry["hkl"] = normalized_hkl
+                    measured_iter_display.append(measured_entry)
                 measured_iter_native = _unrotate_display_peaks(
                     measured_iter_display,
                     display_background.shape,
@@ -11813,6 +11666,7 @@ def on_fit_geometry_click():
             }
         )
 
+        geometry_preview_skip_once = True
         last_simulation_signature = None
         schedule_update()
 
@@ -11843,6 +11697,34 @@ def on_fit_geometry_click():
                 'center_x': center_x_var.get(),
                 'center_y': center_y_var.get(),
             }
+        )
+        point_match_summary = getattr(result, "point_match_summary", None)
+        if isinstance(point_match_summary, dict):
+            _log_section(
+                "Final point-match summary:",
+                [
+                    f"{key}={value}"
+                    for key, value in sorted(point_match_summary.items())
+                ]
+                or ["<none>"],
+            )
+        _log_section(
+            "Final point-match diagnostics:",
+            _log_point_match_diagnostics(
+                getattr(result, "point_match_diagnostics", None)
+            ),
+        )
+        _log_section(
+            "Fixed peak frame transforms after fit:",
+            _log_fixed_peak_frames(
+                measured_from_display,
+                measured_native,
+                measured_for_fit,
+                center_pair=(
+                    float(fitted_params.get("center_x", fitted_params["center"][0])),
+                    float(fitted_params.get("center_y", fitted_params["center"][1])),
+                ),
+            ),
         )
 
         (
@@ -11884,17 +11766,22 @@ def on_fit_geometry_click():
             pixel_offsets.append((hkl_key, dx, dy, dist))
 
         native_overlay_shape = tuple(int(v) for v in native_background.shape[:2])
-        frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(
+        overlay_records = build_geometry_fit_overlay_records(
             initial_auto_pairs_display,
-            agg_meas_coords,
-            agg_millers,
-            orientation_choice=orientation_choice,
+            getattr(result, "point_match_diagnostics", None),
             native_shape=native_overlay_shape,
+            orientation_choice=orientation_choice,
+            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+            background_display_rotate_k=DISPLAY_ROTATE_K,
+        )
+        frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(
+            overlay_records,
         )
         _log_section(
             "Overlay frame diagnostics:",
             [
-                f"paired_hkls={int(frame_diag.get('paired_hkls', 0))}",
+                f"overlay_records={len(overlay_records)}",
+                f"paired_records={int(frame_diag.get('paired_records', 0))}",
                 f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
                 f"bg_display_med_px={float(frame_diag.get('bg_display_med_px', np.nan)):.3f}",
                 f"sim_display_p90_px={float(frame_diag.get('sim_display_p90_px', np.nan)):.3f}",
@@ -11905,15 +11792,10 @@ def on_fit_geometry_click():
             _log_line(f"WARNING: {frame_warning}")
             _log_line()
 
-        if agg_millers:
+        if overlay_records:
             _draw_geometry_fit_overlay(
-                initial_auto_pairs_display,
-                agg_sim_coords,
-                agg_meas_coords,
-                agg_millers,
+                overlay_records,
                 max_display_markers=max_display_markers,
-                orientation_choice=orientation_choice,
-                native_shape=native_overlay_shape,
             )
         else:
             _draw_initial_geometry_pairs_overlay(
@@ -11958,6 +11840,7 @@ def on_fit_geometry_click():
             "Fit summary:",
             [
                 f"auto_matched_peaks={len(matched_pairs)}",
+                f"overlay_records={len(overlay_records)}",
                 f"excluded_live_preview_peaks={excluded_preview_count}",
                 f"excluded_q_groups={_geometry_q_group_excluded_count()}",
                 f"available_q_groups={int(q_group_total)}",
@@ -11979,8 +11862,8 @@ def on_fit_geometry_click():
             + f"\nOrientation = {orientation_choice.get('label', 'identity')}"
         )
         overlay_hint = (
-            "Overlay: blue squares=initial simulated picks, amber triangles=background picks, "
-            "green circles/red x=fitted sim/background, dashed arrows=initial→fitted shifts."
+            "Overlay: blue squares=initial simulated picks, amber triangles=fixed background picks, "
+            "green circles=fitted simulated peaks, dashed arrows=initial->fitted sim shifts."
         )
         frame_warning_line = f"{frame_warning}\n" if frame_warning else ""
         progress_label_geometry.config(
@@ -12101,7 +11984,7 @@ def on_fit_geometry_click():
         canvas_widget.configure(cursor="")
 
     def _on_geometry_pick(event):
-        global profile_cache, last_simulation_signature
+        global profile_cache, last_simulation_signature, geometry_preview_skip_once
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
 
@@ -12132,8 +12015,13 @@ def on_fit_geometry_click():
             root.update_idletasks()
 
             measured_from_clicks = [
-                {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
-                for (h, k, l), (x, y) in picked_pairs
+                {
+                    "label": f"{h},{k},{l}",
+                    "x": float(x),
+                    "y": float(y),
+                    "overlay_match_index": int(pair_idx),
+                }
+                for pair_idx, ((h, k, l), (x, y)) in enumerate(picked_pairs)
             ]
             _log_line(f"Geometry fit started: {stamp}")
             _log_line()
@@ -12649,6 +12537,7 @@ def on_fit_geometry_click():
                 )
 
                 # Force a fresh simulation with the fitted values.
+                geometry_preview_skip_once = True
                 last_simulation_signature = None
                 schedule_update()
 
@@ -12740,17 +12629,22 @@ def on_fit_geometry_click():
                 pixel_offsets.append((hkl_key, dx, dy, dist))
 
             native_overlay_shape = tuple(int(v) for v in native_background.shape[:2])
-            frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(
+            overlay_records = build_geometry_fit_overlay_records(
                 initial_manual_pairs_display,
-                agg_meas_coords,
-                agg_millers,
-                orientation_choice=orientation_choice,
+                getattr(result, "point_match_diagnostics", None),
                 native_shape=native_overlay_shape,
+                orientation_choice=orientation_choice,
+                sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                background_display_rotate_k=DISPLAY_ROTATE_K,
+            )
+            frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(
+                overlay_records,
             )
             _log_section(
                 "Overlay frame diagnostics:",
                 [
-                    f"paired_hkls={int(frame_diag.get('paired_hkls', 0))}",
+                    f"overlay_records={len(overlay_records)}",
+                    f"paired_records={int(frame_diag.get('paired_records', 0))}",
                     f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
                     f"bg_display_med_px={float(frame_diag.get('bg_display_med_px', np.nan)):.3f}",
                     f"sim_display_p90_px={float(frame_diag.get('sim_display_p90_px', np.nan)):.3f}",
@@ -12761,15 +12655,10 @@ def on_fit_geometry_click():
                 _log_line(f"WARNING: {frame_warning}")
                 _log_line()
 
-            if agg_millers:
+            if overlay_records:
                 _draw_geometry_fit_overlay(
-                    initial_manual_pairs_display,
-                    agg_sim_coords,
-                    agg_meas_coords,
-                    agg_millers,
+                    overlay_records,
                     max_display_markers=max_display_markers,
-                    orientation_choice=orientation_choice,
-                    native_shape=native_overlay_shape,
                 )
             else:
                 _draw_initial_geometry_pairs_overlay(
@@ -12821,6 +12710,7 @@ def on_fit_geometry_click():
                     *[
                         f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)
                     ],
+                    f"overlay_records={len(overlay_records)}",
                     f"RMS residual = {rms:.6f} px",
                     f"Applied orientation: {orientation_choice.get('label', 'identity')}",
                     f"Matched peaks saved to: {save_path}",
@@ -12840,9 +12730,9 @@ def on_fit_geometry_click():
                 f"Applied orientation: {orientation_choice.get('label', 'identity')}"
             )
             overlay_hint = (
-                "Overlay: blue squares=initial simulated picks, amber triangles=background picks, "
-                "green circles/red x=fitted sim/background, dashed arrows=initial→fitted shifts."
-            )
+                    "Overlay: blue squares=initial simulated picks, amber triangles=fixed background picks, "
+                    "green circles=fitted simulated peaks, dashed arrows=initial->fitted sim shifts."
+                )
 
             if DEBUG_ENABLED:
                 final_text = (
@@ -12896,6 +12786,7 @@ def on_fit_geometry_click():
         if pending_sim_display is not None:
             initial_manual_pairs_display.append(
                 {
+                    "overlay_match_index": len(initial_manual_pairs_display),
                     "hkl": tuple(int(v) for v in pending),
                     "sim_display": (
                         float(pending_sim_display[0]),

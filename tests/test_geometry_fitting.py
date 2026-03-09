@@ -48,6 +48,21 @@ def _fake_process_peaks(*args, **kwargs):
     return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
 
+def _fake_process_peaks_same_hkl_two_hits(*args, **kwargs):
+    image_size = int(args[2])
+    image = np.zeros((image_size, image_size), dtype=np.float64)
+    hit_tables = [
+        np.array(
+            [
+                [1.0, 2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                [0.8, 8.0, 8.0, 0.0, 1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+    return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+
 def test_fit_geometry_parameters_cost_fn_uses_updated_psi_z(monkeypatch):
     target = 1.25
     psi_z_seen = []
@@ -224,3 +239,132 @@ def test_fit_geometry_parameters_tolerates_bad_measured_labels(monkeypatch):
     )
 
     assert result.success
+
+
+def test_simulate_and_compare_hkl_preserves_fixed_source_row_assignments(monkeypatch):
+    monkeypatch.setattr(
+        opt,
+        "_process_peaks_parallel_safe",
+        _fake_process_peaks_same_hkl_two_hits,
+    )
+
+    image_size = 12
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 2.0,
+            "y": 2.0,
+            "overlay_match_index": 7,
+            "source_table_index": 0,
+            "source_row_index": 1,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 8.0,
+            "y": 8.0,
+            "overlay_match_index": 3,
+            "source_table_index": 0,
+            "source_row_index": 0,
+        },
+    ]
+
+    distances, sim_coords, meas_coords, *_ = opt.simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured,
+    )
+
+    assert sim_coords == [(8.0, 8.0), (2.0, 2.0)]
+    assert meas_coords == [(2.0, 2.0), (8.0, 8.0)]
+    assert distances.size == 4
+    assert np.max(distances) > 0.0
+
+
+def test_fit_geometry_parameters_pixel_path_keeps_fixed_source_row_assignments(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        opt,
+        "_process_peaks_parallel_safe",
+        _fake_process_peaks_same_hkl_two_hits,
+    )
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 2.0,
+            "y": 2.0,
+            "overlay_match_index": 7,
+            "source_table_index": 0,
+            "source_row_index": 1,
+        },
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 8.0,
+            "y": 8.0,
+            "overlay_match_index": 3,
+            "source_table_index": 0,
+            "source_row_index": 0,
+        },
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": False,
+            }
+        },
+    )
+
+    assert result.success
+    assert result.fun.size == 4
+    assert np.max(np.abs(result.fun)) >= 5.0
+    assert isinstance(result.point_match_summary, dict)
+    assert int(result.point_match_summary["fixed_source_resolved_count"]) == 2
+    assert isinstance(result.point_match_diagnostics, list)
+    assert len(result.point_match_diagnostics) == 2
+    assert all(
+        entry["resolution_kind"] == "fixed_source"
+        and entry["match_status"] == "matched"
+        for entry in result.point_match_diagnostics
+    )
+    assert {
+        int(entry["overlay_match_index"]) for entry in result.point_match_diagnostics
+    } == {3, 7}

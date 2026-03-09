@@ -242,8 +242,10 @@ def _normalize_measured_peaks(
         x_val = None
         y_val = None
         label = None
+        normalized_entry: Dict[str, object] = {}
 
         if isinstance(entry, dict):
+            normalized_entry = dict(entry)
             if "hkl" in entry:
                 try:
                     raw_hkl = entry["hkl"]
@@ -285,14 +287,13 @@ def _normalize_measured_peaks(
         if not (np.isfinite(x) and np.isfinite(y)):
             continue
 
-        normalized.append(
-            {
-                "hkl": hkl,
-                "label": str(label) if label is not None else f"{hkl[0]},{hkl[1]},{hkl[2]}",
-                "x": x,
-                "y": y,
-            }
+        normalized_entry["hkl"] = hkl
+        normalized_entry["label"] = (
+            str(label) if label is not None else f"{hkl[0]},{hkl[1]},{hkl[2]}"
         )
+        normalized_entry["x"] = x
+        normalized_entry["y"] = y
+        normalized.append(normalized_entry)
     return normalized
 
 
@@ -2097,6 +2098,156 @@ def build_measured_dict(
     return measured_dict
 
 
+def _valid_hit_rows(hit_table: object) -> List[np.ndarray]:
+    """Return filtered hit rows using the same rules as geometry auto-match."""
+
+    hits = np.asarray(hit_table)
+    if hits.ndim != 2 or hits.shape[1] < 7:
+        return []
+
+    rows: List[np.ndarray] = []
+    for row in hits:
+        if (
+            not np.isfinite(row[0])
+            or not np.isfinite(row[1])
+            or not np.isfinite(row[2])
+            or not np.isfinite(row[4])
+            or not np.isfinite(row[5])
+            or not np.isfinite(row[6])
+        ):
+            continue
+        rows.append(np.asarray(row[:7], dtype=float))
+    return rows
+
+
+def _measured_source_indices(
+    entry: Dict[str, object],
+) -> Optional[Tuple[int, int]]:
+    """Return the preview-style hit-table indices for a measured entry when present."""
+
+    try:
+        table_idx = int(entry.get("source_table_index"))  # type: ignore[arg-type]
+        row_idx = int(entry.get("source_row_index"))  # type: ignore[arg-type]
+    except Exception:
+        return None
+    if table_idx < 0 or row_idx < 0:
+        return None
+    return table_idx, row_idx
+
+
+def _resolve_fixed_source_matches(
+    measured_entries: Sequence[Dict[str, object]],
+    hit_tables: Sequence[object],
+) -> Tuple[
+    List[Tuple[Dict[str, object], Tuple[float, float], Tuple[int, int, int]]],
+    List[Dict[str, object]],
+    Dict[int, Dict[str, object]],
+]:
+    """Resolve measured peaks back to their original simulated hit-table rows."""
+
+    filtered_rows_cache: Dict[int, List[np.ndarray]] = {}
+    resolved: List[
+        Tuple[Dict[str, object], Tuple[float, float], Tuple[int, int, int]]
+    ] = []
+    fallback_entries: List[Dict[str, object]] = []
+    resolution_lookup: Dict[int, Dict[str, object]] = {}
+    used_source_keys: set[Tuple[int, int]] = set()
+
+    def _overlay_index(entry: Dict[str, object], fallback: int) -> int:
+        try:
+            out = int(entry.get("overlay_match_index", fallback))
+        except Exception:
+            out = int(fallback)
+        if out < 0:
+            return int(fallback)
+        return int(out)
+
+    for match_input_index, entry in enumerate(measured_entries):
+        overlay_match_index = _overlay_index(entry, match_input_index)
+        base_diag = {
+            "match_input_index": int(match_input_index),
+            "overlay_match_index": int(overlay_match_index),
+            "label": str(entry.get("label", "")),
+            "hkl": tuple(entry.get("hkl", ())) if isinstance(entry.get("hkl"), tuple) else entry.get("hkl"),
+            "source_table_index": entry.get("source_table_index"),
+            "source_row_index": entry.get("source_row_index"),
+        }
+        source_key = _measured_source_indices(entry)
+        if source_key is None:
+            fallback_entries.append(entry)
+            resolution_lookup[id(entry)] = {
+                **base_diag,
+                "resolution_kind": "hkl_fallback",
+                "resolution_reason": "missing_source_indices",
+            }
+            continue
+        if source_key in used_source_keys:
+            fallback_entries.append(entry)
+            resolution_lookup[id(entry)] = {
+                **base_diag,
+                "resolution_kind": "hkl_fallback",
+                "resolution_reason": "duplicate_source_key",
+            }
+            continue
+
+        table_idx, row_idx = source_key
+        if table_idx not in filtered_rows_cache:
+            if table_idx < 0 or table_idx >= len(hit_tables):
+                filtered_rows_cache[table_idx] = []
+            else:
+                filtered_rows_cache[table_idx] = _valid_hit_rows(hit_tables[table_idx])
+
+        rows = filtered_rows_cache.get(table_idx, [])
+        if row_idx < 0 or row_idx >= len(rows):
+            fallback_entries.append(entry)
+            resolution_lookup[id(entry)] = {
+                **base_diag,
+                "resolution_kind": "hkl_fallback",
+                "resolution_reason": "source_row_out_of_range",
+                "source_row_count": int(len(rows)),
+            }
+            continue
+
+        row = rows[row_idx]
+        try:
+            sim_col = float(row[1])
+            sim_row = float(row[2])
+            sim_hkl = (
+                int(round(float(row[4]))),
+                int(round(float(row[5]))),
+                int(round(float(row[6]))),
+            )
+        except Exception:
+            fallback_entries.append(entry)
+            resolution_lookup[id(entry)] = {
+                **base_diag,
+                "resolution_kind": "hkl_fallback",
+                "resolution_reason": "source_row_parse_failed",
+            }
+            continue
+        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+            fallback_entries.append(entry)
+            resolution_lookup[id(entry)] = {
+                **base_diag,
+                "resolution_kind": "hkl_fallback",
+                "resolution_reason": "invalid_simulated_point",
+            }
+            continue
+
+        resolved.append((entry, (sim_col, sim_row), sim_hkl))
+        resolution_lookup[id(entry)] = {
+            **base_diag,
+            "resolution_kind": "fixed_source",
+            "resolution_reason": "resolved",
+            "sim_x": float(sim_col),
+            "sim_y": float(sim_row),
+            "sim_hkl": tuple(int(v) for v in sim_hkl),
+        }
+        used_source_keys.add(source_key)
+
+    return resolved, fallback_entries, resolution_lookup
+
+
 def _pixel_to_angles(
     col: float,
     row: float,
@@ -2189,7 +2340,7 @@ def simulate_and_compare_hkl(
     meas_millers : list[tuple[int, int, int]]
         Miller indices associated with each entry in ``meas_coords``.
     """
-    measured_dict = build_measured_dict(measured_peaks)
+    normalized_measured = _normalize_measured_peaks(measured_peaks)
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
     # Unpack geometry & mosaic parameters
@@ -2279,6 +2430,63 @@ def simulate_and_compare_hkl(
             used_meas.add(meas_idx)
             used_sim.add(sim_idx)
         return matches
+
+    fixed_matches, fallback_measured, _ = _resolve_fixed_source_matches(
+        normalized_measured,
+        hit_tables,
+    )
+
+    for measured_entry, (sim_center_col, sim_center_row), sim_hkl in fixed_matches:
+        try:
+            meas_center_col = float(measured_entry["x"])
+            meas_center_row = float(measured_entry["y"])
+        except Exception:
+            continue
+        if not (
+            np.isfinite(sim_center_col)
+            and np.isfinite(sim_center_row)
+            and np.isfinite(meas_center_col)
+            and np.isfinite(meas_center_row)
+        ):
+            continue
+
+        sim_two_theta, sim_phi = _pixel_to_angles(
+            sim_center_col, sim_center_row, centre, detector_distance, pixel_size
+        )
+        meas_two_theta, meas_phi = _pixel_to_angles(
+            meas_center_col, meas_center_row, centre, detector_distance, pixel_size
+        )
+        if (
+            sim_two_theta is None
+            or sim_phi is None
+            or meas_two_theta is None
+            or meas_phi is None
+        ):
+            continue
+
+        radial_diff = abs(sim_two_theta - meas_two_theta)
+        azimuthal_diff = abs(_angular_difference_deg(sim_phi, meas_phi))
+        combined = math.hypot(radial_diff, azimuthal_diff)
+        if combined > pixel_tol:
+            continue
+
+        hkl_value = measured_entry.get("hkl")
+        if isinstance(hkl_value, tuple) and len(hkl_value) == 3:
+            hkl_key = (
+                int(hkl_value[0]),
+                int(hkl_value[1]),
+                int(hkl_value[2]),
+            )
+        else:
+            hkl_key = sim_hkl
+
+        distances.extend([radial_diff, azimuthal_diff])
+        sim_coords.append((sim_center_col, sim_center_row))
+        meas_coords.append((meas_center_col, meas_center_row))
+        sim_millers.append(hkl_key)
+        meas_millers.append(hkl_key)
+
+    measured_dict = build_measured_dict(fallback_measured)
 
     for i, (H, K, L) in enumerate(miller):
         key = (int(round(H)), int(round(K)), int(round(L)))
@@ -2512,7 +2720,7 @@ def fit_geometry_parameters(
         measured_points: Sequence[Tuple[float, float]],
         *,
         max_distance: float = np.inf,
-    ) -> List[Tuple[np.ndarray, np.ndarray, float]]:
+    ) -> List[Tuple[np.ndarray, np.ndarray, float, int, int]]:
         """Greedy one-to-one matching between measured and simulated peak points."""
 
         if not simulated_points or not measured_points:
@@ -2537,14 +2745,14 @@ def fit_geometry_parameters(
 
         used_meas: set[int] = set()
         used_sim: set[int] = set()
-        matches: List[Tuple[np.ndarray, np.ndarray, float]] = []
+        matches: List[Tuple[np.ndarray, np.ndarray, float, int, int]] = []
         for idx in order:
             m_idx = int(candidate_pairs[idx, 0])
             s_idx = int(candidate_pairs[idx, 1])
             if m_idx in used_meas or s_idx in used_sim:
                 continue
             d = float(candidate_dist[idx])
-            matches.append((sim[s_idx], meas[m_idx], d))
+            matches.append((sim[s_idx], meas[m_idx], d, s_idx, m_idx))
             used_meas.add(m_idx)
             used_sim.add(s_idx)
         return matches
@@ -2575,12 +2783,19 @@ def fit_geometry_parameters(
         )
         return D
 
-    def pixel_cost_fn(x):
-        local = _apply_trial_params(x)
-
-        measured_dict = build_measured_dict(measured_peaks)
-        if not measured_dict:
-            return np.array([], dtype=float)
+    def _evaluate_pixel_matches(
+        local: Dict[str, object],
+        *,
+        collect_diagnostics: bool = False,
+    ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+        normalized_measured = _normalize_measured_peaks(measured_peaks)
+        if not normalized_measured:
+            return np.array([], dtype=float), [], {
+                "measured_count": 0,
+                "fixed_source_resolved_count": 0,
+                "fallback_entry_count": 0,
+                "missing_pair_count": 0,
+            }
 
         mosaic = local['mosaic_params']
         wavelength_array = mosaic.get('wavelength_array')
@@ -2614,8 +2829,89 @@ def fit_geometry_parameters(
             single_sample_indices=single_ray_indices,
         )
 
+        def _point_radius_px(point: Tuple[float, float]) -> float:
+            try:
+                center_row = float(local['center'][0])
+                center_col = float(local['center'][1])
+            except Exception:
+                return float("nan")
+            if not (
+                np.isfinite(point[0])
+                and np.isfinite(point[1])
+                and np.isfinite(center_row)
+                and np.isfinite(center_col)
+            ):
+                return float("nan")
+            return float(math.hypot(float(point[0]) - center_col, float(point[1]) - center_row))
+
         maxpos = hit_tables_to_max_positions(hit_tables)
         residuals: list[float] = []
+        diagnostics: List[Dict[str, object]] = []
+        fixed_matches, fallback_measured, resolution_lookup = _resolve_fixed_source_matches(
+            normalized_measured,
+            hit_tables,
+        )
+        fallback_entries_by_hkl: Dict[Tuple[int, int, int], List[Dict[str, object]]] = {}
+        for entry in fallback_measured:
+            raw_hkl = entry.get("hkl")
+            if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
+                continue
+            hkl_key = (
+                int(raw_hkl[0]),
+                int(raw_hkl[1]),
+                int(raw_hkl[2]),
+            )
+            fallback_entries_by_hkl.setdefault(hkl_key, []).append(entry)
+
+        for measured_entry, sim_pt, _sim_hkl in fixed_matches:
+            try:
+                meas_pt = (
+                    float(measured_entry["x"]),
+                    float(measured_entry["y"]),
+                )
+            except Exception:
+                continue
+            if not (
+                np.isfinite(sim_pt[0])
+                and np.isfinite(sim_pt[1])
+                and np.isfinite(meas_pt[0])
+                and np.isfinite(meas_pt[1])
+            ):
+                continue
+            dx = float(sim_pt[0] - meas_pt[0])
+            dy = float(sim_pt[1] - meas_pt[1])
+            pair_dist = math.hypot(dx, dy)
+            if weighted_matching:
+                w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
+                dx *= w
+                dy *= w
+            else:
+                w = 1.0
+            residuals.extend([dx, dy])
+            if collect_diagnostics:
+                entry_diag = dict(resolution_lookup.get(id(measured_entry), {}))
+                entry_diag.update(
+                    {
+                        "match_kind": "fixed_source",
+                        "match_status": "matched",
+                        "measured_x": float(meas_pt[0]),
+                        "measured_y": float(meas_pt[1]),
+                        "simulated_x": float(sim_pt[0]),
+                        "simulated_y": float(sim_pt[1]),
+                        "dx_px": float(sim_pt[0] - meas_pt[0]),
+                        "dy_px": float(sim_pt[1] - meas_pt[1]),
+                        "distance_px": float(pair_dist),
+                        "weight": float(w),
+                        "weighted_dx_px": float(dx),
+                        "weighted_dy_px": float(dy),
+                        "measured_radius_px": _point_radius_px(meas_pt),
+                        "simulated_radius_px": _point_radius_px(sim_pt),
+                    }
+                )
+                diagnostics.append(entry_diag)
+
+        measured_dict = build_measured_dict(fallback_measured)
+
         simulated_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
         for idx, (H, K, L) in enumerate(miller):
             key = (int(round(H)), int(round(K)), int(round(L)))
@@ -2629,15 +2925,54 @@ def fit_geometry_parameters(
         missing_pairs = 0
         for hkl_key, measured_list in measured_dict.items():
             sim_list = simulated_by_hkl.get(hkl_key, [])
-            measured_points = [
-                (float(mx), float(my))
-                for mx, my in measured_list
-                if np.isfinite(mx) and np.isfinite(my)
-            ]
+            measured_entries_hkl = fallback_entries_by_hkl.get(hkl_key, [])
+            valid_entries_hkl: List[Dict[str, object]] = []
+            measured_points: List[Tuple[float, float]] = []
+            for entry in measured_entries_hkl:
+                try:
+                    mx = float(entry["x"])
+                    my = float(entry["y"])
+                except Exception:
+                    continue
+                if not (np.isfinite(mx) and np.isfinite(my)):
+                    continue
+                valid_entries_hkl.append(entry)
+                measured_points.append((mx, my))
             if not measured_points:
                 continue
             if not sim_list:
-                missing_pairs += len(measured_points)
+                missing_pairs += len(valid_entries_hkl)
+                if collect_diagnostics:
+                    for entry in valid_entries_hkl:
+                        entry_diag = dict(resolution_lookup.get(id(entry), {}))
+                        entry_diag.update(
+                            {
+                                "match_kind": "hkl_fallback",
+                                "match_status": "missing_pair",
+                                "hkl": tuple(int(v) for v in hkl_key),
+                                "resolution_kind": str(
+                                    entry_diag.get("resolution_kind", "hkl_fallback")
+                                ),
+                                "resolution_reason": str(
+                                    entry_diag.get("resolution_reason", "no_simulated_candidates")
+                                ),
+                                "measured_x": float(entry["x"]),
+                                "measured_y": float(entry["y"]),
+                                "simulated_x": float("nan"),
+                                "simulated_y": float("nan"),
+                                "dx_px": float("nan"),
+                                "dy_px": float("nan"),
+                                "distance_px": float("nan"),
+                                "weight": 0.0,
+                                "weighted_dx_px": float("nan"),
+                                "weighted_dy_px": float("nan"),
+                                "measured_radius_px": _point_radius_px(
+                                    (float(entry["x"]), float(entry["y"]))
+                                ),
+                                "simulated_radius_px": float("nan"),
+                            }
+                        )
+                        diagnostics.append(entry_diag)
                 continue
 
             matches = _build_point_matches(
@@ -2645,22 +2980,143 @@ def fit_geometry_parameters(
                 measured_points,
                 max_distance=pixel_tol,
             )
-            missing_pairs += max(0, len(measured_points) - len(matches))
-            for sim_pt, meas_pt, pair_dist in matches:
+            matched_meas_indices: set[int] = set()
+            for sim_pt, meas_pt, pair_dist, sim_idx, meas_idx in matches:
+                matched_meas_indices.add(int(meas_idx))
                 dx = float(sim_pt[0] - meas_pt[0])
                 dy = float(sim_pt[1] - meas_pt[1])
                 if weighted_matching:
                     w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
                     dx *= w
                     dy *= w
+                else:
+                    w = 1.0
                 residuals.extend([dx, dy])
+                if collect_diagnostics and 0 <= meas_idx < len(valid_entries_hkl):
+                    entry = valid_entries_hkl[meas_idx]
+                    entry_diag = dict(resolution_lookup.get(id(entry), {}))
+                    entry_diag.update(
+                        {
+                            "match_kind": "hkl_fallback",
+                            "match_status": "matched",
+                            "hkl": tuple(int(v) for v in hkl_key),
+                            "sim_list_index": int(sim_idx),
+                            "meas_list_index": int(meas_idx),
+                            "measured_x": float(meas_pt[0]),
+                            "measured_y": float(meas_pt[1]),
+                            "simulated_x": float(sim_pt[0]),
+                            "simulated_y": float(sim_pt[1]),
+                            "dx_px": float(sim_pt[0] - meas_pt[0]),
+                            "dy_px": float(sim_pt[1] - meas_pt[1]),
+                            "distance_px": float(pair_dist),
+                            "weight": float(w),
+                            "weighted_dx_px": float(dx),
+                            "weighted_dy_px": float(dy),
+                            "measured_radius_px": _point_radius_px(
+                                (float(meas_pt[0]), float(meas_pt[1]))
+                            ),
+                            "simulated_radius_px": _point_radius_px(
+                                (float(sim_pt[0]), float(sim_pt[1]))
+                            ),
+                        }
+                    )
+                    diagnostics.append(entry_diag)
+
+            unmatched_meas_indices = [
+                idx for idx in range(len(valid_entries_hkl)) if idx not in matched_meas_indices
+            ]
+            missing_pairs += len(unmatched_meas_indices)
+            if collect_diagnostics:
+                for meas_idx in unmatched_meas_indices:
+                    entry = valid_entries_hkl[meas_idx]
+                    entry_diag = dict(resolution_lookup.get(id(entry), {}))
+                    entry_diag.update(
+                        {
+                            "match_kind": "hkl_fallback",
+                            "match_status": "missing_pair",
+                            "hkl": tuple(int(v) for v in hkl_key),
+                            "resolution_kind": str(
+                                entry_diag.get("resolution_kind", "hkl_fallback")
+                            ),
+                            "resolution_reason": str(
+                                entry_diag.get("resolution_reason", "unmatched_after_assignment")
+                            ),
+                            "measured_x": float(entry["x"]),
+                            "measured_y": float(entry["y"]),
+                            "simulated_x": float("nan"),
+                            "simulated_y": float("nan"),
+                            "dx_px": float("nan"),
+                            "dy_px": float("nan"),
+                            "distance_px": float("nan"),
+                            "weight": 0.0,
+                            "weighted_dx_px": float("nan"),
+                            "weighted_dy_px": float("nan"),
+                            "measured_radius_px": _point_radius_px(
+                                (float(entry["x"]), float(entry["y"]))
+                            ),
+                            "simulated_radius_px": float("nan"),
+                        }
+                    )
+                    diagnostics.append(entry_diag)
 
         if missing_pairs > 0 and missing_pair_penalty > 0.0:
             residuals.extend([missing_pair_penalty] * missing_pairs)
 
-        if not residuals:
-            return np.array([max(1.0, missing_pair_penalty)], dtype=float)
-        return np.asarray(residuals, dtype=float)
+        residual_arr = (
+            np.asarray(residuals, dtype=float)
+            if residuals
+            else np.array([max(1.0, missing_pair_penalty)], dtype=float)
+        )
+        summary: Dict[str, object] = {
+            "measured_count": int(len(normalized_measured)),
+            "fixed_source_resolved_count": int(len(fixed_matches)),
+            "fallback_entry_count": int(len(fallback_measured)),
+            "fallback_hkl_count": int(len(measured_dict)),
+            "missing_pair_count": int(missing_pairs),
+            "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
+            "center_col": float(local['center'][1]) if len(local.get('center', [])) >= 2 else float("nan"),
+        }
+        if diagnostics:
+            sim_radius = np.asarray(
+                [
+                    float(entry.get("simulated_radius_px", np.nan))
+                    for entry in diagnostics
+                ],
+                dtype=float,
+            )
+            meas_radius = np.asarray(
+                [
+                    float(entry.get("measured_radius_px", np.nan))
+                    for entry in diagnostics
+                ],
+                dtype=float,
+            )
+            finite_sim_radius = sim_radius[np.isfinite(sim_radius)]
+            finite_meas_radius = meas_radius[np.isfinite(meas_radius)]
+            if finite_sim_radius.size:
+                summary.update(
+                    {
+                        "sim_radius_min_px": float(np.min(finite_sim_radius)),
+                        "sim_radius_median_px": float(np.median(finite_sim_radius)),
+                        "sim_radius_lt_10px": int(np.count_nonzero(finite_sim_radius < 10.0)),
+                        "sim_radius_lt_25px": int(np.count_nonzero(finite_sim_radius < 25.0)),
+                    }
+                )
+            if finite_meas_radius.size:
+                summary.update(
+                    {
+                        "meas_radius_min_px": float(np.min(finite_meas_radius)),
+                        "meas_radius_median_px": float(np.median(finite_meas_radius)),
+                        "meas_radius_lt_10px": int(np.count_nonzero(finite_meas_radius < 10.0)),
+                        "meas_radius_lt_25px": int(np.count_nonzero(finite_meas_radius < 25.0)),
+                    }
+                )
+        return residual_arr, diagnostics, summary
+
+    def pixel_cost_fn(x):
+        local = _apply_trial_params(x)
+        residual_arr, _, _ = _evaluate_pixel_matches(local, collect_diagnostics=False)
+        return residual_arr
 
     def _initial_value(name: str) -> float:
         if name == "center_x":
@@ -2864,6 +3320,28 @@ def fit_geometry_parameters(
 
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)
+
+    if experimental_image is not None and getattr(result, "x", None) is not None:
+        try:
+            final_local = _apply_trial_params(np.asarray(result.x, dtype=float))
+            _, point_match_diagnostics, point_match_summary = _evaluate_pixel_matches(
+                final_local,
+                collect_diagnostics=True,
+            )
+            result.point_match_diagnostics = point_match_diagnostics
+            result.point_match_summary = point_match_summary
+        except Exception as exc:
+            result.point_match_diagnostics = [
+                {
+                    "match_kind": "diagnostics",
+                    "match_status": "failed",
+                    "resolution_reason": str(exc),
+                }
+            ]
+            result.point_match_summary = {
+                "diagnostics_failed": True,
+                "error": str(exc),
+            }
 
     return result
 

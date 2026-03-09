@@ -89,6 +89,11 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui.sliders import create_slider
 from ra_sim.debug_utils import debug_print, is_debug_enabled
+from ra_sim.gui.geometry_overlay import (
+    build_geometry_fit_overlay_records,
+    compute_geometry_overlay_frame_diagnostics,
+    normalize_initial_geometry_pairs_display,
+)
 from ra_sim.hbn import (
     build_hbn_geometry_debug_trace,
     convert_hbn_bundle_geometry_to_simulation,
@@ -1577,6 +1582,245 @@ def _clear_geometry_pick_artists():
             pass
     geometry_pick_artists.clear()
     canvas.draw_idle()
+
+
+def _draw_geometry_fit_overlay(
+    overlay_records: Sequence[dict[str, object]] | None,
+    *,
+    max_display_markers: int = 120,
+) -> None:
+    """Draw one fixed-background/fitted-simulation overlay record per match."""
+
+    _clear_geometry_pick_artists()
+
+    def _parse_point(value: object) -> tuple[float, float] | None:
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+            return None
+        try:
+            col = float(value[0])
+            row = float(value[1])
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    def _plot_marker(
+        col: float,
+        row: float,
+        label: str | None,
+        color: str,
+        marker: str,
+        *,
+        zorder: int = 7,
+    ) -> None:
+        point, = ax.plot(
+            [float(col)],
+            [float(row)],
+            marker,
+            color=color,
+            markersize=8,
+            markerfacecolor="none",
+            zorder=zorder,
+            linestyle="None",
+        )
+        geometry_pick_artists.append(point)
+        if label:
+            text = ax.text(
+                float(col),
+                float(row),
+                label,
+                color=color,
+                fontsize=8,
+                ha="left",
+                va="bottom",
+                zorder=zorder + 1,
+                bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1.0),
+            )
+            geometry_pick_artists.append(text)
+
+    def _plot_arrow(
+        start_xy: tuple[float, float],
+        end_xy: tuple[float, float],
+        *,
+        color: str,
+        linestyle: str = "--",
+        lw: float = 1.0,
+        alpha: float = 0.8,
+        annotate: str | None = None,
+    ) -> None:
+        arrow = ax.annotate(
+            annotate or "",
+            xy=end_xy,
+            xytext=start_xy,
+            color=color,
+            fontsize=8,
+            ha="center",
+            va="center",
+            arrowprops=dict(
+                arrowstyle="->",
+                color=color,
+                lw=lw,
+                linestyle=linestyle,
+                alpha=alpha,
+            ),
+            bbox=(
+                dict(facecolor="white", alpha=0.85, edgecolor="none", pad=1.0)
+                if annotate
+                else None
+            ),
+            zorder=6,
+        )
+        geometry_pick_artists.append(arrow)
+
+    limit = max(1, int(max_display_markers))
+    for idx, entry in enumerate(overlay_records or []):
+        if idx >= limit or not isinstance(entry, dict):
+            break
+
+        initial_sim_display = _parse_point(entry.get("initial_sim_display"))
+        initial_bg_display = _parse_point(entry.get("initial_bg_display"))
+        final_sim_display = _parse_point(entry.get("final_sim_display"))
+        final_bg_display = _parse_point(entry.get("final_bg_display"))
+        if final_sim_display is None or final_bg_display is None:
+            continue
+
+        label = str(entry.get("hkl", entry.get("label", "match")))
+        if initial_sim_display is not None:
+            _plot_marker(
+                initial_sim_display[0],
+                initial_sim_display[1],
+                None,
+                "#0984e3",
+                "s",
+                zorder=7,
+            )
+            sim_shift = math.hypot(
+                final_sim_display[0] - initial_sim_display[0],
+                final_sim_display[1] - initial_sim_display[1],
+            )
+            if sim_shift > 0.25:
+                _plot_arrow(
+                    initial_sim_display,
+                    final_sim_display,
+                    color="#0984e3",
+                    linestyle="--",
+                    lw=1.0,
+                    alpha=0.85,
+                )
+
+        if initial_bg_display is not None:
+            _plot_marker(
+                initial_bg_display[0],
+                initial_bg_display[1],
+                None,
+                "#f39c12",
+                "^",
+                zorder=7,
+            )
+
+        _plot_marker(
+            final_sim_display[0],
+            final_sim_display[1],
+            f"{label} fit sim",
+            "#00b894",
+            "o",
+            zorder=8,
+        )
+
+        residual_dist = float(entry.get("overlay_distance_px", np.nan))
+        if not np.isfinite(residual_dist):
+            residual_dist = math.hypot(
+                final_sim_display[0] - final_bg_display[0],
+                final_sim_display[1] - final_bg_display[1],
+            )
+        _plot_arrow(
+            final_sim_display,
+            final_bg_display,
+            color="#2d3436",
+            linestyle="-",
+            lw=1.1,
+            alpha=0.9,
+            annotate=f"|Δ|={residual_dist:.1f}px",
+        )
+
+    canvas.draw_idle()
+
+
+def _draw_initial_geometry_pairs_overlay(
+    initial_pairs_display: Sequence[dict[str, object]] | None,
+    *,
+    max_display_markers: int = 120,
+) -> None:
+    """Draw only the initially selected simulation/background peak pairs."""
+
+    initial_pairs = normalize_initial_geometry_pairs_display(initial_pairs_display)
+    _clear_geometry_pick_artists()
+
+    limit = max(1, int(max_display_markers))
+    for idx, entry in enumerate(initial_pairs):
+        if idx >= limit:
+            break
+        sim_display = entry.get("sim_display")
+        bg_display = entry.get("bg_display")
+        if sim_display is None and bg_display is None:
+            continue
+        hkl_label = str(entry.get("hkl", entry.get("label", idx)))
+
+        if sim_display is not None:
+            sim_pt, = ax.plot(
+                [float(sim_display[0])],
+                [float(sim_display[1])],
+                "s",
+                color="#0984e3",
+                markersize=8,
+                markerfacecolor="none",
+                linestyle="None",
+                zorder=7,
+            )
+            geometry_pick_artists.append(sim_pt)
+        if bg_display is not None:
+            bg_pt, = ax.plot(
+                [float(bg_display[0])],
+                [float(bg_display[1])],
+                "^",
+                color="#f39c12",
+                markersize=8,
+                markerfacecolor="none",
+                linestyle="None",
+                zorder=7,
+            )
+            geometry_pick_artists.append(bg_pt)
+
+        if sim_display is not None and bg_display is not None:
+            link = ax.annotate(
+                hkl_label,
+                xy=(float(bg_display[0]), float(bg_display[1])),
+                xytext=(float(sim_display[0]), float(sim_display[1])),
+                color="#636e72",
+                fontsize=8,
+                ha="center",
+                va="center",
+                arrowprops=dict(
+                    arrowstyle="->",
+                    color="#636e72",
+                    lw=1.0,
+                    linestyle=":",
+                    alpha=0.8,
+                ),
+                zorder=6,
+            )
+            geometry_pick_artists.append(link)
+
+    canvas.draw_idle()
+
+
+def _geometry_overlay_frame_diagnostics(
+    overlay_records: Sequence[dict[str, object]] | None,
+) -> tuple[dict[str, float], str]:
+    """Compare per-match fitted overlay alignment in display space."""
+
+    return compute_geometry_overlay_frame_diagnostics(overlay_records)
 
 
 def _background_backend_status() -> str:
@@ -5092,6 +5336,63 @@ def on_fit_geometry_click():
         )
         return
 
+    def _attach_overlay_match_indices(
+        pairs: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        normalized_pairs: list[dict[str, object]] = []
+        for pair_idx, raw_entry in enumerate(pairs or []):
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = dict(raw_entry)
+            try:
+                overlay_idx = int(entry.get("overlay_match_index", pair_idx))
+            except Exception:
+                overlay_idx = int(pair_idx)
+            if overlay_idx < 0:
+                overlay_idx = int(pair_idx)
+            entry["overlay_match_index"] = int(overlay_idx)
+            normalized_pairs.append(entry)
+        return normalized_pairs
+
+    matched_pairs = _attach_overlay_match_indices(matched_pairs)
+
+    initial_auto_pairs_display: list[dict[str, object]] = []
+    for entry in matched_pairs:
+        normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+        if normalized_hkl is None:
+            continue
+        try:
+            sim_col = float(entry["sim_x"])
+            sim_row = float(entry["sim_y"])
+            bg_col = float(entry["x"])
+            bg_row = float(entry["y"])
+        except Exception:
+            continue
+        if not all(np.isfinite(v) for v in (sim_col, sim_row, bg_col, bg_row)):
+            continue
+        sim_display = _rotate_point_for_display(
+            sim_col,
+            sim_row,
+            (image_size, image_size),
+            SIM_DISPLAY_ROTATE_K,
+        )
+        initial_auto_pairs_display.append(
+            {
+                "overlay_match_index": int(
+                    entry.get("overlay_match_index", len(initial_auto_pairs_display))
+                ),
+                "hkl": normalized_hkl,
+                "sim_display": (float(sim_display[0]), float(sim_display[1])),
+                "bg_display": (float(bg_col), float(bg_row)),
+            }
+        )
+    preview_marker_limit = int(auto_match_cfg.get("max_display_markers", 120))
+    preview_marker_limit = max(1, preview_marker_limit)
+    _draw_initial_geometry_pairs_overlay(
+        initial_auto_pairs_display,
+        max_display_markers=preview_marker_limit,
+    )
+
     def _mark_auto_pick(col: float, row: float, label: str, color: str, marker: str):
         point, = ax.plot(
             [col],
@@ -5137,14 +5438,34 @@ def on_fit_geometry_click():
     root.update_idletasks()
 
     try:
-        measured_from_display = [
-            {
-                "label": str(entry["label"]),
-                "x": float(entry["x"]),
-                "y": float(entry["y"]),
-            }
-            for entry in matched_pairs
-        ]
+        measured_from_display = []
+        for entry in matched_pairs:
+            try:
+                x_val = float(entry["x"])
+                y_val = float(entry["y"])
+            except Exception:
+                continue
+            if not (np.isfinite(x_val) and np.isfinite(y_val)):
+                continue
+            hkl_value = entry.get("hkl")
+            if not isinstance(hkl_value, tuple) or len(hkl_value) != 3:
+                try:
+                    hkl_value = tuple(
+                        int(round(float(part)))
+                        for part in str(entry.get("label", "")).split(",")[:3]
+                    )
+                except Exception:
+                    hkl_value = None
+            measured_entry = dict(entry)
+            measured_entry["label"] = str(entry["label"])
+            measured_entry["x"] = x_val
+            measured_entry["y"] = y_val
+            measured_entry["overlay_match_index"] = int(
+                entry.get("overlay_match_index", len(measured_from_display))
+            )
+            if isinstance(hkl_value, tuple) and len(hkl_value) == 3:
+                measured_entry["hkl"] = hkl_value
+            measured_from_display.append(measured_entry)
 
         _log_line(f"Geometry fit started: {stamp}")
         _log_line()
@@ -5213,7 +5534,7 @@ def on_fit_geometry_click():
         measured_native = _unrotate_display_peaks(
             measured_from_display,
             display_background.shape,
-            k=SIM_DISPLAY_ROTATE_K,
+            k=DISPLAY_ROTATE_K,
         )
 
         sim_orientation_points: list[tuple[float, float]] = []
@@ -5402,18 +5723,38 @@ def on_fit_geometry_click():
                     )
                     break
 
-                measured_iter_display = [
-                    {
-                        "label": str(entry["label"]),
-                        "x": float(entry["x"]),
-                        "y": float(entry["y"]),
-                    }
-                    for entry in matched_iter
-                ]
+                measured_iter_display = []
+                for entry in matched_iter:
+                    try:
+                        x_val = float(entry["x"])
+                        y_val = float(entry["y"])
+                    except Exception:
+                        continue
+                    if not (np.isfinite(x_val) and np.isfinite(y_val)):
+                        continue
+                    hkl_value = entry.get("hkl")
+                    if not isinstance(hkl_value, tuple) or len(hkl_value) != 3:
+                        try:
+                            hkl_value = tuple(
+                                int(round(float(part)))
+                                for part in str(entry.get("label", "")).split(",")[:3]
+                            )
+                        except Exception:
+                            hkl_value = None
+                    measured_entry = dict(entry)
+                    measured_entry["label"] = str(entry["label"])
+                    measured_entry["x"] = x_val
+                    measured_entry["y"] = y_val
+                    measured_entry["overlay_match_index"] = int(
+                        entry.get("overlay_match_index", len(measured_iter_display))
+                    )
+                    if isinstance(hkl_value, tuple) and len(hkl_value) == 3:
+                        measured_entry["hkl"] = hkl_value
+                    measured_iter_display.append(measured_entry)
                 measured_iter_native = _unrotate_display_peaks(
                     measured_iter_display,
                     display_background.shape,
-                    k=SIM_DISPLAY_ROTATE_K,
+                    k=DISPLAY_ROTATE_K,
                 )
                 sim_iter_points: list[tuple[float, float]] = []
                 meas_iter_points: list[tuple[float, float]] = []
@@ -5469,6 +5810,7 @@ def on_fit_geometry_click():
                     flip_order=orientation_choice["flip_order"],
                 )
 
+                matched_iter = _attach_overlay_match_indices(matched_iter)
                 current_matched_pairs = matched_iter
                 current_measured_for_fit = measured_iter_for_fit
                 match_stats = stats_iter
@@ -5622,54 +5964,55 @@ def on_fit_geometry_click():
             meas_millers,
         )
 
-        _clear_geometry_pick_artists()
         pixel_offsets: list[tuple[tuple[int, int, int], float, float, float]] = []
         max_display_markers = int(auto_match_cfg.get("max_display_markers", 120))
         max_display_markers = max(1, max_display_markers)
 
-        def _to_display_frame(col: float, row: float, *, k: int) -> tuple[float, float]:
-            return _rotate_point_for_display(float(col), float(row), (image_size, image_size), k)
-
-        for i, (hkl_key, sim_center, meas_center) in enumerate(
-            zip(agg_millers, agg_sim_coords, agg_meas_coords)
+        for hkl_key, sim_center, meas_center in zip(
+            agg_millers, agg_sim_coords, agg_meas_coords
         ):
             dx = sim_center[0] - meas_center[0]
             dy = sim_center[1] - meas_center[1]
             dist = math.hypot(dx, dy)
             pixel_offsets.append((hkl_key, dx, dy, dist))
 
-            if i >= max_display_markers:
-                continue
+        native_overlay_shape = tuple(int(v) for v in native_background.shape[:2])
+        overlay_records = build_geometry_fit_overlay_records(
+            initial_auto_pairs_display,
+            getattr(result, "point_match_diagnostics", None),
+            native_shape=native_overlay_shape,
+            orientation_choice=orientation_choice,
+            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+            background_display_rotate_k=DISPLAY_ROTATE_K,
+        )
+        frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(
+            overlay_records,
+        )
+        _log_section(
+            "Overlay frame diagnostics:",
+            [
+                f"overlay_records={len(overlay_records)}",
+                f"paired_records={int(frame_diag.get('paired_records', 0))}",
+                f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
+                f"bg_display_med_px={float(frame_diag.get('bg_display_med_px', np.nan)):.3f}",
+                f"sim_display_p90_px={float(frame_diag.get('sim_display_p90_px', np.nan)):.3f}",
+                f"bg_display_p90_px={float(frame_diag.get('bg_display_p90_px', np.nan)):.3f}",
+            ],
+        )
+        if frame_warning:
+            _log_line(f"WARNING: {frame_warning}")
+            _log_line()
 
-            disp_sx, disp_sy = _to_display_frame(
-                sim_center[0], sim_center[1], k=SIM_DISPLAY_ROTATE_K
+        if overlay_records:
+            _draw_geometry_fit_overlay(
+                overlay_records,
+                max_display_markers=max_display_markers,
             )
-            disp_mx, disp_my = _to_display_frame(
-                meas_center[0], meas_center[1], k=SIM_DISPLAY_ROTATE_K
+        else:
+            _draw_initial_geometry_pairs_overlay(
+                initial_auto_pairs_display,
+                max_display_markers=max_display_markers,
             )
-
-            _mark_auto_pick(disp_sx, disp_sy, f"{hkl_key} sim", '#00b894', 'o')
-            _mark_auto_pick(disp_mx, disp_my, f"{hkl_key} real", '#e17055', 'x')
-            arrow = ax.annotate(
-                f"|Δ|={dist:.1f}px",
-                xy=(disp_mx, disp_my),
-                xytext=(disp_sx, disp_sy),
-                color='#2d3436',
-                fontsize=8,
-                ha='center',
-                va='center',
-                arrowprops=dict(
-                    arrowstyle='->',
-                    color='#0984e3',
-                    lw=1.0,
-                    alpha=0.8,
-                ),
-                bbox=dict(facecolor='white', alpha=0.85, edgecolor='none', pad=1.0),
-                zorder=6,
-            )
-            geometry_pick_artists.append(arrow)
-
-        canvas.draw_idle()
 
         _log_section(
             "Pixel offsets (native frame):",
@@ -5708,6 +6051,7 @@ def on_fit_geometry_click():
             "Fit summary:",
             [
                 f"auto_matched_peaks={len(matched_pairs)}",
+                f"overlay_records={len(overlay_records)}",
                 f"auto_simulated_peaks={int(match_stats.get('simulated_count', len(simulated_peaks)))}",
                 f"auto_distance_p90_px={float(match_stats.get('p90_match_distance_px', np.nan)):.3f}",
                 f"auto_distance_clip_limit_px={float(match_stats.get('distance_clip_limit_px', np.nan)):.3f}",
@@ -5792,7 +6136,12 @@ def on_fit_geometry_click():
         canvas.draw_idle()
 
     picked_pairs = []  # list[(h,k,l), (x_real, y_real)]
-    selection_state = {"expecting": "sim", "pending_hkl": None}
+    initial_manual_pairs_display: list[dict[str, object]] = []
+    selection_state = {
+        "expecting": "sim",
+        "pending_hkl": None,
+        "pending_sim_display": None,
+    }
     canvas_widget = canvas.get_tk_widget()
 
     progress_label_geometry.config(
@@ -5842,8 +6191,13 @@ def on_fit_geometry_click():
             root.update_idletasks()
 
             measured_from_clicks = [
-                {"label": f"{h},{k},{l}", "x": float(x), "y": float(y)}
-                for (h, k, l), (x, y) in picked_pairs
+                {
+                    "label": f"{h},{k},{l}",
+                    "x": float(x),
+                    "y": float(y),
+                    "overlay_match_index": int(pair_idx),
+                }
+                for pair_idx, ((h, k, l), (x, y)) in enumerate(picked_pairs)
             ]
             _log_line(f"Geometry fit started: {stamp}")
             _log_line()
@@ -5861,7 +6215,7 @@ def on_fit_geometry_click():
             measured_native = _unrotate_display_peaks(
                 measured_from_clicks,
                 current_background_display.shape,
-                k=SIM_DISPLAY_ROTATE_K,
+                k=DISPLAY_ROTATE_K,
             )
             picked_frames = [
                 {
@@ -6422,13 +6776,6 @@ def on_fit_geometry_click():
                 )
                 return
 
-            def _to_display_frame(col: float, row: float, *, k: int) -> tuple[float, float]:
-                """Rotate native coordinates into the currently displayed frame."""
-
-                return _rotate_point_for_display(
-                    float(col), float(row), (image_size, image_size), k
-                )
-
             (
                 agg_sim_coords,
                 agg_meas_coords,
@@ -6439,9 +6786,6 @@ def on_fit_geometry_click():
 
             pixel_offsets = []
 
-            # Replace the original pick markers with the fitted match locations.
-            _clear_geometry_pick_artists()
-
             for hkl_key, sim_center, meas_center in zip(
                 agg_millers, agg_sim_coords, agg_meas_coords
             ):
@@ -6450,48 +6794,45 @@ def on_fit_geometry_click():
                 dist = math.hypot(dx, dy)
                 pixel_offsets.append((hkl_key, dx, dy, dist))
 
-                disp_sx, disp_sy = _to_display_frame(
-                    sim_center[0], sim_center[1], k=SIM_DISPLAY_ROTATE_K
-                )
-                disp_mx, disp_my = _to_display_frame(
-                    meas_center[0], meas_center[1], k=SIM_DISPLAY_ROTATE_K
-                )
+            native_overlay_shape = tuple(int(v) for v in native_background.shape[:2])
+            overlay_records = build_geometry_fit_overlay_records(
+                initial_manual_pairs_display,
+                getattr(result, "point_match_diagnostics", None),
+                native_shape=native_overlay_shape,
+                orientation_choice=orientation_choice,
+                sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                background_display_rotate_k=DISPLAY_ROTATE_K,
+            )
+            frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(
+                overlay_records,
+            )
+            _log_section(
+                "Overlay frame diagnostics:",
+                [
+                    f"overlay_records={len(overlay_records)}",
+                    f"paired_records={int(frame_diag.get('paired_records', 0))}",
+                    f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
+                    f"bg_display_med_px={float(frame_diag.get('bg_display_med_px', np.nan)):.3f}",
+                    f"sim_display_p90_px={float(frame_diag.get('sim_display_p90_px', np.nan)):.3f}",
+                    f"bg_display_p90_px={float(frame_diag.get('bg_display_p90_px', np.nan)):.3f}",
+                ],
+            )
+            if frame_warning:
+                _log_line(f"WARNING: {frame_warning}")
+                _log_line()
 
-                _mark_pick(
-                    disp_sx,
-                    disp_sy,
-                    f"{hkl_key} sim",
-                    '#00b894',
-                    'o',
+            max_display_markers = int(auto_match_cfg.get("max_display_markers", 120))
+            max_display_markers = max(1, max_display_markers)
+            if overlay_records:
+                _draw_geometry_fit_overlay(
+                    overlay_records,
+                    max_display_markers=max_display_markers,
                 )
-                _mark_pick(
-                    disp_mx,
-                    disp_my,
-                    f"{hkl_key} real",
-                    '#e17055',
-                    'x',
+            else:
+                _draw_initial_geometry_pairs_overlay(
+                    initial_manual_pairs_display,
+                    max_display_markers=max_display_markers,
                 )
-
-                arrow = ax.annotate(
-                    f"|Δ|={dist:.1f}px",
-                    xy=(disp_mx, disp_my),
-                    xytext=(disp_sx, disp_sy),
-                    color='#2d3436',
-                    fontsize=8,
-                    ha='center',
-                    va='center',
-                    arrowprops=dict(
-                        arrowstyle='->',
-                        color='#0984e3',
-                        lw=1.2,
-                        alpha=0.9,
-                    ),
-                    bbox=dict(facecolor='white', alpha=0.85, edgecolor='none', pad=1.0),
-                    zorder=6,
-                )
-                geometry_pick_artists.append(arrow)
-
-            canvas.draw_idle()
 
             _log_section(
                 "Pixel offsets (native frame):",
@@ -6537,6 +6878,7 @@ def on_fit_geometry_click():
                     *[
                         f"{name} = {val:.6f}" for name, val in zip(var_names, result.x)
                     ],
+                    f"overlay_records={len(overlay_records)}",
                     f"RMS residual = {rms:.6f} px",
                     f"Applied orientation: {orientation_choice.get('label', 'identity')}",
                     f"Matched peaks saved to: {save_path}",
@@ -6576,6 +6918,7 @@ def on_fit_geometry_click():
                 return
             selection_state["pending_hkl"] = peak_millers[idx]
             sim_col, sim_row = peak_positions[idx]
+            selection_state["pending_sim_display"] = (float(sim_col), float(sim_row))
             _mark_pick(sim_col, sim_row, f"{selection_state['pending_hkl']} sim", '#00b894', 'o')
             progress_label_geometry.config(
                 text=(
@@ -6589,13 +6932,27 @@ def on_fit_geometry_click():
         pending = selection_state.get("pending_hkl")
         if pending is None:
             selection_state["expecting"] = "sim"
+            selection_state["pending_sim_display"] = None
             progress_label_geometry.config(text="Pick a simulated peak first.")
             return
 
         peak_col, peak_row = _peak_maximum_near(col, row, search_radius=6)
         _mark_pick(peak_col, peak_row, f"{pending} real", '#e17055', 'x')
 
+        pending_sim_display = selection_state.get("pending_sim_display")
         picked_pairs.append((pending, (peak_col, peak_row)))
+        if pending_sim_display is not None:
+            initial_manual_pairs_display.append(
+                {
+                    "overlay_match_index": len(initial_manual_pairs_display),
+                    "hkl": tuple(int(v) for v in pending),
+                    "sim_display": (
+                        float(pending_sim_display[0]),
+                        float(pending_sim_display[1]),
+                    ),
+                    "bg_display": (float(peak_col), float(peak_row)),
+                }
+            )
         progress_label_geometry.config(
             text=(
                 f"Recorded pair for HKL={pending} at real px=({peak_col:.1f},{peak_row:.1f}). "
@@ -6603,6 +6960,7 @@ def on_fit_geometry_click():
             )
         )
         selection_state["expecting"] = "sim"
+        selection_state["pending_sim_display"] = None
 
     click_cid = canvas.mpl_connect('button_press_event', _on_geometry_pick)
     return
