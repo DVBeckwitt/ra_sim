@@ -83,6 +83,15 @@ class ReflectionIntersectionAnalysis:
 
 
 @dataclass(frozen=True)
+class QrCylinderDetectorTrace:
+    qr_value: float
+    branch_sign: int
+    detector_col: np.ndarray
+    detector_row: np.ndarray
+    valid_mask: np.ndarray
+
+
+@dataclass(frozen=True)
 class _BeamContext:
     i_plane: np.ndarray
     r_sample: np.ndarray
@@ -224,6 +233,161 @@ def _build_sample_frame(geometry: IntersectionGeometry):
     p0_rot = np.array([0.0, 0.0, -float(geometry.zs)], dtype=np.float64)
 
     return r_sample, n_surf, p0_rot
+
+
+def _build_single_beam_context(
+    *,
+    geometry: IntersectionGeometry,
+    beam_x: float,
+    beam_y: float,
+    dtheta: float,
+    dphi: float,
+    wavelength: float,
+    n2: complex,
+) -> _BeamContext:
+    """Return the projection context for one beam sample.
+
+    This mirrors the single-sample geometry used by the intersection analysis,
+    but without solving for any specific Bragg reflection.
+    """
+
+    if wavelength <= 0.0:
+        raise ValueError("Beam wavelength must be positive.")
+
+    detector_pos, n_det_rot, e1_det, e2_det = _build_detector_frame(geometry)
+    r_sample, n_surf, p0_rot = _build_sample_frame(geometry)
+
+    beam_start = np.array(
+        [float(beam_x), -20e-3, -float(geometry.zb) + float(beam_y)],
+        dtype=np.float64,
+    )
+    k_in = np.array(
+        [
+            cos(float(dtheta)) * sin(float(dphi)),
+            cos(float(dtheta)) * cos(float(dphi)),
+            sin(float(dtheta)),
+        ],
+        dtype=np.float64,
+    )
+
+    ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, p0_rot, n_surf)
+    if not valid_int:
+        raise ValueError("Beam sample does not intersect the sample plane.")
+
+    i_plane = np.array([ix, iy, iz], dtype=np.float64)
+    kn_dot = float(np.dot(k_in, n_surf))
+    kn_dot = float(np.clip(kn_dot, -1.0, 1.0))
+    th_i_prime = (pi / 2.0) - acos(kn_dot)
+
+    projected = k_in - kn_dot * n_surf
+    pln = float(np.linalg.norm(projected))
+    if pln > 1e-12:
+        projected = projected / pln
+    else:
+        projected[:] = 0.0
+    e1_temp = np.cross(n_surf, np.array([0.0, 0.0, -1.0], dtype=np.float64))
+    if float(np.linalg.norm(e1_temp)) < 1e-12:
+        e1_temp = np.cross(n_surf, np.array([1.0, 0.0, 0.0], dtype=np.float64))
+    e1_temp = _unit(e1_temp)
+    e2_temp = np.cross(n_surf, e1_temp)
+    p1 = float(np.dot(projected, e1_temp))
+    p2 = float(np.dot(projected, e2_temp))
+    phi_i_prime = (pi / 2.0) - np.arctan2(p2, p1)
+
+    th_t = float(transmit_angle_grazing(th_i_prime, n2))
+    k0 = 2.0 * pi / float(wavelength)
+    k_scat = float(k0 * np.sqrt(max(np.real(n2 * n2), 0.0)))
+    k_x_scat = float(k_scat * np.cos(th_t) * np.sin(phi_i_prime))
+    k_y_scat = float(k_scat * np.cos(th_t) * np.cos(phi_i_prime))
+    re_k_z, _ = ktz_components(k0, n2, th_t)
+    re_k_z = float(-re_k_z)
+    k_in_crystal = np.array([k_x_scat, k_y_scat, re_k_z], dtype=np.float64)
+
+    return _BeamContext(
+        i_plane=i_plane,
+        r_sample=r_sample,
+        detector_pos=detector_pos,
+        n_det_rot=n_det_rot,
+        e1_det=e1_det,
+        e2_det=e2_det,
+        k_scat=k_scat,
+        k_x_scat=k_x_scat,
+        k_y_scat=k_y_scat,
+        re_k_z=re_k_z,
+        k_in_crystal=k_in_crystal,
+        all_q=np.zeros((0, 4), dtype=np.float64),
+    )
+
+
+def _project_kf_to_detector(
+    kf_lab: np.ndarray,
+    beam_ctx: _BeamContext,
+    geometry: IntersectionGeometry,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Project forward lab-frame scattering rays onto the detector plane."""
+
+    n_det_rot = np.asarray(beam_ctx.n_det_rot, dtype=np.float64)
+    detector_pos = np.asarray(beam_ctx.detector_pos, dtype=np.float64)
+    i_plane = np.asarray(beam_ctx.i_plane, dtype=np.float64)
+    dirs = np.asarray(kf_lab, dtype=np.float64)
+
+    cols = np.full(dirs.shape[0], np.nan, dtype=np.float64)
+    rows = np.full(dirs.shape[0], np.nan, dtype=np.float64)
+    valid = np.zeros(dirs.shape[0], dtype=bool)
+    if dirs.ndim != 2 or dirs.shape[0] == 0 or dirs.shape[1] != 3:
+        return cols, rows, valid
+
+    center_col = float(geometry.center_col)
+    center_row = float(geometry.center_row)
+    pixel_size = float(geometry.pixel_size_m)
+    image_size = int(geometry.image_size)
+
+    dist = float(np.dot(i_plane - detector_pos, n_det_rot))
+    num = -dist
+    denom = dirs @ n_det_rot
+    hit_pts = np.full_like(dirs, np.nan, dtype=np.float64)
+
+    parallel_mask = np.abs(denom) < 1e-14
+    regular_mask = ~parallel_mask
+    if np.any(regular_mask):
+        t = num / denom[regular_mask]
+        good_t = t >= -1e-9
+        if np.any(good_t):
+            t_good = np.where(t[good_t] < 0.0, 0.0, t[good_t])
+            regular_idx = np.nonzero(regular_mask)[0][good_t]
+            hit_pts[regular_idx] = i_plane[None, :] + t_good[:, None] * dirs[regular_idx]
+            valid[regular_idx] = True
+
+    if np.any(parallel_mask):
+        if abs(dist) < 1e-6:
+            hit_pts[parallel_mask] = i_plane[None, :]
+            valid[parallel_mask] = True
+
+    if not np.any(valid):
+        return cols, rows, valid
+
+    plane_to_det = hit_pts[valid] - detector_pos[None, :]
+    x_det = plane_to_det @ np.asarray(beam_ctx.e1_det, dtype=np.float64)
+    y_det = plane_to_det @ np.asarray(beam_ctx.e2_det, dtype=np.float64)
+
+    cols_valid = center_col + x_det / pixel_size
+    rows_valid = center_row - y_det / pixel_size
+    in_bounds = (
+        np.isfinite(cols_valid)
+        & np.isfinite(rows_valid)
+        & (cols_valid >= 0.0)
+        & (cols_valid < image_size)
+        & (rows_valid >= 0.0)
+        & (rows_valid < image_size)
+    )
+
+    valid_idx = np.nonzero(valid)[0]
+    cols[valid_idx[in_bounds]] = cols_valid[in_bounds]
+    rows[valid_idx[in_bounds]] = rows_valid[in_bounds]
+
+    kept = np.zeros_like(valid)
+    kept[valid_idx[in_bounds]] = True
+    return cols, rows, kept
 
 
 def _beam_order(beam: BeamSamples) -> np.ndarray:
@@ -488,6 +652,106 @@ def _project_arc_to_detector(
         valid[idx] = True
 
     return cols, rows, valid
+
+
+def project_qr_cylinder_to_detector(
+    *,
+    qr_value: float,
+    geometry: IntersectionGeometry,
+    wavelength: float,
+    n2: complex,
+    beam_x: float = 0.0,
+    beam_y: float = 0.0,
+    dtheta: float = 0.0,
+    dphi: float = 0.0,
+    phi_samples: int = 721,
+) -> list[QrCylinderDetectorTrace]:
+    """Project an analytic Ewald/constant-Qr cylinder intersection onto the detector.
+
+    Returns one detector trace per intersection branch. Invalid samples are kept
+    as NaNs so callers can plot the arrays directly and let Matplotlib break the
+    line wherever the branch leaves reciprocal space or the detector bounds.
+    """
+
+    qr = float(qr_value)
+    if not np.isfinite(qr) or qr < 0.0:
+        return []
+    sample_count = int(max(16, phi_samples))
+
+    beam_ctx = _build_single_beam_context(
+        geometry=geometry,
+        beam_x=float(beam_x),
+        beam_y=float(beam_y),
+        dtheta=float(dtheta),
+        dphi=float(dphi),
+        wavelength=float(wavelength),
+        n2=n2,
+    )
+
+    phi = np.asarray(
+        np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=True),
+        dtype=np.float64,
+    )
+    cphi = np.cos(phi)
+    sphi = np.sin(phi)
+    kx = float(beam_ctx.k_x_scat)
+    ky = float(beam_ctx.k_y_scat)
+    kz = float(beam_ctx.re_k_z)
+
+    radicand = kz * kz - qr * qr - (2.0 * qr) * (kx * cphi + ky * sphi)
+    radicand = np.asarray(radicand, dtype=np.float64)
+    base_valid = np.isfinite(radicand) & (radicand >= 0.0)
+    if not np.any(base_valid):
+        return []
+
+    traces: list[QrCylinderDetectorTrace] = []
+    qx = qr * cphi
+    qy = qr * sphi
+    sqrt_term = np.zeros_like(radicand, dtype=np.float64)
+    sqrt_term[base_valid] = np.sqrt(radicand[base_valid])
+
+    for branch_sign in (-1, 1):
+        k_tx_prime = kx + qx
+        k_ty_prime = ky + qy
+        k_tz_prime = branch_sign * sqrt_term
+
+        kr = np.sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
+        twotheta_t_prime = np.zeros_like(kr, dtype=np.float64)
+        nonzero_kr = kr >= 1e-12
+        twotheta_t_prime[nonzero_kr] = np.arctan(k_tz_prime[nonzero_kr] / kr[nonzero_kr])
+
+        cos_term = np.cos(twotheta_t_prime) * float(np.real(n2))
+        twotheta_t = np.arccos(np.clip(cos_term, -1.0, 1.0)) * np.sign(twotheta_t_prime)
+        phi_f = np.arctan2(k_tx_prime, k_ty_prime)
+        kf = np.column_stack(
+            [
+                beam_ctx.k_scat * np.cos(twotheta_t) * np.sin(phi_f),
+                beam_ctx.k_scat * np.cos(twotheta_t) * np.cos(phi_f),
+                beam_ctx.k_scat * np.sin(twotheta_t),
+            ]
+        )
+        kf_lab = kf @ np.asarray(beam_ctx.r_sample, dtype=np.float64).T
+
+        cols, rows, det_valid = _project_kf_to_detector(kf_lab, beam_ctx, geometry)
+        valid = base_valid & det_valid
+
+        branch_cols = np.full_like(cols, np.nan, dtype=np.float64)
+        branch_rows = np.full_like(rows, np.nan, dtype=np.float64)
+        branch_cols[valid] = cols[valid]
+        branch_rows[valid] = rows[valid]
+
+        if np.any(valid):
+            traces.append(
+                QrCylinderDetectorTrace(
+                    qr_value=qr,
+                    branch_sign=int(branch_sign),
+                    detector_col=branch_cols,
+                    detector_row=branch_rows,
+                    valid_mask=valid,
+                )
+            )
+
+    return traces
 
 
 def analyze_reflection_intersection(

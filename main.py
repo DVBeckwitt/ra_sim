@@ -307,6 +307,7 @@ from ra_sim.simulation.intersection_analysis import (
     MosaicParams as IntersectionMosaicParams,
     analyze_reflection_intersection,
     plot_intersection_analysis,
+    project_qr_cylinder_to_detector,
 )
 from ra_sim.simulation.diffraction_debug import (
     process_peaks_parallel_debug,
@@ -3304,6 +3305,11 @@ selected_peak_marker.set_visible(False)
 # Geometry click markers (sim vs real)
 geometry_pick_artists = []
 geometry_preview_artists = []
+qr_cylinder_overlay_artists = []
+qr_cylinder_overlay_cache: dict[str, object] = {
+    "signature": None,
+    "paths": [],
+}
 geometry_preview_excluded_keys: set[tuple[object, ...]] = set()
 geometry_preview_state: dict[str, object] = {
     "signature": None,
@@ -3368,6 +3374,233 @@ def _clear_geometry_preview_artists(*, redraw: bool = True):
     geometry_preview_artists.clear()
     if redraw:
         canvas.draw_idle()
+
+
+def _clear_qr_cylinder_overlay_artists(*, redraw: bool = True):
+    """Remove analytic Qr-cylinder detector traces from the plot."""
+
+    global qr_cylinder_overlay_artists
+
+    for artist in qr_cylinder_overlay_artists:
+        try:
+            artist.remove()
+        except ValueError:
+            pass
+    qr_cylinder_overlay_artists.clear()
+    if redraw:
+        canvas.draw_idle()
+
+
+def _active_qr_cylinder_overlay_entries() -> list[dict[str, object]]:
+    """Return active Qr groups from the current simulation state."""
+
+    def _m_values(arr_like: object) -> set[int]:
+        arr = np.asarray(arr_like, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
+            return set()
+        finite = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1])
+        if not np.any(finite):
+            return set()
+        rows = arr[finite, :2]
+        h_vals = np.rint(rows[:, 0]).astype(np.int64, copy=False)
+        k_vals = np.rint(rows[:, 1]).astype(np.int64, copy=False)
+        return {int(v) for v in (h_vals * h_vals + h_vals * k_vals + k_vals * k_vals)}
+
+    try:
+        primary_a = float(a_var.get())
+    except Exception:
+        primary_a = float(av)
+
+    secondary_a = primary_a
+    try:
+        if av2 is not None:
+            secondary_candidate = float(av2)
+            if np.isfinite(secondary_candidate) and secondary_candidate > 0.0:
+                secondary_a = secondary_candidate
+    except Exception:
+        secondary_a = primary_a
+
+    primary_m = set()
+    if isinstance(SIM_PRIMARY_QR, dict):
+        for m_raw in SIM_PRIMARY_QR.keys():
+            try:
+                primary_m.add(int(m_raw))
+            except (TypeError, ValueError):
+                continue
+    primary_m.update(_m_values(globals().get("SIM_MILLER1")))
+
+    secondary_m = _m_values(globals().get("SIM_MILLER2"))
+
+    entries: list[dict[str, object]] = []
+    for source_label, lattice_a, m_values in (
+        ("primary", primary_a, primary_m),
+        ("secondary", secondary_a, secondary_m),
+    ):
+        for m_idx in sorted(m_values):
+            qr_val = _qr_value_for_m(int(m_idx), lattice_a)
+            if not np.isfinite(qr_val) or qr_val < 0.0:
+                continue
+            entries.append(
+                {
+                    "key": (str(source_label), int(m_idx)),
+                    "source": str(source_label),
+                    "m": int(m_idx),
+                    "qr": float(qr_val),
+                }
+            )
+    return entries
+
+
+def _qr_cylinder_overlay_signature(
+    entries: Sequence[dict[str, object]],
+) -> tuple[object, ...]:
+    """Return a cache signature for the analytic detector-trace overlay."""
+
+    qr_keys = tuple(
+        (str(entry["source"]), int(entry["m"]), round(float(entry["qr"]), 10))
+        for entry in entries
+    )
+    return (
+        tuple(qr_keys),
+        int(image_size),
+        int(SIM_DISPLAY_ROTATE_K),
+        float(center_x_var.get()),
+        float(center_y_var.get()),
+        float(corto_detector_var.get()),
+        float(gamma_var.get()),
+        float(Gamma_var.get()),
+        float(chi_var.get()),
+        float(psi),
+        float(psi_z_var.get()),
+        float(zs_var.get()),
+        float(zb_var.get()),
+        float(theta_initial_var.get()),
+        float(cor_angle_var.get()),
+        float(pixel_size_m),
+        float(lambda_),
+        round(float(np.real(n2)), 12),
+        round(float(np.imag(n2)), 12),
+    )
+
+
+def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = False):
+    """Draw analytic Ewald/constant-Qr detector traces for active Bragg groups."""
+
+    global qr_cylinder_overlay_cache
+
+    overlay_var = globals().get("show_qr_cylinder_overlay_var")
+    if overlay_var is None or not bool(overlay_var.get()):
+        _clear_qr_cylinder_overlay_artists(redraw=redraw)
+        return
+
+    if show_caked_2d_var.get():
+        _clear_qr_cylinder_overlay_artists(redraw=redraw)
+        if update_status and "progress_label_positions" in globals():
+            progress_label_positions.config(
+                text="Qr cylinder overlay is hidden in 2D caked view."
+            )
+        return
+
+    entries = _active_qr_cylinder_overlay_entries()
+    if not entries:
+        qr_cylinder_overlay_cache = {"signature": None, "paths": []}
+        _clear_qr_cylinder_overlay_artists(redraw=redraw)
+        if update_status and "progress_label_positions" in globals():
+            progress_label_positions.config(
+                text="Qr cylinder overlay unavailable: no active Bragg Qr groups."
+            )
+        return
+
+    signature = _qr_cylinder_overlay_signature(entries)
+    cached_sig = qr_cylinder_overlay_cache.get("signature")
+    if cached_sig != signature:
+        geometry = IntersectionGeometry(
+            image_size=int(image_size),
+            center_col=float(center_y_var.get()),
+            center_row=float(center_x_var.get()),
+            distance_cor_to_detector=float(corto_detector_var.get()),
+            gamma_deg=float(gamma_var.get()),
+            Gamma_deg=float(Gamma_var.get()),
+            chi_deg=float(chi_var.get()),
+            psi_deg=float(psi),
+            psi_z_deg=float(psi_z_var.get()),
+            zs=float(zs_var.get()),
+            zb=float(zb_var.get()),
+            theta_initial_deg=float(theta_initial_var.get()),
+            cor_angle_deg=float(cor_angle_var.get()),
+            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            pixel_size_m=float(pixel_size_m),
+        )
+        native_shape = (int(image_size), int(image_size))
+        paths: list[dict[str, object]] = []
+        for entry in entries:
+            try:
+                traces = project_qr_cylinder_to_detector(
+                    qr_value=float(entry["qr"]),
+                    geometry=geometry,
+                    wavelength=float(lambda_),
+                    n2=n2,
+                    phi_samples=721,
+                )
+            except Exception:
+                continue
+            for trace in traces:
+                display_cols = np.full_like(trace.detector_col, np.nan, dtype=np.float64)
+                display_rows = np.full_like(trace.detector_row, np.nan, dtype=np.float64)
+                valid_idx = np.nonzero(trace.valid_mask)[0]
+                for idx in valid_idx:
+                    dcol, drow = _native_sim_to_display_coords(
+                        float(trace.detector_col[idx]),
+                        float(trace.detector_row[idx]),
+                        native_shape,
+                    )
+                    display_cols[idx] = dcol
+                    display_rows[idx] = drow
+                valid_count = int(
+                    np.count_nonzero(np.isfinite(display_cols) & np.isfinite(display_rows))
+                )
+                if valid_count < 2:
+                    continue
+                paths.append(
+                    {
+                        "source": str(entry["source"]),
+                        "qr": float(entry["qr"]),
+                        "cols": display_cols,
+                        "rows": display_rows,
+                    }
+                )
+        qr_cylinder_overlay_cache = {"signature": signature, "paths": paths}
+
+    _clear_qr_cylinder_overlay_artists(redraw=False)
+    paths = qr_cylinder_overlay_cache.get("paths", [])
+    if not paths:
+        if redraw:
+            canvas.draw_idle()
+        if update_status and "progress_label_positions" in globals():
+            progress_label_positions.config(
+                text="Qr cylinder overlay found no detector-visible traces."
+            )
+        return
+    for path in paths:
+        color = "#fff06a" if path.get("source") == "primary" else "#78d7ff"
+        line, = ax.plot(
+            path["cols"],
+            path["rows"],
+            color=color,
+            linewidth=0.9,
+            alpha=0.58,
+            zorder=4.6,
+            solid_capstyle="round",
+        )
+        qr_cylinder_overlay_artists.append(line)
+
+    if redraw:
+        canvas.draw_idle()
+    if update_status and "progress_label_positions" in globals():
+        progress_label_positions.config(
+            text=f"Showing analytic Qr-cylinder traces for {len(entries)} active Qr groups."
+        )
 
 
 def _geometry_q_group_window_open() -> bool:
@@ -8873,6 +9106,7 @@ def do_update():
     apply_scale_factor_to_existing_results(update_limits=False)
 
     update_integration_region_visuals(ai, sim_res2)
+    _refresh_qr_cylinder_overlay(redraw=True, update_status=False)
     if _live_geometry_preview_enabled():
         if geometry_preview_skip_once:
             geometry_preview_skip_once = False
@@ -13054,6 +13288,25 @@ ttk.Button(
     text="Bragg Qr Groups",
     command=_open_bragg_qr_toggle_window,
 ).pack(side=tk.LEFT, padx=(0, 4))
+
+show_qr_cylinder_overlay_var = tk.BooleanVar(value=False)
+
+
+def _on_qr_cylinder_overlay_toggle():
+    if show_qr_cylinder_overlay_var.get():
+        _refresh_qr_cylinder_overlay(redraw=True, update_status=True)
+    else:
+        _clear_qr_cylinder_overlay_artists(redraw=True)
+        if "progress_label_positions" in globals():
+            progress_label_positions.config(text="Qr cylinder overlay hidden.")
+
+
+ttk.Checkbutton(
+    root,
+    text="Show Qr Cylinder Lines",
+    variable=show_qr_cylinder_overlay_var,
+    command=_on_qr_cylinder_overlay_toggle,
+).pack(side=tk.TOP, padx=5, pady=2)
 
 for _entry in (h_entry, k_entry, l_entry):
     _entry.bind("<Return>", lambda _event: _select_peak_from_hkl_controls())
