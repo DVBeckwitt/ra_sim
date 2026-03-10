@@ -2659,6 +2659,18 @@ def fit_geometry_parameters(
     missing_pair_penalty = max(0.0, missing_pair_penalty)
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", True))
+    stagnation_probe_enabled = bool(
+        solver_cfg.get("stagnation_probe", experimental_image is not None)
+    )
+    stagnation_probe_fraction = float(solver_cfg.get("stagnation_probe_fraction", 0.35))
+    if not np.isfinite(stagnation_probe_fraction) or stagnation_probe_fraction <= 0.0:
+        stagnation_probe_fraction = 0.0
+    stagnation_probe_min_improvement = float(
+        solver_cfg.get("stagnation_probe_min_improvement", 1e-6)
+    )
+    if not np.isfinite(stagnation_probe_min_improvement):
+        stagnation_probe_min_improvement = 1e-6
+    stagnation_probe_min_improvement = max(0.0, stagnation_probe_min_improvement)
 
     try:
         center_seed = params.get("center", (0.0, 0.0))
@@ -3261,13 +3273,40 @@ def fit_geometry_parameters(
             max_nfev=solver_max_nfev,
         )
 
+    def _evaluate_cost_at(x_trial: np.ndarray) -> Tuple[np.ndarray, float]:
+        residual = np.asarray(residual_fn(np.asarray(x_trial, dtype=float)), dtype=float)
+        return residual, _robust_cost(
+            residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+
+    def _build_probe_result(
+        x_trial: np.ndarray,
+        residual: np.ndarray,
+        *,
+        message: str,
+    ) -> OptimizeResult:
+        trial_x = np.asarray(x_trial, dtype=float)
+        return OptimizeResult(
+            x=trial_x,
+            fun=np.asarray(residual, dtype=float),
+            success=False,
+            status=0,
+            message=message,
+            nfev=0,
+            active_mask=np.zeros_like(trial_x, dtype=int),
+            optimality=float("nan"),
+        )
+
     result = _run_solver(x0_arr)
     best_result = result
-    best_cost = _robust_cost(
+    initial_cost = _robust_cost(
         np.asarray(result.fun, dtype=float),
         loss=solver_loss,
         f_scale=solver_f_scale,
     )
+    best_cost = float(initial_cost)
     restart_history: List[Dict[str, object]] = [
         {
             "restart": 0,
@@ -3308,6 +3347,111 @@ def fit_geometry_parameters(
                     "message": str(trial.message),
                 }
             )
+            if trial_cost < best_cost:
+                best_result = trial
+                best_cost = trial_cost
+
+    stagnation_tol = max(
+        stagnation_probe_min_improvement,
+        1e-9 * max(abs(float(initial_cost)), 1.0),
+    )
+    best_x = np.asarray(getattr(best_result, "x", x0_arr), dtype=float)
+    best_is_initial = (
+        best_x.shape == x0_arr.shape
+        and np.allclose(best_x, x0_arr, atol=1e-12, rtol=0.0)
+    )
+    best_improvement = float(initial_cost - best_cost)
+    if (
+        stagnation_probe_enabled
+        and stagnation_probe_fraction > 0.0
+        and x0_arr.size > 0
+        and (best_is_initial or best_improvement <= stagnation_tol)
+    ):
+        probe_anchor = np.asarray(best_x, dtype=float)
+        probe_scale = np.where(
+            finite_span,
+            span,
+            np.maximum(fallback_scale, x_scale),
+        )
+        probe_scale = np.maximum(probe_scale, 1e-6)
+        visited = {
+            tuple(np.round(np.asarray(probe_anchor, dtype=float), 12).tolist()),
+        }
+        best_probe_x: Optional[np.ndarray] = None
+        best_probe_residual: Optional[np.ndarray] = None
+        best_probe_cost = float("inf")
+        best_probe_label = ""
+
+        for idx, name in enumerate(var_names):
+            step = float(stagnation_probe_fraction * probe_scale[idx])
+            if not np.isfinite(step) or step <= 0.0:
+                continue
+            for direction, direction_label in ((-1.0, "-"), (1.0, "+")):
+                trial_x = np.asarray(probe_anchor, dtype=float).copy()
+                trial_x[idx] = float(trial_x[idx] + direction * step)
+                trial_x = np.minimum(np.maximum(trial_x, lower_bounds), upper_bounds)
+                if np.allclose(trial_x, probe_anchor, atol=1e-12, rtol=0.0):
+                    continue
+                trial_key = tuple(np.round(np.asarray(trial_x, dtype=float), 12).tolist())
+                if trial_key in visited:
+                    continue
+                visited.add(trial_key)
+                trial_residual, trial_cost = _evaluate_cost_at(trial_x)
+                restart_history.append(
+                    {
+                        "restart": len(restart_history),
+                        "start_x": np.asarray(trial_x, dtype=float).tolist(),
+                        "end_x": np.asarray(trial_x, dtype=float).tolist(),
+                        "cost": float(trial_cost),
+                        "success": False,
+                        "message": (
+                            f"directional probe {name}{direction_label} "
+                            "(cost-only seed evaluation)"
+                        ),
+                    }
+                )
+                if trial_cost + stagnation_tol < best_probe_cost:
+                    best_probe_x = np.asarray(trial_x, dtype=float)
+                    best_probe_residual = np.asarray(trial_residual, dtype=float)
+                    best_probe_cost = float(trial_cost)
+                    best_probe_label = f"{name}{direction_label}"
+
+        if (
+            best_probe_x is not None
+            and best_probe_residual is not None
+            and best_probe_cost + stagnation_tol < best_cost
+        ):
+            trial = _run_solver(best_probe_x)
+            trial_cost = _robust_cost(
+                np.asarray(trial.fun, dtype=float),
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+            )
+            restart_history.append(
+                {
+                    "restart": len(restart_history),
+                    "start_x": np.asarray(best_probe_x, dtype=float).tolist(),
+                    "end_x": np.asarray(trial.x, dtype=float).tolist(),
+                    "cost": float(trial_cost),
+                    "success": bool(trial.success),
+                    "message": (
+                        f"directional probe refine from {best_probe_label}: "
+                        f"{str(trial.message).strip()}"
+                    ),
+                }
+            )
+
+            if best_probe_cost + stagnation_tol < trial_cost:
+                trial = _build_probe_result(
+                    best_probe_x,
+                    best_probe_residual,
+                    message=(
+                        f"Directional probe seed {best_probe_label} improved the fit; "
+                        "local least-squares did not improve further."
+                    ),
+                )
+                trial_cost = float(best_probe_cost)
+
             if trial_cost < best_cost:
                 best_result = trial
                 best_cost = trial_cost

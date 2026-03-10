@@ -368,3 +368,69 @@ def test_fit_geometry_parameters_pixel_path_keeps_fixed_source_row_assignments(
     assert {
         int(entry["overlay_match_index"]) for entry in result.point_match_diagnostics
     } == {3, 7}
+
+
+def test_fit_geometry_parameters_pixel_path_probes_out_of_flat_start_region(
+    monkeypatch,
+):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        gamma = float(args[8])
+        sim_col = 6.0 if gamma >= 0.25 else 2.0
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, sim_col, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="flat-local-solver",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 6.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": False,
+                "stagnation_probe": True,
+                "stagnation_probe_fraction": 0.5,
+            }
+        },
+    )
+
+    assert result.x.shape == (1,)
+    assert float(result.x[0]) >= 0.25
+    assert np.allclose(np.asarray(result.fun, dtype=float), [0.0, 0.0])
+    assert any(
+        "directional probe gamma+" in str(entry.get("message", ""))
+        for entry in getattr(result, "restart_history", [])
+    )
