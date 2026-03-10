@@ -2784,6 +2784,165 @@ def process_peaks_parallel_safe(*args, **kwargs):
         raise
 
 
+def _quadratic_peak_from_samples(
+    cols,
+    rows,
+    intensities,
+    *,
+    anchor_col,
+    anchor_row,
+    support_radius_px,
+):
+    """Estimate a local maximum by fitting a quadratic surface in log-intensity."""
+
+    cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+    rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+    intensities_arr = np.asarray(intensities, dtype=np.float64).reshape(-1)
+    finite_mask = (
+        np.isfinite(cols_arr)
+        & np.isfinite(rows_arr)
+        & np.isfinite(intensities_arr)
+        & (intensities_arr > 0.0)
+    )
+    if np.count_nonzero(finite_mask) < 6:
+        return None
+
+    cols_arr = cols_arr[finite_mask]
+    rows_arr = rows_arr[finite_mask]
+    intensities_arr = intensities_arr[finite_mask]
+    x = cols_arr - float(anchor_col)
+    y = rows_arr - float(anchor_row)
+
+    radius = max(float(support_radius_px), 0.5)
+    local_mask = (x * x + y * y) <= radius * radius + 1.0e-12
+    if np.count_nonzero(local_mask) >= 6:
+        x = x[local_mask]
+        y = y[local_mask]
+        intensities_arr = intensities_arr[local_mask]
+
+    if x.size < 6:
+        return None
+
+    max_intensity = float(np.max(intensities_arr))
+    if not np.isfinite(max_intensity) or max_intensity <= 0.0:
+        return None
+
+    z = np.log(np.clip(intensities_arr / max_intensity, 1.0e-12, None))
+    design = np.column_stack(
+        (
+            x * x,
+            y * y,
+            x * y,
+            x,
+            y,
+            np.ones_like(x),
+        )
+    )
+    weights = np.sqrt(np.clip(intensities_arr / max_intensity, 1.0e-6, None))
+
+    try:
+        coeffs, *_ = np.linalg.lstsq(design * weights[:, None], z * weights, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+
+    if coeffs.shape[0] != 6 or not np.all(np.isfinite(coeffs)):
+        return None
+
+    a, b, c, d, e, _ = coeffs
+    hessian = np.array([[2.0 * a, c], [c, 2.0 * b]], dtype=np.float64)
+    det = float(np.linalg.det(hessian))
+    if not np.isfinite(det) or det <= 1.0e-12 or not (a < -1.0e-12 and b < -1.0e-12):
+        return None
+
+    try:
+        offset = -np.linalg.solve(hessian, np.array([d, e], dtype=np.float64))
+    except np.linalg.LinAlgError:
+        return None
+
+    if offset.shape[0] != 2 or not np.all(np.isfinite(offset)):
+        return None
+
+    offset_col = float(offset[0])
+    offset_row = float(offset[1])
+    if np.hypot(offset_col, offset_row) > max(radius, 1.5):
+        return None
+
+    x_margin = max(0.35, 0.15 * radius)
+    y_margin = max(0.35, 0.15 * radius)
+    if offset_col < float(np.min(x)) - x_margin or offset_col > float(np.max(x)) + x_margin:
+        return None
+    if offset_row < float(np.min(y)) - y_margin or offset_row > float(np.max(y)) + y_margin:
+        return None
+
+    return float(anchor_col) + offset_col, float(anchor_row) + offset_row
+
+
+def _refine_cluster_peak(hits_arr, *, merge_radius_px=1.5):
+    """Return a peak-focused subpixel center for one merged hit cluster."""
+
+    hits = np.asarray(hits_arr, dtype=np.float64)
+    if hits.ndim != 2 or hits.shape[1] < 3 or hits.shape[0] == 0:
+        return float("nan"), float("nan")
+
+    intensities = hits[:, 0]
+    cols = hits[:, 1]
+    rows = hits[:, 2]
+    valid_mask = (
+        np.isfinite(intensities)
+        & np.isfinite(cols)
+        & np.isfinite(rows)
+        & (intensities > 0.0)
+    )
+    if not np.any(valid_mask):
+        return float("nan"), float("nan")
+
+    intensities = intensities[valid_mask]
+    cols = cols[valid_mask]
+    rows = rows[valid_mask]
+    anchor_idx = int(np.argmax(intensities))
+    anchor_col = float(cols[anchor_idx])
+    anchor_row = float(rows[anchor_idx])
+
+    dist_sq = (cols - anchor_col) ** 2 + (rows - anchor_row) ** 2
+    support_radius = max(0.75, 0.75 * float(merge_radius_px))
+    local_mask = dist_sq <= support_radius * support_radius + 1.0e-12
+    if np.count_nonzero(local_mask) < min(3, cols.size):
+        order = np.argsort(dist_sq)
+        local_mask = np.zeros_like(dist_sq, dtype=bool)
+        local_mask[order[: min(max(cols.size, 1), 4)]] = True
+
+    local_cols = cols[local_mask]
+    local_rows = rows[local_mask]
+    local_intensities = intensities[local_mask]
+    local_dist_sq = dist_sq[local_mask]
+
+    sigma_sq = max((0.45 * max(float(merge_radius_px), 1.0)) ** 2, 1.0e-6)
+    local_weights = np.power(local_intensities, 1.5) * np.exp(-0.5 * local_dist_sq / sigma_sq)
+    total_weight = float(np.sum(local_weights))
+    if total_weight <= 0.0 or not np.isfinite(total_weight):
+        local_weights = np.clip(local_intensities, 0.0, None)
+        total_weight = float(np.sum(local_weights))
+
+    if total_weight <= 0.0 or not np.isfinite(total_weight):
+        center_col = float(anchor_col)
+        center_row = float(anchor_row)
+    else:
+        center_col = float(np.sum(local_weights * local_cols) / total_weight)
+        center_row = float(np.sum(local_weights * local_rows) / total_weight)
+
+    refined = _quadratic_peak_from_samples(
+        local_cols,
+        local_rows,
+        local_intensities,
+        anchor_col=center_col,
+        anchor_row=center_row,
+        support_radius_px=support_radius,
+    )
+    if refined is not None:
+        return refined
+    return center_col, center_row
+
+
 def _cluster_hit_positions(hits_arr, *, merge_radius_px=1.5):
     """Merge nearby hit-table rows into subpixel centroids."""
 
@@ -2819,6 +2978,7 @@ def _cluster_hit_positions(hits_arr, *, merge_radius_px=1.5):
                     "peak_intensity": intensity,
                     "weighted_col_sum": intensity * col,
                     "weighted_row_sum": intensity * row,
+                    "hits": [(intensity, col, row)],
                 }
             )
             continue
@@ -2827,6 +2987,7 @@ def _cluster_hit_positions(hits_arr, *, merge_radius_px=1.5):
         cluster["total_intensity"] += intensity
         cluster["weighted_col_sum"] += intensity * col
         cluster["weighted_row_sum"] += intensity * row
+        cluster["hits"].append((intensity, col, row))
         if intensity > cluster["peak_intensity"]:
             cluster["peak_intensity"] = intensity
 
@@ -2843,11 +3004,18 @@ def _cluster_hit_positions(hits_arr, *, merge_radius_px=1.5):
         total_intensity = float(cluster["total_intensity"])
         if total_intensity <= 0.0:
             continue
+        refined_col, refined_row = _refine_cluster_peak(
+            np.asarray(cluster["hits"], dtype=np.float64),
+            merge_radius_px=merge_radius_px,
+        )
+        if not (np.isfinite(refined_col) and np.isfinite(refined_row)):
+            refined_col = float(cluster["weighted_col_sum"]) / total_intensity
+            refined_row = float(cluster["weighted_row_sum"]) / total_intensity
         out.append(
             (
                 total_intensity,
-                float(cluster["weighted_col_sum"]) / total_intensity,
-                float(cluster["weighted_row_sum"]) / total_intensity,
+                float(refined_col),
+                float(refined_row),
             )
         )
     return out

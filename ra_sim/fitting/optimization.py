@@ -2811,6 +2811,13 @@ def fit_geometry_parameters(
     if not np.isfinite(stagnation_probe_min_improvement):
         stagnation_probe_min_improvement = 1e-6
     stagnation_probe_min_improvement = max(0.0, stagnation_probe_min_improvement)
+    stagnation_probe_pairwise = bool(solver_cfg.get("stagnation_probe_pairwise", True))
+    stagnation_probe_pair_limit = int(solver_cfg.get("stagnation_probe_pair_limit", 6))
+    stagnation_probe_pair_limit = max(0, stagnation_probe_pair_limit)
+    stagnation_probe_random_directions = int(
+        solver_cfg.get("stagnation_probe_random_directions", 0)
+    )
+    stagnation_probe_random_directions = max(0, stagnation_probe_random_directions)
 
     try:
         center_seed = params.get("center", (0.0, 0.0))
@@ -3548,40 +3555,92 @@ def fit_geometry_parameters(
         best_probe_residual: Optional[np.ndarray] = None
         best_probe_cost = float("inf")
         best_probe_label = ""
-
+        probe_candidates: List[Tuple[np.ndarray, str, str]] = []
         for idx, name in enumerate(var_names):
             step = float(stagnation_probe_fraction * probe_scale[idx])
             if not np.isfinite(step) or step <= 0.0:
                 continue
             for direction, direction_label in ((-1.0, "-"), (1.0, "+")):
-                trial_x = np.asarray(probe_anchor, dtype=float).copy()
-                trial_x[idx] = float(trial_x[idx] + direction * step)
-                trial_x = np.minimum(np.maximum(trial_x, lower_bounds), upper_bounds)
-                if np.allclose(trial_x, probe_anchor, atol=1e-12, rtol=0.0):
-                    continue
-                trial_key = tuple(np.round(np.asarray(trial_x, dtype=float), 12).tolist())
-                if trial_key in visited:
-                    continue
-                visited.add(trial_key)
-                trial_residual, trial_cost = _evaluate_cost_at(trial_x)
-                restart_history.append(
-                    {
-                        "restart": len(restart_history),
-                        "start_x": np.asarray(trial_x, dtype=float).tolist(),
-                        "end_x": np.asarray(trial_x, dtype=float).tolist(),
-                        "cost": float(trial_cost),
-                        "success": False,
-                        "message": (
-                            f"directional probe {name}{direction_label} "
-                            "(cost-only seed evaluation)"
-                        ),
-                    }
+                direction_vec = np.zeros_like(probe_anchor, dtype=float)
+                direction_vec[idx] = float(direction)
+                probe_candidates.append(
+                    (direction_vec, "directional probe", f"{name}{direction_label}")
                 )
-                if trial_cost + stagnation_tol < best_probe_cost:
-                    best_probe_x = np.asarray(trial_x, dtype=float)
-                    best_probe_residual = np.asarray(trial_residual, dtype=float)
-                    best_probe_cost = float(trial_cost)
-                    best_probe_label = f"{name}{direction_label}"
+
+        if (
+            stagnation_probe_pairwise
+            and probe_anchor.size > 1
+            and stagnation_probe_pair_limit > 1
+        ):
+            ranked_indices = np.argsort(probe_scale)[::-1]
+            ranked_indices = ranked_indices[: min(stagnation_probe_pair_limit, ranked_indices.size)]
+            for first_pos, first_idx in enumerate(ranked_indices):
+                idx_i = int(first_idx)
+                for second_idx in ranked_indices[first_pos + 1 :]:
+                    idx_j = int(second_idx)
+                    for dir_i, label_i in ((-1.0, "-"), (1.0, "+")):
+                        for dir_j, label_j in ((-1.0, "-"), (1.0, "+")):
+                            direction_vec = np.zeros_like(probe_anchor, dtype=float)
+                            direction_vec[idx_i] = float(dir_i)
+                            direction_vec[idx_j] = float(dir_j)
+                            probe_candidates.append(
+                                (
+                                    direction_vec / math.sqrt(2.0),
+                                    "pairwise probe",
+                                    (
+                                        f"{var_names[idx_i]}{label_i},"
+                                        f"{var_names[idx_j]}{label_j}"
+                                    ),
+                                )
+                            )
+
+        if stagnation_probe_random_directions > 0 and probe_anchor.size > 1:
+            probe_rng = np.random.default_rng(20260310)
+            for probe_idx in range(stagnation_probe_random_directions):
+                direction_vec = probe_rng.normal(size=probe_anchor.shape[0])
+                if not np.all(np.isfinite(direction_vec)):
+                    continue
+                norm = float(np.linalg.norm(direction_vec))
+                if norm <= 1.0e-12:
+                    continue
+                probe_candidates.append(
+                    (
+                        direction_vec / norm,
+                        "random probe",
+                        f"rand#{probe_idx + 1}",
+                    )
+                )
+
+        for direction_vec, probe_kind, probe_label in probe_candidates:
+            trial_x = np.asarray(probe_anchor, dtype=float) + (
+                stagnation_probe_fraction * probe_scale * np.asarray(direction_vec, dtype=float)
+            )
+            trial_x = np.minimum(np.maximum(trial_x, lower_bounds), upper_bounds)
+            if np.allclose(trial_x, probe_anchor, atol=1e-12, rtol=0.0):
+                continue
+            trial_key = tuple(np.round(np.asarray(trial_x, dtype=float), 12).tolist())
+            if trial_key in visited:
+                continue
+            visited.add(trial_key)
+            trial_residual, trial_cost = _evaluate_cost_at(trial_x)
+            restart_history.append(
+                {
+                    "restart": len(restart_history),
+                    "start_x": np.asarray(trial_x, dtype=float).tolist(),
+                    "end_x": np.asarray(trial_x, dtype=float).tolist(),
+                    "cost": float(trial_cost),
+                    "success": False,
+                    "message": (
+                        f"{probe_kind} {probe_label} "
+                        "(cost-only seed evaluation)"
+                    ),
+                }
+            )
+            if trial_cost + stagnation_tol < best_probe_cost:
+                best_probe_x = np.asarray(trial_x, dtype=float)
+                best_probe_residual = np.asarray(trial_residual, dtype=float)
+                best_probe_cost = float(trial_cost)
+                best_probe_label = f"{probe_kind} {probe_label}"
 
         if (
             best_probe_x is not None
@@ -3602,7 +3661,7 @@ def fit_geometry_parameters(
                     "cost": float(trial_cost),
                     "success": bool(trial.success),
                     "message": (
-                        f"directional probe refine from {best_probe_label}: "
+                        f"{best_probe_label} refine: "
                         f"{str(trial.message).strip()}"
                     ),
                 }
@@ -3613,7 +3672,7 @@ def fit_geometry_parameters(
                     best_probe_x,
                     best_probe_residual,
                     message=(
-                        f"Directional probe seed {best_probe_label} improved the fit; "
+                        f"{best_probe_label} improved the fit; "
                         "local least-squares did not improve further."
                     ),
                 )

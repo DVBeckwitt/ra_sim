@@ -96,6 +96,12 @@ instrument:
       # - missing_pair_penalty_px: penalty when an HKL has measured peaks
       #   but no simulated points are matchable.
       # - weighted_matching: downweight large point-pair residuals.
+      # - stagnation_probe_pairwise: test coupled parameter moves when the
+      #   local solver stays in a flat basin.
+      # - stagnation_probe_pair_limit: max number of parameters considered
+      #   when building pairwise probe directions.
+      # - stagnation_probe_random_directions: optional random probe count for
+      #   broader basin search after stagnation.
       solver:
         loss: soft_l1
         f_scale_px: 8.0
@@ -104,6 +110,9 @@ instrument:
         restart_jitter: 0.15
         missing_pair_penalty_px: 20.0
         weighted_matching: true
+        stagnation_probe_pairwise: true
+        stagnation_probe_pair_limit: 6
+        stagnation_probe_random_directions: 0
       # Automatic background peak association for geometry fitting.
       auto_match:
         search_radius_px: 18.0

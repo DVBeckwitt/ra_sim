@@ -29,7 +29,7 @@ def _refine_peak_center(
     row_idx: int,
     col_idx: int,
 ) -> tuple[float, float]:
-    """Refine a summit center to a local weighted centroid."""
+    """Refine a summit center with a quadratic peak fit and centroid fallback."""
 
     if peakness.ndim != 2:
         return float(col_idx), float(row_idx)
@@ -43,12 +43,60 @@ def _refine_peak_center(
     if not np.any(weight_patch > 0.0) and fine_image.ndim == 2:
         fine_patch = fine_image[r0:r1, c0:c1]
         weight_patch = np.clip(fine_patch - np.min(fine_patch), 0.0, None)
-    total_weight = float(np.sum(weight_patch))
-    if total_weight <= 0.0 or not np.isfinite(total_weight):
-        return float(col_idx), float(row_idx)
     rr, cc = np.mgrid[r0:r1, c0:c1]
-    center_col = float(np.sum(weight_patch * cc) / total_weight)
-    center_row = float(np.sum(weight_patch * rr) / total_weight)
+    total_weight = float(np.sum(weight_patch))
+    center_col = float(col_idx)
+    center_row = float(row_idx)
+    if total_weight > 0.0 and np.isfinite(total_weight):
+        center_col = float(np.sum(weight_patch * cc) / total_weight)
+        center_row = float(np.sum(weight_patch * rr) / total_weight)
+
+    fit_patch = peak_patch
+    if not np.any(np.isfinite(fit_patch)) and fine_image.ndim == 2:
+        fit_patch = fine_image[r0:r1, c0:c1]
+    fit_mask = np.isfinite(fit_patch)
+    if np.count_nonzero(fit_mask) >= 6:
+        x = cc[fit_mask].astype(np.float64) - center_col
+        y = rr[fit_mask].astype(np.float64) - center_row
+        z = fit_patch[fit_mask].astype(np.float64)
+        sample_weights = weight_patch[fit_mask].astype(np.float64)
+        if not np.any(sample_weights > 0.0):
+            sample_weights = np.ones_like(z, dtype=np.float64)
+        design = np.column_stack(
+            (
+                x * x,
+                y * y,
+                x * y,
+                x,
+                y,
+                np.ones_like(x),
+            )
+        )
+        root_weights = np.sqrt(np.clip(sample_weights, 1.0e-6, None))
+        try:
+            coeffs, *_ = np.linalg.lstsq(
+                design * root_weights[:, None],
+                z * root_weights,
+                rcond=None,
+            )
+        except np.linalg.LinAlgError:
+            coeffs = None
+        if coeffs is not None and coeffs.shape[0] == 6 and np.all(np.isfinite(coeffs)):
+            a, b, c, d, e, _ = coeffs
+            hessian = np.array([[2.0 * a, c], [c, 2.0 * b]], dtype=np.float64)
+            det = float(np.linalg.det(hessian))
+            if np.isfinite(det) and det > 1.0e-12 and a < -1.0e-12 and b < -1.0e-12:
+                try:
+                    offset = -np.linalg.solve(hessian, np.array([d, e], dtype=np.float64))
+                except np.linalg.LinAlgError:
+                    offset = None
+                if offset is not None and offset.shape[0] == 2 and np.all(np.isfinite(offset)):
+                    offset_col = float(offset[0])
+                    offset_row = float(offset[1])
+                    if abs(offset_col) <= 1.25 and abs(offset_row) <= 1.25:
+                        center_col = float(center_col + offset_col)
+                        center_row = float(center_row + offset_row)
+
     return center_col, center_row
 
 

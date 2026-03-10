@@ -3,6 +3,7 @@ import math
 import numpy as np
 
 from ra_sim.fitting.background_peak_matching import (
+    _refine_peak_center,
     match_simulated_peaks_to_background,
 )
 
@@ -111,3 +112,25 @@ def test_match_simulated_peaks_to_background_keeps_one_to_one_pairs():
     assert len(matches) == 2
     xs = sorted(float(entry["x"]) for entry in matches)
     assert abs(xs[0] - xs[1]) > 2.0
+
+
+def test_refine_peak_center_recovers_quadratic_subpixel_summit():
+    yy, xx = np.mgrid[0:9, 0:9]
+    true_col = 4.35
+    true_row = 3.65
+    peakness = (
+        20.0
+        - 1.8 * (xx - true_col) ** 2
+        - 1.3 * (yy - true_row) ** 2
+        - 0.25 * (xx - true_col) * (yy - true_row)
+    )
+
+    refined_col, refined_row = _refine_peak_center(
+        peakness.astype(np.float64),
+        peakness.astype(np.float64),
+        row_idx=4,
+        col_idx=4,
+    )
+
+    assert abs(refined_col - true_col) < 1.0e-3
+    assert abs(refined_row - true_row) < 1.0e-3
