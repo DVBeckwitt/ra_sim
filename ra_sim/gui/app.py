@@ -5872,6 +5872,20 @@ def on_fit_geometry_click():
                 ],
             ],
         )
+        point_match_summary = getattr(result, "point_match_summary", None)
+        if isinstance(point_match_summary, dict):
+            _log_section(
+                "Point-match execution:",
+                [
+                    f"simulated_reflections={int(point_match_summary.get('simulated_reflection_count', 0))}",
+                    f"total_reflections={int(point_match_summary.get('total_reflection_count', 0))}",
+                    f"subset_reduced={bool(point_match_summary.get('subset_reduced', False))}",
+                    f"fixed_source_reflections={int(point_match_summary.get('fixed_source_reflection_count', 0))}",
+                    f"fallback_hkls={int(point_match_summary.get('subset_fallback_hkl_count', 0))}",
+                    f"single_ray_enabled={bool(point_match_summary.get('single_ray_enabled', False))}",
+                    f"single_ray_forced_count={int(point_match_summary.get('single_ray_forced_count', 0))}",
+                ],
+            )
 
         for name in var_names:
             val = float(current_fit_params.get(name, params.get(name, 0.0)))
@@ -6681,6 +6695,20 @@ def on_fit_geometry_click():
                         ],
                     ],
                 )
+                point_match_summary = getattr(result, "point_match_summary", None)
+                if isinstance(point_match_summary, dict):
+                    _log_section(
+                        "Point-match execution:",
+                        [
+                            f"simulated_reflections={int(point_match_summary.get('simulated_reflection_count', 0))}",
+                            f"total_reflections={int(point_match_summary.get('total_reflection_count', 0))}",
+                            f"subset_reduced={bool(point_match_summary.get('subset_reduced', False))}",
+                            f"fixed_source_reflections={int(point_match_summary.get('fixed_source_reflection_count', 0))}",
+                            f"fallback_hkls={int(point_match_summary.get('subset_fallback_hkl_count', 0))}",
+                            f"single_ray_enabled={bool(point_match_summary.get('single_ray_enabled', False))}",
+                            f"single_ray_forced_count={int(point_match_summary.get('single_ray_forced_count', 0))}",
+                        ],
+                    )
 
                 for name, val in zip(var_names, result.x):
                     if name == 'zb':               zb_var.set(val)

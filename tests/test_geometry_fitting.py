@@ -127,6 +127,213 @@ def test_fit_geometry_parameters_pixel_path_forwards_optics_mode(monkeypatch):
     assert all(mode == 1 for mode in optics_seen)
 
 
+def test_fit_geometry_parameters_pixel_path_enables_single_ray_by_default(monkeypatch):
+    process_calls = []
+
+    def fake_process(*args, **kwargs):
+        process_calls.append(dict(kwargs))
+        return _fake_process_peaks(*args, **kwargs)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={"solver": {"restarts": 0}},
+    )
+
+    assert result.success
+    assert process_calls
+    assert any(
+        call.get("best_sample_indices_out") is not None for call in process_calls
+    )
+    assert any(
+        isinstance(call.get("single_sample_indices"), np.ndarray)
+        for call in process_calls
+    )
+
+
+def test_fit_geometry_parameters_pixel_path_can_disable_single_ray(monkeypatch):
+    process_calls = []
+
+    def fake_process(*args, **kwargs):
+        process_calls.append(dict(kwargs))
+        return _fake_process_peaks(*args, **kwargs)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {"restarts": 0},
+            "single_ray": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert process_calls
+    assert not any(
+        call.get("best_sample_indices_out") is not None for call in process_calls
+    )
+    assert all(
+        call.get("single_sample_indices") is None for call in process_calls
+    )
+
+
+def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_reflections(
+    monkeypatch,
+):
+    process_calls = []
+
+    def fake_process(*args, **kwargs):
+        process_calls.append(
+            {
+                "miller": np.asarray(args[0], dtype=np.float64).copy(),
+                "kwargs": dict(kwargs),
+            }
+        )
+        miller_arg = np.asarray(args[0], dtype=np.float64)
+        image_size = int(args[2])
+        hit_tables = []
+        for row in miller_arg:
+            hit_tables.append(
+                np.array(
+                    [[1.0, 5.0, 4.0, 0.0, row[0], row[1], row[2]]],
+                    dtype=np.float64,
+                )
+            )
+        best_sample_indices_out = kwargs.get("best_sample_indices_out")
+        if isinstance(best_sample_indices_out, np.ndarray):
+            best_sample_indices_out[:] = 0
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 5.0,
+            "y": 4.0,
+            "source_table_index": 1,
+            "source_row_index": 0,
+        }
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={"solver": {"restarts": 0}},
+    )
+
+    assert result.success
+    assert process_calls
+    assert all(call["miller"].shape == (1, 3) for call in process_calls)
+    assert all(
+        np.allclose(call["miller"], np.array([[2.0, 0.0, 0.0]], dtype=np.float64))
+        for call in process_calls
+    )
+    assert any(
+        call["kwargs"].get("best_sample_indices_out") is not None
+        for call in process_calls
+    )
+    assert any(
+        isinstance(call["kwargs"].get("single_sample_indices"), np.ndarray)
+        for call in process_calls
+    )
+    assert isinstance(result.point_match_summary, dict)
+    assert int(result.point_match_summary["simulated_reflection_count"]) == 1
+    assert int(result.point_match_summary["total_reflection_count"]) == 3
+    assert bool(result.point_match_summary["subset_reduced"]) is True
+    assert bool(result.point_match_summary["single_ray_enabled"]) is True
+    assert int(result.point_match_summary["single_ray_forced_count"]) == 1
+
+
 def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
     optics_seen = []
 
@@ -152,6 +359,57 @@ def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
 
     assert distances.size == 2
     assert optics_seen == [2]
+
+
+def test_simulate_and_compare_hkl_restricts_to_measured_hkl_subset(monkeypatch):
+    process_millers = []
+
+    def fake_process(*args, **kwargs):
+        miller_arg = np.asarray(args[0], dtype=np.float64)
+        process_millers.append(miller_arg.copy())
+        image_size = int(args[2])
+        hit_tables = []
+        for row in miller_arg:
+            hit_tables.append(
+                np.array(
+                    [[1.0, 4.0, 4.0, 0.0, row[0], row[1], row[2]]],
+                    dtype=np.float64,
+                )
+            )
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 10
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 2.0, 2.5, 3.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "2,0,0", "x": 4.0, "y": 4.0}]
+
+    distances, *_ = opt.simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured,
+    )
+
+    assert distances.size > 0
+    assert process_millers
+    assert process_millers[0].shape == (2, 3)
+    assert np.allclose(
+        process_millers[0],
+        np.array([[2.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=np.float64),
+    )
 
 
 def test_fit_geometry_parameters_supports_center_component_variables(monkeypatch):

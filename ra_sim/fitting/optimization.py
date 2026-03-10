@@ -297,6 +297,143 @@ def _normalize_measured_peaks(
     return normalized
 
 
+@dataclass
+class ReflectionSimulationSubset:
+    """Reduced reflection list and remapped measured entries for fitting."""
+
+    miller: np.ndarray
+    intensities: np.ndarray
+    measured_entries: List[Dict[str, object]]
+    original_indices: np.ndarray
+    total_reflection_count: int
+    fixed_source_reflection_count: int
+    fallback_hkl_count: int
+    reduced: bool
+
+
+def _miller_key_from_row(row: Sequence[float]) -> Optional[Tuple[int, int, int]]:
+    """Return an integer HKL tuple from a Miller-array row."""
+
+    try:
+        return (
+            int(round(float(row[0]))),
+            int(round(float(row[1]))),
+            int(round(float(row[2]))),
+        )
+    except Exception:
+        return None
+
+
+def _prepare_reflection_subset(
+    miller: np.ndarray,
+    intensities: np.ndarray,
+    measured_peaks: Optional[Sequence[object]],
+) -> ReflectionSimulationSubset:
+    """Restrict simulation to reflections referenced by the measured peaks."""
+
+    miller_arr = np.asarray(miller, dtype=np.float64)
+    intensities_arr = np.asarray(intensities, dtype=np.float64)
+    total_reflections = int(miller_arr.shape[0]) if miller_arr.ndim >= 1 else 0
+    normalized_measured = _normalize_measured_peaks(measured_peaks)
+
+    if (
+        miller_arr.ndim != 2
+        or miller_arr.shape[1] != 3
+        or intensities_arr.ndim != 1
+        or intensities_arr.shape[0] != total_reflections
+        or total_reflections <= 0
+        or not normalized_measured
+    ):
+        return ReflectionSimulationSubset(
+            miller=miller_arr,
+            intensities=intensities_arr,
+            measured_entries=normalized_measured,
+            original_indices=np.arange(max(total_reflections, 0), dtype=np.int64),
+            total_reflection_count=total_reflections,
+            fixed_source_reflection_count=0,
+            fallback_hkl_count=0,
+            reduced=False,
+        )
+
+    selected_original_indices: List[int] = []
+    selected_lookup: set[int] = set()
+
+    for entry in normalized_measured:
+        source_key = _measured_source_indices(entry)
+        if source_key is None:
+            continue
+        table_idx, _ = source_key
+        if table_idx < 0 or table_idx >= total_reflections or table_idx in selected_lookup:
+            continue
+        selected_lookup.add(table_idx)
+        selected_original_indices.append(int(table_idx))
+
+    fixed_source_reflection_count = int(len(selected_original_indices))
+
+    fallback_hkl_keys: set[Tuple[int, int, int]] = set()
+    for entry in normalized_measured:
+        source_key = _measured_source_indices(entry)
+        if source_key is not None:
+            table_idx, _ = source_key
+            if 0 <= table_idx < total_reflections:
+                continue
+        raw_hkl = entry.get("hkl")
+        if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
+            continue
+        try:
+            hkl_key = (
+                int(raw_hkl[0]),
+                int(raw_hkl[1]),
+                int(raw_hkl[2]),
+            )
+        except Exception:
+            continue
+        fallback_hkl_keys.add(hkl_key)
+
+    if fallback_hkl_keys:
+        for idx, row in enumerate(miller_arr):
+            hkl_key = _miller_key_from_row(row)
+            if hkl_key is None or hkl_key not in fallback_hkl_keys:
+                continue
+            if idx in selected_lookup:
+                continue
+            selected_lookup.add(int(idx))
+            selected_original_indices.append(int(idx))
+
+    if not selected_original_indices:
+        selected_original_indices = list(range(total_reflections))
+
+    original_indices = np.asarray(selected_original_indices, dtype=np.int64)
+    local_index_map = {
+        int(original_idx): int(local_idx)
+        for local_idx, original_idx in enumerate(original_indices.tolist())
+    }
+
+    remapped_measured: List[Dict[str, object]] = []
+    for entry in normalized_measured:
+        remapped_entry = dict(entry)
+        source_key = _measured_source_indices(entry)
+        if source_key is not None:
+            table_idx, row_idx = source_key
+            local_idx = local_index_map.get(int(table_idx))
+            if local_idx is not None:
+                remapped_entry["source_table_index"] = int(local_idx)
+                remapped_entry["source_row_index"] = int(row_idx)
+        remapped_measured.append(remapped_entry)
+
+    reduced = len(original_indices) < total_reflections
+    return ReflectionSimulationSubset(
+        miller=miller_arr[original_indices],
+        intensities=intensities_arr[original_indices],
+        measured_entries=remapped_measured,
+        original_indices=original_indices,
+        total_reflection_count=total_reflections,
+        fixed_source_reflection_count=fixed_source_reflection_count,
+        fallback_hkl_count=int(len(fallback_hkl_keys)),
+        reduced=reduced,
+    )
+
+
 def _local_peak_snr(
     image: np.ndarray,
     row: int,
@@ -2340,7 +2477,10 @@ def simulate_and_compare_hkl(
     meas_millers : list[tuple[int, int, int]]
         Miller indices associated with each entry in ``meas_coords``.
     """
-    normalized_measured = _normalize_measured_peaks(measured_peaks)
+    sim_subset = _prepare_reflection_subset(miller, intensities, measured_peaks)
+    normalized_measured = sim_subset.measured_entries
+    sim_miller = sim_subset.miller
+    sim_intensities = sim_subset.intensities
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 
     # Unpack geometry & mosaic parameters
@@ -2362,7 +2502,7 @@ def simulate_and_compare_hkl(
 
     # Full-pattern simulation
     updated_image, hit_tables, *_ = _process_peaks_parallel_safe(
-        miller, intensities, image_size,
+        sim_miller, sim_intensities, image_size,
         a, c, wavelength_array,
         sim_buffer, dist,
         gamma, Gamma, chi, psi, psi_z,
@@ -2488,7 +2628,7 @@ def simulate_and_compare_hkl(
 
     measured_dict = build_measured_dict(fallback_measured)
 
-    for i, (H, K, L) in enumerate(miller):
+    for i, (H, K, L) in enumerate(sim_miller):
         key = (int(round(H)), int(round(K)), int(round(L)))
         candidates = measured_dict.get(key)
         if not candidates:
@@ -2689,6 +2829,11 @@ def fit_geometry_parameters(
     params.setdefault("center_x", center_row_default)
     params.setdefault("center_y", center_col_default)
 
+    simulation_subset = _prepare_reflection_subset(miller, intensities, measured_peaks)
+    fit_miller = simulation_subset.miller
+    fit_intensities = simulation_subset.intensities
+    fit_measured_peaks = simulation_subset.measured_entries
+
     def _safe_float(value: object, fallback: float) -> float:
         try:
             out = float(value)
@@ -2800,13 +2945,17 @@ def fit_geometry_parameters(
         *,
         collect_diagnostics: bool = False,
     ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
-        normalized_measured = _normalize_measured_peaks(measured_peaks)
+        normalized_measured = fit_measured_peaks
         if not normalized_measured:
             return np.array([], dtype=float), [], {
                 "measured_count": 0,
                 "fixed_source_resolved_count": 0,
                 "fallback_entry_count": 0,
                 "missing_pair_count": 0,
+                "simulated_reflection_count": int(fit_miller.shape[0]),
+                "total_reflection_count": int(simulation_subset.total_reflection_count),
+                "subset_reduced": bool(simulation_subset.reduced),
+                "single_ray_enabled": bool(use_single_ray),
             }
 
         mosaic = local['mosaic_params']
@@ -2816,7 +2965,7 @@ def fit_geometry_parameters(
 
         sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
         _, hit_tables, *_ = _process_peaks_parallel_safe(
-            miller, intensities, image_size,
+            fit_miller, fit_intensities, image_size,
             local['a'], local['c'], wavelength_array,
             sim_buffer, local['corto_detector'],
             local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),
@@ -2925,7 +3074,7 @@ def fit_geometry_parameters(
         measured_dict = build_measured_dict(fallback_measured)
 
         simulated_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
-        for idx, (H, K, L) in enumerate(miller):
+        for idx, (H, K, L) in enumerate(fit_miller):
             key = (int(round(H)), int(round(K)), int(round(L)))
             if key not in measured_dict:
                 continue
@@ -3085,6 +3234,19 @@ def fit_geometry_parameters(
             "fallback_entry_count": int(len(fallback_measured)),
             "fallback_hkl_count": int(len(measured_dict)),
             "missing_pair_count": int(missing_pairs),
+            "simulated_reflection_count": int(fit_miller.shape[0]),
+            "total_reflection_count": int(simulation_subset.total_reflection_count),
+            "fixed_source_reflection_count": int(
+                simulation_subset.fixed_source_reflection_count
+            ),
+            "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
+            "subset_reduced": bool(simulation_subset.reduced),
+            "single_ray_enabled": bool(use_single_ray),
+            "single_ray_forced_count": int(
+                np.count_nonzero(single_ray_indices >= 0)
+            )
+            if isinstance(single_ray_indices, np.ndarray)
+            else 0,
             "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
             "center_col": float(local['center'][1]) if len(local.get('center', [])) >= 2 else float("nan"),
         }
@@ -3145,7 +3307,12 @@ def fit_geometry_parameters(
 
     x0 = [_initial_value(name) for name in var_names]
 
-    if experimental_image is not None and use_single_ray:
+    if (
+        experimental_image is not None
+        and use_single_ray
+        and fit_miller.shape[0] > 0
+        and fit_measured_peaks
+    ):
         try:
             local = _apply_trial_params(np.asarray(x0, dtype=float))
             mosaic = local['mosaic_params']
@@ -3153,10 +3320,10 @@ def fit_geometry_parameters(
             if wavelength_array is None:
                 wavelength_array = mosaic.get('wavelength_i_array')
 
-            best_indices = np.full(miller.shape[0], -1, dtype=np.int64)
+            best_indices = np.full(fit_miller.shape[0], -1, dtype=np.int64)
             sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
             _process_peaks_parallel_safe(
-                miller, intensities, image_size,
+                fit_miller, fit_intensities, image_size,
                 local['a'], local['c'], wavelength_array,
                 sim_buffer, local['corto_detector'],
                 local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),

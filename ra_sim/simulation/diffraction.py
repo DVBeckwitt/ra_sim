@@ -1679,6 +1679,36 @@ def _precompute_sample_terms(
 
 
 @njit(fastmath=True)
+def _accumulate_bilinear_hit(image, image_size, row_f, col_f, value):
+    """Deposit ``value`` into the four neighboring pixels around a float hit."""
+
+    row0 = int(np.floor(row_f))
+    col0 = int(np.floor(col_f))
+    d_row = row_f - float(row0)
+    d_col = col_f - float(col0)
+    deposited = False
+
+    for row_offset in range(2):
+        rr = row0 + row_offset
+        if rr < 0 or rr >= image_size:
+            continue
+        w_row = 1.0 - d_row if row_offset == 0 else d_row
+        if w_row <= 0.0:
+            continue
+        for col_offset in range(2):
+            cc = col0 + col_offset
+            if cc < 0 or cc >= image_size:
+                continue
+            w_col = 1.0 - d_col if col_offset == 0 else d_col
+            if w_col <= 0.0:
+                continue
+            image[rr, cc] += value * w_row * w_col
+            deposited = True
+
+    return deposited
+
+
+@njit(fastmath=True)
 def _calculate_phi_from_precomputed(
     H,
     K,
@@ -1953,9 +1983,9 @@ def _calculate_phi_from_precomputed(
             if not np.isfinite(x_det) or not np.isfinite(y_det):
                 continue
 
-            rpx = int(round(center[0] - y_det * pixel_scale))
-            cpx = int(round(center[1] + x_det * pixel_scale))
-            if not (0 <= rpx < image_size and 0 <= cpx < image_size):
+            row_f = center[0] - y_det * pixel_scale
+            col_f = center[1] + x_det * pixel_scale
+            if not np.isfinite(row_f) or not np.isfinite(col_f):
                 continue
 
             val = (
@@ -1968,14 +1998,15 @@ def _calculate_phi_from_precomputed(
             if not np.isfinite(val) or val <= 0.0:
                 continue
 
-            image[rpx, cpx] += val
+            if not _accumulate_bilinear_hit(image, image_size, row_f, col_f, val):
+                continue
 
             if record_this_solution and val > best_candidate_val:
                 best_candidate_val = val
                 if capture_aux:
                     best_candidate[0] = val
-                    best_candidate[1] = cpx
-                    best_candidate[2] = rpx
+                    best_candidate[1] = col_f
+                    best_candidate[2] = row_f
                     best_candidate[3] = phi_f
                     best_candidate[4] = H
                     best_candidate[5] = K
@@ -1986,8 +2017,8 @@ def _calculate_phi_from_precomputed(
             if record_this_solution:
                 if n_hits < max_hits:
                     pixel_hits[n_hits, 0] = val
-                    pixel_hits[n_hits, 1] = cpx
-                    pixel_hits[n_hits, 2] = rpx
+                    pixel_hits[n_hits, 1] = col_f
+                    pixel_hits[n_hits, 2] = row_f
                     pixel_hits[n_hits, 3] = phi_f
                     pixel_hits[n_hits, 4] = H
                     pixel_hits[n_hits, 5] = K
@@ -2753,14 +2784,86 @@ def process_peaks_parallel_safe(*args, **kwargs):
         raise
 
 
+def _cluster_hit_positions(hits_arr, *, merge_radius_px=1.5):
+    """Merge nearby hit-table rows into subpixel centroids."""
+
+    merge_radius_sq = float(merge_radius_px) * float(merge_radius_px)
+    clusters = []
+
+    for hit in hits_arr[np.argsort(hits_arr[:, 0])[::-1]]:
+        intensity = float(hit[0])
+        col = float(hit[1])
+        row = float(hit[2])
+        if not (
+            np.isfinite(intensity)
+            and np.isfinite(col)
+            and np.isfinite(row)
+            and intensity > 0.0
+        ):
+            continue
+
+        best_cluster_idx = None
+        best_dist_sq = float("inf")
+        for idx, cluster in enumerate(clusters):
+            center_col = cluster["weighted_col_sum"] / cluster["total_intensity"]
+            center_row = cluster["weighted_row_sum"] / cluster["total_intensity"]
+            dist_sq = (col - center_col) ** 2 + (row - center_row) ** 2
+            if dist_sq <= merge_radius_sq and dist_sq < best_dist_sq:
+                best_cluster_idx = idx
+                best_dist_sq = dist_sq
+
+        if best_cluster_idx is None:
+            clusters.append(
+                {
+                    "total_intensity": intensity,
+                    "peak_intensity": intensity,
+                    "weighted_col_sum": intensity * col,
+                    "weighted_row_sum": intensity * row,
+                }
+            )
+            continue
+
+        cluster = clusters[best_cluster_idx]
+        cluster["total_intensity"] += intensity
+        cluster["weighted_col_sum"] += intensity * col
+        cluster["weighted_row_sum"] += intensity * row
+        if intensity > cluster["peak_intensity"]:
+            cluster["peak_intensity"] = intensity
+
+    clusters.sort(
+        key=lambda cluster: (
+            float(cluster["total_intensity"]),
+            float(cluster["peak_intensity"]),
+        ),
+        reverse=True,
+    )
+
+    out = []
+    for cluster in clusters:
+        total_intensity = float(cluster["total_intensity"])
+        if total_intensity <= 0.0:
+            continue
+        out.append(
+            (
+                total_intensity,
+                float(cluster["weighted_col_sum"]) / total_intensity,
+                float(cluster["weighted_row_sum"]) / total_intensity,
+            )
+        )
+    return out
+
+
 def hit_tables_to_max_positions(hit_tables):
-    """Extract top-2 peak locations per reflection from ``hit_tables``.
+    """Extract up to two subpixel peak centers per reflection from ``hit_tables``.
 
     ``process_peaks_parallel`` returns a list of pixel-hit tables, each with
-    columns ``[intensity, col, row, phi, H, K, L]``.  Older callers expect a
-    ``max_positions`` array shaped ``(N, 6)`` containing the brightest two hit
-    locations per reflection: ``(I0, x0, y0, I1, x1, y1)``.  This helper
-    restores that structure so downstream code can remain unchanged.
+    columns ``[intensity, col, row, phi, H, K, L]``.  The ``col``/``row``
+    coordinates are stored in floating detector-pixel units.  Older callers
+    expect a ``max_positions`` array shaped ``(N, 6)`` containing the two
+    strongest candidate peak centers per reflection:
+    ``(I0, x0, y0, I1, x1, y1)``.  Nearby hit-table rows are merged into
+    intensity-weighted centroids so small parameter changes remain visible to
+    the optimizer.
     """
 
     num_peaks = len(hit_tables)
@@ -2771,14 +2874,16 @@ def hit_tables_to_max_positions(hit_tables):
         if hits_arr.size == 0:
             continue
 
-        # Sort by intensity descending and take the top two
-        sorted_hits = hits_arr[np.argsort(hits_arr[:, 0])[::-1]]
-        primary = sorted_hits[0]
-        max_positions[i, 0:3] = primary[0:3]
+        clustered_hits = _cluster_hit_positions(hits_arr)
+        if not clustered_hits:
+            continue
 
-        if sorted_hits.shape[0] > 1:
-            secondary = sorted_hits[1]
-            max_positions[i, 3:6] = secondary[0:3]
+        primary = clustered_hits[0]
+        max_positions[i, 0:3] = primary
+
+        if len(clustered_hits) > 1:
+            secondary = clustered_hits[1]
+            max_positions[i, 3:6] = secondary
 
     return max_positions
 
