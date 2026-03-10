@@ -61,6 +61,7 @@ from ra_sim.io.data_loading import (
     load_parameters,
 )
 from ra_sim.fitting.optimization import (
+    _prepare_reflection_subset,
     build_measured_dict,
     fit_geometry_parameters,
     fit_mosaic_widths_separable,
@@ -4760,21 +4761,71 @@ def _manual_orientation_choice() -> dict:
     }
 
 
-def _center_from_maxpos_entry(entry: Sequence[float]) -> tuple[float, float] | None:
-    """Return the centroid of finite primary/secondary maxima in ``entry``."""
+def _extract_simulated_fit_peaks(
+    hit_tables: Sequence[object],
+    image_shape: tuple[int, int],
+    original_table_indices: np.ndarray,
+) -> list[dict[str, object]]:
+    """Extract distinct simulated detector spots while preserving source rows."""
 
-    if entry is None or len(entry) < 6:
-        return None
-    _, x0, y0, _, x1, y1 = entry
-    candidates: list[tuple[float, float]] = []
-    if np.isfinite(x0) and np.isfinite(y0):
-        candidates.append((float(x0), float(y0)))
-    if np.isfinite(x1) and np.isfinite(y1):
-        candidates.append((float(x1), float(y1)))
-    if not candidates:
-        return None
-    cols, rows = zip(*candidates)
-    return float(np.mean(cols)), float(np.mean(rows))
+    max_hits_per_reflection = max(1, int(HKL_PICK_MAX_HITS_PER_REFLECTION))
+    min_sep_sq = float(HKL_PICK_MIN_SEPARATION_PX) ** 2
+    simulated_peaks: list[dict[str, object]] = []
+
+    for local_table_idx, tbl in enumerate(hit_tables):
+        tbl_arr = np.asarray(tbl, dtype=float)
+        if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0:
+            continue
+
+        row_order = np.argsort(tbl_arr[:, 0])[::-1]
+        chosen_rows: list[tuple[int, np.ndarray, float, float]] = []
+        for row_idx in row_order:
+            row = tbl_arr[row_idx]
+            intensity, sim_col, sim_row, _phi, *_ = row
+            if not (
+                np.isfinite(intensity)
+                and np.isfinite(sim_col)
+                and np.isfinite(sim_row)
+            ):
+                continue
+            disp_col, disp_row = _native_sim_to_display_coords(
+                float(sim_col),
+                float(sim_row),
+                image_shape,
+            )
+            too_close = False
+            for _, _, prev_col, prev_row in chosen_rows:
+                d2 = (disp_col - prev_col) ** 2 + (disp_row - prev_row) ** 2
+                if d2 < min_sep_sq:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            chosen_rows.append((int(row_idx), row, float(disp_col), float(disp_row)))
+            if len(chosen_rows) >= max_hits_per_reflection:
+                break
+
+        original_table_idx = (
+            int(original_table_indices[local_table_idx])
+            if local_table_idx < int(original_table_indices.shape[0])
+            else int(local_table_idx)
+        )
+        for row_idx, row, _disp_col, _disp_row in chosen_rows:
+            intensity, sim_col, sim_row, phi_val, H, K, L = row
+            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
+            simulated_peaks.append(
+                {
+                    "hkl": hkl,
+                    "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
+                    "sim_col": float(sim_col),
+                    "sim_row": float(sim_row),
+                    "weight": float(abs(intensity)),
+                    "source_table_index": int(original_table_idx),
+                    "source_row_index": int(row_idx),
+                    "phi": float(phi_val),
+                }
+            )
+    return simulated_peaks
 
 
 def _simulate_hkl_peak_centers_for_fit(
@@ -4782,8 +4833,20 @@ def _simulate_hkl_peak_centers_for_fit(
     intensity_array: np.ndarray,
     image_size: int,
     param_set: dict[str, object],
+    *,
+    measured_peaks: Sequence[object] | None = None,
+    force_single_ray: bool = True,
 ) -> list[dict[str, object]]:
-    """Simulate once and return one aggregated peak center per integer HKL."""
+    """Simulate detector spots for geometry auto-match/rematch."""
+
+    sim_subset = _prepare_reflection_subset(
+        np.asarray(miller_array, dtype=np.float64),
+        np.asarray(intensity_array, dtype=np.float64),
+        measured_peaks,
+    )
+    sim_miller = sim_subset.miller
+    sim_intensity = sim_subset.intensities
+    original_table_indices = sim_subset.original_indices
 
     mosaic = dict(param_set.get("mosaic_params", {}))
     wavelength_array = mosaic.get("wavelength_array")
@@ -4796,69 +4859,83 @@ def _simulate_hkl_peak_centers_for_fit(
             dtype=np.float64,
         )
 
-    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-    _, hit_tables, *_ = process_peaks_parallel(
-        miller_array,
-        intensity_array,
-        image_size,
-        float(param_set["a"]),
-        float(param_set["c"]),
-        wavelength_array,
-        sim_buffer,
-        float(param_set["corto_detector"]),
-        float(param_set["gamma"]),
-        float(param_set["Gamma"]),
-        float(param_set["chi"]),
-        float(param_set.get("psi", 0.0)),
-        float(param_set.get("psi_z", 0.0)),
-        float(param_set["zs"]),
-        float(param_set["zb"]),
-        param_set["n2"],
-        np.asarray(mosaic["beam_x_array"], dtype=np.float64),
-        np.asarray(mosaic["beam_y_array"], dtype=np.float64),
-        np.asarray(mosaic["theta_array"], dtype=np.float64),
-        np.asarray(mosaic["phi_array"], dtype=np.float64),
-        float(mosaic["sigma_mosaic_deg"]),
-        float(mosaic["gamma_mosaic_deg"]),
-        float(mosaic["eta"]),
-        np.asarray(wavelength_array, dtype=np.float64),
-        float(param_set["debye_x"]),
-        float(param_set["debye_y"]),
-        [float(param_set["center"][0]), float(param_set["center"][1])],
-        float(param_set["theta_initial"]),
-        float(param_set.get("cor_angle", 0.0)),
-        np.array([1.0, 0.0, 0.0]),
-        np.array([0.0, 1.0, 0.0]),
-        save_flag=0,
-        optics_mode=int(param_set.get("optics_mode", 0)),
-    )
+    if sim_miller.ndim != 2 or sim_miller.shape[1] != 3 or sim_miller.shape[0] == 0:
+        return []
 
-    maxpos = hit_tables_to_max_positions(hit_tables)
+    beam_x = np.asarray(mosaic["beam_x_array"], dtype=np.float64)
+    beam_y = np.asarray(mosaic["beam_y_array"], dtype=np.float64)
+    theta_arr = np.asarray(mosaic["theta_array"], dtype=np.float64)
+    phi_arr = np.asarray(mosaic["phi_array"], dtype=np.float64)
+    wavelength_arr = np.asarray(wavelength_array, dtype=np.float64)
+    center = [float(param_set["center"][0]), float(param_set["center"][1])]
 
-    centers_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
-    weights_by_hkl: dict[tuple[int, int, int], float] = {}
-    for idx, (H, K, L) in enumerate(miller_array):
-        key = (int(round(H)), int(round(K)), int(round(L)))
-        center = _center_from_maxpos_entry(maxpos[idx])
-        if center is not None:
-            centers_by_hkl.setdefault(key, []).append(center)
-            weights_by_hkl[key] = weights_by_hkl.get(key, 0.0) + float(
-                abs(intensity_array[idx])
-            )
-
-    simulated_peaks: list[dict[str, object]] = []
-    for key, center_list in centers_by_hkl.items():
-        arr = np.asarray(center_list, dtype=float)
-        simulated_peaks.append(
-            {
-                "hkl": key,
-                "label": f"{key[0]},{key[1]},{key[2]}",
-                "sim_col": float(arr[:, 0].mean()),
-                "sim_row": float(arr[:, 1].mean()),
-                "weight": float(weights_by_hkl.get(key, 0.0)),
-            }
+    def _run_preview_sim(
+        *,
+        single_sample_indices: np.ndarray | None = None,
+        best_sample_indices_out: np.ndarray | None = None,
+        collect_hit_tables: bool = True,
+    ):
+        sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+        return process_peaks_parallel(
+            sim_miller,
+            sim_intensity,
+            image_size,
+            float(param_set["a"]),
+            float(param_set["c"]),
+            wavelength_arr,
+            sim_buffer,
+            float(param_set["corto_detector"]),
+            float(param_set["gamma"]),
+            float(param_set["Gamma"]),
+            float(param_set["chi"]),
+            float(param_set.get("psi", 0.0)),
+            float(param_set.get("psi_z", 0.0)),
+            float(param_set["zs"]),
+            float(param_set["zb"]),
+            param_set["n2"],
+            beam_x,
+            beam_y,
+            theta_arr,
+            phi_arr,
+            float(mosaic["sigma_mosaic_deg"]),
+            float(mosaic["gamma_mosaic_deg"]),
+            float(mosaic["eta"]),
+            wavelength_arr,
+            float(param_set["debye_x"]),
+            float(param_set["debye_y"]),
+            center,
+            float(param_set["theta_initial"]),
+            float(param_set.get("cor_angle", 0.0)),
+            np.array([1.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0]),
+            save_flag=0,
+            optics_mode=int(param_set.get("optics_mode", 0)),
+            single_sample_indices=single_sample_indices,
+            best_sample_indices_out=best_sample_indices_out,
+            collect_hit_tables=collect_hit_tables,
         )
-    return simulated_peaks
+
+    forced_sample_indices: np.ndarray | None = None
+    if force_single_ray and measured_peaks and sim_miller.shape[0] > 0:
+        try:
+            best_indices = np.full(sim_miller.shape[0], -1, dtype=np.int64)
+            _run_preview_sim(
+                best_sample_indices_out=best_indices,
+                collect_hit_tables=False,
+            )
+            forced_sample_indices = best_indices
+        except Exception:
+            forced_sample_indices = None
+
+    _, hit_tables, *_ = _run_preview_sim(
+        single_sample_indices=forced_sample_indices,
+        collect_hit_tables=True,
+    )
+    return _extract_simulated_fit_peaks(
+        hit_tables,
+        (int(image_size), int(image_size)),
+        original_table_indices,
+    )
 
 
 def _auto_match_background_peaks(
@@ -5043,6 +5120,9 @@ def _auto_match_background_peaks(
                 "prominence_sigma": prom_sigma,
                 "confidence": float(confidence),
                 "weight": float(entry.get("weight", 0.0)),
+                "source_table_index": entry.get("source_table_index"),
+                "source_row_index": entry.get("source_row_index"),
+                "phi": entry.get("phi"),
             }
         )
 
@@ -5533,6 +5613,8 @@ def on_fit_geometry_click():
             [
                 (
                     f"HKL=({entry['hkl'][0]},{entry['hkl'][1]},{entry['hkl'][2]}) "
+                    f"src=({int(entry.get('source_table_index', -1))},"
+                    f"{int(entry.get('source_row_index', -1))}) "
                     f"sim=({entry['sim_x']:.3f},{entry['sim_y']:.3f}) "
                     f"meas=({entry['x']:.3f},{entry['y']:.3f}) "
                     f"d={entry['distance_px']:.3f}px "
@@ -5694,6 +5776,7 @@ def on_fit_geometry_click():
                     intensity_array,
                     image_size,
                     current_fit_params,
+                    measured_peaks=current_measured_for_fit,
                 )
                 if not sim_iter:
                     iteration_logs.append(
@@ -6272,6 +6355,7 @@ def on_fit_geometry_click():
                     intensity_array,
                     image_size,
                     params,
+                    measured_peaks=measured_native,
                 )
                 simulated_lookup = {
                     str(entry.get("label")): (
