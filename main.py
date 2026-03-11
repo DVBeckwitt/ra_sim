@@ -273,6 +273,8 @@ from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
     save_all_parameters,
     load_parameters,
+    load_gui_state_file,
+    save_gui_state_file,
 )
 from ra_sim.fitting.optimization import (
     build_measured_dict,
@@ -9703,81 +9705,341 @@ def import_hbn_tilt_from_bundle():
     )
 
 
-save_button = ttk.Button(
-    text="Save Params",
-    command=lambda: save_all_parameters(
-        get_path("parameters_file"),
-        theta_initial_var,
-        cor_angle_var,
-        gamma_var,
-        Gamma_var,
-        chi_var,
-        zs_var,
-        zb_var,
-        debye_x_var,
-        debye_y_var,
-        corto_detector_var,
-        sigma_mosaic_var,
-        gamma_mosaic_var,
-        eta_var,
-        a_var,
-        c_var,
-        center_x_var,
-        center_y_var,
-        resolution_var,
-        custom_samples_var,
-        bandwidth_percent_var=bandwidth_percent_var,
-        optics_mode_var=optics_mode_var,
-        phase_delta_expr_var=phase_delta_expr_var,
-        phi_l_divisor_var=phi_l_divisor_var,
-        sf_prune_bias_var=sf_prune_bias_var,
-        solve_q_steps_var=solve_q_steps_var,
-        solve_q_rel_tol_var=solve_q_rel_tol_var,
-        solve_q_mode_var=solve_q_mode_var,
+_GUI_STATE_EXCLUDED_VAR_NAMES = {
+    "background_file_status_var",
+    "cif_file_var",
+    "geometry_preview_exclude_button_var",
+    "hkl_pick_button_var",
+    "resolution_count_var",
+}
+
+
+def _is_persistable_gui_var(name: str, value: object) -> bool:
+    if not isinstance(value, tk.Variable):
+        return False
+    if name.startswith("_") or name in _GUI_STATE_EXCLUDED_VAR_NAMES:
+        return False
+    if name.endswith(("_button_var", "_entry_var", "_label_var", "_status_var")):
+        return False
+    return True
+
+
+def _collect_full_gui_state_snapshot() -> dict[str, object]:
+    variables: dict[str, object] = {}
+    for name, value in globals().items():
+        if not _is_persistable_gui_var(name, value):
+            continue
+        try:
+            variables[name] = value.get()
+        except Exception:
+            continue
+
+    occupancy_values = []
+    for occ_var in globals().get("occ_vars", []):
+        try:
+            occupancy_values.append(float(occ_var.get()))
+        except Exception:
+            occupancy_values.append(None)
+
+    atom_site_values = []
+    for row in globals().get("atom_site_fract_vars", []):
+        if not isinstance(row, dict):
+            continue
+        atom_site_values.append(
+            {
+                "x": float(row["x"].get()),
+                "y": float(row["y"].get()),
+                "z": float(row["z"].get()),
+            }
+        )
+
+    geometry_state: dict[str, object] = {
+        "q_group_rows": _geometry_q_group_export_rows(),
+    }
+    if isinstance(selected_hkl_target, tuple) and len(selected_hkl_target) == 3:
+        geometry_state["selected_hkl_target"] = [
+            int(selected_hkl_target[0]),
+            int(selected_hkl_target[1]),
+            int(selected_hkl_target[2]),
+        ]
+
+    return {
+        "variables": variables,
+        "dynamic_lists": {
+            "occupancy_values": occupancy_values,
+            "atom_site_fractional_values": atom_site_values,
+        },
+        "files": {
+            "primary_cif_path": str(cif_file),
+            "secondary_cif_path": str(cif_file2) if cif_file2 else None,
+            "background_files": [str(Path(str(path)).expanduser()) for path in osc_files],
+            "current_background_index": int(current_background_index),
+        },
+        "flags": {
+            "background_visible": bool(background_visible),
+            "background_backend_rotation_k": int(background_backend_rotation_k),
+            "background_backend_flip_x": bool(background_backend_flip_x),
+            "background_backend_flip_y": bool(background_backend_flip_y),
+            "background_limits_user_override": bool(background_limits_user_override),
+            "simulation_limits_user_override": bool(simulation_limits_user_override),
+            "scale_factor_user_override": bool(scale_factor_user_override),
+        },
+        "geometry": geometry_state,
+    }
+
+
+def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
+    global background_visible
+    global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
+    global background_limits_user_override, simulation_limits_user_override
+    global scale_factor_user_override, selected_hkl_target
+
+    warnings: list[str] = []
+
+    files = snapshot.get("files", {})
+    if isinstance(files, dict):
+        cif_path = files.get("primary_cif_path")
+        if cif_path:
+            candidate = Path(str(cif_path)).expanduser()
+            if candidate.is_file():
+                try:
+                    _apply_primary_cif_path(str(candidate))
+                except Exception as exc:
+                    warnings.append(f"primary CIF: {exc}")
+            else:
+                warnings.append(f"primary CIF missing: {candidate}")
+
+        raw_background_paths = files.get("background_files", [])
+        background_paths = []
+        if isinstance(raw_background_paths, list):
+            for raw_path in raw_background_paths:
+                if raw_path is None:
+                    continue
+                candidate = Path(str(raw_path)).expanduser()
+                if candidate.is_file():
+                    background_paths.append(str(candidate))
+                else:
+                    warnings.append(f"background missing: {candidate}")
+        if background_paths:
+            try:
+                _load_background_files(
+                    background_paths,
+                    select_index=int(files.get("current_background_index", 0)),
+                )
+            except Exception as exc:
+                warnings.append(f"backgrounds: {exc}")
+
+    variables = snapshot.get("variables", {})
+    if isinstance(variables, dict):
+        for name, stored_value in variables.items():
+            target_var = globals().get(str(name))
+            if not isinstance(target_var, tk.Variable):
+                continue
+            try:
+                target_var.set(stored_value)
+            except Exception as exc:
+                warnings.append(f"{name}: {exc}")
+
+    dynamic_lists = snapshot.get("dynamic_lists", {})
+    if isinstance(dynamic_lists, dict):
+        saved_occ = dynamic_lists.get("occupancy_values", [])
+        if isinstance(saved_occ, list):
+            for occ_var, stored_value in zip(globals().get("occ_vars", []), saved_occ):
+                try:
+                    occ_var.set(float(stored_value))
+                except Exception:
+                    continue
+
+        saved_atom_sites = dynamic_lists.get("atom_site_fractional_values", [])
+        if isinstance(saved_atom_sites, list):
+            for axis_vars, stored_row in zip(globals().get("atom_site_fract_vars", []), saved_atom_sites):
+                if not isinstance(axis_vars, dict) or not isinstance(stored_row, dict):
+                    continue
+                for axis_name in ("x", "y", "z"):
+                    axis_var = axis_vars.get(axis_name)
+                    if axis_var is None or axis_name not in stored_row:
+                        continue
+                    try:
+                        axis_var.set(float(stored_row[axis_name]))
+                    except Exception:
+                        continue
+
+    flags = snapshot.get("flags", {})
+    if isinstance(flags, dict):
+        desired_background_visible = bool(flags.get("background_visible", background_visible))
+        if desired_background_visible != bool(background_visible):
+            toggle_background()
+        background_backend_rotation_k = int(flags.get("background_backend_rotation_k", background_backend_rotation_k)) % 4
+        background_backend_flip_x = bool(flags.get("background_backend_flip_x", background_backend_flip_x))
+        background_backend_flip_y = bool(flags.get("background_backend_flip_y", background_backend_flip_y))
+        background_limits_user_override = bool(
+            flags.get("background_limits_user_override", background_limits_user_override)
+        )
+        simulation_limits_user_override = bool(
+            flags.get("simulation_limits_user_override", simulation_limits_user_override)
+        )
+        scale_factor_user_override = bool(
+            flags.get("scale_factor_user_override", scale_factor_user_override)
+        )
+
+    geometry_state = snapshot.get("geometry", {})
+    if isinstance(geometry_state, dict):
+        saved_rows = geometry_state.get("q_group_rows", [])
+        if isinstance(saved_rows, list):
+            geometry_preview_excluded_q_groups.clear()
+            for row in saved_rows:
+                if not isinstance(row, dict):
+                    continue
+                group_key = _geometry_q_group_key_from_jsonable(row.get("key"))
+                if group_key is None:
+                    continue
+                if not bool(row.get("included", True)):
+                    geometry_preview_excluded_q_groups.add(group_key)
+        target_hkl = geometry_state.get("selected_hkl_target")
+        if isinstance(target_hkl, (list, tuple)) and len(target_hkl) >= 3:
+            try:
+                selected_hkl_target = (
+                    int(target_hkl[0]),
+                    int(target_hkl[1]),
+                    int(target_hkl[2]),
+                )
+            except Exception:
+                selected_hkl_target = None
+
+    if _phase_delta_entry_var is not None:
+        _phase_delta_entry_var.set(_current_phase_delta_expression())
+    if _phi_l_divisor_entry_var is not None:
+        _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
+    _sync_finite_controls()
+    _set_background_file_status_text()
+    _update_geometry_preview_exclude_button_label()
+    _refresh_geometry_q_group_window()
+    _update_hkl_pick_button_label()
+    ensure_valid_resolution_choice()
+    toggle_1d_plots()
+    toggle_caked_2d()
+    toggle_log_radial()
+    toggle_log_azimuth()
+    _update_background_backend_status()
+    _mark_chi_square_dirty()
+    _update_chi_square_display(force=True)
+    _refresh_qr_cylinder_overlay(redraw=True, update_status=False)
+    _refresh_live_geometry_preview(update_status=False)
+    schedule_update()
+
+    summary = "Imported GUI state snapshot."
+    if warnings:
+        summary += " Warnings: " + "; ".join(warnings[:4])
+        if len(warnings) > 4:
+            summary += f"; +{len(warnings) - 4} more"
+    return summary
+
+
+def _export_full_gui_state() -> None:
+    try:
+        initial_dir = str(get_dir("file_dialog_dir"))
+    except Exception:
+        initial_dir = str(Path.cwd())
+    file_path = filedialog.asksaveasfilename(
+        title="Export Full GUI State",
+        initialdir=initial_dir,
+        defaultextension=".json",
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        initialfile=f"ra_sim_gui_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
     )
+    if not file_path:
+        progress_label.config(text="GUI state export canceled.")
+        return
+    try:
+        save_gui_state_file(
+            file_path,
+            _collect_full_gui_state_snapshot(),
+            metadata={"entrypoint": "main.py"},
+        )
+    except Exception as exc:
+        progress_label.config(text=f"Failed to export GUI state: {exc}")
+        return
+    progress_label.config(text=f"Saved GUI state to {file_path}")
+
+
+def _import_full_gui_state() -> None:
+    try:
+        initial_dir = str(get_dir("file_dialog_dir"))
+    except Exception:
+        initial_dir = str(Path.cwd())
+    file_path = filedialog.askopenfilename(
+        title="Import Full GUI State",
+        initialdir=initial_dir,
+        filetypes=[
+            ("RA-SIM GUI state", "*.json"),
+            ("Legacy parameter profiles", "*.npy"),
+            ("All files", "*.*"),
+        ],
+    )
+    if not file_path:
+        progress_label.config(text="GUI state import canceled.")
+        return
+
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".npy":
+        message = load_parameters(
+            file_path,
+            theta_initial_var,
+            cor_angle_var,
+            gamma_var,
+            Gamma_var,
+            chi_var,
+            zs_var,
+            zb_var,
+            debye_x_var,
+            debye_y_var,
+            corto_detector_var,
+            sigma_mosaic_var,
+            gamma_mosaic_var,
+            eta_var,
+            a_var,
+            c_var,
+            center_x_var,
+            center_y_var,
+            resolution_var,
+            custom_samples_var,
+            bandwidth_percent_var=bandwidth_percent_var,
+            optics_mode_var=optics_mode_var,
+            phase_delta_expr_var=phase_delta_expr_var,
+            phi_l_divisor_var=phi_l_divisor_var,
+            sf_prune_bias_var=sf_prune_bias_var,
+            solve_q_steps_var=solve_q_steps_var,
+            solve_q_rel_tol_var=solve_q_rel_tol_var,
+            solve_q_mode_var=solve_q_mode_var,
+        )
+        if _phase_delta_entry_var is not None:
+            _phase_delta_entry_var.set(_current_phase_delta_expression())
+        if _phi_l_divisor_entry_var is not None:
+            _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
+        _sync_finite_controls()
+        ensure_valid_resolution_choice()
+        schedule_update()
+        progress_label.config(text=message)
+        return
+
+    try:
+        payload = load_gui_state_file(file_path)
+        message = _apply_full_gui_state_snapshot(payload.get("state", {}))
+    except Exception as exc:
+        progress_label.config(text=f"Failed to import GUI state: {exc}")
+        return
+    progress_label.config(text=message)
+
+
+save_button = ttk.Button(
+    text="Export GUI State...",
+    command=_export_full_gui_state,
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
 
 load_button = ttk.Button(
-    text="Load Params",
-    command=lambda: (
-        progress_label.config(
-            text=load_parameters(
-                get_path("parameters_file"),
-                theta_initial_var,
-                cor_angle_var,
-                gamma_var,
-                Gamma_var,
-                chi_var,
-                zs_var,
-                zb_var,
-                debye_x_var,
-                debye_y_var,
-                corto_detector_var,
-                sigma_mosaic_var,
-                gamma_mosaic_var,
-                eta_var,
-                a_var,
-                c_var,
-                center_x_var,
-                center_y_var,
-                resolution_var,
-                custom_samples_var,
-                bandwidth_percent_var=bandwidth_percent_var,
-                optics_mode_var=optics_mode_var,
-                phase_delta_expr_var=phase_delta_expr_var,
-                phi_l_divisor_var=phi_l_divisor_var,
-                sf_prune_bias_var=sf_prune_bias_var,
-                solve_q_steps_var=solve_q_steps_var,
-                solve_q_rel_tol_var=solve_q_rel_tol_var,
-                solve_q_mode_var=solve_q_mode_var,
-            )
-        ),
-        (_phase_delta_entry_var.set(_current_phase_delta_expression()) if _phase_delta_entry_var is not None else None),
-        (_phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}") if _phi_l_divisor_entry_var is not None else None),
-        ensure_valid_resolution_choice(),
-        schedule_update()
-    )
+    text="Import GUI State...",
+    command=_import_full_gui_state,
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
 

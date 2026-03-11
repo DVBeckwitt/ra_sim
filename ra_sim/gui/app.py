@@ -59,6 +59,8 @@ from ra_sim.io.data_loading import (
     load_and_format_reference_profiles,
     save_all_parameters,
     load_parameters,
+    load_gui_state_file,
+    save_gui_state_file,
 )
 from ra_sim.fitting.optimization import (
     _prepare_reflection_subset,
@@ -4547,65 +4549,266 @@ def import_hbn_tilt_from_bundle():
     )
 
 
-save_button = ttk.Button(
-    text="Save Params",
-    command=lambda: save_all_parameters(
-        get_path("parameters_file"),
-        theta_initial_var,
-        cor_angle_var,
-        gamma_var,
-        Gamma_var,
-        chi_var,
-        zs_var,
-        zb_var,
-        debye_x_var,
-        debye_y_var,
-        corto_detector_var,
-        sigma_mosaic_var,
-        gamma_mosaic_var,
-        eta_var,
-        a_var,
-        c_var,
-        center_x_var,
-        center_y_var,
-        resolution_var,
-        None,
-        optics_mode_var=optics_mode_var,
+_GUI_STATE_EXCLUDED_VAR_NAMES = {
+    "geometry_preview_exclude_button_var",
+    "hkl_pick_button_var",
+    "resolution_count_var",
+}
+
+
+def _is_persistable_gui_var(name: str, value: object) -> bool:
+    if not isinstance(value, tk.Variable):
+        return False
+    if name.startswith("_") or name in _GUI_STATE_EXCLUDED_VAR_NAMES:
+        return False
+    if name.endswith(("_button_var", "_entry_var", "_label_var", "_status_var")):
+        return False
+    return True
+
+
+def _load_background_files_for_state(
+    file_paths: list[str],
+    *,
+    select_index: int = 0,
+) -> None:
+    global osc_files, background_images, background_images_native, background_images_display
+    global current_background_index, current_background_image, current_background_display
+
+    loaded_native = [np.asarray(read_osc(path)) for path in file_paths]
+    if not loaded_native:
+        return
+    osc_files = list(file_paths)
+    background_images = [np.array(img) for img in loaded_native]
+    background_images_native = [np.array(img) for img in loaded_native]
+    background_images_display = [
+        np.rot90(img, DISPLAY_ROTATE_K) for img in background_images_native
+    ]
+    index = max(0, min(int(select_index), len(background_images_native) - 1))
+    current_background_index = index
+    current_background_image = background_images_native[index]
+    current_background_display = background_images_display[index]
+    background_display.set_data(current_background_display)
+
+
+def _collect_full_gui_state_snapshot() -> dict[str, object]:
+    variables: dict[str, object] = {}
+    for name, value in globals().items():
+        if not _is_persistable_gui_var(name, value):
+            continue
+        try:
+            variables[name] = value.get()
+        except Exception:
+            continue
+
+    geometry_state: dict[str, object] = {}
+    if isinstance(selected_hkl_target, tuple) and len(selected_hkl_target) == 3:
+        geometry_state["selected_hkl_target"] = [
+            int(selected_hkl_target[0]),
+            int(selected_hkl_target[1]),
+            int(selected_hkl_target[2]),
+        ]
+
+    return {
+        "variables": variables,
+        "files": {
+            "background_files": [str(Path(str(path)).expanduser()) for path in osc_files],
+            "current_background_index": int(current_background_index),
+        },
+        "flags": {
+            "background_visible": bool(background_visible),
+            "background_backend_rotation_k": int(background_backend_rotation_k),
+            "background_backend_flip_x": bool(background_backend_flip_x),
+            "background_backend_flip_y": bool(background_backend_flip_y),
+            "background_limits_user_override": bool(background_limits_user_override),
+            "simulation_limits_user_override": bool(simulation_limits_user_override),
+            "scale_factor_user_override": bool(scale_factor_user_override),
+        },
+        "geometry": geometry_state,
+    }
+
+
+def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
+    global background_visible
+    global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
+    global background_limits_user_override, simulation_limits_user_override
+    global scale_factor_user_override, selected_hkl_target
+
+    warnings: list[str] = []
+
+    files = snapshot.get("files", {})
+    if isinstance(files, dict):
+        raw_background_paths = files.get("background_files", [])
+        background_paths = []
+        if isinstance(raw_background_paths, list):
+            for raw_path in raw_background_paths:
+                if raw_path is None:
+                    continue
+                candidate = Path(str(raw_path)).expanduser()
+                if candidate.is_file():
+                    background_paths.append(str(candidate))
+                else:
+                    warnings.append(f"background missing: {candidate}")
+        if background_paths:
+            try:
+                _load_background_files_for_state(
+                    background_paths,
+                    select_index=int(files.get("current_background_index", 0)),
+                )
+            except Exception as exc:
+                warnings.append(f"backgrounds: {exc}")
+
+    variables = snapshot.get("variables", {})
+    if isinstance(variables, dict):
+        for name, stored_value in variables.items():
+            target_var = globals().get(str(name))
+            if not isinstance(target_var, tk.Variable):
+                continue
+            try:
+                target_var.set(stored_value)
+            except Exception as exc:
+                warnings.append(f"{name}: {exc}")
+
+    flags = snapshot.get("flags", {})
+    if isinstance(flags, dict):
+        desired_background_visible = bool(flags.get("background_visible", background_visible))
+        if desired_background_visible != bool(background_visible):
+            toggle_background()
+        background_backend_rotation_k = int(flags.get("background_backend_rotation_k", background_backend_rotation_k)) % 4
+        background_backend_flip_x = bool(flags.get("background_backend_flip_x", background_backend_flip_x))
+        background_backend_flip_y = bool(flags.get("background_backend_flip_y", background_backend_flip_y))
+        background_limits_user_override = bool(
+            flags.get("background_limits_user_override", background_limits_user_override)
+        )
+        simulation_limits_user_override = bool(
+            flags.get("simulation_limits_user_override", simulation_limits_user_override)
+        )
+        scale_factor_user_override = bool(
+            flags.get("scale_factor_user_override", scale_factor_user_override)
+        )
+
+    geometry_state = snapshot.get("geometry", {})
+    if isinstance(geometry_state, dict):
+        target_hkl = geometry_state.get("selected_hkl_target")
+        if isinstance(target_hkl, (list, tuple)) and len(target_hkl) >= 3:
+            try:
+                selected_hkl_target = (
+                    int(target_hkl[0]),
+                    int(target_hkl[1]),
+                    int(target_hkl[2]),
+                )
+            except Exception:
+                selected_hkl_target = None
+
+    _sync_finite_controls()
+    ensure_valid_resolution_choice()
+    toggle_1d_plots()
+    toggle_caked_2d()
+    toggle_log_radial()
+    toggle_log_azimuth()
+    _update_background_backend_status()
+    _update_chi_square_display()
+    schedule_update()
+
+    summary = "Imported GUI state snapshot."
+    if warnings:
+        summary += " Warnings: " + "; ".join(warnings[:4])
+        if len(warnings) > 4:
+            summary += f"; +{len(warnings) - 4} more"
+    return summary
+
+
+def _export_full_gui_state() -> None:
+    try:
+        initial_dir = str(get_dir("file_dialog_dir"))
+    except Exception:
+        initial_dir = str(Path.cwd())
+    file_path = filedialog.asksaveasfilename(
+        title="Export Full GUI State",
+        initialdir=initial_dir,
+        defaultextension=".json",
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        initialfile=f"ra_sim_gui_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
     )
+    if not file_path:
+        progress_label.config(text="GUI state export canceled.")
+        return
+    try:
+        save_gui_state_file(
+            file_path,
+            _collect_full_gui_state_snapshot(),
+            metadata={"entrypoint": "ra_sim.gui.app"},
+        )
+    except Exception as exc:
+        progress_label.config(text=f"Failed to export GUI state: {exc}")
+        return
+    progress_label.config(text=f"Saved GUI state to {file_path}")
+
+
+def _import_full_gui_state() -> None:
+    try:
+        initial_dir = str(get_dir("file_dialog_dir"))
+    except Exception:
+        initial_dir = str(Path.cwd())
+    file_path = filedialog.askopenfilename(
+        title="Import Full GUI State",
+        initialdir=initial_dir,
+        filetypes=[
+            ("RA-SIM GUI state", "*.json"),
+            ("Legacy parameter profiles", "*.npy"),
+            ("All files", "*.*"),
+        ],
+    )
+    if not file_path:
+        progress_label.config(text="GUI state import canceled.")
+        return
+
+    if Path(file_path).suffix.lower() == ".npy":
+        message = load_parameters(
+            file_path,
+            theta_initial_var,
+            cor_angle_var,
+            gamma_var,
+            Gamma_var,
+            chi_var,
+            zs_var,
+            zb_var,
+            debye_x_var,
+            debye_y_var,
+            corto_detector_var,
+            sigma_mosaic_var,
+            gamma_mosaic_var,
+            eta_var,
+            a_var,
+            c_var,
+            center_x_var,
+            center_y_var,
+            resolution_var,
+            None,
+            optics_mode_var=optics_mode_var,
+        )
+        ensure_valid_resolution_choice()
+        schedule_update()
+        progress_label.config(text=message)
+        return
+
+    try:
+        payload = load_gui_state_file(file_path)
+        message = _apply_full_gui_state_snapshot(payload.get("state", {}))
+    except Exception as exc:
+        progress_label.config(text=f"Failed to import GUI state: {exc}")
+        return
+    progress_label.config(text=message)
+
+
+save_button = ttk.Button(
+    text="Export GUI State...",
+    command=_export_full_gui_state,
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
 
 load_button = ttk.Button(
-    text="Load Params",
-    command=lambda: (
-        progress_label.config(
-            text=load_parameters(
-                get_path("parameters_file"),
-                theta_initial_var,
-                cor_angle_var,
-                gamma_var,
-                Gamma_var,
-                chi_var,
-                zs_var,
-                zb_var,
-                debye_x_var,
-                debye_y_var,
-                corto_detector_var,
-                sigma_mosaic_var,
-                gamma_mosaic_var,
-                eta_var,
-                a_var,
-                c_var,
-                center_x_var,
-                center_y_var,
-                resolution_var,
-                None,
-                optics_mode_var=optics_mode_var,
-            )
-        ),
-        ensure_valid_resolution_choice(),
-        schedule_update()
-    )
+    text="Import GUI State...",
+    command=_import_full_gui_state,
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
 
