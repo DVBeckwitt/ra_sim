@@ -11,3 +11,18 @@ __pycache__/
 # Test artifacts
 *.npz
 
+# Local tool caches and temp output
+.pycache_check/
+.pytest_cache/
+.ruff_cache/
+.tmp/
+
+# Windows Explorer metadata
+desktop.ini
+
+# Generated images
+ra_sim/simulation/output.png
+
+# Accidental root-level probe files with random 8-char names
+/[0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_]
+
