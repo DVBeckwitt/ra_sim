@@ -244,6 +244,59 @@ def _assignment_score(
     )
 
 
+def _build_match_stats(
+    *,
+    simulated_count: int,
+    search_radius_px: float,
+    distance_sigma_clip: float,
+    sigma_est: float = float("nan"),
+    prominence_center: float = float("nan"),
+    candidate_count: float = 0.0,
+    qualified_summit_count: float = 0.0,
+    within_radius_count: float = 0.0,
+    unambiguous_count: float = 0.0,
+    ownership_filtered_count: float = 0.0,
+    claimed_summit_count: float = 0.0,
+    conflicted_match_count: float = 0.0,
+    matched_pre_clip_count: float = 0.0,
+    matched_count: float = 0.0,
+    clipped_count: float = 0.0,
+    distance_clip_limit_px: float = float("nan"),
+    distance_median_pre_clip_px: float = float("nan"),
+    distance_sigma_pre_clip_px: float = float("nan"),
+    mean_match_distance_px: float = float("nan"),
+    p90_match_distance_px: float = float("nan"),
+    median_match_confidence: float = float("nan"),
+    mean_walk_steps: float = 0.0,
+    mean_net_ascent_sigma: float = float("nan"),
+) -> dict[str, float]:
+    return {
+        "simulated_count": float(simulated_count),
+        "candidate_count": float(candidate_count),
+        "qualified_summit_count": float(qualified_summit_count),
+        "within_radius_count": float(within_radius_count),
+        "unambiguous_count": float(unambiguous_count),
+        "ownership_filtered_count": float(ownership_filtered_count),
+        "claimed_summit_count": float(claimed_summit_count),
+        "conflicted_match_count": float(conflicted_match_count),
+        "matched_pre_clip_count": float(matched_pre_clip_count),
+        "matched_count": float(matched_count),
+        "clipped_count": float(clipped_count),
+        "sigma_est": float(sigma_est),
+        "prominence_center": float(prominence_center),
+        "search_radius_px": float(search_radius_px),
+        "distance_sigma_clip": float(distance_sigma_clip),
+        "distance_clip_limit_px": float(distance_clip_limit_px),
+        "distance_median_pre_clip_px": float(distance_median_pre_clip_px),
+        "distance_sigma_pre_clip_px": float(distance_sigma_pre_clip_px),
+        "mean_match_distance_px": float(mean_match_distance_px),
+        "p90_match_distance_px": float(p90_match_distance_px),
+        "median_match_confidence": float(median_match_confidence),
+        "mean_walk_steps": float(mean_walk_steps),
+        "mean_net_ascent_sigma": float(mean_net_ascent_sigma),
+    }
+
+
 def match_simulated_peaks_to_peak_context(
     simulated_peaks: Sequence[dict[str, object]],
     peak_context: dict[str, object],
@@ -267,16 +320,20 @@ def match_simulated_peaks_to_peak_context(
     max_candidate_peaks = max(50, int(config.get("max_candidate_peaks", 1200)))
     k_neighbors = max(1, int(config.get("k_neighbors", 8)))
     distance_sigma_clip = max(0.0, float(config.get("distance_sigma_clip", 3.5)))
+    ambiguity_ratio_min = max(1.0, float(config.get("ambiguity_ratio_min", 1.15)))
+    ambiguity_margin_px = max(0.0, float(config.get("ambiguity_margin_px", 2.0)))
+    require_candidate_ownership = bool(config.get("require_candidate_ownership", True))
     max_match_distance_px = float(config.get("max_match_distance_px", search_radius))
     if not np.isfinite(max_match_distance_px) or max_match_distance_px <= 0.0:
         max_match_distance_px = search_radius
     match_radius = min(search_radius, max_match_distance_px)
 
     if not bool(peak_context.get("img_valid", False)):
-        return [], {
-            "simulated_count": float(len(simulated_peaks)),
-            "search_radius_px": float(search_radius),
-        }
+        return [], _build_match_stats(
+            simulated_count=len(simulated_peaks),
+            search_radius_px=search_radius,
+            distance_sigma_clip=distance_sigma_clip,
+        )
 
     work = np.asarray(peak_context.get("work", []), dtype=float)
     fine = np.asarray(peak_context.get("fine", []), dtype=float)
@@ -288,28 +345,13 @@ def match_simulated_peaks_to_peak_context(
 
     summit_records = list(peak_context.get("summit_records", []))
     if not summit_records:
-        return [], {
-            "simulated_count": float(len(simulated_peaks)),
-            "candidate_count": 0.0,
-            "qualified_summit_count": 0.0,
-            "claimed_summit_count": 0.0,
-            "conflicted_match_count": 0.0,
-            "matched_pre_clip_count": 0.0,
-            "matched_count": 0.0,
-            "clipped_count": 0.0,
-            "sigma_est": float(sigma_est),
-            "prominence_center": float(prom_center),
-            "search_radius_px": float(search_radius),
-            "distance_sigma_clip": float(distance_sigma_clip),
-            "distance_clip_limit_px": float("nan"),
-            "distance_median_pre_clip_px": float("nan"),
-            "distance_sigma_pre_clip_px": float("nan"),
-            "mean_match_distance_px": float("nan"),
-            "p90_match_distance_px": float("nan"),
-            "median_match_confidence": float("nan"),
-            "mean_walk_steps": float(0.0),
-            "mean_net_ascent_sigma": float("nan"),
-        }
+        return [], _build_match_stats(
+            simulated_count=len(simulated_peaks),
+            search_radius_px=search_radius,
+            distance_sigma_clip=distance_sigma_clip,
+            sigma_est=sigma_est,
+            prominence_center=prom_center,
+        )
 
     qualified_summits = [
         dict(record)
@@ -330,28 +372,14 @@ def match_simulated_peaks_to_peak_context(
         f"candidate peaks total={len(summit_records)} qualified={len(qualified_summits)} radius={match_radius:.2f}",
     )
     if not qualified_summits:
-        return [], {
-            "simulated_count": float(len(simulated_peaks)),
-            "candidate_count": float(len(summit_records)),
-            "qualified_summit_count": 0.0,
-            "claimed_summit_count": 0.0,
-            "conflicted_match_count": 0.0,
-            "matched_pre_clip_count": 0.0,
-            "matched_count": 0.0,
-            "clipped_count": 0.0,
-            "sigma_est": float(sigma_est),
-            "prominence_center": float(prom_center),
-            "search_radius_px": float(search_radius),
-            "distance_sigma_clip": float(distance_sigma_clip),
-            "distance_clip_limit_px": float("nan"),
-            "distance_median_pre_clip_px": float("nan"),
-            "distance_sigma_pre_clip_px": float("nan"),
-            "mean_match_distance_px": float("nan"),
-            "p90_match_distance_px": float("nan"),
-            "median_match_confidence": float("nan"),
-            "mean_walk_steps": float(0.0),
-            "mean_net_ascent_sigma": float("nan"),
-        }
+        return [], _build_match_stats(
+            simulated_count=len(simulated_peaks),
+            search_radius_px=search_radius,
+            distance_sigma_clip=distance_sigma_clip,
+            sigma_est=sigma_est,
+            prominence_center=prom_center,
+            candidate_count=len(summit_records),
+        )
 
     for info in qualified_summits:
         if bool(info.get("center_refined", False)):
@@ -381,28 +409,14 @@ def match_simulated_peaks_to_peak_context(
         qualified_summits = filtered
         candidate_coords = np.asarray(filtered_coords, dtype=float)
     if candidate_coords.size == 0:
-        return [], {
-            "simulated_count": float(len(simulated_peaks)),
-            "candidate_count": float(len(summit_records)),
-            "qualified_summit_count": 0.0,
-            "claimed_summit_count": 0.0,
-            "conflicted_match_count": 0.0,
-            "matched_pre_clip_count": 0.0,
-            "matched_count": 0.0,
-            "clipped_count": 0.0,
-            "sigma_est": float(sigma_est),
-            "prominence_center": float(prom_center),
-            "search_radius_px": float(search_radius),
-            "distance_sigma_clip": float(distance_sigma_clip),
-            "distance_clip_limit_px": float("nan"),
-            "distance_median_pre_clip_px": float("nan"),
-            "distance_sigma_pre_clip_px": float("nan"),
-            "mean_match_distance_px": float("nan"),
-            "p90_match_distance_px": float("nan"),
-            "median_match_confidence": float("nan"),
-            "mean_walk_steps": float(0.0),
-            "mean_net_ascent_sigma": float("nan"),
-        }
+        return [], _build_match_stats(
+            simulated_count=len(simulated_peaks),
+            search_radius_px=search_radius,
+            distance_sigma_clip=distance_sigma_clip,
+            sigma_est=sigma_est,
+            prominence_center=prom_center,
+            candidate_count=len(summit_records),
+        )
 
     ordered_simulated = [
         dict(entry)
@@ -413,6 +427,66 @@ def match_simulated_peaks_to_peak_context(
         )
     ]
     tree = cKDTree(candidate_coords)
+
+    owner_seed_by_candidate = np.full(candidate_coords.shape[0], -1, dtype=np.int64)
+    owner_dist_by_candidate = np.full(candidate_coords.shape[0], np.inf, dtype=float)
+    competitor_dist_by_candidate = np.full(candidate_coords.shape[0], np.inf, dtype=float)
+    within_radius_mask = np.zeros(candidate_coords.shape[0], dtype=bool)
+    unambiguous_mask = np.ones(candidate_coords.shape[0], dtype=bool)
+    ownership_filtered_count = 0
+    if require_candidate_ownership and candidate_coords.shape[0] > 0:
+        seed_coords_local: list[list[float]] = []
+        seed_tree_indices: list[int] = []
+        for seed_idx, entry in enumerate(ordered_simulated):
+            sim_col_local = float(entry.get("sim_col_local", entry.get("sim_col", np.nan)))
+            sim_row_local = float(entry.get("sim_row_local", entry.get("sim_row", np.nan)))
+            if not (np.isfinite(sim_col_local) and np.isfinite(sim_row_local)):
+                continue
+            seed_coords_local.append([sim_col_local, sim_row_local])
+            seed_tree_indices.append(int(seed_idx))
+
+        if seed_coords_local:
+            seed_coords_arr = np.asarray(seed_coords_local, dtype=float)
+            seed_tree = cKDTree(seed_coords_arr)
+            k_query = 1 if len(seed_tree_indices) <= 1 else 2
+            owner_dists_raw, owner_idx_raw = seed_tree.query(candidate_coords, k=k_query)
+            owner_dists = np.asarray(owner_dists_raw, dtype=float)
+            owner_idx = np.asarray(owner_idx_raw, dtype=np.int64)
+            if owner_dists.ndim == 1:
+                owner_dists = owner_dists[:, np.newaxis]
+                owner_idx = owner_idx[:, np.newaxis]
+
+            owner_dist_by_candidate = owner_dists[:, 0]
+            owner_seed_by_candidate = np.asarray(
+                [
+                    int(seed_tree_indices[idx]) if 0 <= idx < len(seed_tree_indices) else -1
+                    for idx in owner_idx[:, 0].tolist()
+                ],
+                dtype=np.int64,
+            )
+            within_radius_mask = np.isfinite(owner_dist_by_candidate) & (
+                owner_dist_by_candidate <= match_radius + 1.0e-9
+            )
+            if owner_dists.shape[1] >= 2:
+                competitor_dist_by_candidate = owner_dists[:, 1]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    ratio = competitor_dist_by_candidate / np.maximum(
+                        owner_dist_by_candidate,
+                        1.0e-9,
+                    )
+                unambiguous_mask = (
+                    ~np.isfinite(competitor_dist_by_candidate)
+                    | ((competitor_dist_by_candidate - owner_dist_by_candidate) >= ambiguity_margin_px)
+                    | (ratio >= ambiguity_ratio_min)
+                )
+            ownership_filtered_count = int(
+                np.count_nonzero(within_radius_mask & ~unambiguous_mask)
+            )
+        else:
+            unambiguous_mask = np.zeros(candidate_coords.shape[0], dtype=bool)
+
+    within_radius_count = int(np.count_nonzero(within_radius_mask))
+    unambiguous_count = int(np.count_nonzero(within_radius_mask & unambiguous_mask))
 
     edge_lookup: dict[tuple[int, int], dict[str, object]] = {}
     viable_by_summit: dict[int, list[dict[str, object]]] = defaultdict(list)
@@ -448,6 +522,13 @@ def match_simulated_peaks_to_peak_context(
 
         for cand_idx in cand_indices:
             cand_idx = int(cand_idx)
+            if require_candidate_ownership:
+                if cand_idx < 0 or cand_idx >= owner_seed_by_candidate.shape[0]:
+                    continue
+                if not bool(within_radius_mask[cand_idx]) or not bool(unambiguous_mask[cand_idx]):
+                    continue
+                if int(owner_seed_by_candidate[cand_idx]) != int(seed_idx):
+                    continue
             info = qualified_summits[cand_idx]
             center_col_local = float(candidate_coords[cand_idx, 0])
             center_row_local = float(candidate_coords[cand_idx, 1])
@@ -484,6 +565,26 @@ def match_simulated_peaks_to_peak_context(
                 config,
             )
             summit_id = int(info["summit_id"])
+            competitor_dist = (
+                float(competitor_dist_by_candidate[cand_idx])
+                if 0 <= cand_idx < competitor_dist_by_candidate.shape[0]
+                else float("nan")
+            )
+            owner_dist = (
+                float(owner_dist_by_candidate[cand_idx])
+                if 0 <= cand_idx < owner_dist_by_candidate.shape[0]
+                else float("nan")
+            )
+            ownership_margin = (
+                competitor_dist - owner_dist
+                if np.isfinite(competitor_dist) and np.isfinite(owner_dist)
+                else float("inf")
+            )
+            ownership_ratio = (
+                competitor_dist / max(owner_dist, 1.0e-9)
+                if np.isfinite(competitor_dist) and np.isfinite(owner_dist)
+                else float("inf")
+            )
             match_entry = {
                 "seed_index": int(seed_idx),
                 "summit_id": summit_id,
@@ -502,6 +603,10 @@ def match_simulated_peaks_to_peak_context(
                 "walk_steps": 0,
                 "walk_distance_px": float(raw_distance),
                 "net_ascent_sigma": float(net_ascent_sigma),
+                "owner_distance_px": float(owner_dist),
+                "competitor_distance_px": float(competitor_dist),
+                "ownership_margin_px": float(ownership_margin),
+                "ownership_ratio": float(ownership_ratio),
                 "source_peak_index": entry.get("source_peak_index"),
                 "source_label": entry.get("source_label"),
                 "source_table_index": entry.get("source_table_index"),
@@ -515,28 +620,21 @@ def match_simulated_peaks_to_peak_context(
             viable_by_summit[summit_id].append(match_entry)
 
     if not edge_lookup:
-        return [], {
-            "simulated_count": float(len(simulated_peaks)),
-            "candidate_count": float(len(summit_records)),
-            "qualified_summit_count": float(len(qualified_summits)),
-            "claimed_summit_count": 0.0,
-            "conflicted_match_count": 0.0,
-            "matched_pre_clip_count": 0.0,
-            "matched_count": 0.0,
-            "clipped_count": 0.0,
-            "sigma_est": float(sigma_est),
-            "prominence_center": float(prom_center),
-            "search_radius_px": float(search_radius),
-            "distance_sigma_clip": float(distance_sigma_clip),
-            "distance_clip_limit_px": float("nan"),
-            "distance_median_pre_clip_px": float("nan"),
-            "distance_sigma_pre_clip_px": float("nan"),
-            "mean_match_distance_px": float("nan"),
-            "p90_match_distance_px": float("nan"),
-            "median_match_confidence": float("nan"),
-            "mean_walk_steps": float(0.0),
-            "mean_net_ascent_sigma": float(np.mean(net_ascent_values)) if net_ascent_values else float("nan"),
-        }
+        return [], _build_match_stats(
+            simulated_count=len(simulated_peaks),
+            search_radius_px=search_radius,
+            distance_sigma_clip=distance_sigma_clip,
+            sigma_est=sigma_est,
+            prominence_center=prom_center,
+            candidate_count=len(summit_records),
+            qualified_summit_count=len(qualified_summits),
+            within_radius_count=within_radius_count,
+            unambiguous_count=unambiguous_count,
+            ownership_filtered_count=ownership_filtered_count,
+            mean_net_ascent_sigma=(
+                float(np.mean(net_ascent_values)) if net_ascent_values else float("nan")
+            ),
+        )
 
     seed_keys = sorted({key[0] for key in edge_lookup})
     summit_keys = sorted({key[1] for key in edge_lookup})
@@ -600,28 +698,47 @@ def match_simulated_peaks_to_peak_context(
     match_net_ascent = np.asarray([float(m.get("net_ascent_sigma", np.nan)) for m in matches], dtype=float)
     finite_net_ascent = match_net_ascent[np.isfinite(match_net_ascent)]
 
-    return matches, {
-        "simulated_count": float(len(simulated_peaks)),
-        "candidate_count": float(len(summit_records)),
-        "qualified_summit_count": float(len(qualified_summits)),
-        "claimed_summit_count": float(len(viable_by_summit)),
-        "conflicted_match_count": float(conflicted_match_count),
-        "matched_pre_clip_count": float(len(pre_clip_matches)),
-        "matched_count": float(len(matches)),
-        "clipped_count": float(clipped_count),
-        "sigma_est": float(sigma_est),
-        "prominence_center": float(prom_center),
-        "search_radius_px": float(search_radius),
-        "distance_sigma_clip": float(distance_sigma_clip),
-        "distance_clip_limit_px": float(clip_limit) if np.isfinite(clip_limit) else float("nan"),
-        "distance_median_pre_clip_px": float(dist_med) if np.isfinite(dist_med) else float("nan"),
-        "distance_sigma_pre_clip_px": float(dist_sigma) if np.isfinite(dist_sigma) else float("nan"),
-        "mean_match_distance_px": float(np.mean(match_dists)) if match_dists.size else float("nan"),
-        "p90_match_distance_px": float(np.percentile(match_dists, 90.0)) if match_dists.size else float("nan"),
-        "median_match_confidence": float(np.median(match_conf)) if match_conf.size else float("nan"),
-        "mean_walk_steps": float(np.mean(match_walk_steps)) if match_walk_steps.size else float(0.0),
-        "mean_net_ascent_sigma": float(np.mean(finite_net_ascent)) if finite_net_ascent.size else float("nan"),
-    }
+    return matches, _build_match_stats(
+        simulated_count=len(simulated_peaks),
+        search_radius_px=search_radius,
+        distance_sigma_clip=distance_sigma_clip,
+        sigma_est=sigma_est,
+        prominence_center=prom_center,
+        candidate_count=len(summit_records),
+        qualified_summit_count=len(qualified_summits),
+        within_radius_count=within_radius_count,
+        unambiguous_count=unambiguous_count,
+        ownership_filtered_count=ownership_filtered_count,
+        claimed_summit_count=len(viable_by_summit),
+        conflicted_match_count=conflicted_match_count,
+        matched_pre_clip_count=len(pre_clip_matches),
+        matched_count=len(matches),
+        clipped_count=clipped_count,
+        distance_clip_limit_px=(
+            float(clip_limit) if np.isfinite(clip_limit) else float("nan")
+        ),
+        distance_median_pre_clip_px=(
+            float(dist_med) if np.isfinite(dist_med) else float("nan")
+        ),
+        distance_sigma_pre_clip_px=(
+            float(dist_sigma) if np.isfinite(dist_sigma) else float("nan")
+        ),
+        mean_match_distance_px=(
+            float(np.mean(match_dists)) if match_dists.size else float("nan")
+        ),
+        p90_match_distance_px=(
+            float(np.percentile(match_dists, 90.0)) if match_dists.size else float("nan")
+        ),
+        median_match_confidence=(
+            float(np.median(match_conf)) if match_conf.size else float("nan")
+        ),
+        mean_walk_steps=(
+            float(np.mean(match_walk_steps)) if match_walk_steps.size else float(0.0)
+        ),
+        mean_net_ascent_sigma=(
+            float(np.mean(finite_net_ascent)) if finite_net_ascent.size else float("nan")
+        ),
+    )
 
 
 def match_simulated_peaks_to_background(

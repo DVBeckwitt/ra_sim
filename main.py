@@ -10393,6 +10393,7 @@ def _auto_match_background_peaks_with_relaxation(
             {
                 "label": label,
                 "matches": float(len(matches_i)),
+                "search_radius_px": float(attempt_cfg.get("search_radius_px", np.nan)),
                 "min_match_prominence_sigma": float(
                     attempt_cfg.get(
                         "min_match_prominence_sigma",
@@ -10400,6 +10401,8 @@ def _auto_match_background_peaks_with_relaxation(
                     )
                 ),
                 "max_candidate_peaks": float(attempt_cfg.get("max_candidate_peaks", np.nan)),
+                "ambiguity_margin_px": float(attempt_cfg.get("ambiguity_margin_px", np.nan)),
+                "ambiguity_ratio_min": float(attempt_cfg.get("ambiguity_ratio_min", np.nan)),
                 "qualified_summit_count": float(
                     stats_i.get("qualified_summit_count", np.nan)
                 ),
@@ -10440,6 +10443,7 @@ def _auto_match_background_peaks_with_relaxation(
         )
         return best_matches, best_stats, best_cfg, attempts
 
+    base_radius = max(1.0, float(base_cfg.get("search_radius_px", 18.0)))
     base_match_prom = float(
         base_cfg.get(
             "min_match_prominence_sigma",
@@ -10447,14 +10451,20 @@ def _auto_match_background_peaks_with_relaxation(
         )
     )
     base_max_candidates = max(50, int(base_cfg.get("max_candidate_peaks", 1200)))
+    base_ambiguity_margin = max(0.0, float(base_cfg.get("ambiguity_margin_px", 2.0)))
+    base_ambiguity_ratio = max(1.0, float(base_cfg.get("ambiguity_ratio_min", 1.15)))
     base_distance_sigma_clip = max(0.0, float(base_cfg.get("distance_sigma_clip", 3.5)))
 
     relax_steps = max(1, min(6, int(base_cfg.get("relax_steps", 3))))
+    radius_growth = max(0.1, float(base_cfg.get("relax_radius_growth", 0.65)))
     prominence_step = max(0.0, float(base_cfg.get("relax_prominence_step", 0.4)))
     candidate_growth = max(0.0, float(base_cfg.get("relax_candidate_growth", 0.35)))
 
     for step in range(1, relax_steps + 1):
         relax_cfg = dict(base_cfg)
+        relax_cfg["search_radius_px"] = float(
+            min(120.0, max(base_radius, base_radius * (1.0 + radius_growth * step)))
+        )
         relax_cfg["min_match_prominence_sigma"] = float(
             max(0.0, base_match_prom - prominence_step * step)
         )
@@ -10466,6 +10476,12 @@ def _auto_match_background_peaks_with_relaxation(
                     round(base_max_candidates * (1.0 + candidate_growth * step)),
                 ),
             )
+        )
+        relax_cfg["ambiguity_margin_px"] = float(
+            max(0.0, base_ambiguity_margin - 0.5 * step)
+        )
+        relax_cfg["ambiguity_ratio_min"] = float(
+            max(1.0, base_ambiguity_ratio - 0.05 * step)
         )
         relax_cfg["distance_sigma_clip"] = float(
             max(base_distance_sigma_clip, 3.5 + 0.5 * step)
@@ -11367,8 +11383,11 @@ def on_fit_geometry_click():
                 (
                     f"{entry.get('label', 'attempt')}: "
                     f"matches={int(float(entry.get('matches', 0.0)))} "
+                    f"radius={float(entry.get('search_radius_px', np.nan)):.2f}px "
                     f"min_prom={float(entry.get('min_match_prominence_sigma', np.nan)):.2f}σ "
                     f"cands={int(float(entry.get('max_candidate_peaks', 0.0)))} "
+                    f"amb_margin={float(entry.get('ambiguity_margin_px', np.nan)):.2f}px "
+                    f"amb_ratio={float(entry.get('ambiguity_ratio_min', np.nan)):.2f} "
                     f"qualified={int(float(entry.get('qualified_summit_count', 0.0)))} "
                     f"claimed={int(float(entry.get('claimed_summit_count', 0.0)))} "
                     f"pre_clip={int(float(entry.get('matched_pre_clip_count', 0.0)))} "
@@ -11384,6 +11403,9 @@ def on_fit_geometry_click():
                 f"simulated_peaks={int(match_stats.get('simulated_count', len(simulated_peaks)))}",
                 f"candidate_summits={int(match_stats.get('candidate_count', 0))}",
                 f"qualified_summits={int(match_stats.get('qualified_summit_count', 0))}",
+                f"within_radius_summits={int(match_stats.get('within_radius_count', 0))}",
+                f"unambiguous_summits={int(match_stats.get('unambiguous_count', 0))}",
+                f"ownership_filtered_summits={int(match_stats.get('ownership_filtered_count', 0))}",
                 f"claimed_summits={int(match_stats.get('claimed_summit_count', 0))}",
                 f"conflicted_matches={int(match_stats.get('conflicted_match_count', 0))}",
                 f"matched_pre_clip={int(match_stats.get('matched_pre_clip_count', 0))}",

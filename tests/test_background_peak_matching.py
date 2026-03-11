@@ -114,6 +114,32 @@ def test_match_simulated_peaks_to_background_keeps_one_to_one_pairs():
     assert abs(xs[0] - xs[1]) > 2.0
 
 
+def test_match_simulated_peaks_to_background_rejects_ambiguous_shared_peak():
+    background = _synthetic_background(
+        (64, 64),
+        [
+            (20.0, 18.0, 10.0, 1.0),
+        ],
+        noise_sigma=0.0,
+    )
+    simulated = [
+        {"hkl": (1, 0, 0), "label": "1,0,0", "sim_col": 18.6, "sim_row": 18.0, "weight": 5.0},
+        {"hkl": (2, 0, 0), "label": "2,0,0", "sim_col": 21.4, "sim_row": 18.0, "weight": 4.8},
+    ]
+
+    matches, stats, _ = match_simulated_peaks_to_background(
+        simulated,
+        background,
+        _match_config(search_radius_px=4.0),
+    )
+
+    assert matches == []
+    assert math.isclose(float(stats["search_radius_px"]), 4.0)
+    assert int(stats["within_radius_count"]) == 1
+    assert int(stats["unambiguous_count"]) == 0
+    assert int(stats["ownership_filtered_count"]) == 1
+
+
 def test_refine_peak_center_recovers_quadratic_subpixel_summit():
     yy, xx = np.mgrid[0:9, 0:9]
     true_col = 4.35

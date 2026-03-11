@@ -120,12 +120,15 @@ instrument:
         smooth_sigma_px: 3.0
         min_prominence_sigma: 2.0
         min_match_prominence_sigma: 2.5
+        ambiguity_margin_px: 2.0
+        ambiguity_ratio_min: 1.15
         k_neighbors: 8
         max_candidate_peaks: 1200
         # Guardrails: cancel auto-fit if relaxed matches are too far from
         # simulated seeds in the display frame.
         max_mean_distance_px: 22.0
         max_p90_distance_px: 35.0
+        relax_radius_growth: 0.65
         # Keep the initially matched background peaks fixed during fitting.
         # Set true only if you explicitly want to re-run auto-match after each
         # optimizer pass.
