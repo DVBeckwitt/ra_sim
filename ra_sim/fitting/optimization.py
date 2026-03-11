@@ -3292,6 +3292,46 @@ def fit_geometry_parameters(
                         "meas_radius_lt_25px": int(np.count_nonzero(finite_meas_radius < 25.0)),
                     }
                 )
+            matched_distances = np.asarray(
+                [
+                    float(entry.get("distance_px", np.nan))
+                    for entry in diagnostics
+                    if str(entry.get("match_status", "")).lower() == "matched"
+                ],
+                dtype=float,
+            )
+            matched_distances = matched_distances[np.isfinite(matched_distances)]
+            summary["matched_pair_count"] = int(matched_distances.size)
+            if matched_distances.size:
+                summary.update(
+                    {
+                        "unweighted_peak_rms_px": float(
+                            np.sqrt(np.mean(matched_distances * matched_distances))
+                        ),
+                        "unweighted_peak_mean_px": float(np.mean(matched_distances)),
+                        "unweighted_peak_max_px": float(np.max(matched_distances)),
+                        "peak_weighting_mode": "uniform",
+                    }
+                )
+            else:
+                summary.update(
+                    {
+                        "unweighted_peak_rms_px": float("nan"),
+                        "unweighted_peak_mean_px": float("nan"),
+                        "unweighted_peak_max_px": float("nan"),
+                        "peak_weighting_mode": "uniform",
+                    }
+                )
+        else:
+            summary.update(
+                {
+                    "matched_pair_count": 0,
+                    "unweighted_peak_rms_px": float("nan"),
+                    "unweighted_peak_mean_px": float("nan"),
+                    "unweighted_peak_max_px": float("nan"),
+                    "peak_weighting_mode": "uniform",
+                }
+            )
         return residual_arr, diagnostics, summary
 
     def pixel_cost_fn(x):
@@ -3687,6 +3727,13 @@ def fit_geometry_parameters(
     result.robust_cost = float(best_cost)
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
+    weighted_residual_rms = float("nan")
+    if getattr(result, "fun", None) is not None:
+        result_fun = np.asarray(result.fun, dtype=float)
+        if result_fun.size:
+            weighted_residual_rms = float(np.sqrt(np.mean(result_fun * result_fun)))
+    result.weighted_residual_rms_px = float(weighted_residual_rms)
+    result.rms_px = float(weighted_residual_rms)
 
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)
@@ -3700,6 +3747,12 @@ def fit_geometry_parameters(
             )
             result.point_match_diagnostics = point_match_diagnostics
             result.point_match_summary = point_match_summary
+            try:
+                peak_rms = float(point_match_summary.get("unweighted_peak_rms_px", np.nan))
+            except Exception:
+                peak_rms = float("nan")
+            if np.isfinite(peak_rms):
+                result.rms_px = float(peak_rms)
         except Exception as exc:
             result.point_match_diagnostics = [
                 {
@@ -3712,6 +3765,7 @@ def fit_geometry_parameters(
                 "diagnostics_failed": True,
                 "error": str(exc),
             }
+            result.rms_px = float(weighted_residual_rms)
 
     return result
 

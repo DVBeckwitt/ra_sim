@@ -140,6 +140,34 @@ def test_match_simulated_peaks_to_background_rejects_ambiguous_shared_peak():
     assert int(stats["ownership_filtered_count"]) == 1
 
 
+def test_match_simulated_peaks_to_background_broad_search_keeps_seed_ownership():
+    background = _synthetic_background(
+        (64, 64),
+        [
+            (16.0, 18.0, 2.5, 1.0),
+            (24.0, 18.0, 12.0, 1.0),
+        ],
+        noise_sigma=0.0,
+    )
+    simulated = [
+        {"hkl": (1, 0, 0), "label": "1,0,0", "sim_col": 20.5, "sim_row": 18.0, "weight": 5.0},
+        {"hkl": (2, 0, 0), "label": "2,0,0", "sim_col": 23.6, "sim_row": 18.0, "weight": 4.8},
+    ]
+
+    matches, stats, _ = match_simulated_peaks_to_background(
+        simulated,
+        background,
+        _match_config(search_radius_px=8.0),
+    )
+
+    assert len(matches) == 2
+    assert math.isclose(float(stats["search_radius_px"]), 8.0)
+    match_by_label = {str(entry["label"]): entry for entry in matches}
+    assert math.hypot(float(match_by_label["1,0,0"]["x"]) - 16.0, float(match_by_label["1,0,0"]["y"]) - 18.0) < 1.0
+    assert math.hypot(float(match_by_label["1,0,0"]["x"]) - 24.0, float(match_by_label["1,0,0"]["y"]) - 18.0) > 3.0
+    assert math.hypot(float(match_by_label["2,0,0"]["x"]) - 24.0, float(match_by_label["2,0,0"]["y"]) - 18.0) < 1.0
+
+
 def test_refine_peak_center_recovers_quadratic_subpixel_summit():
     yy, xx = np.mgrid[0:9, 0:9]
     true_col = 4.35

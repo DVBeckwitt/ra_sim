@@ -764,3 +764,65 @@ def test_fit_geometry_parameters_pixel_path_pairwise_probe_escapes_coupled_flat_
         and "Gamma" in str(entry.get("message", ""))
         for entry in getattr(result, "restart_history", [])
     )
+
+
+def test_fit_geometry_parameters_reports_unweighted_peak_rms(monkeypatch):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[50.0, 14.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([25.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": True,
+                "f_scale_px": 1.0,
+            }
+        },
+    )
+
+    assert result.success
+    raw_distance = float(result.point_match_diagnostics[0]["distance_px"])
+    assert np.isclose(float(result.point_match_summary["matched_pair_count"]), 1.0)
+    assert np.isclose(float(result.point_match_summary["unweighted_peak_rms_px"]), raw_distance)
+    assert np.isclose(float(result.rms_px), raw_distance)
+    assert str(result.point_match_summary["peak_weighting_mode"]) == "uniform"
+    assert np.isfinite(float(result.weighted_residual_rms_px))
+    assert float(result.rms_px) > float(result.weighted_residual_rms_px)

@@ -1,12 +1,101 @@
 """Functions for persisting and retrieving configuration data."""
 
-import numpy as np
+from __future__ import annotations
+
+import json
 import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import numpy as np
 
 SOLVE_Q_STEPS_MIN = 32
 SOLVE_Q_STEPS_MAX = 8192
 SOLVE_Q_REL_TOL_MIN = 1.0e-6
 SOLVE_Q_REL_TOL_MAX = 5.0e-2
+GUI_STATE_FILE_TYPE = "ra_sim.gui_state"
+GUI_STATE_FILE_VERSION = 1
+
+
+def _json_safe_gui_state_value(value: Any) -> Any:
+    """Return *value* converted to JSON-safe builtin types."""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if not np.isfinite(numeric):
+            return None
+        return numeric
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe_gui_state_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, set):
+        try:
+            ordered = sorted(value)
+        except Exception:
+            ordered = list(value)
+        return [_json_safe_gui_state_value(item) for item in ordered]
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_gui_state_value(item) for item in value]
+    return str(value)
+
+
+def build_gui_state_payload(
+    state: dict[str, Any],
+    *,
+    saved_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a versioned GUI-state payload from *state*."""
+
+    payload: dict[str, Any] = {
+        "type": GUI_STATE_FILE_TYPE,
+        "version": int(GUI_STATE_FILE_VERSION),
+        "saved_at": saved_at or datetime.now().isoformat(timespec="seconds"),
+        "state": _json_safe_gui_state_value(state),
+    }
+    if metadata:
+        payload["metadata"] = _json_safe_gui_state_value(metadata)
+    return payload
+
+
+def save_gui_state_file(
+    path: str | os.PathLike[str],
+    state: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write a JSON GUI-state snapshot and return the payload."""
+
+    payload = build_gui_state_payload(state, metadata=metadata)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+    return payload
+
+
+def load_gui_state_file(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """Read and validate a JSON GUI-state snapshot."""
+
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("GUI state file must contain a JSON object.")
+    if str(payload.get("type", "")) != GUI_STATE_FILE_TYPE:
+        raise ValueError("Unsupported GUI state file type.")
+    state = payload.get("state")
+    if not isinstance(state, dict):
+        raise ValueError("GUI state file is missing a valid 'state' object.")
+    return payload
 
 
 def _normalize_optics_mode(value, fallback="fast"):

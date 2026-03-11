@@ -309,7 +309,7 @@ def match_simulated_peaks_to_peak_context(
     """Assign each simulated seed to one nearby measured background peak."""
 
     config = dict(cfg) if isinstance(cfg, dict) else {}
-    search_radius = max(1.0, float(config.get("search_radius_px", 18.0)))
+    search_radius = max(1.0, float(config.get("search_radius_px", 24.0)))
     min_match_prominence_sigma = float(
         config.get(
             "min_match_prominence_sigma",
@@ -318,7 +318,7 @@ def match_simulated_peaks_to_peak_context(
     )
     min_confidence = float(config.get("min_confidence", 0.0))
     max_candidate_peaks = max(50, int(config.get("max_candidate_peaks", 1200)))
-    k_neighbors = max(1, int(config.get("k_neighbors", 8)))
+    k_neighbors = max(1, int(config.get("k_neighbors", 12)))
     distance_sigma_clip = max(0.0, float(config.get("distance_sigma_clip", 3.5)))
     ambiguity_ratio_min = max(1.0, float(config.get("ambiguity_ratio_min", 1.15)))
     ambiguity_margin_px = max(0.0, float(config.get("ambiguity_margin_px", 2.0)))

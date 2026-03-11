@@ -10443,7 +10443,7 @@ def _auto_match_background_peaks_with_relaxation(
         )
         return best_matches, best_stats, best_cfg, attempts
 
-    base_radius = max(1.0, float(base_cfg.get("search_radius_px", 18.0)))
+    base_radius = max(1.0, float(base_cfg.get("search_radius_px", 24.0)))
     base_match_prom = float(
         base_cfg.get(
             "min_match_prominence_sigma",
@@ -10459,6 +10459,7 @@ def _auto_match_background_peaks_with_relaxation(
     radius_growth = max(0.1, float(base_cfg.get("relax_radius_growth", 0.65)))
     prominence_step = max(0.0, float(base_cfg.get("relax_prominence_step", 0.4)))
     candidate_growth = max(0.0, float(base_cfg.get("relax_candidate_growth", 0.35)))
+    relax_ownership_guards = bool(base_cfg.get("relax_ownership_guards", False))
 
     for step in range(1, relax_steps + 1):
         relax_cfg = dict(base_cfg)
@@ -10477,12 +10478,16 @@ def _auto_match_background_peaks_with_relaxation(
                 ),
             )
         )
-        relax_cfg["ambiguity_margin_px"] = float(
-            max(0.0, base_ambiguity_margin - 0.5 * step)
-        )
-        relax_cfg["ambiguity_ratio_min"] = float(
-            max(1.0, base_ambiguity_ratio - 0.05 * step)
-        )
+        if relax_ownership_guards:
+            relax_cfg["ambiguity_margin_px"] = float(
+                max(0.0, base_ambiguity_margin - 0.5 * step)
+            )
+            relax_cfg["ambiguity_ratio_min"] = float(
+                max(1.0, base_ambiguity_ratio - 0.05 * step)
+            )
+        else:
+            relax_cfg["ambiguity_margin_px"] = float(base_ambiguity_margin)
+            relax_cfg["ambiguity_ratio_min"] = float(base_ambiguity_ratio)
         relax_cfg["distance_sigma_clip"] = float(
             max(base_distance_sigma_clip, 3.5 + 0.5 * step)
         )
@@ -10762,7 +10767,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     preview_auto_match_cfg["relax_on_low_matches"] = False
     preview_auto_match_cfg.setdefault(
         "context_margin_px",
-        max(192.0, 8.0 * float(auto_match_cfg.get("search_radius_px", 18.0))),
+        max(192.0, 8.0 * float(auto_match_cfg.get("search_radius_px", 24.0))),
     )
 
     var_names = _current_geometry_fit_var_names()
@@ -10831,7 +10836,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
                 "degenerate_merge_radius_px",
                 min(
                     6.0,
-                    0.33 * float(preview_auto_match_cfg.get("search_radius_px", 18.0)),
+                    0.33 * float(preview_auto_match_cfg.get("search_radius_px", 24.0)),
                 ),
             )
         ),
@@ -11006,7 +11011,7 @@ def on_fit_geometry_click():
     fit_auto_match_cfg.setdefault("console_progress_every", 10)
     fit_auto_match_cfg.setdefault(
         "context_margin_px",
-        max(256.0, 10.0 * float(auto_match_cfg.get("search_radius_px", 18.0))),
+        max(256.0, 10.0 * float(auto_match_cfg.get("search_radius_px", 24.0))),
     )
     raw_simulated_peak_count = len(simulated_peaks)
     simulated_peaks, collapsed_deg_fit = _collapse_geometry_fit_simulated_peaks(
@@ -11016,7 +11021,7 @@ def on_fit_geometry_click():
                 "degenerate_merge_radius_px",
                 min(
                     6.0,
-                    0.33 * float(fit_auto_match_cfg.get("search_radius_px", 18.0)),
+                    0.33 * float(fit_auto_match_cfg.get("search_radius_px", 24.0)),
                 ),
             )
         ),
@@ -11604,9 +11609,13 @@ def on_fit_geometry_click():
                 _set_fit_param(current_fit_params, name, float(val))
 
             iter_rms = (
-                float(np.sqrt(np.mean(result.fun ** 2)))
-                if getattr(result, "fun", None) is not None and result.fun.size
-                else float("nan")
+                float(getattr(result, "rms_px"))
+                if np.isfinite(float(getattr(result, "rms_px", np.nan)))
+                else (
+                    float(np.sqrt(np.mean(result.fun ** 2)))
+                    if getattr(result, "fun", None) is not None and result.fun.size
+                    else float("nan")
+                )
             )
             iteration_logs.append(
                 (
@@ -11660,7 +11669,7 @@ def on_fit_geometry_click():
                             min(
                                 6.0,
                                 0.33
-                                * float(fit_auto_match_cfg.get("search_radius_px", 18.0)),
+                                * float(fit_auto_match_cfg.get("search_radius_px", 24.0)),
                             ),
                         )
                     ),
@@ -11933,9 +11942,13 @@ def on_fit_geometry_click():
         schedule_update()
 
         rms = (
-            np.sqrt(np.mean(result.fun ** 2))
-            if getattr(result, "fun", None) is not None and result.fun.size
-            else 0.0
+            float(getattr(result, "rms_px"))
+            if np.isfinite(float(getattr(result, "rms_px", np.nan)))
+            else (
+                np.sqrt(np.mean(result.fun ** 2))
+                if getattr(result, "fun", None) is not None and result.fun.size
+                else 0.0
+            )
         )
         _log_section(
             "Optimization result:",
@@ -12805,9 +12818,13 @@ def on_fit_geometry_click():
                 schedule_update()
 
                 rms = (
-                    np.sqrt(np.mean(result.fun**2))
-                    if getattr(result, "fun", None) is not None and result.fun.size
-                    else 0.0
+                    float(getattr(result, "rms_px"))
+                    if np.isfinite(float(getattr(result, "rms_px", np.nan)))
+                    else (
+                        np.sqrt(np.mean(result.fun**2))
+                        if getattr(result, "fun", None) is not None and result.fun.size
+                        else 0.0
+                    )
                 )
                 _log_section(
                     "Optimization result:",

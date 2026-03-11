@@ -4950,7 +4950,7 @@ def _auto_match_background_peaks(
     """
 
     config = cfg if isinstance(cfg, dict) else {}
-    search_radius = max(1.0, float(config.get("search_radius_px", 18.0)))
+    search_radius = max(1.0, float(config.get("search_radius_px", 24.0)))
     local_max_size = int(config.get("local_max_size_px", 5))
     local_max_size = max(3, local_max_size)
     if local_max_size % 2 == 0:
@@ -4960,7 +4960,7 @@ def _auto_match_background_peaks(
     min_match_prominence_sigma = float(
         config.get("min_match_prominence_sigma", min_prominence_sigma)
     )
-    k_neighbors = max(1, int(config.get("k_neighbors", 8)))
+    k_neighbors = max(1, int(config.get("k_neighbors", 12)))
     fallback_percentile = float(config.get("fallback_percentile", 99.5))
     fallback_percentile = min(100.0, max(50.0, fallback_percentile))
     min_confidence = float(config.get("min_confidence", 0.0))
@@ -5234,7 +5234,7 @@ def _auto_match_background_peaks_with_relaxation(
     if not bool(base_cfg.get("relax_on_low_matches", True)):
         return best_matches, best_stats, best_cfg, attempts
 
-    base_radius = max(1.0, float(base_cfg.get("search_radius_px", 18.0)))
+    base_radius = max(1.0, float(base_cfg.get("search_radius_px", 24.0)))
     base_match_prom = float(
         base_cfg.get(
             "min_match_prominence_sigma",
@@ -5250,6 +5250,7 @@ def _auto_match_background_peaks_with_relaxation(
     radius_growth = max(0.1, float(base_cfg.get("relax_radius_growth", 0.65)))
     prominence_step = max(0.0, float(base_cfg.get("relax_prominence_step", 0.4)))
     candidate_growth = max(0.0, float(base_cfg.get("relax_candidate_growth", 0.35)))
+    relax_ownership_guards = bool(base_cfg.get("relax_ownership_guards", False))
 
     for step in range(1, relax_steps + 1):
         relax_cfg = dict(base_cfg)
@@ -5268,8 +5269,16 @@ def _auto_match_background_peaks_with_relaxation(
                 ),
             )
         )
-        relax_cfg["ambiguity_margin_px"] = float(max(0.0, base_ambiguity_margin - 0.5 * step))
-        relax_cfg["ambiguity_ratio_min"] = float(max(1.0, base_ambiguity_ratio - 0.05 * step))
+        if relax_ownership_guards:
+            relax_cfg["ambiguity_margin_px"] = float(
+                max(0.0, base_ambiguity_margin - 0.5 * step)
+            )
+            relax_cfg["ambiguity_ratio_min"] = float(
+                max(1.0, base_ambiguity_ratio - 0.05 * step)
+            )
+        else:
+            relax_cfg["ambiguity_margin_px"] = float(base_ambiguity_margin)
+            relax_cfg["ambiguity_ratio_min"] = float(base_ambiguity_ratio)
         relax_cfg["distance_sigma_clip"] = float(
             max(base_distance_sigma_clip, 3.5 + 0.5 * step)
         )
@@ -5415,7 +5424,7 @@ def on_fit_geometry_click():
         simulated_count = int(match_stats.get("simulated_count", len(simulated_peaks)))
         best_radius = float(
             effective_auto_match_cfg.get(
-                "search_radius_px", auto_match_cfg.get("search_radius_px", 18.0)
+                "search_radius_px", auto_match_cfg.get("search_radius_px", 24.0)
             )
         )
         progress_label_geometry.config(
@@ -5753,9 +5762,13 @@ def on_fit_geometry_click():
                 _set_fit_param(current_fit_params, name, float(val))
 
             iter_rms = (
-                float(np.sqrt(np.mean(result.fun ** 2)))
-                if getattr(result, "fun", None) is not None and result.fun.size
-                else float("nan")
+                float(getattr(result, "rms_px"))
+                if np.isfinite(float(getattr(result, "rms_px", np.nan)))
+                else (
+                    float(np.sqrt(np.mean(result.fun ** 2)))
+                    if getattr(result, "fun", None) is not None and result.fun.size
+                    else float("nan")
+                )
             )
             iteration_logs.append(
                 (
@@ -6018,9 +6031,13 @@ def on_fit_geometry_click():
         schedule_update()
 
         rms = (
-            np.sqrt(np.mean(result.fun ** 2))
-            if getattr(result, "fun", None) is not None and result.fun.size
-            else 0.0
+            float(getattr(result, "rms_px"))
+            if np.isfinite(float(getattr(result, "rms_px", np.nan)))
+            else (
+                np.sqrt(np.mean(result.fun ** 2))
+                if getattr(result, "fun", None) is not None and result.fun.size
+                else 0.0
+            )
         )
         _log_section(
             "Optimization result:",
@@ -6834,9 +6851,13 @@ def on_fit_geometry_click():
                 schedule_update()
 
                 rms = (
-                    np.sqrt(np.mean(result.fun**2))
-                    if getattr(result, "fun", None) is not None and result.fun.size
-                    else 0.0
+                    float(getattr(result, "rms_px"))
+                    if np.isfinite(float(getattr(result, "rms_px", np.nan)))
+                    else (
+                        np.sqrt(np.mean(result.fun**2))
+                        if getattr(result, "fun", None) is not None and result.fun.size
+                        else 0.0
+                    )
                 )
                 _log_section(
                     "Optimization result:",

@@ -115,20 +115,23 @@ instrument:
         stagnation_probe_random_directions: 0
       # Automatic background peak association for geometry fitting.
       auto_match:
-        search_radius_px: 18.0
+        search_radius_px: 24.0
         local_max_size_px: 5
         smooth_sigma_px: 3.0
         min_prominence_sigma: 2.0
         min_match_prominence_sigma: 2.5
         ambiguity_margin_px: 2.0
         ambiguity_ratio_min: 1.15
-        k_neighbors: 8
+        k_neighbors: 12
         max_candidate_peaks: 1200
         # Guardrails: cancel auto-fit if relaxed matches are too far from
         # simulated seeds in the display frame.
         max_mean_distance_px: 22.0
         max_p90_distance_px: 35.0
         relax_radius_growth: 0.65
+        # Keep ownership guards fixed while the search radius grows so one
+        # seed cannot claim a neighboring seed's background peak.
+        relax_ownership_guards: false
         # Keep the initially matched background peaks fixed during fitting.
         # Set true only if you explicitly want to re-run auto-match after each
         # optimizer pass.
