@@ -3306,6 +3306,244 @@ def _draw_initial_geometry_pairs_overlay(
     canvas.draw_idle()
 
 
+def _build_geometry_manual_initial_pairs_display(
+    background_index: int,
+    *,
+    param_set: dict[str, object] | None = None,
+    prefer_cache: bool = False,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Build overlay-ready manual geometry pairs for one background image."""
+
+    saved_entries = _geometry_manual_pairs_for_index(background_index)
+    if not saved_entries:
+        return [], []
+
+    params_local = dict(param_set) if isinstance(param_set, dict) else _current_geometry_fit_params()
+    if prefer_cache and int(background_index) == int(current_background_index):
+        cache_data = _get_geometry_manual_pick_cache(
+            param_set=params_local,
+            prefer_cache=True,
+            background_index=background_index,
+        )
+        simulated_lookup = dict(cache_data.get("simulated_lookup", {}))
+    else:
+        simulated_peaks = _geometry_manual_simulated_peaks_for_params(
+            params_local,
+            prefer_cache=False,
+        )
+        simulated_lookup = _geometry_manual_simulated_lookup(simulated_peaks)
+
+    measured_display: list[dict[str, object]] = []
+    initial_pairs_display: list[dict[str, object]] = []
+    for pair_idx, entry in enumerate(saved_entries):
+        measured_entry = dict(entry)
+        measured_entry["overlay_match_index"] = int(pair_idx)
+        measured_display.append(measured_entry)
+
+        initial_entry: dict[str, object] = {
+            "overlay_match_index": int(pair_idx),
+            "hkl": entry.get("hkl", entry.get("label")),
+            "bg_display": (float(entry["x"]), float(entry["y"])),
+        }
+        try:
+            source_key = (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            )
+        except Exception:
+            source_key = None
+        if source_key is not None:
+            sim_entry = simulated_lookup.get(source_key)
+            if isinstance(sim_entry, dict):
+                try:
+                    sim_col = float(sim_entry.get("sim_col"))
+                    sim_row = float(sim_entry.get("sim_row"))
+                except Exception:
+                    sim_col = float("nan")
+                    sim_row = float("nan")
+                if np.isfinite(sim_col) and np.isfinite(sim_row):
+                    initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+        initial_pairs_display.append(initial_entry)
+
+    return measured_display, initial_pairs_display
+
+
+def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> bool:
+    """Redraw the saved manual geometry-pair overlay for the current background."""
+
+    if show_caked_2d_var.get() or not background_visible or current_background_display is None:
+        _clear_geometry_pick_artists()
+        return False
+
+    params_local = _current_geometry_fit_params()
+    measured_display, initial_pairs_display = _build_geometry_manual_initial_pairs_display(
+        int(current_background_index),
+        param_set=params_local,
+        prefer_cache=True,
+    )
+    if not measured_display:
+        _clear_geometry_pick_artists()
+        if update_status:
+            progress_label_geometry.config(
+                text="No saved manual geometry pairs for the current background image."
+            )
+        return False
+
+    _draw_initial_geometry_pairs_overlay(
+        initial_pairs_display,
+        max_display_markers=max(1, len(initial_pairs_display)),
+    )
+    _update_geometry_manual_pick_button_label()
+    _set_background_file_status_text()
+
+    if update_status:
+        progress_label_geometry.config(
+            text=(
+                f"Current background has {len(initial_pairs_display)} saved manual points "
+                f"across {_geometry_manual_pair_group_count(current_background_index)} Qr/Qz groups."
+            )
+        )
+    return True
+
+
+def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
+    """Add or remove one full symmetric Qr/Qz set at the clicked image location."""
+
+    display_background = _get_current_background_display()
+    if display_background is None:
+        progress_label_geometry.config(text="No background image is loaded for manual geometry picking.")
+        return False
+
+    cache_data = _get_geometry_manual_pick_cache(
+        param_set=_current_geometry_fit_params(),
+        prefer_cache=True,
+        background_image=display_background,
+    )
+    grouped_candidates = dict(cache_data.get("grouped_candidates", {}))
+    if not grouped_candidates:
+        progress_label_geometry.config(
+            text="No simulated Qr/Qz groups are available to pick. Run a simulation update first."
+        )
+        return False
+
+    best_group_key = None
+    best_group_entries: list[dict[str, object]] = []
+    best_d2 = float("inf")
+    for group_key, candidate_entries in grouped_candidates.items():
+        for candidate in candidate_entries:
+            try:
+                sim_col = float(candidate.get("sim_col"))
+                sim_row = float(candidate.get("sim_row"))
+            except Exception:
+                continue
+            if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+                continue
+            d2 = (sim_col - float(col)) ** 2 + (sim_row - float(row)) ** 2
+            if d2 < best_d2:
+                best_d2 = float(d2)
+                best_group_key = group_key
+                best_group_entries = list(candidate_entries)
+
+    if best_group_key is None or best_d2 > float(GEOMETRY_MANUAL_PICK_MAX_DISTANCE_PX) ** 2:
+        progress_label_geometry.config(
+            text=(
+                f"No Qr/Qz set found within {GEOMETRY_MANUAL_PICK_MAX_DISTANCE_PX:.0f}px "
+                "of the clicked position."
+            )
+        )
+        return False
+
+    existing_entries = _geometry_manual_pairs_for_index(current_background_index)
+    if any(entry.get("q_group_key") == best_group_key for entry in existing_entries):
+        remaining_entries = [
+            entry for entry in existing_entries if entry.get("q_group_key") != best_group_key
+        ]
+        _set_geometry_manual_pairs_for_index(current_background_index, remaining_entries)
+        _render_current_geometry_manual_pairs(update_status=False)
+        progress_label_geometry.config(
+            text=(
+                f"Removed one saved Qr/Qz set from background "
+                f"{int(current_background_index) + 1}."
+            )
+        )
+        return True
+
+    updated_entries = [
+        entry for entry in existing_entries if entry.get("q_group_key") != best_group_key
+    ]
+    matched_lookup = _match_geometry_manual_group_to_background(
+        best_group_entries,
+        background_image=display_background,
+        cache_data=cache_data,
+    )
+    match_cfg = dict(cache_data.get("match_config", {})) if isinstance(cache_data, dict) else {}
+    fallback_radius = max(
+        3,
+        int(
+            round(
+                min(
+                    8.0,
+                    0.33 * float(match_cfg.get("search_radius_px", 18.0)),
+                )
+            )
+        ),
+    )
+    for candidate in best_group_entries:
+        try:
+            sim_col = float(candidate.get("sim_col"))
+            sim_row = float(candidate.get("sim_row"))
+        except Exception:
+            continue
+        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+            continue
+        source_key = _geometry_manual_candidate_source_key(candidate)
+        matched_point = matched_lookup.get(source_key) if source_key is not None else None
+        if matched_point is not None:
+            peak_col, peak_row = matched_point
+        else:
+            peak_col, peak_row = _peak_maximum_near_in_image(
+                display_background,
+                sim_col,
+                sim_row,
+                search_radius=fallback_radius,
+            )
+        pair_entry = {
+            "label": str(candidate.get("label", "")),
+            "hkl": _normalize_hkl_key(candidate.get("hkl", candidate.get("label"))),
+            "x": float(peak_col),
+            "y": float(peak_row),
+            "source_table_index": candidate.get("source_table_index"),
+            "source_row_index": candidate.get("source_row_index"),
+            "source_label": candidate.get("source_label"),
+            "q_group_key": best_group_key,
+        }
+        updated_entries.append(pair_entry)
+
+    _set_geometry_manual_pairs_for_index(current_background_index, updated_entries)
+    _render_current_geometry_manual_pairs(update_status=False)
+
+    q_entry = next(
+        (
+            entry
+            for entry in _listed_geometry_q_group_entries()
+            if entry.get("key") == best_group_key
+        ),
+        None,
+    )
+    q_label = (
+        _format_geometry_q_group_line(q_entry)
+        if isinstance(q_entry, dict)
+        else f"group={best_group_key}"
+    )
+    progress_label_geometry.config(
+        text=(
+            f"Saved {len(best_group_entries)} symmetric points for {q_label} "
+            f"on background {int(current_background_index) + 1}."
+        )
+    )
+    return True
+
+
 def _geometry_overlay_frame_diagnostics(
     overlay_records: Sequence[dict[str, object]] | None,
 ) -> tuple[dict[str, float], str]:
@@ -3560,7 +3798,508 @@ geometry_q_group_refresh_requested = False
 geometry_preview_skip_once = False
 geometry_auto_match_background_cache_key = None
 geometry_auto_match_background_cache_data = None
+geometry_manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
+geometry_manual_pick_armed = False
+geometry_manual_pick_button_var = None
+geometry_manual_pick_cache_signature = None
+geometry_manual_pick_cache_data: dict[str, object] = {}
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
+GEOMETRY_MANUAL_PICK_MAX_DISTANCE_PX = 18.0
+
+
+def _normalize_geometry_manual_pair_entry(
+    entry: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Normalize one saved manual geometry-pair entry."""
+
+    if not isinstance(entry, dict):
+        return None
+    try:
+        x_val = float(entry.get("x", np.nan))
+        y_val = float(entry.get("y", np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(x_val) and np.isfinite(y_val)):
+        return None
+
+    normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+    label = str(entry.get("label", "")) if entry.get("label") is not None else ""
+    if not label and normalized_hkl is not None:
+        label = f"{normalized_hkl[0]},{normalized_hkl[1]},{normalized_hkl[2]}"
+
+    normalized: dict[str, object] = {
+        "x": float(x_val),
+        "y": float(y_val),
+        "label": label,
+    }
+    if normalized_hkl is not None:
+        normalized["hkl"] = normalized_hkl
+
+    raw_group_key = entry.get("q_group_key")
+    if isinstance(raw_group_key, tuple):
+        normalized["q_group_key"] = raw_group_key
+    elif isinstance(raw_group_key, list):
+        normalized["q_group_key"] = tuple(raw_group_key)
+
+    for key in ("source_table_index", "source_row_index"):
+        if key not in entry:
+            continue
+        try:
+            normalized[key] = int(entry.get(key))  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+    for key in ("source_label",):
+        if entry.get(key) is not None:
+            normalized[key] = str(entry.get(key))
+
+    return normalized
+
+
+def _geometry_manual_pairs_for_index(index: int) -> list[dict[str, object]]:
+    """Return normalized saved manual geometry pairs for one background index."""
+
+    try:
+        key = int(index)
+    except Exception:
+        return []
+    raw_entries = geometry_manual_pairs_by_background.get(key, [])
+    normalized_entries: list[dict[str, object]] = []
+    for raw_entry in raw_entries:
+        normalized = _normalize_geometry_manual_pair_entry(raw_entry)
+        if normalized is not None:
+            normalized_entries.append(normalized)
+    return normalized_entries
+
+
+def _set_geometry_manual_pairs_for_index(
+    index: int,
+    entries: Sequence[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Replace one background's saved manual geometry-pair list."""
+
+    try:
+        key = int(index)
+    except Exception:
+        return []
+
+    normalized_entries: list[dict[str, object]] = []
+    for raw_entry in entries or []:
+        normalized = _normalize_geometry_manual_pair_entry(raw_entry)
+        if normalized is not None:
+            normalized_entries.append(normalized)
+
+    if normalized_entries:
+        geometry_manual_pairs_by_background[key] = normalized_entries
+    else:
+        geometry_manual_pairs_by_background.pop(key, None)
+    return list(normalized_entries)
+
+
+def _geometry_manual_pair_group_count(index: int) -> int:
+    """Return how many distinct Qr/Qz groups are saved for one background."""
+
+    group_keys = {
+        entry.get("q_group_key")
+        for entry in _geometry_manual_pairs_for_index(index)
+        if entry.get("q_group_key") is not None
+    }
+    return int(len(group_keys))
+
+
+def _invalidate_geometry_manual_pick_cache() -> None:
+    """Drop cached manual-pick simulation/background state."""
+
+    global geometry_manual_pick_cache_signature, geometry_manual_pick_cache_data
+
+    geometry_manual_pick_cache_signature = None
+    geometry_manual_pick_cache_data = {}
+
+
+def _current_geometry_manual_match_config() -> dict[str, object]:
+    """Return the refined background-peak matcher config for manual picking."""
+
+    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
+    if not isinstance(geometry_refine_cfg, dict):
+        geometry_refine_cfg = {}
+    auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
+    if not isinstance(auto_match_cfg, dict):
+        auto_match_cfg = {}
+
+    manual_cfg = dict(auto_match_cfg)
+    search_radius = max(1.0, float(manual_cfg.get("search_radius_px", 24.0)))
+    manual_cfg["console_progress"] = False
+    manual_cfg["relax_on_low_matches"] = False
+    manual_cfg.setdefault("context_margin_px", max(96.0, 6.0 * search_radius))
+    manual_cfg.setdefault("require_candidate_ownership", True)
+    manual_cfg.setdefault("k_neighbors", 12)
+    manual_cfg.setdefault("max_candidate_peaks", 1200)
+    return manual_cfg
+
+
+def _geometry_manual_pick_cache_signature(
+    *,
+    background_index: int | None = None,
+    background_image: object | None = None,
+) -> tuple[object, ...]:
+    """Return a cache signature for reusable manual-pick state."""
+
+    bg_index = int(current_background_index if background_index is None else background_index)
+    background_local = (
+        _get_current_background_display() if background_image is None else background_image
+    )
+    bg_token = None
+    if background_local is not None:
+        raw_arr = np.asarray(background_local)
+        try:
+            bg_ptr = int(raw_arr.__array_interface__["data"][0])
+        except Exception:
+            bg_ptr = int(id(raw_arr))
+        bg_token = (
+            bg_ptr,
+            tuple(int(v) for v in raw_arr.shape),
+            tuple(int(v) for v in raw_arr.strides),
+            str(raw_arr.dtype),
+        )
+
+    excluded_keys = tuple(sorted(repr(key) for key in geometry_preview_excluded_q_groups))
+    listed_group_count = (
+        len(geometry_q_group_cached_entries)
+        if isinstance(geometry_q_group_cached_entries, list)
+        else 0
+    )
+    maxpos_count = len(stored_max_positions_local) if isinstance(stored_max_positions_local, list) else 0
+    peak_table_count = (
+        len(stored_peak_table_lattice)
+        if isinstance(stored_peak_table_lattice, list)
+        else 0
+    )
+    return (
+        last_simulation_signature,
+        int(bg_index),
+        bg_token,
+        int(maxpos_count),
+        int(peak_table_count),
+        int(listed_group_count),
+        excluded_keys,
+    )
+
+
+def _get_geometry_manual_pick_cache(
+    *,
+    param_set: dict[str, object] | None = None,
+    prefer_cache: bool = True,
+    background_index: int | None = None,
+    background_image: object | None = None,
+) -> dict[str, object]:
+    """Build or reuse the current manual-pick simulation/background cache."""
+
+    global geometry_manual_pick_cache_signature, geometry_manual_pick_cache_data
+
+    bg_index = int(current_background_index if background_index is None else background_index)
+    background_local = (
+        _get_current_background_display() if background_image is None else background_image
+    )
+    cache_sig = _geometry_manual_pick_cache_signature(
+        background_index=bg_index,
+        background_image=background_local,
+    )
+    if (
+        prefer_cache
+        and int(bg_index) == int(current_background_index)
+        and geometry_manual_pick_cache_signature == cache_sig
+        and isinstance(geometry_manual_pick_cache_data, dict)
+    ):
+        return geometry_manual_pick_cache_data
+
+    simulated_peaks = _geometry_manual_simulated_peaks_for_params(
+        param_set,
+        prefer_cache=prefer_cache and int(bg_index) == int(current_background_index),
+    )
+    grouped_candidates = _geometry_manual_pick_candidates(simulated_peaks)
+    simulated_lookup = _geometry_manual_simulated_lookup(simulated_peaks)
+    match_cfg = _current_geometry_manual_match_config()
+    resolved_match_cfg = dict(match_cfg)
+    background_context = None
+    if background_local is not None:
+        try:
+            resolved_match_cfg, background_context = _auto_match_background_context(
+                background_local,
+                match_cfg,
+            )
+        except Exception:
+            background_context = None
+
+    cache_data = {
+        "signature": cache_sig,
+        "simulated_peaks": [dict(entry) for entry in simulated_peaks],
+        "simulated_lookup": dict(simulated_lookup),
+        "grouped_candidates": {
+            key: [dict(entry) for entry in entries]
+            for key, entries in grouped_candidates.items()
+        },
+        "match_config": dict(resolved_match_cfg),
+        "background_context": background_context,
+    }
+    if int(bg_index) == int(current_background_index):
+        geometry_manual_pick_cache_signature = cache_sig
+        geometry_manual_pick_cache_data = cache_data
+    return cache_data
+
+
+def _geometry_manual_candidate_source_key(
+    entry: dict[str, object] | None,
+) -> tuple[object, ...] | None:
+    """Return a stable lookup key for one manual-pick candidate or match."""
+
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return (
+            "source",
+            int(entry.get("source_table_index")),
+            int(entry.get("source_row_index")),
+        )
+    except Exception:
+        pass
+    normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+    if normalized_hkl is not None:
+        return ("hkl",) + tuple(int(v) for v in normalized_hkl)
+    label = str(entry.get("label", "")).strip()
+    if label:
+        return ("label", label)
+    return None
+
+
+def _match_geometry_manual_group_to_background(
+    candidate_entries: Sequence[dict[str, object]] | None,
+    *,
+    background_image: np.ndarray | None = None,
+    cache_data: dict[str, object] | None = None,
+) -> dict[tuple[object, ...], tuple[float, float]]:
+    """Return refined measured peak centers for one clicked symmetric Qr/Qz group."""
+
+    entries = [dict(entry) for entry in candidate_entries or [] if isinstance(entry, dict)]
+    if not entries:
+        return {}
+
+    background_local = (
+        _get_current_background_display() if background_image is None else background_image
+    )
+    if background_local is None:
+        return {}
+
+    state = cache_data if isinstance(cache_data, dict) else _get_geometry_manual_pick_cache(
+        prefer_cache=True,
+        background_image=background_local,
+    )
+    match_cfg = dict(state.get("match_config", {})) if isinstance(state, dict) else {}
+    background_context = state.get("background_context") if isinstance(state, dict) else None
+    if not isinstance(background_context, dict) or not bool(background_context.get("img_valid", False)):
+        try:
+            match_cfg, background_context = _auto_match_background_context(
+                background_local,
+                match_cfg,
+            )
+        except Exception:
+            return {}
+
+    try:
+        matches, _stats = match_simulated_peaks_to_peak_context(
+            entries,
+            background_context,
+            match_cfg,
+        )
+    except Exception:
+        return {}
+
+    matched_lookup: dict[tuple[object, ...], tuple[float, float]] = {}
+    for match_entry in matches:
+        source_key = _geometry_manual_candidate_source_key(match_entry)
+        if source_key is None:
+            continue
+        try:
+            match_col = float(match_entry.get("x", np.nan))
+            match_row = float(match_entry.get("y", np.nan))
+        except Exception:
+            continue
+        if np.isfinite(match_col) and np.isfinite(match_row):
+            matched_lookup[source_key] = (float(match_col), float(match_row))
+    return matched_lookup
+
+
+def _update_geometry_manual_pick_button_label() -> None:
+    if (
+        "geometry_manual_pick_button_var" not in globals()
+        or geometry_manual_pick_button_var is None
+    ):
+        return
+    label = "Pick Qr Sets on Image"
+    if geometry_manual_pick_armed:
+        label += " (Armed)"
+    try:
+        pair_count = len(_geometry_manual_pairs_for_index(current_background_index))
+        group_count = _geometry_manual_pair_group_count(current_background_index)
+    except Exception:
+        pair_count = 0
+        group_count = 0
+    if group_count > 0 or pair_count > 0:
+        label += f" [{group_count} groups/{pair_count} pts]"
+    geometry_manual_pick_button_var.set(label)
+
+
+def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None) -> None:
+    """Arm or disarm manual Qr-set selection on the detector image."""
+
+    global geometry_manual_pick_armed
+
+    geometry_manual_pick_armed = bool(enabled)
+    if geometry_manual_pick_armed:
+        _set_hkl_pick_mode(False)
+        _set_geometry_preview_exclude_mode(False)
+    _update_geometry_manual_pick_button_label()
+    try:
+        canvas.get_tk_widget().configure(cursor="crosshair" if geometry_manual_pick_armed else "")
+    except Exception:
+        pass
+    if message:
+        progress_label_geometry.config(text=message)
+
+
+def _toggle_geometry_manual_pick_mode() -> None:
+    """Toggle manual geometry Qr-set selection on the image."""
+
+    _set_geometry_manual_pick_mode(
+        not geometry_manual_pick_armed,
+        message=(
+            "Manual geometry picking armed. Click a Qr/Qz set on the image to add or remove the full symmetric pair."
+            if not geometry_manual_pick_armed
+            else "Manual geometry picking disabled."
+        ),
+    )
+
+
+def _clear_current_geometry_manual_pairs() -> None:
+    """Clear saved manual geometry pairs for the current background image."""
+
+    _set_geometry_manual_pairs_for_index(current_background_index, [])
+    _clear_geometry_pick_artists()
+    _update_geometry_manual_pick_button_label()
+    _set_background_file_status_text()
+    progress_label_geometry.config(text="Cleared saved geometry pairs for the current background image.")
+
+
+def _peak_maximum_near_in_image(
+    image: np.ndarray | None,
+    col: float,
+    row: float,
+    *,
+    search_radius: int = 5,
+) -> tuple[float, float]:
+    """Return the brightest local pixel near ``(col, row)`` in display coordinates."""
+
+    if image is None:
+        return float(col), float(row)
+    try:
+        image_arr = np.asarray(image, dtype=float)
+    except Exception:
+        return float(col), float(row)
+    if image_arr.ndim < 2 or image_arr.size == 0:
+        return float(col), float(row)
+
+    r = int(round(float(row)))
+    c = int(round(float(col)))
+    r0 = max(0, r - int(search_radius))
+    r1 = min(int(image_arr.shape[0]), r + int(search_radius) + 1)
+    c0 = max(0, c - int(search_radius))
+    c1 = min(int(image_arr.shape[1]), c + int(search_radius) + 1)
+
+    window = image_arr[r0:r1, c0:c1]
+    if window.size == 0 or not np.isfinite(window).any():
+        return float(col), float(row)
+
+    max_idx = int(np.nanargmax(window))
+    win_r, win_c = np.unravel_index(max_idx, window.shape)
+    return float(c0 + win_c), float(r0 + win_r)
+
+
+def _geometry_manual_simulated_peaks_for_params(
+    param_set: dict[str, object] | None = None,
+    *,
+    prefer_cache: bool = True,
+) -> list[dict[str, object]]:
+    """Return preview-style simulated peaks for manual geometry pair selection."""
+
+    if prefer_cache:
+        cached = _build_live_preview_simulated_peaks_from_cache()
+        if cached:
+            return cached
+
+    try:
+        params_local = dict(param_set) if isinstance(param_set, dict) else _current_geometry_fit_params()
+        miller_array = np.asarray(miller, dtype=np.float64)
+        intensity_array = np.asarray(intensities, dtype=np.float64)
+        if miller_array.ndim != 2 or miller_array.shape[1] != 3 or miller_array.size == 0:
+            return []
+        if intensity_array.shape[0] != miller_array.shape[0]:
+            return []
+        return _simulate_preview_style_peaks_for_fit(
+            miller_array,
+            intensity_array,
+            image_size,
+            params_local,
+        )
+    except Exception:
+        return []
+
+
+def _geometry_manual_pick_candidates(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+) -> dict[tuple[object, ...], list[dict[str, object]]]:
+    """Collapse simulated peaks into clickable manual-pick Qr/Qz groups."""
+
+    filtered, _, _ = _filter_geometry_fit_simulated_peaks(simulated_peaks)
+    collapsed, _ = _collapse_geometry_fit_simulated_peaks(filtered, merge_radius_px=6.0)
+    grouped: dict[tuple[object, ...], list[dict[str, object]]] = defaultdict(list)
+    for raw_entry in collapsed:
+        if not isinstance(raw_entry, dict):
+            continue
+        group_key = raw_entry.get("q_group_key")
+        if not isinstance(group_key, tuple):
+            continue
+        grouped[group_key].append(dict(raw_entry))
+    for entry_list in grouped.values():
+        entry_list.sort(
+            key=lambda entry: (
+                float(entry.get("sim_col", np.nan))
+                if np.isfinite(float(entry.get("sim_col", np.nan)))
+                else float("inf"),
+                float(entry.get("sim_row", np.nan))
+                if np.isfinite(float(entry.get("sim_row", np.nan)))
+                else float("inf"),
+            )
+        )
+    return dict(grouped)
+
+
+def _geometry_manual_simulated_lookup(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+) -> dict[tuple[int, int], dict[str, object]]:
+    """Map preview-style simulated peaks back to their reflection/source rows."""
+
+    lookup: dict[tuple[int, int], dict[str, object]] = {}
+    for raw_entry in simulated_peaks or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        try:
+            key = (
+                int(raw_entry.get("source_table_index")),
+                int(raw_entry.get("source_row_index")),
+            )
+        except Exception:
+            continue
+        lookup[key] = dict(raw_entry)
+    return lookup
 
 
 def _clear_geometry_pick_artists(*, redraw: bool = True):
@@ -4477,6 +5216,7 @@ def _set_geometry_q_group_entries_snapshot(
         geometry_preview_excluded_q_groups.intersection_update(listed_keys)
     else:
         geometry_preview_excluded_q_groups.clear()
+    _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     return _listed_geometry_q_group_entries()
 
@@ -4943,6 +5683,7 @@ def _on_geometry_q_group_checkbox_changed(
     else:
         geometry_preview_excluded_q_groups.add(group_key)
         action = "Excluded"
+    _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     _update_geometry_q_group_window_status()
 
@@ -4970,6 +5711,7 @@ def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
             entry["key"] for entry in entries if entry.get("key") is not None
         )
         action = "Excluded"
+    _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     _refresh_geometry_q_group_window()
 
@@ -4988,6 +5730,7 @@ def _request_geometry_q_group_window_update() -> None:
 
     geometry_q_group_refresh_requested = True
     last_simulation_signature = None
+    _invalidate_geometry_manual_pick_cache()
     progress_label_geometry.config(text="Updating listed Qr/Qz peaks from the current simulation...")
     schedule_update()
 
@@ -5157,17 +5900,11 @@ def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = N
 
 def _toggle_geometry_preview_exclude_mode():
     _open_geometry_q_group_window()
-    if not _live_geometry_preview_enabled():
-        schedule_update()
-        progress_label_geometry.config(
-            text=(
-                "Opened the Qr/Qz selector. Enable Live Auto-Match Preview to update "
-                "the overlay with the current selection."
-            )
-        )
-        return
     progress_label_geometry.config(
-        text="Opened the Qr/Qz selector for geometry-fit peak inclusion."
+        text=(
+            "Opened the Qr/Qz selector for manual geometry picking. "
+            "Unchecked rows are unavailable when selecting Qr sets on the image."
+        )
     )
 
 
@@ -5201,6 +5938,7 @@ def _clear_live_geometry_preview_exclusions():
 
     geometry_preview_excluded_keys.clear()
     geometry_preview_excluded_q_groups.clear()
+    _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     _refresh_geometry_q_group_window()
     if _live_geometry_preview_enabled():
@@ -6525,6 +7263,9 @@ def on_canvas_click(event):
     if event.button == 3 and hkl_pick_armed:
         _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
         return
+    if event.button == 3 and geometry_manual_pick_armed:
+        _set_geometry_manual_pick_mode(False, message="Manual geometry picking canceled.")
+        return
     if event.button == 3 and geometry_preview_exclude_armed:
         _set_geometry_preview_exclude_mode(
             False,
@@ -6535,6 +7276,14 @@ def on_canvas_click(event):
     if event.button != 1:
         return
     if show_caked_2d_var.get():
+        return
+    if geometry_manual_pick_armed:
+        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
+            return
+        _toggle_geometry_manual_selection_at(
+            float(event.xdata),
+            float(event.ydata),
+        )
         return
     if geometry_preview_exclude_armed:
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
@@ -8738,6 +9487,7 @@ def do_update():
 
     new_sim_sig = get_sim_signature()
     if new_sim_sig != last_simulation_signature:
+        _invalidate_geometry_manual_pick_cache()
         last_simulation_signature = new_sim_sig
         peak_positions.clear()
         peak_millers.clear()
@@ -9333,6 +10083,7 @@ def do_update():
     else:
         geometry_preview_skip_once = False
         _clear_geometry_preview_artists()
+    _render_current_geometry_manual_pairs(update_status=False)
 
     redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
     total_update_elapsed_ms = (perf_counter() - update_start_time) * 1e3
@@ -9387,6 +10138,13 @@ def _set_background_file_status_text():
                 status_text += f" | theta={theta_base:.4f}°"
     except Exception:
         pass
+    try:
+        pair_count = len(_geometry_manual_pairs_for_index(idx))
+        group_count = _geometry_manual_pair_group_count(idx)
+        if pair_count > 0:
+            status_text += f" | manual={group_count} groups/{pair_count} pts"
+    except Exception:
+        pass
     background_file_status_var.set(status_text)
 
 
@@ -9395,6 +10153,7 @@ def _load_background_files(file_paths, *, select_index=0):
 
     global osc_files, background_images, background_images_native, background_images_display
     global current_background_index, current_background_image, current_background_display
+    global geometry_manual_pairs_by_background
 
     normalized_paths = []
     for raw_path in file_paths:
@@ -9444,10 +10203,14 @@ def _load_background_files(file_paths, *, select_index=0):
     current_background_index = index
     current_background_image = background_images_native[index]
     current_background_display = background_images_display[index]
+    geometry_manual_pairs_by_background = {}
+    _invalidate_geometry_manual_pick_cache()
+    _set_geometry_manual_pick_mode(False)
 
     background_display.set_data(current_background_display)
     _update_background_slider_defaults(current_background_display, reset_override=True)
     _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
+    _clear_geometry_pick_artists()
     _set_background_file_status_text()
     schedule_update()
 
@@ -9494,6 +10257,7 @@ def switch_background():
     current_background_index = next_index
     current_background_image = next_native
     current_background_display = next_display
+    _invalidate_geometry_manual_pick_cache()
     if "theta_initial_var" in globals() and theta_initial_var is not None:
         try:
             theta_initial_var.set(
@@ -9504,6 +10268,7 @@ def switch_background():
     background_display.set_data(current_background_display)
     _update_background_slider_defaults(current_background_display, reset_override=True)
     _set_background_file_status_text()
+    _render_current_geometry_manual_pairs(update_status=False)
     schedule_update()
 
 def reset_to_defaults():
@@ -10174,6 +10939,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
                     continue
                 if not bool(row.get("included", True)):
                     geometry_preview_excluded_q_groups.add(group_key)
+            _invalidate_geometry_manual_pick_cache()
         target_hkl = geometry_state.get("selected_hkl_target")
         if isinstance(target_hkl, (list, tuple)) and len(target_hkl) >= 3:
             try:
@@ -11466,7 +12232,7 @@ def _on_live_geometry_preview_toggle():
         schedule_update()
 
 
-def on_fit_geometry_click():
+def _legacy_auto_match_on_fit_geometry_click():
     global profile_cache, last_simulation_signature, geometry_preview_skip_once
     _clear_geometry_pick_artists()
     _clear_geometry_preview_artists()
@@ -14065,6 +14831,662 @@ def on_fit_mosaic_click():
     )
 
 
+def _build_geometry_manual_fit_dataset(
+    background_index: int,
+    *,
+    theta_base: float,
+    base_fit_params: dict[str, object],
+    orientation_cfg: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build one saved-manual-pair geometry dataset for the optimizer."""
+
+    background_idx = int(background_index)
+    selected_entries = _geometry_manual_pairs_for_index(background_idx)
+    if not selected_entries:
+        raise RuntimeError(
+            f"background {background_idx + 1} has no saved manual geometry pairs"
+        )
+
+    native_background, display_background = _load_background_image_by_index(background_idx)
+    backend_background = _apply_background_backend_orientation(native_background)
+    if backend_background is None:
+        backend_background = native_background
+
+    params_i = dict(base_fit_params)
+    theta_offset = float(base_fit_params.get("theta_offset", 0.0))
+    params_i["theta_initial"] = float(theta_base + theta_offset)
+    simulated_peaks = _geometry_manual_simulated_peaks_for_params(
+        params_i,
+        prefer_cache=(background_idx == int(current_background_index)),
+    )
+    simulated_lookup = _geometry_manual_simulated_lookup(simulated_peaks)
+
+    measured_display: list[dict[str, object]] = []
+    initial_pairs_display: list[dict[str, object]] = []
+    for pair_idx, entry in enumerate(selected_entries):
+        measured_entry = dict(entry)
+        measured_entry["overlay_match_index"] = int(pair_idx)
+        measured_display.append(measured_entry)
+
+        initial_entry: dict[str, object] = {
+            "overlay_match_index": int(pair_idx),
+            "hkl": entry.get("hkl", entry.get("label")),
+            "bg_display": (float(entry["x"]), float(entry["y"])),
+        }
+        try:
+            source_key = (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            )
+        except Exception:
+            source_key = None
+        if source_key is not None:
+            sim_entry = simulated_lookup.get(source_key)
+            if isinstance(sim_entry, dict):
+                try:
+                    sim_col = float(sim_entry.get("sim_col"))
+                    sim_row = float(sim_entry.get("sim_row"))
+                except Exception:
+                    sim_col = float("nan")
+                    sim_row = float("nan")
+                if np.isfinite(sim_col) and np.isfinite(sim_row):
+                    initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+        initial_pairs_display.append(initial_entry)
+
+    measured_native = _unrotate_display_peaks(
+        measured_display,
+        display_background.shape,
+        k=DISPLAY_ROTATE_K,
+    )
+
+    sim_orientation_points: list[tuple[float, float]] = []
+    meas_orientation_points: list[tuple[float, float]] = []
+    sim_native_shape = (int(image_size), int(image_size))
+    for initial_entry, measured_entry in zip(initial_pairs_display, measured_native):
+        if not isinstance(measured_entry, dict):
+            continue
+        sim_display = initial_entry.get("sim_display")
+        if (
+            not isinstance(sim_display, (list, tuple, np.ndarray))
+            or len(sim_display) < 2
+        ):
+            continue
+        try:
+            sim_native = _display_to_native_sim_coords(
+                float(sim_display[0]),
+                float(sim_display[1]),
+                sim_native_shape,
+            )
+            mx = float(measured_entry.get("x"))
+            my = float(measured_entry.get("y"))
+        except Exception:
+            continue
+        if not (
+            np.isfinite(sim_native[0])
+            and np.isfinite(sim_native[1])
+            and np.isfinite(mx)
+            and np.isfinite(my)
+        ):
+            continue
+        sim_orientation_points.append((float(sim_native[0]), float(sim_native[1])))
+        meas_orientation_points.append((float(mx), float(my)))
+
+    orientation_choice, orientation_diag = _select_fit_orientation(
+        sim_orientation_points,
+        meas_orientation_points,
+        tuple(int(v) for v in native_background.shape[:2]),
+        cfg=orientation_cfg or {},
+    )
+    measured_for_fit = _apply_orientation_to_entries(
+        measured_native,
+        native_background.shape,
+        indexing_mode=orientation_choice["indexing_mode"],
+        k=orientation_choice["k"],
+        flip_x=orientation_choice["flip_x"],
+        flip_y=orientation_choice["flip_y"],
+        flip_order=orientation_choice["flip_order"],
+    )
+    experimental_image_for_fit = _orient_image_for_fit(
+        backend_background,
+        indexing_mode=orientation_choice["indexing_mode"],
+        k=orientation_choice["k"],
+        flip_x=orientation_choice["flip_x"],
+        flip_y=orientation_choice["flip_y"],
+        flip_order=orientation_choice["flip_order"],
+    )
+
+    label = (
+        Path(str(osc_files[background_idx])).name
+        if 0 <= background_idx < len(osc_files)
+        else f"background_{background_idx}"
+    )
+    group_count = len(
+        {
+            entry.get("q_group_key")
+            for entry in selected_entries
+            if entry.get("q_group_key") is not None
+        }
+    )
+
+    return {
+        "dataset_index": int(background_idx),
+        "label": label,
+        "theta_base": float(theta_base),
+        "theta_effective": float(theta_base + theta_offset),
+        "group_count": int(group_count),
+        "pair_count": int(len(measured_display)),
+        "measured_display": measured_display,
+        "measured_native": measured_native,
+        "measured_for_fit": measured_for_fit,
+        "initial_pairs_display": initial_pairs_display,
+        "experimental_image_for_fit": experimental_image_for_fit,
+        "native_background": native_background,
+        "orientation_choice": orientation_choice,
+        "orientation_diag": orientation_diag,
+        "summary_line": (
+            "bg[{idx}] {name}: theta_i={theta_base:.6f} theta={theta_eff:.6f} "
+            "groups={groups} points={points} orientation={orientation}"
+        ).format(
+            idx=background_idx,
+            name=label,
+            theta_base=float(theta_base),
+            theta_eff=float(theta_base + theta_offset),
+            groups=int(group_count),
+            points=int(len(measured_display)),
+            orientation=orientation_choice.get("label", "identity"),
+        ),
+        "spec": {
+            "dataset_index": int(background_idx),
+            "label": label,
+            "theta_initial": float(theta_base),
+            "measured_peaks": measured_for_fit,
+            "experimental_image": experimental_image_for_fit,
+        },
+    }
+
+
+def on_fit_geometry_click():
+    """Fit geometry from the saved manual Qr/Qz pair selections."""
+
+    global profile_cache, last_simulation_signature, geometry_preview_skip_once
+
+    _clear_geometry_preview_artists()
+    _clear_geometry_pick_artists()
+
+    def _cmd_line(text: str) -> None:
+        try:
+            print(f"[geometry-fit] {text}", flush=True)
+        except Exception:
+            pass
+
+    params = _current_geometry_fit_params()
+    mosaic_params = dict(params.get("mosaic_params", {}))
+    var_names = _current_geometry_fit_var_names()
+    if not var_names:
+        progress_label_geometry.config(text="No geometry parameters are selected for fitting.")
+        return
+
+    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
+    if not isinstance(geometry_refine_cfg, dict):
+        geometry_refine_cfg = {}
+    orientation_cfg = geometry_refine_cfg.get("orientation", {}) or {}
+    if not isinstance(orientation_cfg, dict):
+        orientation_cfg = {}
+    overlay_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
+    if not isinstance(overlay_cfg, dict):
+        overlay_cfg = {}
+    max_display_markers = max(1, int(overlay_cfg.get("max_display_markers", 120)))
+
+    if not osc_files:
+        progress_label_geometry.config(text="Geometry fit unavailable: no background image is loaded.")
+        return
+
+    joint_background_mode = False
+    background_theta_values: list[float] = []
+    if _geometry_fit_uses_shared_theta_offset():
+        if not _apply_background_theta_metadata(trigger_update=False):
+            progress_label_geometry.config(
+                text="Geometry fit unavailable: invalid background theta_i/shared offset settings."
+            )
+            return
+        try:
+            background_theta_values = _current_background_theta_values(strict_count=True)
+            params["theta_offset"] = float(_current_geometry_theta_offset(strict=True))
+        except Exception as exc:
+            progress_label_geometry.config(
+                text=f"Geometry fit unavailable: failed to parse background theta settings ({exc})."
+            )
+            return
+        joint_background_mode = len(background_theta_values) > 1
+        if background_theta_values:
+            params["theta_initial"] = float(
+                background_theta_values[int(current_background_index)]
+                + float(params.get("theta_offset", 0.0))
+            )
+    else:
+        params["theta_offset"] = 0.0
+        background_theta_values = [float(params.get("theta_initial", theta_initial_var.get()))]
+
+    required_indices = (
+        list(range(len(background_theta_values)))
+        if joint_background_mode
+        else [int(current_background_index)]
+    )
+    missing_indices = [
+        idx
+        for idx in required_indices
+        if not _geometry_manual_pairs_for_index(idx)
+    ]
+    if missing_indices:
+        missing_names = [
+            Path(str(osc_files[idx])).name
+            for idx in missing_indices
+            if 0 <= idx < len(osc_files)
+        ]
+        progress_label_geometry.config(
+            text=(
+                "Geometry fit unavailable: save manual Qr/Qz pairs first for "
+                + ", ".join(missing_names or [f"background {idx + 1}" for idx in missing_indices])
+                + "."
+            )
+        )
+        return
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = get_dir("downloads") / f"geometry_fit_log_{stamp}.txt"
+    log_file = None
+
+    def _log_line(text: str = "") -> None:
+        if log_file is None:
+            return
+        try:
+            log_file.write(text + "\n")
+            log_file.flush()
+        except Exception:
+            pass
+
+    def _log_section(title: str, lines: Sequence[str]) -> None:
+        _log_line(title)
+        for line in lines:
+            _log_line(f"  {line}")
+        _log_line()
+
+    try:
+        log_file = log_path.open("w", encoding="utf-8")
+
+        dataset_infos: list[dict[str, object]] = []
+        current_theta_base = (
+            float(background_theta_values[int(current_background_index)])
+            if joint_background_mode
+            else float(params.get("theta_initial", theta_initial_var.get()))
+        )
+        current_dataset = _build_geometry_manual_fit_dataset(
+            int(current_background_index),
+            theta_base=float(current_theta_base),
+            base_fit_params=params,
+            orientation_cfg=orientation_cfg,
+        )
+        dataset_infos.append(current_dataset)
+        if joint_background_mode:
+            for bg_idx, theta_base in enumerate(background_theta_values):
+                if int(bg_idx) == int(current_background_index):
+                    continue
+                dataset_infos.append(
+                    _build_geometry_manual_fit_dataset(
+                        int(bg_idx),
+                        theta_base=float(theta_base),
+                        base_fit_params=params,
+                        orientation_cfg=orientation_cfg,
+                    )
+                )
+
+        _cmd_line(
+            "start: "
+            f"vars={','.join(var_names)} "
+            f"datasets={len(dataset_infos)} "
+            f"current_groups={current_dataset['group_count']} "
+            f"current_points={current_dataset['pair_count']}"
+        )
+        _log_line(f"Geometry fit started: {stamp}")
+        _log_line()
+        _log_section(
+            "Fitting variables (start values):",
+            [
+                f"{name}={float(params.get(name, np.nan)):.6f}"
+                for name in var_names
+            ],
+        )
+        _log_section(
+            "Manual geometry datasets:",
+            [str(info.get("summary_line", "")) for info in dataset_infos] or ["<none>"],
+        )
+        _log_section(
+            "Current orientation diagnostics:",
+            [
+                f"pairs={current_dataset['orientation_diag'].get('pairs', 0)}",
+                f"chosen={current_dataset['orientation_choice'].get('label', 'identity')}",
+                f"identity_rms_px={float(current_dataset['orientation_diag'].get('identity_rms_px', np.nan)):.4f}",
+                f"best_rms_px={float(current_dataset['orientation_diag'].get('best_rms_px', np.nan)):.4f}",
+                f"reason={current_dataset['orientation_diag'].get('reason', 'n/a')}",
+            ],
+        )
+
+        progress_label_geometry.config(text="Running geometry fit from saved manual Qr/Qz pairs…")
+        root.update_idletasks()
+
+        dataset_specs = [dict(info["spec"]) for info in dataset_infos]
+        result = fit_geometry_parameters(
+            miller,
+            intensities,
+            image_size,
+            params,
+            current_dataset["measured_for_fit"],
+            var_names,
+            pixel_tol=float("inf"),
+            experimental_image=current_dataset["experimental_image_for_fit"],
+            dataset_specs=dataset_specs if joint_background_mode else None,
+            refinement_config=geometry_refine_cfg,
+        )
+
+        _log_section(
+            "Optimizer diagnostics:",
+            [
+                f"success={getattr(result, 'success', False)}",
+                f"status={getattr(result, 'status', '')}",
+                f"message={(getattr(result, 'message', '') or '').strip()}",
+                f"nfev={getattr(result, 'nfev', '<unknown>')}",
+                f"cost={float(getattr(result, 'cost', np.nan)):.6f}",
+                f"robust_cost={float(getattr(result, 'robust_cost', np.nan)):.6f}",
+                f"solver_loss={getattr(result, 'solver_loss', '<unknown>')}",
+                f"solver_f_scale={float(getattr(result, 'solver_f_scale', np.nan)):.6f}",
+                f"optimality={float(getattr(result, 'optimality', np.nan)):.6f}",
+                f"active_mask={list(getattr(result, 'active_mask', []))}",
+            ]
+            + [
+                "restart[{idx}] cost={cost:.6f} success={success} msg={msg}".format(
+                    idx=int(entry.get("restart", -1)),
+                    cost=float(entry.get("cost", np.nan)),
+                    success=bool(entry.get("success", False)),
+                    msg=str(entry.get("message", "")).strip(),
+                )
+                for entry in (getattr(result, "restart_history", []) or [])
+            ],
+        )
+
+        for name, value in zip(var_names, getattr(result, "x", [])):
+            val = float(value)
+            if name == "zb":
+                zb_var.set(val)
+            elif name == "zs":
+                zs_var.set(val)
+            elif name == "theta_initial":
+                theta_initial_var.set(val)
+            elif name == "theta_offset":
+                if geometry_theta_offset_var is not None:
+                    geometry_theta_offset_var.set(f"{val:.6g}")
+            elif name == "psi_z":
+                psi_z_var.set(val)
+            elif name == "chi":
+                chi_var.set(val)
+            elif name == "cor_angle":
+                cor_angle_var.set(val)
+            elif name == "gamma":
+                gamma_var.set(val)
+            elif name == "Gamma":
+                Gamma_var.set(val)
+            elif name == "corto_detector":
+                corto_detector_var.set(val)
+            elif name == "center_x":
+                center_x_var.set(val)
+            elif name == "center_y":
+                center_y_var.set(val)
+
+        if joint_background_mode:
+            theta_initial_var.set(
+                _background_theta_for_index(current_background_index, strict_count=False)
+            )
+        _set_background_file_status_text()
+        _update_geometry_manual_pick_button_label()
+
+        profile_cache = dict(profile_cache)
+        profile_cache.update(mosaic_params)
+        profile_cache.update(
+            {
+                "theta_initial": theta_initial_var.get(),
+                "theta_offset": _current_geometry_theta_offset(strict=False),
+                "cor_angle": cor_angle_var.get(),
+                "chi": chi_var.get(),
+                "zs": zs_var.get(),
+                "zb": zb_var.get(),
+                "gamma": gamma_var.get(),
+                "Gamma": Gamma_var.get(),
+                "corto_detector": corto_detector_var.get(),
+                "a": a_var.get(),
+                "c": c_var.get(),
+                "center_x": center_x_var.get(),
+                "center_y": center_y_var.get(),
+            }
+        )
+
+        geometry_preview_skip_once = True
+        last_simulation_signature = None
+        schedule_update()
+
+        rms = (
+            float(getattr(result, "rms_px"))
+            if np.isfinite(float(getattr(result, "rms_px", np.nan)))
+            else (
+                np.sqrt(np.mean(result.fun ** 2))
+                if getattr(result, "fun", None) is not None and result.fun.size
+                else 0.0
+            )
+        )
+        _log_section(
+            "Optimization result:",
+            [f"{name} = {float(val):.6f}" for name, val in zip(var_names, getattr(result, "x", []))]
+            + [f"RMS residual = {float(rms):.6f} px"],
+        )
+
+        fitted_params = dict(params)
+        fitted_params.update(
+            {
+                "zb": zb_var.get(),
+                "zs": zs_var.get(),
+                "theta_initial": theta_initial_var.get(),
+                "theta_offset": _current_geometry_theta_offset(strict=False),
+                "chi": chi_var.get(),
+                "cor_angle": cor_angle_var.get(),
+                "psi_z": psi_z_var.get(),
+                "gamma": gamma_var.get(),
+                "Gamma": Gamma_var.get(),
+                "corto_detector": corto_detector_var.get(),
+                "center": [center_x_var.get(), center_y_var.get()],
+                "center_x": center_x_var.get(),
+                "center_y": center_y_var.get(),
+            }
+        )
+
+        point_match_summary = getattr(result, "point_match_summary", None)
+        if isinstance(point_match_summary, dict):
+            _log_section(
+                "Point-match summary:",
+                [f"{key}={value}" for key, value in sorted(point_match_summary.items())],
+            )
+
+        (
+            _,
+            sim_coords,
+            meas_coords,
+            sim_millers,
+            meas_millers,
+        ) = simulate_and_compare_hkl(
+            miller,
+            intensities,
+            image_size,
+            fitted_params,
+            current_dataset["measured_for_fit"],
+            pixel_tol=float("inf"),
+        )
+        (
+            agg_sim_coords,
+            agg_meas_coords,
+            agg_millers,
+        ) = _aggregate_match_centers(
+            sim_coords,
+            meas_coords,
+            sim_millers,
+            meas_millers,
+        )
+
+        pixel_offsets: list[tuple[tuple[int, int, int], float, float, float]] = []
+        for hkl_key, sim_center, meas_center in zip(
+            agg_millers, agg_sim_coords, agg_meas_coords
+        ):
+            dx = float(sim_center[0] - meas_center[0])
+            dy = float(sim_center[1] - meas_center[1])
+            pixel_offsets.append((hkl_key, dx, dy, float(math.hypot(dx, dy))))
+
+        overlay_point_match_diagnostics = getattr(result, "point_match_diagnostics", None)
+        if joint_background_mode and isinstance(overlay_point_match_diagnostics, list):
+            overlay_point_match_diagnostics = [
+                dict(entry)
+                for entry in overlay_point_match_diagnostics
+                if isinstance(entry, dict)
+                and int(entry.get("dataset_index", -1)) == int(current_background_index)
+            ]
+        overlay_records = build_geometry_fit_overlay_records(
+            current_dataset["initial_pairs_display"],
+            overlay_point_match_diagnostics,
+            native_shape=tuple(int(v) for v in current_dataset["native_background"].shape[:2]),
+            orientation_choice=current_dataset["orientation_choice"],
+            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+            background_display_rotate_k=DISPLAY_ROTATE_K,
+        )
+        frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(overlay_records)
+        _log_section(
+            "Overlay frame diagnostics:",
+            [
+                "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
+                f"overlay_records={len(overlay_records)}",
+                f"paired_records={int(frame_diag.get('paired_records', 0))}",
+                f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
+                f"bg_display_med_px={float(frame_diag.get('bg_display_med_px', np.nan)):.3f}",
+                f"sim_display_p90_px={float(frame_diag.get('sim_display_p90_px', np.nan)):.3f}",
+                f"bg_display_p90_px={float(frame_diag.get('bg_display_p90_px', np.nan)):.3f}",
+            ],
+        )
+
+        if overlay_records:
+            _draw_geometry_fit_overlay(
+                overlay_records,
+                max_display_markers=max_display_markers,
+            )
+        else:
+            _draw_initial_geometry_pairs_overlay(
+                current_dataset["initial_pairs_display"],
+                max_display_markers=max_display_markers,
+            )
+
+        export_recs = []
+        for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
+            export_recs.append(
+                {
+                    "source": "sim",
+                    "hkl": tuple(int(v) for v in hkl),
+                    "x": int(x),
+                    "y": int(y),
+                    "dist_px": float(dist),
+                }
+            )
+        for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_meas_coords, pixel_offsets):
+            export_recs.append(
+                {
+                    "source": "meas",
+                    "hkl": tuple(int(v) for v in hkl),
+                    "x": int(x),
+                    "y": int(y),
+                    "dist_px": float(dist),
+                }
+            )
+        save_path = get_dir("downloads") / f"matched_peaks_{stamp}.npy"
+        np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
+
+        _log_section(
+            "Pixel offsets (native frame):",
+            [
+                f"HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px"
+                for hkl, dx, dy, dist in pixel_offsets
+            ]
+            or ["No matched peaks"],
+        )
+        _log_section(
+            "Fit summary:",
+            [
+                f"manual_groups={current_dataset['group_count']}",
+                f"manual_points={current_dataset['pair_count']}",
+                f"overlay_records={len(overlay_records)}",
+                f"orientation={current_dataset['orientation_choice'].get('label', 'identity')}",
+                *[f"{name} = {float(val):.6f}" for name, val in zip(var_names, getattr(result, "x", []))],
+                f"RMS residual = {float(rms):.6f} px",
+                f"Matched peaks saved to: {save_path}",
+            ],
+        )
+
+        base_summary = (
+            "Manual geometry fit complete:\n"
+            + "\n".join(f"{name} = {float(val):.4f}" for name, val in zip(var_names, getattr(result, "x", [])))
+            + f"\nRMS residual = {float(rms):.2f} px"
+            + f"\nOrientation = {current_dataset['orientation_choice'].get('label', 'identity')}"
+        )
+        overlay_hint = (
+            "Overlay: blue squares=selected simulated points, amber triangles=saved background points, "
+            "green circles=fitted simulated peaks, dashed arrows=initial->fitted sim shifts."
+        )
+        dist_report = (
+            "\n".join(
+                f"HKL={hkl}: |Δ|={dist:.2f}px (dx={dx:.2f}, dy={dy:.2f})"
+                for hkl, dx, dy, dist in pixel_offsets
+            )
+            if pixel_offsets
+            else "No matched peaks to report distances."
+        )
+        progress_label_geometry.config(
+            text=(
+                f"{base_summary}\n"
+                f"Manual pairs: {current_dataset['pair_count']} points across {current_dataset['group_count']} groups"
+                + (
+                    f" | joint backgrounds={len(dataset_infos)}"
+                    if joint_background_mode
+                    else ""
+                )
+                + "\n"
+                + overlay_hint
+                + ("\n" + frame_warning if frame_warning else "")
+                + f"\nSaved {len(export_recs)} peak records → {save_path}"
+                + f"\nPixel offsets:\n{dist_report}"
+                + f"\nFit log → {log_path}"
+            )
+        )
+        _cmd_line(
+            "done: "
+            f"datasets={len(dataset_infos)} "
+            f"groups={current_dataset['group_count']} "
+            f"points={current_dataset['pair_count']} "
+            f"rms={float(rms):.4f}px"
+        )
+    except Exception as exc:
+        _cmd_line(f"failed: {exc}")
+        _log_line(f"Geometry fit failed: {exc}")
+        progress_label_geometry.config(text=f"Geometry fit failed: {exc}")
+        return
+    finally:
+        try:
+            if log_file is not None:
+                log_file.close()
+        except Exception:
+            pass
+
+
 fit_button_geometry = ttk.Button(
     root,
     text="Fit Positions & Geometry",
@@ -14074,13 +15496,14 @@ fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
 
 live_geometry_preview_var = tk.BooleanVar(value=False)
-live_geometry_preview_button = ttk.Checkbutton(
+geometry_manual_pick_button_var = tk.StringVar(value="Pick Qr Sets on Image")
+geometry_manual_pick_button = ttk.Button(
     root,
-    text="Live Auto-Match Preview",
-    variable=live_geometry_preview_var,
-    command=_on_live_geometry_preview_toggle,
+    textvariable=geometry_manual_pick_button_var,
+    command=_toggle_geometry_manual_pick_mode,
 )
-live_geometry_preview_button.pack(side=tk.TOP, padx=5, pady=2)
+geometry_manual_pick_button.pack(side=tk.TOP, padx=5, pady=2)
+_update_geometry_manual_pick_button_label()
 
 geometry_preview_exclude_button_var = tk.StringVar(value="Select Qr/Qz Peaks")
 geometry_preview_exclude_button = ttk.Button(
@@ -14093,8 +15516,8 @@ _update_geometry_preview_exclude_button_label()
 
 clear_geometry_preview_exclusions_button = ttk.Button(
     root,
-    text="Include All Qr/Qz",
-    command=_clear_live_geometry_preview_exclusions,
+    text="Clear Current Image Pairs",
+    command=_clear_current_geometry_manual_pairs,
 )
 clear_geometry_preview_exclusions_button.pack(side=tk.TOP, padx=5, pady=2)
 
