@@ -3654,6 +3654,12 @@ def fit_geometry_parameters(
     if not isinstance(solver_cfg, dict):
         solver_cfg = {}
 
+    prior_cfg: Dict[str, float] = {}
+    if isinstance(refinement_config, dict):
+        prior_cfg = refinement_config.get("priors", {}) or {}
+    if not isinstance(prior_cfg, dict):
+        prior_cfg = {}
+
     image_refinement_cfg: Dict[str, float] = {}
     if isinstance(refinement_config, dict):
         image_refinement_cfg = refinement_config.get("image_refinement", {}) or {}
@@ -4268,6 +4274,9 @@ def fit_geometry_parameters(
             residual_arr = np.asarray(residual, dtype=float)
             if residual_arr.size:
                 residual_blocks.append(residual_arr)
+        prior_residual = _parameter_prior_residuals(x)
+        if prior_residual.size:
+            residual_blocks.append(np.asarray(prior_residual, dtype=float))
         return (
             np.concatenate(residual_blocks)
             if residual_blocks
@@ -4421,6 +4430,16 @@ def fit_geometry_parameters(
     def pixel_cost_fn(x):
         local = _apply_trial_params(x)
         residual_arr, _, _ = _evaluate_pixel_matches(local, collect_diagnostics=False)
+        prior_residual = _parameter_prior_residuals(x)
+        if prior_residual.size:
+            if residual_arr.size:
+                return np.concatenate(
+                    [
+                        np.asarray(residual_arr, dtype=float),
+                        np.asarray(prior_residual, dtype=float),
+                    ]
+                )
+            return np.asarray(prior_residual, dtype=float)
         return residual_arr
 
     def _initial_value(name: str) -> float:
@@ -4563,6 +4582,55 @@ def fit_geometry_parameters(
     lower_bounds = np.asarray(lower_bounds, dtype=float)
     upper_bounds = np.asarray(upper_bounds, dtype=float)
     x0_arr = np.asarray(x0, dtype=float)
+    prior_centers = np.full(x0_arr.shape, np.nan, dtype=float)
+    prior_sigmas = np.full(x0_arr.shape, np.nan, dtype=float)
+    parameter_prior_summary: List[Dict[str, float]] = []
+    for idx, name in enumerate(var_names):
+        entry = prior_cfg.get(name)
+        if entry is None:
+            continue
+
+        center = float(x0_arr[idx])
+        sigma = float("nan")
+        enabled = True
+        if isinstance(entry, (int, float)):
+            sigma = float(entry)
+        elif isinstance(entry, dict):
+            enabled = bool(entry.get("enabled", True))
+            center = _safe_float(entry.get("center", center), center)
+            sigma_value = entry.get("sigma", entry.get("stdev", entry.get("std")))
+            try:
+                sigma = float(sigma_value)
+            except (TypeError, ValueError):
+                sigma = float("nan")
+        if not enabled or not np.isfinite(sigma) or sigma <= 0.0:
+            continue
+
+        prior_centers[idx] = float(center)
+        prior_sigmas[idx] = float(sigma)
+        parameter_prior_summary.append(
+            {
+                "name": str(name),
+                "center": float(center),
+                "sigma": float(sigma),
+            }
+        )
+
+    prior_active_mask = (
+        np.isfinite(prior_centers)
+        & np.isfinite(prior_sigmas)
+        & (prior_sigmas > 0.0)
+    )
+
+    def _parameter_prior_residuals(x_trial: Sequence[float]) -> np.ndarray:
+        if not np.any(prior_active_mask):
+            return np.array([], dtype=float)
+        x_arr = np.asarray(x_trial, dtype=float)
+        return (
+            (x_arr[prior_active_mask] - prior_centers[prior_active_mask])
+            / prior_sigmas[prior_active_mask]
+        )
+
     span = upper_bounds - lower_bounds
     finite_span = np.isfinite(span) & (span > 1e-12)
     fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
@@ -5744,6 +5812,7 @@ def fit_geometry_parameters(
     result.image_refinement_summary = image_refinement_summary
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
+    result.parameter_prior_summary = parameter_prior_summary
 
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)

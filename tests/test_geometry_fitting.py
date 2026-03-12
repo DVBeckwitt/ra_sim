@@ -134,6 +134,44 @@ def test_fit_geometry_parameters_cost_fn_uses_updated_psi_z(monkeypatch):
     assert any(abs(v - target) < 1e-3 for v in psi_z_seen)
 
 
+def test_fit_geometry_parameters_applies_parameter_priors(monkeypatch):
+    target = 1.0
+
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        return np.array([gamma - target], dtype=np.float64)
+
+    monkeypatch.setattr(
+        opt, "compute_peak_position_error_geometry_local", fake_compute
+    )
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[],
+        var_names=["gamma"],
+        experimental_image=None,
+        refinement_config={
+            "solver": {"restarts": 0},
+            "priors": {"gamma": {"center": 0.0, "sigma": 0.25}},
+        },
+    )
+
+    assert result.success
+    assert 0.0 < float(result.x[0]) < 0.1
+    assert isinstance(result.parameter_prior_summary, list)
+    assert result.parameter_prior_summary == [
+        {"name": "gamma", "center": 0.0, "sigma": 0.25}
+    ]
+
+
 def test_fit_geometry_parameters_pixel_path_forwards_optics_mode(monkeypatch):
     optics_seen = []
 

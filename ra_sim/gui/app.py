@@ -1395,6 +1395,28 @@ def _parse_hkl_from_label(label: object) -> tuple[int, int, int] | None:
         return None
 
 
+def _normalize_hkl_key(value: object) -> tuple[int, int, int] | None:
+    if isinstance(value, (list, tuple)) and len(value) == 3:
+        try:
+            return tuple(int(round(float(part))) for part in value)
+        except Exception:
+            return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for ch in "()[]":
+        text = text.replace(ch, "")
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(int(round(float(part))) for part in parts)
+    except Exception:
+        return None
+
+
 def _normalize_measured_peaks_for_geometry_fit(
     measured_peaks: Sequence[object],
 ) -> list[dict[str, object]]:
@@ -1477,6 +1499,282 @@ def _store_geometry_fit_snapshot(
     last_geometry_matched_peaks = _normalize_measured_peaks_for_geometry_fit(
         measured_for_fit
     )
+
+
+def _copy_geometry_fit_state_value(value):
+    """Deep-copy simple GUI fit state without importing ``copy``."""
+
+    if isinstance(value, np.ndarray):
+        return np.asarray(value).copy()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {
+            key: _copy_geometry_fit_state_value(val)
+            for key, val in value.items()
+        }
+    if isinstance(value, list):
+        return [_copy_geometry_fit_state_value(val) for val in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_geometry_fit_state_value(val) for val in value)
+    return value
+
+
+def _current_geometry_fit_ui_params() -> dict[str, object]:
+    return {
+        "zb": float(zb_var.get()),
+        "zs": float(zs_var.get()),
+        "theta_initial": float(theta_initial_var.get()),
+        "psi_z": float(psi_z_var.get()),
+        "chi": float(chi_var.get()),
+        "cor_angle": float(cor_angle_var.get()),
+        "gamma": float(gamma_var.get()),
+        "Gamma": float(Gamma_var.get()),
+        "corto_detector": float(corto_detector_var.get()),
+        "center_x": float(center_x_var.get()),
+        "center_y": float(center_y_var.get()),
+        "center": [float(center_x_var.get()), float(center_y_var.get())],
+    }
+
+
+def _capture_geometry_fit_undo_state() -> dict[str, object]:
+    return {
+        "ui_params": _copy_geometry_fit_state_value(_current_geometry_fit_ui_params()),
+        "profile_cache": _copy_geometry_fit_state_value(profile_cache),
+        "last_geometry_fit_params": _copy_geometry_fit_state_value(
+            last_geometry_fit_params
+        ),
+        "last_geometry_matched_peaks": _copy_geometry_fit_state_value(
+            last_geometry_matched_peaks
+        ),
+        "overlay_state": _copy_geometry_fit_state_value(last_geometry_overlay_state),
+    }
+
+
+def _update_geometry_fit_undo_button_state() -> None:
+    if undo_geometry_fit_button is None:
+        return
+    undo_geometry_fit_button.config(
+        state=("normal" if geometry_fit_undo_stack else "disabled")
+    )
+
+
+def _push_geometry_fit_undo_state(state: dict[str, object] | None) -> None:
+    global geometry_fit_undo_stack
+
+    if not isinstance(state, dict):
+        return
+    geometry_fit_undo_stack.append(_copy_geometry_fit_state_value(state))
+    geometry_fit_undo_stack = geometry_fit_undo_stack[-16:]
+    _update_geometry_fit_undo_button_state()
+
+
+def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
+    global profile_cache, last_geometry_fit_params, last_geometry_matched_peaks
+    global last_geometry_overlay_state, last_simulation_signature
+
+    if not isinstance(state, dict):
+        return
+
+    ui_params = state.get("ui_params", {}) or {}
+    for name, var in (
+        ("zb", zb_var),
+        ("zs", zs_var),
+        ("theta_initial", theta_initial_var),
+        ("psi_z", psi_z_var),
+        ("chi", chi_var),
+        ("cor_angle", cor_angle_var),
+        ("gamma", gamma_var),
+        ("Gamma", Gamma_var),
+        ("corto_detector", corto_detector_var),
+        ("center_x", center_x_var),
+        ("center_y", center_y_var),
+    ):
+        try:
+            value = float(ui_params.get(name))
+        except Exception:
+            continue
+        if np.isfinite(value):
+            var.set(value)
+
+    profile_cache = _copy_geometry_fit_state_value(state.get("profile_cache", {})) or {}
+    last_geometry_fit_params = _copy_geometry_fit_state_value(
+        state.get("last_geometry_fit_params")
+    )
+    last_geometry_matched_peaks = _copy_geometry_fit_state_value(
+        state.get("last_geometry_matched_peaks", [])
+    ) or []
+    last_geometry_overlay_state = _copy_geometry_fit_state_value(
+        state.get("overlay_state")
+    )
+
+    last_simulation_signature = None
+    schedule_update()
+
+    _clear_geometry_pick_artists()
+    overlay_state = last_geometry_overlay_state or {}
+    overlay_records = overlay_state.get("overlay_records", []) or []
+    initial_pairs_display = overlay_state.get("initial_pairs_display", []) or []
+    max_display_markers = int(overlay_state.get("max_display_markers", 120))
+    max_display_markers = max(1, max_display_markers)
+    if overlay_records:
+        _draw_geometry_fit_overlay(
+            overlay_records,
+            max_display_markers=max_display_markers,
+        )
+    elif initial_pairs_display:
+        _draw_initial_geometry_pairs_overlay(
+            initial_pairs_display,
+            max_display_markers=max_display_markers,
+        )
+
+
+def _undo_last_geometry_fit() -> None:
+    if not geometry_fit_undo_stack:
+        progress_label_geometry.config(text="No geometry fit history available to undo.")
+        return
+
+    state = geometry_fit_undo_stack.pop()
+    _update_geometry_fit_undo_button_state()
+    _restore_geometry_fit_undo_state(state)
+    progress_label_geometry.config(text="Restored the previous geometry-fit state.")
+
+
+def _current_geometry_fit_constraint_state(
+    names: Sequence[str] | None = None,
+) -> dict[str, dict[str, float]]:
+    selected_names = list(names) if names is not None else list(geometry_fit_constraint_controls)
+    state: dict[str, dict[str, float]] = {}
+    for name in selected_names:
+        control = geometry_fit_constraint_controls.get(name)
+        if not isinstance(control, dict):
+            continue
+        try:
+            window = float(control["window_var"].get())
+        except Exception:
+            window = float("nan")
+        try:
+            pull = float(control["pull_var"].get())
+        except Exception:
+            pull = 0.0
+        if not np.isfinite(window):
+            continue
+        window = max(0.0, float(window))
+        if not np.isfinite(pull):
+            pull = 0.0
+        pull = min(max(float(pull), 0.0), 1.0)
+        state[name] = {
+            "window": float(window),
+            "pull": float(pull),
+        }
+    return state
+
+
+def _current_geometry_fit_parameter_domains(
+    names: Sequence[str] | None = None,
+) -> dict[str, tuple[float, float]]:
+    selected_names = list(names) if names is not None else list(geometry_fit_parameter_specs)
+    domains: dict[str, tuple[float, float]] = {}
+    for name in selected_names:
+        if name == "center_x" or name == "center_y":
+            domains[name] = (0.0, max(float(image_size) - 1.0, 0.0))
+            continue
+        spec = geometry_fit_parameter_specs.get(name)
+        if not isinstance(spec, dict):
+            continue
+        slider_widget = spec.get("value_slider")
+        if slider_widget is None:
+            continue
+        try:
+            lo = float(slider_widget.cget("from"))
+            hi = float(slider_widget.cget("to"))
+        except Exception:
+            continue
+        if lo > hi:
+            lo, hi = hi, lo
+        domains[name] = (float(lo), float(hi))
+    return domains
+
+
+def _build_geometry_fit_runtime_config(
+    base_config,
+    current_params,
+    control_settings,
+    parameter_domains,
+):
+    runtime_cfg = (
+        _copy_geometry_fit_state_value(base_config)
+        if isinstance(base_config, dict)
+        else {}
+    )
+    if not isinstance(runtime_cfg, dict):
+        runtime_cfg = {}
+
+    bounds_cfg = runtime_cfg.get("bounds", {}) or {}
+    if not isinstance(bounds_cfg, dict):
+        bounds_cfg = {}
+    runtime_cfg["bounds"] = bounds_cfg
+
+    priors_cfg = runtime_cfg.get("priors", {}) or {}
+    if not isinstance(priors_cfg, dict):
+        priors_cfg = {}
+    runtime_cfg["priors"] = priors_cfg
+
+    for name, current in (current_params or {}).items():
+        try:
+            current_value = float(current)
+        except Exception:
+            continue
+        if not np.isfinite(current_value):
+            continue
+
+        control = (control_settings or {}).get(name, {}) or {}
+        try:
+            window = float(control.get("window", 0.0))
+        except Exception:
+            window = 0.0
+        if not np.isfinite(window):
+            window = 0.0
+        window = max(0.0, float(window))
+
+        lo = float(current_value - window)
+        hi = float(current_value + window)
+
+        domain = (parameter_domains or {}).get(name)
+        if isinstance(domain, (list, tuple)) and len(domain) >= 2:
+            try:
+                domain_lo = float(domain[0])
+                domain_hi = float(domain[1])
+            except Exception:
+                domain_lo = float("nan")
+                domain_hi = float("nan")
+            if np.isfinite(domain_lo):
+                lo = max(lo, float(domain_lo))
+            if np.isfinite(domain_hi):
+                hi = min(hi, float(domain_hi))
+
+        if hi < lo:
+            lo = hi = min(max(current_value, lo), hi)
+
+        bounds_cfg[name] = [float(lo), float(hi)]
+
+        try:
+            pull = float(control.get("pull", 0.0))
+        except Exception:
+            pull = 0.0
+        if not np.isfinite(pull):
+            pull = 0.0
+        pull = min(max(float(pull), 0.0), 1.0)
+        if pull > 0.0 and window > 0.0:
+            sigma_scale = max(0.05, 1.0 - 0.95 * pull)
+            priors_cfg[name] = {
+                "center": float(current_value),
+                "sigma": float(max(window * sigma_scale, 1.0e-6)),
+            }
+        else:
+            priors_cfg.pop(name, None)
+
+    return runtime_cfg
 
 
 def _normalize_optics_mode_label(value) -> str:
@@ -1590,6 +1888,9 @@ def _clear_geometry_pick_artists():
 def _clear_all_geometry_overlay_artists():
     """Clear all geometry-fit overlays so the image can be inspected cleanly."""
 
+    global last_geometry_overlay_state
+
+    last_geometry_overlay_state = None
     _clear_geometry_pick_artists()
     try:
         progress_label_geometry.config(
@@ -3389,6 +3690,8 @@ def update_integration_region_visuals(ai, sim_res2):
 profile_cache = {}
 last_geometry_fit_params = None
 last_geometry_matched_peaks = []
+last_geometry_overlay_state = None
+geometry_fit_undo_stack = []
 last_1d_integration_data = {
     "radials_sim": None,
     "intensities_2theta_sim": None,
@@ -3407,6 +3710,7 @@ last_caked_extent = None
 last_res2_background = None
 last_res2_sim = None
 _ai_cache = {}
+undo_geometry_fit_button = None
 
 def update_mosaic_cache():
     """
@@ -4853,6 +5157,55 @@ ttk.Checkbutton(fit_frame, text="Corto", variable=fit_corto_var).pack(side=tk.LE
 ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="center col", variable=fit_center_y_var).pack(side=tk.LEFT, padx=2)
 
+GEOMETRY_FIT_PARAM_ORDER = [
+    "zb",
+    "zs",
+    "theta_initial",
+    "psi_z",
+    "chi",
+    "cor_angle",
+    "gamma",
+    "Gamma",
+    "corto_detector",
+    "center_x",
+    "center_y",
+]
+geometry_fit_toggle_vars = {
+    "zb": fit_zb_var,
+    "zs": fit_zs_var,
+    "theta_initial": fit_theta_var,
+    "psi_z": fit_psi_z_var,
+    "chi": fit_chi_var,
+    "cor_angle": fit_cor_var,
+    "gamma": fit_gamma_var,
+    "Gamma": fit_Gamma_var,
+    "corto_detector": fit_corto_var,
+    "center_x": fit_center_x_var,
+    "center_y": fit_center_y_var,
+}
+geometry_fit_parameter_specs = {}
+geometry_fit_constraint_controls = {}
+
+
+def _sync_geometry_fit_constraint_rows(*_args) -> None:
+    for name in GEOMETRY_FIT_PARAM_ORDER:
+        control = geometry_fit_constraint_controls.get(name)
+        if not isinstance(control, dict):
+            continue
+        row = control.get("row")
+        if row is None:
+            continue
+        toggle_var = geometry_fit_toggle_vars.get(name)
+        enabled = bool(toggle_var.get()) if toggle_var is not None else True
+        mapped = bool(control.get("_mapped", False))
+        if enabled and not mapped:
+            row.pack(fill=tk.X, padx=4, pady=4)
+            control["_mapped"] = True
+        elif not enabled and mapped:
+            row.pack_forget()
+            control["_mapped"] = False
+
+
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     background_backend_frame = ttk.LabelFrame(root, text="Background Backend (debug)")
     background_backend_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
@@ -5504,7 +5857,7 @@ def _auto_match_background_peaks_with_relaxation(
 
 
 def on_fit_geometry_click():
-    global profile_cache, last_simulation_signature
+    global profile_cache, last_simulation_signature, last_geometry_overlay_state
     _clear_geometry_pick_artists()
 
     # first, reconstruct the same mosaic_params dict you use in do_update()
@@ -5564,6 +5917,15 @@ def on_fit_geometry_click():
     orientation_cfg = geometry_refine_cfg.get("orientation", {}) or {}
     if not isinstance(orientation_cfg, dict):
         orientation_cfg = {}
+    geometry_runtime_cfg = _build_geometry_fit_runtime_config(
+        geometry_refine_cfg,
+        {
+            name: params.get(name)
+            for name in var_names
+        },
+        _current_geometry_fit_constraint_state(var_names),
+        _current_geometry_fit_parameter_domains(var_names),
+    )
 
     native_background = _get_current_background_native()
     backend_background = _get_current_background_backend()
@@ -5952,7 +6314,7 @@ def on_fit_geometry_click():
                 var_names,
                 pixel_tol=float('inf'),
                 experimental_image=experimental_image_for_fit,
-                refinement_config=geometry_refine_cfg,
+                refinement_config=geometry_runtime_cfg,
             )
 
             if getattr(result, "x", None) is None or len(result.x) != len(var_names):
@@ -6239,6 +6601,7 @@ def on_fit_geometry_click():
                 ],
             )
 
+        undo_state = _capture_geometry_fit_undo_state()
         for name in var_names:
             val = float(current_fit_params.get(name, params.get(name, 0.0)))
             if name == 'zb':
@@ -6396,6 +6759,13 @@ def on_fit_geometry_click():
                 initial_auto_pairs_display,
                 max_display_markers=max_display_markers,
             )
+        last_geometry_overlay_state = {
+            "overlay_records": _copy_geometry_fit_state_value(overlay_records),
+            "initial_pairs_display": _copy_geometry_fit_state_value(
+                initial_auto_pairs_display
+            ),
+            "max_display_markers": int(max_display_markers),
+        }
 
         _log_section(
             "Pixel offsets (native frame):",
@@ -6460,6 +6830,7 @@ def on_fit_geometry_click():
                 f"Fit log → {log_path}"
             )
         )
+        _push_geometry_fit_undo_state(undo_state)
         return
     except Exception as exc:
         _log_line(f"Geometry fit failed: {exc}")
@@ -6535,7 +6906,7 @@ def on_fit_geometry_click():
     click_cid = None
 
     def _finish_pair_collection():
-        global profile_cache, last_simulation_signature
+        global profile_cache, last_simulation_signature, last_geometry_overlay_state
         nonlocal click_cid
         if click_cid is not None:
             canvas.mpl_disconnect(click_cid)
@@ -6543,7 +6914,7 @@ def on_fit_geometry_click():
         canvas_widget.configure(cursor="")
 
     def _on_geometry_pick(event):
-        global profile_cache, last_simulation_signature
+        global profile_cache, last_simulation_signature, last_geometry_overlay_state
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
 
@@ -7024,7 +7395,7 @@ def on_fit_geometry_click():
                     var_names,
                     pixel_tol=float('inf'),
                     experimental_image=experimental_image_for_fit,
-                    refinement_config=fit_config.get("geometry", {}),
+                    refinement_config=geometry_runtime_cfg,
                 )
 
                 _log_section(
@@ -7120,6 +7491,7 @@ def on_fit_geometry_click():
                         ],
                     )
 
+                undo_state = _capture_geometry_fit_undo_state()
                 for name, val in zip(var_names, result.x):
                     if name == 'zb':               zb_var.set(val)
                     elif name == 'zs':             zs_var.set(val)
@@ -7289,6 +7661,13 @@ def on_fit_geometry_click():
                     initial_manual_pairs_display,
                     max_display_markers=max_display_markers,
                 )
+            last_geometry_overlay_state = {
+                "overlay_records": _copy_geometry_fit_state_value(overlay_records),
+                "initial_pairs_display": _copy_geometry_fit_state_value(
+                    initial_manual_pairs_display
+                ),
+                "max_display_markers": int(max_display_markers),
+            }
 
             _log_section(
                 "Pixel offsets (native frame):",
@@ -7363,6 +7742,7 @@ def on_fit_geometry_click():
                 )
 
             progress_label_geometry.config(text=final_text)
+            _push_geometry_fit_undo_state(undo_state)
             return
 
         col, row = float(event.xdata), float(event.ydata)
@@ -7729,6 +8109,15 @@ fit_button_geometry = ttk.Button(
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
+
+undo_geometry_fit_button = ttk.Button(
+    root,
+    text="Undo Last Geometry Fit",
+    command=_undo_last_geometry_fit,
+    state="disabled",
+)
+undo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+_update_geometry_fit_undo_button_state()
 
 clear_geometry_markers_button = ttk.Button(
     root,
@@ -8267,6 +8656,250 @@ center_y_var, center_y_scale = make_slider(
     1.0,
     center_frame.frame
 )
+
+geometry_fit_parameter_specs = {
+    "zb": {
+        "label": "Zb",
+        "value_var": zb_var,
+        "value_slider": zb_scale,
+        "step": 0.0001,
+    },
+    "zs": {
+        "label": "Zs",
+        "value_var": zs_var,
+        "value_slider": zs_scale,
+        "step": 0.0001,
+    },
+    "theta_initial": {
+        "label": "Theta Initial",
+        "value_var": theta_initial_var,
+        "value_slider": theta_initial_scale,
+        "step": 0.01,
+    },
+    "psi_z": {
+        "label": "Goniometer Z",
+        "value_var": psi_z_var,
+        "value_slider": psi_z_scale,
+        "step": 0.01,
+    },
+    "chi": {
+        "label": "Chi",
+        "value_var": chi_var,
+        "value_slider": chi_scale,
+        "step": 0.001,
+    },
+    "cor_angle": {
+        "label": "Center of Rotation",
+        "value_var": cor_angle_var,
+        "value_slider": cor_angle_scale,
+        "step": 0.001,
+    },
+    "gamma": {
+        "label": "gamma",
+        "value_var": gamma_var,
+        "value_slider": gamma_scale,
+        "step": 0.001,
+    },
+    "Gamma": {
+        "label": "Gamma",
+        "value_var": Gamma_var,
+        "value_slider": Gamma_scale,
+        "step": 0.001,
+    },
+    "corto_detector": {
+        "label": "Detector Distance",
+        "value_var": corto_detector_var,
+        "value_slider": corto_detector_scale,
+        "step": 0.0001,
+    },
+    "center_x": {
+        "label": "Beam Center Row",
+        "value_var": center_x_var,
+        "value_slider": center_x_scale,
+        "step": 1.0,
+    },
+    "center_y": {
+        "label": "Beam Center Col",
+        "value_var": center_y_var,
+        "value_slider": center_y_scale,
+        "step": 1.0,
+    },
+}
+
+
+def _default_geometry_fit_window(name: str) -> float:
+    spec = geometry_fit_parameter_specs.get(name, {})
+    try:
+        current_value = float(spec["value_var"].get())
+    except Exception:
+        current_value = 0.0
+    try:
+        step = abs(float(spec.get("step", 0.01)))
+    except Exception:
+        step = 0.01
+    step = max(step, 1.0e-6)
+    domain = _current_geometry_fit_parameter_domains([name]).get(name)
+    domain_span = 0.0
+    if isinstance(domain, tuple) and len(domain) >= 2:
+        domain_span = max(0.0, float(domain[1]) - float(domain[0]))
+
+    fit_geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
+    if not isinstance(fit_geometry_cfg, dict):
+        fit_geometry_cfg = {}
+    bounds_cfg = fit_geometry_cfg.get("bounds", {}) or {}
+    if not isinstance(bounds_cfg, dict):
+        bounds_cfg = {}
+    entry = bounds_cfg.get(name)
+
+    default_window = float("nan")
+    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+        try:
+            lo = float(entry[0])
+            hi = float(entry[1])
+            default_window = max(abs(current_value - lo), abs(hi - current_value))
+        except Exception:
+            default_window = float("nan")
+    elif isinstance(entry, dict):
+        mode = str(entry.get("mode", "absolute")).strip().lower()
+        try:
+            min_raw = float(entry.get("min")) if entry.get("min") is not None else float("nan")
+        except Exception:
+            min_raw = float("nan")
+        try:
+            max_raw = float(entry.get("max")) if entry.get("max") is not None else float("nan")
+        except Exception:
+            max_raw = float("nan")
+        if mode in {"relative", "rel", "relative_min0", "rel_min0"}:
+            candidates = [abs(v) for v in (min_raw, max_raw) if np.isfinite(v)]
+            if candidates:
+                default_window = max(candidates)
+        else:
+            candidates = [
+                abs(current_value - v)
+                for v in (min_raw, max_raw)
+                if np.isfinite(v)
+            ]
+            if candidates:
+                default_window = max(candidates)
+
+    if not np.isfinite(default_window) or default_window <= 0.0:
+        fallback_window = max(
+            step * 10.0,
+            0.02 * domain_span,
+            0.1 * max(abs(current_value), 1.0),
+        )
+        default_window = fallback_window
+
+    if domain_span > 0.0:
+        default_window = min(default_window, domain_span)
+
+    return max(float(default_window), step)
+
+
+def _default_geometry_fit_pull(name: str, window: float) -> float:
+    fit_geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
+    if not isinstance(fit_geometry_cfg, dict):
+        fit_geometry_cfg = {}
+    priors_cfg = fit_geometry_cfg.get("priors", {}) or {}
+    if not isinstance(priors_cfg, dict):
+        priors_cfg = {}
+    entry = priors_cfg.get(name)
+    if not isinstance(entry, dict):
+        return 0.0
+    try:
+        sigma = float(entry.get("sigma"))
+    except Exception:
+        sigma = float("nan")
+    if not np.isfinite(sigma) or sigma <= 0.0 or not np.isfinite(window) or window <= 0.0:
+        return 0.0
+    inferred = (1.0 - min(max(sigma / window, 0.05), 1.0)) / 0.95
+    if not np.isfinite(inferred):
+        return 0.0
+    return min(max(float(inferred), 0.0), 1.0)
+
+
+geometry_fit_constraints_frame = CollapsibleFrame(
+    root,
+    text="Geometry Fit Constraints",
+    expanded=False,
+)
+geometry_fit_constraints_frame.pack(
+    side=tk.TOP,
+    fill=tk.X,
+    padx=5,
+    pady=5,
+    after=fit_frame,
+)
+ttk.Label(
+    geometry_fit_constraints_frame.frame,
+    text=(
+        "Each window is applied as current value \u00b1 deviation during geometry fitting. "
+        "Stay-close adds a soft pull back to the starting guess."
+    ),
+    wraplength=420,
+    justify="left",
+).pack(fill=tk.X, padx=6, pady=(2, 6))
+
+for name in GEOMETRY_FIT_PARAM_ORDER:
+    spec = geometry_fit_parameter_specs.get(name, {})
+    try:
+        step = abs(float(spec.get("step", 0.01)))
+    except Exception:
+        step = 0.01
+    step = max(step, 1.0e-6)
+    default_window = _default_geometry_fit_window(name)
+    domain = _current_geometry_fit_parameter_domains([name]).get(name)
+    domain_span = 0.0
+    if isinstance(domain, tuple) and len(domain) >= 2:
+        domain_span = max(0.0, float(domain[1]) - float(domain[0]))
+    window_slider_max = max(
+        default_window,
+        step * 20.0,
+        default_window * 4.0,
+        0.05 * domain_span,
+    )
+    if domain_span > 0.0:
+        window_slider_max = min(window_slider_max, domain_span)
+    window_slider_max = max(window_slider_max, default_window, step)
+
+    row = ttk.LabelFrame(
+        geometry_fit_constraints_frame.frame,
+        text=str(spec.get("label", name)),
+    )
+    window_var, _window_slider = create_slider(
+        "Allowed deviation (\u00b1)",
+        0.0,
+        window_slider_max,
+        default_window,
+        step,
+        row,
+        allow_range_expand=True,
+        range_expand_pad=max(step, default_window * 0.25),
+    )
+    pull_var, _pull_slider = create_slider(
+        "Stay-close pull",
+        0.0,
+        1.0,
+        _default_geometry_fit_pull(name, default_window),
+        0.01,
+        row,
+    )
+    ttk.Label(
+        row,
+        text="0 = free fit, 1 = strongest preference for the starting value.",
+        wraplength=360,
+        justify="left",
+    ).pack(fill=tk.X, padx=6, pady=(0, 4))
+    geometry_fit_constraint_controls[name] = {
+        "row": row,
+        "window_var": window_var,
+        "pull_var": pull_var,
+        "_mapped": False,
+    }
+
+for _toggle_var in geometry_fit_toggle_vars.values():
+    _toggle_var.trace_add("write", _sync_geometry_fit_constraint_rows)
+_sync_geometry_fit_constraint_rows()
 
 # Slider controlling contribution of the first CIF file, only if a second CIF
 # was provided.
