@@ -3869,6 +3869,135 @@ measured_peaks = []
 ###############################################################################
 root = tk.Tk()
 root.title("Controls and Sliders")
+root.minsize(680, 760)
+
+
+def _create_scrolled_frame(parent):
+    """Return a vertically scrollable frame body for notebook/control panels."""
+
+    container = ttk.Frame(parent)
+    canvas = tk.Canvas(container, highlightthickness=0, borderwidth=0)
+    scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+    body = ttk.Frame(canvas)
+    body_window = canvas.create_window((0, 0), window=body, anchor="nw")
+
+    def _refresh_scrollregion(_event=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _resize_body(event):
+        canvas.itemconfigure(body_window, width=event.width)
+
+    body.bind("<Configure>", _refresh_scrollregion)
+    canvas.bind("<Configure>", _resize_body)
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    return container, body, canvas
+
+
+def _bind_notebook_state(notebook, tab_var, tab_frames):
+    """Keep a notebook selection synchronized with a persisted ``StringVar``."""
+
+    def _select_from_var(*_args):
+        key = str(tab_var.get()).strip().lower()
+        target = tab_frames.get(key)
+        if target is None:
+            return
+        try:
+            if str(notebook.select()) != str(target):
+                notebook.select(target)
+        except tk.TclError:
+            return
+
+    def _sync_from_notebook(_event=None):
+        try:
+            selected = notebook.select()
+        except tk.TclError:
+            return
+        for key, tab in tab_frames.items():
+            if str(tab) == str(selected):
+                if tab_var.get() != key:
+                    tab_var.set(key)
+                break
+
+    tab_var.trace_add("write", _select_from_var)
+    notebook.bind("<<NotebookTabChanged>>", _sync_from_notebook, add="+")
+    _select_from_var()
+
+
+controls_notebook = ttk.Notebook(root)
+controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
+
+workspace_tab = ttk.Frame(controls_notebook)
+fit_tab = ttk.Frame(controls_notebook)
+parameters_tab = ttk.Frame(controls_notebook)
+analysis_tab = ttk.Frame(controls_notebook)
+controls_notebook.add(workspace_tab, text="Workspace")
+controls_notebook.add(fit_tab, text="Fit")
+controls_notebook.add(parameters_tab, text="Parameters")
+controls_notebook.add(analysis_tab, text="Analysis")
+
+workspace_scroll_frame, workspace_body, _workspace_canvas = _create_scrolled_frame(workspace_tab)
+workspace_scroll_frame.pack(fill=tk.BOTH, expand=True)
+fit_scroll_frame, fit_body, _fit_canvas = _create_scrolled_frame(fit_tab)
+fit_scroll_frame.pack(fill=tk.BOTH, expand=True)
+
+parameter_notebook = ttk.Notebook(parameters_tab)
+parameter_notebook.pack(fill=tk.BOTH, expand=True)
+parameter_geometry_tab = ttk.Frame(parameter_notebook)
+parameter_structure_tab = ttk.Frame(parameter_notebook)
+parameter_notebook.add(parameter_geometry_tab, text="Geometry && Beam")
+parameter_notebook.add(parameter_structure_tab, text="Structure && CIF")
+parameter_geometry_scroll, parameter_geometry_body, _parameter_geometry_canvas = _create_scrolled_frame(
+    parameter_geometry_tab
+)
+parameter_geometry_scroll.pack(fill=tk.BOTH, expand=True)
+parameter_structure_scroll, parameter_structure_body, _parameter_structure_canvas = _create_scrolled_frame(
+    parameter_structure_tab
+)
+parameter_structure_scroll.pack(fill=tk.BOTH, expand=True)
+
+control_tab_var = tk.StringVar(value="parameters")
+parameter_tab_var = tk.StringVar(value="geometry")
+_bind_notebook_state(
+    controls_notebook,
+    control_tab_var,
+    {
+        "workspace": workspace_tab,
+        "fit": fit_tab,
+        "parameters": parameters_tab,
+        "analysis": analysis_tab,
+    },
+)
+_bind_notebook_state(
+    parameter_notebook,
+    parameter_tab_var,
+    {
+        "geometry": parameter_geometry_tab,
+        "structure": parameter_structure_tab,
+    },
+)
+
+workspace_actions_frame = ttk.LabelFrame(workspace_body, text="Workspace Actions")
+workspace_actions_frame.pack(fill=tk.X, padx=5, pady=5)
+workspace_backgrounds_frame = ttk.Frame(workspace_body)
+workspace_backgrounds_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+workspace_session_frame = ttk.LabelFrame(workspace_body, text="Session")
+workspace_session_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+fit_actions_frame = ttk.LabelFrame(fit_body, text="Geometry Tools")
+fit_actions_frame.pack(fill=tk.X, padx=5, pady=5)
+
+analysis_controls_frame = ttk.Frame(analysis_tab, padding=(10, 10, 10, 0))
+analysis_controls_frame.pack(side=tk.TOP, fill=tk.X)
+analysis_views_frame = ttk.LabelFrame(analysis_controls_frame, text="Views")
+analysis_views_frame.pack(fill=tk.X, pady=(0, 5))
+analysis_exports_frame = ttk.LabelFrame(analysis_controls_frame, text="Exports")
+analysis_exports_frame.pack(fill=tk.X)
+
+status_frame = ttk.LabelFrame(root, text="Status", padding=(6, 4))
+status_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=6)
 
 fig_window = tk.Toplevel(root)
 fig_window.title("Main Figure")
@@ -9733,17 +9862,17 @@ caked_limits_user_override = False
 vmin_caked_var = tk.DoubleVar(value=0.0)
 vmax_caked_var = tk.DoubleVar(value=2000.0)
 
-slider_frame = ttk.Frame(root, padding=10)
-slider_frame.pack(side=tk.LEFT, fill=tk.Y)
+slider_frame = ttk.Frame(parameters_tab)
+slider_frame.pack(fill=tk.BOTH, expand=True)
 
-left_col = ttk.Frame(slider_frame)
-left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+left_col = ttk.Frame(parameter_geometry_body, padding=10)
+left_col.pack(fill=tk.BOTH, expand=True)
 
-right_col = ttk.Frame(slider_frame)
-right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+right_col = ttk.Frame(parameter_structure_body, padding=10)
+right_col.pack(fill=tk.BOTH, expand=True)
 
-plot_frame_1d = ttk.Frame(root)
-plot_frame_1d.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+plot_frame_1d = ttk.Frame(analysis_tab, padding=(10, 8, 10, 10))
+plot_frame_1d.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
 fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
 canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(fig_1d, master=plot_frame_1d)
@@ -11778,18 +11907,21 @@ def reset_to_defaults():
     schedule_update()
 
 toggle_button = ttk.Button(
+    workspace_actions_frame,
     text="Toggle Background",
     command=toggle_background
 )
 toggle_button.pack(side=tk.TOP, padx=5, pady=2)
 
 switch_button = ttk.Button(
+    workspace_actions_frame,
     text="Switch Background",
     command=switch_background
 )
 switch_button.pack(side=tk.TOP, padx=5, pady=2)
 
 load_backgrounds_button = ttk.Button(
+    workspace_backgrounds_frame,
     text="Load Background Files...",
     command=_browse_background_files,
 )
@@ -11797,15 +11929,15 @@ load_backgrounds_button.pack(side=tk.TOP, padx=5, pady=2)
 
 background_file_status_var = tk.StringVar(value="")
 background_file_status_label = ttk.Label(
-    root,
+    workspace_backgrounds_frame,
     textvariable=background_file_status_var,
-    wraplength=300,
+    wraplength=520,
     justify=tk.LEFT,
 )
 background_file_status_label.pack(side=tk.TOP, padx=5, pady=(0, 2))
 _set_background_file_status_text()
 
-background_theta_controls = ttk.LabelFrame(root, text="Background Theta_i")
+background_theta_controls = ttk.LabelFrame(workspace_backgrounds_frame, text="Background Theta_i")
 background_theta_controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 ttk.Label(
     background_theta_controls,
@@ -11845,7 +11977,7 @@ background_theta_offset_entry.bind(
 )
 _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
 
-geometry_fit_background_controls = ttk.LabelFrame(root, text="Geometry Fit Backgrounds")
+geometry_fit_background_controls = ttk.LabelFrame(fit_body, text="Geometry Fit Backgrounds")
 geometry_fit_background_controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 ttk.Label(
     geometry_fit_background_controls,
@@ -11873,12 +12005,14 @@ geometry_fit_background_entry.bind(
 _sync_geometry_fit_background_selection(preserve_existing=False)
 
 reset_button_top = ttk.Button(
+    workspace_actions_frame,
     text="Reset to Defaults",
     command=reset_to_defaults
 )
 reset_button_top.pack(side=tk.TOP, padx=5, pady=2)
 
 azimuthal_button = ttk.Button(
+    workspace_actions_frame,
     text="Azim vs Radial Plot Demo",
     command=lambda: view_azimuthal_radial(
         simulate_diffraction(
@@ -11980,31 +12114,31 @@ class ConsoleStatusLabel:
 
 
 progress_label_positions = ConsoleStatusLabel(
-    root,
+    status_frame,
     name="positions",
     max_gui_chars=110,
 )
 progress_label_positions.pack(side=tk.BOTTOM, padx=5)
 
 progress_label_geometry = ConsoleStatusLabel(
-    root,
+    status_frame,
     name="geometry",
     max_gui_chars=110,
 )
 progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
 
-mosaic_progressbar = ttk.Progressbar(root, mode="indeterminate", length=240)
+mosaic_progressbar = ttk.Progressbar(status_frame, mode="indeterminate", length=240)
 mosaic_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
 
 progress_label_mosaic = ConsoleStatusLabel(
-    root,
+    status_frame,
     name="mosaic",
     max_gui_chars=110,
 )
 progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
 
 progress_label = ConsoleStatusLabel(
-    root,
+    status_frame,
     name="gui",
     max_gui_chars=110,
     font=("Helvetica", 8),
@@ -12012,13 +12146,13 @@ progress_label = ConsoleStatusLabel(
 progress_label.pack(side=tk.BOTTOM, padx=5)
 
 update_timing_label = ttk.Label(
-    root,
+    status_frame,
     text="Timing | image generation: n/a | redraw/update: n/a | total: n/a",
     font=("Helvetica", 8),
 )
 update_timing_label.pack(side=tk.BOTTOM, padx=5)
 
-chi_square_label = ttk.Label(root, text="Chi-Squared: ", font=("Helvetica", 8))
+chi_square_label = ttk.Label(status_frame, text="Chi-Squared: ", font=("Helvetica", 8))
 chi_square_label.pack(side=tk.BOTTOM, padx=5)
 
 last_hbn_geometry_debug_report = (
@@ -12649,18 +12783,21 @@ def _import_geometry_manual_pairs() -> None:
 
 
 save_button = ttk.Button(
+    workspace_session_frame,
     text="Export GUI State...",
     command=_export_full_gui_state,
 )
 save_button.pack(side=tk.TOP, padx=5, pady=2)
 
 load_button = ttk.Button(
+    workspace_session_frame,
     text="Import GUI State...",
     command=_import_full_gui_state,
 )
 load_button.pack(side=tk.TOP, padx=5, pady=2)
 
 import_hbn_button = ttk.Button(
+    workspace_session_frame,
     text="Import hBN Bundle Tilt",
     command=import_hbn_tilt_from_bundle,
 )
@@ -12668,13 +12805,14 @@ import_hbn_button.pack(side=tk.TOP, padx=5, pady=2)
 
 if HBN_GEOMETRY_DEBUG_ENABLED:
     show_hbn_debug_button = ttk.Button(
+        workspace_session_frame,
         text="Show hBN Geometry Debug",
         command=show_last_hbn_geometry_debug,
     )
     show_hbn_debug_button.pack(side=tk.TOP, padx=5, pady=2)
 
 # Frame for selecting which geometry params to fit
-fit_frame = ttk.LabelFrame(root, text="Fit geometry parameters")
+fit_frame = ttk.LabelFrame(fit_body, text="Fit geometry parameters")
 fit_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
 fit_zb_var    = tk.BooleanVar(value=True)
@@ -12689,22 +12827,48 @@ fit_dist_var = tk.BooleanVar(value=True)
 fit_center_x_var = tk.BooleanVar(value=False)
 fit_center_y_var = tk.BooleanVar(value=False)
 
-ttk.Checkbutton(fit_frame, text="z_b beam offset", variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="z_s sample offset", variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
+fit_toggle_widgets = []
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="z_b beam offset", variable=fit_zb_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="z_s sample offset", variable=fit_zs_var)
+)
 fit_theta_checkbutton = ttk.Checkbutton(
     fit_frame,
     text="θ sample tilt",
     variable=fit_theta_var,
 )
-fit_theta_checkbutton.pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="ψ goniometer yaw", variable=fit_psi_z_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="χ sample pitch", variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="φ axis angle", variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="γ detector tilt", variable=fit_gamma_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="Γ detector tilt", variable=fit_Gamma_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="distance", variable=fit_dist_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="center col", variable=fit_center_y_var).pack(side=tk.LEFT, padx=2)
+fit_toggle_widgets.append(fit_theta_checkbutton)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="ψ goniometer yaw", variable=fit_psi_z_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="χ sample pitch", variable=fit_chi_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="φ axis angle", variable=fit_cor_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="γ detector tilt", variable=fit_gamma_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="Γ detector tilt", variable=fit_Gamma_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="distance", variable=fit_dist_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="center col", variable=fit_center_y_var)
+)
+for _col in range(4):
+    fit_frame.columnconfigure(_col, weight=1)
+for _idx, _widget in enumerate(fit_toggle_widgets):
+    _row, _col = divmod(_idx, 4)
+    _widget.grid(row=_row, column=_col, sticky="w", padx=4, pady=2)
 _refresh_geometry_fit_theta_checkbox_label()
 
 GEOMETRY_FIT_PARAM_ORDER = [
@@ -12756,7 +12920,7 @@ def _sync_geometry_fit_constraint_rows(*_args) -> None:
             control["_mapped"] = False
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
-    background_backend_frame = ttk.LabelFrame(root, text="Background Backend (debug)")
+    background_backend_frame = ttk.LabelFrame(fit_body, text="Background Backend (debug)")
     background_backend_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
     background_backend_status_label = ttk.Label(
@@ -12797,7 +12961,7 @@ backend_flip_x_axis_var = tk.BooleanVar(value=False)
 backend_flip_order_var = tk.StringVar(value="yx")
 
 if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
-    backend_orient_frame = ttk.LabelFrame(root, text="Backend orientation (debug)")
+    backend_orient_frame = ttk.LabelFrame(fit_body, text="Backend orientation (debug)")
     backend_orient_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
     ttk.Label(backend_orient_frame, text="Rotate ×90° (k):").pack(side=tk.LEFT, padx=2)
@@ -17381,7 +17545,7 @@ def on_fit_geometry_click():
 
 
 fit_button_geometry = ttk.Button(
-    root,
+    fit_actions_frame,
     text="Fit Positions & Geometry",
     command=on_fit_geometry_click
 )
@@ -17391,7 +17555,7 @@ fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_cl
 live_geometry_preview_var = tk.BooleanVar(value=False)
 geometry_manual_pick_button_var = tk.StringVar(value="Pick Qr Sets on Image")
 geometry_manual_pick_button = ttk.Button(
-    root,
+    fit_actions_frame,
     textvariable=geometry_manual_pick_button_var,
     command=_toggle_geometry_manual_pick_mode,
 )
@@ -17399,21 +17563,21 @@ geometry_manual_pick_button.pack(side=tk.TOP, padx=5, pady=2)
 _update_geometry_manual_pick_button_label()
 
 geometry_manual_undo_button = ttk.Button(
-    root,
+    fit_actions_frame,
     text="Undo Placement",
     command=_undo_last_geometry_manual_placement,
 )
 geometry_manual_undo_button.pack(side=tk.TOP, padx=5, pady=2)
 
 geometry_manual_export_button = ttk.Button(
-    root,
+    fit_actions_frame,
     text="Export Placements...",
     command=_export_geometry_manual_pairs,
 )
 geometry_manual_export_button.pack(side=tk.TOP, padx=5, pady=2)
 
 geometry_manual_import_button = ttk.Button(
-    root,
+    fit_actions_frame,
     text="Import Placements...",
     command=_import_geometry_manual_pairs,
 )
@@ -17421,7 +17585,7 @@ geometry_manual_import_button.pack(side=tk.TOP, padx=5, pady=2)
 
 geometry_preview_exclude_button_var = tk.StringVar(value="Select Qr/Qz Peaks")
 geometry_preview_exclude_button = ttk.Button(
-    root,
+    fit_actions_frame,
     textvariable=geometry_preview_exclude_button_var,
     command=_toggle_geometry_preview_exclude_mode,
 )
@@ -17429,62 +17593,65 @@ geometry_preview_exclude_button.pack(side=tk.TOP, padx=5, pady=2)
 _update_geometry_preview_exclude_button_label()
 
 clear_geometry_preview_exclusions_button = ttk.Button(
-    root,
+    fit_actions_frame,
     text="Clear Current Image Pairs",
     command=_clear_current_geometry_manual_pairs,
 )
 clear_geometry_preview_exclusions_button.pack(side=tk.TOP, padx=5, pady=2)
 
-hkl_lookup_frame = ttk.Frame(root)
+hkl_lookup_frame = ttk.LabelFrame(fit_actions_frame, text="Peak Lookup (HKL)")
 hkl_lookup_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4)
 
 selected_h_var = tk.StringVar(value="0")
 selected_k_var = tk.StringVar(value="0")
 selected_l_var = tk.StringVar(value="0")
 
-ttk.Label(hkl_lookup_frame, text="H").pack(side=tk.LEFT, padx=(4, 2))
+for _col in range(8):
+    hkl_lookup_frame.columnconfigure(_col, weight=1 if _col in {1, 3, 5} else 0)
+
+ttk.Label(hkl_lookup_frame, text="H").grid(row=0, column=0, sticky="w", padx=(6, 2), pady=(4, 2))
 h_entry = ttk.Entry(hkl_lookup_frame, width=5, textvariable=selected_h_var)
-h_entry.pack(side=tk.LEFT, padx=(0, 6))
+h_entry.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(4, 2))
 
-ttk.Label(hkl_lookup_frame, text="K").pack(side=tk.LEFT, padx=(0, 2))
+ttk.Label(hkl_lookup_frame, text="K").grid(row=0, column=2, sticky="w", padx=(0, 2), pady=(4, 2))
 k_entry = ttk.Entry(hkl_lookup_frame, width=5, textvariable=selected_k_var)
-k_entry.pack(side=tk.LEFT, padx=(0, 6))
+k_entry.grid(row=0, column=3, sticky="ew", padx=(0, 6), pady=(4, 2))
 
-ttk.Label(hkl_lookup_frame, text="L").pack(side=tk.LEFT, padx=(0, 2))
+ttk.Label(hkl_lookup_frame, text="L").grid(row=0, column=4, sticky="w", padx=(0, 2), pady=(4, 2))
 l_entry = ttk.Entry(hkl_lookup_frame, width=5, textvariable=selected_l_var)
-l_entry.pack(side=tk.LEFT, padx=(0, 8))
+l_entry.grid(row=0, column=5, sticky="ew", padx=(0, 8), pady=(4, 2))
 
 ttk.Button(
     hkl_lookup_frame,
     text="Select HKL",
     command=_select_peak_from_hkl_controls,
-).pack(side=tk.LEFT, padx=(0, 4))
+).grid(row=0, column=6, sticky="ew", padx=(0, 4), pady=(4, 2))
 
 hkl_pick_button_var = tk.StringVar(value="Pick HKL on Image")
 ttk.Button(
     hkl_lookup_frame,
     textvariable=hkl_pick_button_var,
     command=_toggle_hkl_pick_mode,
-).pack(side=tk.LEFT, padx=(0, 4))
+).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(6, 4), pady=(2, 6))
 _update_hkl_pick_button_label()
 
 ttk.Button(
     hkl_lookup_frame,
     text="Clear",
     command=_clear_selected_peak,
-).pack(side=tk.LEFT, padx=(0, 4))
+).grid(row=0, column=7, sticky="ew", padx=(0, 6), pady=(4, 2))
 
 ttk.Button(
     hkl_lookup_frame,
     text="Show Bragg/Ewald",
     command=_open_selected_peak_intersection_figure,
-).pack(side=tk.LEFT, padx=(0, 4))
+).grid(row=1, column=2, columnspan=3, sticky="ew", padx=(0, 4), pady=(2, 6))
 
 ttk.Button(
     hkl_lookup_frame,
     text="Bragg Qr Groups",
     command=_open_bragg_qr_toggle_window,
-).pack(side=tk.LEFT, padx=(0, 4))
+).grid(row=1, column=5, columnspan=3, sticky="ew", padx=(0, 6), pady=(2, 6))
 
 show_qr_cylinder_overlay_var = tk.BooleanVar(value=False)
 
@@ -17499,7 +17666,7 @@ def _on_qr_cylinder_overlay_toggle():
 
 
 ttk.Checkbutton(
-    root,
+    fit_actions_frame,
     text="Show Qr Cylinder Lines",
     variable=show_qr_cylinder_overlay_var,
     command=_on_qr_cylinder_overlay_toggle,
@@ -17509,14 +17676,14 @@ for _entry in (h_entry, k_entry, l_entry):
     _entry.bind("<Return>", lambda _event: _select_peak_from_hkl_controls())
 
 clear_geometry_markers_button = ttk.Button(
-    root,
+    fit_actions_frame,
     text="Clear Geometry Overlays",
     command=_clear_all_geometry_overlay_artists,
 )
 clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
 
 fit_button_mosaic = ttk.Button(
-    root,
+    fit_actions_frame,
     text="Fit Mosaic Widths",
     command=on_fit_mosaic_click,
 )
@@ -17527,6 +17694,7 @@ def toggle_1d_plots():
     schedule_range_update()
 
 check_1d = ttk.Checkbutton(
+    analysis_views_frame,
     text="Show 1D Integration",
     variable=show_1d_var,
     command=toggle_1d_plots
@@ -17549,6 +17717,7 @@ def toggle_caked_2d():
     schedule_update()
 
 check_2d = ttk.Checkbutton(
+    analysis_views_frame,
     text="Show 2D Caked Integration",
     variable=show_caked_2d_var,
     command=toggle_caked_2d
@@ -17565,6 +17734,7 @@ def toggle_log_azimuth():
     schedule_range_update()
 
 check_log_radial = ttk.Checkbutton(
+    analysis_views_frame,
     text="Log Radial",
     variable=log_radial_var,
     command=toggle_log_radial
@@ -17572,6 +17742,7 @@ check_log_radial = ttk.Checkbutton(
 check_log_radial.pack(side=tk.TOP, padx=5, pady=2)
 
 check_log_azimuth = ttk.Checkbutton(
+    analysis_views_frame,
     text="Log Azimuth",
     variable=log_azimuth_var,
     command=toggle_log_azimuth
@@ -17613,6 +17784,7 @@ def save_1d_snapshot():
         progress_label.config(text=f"Error saving simulated image: {e}")
 
 snapshot_button = ttk.Button(
+    analysis_exports_frame,
     text="Save 1D Snapshot",
     command=save_1d_snapshot
 )
@@ -17720,6 +17892,7 @@ def save_q_space_representation():
     progress_label.config(text=f"Saved Q-Space representation to {file_path}")
 
 save_q_button = ttk.Button(
+    analysis_exports_frame,
     text="Save Q-Space Snapshot",
     command=save_q_space_representation
 )
@@ -17729,6 +17902,7 @@ def save_1d_permutations():
     pass
 
 save_1d_grid_button = ttk.Button(
+    analysis_exports_frame,
     text="Save 1D Grid",
     command=save_1d_permutations
 )
@@ -17804,6 +17978,7 @@ def run_debug_simulation():
     progress_label.config(text="Debug simulation complete. Log saved.")
 
 debug_button = ttk.Button(
+    workspace_actions_frame,
     text="Run Debug Simulation",
     command=run_debug_simulation
 )
@@ -17811,6 +17986,7 @@ debug_button.pack(side=tk.TOP, padx=5, pady=2)
 
 # Button to force a full update (re-read occupancies and recalc everything).
 force_update_button = ttk.Button(
+    workspace_actions_frame,
     text="Force Update",
     command=lambda: update_occupancies()
 )
@@ -18440,7 +18616,7 @@ def _default_geometry_fit_pull(name: str, window: float) -> float:
 
 
 geometry_fit_constraints_frame = CollapsibleFrame(
-    root,
+    fit_body,
     text="Geometry Fit Constraints",
     expanded=True,
 )
