@@ -5,7 +5,12 @@ import math
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
-from scipy.optimize import least_squares, differential_evolution, OptimizeResult
+from scipy.optimize import (
+    OptimizeResult,
+    differential_evolution,
+    least_squares,
+    linear_sum_assignment,
+)
 from scipy.ndimage import distance_transform_edt, gaussian_filter, sobel, zoom
 from scipy.spatial import cKDTree
 
@@ -199,8 +204,26 @@ def _update_params(
     values: Sequence[float],
 ) -> Dict[str, float]:
     updated = dict(params)
+    try:
+        center_seed = updated.get("center", (updated.get("center_x", 0.0), updated.get("center_y", 0.0)))
+        center_row = float(center_seed[0])
+        center_col = float(center_seed[1])
+    except Exception:
+        center_row = float(updated.get("center_x", 0.0))
+        center_col = float(updated.get("center_y", 0.0))
     for name, val in zip(var_names, values):
-        updated[name] = float(val)
+        val_float = float(val)
+        if name == "center_x":
+            center_row = val_float
+            updated["center_x"] = val_float
+        elif name == "center_y":
+            center_col = val_float
+            updated["center_y"] = val_float
+        else:
+            updated[name] = val_float
+    updated["center"] = [float(center_row), float(center_col)]
+    updated["center_x"] = float(center_row)
+    updated["center_y"] = float(center_col)
     return updated
 
 
@@ -325,6 +348,25 @@ def _normalize_measured_peaks(
                 normalized_entry["sigma_px"] = float(sigma_px)
             else:
                 normalized_entry.pop("sigma_px", None)
+
+        for source_key, target_key in (
+            ("sigma_radial_px", "sigma_radial_px"),
+            ("radial_sigma_px", "sigma_radial_px"),
+            ("sigma_tangential_px", "sigma_tangential_px"),
+            ("tangential_sigma_px", "sigma_tangential_px"),
+        ):
+            raw_value = normalized_entry.get(source_key)
+            if raw_value is None:
+                continue
+            try:
+                sigma_component = float(raw_value)
+            except Exception:
+                normalized_entry.pop(target_key, None)
+                continue
+            if np.isfinite(sigma_component) and sigma_component > 0.0:
+                normalized_entry[target_key] = float(sigma_component)
+            else:
+                normalized_entry.pop(target_key, None)
         normalized.append(normalized_entry)
     return normalized
 
@@ -353,6 +395,191 @@ def _measured_entry_sigma_px(
     if not np.isfinite(sigma_px) or sigma_px <= 0.0:
         return float(default_sigma_px), False
     return float(sigma_px), True
+
+
+def _measured_entry_sigma_components(
+    entry: Dict[str, object],
+    *,
+    default_sigma_px: float = 1.0,
+    anisotropic_enabled: bool = False,
+    radial_scale: float = 1.0,
+    tangential_scale: float = 1.0,
+) -> Tuple[float, float, float, bool, bool]:
+    """Return isotropic and radial/tangential measurement sigmas in pixels."""
+
+    sigma_px, has_custom_sigma = _measured_entry_sigma_px(
+        entry,
+        default_sigma_px=default_sigma_px,
+    )
+    sigma_radial = float(
+        entry.get(
+            "sigma_radial_px",
+            entry.get("radial_sigma_px", float("nan")),
+        )
+    )
+    sigma_tangential = float(
+        entry.get(
+            "sigma_tangential_px",
+            entry.get("tangential_sigma_px", float("nan")),
+        )
+    )
+
+    has_custom_anisotropy = bool(
+        np.isfinite(sigma_radial)
+        or np.isfinite(sigma_tangential)
+    )
+    radial_scale = float(radial_scale) if np.isfinite(radial_scale) else 1.0
+    tangential_scale = (
+        float(tangential_scale) if np.isfinite(tangential_scale) else 1.0
+    )
+    radial_scale = max(radial_scale, 1.0e-6)
+    tangential_scale = max(tangential_scale, 1.0e-6)
+
+    if not np.isfinite(sigma_radial) or sigma_radial <= 0.0:
+        sigma_radial = float(sigma_px) * (
+            radial_scale if anisotropic_enabled else 1.0
+        )
+    if not np.isfinite(sigma_tangential) or sigma_tangential <= 0.0:
+        sigma_tangential = float(sigma_px) * (
+            tangential_scale if anisotropic_enabled else 1.0
+        )
+
+    sigma_radial = max(float(sigma_radial), 1.0e-6)
+    sigma_tangential = max(float(sigma_tangential), 1.0e-6)
+    anisotropic_used = bool(
+        has_custom_anisotropy
+        or (
+            anisotropic_enabled
+            and not math.isclose(
+                float(sigma_radial),
+                float(sigma_tangential),
+                rel_tol=1.0e-9,
+                abs_tol=1.0e-9,
+            )
+        )
+    )
+    return (
+        float(sigma_px),
+        float(sigma_radial),
+        float(sigma_tangential),
+        bool(has_custom_sigma),
+        bool(anisotropic_used),
+    )
+
+
+def _radial_tangential_basis(
+    point: Tuple[float, float],
+    center: Sequence[float],
+) -> Optional[np.ndarray]:
+    """Return a detector-pixel radial/tangential basis at *point*."""
+
+    if center is None or len(center) < 2:
+        return None
+    try:
+        center_row = float(center[0])
+        center_col = float(center[1])
+        point_col = float(point[0])
+        point_row = float(point[1])
+    except Exception:
+        return None
+    if not (
+        np.isfinite(center_row)
+        and np.isfinite(center_col)
+        and np.isfinite(point_col)
+        and np.isfinite(point_row)
+    ):
+        return None
+
+    radial = np.array(
+        [point_col - center_col, point_row - center_row],
+        dtype=np.float64,
+    )
+    norm = float(np.linalg.norm(radial))
+    if norm <= 1.0e-9:
+        return None
+    radial_unit = radial / norm
+    tangential_unit = np.array(
+        [-radial_unit[1], radial_unit[0]],
+        dtype=np.float64,
+    )
+    return np.column_stack((radial_unit, tangential_unit))
+
+
+def _weight_measurement_residual(
+    dx: float,
+    dy: float,
+    *,
+    measured_point: Tuple[float, float],
+    center: Sequence[float],
+    entry: Dict[str, object],
+    distance_weight: float,
+    anisotropic_enabled: bool,
+    radial_scale: float,
+    tangential_scale: float,
+) -> Dict[str, float | bool]:
+    """Apply scalar or covariance-style measurement weighting to one match."""
+
+    sigma_px, sigma_radial, sigma_tangential, has_custom_sigma, anisotropic_used = (
+        _measured_entry_sigma_components(
+            entry,
+            anisotropic_enabled=anisotropic_enabled,
+            radial_scale=radial_scale,
+            tangential_scale=tangential_scale,
+        )
+    )
+    residual_vec = np.array([float(dx), float(dy)], dtype=np.float64)
+    radial_component = float("nan")
+    tangential_component = float("nan")
+    weighted_radial = float("nan")
+    weighted_tangential = float("nan")
+
+    basis = _radial_tangential_basis(measured_point, center)
+    if anisotropic_used and basis is not None:
+        radial_unit = basis[:, 0]
+        tangential_unit = basis[:, 1]
+        radial_component = float(np.dot(radial_unit, residual_vec))
+        tangential_component = float(np.dot(tangential_unit, residual_vec))
+        weighted_radial = float(distance_weight * radial_component / sigma_radial)
+        weighted_tangential = float(
+            distance_weight * tangential_component / sigma_tangential
+        )
+        inv_sqrt_cov = basis @ np.diag(
+            [1.0 / sigma_radial, 1.0 / sigma_tangential]
+        ) @ basis.T
+        weighted_vec = float(distance_weight) * (inv_sqrt_cov @ residual_vec)
+    else:
+        scalar_sigma_weight = 1.0 / float(sigma_px)
+        weighted_vec = float(distance_weight * scalar_sigma_weight) * residual_vec
+        if basis is not None:
+            radial_unit = basis[:, 0]
+            tangential_unit = basis[:, 1]
+            radial_component = float(np.dot(radial_unit, residual_vec))
+            tangential_component = float(np.dot(tangential_unit, residual_vec))
+            weighted_radial = float(distance_weight * scalar_sigma_weight * radial_component)
+            weighted_tangential = float(
+                distance_weight * scalar_sigma_weight * tangential_component
+            )
+        else:
+            weighted_radial = float(distance_weight * residual_vec[0] / sigma_px)
+            weighted_tangential = float(distance_weight * residual_vec[1] / sigma_px)
+
+    sigma_weight_equivalent = 1.0 / math.sqrt(
+        max(float(sigma_radial) * float(sigma_tangential), 1.0e-12)
+    )
+    return {
+        "measurement_sigma_px": float(sigma_px),
+        "sigma_radial_px": float(sigma_radial),
+        "sigma_tangential_px": float(sigma_tangential),
+        "sigma_is_custom": bool(has_custom_sigma),
+        "anisotropic_sigma_used": bool(anisotropic_used),
+        "sigma_weight": float(sigma_weight_equivalent),
+        "weighted_dx_px": float(weighted_vec[0]),
+        "weighted_dy_px": float(weighted_vec[1]),
+        "radial_residual_px": float(radial_component),
+        "tangential_residual_px": float(tangential_component),
+        "weighted_radial_residual_px": float(weighted_radial),
+        "weighted_tangential_residual_px": float(weighted_tangential),
+    }
 
 
 @dataclass
@@ -575,13 +802,13 @@ def _build_geometry_fit_dataset_contexts(
     return contexts
 
 
-def _build_greedy_point_matches(
+def _build_global_point_matches(
     simulated_points: Sequence[Tuple[float, float]],
     measured_points: Sequence[Tuple[float, float]],
     *,
     max_distance: float = np.inf,
 ) -> List[Tuple[np.ndarray, np.ndarray, float, int, int]]:
-    """Greedy one-to-one matching between measured and simulated point sets."""
+    """Globally optimal one-to-one matching with optional unmatched points."""
 
     if not simulated_points or not measured_points:
         return []
@@ -596,25 +823,57 @@ def _build_greedy_point_matches(
         mask = np.isfinite(dist)
     else:
         mask = np.isfinite(dist) & (dist <= float(max_distance))
-    candidate_pairs = np.argwhere(mask)
-    if candidate_pairs.size == 0:
+    if not np.any(mask):
         return []
 
-    candidate_dist = dist[candidate_pairs[:, 0], candidate_pairs[:, 1]]
-    order = np.argsort(candidate_dist)
-    used_meas: set[int] = set()
-    used_sim: set[int] = set()
+    finite_dist = dist[mask]
+    if finite_dist.size == 0:
+        return []
+
+    if np.isfinite(max_distance):
+        dummy_cost = max(float(max_distance), 0.0) + 1.0e-6
+    else:
+        dummy_cost = max(float(np.max(finite_dist)), 0.0) + 1.0
+    invalid_cost = dummy_cost + max(dummy_cost, 1.0) * 1.0e6
+
+    num_meas, num_sim = dist.shape
+    total_size = num_meas + num_sim
+    cost = np.full((total_size, total_size), invalid_cost, dtype=float)
+    cost[:num_meas, :num_sim] = np.where(mask, dist, invalid_cost)
+
+    for meas_idx in range(num_meas):
+        cost[meas_idx, num_sim + meas_idx] = dummy_cost
+    for sim_idx in range(num_sim):
+        cost[num_meas + sim_idx, sim_idx] = dummy_cost
+    cost[num_meas:, num_sim:] = 0.0
+
+    row_ind, col_ind = linear_sum_assignment(cost)
     matches: List[Tuple[np.ndarray, np.ndarray, float, int, int]] = []
-    for idx in order:
-        m_idx = int(candidate_pairs[idx, 0])
-        s_idx = int(candidate_pairs[idx, 1])
-        if m_idx in used_meas or s_idx in used_sim:
+    for row_idx, col_idx in zip(row_ind.tolist(), col_ind.tolist()):
+        if row_idx >= num_meas or col_idx >= num_sim:
             continue
-        d = float(candidate_dist[idx])
-        matches.append((sim[s_idx], meas[m_idx], d, s_idx, m_idx))
-        used_meas.add(m_idx)
-        used_sim.add(s_idx)
+        if not bool(mask[row_idx, col_idx]):
+            continue
+        pair_dist = float(dist[row_idx, col_idx])
+        matches.append((sim[col_idx], meas[row_idx], pair_dist, int(col_idx), int(row_idx)))
+
+    matches.sort(key=lambda item: (float(item[2]), int(item[4]), int(item[3])))
     return matches
+
+
+def _build_greedy_point_matches(
+    simulated_points: Sequence[Tuple[float, float]],
+    measured_points: Sequence[Tuple[float, float]],
+    *,
+    max_distance: float = np.inf,
+) -> List[Tuple[np.ndarray, np.ndarray, float, int, int]]:
+    """Backward-compatible wrapper for global point assignment."""
+
+    return _build_global_point_matches(
+        simulated_points,
+        measured_points,
+        max_distance=max_distance,
+    )
 
 
 def _evaluate_geometry_fit_dataset_point_matches(
@@ -628,6 +887,9 @@ def _evaluate_geometry_fit_dataset_point_matches(
     missing_pair_penalty: float,
     use_single_ray: bool,
     theta_value: float,
+    anisotropic_uncertainty: bool = False,
+    radial_sigma_scale: float = 1.0,
+    tangential_sigma_scale: float = 1.0,
     collect_diagnostics: bool = False,
 ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
     """Evaluate one measured dataset against one simulated geometry state."""
@@ -705,6 +967,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
     residuals: List[float] = []
     diagnostics: List[Dict[str, object]] = []
     custom_sigma_values: List[float] = []
+    anisotropic_sigma_count = 0
     fixed_matches, fallback_measured, resolution_lookup = _resolve_fixed_source_matches(
         normalized_measured,
         hit_tables,
@@ -728,13 +991,31 @@ def _evaluate_geometry_fit_dataset_point_matches(
         diag["theta_initial_deg"] = float(theta_value)
         diagnostics.append(diag)
 
-    def _entry_sigma_fields(entry: Dict[str, object]) -> Tuple[float, bool, float]:
-        sigma_px, has_custom_sigma = _measured_entry_sigma_px(entry)
-        sigma_px = max(float(sigma_px), 1.0e-6)
-        sigma_weight = 1.0 / float(sigma_px)
-        if has_custom_sigma:
-            custom_sigma_values.append(float(sigma_px))
-        return float(sigma_px), bool(has_custom_sigma), float(sigma_weight)
+    def _weight_fields(
+        entry: Dict[str, object],
+        *,
+        measured_point: Tuple[float, float],
+        dx: float = 0.0,
+        dy: float = 0.0,
+        distance_weight: float = 1.0,
+    ) -> Dict[str, float | bool]:
+        nonlocal anisotropic_sigma_count
+        fields = _weight_measurement_residual(
+            dx,
+            dy,
+            measured_point=measured_point,
+            center=local.get("center", []),
+            entry=entry,
+            distance_weight=distance_weight,
+            anisotropic_enabled=bool(anisotropic_uncertainty),
+            radial_scale=float(radial_sigma_scale),
+            tangential_scale=float(tangential_sigma_scale),
+        )
+        if bool(fields.get("sigma_is_custom", False)):
+            custom_sigma_values.append(float(fields.get("measurement_sigma_px", np.nan)))
+        if bool(fields.get("anisotropic_sigma_used", False)):
+            anisotropic_sigma_count += 1
+        return fields
 
     def _placement_error_px(entry: Dict[str, object]) -> float:
         try:
@@ -753,7 +1034,6 @@ def _evaluate_geometry_fit_dataset_point_matches(
             and np.isfinite(meas_pt[0]) and np.isfinite(meas_pt[1])
         ):
             continue
-        sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(measured_entry)
         dx = float(sim_pt[0] - meas_pt[0])
         dy = float(sim_pt[1] - meas_pt[1])
         pair_dist = math.hypot(dx, dy)
@@ -761,9 +1041,15 @@ def _evaluate_geometry_fit_dataset_point_matches(
             distance_weight = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
         else:
             distance_weight = 1.0
-        total_weight = float(distance_weight * sigma_weight)
-        weighted_dx = float(dx * total_weight)
-        weighted_dy = float(dy * total_weight)
+        weight_fields = _weight_fields(
+            measured_entry,
+            measured_point=meas_pt,
+            dx=dx,
+            dy=dy,
+            distance_weight=float(distance_weight),
+        )
+        weighted_dx = float(weight_fields["weighted_dx_px"])
+        weighted_dy = float(weight_fields["weighted_dy_px"])
         residuals.extend([weighted_dx, weighted_dy])
         _add_diag(
             dict(resolution_lookup.get(id(measured_entry), {})),
@@ -778,15 +1064,13 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 "dy_px": float(sim_pt[1] - meas_pt[1]),
                 "distance_px": float(pair_dist),
                 "placement_error_px": _placement_error_px(measured_entry),
-                "measurement_sigma_px": float(sigma_px),
-                "sigma_is_custom": bool(has_custom_sigma),
-                "sigma_weight": float(sigma_weight),
                 "distance_weight": float(distance_weight),
-                "weight": float(total_weight),
-                "weighted_dx_px": float(weighted_dx),
-                "weighted_dy_px": float(weighted_dy),
+                "weight": float(
+                    float(distance_weight) * float(weight_fields.get("sigma_weight", 1.0))
+                ),
                 "measured_radius_px": _point_radius_px(meas_pt),
                 "simulated_radius_px": _point_radius_px(sim_pt),
+                **weight_fields,
             },
         )
 
@@ -822,8 +1106,13 @@ def _evaluate_geometry_fit_dataset_point_matches(
         if not sim_list:
             missing_pairs += len(valid_entries_hkl)
             for entry in valid_entries_hkl:
-                sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(entry)
-                penalty_weight = float(sigma_weight)
+                measured_point = (float(entry["x"]), float(entry["y"]))
+                weight_fields = _weight_fields(
+                    entry,
+                    measured_point=measured_point,
+                    distance_weight=1.0,
+                )
+                penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
                 if missing_pair_penalty > 0.0:
                     residuals.append(float(missing_pair_penalty) * penalty_weight)
                 _add_diag(
@@ -850,16 +1139,12 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "dy_px": float("nan"),
                         "distance_px": float("nan"),
                         "placement_error_px": _placement_error_px(entry),
-                        "measurement_sigma_px": float(sigma_px),
-                        "sigma_is_custom": bool(has_custom_sigma),
-                        "sigma_weight": float(sigma_weight),
                         "distance_weight": 1.0,
                         "weight": float(penalty_weight),
-                        "weighted_dx_px": float("nan"),
-                        "weighted_dy_px": float("nan"),
                         "weighted_missing_penalty_px": float(missing_pair_penalty) * float(penalty_weight),
-                        "measured_radius_px": _point_radius_px((float(entry["x"]), float(entry["y"]))),
+                        "measured_radius_px": _point_radius_px(measured_point),
                         "simulated_radius_px": float("nan"),
+                        **weight_fields,
                     },
                 )
             continue
@@ -869,16 +1154,21 @@ def _evaluate_geometry_fit_dataset_point_matches(
         for sim_pt, meas_pt, pair_dist, sim_idx, meas_idx in matches:
             matched_meas_indices.add(int(meas_idx))
             entry = valid_entries_hkl[meas_idx] if 0 <= meas_idx < len(valid_entries_hkl) else {}
-            sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(entry)
             dx = float(sim_pt[0] - meas_pt[0])
             dy = float(sim_pt[1] - meas_pt[1])
             if weighted_matching:
                 distance_weight = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
             else:
                 distance_weight = 1.0
-            total_weight = float(distance_weight * sigma_weight)
-            weighted_dx = float(dx * total_weight)
-            weighted_dy = float(dy * total_weight)
+            weight_fields = _weight_fields(
+                entry,
+                measured_point=(float(meas_pt[0]), float(meas_pt[1])),
+                dx=dx,
+                dy=dy,
+                distance_weight=float(distance_weight),
+            )
+            weighted_dx = float(weight_fields["weighted_dx_px"])
+            weighted_dy = float(weight_fields["weighted_dy_px"])
             residuals.extend([weighted_dx, weighted_dy])
             if 0 <= meas_idx < len(valid_entries_hkl):
                 _add_diag(
@@ -897,15 +1187,13 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "dy_px": float(sim_pt[1] - meas_pt[1]),
                         "distance_px": float(pair_dist),
                         "placement_error_px": _placement_error_px(entry),
-                        "measurement_sigma_px": float(sigma_px),
-                        "sigma_is_custom": bool(has_custom_sigma),
-                        "sigma_weight": float(sigma_weight),
                         "distance_weight": float(distance_weight),
-                        "weight": float(total_weight),
-                        "weighted_dx_px": float(weighted_dx),
-                        "weighted_dy_px": float(weighted_dy),
+                        "weight": float(
+                            float(distance_weight) * float(weight_fields.get("sigma_weight", 1.0))
+                        ),
                         "measured_radius_px": _point_radius_px((float(meas_pt[0]), float(meas_pt[1]))),
                         "simulated_radius_px": _point_radius_px((float(sim_pt[0]), float(sim_pt[1]))),
+                        **weight_fields,
                     },
                 )
 
@@ -913,8 +1201,13 @@ def _evaluate_geometry_fit_dataset_point_matches(
         missing_pairs += len(unmatched_meas_indices)
         for meas_idx in unmatched_meas_indices:
             entry = valid_entries_hkl[meas_idx]
-            sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(entry)
-            penalty_weight = float(sigma_weight)
+            measured_point = (float(entry["x"]), float(entry["y"]))
+            weight_fields = _weight_fields(
+                entry,
+                measured_point=measured_point,
+                distance_weight=1.0,
+            )
+            penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
             if missing_pair_penalty > 0.0:
                 residuals.append(float(missing_pair_penalty) * penalty_weight)
             _add_diag(
@@ -941,16 +1234,12 @@ def _evaluate_geometry_fit_dataset_point_matches(
                     "dy_px": float("nan"),
                     "distance_px": float("nan"),
                     "placement_error_px": _placement_error_px(entry),
-                    "measurement_sigma_px": float(sigma_px),
-                    "sigma_is_custom": bool(has_custom_sigma),
-                    "sigma_weight": float(sigma_weight),
                     "distance_weight": 1.0,
                     "weight": float(penalty_weight),
-                    "weighted_dx_px": float("nan"),
-                    "weighted_dy_px": float("nan"),
                     "weighted_missing_penalty_px": float(missing_pair_penalty) * float(penalty_weight),
-                    "measured_radius_px": _point_radius_px((float(entry["x"]), float(entry["y"]))),
+                    "measured_radius_px": _point_radius_px(measured_point),
                     "simulated_radius_px": float("nan"),
+                    **weight_fields,
                 },
             )
 
@@ -980,6 +1269,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
         "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
     }
+    summary["anisotropic_sigma_count"] = int(anisotropic_sigma_count)
     if custom_sigma_values:
         sigma_arr = np.asarray(custom_sigma_values, dtype=float)
         sigma_arr = sigma_arr[np.isfinite(sigma_arr) & (sigma_arr > 0.0)]
@@ -988,14 +1278,21 @@ def _evaluate_geometry_fit_dataset_point_matches(
             summary["measurement_sigma_median_px"] = float(np.median(sigma_arr))
             summary["measurement_sigma_mean_px"] = float(np.mean(sigma_arr))
             summary["measurement_sigma_max_px"] = float(np.max(sigma_arr))
-            summary["peak_weighting_mode"] = (
-                "measurement_sigma+distance" if weighted_matching else "measurement_sigma"
-            )
         else:
             summary["custom_sigma_count"] = 0
-            summary["peak_weighting_mode"] = "uniform"
     else:
         summary["custom_sigma_count"] = 0
+    if anisotropic_sigma_count > 0:
+        summary["peak_weighting_mode"] = (
+            "measurement_covariance+distance"
+            if weighted_matching
+            else "measurement_covariance"
+        )
+    elif summary.get("custom_sigma_count", 0):
+        summary["peak_weighting_mode"] = (
+            "measurement_sigma+distance" if weighted_matching else "measurement_sigma"
+        )
+    else:
         summary["peak_weighting_mode"] = "uniform"
     return residual_arr, diagnostics, summary
 
@@ -2398,6 +2695,8 @@ def _stage_one_initialize(
     *,
     downsample_factor: int,
     max_nfev: int,
+    bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
+    x_scale: Optional[Sequence[float]] = None,
 ) -> Tuple[Dict[str, float], OptimizeResult]:
     """Stage 1 coarse alignment using Chamfer distance on ridge maps."""
 
@@ -2418,7 +2717,24 @@ def _stage_one_initialize(
         back = distance_exp[ridge_sim]
         return np.concatenate((fwd.ravel(), back.ravel()))
 
-    result = least_squares(residual, x0, max_nfev=max_nfev)
+    initial_residual = np.asarray(residual(x0), dtype=np.float64)
+    lsq_kwargs: Dict[str, object] = {
+        "max_nfev": int(max_nfev),
+    }
+    if bounds is not None:
+        lsq_kwargs["bounds"] = bounds
+    if x_scale is not None:
+        lsq_kwargs["x_scale"] = np.asarray(x_scale, dtype=np.float64)
+    result = least_squares(residual, x0, **lsq_kwargs)
+    result.initial_cost = 0.5 * float(np.sum(initial_residual * initial_residual))
+    result.final_cost = 0.5 * float(
+        np.sum(np.asarray(result.fun, dtype=np.float64) ** 2)
+    )
+    result.cost_reduction = (
+        float((result.initial_cost - result.final_cost) / result.initial_cost)
+        if np.isfinite(float(result.initial_cost)) and float(result.initial_cost) > 1.0e-12
+        else 0.0
+    )
     updated_params = _update_params(params, var_names, result.x)
     return updated_params, result
 
@@ -2526,9 +2842,13 @@ def _stage_two_refinement(
         return np.concatenate(residuals_list)
 
     x0 = np.array([params[name] for name in var_names], dtype=float)
+    initial_residual = np.asarray(residual(x0), dtype=np.float64)
+    initial_cost = 0.5 * float(np.sum(initial_residual * initial_residual))
     result = least_squares(residual, x0, max_nfev=int(cfg.get('max_nfev', 25)))
     updated_params = _update_params(params, var_names, result.x)
     final_sim, _ = simulator(updated_params)
+    final_residual = np.asarray(result.fun, dtype=np.float64)
+    final_cost = 0.5 * float(np.sum(final_residual * final_residual))
     rois_state = _refresh_rois_if_needed(
         rois_state,
         miller,
@@ -2538,6 +2858,14 @@ def _stage_two_refinement(
         measured_dict=measured_dict,
         threshold=float(cfg.get('roi_refresh_threshold', 1.0)),
     )
+    result.initial_cost = float(initial_cost)
+    result.final_cost = float(final_cost)
+    result.cost_reduction = (
+        float((initial_cost - final_cost) / initial_cost)
+        if np.isfinite(initial_cost) and initial_cost > 1.0e-12
+        else 0.0
+    )
+    result.selected_rois = list(rois_state)
     return updated_params, result, rois_state, final_sim, residual
 
 
@@ -3107,35 +3435,18 @@ def simulate_and_compare_hkl(
         simulated_points: list[tuple[float, float]],
         measured_points: list[tuple[float, float]],
     ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
-        if not simulated_points or not measured_points:
-            return []
-
-        sim_arr = np.asarray(simulated_points, dtype=float)
-        meas_arr = np.asarray(measured_points, dtype=float)
-        if sim_arr.ndim != 2 or meas_arr.ndim != 2 or sim_arr.shape[1] != 2 or meas_arr.shape[1] != 2:
-            return []
-
-        dist = np.linalg.norm(meas_arr[:, None, :] - sim_arr[None, :, :], axis=2)
-        candidate_pairs = np.argwhere(np.isfinite(dist))
-        if candidate_pairs.size == 0:
-            return []
-
-        candidate_dist = dist[candidate_pairs[:, 0], candidate_pairs[:, 1]]
-        order = np.argsort(candidate_dist)
-        used_meas: set[int] = set()
-        used_sim: set[int] = set()
-        matches: list[tuple[tuple[float, float], tuple[float, float]]] = []
-        for idx in order:
-            meas_idx = int(candidate_pairs[idx, 0])
-            sim_idx = int(candidate_pairs[idx, 1])
-            if meas_idx in used_meas or sim_idx in used_sim:
-                continue
-            sim_pt = (float(sim_arr[sim_idx, 0]), float(sim_arr[sim_idx, 1]))
-            meas_pt = (float(meas_arr[meas_idx, 0]), float(meas_arr[meas_idx, 1]))
-            matches.append((sim_pt, meas_pt))
-            used_meas.add(meas_idx)
-            used_sim.add(sim_idx)
-        return matches
+        assigned = _build_global_point_matches(
+            simulated_points,
+            measured_points,
+            max_distance=np.inf,
+        )
+        return [
+            (
+                (float(sim_pt[0]), float(sim_pt[1])),
+                (float(meas_pt[0]), float(meas_pt[1])),
+            )
+            for sim_pt, meas_pt, *_ in assigned
+        ]
 
     fixed_matches, fallback_measured, _ = _resolve_fixed_source_matches(
         normalized_measured,
@@ -3343,6 +3654,24 @@ def fit_geometry_parameters(
     if not isinstance(solver_cfg, dict):
         solver_cfg = {}
 
+    image_refinement_cfg: Dict[str, float] = {}
+    if isinstance(refinement_config, dict):
+        image_refinement_cfg = refinement_config.get("image_refinement", {}) or {}
+    if not isinstance(image_refinement_cfg, dict):
+        image_refinement_cfg = {}
+
+    ridge_refinement_cfg: Dict[str, float] = {}
+    if isinstance(refinement_config, dict):
+        ridge_refinement_cfg = refinement_config.get("ridge_refinement", {}) or {}
+    if not isinstance(ridge_refinement_cfg, dict):
+        ridge_refinement_cfg = {}
+
+    identifiability_cfg: Dict[str, float] = {}
+    if isinstance(refinement_config, dict):
+        identifiability_cfg = refinement_config.get("identifiability", {}) or {}
+    if not isinstance(identifiability_cfg, dict):
+        identifiability_cfg = {}
+
     solver_loss = str(
         solver_cfg.get("loss", "soft_l1" if point_match_mode else "linear")
     ).strip().lower()
@@ -3386,6 +3715,25 @@ def fit_geometry_parameters(
         solver_cfg.get("stagnation_probe_random_directions", 0)
     )
     stagnation_probe_random_directions = max(0, stagnation_probe_random_directions)
+
+    image_refinement_enabled = bool(
+        image_refinement_cfg.get("enabled", point_match_mode)
+    )
+    ridge_refinement_enabled = bool(
+        ridge_refinement_cfg.get("enabled", point_match_mode)
+    )
+    identifiability_enabled = bool(
+        identifiability_cfg.get("enabled", point_match_mode)
+    )
+    anisotropic_uncertainty_enabled = bool(
+        solver_cfg.get("anisotropic_measurement_uncertainty", False)
+    )
+    radial_sigma_scale = float(solver_cfg.get("radial_sigma_scale", 1.0))
+    tangential_sigma_scale = float(solver_cfg.get("tangential_sigma_scale", 1.0))
+    if not np.isfinite(radial_sigma_scale) or radial_sigma_scale <= 0.0:
+        radial_sigma_scale = 1.0
+    if not np.isfinite(tangential_sigma_scale) or tangential_sigma_scale <= 0.0:
+        tangential_sigma_scale = 1.0
 
     try:
         center_seed = params.get("center", (0.0, 0.0))
@@ -3459,41 +3807,13 @@ def fit_geometry_parameters(
         *,
         max_distance: float = np.inf,
     ) -> List[Tuple[np.ndarray, np.ndarray, float, int, int]]:
-        """Greedy one-to-one matching between measured and simulated peak points."""
+        """Backward-compatible wrapper around the global point matcher."""
 
-        if not simulated_points or not measured_points:
-            return []
-
-        sim = np.asarray(simulated_points, dtype=float)
-        meas = np.asarray(measured_points, dtype=float)
-        if sim.ndim != 2 or meas.ndim != 2 or sim.shape[1] != 2 or meas.shape[1] != 2:
-            return []
-
-        dist = np.linalg.norm(meas[:, None, :] - sim[None, :, :], axis=2)
-        if not np.isfinite(max_distance):
-            mask = np.isfinite(dist)
-        else:
-            mask = np.isfinite(dist) & (dist <= float(max_distance))
-        candidate_pairs = np.argwhere(mask)
-        if candidate_pairs.size == 0:
-            return []
-
-        candidate_dist = dist[candidate_pairs[:, 0], candidate_pairs[:, 1]]
-        order = np.argsort(candidate_dist)
-
-        used_meas: set[int] = set()
-        used_sim: set[int] = set()
-        matches: List[Tuple[np.ndarray, np.ndarray, float, int, int]] = []
-        for idx in order:
-            m_idx = int(candidate_pairs[idx, 0])
-            s_idx = int(candidate_pairs[idx, 1])
-            if m_idx in used_meas or s_idx in used_sim:
-                continue
-            d = float(candidate_dist[idx])
-            matches.append((sim[s_idx], meas[m_idx], d, s_idx, m_idx))
-            used_meas.add(m_idx)
-            used_sim.add(s_idx)
-        return matches
+        return _build_global_point_matches(
+            simulated_points,
+            measured_points,
+            max_distance=max_distance,
+        )
 
     def _legacy_cost_fn_unused(x):
         local = _apply_trial_params(x)
@@ -4007,6 +4327,9 @@ def fit_geometry_parameters(
                 missing_pair_penalty=float(missing_pair_penalty),
                 use_single_ray=bool(use_single_ray),
                 theta_value=float(theta_value),
+                anisotropic_uncertainty=bool(anisotropic_uncertainty_enabled),
+                radial_sigma_scale=float(radial_sigma_scale),
+                tangential_sigma_scale=float(tangential_sigma_scale),
                 collect_diagnostics=collect_diagnostics,
             )
             residual_i = np.asarray(residual_i, dtype=float)
@@ -4061,11 +4384,24 @@ def fit_geometry_parameters(
         matched_distances = matched_distances[np.isfinite(matched_distances)]
         summary["matched_pair_count"] = int(matched_distances.size)
         summary["custom_sigma_count"] = int(custom_sigma_values.size)
-        summary["peak_weighting_mode"] = (
-            "measurement_sigma+distance"
-            if custom_sigma_values.size and bool(weighted_matching)
-            else ("measurement_sigma" if custom_sigma_values.size else "uniform")
+        anisotropic_count = int(
+            sum(int(summary_i.get("anisotropic_sigma_count", 0)) for summary_i in per_dataset_summaries)
         )
+        summary["anisotropic_sigma_count"] = int(anisotropic_count)
+        if anisotropic_count > 0:
+            summary["peak_weighting_mode"] = (
+                "measurement_covariance+distance"
+                if bool(weighted_matching)
+                else "measurement_covariance"
+            )
+        elif custom_sigma_values.size:
+            summary["peak_weighting_mode"] = (
+                "measurement_sigma+distance"
+                if bool(weighted_matching)
+                else "measurement_sigma"
+            )
+        else:
+            summary["peak_weighting_mode"] = "uniform"
         if custom_sigma_values.size:
             summary["measurement_sigma_median_px"] = float(np.median(custom_sigma_values))
             summary["measurement_sigma_mean_px"] = float(np.mean(custom_sigma_values))
@@ -4099,6 +4435,34 @@ def fit_geometry_parameters(
                 center_col_default,
             )
         return _safe_float(params.get(name, 0.0), 0.0)
+
+    def _vector_from_params(local_params: Dict[str, object]) -> np.ndarray:
+        values: List[float] = []
+        for name in var_names:
+            if name == "center_x":
+                values.append(
+                    _safe_float(
+                        local_params.get(
+                            "center_x",
+                            local_params.get("center", [center_row_default, center_col_default])[0],
+                        ),
+                        center_row_default,
+                    )
+                )
+                continue
+            if name == "center_y":
+                values.append(
+                    _safe_float(
+                        local_params.get(
+                            "center_y",
+                            local_params.get("center", [center_row_default, center_col_default])[1],
+                        ),
+                        center_col_default,
+                    )
+                )
+                continue
+            values.append(_safe_float(local_params.get(name, params.get(name, 0.0)), 0.0))
+        return np.asarray(values, dtype=float)
 
     x0 = [_initial_value(name) for name in var_names]
 
@@ -4225,6 +4589,857 @@ def fit_geometry_parameters(
         x_scale = auto_scale
 
     residual_fn = pixel_cost_fn if point_match_mode else cost_fn
+
+    def _build_single_dataset_refinement_context(
+        local_params: Dict[str, object],
+    ) -> Optional[Dict[str, object]]:
+        if len(dataset_contexts) != 1:
+            return None
+        dataset_ctx = dataset_contexts[0]
+        experimental_local = dataset_ctx.experimental_image
+        if experimental_local is None:
+            return None
+        experimental_local = np.asarray(experimental_local, dtype=np.float64)
+        if experimental_local.shape != (image_size, image_size):
+            return None
+
+        fit_miller = np.asarray(dataset_ctx.subset.miller, dtype=np.float64)
+        fit_intensities = np.asarray(dataset_ctx.subset.intensities, dtype=np.float64)
+        fit_measured = list(dataset_ctx.subset.measured_entries)
+        if fit_miller.ndim != 2 or fit_miller.shape[0] <= 0 or not fit_measured:
+            return None
+
+        measured_dict = build_measured_dict(fit_measured)
+        if not measured_dict:
+            return None
+
+        cache = SimulationCache(
+            [
+                "gamma",
+                "Gamma",
+                "corto_detector",
+                "theta_initial",
+                "cor_angle",
+                "zs",
+                "zb",
+                "chi",
+                "psi_z",
+                "a",
+                "c",
+                "center",
+            ]
+        )
+
+        def _refine_simulator(local_updates: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray]:
+            merged = dict(local_params)
+            merged.update(local_updates)
+            merged = _update_params(merged, (), ())
+            return _simulate_with_cache(
+                merged,
+                fit_miller,
+                fit_intensities,
+                image_size,
+                cache,
+            )
+
+        return {
+            "dataset_ctx": dataset_ctx,
+            "experimental_image": experimental_local,
+            "fit_miller": fit_miller,
+            "fit_intensities": fit_intensities,
+            "fit_measured": fit_measured,
+            "measured_dict": measured_dict,
+            "simulator": _refine_simulator,
+        }
+
+    def _maybe_run_ridge_refinement(current_result: OptimizeResult) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(ridge_refinement_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+        }
+        if not point_match_mode:
+            summary["reason"] = "point_match_mode_disabled"
+            return summary
+        if not ridge_refinement_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+        if len(dataset_contexts) != 1:
+            summary["reason"] = "requires_single_dataset"
+            return summary
+        if "theta_offset" in var_names:
+            summary["reason"] = "theta_offset_not_supported"
+            return summary
+        if getattr(current_result, "x", None) is None:
+            summary["reason"] = "missing_parameter_vector"
+            return summary
+
+        point_x = np.asarray(current_result.x, dtype=float)
+        point_local = _apply_trial_params(point_x)
+        point_residual_before, _, point_summary_before = _evaluate_pixel_matches(
+            point_local,
+            collect_diagnostics=True,
+        )
+        point_cost_before = _robust_cost(
+            np.asarray(point_residual_before, dtype=float),
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        try:
+            point_rms_before = float(
+                point_summary_before.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            point_rms_before = float("nan")
+        matched_before = int(point_summary_before.get("matched_pair_count", 0))
+        summary.update(
+            {
+                "point_cost_before": float(point_cost_before),
+                "point_rms_before_px": float(point_rms_before),
+                "matched_pair_count_before": int(matched_before),
+            }
+        )
+
+        ctx = _build_single_dataset_refinement_context(point_local)
+        if ctx is None:
+            summary["reason"] = "single_dataset_context_unavailable"
+            return summary
+
+        stage_cfg = {
+            "downsample_factor": int(ridge_refinement_cfg.get("downsample_factor", 4)),
+            "max_nfev": int(ridge_refinement_cfg.get("max_nfev", 20)),
+        }
+        stage_cfg["downsample_factor"] = max(1, int(stage_cfg["downsample_factor"]))
+        stage_cfg["max_nfev"] = max(10, int(stage_cfg["max_nfev"]))
+
+        try:
+            updated_params, ridge_result = _stage_one_initialize(
+                np.asarray(ctx["experimental_image"], dtype=np.float64),
+                point_local,
+                var_names,
+                ctx["simulator"],
+                downsample_factor=int(stage_cfg["downsample_factor"]),
+                max_nfev=int(stage_cfg["max_nfev"]),
+                bounds=(lower_bounds, upper_bounds),
+                x_scale=x_scale,
+            )
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["reason"] = f"ridge_refinement_failed: {exc}"
+            return summary
+
+        refined_x = _vector_from_params(updated_params)
+        refined_x = np.minimum(np.maximum(refined_x, lower_bounds), upper_bounds)
+        refined_local = _apply_trial_params(refined_x)
+        point_residual_after, _, point_summary_after = _evaluate_pixel_matches(
+            refined_local,
+            collect_diagnostics=True,
+        )
+        point_cost_after = _robust_cost(
+            np.asarray(point_residual_after, dtype=float),
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        try:
+            point_rms_after = float(
+                point_summary_after.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            point_rms_after = float("nan")
+        matched_after = int(point_summary_after.get("matched_pair_count", 0))
+
+        ridge_initial_cost = float(getattr(ridge_result, "initial_cost", np.nan))
+        ridge_final_cost = float(getattr(ridge_result, "final_cost", np.nan))
+        max_point_cost_increase_fraction = float(
+            ridge_refinement_cfg.get("max_point_cost_increase_fraction", 0.03)
+        )
+        max_point_cost_increase_fraction = max(0.0, max_point_cost_increase_fraction)
+        max_point_rms_increase_px = float(
+            ridge_refinement_cfg.get("max_point_rms_increase_px", 0.35)
+        )
+        if not np.isfinite(max_point_rms_increase_px):
+            max_point_rms_increase_px = 0.35
+        max_point_rms_increase_px = max(0.0, max_point_rms_increase_px)
+        min_ridge_cost_reduction = float(
+            ridge_refinement_cfg.get("min_ridge_cost_reduction", 1.0e-6)
+        )
+        if not np.isfinite(min_ridge_cost_reduction):
+            min_ridge_cost_reduction = 1.0e-6
+        min_ridge_cost_reduction = max(0.0, min_ridge_cost_reduction)
+
+        if np.isfinite(point_cost_before):
+            if point_cost_before > 1.0e-12:
+                point_cost_limit = point_cost_before * (
+                    1.0 + max_point_cost_increase_fraction
+                )
+            else:
+                point_cost_limit = point_cost_before + max(
+                    max_point_cost_increase_fraction,
+                    1.0e-6,
+                )
+        else:
+            point_cost_limit = float("inf")
+        if np.isfinite(point_rms_before):
+            point_rms_limit = point_rms_before + max_point_rms_increase_px
+        else:
+            point_rms_limit = float("inf")
+
+        ridge_improved = (
+            np.isfinite(ridge_initial_cost)
+            and np.isfinite(ridge_final_cost)
+            and ridge_final_cost + min_ridge_cost_reduction < ridge_initial_cost
+        )
+        point_cost_ok = (
+            not np.isfinite(point_cost_limit)
+            or (
+                np.isfinite(point_cost_after)
+                and point_cost_after <= point_cost_limit + 1.0e-12
+            )
+        )
+        point_rms_ok = (
+            not np.isfinite(point_rms_limit)
+            or (
+                np.isfinite(point_rms_after)
+                and point_rms_after <= point_rms_limit + 1.0e-12
+            )
+        )
+        matched_ok = matched_after >= matched_before
+        accepted = bool(ridge_improved and point_cost_ok and point_rms_ok and matched_ok)
+
+        summary.update(
+            {
+                "status": "accepted" if accepted else "rejected",
+                "accepted": bool(accepted),
+                "reason": (
+                    "accepted"
+                    if accepted
+                    else ", ".join(
+                        part
+                        for ok, part in (
+                            (ridge_improved, "ridge_cost_not_improved"),
+                            (point_cost_ok, "point_cost_regressed"),
+                            (point_rms_ok, "point_rms_regressed"),
+                            (matched_ok, "matched_pairs_decreased"),
+                        )
+                        if not ok
+                    )
+                ),
+                "stage_nfev": int(getattr(ridge_result, "nfev", 0)),
+                "stage_success": bool(getattr(ridge_result, "success", False)),
+                "stage_message": str(getattr(ridge_result, "message", "")),
+                "ridge_cost_before": float(ridge_initial_cost),
+                "ridge_cost_after": float(ridge_final_cost),
+                "point_cost_after": float(point_cost_after),
+                "point_rms_after_px": float(point_rms_after),
+                "matched_pair_count_after": int(matched_after),
+                "point_cost_limit": float(point_cost_limit),
+                "point_rms_limit_px": float(point_rms_limit),
+            }
+        )
+        if accepted:
+            summary["x"] = refined_x
+        return summary
+
+    def _maybe_run_image_refinement(point_result: OptimizeResult) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(image_refinement_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+        }
+        if not point_match_mode:
+            summary["reason"] = "point_match_mode_disabled"
+            return summary
+        if not image_refinement_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+        if len(dataset_contexts) != 1:
+            summary["reason"] = "requires_single_dataset"
+            return summary
+        if "theta_offset" in var_names:
+            summary["reason"] = "theta_offset_not_supported"
+            return summary
+        if getattr(point_result, "x", None) is None:
+            summary["reason"] = "missing_parameter_vector"
+            return summary
+
+        dataset_ctx = dataset_contexts[0]
+        experimental_local = dataset_ctx.experimental_image
+        if experimental_local is None:
+            summary["reason"] = "missing_experimental_image"
+            return summary
+        experimental_local = np.asarray(experimental_local, dtype=np.float64)
+        if experimental_local.shape != (image_size, image_size):
+            summary["reason"] = "experimental_image_shape_mismatch"
+            return summary
+
+        point_x = np.asarray(point_result.x, dtype=float)
+        point_local = _apply_trial_params(point_x)
+        point_residual_before, _, point_summary_before = _evaluate_pixel_matches(
+            point_local,
+            collect_diagnostics=True,
+        )
+        point_cost_before = _robust_cost(
+            np.asarray(point_residual_before, dtype=float),
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        try:
+            point_rms_before = float(
+                point_summary_before.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            point_rms_before = float("nan")
+        matched_before = int(point_summary_before.get("matched_pair_count", 0))
+        summary.update(
+            {
+                "point_cost_before": float(point_cost_before),
+                "point_rms_before_px": float(point_rms_before),
+                "matched_pair_count_before": int(matched_before),
+            }
+        )
+
+        min_rois_default = max(3, len(var_names) + 1)
+        min_rois = int(image_refinement_cfg.get("min_rois", min_rois_default))
+        min_rois = max(1, min_rois)
+        if matched_before < min_rois:
+            summary["reason"] = "insufficient_matched_pairs"
+            summary["min_rois"] = int(min_rois)
+            return summary
+
+        ctx = _build_single_dataset_refinement_context(point_local)
+        if ctx is None:
+            summary["reason"] = "single_dataset_context_unavailable"
+            return summary
+
+        stage_cfg = {
+            "downsample_factor": int(image_refinement_cfg.get("downsample_factor", 4)),
+            "percentile": float(image_refinement_cfg.get("percentile", 90.0)),
+            "huber_percentile": float(image_refinement_cfg.get("huber_percentile", 97.0)),
+            "per_reflection_quota": int(image_refinement_cfg.get("per_reflection_quota", 200)),
+            "off_tube_fraction": float(image_refinement_cfg.get("off_tube_fraction", 0.05)),
+            "max_reflections": int(image_refinement_cfg.get("max_reflections", 12)),
+            "random_reflection_fraction": float(
+                image_refinement_cfg.get("random_reflection_fraction", 0.15)
+            ),
+            "sampling_temperature": float(
+                image_refinement_cfg.get("sampling_temperature", 1.0)
+            ),
+            "explore_fraction": float(image_refinement_cfg.get("explore_fraction", 0.15)),
+            "huber_delta": float(image_refinement_cfg.get("huber_delta", 2.5)),
+            "outlier_mixture": float(image_refinement_cfg.get("outlier_mixture", 0.1)),
+            "max_nfev": int(image_refinement_cfg.get("max_nfev", 25)),
+            "roi_refresh_threshold": float(
+                image_refinement_cfg.get("roi_refresh_threshold", 1.0)
+            ),
+        }
+        stage_cfg["downsample_factor"] = max(1, int(stage_cfg["downsample_factor"]))
+        stage_cfg["per_reflection_quota"] = max(1, int(stage_cfg["per_reflection_quota"]))
+        stage_cfg["max_reflections"] = max(1, int(stage_cfg["max_reflections"]))
+        stage_cfg["max_nfev"] = max(10, int(stage_cfg["max_nfev"]))
+
+        try:
+            _, preview_maxpos = ctx["simulator"](point_local)
+            preview_rois = build_tube_rois(
+                np.asarray(ctx["fit_miller"], dtype=np.float64),
+                preview_maxpos,
+                point_local,
+                image_size,
+                measured_dict=dict(ctx["measured_dict"]),
+            )
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["reason"] = f"roi_preview_failed: {exc}"
+            return summary
+
+        preview_roi_count = int(len(preview_rois))
+        summary["preview_roi_count"] = preview_roi_count
+        summary["min_rois"] = int(min_rois)
+        if preview_roi_count < min_rois:
+            summary["reason"] = "insufficient_rois"
+            return summary
+
+        try:
+            updated_params, image_result, selected_rois, _final_sim, _image_residual = (
+                _stage_two_refinement(
+                    np.asarray(ctx["experimental_image"], dtype=np.float64),
+                    np.asarray(ctx["fit_miller"], dtype=np.float64),
+                    np.asarray(ctx["fit_intensities"], dtype=np.float64),
+                    image_size,
+                    point_local,
+                    var_names,
+                    ctx["simulator"],
+                    dict(ctx["measured_dict"]),
+                    cfg=stage_cfg,
+                )
+            )
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["reason"] = f"image_refinement_failed: {exc}"
+            return summary
+
+        image_initial_cost = float(getattr(image_result, "initial_cost", np.nan))
+        image_final_cost = float(getattr(image_result, "final_cost", np.nan))
+        refined_x = _vector_from_params(updated_params)
+        refined_x = np.minimum(np.maximum(refined_x, lower_bounds), upper_bounds)
+        refined_local = _apply_trial_params(refined_x)
+        point_residual_after, _, point_summary_after = _evaluate_pixel_matches(
+            refined_local,
+            collect_diagnostics=True,
+        )
+        point_cost_after = _robust_cost(
+            np.asarray(point_residual_after, dtype=float),
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        try:
+            point_rms_after = float(
+                point_summary_after.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            point_rms_after = float("nan")
+        matched_after = int(point_summary_after.get("matched_pair_count", 0))
+
+        max_point_cost_increase_fraction = float(
+            image_refinement_cfg.get("max_point_cost_increase_fraction", 0.05)
+        )
+        max_point_cost_increase_fraction = max(
+            0.0,
+            max_point_cost_increase_fraction,
+        )
+        max_point_rms_increase_px = float(
+            image_refinement_cfg.get("max_point_rms_increase_px", 0.5)
+        )
+        if not np.isfinite(max_point_rms_increase_px):
+            max_point_rms_increase_px = 0.5
+        max_point_rms_increase_px = max(0.0, max_point_rms_increase_px)
+        min_image_cost_reduction = float(
+            image_refinement_cfg.get("min_image_cost_reduction", 1.0e-6)
+        )
+        if not np.isfinite(min_image_cost_reduction):
+            min_image_cost_reduction = 1.0e-6
+        min_image_cost_reduction = max(0.0, min_image_cost_reduction)
+
+        if np.isfinite(point_cost_before):
+            if point_cost_before > 1.0e-12:
+                point_cost_limit = point_cost_before * (1.0 + max_point_cost_increase_fraction)
+            else:
+                point_cost_limit = point_cost_before + max(max_point_cost_increase_fraction, 1.0e-6)
+        else:
+            point_cost_limit = float("inf")
+        if np.isfinite(point_rms_before):
+            point_rms_limit = point_rms_before + max_point_rms_increase_px
+        else:
+            point_rms_limit = float("inf")
+
+        image_improved = (
+            np.isfinite(image_initial_cost)
+            and np.isfinite(image_final_cost)
+            and image_final_cost + min_image_cost_reduction < image_initial_cost
+        )
+        point_cost_ok = (
+            not np.isfinite(point_cost_limit)
+            or (
+                np.isfinite(point_cost_after)
+                and point_cost_after <= point_cost_limit + 1.0e-12
+            )
+        )
+        point_rms_ok = (
+            not np.isfinite(point_rms_limit)
+            or (
+                np.isfinite(point_rms_after)
+                and point_rms_after <= point_rms_limit + 1.0e-12
+            )
+        )
+        matched_ok = matched_after >= matched_before
+        accepted = bool(image_improved and point_cost_ok and point_rms_ok and matched_ok)
+
+        summary.update(
+            {
+                "status": "accepted" if accepted else "rejected",
+                "accepted": bool(accepted),
+                "reason": (
+                    "accepted"
+                    if accepted
+                    else ", ".join(
+                        part
+                        for ok, part in (
+                            (image_improved, "image_cost_not_improved"),
+                            (point_cost_ok, "point_cost_regressed"),
+                            (point_rms_ok, "point_rms_regressed"),
+                            (matched_ok, "matched_pairs_decreased"),
+                        )
+                        if not ok
+                    )
+                ),
+                "preview_roi_count": int(preview_roi_count),
+                "selected_roi_count": int(len(selected_rois)),
+                "stage_nfev": int(getattr(image_result, "nfev", 0)),
+                "stage_success": bool(getattr(image_result, "success", False)),
+                "stage_message": str(getattr(image_result, "message", "")),
+                "image_cost_before": float(image_initial_cost),
+                "image_cost_after": float(image_final_cost),
+                "point_cost_after": float(point_cost_after),
+                "point_rms_after_px": float(point_rms_after),
+                "matched_pair_count_after": int(matched_after),
+                "point_cost_limit": float(point_cost_limit),
+                "point_rms_limit_px": float(point_rms_limit),
+            }
+        )
+        if accepted:
+            summary["x"] = refined_x
+        return summary
+
+    def _diagnostic_match_key(entry: Dict[str, object]) -> Tuple[object, ...]:
+        raw_hkl = entry.get("hkl")
+        if isinstance(raw_hkl, tuple):
+            hkl_key: object = tuple(int(v) for v in raw_hkl)
+        else:
+            hkl_key = str(raw_hkl)
+        try:
+            measured_x = round(float(entry.get("measured_x", np.nan)), 6)
+        except Exception:
+            measured_x = float("nan")
+        try:
+            measured_y = round(float(entry.get("measured_y", np.nan)), 6)
+        except Exception:
+            measured_y = float("nan")
+        return (
+            int(entry.get("dataset_index", -1)),
+            str(entry.get("match_kind", "")),
+            str(entry.get("match_status", "")),
+            hkl_key,
+            int(entry.get("overlay_match_index", -1)),
+            int(entry.get("source_table_index", -1)),
+            int(entry.get("source_row_index", -1)),
+            measured_x,
+            measured_y,
+        )
+
+    def _build_identifiability_summary(
+        final_result: OptimizeResult,
+        point_match_diagnostics: Optional[Sequence[Dict[str, object]]] = None,
+    ) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(identifiability_enabled),
+            "status": "skipped",
+            "reason": "",
+            "underconstrained": False,
+        }
+        if not identifiability_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+        if getattr(final_result, "x", None) is None:
+            summary["reason"] = "missing_parameter_vector"
+            return summary
+
+        x_ref = np.asarray(final_result.x, dtype=float)
+        if x_ref.ndim != 1 or x_ref.size == 0:
+            summary["reason"] = "empty_parameter_vector"
+            return summary
+
+        residual_ref = np.asarray(residual_fn(x_ref), dtype=float)
+        if residual_ref.ndim != 1 or residual_ref.size == 0:
+            summary["reason"] = "empty_residual"
+            return summary
+
+        fd_step_fraction = float(identifiability_cfg.get("fd_step_fraction", 0.02))
+        if not np.isfinite(fd_step_fraction) or fd_step_fraction <= 0.0:
+            fd_step_fraction = 0.02
+        fd_min_step = float(identifiability_cfg.get("fd_min_step", 1.0e-4))
+        if not np.isfinite(fd_min_step) or fd_min_step <= 0.0:
+            fd_min_step = 1.0e-4
+        condition_warn = float(
+            identifiability_cfg.get("condition_number_warn", 1.0e8)
+        )
+        if not np.isfinite(condition_warn) or condition_warn <= 1.0:
+            condition_warn = 1.0e8
+        top_peaks_per_parameter = int(
+            identifiability_cfg.get("top_peaks_per_parameter", 3)
+        )
+        top_peaks_per_parameter = max(1, top_peaks_per_parameter)
+
+        jacobian = np.full((residual_ref.size, x_ref.size), np.nan, dtype=np.float64)
+        steps = np.full(x_ref.size, np.nan, dtype=np.float64)
+        residual_plus_cache: Dict[int, np.ndarray] = {}
+        residual_minus_cache: Dict[int, np.ndarray] = {}
+        diagnostics_plus_cache: Dict[int, Dict[Tuple[object, ...], np.ndarray]] = {}
+        diagnostics_minus_cache: Dict[int, Dict[Tuple[object, ...], np.ndarray]] = {}
+
+        base_diag_map: Dict[Tuple[object, ...], np.ndarray] = {}
+        if point_match_mode and point_match_diagnostics:
+            for entry in point_match_diagnostics:
+                if str(entry.get("match_status", "")).lower() != "matched":
+                    continue
+                try:
+                    base_diag_map[_diagnostic_match_key(dict(entry))] = np.array(
+                        [
+                            float(entry.get("dx_px", np.nan)),
+                            float(entry.get("dy_px", np.nan)),
+                        ],
+                        dtype=np.float64,
+                    )
+                except Exception:
+                    continue
+
+        def _evaluate_diag_map(x_trial: np.ndarray) -> Dict[Tuple[object, ...], np.ndarray]:
+            local_trial = _apply_trial_params(x_trial)
+            _, diagnostics_trial, _ = _evaluate_pixel_matches(
+                local_trial,
+                collect_diagnostics=True,
+            )
+            out: Dict[Tuple[object, ...], np.ndarray] = {}
+            for raw_entry in diagnostics_trial:
+                entry = dict(raw_entry)
+                if str(entry.get("match_status", "")).lower() != "matched":
+                    continue
+                try:
+                    out[_diagnostic_match_key(entry)] = np.array(
+                        [
+                            float(entry.get("dx_px", np.nan)),
+                            float(entry.get("dy_px", np.nan)),
+                        ],
+                        dtype=np.float64,
+                    )
+                except Exception:
+                    continue
+            return out
+
+        for idx in range(x_ref.size):
+            probe_scale = max(
+                float(x_scale[idx]) if idx < len(x_scale) else 0.0,
+                float(np.abs(x_ref[idx])),
+                1.0,
+            )
+            if idx < len(span) and np.isfinite(span[idx]) and span[idx] > 1.0e-12:
+                probe_scale = max(probe_scale, float(span[idx]))
+            step = max(fd_min_step, fd_step_fraction * probe_scale)
+            if idx < len(span) and np.isfinite(span[idx]) and span[idx] > 1.0e-12:
+                step = min(step, 0.25 * float(span[idx]))
+            step = max(step, fd_min_step)
+            x_plus = np.asarray(x_ref, dtype=float).copy()
+            x_minus = np.asarray(x_ref, dtype=float).copy()
+            x_plus[idx] = min(float(upper_bounds[idx]), float(x_plus[idx] + step))
+            x_minus[idx] = max(float(lower_bounds[idx]), float(x_minus[idx] - step))
+            delta_plus = float(x_plus[idx] - x_ref[idx])
+            delta_minus = float(x_ref[idx] - x_minus[idx])
+            if delta_plus <= 0.0 and delta_minus <= 0.0:
+                continue
+
+            steps[idx] = max(delta_plus, delta_minus)
+            use_central = delta_plus > 0.0 and delta_minus > 0.0
+            try:
+                residual_plus = np.asarray(residual_fn(x_plus), dtype=float)
+            except Exception:
+                residual_plus = np.array([], dtype=float)
+            if residual_plus.shape == residual_ref.shape:
+                residual_plus_cache[idx] = residual_plus
+            try:
+                residual_minus = np.asarray(residual_fn(x_minus), dtype=float)
+            except Exception:
+                residual_minus = np.array([], dtype=float)
+            if residual_minus.shape == residual_ref.shape:
+                residual_minus_cache[idx] = residual_minus
+
+            if use_central and idx in residual_plus_cache and idx in residual_minus_cache:
+                denom = float(delta_plus + delta_minus)
+                if denom > 0.0:
+                    jacobian[:, idx] = (
+                        residual_plus_cache[idx] - residual_minus_cache[idx]
+                    ) / denom
+            elif idx in residual_plus_cache and delta_plus > 0.0:
+                jacobian[:, idx] = (residual_plus_cache[idx] - residual_ref) / delta_plus
+            elif idx in residual_minus_cache and delta_minus > 0.0:
+                jacobian[:, idx] = (residual_ref - residual_minus_cache[idx]) / delta_minus
+
+            if point_match_mode and base_diag_map:
+                try:
+                    diagnostics_plus_cache[idx] = _evaluate_diag_map(x_plus)
+                except Exception:
+                    diagnostics_plus_cache[idx] = {}
+                try:
+                    diagnostics_minus_cache[idx] = _evaluate_diag_map(x_minus)
+                except Exception:
+                    diagnostics_minus_cache[idx] = {}
+
+        valid_columns = np.all(np.isfinite(jacobian), axis=0)
+        if not np.any(valid_columns):
+            summary["status"] = "failed"
+            summary["reason"] = "no_valid_jacobian_columns"
+            return summary
+
+        jacobian_valid = jacobian[:, valid_columns]
+        try:
+            _, singular_values, _ = np.linalg.svd(jacobian_valid, full_matrices=False)
+        except np.linalg.LinAlgError as exc:
+            summary["status"] = "failed"
+            summary["reason"] = f"svd_failed: {exc}"
+            return summary
+
+        singular_values = np.asarray(singular_values, dtype=np.float64)
+        max_sv = float(np.max(singular_values)) if singular_values.size else 0.0
+        eps = np.finfo(np.float64).eps
+        rank_tol = max_sv * max(jacobian_valid.shape) * eps if max_sv > 0.0 else eps
+        rank = int(np.count_nonzero(singular_values > rank_tol))
+        min_nonzero_sv = singular_values[singular_values > rank_tol]
+        if min_nonzero_sv.size:
+            condition_number = float(max_sv / np.min(min_nonzero_sv))
+        else:
+            condition_number = float("inf")
+
+        column_norms = np.linalg.norm(jacobian_valid, axis=0)
+        full_column_norms = np.full(x_ref.size, np.nan, dtype=np.float64)
+        full_column_norms[valid_columns] = column_norms
+        total_column_norm = float(np.nansum(full_column_norms))
+        param_entries: List[Dict[str, object]] = []
+        for idx, name in enumerate(var_names):
+            column_norm = float(full_column_norms[idx])
+            param_entries.append(
+                {
+                    "name": str(name),
+                    "valid": bool(valid_columns[idx]),
+                    "step": float(steps[idx]) if np.isfinite(steps[idx]) else float("nan"),
+                    "column_norm": column_norm,
+                    "relative_sensitivity": (
+                        float(column_norm / total_column_norm)
+                        if np.isfinite(column_norm) and total_column_norm > 1.0e-12
+                        else float("nan")
+                    ),
+                }
+            )
+
+        residual_variance = float("nan")
+        dof = max(int(residual_ref.size - rank), 1)
+        if residual_ref.size:
+            residual_variance = float(np.sum(residual_ref * residual_ref) / dof)
+        covariance = np.full((x_ref.size, x_ref.size), np.nan, dtype=np.float64)
+        correlation = np.full((x_ref.size, x_ref.size), np.nan, dtype=np.float64)
+        if rank > 0:
+            info_matrix = jacobian_valid.T @ jacobian_valid
+            try:
+                cov_valid = np.linalg.pinv(info_matrix, hermitian=True)
+            except TypeError:
+                cov_valid = np.linalg.pinv(info_matrix)
+            if np.isfinite(residual_variance):
+                cov_valid = cov_valid * residual_variance
+            valid_indices = np.flatnonzero(valid_columns)
+            for i_local, i_global in enumerate(valid_indices.tolist()):
+                for j_local, j_global in enumerate(valid_indices.tolist()):
+                    covariance[i_global, j_global] = float(cov_valid[i_local, j_local])
+            std = np.sqrt(np.clip(np.diag(cov_valid), 0.0, None))
+            for i_local, i_global in enumerate(valid_indices.tolist()):
+                for j_local, j_global in enumerate(valid_indices.tolist()):
+                    denom = float(std[i_local] * std[j_local])
+                    if denom > 1.0e-12:
+                        correlation[i_global, j_global] = float(
+                            cov_valid[i_local, j_local] / denom
+                        )
+
+        group_map = {
+            "center_x": "center",
+            "center_y": "center",
+            "gamma": "tilt",
+            "Gamma": "tilt",
+            "chi": "tilt",
+            "cor_angle": "tilt",
+            "theta_initial": "tilt",
+            "theta_offset": "tilt",
+            "corto_detector": "distance",
+            "zs": "distance",
+            "zb": "distance",
+            "a": "lattice",
+            "c": "lattice",
+            "psi_z": "lattice",
+        }
+        group_sensitivity: Dict[str, float] = {}
+        for entry in param_entries:
+            group = group_map.get(str(entry["name"]), "other")
+            column_norm = float(entry.get("column_norm", np.nan))
+            if np.isfinite(column_norm):
+                group_sensitivity[group] = float(
+                    group_sensitivity.get(group, 0.0) + column_norm
+                )
+        dominant_group = "mixed"
+        underconstrained = bool(
+            rank < int(np.count_nonzero(valid_columns))
+            or not np.isfinite(condition_number)
+            or condition_number >= condition_warn
+            or residual_ref.size < int(np.count_nonzero(valid_columns))
+        )
+        if underconstrained:
+            dominant_group = "underconstrained"
+        elif group_sensitivity:
+            total_group_norm = sum(group_sensitivity.values())
+            best_group, best_norm = max(
+                group_sensitivity.items(),
+                key=lambda item: float(item[1]),
+            )
+            if total_group_norm > 1.0e-12 and float(best_norm) / total_group_norm >= 0.55:
+                dominant_group = str(best_group)
+
+        top_peak_sensitivity: Dict[str, List[Dict[str, object]]] = {}
+        if point_match_mode and base_diag_map:
+            for idx, name in enumerate(var_names):
+                if not bool(valid_columns[idx]):
+                    continue
+                peak_scores: List[Dict[str, object]] = []
+                diag_plus_map = diagnostics_plus_cache.get(idx, {})
+                diag_minus_map = diagnostics_minus_cache.get(idx, {})
+                for key, base_vec in base_diag_map.items():
+                    if key in diag_plus_map and key in diag_minus_map:
+                        delta_vec = (
+                            diag_plus_map[key] - diag_minus_map[key]
+                        ) / max(float(steps[idx]) * 2.0, 1.0e-12)
+                    elif key in diag_plus_map:
+                        delta_vec = (
+                            diag_plus_map[key] - base_vec
+                        ) / max(float(steps[idx]), 1.0e-12)
+                    elif key in diag_minus_map:
+                        delta_vec = (
+                            base_vec - diag_minus_map[key]
+                        ) / max(float(steps[idx]), 1.0e-12)
+                    else:
+                        continue
+                    sensitivity_val = float(np.linalg.norm(delta_vec))
+                    if not np.isfinite(sensitivity_val):
+                        continue
+                    peak_scores.append(
+                        {
+                            "key": list(key),
+                            "sensitivity": float(sensitivity_val),
+                        }
+                    )
+                peak_scores.sort(
+                    key=lambda item: float(item.get("sensitivity", 0.0)),
+                    reverse=True,
+                )
+                top_peak_sensitivity[str(name)] = peak_scores[:top_peaks_per_parameter]
+
+        summary.update(
+            {
+                "enabled": True,
+                "status": "ok",
+                "reason": "computed",
+                "num_parameters": int(x_ref.size),
+                "num_valid_parameters": int(np.count_nonzero(valid_columns)),
+                "num_residuals": int(residual_ref.size),
+                "rank": int(rank),
+                "condition_number": float(condition_number),
+                "singular_values": singular_values.tolist(),
+                "residual_variance": float(residual_variance),
+                "parameter_entries": param_entries,
+                "covariance_matrix": covariance.tolist(),
+                "correlation_matrix": correlation.tolist(),
+                "group_sensitivity": {
+                    str(key): float(val) for key, val in group_sensitivity.items()
+                },
+                "dominant_group": str(dominant_group),
+                "underconstrained": bool(underconstrained),
+                "top_peak_sensitivity": top_peak_sensitivity,
+            }
+        )
+        return summary
 
     def _run_solver(x_start: np.ndarray) -> OptimizeResult:
         return least_squares(
@@ -4472,21 +5687,85 @@ def fit_geometry_parameters(
                 best_result = trial
                 best_cost = trial_cost
 
+    def _append_result_message(current_result: OptimizeResult, note: str) -> None:
+        message_text = str(getattr(current_result, "message", "") or "").strip()
+        if not message_text:
+            current_result.message = note
+            return
+        existing_parts = [part.strip() for part in message_text.split(";") if part.strip()]
+        if note not in existing_parts:
+            current_result.message = f"{message_text}; {note}"
+
     result = best_result
+    ridge_refinement_summary: Dict[str, object] = {
+        "enabled": bool(ridge_refinement_enabled),
+        "status": "skipped",
+        "reason": "not_evaluated",
+        "accepted": False,
+    }
+    if point_match_mode and getattr(result, "x", None) is not None:
+        try:
+            ridge_refinement_summary = _maybe_run_ridge_refinement(result)
+        except Exception as exc:
+            ridge_refinement_summary = {
+                "enabled": bool(ridge_refinement_enabled),
+                "status": "failed",
+                "reason": f"unexpected_exception: {exc}",
+                "accepted": False,
+            }
+        refined_x = ridge_refinement_summary.get("x")
+        if ridge_refinement_summary.get("accepted") and refined_x is not None:
+            result.x = np.asarray(refined_x, dtype=float)
+            _append_result_message(result, "Ridge refinement accepted")
+
+    image_refinement_summary: Dict[str, object] = {
+        "enabled": bool(image_refinement_enabled),
+        "status": "skipped",
+        "reason": "not_evaluated",
+        "accepted": False,
+    }
+    if point_match_mode and getattr(result, "x", None) is not None:
+        try:
+            image_refinement_summary = _maybe_run_image_refinement(result)
+        except Exception as exc:
+            image_refinement_summary = {
+                "enabled": bool(image_refinement_enabled),
+                "status": "failed",
+                "reason": f"unexpected_exception: {exc}",
+                "accepted": False,
+            }
+        refined_x = image_refinement_summary.get("x")
+        if image_refinement_summary.get("accepted") and refined_x is not None:
+            result.x = np.asarray(refined_x, dtype=float)
+            _append_result_message(result, "ROI/image refinement accepted")
+
     result.restart_history = restart_history
-    result.robust_cost = float(best_cost)
+    result.ridge_refinement_summary = ridge_refinement_summary
+    result.image_refinement_summary = image_refinement_summary
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
-    weighted_residual_rms = float("nan")
-    if getattr(result, "fun", None) is not None:
-        result_fun = np.asarray(result.fun, dtype=float)
-        if result_fun.size:
-            weighted_residual_rms = float(np.sqrt(np.mean(result_fun * result_fun)))
-    result.weighted_residual_rms_px = float(weighted_residual_rms)
-    result.rms_px = float(weighted_residual_rms)
 
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)
+        result.fun = np.asarray(residual_fn(np.asarray(result.x, dtype=float)), dtype=float)
+    elif getattr(result, "fun", None) is not None:
+        result.fun = np.asarray(result.fun, dtype=float)
+    else:
+        result.fun = np.array([], dtype=float)
+
+    result.robust_cost = _robust_cost(
+        np.asarray(result.fun, dtype=float),
+        loss=solver_loss,
+        f_scale=solver_f_scale,
+    )
+    result.cost = 0.5 * float(np.sum(np.asarray(result.fun, dtype=float) ** 2))
+
+    weighted_residual_rms = float("nan")
+    result_fun = np.asarray(result.fun, dtype=float)
+    if result_fun.size:
+        weighted_residual_rms = float(np.sqrt(np.mean(result_fun * result_fun)))
+    result.weighted_residual_rms_px = float(weighted_residual_rms)
+    result.rms_px = float(weighted_residual_rms)
 
     if point_match_mode and getattr(result, "x", None) is not None:
         try:
@@ -4516,6 +5795,12 @@ def fit_geometry_parameters(
                 "error": str(exc),
             }
             result.rms_px = float(weighted_residual_rms)
+
+    identifiability_summary = _build_identifiability_summary(
+        result,
+        getattr(result, "point_match_diagnostics", None),
+    )
+    result.identifiability_summary = identifiability_summary
 
     return result
 

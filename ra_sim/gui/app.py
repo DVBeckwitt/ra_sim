@@ -6176,6 +6176,11 @@ def on_fit_geometry_click():
             _log_section(
                 "Point-match execution:",
                 [
+                    f"matched_pairs={int(point_match_summary.get('matched_pair_count', 0))}",
+                    f"peak_weighting_mode={point_match_summary.get('peak_weighting_mode', 'uniform')}",
+                    f"custom_sigma_count={int(point_match_summary.get('custom_sigma_count', 0))}",
+                    f"anisotropic_sigma_count={int(point_match_summary.get('anisotropic_sigma_count', 0))}",
+                    f"unweighted_peak_rms_px={float(point_match_summary.get('unweighted_peak_rms_px', np.nan)):.6f}",
                     f"simulated_reflections={int(point_match_summary.get('simulated_reflection_count', 0))}",
                     f"total_reflections={int(point_match_summary.get('total_reflection_count', 0))}",
                     f"subset_reduced={bool(point_match_summary.get('subset_reduced', False))}",
@@ -6183,6 +6188,54 @@ def on_fit_geometry_click():
                     f"fallback_hkls={int(point_match_summary.get('subset_fallback_hkl_count', 0))}",
                     f"single_ray_enabled={bool(point_match_summary.get('single_ray_enabled', False))}",
                     f"single_ray_forced_count={int(point_match_summary.get('single_ray_forced_count', 0))}",
+                ],
+            )
+        ridge_refinement_summary = getattr(result, "ridge_refinement_summary", None)
+        if isinstance(ridge_refinement_summary, dict):
+            _log_section(
+                "Ridge refinement:",
+                [
+                    f"enabled={bool(ridge_refinement_summary.get('enabled', False))}",
+                    f"status={ridge_refinement_summary.get('status', 'unknown')}",
+                    f"reason={ridge_refinement_summary.get('reason', 'n/a')}",
+                    f"accepted={bool(ridge_refinement_summary.get('accepted', False))}",
+                    f"ridge_cost_before={float(ridge_refinement_summary.get('ridge_cost_before', np.nan)):.6f}",
+                    f"ridge_cost_after={float(ridge_refinement_summary.get('ridge_cost_after', np.nan)):.6f}",
+                    f"point_rms_before_px={float(ridge_refinement_summary.get('point_rms_before_px', np.nan)):.6f}",
+                    f"point_rms_after_px={float(ridge_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
+                ],
+            )
+        image_refinement_summary = getattr(result, "image_refinement_summary", None)
+        if isinstance(image_refinement_summary, dict):
+            _log_section(
+                "ROI/image refinement:",
+                [
+                    f"enabled={bool(image_refinement_summary.get('enabled', False))}",
+                    f"status={image_refinement_summary.get('status', 'unknown')}",
+                    f"reason={image_refinement_summary.get('reason', 'n/a')}",
+                    f"accepted={bool(image_refinement_summary.get('accepted', False))}",
+                    f"preview_roi_count={int(image_refinement_summary.get('preview_roi_count', 0))}",
+                    f"selected_roi_count={int(image_refinement_summary.get('selected_roi_count', 0))}",
+                    f"image_cost_before={float(image_refinement_summary.get('image_cost_before', np.nan)):.6f}",
+                    f"image_cost_after={float(image_refinement_summary.get('image_cost_after', np.nan)):.6f}",
+                    f"point_rms_before_px={float(image_refinement_summary.get('point_rms_before_px', np.nan)):.6f}",
+                    f"point_rms_after_px={float(image_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
+                ],
+            )
+        identifiability_summary = getattr(result, "identifiability_summary", None)
+        if isinstance(identifiability_summary, dict):
+            _log_section(
+                "Identifiability diagnostics:",
+                [
+                    f"enabled={bool(identifiability_summary.get('enabled', False))}",
+                    f"status={identifiability_summary.get('status', 'unknown')}",
+                    f"reason={identifiability_summary.get('reason', 'n/a')}",
+                    f"rank={int(identifiability_summary.get('rank', 0))}",
+                    f"num_valid_parameters={int(identifiability_summary.get('num_valid_parameters', 0))}",
+                    f"num_residuals={int(identifiability_summary.get('num_residuals', 0))}",
+                    f"condition_number={float(identifiability_summary.get('condition_number', np.nan)):.6g}",
+                    f"dominant_group={identifiability_summary.get('dominant_group', 'unknown')}",
+                    f"underconstrained={bool(identifiability_summary.get('underconstrained', False))}",
                 ],
             )
 
@@ -7004,6 +7057,11 @@ def on_fit_geometry_click():
                     _log_section(
                         "Point-match execution:",
                         [
+                            f"matched_pairs={int(point_match_summary.get('matched_pair_count', 0))}",
+                            f"peak_weighting_mode={point_match_summary.get('peak_weighting_mode', 'uniform')}",
+                            f"custom_sigma_count={int(point_match_summary.get('custom_sigma_count', 0))}",
+                            f"anisotropic_sigma_count={int(point_match_summary.get('anisotropic_sigma_count', 0))}",
+                            f"unweighted_peak_rms_px={float(point_match_summary.get('unweighted_peak_rms_px', np.nan)):.6f}",
                             f"simulated_reflections={int(point_match_summary.get('simulated_reflection_count', 0))}",
                             f"total_reflections={int(point_match_summary.get('total_reflection_count', 0))}",
                             f"subset_reduced={bool(point_match_summary.get('subset_reduced', False))}",
@@ -7011,6 +7069,54 @@ def on_fit_geometry_click():
                             f"fallback_hkls={int(point_match_summary.get('subset_fallback_hkl_count', 0))}",
                             f"single_ray_enabled={bool(point_match_summary.get('single_ray_enabled', False))}",
                             f"single_ray_forced_count={int(point_match_summary.get('single_ray_forced_count', 0))}",
+                        ],
+                    )
+                ridge_refinement_summary = getattr(result, "ridge_refinement_summary", None)
+                if isinstance(ridge_refinement_summary, dict):
+                    _log_section(
+                        "Ridge refinement:",
+                        [
+                            f"enabled={bool(ridge_refinement_summary.get('enabled', False))}",
+                            f"status={ridge_refinement_summary.get('status', 'unknown')}",
+                            f"reason={ridge_refinement_summary.get('reason', 'n/a')}",
+                            f"accepted={bool(ridge_refinement_summary.get('accepted', False))}",
+                            f"ridge_cost_before={float(ridge_refinement_summary.get('ridge_cost_before', np.nan)):.6f}",
+                            f"ridge_cost_after={float(ridge_refinement_summary.get('ridge_cost_after', np.nan)):.6f}",
+                            f"point_rms_before_px={float(ridge_refinement_summary.get('point_rms_before_px', np.nan)):.6f}",
+                            f"point_rms_after_px={float(ridge_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
+                        ],
+                    )
+                image_refinement_summary = getattr(result, "image_refinement_summary", None)
+                if isinstance(image_refinement_summary, dict):
+                    _log_section(
+                        "ROI/image refinement:",
+                        [
+                            f"enabled={bool(image_refinement_summary.get('enabled', False))}",
+                            f"status={image_refinement_summary.get('status', 'unknown')}",
+                            f"reason={image_refinement_summary.get('reason', 'n/a')}",
+                            f"accepted={bool(image_refinement_summary.get('accepted', False))}",
+                            f"preview_roi_count={int(image_refinement_summary.get('preview_roi_count', 0))}",
+                            f"selected_roi_count={int(image_refinement_summary.get('selected_roi_count', 0))}",
+                            f"image_cost_before={float(image_refinement_summary.get('image_cost_before', np.nan)):.6f}",
+                            f"image_cost_after={float(image_refinement_summary.get('image_cost_after', np.nan)):.6f}",
+                            f"point_rms_before_px={float(image_refinement_summary.get('point_rms_before_px', np.nan)):.6f}",
+                            f"point_rms_after_px={float(image_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
+                        ],
+                    )
+                identifiability_summary = getattr(result, "identifiability_summary", None)
+                if isinstance(identifiability_summary, dict):
+                    _log_section(
+                        "Identifiability diagnostics:",
+                        [
+                            f"enabled={bool(identifiability_summary.get('enabled', False))}",
+                            f"status={identifiability_summary.get('status', 'unknown')}",
+                            f"reason={identifiability_summary.get('reason', 'n/a')}",
+                            f"rank={int(identifiability_summary.get('rank', 0))}",
+                            f"num_valid_parameters={int(identifiability_summary.get('num_valid_parameters', 0))}",
+                            f"num_residuals={int(identifiability_summary.get('num_residuals', 0))}",
+                            f"condition_number={float(identifiability_summary.get('condition_number', np.nan)):.6g}",
+                            f"dominant_group={identifiability_summary.get('dominant_group', 'unknown')}",
+                            f"underconstrained={bool(identifiability_summary.get('underconstrained', False))}",
                         ],
                     )
 

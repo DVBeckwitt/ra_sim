@@ -98,8 +98,11 @@ The geometry fit button compares annotated peaks from the experimental image to 
 
 1. Rotates those measured coordinates to match the displayed background.
 2. Runs a full simulation with the current geometry and finds each simulated peak’s maximum pixel position for every HKL in `miller`.
-3. For each HKL present in both measured and simulated data, converts the pixel coordinates to (2θ, φ) angles, sorts them radially, and pairs them in order.
-4. Minimizes the angular residuals (Δ2θ, Δφ) between each measured/simulated pair for the selected geometry parameters.
+3. For each HKL present in both measured and simulated data, keeps any fixed preview-source matches and otherwise solves a one-to-one point assignment inside each HKL group.
+4. Minimizes the weighted pixel residuals `(Δx, Δy)` between each measured/simulated pair for the selected geometry parameters. If a measured peak supplies `sigma_px`, `sigma_radial_px`, or `sigma_tangential_px`, those uncertainties are folded into the residual weighting.
+5. Optionally runs a coarse ridge/Chamfer refinement pass on the experimental image before the ROI stage. This still fits only geometry and is accepted only if the matched-peak point fit does not materially regress.
+6. Optionally runs a second-stage ROI/image refinement pass with the same geometry variables while keeping mosaic parameters fixed.
+7. Reports a finite-difference identifiability summary after the final solve, including approximate rank, condition number, and the parameter/peak sensitivities that dominate the fit.
 
 This pairing enforces HKL correspondence: the optimizer only adjusts geometry so that a given experimental peak lines up with the simulated location of the **same reflection**, not just any nearby bright spot.
 
