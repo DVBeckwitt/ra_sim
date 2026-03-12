@@ -168,6 +168,35 @@ def test_match_simulated_peaks_to_background_broad_search_keeps_seed_ownership()
     assert math.hypot(float(match_by_label["2,0,0"]["x"]) - 24.0, float(match_by_label["2,0,0"]["y"]) - 18.0) < 1.0
 
 
+def test_match_simulated_peaks_to_background_prefers_seed_climb_summit():
+    background = _synthetic_background(
+        (64, 64),
+        [
+            (20.0, 20.0, 8.0, 1.0),
+            (22.5, 19.0, 10.0, 1.0),
+        ],
+        noise_sigma=0.0,
+    )
+    simulated = [
+        {"hkl": (1, 0, 0), "label": "1,0,0", "sim_col": 21.4, "sim_row": 20.6, "weight": 5.0},
+    ]
+
+    matches, stats, _ = match_simulated_peaks_to_background(
+        simulated,
+        background,
+        _match_config(search_radius_px=5.0),
+    )
+
+    assert len(matches) == 1
+    match = matches[0]
+    matched_dist_to_target = math.hypot(float(match["x"]) - 20.0, float(match["y"]) - 20.0)
+    matched_dist_to_distractor = math.hypot(float(match["x"]) - 22.5, float(match["y"]) - 19.0)
+    assert matched_dist_to_target < matched_dist_to_distractor
+    assert bool(match["walk_summit_match"]) is True
+    assert int(match["walk_steps"]) >= 1
+    assert float(stats["mean_walk_steps"]) >= 1.0
+
+
 def test_refine_peak_center_recovers_quadratic_subpixel_summit():
     yy, xx = np.mgrid[0:9, 0:9]
     true_col = 4.35

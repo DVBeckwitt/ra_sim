@@ -100,6 +100,129 @@ def _refine_peak_center(
     return center_col, center_row
 
 
+def _candidate_summit_id_near_pixel(
+    candidate_labels: np.ndarray,
+    peakness: np.ndarray,
+    row_idx: int,
+    col_idx: int,
+    *,
+    radius_px: int = 1,
+) -> int:
+    """Return the best candidate-label summit near one detector pixel."""
+
+    if candidate_labels.ndim != 2 or candidate_labels.size == 0:
+        return -1
+
+    height, width = candidate_labels.shape
+    radius = max(0, int(radius_px))
+    r0 = max(0, int(row_idx) - radius)
+    r1 = min(height, int(row_idx) + radius + 1)
+    c0 = max(0, int(col_idx) - radius)
+    c1 = min(width, int(col_idx) + radius + 1)
+    label_patch = candidate_labels[r0:r1, c0:c1]
+    positive_mask = label_patch > 0
+    if not np.any(positive_mask):
+        return -1
+
+    rr, cc = np.nonzero(positive_mask)
+    rr = rr.astype(np.int64, copy=False)
+    cc = cc.astype(np.int64, copy=False)
+    label_vals = label_patch[rr, cc].astype(np.int64, copy=False)
+    if peakness.ndim == 2 and peakness.shape == candidate_labels.shape:
+        peak_patch = np.asarray(peakness[r0:r1, c0:c1], dtype=np.float64)
+        peak_vals = peak_patch[rr, cc]
+    else:
+        peak_vals = np.zeros(rr.shape[0], dtype=np.float64)
+    dist_sq = (rr + r0 - int(row_idx)) ** 2 + (cc + c0 - int(col_idx)) ** 2
+    order = np.lexsort((dist_sq, -peak_vals))
+    if order.size <= 0:
+        return -1
+    return int(label_vals[int(order[0])])
+
+
+def _walk_seed_to_summit(
+    peakness: np.ndarray,
+    candidate_labels: np.ndarray,
+    start_row: float,
+    start_col: float,
+    *,
+    max_steps: int = 24,
+    sigma_est: float = float("nan"),
+    step_min_gain_sigma: float = 0.0,
+) -> dict[str, float | int]:
+    """Walk uphill on the peakness map from a simulated seed to a nearby summit."""
+
+    if peakness.ndim != 2 or peakness.size == 0:
+        return {
+            "terminal_col": float(start_col),
+            "terminal_row": float(start_row),
+            "steps": 0,
+            "distance_px": 0.0,
+            "summit_id": -1,
+            "net_ascent_sigma": float("nan"),
+        }
+
+    height, width = peakness.shape
+    current_row = int(np.clip(round(float(start_row)), 0, max(height - 1, 0)))
+    current_col = int(np.clip(round(float(start_col)), 0, max(width - 1, 0)))
+    current_val = float(peakness[current_row, current_col])
+    start_val = current_val if np.isfinite(current_val) else 0.0
+    sigma_scale = float(sigma_est) if np.isfinite(sigma_est) and sigma_est > 1.0e-12 else 1.0
+    min_gain = max(0.0, float(step_min_gain_sigma)) * sigma_scale
+    steps = 0
+
+    while steps < max(0, int(max_steps)):
+        r0 = max(0, current_row - 1)
+        r1 = min(height, current_row + 2)
+        c0 = max(0, current_col - 1)
+        c1 = min(width, current_col + 2)
+        patch = np.asarray(peakness[r0:r1, c0:c1], dtype=np.float64)
+        if patch.size <= 0:
+            break
+        patch = np.where(np.isfinite(patch), patch, -np.inf)
+        best_val = float(np.max(patch))
+        if not np.isfinite(best_val):
+            break
+
+        rr, cc = np.nonzero(np.isclose(patch, best_val, rtol=0.0, atol=1.0e-12))
+        if rr.size <= 0:
+            break
+        dist_sq = (rr + r0 - current_row) ** 2 + (cc + c0 - current_col) ** 2
+        best_choice = int(np.argmin(dist_sq))
+        next_row = int(rr[best_choice] + r0)
+        next_col = int(cc[best_choice] + c0)
+        current_val = float(peakness[current_row, current_col])
+        if not np.isfinite(current_val):
+            current_val = -np.inf
+        if next_row == current_row and next_col == current_col:
+            break
+        if best_val <= current_val + min_gain + 1.0e-12:
+            break
+        current_row = next_row
+        current_col = next_col
+        steps += 1
+
+    summit_id = _candidate_summit_id_near_pixel(
+        candidate_labels,
+        peakness,
+        current_row,
+        current_col,
+    )
+    final_val = float(peakness[current_row, current_col])
+    if not np.isfinite(final_val):
+        final_val = start_val
+    return {
+        "terminal_col": float(current_col),
+        "terminal_row": float(current_row),
+        "steps": int(steps),
+        "distance_px": float(
+            np.hypot(float(current_col) - float(start_col), float(current_row) - float(start_row))
+        ),
+        "summit_id": int(summit_id),
+        "net_ascent_sigma": float((final_val - start_val) / (sigma_scale + 1.0e-12)),
+    }
+
+
 def build_background_peak_context(
     background_image: object,
     cfg: dict[str, object] | None = None,
@@ -230,17 +353,27 @@ def _assignment_score(
     seed_weight: float,
     match_radius_px: float,
     config: dict[str, object],
+    *,
+    net_ascent_sigma: float = float("nan"),
+    walk_summit_match: bool = False,
 ) -> float:
     radius = max(1.0, float(match_radius_px))
     distance_weight = max(0.0, float(config.get("distance_score_weight", 2.5)))
     prominence_weight = max(0.0, float(config.get("prominence_score_weight", 0.05)))
     seed_weight_scale = max(0.0, float(config.get("seed_weight_score_scale", 1e-12)))
+    ascent_weight = max(0.0, float(config.get("ascent_score_weight", 0.15)))
+    walk_match_bonus = max(0.0, float(config.get("walk_match_score_bonus", 1.0)))
     distance_term = max(0.0, 1.0 - float(dist_px) / radius)
     prominence_term = max(0.0, float(prom_sigma))
+    ascent_term = 0.0
+    if np.isfinite(net_ascent_sigma):
+        ascent_term = min(4.0, max(0.0, float(net_ascent_sigma)))
     return (
         distance_weight * distance_term
         + prominence_weight * prominence_term
         + seed_weight_scale * max(0.0, float(seed_weight))
+        + ascent_weight * ascent_term
+        + (walk_match_bonus if walk_summit_match else 0.0)
     )
 
 
@@ -338,10 +471,13 @@ def match_simulated_peaks_to_peak_context(
     work = np.asarray(peak_context.get("work", []), dtype=float)
     fine = np.asarray(peak_context.get("fine", []), dtype=float)
     peakness = np.asarray(peak_context.get("peakness", []), dtype=float)
+    candidate_labels = np.asarray(peak_context.get("candidate_labels", []), dtype=np.int32)
     sigma_est = float(peak_context.get("sigma_est", np.nan))
     prom_center = float(peak_context.get("prominence_center", np.nan))
     height = int(peak_context.get("height", work.shape[0] if work.ndim == 2 else 0))
     width = int(peak_context.get("width", work.shape[1] if work.ndim == 2 else 0))
+    walk_max_steps = max(0, int(config.get("walk_max_steps", 24)))
+    walk_step_min_gain_sigma = max(0.0, float(config.get("walk_step_min_gain_sigma", 0.0)))
 
     summit_records = list(peak_context.get("summit_records", []))
     if not summit_records:
@@ -519,6 +655,20 @@ def match_simulated_peaks_to_peak_context(
         seed_col_px = int(np.clip(round(sim_col_local), 0, max(width - 1, 0)))
         seed_row_px = int(np.clip(round(sim_row_local), 0, max(height - 1, 0)))
         seed_peakness = float(peakness[seed_row_px, seed_col_px]) if peakness.ndim == 2 else 0.0
+        walk_info = _walk_seed_to_summit(
+            peakness,
+            candidate_labels,
+            sim_row_local,
+            sim_col_local,
+            max_steps=walk_max_steps,
+            sigma_est=sigma_est,
+            step_min_gain_sigma=walk_step_min_gain_sigma,
+        )
+        walk_summit_id = int(walk_info.get("summit_id", -1))
+        walk_steps = int(walk_info.get("steps", 0))
+        walk_distance = float(walk_info.get("distance_px", 0.0))
+        walk_terminal_col = float(walk_info.get("terminal_col", sim_col_local))
+        walk_terminal_row = float(walk_info.get("terminal_row", sim_row_local))
 
         for cand_idx in cand_indices:
             cand_idx = int(cand_idx)
@@ -557,14 +707,17 @@ def match_simulated_peaks_to_peak_context(
             )
             net_ascent_values.append(net_ascent_sigma)
 
+            summit_id = int(info["summit_id"])
+            walk_summit_match = walk_summit_id > 0 and summit_id == walk_summit_id
             assignment_score = _assignment_score(
                 dist_px,
                 prom_sigma,
                 float(entry.get("weight", 0.0)),
                 match_radius,
                 config,
+                net_ascent_sigma=net_ascent_sigma,
+                walk_summit_match=walk_summit_match,
             )
-            summit_id = int(info["summit_id"])
             competitor_dist = (
                 float(competitor_dist_by_candidate[cand_idx])
                 if 0 <= cand_idx < competitor_dist_by_candidate.shape[0]
@@ -600,8 +753,13 @@ def match_simulated_peaks_to_peak_context(
                 "confidence": float(confidence),
                 "assignment_score": float(assignment_score),
                 "weight": float(entry.get("weight", 0.0)),
-                "walk_steps": 0,
-                "walk_distance_px": float(raw_distance),
+                "walk_steps": int(walk_steps),
+                "walk_distance_px": float(walk_distance),
+                "walk_terminal_x": float(walk_terminal_col + context_offset_col),
+                "walk_terminal_y": float(walk_terminal_row + context_offset_row),
+                "walk_summit_id": int(walk_summit_id),
+                "walk_summit_match": bool(walk_summit_match),
+                "summit_seed_distance_px": float(raw_distance),
                 "net_ascent_sigma": float(net_ascent_sigma),
                 "owner_distance_px": float(owner_dist),
                 "competitor_distance_px": float(competitor_dist),

@@ -50,6 +50,8 @@ def test_background_theta_for_index_adds_shared_offset_for_multiple_backgrounds(
     namespace = _load_main_functions(
         "_background_theta_default_value",
         "_parse_background_theta_values",
+        "_parse_geometry_fit_background_indices",
+        "_current_geometry_fit_background_indices",
         "_geometry_fit_uses_shared_theta_offset",
         "_current_geometry_theta_offset",
         "_current_background_theta_values",
@@ -66,10 +68,47 @@ def test_background_theta_for_index_adds_shared_offset_for_multiple_backgrounds(
     namespace["theta_initial"] = 6.0
     namespace["defaults"] = {"theta_initial": 6.0}
     namespace["background_theta_list_var"] = _Var("4.0, 7.5")
+    namespace["geometry_fit_background_selection_var"] = _Var("all")
     namespace["geometry_theta_offset_var"] = _Var("0.25")
     namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
+    namespace["current_background_index"] = 0
 
     theta_for_index = namespace["_background_theta_for_index"]
 
     assert theta_for_index(0, strict_count=True) == 4.25
     assert theta_for_index(1, strict_count=True) == 7.75
+
+
+def test_parse_geometry_fit_background_indices_supports_current_all_and_ranges() -> None:
+    namespace = _load_main_functions("_parse_geometry_fit_background_indices")
+    parse_selection = namespace["_parse_geometry_fit_background_indices"]
+
+    assert parse_selection("current", total_count=4, current_index=2) == [2]
+    assert parse_selection("all", total_count=3, current_index=1) == [0, 1, 2]
+    assert parse_selection("1, 3-4", total_count=4, current_index=0) == [0, 2, 3]
+
+
+def test_geometry_fit_shared_theta_offset_depends_on_selected_fit_backgrounds() -> None:
+    namespace = _load_main_functions(
+        "_parse_geometry_fit_background_indices",
+        "_current_geometry_fit_background_indices",
+        "_geometry_fit_uses_shared_theta_offset",
+    )
+
+    class _Var:
+        def __init__(self, value: str):
+            self._value = value
+
+        def get(self) -> str:
+            return self._value
+
+    namespace["osc_files"] = ["bg0.osc", "bg1.osc", "bg2.osc"]
+    namespace["current_background_index"] = 1
+    namespace["geometry_fit_background_selection_var"] = _Var("current")
+
+    assert namespace["_current_geometry_fit_background_indices"](strict=True) == [1]
+    assert namespace["_geometry_fit_uses_shared_theta_offset"]() is False
+
+    namespace["geometry_fit_background_selection_var"] = _Var("1,3")
+    assert namespace["_current_geometry_fit_background_indices"](strict=True) == [0, 2]
+    assert namespace["_geometry_fit_uses_shared_theta_offset"]() is True

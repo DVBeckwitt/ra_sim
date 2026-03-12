@@ -4,9 +4,13 @@ import numpy as np
 import pytest
 
 from ra_sim.io.data_loading import (
+    GEOMETRY_PLACEMENTS_FILE_TYPE,
     GUI_STATE_FILE_TYPE,
+    build_geometry_placements_payload,
     build_gui_state_payload,
+    load_geometry_placements_file,
     load_gui_state_file,
+    save_geometry_placements_file,
     save_gui_state_file,
 )
 
@@ -62,3 +66,59 @@ def test_load_gui_state_file_rejects_wrong_type(tmp_path):
 
     with pytest.raises(ValueError, match="Unsupported GUI state file type"):
         load_gui_state_file(file_path)
+
+
+def test_build_geometry_placements_payload_normalizes_nested_values(tmp_path):
+    payload = build_geometry_placements_payload(
+        {
+            "background_files": [tmp_path / "a.osc"],
+            "manual_pairs": [
+                {
+                    "background_index": np.int64(0),
+                    "entries": [
+                        {
+                            "hkl": (1, 0, 2),
+                            "q_group_key": ("q_group", "primary", 1.0, 2),
+                        }
+                    ],
+                }
+            ],
+        },
+        metadata={"entrypoint": Path("main.py")},
+    )
+
+    assert payload["type"] == GEOMETRY_PLACEMENTS_FILE_TYPE
+    assert payload["state"]["background_files"] == [str(tmp_path / "a.osc")]
+    assert payload["state"]["manual_pairs"][0]["background_index"] == 0
+    assert payload["state"]["manual_pairs"][0]["entries"][0]["hkl"] == [1, 0, 2]
+    assert payload["state"]["manual_pairs"][0]["entries"][0]["q_group_key"] == [
+        "q_group",
+        "primary",
+        1.0,
+        2,
+    ]
+    assert payload["metadata"]["entrypoint"] == "main.py"
+
+
+def test_save_and_load_geometry_placements_file_round_trip(tmp_path):
+    file_path = tmp_path / "placements.json"
+    save_geometry_placements_file(
+        file_path,
+        {
+            "background_files": ["a.osc", "b.osc"],
+            "manual_pairs": [
+                {
+                    "background_index": 1,
+                    "background_name": "b.osc",
+                    "entries": [{"label": "1,0,0", "x": 12.5, "y": 9.0}],
+                }
+            ],
+        },
+    )
+
+    loaded = load_geometry_placements_file(file_path)
+
+    assert loaded["type"] == GEOMETRY_PLACEMENTS_FILE_TYPE
+    assert loaded["state"]["background_files"] == ["a.osc", "b.osc"]
+    assert loaded["state"]["manual_pairs"][0]["background_name"] == "b.osc"
+    assert loaded["state"]["manual_pairs"][0]["entries"][0]["x"] == 12.5

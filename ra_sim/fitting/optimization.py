@@ -293,8 +293,66 @@ def _normalize_measured_peaks(
         )
         normalized_entry["x"] = x
         normalized_entry["y"] = y
+
+        for key in ("raw_x", "raw_y", "placement_error_px"):
+            raw_value = normalized_entry.get(key)
+            if raw_value is None:
+                continue
+            try:
+                numeric = float(raw_value)
+            except Exception:
+                normalized_entry.pop(key, None)
+                continue
+            if np.isfinite(numeric):
+                normalized_entry[key] = float(numeric)
+            else:
+                normalized_entry.pop(key, None)
+
+        sigma_value = (
+            normalized_entry.get("sigma_px")
+            if normalized_entry.get("sigma_px") is not None
+            else normalized_entry.get(
+                "position_sigma_px",
+                normalized_entry.get("measurement_sigma_px"),
+            )
+        )
+        if sigma_value is not None:
+            try:
+                sigma_px = float(sigma_value)
+            except Exception:
+                sigma_px = float("nan")
+            if np.isfinite(sigma_px) and sigma_px > 0.0:
+                normalized_entry["sigma_px"] = float(sigma_px)
+            else:
+                normalized_entry.pop("sigma_px", None)
         normalized.append(normalized_entry)
     return normalized
+
+
+def _measured_entry_sigma_px(
+    entry: Dict[str, object],
+    *,
+    default_sigma_px: float = 1.0,
+) -> Tuple[float, bool]:
+    """Return one measured-peak sigma in pixels and whether it was user-specified."""
+
+    sigma_value = (
+        entry.get("sigma_px")
+        if entry.get("sigma_px") is not None
+        else entry.get(
+            "position_sigma_px",
+            entry.get("measurement_sigma_px"),
+        )
+    )
+    if sigma_value is None:
+        return float(default_sigma_px), False
+    try:
+        sigma_px = float(sigma_value)
+    except Exception:
+        return float(default_sigma_px), False
+    if not np.isfinite(sigma_px) or sigma_px <= 0.0:
+        return float(default_sigma_px), False
+    return float(sigma_px), True
 
 
 @dataclass
@@ -646,6 +704,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
     maxpos = hit_tables_to_max_positions(hit_tables)
     residuals: List[float] = []
     diagnostics: List[Dict[str, object]] = []
+    custom_sigma_values: List[float] = []
     fixed_matches, fallback_measured, resolution_lookup = _resolve_fixed_source_matches(
         normalized_measured,
         hit_tables,
@@ -669,6 +728,21 @@ def _evaluate_geometry_fit_dataset_point_matches(
         diag["theta_initial_deg"] = float(theta_value)
         diagnostics.append(diag)
 
+    def _entry_sigma_fields(entry: Dict[str, object]) -> Tuple[float, bool, float]:
+        sigma_px, has_custom_sigma = _measured_entry_sigma_px(entry)
+        sigma_px = max(float(sigma_px), 1.0e-6)
+        sigma_weight = 1.0 / float(sigma_px)
+        if has_custom_sigma:
+            custom_sigma_values.append(float(sigma_px))
+        return float(sigma_px), bool(has_custom_sigma), float(sigma_weight)
+
+    def _placement_error_px(entry: Dict[str, object]) -> float:
+        try:
+            value = float(entry.get("placement_error_px", np.nan))
+        except Exception:
+            return float("nan")
+        return float(value) if np.isfinite(value) else float("nan")
+
     for measured_entry, sim_pt, _sim_hkl in fixed_matches:
         try:
             meas_pt = (float(measured_entry["x"]), float(measured_entry["y"]))
@@ -679,16 +753,18 @@ def _evaluate_geometry_fit_dataset_point_matches(
             and np.isfinite(meas_pt[0]) and np.isfinite(meas_pt[1])
         ):
             continue
+        sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(measured_entry)
         dx = float(sim_pt[0] - meas_pt[0])
         dy = float(sim_pt[1] - meas_pt[1])
         pair_dist = math.hypot(dx, dy)
         if weighted_matching:
-            w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
-            dx *= w
-            dy *= w
+            distance_weight = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
         else:
-            w = 1.0
-        residuals.extend([dx, dy])
+            distance_weight = 1.0
+        total_weight = float(distance_weight * sigma_weight)
+        weighted_dx = float(dx * total_weight)
+        weighted_dy = float(dy * total_weight)
+        residuals.extend([weighted_dx, weighted_dy])
         _add_diag(
             dict(resolution_lookup.get(id(measured_entry), {})),
             {
@@ -701,9 +777,14 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 "dx_px": float(sim_pt[0] - meas_pt[0]),
                 "dy_px": float(sim_pt[1] - meas_pt[1]),
                 "distance_px": float(pair_dist),
-                "weight": float(w),
-                "weighted_dx_px": float(dx),
-                "weighted_dy_px": float(dy),
+                "placement_error_px": _placement_error_px(measured_entry),
+                "measurement_sigma_px": float(sigma_px),
+                "sigma_is_custom": bool(has_custom_sigma),
+                "sigma_weight": float(sigma_weight),
+                "distance_weight": float(distance_weight),
+                "weight": float(total_weight),
+                "weighted_dx_px": float(weighted_dx),
+                "weighted_dy_px": float(weighted_dy),
                 "measured_radius_px": _point_radius_px(meas_pt),
                 "simulated_radius_px": _point_radius_px(sim_pt),
             },
@@ -741,6 +822,10 @@ def _evaluate_geometry_fit_dataset_point_matches(
         if not sim_list:
             missing_pairs += len(valid_entries_hkl)
             for entry in valid_entries_hkl:
+                sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(entry)
+                penalty_weight = float(sigma_weight)
+                if missing_pair_penalty > 0.0:
+                    residuals.append(float(missing_pair_penalty) * penalty_weight)
                 _add_diag(
                     dict(resolution_lookup.get(id(entry), {})),
                     {
@@ -764,9 +849,15 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "dx_px": float("nan"),
                         "dy_px": float("nan"),
                         "distance_px": float("nan"),
-                        "weight": 0.0,
+                        "placement_error_px": _placement_error_px(entry),
+                        "measurement_sigma_px": float(sigma_px),
+                        "sigma_is_custom": bool(has_custom_sigma),
+                        "sigma_weight": float(sigma_weight),
+                        "distance_weight": 1.0,
+                        "weight": float(penalty_weight),
                         "weighted_dx_px": float("nan"),
                         "weighted_dy_px": float("nan"),
+                        "weighted_missing_penalty_px": float(missing_pair_penalty) * float(penalty_weight),
                         "measured_radius_px": _point_radius_px((float(entry["x"]), float(entry["y"]))),
                         "simulated_radius_px": float("nan"),
                     },
@@ -777,17 +868,19 @@ def _evaluate_geometry_fit_dataset_point_matches(
         matched_meas_indices: set[int] = set()
         for sim_pt, meas_pt, pair_dist, sim_idx, meas_idx in matches:
             matched_meas_indices.add(int(meas_idx))
+            entry = valid_entries_hkl[meas_idx] if 0 <= meas_idx < len(valid_entries_hkl) else {}
+            sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(entry)
             dx = float(sim_pt[0] - meas_pt[0])
             dy = float(sim_pt[1] - meas_pt[1])
             if weighted_matching:
-                w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
-                dx *= w
-                dy *= w
+                distance_weight = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
             else:
-                w = 1.0
-            residuals.extend([dx, dy])
+                distance_weight = 1.0
+            total_weight = float(distance_weight * sigma_weight)
+            weighted_dx = float(dx * total_weight)
+            weighted_dy = float(dy * total_weight)
+            residuals.extend([weighted_dx, weighted_dy])
             if 0 <= meas_idx < len(valid_entries_hkl):
-                entry = valid_entries_hkl[meas_idx]
                 _add_diag(
                     dict(resolution_lookup.get(id(entry), {})),
                     {
@@ -803,9 +896,14 @@ def _evaluate_geometry_fit_dataset_point_matches(
                         "dx_px": float(sim_pt[0] - meas_pt[0]),
                         "dy_px": float(sim_pt[1] - meas_pt[1]),
                         "distance_px": float(pair_dist),
-                        "weight": float(w),
-                        "weighted_dx_px": float(dx),
-                        "weighted_dy_px": float(dy),
+                        "placement_error_px": _placement_error_px(entry),
+                        "measurement_sigma_px": float(sigma_px),
+                        "sigma_is_custom": bool(has_custom_sigma),
+                        "sigma_weight": float(sigma_weight),
+                        "distance_weight": float(distance_weight),
+                        "weight": float(total_weight),
+                        "weighted_dx_px": float(weighted_dx),
+                        "weighted_dy_px": float(weighted_dy),
                         "measured_radius_px": _point_radius_px((float(meas_pt[0]), float(meas_pt[1]))),
                         "simulated_radius_px": _point_radius_px((float(sim_pt[0]), float(sim_pt[1]))),
                     },
@@ -815,6 +913,10 @@ def _evaluate_geometry_fit_dataset_point_matches(
         missing_pairs += len(unmatched_meas_indices)
         for meas_idx in unmatched_meas_indices:
             entry = valid_entries_hkl[meas_idx]
+            sigma_px, has_custom_sigma, sigma_weight = _entry_sigma_fields(entry)
+            penalty_weight = float(sigma_weight)
+            if missing_pair_penalty > 0.0:
+                residuals.append(float(missing_pair_penalty) * penalty_weight)
             _add_diag(
                 dict(resolution_lookup.get(id(entry), {})),
                 {
@@ -838,16 +940,19 @@ def _evaluate_geometry_fit_dataset_point_matches(
                     "dx_px": float("nan"),
                     "dy_px": float("nan"),
                     "distance_px": float("nan"),
-                    "weight": 0.0,
+                    "placement_error_px": _placement_error_px(entry),
+                    "measurement_sigma_px": float(sigma_px),
+                    "sigma_is_custom": bool(has_custom_sigma),
+                    "sigma_weight": float(sigma_weight),
+                    "distance_weight": 1.0,
+                    "weight": float(penalty_weight),
                     "weighted_dx_px": float("nan"),
                     "weighted_dy_px": float("nan"),
+                    "weighted_missing_penalty_px": float(missing_pair_penalty) * float(penalty_weight),
                     "measured_radius_px": _point_radius_px((float(entry["x"]), float(entry["y"]))),
                     "simulated_radius_px": float("nan"),
                 },
             )
-
-    if missing_pairs > 0 and missing_pair_penalty > 0.0:
-        residuals.extend([missing_pair_penalty] * missing_pairs)
 
     residual_arr = (
         np.asarray(residuals, dtype=float)
@@ -875,6 +980,23 @@ def _evaluate_geometry_fit_dataset_point_matches(
         "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
         "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
     }
+    if custom_sigma_values:
+        sigma_arr = np.asarray(custom_sigma_values, dtype=float)
+        sigma_arr = sigma_arr[np.isfinite(sigma_arr) & (sigma_arr > 0.0)]
+        if sigma_arr.size:
+            summary["custom_sigma_count"] = int(sigma_arr.size)
+            summary["measurement_sigma_median_px"] = float(np.median(sigma_arr))
+            summary["measurement_sigma_mean_px"] = float(np.mean(sigma_arr))
+            summary["measurement_sigma_max_px"] = float(np.max(sigma_arr))
+            summary["peak_weighting_mode"] = (
+                "measurement_sigma+distance" if weighted_matching else "measurement_sigma"
+            )
+        else:
+            summary["custom_sigma_count"] = 0
+            summary["peak_weighting_mode"] = "uniform"
+    else:
+        summary["custom_sigma_count"] = 0
+        summary["peak_weighting_mode"] = "uniform"
     return residual_arr, diagnostics, summary
 
 
@@ -3916,6 +4038,18 @@ def fit_geometry_parameters(
         )
         summary["per_dataset"] = per_dataset_summaries
 
+        custom_sigma_values = np.asarray(
+            [
+                float(entry.get("measurement_sigma_px", np.nan))
+                for entry in diagnostics
+                if bool(entry.get("sigma_is_custom", False))
+            ],
+            dtype=float,
+        )
+        custom_sigma_values = custom_sigma_values[
+            np.isfinite(custom_sigma_values) & (custom_sigma_values > 0.0)
+        ]
+
         matched_distances = np.asarray(
             [
                 float(entry.get("distance_px", np.nan))
@@ -3926,7 +4060,16 @@ def fit_geometry_parameters(
         )
         matched_distances = matched_distances[np.isfinite(matched_distances)]
         summary["matched_pair_count"] = int(matched_distances.size)
-        summary["peak_weighting_mode"] = "uniform"
+        summary["custom_sigma_count"] = int(custom_sigma_values.size)
+        summary["peak_weighting_mode"] = (
+            "measurement_sigma+distance"
+            if custom_sigma_values.size and bool(weighted_matching)
+            else ("measurement_sigma" if custom_sigma_values.size else "uniform")
+        )
+        if custom_sigma_values.size:
+            summary["measurement_sigma_median_px"] = float(np.median(custom_sigma_values))
+            summary["measurement_sigma_mean_px"] = float(np.mean(custom_sigma_values))
+            summary["measurement_sigma_max_px"] = float(np.max(custom_sigma_values))
         if matched_distances.size:
             summary["unweighted_peak_rms_px"] = float(
                 np.sqrt(np.mean(matched_distances * matched_distances))

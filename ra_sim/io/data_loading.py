@@ -16,6 +16,8 @@ SOLVE_Q_REL_TOL_MIN = 1.0e-6
 SOLVE_Q_REL_TOL_MAX = 5.0e-2
 GUI_STATE_FILE_TYPE = "ra_sim.gui_state"
 GUI_STATE_FILE_VERSION = 1
+GEOMETRY_PLACEMENTS_FILE_TYPE = "ra_sim.geometry_placements"
+GEOMETRY_PLACEMENTS_FILE_VERSION = 1
 
 
 def _json_safe_gui_state_value(value: Any) -> Any:
@@ -69,6 +71,25 @@ def build_gui_state_payload(
     return payload
 
 
+def build_geometry_placements_payload(
+    state: dict[str, Any],
+    *,
+    saved_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a versioned geometry-placement payload from *state*."""
+
+    payload: dict[str, Any] = {
+        "type": GEOMETRY_PLACEMENTS_FILE_TYPE,
+        "version": int(GEOMETRY_PLACEMENTS_FILE_VERSION),
+        "saved_at": saved_at or datetime.now().isoformat(timespec="seconds"),
+        "state": _json_safe_gui_state_value(state),
+    }
+    if metadata:
+        payload["metadata"] = _json_safe_gui_state_value(metadata)
+    return payload
+
+
 def save_gui_state_file(
     path: str | os.PathLike[str],
     state: dict[str, Any],
@@ -78,6 +99,20 @@ def save_gui_state_file(
     """Write a JSON GUI-state snapshot and return the payload."""
 
     payload = build_gui_state_payload(state, metadata=metadata)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+    return payload
+
+
+def save_geometry_placements_file(
+    path: str | os.PathLike[str],
+    state: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write a JSON geometry-placement snapshot and return the payload."""
+
+    payload = build_geometry_placements_payload(state, metadata=metadata)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
     return payload
@@ -95,6 +130,21 @@ def load_gui_state_file(path: str | os.PathLike[str]) -> dict[str, Any]:
     state = payload.get("state")
     if not isinstance(state, dict):
         raise ValueError("GUI state file is missing a valid 'state' object.")
+    return payload
+
+
+def load_geometry_placements_file(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """Read and validate a JSON manual-placement snapshot."""
+
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("Geometry placements file must contain a JSON object.")
+    if str(payload.get("type", "")) != GEOMETRY_PLACEMENTS_FILE_TYPE:
+        raise ValueError("Unsupported geometry placements file type.")
+    state = payload.get("state")
+    if not isinstance(state, dict):
+        raise ValueError("Geometry placements file is missing a valid 'state' object.")
     return payload
 
 

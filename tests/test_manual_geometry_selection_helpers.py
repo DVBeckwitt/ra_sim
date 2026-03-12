@@ -34,12 +34,15 @@ def _load_main_functions(*names: str) -> dict[str, object]:
 def test_manual_pair_store_keeps_backgrounds_separate() -> None:
     namespace = _load_main_functions(
         "_normalize_hkl_key",
+        "_geometry_manual_position_error_px",
+        "_geometry_manual_position_sigma_px",
         "_normalize_geometry_manual_pair_entry",
         "_geometry_manual_pairs_for_index",
         "_set_geometry_manual_pairs_for_index",
         "_geometry_manual_pair_group_count",
     )
     namespace["geometry_manual_pairs_by_background"] = {}
+    namespace["GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX"] = 0.75
 
     set_pairs = namespace["_set_geometry_manual_pairs_for_index"]
     get_pairs = namespace["_geometry_manual_pairs_for_index"]
@@ -55,6 +58,8 @@ def test_manual_pair_store_keeps_backgrounds_separate() -> None:
                 "q_group_key": ["q_group", "primary", 1, 2],
                 "source_table_index": "4",
                 "source_row_index": "7",
+                "raw_x": "9.5",
+                "raw_y": 11.5,
             }
         ],
     )
@@ -74,6 +79,10 @@ def test_manual_pair_store_keeps_backgrounds_separate() -> None:
     assert bg0_pairs[0]["source_table_index"] == 4
     assert bg0_pairs[0]["source_row_index"] == 7
     assert bg0_pairs[0]["q_group_key"] == ("q_group", "primary", 1, 2)
+    assert bg0_pairs[0]["raw_x"] == 9.5
+    assert bg0_pairs[0]["raw_y"] == 11.5
+    assert bg0_pairs[0]["placement_error_px"] > 0.0
+    assert bg0_pairs[0]["sigma_px"] > bg0_pairs[0]["placement_error_px"]
 
     assert len(get_pairs(0)) == 1
     assert len(get_pairs(1)) == 1
@@ -128,3 +137,196 @@ def test_current_geometry_manual_match_config_reuses_auto_match_defaults() -> No
     assert cfg["console_progress"] is False
     assert cfg["relax_on_low_matches"] is False
     assert cfg["require_candidate_ownership"] is True
+
+
+def test_geometry_manual_choose_group_at_picks_nearest_seed() -> None:
+    namespace = _load_main_functions("_geometry_manual_choose_group_at")
+    choose_group = namespace["_geometry_manual_choose_group_at"]
+
+    grouped_candidates = {
+        ("q_group", "primary", 1, 0): [
+            {"label": "1,0,0", "sim_col": 20.0, "sim_row": 24.0},
+            {"label": "-1,0,0", "sim_col": 42.0, "sim_row": 24.0},
+        ],
+        ("q_group", "primary", 3, 0): [
+            {"label": "2,1,0", "sim_col": 75.0, "sim_row": 24.0},
+        ],
+    }
+
+    group_key, entries, best_dist = choose_group(
+        grouped_candidates,
+        19.5,
+        23.5,
+        window_size_px=50.0,
+    )
+
+    assert group_key == ("q_group", "primary", 1, 0)
+    assert len(entries) == 2
+    assert best_dist < 1.0
+
+
+def test_geometry_manual_choose_group_at_ignores_peaks_outside_50px_window() -> None:
+    namespace = _load_main_functions("_geometry_manual_choose_group_at")
+    choose_group = namespace["_geometry_manual_choose_group_at"]
+
+    grouped_candidates = {
+        ("q_group", "primary", 1, 0): [
+            {"label": "1,0,0", "sim_col": 80.0, "sim_row": 80.0},
+        ],
+    }
+
+    group_key, entries, best_dist = choose_group(
+        grouped_candidates,
+        20.0,
+        20.0,
+        window_size_px=50.0,
+    )
+
+    assert group_key is None
+    assert entries == []
+    assert best_dist != best_dist
+
+
+def test_geometry_manual_zoom_bounds_returns_clamped_100px_window() -> None:
+    namespace = _load_main_functions("_geometry_manual_zoom_bounds")
+    zoom_bounds = namespace["_geometry_manual_zoom_bounds"]
+
+    x_min, x_max, y_min, y_max = zoom_bounds(
+        150.0,
+        80.0,
+        (200, 300),
+        window_size_px=100.0,
+    )
+    assert (x_min, x_max, y_min, y_max) == (100.0, 200.0, 30.0, 130.0)
+
+    edge_bounds = zoom_bounds(
+        12.0,
+        15.0,
+        (200, 300),
+        window_size_px=100.0,
+    )
+    assert edge_bounds == (0.0, 100.0, 0.0, 100.0)
+
+
+def test_geometry_manual_group_target_count_uses_single_bg_peak_for_00l() -> None:
+    namespace = _load_main_functions(
+        "_normalize_hkl_key",
+        "_geometry_manual_group_target_count",
+    )
+    target_count = namespace["_geometry_manual_group_target_count"]
+
+    assert (
+        target_count(
+            ("q_group", "primary", 0, 3),
+            [
+                {"hkl": (0, 0, 3), "label": "0,0,3"},
+                {"hkl": (0, 0, 3), "label": "0,0,3"},
+            ],
+        )
+        == 1
+    )
+    assert (
+        target_count(
+            ("q_group", "primary", 1, 2),
+            [
+                {"hkl": (1, 0, 2), "label": "1,0,2"},
+                {"hkl": (-1, 0, 2), "label": "-1,0,2"},
+            ],
+        )
+        == 2
+    )
+
+
+def test_geometry_manual_nearest_candidate_to_point_selects_closest_simulated_peak() -> None:
+    namespace = _load_main_functions("_geometry_manual_nearest_candidate_to_point")
+    nearest_candidate = namespace["_geometry_manual_nearest_candidate_to_point"]
+
+    candidate, dist = nearest_candidate(
+        28.0,
+        15.5,
+        [
+            {"label": "left", "sim_col": 12.0, "sim_row": 15.0},
+            {"label": "right", "sim_col": 30.0, "sim_row": 16.0},
+        ],
+    )
+
+    assert isinstance(candidate, dict)
+    assert candidate["label"] == "right"
+    assert dist < 3.0
+
+
+def test_geometry_manual_preview_due_throttles_small_motion() -> None:
+    namespace = _load_main_functions(
+        "_geometry_manual_pick_session_active",
+        "_geometry_manual_preview_due",
+    )
+    preview_due = namespace["_geometry_manual_preview_due"]
+    namespace["geometry_manual_pick_session"] = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [{"label": "1,0,0"}],
+        "background_index": 0,
+        "preview_last_t": 0.0,
+        "preview_last_xy": None,
+    }
+    namespace["current_background_index"] = 0
+    namespace["GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S"] = 0.03
+    namespace["GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX"] = 0.8
+
+    times = iter([1.0, 1.01, 1.05])
+    namespace["perf_counter"] = lambda: next(times)
+
+    assert preview_due(10.0, 20.0) is True
+    assert preview_due(10.2, 20.1) is False
+    assert preview_due(10.2, 20.1) is True
+
+
+def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> None:
+    namespace = _load_main_functions(
+        "_normalize_hkl_key",
+        "_normalize_bragg_qr_source_label",
+        "_q_group_key_component",
+        "_integer_gz_index",
+        "_geometry_manual_position_error_px",
+        "_geometry_manual_position_sigma_px",
+        "_geometry_q_group_key_to_jsonable",
+        "_geometry_q_group_key_from_jsonable",
+        "_normalize_geometry_manual_pair_entry",
+        "_geometry_manual_pair_entry_to_jsonable",
+        "_geometry_manual_pair_entry_from_jsonable",
+    )
+    namespace["GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX"] = 0.75
+
+    to_json = namespace["_geometry_manual_pair_entry_to_jsonable"]
+    from_json = namespace["_geometry_manual_pair_entry_from_jsonable"]
+
+    serialized = to_json(
+        {
+            "label": "1,0,2",
+            "hkl": (1, 0, 2),
+            "x": 10.5,
+            "y": 12.25,
+            "q_group_key": ("q_group", "primary", 1.0, 2),
+            "source_table_index": 4,
+            "source_row_index": 7,
+            "raw_x": 9.0,
+            "raw_y": 11.0,
+            "placement_error_px": 1.25,
+            "sigma_px": 1.46,
+        }
+    )
+
+    assert serialized["hkl"] == [1, 0, 2]
+    assert serialized["q_group_key"] == ["q_group", "primary", 1.0, 2]
+    assert serialized["placement_error_px"] == 1.25
+    assert serialized["sigma_px"] == 1.46
+
+    restored = from_json(serialized)
+
+    assert restored["hkl"] == (1, 0, 2)
+    assert restored["q_group_key"] == ("q_group", "primary", 1.0, 2)
+    assert restored["source_table_index"] == 4
+    assert restored["source_row_index"] == 7
+    assert restored["raw_x"] == 9.0
+    assert restored["raw_y"] == 11.0
+    assert restored["placement_error_px"] == 1.25
+    assert restored["sigma_px"] == 1.46

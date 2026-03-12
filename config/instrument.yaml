@@ -126,6 +126,10 @@ instrument:
         ambiguity_ratio_min: 1.15
         k_neighbors: 12
         max_candidate_peaks: 1200
+        walk_max_steps: 24
+        walk_step_min_gain_sigma: 0.0
+        walk_match_score_bonus: 1.0
+        ascent_score_weight: 0.15
         # Guardrails: cancel auto-fit if relaxed matches are too far from
         # simulated seeds in the display frame.
         max_mean_distance_px: 22.0
