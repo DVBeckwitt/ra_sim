@@ -2365,9 +2365,20 @@ def _refresh_geometry_fit_theta_checkbox_label() -> None:
 
     if fit_theta_checkbutton is None:
         return
+    shared_theta = _geometry_fit_uses_shared_theta_offset()
     fit_theta_checkbutton.config(
-        text="θ shared offset" if _geometry_fit_uses_shared_theta_offset() else "θ sample tilt"
+        text="θ shared offset" if shared_theta else "θ sample tilt"
     )
+    theta_controls = globals().get("geometry_fit_constraint_controls", {})
+    if not isinstance(theta_controls, dict):
+        theta_controls = {}
+    theta_control = theta_controls.get("theta_initial", {})
+    if isinstance(theta_control, dict):
+        row = theta_control.get("row")
+        if row is not None:
+            row.configure(
+                text="Theta Shared Offset" if shared_theta else "Theta Sample Tilt"
+            )
 
 
 def _sync_background_theta_controls(
@@ -11918,19 +11929,86 @@ azimuthal_button = ttk.Button(
 )
 azimuthal_button.pack(side=tk.TOP, padx=5, pady=2)
 
-progress_label_positions = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
+def _compact_status_text(text: object, *, max_chars: int = 120) -> str:
+    summary = " ".join(str(text).split())
+    if len(summary) > max_chars:
+        return summary[: max_chars - 1] + "..."
+    return summary
+
+
+class ConsoleStatusLabel:
+    """Mirror verbose GUI status messages to the terminal and keep GUI text compact."""
+
+    def __init__(
+        self,
+        parent,
+        *,
+        name: str,
+        max_gui_chars: int = 120,
+        **label_kwargs,
+    ) -> None:
+        self._name = str(name)
+        self._max_gui_chars = max(16, int(max_gui_chars))
+        self._last_full_text = ""
+        self._label = ttk.Label(parent, wraplength=0, justify=tk.LEFT, anchor=tk.W, **label_kwargs)
+
+    def config(self, cnf=None, **kwargs):
+        options = {}
+        if isinstance(cnf, dict):
+            options.update(cnf)
+        options.update(kwargs)
+        if "text" in options:
+            raw_text = "" if options["text"] is None else str(options["text"])
+            if raw_text != self._last_full_text:
+                if raw_text.strip():
+                    print(f"[{self._name}] {raw_text}", flush=True)
+                self._last_full_text = raw_text
+            options["text"] = _compact_status_text(
+                raw_text,
+                max_chars=self._max_gui_chars,
+            )
+            options.pop("wraplength", None)
+        return self._label.config(**options)
+
+    configure = config
+
+    def cget(self, key):
+        return self._label.cget(key)
+
+    def __getattr__(self, name):
+        return getattr(self._label, name)
+
+
+progress_label_positions = ConsoleStatusLabel(
+    root,
+    name="positions",
+    max_gui_chars=110,
+)
 progress_label_positions.pack(side=tk.BOTTOM, padx=5)
 
-progress_label_geometry = ttk.Label(root, text="")
+progress_label_geometry = ConsoleStatusLabel(
+    root,
+    name="geometry",
+    max_gui_chars=110,
+)
 progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
 
 mosaic_progressbar = ttk.Progressbar(root, mode="indeterminate", length=240)
 mosaic_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
 
-progress_label_mosaic = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
+progress_label_mosaic = ConsoleStatusLabel(
+    root,
+    name="mosaic",
+    max_gui_chars=110,
+)
 progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
 
-progress_label = ttk.Label(root, text="", font=("Helvetica", 8))
+progress_label = ConsoleStatusLabel(
+    root,
+    name="gui",
+    max_gui_chars=110,
+    font=("Helvetica", 8),
+)
 progress_label.pack(side=tk.BOTTOM, padx=5)
 
 update_timing_label = ttk.Label(
@@ -12628,6 +12706,54 @@ ttk.Checkbutton(fit_frame, text="distance", variable=fit_dist_var).pack(side=tk.
 ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="center col", variable=fit_center_y_var).pack(side=tk.LEFT, padx=2)
 _refresh_geometry_fit_theta_checkbox_label()
+
+GEOMETRY_FIT_PARAM_ORDER = [
+    "zb",
+    "zs",
+    "theta_initial",
+    "psi_z",
+    "chi",
+    "cor_angle",
+    "gamma",
+    "Gamma",
+    "corto_detector",
+    "center_x",
+    "center_y",
+]
+geometry_fit_toggle_vars = {
+    "zb": fit_zb_var,
+    "zs": fit_zs_var,
+    "theta_initial": fit_theta_var,
+    "psi_z": fit_psi_z_var,
+    "chi": fit_chi_var,
+    "cor_angle": fit_cor_var,
+    "gamma": fit_gamma_var,
+    "Gamma": fit_Gamma_var,
+    "corto_detector": fit_dist_var,
+    "center_x": fit_center_x_var,
+    "center_y": fit_center_y_var,
+}
+geometry_fit_parameter_specs = {}
+geometry_fit_constraint_controls = {}
+
+
+def _sync_geometry_fit_constraint_rows(*_args) -> None:
+    for name in GEOMETRY_FIT_PARAM_ORDER:
+        control = geometry_fit_constraint_controls.get(name)
+        if not isinstance(control, dict):
+            continue
+        row = control.get("row")
+        if row is None:
+            continue
+        toggle_var = geometry_fit_toggle_vars.get(name)
+        enabled = bool(toggle_var.get()) if toggle_var is not None else True
+        mapped = bool(control.get("_mapped", False))
+        if enabled and not mapped:
+            row.pack(fill=tk.X, padx=4, pady=4)
+            control["_mapped"] = True
+        elif not enabled and mapped:
+            row.pack_forget()
+            control["_mapped"] = False
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     background_backend_frame = ttk.LabelFrame(root, text="Background Backend (debug)")
@@ -13396,6 +13522,203 @@ def _current_geometry_fit_params() -> dict[str, object]:
         "cor_angle": cor_angle_var.get(),
         "optics_mode": _current_optics_mode_flag(),
     }
+
+
+def _geometry_fit_constraint_source_name(name: str) -> str:
+    """Map fitted variable names back to the UI constraint control names."""
+
+    if name == "theta_offset":
+        return "theta_initial"
+    return str(name)
+
+
+def _geometry_fit_constraint_parameter_name(name: str) -> str:
+    """Map UI constraint rows to the active fitted parameter names."""
+
+    if name == "theta_initial" and _geometry_fit_uses_shared_theta_offset():
+        return "theta_offset"
+    return str(name)
+
+
+def _current_geometry_fit_constraint_state(
+    names: Sequence[str] | None = None,
+) -> dict[str, dict[str, float]]:
+    selected_names = (
+        list(names) if names is not None else list(geometry_fit_constraint_controls)
+    )
+    state: dict[str, dict[str, float]] = {}
+    for name in selected_names:
+        control = geometry_fit_constraint_controls.get(
+            _geometry_fit_constraint_source_name(name)
+        )
+        if not isinstance(control, dict):
+            continue
+        try:
+            window = float(control["window_var"].get())
+        except Exception:
+            window = float("nan")
+        try:
+            pull = float(control["pull_var"].get())
+        except Exception:
+            pull = 0.0
+        if not np.isfinite(window):
+            continue
+        window = max(0.0, float(window))
+        if not np.isfinite(pull):
+            pull = 0.0
+        pull = min(max(float(pull), 0.0), 1.0)
+        state[str(name)] = {
+            "window": float(window),
+            "pull": float(pull),
+        }
+    return state
+
+
+def _current_geometry_fit_parameter_domains(
+    names: Sequence[str] | None = None,
+) -> dict[str, tuple[float, float]]:
+    selected_names = (
+        list(names) if names is not None else list(geometry_fit_parameter_specs)
+    )
+    domains: dict[str, tuple[float, float]] = {}
+    fit_geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
+    if not isinstance(fit_geometry_cfg, dict):
+        fit_geometry_cfg = {}
+    bounds_cfg = fit_geometry_cfg.get("bounds", {}) or {}
+    if not isinstance(bounds_cfg, dict):
+        bounds_cfg = {}
+
+    for name in selected_names:
+        parameter_name = _geometry_fit_constraint_parameter_name(str(name))
+        control_name = _geometry_fit_constraint_source_name(parameter_name)
+
+        if parameter_name == "center_x" or parameter_name == "center_y":
+            domains[str(name)] = (0.0, max(float(image_size) - 1.0, 0.0))
+            continue
+
+        if parameter_name == "theta_offset":
+            entry = bounds_cfg.get("theta_offset")
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                try:
+                    lo = float(entry[0])
+                    hi = float(entry[1])
+                except Exception:
+                    lo = float("nan")
+                    hi = float("nan")
+                if np.isfinite(lo) and np.isfinite(hi):
+                    if lo > hi:
+                        lo, hi = hi, lo
+                    domains[str(name)] = (float(lo), float(hi))
+                    continue
+            elif isinstance(entry, dict):
+                try:
+                    lo = float(entry.get("min"))
+                    hi = float(entry.get("max"))
+                except Exception:
+                    lo = float("nan")
+                    hi = float("nan")
+                if np.isfinite(lo) and np.isfinite(hi):
+                    if lo > hi:
+                        lo, hi = hi, lo
+                    domains[str(name)] = (float(lo), float(hi))
+                    continue
+
+        spec = geometry_fit_parameter_specs.get(control_name)
+        if not isinstance(spec, dict):
+            continue
+        slider_widget = spec.get("value_slider")
+        if slider_widget is None:
+            continue
+        try:
+            lo = float(slider_widget.cget("from"))
+            hi = float(slider_widget.cget("to"))
+        except Exception:
+            continue
+        if parameter_name == "theta_offset":
+            span = max(abs(lo), abs(hi), 1.0)
+            domains[str(name)] = (-float(span), float(span))
+            continue
+        if lo > hi:
+            lo, hi = hi, lo
+        domains[str(name)] = (float(lo), float(hi))
+    return domains
+
+
+def _build_geometry_fit_runtime_config(
+    base_config,
+    current_params,
+    control_settings,
+    parameter_domains,
+):
+    runtime_cfg = copy.deepcopy(base_config) if isinstance(base_config, dict) else {}
+    if not isinstance(runtime_cfg, dict):
+        runtime_cfg = {}
+
+    bounds_cfg = runtime_cfg.get("bounds", {}) or {}
+    if not isinstance(bounds_cfg, dict):
+        bounds_cfg = {}
+    runtime_cfg["bounds"] = bounds_cfg
+
+    priors_cfg = runtime_cfg.get("priors", {}) or {}
+    if not isinstance(priors_cfg, dict):
+        priors_cfg = {}
+    runtime_cfg["priors"] = priors_cfg
+
+    for name, current in (current_params or {}).items():
+        try:
+            current_value = float(current)
+        except Exception:
+            continue
+        if not np.isfinite(current_value):
+            continue
+
+        control = (control_settings or {}).get(name, {}) or {}
+        try:
+            window = float(control.get("window", 0.0))
+        except Exception:
+            window = 0.0
+        if not np.isfinite(window):
+            window = 0.0
+        window = max(0.0, float(window))
+
+        lo = float(current_value - window)
+        hi = float(current_value + window)
+
+        domain = (parameter_domains or {}).get(name)
+        if isinstance(domain, (list, tuple)) and len(domain) >= 2:
+            try:
+                domain_lo = float(domain[0])
+                domain_hi = float(domain[1])
+            except Exception:
+                domain_lo = float("nan")
+                domain_hi = float("nan")
+            if np.isfinite(domain_lo):
+                lo = max(lo, float(domain_lo))
+            if np.isfinite(domain_hi):
+                hi = min(hi, float(domain_hi))
+
+        if hi < lo:
+            lo = hi = min(max(current_value, lo), hi)
+
+        bounds_cfg[str(name)] = [float(lo), float(hi)]
+
+        try:
+            pull = float(control.get("pull", 0.0))
+        except Exception:
+            pull = 0.0
+        if not np.isfinite(pull):
+            pull = 0.0
+        pull = min(max(float(pull), 0.0), 1.0)
+        if pull > 0.0 and window > 0.0:
+            sigma_scale = max(0.05, 1.0 - 0.95 * pull)
+            priors_cfg[str(name)] = {
+                "center": float(current_value),
+                "sigma": float(max(window * sigma_scale, 1.0e-6)),
+            }
+        else:
+            priors_cfg.pop(str(name), None)
+
+    return runtime_cfg
 
 
 def _live_geometry_preview_enabled() -> bool:
@@ -14662,6 +14985,15 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
             )
             root.update_idletasks()
+            geometry_runtime_cfg = _build_geometry_fit_runtime_config(
+                geometry_refine_cfg,
+                {
+                    name: current_fit_params.get(name)
+                    for name in var_names
+                },
+                _current_geometry_fit_constraint_state(var_names),
+                _current_geometry_fit_parameter_domains(var_names),
+            )
 
             result = fit_geometry_parameters(
                 miller,
@@ -14673,7 +15005,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 pixel_tol=float('inf'),
                 experimental_image=experimental_image_for_fit,
                 dataset_specs=current_dataset_specs if joint_background_mode else None,
-                refinement_config=geometry_refine_cfg,
+                refinement_config=geometry_runtime_cfg,
             )
 
             if getattr(result, "x", None) is None or len(result.x) != len(var_names):
@@ -15835,6 +16167,15 @@ def _legacy_auto_match_on_fit_geometry_click():
                 _log_assignment_snapshot(
                     "Match assignments before fit (native frame):", params
                 )
+                geometry_runtime_cfg = _build_geometry_fit_runtime_config(
+                    geometry_refine_cfg,
+                    {
+                        name: params.get(name)
+                        for name in var_names
+                    },
+                    _current_geometry_fit_constraint_state(var_names),
+                    _current_geometry_fit_parameter_domains(var_names),
+                )
 
                 result = fit_geometry_parameters(
                     miller,
@@ -15845,7 +16186,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     var_names,
                     pixel_tol=float('inf'),
                     experimental_image=experimental_image_for_fit,
-                    refinement_config=fit_config.get("geometry", {}),
+                    refinement_config=geometry_runtime_cfg,
                 )
 
                 _log_section(
@@ -16718,6 +17059,15 @@ def on_fit_geometry_click():
         root.update_idletasks()
 
         dataset_specs = [dict(info["spec"]) for info in dataset_infos]
+        geometry_runtime_cfg = _build_geometry_fit_runtime_config(
+            geometry_refine_cfg,
+            {
+                name: params.get(name)
+                for name in var_names
+            },
+            _current_geometry_fit_constraint_state(var_names),
+            _current_geometry_fit_parameter_domains(var_names),
+        )
         result = fit_geometry_parameters(
             miller,
             intensities,
@@ -16728,7 +17078,7 @@ def on_fit_geometry_click():
             pixel_tol=float("inf"),
             experimental_image=current_dataset["experimental_image_for_fit"],
             dataset_specs=dataset_specs if joint_background_mode else None,
-            refinement_config=geometry_refine_cfg,
+            refinement_config=geometry_runtime_cfg,
         )
 
         _log_section(
@@ -17920,6 +18270,342 @@ center_y_var, center_y_scale = make_slider(
     1.0,
     center_frame.frame
 )
+geometry_fit_parameter_specs = {
+    "zb": {
+        "label": "Beam Offset",
+        "value_var": zb_var,
+        "value_slider": zb_scale,
+        "step": 0.0001,
+    },
+    "zs": {
+        "label": "Sample Offset",
+        "value_var": zs_var,
+        "value_slider": zs_scale,
+        "step": 0.0001,
+    },
+    "theta_initial": {
+        "label": "Theta Sample Tilt",
+        "value_var": theta_initial_var,
+        "value_slider": theta_initial_scale,
+        "step": 0.01,
+    },
+    "psi_z": {
+        "label": "Goniometer Yaw",
+        "value_var": psi_z_var,
+        "value_slider": psi_z_scale,
+        "step": 0.01,
+    },
+    "chi": {
+        "label": "Sample Pitch",
+        "value_var": chi_var,
+        "value_slider": chi_scale,
+        "step": 0.001,
+    },
+    "cor_angle": {
+        "label": "Axis Angle",
+        "value_var": cor_angle_var,
+        "value_slider": cor_angle_scale,
+        "step": 0.01,
+    },
+    "gamma": {
+        "label": "Detector Pitch",
+        "value_var": gamma_var,
+        "value_slider": gamma_scale,
+        "step": 0.001,
+    },
+    "Gamma": {
+        "label": "Detector Yaw",
+        "value_var": Gamma_var,
+        "value_slider": Gamma_scale,
+        "step": 0.001,
+    },
+    "corto_detector": {
+        "label": "Detector Distance",
+        "value_var": corto_detector_var,
+        "value_slider": corto_detector_scale,
+        "step": 0.0001,
+    },
+    "center_x": {
+        "label": "Beam Center Row",
+        "value_var": center_x_var,
+        "value_slider": center_x_scale,
+        "step": 1.0,
+    },
+    "center_y": {
+        "label": "Beam Center Col",
+        "value_var": center_y_var,
+        "value_slider": center_y_scale,
+        "step": 1.0,
+    },
+}
+
+
+def _default_geometry_fit_window(name: str) -> float:
+    parameter_name = _geometry_fit_constraint_parameter_name(name)
+    control_name = _geometry_fit_constraint_source_name(parameter_name)
+    spec = geometry_fit_parameter_specs.get(control_name, {})
+    if parameter_name == "theta_offset":
+        try:
+            current_value = float(_current_geometry_theta_offset(strict=False))
+        except Exception:
+            current_value = 0.0
+    else:
+        try:
+            current_value = float(spec["value_var"].get())
+        except Exception:
+            current_value = 0.0
+    try:
+        step = abs(float(spec.get("step", 0.01)))
+    except Exception:
+        step = 0.01
+    step = max(step, 1.0e-6)
+    domain = _current_geometry_fit_parameter_domains([parameter_name]).get(parameter_name)
+    domain_span = 0.0
+    if isinstance(domain, tuple) and len(domain) >= 2:
+        domain_span = max(0.0, float(domain[1]) - float(domain[0]))
+
+    fit_geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
+    if not isinstance(fit_geometry_cfg, dict):
+        fit_geometry_cfg = {}
+    bounds_cfg = fit_geometry_cfg.get("bounds", {}) or {}
+    if not isinstance(bounds_cfg, dict):
+        bounds_cfg = {}
+    entry = bounds_cfg.get(parameter_name)
+
+    default_window = float("nan")
+    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+        try:
+            lo = float(entry[0])
+            hi = float(entry[1])
+            default_window = max(abs(current_value - lo), abs(hi - current_value))
+        except Exception:
+            default_window = float("nan")
+    elif isinstance(entry, dict):
+        mode = str(entry.get("mode", "absolute")).strip().lower()
+        try:
+            min_raw = float(entry.get("min")) if entry.get("min") is not None else float("nan")
+        except Exception:
+            min_raw = float("nan")
+        try:
+            max_raw = float(entry.get("max")) if entry.get("max") is not None else float("nan")
+        except Exception:
+            max_raw = float("nan")
+        if mode in {"relative", "rel", "relative_min0", "rel_min0"}:
+            candidates = [abs(v) for v in (min_raw, max_raw) if np.isfinite(v)]
+            if candidates:
+                default_window = max(candidates)
+        else:
+            candidates = [
+                abs(current_value - v)
+                for v in (min_raw, max_raw)
+                if np.isfinite(v)
+            ]
+            if candidates:
+                default_window = max(candidates)
+
+    if not np.isfinite(default_window) or default_window <= 0.0:
+        default_window = max(
+            step * 10.0,
+            0.02 * domain_span,
+            0.1 * max(abs(current_value), 1.0),
+        )
+
+    if domain_span > 0.0:
+        default_window = min(default_window, domain_span)
+
+    return max(float(default_window), step)
+
+
+def _default_geometry_fit_pull(name: str, window: float) -> float:
+    parameter_name = _geometry_fit_constraint_parameter_name(name)
+    fit_geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
+    if not isinstance(fit_geometry_cfg, dict):
+        fit_geometry_cfg = {}
+    priors_cfg = fit_geometry_cfg.get("priors", {}) or {}
+    if not isinstance(priors_cfg, dict):
+        priors_cfg = {}
+    entry = priors_cfg.get(parameter_name)
+    if not isinstance(entry, dict):
+        return 0.0
+    try:
+        sigma = float(entry.get("sigma"))
+    except Exception:
+        sigma = float("nan")
+    if not np.isfinite(sigma) or sigma <= 0.0 or not np.isfinite(window) or window <= 0.0:
+        return 0.0
+    inferred = (1.0 - min(max(sigma / window, 0.05), 1.0)) / 0.95
+    if not np.isfinite(inferred):
+        return 0.0
+    return min(max(float(inferred), 0.0), 1.0)
+
+
+geometry_fit_constraints_frame = CollapsibleFrame(
+    root,
+    text="Geometry Fit Constraints",
+    expanded=True,
+)
+geometry_fit_constraints_frame.pack(
+    side=tk.TOP,
+    fill=tk.X,
+    padx=5,
+    pady=5,
+    after=fit_frame,
+)
+ttk.Label(
+    geometry_fit_constraints_frame.frame,
+    text=(
+        "Each window is applied as current value ± deviation during geometry fitting. "
+        "Stay-close adds a soft pull back to the starting guess."
+    ),
+    wraplength=420,
+    justify="left",
+).pack(fill=tk.X, padx=6, pady=(2, 6))
+
+geometry_fit_constraints_list_frame = ttk.Frame(geometry_fit_constraints_frame.frame)
+geometry_fit_constraints_list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+geometry_fit_constraints_canvas_height = int(
+    min(max(root.winfo_screenheight() * 0.35, 220), 420)
+)
+geometry_fit_constraints_canvas = tk.Canvas(
+    geometry_fit_constraints_list_frame,
+    highlightthickness=0,
+    borderwidth=0,
+    height=geometry_fit_constraints_canvas_height,
+)
+geometry_fit_constraints_scrollbar = ttk.Scrollbar(
+    geometry_fit_constraints_list_frame,
+    orient=tk.VERTICAL,
+    command=geometry_fit_constraints_canvas.yview,
+)
+geometry_fit_constraints_canvas.configure(
+    yscrollcommand=geometry_fit_constraints_scrollbar.set
+)
+geometry_fit_constraints_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+geometry_fit_constraints_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+geometry_fit_constraints_body = ttk.Frame(geometry_fit_constraints_canvas)
+geometry_fit_constraints_body_window = geometry_fit_constraints_canvas.create_window(
+    (0, 0),
+    window=geometry_fit_constraints_body,
+    anchor="nw",
+)
+
+
+def _refresh_geometry_fit_constraints_scrollregion(_event=None) -> None:
+    geometry_fit_constraints_canvas.configure(
+        scrollregion=geometry_fit_constraints_canvas.bbox("all")
+    )
+
+
+def _resize_geometry_fit_constraints_body(event) -> None:
+    geometry_fit_constraints_canvas.itemconfigure(
+        geometry_fit_constraints_body_window,
+        width=event.width,
+    )
+
+
+def _scroll_geometry_fit_constraints(event):
+    pointer_x = root.winfo_pointerx()
+    pointer_y = root.winfo_pointery()
+    canvas_x = geometry_fit_constraints_canvas.winfo_rootx()
+    canvas_y = geometry_fit_constraints_canvas.winfo_rooty()
+    if not (
+        canvas_x <= pointer_x <= canvas_x + geometry_fit_constraints_canvas.winfo_width()
+        and canvas_y <= pointer_y <= canvas_y + geometry_fit_constraints_canvas.winfo_height()
+    ):
+        return None
+
+    delta = 0
+    if getattr(event, "delta", 0):
+        delta = int(-event.delta / 120)
+    elif getattr(event, "num", None) == 4:
+        delta = -1
+    elif getattr(event, "num", None) == 5:
+        delta = 1
+    if delta:
+        geometry_fit_constraints_canvas.yview_scroll(delta, "units")
+        return "break"
+    return None
+
+
+geometry_fit_constraints_body.bind(
+    "<Configure>",
+    _refresh_geometry_fit_constraints_scrollregion,
+)
+geometry_fit_constraints_canvas.bind(
+    "<Configure>",
+    _resize_geometry_fit_constraints_body,
+)
+root.bind_all("<MouseWheel>", _scroll_geometry_fit_constraints, add="+")
+root.bind_all("<Button-4>", _scroll_geometry_fit_constraints, add="+")
+root.bind_all("<Button-5>", _scroll_geometry_fit_constraints, add="+")
+
+for name in GEOMETRY_FIT_PARAM_ORDER:
+    spec = geometry_fit_parameter_specs.get(name, {})
+    try:
+        step = abs(float(spec.get("step", 0.01)))
+    except Exception:
+        step = 0.01
+    step = max(step, 1.0e-6)
+    default_window = _default_geometry_fit_window(name)
+    parameter_name = _geometry_fit_constraint_parameter_name(name)
+    domain = _current_geometry_fit_parameter_domains([parameter_name]).get(parameter_name)
+    domain_span = 0.0
+    if isinstance(domain, tuple) and len(domain) >= 2:
+        domain_span = max(0.0, float(domain[1]) - float(domain[0]))
+    window_slider_max = max(
+        default_window,
+        step * 20.0,
+        default_window * 4.0,
+        0.05 * domain_span,
+    )
+    if domain_span > 0.0:
+        window_slider_max = min(window_slider_max, domain_span)
+    window_slider_max = max(window_slider_max, default_window, step)
+
+    row_text = str(spec.get("label", name))
+    if name == "theta_initial" and _geometry_fit_uses_shared_theta_offset():
+        row_text = "Theta Shared Offset"
+    row = ttk.LabelFrame(
+        geometry_fit_constraints_body,
+        text=row_text,
+    )
+    window_var, _window_slider = create_slider(
+        "Allowed deviation (±)",
+        0.0,
+        window_slider_max,
+        default_window,
+        step,
+        row,
+        allow_range_expand=True,
+        range_expand_pad=max(step, default_window * 0.25),
+    )
+    pull_var, _pull_slider = create_slider(
+        "Stay-close pull",
+        0.0,
+        1.0,
+        _default_geometry_fit_pull(name, default_window),
+        0.01,
+        row,
+    )
+    ttk.Label(
+        row,
+        text="0 = free fit, 1 = strongest preference for the starting value.",
+        wraplength=360,
+        justify="left",
+    ).pack(fill=tk.X, padx=6, pady=(0, 4))
+    geometry_fit_constraint_controls[name] = {
+        "row": row,
+        "window_var": window_var,
+        "pull_var": pull_var,
+        "_mapped": False,
+    }
+
+for _toggle_var in geometry_fit_toggle_vars.values():
+    _toggle_var.trace_add("write", _sync_geometry_fit_constraint_rows)
+_sync_geometry_fit_constraint_rows()
+_refresh_geometry_fit_theta_checkbox_label()
 
 # Slider controlling contribution of the first CIF file, only if a second CIF
 # was provided.

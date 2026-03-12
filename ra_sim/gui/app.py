@@ -4603,19 +4603,86 @@ azimuthal_button = ttk.Button(
 )
 azimuthal_button.pack(side=tk.TOP, padx=5, pady=2)
 
-progress_label_positions = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
+def _compact_status_text(text: object, *, max_chars: int = 120) -> str:
+    summary = " ".join(str(text).split())
+    if len(summary) > max_chars:
+        return summary[: max_chars - 1] + "..."
+    return summary
+
+
+class ConsoleStatusLabel:
+    """Mirror verbose GUI status messages to the terminal and keep GUI text compact."""
+
+    def __init__(
+        self,
+        parent,
+        *,
+        name: str,
+        max_gui_chars: int = 120,
+        **label_kwargs,
+    ) -> None:
+        self._name = str(name)
+        self._max_gui_chars = max(16, int(max_gui_chars))
+        self._last_full_text = ""
+        self._label = ttk.Label(parent, wraplength=0, justify=tk.LEFT, anchor=tk.W, **label_kwargs)
+
+    def config(self, cnf=None, **kwargs):
+        options = {}
+        if isinstance(cnf, dict):
+            options.update(cnf)
+        options.update(kwargs)
+        if "text" in options:
+            raw_text = "" if options["text"] is None else str(options["text"])
+            if raw_text != self._last_full_text:
+                if raw_text.strip():
+                    print(f"[{self._name}] {raw_text}", flush=True)
+                self._last_full_text = raw_text
+            options["text"] = _compact_status_text(
+                raw_text,
+                max_chars=self._max_gui_chars,
+            )
+            options.pop("wraplength", None)
+        return self._label.config(**options)
+
+    configure = config
+
+    def cget(self, key):
+        return self._label.cget(key)
+
+    def __getattr__(self, name):
+        return getattr(self._label, name)
+
+
+progress_label_positions = ConsoleStatusLabel(
+    root,
+    name="positions",
+    max_gui_chars=110,
+)
 progress_label_positions.pack(side=tk.BOTTOM, padx=5)
 
-progress_label_geometry = ttk.Label(root, text="")
+progress_label_geometry = ConsoleStatusLabel(
+    root,
+    name="geometry",
+    max_gui_chars=110,
+)
 progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
 
 mosaic_progressbar = ttk.Progressbar(root, mode="indeterminate", length=240)
 mosaic_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
 
-progress_label_mosaic = ttk.Label(root, text="", wraplength=300, justify=tk.LEFT)
+progress_label_mosaic = ConsoleStatusLabel(
+    root,
+    name="mosaic",
+    max_gui_chars=110,
+)
 progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
 
-progress_label = ttk.Label(root, text="", font=("Helvetica", 8))
+progress_label = ConsoleStatusLabel(
+    root,
+    name="gui",
+    max_gui_chars=110,
+    font=("Helvetica", 8),
+)
 progress_label.pack(side=tk.BOTTOM, padx=5)
 
 update_timing_label = ttk.Label(
@@ -8821,7 +8888,7 @@ def _default_geometry_fit_pull(name: str, window: float) -> float:
 geometry_fit_constraints_frame = CollapsibleFrame(
     root,
     text="Geometry Fit Constraints",
-    expanded=False,
+    expanded=True,
 )
 geometry_fit_constraints_frame.pack(
     side=tk.TOP,
@@ -8839,6 +8906,86 @@ ttk.Label(
     wraplength=420,
     justify="left",
 ).pack(fill=tk.X, padx=6, pady=(2, 6))
+
+geometry_fit_constraints_list_frame = ttk.Frame(geometry_fit_constraints_frame.frame)
+geometry_fit_constraints_list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+geometry_fit_constraints_canvas_height = int(
+    min(max(root.winfo_screenheight() * 0.35, 220), 420)
+)
+geometry_fit_constraints_canvas = tk.Canvas(
+    geometry_fit_constraints_list_frame,
+    highlightthickness=0,
+    borderwidth=0,
+    height=geometry_fit_constraints_canvas_height,
+)
+geometry_fit_constraints_scrollbar = ttk.Scrollbar(
+    geometry_fit_constraints_list_frame,
+    orient=tk.VERTICAL,
+    command=geometry_fit_constraints_canvas.yview,
+)
+geometry_fit_constraints_canvas.configure(
+    yscrollcommand=geometry_fit_constraints_scrollbar.set
+)
+geometry_fit_constraints_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+geometry_fit_constraints_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+geometry_fit_constraints_body = ttk.Frame(geometry_fit_constraints_canvas)
+geometry_fit_constraints_body_window = geometry_fit_constraints_canvas.create_window(
+    (0, 0),
+    window=geometry_fit_constraints_body,
+    anchor="nw",
+)
+
+
+def _refresh_geometry_fit_constraints_scrollregion(_event=None) -> None:
+    geometry_fit_constraints_canvas.configure(
+        scrollregion=geometry_fit_constraints_canvas.bbox("all")
+    )
+
+
+def _resize_geometry_fit_constraints_body(event) -> None:
+    geometry_fit_constraints_canvas.itemconfigure(
+        geometry_fit_constraints_body_window,
+        width=event.width,
+    )
+
+
+def _scroll_geometry_fit_constraints(event):
+    pointer_x = root.winfo_pointerx()
+    pointer_y = root.winfo_pointery()
+    canvas_x = geometry_fit_constraints_canvas.winfo_rootx()
+    canvas_y = geometry_fit_constraints_canvas.winfo_rooty()
+    if not (
+        canvas_x <= pointer_x <= canvas_x + geometry_fit_constraints_canvas.winfo_width()
+        and canvas_y <= pointer_y <= canvas_y + geometry_fit_constraints_canvas.winfo_height()
+    ):
+        return None
+
+    delta = 0
+    if getattr(event, "delta", 0):
+        delta = int(-event.delta / 120)
+    elif getattr(event, "num", None) == 4:
+        delta = -1
+    elif getattr(event, "num", None) == 5:
+        delta = 1
+    if delta:
+        geometry_fit_constraints_canvas.yview_scroll(delta, "units")
+        return "break"
+    return None
+
+
+geometry_fit_constraints_body.bind(
+    "<Configure>",
+    _refresh_geometry_fit_constraints_scrollregion,
+)
+geometry_fit_constraints_canvas.bind(
+    "<Configure>",
+    _resize_geometry_fit_constraints_body,
+)
+root.bind_all("<MouseWheel>", _scroll_geometry_fit_constraints, add="+")
+root.bind_all("<Button-4>", _scroll_geometry_fit_constraints, add="+")
+root.bind_all("<Button-5>", _scroll_geometry_fit_constraints, add="+")
 
 for name in GEOMETRY_FIT_PARAM_ORDER:
     spec = geometry_fit_parameter_specs.get(name, {})
@@ -8863,7 +9010,7 @@ for name in GEOMETRY_FIT_PARAM_ORDER:
     window_slider_max = max(window_slider_max, default_window, step)
 
     row = ttk.LabelFrame(
-        geometry_fit_constraints_frame.frame,
+        geometry_fit_constraints_body,
         text=str(spec.get("label", name)),
     )
     window_var, _window_slider = create_slider(

@@ -1,0 +1,415 @@
+[33m7881cfb[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32moptimize[m[33m)[m HEAD@{0}: reset: moving to 7881cfb
+[33m00c7f14[m HEAD@{1}: commit: t;rying a new gui
+[33ma485e65[m HEAD@{2}: commit: Add geometry-fit undo support and per-parameter fit constraint sliders with soft initial-guess priors.
+[33m7881cfb[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32moptimize[m[33m)[m HEAD@{3}: commit: Add staged geometry refinement with ridge pre-alignment, anisotropic peak uncertainty weighting, and post-fit identifiability diagnostics.
+[33m1bfe936[m HEAD@{4}: commit: multi image refinement
+[33mf589a77[m HEAD@{5}: commit: multi image refinement
+[33m76ca133[m HEAD@{6}: checkout: moving from main to optimize
+[33ma19f5b4[m[33m ([m[1;32mmain[m[33m)[m HEAD@{7}: checkout: moving from optimize to main
+[33m76ca133[m HEAD@{8}: commit: multi image refinement
+[33m858dfba[m HEAD@{9}: commit: optimizing
+[33mb20f560[m HEAD@{10}: commit: optimizing
+[33m13a766d[m HEAD@{11}: commit: optimizing
+[33ma8f3091[m HEAD@{12}: commit: cleaned
+[33me55c36a[m HEAD@{13}: reset: moving to e55c36a
+[33mb9db5b0[m[33m ([m[1;32mbackup-optimize[m[33m)[m HEAD@{14}: commit: changed optimization strat to lines
+[33m61f8483[m HEAD@{15}: commit: improving Qr rod plotting
+[33me55c36a[m HEAD@{16}: checkout: moving from main to optimize
+[33ma19f5b4[m[33m ([m[1;32mmain[m[33m)[m HEAD@{17}: checkout: moving from optimize to main
+[33me55c36a[m HEAD@{18}: commit: added Qz cylinder lines
+[33me01e58d[m HEAD@{19}: commit: improving geo fit
+[33m13b3cca[m HEAD@{20}: commit: fixing geo
+[33m0080acd[m HEAD@{21}: commit: fixing geo
+[33mcfa7777[m HEAD@{22}: commit: fixing geo
+[33m4abbf9c[m HEAD@{23}: commit: fixing geometry
+[33mc3f66fc[m HEAD@{24}: commit: fixing geometry
+[33mad17406[m HEAD@{25}: commit: fixing geometry optimizer
+[33mec1d30f[m HEAD@{26}: commit: fixed geo spots
+[33m6adc2d9[m HEAD@{27}: commit: added live preview for geometric fitting
+[33m980c372[m HEAD@{28}: commit: Implemented a stability fix for geometry fitting crashes caused by malformed measured-peak inputs.
+[33me4661a7[m HEAD@{29}: reset: moving to HEAD
+[33me4661a7[m HEAD@{30}: reset: moving to HEAD
+[33me4661a7[m HEAD@{31}: commit: remove unnecessary work each update
+[33m8a529e7[m HEAD@{32}: commit: remove unnecessary work each update
+[33m32fa319[m HEAD@{33}: commit: remove unnecessary work each update
+[33m5d3c4df[m HEAD@{34}: reset: moving to HEAD
+[33m5d3c4df[m HEAD@{35}: commit: grouped peaks with the same G but scale SF
+[33mf9fae7b[m HEAD@{36}: commit: parallelize unique bragg
+[33m850c1ca[m HEAD@{37}: commit: precompute stuff
+[33m1a5c440[m HEAD@{38}: commit: implemented simple multiplicity
+[33ma19f5b4[m[33m ([m[1;32mmain[m[33m)[m HEAD@{39}: checkout: moving from main to optimize
+[33ma19f5b4[m[33m ([m[1;32mmain[m[33m)[m HEAD@{40}: checkout: moving from optimize to main
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{41}: checkout: moving from main to optimize
+[33ma19f5b4[m[33m ([m[1;32mmain[m[33m)[m HEAD@{42}: commit: committing
+[33m34cd6ff[m HEAD@{43}: commit: added adaptive kernel for mosaic
+[33m65bfb8d[m HEAD@{44}: commit: fixing
+[33me303048[m HEAD@{45}: commit: geometry improvement and fixed n2 to use proper bandwidth
+[33mc7fc39a[m HEAD@{46}: commit: speed up gui time
+[33m9bf6f4a[m HEAD@{47}: commit: added selection of peaks to simulation
+[33m91f4fd5[m HEAD@{48}: commit: optimize threads and debounce
+[33mc97a43f[m HEAD@{49}: reset: moving to c97a43f
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{50}: checkout: moving from optimize to main
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{51}: checkout: moving from main to optimize
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{52}: checkout: moving from test2 to main
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{53}: checkout: moving from main to test2
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{54}: checkout: moving from test to main
+[33m86a8c66[m HEAD@{55}: commit: testing optimization
+[33m54b1162[m HEAD@{56}: commit: optimizing cache
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{57}: checkout: moving from main to test
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{58}: merge test: Fast-forward
+[33me24b6eb[m HEAD@{59}: checkout: moving from test to main
+[33mc9f7e77[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{60}: commit: Phase 1: Extract refactors for optimization
+[33me24b6eb[m HEAD@{61}: checkout: moving from main to test
+[33me24b6eb[m HEAD@{62}: checkout: moving from mosaic to main
+[33m2e4fc6f[m HEAD@{63}: checkout: moving from 236 to mosaic
+[33m1894dfd[m[33m ([m[1;31morigin/codex/hoist-geometry-invariants-from-loops[m[33m)[m HEAD@{64}: checkout: moving from main to 236
+[33me24b6eb[m HEAD@{65}: checkout: moving from opt to main
+[33me24b6eb[m HEAD@{66}: checkout: moving from main to opt
+[33me24b6eb[m HEAD@{67}: checkout: moving from mosaic to main
+[33m2e4fc6f[m HEAD@{68}: commit: testing
+[33mc7786ff[m HEAD@{69}: commit: optimizing
+[33me24b6eb[m HEAD@{70}: checkout: moving from main to mosaic
+[33me24b6eb[m HEAD@{71}: checkout: moving from mosaic to main
+[33me24b6eb[m HEAD@{72}: checkout: moving from main to mosaic
+[33me24b6eb[m HEAD@{73}: merge mosaic: Fast-forward
+[33mc97a43f[m HEAD@{74}: checkout: moving from mosaic to main
+[33me24b6eb[m HEAD@{75}: commit: optimize
+[33mc97a43f[m HEAD@{76}: checkout: moving from main to mosaic
+[33mc97a43f[m HEAD@{77}: merge mosaic: Fast-forward
+[33m9f6dd4e[m HEAD@{78}: checkout: moving from mosaic to main
+[33mc97a43f[m HEAD@{79}: commit: optimize
+[33m9f6dd4e[m HEAD@{80}: checkout: moving from main to mosaic
+[33m9f6dd4e[m HEAD@{81}: merge mosaic: Fast-forward
+[33mafb23a6[m HEAD@{82}: checkout: moving from mosaic to main
+[33m9f6dd4e[m HEAD@{83}: commit: fix HT
+[33mafb23a6[m HEAD@{84}: checkout: moving from main to mosaic
+[33mafb23a6[m HEAD@{85}: reset: moving to mosaic
+[33m0c97edc[m HEAD@{86}: reset: moving to HEAD
+[33m0c97edc[m HEAD@{87}: checkout: moving from mosaic to main
+[33mafb23a6[m HEAD@{88}: commit: fix diffuse
+[33mb6b5e94[m HEAD@{89}: checkout: moving from main to mosaic
+[33m0c97edc[m HEAD@{90}: checkout: moving from mosaic to main
+[33mb6b5e94[m HEAD@{91}: commit: changing HT
+[33m2b2c9fe[m HEAD@{92}: checkout: moving from main to mosaic
+[33m0c97edc[m HEAD@{93}: merge mosaic: Merge made by the 'ort' strategy.
+[33m86bc727[m HEAD@{94}: checkout: moving from mosaic to main
+[33m2b2c9fe[m HEAD@{95}: commit: fixes
+[33m3adbb36[m HEAD@{96}: commit: fixed
+[33m450e3b3[m HEAD@{97}: checkout: moving from main to mosaic
+[33m86bc727[m HEAD@{98}: checkout: moving from main to main
+[33m86bc727[m HEAD@{99}: commit: removed old features
+[33ma0ed0fc[m HEAD@{100}: checkout: moving from mosaic to main
+[33m450e3b3[m HEAD@{101}: checkout: moving from main to mosaic
+[33ma0ed0fc[m HEAD@{102}: pull: Merge made by the 'ort' strategy.
+[33m450e3b3[m HEAD@{103}: merge mosaic: Fast-forward
+[33me11bec1[m HEAD@{104}: checkout: moving from mosaic to main
+[33m450e3b3[m HEAD@{105}: commit: Add hBN geometry mapping, fitter/solver updates, GUI improvements, and tests
+[33me11bec1[m HEAD@{106}: checkout: moving from main to mosaic
+[33me11bec1[m HEAD@{107}: merge mosaic: Fast-forward
+[33m465a19d[m HEAD@{108}: checkout: moving from mosaic to main
+[33me11bec1[m HEAD@{109}: commit: fixed gui labels
+[33m465a19d[m HEAD@{110}: checkout: moving from main to mosaic
+[33m465a19d[m HEAD@{111}: commit: added images
+[33m8605448[m HEAD@{112}: merge fit_mosaic: Fast-forward
+[33mc36140d[m HEAD@{113}: checkout: moving from fit_mosaic to main
+[33m8605448[m HEAD@{114}: merge 237: Fast-forward
+[33ma42b92b[m HEAD@{115}: checkout: moving from 237 to fit_mosaic
+[33m8605448[m HEAD@{116}: commit: added readme
+[33m61bf646[m[33m ([m[1;31morigin/237[m[33m)[m HEAD@{117}: commit: added hbn calibration to this project and added a gui for it
+[33ma42b92b[m HEAD@{118}: checkout: moving from fit_mosaic to 237
+[33ma42b92b[m HEAD@{119}: merge 237: Fast-forward
+[33m96dbd62[m HEAD@{120}: checkout: moving from 237 to fit_mosaic
+[33ma42b92b[m HEAD@{121}: commit: patched geometric fit
+[33m96dbd62[m HEAD@{122}: checkout: moving from fit_mosaic to 237
+[33m96dbd62[m HEAD@{123}: checkout: moving from 237 to fit_mosaic
+[33m96dbd62[m HEAD@{124}: checkout: moving from fit_mosaic to 237
+[33m96dbd62[m HEAD@{125}: merge 237: Fast-forward
+[33m73b5d95[m HEAD@{126}: checkout: moving from 237 to fit_mosaic
+[33m96dbd62[m HEAD@{127}: commit: .
+[33m73b5d95[m HEAD@{128}: checkout: moving from 237 to 237
+[33m73b5d95[m HEAD@{129}: checkout: moving from fit_mosaic to 237
+[33m73b5d95[m HEAD@{130}: merge 237: Fast-forward
+[33m94f5f6e[m HEAD@{131}: checkout: moving from 237 to fit_mosaic
+[33m73b5d95[m HEAD@{132}: commit: fixed occupancies
+[33m94f5f6e[m HEAD@{133}: checkout: moving from fit_mosaic to 237
+[33m94f5f6e[m HEAD@{134}: merge 237: Fast-forward
+[33m8d94794[m HEAD@{135}: checkout: moving from 237 to fit_mosaic
+[33m94f5f6e[m HEAD@{136}: commit: fixed a bunch of stuff
+[33m8d94794[m HEAD@{137}: checkout: moving from fit_mosaic to 237
+[33m8d94794[m HEAD@{138}: merge 237: Fast-forward
+[33mbd9e34e[m HEAD@{139}: checkout: moving from 237 to fit_mosaic
+[33m8d94794[m HEAD@{140}: commit: speed up integration
+[33mbd9e34e[m HEAD@{141}: checkout: moving from fit_mosaic to 237
+[33mbd9e34e[m HEAD@{142}: merge 237: Fast-forward
+[33mef512d8[m HEAD@{143}: checkout: moving from 237 to fit_mosaic
+[33mbd9e34e[m HEAD@{144}: commit: fixed integration
+[33mef512d8[m HEAD@{145}: checkout: moving from main to 237
+[33mc36140d[m HEAD@{146}: checkout: moving from main to main
+[33mc36140d[m HEAD@{147}: checkout: moving from fit_mosaic to main
+[33mef512d8[m HEAD@{148}: reset: moving to HEAD
+[33mef512d8[m HEAD@{149}: checkout: moving from 237 to fit_mosaic
+[33mef512d8[m HEAD@{150}: checkout: moving from fit_mosaic to 237
+[33mef512d8[m HEAD@{151}: checkout: moving from 237 to fit_mosaic
+[33mef512d8[m HEAD@{152}: checkout: moving from fit_mosaic to 237
+[33mef512d8[m HEAD@{153}: checkout: moving from 237 to fit_mosaic
+[33mef512d8[m HEAD@{154}: checkout: moving from fit_mosaic to 237
+[33mef512d8[m HEAD@{155}: checkout: moving from 237 to fit_mosaic
+[33mef512d8[m HEAD@{156}: checkout: moving from fit_mosaic to 237
+[33mef512d8[m HEAD@{157}: merge 237: Fast-forward
+[33mccc9d98[m HEAD@{158}: checkout: moving from 237 to fit_mosaic
+[33mef512d8[m HEAD@{159}: commit: .
+[33mccc9d98[m HEAD@{160}: checkout: moving from fit_mosaic to 237
+[33mccc9d98[m HEAD@{161}: checkout: moving from 237 to fit_mosaic
+[33mccc9d98[m HEAD@{162}: checkout: moving from fit_mosaic to 237
+[33mccc9d98[m HEAD@{163}: merge 237: Fast-forward
+[33meffc987[m[33m ([m[1;31morigin/fit_mosaic[m[33m)[m HEAD@{164}: checkout: moving from 237 to fit_mosaic
+[33mccc9d98[m HEAD@{165}: commit: fix 3d plot
+[33meffc987[m[33m ([m[1;31morigin/fit_mosaic[m[33m)[m HEAD@{166}: checkout: moving from fit_mosaic to 237
+[33meffc987[m[33m ([m[1;31morigin/fit_mosaic[m[33m)[m HEAD@{167}: merge 237: Fast-forward
+[33mb55f37c[m HEAD@{168}: checkout: moving from 237 to fit_mosaic
+[33meffc987[m[33m ([m[1;31morigin/fit_mosaic[m[33m)[m HEAD@{169}: commit: fix signed distribution
+[33mb55f37c[m HEAD@{170}: checkout: moving from fit_mosaic to 237
+[33mb55f37c[m HEAD@{171}: commit: fixing distribution
+[33m7f89c5a[m HEAD@{172}: checkout: moving from fit_mosaic to fit_mosaic
+[33m7f89c5a[m HEAD@{173}: checkout: moving from 236 to fit_mosaic
+[33m7f89c5a[m HEAD@{174}: checkout: moving from fit_mosaic to 236
+[33m7f89c5a[m HEAD@{175}: merge 235: Fast-forward
+[33mbcf2e4d[m HEAD@{176}: checkout: moving from 235 to fit_mosaic
+[33m7f89c5a[m HEAD@{177}: commit: fixing gemoetry fit
+[33m2183561[m[33m ([m[1;31morigin/codex/rotate-background-image-in-main-gui[m[33m)[m HEAD@{178}: checkout: moving from 234 to 235
+[33mfb44d88[m[33m ([m[1;31morigin/codex/rotate-background-image-by-90-degrees[m[33m)[m HEAD@{179}: pull: Fast-forward
+[33m7749e10[m HEAD@{180}: pull: Fast-forward
+[33m1ab36b8[m HEAD@{181}: pull: Fast-forward
+[33ma8cbd72[m HEAD@{182}: pull: Fast-forward
+[33m2c3966a[m HEAD@{183}: checkout: moving from fit_mosaic to 234
+[33mbcf2e4d[m HEAD@{184}: pull: Fast-forward
+[33mb4ff72a[m[33m ([m[1;31morigin/230[m[33m)[m HEAD@{185}: checkout: moving from 233 to fit_mosaic
+[33m8c02875[m[33m ([m[1;31morigin/codex/add-z-axis-rotation-for-goniometer[m[33m)[m HEAD@{186}: checkout: moving from fit_mosaic to 233
+[33mb4ff72a[m[33m ([m[1;31morigin/230[m[33m)[m HEAD@{187}: checkout: moving from 232 to fit_mosaic
+[33md6a5788[m[33m ([m[1;31morigin/codex/describe-geometry-fitting-in-gui[m[33m)[m HEAD@{188}: pull: Fast-forward
+[33m4d198b6[m HEAD@{189}: pull: Fast-forward
+[33m3bbaf1d[m HEAD@{190}: pull: Fast-forward
+[33md174d90[m HEAD@{191}: pull: Fast-forward
+[33m72f873b[m HEAD@{192}: pull: Fast-forward
+[33m0039c38[m HEAD@{193}: pull: Fast-forward
+[33m3a71854[m HEAD@{194}: pull: Fast-forward
+[33m8fc026e[m HEAD@{195}: pull: Fast-forward
+[33mc352616[m HEAD@{196}: pull: Fast-forward
+[33md7661d8[m HEAD@{197}: pull: Fast-forward
+[33m6f54f7d[m HEAD@{198}: pull: Fast-forward
+[33m464bbe9[m HEAD@{199}: pull: Fast-forward
+[33mfbb1c80[m HEAD@{200}: pull: Fast-forward
+[33mdd5e8ab[m HEAD@{201}: pull: Fast-forward
+[33m0e14a64[m HEAD@{202}: pull: Fast-forward
+[33m7ce38c0[m HEAD@{203}: pull: Fast-forward
+[33m4689e15[m HEAD@{204}: pull: Fast-forward
+[33m6a6ed32[m HEAD@{205}: pull: Fast-forward
+[33maab7001[m HEAD@{206}: pull: Fast-forward
+[33m892c7c3[m HEAD@{207}: pull: Fast-forward
+[33mee75444[m HEAD@{208}: pull: Fast-forward
+[33m59e628d[m HEAD@{209}: pull: Fast-forward
+[33mf12891b[m HEAD@{210}: pull: Fast-forward
+[33m14770ec[m HEAD@{211}: pull: Fast-forward
+[33m09e90c3[m HEAD@{212}: pull: Fast-forward
+[33mc7b017a[m HEAD@{213}: pull: Fast-forward
+[33mbdae4e0[m HEAD@{214}: pull: Fast-forward
+[33m3dd0951[m HEAD@{215}: pull: Fast-forward
+[33ma1bad5a[m HEAD@{216}: pull: Fast-forward
+[33mbc39e60[m HEAD@{217}: pull: Fast-forward
+[33m47a1c95[m HEAD@{218}: pull: Fast-forward
+[33m430690a[m HEAD@{219}: pull: Fast-forward
+[33m30c0114[m HEAD@{220}: pull: Fast-forward
+[33m00e9b3a[m HEAD@{221}: pull: Fast-forward
+[33me283412[m HEAD@{222}: pull: Fast-forward
+[33m49269cb[m HEAD@{223}: pull: Fast-forward
+[33mcc5aaca[m HEAD@{224}: pull: Fast-forward
+[33m4a59018[m HEAD@{225}: pull: Fast-forward
+[33m092a30c[m HEAD@{226}: pull: Fast-forward
+[33m948b12d[m HEAD@{227}: pull: Fast-forward
+[33m3172ad1[m HEAD@{228}: pull: Fast-forward
+[33m949249e[m HEAD@{229}: pull: Fast-forward
+[33m39cae6f[m HEAD@{230}: pull: Fast-forward
+[33mb9d50d6[m HEAD@{231}: pull: Fast-forward
+[33m9d00b7c[m HEAD@{232}: pull: Fast-forward
+[33m13b73f7[m HEAD@{233}: pull: Fast-forward
+[33mc08e0e1[m HEAD@{234}: pull: Fast-forward
+[33m6763262[m HEAD@{235}: pull: Fast-forward
+[33mb047199[m HEAD@{236}: checkout: moving from fit_mosaic to 232
+[33mb4ff72a[m[33m ([m[1;31morigin/230[m[33m)[m HEAD@{237}: reset: moving to HEAD
+[33mb4ff72a[m[33m ([m[1;31morigin/230[m[33m)[m HEAD@{238}: merge 230: Fast-forward
+[33m5e455be[m HEAD@{239}: checkout: moving from 230 to fit_mosaic
+[33mb4ff72a[m[33m ([m[1;31morigin/230[m[33m)[m HEAD@{240}: checkout: moving from main to 230
+[33mc36140d[m HEAD@{241}: checkout: moving from 231 to main
+[33mb904f1e[m[33m ([m[1;31morigin/codex/integrate-hbn.py-for-ellipsis-correction[m[33m)[m HEAD@{242}: checkout: moving from main to 231
+[33mc36140d[m HEAD@{243}: checkout: moving from 230 to main
+[33m1befdde[m HEAD@{244}: checkout: moving from 231 to 230
+[33mb904f1e[m[33m ([m[1;31morigin/codex/integrate-hbn.py-for-ellipsis-correction[m[33m)[m HEAD@{245}: pull: Fast-forward
+[33m5fc8c61[m HEAD@{246}: pull: Fast-forward
+[33m09824e2[m HEAD@{247}: pull: Fast-forward
+[33m3a8ae1c[m HEAD@{248}: pull: Fast-forward
+[33m289dcdb[m HEAD@{249}: pull: Fast-forward
+[33m7a24ce0[m HEAD@{250}: pull: Fast-forward
+[33md769ee2[m HEAD@{251}: pull: Fast-forward
+[33m37d8e16[m HEAD@{252}: pull: Fast-forward
+[33m2f808f6[m HEAD@{253}: pull: Fast-forward
+[33mf80ce45[m HEAD@{254}: pull: Fast-forward
+[33mf013ec2[m HEAD@{255}: checkout: moving from 230 to 231
+[33m1befdde[m HEAD@{256}: pull: Merge made by the 'ort' strategy.
+[33m3a0482b[m HEAD@{257}: commit: added hbn.py
+[33m5a86ce2[m HEAD@{258}: checkout: moving from fit_mosaic to 230
+[33m5e455be[m HEAD@{259}: commit: hbn paths for me
+[33mb640d66[m HEAD@{260}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{261}: checkout: moving from fit_mosaic to main
+[33m7229b24[m HEAD@{262}: checkout: moving from fit_mosaic to fit_mosaic
+[33m7229b24[m HEAD@{263}: checkout: moving from fit_mosaic to fit_mosaic
+[33m7229b24[m HEAD@{264}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{265}: checkout: moving from 228 to main
+[33m5b8c03c[m[33m ([m[1;31morigin/codex/find-expected-2theta-values-for-hbn-peaks[m[33m)[m HEAD@{266}: reset: moving to HEAD
+[33m5b8c03c[m[33m ([m[1;31morigin/codex/find-expected-2theta-values-for-hbn-peaks[m[33m)[m HEAD@{267}: pull: Fast-forward
+[33m8592dbc[m HEAD@{268}: pull: Fast-forward
+[33maec22f9[m HEAD@{269}: checkout: moving from 227 to 228
+[33m80d5df8[m[33m ([m[1;31morigin/codex/integrate-hbn.py-fit-function[m[33m)[m HEAD@{270}: pull: Fast-forward
+[33m628b51a[m HEAD@{271}: pull: Fast-forward
+[33mdf70470[m HEAD@{272}: pull: Fast-forward
+[33mb2b8846[m HEAD@{273}: pull: Fast-forward
+[33mca546a3[m HEAD@{274}: pull: Fast-forward
+[33m0f6ff73[m HEAD@{275}: reset: moving to HEAD
+[33m0f6ff73[m HEAD@{276}: pull: Fast-forward
+[33mdf342a7[m HEAD@{277}: pull: Fast-forward
+[33m099e8d2[m HEAD@{278}: pull: Fast-forward
+[33mfd5a642[m HEAD@{279}: pull: Fast-forward
+[33m80d4a8a[m HEAD@{280}: pull: Fast-forward
+[33m28bb6d0[m HEAD@{281}: pull: Fast-forward
+[33m7b1c016[m HEAD@{282}: pull: Fast-forward
+[33me0fd965[m HEAD@{283}: pull: Fast-forward
+[33m2a8463f[m HEAD@{284}: reset: moving to HEAD
+[33m2a8463f[m HEAD@{285}: pull: Fast-forward
+[33m59f1be1[m HEAD@{286}: checkout: moving from fit_mosaic to 227
+[33m7229b24[m HEAD@{287}: commit: added hbn fitter
+[33m5d7bddd[m HEAD@{288}: pull: Fast-forward
+[33m34955c7[m HEAD@{289}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{290}: checkout: moving from 226 to main
+[33m0aecde8[m[33m ([m[1;31morigin/codex/fit-peak-positions-with-cor-axis-rotation[m[33m)[m HEAD@{291}: checkout: moving from fit_mosaic to 226
+[33m34955c7[m HEAD@{292}: pull: Fast-forward
+[33m22ace93[m HEAD@{293}: checkout: moving from 225 to fit_mosaic
+[33m20e42ec[m[33m ([m[1;31morigin/codex/add-cor-parameter-for-rotation[m[33m)[m HEAD@{294}: pull: Fast-forward
+[33me6d083b[m HEAD@{295}: checkout: moving from fit_mosaic to 225
+[33m22ace93[m HEAD@{296}: pull: Fast-forward
+[33m47784de[m HEAD@{297}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{298}: checkout: moving from 224 to main
+[33m43d8151[m[33m ([m[1;31morigin/codex/enable-default-finite-stack[m[33m)[m HEAD@{299}: pull: Fast-forward
+[33mbc7686f[m HEAD@{300}: pull: Fast-forward
+[33m1a79296[m HEAD@{301}: checkout: moving from fit_mosaic to 224
+[33m47784de[m HEAD@{302}: pull: Fast-forward
+[33mb50816e[m HEAD@{303}: checkout: moving from 223 to fit_mosaic
+[33mddc774a[m[33m ([m[1;31morigin/codex/add-finite-n-option-for-ht-and-markov-ko880o[m[33m)[m HEAD@{304}: checkout: moving from 222 to 223
+[33ma0a5822[m[33m ([m[1;31morigin/codex/add-finite-n-option-for-ht-and-markov[m[33m)[m HEAD@{305}: pull: Fast-forward
+[33me20801f[m HEAD@{306}: checkout: moving from fit_mosaic to 222
+[33mb50816e[m HEAD@{307}: reset: moving to HEAD
+[33mb50816e[m HEAD@{308}: checkout: moving from codex/add-finite-n-option-for-ht-and-markov to fit_mosaic
+[33mb50816e[m HEAD@{309}: checkout: moving from codex/add-finite-n-option-for-ht-and-markov to codex/add-finite-n-option-for-ht-and-markov
+[33mb50816e[m HEAD@{310}: Branch: renamed refs/heads/origin/codex/add-finite-n-option-for-ht-and-markov to refs/heads/codex/add-finite-n-option-for-ht-and-markov
+[33mb50816e[m HEAD@{312}: checkout: moving from fit_mosaic to origin/codex/add-finite-n-option-for-ht-and-markov
+[33mb50816e[m HEAD@{313}: pull: Fast-forward
+[33m0f49bca[m HEAD@{314}: pull: Fast-forward
+[33m7609147[m HEAD@{315}: commit: added an uncorrelated form for the diffuse
+[33m5999074[m HEAD@{316}: pull: Fast-forward
+[33ma5d9094[m HEAD@{317}: checkout: moving from 219 to fit_mosaic
+[33m603349c[m[33m ([m[1;31morigin/codex/investigate-missing-peaks-in-pbi2-structure[m[33m)[m HEAD@{318}: checkout: moving from fit_mosaic to 219
+[33ma5d9094[m HEAD@{319}: pull: Fast-forward
+[33md823fa3[m HEAD@{320}: pull: Fast-forward
+[33mbf7dcd9[m HEAD@{321}: pull: Fast-forward
+[33me6ffe25[m HEAD@{322}: pull --rebase origin fit_mosaic (finish): returning to refs/heads/fit_mosaic
+[33me6ffe25[m HEAD@{323}: pull --rebase origin fit_mosaic (pick): fixed stacking_fault method
+[33m4a93272[m HEAD@{324}: pull --rebase origin fit_mosaic (start): checkout 4a9327258698df06361c32126d96692c1e450d62
+[33m2348ba3[m[33m ([m[1;31morigin/215[m[33m)[m HEAD@{325}: merge 215: Fast-forward
+[33mae43b58[m HEAD@{326}: checkout: moving from 215 to fit_mosaic
+[33m2348ba3[m[33m ([m[1;31morigin/215[m[33m)[m HEAD@{327}: commit: fixed stacking_fault method
+[33m24b352b[m[33m ([m[1;31morigin/codex/restrict-simulation-min-intensity-to-0[m[33m)[m HEAD@{328}: checkout: moving from fit_mosaic to 215
+[33mae43b58[m HEAD@{329}: pull: Fast-forward
+[33m2aebcfe[m HEAD@{330}: pull: Fast-forward
+[33mbd9b088[m HEAD@{331}: pull: Fast-forward
+[33m638d963[m HEAD@{332}: pull: Fast-forward
+[33m5a13bf0[m HEAD@{333}: pull: Fast-forward
+[33mac4b7ad[m HEAD@{334}: pull: Fast-forward
+[33m262d6c9[m HEAD@{335}: checkout: moving from 209 to fit_mosaic
+[33ma060bdc[m[33m ([m[1;31morigin/codex/fix-missing-transparency-slider-bar[m[33m)[m HEAD@{336}: pull: Fast-forward
+[33m0a11eeb[m HEAD@{337}: pull: Fast-forward
+[33me95aa29[m HEAD@{338}: checkout: moving from fit_mosaic to 209
+[33m262d6c9[m HEAD@{339}: pull: Fast-forward
+[33mdbaf5e1[m HEAD@{340}: pull: Fast-forward
+[33m3663f7a[m HEAD@{341}: pull: Fast-forward
+[33md0aedb9[m HEAD@{342}: pull: Fast-forward
+[33m7b21f61[m HEAD@{343}: pull: Fast-forward
+[33m92063e8[m HEAD@{344}: pull: Fast-forward
+[33m418a66e[m HEAD@{345}: pull: Fast-forward
+[33me9ba179[m HEAD@{346}: pull: Fast-forward
+[33m7724d1d[m HEAD@{347}: pull: Fast-forward
+[33mb401c35[m HEAD@{348}: pull: Fast-forward
+[33m102639d[m HEAD@{349}: pull: Fast-forward
+[33md14c472[m HEAD@{350}: pull: Fast-forward
+[33m8d8f5a9[m HEAD@{351}: pull: Fast-forward
+[33m748fdfb[m HEAD@{352}: pull: Fast-forward
+[33med7ad48[m HEAD@{353}: pull: Fast-forward
+[33m1f6bef8[m HEAD@{354}: pull: Fast-forward
+[33ma85443e[m HEAD@{355}: pull: Fast-forward
+[33mc2e58b8[m HEAD@{356}: pull: Fast-forward
+[33mf562f73[m HEAD@{357}: pull: Fast-forward
+[33m7fa973c[m HEAD@{358}: pull: Fast-forward
+[33mb85fb9a[m HEAD@{359}: pull: Fast-forward
+[33md6d7eb6[m HEAD@{360}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{361}: checkout: moving from fit_mosaic to main
+[33md6d7eb6[m HEAD@{362}: pull: Fast-forward
+[33m469fb2b[m HEAD@{363}: pull: Fast-forward
+[33m19cace9[m HEAD@{364}: reset: moving to 19cace9
+[33m881be00[m HEAD@{365}: pull: Fast-forward
+[33mc7d36d3[m HEAD@{366}: pull: Fast-forward
+[33mf1fed9a[m HEAD@{367}: pull: Fast-forward
+[33m852d6d6[m HEAD@{368}: pull: Fast-forward
+[33m55a51f2[m HEAD@{369}: pull: Fast-forward
+[33m19cace9[m HEAD@{370}: pull: Fast-forward
+[33m5bff68d[m HEAD@{371}: pull: Fast-forward
+[33mec6c982[m HEAD@{372}: pull: Fast-forward
+[33m66afadf[m HEAD@{373}: pull: Fast-forward
+[33m417932f[m HEAD@{374}: pull: Fast-forward
+[33mf141e69[m HEAD@{375}: pull: Fast-forward
+[33m56e43e6[m HEAD@{376}: checkout: moving from 174 to fit_mosaic
+[33m11ffb36[m[33m ([m[1;31morigin/codex/change-optimization-method-for-peak-widths[m[33m)[m HEAD@{377}: checkout: moving from fit_mosaic to 174
+[33m56e43e6[m HEAD@{378}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{379}: checkout: moving from 174 to main
+[33m11ffb36[m[33m ([m[1;31morigin/codex/change-optimization-method-for-peak-widths[m[33m)[m HEAD@{380}: pull: Fast-forward
+[33m3afd188[m HEAD@{381}: pull: Fast-forward
+[33m3466438[m HEAD@{382}: pull: Fast-forward
+[33m0b6cf7c[m HEAD@{383}: pull: Fast-forward
+[33m2f2c8b5[m HEAD@{384}: pull: Fast-forward
+[33m7177f17[m HEAD@{385}: pull: Fast-forward
+[33mfcc6cc0[m HEAD@{386}: pull: Fast-forward
+[33m65e167b[m HEAD@{387}: pull: Fast-forward
+[33maf4d78d[m HEAD@{388}: pull: Fast-forward
+[33m1f631de[m HEAD@{389}: pull: Fast-forward
+[33mc703a89[m HEAD@{390}: checkout: moving from fit_mosaic to 174
+[33m56e43e6[m HEAD@{391}: reset: moving to HEAD
+[33m56e43e6[m HEAD@{392}: commit: headless
+[33mdeff6a9[m HEAD@{393}: commit: Added features
+[33m1fd1f8a[m HEAD@{394}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{395}: checkout: moving from fit_mosaic to main
+[33m1fd1f8a[m HEAD@{396}: reset: moving to HEAD
+[33m1fd1f8a[m HEAD@{397}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{398}: checkout: moving from fit_mosaic to main
+[33mfbffdb1[m HEAD@{399}: reset: moving to HEAD
+[33mfbffdb1[m HEAD@{400}: checkout: moving from 173 to fit_mosaic
+[33m7ce9a61[m HEAD@{401}: pull: Fast-forward
+[33m1df88d4[m HEAD@{402}: pull: Fast-forward
+[33m2985eb0[m HEAD@{403}: checkout: moving from fit_mosaic to 173
+[33mfbffdb1[m HEAD@{404}: reset: moving to HEAD
+[33mfbffdb1[m HEAD@{405}: pull: Merge made by the 'ort' strategy.
+[33m6d5ff09[m HEAD@{406}: pull: Merge made by the 'ort' strategy.
+[33m3ad310c[m HEAD@{407}: commit: added comments to instrument.yaml
+[33m898bad1[m HEAD@{408}: pull origin: Fast-forward
+[33mb072fe6[m HEAD@{409}: merge 168: Merge made by the 'ort' strategy.
+[33mf1340a1[m HEAD@{410}: checkout: moving from 168 to fit_mosaic
+[33ma4c3166[m HEAD@{411}: checkout: moving from fit_mosaic to 168
+[33mf1340a1[m HEAD@{412}: commit: WIP: temp changes before switching
+[33mc36140d[m HEAD@{413}: checkout: moving from main to fit_mosaic
+[33mc36140d[m HEAD@{414}: commit: added Fresnel and Transmission
+[33md055776[m HEAD@{415}: clone: from https://github.com/DVBeckwitt/ra_sim.git

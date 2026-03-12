@@ -1,0 +1,4063 @@
+[33mcommit 00c7f14a770649a8f4e33b91c9d88cdcae293158[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32moptimize[m[33m)[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Mar 12 14:50:25 2026 -0500
+
+    t;rying a new gui
+
+[33mcommit a485e65c2bb54a47e3118dc0cf89b8a493e53c74[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Mar 12 12:18:24 2026 -0500
+
+    Add geometry-fit undo support and per-parameter fit constraint sliders with soft initial-guess priors.
+
+[33mcommit 7881cfb8d833525c50c667a78b3b5ecd11c808a1[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Mar 12 11:58:55 2026 -0500
+
+    Add staged geometry refinement with ridge pre-alignment, anisotropic peak uncertainty weighting, and post-fit identifiability diagnostics.
+
+[33mcommit 1bfe9364627ea47fc4d457654495f3e148458139[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 11 22:47:04 2026 -0500
+
+    multi image refinement
+
+[33mcommit f589a7728bb809b5d4d03cbc51ea524ad590f0a7[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 11 20:46:31 2026 -0500
+
+    multi image refinement
+
+[33mcommit 76ca133a3795912284b2b27663b8af14e7ee9e0a[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 11 19:44:11 2026 -0500
+
+    multi image refinement
+
+[33mcommit 858dfba0c047dbcabf36cc87adb9493a185c1995[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 11 18:51:19 2026 -0500
+
+    optimizing
+
+[33mcommit b20f56056bf039c876c7ebd2222988f0ba98fa69[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 11 18:46:06 2026 -0500
+
+    optimizing
+
+[33mcommit 13a766de2caf75c1c947b1062992f7021c3824bd[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 11 18:18:46 2026 -0500
+
+    optimizing
+
+[33mcommit a8f3091c3464a1a50bd6bc09074de08a998e86c8[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 11 16:47:18 2026 -0500
+
+    cleaned
+
+[33mcommit e55c36aaf2bac37fb1dc63b34e35e9f9919bec77[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Mar 10 16:02:20 2026 -0500
+
+    added Qz cylinder lines
+
+[33mcommit e01e58d0543b1266a2c6062f0614c9c5f8ba6a6b[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Mar 10 15:03:40 2026 -0500
+
+    improving geo fit
+
+[33mcommit 13b3cca46a55e1d184a40269c421c3129795080d[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Mar 10 14:20:08 2026 -0500
+
+    fixing geo
+
+[33mcommit 0080acd4ed48bce739f1ccf8e9444e43edd49498[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Mar 10 13:18:58 2026 -0500
+
+    fixing geo
+
+[33mcommit cfa7777bb9dba16a467e0895ed7d6925b1381cb1[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Mar 10 12:34:37 2026 -0500
+
+    fixing geo
+
+[33mcommit 4abbf9cbd370b39ec6c9ed96f3209598ea983c87[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Mar 9 17:37:28 2026 -0500
+
+    fixing geometry
+
+[33mcommit c3f66fc90b294941ee271cefb4bac9e74db328bf[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Mar 9 17:09:34 2026 -0500
+
+    fixing geometry
+
+[33mcommit ad17406ee5790f99a28e4819065fc5ad59830913[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Mar 6 17:04:23 2026 -0600
+
+    fixing geometry optimizer
+
+[33mcommit ec1d30facf3fd5f40a1cd4d293d0ddb6556813f2[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Mar 5 13:51:03 2026 -0600
+
+    fixed geo spots
+
+[33mcommit 6adc2d99fa8d861c01897b24b6d0bbef5bfb36f4[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Mar 5 13:22:33 2026 -0600
+
+    added live preview for geometric fitting
+
+[33mcommit 980c372976a427ff0d162c01b9675ea115ce8ffa[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Mar 5 11:46:18 2026 -0600
+
+    Implemented a stability fix for geometry fitting crashes caused by malformed measured-peak inputs.
+
+[33mcommit e4661a707ea97b7f9b58c744d0c89f703466f5d0[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 17:18:28 2026 -0600
+
+    remove unnecessary work each update
+
+[33mcommit 8a529e75d3ed004aeddf2ed0852a4f87a0f0c386[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 17:08:59 2026 -0600
+
+    remove unnecessary work each update
+
+[33mcommit 32fa319b6a1cfe5c7b0c07e173feeb6664018978[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 16:49:30 2026 -0600
+
+    remove unnecessary work each update
+
+[33mcommit 5d3c4df662741c1d1a2e9804c6aca901de44b4b3[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 14:13:27 2026 -0600
+
+    grouped peaks with the same G but scale SF
+
+[33mcommit f9fae7ba19fb8a3fcf364d0c136d5e9321ee43b0[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 13:38:26 2026 -0600
+
+    parallelize unique bragg
+
+[33mcommit 850c1cacef1fc64c2b233a9fb9aeff8c94c55792[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 13:19:12 2026 -0600
+
+    precompute stuff
+
+[33mcommit 1a5c4400fb04a539e561238f8048003a58ae1857[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 12:57:13 2026 -0600
+
+    implemented simple multiplicity
+
+[33mcommit a19f5b416244d39fa540d3f14079c8f780eae42b[m[33m ([m[1;32mmain[m[33m)[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Mar 4 11:55:21 2026 -0600
+
+    committing
+
+[33mcommit 34cd6ff8eddec8eefa40431d5ac9373748f4f006[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 25 18:45:26 2026 -0600
+
+    added adaptive kernel for mosaic
+
+[33mcommit 65bfb8defe1cdbdeded7e3021bd615fe0b686ccb[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 25 17:19:22 2026 -0600
+
+    fixing
+
+[33mcommit e30304899972fe57cfe324930e4b0af5b2a135eb[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 25 15:54:08 2026 -0600
+
+    geometry improvement and fixed n2 to use proper bandwidth
+
+[33mcommit c7fc39a97f8d47b828db6dddb6c551a257ccd952[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 25 14:50:22 2026 -0600
+
+    speed up gui time
+
+[33mcommit 9bf6f4a7644f23c88253ab9a0efc91b916e9cd53[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 25 14:15:44 2026 -0600
+
+    added selection of peaks to simulation
+
+[33mcommit 91f4fd52c3c02db5e34a0c38a95334641281e038[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 25 13:11:56 2026 -0600
+
+    optimize threads and debounce
+
+[33mcommit c97a43fb0b43994ca9c368ccebcd9699d31fbcb9[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 19 22:42:19 2026 -0600
+
+    optimize
+
+[33mcommit 9f6dd4ebe1be0c96d0ba37c968667a5295a23d64[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 19 21:40:57 2026 -0600
+
+    fix HT
+
+[33mcommit afb23a64e7cee3021920e01e13191ed2934ceb62[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 19 15:16:02 2026 -0600
+
+    fix diffuse
+
+[33mcommit b6b5e948385955545246e23057cc2fd7538ee4bd[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 18 18:25:07 2026 -0600
+
+    changing HT
+
+[33mcommit 2b2c9feefee6ecbc70522457ecc3d414e050ce1c[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 18 17:17:32 2026 -0600
+
+    fixes
+
+[33mcommit 3adbb369d2a808f5a76c38444ba33306e1aae586[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 18 16:12:49 2026 -0600
+
+    fixed
+
+[33mcommit 450e3b3bfacd0570ce36cc42c7c407032cb9bffd[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 18 15:29:14 2026 -0600
+
+    Add hBN geometry mapping, fitter/solver updates, GUI improvements, and tests
+
+[33mcommit e11bec11ae33dff521d000d4a183931fbff6fd2e[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Feb 13 18:19:37 2026 -0600
+
+    fixed gui labels
+
+[33mcommit 465a19de66d0f4223bb560f19aa1c5fa7353faf1[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Feb 13 17:44:24 2026 -0600
+
+    added images
+
+[33mcommit 8605448f1b73dc19e31afa73476cda4cc20b21e8[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Feb 13 17:40:31 2026 -0600
+
+    added readme
+
+[33mcommit 61bf646b2097de8a98d984de23e9a0f200858af2[m[33m ([m[1;31morigin/237[m[33m)[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Feb 13 17:27:13 2026 -0600
+
+    added hbn calibration to this project and added a gui for it
+
+[33mcommit a42b92ba441923c4ba3f63eb4be3bb1d96b2dd28[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 12 22:19:14 2026 -0600
+
+    patched geometric fit
+
+[33mcommit 96dbd62cdb34eb87ce8035edca4f6d53acbaf7c8[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 12 20:00:56 2026 -0600
+
+    .
+
+[33mcommit 73b5d951e747cd84c445bb77b5a7a49e080262ac[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 12 18:30:21 2026 -0600
+
+    fixed occupancies
+
+[33mcommit 94f5f6e3dca3679892251ac5207a7d6d2e5364ae[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 12 17:13:32 2026 -0600
+
+    fixed a bunch of stuff
+
+[33mcommit 8d947943f91a50ef0e423781415fd9f0861f01bd[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 12 12:39:00 2026 -0600
+
+    speed up integration
+
+[33mcommit bd9e34e6d69ecea761580661e96d559defe34dda[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Feb 12 11:56:58 2026 -0600
+
+    fixed integration
+
+[33mcommit ef512d8b00b7d47f65167669dd17fab2074e1dcf[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 11 11:35:13 2026 -0600
+
+    .
+
+[33mcommit ccc9d9870dce9b507c5eaf24329cf785e127ad93[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 4 14:17:11 2026 -0600
+
+    fix 3d plot
+
+[33mcommit effc9876ae17cefa31719a42bf9fa06d673fdd3e[m[33m ([m[1;31morigin/fit_mosaic[m[33m)[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 4 14:00:49 2026 -0600
+
+    fix signed distribution
+
+[33mcommit b55f37cdcc055879fbc2e7f02c8b93c269b33675[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Feb 4 13:46:24 2026 -0600
+
+    fixing distribution
+
+[33mcommit 7f89c5a38bb45a49676c167a221807f524e18798[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Feb 2 15:45:36 2026 -0600
+
+    fixing gemoetry fit
+
+[33mcommit 2183561b8d34edbe46d8710a5e2d605e86e7e0d2[m[33m ([m[1;31morigin/codex/rotate-background-image-in-main-gui[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jan 16 13:18:23 2026 -0600
+
+    Rotate background display only
+
+[33mcommit bcf2e4d85986b23436206c79060f2b1152a468c8[m
+Merge: 7ee18ea 8c02875
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jan 16 11:26:16 2026 -0600
+
+    Merge pull request #233 from DVBeckwitt/codex/add-z-axis-rotation-for-goniometer
+    
+    Add goniometer z-axis rotation parameter (`psi_z`) and GUI slider
+
+[33mcommit 8c028755e2e8ca5f99d698d7f7f304ce310846fb[m[33m ([m[1;31morigin/codex/add-z-axis-rotation-for-goniometer[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jan 16 11:01:00 2026 -0600
+
+    Add goniometer z-axis rotation support
+
+[33mcommit 7ee18eafa0bfcb0d6a4099d81293e7bd33b6b61c[m
+Merge: b4ff72a d6a5788
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 17:59:28 2025 -0600
+
+    Merge pull request #232 from DVBeckwitt/codex/describe-geometry-fitting-in-gui
+    
+    Fix max position handling after diffraction API change
+
+[33mcommit d6a57880683be19741f1316ae37e1d84d18f3f12[m[33m ([m[1;31morigin/codex/describe-geometry-fitting-in-gui[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 17:46:32 2025 -0600
+
+    Gate orientation search behind debug flag
+
+[33mcommit 4d198b6d56cc747036897862f6e9680ab5704e49[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 17:36:55 2025 -0600
+
+    Fix geometry fit log summary before save
+
+[33mcommit 710b0a3173cd527cb971922092dcc438778af35f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 17:36:50 2025 -0600
+
+    Align display orientation with native matrices
+
+[33mcommit 3bbaf1dd247ac4ebbf40183f08918009753e158c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 17:23:54 2025 -0600
+
+    Import typing Sequence for geometry logging
+
+[33mcommit d174d9024311811fd9bf8e221bd317e92bb4da82[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 17:19:03 2025 -0600
+
+    Aggregate geometry fit matches per HKL
+
+[33mcommit 72f873bb06c43db95bd00b2e3244b960a2e2cb0c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 17:03:04 2025 -0600
+
+    Log peak assignments for geometry fit diagnostics
+
+[33mcommit 0039c38b87342b211499f715c02914396e2b0ee4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 16:50:40 2025 -0600
+
+    Import missing build_measured_dict for geometry fit
+
+[33mcommit 3a71854713823a2cd7436394d9f0db40e415d5d0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 16:42:40 2025 -0600
+
+    Improve pixel match logging for geometry fit
+
+[33mcommit 8fc026e8670de11e257a62373629482d0aa08cb5[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 16:35:09 2025 -0600
+
+    Enhance geometry fit debugging
+
+[33mcommit c3526160eda5afdb424d2d2c7b66f8f3a067991c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 16:27:10 2025 -0600
+
+    Improve geometry fit logging
+
+[33mcommit d7661d8153722ecba8291d64bf183a841145d650[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 16:20:40 2025 -0600
+
+    Log geometry fits for debugging
+
+[33mcommit 6f54f7dd35b47c56397034b25b2a2f0ffce7d044[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 16:07:54 2025 -0600
+
+    Fix geometry pick unrotation frame
+
+[33mcommit 464bbe95d67907c38264ac22277e0eedd72d1a56[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 15:45:13 2025 -0600
+
+    Fix profile cache scope in geometry pick handler
+
+[33mcommit fbb1c808ed25b03b15e8e432e57ee178b328ab63[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 15:37:13 2025 -0600
+
+    Fix geometry fit profile cache scope
+
+[33mcommit dd5e8aba5f2c5ef06dbd4b2559424bd35837d6aa[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 15:31:33 2025 -0600
+
+    Ensure geometry fit runs and reports results
+
+[33mcommit 0e14a64df4bc8f2076fb9836a26ae9ef7de482c3[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 15:19:13 2025 -0600
+
+    Show geometry fit summary even in debug mode
+
+[33mcommit 7ce38c0521540f7763b3a8b367984224e0d66c99[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 15:11:14 2025 -0600
+
+    Refresh geometry fits while debug is off
+
+[33mcommit 4689e150c7f4ee8606e7057d97febacd18eb358c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 14:51:45 2025 -0600
+
+    Default diagnostics off unless RA_SIM_DEBUG=1
+
+[33mcommit 6a6ed32ef80dadbc565be5c3c9746ee19ca49167[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 14:43:44 2025 -0600
+
+    Apply automatic orientation search for geometry fit
+
+[33mcommit aab700107e1e1fa4e7857c80deabcbde4a20f24a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 14:24:41 2025 -0600
+
+    Fix orientation transforms for geometry fitting
+
+[33mcommit 892c7c3558646a66b1b173df87745639fa373680[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 14:00:27 2025 -0600
+
+    Automate orientation diagnostics for geometry fit
+
+[33mcommit ee7544448b9a04774656e1189c9f2ab65142e148[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 13:42:09 2025 -0600
+
+    Use native orientation for geometry fitting
+
+[33mcommit 59e628dfb4274055cfbce8478b5a7d8af0705d6f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 13:25:05 2025 -0600
+
+    Aggregate geometry arrows per reflection
+
+[33mcommit f12891b0f85586e799458c1b65c1bd31f3fecff6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 13:18:56 2025 -0600
+
+    Center peak matches for geometry overlay
+
+[33mcommit 14770ec2cae4c6876d19344440fdf9b07a6ed840[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 13:13:55 2025 -0600
+
+    Add directional arrows between matched peaks
+
+[33mcommit 09e90c3e29050293122a3ca003e1e941dc1c3107[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 12:58:41 2025 -0600
+
+    Add flip order selection for orientation debug
+
+[33mcommit c7b017a44d37b1c3be5d6c217bbe15df37883438[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 12:26:15 2025 -0600
+
+    Align geometry fit connectors with display orientation
+
+[33mcommit bdae4e0f1255a7361d5716bf232885c753257972[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 12:15:20 2025 -0600
+
+    Add backend x-axis flip control
+
+[33mcommit 3dd0951c1958b8c1619b35818f6fbf3fa8ffb43f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 11:48:27 2025 -0600
+
+    Enable debug and add backend orientation controls
+
+[33mcommit a1bad5a38b3376bdb1e60e686ce5400fdbda480b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Dec 15 11:25:12 2025 -0600
+
+    Disable default diagnostics and gate orientation search
+
+[33mcommit bc39e60c55306b47fd23f1422bc62d275679f135[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 17:09:27 2025 -0600
+
+    Enable default diagnostics and focus orientation output
+
+[33mcommit 47a1c9525767185e2f5620f20fbffde65edd16b5[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 17:04:04 2025 -0600
+
+    Limit orientation diagnostic output
+
+[33mcommit 430690ac0a2282273d60008189462ded167ee157[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 16:56:26 2025 -0600
+
+    Add orientation search debug for geometry fitting
+
+[33mcommit 30c0114d1aaf7ba9262b3c94f1f9b1bf065d94e1[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 16:48:47 2025 -0600
+
+    Align measured peak frame for fitting
+
+[33mcommit 00e9b3ae28f508cd70171c43851f86f78f8caf52[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 16:40:38 2025 -0600
+
+    Fix geometry pick display transform
+
+[33mcommit e283412d692b8b28f114e69eedbfcd519f77a8a6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 16:32:44 2025 -0600
+
+    Reduce default display rotation
+
+[33mcommit 49269cbfbd4f58d9d407a7f4c272eb57fb0f15b8[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 16:30:02 2025 -0600
+
+    Default rotated display alignment
+
+[33mcommit cc5aacaa6e3d1435bf635b828fc779622b7e8b9b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 15:59:44 2025 -0600
+
+    Add simulation rotation control and clear geometry picks
+
+[33mcommit 4a59018d5a07635d502af2ecd730ed08a9266c72[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 15:50:10 2025 -0600
+
+    Rotate simulation display to match background
+
+[33mcommit 092a30cd506039529e0ddfcf74156a20171f11cd[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 15:46:14 2025 -0600
+
+    Adjust display rotation to align simulation
+
+[33mcommit 948b12dcd3ebaa6864f66a87a6601f1e4a63bc3b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 15:33:29 2025 -0600
+
+    Align display rotation transforms
+
+[33mcommit 3172ad17b6e83f2b595761a0e0a9fb07c896a012[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 15:21:30 2025 -0600
+
+    Align displayed simulation orientation with background
+
+[33mcommit 949249e19d2ab04b0a74fae9937f2d34fea76527[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 15:14:50 2025 -0600
+
+    Surface pixel offsets for geometry peak matches
+
+[33mcommit 39cae6f3cfbcb9e49949363fc703bf32be4428b0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 15:08:58 2025 -0600
+
+    Rotate GUI peak picks back to simulator frame before fitting
+
+[33mcommit b9d50d637b448e6905647cbcbcd209a86885f019[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 14:53:13 2025 -0600
+
+    Use pixel residuals when fitting geometry from GUI picks
+
+[33mcommit 9d00b7c621dd1fc3ffedbd1f3c7f62941199ae38[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 14:36:25 2025 -0600
+
+    Add persistent pick markers for geometry fitting
+
+[33mcommit 9c5cd5f1a5cddcd085f862e228cec0da2b502379[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 14:36:20 2025 -0600
+
+    Bound chi and cor angle during geometry fit
+
+[33mcommit 13b73f79c2bb357d5f8a38a50d12053ee2900fce[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 14:18:10 2025 -0600
+
+    Constrain z offsets during GUI geometry fit
+
+[33mcommit c08e0e100700596e87ebf8fd68f80f6a3cabc0d2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 14:09:28 2025 -0600
+
+    Constrain GUI geometry fit and simplify refinement
+
+[33mcommit 67632625aecbb35ddcb5fdf77e034f3f7ef27b24[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 13:53:34 2025 -0600
+
+    Fix hit table helper placement
+
+[33mcommit b047199509cb69dc838f67ed5f2c3600e40956f6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 13:48:12 2025 -0600
+
+    Fix max position handling after diffraction API change
+
+[33mcommit b4ff72aa708618d6247324b4bd573c99a125a764[m[33m ([m[1;31morigin/230[m[33m)[m
+Merge: 3a0482b b904f1e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 12:02:33 2025 -0600
+
+    Merge pull request #231 from DVBeckwitt/codex/integrate-hbn.py-for-ellipsis-correction
+    
+    Integrate tilt circularization into hbn-fit workflow
+
+[33mcommit b904f1e0383ca5dc13b921be09a971b1e1987743[m[33m ([m[1;31morigin/codex/integrate-hbn.py-for-ellipsis-correction[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:55:12 2025 -0600
+
+    Use config-defined beam center defaults
+
+[33mcommit 5fc8c61d9aa8097412defcaa325ec39247059b58[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:51:37 2025 -0600
+
+    Initialize center_common before guide computation
+
+[33mcommit 09824e290724729fe98b537ac650ae3a646661f0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:47:22 2025 -0600
+
+    Add beam-center guides for hBN clicking
+
+[33mcommit 3a8ae1ccca539ddd1db5a4241c453c4f0d8bcdbd[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:39:37 2025 -0600
+
+    Annotate tilt overlay with shared distance
+
+[33mcommit 289dcdb68fab953fcfb900d07880f49fa1838448[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:35:47 2025 -0600
+
+    Fallback when click profile missing
+
+[33mcommit 7a24ce0d738dfc1322849b44b502214055875982[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:32:25 2025 -0600
+
+    Handle missing click profile output
+
+[33mcommit 97a3b176935510b4a9f9058a8765614a1cc2df02[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:30:20 2025 -0600
+
+    Add click profile save/load options to hbn fit
+
+[33mcommit d769ee26f60b0346e21a3c0c9801f1f705820f59[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:22:02 2025 -0600
+
+    Initialize expected_peaks and tilt_hint before hBN fit
+
+[33mcommit 37d8e163643d917b9bb74f853c2034d24b06a283[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:19:28 2025 -0600
+
+    Initialize center_common before hbn fit
+
+[33mcommit 2f808f6697b09ca65214e3ba6a68256e4998034f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:17:18 2025 -0600
+
+    Consolidate hBN outputs into single bundle
+
+[33mcommit f80ce453def8d713e681ad975c0f2542f46f6bcd[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:14:55 2025 -0600
+
+    Use circularized fits for distance estimation
+
+[33mcommit f013ec286114f08202f8a2a7c9f533fcb71b8ff9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:06:23 2025 -0600
+
+    Show tilt-corrected circles and use them for distance
+
+[33mcommit ec352acb321fb3ddc395acd64b0fcce42f3ca1c8[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 11:01:01 2025 -0600
+
+    Integrate tilt circularization into hbn-fit
+
+[33mcommit 3a0482b811fb3a3e1b1d55f0fbe189a2cad451a1[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Dec 12 10:55:25 2025 -0600
+
+    added hbn.py
+
+[33mcommit 5a86ce2d5dabb82cef13d39fc6192905365b10ae[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 10:44:56 2025 -0600
+
+    Default mosaic resolution low and narrow CoR angle
+
+[33mcommit 2e949964574e82eb042bab720c20e17e8e80313e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 10:42:46 2025 -0600
+
+    Add interactive geometry peak pairing
+
+[33mcommit ee24d7b69634ff92e6101462d960864acf73cf73[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 10:34:57 2025 -0600
+
+    Clarify GUI geometry fitting matching
+
+[33mcommit 52bd62be6a354a3bb7d2045c455e3e80befef1e7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 10:32:10 2025 -0600
+
+    Document five-point requirement for hbn ellipse fits
+
+[33mcommit 5e455be008e241a926802ec2f081c7cf272c859f[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Dec 12 10:26:21 2025 -0600
+
+    hbn paths for me
+
+[33mcommit b640d669bcccab45eaa4b1f5ae8a7feeebead414[m
+Merge: f2cdfd5 b72d514
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 10:19:47 2025 -0600
+
+    Merge pull request #229 from DVBeckwitt/codex/find-expected-2theta-values-for-hbn-peaks-sp03l5
+    
+    Persist detector distance in hBN bundles and default GUI sampling to Low
+
+[33mcommit b72d51404a7475bef1b308a28deed5e1bd528f49[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 10:19:19 2025 -0600
+
+    Store hBN distance in bundles and default GUI to low sampling
+
+[33mcommit f2cdfd58531cd63e9708b4fa8bc6137b90e58913[m
+Merge: 7229b24 80d5df8
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 09:55:57 2025 -0600
+
+    Merge pull request #227 from DVBeckwitt/codex/integrate-hbn.py-fit-function
+    
+    Add CLI entry point for hBN ellipse fitting workflow
+
+[33mcommit 80d5df83e5f1f61d7986566baca6693219c8417c[m[33m ([m[1;31morigin/codex/integrate-hbn.py-fit-function[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 09:53:05 2025 -0600
+
+    Add CLI option to launch GUI
+
+[33mcommit 628b51ac0ac72df0beaf5269c1fb783d1ca1d69f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 09:47:49 2025 -0600
+
+    Add GUI button to import hBN bundle tilt
+
+[33mcommit df704702e12cdfc10062a7eeebcfd70d52b075b0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 09:43:39 2025 -0600
+
+    Use hBN fit tilt defaults for simulation
+
+[33mcommit b2b8846115a24b4475af6fb22ef8bd0ec88fd4b9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Dec 12 09:08:21 2025 -0600
+
+    Report cone angles for fitted hBN rings
+
+[33mcommit ca546a3e1cd6897c0553cf691f6bd29a12c11761[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 17:55:37 2025 -0600
+
+    Remove downsampling options from hBN CLI workflow
+
+[33mcommit 0f6ff736c434b706a7c1a54b6b8f70f1f9b88dd4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 17:00:35 2025 -0600
+
+    Require explicit bundle flag before skipping hBN clicks
+
+[33mcommit df342a7ed79946256183f91fb7bf20e19addb304[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:56:58 2025 -0600
+
+    Allow forcing fresh hBN click collection from bundles
+
+[33mcommit 099e8d26aa09b947f2df0a1e53a45bb3366fd191[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:52:13 2025 -0600
+
+    Annotate fitted ellipses on overlay output
+
+[33mcommit fd5a6425693a8c5c406e28f636c99e3f4f3d89bf[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:48:10 2025 -0600
+
+    Allow hbn-fit to use bundle path from paths file
+
+[33mcommit 80d4a8a7d27e7423f20e18ec93557304afd85a78[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:44:04 2025 -0600
+
+    Document hBN CLI usage and compression overrides
+
+[33mcommit 28bb6d00b51cd4e884535e1884c4e7c892fcb96c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:42:24 2025 -0600
+
+    Clarify hBN paths usage and fit compression source
+
+[33mcommit 7b1c01655325578d33621038be825b30139632d2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:33:48 2025 -0600
+
+    Refit bundle runs when compression changes
+
+[33mcommit e0fd9655edd5873674ef89d289ced0ac433dc65b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:28:03 2025 -0600
+
+    Add fit compression control and additional hBN path defaults
+
+[33mcommit 2a8463f655903827f9ed98f71857e16aa9440777[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:19:32 2025 -0600
+
+    Add configurable path file support for hBN CLI
+
+[33mcommit 59f1be18f5fe87428746336ef73458141e20a554[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:12:59 2025 -0600
+
+    Add CLI access for hBN ellipse fitting
+
+[33mcommit 7229b2430e369267daa1fc279791e5eb2cfa8eaf[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Dec 11 16:03:16 2025 -0600
+
+    added hbn fitter
+
+[33mcommit 5d7bdddc88d876ee47ae8be15200d3c69c7a97d4[m
+Merge: 34955c7 0aecde8
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Dec 11 16:01:57 2025 -0600
+
+    Merge pull request #226 from DVBeckwitt/codex/fit-peak-positions-with-cor-axis-rotation
+    
+    Include CoR rotation in geometry fitting
+
+[33mcommit 0aecde8cbb5ef635885dfd2d29f11ed62c0f726c[m[33m ([m[1;31morigin/codex/fit-peak-positions-with-cor-axis-rotation[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 14:31:09 2025 -0600
+
+    Include CoR rotation in geometry fitting
+
+[33mcommit 34955c7d7dc76d1309d77500766f519fbd32bf3d[m
+Merge: 22ace93 20e42ec
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 14:19:00 2025 -0600
+
+    Merge pull request #225 from DVBeckwitt/codex/add-cor-parameter-for-rotation
+    
+    Add CoR axis angle control for sample rotation
+
+[33mcommit 20e42ecbb907fc1548fa8d3a9afc7c891b74d18d[m[33m ([m[1;31morigin/codex/add-cor-parameter-for-rotation[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 14:13:04 2025 -0600
+
+    Expand CoR axis angle range to 90 degrees
+
+[33mcommit 5a35e3c9730f5f6cdc8e6e4f255fd31f9d773da2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 14:06:03 2025 -0600
+
+    Document CoR rotation math for configurable axis
+
+[33mcommit e6d083bb2a5e2b65d4f67478e2a2e9f16d8fa917[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 13:17:39 2025 -0600
+
+    Add CoR axis angle control for sample rotation
+
+[33mcommit 22ace9357c543f2a126483e1f8ba4c85b5cf63d1[m
+Merge: 47784de 43d8151
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 12:34:03 2025 -0600
+
+    Merge pull request #224 from DVBeckwitt/codex/enable-default-finite-stack
+    
+    Enable finite stack by default
+
+[33mcommit 43d81513528998a8d5b811ff625df1e298174e42[m[33m ([m[1;31morigin/codex/enable-default-finite-stack[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 12:32:30 2025 -0600
+
+    Default finite-stack option in GUI
+
+[33mcommit bc7686fa733504f955e899264423526c1650a309[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 12:29:52 2025 -0600
+
+    Handle closing either GUI window
+
+[33mcommit 1a79296c5cb17e487a77b66d09da521bee8adfa4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Dec 10 12:26:56 2025 -0600
+
+    Enable finite stack by default
+
+[33mcommit 47784ded867e4daaa12753743c26b15e3ccf7923[m
+Merge: 4db4065 ddc774a
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Nov 14 10:49:51 2025 -0600
+
+    Merge pull request #223 from DVBeckwitt/codex/add-finite-n-option-for-ht-and-markov-ko880o
+    
+    Add finite-stack controls and Markov support
+
+[33mcommit ddc774a29460da887b54136b8f8aa349418c2087[m[33m ([m[1;31morigin/codex/add-finite-n-option-for-ht-and-markov-ko880o[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 19:33:46 2025 -0600
+
+    Add finite stack controls and Markov support
+
+[33mcommit 4db4065705352b11991b89a1ec5897756df0bac9[m
+Merge: b50816e a0a5822
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 19:15:42 2025 -0600
+
+    Merge pull request #222 from DVBeckwitt/codex/add-finite-n-option-for-ht-and-markov
+    
+    Add finite layer stacking option to dual HT viewer
+
+[33mcommit a0a5822c994fbde10f0858a0d453704b32e606ca[m[33m ([m[1;31morigin/codex/add-finite-n-option-for-ht-and-markov[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 19:11:27 2025 -0600
+
+    Normalize finite layer factor
+
+[33mcommit e20801f0418033dfe586340019141e4a12eab025[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 18:53:45 2025 -0600
+
+    Show finite stack controls in viewer
+
+[33mcommit 4e4e6cf7571f33b00faebe8f14a5b78aad027be7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 18:50:25 2025 -0600
+
+    Add finite layer stacking option to dual HT viewer
+
+[33mcommit b50816e83e31f727b08160860524b23cc56f278d[m
+Merge: 0f49bca 532fc1a
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 16:59:53 2025 -0600
+
+    Merge pull request #221 from DVBeckwitt/codex/optimize-markov-process-with-caching-and-precomputation
+    
+    Optimize Markov transfer caching
+
+[33mcommit 532fc1a2d6f9dfb47b588bd916e50d38a20dc750[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 16:59:45 2025 -0600
+
+    Optimize Markov transfer caching
+
+[33mcommit 0f49bca528fe7f5410d85ee5ba9fdd401c42b228[m
+Merge: 7609147 ca2d409
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 16:49:31 2025 -0600
+
+    Merge pull request #220 from DVBeckwitt/codex/display-calculation-time-for-methods
+    
+    Display recalculation timings in diffuse HT toggle view
+
+[33mcommit ca2d4097b3bb536fdac5d1566ce818f311370ac7[m[33m ([m[1;31morigin/codex/display-calculation-time-for-methods[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 16:49:16 2025 -0600
+
+    Display timing for HT method recalculations
+
+[33mcommit 7609147bd5c52f5d4043b65aa05273ed8cfeff3f[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Nov 13 16:46:25 2025 -0600
+
+    added an uncorrelated form for the diffuse
+
+[33mcommit 599907402470e810b853d0be1134e244073e5eee[m
+Merge: a5d9094 603349c
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 11:45:47 2025 -0600
+
+    Merge pull request #219 from DVBeckwitt/codex/investigate-missing-peaks-in-pbi2-structure
+    
+    Scale HT two-theta window with c-axis length
+
+[33mcommit 603349c3e82bf9f6427d0858bdea4ffb73d9e5b7[m[33m ([m[1;31morigin/codex/investigate-missing-peaks-in-pbi2-structure[m[33m)[m
+Merge: 8dc04c4 a5d9094
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 11:33:26 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/investigate-missing-peaks-in-pbi2-structure
+
+[33mcommit 8dc04c4bbcd8fa0a48f2cecea926de26c77fcc9b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 11:32:47 2025 -0600
+
+    Extend HT two-theta window with c-axis scaling
+
+[33mcommit a5d9094450f08807e08fe6214409c77420ae92c1[m
+Merge: d823fa3 6078524
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 11:18:03 2025 -0600
+
+    Merge pull request #218 from DVBeckwitt/codex/investigate-missing-peaks-in-pbi2-structure
+    
+    Recompute diffraction limits when detector geometry changes
+
+[33mcommit 6078524ade575fc1e99ddf177a6e5a3305ad3938[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 11:17:41 2025 -0600
+
+    Recompute diffraction limits when detector geometry changes
+
+[33mcommit d823fa3dcf66b0ddaa25ce5a2e58ccf78e67fb91[m
+Merge: bf7dcd9 948ab71
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 11:02:11 2025 -0600
+
+    Merge pull request #217 from DVBeckwitt/codex/investigate-missing-peaks-in-pbi2-structure
+    
+    Compute detector-limited 2θ range
+
+[33mcommit 948ab7157aa12d91dc589e3abfd1d82751554da2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 11:01:55 2025 -0600
+
+    Compute detector-limited 2theta range
+
+[33mcommit bf7dcd940af810a0429b339901c8e66d591827dc[m
+Merge: e6ffe25 cda732c
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 10:30:10 2025 -0600
+
+    Merge pull request #216 from DVBeckwitt/codex/ensure-slider-precision-minimum-of-0.0001
+    
+    Improve simulation intensity slider precision
+
+[33mcommit cda732c3896fc5788ae0bf1f7e53bfafb7271b1f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Nov 13 10:29:49 2025 -0600
+
+    Improve simulation intensity slider precision
+
+[33mcommit e6ffe25a9ee07b660e357f2cf89f7cfa98996955[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Nov 12 18:42:40 2025 -0600
+
+    fixed stacking_fault method
+
+[33mcommit 4a9327258698df06361c32126d96692c1e450d62[m
+Merge: ae43b58 24b352b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:52:06 2025 -0600
+
+    Merge pull request #215 from DVBeckwitt/codex/restrict-simulation-min-intensity-to-0
+    
+    Clamp simulation min intensity to zero
+
+[33mcommit 24b352b3fb40da63f739d52a03ad9cf8af90738f[m[33m ([m[1;31morigin/codex/restrict-simulation-min-intensity-to-0[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:49:56 2025 -0600
+
+    Clamp simulation min intensity to zero
+
+[33mcommit ae43b580fe4a371aae70e2218c6d6beef7aee4c4[m
+Merge: 2aebcfe 960c75e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:28:17 2025 -0600
+
+    Merge pull request #214 from DVBeckwitt/codex/fit-radial-and-azimuthal-peak-positions
+    
+    Refine geometry fitting to use 1D peak maxima
+
+[33mcommit 960c75ec9fd2ec893229d89086cb915cc94c16b6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:28:02 2025 -0600
+
+    Refine geometry fit to use 1D peak maxima
+
+[33mcommit 2aebcfe8173f336e35eeaa3ec2943b2ce7a8e7f8[m
+Merge: bd9b088 3faad3d
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:09:49 2025 -0600
+
+    Merge pull request #213 from DVBeckwitt/codex/restrict-simulation-scale-factor-to-2
+    
+    Normalize simulation intensities and fix scale factor slider range
+
+[33mcommit 3faad3d01f3edbc0600ad5745ac4a24b14a7b8dd[m
+Merge: 25c0adb bd9b088
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:09:42 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/restrict-simulation-scale-factor-to-2
+
+[33mcommit 25c0adbe9eece9950f6b4c49a21d8eadd0f6fe35[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:09:12 2025 -0600
+
+    Normalize simulation intensities to auto scale
+
+[33mcommit bd9b088ddbb74641a3bef4818ac6715432bcf7f5[m
+Merge: 638d963 3ed13ee
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 17:00:04 2025 -0600
+
+    Merge pull request #212 from DVBeckwitt/codex/restrict-simulation-scale-factor-to-2
+    
+    Adjust simulation scale factor slider range to match suggestions
+
+[33mcommit 3ed13eead51739cc27447ab82a74c781eb42fd02[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:59:52 2025 -0600
+
+    Tie scale factor slider max to suggestion
+
+[33mcommit 638d963cdaf00f28fa447189c86935d1ab8d52bf[m
+Merge: 5a13bf0 c48ab71
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:35:41 2025 -0600
+
+    Merge pull request #211 from DVBeckwitt/codex/set-scale-factor-to-+/-100%
+    
+    Clamp simulation scale factor slider to 100 percent range
+
+[33mcommit c48ab71bf98edd5b775ed1ac6d2079edcac8e6d6[m
+Merge: fb509e8 5a13bf0
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:35:29 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/set-scale-factor-to-+/-100%
+
+[33mcommit fb509e89a5e6295cbe37162c765ae35eff15d7f6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:35:11 2025 -0600
+
+    Clamp scale factor slider to 0-100 percent
+
+[33mcommit 5a13bf0c8b6b376e70bab5d9f3cfd3c51e80049c[m
+Merge: ac4b7ad 8bc8138
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:28:30 2025 -0600
+
+    Merge pull request #210 from DVBeckwitt/codex/set-scale-factor-to-+/-100%
+    
+    Adjust GUI scale factor slider range around guessed value
+
+[33mcommit 8bc81380209f3600464f105ab9acd3c7719dcb7e[m[33m ([m[1;31morigin/codex/set-scale-factor-to-+/-100%[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:27:53 2025 -0600
+
+    Adjust simulation scale slider range
+
+[33mcommit ac4b7ad738cabe8adb30d436bfbebf6ccb68b38f[m
+Merge: 262d6c9 a060bdc
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:16:19 2025 -0600
+
+    Merge pull request #209 from DVBeckwitt/codex/fix-missing-transparency-slider-bar
+    
+    Add transparency slider and hide background min/max controls
+
+[33mcommit a060bdca607327a2510bcea8dca2722eefb91f36[m[33m ([m[1;31morigin/codex/fix-missing-transparency-slider-bar[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:10:12 2025 -0600
+
+    Remove caked vmin/vmax sliders
+
+[33mcommit 0a11eebc6efe7a365b5db8d8fd22fc813ddeebcb[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:04:56 2025 -0600
+
+    Restore intensity sliders visibility
+
+[33mcommit e95aa298492b44a42a42c0f34c4017322a4b7a75[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 16:00:31 2025 -0600
+
+    Hide background range sliders and add transparency control
+
+[33mcommit 262d6c97f2c48db80fc064374c4b90d239cdba75[m
+Merge: dbaf5e1 34703c4
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 15:14:14 2025 -0600
+
+    Merge pull request #208 from DVBeckwitt/codex/fix-missing-transparency-slider-bar
+    
+    Improve slider layout to ensure controls render
+
+[33mcommit 34703c47f0f070eeebb5b6cf7c756518d8dd280e[m
+Merge: 1d54698 dbaf5e1
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 15:14:06 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/fix-missing-transparency-slider-bar
+
+[33mcommit 1d54698312bb931e9b8daf4e62ab4752f31b45f8[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 15:13:50 2025 -0600
+
+    Improve slider layout to ensure controls render
+
+[33mcommit dbaf5e1ce8d661245a77abb26b22f292fb034a2d[m
+Merge: 3663f7a 4cb882d
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 15:07:46 2025 -0600
+
+    Merge pull request #207 from DVBeckwitt/codex/fix-missing-transparency-slider-bar
+    
+    Fix slider layout to display transparency control
+
+[33mcommit 4cb882d4930c38d8b0cac6c030c0aab9eea7ba52[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 15:07:14 2025 -0600
+
+    Ensure slider widgets render with horizontal row layout
+
+[33mcommit 3663f7ab632a1958375603c68a6b0d0e3b1467dd[m
+Merge: d0aedb9 56a3ff1
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 15:03:50 2025 -0600
+
+    Merge pull request #206 from DVBeckwitt/codex/fix-transparency-slider-visibility-issue
+    
+    Rename background opacity control to transparency slider
+
+[33mcommit 56a3ff1822a0b47f97d5337543cd8f45e6acd414[m[33m ([m[1;31morigin/codex/fix-transparency-slider-visibility-issue[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 15:01:56 2025 -0600
+
+    Rename background opacity slider to transparency
+
+[33mcommit d0aedb9632c2f507181587acd7288e3a2845b54f[m
+Merge: 7b21f61 43ffb72
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:58:40 2025 -0600
+
+    Merge pull request #205 from DVBeckwitt/codex/fix-transparency-slider-visibility-issue
+    
+    Organize GUI slider layout for background transparency
+
+[33mcommit 43ffb72e730a2f8a2e86e552fb512bbc5ecfc6a0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:58:31 2025 -0600
+
+    Group GUI controls for background transparency
+
+[33mcommit 7b21f61914c4dd926cbc2c0e43c3acf87842c2d4[m
+Merge: 92063e8 a038e1b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:52:36 2025 -0600
+
+    Merge pull request #204 from DVBeckwitt/codex/add-scale-factor-and-update-sliders
+    
+    Add background opacity control to GUI
+
+[33mcommit a038e1b261e6d6dcb4d2b19d4d1f8a106b0ffae2[m
+Merge: 0c197e6 92063e8
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:52:29 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/add-scale-factor-and-update-sliders
+
+[33mcommit 0c197e69033bee551277d3b752db8067fc853e63[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:52:09 2025 -0600
+
+    Add background opacity control to GUI
+
+[33mcommit 92063e8d1223149cdb6118abb6055b6a473af22b[m
+Merge: 418a66e d039abd
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:43:42 2025 -0600
+
+    Merge pull request #203 from DVBeckwitt/codex/add-scale-factor-and-update-sliders
+    
+    Default intensity minima to zero and refine scale guesses
+
+[33mcommit d039abd2da2e7526007dbde14a126f2c9021e75d[m
+Merge: 1baf870 418a66e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:43:36 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/add-scale-factor-and-update-sliders
+
+[33mcommit 1baf87033e9a0407cb6ce0cb5242200018e53cf2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 14:42:45 2025 -0600
+
+    Improve slider defaults and scale factor estimates
+
+[33mcommit 418a66e8c2247ff54c83981a2c541e4b00a82506[m
+Merge: e9ba179 289cdde
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 13:19:22 2025 -0600
+
+    Merge pull request #202 from DVBeckwitt/codex/add-scale-factor-and-update-sliders
+    
+    Fix GUI slider setup after slider refactor
+
+[33mcommit 289cddea6361c69d6005aec98eeffd41b732f732[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 13:19:11 2025 -0600
+
+    Fix GUI display setup after slider refactor
+
+[33mcommit e9ba179f12596ae02569b8b6d061753245af3fe8[m
+Merge: 7724d1d 6e82da3
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 13:13:13 2025 -0600
+
+    Merge pull request #201 from DVBeckwitt/codex/add-scale-factor-and-update-sliders
+    
+    Add GUI display scaling controls to main interface
+
+[33mcommit 6e82da33ba735449740d8ac8d0672418aa8fc858[m[33m ([m[1;31morigin/codex/add-scale-factor-and-update-sliders[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 13:08:54 2025 -0600
+
+    Update GUI display controls and scaling
+
+[33mcommit 7724d1da40ddc7064eef970d765129ae5d088740[m
+Merge: b401c35 837378b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 12:52:56 2025 -0600
+
+    Merge pull request #200 from DVBeckwitt/codex/add-scale-factor-and-update-sliders
+    
+    Add scaling controls and intensity limits to GUI
+
+[33mcommit 837378bf435d798b56c895c88f25384fa85947be[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 12:52:28 2025 -0600
+
+    Add scaling controls and intensity limits to GUI
+
+[33mcommit b401c35403ebee6f1e6e333aa6681ef685711fd8[m
+Merge: 102639d 8b4db77
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 12:30:09 2025 -0600
+
+    Merge pull request #199 from DVBeckwitt/codex/verify-geometric-parameters-button-functionality
+    
+    Rotate measured peak coordinates for geometry fitting
+
+[33mcommit 8b4db7743c5b76f662421440a4c3df666a548e6e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 12 12:30:00 2025 -0600
+
+    Rotate measured peak coordinates for geometry fit
+
+[33mcommit 102639d20b5bc03ab13d7ff523dbd42d78abb63e[m
+Merge: d14c472 106da48
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 15:04:52 2025 -0600
+
+    Merge pull request #198 from DVBeckwitt/codex/add-sliders-for-simulation-and-background
+    
+    Add GUI controls for background and simulation intensity scaling
+
+[33mcommit 106da4857e240e898bba9fc72eb2f467da0abb0c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 15:04:43 2025 -0600
+
+    Add GUI controls for background and simulation intensity scaling
+
+[33mcommit d14c472e7905f527cc07d9bd2fa485503571e74f[m
+Merge: 8d8f5a9 7307627
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:56:35 2025 -0600
+
+    Merge pull request #197 from DVBeckwitt/codex/restrict-max-value-to-simulation-only
+    
+    Decouple background display from normal max slider
+
+[33mcommit 730762714b10f9e7e4887227748c20c5c293a9e9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:56:26 2025 -0600
+
+    Adjust background scaling to ignore normal max slider
+
+[33mcommit 8d8f5a97ade1a4bfb97bd0f1406a9ed856c1bc6f[m
+Merge: 748fdfb 2e53ae4
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:51:57 2025 -0600
+
+    Merge pull request #196 from DVBeckwitt/codex/remove-include-rods-button
+    
+    Remove Include Rods toggle from GUI
+
+[33mcommit 2e53ae40a0b19bd9eeafaf691e687cd698c4e39b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:51:46 2025 -0600
+
+    Remove Include Rods toggle from GUI
+
+[33mcommit 748fdfb616c1885bbc98fd676c5c4352f2d7cf32[m
+Merge: ed7ad48 dbb80af
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:45:19 2025 -0600
+
+    Merge pull request #195 from DVBeckwitt/codex/update-2d-caking-display-for-transformation
+    
+    Align background overlay when toggling 2D caking
+
+[33mcommit dbb80af5dd8772de45e0c4bf073b54a170662563[m
+Merge: 561b079 ed7ad48
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:45:13 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/update-2d-caking-display-for-transformation
+
+[33mcommit 561b079e3da9b81a13cf7861d86cf22cf8db3e79[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:44:39 2025 -0600
+
+    Fix background orientation when toggling caked view
+
+[33mcommit ed7ad48ccb002c6b79eaae113b3e2ebffdd2d468[m
+Merge: 1f6bef8 261b0ed
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:39:09 2025 -0600
+
+    Merge pull request #194 from DVBeckwitt/codex/update-2d-caking-display-for-transformation
+    
+    Keep global max slider tied to caked view
+
+[33mcommit 261b0edba64f0d6867b3ab946f6d611ffe65dec7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:39:01 2025 -0600
+
+    Ensure max slider constrains caked view
+
+[33mcommit 1f6bef8f4deeea3f20d6cbdf2149c3f00e20fa41[m
+Merge: a85443e 0b6a118
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:18:52 2025 -0600
+
+    Merge pull request #193 from DVBeckwitt/codex/update-2d-caking-display-for-transformation
+    
+    Show background in caked view
+
+[33mcommit 0b6a118ee2f5c34ec65224c6cae6efe2664d3e69[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:18:41 2025 -0600
+
+    Show background in caked view
+
+[33mcommit a85443e3d5100519afb900054601a360c18d3b94[m
+Merge: c2e58b8 8200e05
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:05:49 2025 -0600
+
+    Merge pull request #192 from DVBeckwitt/codex/fix-2d-caking-render-issue
+    
+    Harden image origin helper
+
+[33mcommit 8200e054b43264b328ace83d9bf023a699824dcf[m[33m ([m[1;31morigin/codex/fix-2d-caking-render-issue[m[33m)[m
+Merge: 2f75f2a c2e58b8
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:05:28 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/fix-2d-caking-render-issue
+
+[33mcommit 2f75f2abf8c670df1ed020e00cd24c1f107d2470[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Nov 11 14:05:03 2025 -0600
+
+    Harden image origin helper
+
+[33mcommit c2e58b8a003291a0b2851492061b137042304453[m
+Merge: f562f73 1ef8b80
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 17:00:13 2025 -0600
+
+    Merge pull request #191 from DVBeckwitt/codex/fix-2d-caking-render-issue
+    
+    Stabilize caked 2D axes
+
+[33mcommit 1ef8b8059e566ea2fd79f3c84a83dae5e148799e[m
+Merge: bec3633 f562f73
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 17:00:05 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/fix-2d-caking-render-issue
+
+[33mcommit bec36338bfebaefc8145967da4a5cd7a73719b11[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:59:33 2025 -0600
+
+    Stabilize caked 2D axes
+
+[33mcommit f562f73bd72893cfe7b353c3395a7221be291742[m
+Merge: 7fa973c e5f7ddd
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:43:41 2025 -0600
+
+    Merge pull request #190 from DVBeckwitt/codex/fix-2d-caking-render-issue
+    
+    Constrain caked 2D axes
+
+[33mcommit e5f7ddd4102f70bf6ec07207fca72fffb20e9a6a[m
+Merge: 1788334 7fa973c
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:43:32 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/fix-2d-caking-render-issue
+
+[33mcommit 17883343ea8b8d43c08d23261ab43c670bfac34e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:43:03 2025 -0600
+
+    Constrain caked 2D axes
+
+[33mcommit 7fa973c3001029d3f31359c71c9ceeee7846d489[m
+Merge: b85fb9a 565dd1c
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:36:14 2025 -0600
+
+    Merge pull request #189 from DVBeckwitt/codex/fix-2d-caking-render-issue
+    
+    Auto-scale 2D caked display
+
+[33mcommit 565dd1c49623f1476413137c9a814e9450ff5a73[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:36:04 2025 -0600
+
+    Auto-scale 2D caked display
+
+[33mcommit b85fb9ac260849665a79f6947feadeafc1abdef1[m
+Merge: d6d7eb6 d3ea68b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:24:06 2025 -0600
+
+    Merge pull request #188 from DVBeckwitt/codex/adjust-integration-range-by-90-degrees
+    
+    Adjust phi zero offset to -90 degrees
+
+[33mcommit d3ea68b50df496461555e3337efaba47be767109[m[33m ([m[1;31morigin/codex/adjust-integration-range-by-90-degrees[m[33m)[m
+Merge: cbd761e d6d7eb6
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:23:30 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/adjust-integration-range-by-90-degrees
+
+[33mcommit cbd761ec5b91bc300be0257fa64fdc81ca82d2d9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:23:15 2025 -0600
+
+    Set phi zero offset to -90 degrees
+
+[33mcommit d6d7eb6d3f8c1072883791b036906af86edba358[m
+Merge: 469fb2b 54a70a1
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:08:21 2025 -0600
+
+    Merge pull request #187 from DVBeckwitt/codex/adjust-integration-range-by-90-degrees
+    
+    Shift phi integration zero by 90 degrees
+
+[33mcommit 54a70a166766617c8ffafc8614f15220348c1024[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 16:08:09 2025 -0600
+
+    Shift phi integration zero by 90 degrees
+
+[33mcommit 469fb2be20171df1c051ce74528665beb83b7035[m
+Merge: 19cace9 9b04c2a
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 15:55:33 2025 -0600
+
+    Merge pull request #186 from DVBeckwitt/codex/add-region-display-in-diffraction-pattern
+    
+    Highlight 1D integration region on diffraction plot
+
+[33mcommit 9b04c2aa03208d1cb1a9803402649d3708803706[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 15:55:15 2025 -0600
+
+    Highlight 1D integration region on diffraction plot
+
+[33mcommit 19cace90d76fe880c0d4f2c755d08b29572fe295[m
+Merge: 5bff68d d854740
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 15:02:35 2025 -0600
+
+    Merge pull request #180 from DVBeckwitt/codex/fix-fit-geometry-button-functionality
+    
+    Fix fit geometry export by matching updated simulator outputs
+
+[33mcommit d854740ea3654b890e7f014c266719290db9bd7a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 15:02:27 2025 -0600
+
+    Fix fit geometry export by matching updated simulator outputs
+
+[33mcommit 5bff68dd8b4dafdea634ef15d38beadcfc781d0b[m
+Merge: ec6c982 5595f3a
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:52:46 2025 -0600
+
+    Merge pull request #179 from DVBeckwitt/codex/add-resolution-toggle-in-gui-ogwb89
+    
+    Fix pixel hit buffer overflow at low sampling resolution
+
+[33mcommit 5595f3a6e54ae6c7437e1a561014a7043b409473[m
+Merge: 4b6cbb2 ec6c982
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:52:39 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/add-resolution-toggle-in-gui-ogwb89
+
+[33mcommit 4b6cbb26683ba9fc7293c2b611eb44239c796fd3[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:52:22 2025 -0600
+
+    Prevent pixel hit buffer overflow for small sample counts
+
+[33mcommit ec6c98264878a060c6cd09cc95c6ac906d31e529[m
+Merge: 66afadf e8f1635
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:49:33 2025 -0600
+
+    Merge pull request #178 from DVBeckwitt/codex/fix-missing-bragg-peaks-for-h=k=0
+    
+    Fix missing (0,0,L) Hendricks–Teller curves
+
+[33mcommit e8f16352701890d32f75f39008fd9d4bf92015e6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:49:22 2025 -0600
+
+    Include (0,0) Hendricks–Teller curves
+
+[33mcommit 66afadf2d3627e5f5622f545aa93fa4dd18cf33f[m
+Merge: 417932f e8c2847
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:44:15 2025 -0600
+
+    Merge pull request #177 from DVBeckwitt/codex/add-resolution-toggle-in-gui
+    
+    Adjust sampling resolution presets to 25/250/500
+
+[33mcommit e8c284769a65fb511f6a8ab68dd93e424256297f[m[33m ([m[1;31morigin/codex/add-resolution-toggle-in-gui[m[33m)[m
+Merge: 4095bcf 417932f
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:44:08 2025 -0600
+
+    Merge branch 'fit_mosaic' into codex/add-resolution-toggle-in-gui
+
+[33mcommit 4095bcf846703dea7215c8bff9f2128b585ad557[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:42:59 2025 -0600
+
+    Adjust sampling resolution presets to 25/250/500
+
+[33mcommit 417932fbc7ed34c5d86f524ca0a36768c5f304aa[m
+Merge: f141e69 9026799
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:29:50 2025 -0600
+
+    Merge pull request #176 from DVBeckwitt/codex/add-resolution-toggle-in-gui
+    
+    Add sampling resolution selector to main GUI
+
+[33mcommit 9026799571add6cd48eb73eba6c82511f058a53d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 14:27:41 2025 -0600
+
+    Add sampling resolution selector to main GUI
+
+[33mcommit f141e69140155b240a078748807cece9b8a219b0[m
+Merge: c5605db 809c385
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 13:39:49 2025 -0600
+
+    Merge pull request #175 from DVBeckwitt/codex/add-resolution-toggle-in-gui
+    
+    Add sampling resolution toggle to GUI
+
+[33mcommit 809c385b07798f7f75fecdb6796a49576b04e5e2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 13:39:40 2025 -0600
+
+    Add sampling resolution toggle to GUI
+
+[33mcommit c5605db8a2c4b0e395095e21a31aca4b28960b6c[m
+Merge: 56e43e6 fa63ddb
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 13:36:02 2025 -0600
+
+    Merge pull request #174 from DVBeckwitt/codex/change-optimization-method-for-peak-widths
+    
+    feat: add separable mosaic width refinement
+
+[33mcommit fa63ddb44c89e1c6f17d242c421391e09080be61[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 13:35:49 2025 -0600
+
+    Include 00L reflections beyond mosaic fit two-theta cap
+
+[33mcommit ed40aff884d3c4d920c7c33ce3780dbfc8f1e8d2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 13:06:47 2025 -0600
+
+    Reinstate two-theta cutoff for all mosaic-fit reflections
+
+[33mcommit 11ffb3668faf5ed4b13f27640b76f89aea893390[m[33m ([m[1;31morigin/codex/change-optimization-method-for-peak-widths[m[33m)[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 12:57:37 2025 -0600
+
+    Include 00L reflections in mosaic width fit
+
+[33mcommit 3afd1886cac3e1b7cce089bc7fa6273f3cbc44c0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 12:43:37 2025 -0600
+
+    Limit mosaic-fit reflections by two-theta
+
+[33mcommit 3466438a04561604e70fea3169c37e29531c4086[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 12:38:42 2025 -0600
+
+    Optimize mosaic fit simulation for allowed reflections
+
+[33mcommit 0b6cf7c09143bf628c3cdcd9f092ac251bbab430[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 12:33:24 2025 -0600
+
+    feat: restrict roi selection to allowed reflections
+
+[33mcommit 2f2c8b553a130d5fa315fbf0ce746cfddd2782ee[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 12:28:45 2025 -0600
+
+    fix: record strongest peak candidate for all reflections
+
+[33mcommit 7177f17a7b207291f88b0cda979fc7cb09f8d5bf[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 12:18:43 2025 -0600
+
+    fix: retain peak hits when nominal sample misses
+
+[33mcommit fcc6cc00ddba6f1c69c32240cd3be02b312ff06e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 12:02:48 2025 -0600
+
+    Fix rounding of stored peak HKLs
+
+[33mcommit 65e167b71193a520db15885045c63dce9c62929a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 11:42:43 2025 -0600
+
+    feat: show fitted mosaic peaks
+
+[33mcommit af4d78da0a3b3a73fe851576b71a9c06000503ee[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 11:33:49 2025 -0600
+
+    feat: show progress for mosaic optimization
+
+[33mcommit 1f631de5fb8f9ce600d9652dd99340a7adea95d9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 11:16:45 2025 -0600
+
+    feat: add GUI control for mosaic optimization
+
+[33mcommit c703a8939e5cde6b497452d2a6ddba26448c82b7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Nov 5 11:05:15 2025 -0600
+
+    feat: add separable mosaic width refinement
+
+[33mcommit 56e43e6a4eddade4cb939ad72c6ef823d882ec92[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Nov 3 15:06:13 2025 -0600
+
+    headless
+
+[33mcommit deff6a9a7e3c4e090414ad68cdf1dfd413f77568[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Nov 3 14:20:03 2025 -0600
+
+    Added features
+
+[33mcommit 1fd1f8a0acc975a2b46f4665f58868b38bf316a5[m
+Merge: 4115b3e 3fdbac7
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Oct 21 16:40:14 2025 -0500
+
+    Merge pull request #172 from DVBeckwitt/codex/replace-optimization-function-with-new-method
+    
+    Implement iterative refinement pipeline for geometry fitting
+
+[33mcommit 3fdbac7829532549243228ac78477e4e7f3de2de[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Oct 21 16:39:55 2025 -0500
+
+    Implement iterative refinement pipeline for geometry fitting
+
+[33mcommit 4115b3ec91a42b8c36cdeb2e480bdee4243d50b0[m
+Merge: 11ce49c ed7094a
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Oct 21 13:17:59 2025 -0500
+
+    Merge pull request #171 from DVBeckwitt/codex/prevent-overlapping-labels-on-correlation-scale
+    
+    Adjust correlation colorbar ticks to prevent overlap
+
+[33mcommit ed7094a0b994d35f43823ace00bd875bba66998f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Oct 21 13:16:09 2025 -0500
+
+    Prevent correlation colorbar labels from overlapping
+
+[33mcommit 11ce49c1c4911bc96378a1319e0fec4f0c3262e1[m
+Merge: 898bad1 349d8d7
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Oct 20 15:41:50 2025 -0500
+
+    Merge pull request #170 from DVBeckwitt/codex/move-yaml-files-to-config-folder
+    
+    Move YAML configuration files into config directory
+
+[33mcommit 349d8d7eb07392fb5d333b5dd1ae45e0f05a32ac[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Oct 20 15:41:39 2025 -0500
+
+    Organize YAML configuration into config directory
+
+[33mcommit 898bad199906647213f450ff3690b462b57c4bf6[m
+Merge: b072fe6 3179fd8
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Oct 20 14:19:40 2025 -0500
+
+    Merge pull request #169 from DVBeckwitt/codex/generalize-hardcoded-values-in-main.py
+    
+    Externalize instrument configuration parameters
+
+[33mcommit 3179fd87420cd2f20c052c971d3c26033a318920[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Oct 20 14:19:11 2025 -0500
+
+    Externalize instrument defaults into configuration
+
+[33mcommit b072fe64231ca32bf0bc18be2701e290d87c53aa[m
+Merge: f1340a1 a4c3166
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Oct 20 13:54:44 2025 -0500
+
+    Merge branch '168' into fit_mosaic
+
+[33mcommit f1340a1b169997a852d2f7e68e24da1d76fe6bc9[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Oct 20 13:52:48 2025 -0500
+
+    WIP: temp changes before switching
+
+[33mcommit a4c3166378a8d937a149bb693cc3984009f5659d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Oct 20 13:49:04 2025 -0500
+
+    Add configurable materials metadata
+
+[33mcommit c36140de7ad86e56d52aa35e4c59fa3c380bc781[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Oct 16 12:48:46 2025 -0500
+
+    added Fresnel and Transmission
+
+[33mcommit d0557764f47daad2aa4214db499c9a83a4e1ac4d[m
+Merge: dba2545 02b15f1
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Oct 16 11:45:16 2025 -0500
+
+    Merge branch 'disorder'
+
+[33mcommit 02b15f1b3f4bdc01572ed5132f64fe2ea3b3bc73[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Oct 16 11:41:10 2025 -0500
+
+    getting back
+
+[33mcommit bd439ba0c31f0fca173ce90c81078a175ef3981e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Aug 4 16:20:50 2025 -0500
+
+    propagate qr degeneracy into simulations
+
+[33mcommit dc52bc9281a611490adba626937d35d7145ca0e3[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Aug 4 15:52:55 2025 -0500
+
+    Preserve Qr degeneracy when merging HT caches
+
+[33mcommit 426f29c22980cd9281178a5868db691428ab010c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Aug 4 14:28:46 2025 -0500
+
+    Track Qr degeneracy when combining HT curves
+
+[33mcommit dba2545764190c20fdcc32ee091e873a4b1dea22[m
+Merge: 0ea8604 7d2216b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Aug 25 20:35:09 2025 -0500
+
+    Merge pull request #167 from DVBeckwitt/rods
+    
+    Rods
+
+[33mcommit 7d2216b502d629265804474315aa12aba2dd9b68[m
+Merge: c8579ec 56c1a92
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Aug 25 20:30:27 2025 -0500
+
+    Merge pull request #166 from DVBeckwitt/codex/create-readme-for-github-repository
+    
+    docs: describe DWBA 2D powder simulation
+
+[33mcommit 56c1a9217fdfe2ade2a56b6566cc903bf696bf80[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Aug 25 20:30:13 2025 -0500
+
+    docs: describe DWBA 2D powder simulation
+
+[33mcommit c8579ec0e65b422efdb9d347b3790cf23173d7ab[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Mon Aug 4 14:13:16 2025 -0500
+
+    fix
+
+[33mcommit 557310e373368c2b958159fd44a7bb81aec13005[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Jul 29 16:09:14 2025 -0500
+
+    *2
+
+[33mcommit af2c1b8f7fb0b57d0a6dea903157c20faa5273bc[m
+Merge: d086a34 c2c632f
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 29 16:08:04 2025 -0500
+
+    Merge pull request #164 from DVBeckwitt/codex/fix-stacking_fault.py-intensity-calculations
+    
+    Fix stacking fault intensity
+
+[33mcommit c2c632f7b4fdd1293437f29e41f0b076de2ded27[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 29 15:50:33 2025 -0500
+
+    Fix HT intensity calculation
+
+[33mcommit d086a34b6c8619b25f10823a20753d0b8c5dd05c[m
+Merge: 913522e 9f4e100
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 29 15:39:34 2025 -0500
+
+    Merge pull request #163 from DVBeckwitt/codex/calculate-form-factors-with-c-value-adjustment
+    
+    Implement form factor utilities
+
+[33mcommit 9f4e1001fb84ce7acc4591d5fa144540249068de[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 29 15:05:05 2025 -0500
+
+    Fix energy units for form factor computations
+
+[33mcommit 1045562153677dda9fb55f435b83fd052320d508[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 29 13:42:54 2025 -0500
+
+    cache ht curves when forcing update
+
+[33mcommit f688997935caded7d9505c475e6f99aff238c2d1[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 29 13:20:56 2025 -0500
+
+    Add form factor utilities and update stacking fault
+
+[33mcommit 913522e2fa26290a58027caaf5b50a961934ec29[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 13:46:14 2025 -0500
+
+    Remove phi_scale parameter and rename file
+
+[33mcommit 050e85e6d74d7bb211e14baadc132a29284b0528[m
+Merge: 7a56e8b b865d20
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 13:20:48 2025 -0500
+
+    Merge pull request #158 from DVBeckwitt/codex/make-diffuse_with_cif_polytype_toggle-colorblind-friendly
+    
+    Improve accessibility of diffuse plot colors
+
+[33mcommit b865d20bb25e61c975f46a9568aaae4614585de7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 13:19:35 2025 -0500
+
+    Make plotting colors colorblind friendly
+
+[33mcommit 7a56e8ba33451fc805a60001ffab0a8a50339a72[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Jul 2 12:45:33 2025 -0500
+
+    removed phi_scale
+
+[33mcommit 7b31eafb4b21b98ac7fc38762b4ccf0259de832b[m
+Merge: fd3a27f 34bb405
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 11:52:03 2025 -0500
+
+    Merge pull request #157 from DVBeckwitt/codex/save-all-hkl-permutations-up-to-l=10
+    
+    Export all HKL permutations for CIF HKL save
+
+[33mcommit 34bb4053bcfadb1ad58406c47890af2f317fbeec[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 10:25:55 2025 -0500
+
+    Filter metrics comparison to reflections with Cif intensity
+
+[33mcommit fd3a27fc0ba8bc9588bc95dc8ca8f72576b91f14[m
+Merge: da9a023 9e002ca
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 10:06:52 2025 -0500
+
+    Merge pull request #156 from DVBeckwitt/codex/save-all-hkl-permutations-up-to-l=10
+    
+    Export all HKL permutations for CIF HKL save
+
+[33mcommit 9e002ca8cf637db4462b21ada8f2e7bd106f17ae[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 10:03:49 2025 -0500
+
+    Export all HKL permutations in CIF save
+
+[33mcommit da9a023710695cf8928da5eb2e540fd4dfa3cc54[m
+Merge: 0e11611 b14a41e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 09:44:31 2025 -0500
+
+    Merge pull request #155 from DVBeckwitt/codex/add-checkboxes-to-diffuse_with_cif_polytype_toggle
+    
+    Add F²-only and qz axis controls
+
+[33mcommit b14a41e0381bd5ba6b1503e3333d3d8f8906c26b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 09:41:08 2025 -0500
+
+    Add F2-only and qz axis checkboxes
+
+[33mcommit 0e116115b9b25128635e99626a00d5e1f2be3df8[m
+Merge: 151255d 2b5448e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 09:13:36 2025 -0500
+
+    Merge pull request #154 from DVBeckwitt/codex/ensure-correct-f2-sent-to-i_inf-for-h--k
+    
+    Fix F2 lookup for each HK pair
+
+[33mcommit 2b5448ecd40e814e5d220081bb999b782e6bbd1d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jul 2 09:12:52 2025 -0500
+
+    Fix F2 lookup for each HK pair
+
+[33mcommit 151255dae7ea176b9f4600815d691710129e60bd[m
+Merge: bd292f7 948ad5f
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 23:51:34 2025 -0500
+
+    Merge pull request #152 from DVBeckwitt/codex/add-iodine-z-value-slider-in-gui
+    
+    Add iodine z slider
+
+[33mcommit 948ad5fdf595685814a445883bc0574637969da0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 23:48:13 2025 -0500
+
+    Optimize iodine z recalculation
+
+[33mcommit 8e07fd4ec9a316dbb3f84a9acf075c54578295eb[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 23:29:42 2025 -0500
+
+    Add iodine z slider to HT viewer
+
+[33mcommit bd292f7c9e0687f7f236ef65875191553be23029[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Jul 1 16:10:22 2025 -0500
+
+    added 1/3 to the Lz
+
+[33mcommit b13bc8b45b1dea45bd3eddff0691286b05c3c417[m
+Merge: b431417 f0700c4
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 13:08:26 2025 -0500
+
+    Merge pull request #136 from DVBeckwitt/codex/set-max-ell-range-to-10-and-variable
+    
+    Make max ell range variable
+
+[33mcommit f0700c43f1a85eb99dcdbc8be7353c1708d56608[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 13:07:29 2025 -0500
+
+    Make max ell range configurable
+
+[33mcommit b431417db211b2352a1b6fc6813d6ca31ea21407[m
+Merge: efb9781 1a72769
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 11:27:11 2025 -0500
+
+    Merge pull request #135 from DVBeckwitt/codex/fix-perfect-2h-case-in-diffuse_with_cif_polytype_toggle
+    
+    Refactor numeric HT area
+
+[33mcommit 1a72769883874631c38d319afc6ca3cc7d5c47f0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 11:23:01 2025 -0500
+
+    cache AzimuthalIntegrator
+
+[33mcommit edd7f13069b95462fda0c2da74248998251f888d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 11:12:38 2025 -0500
+
+    refactor: simplify form factor handling
+
+[33mcommit efb97818e5273ab6e491c03d781728409b64fe2b[m
+Merge: f2cd14d 2264068
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 10:42:59 2025 -0500
+
+    Merge pull request #134 from DVBeckwitt/codex/fix-case-of-perfect-2h-in-diffuse_with_cif_polytype_toggle
+    
+    Fix default weights for HT viewer
+
+[33mcommit 22640684aad252bbb35d72611d7c089b1a6dc8f6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 10:41:09 2025 -0500
+
+    Disable default perfect polytypes
+
+[33mcommit f2cd14d37fece3ca1c9198dab14f32004edc5927[m
+Merge: e859561 fc6345f
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 10:25:06 2025 -0500
+
+    Merge pull request #133 from DVBeckwitt/codex/implement-single-layer-form-factor-with-diffraction
+    
+    Fix single-layer form factor
+
+[33mcommit fc6345f13a45e6adedfdadca4c7c94e56feaed26[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 10:17:12 2025 -0500
+
+    include atomic sites in bragg export
+
+[33mcommit 7f151283e8230fda8e004413ba096622ace828fe[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 10:12:33 2025 -0500
+
+    Adjust phase for polytype cases
+
+[33mcommit 88e30b91fc421c500c3487be060984aefd4aef27[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 10:02:04 2025 -0500
+
+    Use consistent atomic positions for 2H and 6H
+
+[33mcommit bb5c7f3c7e93e6a95b6fb79480a0878576dbbaad[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 08:49:22 2025 -0500
+
+    Use CIF-derived atomic sites for structure factors
+
+[33mcommit ad4c279d82a8597be7a9f4e11ccd2063faf93dd6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 08:20:50 2025 -0500
+
+    Add structure factor columns to Bragg export
+
+[33mcommit 6c7d8a6ea3275ab5cc09651bb11604acc033f019[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jul 1 08:10:11 2025 -0500
+
+    Use Dans Diffraction form factors
+
+[33mcommit e859561825938caf8a0e995bf0db422fb508beb6[m
+Merge: f8ca4b1 e9915a5
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 17:03:37 2025 -0500
+
+    Merge pull request #132 from DVBeckwitt/codex/align-diffuse_with_cif_polygon-with-miller_generator
+    
+    Fix CIF HKL export to match miller_generator
+
+[33mcommit e9915a53fe7890d2b04983a5e842653937e77d43[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 17:02:35 2025 -0500
+
+    Compute complex F components in CIF HKL export
+
+[33mcommit fa3d2aadfbf63b6ad4930d33f19b1ecb7da77c96[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 16:45:47 2025 -0500
+
+    Import Dans_Diffraction for CIF structure factor
+
+[33mcommit 63ebdcb681f8270a1bd8a65fe08d5a03e50bc63a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 16:36:25 2025 -0500
+
+    Fix F magnitude calculation for CIF HKL export
+
+[33mcommit 26164e77bff744d678ab33671032c483c16e5d43[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 15:38:34 2025 -0500
+
+    Export CIF HKLs using grouped method
+
+[33mcommit f8ca4b13521d82337b29eacc02f7f346bfbdd444[m
+Merge: b16b39e fc61e64
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 15:27:37 2025 -0500
+
+    Merge pull request #131 from DVBeckwitt/codex/clarify-information-saved-to-miller_calcd
+    
+    Fix energy value in CIF HKL export
+
+[33mcommit fc61e64142b501be7524a9cc7c1e3c7f0afbeb3c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 15:18:03 2025 -0500
+
+    Use explicit Cu Kalpha energy for CIF intensity export
+
+[33mcommit b16b39e7fa86b18b035776950623d8fdc721a312[m
+Merge: 9205437 338e5b4
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 14:32:43 2025 -0500
+
+    Merge pull request #130 from DVBeckwitt/672fq2-codex/fix-interactability-issue-with-plot-scatter
+    
+    Fix interactive scatter plot
+
+[33mcommit 338e5b47eb2a1f96d7c662236788f8701c60965f[m
+Merge: 6b864c9 9205437
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 14:32:37 2025 -0500
+
+    Merge branch 'codex/modify-main.py-to-calculate-qr-rods' into 672fq2-codex/fix-interactability-issue-with-plot-scatter
+
+[33mcommit 6b864c9504282202053dc80465c8b3715bd4b6ba[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 14:11:01 2025 -0500
+
+    Ensure CIF HKL export columns
+
+[33mcommit 6575c8376a8d1ef35040635420d444bb9a7c9b18[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 14:10:56 2025 -0500
+
+    Prompt for polytype when exporting CIF HKLs
+
+[33mcommit 1123fa10e28277c24f95737b00280faf14d00d85[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 14:10:51 2025 -0500
+
+    Move CIF HKLs export button
+
+[33mcommit d63f937540dd4a3deb51befb89880db07d476c95[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 13:52:51 2025 -0500
+
+    Normalize CIF HKL export
+
+[33mcommit 34193b3a1a691e385e64da70e663c93ed6f7f93d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 13:42:13 2025 -0500
+
+    Add CIF HKL export
+
+[33mcommit f175c8e0a9bf4675a1733c70861c6d530eec3f9a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 13:24:21 2025 -0500
+
+    Fix scaling weights for CIF intensities
+
+[33mcommit 7d4b03ec34668022f411bd21174fe987581352bd[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 13:15:22 2025 -0500
+
+    Keep scatter widgets alive
+
+[33mcommit 3b9e417a912515a8baab4b52db00792765531fa4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 13:04:13 2025 -0500
+
+    Fix scatter figure responsiveness
+
+[33mcommit b211e40900f08106627234d3d43b91dc25777451[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 12:50:08 2025 -0500
+
+    Show scatter via figure manager
+
+[33mcommit a0b0745cdb5c1a7781af502d855a27523f567612[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 12:43:05 2025 -0500
+
+    Remove interactive mode call
+
+[33mcommit 92054370445624655cfc3402fac1c9898342ce09[m
+Merge: 3f29077 7701146
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 12:22:09 2025 -0500
+
+    Merge pull request #128 from DVBeckwitt/codex/fix-interactability-issue-with-plot-scatter
+    
+    Fix scatter figure UI responsiveness
+
+[33mcommit 7701146d5dee1fe38952d18c69820646c9df8d5f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 12:21:13 2025 -0500
+
+    Fix unresponsive widgets in scatter plot
+
+[33mcommit 3f29077bda63a54223b09b328944f03762c84262[m
+Merge: 0c5f484 3130f93
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 12:12:03 2025 -0500
+
+    Merge pull request #127 from DVBeckwitt/codex/use-numerical-method-for-miller-values
+    
+    Use numeric HT integration for excel export
+
+[33mcommit 3130f93187573d6061a3456fce73ef7332cdac0d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 12:11:00 2025 -0500
+
+    Fix widget layout for scatter controls
+
+[33mcommit f30154f48ab0911a68351f4e1906482b604c3df6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 11:58:53 2025 -0500
+
+    Fix widget layout so scatter plot controls respond
+
+[33mcommit 9cce4037faf96969f652f4d367646a7098b6d359[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 11:22:40 2025 -0500
+
+    Ensure interactive backend
+
+[33mcommit 15d06191dbf65a913b537827d225d85d35efa3b0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 11:07:10 2025 -0500
+
+    Restore single-plot scatter with checkboxes
+
+[33mcommit 379cd6d2c09d448adbf8870efc8745021e8e7e07[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 10:51:00 2025 -0500
+
+    Add plotting and comparison buttons
+
+[33mcommit 2d55440787b1ecb7c0f08801b173b2163ae144a1[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 10:41:26 2025 -0500
+
+    Add intensity comparison metrics and plots
+
+[33mcommit 5bc1d5746a522bb9031b24fa1d866b02ba1b3fc7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 10:41:21 2025 -0500
+
+    Improve scatter plot comparison
+
+[33mcommit 36f79e86d807fccd8f4100d611343fabd72d84a4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 30 10:41:15 2025 -0500
+
+    Normalize scatter plot and annotate HKL
+
+[33mcommit 781607fa9ca9b48401c793023145950d7adb2ba4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sun Jun 29 14:09:30 2025 -0500
+
+    Compute numeric HT areas using phase-specific F2
+
+[33mcommit 382bb8aa03d275e496cb531704b0aa1632daadc0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sun Jun 29 13:36:43 2025 -0500
+
+    Fix numeric area mapping
+
+[33mcommit 7b9a6f0b01ea1b8eb14d74a4ad8371cbf5e3f774[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sun Jun 29 13:27:42 2025 -0500
+
+    Normalize numeric HT areas to Dans scale
+
+[33mcommit 2a4461e3c08a438d5056d87e5221468ee57b5211[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sun Jun 29 13:09:45 2025 -0500
+
+    Switch XLSX export to numeric HT areas
+
+[33mcommit 78f8d17c86ea1971e44828ae2987a03ffd73ec45[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sun Jun 29 12:53:54 2025 -0500
+
+    Use numeric integration for HT intensities
+
+[33mcommit 0c5f484c2338b83b45e67bfe46ba0e0bb4b876e3[m
+Merge: 4fc8311 73452e4
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sun Jun 29 12:36:25 2025 -0500
+
+    Merge pull request #126 from DVBeckwitt/90diux-codex/fix-missing-data-sets-in-plot_excel_scatter
+    
+    Improve intensity column detection
+
+[33mcommit 73452e43d9e34d931a408397ef74cbbccd548251[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sun Jun 29 12:35:45 2025 -0500
+
+    Fix intensity column detection when 'Intensity' exists with others
+
+[33mcommit 4fc8311c72a0ee55ffa121f5389133bc1637daf8[m
+Merge: 491d177 545c7d2
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 13:07:37 2025 -0500
+
+    Merge pull request #125 from DVBeckwitt/codex/fix-missing-data-sets-in-plot_excel_scatter
+    
+    Improve intensity column detection
+
+[33mcommit 545c7d243caa02cb43e9f14c1c4b9c23684ecdad[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 13:07:25 2025 -0500
+
+    Improve intensity column detection
+
+[33mcommit 491d177c8c5a83f53b03432d8cb99009c2464944[m
+Merge: e4d2a96 e7cd316
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:58:53 2025 -0500
+
+    Merge pull request #123 from DVBeckwitt/codex/verify-numeric-method-and-update-legend
+    
+    Normalize saved intensities
+
+[33mcommit e7cd316c9b1d3d5a05be6b22c1cf0cee53bb077e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:58:43 2025 -0500
+
+    Normalize exported intensities and clarify legend
+
+[33mcommit e4d2a968f4d02e9868ea574fc32693bb16b7b87f[m
+Merge: 4cb78cf e70bc31
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:41:58 2025 -0500
+
+    Merge pull request #122 from DVBeckwitt/ehtmju-codex/plot-all-intensity-columns-by-default
+    
+    Add interactive intensity controls
+
+[33mcommit e70bc31fa9f457b61c15ea371f435d56d7b84e64[m
+Merge: a058bf2 4cb78cf
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:41:51 2025 -0500
+
+    Merge branch 'codex/modify-main.py-to-calculate-qr-rods' into ehtmju-codex/plot-all-intensity-columns-by-default
+
+[33mcommit a058bf2b0f3fb0084fbfe5262fbcabeb2da0f12d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:41:22 2025 -0500
+
+    Add numeric integration script for HT area
+
+[33mcommit 4cb78cf6a9d064bdaa4adb09123b1a8f0f31185a[m
+Merge: 7c68e7b 25ae72d
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:32:50 2025 -0500
+
+    Merge pull request #121 from DVBeckwitt/lbdwrx-codex/plot-all-intensity-columns-by-default
+    
+    Add interactive intensity controls
+
+[33mcommit 25ae72d63e0234a9c5c6c2b30a6d81610e34dbee[m
+Merge: e75fa1f 7c68e7b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:32:17 2025 -0500
+
+    Merge branch 'codex/modify-main.py-to-calculate-qr-rods' into lbdwrx-codex/plot-all-intensity-columns-by-default
+
+[33mcommit e75fa1f36c7eba250e624afc02aa56d356fec5c2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:31:40 2025 -0500
+
+    Add interactive intensity toggle
+
+[33mcommit 7c68e7babd2b9c8ea48c95f05cbf1831a3b9923c[m
+Merge: 1465dfc ca834b0
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:20:51 2025 -0500
+
+    Merge pull request #120 from DVBeckwitt/pvu5tx-codex/plot-all-intensity-columns-by-default
+    
+    Update plot to 2D Intensity vs L
+
+[33mcommit ca834b0b0f470c0156219ff4ec86a2ead11441ef[m
+Merge: 53c3ca6 1465dfc
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:20:45 2025 -0500
+
+    Merge branch 'codex/modify-main.py-to-calculate-qr-rods' into pvu5tx-codex/plot-all-intensity-columns-by-default
+
+[33mcommit 53c3ca6713f511e25f9c04b089fd3b1f4a34b1a6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:20:20 2025 -0500
+
+    Plot intensities vs L
+
+[33mcommit 1465dfc9bac33779896c53f7b8214e40de9346ac[m
+Merge: 16f8b6a 819d5ab
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:16:05 2025 -0500
+
+    Merge pull request #119 from DVBeckwitt/codex/plot-all-intensity-columns-by-default
+    
+    Improve intensity auto-detection
+
+[33mcommit 819d5abfea533f4b3c5ccd9d43bcaaa54aa11aae[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:15:57 2025 -0500
+
+    Allow plotting multiple intensity columns
+
+[33mcommit 16f8b6a4e5f528bee5516a1f3bb53af3b0ef58d7[m
+Merge: d715ff5 b3e1d3a
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:09:27 2025 -0500
+
+    Merge pull request #118 from DVBeckwitt/codex/fix-plot_excel_scatter-with-diffuse_with_cif
+    
+    Fix plot_excel_scatter for diffuse output
+
+[33mcommit b3e1d3a54530777cafb4dd014dc9f900253230a9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:09:17 2025 -0500
+
+    Improve plot_excel_scatter intensity detection
+
+[33mcommit d715ff5e1de78846e2127bee19b0908aed25b2e2[m
+Merge: 24f78cd dfdb46b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 10:00:25 2025 -0500
+
+    Merge pull request #117 from DVBeckwitt/codex/fix-undefined-name-asksaveasfilename
+    
+    Fix undefined asksaveasfilename
+
+[33mcommit dfdb46bb17e9e04a29e632cd88c2c3f001096fcf[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:59:57 2025 -0500
+
+    Fix undefined asksaveasfilename
+
+[33mcommit 24f78cd0ea5aec8cdb86f21557f564cc8c543975[m
+Merge: aa76868 845b55b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:54:51 2025 -0500
+
+    Merge pull request #116 from DVBeckwitt/codex/fix-keyerror-for--intensity--column
+    
+    Fix intensity column detection in scatter plot
+
+[33mcommit 845b55bf6e2381724e41ddfd3e7932b03c82530a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:54:42 2025 -0500
+
+    Improve column detection in plot_excel_scatter
+
+[33mcommit aa76868656a71426e56f94c935de9adaccb1a81e[m
+Merge: 477b4b2 01eb263
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:49:05 2025 -0500
+
+    Merge pull request #115 from DVBeckwitt/qb6h9n-codex/create-script-to-import-.xlsx-and-plot-as-scatter-points
+    
+    Improve Excel scatter helper
+
+[33mcommit 01eb2634cbd5e340794262917c1adab9715d11b6[m
+Merge: 71697bb 477b4b2
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:49:00 2025 -0500
+
+    Merge branch 'codex/modify-main.py-to-calculate-qr-rods' into qb6h9n-codex/create-script-to-import-.xlsx-and-plot-as-scatter-points
+
+[33mcommit 71697bb4dcf8fc4285f4e03d2337ee1a330fa7a9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:48:35 2025 -0500
+
+    Improve Excel plot script
+
+[33mcommit 477b4b28547f731c9f71da06b69f4d33a8b90bed[m
+Merge: 8b45581 410684b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:41:34 2025 -0500
+
+    Merge pull request #114 from DVBeckwitt/codex/create-script-to-import-.xlsx-and-plot-as-scatter-points
+    
+    Add Excel scatter plot helper
+
+[33mcommit 410684b47acd0278b5046ab0a5c86e8a85ce4828[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:41:15 2025 -0500
+
+    Add script to plot Miller intensities from Excel
+
+[33mcommit 8b45581dfb366d32209590b788b7ccdcf69ec994[m
+Merge: 1e3f4fa 4739b67
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:39:23 2025 -0500
+
+    Merge pull request #113 from DVBeckwitt/codex/fix-attributeerror-with-tkinter-filedialog
+    
+    Fix Tkinter filedialog call
+
+[33mcommit 4739b675b61c29082f097c6957da01344e68a455[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Sat Jun 28 09:39:14 2025 -0500
+
+    Fix export bragg data
+
+[33mcommit 1e3f4fa8daa5b98f7b7251557b639f6270477a3b[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Jun 27 22:29:09 2025 -0500
+
+    adding diagnostics to HT
+
+[33mcommit 107d22b68187fc942e0998f62dd9a7ba55b5410d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 19:39:15 2025 -0500
+
+    weight bragg sum by w0/w1
+
+[33mcommit 7bdc20b74b4e6b5ab528c00174419bcce28b1bd4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 19:20:31 2025 -0500
+
+    Sum polytype Bragg peaks in m-mode
+
+[33mcommit 699103ac824bf0310d1dc833fe2bf4c579164629[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 19:04:51 2025 -0500
+
+    Update HT peak area formula
+
+[33mcommit 54a03cdf75f9ddd9adb640740095ea326d062011[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 17:00:08 2025 -0500
+
+    Fix bragg lines state
+
+[33mcommit b60a4adc8dc6ae46b00371ce42403ef09b1f8158[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 16:55:31 2025 -0500
+
+    Plot Bragg peaks for 2H and 6H
+
+[33mcommit 0bbb13417dad25e0fda6b4c3dcb97ac0e5429d67[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 16:47:21 2025 -0500
+
+    Plot Bragg peaks across visible L range
+
+[33mcommit 7704bcf61c785343c7c1cd7e2535c5414d2664b2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 16:34:04 2025 -0500
+
+    Add export of Bragg peak intensities
+
+[33mcommit 9438bfb505f0c250bd991555e0062c04bdea9d28[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 16:18:38 2025 -0500
+
+    Handle Bragg peak overlay for m-mode
+
+[33mcommit 0c9ee2990c723b3696a06908921834964652ac05[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 16:06:28 2025 -0500
+
+    Add Bragg intensity display with toggle
+
+[33mcommit a63cbfdeef40fe9f2a2dbff44a79482f6cdb3fd7[m
+Merge: 59bc02d 9f0eb73
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 14:50:59 2025 -0500
+
+    Merge pull request #109 from DVBeckwitt/codex/hide-m-index-slider-when-h/k-panel-is-enabled
+    
+    Fix slider toggle visibility
+
+[33mcommit 9f0eb7394a2155e706778f8cedf90608806d21b5[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 14:50:48 2025 -0500
+
+    Fix HK panel toggle hiding m index slider
+
+[33mcommit 59bc02d9f0affb0f9852f7b41127117ed9a9bea7[m
+Merge: 9a5c664 66b1915
+Author: David Beckwitt <david.beckwitt@gmail.com>
+Date:   Fri Jun 27 14:45:35 2025 -0500
+
+    Merge branch 'codex/modify-main.py-to-calculate-qr-rods' of https://github.com/DVBeckwitt/ra_sim into codex/modify-main.py-to-calculate-qr-rods
+
+[33mcommit 9a5c6644891a7e63c4fc75d2ef947a75cd906e58[m
+Author: David Beckwitt <david.beckwitt@gmail.com>
+Date:   Fri Jun 27 14:44:38 2025 -0500
+
+    added HK sliders to diffuse back
+
+[33mcommit bc9967a320981cde7ab598bed7bd03d0e9b3a8ba[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Jun 27 12:55:47 2025 -0500
+
+    changed filepath
+
+[33mcommit 66b1915aac4bedef4b61dc371e4a73c55cf793d6[m
+Merge: a37515e 54ba2e7
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 12:06:29 2025 -0500
+
+    Merge pull request #108 from DVBeckwitt/codex/add-interactive-status-indicator
+    
+    Add status square to GUI
+
+[33mcommit 54ba2e78ec5edf2036b23d5354b0364b221efe81[m
+Merge: c100e3e a37515e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 12:06:14 2025 -0500
+
+    Merge branch 'codex/modify-main.py-to-calculate-qr-rods' into codex/add-interactive-status-indicator
+
+[33mcommit c100e3ece49681ace5d63bb2c7a5bf5f2c746a3a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 12:05:17 2025 -0500
+
+    Fix status square visibility and update timing
+
+[33mcommit a37515e25843687ed89850eff68ca6476917bc2c[m
+Merge: a6a9ec5 8c8f5e1
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 11:57:40 2025 -0500
+
+    Merge pull request #107 from DVBeckwitt/codex/add-interactive-status-indicator
+    
+    Add status square to GUI
+
+[33mcommit 8c8f5e1001ef62a1b4662390ea9ccd06088016ae[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 11:57:23 2025 -0500
+
+    Add status indicator square to GUI
+
+[33mcommit a6a9ec5aa3d40f2e170e6cb4d64bb25decf3af89[m
+Merge: 07b1819 8fd1a7f
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 11:12:22 2025 -0500
+
+    Merge pull request #106 from DVBeckwitt/codex/fix-save-1d-snapshot-functionality
+    
+    Fix save 1D snapshot
+
+[33mcommit 8fd1a7f72eed36112f429715f0ae1b4c1f5591be[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 11:12:12 2025 -0500
+
+    fix snapshot save
+
+[33mcommit 07b1819ccd5e18ad73a95e748f0148953be345f9[m
+Merge: 0df7bda ad63fc3
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 10:54:14 2025 -0500
+
+    Merge pull request #105 from DVBeckwitt/codex/move-force-update-button-in-gui
+    
+    Move force update button
+
+[33mcommit ad63fc3a5e41776a8a782c992803e3a8c3ff6ed7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 10:53:37 2025 -0500
+
+    Move Force Update button under debug button
+
+[33mcommit 0df7bdaa81eab75351a50e02f9f13a754d294546[m
+Merge: ae4ec23 1063e3e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 09:20:56 2025 -0500
+
+    Merge pull request #104 from DVBeckwitt/codex/update-2d-caking-axis-to-2theta-and-phi
+    
+    Fix axes for caked 2D view
+
+[33mcommit 1063e3e74a5b874201bba7d1ae670d6481fd71fd[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 27 09:20:28 2025 -0500
+
+    Adjust axes when 2D caking shown
+
+[33mcommit ae4ec236dc53732641b777a11b337071a5dc4eef[m
+Merge: c9aecbe f7b5244
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 22:52:06 2025 -0500
+
+    Merge pull request #101 from DVBeckwitt/codex/add-loading-feature-to-prevent-unresponsiveness
+    
+    Improve GUI responsiveness with loading indicator
+
+[33mcommit f7b524401c4407ff5e9015f0c6cd5e7fe5e41c90[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 22:51:57 2025 -0500
+
+    Add async loading indicator to GUI
+
+[33mcommit c9aecbed4b5eaf188363902d681fc2e99fcf62a2[m
+Merge: e721042 d1e8afe
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 20:16:42 2025 -0500
+
+    Merge pull request #100 from DVBeckwitt/djhm47-codex/fix-intermittent-crash-with-large-l_step
+    
+    Prevent overlapping updates
+
+[33mcommit d1e8afe53bd8b46560a7d12764c70aba2cd91aa6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 20:16:06 2025 -0500
+
+    Prevent overlapping GUI updates
+
+[33mcommit e721042abece9e96e2139bc4ded929003bb86faa[m
+Merge: 7c51d8b bcf505c
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 20:15:40 2025 -0500
+
+    Merge pull request #99 from DVBeckwitt/codex/fix-intermittent-crash-with-large-l_step
+    
+    Fix nondeterministic crashes in diffraction simulation
+
+[33mcommit bcf505c07954a89be1d8651da9120aaa4ded7cdb[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 20:15:25 2025 -0500
+
+    Fix parallel list writes
+
+[33mcommit 7c51d8bce5ae7da6ed8b7df5a10d004bf4083f08[m
+Merge: 258c051 bb9502e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 19:34:06 2025 -0500
+
+    Merge pull request #98 from DVBeckwitt/codex/update-main.py-to-add-p-values-with-sliders
+    
+    Add multi-probability stacking control
+
+[33mcommit bb9502ea8a4e2458eace4a3ef365a67f0d32e053[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 19:21:30 2025 -0500
+
+    Group parameter sliders in collapsible frames
+
+[33mcommit 4a1fc3d30398e2c0824163875f67cb99727af96a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 16:58:43 2025 -0500
+
+    Add collapsible frames for stacking and occupancy sliders
+
+[33mcommit 0b4e1ca280fcfa56a218a0d3ae24ec7d555ae93b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 16:41:09 2025 -0500
+
+    Add multi-p stacking options
+
+[33mcommit 258c05108266483aa1a38acaa87a5694077a284a[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Jun 26 16:28:25 2025 -0500
+
+    optimize cylinder
+
+[33mcommit 8f1b52c0e66b0cf9505782b909c408d01d0bed3c[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Jun 26 16:25:32 2025 -0500
+
+    changed the cylinder pdf
+
+[33mcommit 1929d75441470c44bf1b5285dcae874ce78a2f93[m
+Merge: c1eabec 7858b74
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 13:08:29 2025 -0500
+
+    Merge pull request #97 from DVBeckwitt/codex/check-for-dynamic-arrays-in-parallelized-routine
+    
+    Remove dynamic arrays in parallel loop
+
+[33mcommit 7858b74fdf78cbbc7c661481a0716738fffdfea9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 13:08:17 2025 -0500
+
+    avoid dynamic arrays in parallel loop
+
+[33mcommit c1eabec6398ffad6ad7ae956e3a78b12fb8c3ed9[m
+Merge: 46095a8 762a0f3
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 10:00:57 2025 -0500
+
+    Merge pull request #96 from DVBeckwitt/codex/fix-program-crash-when-changing-parameters
+    
+    Fix GUI crash from excessive updates
+
+[33mcommit 762a0f3268301d9637f26bad9efb26ece79374ae[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 26 10:00:44 2025 -0500
+
+    Throttle GUI updates to prevent crashes
+
+[33mcommit 46095a8328b3bb7050c77fd68ee1b62ea82e1628[m
+Merge: 678fc63 bd220cf
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 20:14:07 2025 -0500
+
+    Merge pull request #94 from DVBeckwitt/codex/fix-gui-parameter-update-crash
+    
+    Fix slider widget crash
+
+[33mcommit bd220cf4dfc6368aec6d7df4c7203929b13c9049[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 20:13:31 2025 -0500
+
+    Fix slider parent argument in GUI
+
+[33mcommit 678fc6349c8c119c676b9acc43f747fc6821cef2[m
+Merge: 991cd2c 62dd3a5
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 19:58:49 2025 -0500
+
+    Merge pull request #93 from DVBeckwitt/codex/fix-gui-crash-when-updating-image
+    
+    Fix slider argument order
+
+[33mcommit 62dd3a58ab0333b9a9d5b88709dda5e544989fcc[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 19:58:34 2025 -0500
+
+    Fix slider argument order in GUI
+
+[33mcommit 991cd2c635d3432b822da4c054b789f2edd40239[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Wed Jun 25 19:52:13 2025 -0500
+
+    fix L/3
+
+[33mcommit 34287fe6f47399685fd2fd7530b25b2ce6782717[m
+Merge: 2ebba97 f943196
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 19:43:49 2025 -0500
+
+    Merge pull request #92 from DVBeckwitt/codex/fix-gui-crash-on-parameter-change
+    
+    Fix GUI slider initialization
+
+[33mcommit f9431961ab5c97072585d58e2d876271e1e32ab6[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 19:43:25 2025 -0500
+
+    fix gui slider crash
+
+[33mcommit 2ebba97851d5815a911926d121e530702ebdeb23[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 15:07:49 2025 -0500
+
+    fix qr rod merge when L grids differ
+
+[33mcommit a6ad524fbe7fbaa9e165c32820fe60fbfcb2ce0c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Wed Jun 25 14:29:27 2025 -0500
+
+    Process diffraction on Qr rods
+
+[33mcommit cb5e78fc2b06de2cb5b133aa75f106ab3960ece1[m
+Author: David Beckwitt <david.beckwitt@gmail.com>
+Date:   Wed Jun 25 14:03:44 2025 -0500
+
+    updated the diffuse test for qr
+
+[33mcommit 86ed5172353c16f6fdd5885173660425c128c642[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Tue Jun 24 21:17:02 2025 -0500
+
+    add write_excel
+
+[33mcommit 10715f24feaadef87b8c62ddc0b5f0460f4eeba1[m
+Merge: b6af2a7 dc514a7
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 13:10:25 2025 -0500
+
+    Merge pull request #77 from DVBeckwitt/codex/implement-debug-logging-for-numba
+    
+    Enable RA_SIM_DEBUG in main
+
+[33mcommit dc514a7a78d54fc8673baf1ae814415e8d021003[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 13:10:15 2025 -0500
+
+    Enable RA_SIM_DEBUG in main
+
+[33mcommit b6af2a757c273c811fdde4ad83d591d6543b77f5[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 11:20:59 2025 -0500
+
+    Add flag to control Excel output
+
+[33mcommit 3e52fbfba694e851bd0944028a6b6e2cea890cd9[m
+Merge: ec3e13d 2982583
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:58:05 2025 -0500
+
+    Merge pull request #71 from DVBeckwitt/codex/save-non-dependent-values-in-ht_curves
+    
+    Cache HT base curves independent of occ and p
+
+[33mcommit 298258367b603a2d70a69fc16fa236459818f502[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:57:53 2025 -0500
+
+    cache cif parsing and reuse temp files
+
+[33mcommit ec3e13dc41bee4ddef4415367bc16499954bf537[m
+Merge: abc1819 0eaaabc
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:39:03 2025 -0500
+
+    Merge pull request #70 from DVBeckwitt/codex/optimize-ht_curves-for-fewer-recalculations
+    
+    Optimize HT curve reuse
+
+[33mcommit 0eaaabc3affaf3c1492ed2b8c96afdb2643d04f8[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:38:51 2025 -0500
+
+    Optimize HT curve caching and add L_step safeguard
+
+[33mcommit abc1819bedd39cc9ca93a412da21383cbec5abe0[m
+Merge: abe7d7b f67005e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:15:09 2025 -0500
+
+    Merge pull request #69 from DVBeckwitt/codex/fix-nameerror-for--defaults--variable
+    
+    Fix defaults initialization order
+
+[33mcommit f67005ec8bf650d94498feb8fc3b7574dbfaf211[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:13:45 2025 -0500
+
+    fix defaults initialization
+
+[33mcommit abe7d7b5deff283eea85de8d94c4f1dc13155a69[m
+Merge: 2c8d7c5 7cca871
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:03:09 2025 -0500
+
+    Merge pull request #68 from DVBeckwitt/codex/optimize-stackingfault.py
+    
+    Optimize stacking fault calculations
+
+[33mcommit 7cca871fd2986ccb4e474bdd8a6ca8cb63145a00[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:02:19 2025 -0500
+
+    Optimize stacking fault calculations
+
+[33mcommit 2c8d7c5f4055306807586937c860f0c38e54d997[m
+Merge: 886763a a1c05e0
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:00:12 2025 -0500
+
+    Merge pull request #67 from DVBeckwitt/codex/optimize-ht_curves-recalculation
+    
+    Optimize HT curve recalculation
+
+[33mcommit a1c05e0ee24cc570dd52a25f0f3d2434d57a3f03[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Tue Jun 24 10:00:00 2025 -0500
+
+    cache ht_curves
+
+[33mcommit 886763a913aa710c7108e7cef68e2bf63435e19d[m
+Merge: 453f5f3 756a089
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 23:38:01 2025 -0500
+
+    Merge pull request #66 from DVBeckwitt/codex/add-slider-to-adjust-p-in-ht_iinf_dict
+    
+    Remove outdated troubleshooting info
+
+[33mcommit 756a08997bba709d6d8217fa7eabc3e89e8554e5[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 23:37:52 2025 -0500
+
+    docs: remove numba troubleshooting
+
+[33mcommit 453f5f3d242768b032a01aea465589928083444a[m
+Merge: c32e114 cf79fca
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 23:12:02 2025 -0500
+
+    Merge pull request #65 from DVBeckwitt/codex/modify-hendricks-teller-helper-with-2theta-max
+    
+    Add two_theta_max option for HT curves
+
+[33mcommit cf79fca1c7f99f804b59d809f531ba2ef4cc6395[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 23:11:46 2025 -0500
+
+    Add two_theta_max option to HT helper
+
+[33mcommit c32e114d4cea95412d8971e6274eca0c03582a5d[m
+Merge: 5655b7c 57be41d
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 21:04:47 2025 -0500
+
+    Merge pull request #64 from DVBeckwitt/codex/investigate-new-method-variable-shapes
+    
+    docs: clarify numba compatibility
+
+[33mcommit 57be41dc19906f9d87e386ed4520c1a5196e16fb[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 21:04:38 2025 -0500
+
+    docs: clarify numba compatibility
+
+[33mcommit 5655b7cc5410f82df894b81863294fc6828c7f17[m
+Merge: aaa8f23 56364e2
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 17:17:22 2025 -0500
+
+    Merge pull request #63 from DVBeckwitt/codex/debug-output-skipping-despite-being-enabled
+    
+    Fix debug print flag
+
+[33mcommit 56364e2452b425dc036f4202ccc96cea21deaa32[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 17:17:14 2025 -0500
+
+    debug utils: check env var on each call
+
+[33mcommit aaa8f2364d772db613e8181f9ab4be40c0459689[m
+Merge: a752f5b 2a92b4a
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 16:32:14 2025 -0500
+
+    Merge pull request #62 from DVBeckwitt/codex/debug-issue-before-next-debug-statement
+    
+    Print HT arrays when debug mode enabled
+
+[33mcommit 2a92b4ab9803500d25a05e2d9a886b56e2b8ba46[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 16:32:03 2025 -0500
+
+    Add HT array diagnostics when debugging
+
+[33mcommit a752f5b7bec466f57cde296ae0aef4eb1d19d6dc[m
+Merge: d1996d0 4e852b4
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 16:02:47 2025 -0500
+
+    Merge pull request #60 from DVBeckwitt/efrxc5-codex/add-troubleshooting-for-diffraction.py-error
+    
+    Add debug_print utility for RA_SIM_DEBUG
+
+[33mcommit 4e852b4cd4d4942e018810bf22fba401a021f75f[m
+Merge: 4e96a29 d1996d0
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 16:02:37 2025 -0500
+
+    Merge branch 'disorder' into efrxc5-codex/add-troubleshooting-for-diffraction.py-error
+
+[33mcommit 4e96a29d3c1569d7dba6858b1a094b07ea3d8ece[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 16:01:27 2025 -0500
+
+    Print debug mode status
+
+[33mcommit d1996d00cfbbee59028f528a17e51cb933520f19[m
+Merge: de3e39f 37f5b33
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:30:21 2025 -0500
+
+    Merge pull request #59 from DVBeckwitt/d4cl0w-codex/add-troubleshooting-for-diffraction.py-error
+    
+    Add debug_print utility for RA_SIM_DEBUG
+
+[33mcommit 37f5b33d2a9f74e60fac290c75029e6918a58020[m
+Merge: 90f18cc de3e39f
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:30:12 2025 -0500
+
+    Merge branch 'disorder' into d4cl0w-codex/add-troubleshooting-for-diffraction.py-error
+
+[33mcommit 90f18cc03114b31eff63c982bb50f0670f1d6e72[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:29:25 2025 -0500
+
+    Improve RA_SIM_DEBUG handling
+
+[33mcommit de3e39f2e79df263f3c9ddc47c463cba058589a8[m
+Merge: b0f5acf 61f7c8f
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:20:28 2025 -0500
+
+    Merge pull request #58 from DVBeckwitt/xo8t5b-codex/add-troubleshooting-for-diffraction.py-error
+    
+    Add debug_print utility for RA_SIM_DEBUG
+
+[33mcommit 61f7c8f2b524c635c3ffe4b751a746a0d451a5a5[m
+Merge: eb149f7 b0f5acf
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:20:16 2025 -0500
+
+    Merge branch 'disorder' into xo8t5b-codex/add-troubleshooting-for-diffraction.py-error
+
+[33mcommit eb149f76113a53a90d52f7abba042a87f4729e14[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:19:17 2025 -0500
+
+    Add debug_print utility and update diagnostics
+
+[33mcommit b0f5acfbe8c473f630321acffaec44ae5552076a[m
+Merge: 0c9b309 c596f35
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:12:35 2025 -0500
+
+    Merge pull request #57 from DVBeckwitt/x5sn0s-codex/add-troubleshooting-for-diffraction.py-error
+    
+    Add troubleshooting diagnostics toggle
+
+[33mcommit c596f357efa0c4542dfaafee209af7c2f83cd103[m
+Merge: 0723dab 0c9b309
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:12:29 2025 -0500
+
+    Merge branch 'disorder' into x5sn0s-codex/add-troubleshooting-for-diffraction.py-error
+
+[33mcommit 0723dabf8541a6df7e743321301ed85f95870589[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 15:12:07 2025 -0500
+
+    Add RA_SIM_DEBUG diagnostics
+
+[33mcommit 0c9b309151854200cbb17e63b4ae0173fbc98fd0[m
+Merge: 39de510 9ebcaeb
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 14:48:38 2025 -0500
+
+    Merge pull request #56 from DVBeckwitt/codex/add-troubleshooting-for-diffraction.py-error
+    
+    Add debug logging for non-integer L handling
+
+[33mcommit 9ebcaeb17d90c70223d92731cd369a55d635e0e0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 14:48:28 2025 -0500
+
+    Add debug logging and exception handling
+
+[33mcommit 39de510afa91ba873758efb53dfe9b5c8a2d88f1[m
+Merge: a977b4e 501cbd5
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 14:36:11 2025 -0500
+
+    Merge pull request #55 from DVBeckwitt/uf8kf9-codex/verify-format-consistency-of-miller1-and-intens1
+    
+    Fix ht_curves array conversion
+
+[33mcommit 501cbd53fe1a670cce363875a76bae192270f595[m
+Merge: 6ec5362 a977b4e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 14:36:05 2025 -0500
+
+    Merge branch 'disorder' into uf8kf9-codex/verify-format-consistency-of-miller1-and-intens1
+
+[33mcommit 6ec5362b368cd48fa70cc08e0a1dee11232e35a7[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 14:35:32 2025 -0500
+
+    Ensure L order consistent in ht_dict_to_arrays
+
+[33mcommit a977b4e1d1a724ab919887d53523d6fcf6733ea0[m
+Merge: 4e757d2 17852b3
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 14:05:37 2025 -0500
+
+    Merge pull request #54 from DVBeckwitt/codex/verify-format-consistency-of-miller1-and-intens1
+    
+    Fix ht_curves array conversion
+
+[33mcommit 17852b349c40c8dd5334d2664d69fe8b3e66dc11[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 14:05:26 2025 -0500
+
+    Add helper for HT curves and fix update_occupancies
+
+[33mcommit 4e757d28a77d9bc249cc00843c995136fea7cf54[m
+Merge: 874ab26 c367ae7
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:51:41 2025 -0500
+
+    Merge pull request #53 from DVBeckwitt/85695u-codex/modify-ht_curves-to-include-rod-flags
+    
+    Fix occupancy regeneration
+
+[33mcommit c367ae73b07f91e2e78691489780a294287006c6[m
+Merge: 1999f4c 874ab26
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:51:34 2025 -0500
+
+    Merge branch 'disorder' into 85695u-codex/modify-ht_curves-to-include-rod-flags
+
+[33mcommit 1999f4caa1d0949ac5d31dda4728eff179dfd060[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:50:53 2025 -0500
+
+    Fix occupancy regeneration
+
+[33mcommit 874ab26d0e175d63e2501cb82501215427b4ed23[m
+Merge: d78a590 cfcddd3
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:39:38 2025 -0500
+
+    Merge pull request #52 from DVBeckwitt/codex/modify-ht_curves-to-include-rod-flags
+    
+    Fix occupancy update path for stacking fault rods
+
+[33mcommit cfcddd386c529014f979f36ee888a5e426e215bf[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:39:24 2025 -0500
+
+    Use ht_Iinf_dict when updating occupancies
+
+[33mcommit d78a590acda6e79f0495147f94e99b2abf20cb81[m
+Merge: d216b9d e9ef340
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:31:40 2025 -0500
+
+    Merge pull request #51 from DVBeckwitt/codex/debug-shape-or-type-issue-in-diffractin.py
+    
+    Fix simulate_diffraction call signature
+
+[33mcommit e9ef340d06883c42fe177fac3dbb713e165934f4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:31:23 2025 -0500
+
+    Fix simulate_diffraction parameter handling
+
+[33mcommit d216b9d60525297a9215f8d9dcb3b4b90d13717a[m
+Merge: b4be757 c27947e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:10:57 2025 -0500
+
+    Merge pull request #50 from DVBeckwitt/codex/fix-array-formatting-in-diffraction.py
+    
+    Fix empty Miller array handling
+
+[33mcommit c27947ec49bd93c61047f024f63e771d77b8a20c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 13:10:46 2025 -0500
+
+    Ensure Miller array shape
+
+[33mcommit b4be757ac09db780a21d8c4d43a7f402929a419c[m
+Merge: 6703a1c c69126b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:55:40 2025 -0500
+
+    Merge pull request #49 from DVBeckwitt/codex/organize-diffraction-data-into-structure
+    
+    Add helper for diffraction DataFrame output
+
+[33mcommit c69126bdb26f9de1d2b9876755001d7d6d8c52f8[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:55:26 2025 -0500
+
+    Add helper for diffraction DataFrames
+
+[33mcommit 6703a1c5cb8b21f6a11a8ea294dbc9e23620206e[m
+Merge: 1f2b065 32a4b28
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:26:43 2025 -0500
+
+    Merge pull request #48 from DVBeckwitt/codex/fix-bugs-in-implementation
+    
+    Fix DataFrame creation for stacking fault results
+
+[33mcommit 32a4b28fbeaabe05f208ba64d127c85e63e183b6[m
+Merge: 48bf507 1f2b065
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:26:37 2025 -0500
+
+    Merge branch 'disorder' into codex/fix-bugs-in-implementation
+
+[33mcommit 48bf507e930ac84e559d393f15888888a067572a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:23:32 2025 -0500
+
+    Expand stacking fault rods over L
+
+[33mcommit 1f2b065bfd539740f2c7e42b8a9e12fd219037a4[m
+Merge: 4d13727 859fec3
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:13:38 2025 -0500
+
+    Merge pull request #47 from DVBeckwitt/re2oj7-codex/fix-bugs-in-implementation
+    
+    Fix DataFrame creation for stacking fault results
+
+[33mcommit 859fec3a3d57134828614be059e55ed6e878b50e[m
+Merge: c28f823 4d13727
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:13:31 2025 -0500
+
+    Merge branch 'disorder' into re2oj7-codex/fix-bugs-in-implementation
+
+[33mcommit c28f823a1b6697ca5145e141c3c1b31ed7089005[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 12:12:20 2025 -0500
+
+    Expand stacking fault rods over L
+
+[33mcommit 4d137272c28d501c893b13f5e02656a7cea2bb06[m
+Merge: 1c9f494 6ac21c7
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 11:55:24 2025 -0500
+
+    Merge pull request #46 from DVBeckwitt/fqdi93-codex/fix-bugs-in-implementation
+    
+    Fix DataFrame creation for stacking fault results
+
+[33mcommit 6ac21c7a9260427371a0d8e777ad3bf49f0d0fc1[m
+Merge: e97c6d9 1c9f494
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 11:55:17 2025 -0500
+
+    Merge branch 'disorder' into fqdi93-codex/fix-bugs-in-implementation
+
+[33mcommit e97c6d90fa529f2e1fa4f968bb01be3f3d5045ba[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 11:54:46 2025 -0500
+
+    Expand stacking fault rods over L
+
+[33mcommit 1c9f494688d3c4e8730fc68a36989626bb2010ea[m
+Merge: 7ad60d3 7c2d697
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 11:48:04 2025 -0500
+
+    Merge pull request #45 from DVBeckwitt/codex/fix-bugs-in-implementation
+    
+    Fix DataFrame creation for stacking fault results
+
+[33mcommit 7c2d6970c848989c32167095e733426da94d397f[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 11:47:49 2025 -0500
+
+    Fix DataFrame shape error in main
+
+[33mcommit 7ad60d3344d472ae774754ae54ca2358b077e439[m
+Merge: e6202c0 bebbd5d
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 11:39:46 2025 -0500
+
+    Merge pull request #44 from DVBeckwitt/codex/fix-bug-in-ht_iinf_dict-function
+    
+    Fix HT occupancy helper path
+
+[33mcommit bebbd5d34f21002a9949347f13d043c3d7eb7a00[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 11:38:07 2025 -0500
+
+    Fix HT occupancy helper and import
+
+[33mcommit e6202c0e347dc9f3f996cde9d2694e916369427b[m
+Author: David Beckwitt <david.beckwitt@gmail.com>
+Date:   Mon Jun 23 11:12:07 2025 -0500
+
+    Added HT logic
+
+[33mcommit 0ea8604d5c581a785135e531b40cad157e962eb8[m
+Author: David Beckwitt <david.beckwitt@gmail.com>
+Date:   Mon Jun 23 10:35:29 2025 -0500
+
+    Added markovian stacking fault logic
+
+[33mcommit 955e3d35dae1fade776ef6cb58e3d473089ceda4[m
+Merge: cd4af61 d368d09
+Author: David Beckwitt <david.beckwitt@gmail.com>
+Date:   Mon Jun 23 10:31:29 2025 -0500
+
+    Merge branch 'rod'
+
+[33mcommit d368d0935ea59d4fa6ee9fa8be7b222f644263dd[m
+Merge: 194547b 7dd3c81
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 09:28:58 2025 -0500
+
+    Merge pull request #42 from DVBeckwitt/codex/add-rod-feature-to-main.py-simulation
+    
+    Enable fractional rod reflections in GUI
+
+[33mcommit 7dd3c81356d9e80f9acd010aad459edbb5decb45[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 23 09:28:41 2025 -0500
+
+    Add optional fractional rod reflections
+
+[33mcommit cd4af61e3cf6b7c4d8cbda72eae4426111e9e854[m
+Merge: 7aac9d3 ebc7291
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 19 09:13:29 2025 -0500
+
+    Merge pull request #41 from DVBeckwitt/codex/add-intensities_for_hkls-function
+    
+    Add intensity helper
+
+[33mcommit ebc7291d2b3ca51c162438daa4134f9b8086bc3b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 19 09:11:05 2025 -0500
+
+    Add intensity helper and tests
+
+[33mcommit 194547b09120152c76fc9383ac415ee8db1c9052[m
+Merge: 9c9c823 3ae15b7
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:47:13 2025 -0500
+
+    Merge pull request #40 from DVBeckwitt/codex/add-intensity-scale-slider-to-view_sim_image
+    
+    Add intensity slider to view_sim_image
+
+[33mcommit 3ae15b76bd4f2d4b05d63dc9ac88c22b584c8063[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:47:04 2025 -0500
+
+    Ensure HKL values remain floats
+
+[33mcommit 9c9c8230c329fdfcadca07445648760ea76df2ac[m
+Merge: 99fa483 b97942b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:31:10 2025 -0500
+
+    Merge pull request #39 from DVBeckwitt/zt8eib-codex/inject-constant-intensity-spheres-between-bragg-spheres
+    
+    Inject fractional reflection spheres
+
+[33mcommit b97942b179668031543928e04e4b74b7315d7129[m
+Merge: aaf71b9 99fa483
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:31:04 2025 -0500
+
+    Merge branch 'rod' into zt8eib-codex/inject-constant-intensity-spheres-between-bragg-spheres
+
+[33mcommit aaf71b97f2e2daf748b44c1e51224e6e25d1f6c0[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:28:09 2025 -0500
+
+    Inject fractional reflections only along L
+
+[33mcommit 99fa4830acf02623a4a33d931a4742f1664eec65[m
+Merge: db35b13 3839080
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:03:30 2025 -0500
+
+    Merge pull request #38 from DVBeckwitt/g0mix8-codex/inject-constant-intensity-spheres-between-bragg-spheres
+    
+    Inject fractional reflection spheres
+
+[33mcommit 383908058e3da771a7ddee272360fca327c63a6b[m
+Merge: 8ca5c3e db35b13
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:03:22 2025 -0500
+
+    Merge branch 'rod' into g0mix8-codex/inject-constant-intensity-spheres-between-bragg-spheres
+
+[33mcommit 8ca5c3e7fa7a5ed2a415f0b3a98bf5528fc5ff33[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 12:01:35 2025 -0500
+
+    Add viewer script and wrap diffraction simulation
+
+[33mcommit db35b13056bf5f342ff1286288e89805b14660f7[m
+Merge: b5ed78e a68d2de
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 11:28:13 2025 -0500
+
+    Merge pull request #36 from DVBeckwitt/7so7u2-codex/inject-constant-intensity-spheres-between-bragg-spheres
+    
+    Inject fractional reflection spheres
+
+[33mcommit a68d2de402918b5485b69db0a04fc2bec2ececb2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 11:27:25 2025 -0500
+
+    Fix fractional reflection offset
+
+[33mcommit 490082044bd3e79b1378cbe758875704843e58f2[m
+Merge: 18e0c19 b5ed78e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 11:17:08 2025 -0500
+
+    Merge branch 'rod' into 7so7u2-codex/inject-constant-intensity-spheres-between-bragg-spheres
+
+[33mcommit 18e0c198886e26e04c4816cd2a264c5c6825cbcc[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 11:16:45 2025 -0500
+
+    Refine fractional reflection injection
+
+[33mcommit b5ed78e7dcfb4a8f14a17cf9d0787b5fada44653[m
+Merge: 7aac9d3 f7fc6bb
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 11:03:10 2025 -0500
+
+    Merge pull request #35 from DVBeckwitt/codex/inject-constant-intensity-spheres-between-bragg-spheres
+    
+    Inject fractional reflection spheres
+
+[33mcommit f7fc6bb1317945c51504d66d8077e9c0ff6c48ae[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Mon Jun 16 11:02:57 2025 -0500
+
+    Add fractional reflection injection
+
+[33mcommit 7aac9d3e9a9b6ca99b5cc7965d58c3ae1653fdcb[m
+Merge: c6b338d eb1fe8d
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Jun 13 11:51:54 2025 -0500
+
+    Merge branch 'duo'
+
+[33mcommit eb1fe8d2dd911ddb9d0d101fa5749d64afc8c909[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Jun 13 11:51:26 2025 -0500
+
+    done
+
+[33mcommit 20312ffeb4bbc513d81fca9a3fa40da43e15ccb8[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 13 11:42:07 2025 -0500
+
+    Fix CIF weight mixing
+
+[33mcommit c6b338dba0b5fd7fb24c4d051d55c8a797604445[m
+Merge: f890925 1935b64
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Jun 13 10:57:08 2025 -0500
+
+    Merge branch '32'
+
+[33mcommit 1935b64ef22b911e250bd74fa56dacc5b7d2d8c5[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Fri Jun 13 10:56:31 2025 -0500
+
+    change directory
+
+[33mcommit b322932a9b25035d0d0d8e9396bfd8bd9d252fa4[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 13 10:03:30 2025 -0500
+
+    Merge degeneracy and details symmetrically
+
+[33mcommit 52cf3a7eb8d30cd959514b998e1e92260432ab7c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 13 09:29:24 2025 -0500
+
+    Add independent weight sliders for two CIF files
+
+[33mcommit dcf8a937c6519b35ab97034362203e6fc39a6bfd[m
+Merge: 05057b7 20e6b42
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 12 16:24:00 2025 -0500
+
+    Merge branch 'geometry-optimizer' into 2a3mmy-codex/add-slider-for-cif-file-weight-control
+
+[33mcommit 05057b7b77f3ea3c421fd587b7ba16553a1f9f1b[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 12 16:23:18 2025 -0500
+
+    Normalize intensities after CIF mixing
+
+[33mcommit 20e6b42ece85768928e691ae79a92ea8087808a1[m
+Merge: ae288d4 c83d501
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 12 15:55:34 2025 -0500
+
+    Merge pull request #30 from DVBeckwitt/codex/add-slider-for-cif-file-weight-control
+    
+    Add CIF mixing feature
+
+[33mcommit c83d5017ecabaea640d37643abfc7985c966e0c2[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 12 15:55:27 2025 -0500
+
+    Handle optional second CIF
+
+[33mcommit 14be6b8a6c17fd31a636e62b2db792c0f5f6c6f3[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 12 15:32:48 2025 -0500
+
+    Add weighted CIF combination with slider
+
+[33mcommit ae288d484c0f1247324e293e627db8e568314e8b[m
+Merge: b7dbd7a b299fe5
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 15:03:24 2025 -0500
+
+    Merge pull request #26 from DVBeckwitt/codex/fix-debugger-issue-in-diffraction.py
+    
+    Improve diffraction debug output
+
+[33mcommit b299fe500e32a1318f366c23a660da4e2bba7c19[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 15:02:51 2025 -0500
+
+    Return missed kf vectors from calculate_phi
+
+[33mcommit b7dbd7ada5896c71287b5066a9d7762f69de6861[m
+Merge: 31b8353 f7c6d1e
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 14:28:32 2025 -0500
+
+    Merge pull request #25 from DVBeckwitt/codex/update-main.py-for-recent-changes
+    
+    Fix main.py for updated diffraction output
+
+[33mcommit f7c6d1e69561253bc640bc139adfda5090c1344e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 14:27:42 2025 -0500
+
+    Update main to use new diffraction outputs
+
+[33mcommit 31b8353dbf925c594abd23b4e9324726aa425065[m
+Merge: cde9a5c 0949df1
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 14:20:42 2025 -0500
+
+    Merge pull request #24 from DVBeckwitt/7i8ix7-codex/fix-numba-typing-error-in-solve_q-function
+    
+    Fix numba return types
+
+[33mcommit 0949df1a56b0c64d3844e7499396e83a3c1f104e[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 14:18:50 2025 -0500
+
+    Remove unused return_status and clarify solve_q
+
+[33mcommit cde9a5c8212ded923dcdb975a4b250d0145d8d89[m
+Merge: 46902d2 95271f5
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 13:36:46 2025 -0500
+
+    Merge pull request #23 from DVBeckwitt/codex/fix-numba-typing-error-in-solve_q-function
+    
+    Fix numba return types
+
+[33mcommit 95271f51228432f0df7c2b8b1091b6b6a1b15bf9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 13:36:35 2025 -0500
+
+    Fix numba return types and handle missing occupancy
+
+[33mcommit 46902d2603756f56b606f626384417008656b7eb[m
+Merge: 1a97bc7 7a232e5
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 13:17:39 2025 -0500
+
+    Merge pull request #22 from DVBeckwitt/codex/fix-debugger-in-run_diffraction_test-to-capture-missed-rays
+    
+    Add debug status output from diffraction solver
+
+[33mcommit 7a232e5c36ea23b759ebd15d1a8d2c370cff2361[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 13:14:59 2025 -0500
+
+    Add debug status tracking in diffraction solver
+
+[33mcommit 1a97bc70bbd3ded5c22e68907e64252935dcae15[m
+Merge: a166cab 01cc4a6
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 13:01:19 2025 -0500
+
+    Merge pull request #21 from DVBeckwitt/codex/write-test-script-to-analyze-missed-vectors
+    
+    Add debug analysis script
+
+[33mcommit 01cc4a609614765f1168f4a90909d9af46f503b8[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 13:01:09 2025 -0500
+
+    Add debug analysis script
+
+[33mcommit a166cab99bbac52dfd2f92b710694db96186bb62[m
+Merge: b68ed57 4775f18
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 12:54:48 2025 -0500
+
+    Merge pull request #20 from DVBeckwitt/codex/debug-missing-kf-vectors-in-diffraction
+    
+    Add geometry debugging helper
+
+[33mcommit 4775f183b325ef503d1890243b981c674f46e240[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Fri Jun 6 12:54:38 2025 -0500
+
+    Add geometry debugging helper
+
+[33mcommit b68ed57088c181ba76e4e11330e546c24ba1a24e[m
+Merge: 12d2431 f92af39
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 16:28:29 2025 -0500
+
+    Merge pull request #19 from DVBeckwitt/codex/troubleshoot-ray-detection-issue
+    
+    Fix intersection accuracy for grazing angles
+
+[33mcommit f92af39556f3f6d1cc649b5d16d4ea220a736add[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 16:20:12 2025 -0500
+
+    Fix plane intersection and config path
+
+[33mcommit 12d2431f4511943a39ae1c49a34cc13de28e8057[m
+Merge: 6aa51b1 a6fae9b
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 15:31:49 2025 -0500
+
+    Merge pull request #17 from DVBeckwitt/codex/fix-diffraction-simulation-bug-for-kf-rays
+    
+    Fix tolerance for detector intersection
+
+[33mcommit a6fae9b4f1e1dba11b3b895f7502110a76c9d805[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 15:31:37 2025 -0500
+
+    Fix plane intersection tolerance
+
+[33mcommit 6aa51b1220a7df91b70b69cbc278a13f1eb340f1[m
+Merge: 4139576 415e203
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 15:23:22 2025 -0500
+
+    Merge pull request #16 from DVBeckwitt/codex/fix-kf-outgoing-rays-in-diffraction-simulation
+    
+    Fix grazing ray intersection
+
+[33mcommit 415e20341df91e8f01b325360339e933e5a1055a[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 15:23:07 2025 -0500
+
+    Handle grazing rays in batch intersection
+
+[33mcommit 4139576af750bbde0959587d68d4ed4a1f19986b[m
+Merge: 897a6fe 71b0095
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 15:08:27 2025 -0500
+
+    Merge pull request #15 from DVBeckwitt/codex/create-temporary-folder-and-yaml-config
+    
+    Add cache directory defaults
+
+[33mcommit 71b009516afaf53fd16f42149ce441176c0d08c9[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 15:08:11 2025 -0500
+
+    Use cache directories for logs and overlays
+
+[33mcommit 897a6fe1bb1e5fa0b75875abbfa0c98ba16d42f9[m
+Merge: 6e0da61 902f3c3
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 14:54:28 2025 -0500
+
+    Merge pull request #14 from DVBeckwitt/codex/refactor-code-to-be-more-pythonic
+    
+    Refactor utilities
+
+[33mcommit 902f3c36c637ec223aca9584d5cffca82e94e72c[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 14:54:14 2025 -0500
+
+    Refactor utils
+
+[33mcommit 6e0da615d249f22eb5b7a61bc0ccb4b5ece984af[m
+Merge: 81c7396 d2575a2
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 14:46:08 2025 -0500
+
+    Merge pull request #13 from DVBeckwitt/codex/ensure-library-imports-at-the-top
+    
+    Refactor imports
+
+[33mcommit d2575a22710acf7291e5f6a2a53f77d590c85e94[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 14:45:55 2025 -0500
+
+    Move inline imports to top
+
+[33mcommit 81c7396e3f1dfa41a18fd29a12b280ecbf1121d1[m
+Merge: d0ebe85 acebef9
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 12:50:09 2025 -0500
+
+    Merge pull request #12 from DVBeckwitt/codex/find-hard-coded-lattice-or-crystal-values
+    
+    Use CIF cell parameters and config for IoR constants
+
+[33mcommit acebef941d4d17c2fe75df3f0453fc364af64564[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 12:49:56 2025 -0500
+
+    Use CIF cell parameters and externalize IoR constants
+
+[33mcommit d0ebe85719b0d3ab0519bc60749f333b512bfb8f[m
+Merge: 59da4ad e692b12
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 12:34:00 2025 -0500
+
+    Merge pull request #11 from DVBeckwitt/codex/extract-hard-coded-file-locations-to-yaml
+    
+    Centralize file paths
+
+[33mcommit e692b12af6bb53a26a7aab321937818694a89507[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 12:33:47 2025 -0500
+
+    refactor: centralize file paths
+
+[33mcommit 59da4ad3cd680361a667c4a58600763523c740a6[m
+Merge: f890925 6760010
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 12:13:54 2025 -0500
+
+    Merge pull request #10 from DVBeckwitt/codex/clean-up-project-and-make-comments-pythonic
+    
+    Project cleanup and comments
+
+[33mcommit 67600101f6a2e80f79bf4f03ea6515392771f60d[m
+Author: David Beckwitt <110573014+DVBeckwitt@users.noreply.github.com>
+Date:   Thu Jun 5 12:13:29 2025 -0500
+
+    Remove generated files and improve comments
+
+[33mcommit f8909259a47cfd962ff6225d81c1050ad6d80562[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu Jun 5 11:53:56 2025 -0500
+
+    Making paths more generalized
+
+[33mcommit 0da6f93ed3183ee233e5e5210053864eb9cfff73[m
+Author: David Beckwitt <David.Beckwitt@gmail.com>
+Date:   Thu May 29 15:39:23 2025 -0500
+
+    Initial commit
