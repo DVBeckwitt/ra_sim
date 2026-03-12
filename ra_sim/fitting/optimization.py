@@ -311,6 +311,18 @@ class ReflectionSimulationSubset:
     reduced: bool
 
 
+@dataclass
+class GeometryFitDatasetContext:
+    """One measured-peak dataset used in a geometry fit."""
+
+    dataset_index: int
+    label: str
+    theta_initial: float
+    subset: ReflectionSimulationSubset
+    experimental_image: Optional[np.ndarray] = None
+    single_ray_indices: Optional[np.ndarray] = None
+
+
 def _miller_key_from_row(row: Sequence[float]) -> Optional[Tuple[int, int, int]]:
     """Return an integer HKL tuple from a Miller-array row."""
 
@@ -432,6 +444,438 @@ def _prepare_reflection_subset(
         fallback_hkl_count=int(len(fallback_hkl_keys)),
         reduced=reduced,
     )
+
+
+def _build_geometry_fit_dataset_contexts(
+    miller: np.ndarray,
+    intensities: np.ndarray,
+    params: Dict[str, object],
+    measured_peaks: Optional[Sequence[object]],
+    experimental_image: Optional[np.ndarray],
+    dataset_specs: Optional[Sequence[Dict[str, object]]] = None,
+) -> List[GeometryFitDatasetContext]:
+    """Normalize one or more geometry-fit datasets into internal contexts."""
+
+    default_theta = float(params.get("theta_initial", 0.0))
+    raw_specs: List[Dict[str, object]] = []
+
+    if dataset_specs:
+        for dataset_index, raw_entry in enumerate(dataset_specs):
+            if not isinstance(raw_entry, dict):
+                raise TypeError(
+                    "geometry fit dataset_specs entries must be dictionaries"
+                )
+            entry = dict(raw_entry)
+            entry.setdefault("dataset_index", int(dataset_index))
+            entry.setdefault("label", f"dataset_{dataset_index}")
+            entry.setdefault("theta_initial", default_theta)
+            raw_specs.append(entry)
+    else:
+        raw_specs.append(
+            {
+                "dataset_index": 0,
+                "label": "dataset_0",
+                "theta_initial": default_theta,
+                "measured_peaks": measured_peaks,
+                "experimental_image": experimental_image,
+            }
+        )
+
+    contexts: List[GeometryFitDatasetContext] = []
+    for fallback_index, entry in enumerate(raw_specs):
+        try:
+            dataset_index = int(entry.get("dataset_index", fallback_index))
+        except Exception:
+            dataset_index = int(fallback_index)
+        if dataset_index < 0:
+            dataset_index = int(fallback_index)
+
+        try:
+            theta_initial = float(entry.get("theta_initial", default_theta))
+        except Exception:
+            theta_initial = float(default_theta)
+        if not np.isfinite(theta_initial):
+            theta_initial = float(default_theta)
+
+        label = str(entry.get("label", f"dataset_{dataset_index}"))
+        measured_local = entry.get("measured_peaks", measured_peaks)
+        experimental_local = entry.get("experimental_image", experimental_image)
+        subset = _prepare_reflection_subset(miller, intensities, measured_local)
+        contexts.append(
+            GeometryFitDatasetContext(
+                dataset_index=int(dataset_index),
+                label=label,
+                theta_initial=float(theta_initial),
+                subset=subset,
+                experimental_image=(
+                    None
+                    if experimental_local is None
+                    else np.asarray(experimental_local, dtype=np.float64)
+                ),
+            )
+        )
+    return contexts
+
+
+def _build_greedy_point_matches(
+    simulated_points: Sequence[Tuple[float, float]],
+    measured_points: Sequence[Tuple[float, float]],
+    *,
+    max_distance: float = np.inf,
+) -> List[Tuple[np.ndarray, np.ndarray, float, int, int]]:
+    """Greedy one-to-one matching between measured and simulated point sets."""
+
+    if not simulated_points or not measured_points:
+        return []
+
+    sim = np.asarray(simulated_points, dtype=float)
+    meas = np.asarray(measured_points, dtype=float)
+    if sim.ndim != 2 or meas.ndim != 2 or sim.shape[1] != 2 or meas.shape[1] != 2:
+        return []
+
+    dist = np.linalg.norm(meas[:, None, :] - sim[None, :, :], axis=2)
+    if not np.isfinite(max_distance):
+        mask = np.isfinite(dist)
+    else:
+        mask = np.isfinite(dist) & (dist <= float(max_distance))
+    candidate_pairs = np.argwhere(mask)
+    if candidate_pairs.size == 0:
+        return []
+
+    candidate_dist = dist[candidate_pairs[:, 0], candidate_pairs[:, 1]]
+    order = np.argsort(candidate_dist)
+    used_meas: set[int] = set()
+    used_sim: set[int] = set()
+    matches: List[Tuple[np.ndarray, np.ndarray, float, int, int]] = []
+    for idx in order:
+        m_idx = int(candidate_pairs[idx, 0])
+        s_idx = int(candidate_pairs[idx, 1])
+        if m_idx in used_meas or s_idx in used_sim:
+            continue
+        d = float(candidate_dist[idx])
+        matches.append((sim[s_idx], meas[m_idx], d, s_idx, m_idx))
+        used_meas.add(m_idx)
+        used_sim.add(s_idx)
+    return matches
+
+
+def _evaluate_geometry_fit_dataset_point_matches(
+    local: Dict[str, object],
+    dataset_ctx: GeometryFitDatasetContext,
+    *,
+    image_size: int,
+    pixel_tol: float,
+    weighted_matching: bool,
+    solver_f_scale: float,
+    missing_pair_penalty: float,
+    use_single_ray: bool,
+    theta_value: float,
+    collect_diagnostics: bool = False,
+) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+    """Evaluate one measured dataset against one simulated geometry state."""
+
+    simulation_subset = dataset_ctx.subset
+    fit_miller = simulation_subset.miller
+    fit_intensities = simulation_subset.intensities
+    normalized_measured = simulation_subset.measured_entries
+    single_ray_indices = dataset_ctx.single_ray_indices
+
+    if not normalized_measured:
+        return np.array([], dtype=float), [], {
+            "dataset_index": int(dataset_ctx.dataset_index),
+            "dataset_label": str(dataset_ctx.label),
+            "theta_initial_deg": float(theta_value),
+            "measured_count": 0,
+            "fixed_source_resolved_count": 0,
+            "fallback_entry_count": 0,
+            "missing_pair_count": 0,
+            "simulated_reflection_count": int(fit_miller.shape[0]),
+            "total_reflection_count": int(simulation_subset.total_reflection_count),
+            "subset_reduced": bool(simulation_subset.reduced),
+            "single_ray_enabled": bool(use_single_ray),
+            "single_ray_forced_count": 0,
+        }
+
+    mosaic = local["mosaic_params"]
+    wavelength_array = mosaic.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic.get("wavelength_i_array")
+
+    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+    _, hit_tables, *_ = _process_peaks_parallel_safe(
+        fit_miller, fit_intensities, image_size,
+        local["a"], local["c"], wavelength_array,
+        sim_buffer, local["corto_detector"],
+        local["gamma"], local["Gamma"], local["chi"], local.get("psi", 0.0), local.get("psi_z", 0.0),
+        local["zs"], local["zb"], local["n2"],
+        mosaic["beam_x_array"],
+        mosaic["beam_y_array"],
+        mosaic["theta_array"],
+        mosaic["phi_array"],
+        mosaic["sigma_mosaic_deg"],
+        mosaic["gamma_mosaic_deg"],
+        mosaic["eta"],
+        wavelength_array,
+        local["debye_x"], local["debye_y"],
+        local["center"], theta_value, local.get("cor_angle", 0.0),
+        np.array([1.0, 0.0, 0.0]),
+        np.array([0.0, 1.0, 0.0]),
+        save_flag=0,
+        optics_mode=int(local.get("optics_mode", 0)),
+        solve_q_steps=int(mosaic.get("solve_q_steps", 1000)),
+        solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", 5.0e-4)),
+        solve_q_mode=int(mosaic.get("solve_q_mode", 1)),
+        single_sample_indices=single_ray_indices,
+    )
+
+    def _point_radius_px(point: Tuple[float, float]) -> float:
+        try:
+            center_row = float(local["center"][0])
+            center_col = float(local["center"][1])
+        except Exception:
+            return float("nan")
+        if not (
+            np.isfinite(point[0])
+            and np.isfinite(point[1])
+            and np.isfinite(center_row)
+            and np.isfinite(center_col)
+        ):
+            return float("nan")
+        return float(math.hypot(float(point[0]) - center_col, float(point[1]) - center_row))
+
+    maxpos = hit_tables_to_max_positions(hit_tables)
+    residuals: List[float] = []
+    diagnostics: List[Dict[str, object]] = []
+    fixed_matches, fallback_measured, resolution_lookup = _resolve_fixed_source_matches(
+        normalized_measured,
+        hit_tables,
+    )
+
+    fallback_entries_by_hkl: Dict[Tuple[int, int, int], List[Dict[str, object]]] = {}
+    for entry in fallback_measured:
+        raw_hkl = entry.get("hkl")
+        if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
+            continue
+        hkl_key = (int(raw_hkl[0]), int(raw_hkl[1]), int(raw_hkl[2]))
+        fallback_entries_by_hkl.setdefault(hkl_key, []).append(entry)
+
+    def _add_diag(base_entry: Dict[str, object], payload: Dict[str, object]) -> None:
+        if not collect_diagnostics:
+            return
+        diag = dict(base_entry)
+        diag.update(payload)
+        diag["dataset_index"] = int(dataset_ctx.dataset_index)
+        diag["dataset_label"] = str(dataset_ctx.label)
+        diag["theta_initial_deg"] = float(theta_value)
+        diagnostics.append(diag)
+
+    for measured_entry, sim_pt, _sim_hkl in fixed_matches:
+        try:
+            meas_pt = (float(measured_entry["x"]), float(measured_entry["y"]))
+        except Exception:
+            continue
+        if not (
+            np.isfinite(sim_pt[0]) and np.isfinite(sim_pt[1])
+            and np.isfinite(meas_pt[0]) and np.isfinite(meas_pt[1])
+        ):
+            continue
+        dx = float(sim_pt[0] - meas_pt[0])
+        dy = float(sim_pt[1] - meas_pt[1])
+        pair_dist = math.hypot(dx, dy)
+        if weighted_matching:
+            w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
+            dx *= w
+            dy *= w
+        else:
+            w = 1.0
+        residuals.extend([dx, dy])
+        _add_diag(
+            dict(resolution_lookup.get(id(measured_entry), {})),
+            {
+                "match_kind": "fixed_source",
+                "match_status": "matched",
+                "measured_x": float(meas_pt[0]),
+                "measured_y": float(meas_pt[1]),
+                "simulated_x": float(sim_pt[0]),
+                "simulated_y": float(sim_pt[1]),
+                "dx_px": float(sim_pt[0] - meas_pt[0]),
+                "dy_px": float(sim_pt[1] - meas_pt[1]),
+                "distance_px": float(pair_dist),
+                "weight": float(w),
+                "weighted_dx_px": float(dx),
+                "weighted_dy_px": float(dy),
+                "measured_radius_px": _point_radius_px(meas_pt),
+                "simulated_radius_px": _point_radius_px(sim_pt),
+            },
+        )
+
+    measured_dict = build_measured_dict(fallback_measured)
+    simulated_by_hkl: Dict[Tuple[int, int, int], List[Tuple[float, float]]] = {}
+    for idx, (H, K, L) in enumerate(fit_miller):
+        key = (int(round(H)), int(round(K)), int(round(L)))
+        if key not in measured_dict:
+            continue
+        _, x0, y0, _, x1, y1 = maxpos[idx]
+        for col, row in ((x0, y0), (x1, y1)):
+            if np.isfinite(col) and np.isfinite(row):
+                simulated_by_hkl.setdefault(key, []).append((float(col), float(row)))
+
+    missing_pairs = 0
+    for hkl_key in measured_dict:
+        sim_list = simulated_by_hkl.get(hkl_key, [])
+        measured_entries_hkl = fallback_entries_by_hkl.get(hkl_key, [])
+        valid_entries_hkl: List[Dict[str, object]] = []
+        measured_points: List[Tuple[float, float]] = []
+        for entry in measured_entries_hkl:
+            try:
+                mx = float(entry["x"])
+                my = float(entry["y"])
+            except Exception:
+                continue
+            if not (np.isfinite(mx) and np.isfinite(my)):
+                continue
+            valid_entries_hkl.append(entry)
+            measured_points.append((mx, my))
+        if not measured_points:
+            continue
+        if not sim_list:
+            missing_pairs += len(valid_entries_hkl)
+            for entry in valid_entries_hkl:
+                _add_diag(
+                    dict(resolution_lookup.get(id(entry), {})),
+                    {
+                        "match_kind": "hkl_fallback",
+                        "match_status": "missing_pair",
+                        "hkl": tuple(int(v) for v in hkl_key),
+                        "resolution_kind": str(
+                            dict(resolution_lookup.get(id(entry), {})).get(
+                                "resolution_kind", "hkl_fallback"
+                            )
+                        ),
+                        "resolution_reason": str(
+                            dict(resolution_lookup.get(id(entry), {})).get(
+                                "resolution_reason", "no_simulated_candidates"
+                            )
+                        ),
+                        "measured_x": float(entry["x"]),
+                        "measured_y": float(entry["y"]),
+                        "simulated_x": float("nan"),
+                        "simulated_y": float("nan"),
+                        "dx_px": float("nan"),
+                        "dy_px": float("nan"),
+                        "distance_px": float("nan"),
+                        "weight": 0.0,
+                        "weighted_dx_px": float("nan"),
+                        "weighted_dy_px": float("nan"),
+                        "measured_radius_px": _point_radius_px((float(entry["x"]), float(entry["y"]))),
+                        "simulated_radius_px": float("nan"),
+                    },
+                )
+            continue
+
+        matches = _build_greedy_point_matches(sim_list, measured_points, max_distance=pixel_tol)
+        matched_meas_indices: set[int] = set()
+        for sim_pt, meas_pt, pair_dist, sim_idx, meas_idx in matches:
+            matched_meas_indices.add(int(meas_idx))
+            dx = float(sim_pt[0] - meas_pt[0])
+            dy = float(sim_pt[1] - meas_pt[1])
+            if weighted_matching:
+                w = 1.0 / math.sqrt(1.0 + (pair_dist / solver_f_scale) ** 2)
+                dx *= w
+                dy *= w
+            else:
+                w = 1.0
+            residuals.extend([dx, dy])
+            if 0 <= meas_idx < len(valid_entries_hkl):
+                entry = valid_entries_hkl[meas_idx]
+                _add_diag(
+                    dict(resolution_lookup.get(id(entry), {})),
+                    {
+                        "match_kind": "hkl_fallback",
+                        "match_status": "matched",
+                        "hkl": tuple(int(v) for v in hkl_key),
+                        "sim_list_index": int(sim_idx),
+                        "meas_list_index": int(meas_idx),
+                        "measured_x": float(meas_pt[0]),
+                        "measured_y": float(meas_pt[1]),
+                        "simulated_x": float(sim_pt[0]),
+                        "simulated_y": float(sim_pt[1]),
+                        "dx_px": float(sim_pt[0] - meas_pt[0]),
+                        "dy_px": float(sim_pt[1] - meas_pt[1]),
+                        "distance_px": float(pair_dist),
+                        "weight": float(w),
+                        "weighted_dx_px": float(dx),
+                        "weighted_dy_px": float(dy),
+                        "measured_radius_px": _point_radius_px((float(meas_pt[0]), float(meas_pt[1]))),
+                        "simulated_radius_px": _point_radius_px((float(sim_pt[0]), float(sim_pt[1]))),
+                    },
+                )
+
+        unmatched_meas_indices = [idx for idx in range(len(valid_entries_hkl)) if idx not in matched_meas_indices]
+        missing_pairs += len(unmatched_meas_indices)
+        for meas_idx in unmatched_meas_indices:
+            entry = valid_entries_hkl[meas_idx]
+            _add_diag(
+                dict(resolution_lookup.get(id(entry), {})),
+                {
+                    "match_kind": "hkl_fallback",
+                    "match_status": "missing_pair",
+                    "hkl": tuple(int(v) for v in hkl_key),
+                    "resolution_kind": str(
+                        dict(resolution_lookup.get(id(entry), {})).get(
+                            "resolution_kind", "hkl_fallback"
+                        )
+                    ),
+                    "resolution_reason": str(
+                        dict(resolution_lookup.get(id(entry), {})).get(
+                            "resolution_reason", "unmatched_after_assignment"
+                        )
+                    ),
+                    "measured_x": float(entry["x"]),
+                    "measured_y": float(entry["y"]),
+                    "simulated_x": float("nan"),
+                    "simulated_y": float("nan"),
+                    "dx_px": float("nan"),
+                    "dy_px": float("nan"),
+                    "distance_px": float("nan"),
+                    "weight": 0.0,
+                    "weighted_dx_px": float("nan"),
+                    "weighted_dy_px": float("nan"),
+                    "measured_radius_px": _point_radius_px((float(entry["x"]), float(entry["y"]))),
+                    "simulated_radius_px": float("nan"),
+                },
+            )
+
+    if missing_pairs > 0 and missing_pair_penalty > 0.0:
+        residuals.extend([missing_pair_penalty] * missing_pairs)
+
+    residual_arr = (
+        np.asarray(residuals, dtype=float)
+        if residuals
+        else np.array([max(1.0, missing_pair_penalty)], dtype=float)
+    )
+    summary: Dict[str, object] = {
+        "dataset_index": int(dataset_ctx.dataset_index),
+        "dataset_label": str(dataset_ctx.label),
+        "theta_initial_deg": float(theta_value),
+        "measured_count": int(len(normalized_measured)),
+        "fixed_source_resolved_count": int(len(fixed_matches)),
+        "fallback_entry_count": int(len(fallback_measured)),
+        "fallback_hkl_count": int(len(measured_dict)),
+        "missing_pair_count": int(missing_pairs),
+        "simulated_reflection_count": int(fit_miller.shape[0]),
+        "total_reflection_count": int(simulation_subset.total_reflection_count),
+        "fixed_source_reflection_count": int(simulation_subset.fixed_source_reflection_count),
+        "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
+        "subset_reduced": bool(simulation_subset.reduced),
+        "single_ray_enabled": bool(use_single_ray),
+        "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
+        if isinstance(single_ray_indices, np.ndarray)
+        else 0,
+        "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
+        "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+    }
+    return residual_arr, diagnostics, summary
 
 
 def _local_peak_snr(
@@ -2750,6 +3194,7 @@ def fit_geometry_parameters(
     miller, intensities, image_size,
     params, measured_peaks, var_names, pixel_tol=np.inf,
     *, experimental_image: Optional[np.ndarray] = None,
+    dataset_specs: Optional[Sequence[Dict[str, object]]] = None,
     refinement_config: Optional[Dict[str, Dict[str, float]]] = None,
 ):
     """
@@ -2759,15 +3204,16 @@ def fit_geometry_parameters(
 
     _set_numba_usage_from_config(refinement_config)
 
+    point_match_mode = experimental_image is not None or bool(dataset_specs)
+
     single_ray_cfg: Dict[str, float] = {}
     use_single_ray = False
-    if experimental_image is not None:
+    if point_match_mode:
         if isinstance(refinement_config, dict):
             single_ray_cfg = refinement_config.get("single_ray", {}) or {}
         if not isinstance(single_ray_cfg, dict):
             single_ray_cfg = {}
         use_single_ray = bool(single_ray_cfg.get("enabled", True))
-    single_ray_indices: Optional[np.ndarray] = None
 
     solver_cfg: Dict[str, float] = {}
     if isinstance(refinement_config, dict):
@@ -2776,20 +3222,20 @@ def fit_geometry_parameters(
         solver_cfg = {}
 
     solver_loss = str(
-        solver_cfg.get("loss", "soft_l1" if experimental_image is not None else "linear")
+        solver_cfg.get("loss", "soft_l1" if point_match_mode else "linear")
     ).strip().lower()
     if solver_loss not in {"linear", "soft_l1", "huber", "cauchy", "arctan"}:
-        solver_loss = "soft_l1" if experimental_image is not None else "linear"
+        solver_loss = "soft_l1" if point_match_mode else "linear"
 
     solver_f_scale = float(
-        solver_cfg.get("f_scale_px", 6.0 if experimental_image is not None else 1.0)
+        solver_cfg.get("f_scale_px", 6.0 if point_match_mode else 1.0)
     )
     solver_f_scale = max(solver_f_scale, 1e-6)
 
-    solver_max_nfev = int(solver_cfg.get("max_nfev", 120 if experimental_image is not None else 60))
+    solver_max_nfev = int(solver_cfg.get("max_nfev", 120 if point_match_mode else 60))
     solver_max_nfev = max(20, solver_max_nfev)
 
-    solver_restarts = int(solver_cfg.get("restarts", 4 if experimental_image is not None else 0))
+    solver_restarts = int(solver_cfg.get("restarts", 4 if point_match_mode else 0))
     solver_restarts = max(0, solver_restarts)
 
     solver_restart_jitter = float(solver_cfg.get("restart_jitter", 0.15))
@@ -2800,7 +3246,7 @@ def fit_geometry_parameters(
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", True))
     stagnation_probe_enabled = bool(
-        solver_cfg.get("stagnation_probe", experimental_image is not None)
+        solver_cfg.get("stagnation_probe", point_match_mode)
     )
     stagnation_probe_fraction = float(solver_cfg.get("stagnation_probe_fraction", 0.35))
     if not np.isfinite(stagnation_probe_fraction) or stagnation_probe_fraction <= 0.0:
@@ -2835,11 +3281,17 @@ def fit_geometry_parameters(
     params["center"] = [center_row_default, center_col_default]
     params.setdefault("center_x", center_row_default)
     params.setdefault("center_y", center_col_default)
+    params.setdefault("theta_offset", 0.0)
 
-    simulation_subset = _prepare_reflection_subset(miller, intensities, measured_peaks)
-    fit_miller = simulation_subset.miller
-    fit_intensities = simulation_subset.intensities
-    fit_measured_peaks = simulation_subset.measured_entries
+    dataset_contexts = _build_geometry_fit_dataset_contexts(
+        miller,
+        intensities,
+        params,
+        measured_peaks,
+        experimental_image,
+        dataset_specs=dataset_specs,
+    )
+    multi_dataset_mode = ("theta_offset" in var_names) and len(dataset_contexts) > 0
 
     def _safe_float(value: object, fallback: float) -> float:
         try:
@@ -2921,7 +3373,7 @@ def fit_geometry_parameters(
             used_sim.add(s_idx)
         return matches
 
-    def cost_fn(x):
+    def _legacy_cost_fn_unused(x):
         local = _apply_trial_params(x)
         args = [
             local['gamma'], local['Gamma'], local['corto_detector'],
@@ -2947,7 +3399,7 @@ def fit_geometry_parameters(
         )
         return D
 
-    def _evaluate_pixel_matches(
+    def _legacy_evaluate_pixel_matches_unused(
         local: Dict[str, object],
         *,
         collect_diagnostics: bool = False,
@@ -3334,6 +3786,159 @@ def fit_geometry_parameters(
             )
         return residual_arr, diagnostics, summary
 
+    def _theta_initial_for_dataset(
+        local: Dict[str, object],
+        dataset_ctx: GeometryFitDatasetContext,
+    ) -> float:
+        theta_base = _safe_float(dataset_ctx.theta_initial, 0.0)
+        if multi_dataset_mode:
+            theta_offset = _safe_float(local.get("theta_offset", 0.0), 0.0)
+            return float(theta_base + theta_offset)
+        return _safe_float(local.get("theta_initial", theta_base), theta_base)
+
+    def cost_fn(x):
+        local = _apply_trial_params(x)
+        residual_blocks: List[np.ndarray] = []
+        for dataset_ctx in dataset_contexts:
+            theta_value = _theta_initial_for_dataset(local, dataset_ctx)
+            args = [
+                local['gamma'], local['Gamma'], local['corto_detector'],
+                theta_value, local.get('cor_angle', 0.0), local['zs'], local['zb'],
+                local['chi'], local['a'], local['c'],
+                local['center'][0], local['center'][1]
+            ]
+            residual = compute_peak_position_error_geometry_local(
+                *args,
+                measured_peaks=dataset_ctx.subset.measured_entries,
+                miller=dataset_ctx.subset.miller,
+                intensities=dataset_ctx.subset.intensities,
+                image_size=image_size,
+                mosaic_params=local['mosaic_params'],
+                n2=local['n2'],
+                psi=local.get('psi', 0.0),
+                psi_z=local.get('psi_z', 0.0),
+                debye_x=local['debye_x'],
+                debye_y=local['debye_y'],
+                wavelength=local['lambda'],
+                pixel_tol=pixel_tol,
+                optics_mode=local.get('optics_mode', 0),
+            )
+            residual_arr = np.asarray(residual, dtype=float)
+            if residual_arr.size:
+                residual_blocks.append(residual_arr)
+        return (
+            np.concatenate(residual_blocks)
+            if residual_blocks
+            else np.array([], dtype=float)
+        )
+
+    def _evaluate_pixel_matches(
+        local: Dict[str, object],
+        *,
+        collect_diagnostics: bool = False,
+    ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+        if not dataset_contexts:
+            return np.array([], dtype=float), [], {
+                "dataset_count": 0,
+                "measured_count": 0,
+                "fixed_source_resolved_count": 0,
+                "fallback_entry_count": 0,
+                "missing_pair_count": 0,
+                "simulated_reflection_count": 0,
+                "total_reflection_count": 0,
+                "fixed_source_reflection_count": 0,
+                "subset_fallback_hkl_count": 0,
+                "subset_reduced": False,
+                "single_ray_enabled": bool(use_single_ray),
+                "single_ray_forced_count": 0,
+            }
+
+        residual_blocks: List[np.ndarray] = []
+        diagnostics: List[Dict[str, object]] = []
+        per_dataset_summaries: List[Dict[str, object]] = []
+        summary: Dict[str, object] = {
+            "dataset_count": int(len(dataset_contexts)),
+            "measured_count": 0,
+            "fixed_source_resolved_count": 0,
+            "fallback_entry_count": 0,
+            "missing_pair_count": 0,
+            "simulated_reflection_count": 0,
+            "total_reflection_count": 0,
+            "fixed_source_reflection_count": 0,
+            "subset_fallback_hkl_count": 0,
+            "subset_reduced": False,
+            "single_ray_enabled": bool(use_single_ray),
+            "single_ray_forced_count": 0,
+            "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
+            "center_col": float(local['center'][1]) if len(local.get('center', [])) >= 2 else float("nan"),
+        }
+
+        for dataset_ctx in dataset_contexts:
+            theta_value = _theta_initial_for_dataset(local, dataset_ctx)
+            residual_i, diagnostics_i, summary_i = _evaluate_geometry_fit_dataset_point_matches(
+                local,
+                dataset_ctx,
+                image_size=image_size,
+                pixel_tol=float(pixel_tol),
+                weighted_matching=bool(weighted_matching),
+                solver_f_scale=float(solver_f_scale),
+                missing_pair_penalty=float(missing_pair_penalty),
+                use_single_ray=bool(use_single_ray),
+                theta_value=float(theta_value),
+                collect_diagnostics=collect_diagnostics,
+            )
+            residual_i = np.asarray(residual_i, dtype=float)
+            if residual_i.size:
+                residual_blocks.append(residual_i)
+            per_dataset_summaries.append(dict(summary_i))
+            for key in (
+                "measured_count",
+                "fixed_source_resolved_count",
+                "fallback_entry_count",
+                "missing_pair_count",
+                "simulated_reflection_count",
+                "total_reflection_count",
+                "fixed_source_reflection_count",
+                "subset_fallback_hkl_count",
+                "single_ray_forced_count",
+            ):
+                summary[key] = int(summary.get(key, 0)) + int(summary_i.get(key, 0))
+            summary["subset_reduced"] = bool(
+                summary.get("subset_reduced", False) or bool(summary_i.get("subset_reduced", False))
+            )
+            if collect_diagnostics and diagnostics_i:
+                diagnostics.extend(diagnostics_i)
+
+        residual_arr = (
+            np.concatenate(residual_blocks)
+            if residual_blocks
+            else np.array([], dtype=float)
+        )
+        summary["per_dataset"] = per_dataset_summaries
+
+        matched_distances = np.asarray(
+            [
+                float(entry.get("distance_px", np.nan))
+                for entry in diagnostics
+                if str(entry.get("match_status", "")).lower() == "matched"
+            ],
+            dtype=float,
+        )
+        matched_distances = matched_distances[np.isfinite(matched_distances)]
+        summary["matched_pair_count"] = int(matched_distances.size)
+        summary["peak_weighting_mode"] = "uniform"
+        if matched_distances.size:
+            summary["unweighted_peak_rms_px"] = float(
+                np.sqrt(np.mean(matched_distances * matched_distances))
+            )
+            summary["unweighted_peak_mean_px"] = float(np.mean(matched_distances))
+            summary["unweighted_peak_max_px"] = float(np.max(matched_distances))
+        else:
+            summary["unweighted_peak_rms_px"] = float("nan")
+            summary["unweighted_peak_mean_px"] = float("nan")
+            summary["unweighted_peak_max_px"] = float("nan")
+        return residual_arr, diagnostics, summary
+
     def pixel_cost_fn(x):
         local = _apply_trial_params(x)
         residual_arr, _, _ = _evaluate_pixel_matches(local, collect_diagnostics=False)
@@ -3354,49 +3959,51 @@ def fit_geometry_parameters(
 
     x0 = [_initial_value(name) for name in var_names]
 
-    if (
-        experimental_image is not None
-        and use_single_ray
-        and fit_miller.shape[0] > 0
-        and fit_measured_peaks
-    ):
-        try:
-            local = _apply_trial_params(np.asarray(x0, dtype=float))
-            mosaic = local['mosaic_params']
-            wavelength_array = mosaic.get('wavelength_array')
-            if wavelength_array is None:
-                wavelength_array = mosaic.get('wavelength_i_array')
+    if point_match_mode and use_single_ray and dataset_contexts:
+        local = _apply_trial_params(np.asarray(x0, dtype=float))
+        mosaic = local['mosaic_params']
+        wavelength_array = mosaic.get('wavelength_array')
+        if wavelength_array is None:
+            wavelength_array = mosaic.get('wavelength_i_array')
 
-            best_indices = np.full(fit_miller.shape[0], -1, dtype=np.int64)
-            sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-            _process_peaks_parallel_safe(
-                fit_miller, fit_intensities, image_size,
-                local['a'], local['c'], wavelength_array,
-                sim_buffer, local['corto_detector'],
-                local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),
-                local['zs'], local['zb'], local['n2'],
-                mosaic['beam_x_array'],
-                mosaic['beam_y_array'],
-                mosaic['theta_array'],
-                mosaic['phi_array'],
-                mosaic['sigma_mosaic_deg'],
-                mosaic['gamma_mosaic_deg'],
-                mosaic['eta'],
-                wavelength_array,
-                local['debye_x'], local['debye_y'],
-                local['center'], local['theta_initial'], local.get('cor_angle', 0.0),
-                np.array([1.0, 0.0, 0.0]),
-                np.array([0.0, 1.0, 0.0]),
-                save_flag=0,
-                optics_mode=int(local.get('optics_mode', 0)),
-                solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
-                solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
-                solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
-                best_sample_indices_out=best_indices,
-            )
-            single_ray_indices = best_indices
-        except Exception:
-            single_ray_indices = None
+        for dataset_ctx in dataset_contexts:
+            fit_miller = dataset_ctx.subset.miller
+            fit_measured_peaks = dataset_ctx.subset.measured_entries
+            if fit_miller.shape[0] <= 0 or not fit_measured_peaks:
+                dataset_ctx.single_ray_indices = None
+                continue
+            try:
+                theta_value = _theta_initial_for_dataset(local, dataset_ctx)
+                best_indices = np.full(fit_miller.shape[0], -1, dtype=np.int64)
+                sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+                _process_peaks_parallel_safe(
+                    fit_miller, dataset_ctx.subset.intensities, image_size,
+                    local['a'], local['c'], wavelength_array,
+                    sim_buffer, local['corto_detector'],
+                    local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),
+                    local['zs'], local['zb'], local['n2'],
+                    mosaic['beam_x_array'],
+                    mosaic['beam_y_array'],
+                    mosaic['theta_array'],
+                    mosaic['phi_array'],
+                    mosaic['sigma_mosaic_deg'],
+                    mosaic['gamma_mosaic_deg'],
+                    mosaic['eta'],
+                    wavelength_array,
+                    local['debye_x'], local['debye_y'],
+                    local['center'], theta_value, local.get('cor_angle', 0.0),
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.0, 1.0, 0.0]),
+                    save_flag=0,
+                    optics_mode=int(local.get('optics_mode', 0)),
+                    solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
+                    solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
+                    solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
+                    best_sample_indices_out=best_indices,
+                )
+                dataset_ctx.single_ray_indices = best_indices
+            except Exception:
+                dataset_ctx.single_ray_indices = None
 
     lower_bounds = []
     upper_bounds = []
@@ -3474,7 +4081,7 @@ def fit_geometry_parameters(
     else:
         x_scale = auto_scale
 
-    residual_fn = pixel_cost_fn if experimental_image is not None else cost_fn
+    residual_fn = pixel_cost_fn if point_match_mode else cost_fn
 
     def _run_solver(x_start: np.ndarray) -> OptimizeResult:
         return least_squares(
@@ -3738,7 +4345,7 @@ def fit_geometry_parameters(
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)
 
-    if experimental_image is not None and getattr(result, "x", None) is not None:
+    if point_match_mode and getattr(result, "x", None) is not None:
         try:
             final_local = _apply_trial_params(np.asarray(result.x, dtype=float))
             _, point_match_diagnostics, point_match_summary = _evaluate_pixel_matches(

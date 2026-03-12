@@ -68,6 +68,7 @@ instrument:
       # - relative_min0: like relative, but the lower bound is clamped to >= 0.
       bounds:
         theta_initial: {mode: relative, min: -0.5, max: 0.5}
+        theta_offset: {mode: absolute, min: -0.5, max: 0.5}
         zs: {mode: absolute, min: -2.0e-3, max: 2.0e-3}
         zb: {mode: absolute, min: -2.0e-3, max: 2.0e-3}
         chi: {mode: absolute, min: -1.0, max: 1.0}
@@ -79,6 +80,7 @@ instrument:
       # Per-parameter optimizer sensitivity (scales). Use 1.0 for defaults.
       x_scale:
         theta_initial: 1.0
+        theta_offset: 1.0
         zs: 1.0
         zb: 1.0
         chi: 1.0

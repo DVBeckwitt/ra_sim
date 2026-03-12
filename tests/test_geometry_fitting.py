@@ -826,3 +826,79 @@ def test_fit_geometry_parameters_reports_unweighted_peak_rms(monkeypatch):
     assert str(result.point_match_summary["peak_weighting_mode"]) == "uniform"
     assert np.isfinite(float(result.weighted_residual_rms_px))
     assert float(result.rms_px) > float(result.weighted_residual_rms_px)
+
+
+def test_fit_geometry_parameters_joint_backgrounds_share_theta_offset(monkeypatch):
+    target_offset = 0.75
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        theta_initial = float(args[27])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, theta_initial, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        best_sample_indices_out = kwargs.get("best_sample_indices_out")
+        if isinstance(best_sample_indices_out, np.ndarray):
+            best_sample_indices_out[:] = 0
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["theta_offset"] = 0.0
+
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 3.0,
+            "measured_peaks": [
+                {"label": "1,0,0", "x": 3.0 + target_offset, "y": 4.0}
+            ],
+            "experimental_image": experimental_image,
+        },
+        {
+            "dataset_index": 1,
+            "label": "bg1",
+            "theta_initial": 7.0,
+            "measured_peaks": [
+                {"label": "1,0,0", "x": 7.0 + target_offset, "y": 4.0}
+            ],
+            "experimental_image": experimental_image,
+        },
+    ]
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=dataset_specs[0]["measured_peaks"],
+        var_names=["theta_offset"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {"restarts": 0, "weighted_matching": False, "max_nfev": 40},
+            "single_ray": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert result.x.shape == (1,)
+    assert abs(float(result.x[0]) - target_offset) < 1e-6
+    assert np.allclose(np.asarray(result.fun, dtype=float), 0.0, atol=1e-6)
+    assert int(result.point_match_summary["dataset_count"]) == 2
+    assert int(result.point_match_summary["matched_pair_count"]) == 2
+    assert len(result.point_match_summary["per_dataset"]) == 2
+    assert len(result.point_match_diagnostics) == 2
+    assert {
+        int(entry["dataset_index"]) for entry in result.point_match_diagnostics
+    } == {0, 1}

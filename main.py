@@ -2075,6 +2075,221 @@ background_visible = True
 background_backend_rotation_k = 3
 background_backend_flip_x = False
 background_backend_flip_y = False
+background_theta_list_var = None
+geometry_theta_offset_var = None
+fit_theta_checkbutton = None
+
+
+def _background_theta_default_value() -> float:
+    """Return the fallback theta value used when no per-background list exists."""
+
+    try:
+        if "defaults" in globals():
+            return float(defaults.get("theta_initial", theta_initial))
+    except Exception:
+        pass
+    try:
+        if "theta_initial_var" in globals() and theta_initial_var is not None:
+            return float(theta_initial_var.get())
+    except Exception:
+        pass
+    return float(theta_initial)
+
+
+def _format_background_theta_values(values: Sequence[object]) -> str:
+    """Format per-background theta values for the GUI entry."""
+
+    formatted: list[str] = []
+    for value in values:
+        try:
+            theta_val = float(value)
+        except Exception:
+            continue
+        if not np.isfinite(theta_val):
+            continue
+        formatted.append(f"{theta_val:.6g}")
+    return ", ".join(formatted)
+
+
+def _parse_background_theta_values(
+    raw_text: object,
+    *,
+    expected_count: int | None = None,
+) -> list[float]:
+    """Parse comma/space/semicolon separated background theta values."""
+
+    text = str(raw_text or "").strip()
+    if not text:
+        if expected_count is not None:
+            raise ValueError(
+                f"Expected {expected_count} background theta values, got 0."
+            )
+        return []
+
+    tokens = [token for token in re.split(r"[\s,;]+", text) if token]
+    values: list[float] = []
+    for token in tokens:
+        try:
+            theta_val = float(token)
+        except Exception as exc:
+            raise ValueError(f"Invalid theta value '{token}'.") from exc
+        if not np.isfinite(theta_val):
+            raise ValueError(f"Non-finite theta value '{token}'.")
+        values.append(float(theta_val))
+
+    if expected_count is not None and len(values) != int(expected_count):
+        raise ValueError(
+            f"Expected {int(expected_count)} background theta values, got {len(values)}."
+        )
+    return values
+
+
+def _geometry_fit_uses_shared_theta_offset() -> bool:
+    """Return whether geometry fitting should use a shared theta offset."""
+
+    try:
+        return len(osc_files) > 1
+    except Exception:
+        return False
+
+
+def _current_geometry_theta_offset(*, strict: bool = False) -> float:
+    """Return the shared theta offset used by multi-background fitting."""
+
+    if geometry_theta_offset_var is None:
+        return 0.0
+    raw_value = geometry_theta_offset_var.get()
+    try:
+        theta_offset = float(raw_value)
+    except Exception as exc:
+        if strict:
+            raise ValueError(f"Invalid shared theta offset '{raw_value}'.") from exc
+        return 0.0
+    if not np.isfinite(theta_offset):
+        if strict:
+            raise ValueError("Shared theta offset must be finite.")
+        return 0.0
+    return float(theta_offset)
+
+
+def _current_background_theta_values(*, strict_count: bool = False) -> list[float]:
+    """Return one configured theta value per loaded background image."""
+
+    expected_count = int(len(osc_files))
+    default_theta = _background_theta_default_value()
+    raw_values: list[float] = []
+    if background_theta_list_var is not None:
+        try:
+            raw_values = _parse_background_theta_values(
+                background_theta_list_var.get(),
+                expected_count=expected_count if strict_count else None,
+            )
+        except Exception:
+            if strict_count:
+                raise
+            raw_values = []
+
+    if strict_count:
+        if expected_count != len(raw_values):
+            raise ValueError(
+                f"Expected {expected_count} background theta values, got {len(raw_values)}."
+            )
+        return raw_values
+
+    if expected_count <= 0:
+        return []
+    if not raw_values:
+        return [float(default_theta)] * expected_count
+
+    values = list(raw_values[:expected_count])
+    if len(values) < expected_count:
+        values.extend([float(default_theta)] * (expected_count - len(values)))
+    return [float(v) for v in values]
+
+
+def _background_theta_for_index(
+    index: int,
+    *,
+    strict_count: bool = False,
+) -> float:
+    """Return the effective theta used for one background index."""
+
+    theta_values = _current_background_theta_values(strict_count=strict_count)
+    if not theta_values:
+        return _background_theta_default_value()
+    idx = max(0, min(int(index), len(theta_values) - 1))
+    theta_val = float(theta_values[idx])
+    if _geometry_fit_uses_shared_theta_offset():
+        theta_val += _current_geometry_theta_offset(strict=strict_count)
+    return float(theta_val)
+
+
+def _refresh_geometry_fit_theta_checkbox_label() -> None:
+    """Update the theta fit toggle label for single vs multi-background mode."""
+
+    if fit_theta_checkbutton is None:
+        return
+    fit_theta_checkbutton.config(
+        text="θ shared offset" if _geometry_fit_uses_shared_theta_offset() else "θ sample tilt"
+    )
+
+
+def _sync_background_theta_controls(
+    *,
+    preserve_existing: bool = True,
+    trigger_update: bool = False,
+) -> None:
+    """Keep the theta list entry aligned with the currently loaded backgrounds."""
+
+    expected_count = int(len(osc_files))
+    default_theta = _background_theta_default_value()
+    current_values: list[float] = []
+    if preserve_existing:
+        current_values = _current_background_theta_values(strict_count=False)
+    if expected_count > 0:
+        current_values = list(current_values[:expected_count])
+        if len(current_values) < expected_count:
+            current_values.extend([float(default_theta)] * (expected_count - len(current_values)))
+    else:
+        current_values = []
+
+    if background_theta_list_var is not None:
+        background_theta_list_var.set(_format_background_theta_values(current_values))
+
+    _refresh_geometry_fit_theta_checkbox_label()
+    _set_background_file_status_text()
+
+    if "theta_initial_var" in globals() and theta_initial_var is not None and expected_count > 0:
+        try:
+            theta_initial_var.set(_background_theta_for_index(current_background_index, strict_count=False))
+        except Exception:
+            theta_initial_var.set(float(default_theta))
+
+    if trigger_update:
+        schedule_update()
+
+
+def _apply_background_theta_metadata(*, trigger_update: bool = True) -> bool:
+    """Validate the theta list/offset entries and optionally refresh the display."""
+
+    try:
+        theta_values = _current_background_theta_values(strict_count=True)
+        _ = _current_geometry_theta_offset(strict=True)
+    except Exception as exc:
+        if "progress_label" in globals():
+            progress_label.config(text=f"Invalid background theta settings: {exc}")
+        return False
+
+    if background_theta_list_var is not None:
+        background_theta_list_var.set(_format_background_theta_values(theta_values))
+
+    _refresh_geometry_fit_theta_checkbox_label()
+    _set_background_file_status_text()
+    if "theta_initial_var" in globals() and theta_initial_var is not None and theta_values:
+        theta_initial_var.set(_background_theta_for_index(current_background_index, strict_count=True))
+    if trigger_update:
+        schedule_update()
+    return True
 
 
 def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]:
@@ -9157,9 +9372,22 @@ def _set_background_file_status_text():
 
     idx = int(current_background_index) % len(osc_files)
     current_name = Path(str(osc_files[idx])).name
-    background_file_status_var.set(
-        f"Background {idx + 1}/{len(osc_files)}: {current_name}"
-    )
+    status_text = f"Background {idx + 1}/{len(osc_files)}: {current_name}"
+    try:
+        theta_values = _current_background_theta_values(strict_count=False)
+        if theta_values:
+            theta_base = float(theta_values[idx])
+            theta_effective = float(_background_theta_for_index(idx, strict_count=False))
+            if _geometry_fit_uses_shared_theta_offset():
+                status_text += (
+                    f" | theta_i={theta_base:.4f}°"
+                    f" | theta={theta_effective:.4f}°"
+                )
+            else:
+                status_text += f" | theta={theta_base:.4f}°"
+    except Exception:
+        pass
+    background_file_status_var.set(status_text)
 
 
 def _load_background_files(file_paths, *, select_index=0):
@@ -9219,6 +9447,7 @@ def _load_background_files(file_paths, *, select_index=0):
 
     background_display.set_data(current_background_display)
     _update_background_slider_defaults(current_background_display, reset_override=True)
+    _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
     _set_background_file_status_text()
     schedule_update()
 
@@ -9265,6 +9494,13 @@ def switch_background():
     current_background_index = next_index
     current_background_image = next_native
     current_background_display = next_display
+    if "theta_initial_var" in globals() and theta_initial_var is not None:
+        try:
+            theta_initial_var.set(
+                _background_theta_for_index(current_background_index, strict_count=False)
+            )
+        except Exception:
+            pass
     background_display.set_data(current_background_display)
     _update_background_slider_defaults(current_background_display, reset_override=True)
     _set_background_file_status_text()
@@ -9275,6 +9511,8 @@ def reset_to_defaults():
     global simulation_limits_user_override, background_limits_user_override
     global scale_factor_user_override, suppress_simulation_limit_callback
     theta_initial_var.set(defaults['theta_initial'])
+    if geometry_theta_offset_var is not None:
+        geometry_theta_offset_var.set("0.0")
     cor_angle_var.set(defaults['cor_angle'])
     gamma_var.set(defaults['gamma'])
     Gamma_var.set(defaults['Gamma'])
@@ -9314,6 +9552,7 @@ def reset_to_defaults():
     )
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
+    _sync_background_theta_controls(preserve_existing=False, trigger_update=False)
     tth_min_var.set(0.0)
     tth_max_var.set(80.0)
     phi_min_var.set(-15.0)
@@ -9397,6 +9636,46 @@ background_file_status_label = ttk.Label(
 )
 background_file_status_label.pack(side=tk.TOP, padx=5, pady=(0, 2))
 _set_background_file_status_text()
+
+background_theta_controls = ttk.LabelFrame(root, text="Background Theta_i")
+background_theta_controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+ttk.Label(
+    background_theta_controls,
+    text="Per-background theta_i values (deg, in load order)",
+).pack(anchor=tk.W, padx=5, pady=(4, 0))
+background_theta_list_var = tk.StringVar(
+    value=_format_background_theta_values([_background_theta_default_value()] * len(osc_files))
+)
+background_theta_row = ttk.Frame(background_theta_controls)
+background_theta_row.pack(fill=tk.X, padx=5, pady=(2, 4))
+background_theta_entry = ttk.Entry(
+    background_theta_row,
+    textvariable=background_theta_list_var,
+)
+background_theta_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+geometry_theta_offset_var = tk.StringVar(value="0.0")
+ttk.Label(background_theta_row, text="shared offset").pack(side=tk.LEFT, padx=(8, 4))
+background_theta_offset_entry = ttk.Entry(
+    background_theta_row,
+    textvariable=geometry_theta_offset_var,
+    width=10,
+    justify=tk.RIGHT,
+)
+background_theta_offset_entry.pack(side=tk.LEFT)
+ttk.Button(
+    background_theta_row,
+    text="Apply",
+    command=lambda: _apply_background_theta_metadata(trigger_update=True),
+).pack(side=tk.LEFT, padx=(6, 0))
+background_theta_entry.bind(
+    "<Return>",
+    lambda _event: _apply_background_theta_metadata(trigger_update=True),
+)
+background_theta_offset_entry.bind(
+    "<Return>",
+    lambda _event: _apply_background_theta_metadata(trigger_update=True),
+)
+_sync_background_theta_controls(preserve_existing=True, trigger_update=False)
 
 reset_button_top = ttk.Button(
     text="Reset to Defaults",
@@ -10074,7 +10353,12 @@ fit_center_y_var = tk.BooleanVar(value=False)
 
 ttk.Checkbutton(fit_frame, text="z_b beam offset", variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="z_s sample offset", variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="θ sample tilt", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
+fit_theta_checkbutton = ttk.Checkbutton(
+    fit_frame,
+    text="θ sample tilt",
+    variable=fit_theta_var,
+)
+fit_theta_checkbutton.pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="ψ goniometer yaw", variable=fit_psi_z_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="χ sample pitch", variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="φ axis angle", variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
@@ -10083,6 +10367,7 @@ ttk.Checkbutton(fit_frame, text="Γ detector tilt", variable=fit_Gamma_var).pack
 ttk.Checkbutton(fit_frame, text="distance", variable=fit_dist_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="center col", variable=fit_center_y_var).pack(side=tk.LEFT, padx=2)
+_refresh_geometry_fit_theta_checkbox_label()
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     background_backend_frame = ttk.LabelFrame(root, text="Background Backend (debug)")
@@ -10791,7 +11076,9 @@ def _current_geometry_fit_var_names() -> list[str]:
     if fit_zs_var.get():
         var_names.append("zs")
     if fit_theta_var.get():
-        var_names.append("theta_initial")
+        var_names.append(
+            "theta_offset" if _geometry_fit_uses_shared_theta_offset() else "theta_initial"
+        )
     if fit_psi_z_var.get():
         var_names.append("psi_z")
     if fit_chi_var.get():
@@ -10814,6 +11101,11 @@ def _current_geometry_fit_var_names() -> list[str]:
 def _current_geometry_fit_params() -> dict[str, object]:
     """Assemble the current geometry-fit parameter dictionary."""
 
+    theta_current = (
+        _background_theta_for_index(current_background_index, strict_count=False)
+        if _geometry_fit_uses_shared_theta_offset()
+        else theta_initial_var.get()
+    )
     return {
         "a": a_var.get(),
         "c": c_var.get(),
@@ -10830,7 +11122,8 @@ def _current_geometry_fit_params() -> dict[str, object]:
         "center": [center_x_var.get(), center_y_var.get()],
         "center_x": center_x_var.get(),
         "center_y": center_y_var.get(),
-        "theta_initial": theta_initial_var.get(),
+        "theta_initial": theta_current,
+        "theta_offset": _current_geometry_theta_offset(strict=False),
         "uv1": np.array([1.0, 0.0, 0.0]),
         "uv2": np.array([0.0, 1.0, 0.0]),
         "corto_detector": corto_detector_var.get(),
@@ -11205,6 +11498,38 @@ def on_fit_geometry_click():
     orientation_cfg = geometry_refine_cfg.get("orientation", {}) or {}
     if not isinstance(orientation_cfg, dict):
         orientation_cfg = {}
+
+    joint_background_mode = False
+    background_theta_values: list[float] = []
+    shared_theta_offset_seed = 0.0
+    if _geometry_fit_uses_shared_theta_offset():
+        if not _apply_background_theta_metadata(trigger_update=False):
+            _cmd_line("aborted: invalid background theta_i/shared offset settings")
+            progress_label_geometry.config(
+                text="Geometry fit unavailable: invalid background theta_i/shared offset settings."
+            )
+            return
+        try:
+            background_theta_values = _current_background_theta_values(strict_count=True)
+            shared_theta_offset_seed = _current_geometry_theta_offset(strict=True)
+        except Exception as exc:
+            _cmd_line(f"aborted: failed to parse background theta settings ({exc})")
+            progress_label_geometry.config(
+                text=f"Geometry fit unavailable: failed to parse background theta settings ({exc})."
+            )
+            return
+        if len(background_theta_values) > 1:
+            joint_background_mode = True
+        params["theta_offset"] = float(shared_theta_offset_seed)
+        if background_theta_values:
+            try:
+                params["theta_initial"] = float(
+                    background_theta_values[int(current_background_index)] + shared_theta_offset_seed
+                )
+            except Exception:
+                pass
+    else:
+        params["theta_offset"] = 0.0
 
     native_background = _get_current_background_native()
     backend_background = _get_current_background_backend()
@@ -11589,6 +11914,7 @@ def on_fit_geometry_click():
                 meas_x = meas_y = sim_x = sim_y = dist_px = meas_r = sim_r = float("nan")
             lines.append(
                 f"idx={entry.get('match_input_index', 'n/a')} "
+                f"dataset={entry.get('dataset_index', 'n/a')}:{entry.get('dataset_label', 'n/a')} "
                 f"overlay={entry.get('overlay_match_index', 'n/a')} HKL={hkl_key} "
                 f"label={entry.get('label', 'n/a')} src={src_text} "
                 f"resolution={entry.get('resolution_kind', 'n/a')}/"
@@ -11790,6 +12116,193 @@ def on_fit_geometry_click():
             ),
         )
 
+        def _pairs_to_measured_display_entries(
+            pairs: Sequence[dict[str, object]] | None,
+        ) -> list[dict[str, object]]:
+            measured_entries: list[dict[str, object]] = []
+            for entry in pairs or []:
+                try:
+                    x_val = float(entry["x"])
+                    y_val = float(entry["y"])
+                except Exception:
+                    continue
+                if not (np.isfinite(x_val) and np.isfinite(y_val)):
+                    continue
+                normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
+                measured_entry = dict(entry)
+                measured_entry["label"] = str(entry["label"])
+                measured_entry["x"] = x_val
+                measured_entry["y"] = y_val
+                measured_entry["overlay_match_index"] = int(
+                    entry.get("overlay_match_index", len(measured_entries))
+                )
+                if normalized_hkl is not None:
+                    measured_entry["hkl"] = normalized_hkl
+                measured_entries.append(measured_entry)
+            return measured_entries
+
+        def _build_joint_background_dataset_specs(
+            base_fit_params: dict[str, object],
+        ) -> tuple[list[dict[str, object]], list[str]]:
+            dataset_specs_local: list[dict[str, object]] = []
+            dataset_summary_lines: list[str] = []
+            if not joint_background_mode:
+                return dataset_specs_local, dataset_summary_lines
+
+            current_theta_base = float(background_theta_values[int(current_background_index)])
+            dataset_specs_local.append(
+                {
+                    "dataset_index": int(current_background_index),
+                    "label": Path(str(osc_files[current_background_index])).name,
+                    "theta_initial": float(current_theta_base),
+                    "measured_peaks": list(measured_for_fit),
+                    "experimental_image": experimental_image_for_fit,
+                }
+            )
+            dataset_summary_lines.append(
+                "current[{idx}] {name}: theta_i={theta_base:.6f} theta={theta_eff:.6f} "
+                "matches={matches} excluded={excluded}"
+                .format(
+                    idx=int(current_background_index),
+                    name=Path(str(osc_files[current_background_index])).name,
+                    theta_base=float(current_theta_base),
+                    theta_eff=float(current_theta_base + float(base_fit_params.get("theta_offset", 0.0))),
+                    matches=len(matched_pairs),
+                    excluded=int(match_stats.get("excluded_count", excluded_preview_count)),
+                )
+            )
+
+            for bg_idx, theta_base in enumerate(background_theta_values):
+                if int(bg_idx) == int(current_background_index):
+                    continue
+
+                native_bg_i, display_bg_i = _load_background_image_by_index(int(bg_idx))
+                backend_bg_i = _apply_background_backend_orientation(native_bg_i)
+                if backend_bg_i is None:
+                    backend_bg_i = native_bg_i
+
+                params_i = dict(base_fit_params)
+                params_i["theta_initial"] = float(theta_base + float(base_fit_params.get("theta_offset", 0.0)))
+
+                simulated_i = _simulate_preview_style_peaks_for_fit(
+                    miller_array,
+                    intensity_array,
+                    image_size,
+                    params_i,
+                )
+                if not simulated_i:
+                    raise RuntimeError(
+                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) has no simulated peaks"
+                    )
+                simulated_i, excluded_q_i, q_group_total_i = _filter_geometry_fit_simulated_peaks(
+                    simulated_i
+                )
+                if not simulated_i:
+                    raise RuntimeError(
+                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) has no selected Qr/Qz groups"
+                    )
+                simulated_i, collapsed_deg_i = _collapse_geometry_fit_simulated_peaks(
+                    simulated_i,
+                    merge_radius_px=float(
+                        fit_auto_match_cfg.get(
+                            "degenerate_merge_radius_px",
+                            min(
+                                6.0,
+                                0.33 * float(fit_auto_match_cfg.get("search_radius_px", 24.0)),
+                            ),
+                        )
+                    ),
+                )
+                if not simulated_i:
+                    raise RuntimeError(
+                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) has no seeds after Qr/Qz collapse"
+                    )
+
+                matched_i, stats_i, _, _ = _auto_match_background_peaks_with_relaxation(
+                    simulated_i,
+                    display_bg_i,
+                    fit_auto_match_cfg,
+                    min_matches=min_matches,
+                )
+                matched_i, stats_i, excluded_i = _apply_live_preview_match_exclusions(
+                    matched_i,
+                    stats_i,
+                )
+                matched_i = _attach_overlay_match_indices(matched_i)
+
+                if len(matched_i) < min_matches:
+                    raise RuntimeError(
+                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) matched "
+                        f"{len(matched_i)}/{int(stats_i.get('simulated_count', len(simulated_i)))} peaks "
+                        f"(need {min_matches})"
+                    )
+
+                mean_i = float(stats_i.get("mean_match_distance_px", np.nan))
+                p90_i = float(stats_i.get("p90_match_distance_px", np.nan))
+                quality_fail_i = (
+                    (np.isfinite(max_auto_p90) and np.isfinite(p90_i) and p90_i > max_auto_p90)
+                    or (np.isfinite(max_auto_mean) and np.isfinite(mean_i) and mean_i > max_auto_mean)
+                )
+                if quality_fail_i:
+                    raise RuntimeError(
+                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) failed the quality gate "
+                        f"(mean={mean_i:.2f}px, p90={p90_i:.2f}px)"
+                    )
+
+                measured_i_display = _pairs_to_measured_display_entries(matched_i)
+                measured_i_native = _unrotate_display_peaks(
+                    measured_i_display,
+                    display_bg_i.shape,
+                    k=DISPLAY_ROTATE_K,
+                )
+                measured_i_for_fit = _apply_orientation_to_entries(
+                    measured_i_native,
+                    native_bg_i.shape,
+                    indexing_mode=orientation_choice["indexing_mode"],
+                    k=orientation_choice["k"],
+                    flip_x=orientation_choice["flip_x"],
+                    flip_y=orientation_choice["flip_y"],
+                    flip_order=orientation_choice["flip_order"],
+                )
+                experimental_i_for_fit = _orient_image_for_fit(
+                    backend_bg_i,
+                    indexing_mode=orientation_choice["indexing_mode"],
+                    k=orientation_choice["k"],
+                    flip_x=orientation_choice["flip_x"],
+                    flip_y=orientation_choice["flip_y"],
+                    flip_order=orientation_choice["flip_order"],
+                )
+                dataset_specs_local.append(
+                    {
+                        "dataset_index": int(bg_idx),
+                        "label": Path(str(osc_files[bg_idx])).name,
+                        "theta_initial": float(theta_base),
+                        "measured_peaks": measured_i_for_fit,
+                        "experimental_image": experimental_i_for_fit,
+                    }
+                )
+                dataset_summary_lines.append(
+                    "bg[{idx}] {name}: theta_i={theta_base:.6f} theta={theta_eff:.6f} "
+                    "matches={matches} mean={mean:.3f}px p90={p90:.3f}px "
+                    "excluded={excluded} q_groups_on={q_on}/{q_total} collapsed={collapsed} excluded_q={excluded_q}"
+                    .format(
+                        idx=int(bg_idx),
+                        name=Path(str(osc_files[bg_idx])).name,
+                        theta_base=float(theta_base),
+                        theta_eff=float(theta_base + float(base_fit_params.get("theta_offset", 0.0))),
+                        matches=len(matched_i),
+                        mean=float(mean_i),
+                        p90=float(p90_i),
+                        excluded=int(excluded_i),
+                        q_on=max(0, int(q_group_total_i) - _geometry_q_group_excluded_count()),
+                        q_total=int(q_group_total_i),
+                        collapsed=int(collapsed_deg_i),
+                        excluded_q=int(excluded_q_i),
+                    )
+                )
+
+            return dataset_specs_local, dataset_summary_lines
+
         _log_section(
             "Fitting variables (start values):",
             [
@@ -11807,12 +12320,27 @@ def on_fit_geometry_click():
         rematch_between_iterations = bool(
             auto_match_cfg.get("rematch_between_iterations", False)
         )
+        if joint_background_mode and rematch_between_iterations:
+            _cmd_line(
+                "auto-match: multi-background rematch is not yet supported; "
+                "using the initial joint matches only"
+            )
+            rematch_between_iterations = False
         if not rematch_between_iterations and fit_iterations > 1:
             _cmd_line(
                 "auto-match: background peaks fixed after initial selection; "
                 "skipping iterative rematch"
             )
             fit_iterations = 1
+
+        current_dataset_specs, joint_dataset_summary_lines = _build_joint_background_dataset_specs(
+            params
+        )
+        if joint_dataset_summary_lines:
+            _log_section(
+                "Joint background datasets:",
+                joint_dataset_summary_lines,
+            )
 
         result = None
         iteration_logs: list[str] = []
@@ -11857,6 +12385,7 @@ def on_fit_geometry_click():
                 var_names,
                 pixel_tol=float('inf'),
                 experimental_image=experimental_image_for_fit,
+                dataset_specs=current_dataset_specs if joint_background_mode else None,
                 refinement_config=geometry_refine_cfg,
             )
 
@@ -12163,6 +12692,9 @@ def on_fit_geometry_click():
                 zs_var.set(val)
             elif name == 'theta_initial':
                 theta_initial_var.set(val)
+            elif name == 'theta_offset':
+                if geometry_theta_offset_var is not None:
+                    geometry_theta_offset_var.set(f"{val:.6g}")
             elif name == 'psi_z':
                 psi_z_var.set(val)
             elif name == 'chi':
@@ -12180,11 +12712,18 @@ def on_fit_geometry_click():
             elif name == 'center_y':
                 center_y_var.set(val)
 
+        if joint_background_mode:
+            theta_initial_var.set(
+                _background_theta_for_index(current_background_index, strict_count=False)
+            )
+            _set_background_file_status_text()
+
         profile_cache = dict(profile_cache)
         profile_cache.update(mosaic_params)
         profile_cache.update(
             {
                 "theta_initial": theta_initial_var.get(),
+                "theta_offset": _current_geometry_theta_offset(strict=False),
                 "cor_angle": cor_angle_var.get(),
                 "chi": chi_var.get(),
                 "zs": zs_var.get(),
@@ -12224,6 +12763,7 @@ def on_fit_geometry_click():
                 'zb': zb_var.get(),
                 'zs': zs_var.get(),
                 'theta_initial': theta_initial_var.get(),
+                'theta_offset': _current_geometry_theta_offset(strict=False),
                 'chi': chi_var.get(),
                 'cor_angle': cor_angle_var.get(),
                 'psi_z': psi_z_var.get(),
@@ -12303,9 +12843,17 @@ def on_fit_geometry_click():
             pixel_offsets.append((hkl_key, dx, dy, dist))
 
         native_overlay_shape = tuple(int(v) for v in native_background.shape[:2])
+        overlay_point_match_diagnostics = getattr(result, "point_match_diagnostics", None)
+        if joint_background_mode and isinstance(overlay_point_match_diagnostics, list):
+            overlay_point_match_diagnostics = [
+                dict(entry)
+                for entry in overlay_point_match_diagnostics
+                if isinstance(entry, dict)
+                and int(entry.get("dataset_index", -1)) == int(current_background_index)
+            ]
         overlay_records = build_geometry_fit_overlay_records(
             initial_auto_pairs_display,
-            getattr(result, "point_match_diagnostics", None),
+            overlay_point_match_diagnostics,
             native_shape=native_overlay_shape,
             orientation_choice=orientation_choice,
             sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
@@ -13043,6 +13591,9 @@ def on_fit_geometry_click():
                     if name == 'zb':               zb_var.set(val)
                     elif name == 'zs':             zs_var.set(val)
                     elif name == 'theta_initial':  theta_initial_var.set(val)
+                    elif name == 'theta_offset':
+                        if geometry_theta_offset_var is not None:
+                            geometry_theta_offset_var.set(f"{float(val):.6g}")
                     elif name == 'psi_z':          psi_z_var.set(val)
                     elif name == 'chi':            chi_var.set(val)
                     elif name == 'cor_angle':      cor_angle_var.set(val)
@@ -13052,6 +13603,12 @@ def on_fit_geometry_click():
                     elif name == 'center_x':       center_x_var.set(val)
                     elif name == 'center_y':       center_y_var.set(val)
 
+                if _geometry_fit_uses_shared_theta_offset():
+                    theta_initial_var.set(
+                        _background_theta_for_index(current_background_index, strict_count=False)
+                    )
+                    _set_background_file_status_text()
+
                 # Keep the cached profile in sync with the fitted geometry so the
                 # next simulation uses the updated parameters even when diagnostics
                 # are disabled.
@@ -13060,6 +13617,7 @@ def on_fit_geometry_click():
                 profile_cache.update(
                     {
                         "theta_initial": theta_initial_var.get(),
+                        "theta_offset": _current_geometry_theta_offset(strict=False),
                         "cor_angle": cor_angle_var.get(),
                         "chi": chi_var.get(),
                         "zs": zs_var.get(),
@@ -13106,6 +13664,7 @@ def on_fit_geometry_click():
                     'zb': zb_var.get(),
                     'zs': zs_var.get(),
                     'theta_initial': theta_initial_var.get(),
+                    'theta_offset': _current_geometry_theta_offset(strict=False),
                     'chi': chi_var.get(),
                     'cor_angle': cor_angle_var.get(),
                     'psi_z': psi_z_var.get(),
