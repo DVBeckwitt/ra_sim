@@ -3868,8 +3868,16 @@ measured_peaks = []
 #                                  TK SETUP
 ###############################################################################
 root = tk.Tk()
-root.title("Controls and Sliders")
-root.minsize(680, 760)
+root.title("RA-SIM Simulation")
+root.minsize(1200, 760)
+
+main_pane = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
+main_pane.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
+
+controls_panel = ttk.Frame(main_pane)
+figure_panel = ttk.Frame(main_pane)
+main_pane.add(controls_panel, weight=1)
+main_pane.add(figure_panel, weight=3)
 
 
 def _create_scrolled_frame(parent):
@@ -3926,7 +3934,7 @@ def _bind_notebook_state(notebook, tab_var, tab_frames):
     _select_from_var()
 
 
-controls_notebook = ttk.Notebook(root)
+controls_notebook = ttk.Notebook(controls_panel)
 controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
 
 workspace_tab = ttk.Frame(controls_notebook)
@@ -3999,23 +4007,20 @@ analysis_exports_frame.pack(fill=tk.X)
 status_frame = ttk.LabelFrame(root, text="Status", padding=(6, 4))
 status_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=6)
 
-fig_window = tk.Toplevel(root)
-fig_window.title("Main Figure")
-fig_frame = ttk.Frame(fig_window)
+fig_frame = ttk.Frame(figure_panel)
 fig_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 
 def _shutdown_gui():
     """Close all application windows and end the Tk event loop."""
 
-    for window in (fig_window, root):
-        try:
-            if window.winfo_exists():
-                window.destroy()
-        except tk.TclError:
-            # Window is already gone or cannot be destroyed cleanly; proceed to
-            # shut down the rest of the application.
-            pass
+    try:
+        if root.winfo_exists():
+            root.destroy()
+    except tk.TclError:
+        # Window is already gone or cannot be destroyed cleanly; proceed to
+        # shut down the rest of the application.
+        pass
 
     try:
         root.quit()
@@ -4024,7 +4029,6 @@ def _shutdown_gui():
 
 
 root.protocol("WM_DELETE_WINDOW", _shutdown_gui)
-fig_window.protocol("WM_DELETE_WINDOW", _shutdown_gui)
 
 canvas_frame = ttk.Frame(fig_frame)
 canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -19790,7 +19794,6 @@ def _choose_startup_mode_gui():
 
     try:
         root.withdraw()
-        fig_window.withdraw()
     except tk.TclError:
         pass
 
@@ -19897,7 +19900,6 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
 
     try:
         root.deiconify()
-        fig_window.deiconify()
     except tk.TclError:
         pass
 
