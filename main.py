@@ -3535,8 +3535,10 @@ def _build_geometry_manual_initial_pairs_display(
         initial_entry: dict[str, object] = {
             "overlay_match_index": int(pair_idx),
             "hkl": entry.get("hkl", entry.get("label")),
-            "bg_display": (float(entry["x"]), float(entry["y"])),
         }
+        bg_coords = _geometry_manual_entry_display_coords(entry)
+        if bg_coords is not None:
+            initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         try:
             source_key = (
                 int(entry.get("source_table_index")),
@@ -3563,7 +3565,7 @@ def _build_geometry_manual_initial_pairs_display(
 def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> bool:
     """Redraw the saved manual geometry-pair overlay for the current background."""
 
-    if show_caked_2d_var.get() or not background_visible or current_background_display is None:
+    if not background_visible or _current_geometry_manual_pick_background_image() is None:
         _clear_geometry_pick_artists()
         return False
 
@@ -3627,7 +3629,7 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
     global _suppress_drag_press_once
     global geometry_manual_pick_session
 
-    display_background = _get_current_background_display()
+    display_background = _current_geometry_manual_pick_background_image()
     if display_background is None:
         progress_label_geometry.config(text="No background image is loaded for manual geometry picking.")
         return False
@@ -3644,18 +3646,23 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
         )
         return False
 
+    group_window = (
+        float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX)
+        if not _geometry_manual_pick_uses_caked_space()
+        else float(max(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG, 2.0 * GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG))
+    )
     best_group_key, best_group_entries, best_dist = _geometry_manual_choose_group_at(
         grouped_candidates,
         float(col),
         float(row),
-        window_size_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
+        window_size_px=float(group_window),
     )
     if best_group_key is None:
         progress_label_geometry.config(
             text=(
                 "No Qr/Qz set found within a "
-                f"{GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX:.0f}x"
-                f"{GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX:.0f}px "
+                f"{group_window:.1f}x"
+                f"{group_window:.1f}{' deg' if _geometry_manual_pick_uses_caked_space() else 'px'} "
                 "window around the clicked position."
             )
         )
@@ -3718,7 +3725,7 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
     _update_geometry_manual_pick_button_label()
     progress_label_geometry.config(
         text=(
-            f"Selected {q_label} (nearest seed {best_dist:.1f}px). "
+            f"Selected {q_label} (nearest seed {best_dist:.1f}{' deg' if _geometry_manual_pick_uses_caked_space() else 'px'}). "
             f"Click background peak 1 of {max(1, int(target_count))}; it will be assigned to the nearest simulated peak."
         )
     )
@@ -3732,7 +3739,7 @@ def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
 
     if not _geometry_manual_pick_session_active():
         return False
-    display_background = _get_current_background_display()
+    display_background = _current_geometry_manual_pick_background_image()
     if display_background is None:
         progress_label_geometry.config(text="No background image is loaded for manual geometry picking.")
         return False
@@ -3768,20 +3775,70 @@ def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
             text="Manual geometry picking could not find an unassigned simulated peak for that background point."
         )
         return False
+    pair_kwargs: dict[str, object] = {
+        "peak_col": float(peak_col),
+        "peak_row": float(peak_row),
+        "raw_col": float(col),
+        "raw_row": float(row),
+    }
     placement_error_px = _geometry_manual_position_error_px(
         float(col),
         float(row),
         float(peak_col),
         float(peak_row),
     )
+    if _geometry_manual_pick_uses_caked_space():
+        raw_display = _caked_angles_to_background_display_coords(float(col), float(row))
+        peak_display = _caked_angles_to_background_display_coords(float(peak_col), float(peak_row))
+        if raw_display[0] is None or raw_display[1] is None or peak_display[0] is None or peak_display[1] is None:
+            progress_label_geometry.config(
+                text="Manual geometry picking could not back-project the selected caked peak onto the detector."
+            )
+            return False
+        placement_error_px = _geometry_manual_position_error_px(
+            float(raw_display[0]),
+            float(raw_display[1]),
+            float(peak_display[0]),
+            float(peak_display[1]),
+        )
+        pair_kwargs = {
+            "peak_col": float(peak_display[0]),
+            "peak_row": float(peak_display[1]),
+            "raw_col": float(raw_display[0]),
+            "raw_row": float(raw_display[1]),
+            "caked_col": float(peak_col),
+            "caked_row": float(peak_row),
+            "raw_caked_col": float(col),
+            "raw_caked_row": float(row),
+        }
     sigma_px = _geometry_manual_position_sigma_px(float(placement_error_px))
     pair_entry = _geometry_manual_pair_entry_from_candidate(
         candidate,
-        peak_col,
-        peak_row,
+        float(pair_kwargs["peak_col"]),
+        float(pair_kwargs["peak_row"]),
         group_key=geometry_manual_pick_session.get("group_key"),
-        raw_col=float(col),
-        raw_row=float(row),
+        raw_col=float(pair_kwargs["raw_col"]),
+        raw_row=float(pair_kwargs["raw_row"]),
+        caked_col=(
+            float(pair_kwargs["caked_col"])
+            if "caked_col" in pair_kwargs
+            else None
+        ),
+        caked_row=(
+            float(pair_kwargs["caked_row"])
+            if "caked_row" in pair_kwargs
+            else None
+        ),
+        raw_caked_col=(
+            float(pair_kwargs["raw_caked_col"])
+            if "raw_caked_col" in pair_kwargs
+            else None
+        ),
+        raw_caked_row=(
+            float(pair_kwargs["raw_caked_row"])
+            if "raw_caked_row" in pair_kwargs
+            else None
+        ),
         placement_error_px=float(placement_error_px),
         sigma_px=float(sigma_px),
     )
@@ -3841,7 +3898,11 @@ def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
             f"Placed peak {placed_count} of {total_count} for {q_label}. "
             + (
                 f"Assigned to {candidate_label}"
-                + (f" ({float(candidate_dist):.2f}px from sim)." if np.isfinite(candidate_dist) else ".")
+                + (
+                    f" ({float(candidate_dist):.2f}{' deg' if _geometry_manual_pick_uses_caked_space() else 'px'} from sim)."
+                    if np.isfinite(candidate_dist)
+                    else "."
+                )
                 if candidate_label
                 else ""
             )
@@ -4252,6 +4313,10 @@ GEOMETRY_MANUAL_UNDO_LIMIT = 100
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
 GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX = 50.0
 GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX = 100.0
+GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG = 1.5
+GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG = 10.0
+GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG = 4.0
+GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG = 24.0
 GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S = 0.03
 GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
 GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
@@ -4358,6 +4423,21 @@ def _normalize_geometry_manual_pair_entry(
     if np.isfinite(raw_x_val) and np.isfinite(raw_y_val):
         normalized["raw_x"] = float(raw_x_val)
         normalized["raw_y"] = float(raw_y_val)
+
+    for x_key, y_key in (("caked_x", "caked_y"), ("raw_caked_x", "raw_caked_y")):
+        raw_x_local = entry.get(x_key)
+        raw_y_local = entry.get(y_key)
+        try:
+            caked_x_val = float(raw_x_local) if raw_x_local is not None else float("nan")
+        except Exception:
+            caked_x_val = float("nan")
+        try:
+            caked_y_val = float(raw_y_local) if raw_y_local is not None else float("nan")
+        except Exception:
+            caked_y_val = float("nan")
+        if np.isfinite(caked_x_val) and np.isfinite(caked_y_val):
+            normalized[x_key] = float(caked_x_val)
+            normalized[y_key] = float(caked_y_val)
 
     placement_error_value = entry.get("placement_error_px")
     if placement_error_value is None and np.isfinite(raw_x_val) and np.isfinite(raw_y_val):
@@ -4515,7 +4595,16 @@ def _geometry_manual_pair_entry_to_jsonable(
         "label": str(normalized.get("label", "")),
     }
 
-    for key in ("raw_x", "raw_y", "placement_error_px", "sigma_px"):
+    for key in (
+        "raw_x",
+        "raw_y",
+        "caked_x",
+        "caked_y",
+        "raw_caked_x",
+        "raw_caked_y",
+        "placement_error_px",
+        "sigma_px",
+    ):
         value = normalized.get(key)
         if value is None:
             continue
@@ -4833,7 +4922,7 @@ def _geometry_manual_pick_cache_signature(
 
     bg_index = int(current_background_index if background_index is None else background_index)
     background_local = (
-        _get_current_background_display() if background_image is None else background_image
+        _current_geometry_manual_pick_background_image() if background_image is None else background_image
     )
     bg_token = None
     if background_local is not None:
@@ -4864,6 +4953,7 @@ def _geometry_manual_pick_cache_signature(
     return (
         last_simulation_signature,
         int(bg_index),
+        bool(_geometry_manual_pick_uses_caked_space()),
         bg_token,
         int(maxpos_count),
         int(peak_table_count),
@@ -4885,7 +4975,7 @@ def _get_geometry_manual_pick_cache(
 
     bg_index = int(current_background_index if background_index is None else background_index)
     background_local = (
-        _get_current_background_display() if background_image is None else background_image
+        _current_geometry_manual_pick_background_image() if background_image is None else background_image
     )
     cache_sig = _geometry_manual_pick_cache_signature(
         background_index=bg_index,
@@ -5153,6 +5243,10 @@ def _geometry_manual_pair_entry_from_candidate(
     group_key: tuple[object, ...] | None,
     raw_col: float | None = None,
     raw_row: float | None = None,
+    caked_col: float | None = None,
+    caked_row: float | None = None,
+    raw_caked_col: float | None = None,
+    raw_caked_row: float | None = None,
     placement_error_px: float | None = None,
     sigma_px: float | None = None,
 ) -> dict[str, object] | None:
@@ -5173,6 +5267,12 @@ def _geometry_manual_pair_entry_from_candidate(
     if raw_col is not None and raw_row is not None:
         entry["raw_x"] = float(raw_col)
         entry["raw_y"] = float(raw_row)
+    if caked_col is not None and caked_row is not None:
+        entry["caked_x"] = float(caked_col)
+        entry["caked_y"] = float(caked_row)
+    if raw_caked_col is not None and raw_caked_row is not None:
+        entry["raw_caked_x"] = float(raw_caked_col)
+        entry["raw_caked_y"] = float(raw_caked_row)
     if placement_error_px is not None and np.isfinite(float(placement_error_px)):
         entry["placement_error_px"] = max(0.0, float(placement_error_px))
     if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
@@ -5288,7 +5388,7 @@ def _geometry_manual_refine_preview_point(
     """Refine one manual raw click/release position to the best background peak."""
 
     background_local = (
-        _get_current_background_display() if display_background is None else display_background
+        _current_geometry_manual_pick_background_image() if display_background is None else display_background
     )
     if background_local is None:
         return float(raw_col), float(raw_row)
@@ -5315,6 +5415,60 @@ def _geometry_manual_refine_preview_point(
     refined_col = float(raw_col)
     refined_row = float(raw_row)
     used_peak_context = False
+    if _geometry_manual_pick_uses_caked_space():
+        radial_axis = np.asarray(last_caked_radial_values, dtype=float)
+        azimuth_axis = np.asarray(last_caked_azimuth_values, dtype=float)
+        raw_col_local = _caked_axis_to_image_index(float(raw_col), radial_axis)
+        raw_row_local = _caked_axis_to_image_index(float(raw_row), azimuth_axis)
+        if (
+            isinstance(background_context, dict)
+            and bool(background_context.get("img_valid", False))
+            and np.isfinite(raw_col_local)
+            and np.isfinite(raw_row_local)
+        ):
+            seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
+            seed_entry["sim_col"] = float(raw_col)
+            seed_entry["sim_row"] = float(raw_row)
+            seed_entry["sim_col_global"] = float(raw_col)
+            seed_entry["sim_row_global"] = float(raw_row)
+            seed_entry["sim_col_local"] = float(raw_col_local)
+            seed_entry["sim_row_local"] = float(raw_row_local)
+            try:
+                manual_matches, _manual_stats = match_simulated_peaks_to_peak_context(
+                    [seed_entry],
+                    background_context,
+                    match_cfg,
+                )
+            except Exception:
+                manual_matches = []
+            if manual_matches:
+                try:
+                    refined_col = float(
+                        _caked_image_index_to_axis(
+                            float(manual_matches[0].get("x", raw_col_local)),
+                            radial_axis,
+                        )
+                    )
+                    refined_row = float(
+                        _caked_image_index_to_axis(
+                            float(manual_matches[0].get("y", raw_row_local)),
+                            azimuth_axis,
+                        )
+                    )
+                    used_peak_context = np.isfinite(refined_col) and np.isfinite(refined_row)
+                except Exception:
+                    refined_col = float(raw_col)
+                    refined_row = float(raw_row)
+        if not used_peak_context or not (np.isfinite(refined_col) and np.isfinite(refined_row)):
+            refined_col, refined_row = _refine_caked_peak_center(
+                np.asarray(background_local, dtype=float),
+                radial_axis,
+                azimuth_axis,
+                float(raw_col),
+                float(raw_row),
+            )
+        return float(refined_col), float(refined_row)
+
     if isinstance(background_context, dict) and bool(background_context.get("img_valid", False)):
         seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
         seed_entry["sim_col"] = float(raw_col)
@@ -5371,8 +5525,33 @@ def _apply_geometry_manual_pick_zoom(col: float, row: float) -> None:
 
     if not _geometry_manual_pick_session_active():
         return
-    display_background = _get_current_background_display()
+    display_background = _current_geometry_manual_pick_background_image()
     if display_background is None:
+        return
+    if _geometry_manual_pick_uses_caked_space():
+        x_min = float(col) - 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG)
+        x_max = float(col) + 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG)
+        y_min = float(row) - 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG)
+        y_max = float(row) + 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG)
+        if last_caked_extent is not None and len(last_caked_extent) >= 4:
+            x_lo = float(last_caked_extent[0])
+            x_hi = float(last_caked_extent[1])
+            y_lo = float(last_caked_extent[2])
+            y_hi = float(last_caked_extent[3])
+            x_min = min(max(x_min, x_lo), x_hi)
+            x_max = min(max(x_max, x_lo), x_hi)
+            y_min = min(max(y_min, y_lo), y_hi)
+            y_max = min(max(y_max, y_lo), y_hi)
+        if x_max <= x_min or y_max <= y_min:
+            return
+        if not bool(geometry_manual_pick_session.get("zoom_active", False)):
+            geometry_manual_pick_session["saved_xlim"] = tuple(float(v) for v in ax.get_xlim())
+            geometry_manual_pick_session["saved_ylim"] = tuple(float(v) for v in ax.get_ylim())
+        geometry_manual_pick_session["zoom_active"] = True
+        geometry_manual_pick_session["zoom_center"] = (float(col), float(row))
+        ax.set_xlim(float(x_min), float(x_max))
+        ax.set_ylim(float(y_min), float(y_max))
+        canvas.draw_idle()
         return
     x_min, x_max, y_min, y_max = _geometry_manual_zoom_bounds(
         float(col),
@@ -5407,7 +5586,7 @@ def _update_geometry_manual_pick_preview(
     if not force and not _geometry_manual_preview_due(float(raw_col), float(raw_row)):
         return
     remaining_candidates = _geometry_manual_unassigned_group_candidates()
-    display_background = _get_current_background_display()
+    display_background = _current_geometry_manual_pick_background_image()
     if display_background is None:
         return
     cache_data = _get_geometry_manual_pick_cache(
@@ -5441,6 +5620,26 @@ def _update_geometry_manual_pick_preview(
             float(refined_row),
         )
     )
+    if _geometry_manual_pick_uses_caked_space():
+        raw_display = _caked_angles_to_background_display_coords(float(raw_col), float(raw_row))
+        refined_display = _caked_angles_to_background_display_coords(
+            float(refined_col),
+            float(refined_row),
+        )
+        if (
+            raw_display[0] is not None
+            and raw_display[1] is not None
+            and refined_display[0] is not None
+            and refined_display[1] is not None
+        ):
+            delta = float(
+                _geometry_manual_position_error_px(
+                    float(raw_display[0]),
+                    float(raw_display[1]),
+                    float(refined_display[0]),
+                    float(refined_display[1]),
+                )
+            )
     sigma_px = _geometry_manual_position_sigma_px(delta)
     candidate_label = str(candidate.get("label", "")) if isinstance(candidate, dict) else ""
     q_label = str(
@@ -5458,7 +5657,10 @@ def _update_geometry_manual_pick_preview(
     if candidate_label:
         preview_msg += f" -> nearest sim [{candidate_label}]"
         if np.isfinite(sim_dist):
-            preview_msg += f" ({float(sim_dist):.2f}px)"
+            preview_msg += (
+                f" ({float(sim_dist):.2f}"
+                f"{' deg' if _geometry_manual_pick_uses_caked_space() else 'px'})"
+            )
     progress_label_geometry.config(text=preview_msg)
 
 
@@ -5501,14 +5703,9 @@ def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
         source_key = _geometry_manual_candidate_source_key(raw_entry)
         measured_entry = pending_lookup.get(source_key) if source_key is not None else None
         if isinstance(measured_entry, dict):
-            try:
-                bg_col = float(measured_entry.get("x"))
-                bg_row = float(measured_entry.get("y"))
-            except Exception:
-                bg_col = float("nan")
-                bg_row = float("nan")
-            if np.isfinite(bg_col) and np.isfinite(bg_row):
-                entry["bg_display"] = (float(bg_col), float(bg_row))
+            bg_coords = _geometry_manual_entry_display_coords(measured_entry)
+            if bg_coords is not None:
+                entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         initial_pairs_display.append(entry)
     return initial_pairs_display
 
@@ -5628,6 +5825,9 @@ def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None)
 
     geometry_manual_pick_armed = bool(enabled)
     if geometry_manual_pick_armed:
+        if not bool(show_caked_2d_var.get()):
+            show_caked_2d_var.set(True)
+            toggle_caked_2d()
         _set_hkl_pick_mode(False)
         _set_geometry_preview_exclude_mode(False)
     else:
@@ -5648,8 +5848,9 @@ def _toggle_geometry_manual_pick_mode() -> None:
         not geometry_manual_pick_armed,
         message=(
             (
-                "Manual geometry picking armed. Click a Qr/Qz set once, then click the "
-                "matching background peaks for each simulated member of that set."
+                "Manual geometry picking armed in 2D caked phi-vs-2theta view. "
+                "Click a Qr/Qz set once, then click the matching background peaks "
+                "for each simulated member of that set."
             )
             if not geometry_manual_pick_armed
             else "Manual geometry picking disabled."
@@ -5704,6 +5905,410 @@ def _peak_maximum_near_in_image(
     return float(c0 + win_c), float(r0 + win_r)
 
 
+def _detector_pixel_to_scattering_angles(
+    col: float,
+    row: float,
+    center: Sequence[float] | None,
+    detector_distance: float,
+    pixel_size: float,
+) -> tuple[float | None, float | None]:
+    """Convert one detector pixel position to ``(2theta, phi)`` in degrees."""
+
+    if center is None or len(center) < 2:
+        return None, None
+    if not (np.isfinite(detector_distance) and detector_distance > 0.0):
+        return None, None
+    if not (np.isfinite(pixel_size) and pixel_size > 0.0):
+        return None, None
+    try:
+        center_row = float(center[0])
+        center_col = float(center[1])
+    except Exception:
+        return None, None
+    if not (np.isfinite(col) and np.isfinite(row) and np.isfinite(center_row) and np.isfinite(center_col)):
+        return None, None
+
+    dx = (float(col) - center_col) * float(pixel_size)
+    dy = (center_row - float(row)) * float(pixel_size)
+    radius = float(np.hypot(dx, dy))
+    two_theta = float(np.degrees(np.arctan2(radius, float(detector_distance))))
+    phi = float(np.degrees(np.arctan2(dx, dy)))
+    return two_theta, _wrap_phi_range(phi)
+
+
+def _scattering_angles_to_detector_pixel(
+    two_theta_deg: float,
+    phi_deg: float,
+    center: Sequence[float] | None,
+    detector_distance: float,
+    pixel_size: float,
+) -> tuple[float | None, float | None]:
+    """Convert ``(2theta, phi)`` in degrees to one detector pixel position."""
+
+    if center is None or len(center) < 2:
+        return None, None
+    if not (np.isfinite(detector_distance) and detector_distance > 0.0):
+        return None, None
+    if not (np.isfinite(pixel_size) and pixel_size > 0.0):
+        return None, None
+    try:
+        center_row = float(center[0])
+        center_col = float(center[1])
+    except Exception:
+        return None, None
+    if not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg) and np.isfinite(center_row) and np.isfinite(center_col)):
+        return None, None
+
+    radius = float(detector_distance) * float(np.tan(np.deg2rad(float(two_theta_deg))))
+    phi_rad = float(np.deg2rad(float(phi_deg)))
+    dx = radius * float(np.sin(phi_rad))
+    dy = radius * float(np.cos(phi_rad))
+    col = center_col + dx / float(pixel_size)
+    row = center_row - dy / float(pixel_size)
+    return float(col), float(row)
+
+
+def _caked_axis_to_image_index(
+    value: float,
+    axis_values: Sequence[float] | None,
+) -> float:
+    """Map one caked-axis coordinate in degrees to a floating image index."""
+
+    if axis_values is None or not np.isfinite(value):
+        return float("nan")
+    axis_arr = np.asarray(axis_values, dtype=float).reshape(-1)
+    if axis_arr.size <= 0:
+        return float("nan")
+    finite_idx = np.flatnonzero(np.isfinite(axis_arr))
+    if finite_idx.size <= 0:
+        return float("nan")
+    if finite_idx.size == 1:
+        return float(finite_idx[0])
+    axis_used = axis_arr[finite_idx]
+    idx_used = finite_idx.astype(float)
+    if axis_used[0] > axis_used[-1]:
+        axis_used = axis_used[::-1]
+        idx_used = idx_used[::-1]
+    return float(np.interp(float(value), axis_used, idx_used))
+
+
+def _caked_image_index_to_axis(
+    index_value: float,
+    axis_values: Sequence[float] | None,
+) -> float:
+    """Map one floating caked image index back to axis-space degrees."""
+
+    if axis_values is None or not np.isfinite(index_value):
+        return float("nan")
+    axis_arr = np.asarray(axis_values, dtype=float).reshape(-1)
+    if axis_arr.size <= 0:
+        return float("nan")
+    finite_idx = np.flatnonzero(np.isfinite(axis_arr))
+    if finite_idx.size <= 0:
+        return float("nan")
+    if finite_idx.size == 1:
+        return float(axis_arr[finite_idx[0]])
+    axis_used = axis_arr[finite_idx]
+    idx_used = finite_idx.astype(float)
+    if axis_used[0] > axis_used[-1]:
+        axis_used = axis_used[::-1]
+        idx_used = idx_used[::-1]
+    return float(np.interp(float(index_value), idx_used, axis_used))
+
+
+def _refine_profile_peak_index(
+    profile: Sequence[float] | None,
+    seed_index: float,
+) -> float:
+    """Return one subpixel 1D peak center focused on the top of a local profile."""
+
+    arr = np.asarray(profile, dtype=float).reshape(-1)
+    if arr.size <= 0:
+        return float(seed_index)
+    finite = np.isfinite(arr)
+    if not np.any(finite):
+        return float(seed_index)
+    arr = np.where(finite, arr, np.nan)
+    baseline = float(np.nanpercentile(arr, 35.0))
+    weights = np.clip(arr - baseline, 0.0, None)
+    if not np.any(weights > 0.0):
+        floor = float(np.nanmin(arr))
+        weights = np.clip(arr - floor, 0.0, None)
+    if not np.any(weights > 0.0):
+        return float(np.nanargmax(arr))
+
+    peak_idx = int(np.nanargmax(weights))
+    half_window = 2
+    lo = max(0, peak_idx - half_window)
+    hi = min(arr.size, peak_idx + half_window + 1)
+    local_weights = np.asarray(weights[lo:hi], dtype=float)
+    local_idx = np.arange(lo, hi, dtype=float)
+    if local_weights.size <= 0 or not np.any(local_weights > 0.0):
+        return float(peak_idx)
+    crest_mask = local_weights >= 0.5 * float(np.max(local_weights))
+    if np.any(crest_mask):
+        local_weights = local_weights[crest_mask]
+        local_idx = local_idx[crest_mask]
+    total = float(np.sum(local_weights))
+    if not np.isfinite(total) or total <= 0.0:
+        return float(peak_idx)
+    return float(np.sum(local_weights * local_idx) / total)
+
+
+def _refine_caked_peak_center(
+    image: np.ndarray | None,
+    radial_axis: Sequence[float] | None,
+    azimuth_axis: Sequence[float] | None,
+    two_theta_deg: float,
+    phi_deg: float,
+    *,
+    tth_window_deg: float | None = None,
+    phi_window_deg: float | None = None,
+) -> tuple[float, float]:
+    """Refine one caked click to the crest of the local 2theta/phi ridge."""
+
+    if image is None:
+        return float(two_theta_deg), float(phi_deg)
+    img = np.asarray(image, dtype=float)
+    if img.ndim != 2 or img.size <= 0:
+        return float(two_theta_deg), float(phi_deg)
+    if radial_axis is None or azimuth_axis is None:
+        return float(two_theta_deg), float(phi_deg)
+
+    col_seed = _caked_axis_to_image_index(float(two_theta_deg), radial_axis)
+    row_seed = _caked_axis_to_image_index(float(phi_deg), azimuth_axis)
+    if not (np.isfinite(col_seed) and np.isfinite(row_seed)):
+        return float(two_theta_deg), float(phi_deg)
+
+    col_min = _caked_axis_to_image_index(
+        float(two_theta_deg) - float(
+            GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG if tth_window_deg is None else tth_window_deg
+        ),
+        radial_axis,
+    )
+    col_max = _caked_axis_to_image_index(
+        float(two_theta_deg) + float(
+            GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG if tth_window_deg is None else tth_window_deg
+        ),
+        radial_axis,
+    )
+    row_min = _caked_axis_to_image_index(
+        float(phi_deg) - float(
+            GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG if phi_window_deg is None else phi_window_deg
+        ),
+        azimuth_axis,
+    )
+    row_max = _caked_axis_to_image_index(
+        float(phi_deg) + float(
+            GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG if phi_window_deg is None else phi_window_deg
+        ),
+        azimuth_axis,
+    )
+    if not all(np.isfinite(v) for v in (col_min, col_max, row_min, row_max)):
+        return float(two_theta_deg), float(phi_deg)
+
+    c0 = max(0, int(np.floor(min(col_min, col_max))))
+    c1 = min(int(img.shape[1]), int(np.ceil(max(col_min, col_max))) + 1)
+    r0 = max(0, int(np.floor(min(row_min, row_max))))
+    r1 = min(int(img.shape[0]), int(np.ceil(max(row_min, row_max))) + 1)
+    if c0 >= c1 or r0 >= r1:
+        return float(two_theta_deg), float(phi_deg)
+
+    patch = np.asarray(img[r0:r1, c0:c1], dtype=float)
+    if patch.size <= 0 or not np.isfinite(patch).any():
+        return float(two_theta_deg), float(phi_deg)
+    baseline = float(np.nanpercentile(patch, 35.0))
+    signal = np.clip(patch - baseline, 0.0, None)
+    if not np.any(signal > 0.0):
+        signal = np.clip(patch - float(np.nanmin(patch)), 0.0, None)
+    if not np.any(signal > 0.0):
+        return float(two_theta_deg), float(phi_deg)
+
+    col_local = float(col_seed - c0)
+    row_local = float(row_seed - r0)
+    row_band = max(1, min(6, int(round(0.10 * signal.shape[0]))))
+    col_band = max(1, min(6, int(round(0.10 * signal.shape[1]))))
+    for _ in range(2):
+        row_center = int(np.clip(round(row_local), 0, max(signal.shape[0] - 1, 0)))
+        rr0 = max(0, row_center - row_band)
+        rr1 = min(signal.shape[0], row_center + row_band + 1)
+        radial_profile = np.nansum(signal[rr0:rr1, :], axis=0)
+        col_local = _refine_profile_peak_index(radial_profile, col_local)
+
+        col_center = int(np.clip(round(col_local), 0, max(signal.shape[1] - 1, 0)))
+        cc0 = max(0, col_center - col_band)
+        cc1 = min(signal.shape[1], col_center + col_band + 1)
+        az_profile = np.nansum(signal[:, cc0:cc1], axis=1)
+        row_local = _refine_profile_peak_index(az_profile, row_local)
+
+    refined_col = float(c0 + col_local)
+    refined_row = float(r0 + row_local)
+    return (
+        float(_caked_image_index_to_axis(refined_col, radial_axis)),
+        float(_caked_image_index_to_axis(refined_row, azimuth_axis)),
+    )
+
+
+def _geometry_manual_pick_uses_caked_space() -> bool:
+    """Return whether manual geometry picking is currently operating in caked space."""
+
+    if not bool(show_caked_2d_var.get()):
+        return False
+    return (
+        isinstance(last_caked_background_image_unscaled, np.ndarray)
+        and last_caked_background_image_unscaled.ndim == 2
+        and last_caked_background_image_unscaled.size > 0
+        and np.asarray(last_caked_radial_values, dtype=float).size > 1
+        and np.asarray(last_caked_azimuth_values, dtype=float).size > 1
+    )
+
+
+def _current_geometry_manual_pick_background_image():
+    """Return the background image currently used by manual geometry picking."""
+
+    if _geometry_manual_pick_uses_caked_space():
+        return last_caked_background_image_unscaled
+    return _get_current_background_display()
+
+
+def _geometry_manual_entry_display_coords(
+    entry: dict[str, object] | None,
+) -> tuple[float, float] | None:
+    """Return one saved/manual entry's coordinates in the current displayed view."""
+
+    if not isinstance(entry, dict):
+        return None
+    key_x = "caked_x" if _geometry_manual_pick_uses_caked_space() else "x"
+    key_y = "caked_y" if _geometry_manual_pick_uses_caked_space() else "y"
+    try:
+        col = float(entry.get(key_x, np.nan))
+        row = float(entry.get(key_y, np.nan))
+    except Exception:
+        col = float("nan")
+        row = float("nan")
+    if _geometry_manual_pick_uses_caked_space() and not (np.isfinite(col) and np.isfinite(row)):
+        try:
+            raw_col = float(entry.get("x", np.nan))
+            raw_row = float(entry.get("y", np.nan))
+        except Exception:
+            raw_col = float("nan")
+            raw_row = float("nan")
+        angles = _display_to_detector_angles(raw_col, raw_row, _ai_cache.get("ai"))
+        if angles is not None:
+            col = float(angles[0])
+            row = float(_wrap_phi_range(float(angles[1])))
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _caked_angles_to_background_display_coords(
+    two_theta_deg: float,
+    phi_deg: float,
+) -> tuple[float | None, float | None]:
+    """Back-project one caked-space point to the displayed detector background."""
+
+    ai = _ai_cache.get("ai")
+    two_theta_map, phi_map = _get_detector_angular_maps(ai)
+    native_background = _get_current_background_native()
+    if (
+        two_theta_map is None
+        or phi_map is None
+        or native_background is None
+        or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg))
+    ):
+        center = [float(center_x_var.get()), float(center_y_var.get())]
+        native_point = _scattering_angles_to_detector_pixel(
+            float(two_theta_deg),
+            float(phi_deg),
+            center,
+            float(corto_detector_var.get()),
+            float(pixel_size_m),
+        )
+        if native_point[0] is None or native_point[1] is None:
+            return None, None
+        return _rotate_point_for_display(
+            float(native_point[0]),
+            float(native_point[1]),
+            tuple(int(v) for v in native_background.shape[:2]),
+            DISPLAY_ROTATE_K,
+        )
+
+    dphi = ((np.asarray(phi_map, dtype=float) - float(phi_deg) + 180.0) % 360.0) - 180.0
+    dtth = np.asarray(two_theta_map, dtype=float) - float(two_theta_deg)
+    metric = dtth * dtth + dphi * dphi
+    finite_metric = np.where(np.isfinite(metric), metric, np.inf)
+    best_idx = int(np.argmin(finite_metric))
+    if not np.isfinite(finite_metric.flat[best_idx]):
+        return None, None
+    row_idx, col_idx = np.unravel_index(best_idx, finite_metric.shape)
+    return _rotate_point_for_display(
+        float(col_idx),
+        float(row_idx),
+        tuple(int(v) for v in native_background.shape[:2]),
+        DISPLAY_ROTATE_K,
+    )
+
+
+def _project_geometry_manual_peaks_to_current_view(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Project simulated manual-pick candidates into the currently displayed view."""
+
+    projected: list[dict[str, object]] = []
+    use_caked = _geometry_manual_pick_uses_caked_space()
+    ai = _ai_cache.get("ai")
+    sim_shape = (int(image_size), int(image_size))
+    radial_axis = np.asarray(last_caked_radial_values, dtype=float) if use_caked else np.array([])
+    azimuth_axis = np.asarray(last_caked_azimuth_values, dtype=float) if use_caked else np.array([])
+
+    for raw_entry in simulated_peaks or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        try:
+            raw_col = float(entry.get("sim_col", np.nan))
+            raw_row = float(entry.get("sim_row", np.nan))
+        except Exception:
+            raw_col = float("nan")
+            raw_row = float("nan")
+        entry["sim_col_raw"] = float(raw_col)
+        entry["sim_row_raw"] = float(raw_row)
+
+        if np.isfinite(raw_col) and np.isfinite(raw_row):
+            angles = _display_to_detector_angles(raw_col, raw_row, ai)
+            if angles is None:
+                native_col, native_row = _display_to_native_sim_coords(raw_col, raw_row, sim_shape)
+                angles = _detector_pixel_to_scattering_angles(
+                    float(native_col),
+                    float(native_row),
+                    [float(center_x_var.get()), float(center_y_var.get())],
+                    float(corto_detector_var.get()),
+                    float(pixel_size_m),
+                )
+            if angles is not None and angles[0] is not None and angles[1] is not None:
+                entry["caked_x"] = float(angles[0])
+                entry["caked_y"] = float(_wrap_phi_range(float(angles[1])))
+
+        if use_caked:
+            try:
+                caked_col = float(entry.get("caked_x", np.nan))
+                caked_row = float(entry.get("caked_y", np.nan))
+            except Exception:
+                caked_col = float("nan")
+                caked_row = float("nan")
+            if np.isfinite(caked_col) and np.isfinite(caked_row):
+                entry["sim_col"] = float(caked_col)
+                entry["sim_row"] = float(caked_row)
+                entry["sim_col_global"] = float(caked_col)
+                entry["sim_row_global"] = float(caked_row)
+                entry["sim_col_local"] = float(_caked_axis_to_image_index(caked_col, radial_axis))
+                entry["sim_row_local"] = float(_caked_axis_to_image_index(caked_row, azimuth_axis))
+
+        projected.append(entry)
+    return projected
+
+
 def _geometry_manual_simulated_peaks_for_params(
     param_set: dict[str, object] | None = None,
     *,
@@ -5714,7 +6319,7 @@ def _geometry_manual_simulated_peaks_for_params(
     if prefer_cache:
         cached = _build_live_preview_simulated_peaks_from_cache()
         if cached:
-            return cached
+            return _project_geometry_manual_peaks_to_current_view(cached)
 
     try:
         params_local = dict(param_set) if isinstance(param_set, dict) else _current_geometry_fit_params()
@@ -5724,12 +6329,13 @@ def _geometry_manual_simulated_peaks_for_params(
             return []
         if intensity_array.shape[0] != miller_array.shape[0]:
             return []
-        return _simulate_preview_style_peaks_for_fit(
+        raw_peaks = _simulate_preview_style_peaks_for_fit(
             miller_array,
             intensity_array,
             image_size,
             params_local,
         )
+        return _project_geometry_manual_peaks_to_current_view(raw_peaks)
     except Exception:
         return []
 
@@ -8756,8 +9362,6 @@ def on_canvas_click(event):
 
     if event.button != 1:
         return
-    if show_caked_2d_var.get():
-        return
     if geometry_manual_pick_armed:
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
@@ -8767,6 +9371,8 @@ def on_canvas_click(event):
             float(event.xdata),
             float(event.ydata),
         )
+        return
+    if show_caked_2d_var.get():
         return
     if geometry_preview_exclude_armed:
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
@@ -10267,6 +10873,9 @@ last_1d_integration_data = {
 
 last_caked_image_unscaled = None
 last_caked_extent = None
+last_caked_background_image_unscaled = None
+last_caked_radial_values = None
+last_caked_azimuth_values = None
 
 last_res2_background = None
 last_res2_sim = None
@@ -10864,6 +11473,7 @@ def do_update():
     global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
     global av2, cv2
     global last_caked_image_unscaled, last_caked_extent
+    global last_caked_background_image_unscaled, last_caked_radial_values, last_caked_azimuth_values
     global last_res2_sim, last_res2_background
     global last_unscaled_image_signature
 
@@ -11402,6 +12012,8 @@ def do_update():
             caked_img = caked_img[:, radial_mask]
 
         last_caked_image_unscaled = caked_img
+        last_caked_radial_values = np.asarray(radial_vals, dtype=float)
+        last_caked_azimuth_values = np.asarray(azimuth_vals, dtype=float)
 
         current_scale = _get_scale_factor_value(default=1.0)
         scaled_caked_for_limits = caked_img * current_scale
@@ -11439,6 +12051,7 @@ def do_update():
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
 
         background_caked_available = False
+        last_caked_background_image_unscaled = None
         if background_visible and native_background is not None:
             if (
                 caking_cache.get("bg_sig") == bg_caking_sig
@@ -11463,6 +12076,7 @@ def do_update():
                 bg_radial = bg_radial[bg_radial_mask]
                 bg_caked = bg_caked[:, bg_radial_mask]
 
+            last_caked_background_image_unscaled = np.asarray(bg_caked, dtype=float)
             _set_image_origin(background_display, 'lower')
             background_display.set_data(bg_caked)
             bg_display_vmax = vmax_val
@@ -11530,6 +12144,9 @@ def do_update():
     else:
         last_caked_image_unscaled = None
         last_caked_extent = None
+        last_caked_background_image_unscaled = None
+        last_caked_radial_values = None
+        last_caked_azimuth_values = None
         ax.set_xlim(0, image_size)
         ax.set_ylim(image_size, 0)
         ax.set_aspect("auto")
@@ -16901,8 +17518,10 @@ def _build_geometry_manual_fit_dataset(
         initial_entry: dict[str, object] = {
             "overlay_match_index": int(pair_idx),
             "hkl": entry.get("hkl", entry.get("label")),
-            "bg_display": (float(entry["x"]), float(entry["y"])),
         }
+        bg_coords = _geometry_manual_entry_display_coords(entry)
+        if bg_coords is not None:
+            initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         try:
             source_key = (
                 int(entry.get("source_table_index")),

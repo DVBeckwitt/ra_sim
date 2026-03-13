@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import numpy as np
+
 
 def _load_main_functions(*names: str) -> dict[str, object]:
     source = Path("main.py").read_text(encoding="utf-8")
@@ -104,6 +106,54 @@ def test_peak_maximum_near_in_image_returns_local_brightest_pixel() -> None:
 
     assert peak_maximum(image, 4.2, 4.1, search_radius=1) == (4.0, 4.0)
     assert peak_maximum(image, 4.9, 5.8, search_radius=2) == (5.0, 6.0)
+
+
+def test_caked_axis_index_helpers_round_trip() -> None:
+    namespace = _load_main_functions(
+        "_caked_axis_to_image_index",
+        "_caked_image_index_to_axis",
+    )
+    axis_to_index = namespace["_caked_axis_to_image_index"]
+    index_to_axis = namespace["_caked_image_index_to_axis"]
+
+    axis = np.linspace(-30.0, 30.0, 121)
+    idx = axis_to_index(7.5, axis)
+    restored = index_to_axis(idx, axis)
+
+    assert np.isfinite(idx)
+    assert abs(restored - 7.5) < 1e-9
+
+
+def test_refine_caked_peak_center_finds_ridge_crest() -> None:
+    namespace = _load_main_functions(
+        "_caked_axis_to_image_index",
+        "_caked_image_index_to_axis",
+        "_refine_profile_peak_index",
+        "_refine_caked_peak_center",
+    )
+    namespace["GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG"] = 1.5
+    namespace["GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG"] = 10.0
+    refine = namespace["_refine_caked_peak_center"]
+
+    radial = np.linspace(10.0, 20.0, 201)
+    azimuth = np.linspace(-30.0, 30.0, 301)
+    radial_grid, azimuth_grid = np.meshgrid(radial, azimuth)
+    image = (
+        2.0
+        + 6.0 * np.exp(-0.5 * ((radial_grid - 15.2) / 0.22) ** 2)
+        * np.exp(-0.5 * ((azimuth_grid - 7.5) / 4.2) ** 2)
+    )
+
+    refined_tth, refined_phi = refine(
+        image,
+        radial,
+        azimuth,
+        14.7,
+        11.0,
+    )
+
+    assert abs(refined_tth - 15.2) < 0.08
+    assert abs(refined_phi - 7.5) < 0.35
 
 
 def test_geometry_manual_candidate_source_key_prefers_source_indices() -> None:
@@ -253,6 +303,42 @@ def test_geometry_manual_nearest_candidate_to_point_selects_closest_simulated_pe
     assert isinstance(candidate, dict)
     assert candidate["label"] == "right"
     assert dist < 3.0
+
+
+def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> None:
+    namespace = _load_main_functions(
+        "_normalize_hkl_key",
+        "_geometry_manual_pair_entry_from_candidate",
+    )
+    pair_entry_from_candidate = namespace["_geometry_manual_pair_entry_from_candidate"]
+
+    entry = pair_entry_from_candidate(
+        {
+            "label": "1,0,2",
+            "hkl": (1, 0, 2),
+            "source_table_index": 3,
+            "source_row_index": 8,
+        },
+        120.0,
+        240.0,
+        group_key=("q_group", "primary", 1, 2),
+        raw_col=118.5,
+        raw_row=239.0,
+        caked_col=13.2,
+        caked_row=-7.4,
+        raw_caked_col=13.0,
+        raw_caked_row=-7.0,
+        placement_error_px=1.7,
+        sigma_px=1.9,
+    )
+
+    assert entry is not None
+    assert entry["x"] == 120.0
+    assert entry["y"] == 240.0
+    assert entry["caked_x"] == 13.2
+    assert entry["caked_y"] == -7.4
+    assert entry["raw_caked_x"] == 13.0
+    assert entry["raw_caked_y"] == -7.0
 
 
 def test_geometry_manual_preview_due_throttles_small_motion() -> None:
