@@ -325,6 +325,7 @@ from ra_sim.gui.geometry_overlay import (
     compute_geometry_overlay_frame_diagnostics,
     normalize_initial_geometry_pairs_display,
 )
+from ra_sim.gui.qr_cylinder_overlay import interpolate_trace_to_caked_coords
 from ra_sim.gui.sliders import create_slider
 from ra_sim.gui.diffuse_cif_toggle import (
     open_diffuse_cif_toggle_algebraic,
@@ -6505,6 +6506,7 @@ def _qr_cylinder_overlay_signature(
     )
     return (
         tuple(qr_keys),
+        bool(show_caked_2d_var.get()),
         int(image_size),
         int(SIM_DISPLAY_ROTATE_K),
         float(center_x_var.get()),
@@ -6527,21 +6529,13 @@ def _qr_cylinder_overlay_signature(
 
 
 def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = False):
-    """Draw analytic Ewald/constant-Qr detector traces for active Bragg groups."""
+    """Draw analytic Ewald/constant-Qr traces in the current detector or caked view."""
 
     global qr_cylinder_overlay_cache
 
     overlay_var = globals().get("show_qr_cylinder_overlay_var")
     if overlay_var is None or not bool(overlay_var.get()):
         _clear_qr_cylinder_overlay_artists(redraw=redraw)
-        return
-
-    if show_caked_2d_var.get():
-        _clear_qr_cylinder_overlay_artists(redraw=redraw)
-        if update_status and "progress_label_positions" in globals():
-            progress_label_positions.config(
-                text="Qr cylinder overlay is hidden in 2D caked view."
-            )
         return
 
     entries = _active_qr_cylinder_overlay_entries()
@@ -6557,6 +6551,12 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
     signature = _qr_cylinder_overlay_signature(entries)
     cached_sig = qr_cylinder_overlay_cache.get("signature")
     if cached_sig != signature:
+        render_in_caked_space = bool(show_caked_2d_var.get())
+        ai = _ai_cache.get("ai")
+        two_theta_map = None
+        phi_map = None
+        if render_in_caked_space:
+            two_theta_map, phi_map = _get_detector_angular_maps(ai)
         geometry = IntersectionGeometry(
             image_size=int(image_size),
             center_col=float(center_y_var.get()),
@@ -6589,17 +6589,29 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
             except Exception:
                 continue
             for trace in traces:
-                display_cols = np.full_like(trace.detector_col, np.nan, dtype=np.float64)
-                display_rows = np.full_like(trace.detector_row, np.nan, dtype=np.float64)
-                valid_idx = np.nonzero(trace.valid_mask)[0]
-                for idx in valid_idx:
-                    dcol, drow = _native_sim_to_display_coords(
-                        float(trace.detector_col[idx]),
-                        float(trace.detector_row[idx]),
-                        native_shape,
+                if render_in_caked_space:
+                    if two_theta_map is None or phi_map is None:
+                        continue
+                    display_cols, display_rows = interpolate_trace_to_caked_coords(
+                        detector_cols=trace.detector_col,
+                        detector_rows=trace.detector_row,
+                        valid_mask=trace.valid_mask,
+                        two_theta_map=two_theta_map,
+                        phi_map_deg=phi_map,
+                        two_theta_limits=(0.0, 90.0),
                     )
-                    display_cols[idx] = dcol
-                    display_rows[idx] = drow
+                else:
+                    display_cols = np.full_like(trace.detector_col, np.nan, dtype=np.float64)
+                    display_rows = np.full_like(trace.detector_row, np.nan, dtype=np.float64)
+                    valid_idx = np.nonzero(trace.valid_mask)[0]
+                    for idx in valid_idx:
+                        dcol, drow = _native_sim_to_display_coords(
+                            float(trace.detector_col[idx]),
+                            float(trace.detector_row[idx]),
+                            native_shape,
+                        )
+                        display_cols[idx] = dcol
+                        display_rows[idx] = drow
                 valid_count = int(
                     np.count_nonzero(np.isfinite(display_cols) & np.isfinite(display_rows))
                 )
@@ -6622,7 +6634,7 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
             canvas.draw_idle()
         if update_status and "progress_label_positions" in globals():
             progress_label_positions.config(
-                text="Qr cylinder overlay found no detector-visible traces."
+                text="Qr cylinder overlay found no visible traces in the current view."
             )
         return
     for path in paths:
