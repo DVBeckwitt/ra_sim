@@ -30,6 +30,17 @@ def simulate(
 
     image_buffer = _default_image_buffer(request)
 
+    peak_kwargs: dict[str, Any] = dict(
+        save_flag=request.save_flag,
+        record_status=request.record_status,
+        thickness=request.thickness,
+        solve_q_steps=request.mosaic.solve_q_steps,
+        solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
+        solve_q_mode=request.mosaic.solve_q_mode,
+    )
+    if request.beam.sample_weights is not None:
+        peak_kwargs["sample_weights"] = request.beam.sample_weights
+
     image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
         request.miller,
         request.intensities,
@@ -62,12 +73,7 @@ def simulate(
         request.geometry.cor_angle_deg,
         request.geometry.unit_x,
         request.geometry.n_detector,
-        save_flag=request.save_flag,
-        record_status=request.record_status,
-        thickness=request.thickness,
-        solve_q_steps=request.mosaic.solve_q_steps,
-        solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
-        solve_q_mode=request.mosaic.solve_q_mode,
+        **peak_kwargs,
     )
 
     return SimulationResult(
@@ -90,6 +96,17 @@ def simulate_qr_rods(
     """Run rod-based simulation through the typed request API."""
 
     image_buffer = _default_image_buffer(request)
+
+    rod_kwargs: dict[str, Any] = dict(
+        save_flag=request.save_flag,
+        record_status=request.record_status,
+        thickness=request.thickness,
+        solve_q_steps=request.mosaic.solve_q_steps,
+        solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
+        solve_q_mode=request.mosaic.solve_q_mode,
+    )
+    if request.beam.sample_weights is not None:
+        rod_kwargs["sample_weights"] = request.beam.sample_weights
 
     image, hit_tables, q_data, q_count, all_status, miss_tables, degeneracy = peak_runner(
         qr_dict,
@@ -122,12 +139,7 @@ def simulate_qr_rods(
         request.geometry.cor_angle_deg,
         request.geometry.unit_x,
         request.geometry.n_detector,
-        save_flag=request.save_flag,
-        record_status=request.record_status,
-        thickness=request.thickness,
-        solve_q_steps=request.mosaic.solve_q_steps,
-        solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
-        solve_q_mode=request.mosaic.solve_q_mode,
+        **rod_kwargs,
     )
 
     return SimulationResult(

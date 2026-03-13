@@ -2,6 +2,9 @@
 
 ## Unreleased (since `e11bec1` on 2026-02-13)
 
+- **Simulation performance**
+  - Optimized diffraction simulation with low-discrepancy antithetic beam sampling, weighted beam clustering, nominal detector culling, local-arc `solve_q`, sparse bilinear accumulation, and a fast-mode optics lookup table.
+
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.
   - Added geometry solver tuning block under `instrument.fit.geometry.solver`.

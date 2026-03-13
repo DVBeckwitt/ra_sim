@@ -36,6 +36,7 @@ class BeamSamples:
     theta_array: np.ndarray
     phi_array: np.ndarray
     wavelength_array: np.ndarray
+    sample_weights: np.ndarray | None = None
 
 
 @dataclass

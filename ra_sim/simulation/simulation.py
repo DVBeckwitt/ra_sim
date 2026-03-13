@@ -7,7 +7,7 @@ from ra_sim.simulation.diffraction import (
     DEFAULT_SOLVE_Q_MODE,
     DEFAULT_SOLVE_Q_REL_TOL,
     OPTICS_MODE_FAST,
-    process_peaks_parallel,
+    process_peaks_parallel_safe,
 )
 from ra_sim.utils.calculations import IndexofRefraction, fresnel_transmission
 
@@ -67,7 +67,7 @@ def simulate_diffraction(
     unit_x = np.array([1.0, 0.0, 0.0])
     n_detector = np.array([0.0, 1.0, 0.0])
 
-    simulated_image, *_ = process_peaks_parallel(
+    simulated_image, *_ = process_peaks_parallel_safe(
         miller,
         intensities,
         image_size,

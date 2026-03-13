@@ -16,7 +16,7 @@ from scipy.spatial import cKDTree
 
 from ra_sim.simulation.diffraction import (
     hit_tables_to_max_positions,
-    process_peaks_parallel,
+    process_peaks_parallel_safe as process_peaks_parallel,
 )
 from ra_sim.utils.calculations import d_spacing, two_theta
 
