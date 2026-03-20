@@ -2446,6 +2446,13 @@ def _apply_geometry_fit_background_selection(*, trigger_update: bool = False) ->
     if geometry_fit_background_selection_var is None:
         return True
 
+    live_theta_before = None
+    if "theta_initial_var" in globals() and theta_initial_var is not None:
+        try:
+            live_theta_before = float(theta_initial_var.get())
+        except Exception:
+            live_theta_before = None
+
     try:
         selected_indices = _current_geometry_fit_background_indices(strict=True)
     except Exception as exc:
@@ -2467,7 +2474,24 @@ def _apply_geometry_fit_background_selection(*, trigger_update: bool = False) ->
 
     _refresh_geometry_fit_theta_checkbox_label()
     _set_background_file_status_text()
-    if trigger_update:
+
+    theta_changed = False
+    if "theta_initial_var" in globals() and theta_initial_var is not None:
+        try:
+            live_theta_after = float(
+                _background_theta_for_index(current_background_index, strict_count=False)
+            )
+            theta_initial_var.set(live_theta_after)
+            if (
+                live_theta_before is None
+                or not np.isfinite(live_theta_before)
+                or abs(float(live_theta_after) - float(live_theta_before)) > 1.0e-12
+            ):
+                theta_changed = True
+        except Exception:
+            theta_changed = bool(trigger_update)
+
+    if trigger_update and theta_changed:
         schedule_update()
     return True
 
@@ -3366,6 +3390,35 @@ def _draw_geometry_fit_overlay(
         initial_bg_display = _parse_point(entry.get("initial_bg_display"))
         final_sim_display = _parse_point(entry.get("final_sim_display"))
         final_bg_display = _parse_point(entry.get("final_bg_display"))
+        if bool(show_caked_2d_var.get()):
+            final_sim_native = _parse_point(entry.get("final_sim_native"))
+            final_bg_native = _parse_point(entry.get("final_bg_native"))
+            try:
+                projected_sim = (
+                    _native_detector_coords_to_caked_display_coords(
+                        final_sim_native[0],
+                        final_sim_native[1],
+                    )
+                    if final_sim_native is not None
+                    else None
+                )
+            except Exception:
+                projected_sim = None
+            try:
+                projected_bg = (
+                    _native_detector_coords_to_caked_display_coords(
+                        final_bg_native[0],
+                        final_bg_native[1],
+                    )
+                    if final_bg_native is not None
+                    else None
+                )
+            except Exception:
+                projected_bg = None
+            if projected_sim is not None:
+                final_sim_display = projected_sim
+            if projected_bg is not None:
+                final_bg_display = projected_bg
         if final_sim_display is None or final_bg_display is None:
             continue
 
@@ -5842,6 +5895,42 @@ def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None)
         progress_label_geometry.config(text=message)
 
 
+def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
+    """Switch geometry fitting/import into the 2D caked integration view now."""
+
+    global update_pending, integration_update_pending
+
+    needs_refresh = bool(force_refresh)
+    if not bool(show_caked_2d_var.get()):
+        show_caked_2d_var.set(True)
+        toggle_caked_2d()
+        needs_refresh = True
+    elif not _geometry_manual_pick_uses_caked_space():
+        needs_refresh = True
+
+    if not needs_refresh:
+        return
+
+    if integration_update_pending is not None:
+        try:
+            root.after_cancel(integration_update_pending)
+        except Exception:
+            pass
+        integration_update_pending = None
+    if update_pending is not None:
+        try:
+            root.after_cancel(update_pending)
+        except Exception:
+            pass
+        update_pending = None
+
+    if bool(globals().get("update_running", False)):
+        schedule_update()
+        return
+
+    do_update()
+
+
 def _toggle_geometry_manual_pick_mode() -> None:
     """Toggle manual geometry Qr-set selection on the image."""
 
@@ -6210,22 +6299,30 @@ def _caked_angles_to_background_display_coords(
     """Back-project one caked-space point to the displayed detector background."""
 
     ai = _ai_cache.get("ai")
-    two_theta_map, phi_map = _get_detector_angular_maps(ai)
     native_background = _get_current_background_native()
+    try:
+        two_theta_map, phi_map = _get_detector_angular_maps(ai)
+    except Exception:
+        two_theta_map, phi_map = None, None
     if (
         two_theta_map is None
         or phi_map is None
         or native_background is None
         or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg))
     ):
+        if native_background is None:
+            return None, None
         center = [float(center_x_var.get()), float(center_y_var.get())]
-        native_point = _scattering_angles_to_detector_pixel(
-            float(two_theta_deg),
-            float(phi_deg),
-            center,
-            float(corto_detector_var.get()),
-            float(pixel_size_m),
-        )
+        try:
+            native_point = _scattering_angles_to_detector_pixel(
+                float(two_theta_deg),
+                float(phi_deg),
+                center,
+                float(corto_detector_var.get()),
+                float(pixel_size_m),
+            )
+        except Exception:
+            return None, None
         if native_point[0] is None or native_point[1] is None:
             return None, None
         return _rotate_point_for_display(
@@ -6249,6 +6346,53 @@ def _caked_angles_to_background_display_coords(
         tuple(int(v) for v in native_background.shape[:2]),
         DISPLAY_ROTATE_K,
     )
+
+
+def _native_detector_coords_to_caked_display_coords(
+    col: float,
+    row: float,
+) -> tuple[float, float] | None:
+    """Project one native detector pixel into the active caked display axes."""
+
+    try:
+        col_val = float(col)
+        row_val = float(row)
+    except Exception:
+        return None
+    if not (np.isfinite(col_val) and np.isfinite(row_val)):
+        return None
+
+    ai = _ai_cache.get("ai")
+    try:
+        two_theta_map, phi_map = _get_detector_angular_maps(ai)
+    except Exception:
+        two_theta_map, phi_map = None, None
+    if two_theta_map is not None and phi_map is not None:
+        try:
+            height, width = two_theta_map.shape[:2]
+            if height > 0 and width > 0:
+                col_idx = min(max(int(round(col_val)), 0), width - 1)
+                row_idx = min(max(int(round(row_val)), 0), height - 1)
+                two_theta = float(two_theta_map[row_idx, col_idx])
+                phi = float(phi_map[row_idx, col_idx])
+                if np.isfinite(two_theta) and np.isfinite(phi):
+                    return float(two_theta), float(_wrap_phi_range(phi))
+        except Exception:
+            pass
+
+    try:
+        two_theta, phi = _detector_pixel_to_scattering_angles(
+            col_val,
+            row_val,
+            [float(center_x_var.get()), float(center_y_var.get())],
+            float(corto_detector_var.get()),
+            float(pixel_size_m),
+        )
+    except Exception:
+        return None
+    if two_theta is None or phi is None:
+        return None
+    return float(two_theta), float(_wrap_phi_range(phi))
 
 
 def _project_geometry_manual_peaks_to_current_view(
@@ -13412,6 +13556,10 @@ def _import_geometry_manual_pairs() -> None:
     except Exception as exc:
         progress_label_geometry.config(text=f"Failed to import geometry placements: {exc}")
         return
+    try:
+        _ensure_geometry_fit_caked_view(force_refresh=True)
+    except Exception as exc:
+        message += f" Warning: imported placements but could not switch to 2D caked view ({exc})."
     progress_label_geometry.config(text=message)
 
 
@@ -17771,6 +17919,14 @@ def on_fit_geometry_click():
                 + ", ".join(missing_names or [f"background {idx + 1}" for idx in missing_indices])
                 + "."
             )
+        )
+        return
+
+    try:
+        _ensure_geometry_fit_caked_view()
+    except Exception as exc:
+        progress_label_geometry.config(
+            text=f"Geometry fit unavailable: failed to prepare the 2D caked view ({exc})."
         )
         return
 

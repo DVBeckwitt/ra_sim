@@ -4937,6 +4937,28 @@ def _is_persistable_gui_var(name: str, value: object) -> bool:
     return True
 
 
+def _canonicalize_gui_state_background_path(path: object) -> str:
+    return os.path.normcase(str(Path(str(path)).expanduser().resolve(strict=False)))
+
+
+def _background_files_match_loaded_state(file_paths: list[str]) -> bool:
+    if not file_paths:
+        return False
+    if len(file_paths) != len(osc_files):
+        return False
+    if len(background_images_native) != len(file_paths):
+        return False
+    if len(background_images_display) != len(file_paths):
+        return False
+    requested_paths = [
+        _canonicalize_gui_state_background_path(path) for path in file_paths
+    ]
+    current_paths = [
+        _canonicalize_gui_state_background_path(path) for path in osc_files
+    ]
+    return requested_paths == current_paths
+
+
 def _load_background_files_for_state(
     file_paths: list[str],
     *,
@@ -4945,10 +4967,26 @@ def _load_background_files_for_state(
     global osc_files, background_images, background_images_native, background_images_display
     global current_background_index, current_background_image, current_background_display
 
-    loaded_native = [np.asarray(read_osc(path)) for path in file_paths]
+    normalized_paths = [
+        str(Path(str(path)).expanduser())
+        for path in file_paths
+        if path is not None
+    ]
+    if not normalized_paths:
+        return
+    if _background_files_match_loaded_state(normalized_paths):
+        osc_files = list(normalized_paths)
+        index = max(0, min(int(select_index), len(background_images_native) - 1))
+        current_background_index = index
+        current_background_image = background_images_native[index]
+        current_background_display = background_images_display[index]
+        background_display.set_data(current_background_display)
+        return
+
+    loaded_native = [np.asarray(read_osc(path)) for path in normalized_paths]
     if not loaded_native:
         return
-    osc_files = list(file_paths)
+    osc_files = list(normalized_paths)
     background_images = [np.array(img) for img in loaded_native]
     background_images_native = [np.array(img) for img in loaded_native]
     background_images_display = [
@@ -5002,6 +5040,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     global background_visible
     global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
     global background_limits_user_override, simulation_limits_user_override
+    global caked_limits_user_override
     global scale_factor_user_override, selected_hkl_target
 
     warnings: list[str] = []
@@ -5035,6 +5074,11 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             if not isinstance(target_var, tk.Variable):
                 continue
             try:
+                if target_var.get() == stored_value:
+                    continue
+            except Exception:
+                pass
+            try:
                 target_var.set(stored_value)
             except Exception as exc:
                 warnings.append(f"{name}: {exc}")
@@ -5043,7 +5087,8 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     if isinstance(flags, dict):
         desired_background_visible = bool(flags.get("background_visible", background_visible))
         if desired_background_visible != bool(background_visible):
-            toggle_background()
+            background_visible = desired_background_visible
+            image_display.set_alpha(0.5 if background_visible else 1.0)
         background_backend_rotation_k = int(flags.get("background_backend_rotation_k", background_backend_rotation_k)) % 4
         background_backend_flip_x = bool(flags.get("background_backend_flip_x", background_backend_flip_x))
         background_backend_flip_y = bool(flags.get("background_backend_flip_y", background_backend_flip_y))
@@ -5072,10 +5117,10 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
 
     _sync_finite_controls()
     ensure_valid_resolution_choice()
-    toggle_1d_plots()
-    toggle_caked_2d()
-    toggle_log_radial()
-    toggle_log_azimuth()
+    if not show_caked_2d_var.get():
+        caked_limits_user_override = False
+    else:
+        simulation_limits_user_override = False
     _update_background_backend_status()
     _update_chi_square_display()
     schedule_update()

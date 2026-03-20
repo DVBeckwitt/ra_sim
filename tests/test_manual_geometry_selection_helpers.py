@@ -4,6 +4,17 @@ from pathlib import Path
 import numpy as np
 
 
+class _DummyVar:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self._value = value
+
+
 def _load_main_functions(*names: str) -> dict[str, object]:
     source = Path("main.py").read_text(encoding="utf-8")
     module = ast.parse(source, filename="main.py")
@@ -339,6 +350,103 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> N
     assert entry["caked_y"] == -7.4
     assert entry["raw_caked_x"] == 13.0
     assert entry["raw_caked_y"] == -7.0
+
+
+def test_ensure_geometry_fit_caked_view_switches_and_refreshes_immediately() -> None:
+    namespace = _load_main_functions("_ensure_geometry_fit_caked_view")
+
+    calls: list[str] = []
+
+    class _DummyRoot:
+        def __init__(self) -> None:
+            self.canceled: list[object] = []
+
+        def after_cancel(self, token) -> None:
+            self.canceled.append(token)
+
+    namespace["show_caked_2d_var"] = _DummyVar(False)
+    namespace["_geometry_manual_pick_uses_caked_space"] = lambda: False
+    namespace["toggle_caked_2d"] = lambda: calls.append("toggle")
+    namespace["do_update"] = lambda: calls.append("update")
+    namespace["schedule_update"] = lambda: calls.append("schedule")
+    namespace["root"] = _DummyRoot()
+    namespace["update_pending"] = "update-token"
+    namespace["integration_update_pending"] = "range-token"
+    namespace["update_running"] = False
+
+    namespace["_ensure_geometry_fit_caked_view"]()
+
+    assert namespace["show_caked_2d_var"].get() is True
+    assert calls == ["toggle", "update"]
+    assert namespace["root"].canceled == ["range-token", "update-token"]
+    assert namespace["update_pending"] is None
+    assert namespace["integration_update_pending"] is None
+
+
+def test_native_detector_coords_to_caked_display_coords_prefers_angular_maps() -> None:
+    namespace = _load_main_functions(
+        "_wrap_phi_range",
+        "_native_detector_coords_to_caked_display_coords",
+    )
+    namespace["_ai_cache"] = {"ai": object()}
+    namespace["_get_detector_angular_maps"] = lambda _ai: (
+        np.array([[11.0, 12.5], [13.0, 14.0]], dtype=float),
+        np.array([[181.0, -190.0], [35.0, 40.0]], dtype=float),
+    )
+    namespace["_detector_pixel_to_scattering_angles"] = lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(AssertionError("fallback should not be used"))
+    )
+    namespace["center_x_var"] = _DummyVar(0.0)
+    namespace["center_y_var"] = _DummyVar(0.0)
+    namespace["corto_detector_var"] = _DummyVar(1.0)
+    namespace["pixel_size_m"] = 1.0
+
+    result = namespace["_native_detector_coords_to_caked_display_coords"](0.9, 0.1)
+
+    assert result is not None
+    assert result[0] == 12.5
+    assert result[1] == 170.0
+
+
+def test_native_detector_coords_to_caked_display_coords_falls_back_when_map_lookup_raises() -> None:
+    namespace = _load_main_functions(
+        "_wrap_phi_range",
+        "_native_detector_coords_to_caked_display_coords",
+    )
+    namespace["_ai_cache"] = {"ai": object()}
+    namespace["_get_detector_angular_maps"] = lambda _ai: (
+        (_ for _ in ()).throw(RuntimeError("map lookup failed"))
+    )
+    namespace["_detector_pixel_to_scattering_angles"] = (
+        lambda *_args, **_kwargs: (22.0, 190.0)
+    )
+    namespace["center_x_var"] = _DummyVar(0.0)
+    namespace["center_y_var"] = _DummyVar(0.0)
+    namespace["corto_detector_var"] = _DummyVar(1.0)
+    namespace["pixel_size_m"] = 1.0
+
+    result = namespace["_native_detector_coords_to_caked_display_coords"](5.0, 7.0)
+
+    assert result is not None
+    assert result == (22.0, -170.0)
+
+
+def test_caked_angles_to_background_display_coords_returns_none_without_native_background() -> None:
+    namespace = _load_main_functions(
+        "_scattering_angles_to_detector_pixel",
+        "_caked_angles_to_background_display_coords",
+    )
+    namespace["_ai_cache"] = {"ai": object()}
+    namespace["_get_detector_angular_maps"] = lambda _ai: (None, None)
+    namespace["_get_current_background_native"] = lambda: None
+    namespace["center_x_var"] = _DummyVar(0.0)
+    namespace["center_y_var"] = _DummyVar(0.0)
+    namespace["corto_detector_var"] = _DummyVar(1.0)
+    namespace["pixel_size_m"] = 1.0
+
+    result = namespace["_caked_angles_to_background_display_coords"](12.0, 30.0)
+
+    assert result == (None, None)
 
 
 def test_geometry_manual_preview_due_throttles_small_motion() -> None:
