@@ -842,6 +842,80 @@ def test_fit_geometry_parameters_pixel_path_pairwise_probe_escapes_coupled_flat_
     )
 
 
+def test_fit_geometry_parameters_pixel_path_broad_restart_seed_escapes_far_coupled_minimum(
+    monkeypatch,
+):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        gamma = float(args[8])
+        Gamma = float(args[9])
+        sim_col = 6.0 if gamma >= 0.75 and Gamma >= 0.75 else 2.0
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, sim_col, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="flat-local-solver",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 6.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "bounds": {
+                "gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+                "Gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+            },
+            "solver": {
+                "restarts": 4,
+                "restart_jitter": 0.15,
+                "weighted_matching": False,
+                "stagnation_probe": False,
+            },
+        },
+    )
+
+    assert result.x.shape == (2,)
+    assert float(result.x[0]) >= 0.75
+    assert float(result.x[1]) >= 0.75
+    assert np.allclose(np.asarray(result.fun, dtype=float), [0.0, 0.0])
+    assert "restart corner seed" in str(result.message)
+    assert any(
+        "restart corner seed" in str(entry.get("message", ""))
+        and "opposite-corner" in str(entry.get("message", ""))
+        for entry in getattr(result, "restart_history", [])
+    )
+
+
 def test_fit_geometry_parameters_reports_unweighted_peak_rms(monkeypatch):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
@@ -961,6 +1035,7 @@ def test_fit_geometry_parameters_scales_manual_peak_residuals_by_sigma(monkeypat
             "solver": {
                 "restarts": 0,
                 "weighted_matching": False,
+                "use_measurement_uncertainty": True,
                 "f_scale_px": 1.0,
             }
         },
@@ -980,6 +1055,86 @@ def test_fit_geometry_parameters_scales_manual_peak_residuals_by_sigma(monkeypat
     assert np.isclose(float(result.point_match_summary["measurement_sigma_median_px"]), 5.0)
     assert np.isclose(float(result.rms_px), 10.0)
     assert float(result.weighted_residual_rms_px) < float(result.rms_px)
+
+
+def test_fit_geometry_parameters_ignores_manual_peak_sigma_by_default(monkeypatch):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[50.0, 14.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([25.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "label": "1,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "sigma_px": 5.0,
+            "placement_error_px": 4.5,
+            "source_table_index": 0,
+            "source_row_index": 0,
+        }
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": False,
+                "f_scale_px": 1.0,
+            }
+        },
+    )
+
+    assert result.success
+    assert np.allclose(np.asarray(result.fun, dtype=float), [10.0, 0.0])
+    diag = result.point_match_diagnostics[0]
+    assert float(diag["distance_px"]) == 10.0
+    assert float(diag["measurement_sigma_px"]) == 5.0
+    assert np.isclose(float(diag["sigma_weight"]), 1.0)
+    assert np.isclose(float(diag["weight"]), 1.0)
+    assert np.isclose(float(diag["weighted_dx_px"]), 10.0)
+    assert np.isclose(float(diag["placement_error_px"]), 4.5)
+    assert str(result.point_match_summary["peak_weighting_mode"]) == "uniform"
+    assert int(result.point_match_summary["custom_sigma_count"]) == 0
+    assert np.isclose(float(result.rms_px), 10.0)
+    assert np.isclose(
+        float(result.weighted_residual_rms_px),
+        np.sqrt((10.0 ** 2 + 0.0 ** 2) / 2.0),
+    )
 
 
 def test_fit_geometry_parameters_joint_backgrounds_share_theta_offset(monkeypatch):
@@ -1058,7 +1213,100 @@ def test_fit_geometry_parameters_joint_backgrounds_share_theta_offset(monkeypatc
     } == {0, 1}
 
 
+def test_compute_sensitivity_weights_can_equalize_roi_totals():
+    image_size = 31
+    params = _base_params(image_size, optics_mode=1)
+    params["gamma"] = 0.0
+    params["pixel_size"] = 0.01
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    max_positions = np.array(
+        [
+            [1.0, 8.0, 15.0, np.nan, np.nan, np.nan],
+            [25.0, 22.0, 15.0, np.nan, np.nan, np.nan],
+        ],
+        dtype=np.float64,
+    )
+    yy, xx = np.mgrid[0:image_size, 0:image_size]
+
+    def simulator(local_params):
+        shift = float(local_params.get("gamma", 0.0))
+        image = (
+            np.exp(
+                -(
+                    (xx - (8.0 + shift)) ** 2
+                    + (yy - 15.0) ** 2
+                )
+                / (2.0 * 0.8 ** 2)
+            )
+            + 25.0
+            * np.exp(
+                -(
+                    (xx - (22.0 + shift)) ** 2
+                    + (yy - 15.0) ** 2
+                )
+                / (2.0 * 0.8 ** 2)
+            )
+        )
+        return image.astype(np.float64), max_positions
+
+    base_sim, _ = simulator(params)
+    rois_raw = opt.build_tube_rois(
+        miller,
+        max_positions,
+        params,
+        image_size,
+        base_width=3.0,
+    )
+    opt.compute_sensitivity_weights(
+        base_sim,
+        params,
+        ["gamma"],
+        rois_raw,
+        simulator,
+        downsample_factor=1,
+        percentile=80.0,
+        huber_percentile=100.0,
+        per_reflection_quota=25,
+        off_tube_fraction=0.0,
+        normalize_per_roi=False,
+    )
+    raw_sums = [float(np.sum(np.asarray(roi.weights, dtype=float))) for roi in rois_raw]
+    assert raw_sums[1] > raw_sums[0] * 2.0
+
+    rois_equal = opt.build_tube_rois(
+        miller,
+        max_positions,
+        params,
+        image_size,
+        base_width=3.0,
+    )
+    opt.compute_sensitivity_weights(
+        base_sim,
+        params,
+        ["gamma"],
+        rois_equal,
+        simulator,
+        downsample_factor=1,
+        percentile=80.0,
+        huber_percentile=100.0,
+        per_reflection_quota=25,
+        off_tube_fraction=0.0,
+        normalize_per_roi=True,
+    )
+    equal_sums = [float(np.sum(np.asarray(roi.weights, dtype=float))) for roi in rois_equal]
+    assert np.isclose(equal_sums[0], 1.0)
+    assert np.isclose(equal_sums[1], 1.0)
+
+
 def test_fit_geometry_parameters_can_accept_roi_image_refinement(monkeypatch):
+    captured_cfg = {}
+
     def fake_least_squares(residual_fn, x0, **kwargs):
         x = np.asarray(x0, dtype=float)
         return opt.OptimizeResult(
@@ -1084,6 +1332,7 @@ def test_fit_geometry_parameters_can_accept_roi_image_refinement(monkeypatch):
         *,
         cfg,
     ):
+        captured_cfg.update(cfg)
         updated_params = dict(params)
         updated_params["gamma"] = 0.25
         updated_params["center"] = list(params.get("center", [image_size / 2.0, image_size / 2.0]))
@@ -1144,9 +1393,64 @@ def test_fit_geometry_parameters_can_accept_roi_image_refinement(monkeypatch):
     assert isinstance(result.image_refinement_summary, dict)
     assert bool(result.image_refinement_summary["accepted"]) is True
     assert str(result.image_refinement_summary["status"]) == "accepted"
+    assert bool(captured_cfg["equal_peak_weights"]) is True
     assert int(result.image_refinement_summary["selected_roi_count"]) == 3
     assert "ROI/image refinement accepted" in str(result.message)
     assert int(result.point_match_summary["matched_pair_count"]) == 3
+
+
+def test_fit_geometry_parameters_defaults_to_point_only_fit_without_image_stages(
+    monkeypatch,
+):
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def fail_stage_one(*args, **kwargs):
+        raise AssertionError("ridge refinement should be disabled by default")
+
+    def fail_stage_two(*args, **kwargs):
+        raise AssertionError("image refinement should be disabled by default")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process_peaks)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+    monkeypatch.setattr(opt, "_stage_one_initialize", fail_stage_one)
+    monkeypatch.setattr(opt, "_stage_two_refinement", fail_stage_two)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([10.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={"solver": {"restarts": 0, "weighted_matching": False}},
+    )
+
+    assert result.success
+    assert isinstance(result.ridge_refinement_summary, dict)
+    assert bool(result.ridge_refinement_summary["enabled"]) is False
+    assert str(result.ridge_refinement_summary["reason"]) == "disabled_by_config"
+    assert isinstance(result.image_refinement_summary, dict)
+    assert bool(result.image_refinement_summary["enabled"]) is False
+    assert str(result.image_refinement_summary["reason"]) == "disabled_by_config"
 
 
 def test_fit_geometry_parameters_can_accept_ridge_refinement(monkeypatch):
@@ -1279,6 +1583,7 @@ def test_fit_geometry_parameters_supports_anisotropic_measurement_weighting(monk
             "solver": {
                 "restarts": 0,
                 "weighted_matching": False,
+                "use_measurement_uncertainty": True,
                 "anisotropic_measurement_uncertainty": True,
                 "radial_sigma_scale": 1.0,
                 "tangential_sigma_scale": 4.0,

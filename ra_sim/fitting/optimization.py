@@ -513,6 +513,7 @@ def _weight_measurement_residual(
     center: Sequence[float],
     entry: Dict[str, object],
     distance_weight: float,
+    use_measurement_uncertainty: bool,
     anisotropic_enabled: bool,
     radial_scale: float,
     tangential_scale: float,
@@ -532,6 +533,37 @@ def _weight_measurement_residual(
     tangential_component = float("nan")
     weighted_radial = float("nan")
     weighted_tangential = float("nan")
+    effective_distance_weight = float(distance_weight)
+
+    if not bool(use_measurement_uncertainty):
+        basis = _radial_tangential_basis(measured_point, center)
+        weighted_vec = effective_distance_weight * residual_vec
+        if basis is not None:
+            radial_unit = basis[:, 0]
+            tangential_unit = basis[:, 1]
+            radial_component = float(np.dot(radial_unit, residual_vec))
+            tangential_component = float(np.dot(tangential_unit, residual_vec))
+            weighted_radial = float(effective_distance_weight * radial_component)
+            weighted_tangential = float(
+                effective_distance_weight * tangential_component
+            )
+        else:
+            weighted_radial = float(weighted_vec[0])
+            weighted_tangential = float(weighted_vec[1])
+        return {
+            "measurement_sigma_px": float(sigma_px),
+            "sigma_radial_px": float(sigma_radial),
+            "sigma_tangential_px": float(sigma_tangential),
+            "sigma_is_custom": False,
+            "anisotropic_sigma_used": False,
+            "sigma_weight": 1.0,
+            "weighted_dx_px": float(weighted_vec[0]),
+            "weighted_dy_px": float(weighted_vec[1]),
+            "radial_residual_px": float(radial_component),
+            "tangential_residual_px": float(tangential_component),
+            "weighted_radial_residual_px": float(weighted_radial),
+            "weighted_tangential_residual_px": float(weighted_tangential),
+        }
 
     basis = _radial_tangential_basis(measured_point, center)
     if anisotropic_used and basis is not None:
@@ -887,6 +919,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
     missing_pair_penalty: float,
     use_single_ray: bool,
     theta_value: float,
+    use_measurement_uncertainty: bool = False,
     anisotropic_uncertainty: bool = False,
     radial_sigma_scale: float = 1.0,
     tangential_sigma_scale: float = 1.0,
@@ -1007,6 +1040,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
             center=local.get("center", []),
             entry=entry,
             distance_weight=distance_weight,
+            use_measurement_uncertainty=bool(use_measurement_uncertainty),
             anisotropic_enabled=bool(anisotropic_uncertainty),
             radial_scale=float(radial_sigma_scale),
             tangential_scale=float(tangential_sigma_scale),
@@ -2352,6 +2386,7 @@ def compute_sensitivity_weights(
     huber_percentile: float = 97.0,
     per_reflection_quota: int = 200,
     off_tube_fraction: float = 0.05,
+    normalize_per_roi: bool = False,
 ) -> None:
     """Populate each ROI with active pixels using a sensitivity-driven map."""
 
@@ -2426,9 +2461,20 @@ def compute_sensitivity_weights(
         ys, xs = np.nonzero(active_mask)
         global_y = ys + min_y
         global_x = xs + min_x
+        roi_weights = np.asarray(weights_map[ys, xs], dtype=np.float64)
+        if normalize_per_roi and roi_weights.size:
+            positive_weight_sum = float(np.sum(roi_weights[roi_weights > 0.0]))
+            if np.isfinite(positive_weight_sum) and positive_weight_sum > 0.0:
+                roi_weights = roi_weights / positive_weight_sum
+            else:
+                roi_weights = np.full(
+                    roi_weights.shape,
+                    1.0 / max(int(roi_weights.size), 1),
+                    dtype=np.float64,
+                )
 
         roi.active_pixels = np.stack((global_y, global_x), axis=1)
-        roi.weights = weights_map[ys, xs]
+        roi.weights = roi_weights
         roi.full_weight_map = weights_map
         roi.active_mask = active_mask
 
@@ -2773,6 +2819,7 @@ def _stage_two_refinement(
         huber_percentile=float(cfg.get('huber_percentile', 97.0)),
         per_reflection_quota=int(cfg.get('per_reflection_quota', 200)),
         off_tube_fraction=float(cfg.get('off_tube_fraction', 0.05)),
+        normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
     )
 
     rois_state = rois
@@ -2804,11 +2851,17 @@ def _stage_two_refinement(
                 huber_percentile=float(cfg.get('huber_percentile', 97.0)),
                 per_reflection_quota=int(cfg.get('per_reflection_quota', 200)),
                 off_tube_fraction=float(cfg.get('off_tube_fraction', 0.05)),
+                normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
             )
 
+        max_reflections = (
+            len(rois_state)
+            if bool(cfg.get('equal_peak_weights', False))
+            else int(cfg.get('max_reflections', 12))
+        )
         active = _select_active_reflections(
             rois_state,
-            max_reflections=int(cfg.get('max_reflections', 12)),
+            max_reflections=max(1, int(max_reflections)),
             random_fraction=float(cfg.get('random_reflection_fraction', 0.15)),
         )
 
@@ -2895,6 +2948,7 @@ def _stage_three_refinement(
         huber_percentile=float(cfg.get('huber_percentile', 98.0)),
         per_reflection_quota=int(cfg.get('per_reflection_quota', 400)),
         off_tube_fraction=float(cfg.get('off_tube_fraction', 0.1)),
+        normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
     )
 
     rois_state = rois
@@ -2924,11 +2978,17 @@ def _stage_three_refinement(
             huber_percentile=float(cfg.get('huber_percentile', 98.0)),
             per_reflection_quota=int(cfg.get('per_reflection_quota', 400)),
             off_tube_fraction=float(cfg.get('off_tube_fraction', 0.1)),
+            normalize_per_roi=bool(cfg.get('equal_peak_weights', False)),
         )
 
+        max_reflections = (
+            len(rois_state)
+            if bool(cfg.get('equal_peak_weights', False))
+            else int(cfg.get('max_reflections', len(rois_state)))
+        )
         active = _select_active_reflections(
             rois_state,
-            max_reflections=int(cfg.get('max_reflections', len(rois_state))),
+            max_reflections=max(1, int(max_reflections)),
             random_fraction=float(cfg.get('random_reflection_fraction', 0.1)),
         )
 
@@ -3679,10 +3739,10 @@ def fit_geometry_parameters(
         identifiability_cfg = {}
 
     solver_loss = str(
-        solver_cfg.get("loss", "soft_l1" if point_match_mode else "linear")
+        solver_cfg.get("loss", "linear")
     ).strip().lower()
     if solver_loss not in {"linear", "soft_l1", "huber", "cauchy", "arctan"}:
-        solver_loss = "soft_l1" if point_match_mode else "linear"
+        solver_loss = "linear"
 
     solver_f_scale = float(
         solver_cfg.get("f_scale_px", 6.0 if point_match_mode else 1.0)
@@ -3701,7 +3761,10 @@ def fit_geometry_parameters(
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
 
-    weighted_matching = bool(solver_cfg.get("weighted_matching", True))
+    weighted_matching = bool(solver_cfg.get("weighted_matching", False))
+    use_measurement_uncertainty = bool(
+        solver_cfg.get("use_measurement_uncertainty", False)
+    )
     stagnation_probe_enabled = bool(
         solver_cfg.get("stagnation_probe", point_match_mode)
     )
@@ -3723,10 +3786,10 @@ def fit_geometry_parameters(
     stagnation_probe_random_directions = max(0, stagnation_probe_random_directions)
 
     image_refinement_enabled = bool(
-        image_refinement_cfg.get("enabled", point_match_mode)
+        image_refinement_cfg.get("enabled", False)
     )
     ridge_refinement_enabled = bool(
-        ridge_refinement_cfg.get("enabled", point_match_mode)
+        ridge_refinement_cfg.get("enabled", False)
     )
     identifiability_enabled = bool(
         identifiability_cfg.get("enabled", point_match_mode)
@@ -4336,6 +4399,7 @@ def fit_geometry_parameters(
                 missing_pair_penalty=float(missing_pair_penalty),
                 use_single_ray=bool(use_single_ray),
                 theta_value=float(theta_value),
+                use_measurement_uncertainty=bool(use_measurement_uncertainty),
                 anisotropic_uncertainty=bool(anisotropic_uncertainty_enabled),
                 radial_sigma_scale=float(radial_sigma_scale),
                 tangential_sigma_scale=float(tangential_sigma_scale),
@@ -4988,6 +5052,9 @@ def fit_geometry_parameters(
             "per_reflection_quota": int(image_refinement_cfg.get("per_reflection_quota", 200)),
             "off_tube_fraction": float(image_refinement_cfg.get("off_tube_fraction", 0.05)),
             "max_reflections": int(image_refinement_cfg.get("max_reflections", 12)),
+            "equal_peak_weights": bool(
+                image_refinement_cfg.get("equal_peak_weights", True)
+            ),
             "random_reflection_fraction": float(
                 image_refinement_cfg.get("random_reflection_fraction", 0.15)
             ),
@@ -5546,6 +5613,136 @@ def fit_geometry_parameters(
             optimality=float("nan"),
         )
 
+    def _vector_key(x_trial: Sequence[float]) -> Tuple[float, ...]:
+        return tuple(np.round(np.asarray(x_trial, dtype=float), 12).tolist())
+
+    def _build_restart_candidates() -> List[Tuple[np.ndarray, str, str]]:
+        if solver_restarts <= 0 or x0_arr.size == 0:
+            return []
+
+        candidate_budget = min(max(solver_restarts * 3, solver_restarts + 4), 16)
+        local_scale = np.where(finite_span, span, fallback_scale)
+        local_scale = np.maximum(local_scale, 1e-6)
+        clipped_initial = np.minimum(np.maximum(x0_arr, lower_bounds), upper_bounds)
+        finite_indices = np.flatnonzero(finite_span)
+        candidates: List[Tuple[np.ndarray, str, str]] = []
+        seen = {_vector_key(x0_arr)}
+
+        def _append_candidate(
+            x_trial: Sequence[float],
+            *,
+            seed_kind: str,
+            seed_label: str,
+        ) -> None:
+            trial_x = np.asarray(x_trial, dtype=float)
+            if trial_x.shape != x0_arr.shape:
+                return
+            trial_x = np.minimum(np.maximum(trial_x, lower_bounds), upper_bounds)
+            if not np.all(np.isfinite(trial_x)):
+                return
+            key = _vector_key(trial_x)
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append((trial_x, str(seed_kind), str(seed_label)))
+
+        if finite_indices.size > 0:
+            midpoint = np.asarray(clipped_initial, dtype=float)
+            midpoint[finite_indices] = (
+                lower_bounds[finite_indices] + 0.5 * span[finite_indices]
+            )
+            relative = np.clip(
+                (
+                    clipped_initial[finite_indices] - lower_bounds[finite_indices]
+                )
+                / np.maximum(span[finite_indices], 1e-12),
+                0.0,
+                1.0,
+            )
+            opposite_corner = np.asarray(clipped_initial, dtype=float)
+            opposite_corner[finite_indices] = np.where(
+                relative <= 0.5,
+                upper_bounds[finite_indices],
+                lower_bounds[finite_indices],
+            )
+            _append_candidate(
+                opposite_corner,
+                seed_kind="restart corner seed",
+                seed_label="opposite-corner",
+            )
+            _append_candidate(
+                midpoint,
+                seed_kind="restart center seed",
+                seed_label="box-center",
+            )
+
+            ranked_finite = finite_indices[
+                np.argsort(local_scale[finite_indices])[::-1]
+            ]
+            axis_limit = min(max(2, solver_restarts), ranked_finite.size)
+            for idx in ranked_finite[:axis_limit]:
+                lower_seed = np.asarray(clipped_initial, dtype=float)
+                lower_seed[idx] = lower_bounds[idx]
+                _append_candidate(
+                    lower_seed,
+                    seed_kind="restart axis seed",
+                    seed_label=f"{var_names[int(idx)]}-lower",
+                )
+
+                upper_seed = np.asarray(clipped_initial, dtype=float)
+                upper_seed[idx] = upper_bounds[idx]
+                _append_candidate(
+                    upper_seed,
+                    seed_kind="restart axis seed",
+                    seed_label=f"{var_names[int(idx)]}-upper",
+                )
+
+        irrational_steps = np.modf(
+            np.sqrt(np.arange(2, x0_arr.size + 2, dtype=float))
+        )[0]
+        irrational_steps = np.where(
+            np.abs(irrational_steps) > 1e-12,
+            irrational_steps,
+            0.5,
+        )
+        for sample_idx in range(candidate_budget):
+            unit = np.mod(0.5 + (sample_idx + 1) * irrational_steps, 1.0)
+            sample = np.asarray(clipped_initial, dtype=float)
+            if finite_indices.size > 0:
+                sample[finite_indices] = (
+                    lower_bounds[finite_indices]
+                    + unit[finite_indices] * span[finite_indices]
+                )
+            infinite_indices = np.flatnonzero(~finite_span)
+            if infinite_indices.size > 0:
+                sample[infinite_indices] = (
+                    x0_arr[infinite_indices]
+                    + (2.0 * unit[infinite_indices] - 1.0)
+                    * solver_restart_jitter
+                    * local_scale[infinite_indices]
+                )
+            _append_candidate(
+                sample,
+                seed_kind="restart global sample",
+                seed_label=f"qmc#{sample_idx + 1}",
+            )
+            if len(candidates) >= candidate_budget:
+                break
+
+        restart_rng = np.random.default_rng(20260214)
+        attempts = 0
+        while len(candidates) < candidate_budget and attempts < candidate_budget * 8:
+            perturb = restart_rng.uniform(-1.0, 1.0, size=x0_arr.shape)
+            sample = x0_arr + solver_restart_jitter * local_scale * perturb
+            _append_candidate(
+                sample,
+                seed_kind="restart local jitter",
+                seed_label=f"local#{attempts + 1}",
+            )
+            attempts += 1
+
+        return candidates
+
     result = _run_solver(x0_arr)
     best_result = result
     initial_cost = _robust_cost(
@@ -5566,32 +5763,96 @@ def fit_geometry_parameters(
     ]
 
     if solver_restarts > 0 and x0_arr.size > 0:
-        restart_rng = np.random.default_rng(20260214)
-        restart_scale = np.where(finite_span, span, fallback_scale)
-        restart_scale = np.maximum(restart_scale, 1e-6)
+        restart_selection_tol = max(
+            1e-9 * max(abs(float(initial_cost)), 1.0),
+            1e-12,
+        )
+        ranked_restart_candidates: List[
+            Tuple[float, int, np.ndarray, np.ndarray, str, str]
+        ] = []
+        for candidate_idx, (
+            trial_start,
+            seed_kind,
+            seed_label,
+        ) in enumerate(_build_restart_candidates()):
+            seed_residual, seed_cost = _evaluate_cost_at(trial_start)
+            ranked_restart_candidates.append(
+                (
+                    float(seed_cost),
+                    int(candidate_idx),
+                    np.asarray(trial_start, dtype=float),
+                    np.asarray(seed_residual, dtype=float),
+                    str(seed_kind),
+                    str(seed_label),
+                )
+            )
+            restart_history.append(
+                {
+                    "restart": len(restart_history),
+                    "start_x": np.asarray(trial_start, dtype=float).tolist(),
+                    "end_x": np.asarray(trial_start, dtype=float).tolist(),
+                    "cost": float(seed_cost),
+                    "success": False,
+                    "seed_kind": str(seed_kind),
+                    "seed_label": str(seed_label),
+                    "message": (
+                        f"{seed_kind} {seed_label} "
+                        "(cost-only seed evaluation)"
+                    ),
+                }
+            )
 
-        for restart_idx in range(solver_restarts):
-            anchor = np.asarray(best_result.x, dtype=float)
-            perturb = restart_rng.uniform(-1.0, 1.0, size=anchor.shape)
-            trial_start = anchor + solver_restart_jitter * restart_scale * perturb
-            trial_start = np.clip(trial_start, lower_bounds, upper_bounds)
-            if np.allclose(trial_start, anchor, atol=1e-12, rtol=0.0):
-                continue
+        ranked_restart_candidates.sort(key=lambda item: (item[0], item[1]))
 
+        for (
+            _seed_cost_sort,
+            _candidate_idx,
+            trial_start,
+            seed_residual,
+            seed_kind,
+            seed_label,
+        ) in ranked_restart_candidates[:solver_restarts]:
+            seed_cost = _robust_cost(
+                np.asarray(seed_residual, dtype=float),
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+            )
             trial = _run_solver(trial_start)
             trial_cost = _robust_cost(
                 np.asarray(trial.fun, dtype=float),
                 loss=solver_loss,
                 f_scale=solver_f_scale,
             )
+
+            if seed_cost + restart_selection_tol < trial_cost:
+                trial = _build_probe_result(
+                    trial_start,
+                    seed_residual,
+                    message=(
+                        f"{seed_kind} {seed_label} improved the fit; "
+                        "local least-squares did not improve further."
+                    ),
+                )
+                trial_cost = float(seed_cost)
+
+            result_message = str(getattr(trial, "message", "") or "").strip()
+            if result_message:
+                result_message = f"{seed_kind} {seed_label}: {result_message}"
+            else:
+                result_message = f"{seed_kind} {seed_label}"
+            trial.message = result_message
+
             restart_history.append(
                 {
-                    "restart": restart_idx + 1,
+                    "restart": len(restart_history),
                     "start_x": np.asarray(trial_start, dtype=float).tolist(),
                     "end_x": np.asarray(trial.x, dtype=float).tolist(),
                     "cost": float(trial_cost),
+                    "seed_cost": float(seed_cost),
                     "success": bool(trial.success),
-                    "message": str(trial.message),
+                    "seed_kind": str(seed_kind),
+                    "seed_label": str(seed_label),
+                    "message": result_message,
                 }
             )
             if trial_cost < best_cost:
@@ -5622,7 +5883,7 @@ def fit_geometry_parameters(
         )
         probe_scale = np.maximum(probe_scale, 1e-6)
         visited = {
-            tuple(np.round(np.asarray(probe_anchor, dtype=float), 12).tolist()),
+            _vector_key(probe_anchor),
         }
         best_probe_x: Optional[np.ndarray] = None
         best_probe_residual: Optional[np.ndarray] = None
