@@ -31,6 +31,7 @@
   - Added background file browser/status controls in `main.py`.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
   - CIF parsing now handles numeric/scalar forms robustly and no longer multiplies `c` by 3.
+  - Added a top-right red/green responsiveness indicator in the simulation GUI that turns red before blocking loads/fits/updates and green again once Tk is responsive.
 
 - **CLI updates**
   - Updated `ra_sim/cli.py` CIF parsing (raw `a,c` values; no forced `c*3`) and tilt-hint application using converted degree fields.

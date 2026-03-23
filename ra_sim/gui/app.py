@@ -11,6 +11,7 @@ import argparse
 import tempfile
 from collections import defaultdict, namedtuple
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from time import perf_counter
 from typing import Sequence
@@ -1303,6 +1304,90 @@ fig_window.protocol("WM_DELETE_WINDOW", _shutdown_gui)
 
 canvas_frame = ttk.Frame(fig_frame)
 canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+RESPONSIVE_STATUS_BUSY_COLOR = "#c62828"
+RESPONSIVE_STATUS_READY_COLOR = "#2e7d32"
+_gui_busy_depth = 0
+_gui_ready_after_id = None
+
+responsiveness_indicator_block = tk.Frame(
+    canvas_frame,
+    width=18,
+    height=18,
+    bg=RESPONSIVE_STATUS_BUSY_COLOR,
+    highlightthickness=1,
+    highlightbackground="#1f1f1f",
+    highlightcolor="#1f1f1f",
+)
+responsiveness_indicator_block.place(relx=1.0, x=-12, y=12, anchor="ne")
+responsiveness_indicator_block.lift()
+
+
+def _set_responsiveness_indicator_color(color: str) -> None:
+    try:
+        responsiveness_indicator_block.configure(bg=str(color))
+        responsiveness_indicator_block.lift()
+    except tk.TclError:
+        pass
+
+
+def _apply_responsiveness_indicator_ready() -> None:
+    global _gui_ready_after_id
+
+    _gui_ready_after_id = None
+    if _gui_busy_depth == 0:
+        _set_responsiveness_indicator_color(RESPONSIVE_STATUS_READY_COLOR)
+
+
+def _mark_gui_busy() -> None:
+    global _gui_busy_depth, _gui_ready_after_id
+
+    _gui_busy_depth += 1
+    if _gui_ready_after_id is not None:
+        try:
+            root.after_cancel(_gui_ready_after_id)
+        except tk.TclError:
+            pass
+        _gui_ready_after_id = None
+    _set_responsiveness_indicator_color(RESPONSIVE_STATUS_BUSY_COLOR)
+    try:
+        root.update_idletasks()
+    except tk.TclError:
+        pass
+
+
+def _mark_gui_ready() -> None:
+    global _gui_busy_depth, _gui_ready_after_id
+
+    _gui_busy_depth = max(0, _gui_busy_depth - 1)
+    if _gui_busy_depth != 0:
+        return
+    try:
+        _gui_ready_after_id = root.after_idle(_apply_responsiveness_indicator_ready)
+    except tk.TclError:
+        _set_responsiveness_indicator_color(RESPONSIVE_STATUS_READY_COLOR)
+
+
+def _run_with_responsiveness_indicator(callback, *args, **kwargs):
+    _mark_gui_busy()
+    try:
+        return callback(*args, **kwargs)
+    finally:
+        _mark_gui_ready()
+
+
+def _wrap_with_responsiveness_indicator(callback):
+    @wraps(callback)
+    def wrapped(*args, **kwargs):
+        return _run_with_responsiveness_indicator(callback, *args, **kwargs)
+
+    return wrapped
+
+
+try:
+    _gui_ready_after_id = root.after_idle(_apply_responsiveness_indicator_ready)
+except tk.TclError:
+    _gui_ready_after_id = None
 
 display_controls_frame = ttk.Frame(fig_frame)
 display_controls_frame.pack(side=tk.BOTTOM, fill=tk.X)
@@ -4455,6 +4540,9 @@ def do_update():
     # mark update completion so future updates can run
     update_running = False
 
+
+do_update = _wrap_with_responsiveness_indicator(do_update)
+
 # ── after you’ve updated background_visible in toggle_background() ──
 def toggle_background():
     global background_visible
@@ -4556,9 +4644,9 @@ reset_button_top = ttk.Button(
 )
 reset_button_top.pack(side=tk.TOP, padx=5, pady=2)
 
-azimuthal_button = ttk.Button(
-    text="Azim vs Radial Plot Demo",
-    command=lambda: view_azimuthal_radial(
+
+def open_azimuthal_radial_view():
+    view_azimuthal_radial(
         simulate_diffraction(
             theta_initial=theta_initial_var.get(),
             cor_angle=cor_angle_var.get(),
@@ -4600,6 +4688,15 @@ azimuthal_button = ttk.Button(
             'wavelength': wave_m
         }
     )
+
+
+open_azimuthal_radial_view = _wrap_with_responsiveness_indicator(
+    open_azimuthal_radial_view
+)
+
+azimuthal_button = ttk.Button(
+    text="Azim vs Radial Plot Demo",
+    command=open_azimuthal_radial_view
 )
 azimuthal_button.pack(side=tk.TOP, padx=5, pady=2)
 
@@ -4757,9 +4854,17 @@ def import_hbn_tilt_from_bundle():
         return -1 if int(default) < 0 else 1
 
     try:
-        _, _, _, _, distance_info, tilt_correction, tilt_hint, _, imported_center = load_bundle_npz(
-            bundle_path
-        )
+        (
+            _,
+            _,
+            _,
+            _,
+            distance_info,
+            tilt_correction,
+            tilt_hint,
+            _,
+            imported_center,
+        ) = _run_with_responsiveness_indicator(load_bundle_npz, bundle_path)
     except Exception as exc:  # pragma: no cover - GUI interaction
         progress_label.config(text=f"Failed to load bundle: {exc}")
         return
@@ -4999,6 +5104,11 @@ def _load_background_files_for_state(
     background_display.set_data(current_background_display)
 
 
+_load_background_files_for_state = _wrap_with_responsiveness_indicator(
+    _load_background_files_for_state
+)
+
+
 def _collect_full_gui_state_snapshot() -> dict[str, object]:
     variables: dict[str, object] = {}
     for name, value in globals().items():
@@ -5133,6 +5243,11 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     return summary
 
 
+_apply_full_gui_state_snapshot = _wrap_with_responsiveness_indicator(
+    _apply_full_gui_state_snapshot
+)
+
+
 def _export_full_gui_state() -> None:
     try:
         initial_dir = str(get_dir("file_dialog_dir"))
@@ -5179,40 +5294,47 @@ def _import_full_gui_state() -> None:
         return
 
     if Path(file_path).suffix.lower() == ".npy":
-        message = load_parameters(
-            file_path,
-            theta_initial_var,
-            cor_angle_var,
-            gamma_var,
-            Gamma_var,
-            chi_var,
-            zs_var,
-            zb_var,
-            debye_x_var,
-            debye_y_var,
-            corto_detector_var,
-            sigma_mosaic_var,
-            gamma_mosaic_var,
-            eta_var,
-            a_var,
-            c_var,
-            center_x_var,
-            center_y_var,
-            resolution_var,
-            None,
-            optics_mode_var=optics_mode_var,
-        )
-        ensure_valid_resolution_choice()
-        schedule_update()
+        _mark_gui_busy()
+        try:
+            message = load_parameters(
+                file_path,
+                theta_initial_var,
+                cor_angle_var,
+                gamma_var,
+                Gamma_var,
+                chi_var,
+                zs_var,
+                zb_var,
+                debye_x_var,
+                debye_y_var,
+                corto_detector_var,
+                sigma_mosaic_var,
+                gamma_mosaic_var,
+                eta_var,
+                a_var,
+                c_var,
+                center_x_var,
+                center_y_var,
+                resolution_var,
+                None,
+                optics_mode_var=optics_mode_var,
+            )
+            ensure_valid_resolution_choice()
+            schedule_update()
+        finally:
+            _mark_gui_ready()
         progress_label.config(text=message)
         return
 
+    _mark_gui_busy()
     try:
         payload = load_gui_state_file(file_path)
         message = _apply_full_gui_state_snapshot(payload.get("state", {}))
     except Exception as exc:
         progress_label.config(text=f"Failed to import GUI state: {exc}")
         return
+    finally:
+        _mark_gui_ready()
     progress_label.config(text=message)
 
 
@@ -7498,7 +7620,8 @@ def on_fit_geometry_click():
                     "Match assignments before fit (native frame):", params
                 )
 
-                result = fit_geometry_parameters(
+                result = _run_with_responsiveness_indicator(
+                    fit_geometry_parameters,
                     miller,
                     intensities,
                     image_size,
@@ -8214,6 +8337,10 @@ def on_fit_mosaic_click():
     )
 
 
+on_fit_geometry_click = _wrap_with_responsiveness_indicator(on_fit_geometry_click)
+on_fit_mosaic_click = _wrap_with_responsiveness_indicator(on_fit_mosaic_click)
+
+
 fit_button_geometry = ttk.Button(
     root,
     text="Fit Positions & Geometry",
@@ -8549,6 +8676,9 @@ def run_debug_simulation():
 
     dump_debug_log()
     progress_label.config(text="Debug simulation complete. Log saved.")
+
+
+run_debug_simulation = _wrap_with_responsiveness_indicator(run_debug_simulation)
 
 debug_button = ttk.Button(
     text="Run Debug Simulation",
@@ -9279,6 +9409,11 @@ def _rebuild_diffraction_inputs(
     last_simulation_signature = None
     if trigger_update:
         schedule_update()
+
+
+_rebuild_diffraction_inputs = _wrap_with_responsiveness_indicator(
+    _rebuild_diffraction_inputs
+)
 
 
 def update_occupancies(*args):
