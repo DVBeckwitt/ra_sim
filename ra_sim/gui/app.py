@@ -1307,26 +1307,37 @@ canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
 RESPONSIVE_STATUS_BUSY_COLOR = "#c62828"
 RESPONSIVE_STATUS_READY_COLOR = "#2e7d32"
+RESPONSIVE_STATUS_BLOCK_SIZE = 24
 _gui_busy_depth = 0
 _gui_ready_after_id = None
+responsiveness_indicator_block = None
+responsiveness_indicator_container = None
 
-responsiveness_indicator_block = tk.Frame(
-    canvas_frame,
-    width=18,
-    height=18,
-    bg=RESPONSIVE_STATUS_BUSY_COLOR,
-    highlightthickness=1,
-    highlightbackground="#1f1f1f",
-    highlightcolor="#1f1f1f",
-)
-responsiveness_indicator_block.place(relx=1.0, x=-12, y=12, anchor="ne")
-responsiveness_indicator_block.lift()
+
+def _raise_responsiveness_indicator_block() -> None:
+    if responsiveness_indicator_block is None:
+        return
+    try:
+        if (
+            responsiveness_indicator_container is not None
+            and responsiveness_indicator_block.winfo_manager() != "pack"
+        ):
+            responsiveness_indicator_block.pack(
+                side=tk.LEFT,
+                padx=6,
+                pady=4,
+            )
+        responsiveness_indicator_block.lift()
+    except tk.TclError:
+        pass
 
 
 def _set_responsiveness_indicator_color(color: str) -> None:
+    if responsiveness_indicator_block is None:
+        return
     try:
         responsiveness_indicator_block.configure(bg=str(color))
-        responsiveness_indicator_block.lift()
+        _raise_responsiveness_indicator_block()
     except tk.TclError:
         pass
 
@@ -4791,6 +4802,21 @@ update_timing_label.pack(side=tk.BOTTOM, padx=5)
 
 chi_square_label = ttk.Label(root, text="Chi-Squared: ", font=("Helvetica", 8))
 chi_square_label.pack(side=tk.BOTTOM, padx=5)
+
+responsiveness_indicator_container = ttk.Frame(root)
+responsiveness_indicator_container.pack(side=tk.BOTTOM, fill=tk.X)
+responsiveness_indicator_block = tk.Frame(
+    responsiveness_indicator_container,
+    width=RESPONSIVE_STATUS_BLOCK_SIZE,
+    height=RESPONSIVE_STATUS_BLOCK_SIZE,
+    bg=RESPONSIVE_STATUS_BUSY_COLOR,
+    highlightthickness=1,
+    highlightbackground="#1f1f1f",
+    highlightcolor="#1f1f1f",
+)
+_raise_responsiveness_indicator_block()
+if _gui_busy_depth == 0:
+    _set_responsiveness_indicator_color(RESPONSIVE_STATUS_READY_COLOR)
 
 last_hbn_geometry_debug_report = (
     "No hBN geometry debug report yet.\n"

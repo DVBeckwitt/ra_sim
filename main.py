@@ -2089,13 +2089,13 @@ def _background_theta_default_value() -> float:
     """Return the fallback theta value used when no per-background list exists."""
 
     try:
-        if "defaults" in globals():
-            return float(defaults.get("theta_initial", theta_initial))
+        if "theta_initial_var" in globals() and theta_initial_var is not None:
+            return float(theta_initial_var.get())
     except Exception:
         pass
     try:
-        if "theta_initial_var" in globals() and theta_initial_var is not None:
-            return float(theta_initial_var.get())
+        if "defaults" in globals():
+            return float(defaults.get("theta_initial", theta_initial))
     except Exception:
         pass
     return float(theta_initial)
@@ -11430,6 +11430,29 @@ def schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS):
     delay = max(RANGE_UPDATE_DEBOUNCE_MS, int(delay_ms))
     integration_update_pending = root.after(delay, _run_scheduled_range_update)
 
+
+def _should_collect_hit_tables_for_update() -> bool:
+    """Return whether the next redraw needs per-hit detector tables."""
+
+    manual_geometry_overlay_requested = False
+    if background_visible and _current_geometry_manual_pick_background_image() is not None:
+        try:
+            manual_geometry_overlay_requested = bool(
+                _geometry_manual_pairs_for_index(current_background_index)
+                or _geometry_manual_pick_session_active()
+            )
+        except Exception:
+            manual_geometry_overlay_requested = False
+
+    return bool(
+        hkl_pick_armed
+        or selected_hkl_target is not None
+        or selected_peak_record is not None
+        or _live_geometry_preview_enabled()
+        or geometry_q_group_refresh_requested
+        or manual_geometry_overlay_requested
+    )
+
 peak_positions = []
 peak_millers = []
 peak_intensities = []
@@ -11718,13 +11741,7 @@ def do_update():
 
     mosaic_params = build_mosaic_params()
     optics_mode_flag = _current_optics_mode_flag()
-    collect_hit_tables_requested = bool(
-        hkl_pick_armed
-        or selected_hkl_target is not None
-        or selected_peak_record is not None
-        or _live_geometry_preview_enabled()
-        or geometry_q_group_refresh_requested
-    )
+    collect_hit_tables_requested = _should_collect_hit_tables_for_update()
 
 
     def get_sim_signature():

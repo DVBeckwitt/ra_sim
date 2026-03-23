@@ -29,9 +29,12 @@
   - Corrected center-axis mappings used in pyFAI/intersection geometry paths.
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.
+  - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
+  - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
   - CIF parsing now handles numeric/scalar forms robustly and no longer multiplies `c` by 3.
   - Added a top-right red/green responsiveness indicator in the simulation GUI that turns red before blocking loads/fits/updates and green again once Tk is responsive.
+  - Reworked the responsiveness indicator into a canvas-anchored block that stays positioned correctly across window and canvas resizes.
 
 - **CLI updates**
   - Updated `ra_sim/cli.py` CIF parsing (raw `a,c` values; no forced `c*3`) and tilt-hint application using converted degree fields.
@@ -39,6 +42,8 @@
 - **Tests**
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
   - Added `tests/test_hbn_geometry_mapping.py` for geometry mapping math, metadata validation, sign handling, and startup/import consistency.
+  - Added regression coverage for blank background-theta selections preserving the active live theta value.
+  - Added regression coverage for manual-geometry overlay redraws requesting hit tables only when the overlay is visible.
 
 - **Notes**
   - `ra_sim/simulation/diffraction.py` and `ra_sim/simulation/diffraction_debug.py` currently show line-ending-only modifications (no content diff).

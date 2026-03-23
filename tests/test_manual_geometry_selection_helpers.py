@@ -474,6 +474,44 @@ def test_geometry_manual_preview_due_throttles_small_motion() -> None:
     assert preview_due(10.2, 20.1) is True
 
 
+def test_should_collect_hit_tables_when_manual_geometry_overlay_is_visible() -> None:
+    namespace = _load_main_functions("_should_collect_hit_tables_for_update")
+    should_collect = namespace["_should_collect_hit_tables_for_update"]
+
+    namespace["background_visible"] = True
+    namespace["current_background_index"] = 2
+    namespace["hkl_pick_armed"] = False
+    namespace["selected_hkl_target"] = None
+    namespace["selected_peak_record"] = None
+    namespace["geometry_q_group_refresh_requested"] = False
+    namespace["_live_geometry_preview_enabled"] = lambda: False
+    namespace["_current_geometry_manual_pick_background_image"] = lambda: object()
+    namespace["_geometry_manual_pairs_for_index"] = (
+        lambda idx: [{"hkl": (1, 0, 2)}] if int(idx) == 2 else []
+    )
+    namespace["_geometry_manual_pick_session_active"] = lambda: False
+
+    assert should_collect() is True
+
+
+def test_should_not_collect_hit_tables_for_hidden_manual_geometry_overlay() -> None:
+    namespace = _load_main_functions("_should_collect_hit_tables_for_update")
+    should_collect = namespace["_should_collect_hit_tables_for_update"]
+
+    namespace["background_visible"] = False
+    namespace["current_background_index"] = 0
+    namespace["hkl_pick_armed"] = False
+    namespace["selected_hkl_target"] = None
+    namespace["selected_peak_record"] = None
+    namespace["geometry_q_group_refresh_requested"] = False
+    namespace["_live_geometry_preview_enabled"] = lambda: False
+    namespace["_current_geometry_manual_pick_background_image"] = lambda: object()
+    namespace["_geometry_manual_pairs_for_index"] = lambda _idx: [{"hkl": (1, 0, 2)}]
+    namespace["_geometry_manual_pick_session_active"] = lambda: False
+
+    assert should_collect() is False
+
+
 def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> None:
     namespace = _load_main_functions(
         "_normalize_hkl_key",
