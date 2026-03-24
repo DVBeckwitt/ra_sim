@@ -410,6 +410,84 @@ def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_ref
     assert int(result.point_match_summary["single_ray_forced_count"]) == 1
 
 
+def test_fit_geometry_parameters_pixel_path_keeps_residual_size_when_pair_status_changes(
+    monkeypatch,
+):
+    captured_residuals = {}
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        gamma = float(args[8])
+        sim_col = 4.0 if gamma < 0.5 else 20.0
+        sim_row = 4.0 if gamma < 0.5 else 20.0
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, sim_col, sim_row, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x_match = np.asarray(x0, dtype=float).copy()
+        x_match[0] = 0.0
+        x_missing = np.asarray(x0, dtype=float).copy()
+        x_missing[0] = 1.0
+
+        residual_match = np.asarray(residual_fn(x_match), dtype=float)
+        residual_missing = np.asarray(residual_fn(x_missing), dtype=float)
+        captured_residuals["match"] = residual_match.copy()
+        captured_residuals["missing"] = residual_missing.copy()
+
+        assert residual_match.shape == residual_missing.shape == (2,)
+
+        return opt.OptimizeResult(
+            x=x_match,
+            fun=residual_match,
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x_match, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 24
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"hkl": (1, 0, 0), "label": "1,0,0", "x": 4.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        pixel_tol=2.0,
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": False,
+                "missing_pair_penalty_px": 11.0,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert np.allclose(captured_residuals["match"], [0.0, 0.0])
+    assert np.allclose(captured_residuals["missing"], [11.0, 0.0])
+
+
 def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
     optics_seen = []
 

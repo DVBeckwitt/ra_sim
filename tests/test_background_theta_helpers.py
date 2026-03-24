@@ -357,3 +357,71 @@ def test_apply_background_theta_metadata_can_skip_live_theta_sync() -> None:
     assert namespace["background_theta_list_var"].get() == "4, 7.5"
     assert namespace["theta_initial_var"].get() == 12.75
     assert scheduled["count"] == 0
+
+
+def test_apply_gui_state_background_theta_compatibility_seeds_legacy_theta_list() -> None:
+    namespace = _load_main_functions(
+        "_format_background_theta_values",
+        "_default_geometry_fit_background_selection",
+        "_apply_gui_state_background_theta_compatibility",
+    )
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
+    namespace["theta_initial_var"] = _Var(12.75)
+    namespace["background_theta_list_var"] = _Var("6, 6")
+    namespace["geometry_theta_offset_var"] = _Var("1.5")
+    namespace["geometry_fit_background_selection_var"] = _Var("current")
+
+    namespace["_apply_gui_state_background_theta_compatibility"](
+        {"theta_initial_var": 12.75}
+    )
+
+    assert namespace["background_theta_list_var"].get() == "12.75, 12.75"
+    assert namespace["geometry_theta_offset_var"].get() == "0.0"
+    assert namespace["geometry_fit_background_selection_var"].get() == "all"
+
+
+def test_apply_gui_state_background_theta_compatibility_preserves_saved_metadata() -> None:
+    namespace = _load_main_functions(
+        "_default_geometry_fit_background_selection",
+        "_apply_gui_state_background_theta_compatibility",
+    )
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
+    namespace["theta_initial_var"] = _Var(12.75)
+    namespace["background_theta_list_var"] = _Var("4, 7.5")
+    namespace["geometry_theta_offset_var"] = _Var("0.25")
+    namespace["geometry_fit_background_selection_var"] = _Var("current")
+
+    namespace["_apply_gui_state_background_theta_compatibility"](
+        {
+            "theta_initial_var": 12.75,
+            "background_theta_list_var": "4, 7.5",
+            "geometry_theta_offset_var": "0.25",
+            "geometry_fit_background_selection_var": "current",
+        }
+    )
+
+    assert namespace["background_theta_list_var"].get() == "4, 7.5"
+    assert namespace["geometry_theta_offset_var"].get() == "0.25"
+    assert namespace["geometry_fit_background_selection_var"].get() == "current"

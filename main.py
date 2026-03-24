@@ -13650,6 +13650,46 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
     }
 
 
+def _apply_gui_state_background_theta_compatibility(
+    saved_variables: dict[str, object] | None,
+) -> None:
+    """Backfill newer background-theta GUI state from legacy snapshots."""
+
+    if not isinstance(saved_variables, dict):
+        saved_variables = {}
+
+    if (
+        "background_theta_list_var" not in saved_variables
+        and "theta_initial_var" in saved_variables
+        and background_theta_list_var is not None
+        and len(osc_files) > 0
+    ):
+        try:
+            restored_theta = float(theta_initial_var.get())
+        except Exception:
+            restored_theta = None
+        if restored_theta is not None and np.isfinite(restored_theta):
+            background_theta_list_var.set(
+                _format_background_theta_values(
+                    [float(restored_theta)] * int(len(osc_files))
+                )
+            )
+
+    if (
+        geometry_theta_offset_var is not None
+        and "geometry_theta_offset_var" not in saved_variables
+    ):
+        geometry_theta_offset_var.set("0.0")
+
+    if (
+        geometry_fit_background_selection_var is not None
+        and "geometry_fit_background_selection_var" not in saved_variables
+    ):
+        geometry_fit_background_selection_var.set(
+            _default_geometry_fit_background_selection()
+        )
+
+
 def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     global background_visible
     global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
@@ -13701,6 +13741,10 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
                 target_var.set(stored_value)
             except Exception as exc:
                 warnings.append(f"{name}: {exc}")
+
+    _apply_gui_state_background_theta_compatibility(
+        variables if isinstance(variables, dict) else {}
+    )
 
     dynamic_lists = snapshot.get("dynamic_lists", {})
     if isinstance(dynamic_lists, dict):

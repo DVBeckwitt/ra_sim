@@ -997,7 +997,14 @@ def _evaluate_geometry_fit_dataset_point_matches(
         return float(math.hypot(float(point[0]) - center_col, float(point[1]) - center_row))
 
     maxpos = hit_tables_to_max_positions(hit_tables)
-    residuals: List[float] = []
+    measured_index_lookup = {
+        id(entry): int(idx) for idx, entry in enumerate(normalized_measured)
+    }
+    # Keep one fixed two-component residual block per measured point. SciPy's
+    # finite-difference Jacobian estimation requires a stable residual shape
+    # even when one point flips between matched and missing.
+    residual_components = np.zeros((len(normalized_measured), 2), dtype=np.float64)
+    unresolved_indices = set(measured_index_lookup.values())
     diagnostics: List[Dict[str, object]] = []
     custom_sigma_values: List[float] = []
     anisotropic_sigma_count = 0
@@ -1058,6 +1065,18 @@ def _evaluate_geometry_fit_dataset_point_matches(
             return float("nan")
         return float(value) if np.isfinite(value) else float("nan")
 
+    def _assign_residual_pair(
+        entry: Dict[str, object],
+        primary: float,
+        secondary: float = 0.0,
+    ) -> None:
+        slot = measured_index_lookup.get(id(entry))
+        if slot is None:
+            return
+        residual_components[int(slot), 0] = float(primary)
+        residual_components[int(slot), 1] = float(secondary)
+        unresolved_indices.discard(int(slot))
+
     for measured_entry, sim_pt, _sim_hkl in fixed_matches:
         try:
             meas_pt = (float(measured_entry["x"]), float(measured_entry["y"]))
@@ -1084,7 +1103,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         )
         weighted_dx = float(weight_fields["weighted_dx_px"])
         weighted_dy = float(weight_fields["weighted_dy_px"])
-        residuals.extend([weighted_dx, weighted_dy])
+        _assign_residual_pair(measured_entry, weighted_dx, weighted_dy)
         _add_diag(
             dict(resolution_lookup.get(id(measured_entry), {})),
             {
@@ -1147,8 +1166,8 @@ def _evaluate_geometry_fit_dataset_point_matches(
                     distance_weight=1.0,
                 )
                 penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
-                if missing_pair_penalty > 0.0:
-                    residuals.append(float(missing_pair_penalty) * penalty_weight)
+                missing_penalty = float(missing_pair_penalty) * penalty_weight
+                _assign_residual_pair(entry, missing_penalty, 0.0)
                 _add_diag(
                     dict(resolution_lookup.get(id(entry), {})),
                     {
@@ -1203,7 +1222,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
             )
             weighted_dx = float(weight_fields["weighted_dx_px"])
             weighted_dy = float(weight_fields["weighted_dy_px"])
-            residuals.extend([weighted_dx, weighted_dy])
+            _assign_residual_pair(entry, weighted_dx, weighted_dy)
             if 0 <= meas_idx < len(valid_entries_hkl):
                 _add_diag(
                     dict(resolution_lookup.get(id(entry), {})),
@@ -1242,8 +1261,8 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 distance_weight=1.0,
             )
             penalty_weight = float(weight_fields.get("sigma_weight", 1.0))
-            if missing_pair_penalty > 0.0:
-                residuals.append(float(missing_pair_penalty) * penalty_weight)
+            missing_penalty = float(missing_pair_penalty) * penalty_weight
+            _assign_residual_pair(entry, missing_penalty, 0.0)
             _add_diag(
                 dict(resolution_lookup.get(id(entry), {})),
                 {
@@ -1277,11 +1296,54 @@ def _evaluate_geometry_fit_dataset_point_matches(
                 },
             )
 
-    residual_arr = (
-        np.asarray(residuals, dtype=float)
-        if residuals
-        else np.array([max(1.0, missing_pair_penalty)], dtype=float)
-    )
+    for unresolved_idx in list(unresolved_indices):
+        if unresolved_idx < 0 or unresolved_idx >= len(normalized_measured):
+            continue
+        entry = normalized_measured[unresolved_idx]
+        residual_components[int(unresolved_idx), 0] = float(missing_pair_penalty)
+        residual_components[int(unresolved_idx), 1] = 0.0
+        missing_pairs += 1
+        if collect_diagnostics:
+            _add_diag(
+                dict(resolution_lookup.get(id(entry), {})),
+                {
+                    "match_kind": "unresolved",
+                    "match_status": "missing_pair",
+                    "hkl": tuple(int(v) for v in entry.get("hkl", ()))
+                    if isinstance(entry.get("hkl"), tuple)
+                    else entry.get("hkl"),
+                    "resolution_kind": str(
+                        dict(resolution_lookup.get(id(entry), {})).get(
+                            "resolution_kind", "unresolved"
+                        )
+                    ),
+                    "resolution_reason": str(
+                        dict(resolution_lookup.get(id(entry), {})).get(
+                            "resolution_reason", "entry_not_evaluated"
+                        )
+                    ),
+                    "measured_x": float(entry.get("x", np.nan)),
+                    "measured_y": float(entry.get("y", np.nan)),
+                    "simulated_x": float("nan"),
+                    "simulated_y": float("nan"),
+                    "dx_px": float("nan"),
+                    "dy_px": float("nan"),
+                    "distance_px": float("nan"),
+                    "placement_error_px": _placement_error_px(entry),
+                    "distance_weight": 1.0,
+                    "weight": 1.0,
+                    "weighted_missing_penalty_px": float(missing_pair_penalty),
+                    "measured_radius_px": _point_radius_px(
+                        (
+                            float(entry.get("x", np.nan)),
+                            float(entry.get("y", np.nan)),
+                        )
+                    ),
+                    "simulated_radius_px": float("nan"),
+                },
+            )
+
+    residual_arr = residual_components.reshape(-1)
     summary: Dict[str, object] = {
         "dataset_index": int(dataset_ctx.dataset_index),
         "dataset_label": str(dataset_ctx.label),
