@@ -4195,8 +4195,10 @@ class HBNFitterGUI:
         points_sigma_save = self._sigma_for_fit(self.points_sigma_ds, downsample=self.down)
         tilt_x_deg_internal = float(opt.get("tilt_x_deg", np.nan))
         tilt_y_deg_internal = float(opt.get("tilt_y_deg", np.nan))
-        tilt_x_deg_npz = float(tilt_x_deg_internal)
-        # NPZ exchange convention: detector pitch (tilt_y) is exported with opposite sign.
+        # NPZ exchange convention: exported detector tilts use the opposite sign
+        # from the fitter's internal optimization state. Preserve the raw values
+        # separately so the standalone GUI can round-trip its own bundles.
+        tilt_x_deg_npz = -float(tilt_x_deg_internal) if np.isfinite(tilt_x_deg_internal) else np.nan
         tilt_y_deg_npz = -float(tilt_y_deg_internal) if np.isfinite(tilt_y_deg_internal) else np.nan
         tilt_correction = None
         tilt_hint = None

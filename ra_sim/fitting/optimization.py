@@ -179,20 +179,24 @@ def _process_peaks_parallel_safe(*args, **kwargs):
 
     global _USE_NUMBA_PROCESS_PEAKS
 
-    def _invoke(fn):
+    def _invoke(fn, *, prefer_python_runner: bool = False):
+        call_kwargs = dict(kwargs)
+        if prefer_python_runner:
+            call_kwargs["prefer_python_runner"] = True
+
         try:
-            return fn(*args, **kwargs)
+            return fn(*args, **call_kwargs)
         except TypeError as exc:
             # Test doubles and older callsites may not accept the new keyword.
             if (
                 (
-                    "solve_q_steps" in kwargs
-                    or "solve_q_rel_tol" in kwargs
-                    or "solve_q_mode" in kwargs
+                    "solve_q_steps" in call_kwargs
+                    or "solve_q_rel_tol" in call_kwargs
+                    or "solve_q_mode" in call_kwargs
                 )
                 and "unexpected keyword" in str(exc)
             ):
-                reduced_kwargs = dict(kwargs)
+                reduced_kwargs = dict(call_kwargs)
                 reduced_kwargs.pop("solve_q_steps", None)
                 reduced_kwargs.pop("solve_q_rel_tol", None)
                 reduced_kwargs.pop("solve_q_mode", None)
@@ -204,10 +208,7 @@ def _process_peaks_parallel_safe(*args, **kwargs):
             return _invoke(process_peaks_parallel)
         except Exception:
             _USE_NUMBA_PROCESS_PEAKS = False
-    py_runner = getattr(process_peaks_parallel, "py_func", None)
-    if callable(py_runner):
-        return _invoke(py_runner)
-    return _invoke(process_peaks_parallel)
+    return _invoke(process_peaks_parallel, prefer_python_runner=True)
 
 
 @dataclass

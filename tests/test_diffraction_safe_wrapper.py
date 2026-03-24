@@ -125,3 +125,34 @@ def test_process_peaks_parallel_safe_keeps_raw_samples_for_forced_indices(monkey
 
     assert observed["sample_count"] == int(np.asarray(args[16]).shape[0])
     assert observed["has_sample_weights"] is False
+
+
+def test_process_peaks_parallel_safe_can_prefer_python_runner(monkeypatch) -> None:
+    args = _build_process_args(8)
+    call_order: list[str] = []
+
+    def fake_compiled(*_args, **_kwargs):
+        call_order.append("compiled")
+        raise AssertionError("compiled runner should be skipped")
+
+    def fake_python(*_args, **_kwargs):
+        call_order.append("python")
+        return (
+            np.zeros((8, 8), dtype=np.float64),
+            [],
+            np.zeros((1, 1, 5), dtype=np.float64),
+            np.zeros(1, dtype=np.int64),
+            np.zeros((1, int(np.asarray(args[16]).shape[0])), dtype=np.int64),
+            [],
+        )
+
+    fake_compiled.py_func = fake_python
+    monkeypatch.setattr(diffraction, "process_peaks_parallel", fake_compiled)
+
+    diffraction.process_peaks_parallel_safe(
+        *args,
+        save_flag=0,
+        prefer_python_runner=True,
+    )
+
+    assert call_order == ["python"]

@@ -4685,6 +4685,8 @@ def _current_geometry_fit_ui_params() -> dict[str, object]:
         "gamma": float(gamma_var.get()),
         "Gamma": float(Gamma_var.get()),
         "corto_detector": float(corto_detector_var.get()),
+        "a": float(a_var.get()),
+        "c": float(c_var.get()),
         "center_x": float(center_x_var.get()),
         "center_y": float(center_y_var.get()),
         "center": [float(center_x_var.get()), float(center_y_var.get())],
@@ -4800,6 +4802,8 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
         ("gamma", gamma_var),
         ("Gamma", Gamma_var),
         ("corto_detector", corto_detector_var),
+        ("a", a_var),
+        ("c", c_var),
         ("center_x", center_x_var),
         ("center_y", center_y_var),
     ):
@@ -14058,6 +14062,8 @@ fit_cor_var   = tk.BooleanVar(value=True)
 fit_gamma_var = tk.BooleanVar(value=True)
 fit_Gamma_var = tk.BooleanVar(value=True)
 fit_dist_var = tk.BooleanVar(value=True)
+fit_a_var = tk.BooleanVar(value=False)
+fit_c_var = tk.BooleanVar(value=False)
 fit_center_x_var = tk.BooleanVar(value=False)
 fit_center_y_var = tk.BooleanVar(value=False)
 
@@ -14101,6 +14107,12 @@ fit_toggle_widgets.append(
     ttk.Checkbutton(fit_frame, text="distance", variable=fit_dist_var)
 )
 fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="a lattice", variable=fit_a_var)
+)
+fit_toggle_widgets.append(
+    ttk.Checkbutton(fit_frame, text="c lattice", variable=fit_c_var)
+)
+fit_toggle_widgets.append(
     ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var)
 )
 fit_toggle_widgets.append(
@@ -14123,6 +14135,8 @@ GEOMETRY_FIT_PARAM_ORDER = [
     "gamma",
     "Gamma",
     "corto_detector",
+    "a",
+    "c",
     "center_x",
     "center_y",
 ]
@@ -14136,6 +14150,8 @@ geometry_fit_toggle_vars = {
     "gamma": fit_gamma_var,
     "Gamma": fit_Gamma_var,
     "corto_detector": fit_dist_var,
+    "a": fit_a_var,
+    "c": fit_c_var,
     "center_x": fit_center_x_var,
     "center_y": fit_center_y_var,
 }
@@ -14883,6 +14899,10 @@ def _current_geometry_fit_var_names() -> list[str]:
         var_names.append("Gamma")
     if fit_dist_var.get():
         var_names.append("corto_detector")
+    if fit_a_var.get():
+        var_names.append("a")
+    if fit_c_var.get():
+        var_names.append("c")
     if fit_center_x_var.get():
         var_names.append("center_x")
     if fit_center_y_var.get():
@@ -16741,6 +16761,10 @@ def _legacy_auto_match_on_fit_geometry_click():
                 Gamma_var.set(val)
             elif name == 'corto_detector':
                 corto_detector_var.set(val)
+            elif name == 'a':
+                a_var.set(val)
+            elif name == 'c':
+                c_var.set(val)
             elif name == 'center_x':
                 center_x_var.set(val)
             elif name == 'center_y':
@@ -16804,6 +16828,8 @@ def _legacy_auto_match_on_fit_geometry_click():
                 'gamma': gamma_var.get(),
                 'Gamma': Gamma_var.get(),
                 'corto_detector': corto_detector_var.get(),
+                'a': a_var.get(),
+                'c': c_var.get(),
                 'center': [center_x_var.get(), center_y_var.get()],
                 'center_x': center_x_var.get(),
                 'center_y': center_y_var.get(),
@@ -17643,6 +17669,8 @@ def _legacy_auto_match_on_fit_geometry_click():
                     elif name == 'gamma':          gamma_var.set(val)
                     elif name == 'Gamma':          Gamma_var.set(val)
                     elif name == 'corto_detector': corto_detector_var.set(val)
+                    elif name == 'a':              a_var.set(val)
+                    elif name == 'c':              c_var.set(val)
                     elif name == 'center_x':       center_x_var.set(val)
                     elif name == 'center_y':       center_y_var.set(val)
 
@@ -17714,6 +17742,8 @@ def _legacy_auto_match_on_fit_geometry_click():
                     'gamma': gamma_var.get(),
                     'Gamma': Gamma_var.get(),
                     'corto_detector': corto_detector_var.get(),
+                    'a': a_var.get(),
+                    'c': c_var.get(),
                     'center': [center_x_var.get(), center_y_var.get()],
                     'center_x': center_x_var.get(),
                     'center_y': center_y_var.get(),
@@ -18565,6 +18595,10 @@ def on_fit_geometry_click():
                 Gamma_var.set(val)
             elif name == "corto_detector":
                 corto_detector_var.set(val)
+            elif name == "a":
+                a_var.set(val)
+            elif name == "c":
+                c_var.set(val)
             elif name == "center_x":
                 center_x_var.set(val)
             elif name == "center_y":
@@ -18630,6 +18664,8 @@ def on_fit_geometry_click():
                 "gamma": gamma_var.get(),
                 "Gamma": Gamma_var.get(),
                 "corto_detector": corto_detector_var.get(),
+                "a": a_var.get(),
+                "c": c_var.get(),
                 "center": [center_x_var.get(), center_y_var.get()],
                 "center_x": center_x_var.get(),
                 "center_y": center_y_var.get(),
@@ -19824,6 +19860,18 @@ geometry_fit_parameter_specs = {
         "value_var": corto_detector_var,
         "value_slider": corto_detector_scale,
         "step": 0.0001,
+    },
+    "a": {
+        "label": "a Lattice Parameter",
+        "value_var": a_var,
+        "value_slider": a_scale,
+        "step": 0.01,
+    },
+    "c": {
+        "label": "c Lattice Parameter",
+        "value_var": c_var,
+        "value_slider": c_scale,
+        "step": 0.01,
     },
     "center_x": {
         "label": "Beam Center Row",

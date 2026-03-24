@@ -4160,6 +4160,7 @@ def _finalize_clustered_process_peaks_result(result, cluster_meta):
 def process_peaks_parallel_safe(*args, **kwargs):
     """Run ``process_peaks_parallel`` with Python fallback if JIT execution fails."""
 
+    prefer_python_runner = bool(kwargs.pop("prefer_python_runner", False))
     clustered_args, clustered_kwargs, cluster_meta = _prepare_clustered_process_peaks_call(
         args,
         kwargs,
@@ -4169,9 +4170,12 @@ def process_peaks_parallel_safe(*args, **kwargs):
         call_variants.append((clustered_args, clustered_kwargs, cluster_meta))
     call_variants.append((args, dict(kwargs), None))
 
-    runners = [process_peaks_parallel]
     py_runner = getattr(process_peaks_parallel, "py_func", None)
-    if callable(py_runner):
+    runners = []
+    if prefer_python_runner and callable(py_runner):
+        runners.append(py_runner)
+    runners.append(process_peaks_parallel)
+    if (not prefer_python_runner) and callable(py_runner):
         runners.append(py_runner)
 
     last_exc = None

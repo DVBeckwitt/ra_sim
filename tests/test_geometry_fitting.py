@@ -309,6 +309,43 @@ def test_fit_geometry_parameters_pixel_path_can_disable_single_ray(monkeypatch):
     )
 
 
+def test_process_peaks_wrapper_prefers_python_runner_when_numba_disabled(monkeypatch):
+    process_calls = []
+
+    def fake_process(*args, **kwargs):
+        process_calls.append(dict(kwargs))
+        return _fake_process_peaks(*args, **kwargs)
+
+    monkeypatch.setattr(opt, "process_peaks_parallel", fake_process)
+    monkeypatch.setattr(opt, "_USE_NUMBA_PROCESS_PEAKS", False)
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "solver": {"restarts": 0},
+            "single_ray": {"enabled": False},
+            "use_numba": False,
+        },
+    )
+
+    assert result.success
+    assert process_calls
+    assert all(call.get("prefer_python_runner") is True for call in process_calls)
+
+
 def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_reflections(
     monkeypatch,
 ):
