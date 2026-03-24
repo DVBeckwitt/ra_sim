@@ -116,6 +116,7 @@ def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
         optics_mode,
         theta_initial_deg,
         cor_angle_deg,
+        psi_z_deg,
         R_z_R_y,
         R_ZY_n,
         P0,
@@ -257,6 +258,61 @@ def test_debug_detector_paths_ignores_cor_angle_for_theta_i():
     out_cor_5 = diffraction.debug_detector_paths(cor_angle_deg=5.0, **common_kwargs)
 
     np.testing.assert_allclose(out_cor_0, out_cor_5, atol=1e-12, rtol=0.0)
+
+
+def test_build_sample_rotation_psi_z_yaws_cor_axis():
+    r_z_r_y = np.eye(3, dtype=np.float64)
+    r_zy_n = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    p0 = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+
+    _, n_surf_0, _ = diffraction._build_sample_rotation.py_func(
+        10.0,
+        20.0,
+        0.0,
+        r_z_r_y,
+        r_zy_n,
+        p0,
+    )
+    _, n_surf_90, _ = diffraction._build_sample_rotation.py_func(
+        10.0,
+        20.0,
+        90.0,
+        r_z_r_y,
+        r_zy_n,
+        p0,
+    )
+
+    assert np.isclose(float(n_surf_0[2]), float(n_surf_90[2]), atol=1e-12, rtol=0.0)
+    assert abs(float(n_surf_90[0])) > abs(float(n_surf_0[0])) + 1e-6
+    assert abs(float(n_surf_90[1])) < abs(float(n_surf_0[1])) - 1e-6
+    assert not np.allclose(n_surf_0, n_surf_90)
+
+
+def test_build_sample_rotation_zero_tilt_ignores_axis_yaw():
+    r_z_r_y = np.eye(3, dtype=np.float64)
+    r_zy_n = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    p0 = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+
+    r_sample_0, n_surf_0, p0_rot_0 = diffraction._build_sample_rotation.py_func(
+        0.0,
+        20.0,
+        0.0,
+        r_z_r_y,
+        r_zy_n,
+        p0,
+    )
+    r_sample_45, n_surf_45, p0_rot_45 = diffraction._build_sample_rotation.py_func(
+        0.0,
+        20.0,
+        45.0,
+        r_z_r_y,
+        r_zy_n,
+        p0,
+    )
+
+    np.testing.assert_allclose(r_sample_0, r_sample_45, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(n_surf_0, n_surf_45, atol=1e-12, rtol=0.0)
+    np.testing.assert_allclose(p0_rot_0, p0_rot_45, atol=1e-12, rtol=0.0)
 
 
 def test_intersect_infinite_line_plane_allows_negative_t():

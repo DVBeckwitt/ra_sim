@@ -2321,15 +2321,30 @@ def _select_g_peak_solution_indices(all_q, k_in_crystal, k_scat, g_vec):
 
 
 @njit(fastmath=True)
-def _build_sample_rotation(theta_initial_deg, cor_angle_deg, R_z_R_y, R_ZY_n, P0):
+def _build_sample_rotation(
+    theta_initial_deg,
+    cor_angle_deg,
+    psi_z_deg,
+    R_z_R_y,
+    R_ZY_n,
+    P0,
+):
     """Build reflection-invariant sample frame for the current geometry."""
     rad_theta_i = theta_initial_deg * (pi / 180.0)
     cor_axis_rad = cor_angle_deg * (pi / 180.0)
+    cor_axis_yaw_rad = psi_z_deg * (pi / 180.0)
 
-    # CoR axis in the x-z plane.
+    # Pitch the CoR axis in its local x-z plane, then yaw that axis about
+    # laboratory z by psi_z.
     ax = cos(cor_axis_rad)
     ay = 0.0
     az = sin(cor_axis_rad)
+    c_axis_yaw = cos(cor_axis_yaw_rad)
+    s_axis_yaw = sin(cor_axis_yaw_rad)
+    ax_yawed = c_axis_yaw * ax + s_axis_yaw * ay
+    ay_yawed = -s_axis_yaw * ax + c_axis_yaw * ay
+    ax = ax_yawed
+    ay = ay_yawed
     axis_norm = sqrt(ax * ax + ay * ay + az * az)
     if axis_norm < 1e-12:
         axis_norm = 1.0
@@ -2385,6 +2400,7 @@ def _precompute_sample_terms(
     optics_mode,
     theta_initial_deg,
     cor_angle_deg,
+    psi_z_deg,
     R_z_R_y,
     R_ZY_n,
     P0,
@@ -2398,6 +2414,7 @@ def _precompute_sample_terms(
     R_sample, n_surf, P0_rot = _build_sample_rotation(
         theta_initial_deg,
         cor_angle_deg,
+        psi_z_deg,
         R_z_R_y,
         R_ZY_n,
         P0,
@@ -3295,6 +3312,7 @@ def calculate_phi(
         optics_mode,
         theta_initial_deg,
         cor_angle_deg,
+        psi_z_deg,
         R_z_R_y,
         R_ZY_n,
         P0,
@@ -3390,8 +3408,6 @@ def process_peaks_parallel(
     Gamma_rad = Gamma_deg*(pi/180.0)
     chi_rad   = chi_deg*(pi/180.0)
     psi_rad   = psi_deg*(pi/180.0)
-    psi_z_rad = psi_z_deg*(pi/180.0)
-
     sigma_rad   = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)
     solve_q_steps_i = int(solve_q_steps)
@@ -3462,14 +3478,7 @@ def process_peaks_parallel(
         [-s_psi, c_psi, 0.0],
         [ 0.0,   0.0,   1.0]
     ])
-    c_psi_z = cos(psi_z_rad)
-    s_psi_z = sin(psi_z_rad)
-    R_z_gonio = np.array([
-        [ c_psi_z, s_psi_z, 0.0],
-        [-s_psi_z, c_psi_z, 0.0],
-        [ 0.0,     0.0,     1.0]
-    ])
-    R_z_R_y = (R_z_gonio @ R_z) @ R_y
+    R_z_R_y = R_z @ R_y
 
     n1= np.array([0.0, 0.0, 1.0], dtype=np.float64)
     R_ZY_n= R_z_R_y @ n1
@@ -3534,6 +3543,7 @@ def process_peaks_parallel(
         optics_mode,
         theta_initial_deg,
         cor_angle_deg,
+        psi_z_deg,
         R_z_R_y,
         R_ZY_n,
         P0,
@@ -4589,8 +4599,10 @@ def debug_detector_paths(
         Sample tilt around the CoR axis.
     cor_angle_deg : float
         Angle of the CoR axis relative to the +x axis.
-    chi_deg, psi_deg, psi_z_deg : float
+    chi_deg, psi_deg : float
         Additional sample rotations around y and z.
+    psi_z_deg : float
+        Yaw of the CoR/goniometer axis about laboratory z.
     zb, zs : float
         Beam and sample offsets used in the main simulation.
     Distance_CoR_to_Detector, gamma_deg, Gamma_deg : float
@@ -4642,20 +4654,19 @@ def debug_detector_paths(
         [-s_psi, c_psi, 0.0],
         [ 0.0,   0.0,   1.0]
     ])
-    c_psi_z = np.cos(psi_z_rad)
-    s_psi_z = np.sin(psi_z_rad)
-    R_z_gonio = np.array([
-        [ c_psi_z, s_psi_z, 0.0],
-        [-s_psi_z, c_psi_z, 0.0],
-        [ 0.0,     0.0,     1.0]
-    ])
-    R_z_R_y = (R_z_gonio @ R_z) @ R_y
+    R_z_R_y = R_z @ R_y
 
     # Construct the pitched CoR axis in x–z and rotate with Rodrigues' formula;
     # see docs/cor_rotation_math.md for the math details.
     ax = np.cos(cor_axis_rad)
     ay = 0.0
     az = np.sin(cor_axis_rad)
+    c_axis_yaw = np.cos(psi_z_rad)
+    s_axis_yaw = np.sin(psi_z_rad)
+    ax_yawed = c_axis_yaw * ax + s_axis_yaw * ay
+    ay_yawed = -s_axis_yaw * ax + c_axis_yaw * ay
+    ax = ax_yawed
+    ay = ay_yawed
     axis_norm = np.sqrt(ax * ax + ay * ay + az * az)
     if axis_norm < 1e-12:
         axis_norm = 1.0

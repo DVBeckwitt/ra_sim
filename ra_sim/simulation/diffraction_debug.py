@@ -301,6 +301,7 @@ def calculate_phi(
     center,
     theta_initial_deg,
     cor_angle_deg,
+    psi_z_deg,
     R_x_detector, R_z_detector, n_det_rot, Detector_Pos,
     e1_det, e2_det,
     R_z_R_y,
@@ -322,9 +323,16 @@ def calculate_phi(
 
     rad_theta_i = theta_initial_deg*(pi/180.0)
     cor_axis_rad = cor_angle_deg * (pi / 180.0)
+    cor_axis_yaw_rad = psi_z_deg * (pi / 180.0)
     ax = cos(cor_axis_rad)
     ay = 0.0
     az = sin(cor_axis_rad)
+    c_axis_yaw = cos(cor_axis_yaw_rad)
+    s_axis_yaw = sin(cor_axis_yaw_rad)
+    ax_yawed = c_axis_yaw * ax + s_axis_yaw * ay
+    ay_yawed = -s_axis_yaw * ax + c_axis_yaw * ay
+    ax = ax_yawed
+    ay = ay_yawed
     axis_norm = sqrt(ax * ax + ay * ay + az * az)
     if axis_norm < 1e-12:
         axis_norm = 1.0
@@ -517,7 +525,6 @@ def process_peaks_parallel_debug(
     Gamma_rad = Gamma_deg*(pi/180.0)
     chi_rad   = chi_deg*(pi/180.0)
     psi_rad   = psi_deg*(pi/180.0)
-    psi_z_rad = psi_z_deg*(pi/180.0)
 
     sigma_rad   = sigma_pv_deg*(pi/180.0)
     gamma_rad_m = gamma_pv_deg*(pi/180.0)  # not used in example
@@ -572,14 +579,7 @@ def process_peaks_parallel_debug(
         [-s_psi, c_psi, 0.0],
         [ 0.0,   0.0,   1.0]
     ])
-    c_psi_z = cos(psi_z_rad)
-    s_psi_z = sin(psi_z_rad)
-    R_z_gonio = np.array([
-        [ c_psi_z, s_psi_z, 0.0],
-        [-s_psi_z, c_psi_z, 0.0],
-        [ 0.0,     0.0,     1.0]
-    ])
-    R_z_R_y= (R_z_gonio @ R_z) @ R_y
+    R_z_R_y= R_z @ R_y
 
     n1= np.array([0.0,0.0,1.0], dtype=np.float64)
     R_ZY_n= R_z_R_y @ n1
@@ -623,6 +623,7 @@ def process_peaks_parallel_debug(
             center,
             theta_initial_deg,
             cor_angle_deg,
+            psi_z_deg,
             R_x_det, R_z_det, n_det_rot, Detector_Pos,
             e1_det, e2_det,
             R_z_R_y,
@@ -675,6 +676,7 @@ def process_qr_rods_parallel_debug(
     unit_x,
     n_detector,
     save_flag,
+    psi_z_deg=0.0,
 ):
     """Wrapper to debug-process rods instead of individual reflections.
 
@@ -699,6 +701,7 @@ def process_qr_rods_parallel_debug(
         Gamma_deg,
         chi_deg,
         psi_deg,
+        psi_z_deg,
         zs,
         zb,
         n2,

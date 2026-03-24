@@ -3997,6 +3997,7 @@ def do_update():
             round(gamma_updated, 6),
             round(Gamma_updated, 6),
             round(chi_updated, 6),
+            round(psi_z_updated, 6),
             round(zs_updated, 9),
             round(zb_updated, 9),
             round(debye_x_updated, 6),
@@ -5408,9 +5409,17 @@ fit_center_y_var = tk.BooleanVar(value=False)
 ttk.Checkbutton(fit_frame, text="zb",    variable=fit_zb_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="zs",    variable=fit_zs_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="theta", variable=fit_theta_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="psi_z", variable=fit_psi_z_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(
+    fit_frame,
+    text="Goniometer Axis Yaw (about z)",
+    variable=fit_psi_z_var,
+).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="chi",   variable=fit_chi_var).pack(side=tk.LEFT, padx=2)
-ttk.Checkbutton(fit_frame, text="CoR",   variable=fit_cor_var).pack(side=tk.LEFT, padx=2)
+ttk.Checkbutton(
+    fit_frame,
+    text="Goniometer Axis Pitch (about y)",
+    variable=fit_cor_var,
+).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="gamma", variable=fit_gamma_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="Gamma", variable=fit_Gamma_var).pack(side=tk.LEFT, padx=2)
 ttk.Checkbutton(fit_frame, text="Corto", variable=fit_corto_var).pack(side=tk.LEFT, padx=2)
@@ -8837,7 +8846,12 @@ theta_initial_var, theta_initial_scale = make_slider(
     'Theta Initial', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
 )
 cor_angle_var, cor_angle_scale = make_slider(
-    'CoR Axis Angle', -5.0, 5.0, defaults['cor_angle'], 0.01, geo_frame.frame
+    'Goniometer Axis Pitch (about y)',
+    -5.0,
+    5.0,
+    defaults['cor_angle'],
+    0.01,
+    geo_frame.frame,
 )
 gamma_var, gamma_scale = make_slider(
     'Gamma',
@@ -8861,8 +8875,32 @@ chi_var, chi_scale = make_slider(
     'Chi', -1, 1, defaults['chi'], 0.001, geo_frame.frame
 )
 psi_z_var, psi_z_scale = make_slider(
-    'Goniometer Z', -5.0, 5.0, defaults['psi_z'], 0.01, geo_frame.frame
+    'Goniometer Axis Yaw (about z)',
+    -5.0,
+    5.0,
+    defaults['psi_z'],
+    0.01,
+    geo_frame.frame,
 )
+
+
+def _clamp_psi_z_var(*_):
+    try:
+        value = float(psi_z_var.get())
+        lo = float(psi_z_scale.cget("from"))
+        hi = float(psi_z_scale.cget("to"))
+    except Exception:
+        return
+    if hi < lo:
+        lo, hi = hi, lo
+    clipped = min(max(value, lo), hi)
+    if not math.isclose(value, clipped, rel_tol=0.0, abs_tol=1e-12):
+        psi_z_var.set(clipped)
+
+
+psi_z_var.trace_add("write", _clamp_psi_z_var)
+_clamp_psi_z_var()
+
 zs_var, zs_scale = make_slider(
     'Zs', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame
 )
@@ -8945,7 +8983,7 @@ geometry_fit_parameter_specs = {
         "step": 0.01,
     },
     "psi_z": {
-        "label": "Goniometer Z",
+        "label": "Goniometer Axis Yaw (about z)",
         "value_var": psi_z_var,
         "value_slider": psi_z_scale,
         "step": 0.01,
@@ -8957,7 +8995,7 @@ geometry_fit_parameter_specs = {
         "step": 0.001,
     },
     "cor_angle": {
-        "label": "Center of Rotation",
+        "label": "Goniometer Axis Pitch (about y)",
         "value_var": cor_angle_var,
         "value_slider": cor_angle_scale,
         "step": 0.001,

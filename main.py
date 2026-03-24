@@ -4377,6 +4377,7 @@ geometry_manual_pick_cache_data: dict[str, object] = {}
 geometry_manual_pick_session: dict[str, object] = {}
 geometry_manual_undo_stack: list[dict[str, object]] = []
 geometry_fit_undo_stack: list[dict[str, object]] = []
+geometry_fit_redo_stack: list[dict[str, object]] = []
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
 GEOMETRY_FIT_UNDO_LIMIT = 16
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
@@ -4391,6 +4392,7 @@ GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
 GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
 last_geometry_overlay_state: dict[str, object] | None = None
 undo_geometry_fit_button = None
+redo_geometry_fit_button = None
 
 
 def _geometry_manual_position_error_px(
@@ -4693,21 +4695,25 @@ def _current_geometry_fit_ui_params() -> dict[str, object]:
 
 
 def _update_geometry_fit_undo_button_state() -> None:
-    """Enable the fit-undo button only when there is fit history."""
+    """Enable fit history buttons only when the relevant history exists."""
 
-    if undo_geometry_fit_button is None:
-        return
-    undo_geometry_fit_button.config(
-        state=("normal" if geometry_fit_undo_stack else "disabled")
-    )
+    if undo_geometry_fit_button is not None:
+        undo_geometry_fit_button.config(
+            state=("normal" if geometry_fit_undo_stack else "disabled")
+        )
+    if redo_geometry_fit_button is not None:
+        redo_geometry_fit_button.config(
+            state=("normal" if geometry_fit_redo_stack else "disabled")
+        )
 
 
 def _clear_geometry_fit_undo_stack() -> None:
-    """Discard the geometry-fit undo history."""
+    """Discard the geometry-fit undo/redo history."""
 
-    global geometry_fit_undo_stack, last_geometry_overlay_state
+    global geometry_fit_undo_stack, geometry_fit_redo_stack, last_geometry_overlay_state
 
     geometry_fit_undo_stack = []
+    geometry_fit_redo_stack = []
     last_geometry_overlay_state = None
     _update_geometry_fit_undo_button_state()
 
@@ -4716,24 +4722,31 @@ def _capture_geometry_fit_undo_state() -> dict[str, object]:
     """Capture the current geometry-fit state for undo."""
 
     overlay_state = _copy_geometry_fit_state_value(last_geometry_overlay_state)
-    try:
-        _, initial_pairs_display = _build_geometry_manual_initial_pairs_display(
-            int(current_background_index),
-            param_set=_current_geometry_fit_params(),
-            prefer_cache=True,
+    if not (
+        isinstance(overlay_state, dict)
+        and (
+            overlay_state.get("overlay_records")
+            or overlay_state.get("initial_pairs_display")
         )
-        pending_pairs_display = _geometry_manual_session_initial_pairs_display()
-        combined_pairs_display = list(initial_pairs_display) + list(pending_pairs_display)
-        if combined_pairs_display:
-            overlay_state = {
-                "overlay_records": [],
-                "initial_pairs_display": _copy_geometry_fit_state_value(
-                    combined_pairs_display
-                ),
-                "max_display_markers": max(1, len(combined_pairs_display)),
-            }
-    except Exception:
-        pass
+    ):
+        try:
+            _, initial_pairs_display = _build_geometry_manual_initial_pairs_display(
+                int(current_background_index),
+                param_set=_current_geometry_fit_params(),
+                prefer_cache=True,
+            )
+            pending_pairs_display = _geometry_manual_session_initial_pairs_display()
+            combined_pairs_display = list(initial_pairs_display) + list(pending_pairs_display)
+            if combined_pairs_display:
+                overlay_state = {
+                    "overlay_records": [],
+                    "initial_pairs_display": _copy_geometry_fit_state_value(
+                        combined_pairs_display
+                    ),
+                    "max_display_markers": max(1, len(combined_pairs_display)),
+                }
+        except Exception:
+            pass
 
     return {
         "ui_params": _copy_geometry_fit_state_value(_current_geometry_fit_ui_params()),
@@ -4745,12 +4758,25 @@ def _capture_geometry_fit_undo_state() -> dict[str, object]:
 def _push_geometry_fit_undo_state(state: dict[str, object] | None) -> None:
     """Push one pre-fit state onto the geometry-fit undo stack."""
 
-    global geometry_fit_undo_stack
+    global geometry_fit_undo_stack, geometry_fit_redo_stack
 
     if not isinstance(state, dict):
         return
     geometry_fit_undo_stack.append(_copy_geometry_fit_state_value(state))
     geometry_fit_undo_stack = geometry_fit_undo_stack[-int(GEOMETRY_FIT_UNDO_LIMIT):]
+    geometry_fit_redo_stack = []
+    _update_geometry_fit_undo_button_state()
+
+
+def _push_geometry_fit_redo_state(state: dict[str, object] | None) -> None:
+    """Push one state onto the geometry-fit redo stack."""
+
+    global geometry_fit_redo_stack
+
+    if not isinstance(state, dict):
+        return
+    geometry_fit_redo_stack.append(_copy_geometry_fit_state_value(state))
+    geometry_fit_redo_stack = geometry_fit_redo_stack[-int(GEOMETRY_FIT_UNDO_LIMIT):]
     _update_geometry_fit_undo_button_state()
 
 
@@ -4834,6 +4860,7 @@ def _undo_last_geometry_fit() -> None:
         progress_label_geometry.config(text="No geometry fit history available to undo.")
         return
 
+    current_state = _capture_geometry_fit_undo_state()
     state = _copy_geometry_fit_state_value(geometry_fit_undo_stack[-1])
     try:
         _restore_geometry_fit_undo_state(state)
@@ -4842,8 +4869,30 @@ def _undo_last_geometry_fit() -> None:
         return
 
     geometry_fit_undo_stack.pop()
-    _update_geometry_fit_undo_button_state()
+    _push_geometry_fit_redo_state(current_state)
     progress_label_geometry.config(text="Restored the previous geometry-fit state.")
+
+
+def _redo_last_geometry_fit() -> None:
+    """Reapply the most recently undone geometry-fit state."""
+
+    if not geometry_fit_redo_stack:
+        progress_label_geometry.config(text="No geometry fit history available to redo.")
+        return
+
+    current_state = _capture_geometry_fit_undo_state()
+    state = _copy_geometry_fit_state_value(geometry_fit_redo_stack[-1])
+    try:
+        _restore_geometry_fit_undo_state(state)
+    except Exception as exc:
+        progress_label_geometry.config(text=f"Failed to redo geometry fit: {exc}")
+        return
+
+    geometry_fit_redo_stack.pop()
+    geometry_fit_undo_stack.append(_copy_geometry_fit_state_value(current_state))
+    geometry_fit_undo_stack = geometry_fit_undo_stack[-int(GEOMETRY_FIT_UNDO_LIMIT):]
+    _update_geometry_fit_undo_button_state()
+    progress_label_geometry.config(text="Reapplied the next geometry-fit state.")
 
 
 def _geometry_manual_pair_entry_to_jsonable(
@@ -11962,6 +12011,7 @@ def do_update():
             round(gamma_updated, 6),
             round(Gamma_updated, 6),
             round(chi_updated, 6),
+            round(psi_z_updated, 6),
             round(zs_updated, 9),
             round(zb_updated, 9),
             round(debye_x_updated, 6),
@@ -13855,13 +13905,21 @@ fit_theta_checkbutton = ttk.Checkbutton(
 )
 fit_toggle_widgets.append(fit_theta_checkbutton)
 fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="ψ goniometer yaw", variable=fit_psi_z_var)
+    ttk.Checkbutton(
+        fit_frame,
+        text="Goniometer Axis Yaw (about z)",
+        variable=fit_psi_z_var,
+    )
 )
 fit_toggle_widgets.append(
     ttk.Checkbutton(fit_frame, text="χ sample pitch", variable=fit_chi_var)
 )
 fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="φ axis angle", variable=fit_cor_var)
+    ttk.Checkbutton(
+        fit_frame,
+        text="Goniometer Axis Pitch (about y)",
+        variable=fit_cor_var,
+    )
 )
 fit_toggle_widgets.append(
     ttk.Checkbutton(fit_frame, text="γ detector tilt", variable=fit_gamma_var)
@@ -18610,6 +18668,13 @@ undo_geometry_fit_button = ttk.Button(
     command=_undo_last_geometry_fit,
 )
 undo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+
+redo_geometry_fit_button = ttk.Button(
+    fit_actions_frame,
+    text="Redo Fit",
+    command=_redo_last_geometry_fit,
+)
+redo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
 _update_geometry_fit_undo_button_state()
 
 live_geometry_preview_var = tk.BooleanVar(value=False)
@@ -19410,7 +19475,12 @@ theta_initial_var, theta_initial_scale = make_slider(
     'θ sample tilt', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
 )
 cor_angle_var, cor_angle_scale = make_slider(
-    'φ axis angle', -5.0, 5.0, defaults['cor_angle'], 0.01, geo_frame.frame
+    'Goniometer Axis Pitch (about y)',
+    -5.0,
+    5.0,
+    defaults['cor_angle'],
+    0.01,
+    geo_frame.frame,
 )
 gamma_var, gamma_scale = make_slider(
     'γ detector pitch',
@@ -19434,8 +19504,32 @@ chi_var, chi_scale = make_slider(
     'χ sample pitch', -1, 1, defaults['chi'], 0.001, geo_frame.frame
 )
 psi_z_var, psi_z_scale = make_slider(
-    'ψ goniometer yaw', -5.0, 5.0, defaults['psi_z'], 0.01, geo_frame.frame
+    'Goniometer Axis Yaw (about z)',
+    -5.0,
+    5.0,
+    defaults['psi_z'],
+    0.01,
+    geo_frame.frame,
 )
+
+
+def _clamp_psi_z_var(*_):
+    try:
+        value = float(psi_z_var.get())
+        lo = float(psi_z_scale.cget("from"))
+        hi = float(psi_z_scale.cget("to"))
+    except Exception:
+        return
+    if hi < lo:
+        lo, hi = hi, lo
+    clipped = min(max(value, lo), hi)
+    if not math.isclose(value, clipped, rel_tol=0.0, abs_tol=1e-12):
+        psi_z_var.set(clipped)
+
+
+psi_z_var.trace_add("write", _clamp_psi_z_var)
+_clamp_psi_z_var()
+
 zs_var, zs_scale = make_slider(
     'z_s sample offset', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame
 )
@@ -19526,7 +19620,7 @@ geometry_fit_parameter_specs = {
         "step": 0.01,
     },
     "psi_z": {
-        "label": "Goniometer Yaw",
+        "label": "Goniometer Axis Yaw (about z)",
         "value_var": psi_z_var,
         "value_slider": psi_z_scale,
         "step": 0.01,
@@ -19538,7 +19632,7 @@ geometry_fit_parameter_specs = {
         "step": 0.001,
     },
     "cor_angle": {
-        "label": "Axis Angle",
+        "label": "Goniometer Axis Pitch (about y)",
         "value_var": cor_angle_var,
         "value_slider": cor_angle_scale,
         "step": 0.01,

@@ -179,7 +179,7 @@ def _build_sample_frame(geometry: IntersectionGeometry):
     psi_rad = np.deg2rad(float(geometry.psi_deg))
     psi_z_rad = np.deg2rad(float(geometry.psi_z_deg))
     theta_initial_rad = np.deg2rad(float(geometry.theta_initial_deg))
-    _ = geometry.cor_angle_deg
+    cor_angle_rad = np.deg2rad(float(geometry.cor_angle_deg))
 
     c_chi = cos(chi_rad)
     s_chi = sin(chi_rad)
@@ -203,25 +203,29 @@ def _build_sample_frame(geometry: IntersectionGeometry):
         dtype=np.float64,
     )
 
-    c_psi_z = cos(psi_z_rad)
-    s_psi_z = sin(psi_z_rad)
-    r_z_gonio = np.array(
-        [
-            [c_psi_z, s_psi_z, 0.0],
-            [-s_psi_z, c_psi_z, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-    r_z_r_y = (r_z_gonio @ r_z) @ r_y
+    r_z_r_y = r_z @ r_y
 
     ct = cos(theta_initial_rad)
     st = sin(theta_initial_rad)
+    ax = cos(cor_angle_rad)
+    ay = 0.0
+    az = sin(cor_angle_rad)
+    c_psi_z = cos(psi_z_rad)
+    s_psi_z = sin(psi_z_rad)
+    ax_yawed = c_psi_z * ax + s_psi_z * ay
+    ay_yawed = -s_psi_z * ax + c_psi_z * ay
+    ax = ax_yawed
+    ay = ay_yawed
+    axis = _unit(np.array([ax, ay, az], dtype=np.float64))
+    ax = float(axis[0])
+    ay = float(axis[1])
+    az = float(axis[2])
+    one_ct = 1.0 - ct
     r_cor = np.array(
         [
-            [1.0, 0.0, 0.0],
-            [0.0, ct, -st],
-            [0.0, st,  ct],
+            [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
+            [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
+            [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
         ],
         dtype=np.float64,
     )
@@ -230,7 +234,9 @@ def _build_sample_frame(geometry: IntersectionGeometry):
     n1 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
     n_surf = _unit(r_cor @ (r_z_r_y @ n1))
 
-    p0_rot = np.array([0.0, 0.0, -float(geometry.zs)], dtype=np.float64)
+    p0 = np.array([0.0, 0.0, -float(geometry.zs)], dtype=np.float64)
+    p0_rot = r_sample @ p0
+    p0_rot[0] = 0.0
 
     return r_sample, n_surf, p0_rot
 

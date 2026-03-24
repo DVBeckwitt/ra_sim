@@ -1,158 +1,189 @@
-# RA Simulation
+<div align="center">
+  <h1>RA-SIM</h1>
+  <p><strong>DWBA forward simulation and refinement for 2D oriented powder diffraction</strong></p>
+  <p>
+    RA-SIM is research software for modeling grazing-incidence diffraction on area
+    detectors, calibrating detector geometry, and refining mosaic, stacking-disorder,
+    and crystallographic parameters against experimental images.
+  </p>
+  <p>
+    <a href="https://github.com/DVBeckwitt/ra_sim/actions/workflows/ci.yml">
+      <img src="https://img.shields.io/github/actions/workflow/status/DVBeckwitt/ra_sim/ci.yml?label=CI" alt="CI status" />
+    </a>
+    <a href="https://www.python.org/downloads/">
+      <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+" />
+    </a>
+    <a href="LICENSE">
+      <img src="https://img.shields.io/github/license/DVBeckwitt/ra_sim" alt="License" />
+    </a>
+  </p>
+  <p>
+    <a href="#installation">Installation</a> •
+    <a href="#configuration">Configuration</a> •
+    <a href="#usage">Usage</a> •
+    <a href="#screenshots">Screenshots</a> •
+    <a href="#development">Development</a>
+  </p>
+</div>
 
-RA Simulation is an open-source Distorted-Wave Born Approximation (DWBA) forward model for quantitative analysis of diffraction from two-dimensional oriented powders. The code refines full area-detector images, jointly modeling detector geometry, mosaic orientation distributions, stacking disorder, and crystallographic structure factors. It accompanies the manuscript "Quantitative simulation and refinement of diffraction from 2D oriented powders."
+![RA-SIM simulation view](docs/images/simulation.png)
 
-## Features
+> [!NOTE]
+> RA-SIM is active research software. The repository does not bundle raw detector
+> data, so you will need to point the configuration files at local `.osc`, `.poni`,
+> `.cif`, and measured-peak inputs before launching the workflows.
 
-- **DWBA forward model** with refraction, footprint and divergence corrections for grazing-incidence diffraction.
-- **Geometry and detector calibration** using a 3D powder standard and transfer to samples.
-- **Mosaic orientation distributions** parameterized by pseudo-Voigt functions for hybrid ring–cap patterns.
-- **Structure-factor refinement** including fractional occupancies, atomic positions, and anisotropic Debye–Waller factors.
-- **Tk-based GUI** for loading images, running simulations and refining parameters.
-- **Debug utilities** and helpers for stacking-fault analysis.
+## Highlights
+
+- Full 2D DWBA forward modeling with refraction, footprint, divergence, and detector
+  geometry handling for grazing-incidence diffraction.
+- Calibration workflow for fitting hBN ring ellipses and transferring detector
+  geometry into simulation runs.
+- Refinement controls for mosaic orientation distributions, stacking disorder,
+  lattice parameters, occupancies, and Debye-Waller terms.
+- Desktop GUI for image-based analysis plus CLI entry points for headless
+  simulation and calibrant fitting.
 
 ## Installation
 
-Clone the repository and install dependencies:
+RA-SIM supports Python 3.10+.
 
 ```bash
-git clone https://github.com/<user>/ra_sim.git
+git clone https://github.com/DVBeckwitt/ra_sim.git
 cd ra_sim
-pip install -e .
+python -m pip install -e .
 ```
 
-## Quick start
+If you prefer the installed console script, the package also exposes `ra-sim`.
 
-Launch with a startup choice prompt (calibrant fit or simulation GUI):
+> [!TIP]
+> The GUI uses Tkinter. Most Python distributions include it already, but some
+> Linux environments require installing the system `tk` package separately.
+
+## Configuration
+
+RA-SIM reads project settings from `config/`.
+
+1. Create a local paths file from the example.
+2. Update the file so it points at your experiment-specific data.
+3. Optionally move your config out of the repository and set `RA_SIM_CONFIG_DIR`
+   to that folder.
 
 ```bash
-python -m ra_sim
-# or on Windows
-run_ra_sim.bat
+cp config/file_paths.example.yaml config/file_paths.yaml
+# Windows PowerShell: Copy-Item config/file_paths.example.yaml config/file_paths.yaml
 ```
 
-Or launch a specific mode directly:
+At minimum, review these files:
+
+- `config/file_paths.yaml` for detector images, `.poni` geometry, CIF input,
+  measured peaks, and output artifacts.
+- `config/hbn_paths.yaml` for the headless hBN ellipse-fit workflow.
+- `config/instrument.yaml` and `config/materials.yaml` for instrument defaults
+  and material-specific constants.
+
+## Usage
+
+Common entry points:
+
+| Task | Command |
+| --- | --- |
+| Interactive launcher | `python -m ra_sim` |
+| Main GUI | `python -m ra_sim gui` |
+| Windows launcher | `run_ra_sim.bat` |
+| Calibrant GUI | `python -m ra_sim calibrant` |
+| Headless simulation | `python -m ra_sim simulate --out output.png` |
+| Headless hBN ellipse fit | `python -m ra_sim hbn-fit` |
+
+A typical workflow looks like this:
+
+1. Fit detector geometry with the calibrant workflow.
+2. Launch the main GUI and load your experimental background.
+3. Match 2D detector features first, then validate radial and azimuthal
+   integrations.
+4. Refine mosaic, stacking, and structural parameters and save parameter
+   snapshots for reproducibility.
+
+Further GUI notes: [docs/gui_views.md](docs/gui_views.md)
+
+<details>
+<summary>Advanced CLI examples</summary>
 
 ```bash
-python -m ra_sim gui
-python -m ra_sim calibrant
-# or via main.py
-python main.py
-python main.py gui
-python main.py calibrant
-# command passthrough also works from main.py/.bat
-python main.py simulate --out output.png
-run_ra_sim.bat hbn-fit
-```
+# Launch the GUI through the installed script
+ra-sim gui
 
-The application loads example images specified in `config/dir_paths.yaml`. Refine detector geometry with a calibrant, then adjust mosaic and structural parameters to fit sample data. The `tests` folder contains unit tests that can be run with `pytest`.
+# Save a headless simulation image
+python -m ra_sim simulate --out output.png --samples 2000 --image-size 3000
 
-## GUI Views (What Each One Is)
-
-Project document: [`docs/gui_views.md`](docs/gui_views.md)
-
-### 1) Simulation
-
-The simulation image is the main diffraction workspace. It shows the modeled detector pattern and is the first view to use when checking whether the overall ring/cap geometry and intensity distribution match experiment.
-
-![Simulation View](docs/images/simulation.png)
-
-### 2) Phi-vs-Theta and Integration
-
-Use integration views next:
-
-- Radial integration (`2theta`) compares intensity vs scattering angle.
-- Azimuthal integration (`phi`) compares intensity vs azimuth.
-- 2D caked/integration view highlights region-specific mismatch.
-
-This stage is where you validate alignment and shape in reduced coordinates before deeper refinement.
-
-![Phi-vs-Theta View](docs/images/phivstheta.png)
-
-![Integration View](docs/images/integration.png)
-
-### 3) Calibrant
-
-Calibrant mode (hBN fitter) is for detector geometry and tilt setup from ring data. You load calibrant/dark files, fit rings, refine, and save/load NPZ bundles that feed cleaner starting geometry back into simulation.
-
-![Calibrant View](docs/images/calibrant.png)
-
-### 4) Parameters
-
-The parameters panel controls geometry, lattice values, mosaic broadening, beam center, beam spectral bandwidth (`Bandwidth (%)`), stacking probabilities, occupancies, and fit toggles. It is the main control surface for iterative refinement and reproducible save/load workflows.
-
-![Parameters View](docs/images/parameters.png)
-
-### Optics Transport Modes
-
-The GUI `Optics Transport` selector provides two named modes:
-
-- **Original Fast Approx (Fresnel + Beer-Lambert)** (`FRESNEL_CTR_DAMPING`, stored as `fast`): fast approximation that applies Fresnel interface weights with Beer-Lambert entry/exit attenuation.
-- **Complex-k DWBA slab optics (Precise)** (`COMPLEX_K_DWBA_SLAB`, stored as `exact`): phase-matched complex-`k` slab refraction/transmission with the full precise transport path implemented in the simulator.
-
-The fast mode is intentionally approximate and omits coherent internal multiple-reflection and full coherent internal phase-coupling terms. Use the precise mode when those effects matter.
-
-### How GUI geometry fitting chooses what to match
-
-The geometry fit button compares annotated peaks from the experimental image to simulated peaks with the **same HKL labels**. The default `config/file_paths.yaml` points `measured_peaks` at a NumPy array where each entry is either `[h, k, l, x_pix, y_pix]` or a dict with `{"label": "h,k,l", "x": ..., "y": ...}`. During fitting, RA-Sim:
-
-1. Rotates those measured coordinates to match the displayed background.
-2. Runs a full simulation with the current geometry and finds each simulated peak’s maximum pixel position for every HKL in `miller`.
-3. For each HKL present in both measured and simulated data, keeps any fixed preview-source matches and otherwise solves a one-to-one point assignment inside each HKL group.
-4. Minimizes the pixel residuals `(Δx, Δy)` between each measured/simulated pair for the selected geometry parameters. The default solver path is a linear, point-to-point fit with uniform pair weighting. If you explicitly enable `use_measurement_uncertainty: true` and supply `sigma_px`, `sigma_radial_px`, or `sigma_tangential_px`, those uncertainties are folded into the residual weighting.
-5. Optionally runs a coarse ridge/Chamfer refinement pass on the experimental image before the ROI stage. This still fits only geometry, is accepted only if the matched-peak point fit does not materially regress, and is disabled by default in the current instrument config.
-6. Optionally runs a second-stage ROI/image refinement pass with the same geometry variables while keeping mosaic parameters fixed. This stage is also disabled by default, and when enabled it can normalize per-ROI sensitivity weights with `equal_peak_weights: true` so each matched peak contributes equally regardless of intensity.
-7. Reports a finite-difference identifiability summary after the final solve, including approximate rank, condition number, and the parameter/peak sensitivities that dominate the fit.
-
-This pairing enforces HKL correspondence: the optimizer only adjusts geometry so that a given experimental peak lines up with the simulated location of the **same reflection**, not just any nearby bright spot. When solver restarts are enabled, RA-Sim now evaluates broader restart seeds such as box corners, box center, axis-bound seeds, and low-discrepancy samples before falling back to local jitter, which helps recover from flat local minima.
-
-## Command-line hBN ellipse fitting
-
-You can run the hBN ellipse fitting workflow without the GUI through the project CLI. The workflow understands a YAML/JSON paths file so you do not have to repeat calibrant and dark frame paths each time.
-
-1. Update `config/hbn_paths.yaml` with your calibrant, dark, and optional bundle/profile paths (or point `--paths-file` to a custom YAML/JSON).
-2. Launch the workflow at full 3000×3000 resolution from the command prompt:
-
-```bash
-# Use the default config/hbn_paths.yaml and process at full resolution
-python -m ra_sim hbn-fit
-
-# Load the bundle listed in the paths file without retyping its path
+# Use the default hBN paths file
 python -m ra_sim hbn-fit --load-bundle
 
-# Recompute a fresh background/fit at full resolution using stored ellipses as starting guesses
-python -m ra_sim hbn-fit --load-bundle --highres-refine --osc /path/to/calibrant.osc --dark /path/to/dark.osc
-
-# Collect a fresh set of 5 points on each of the 5 rings even when a bundle exists
-python -m ra_sim hbn-fit --reclick --osc /path/to/calibrant.osc --dark /path/to/dark.osc
-
-# Supply an alternate paths file
+# Use a custom hBN paths file
 python -m ra_sim hbn-fit --paths-file /path/to/custom_hbn_paths.yaml
+
+# Refit the hBN workflow at full resolution
+python -m ra_sim hbn-fit --load-bundle --highres-refine
 ```
 
-When a bundle NPZ is provided in the paths file (or via `--load-bundle`), `--highres-refine` will rebuild the background and refit using the saved ellipses as starting guesses at full resolution.
+</details>
 
-**Why five clicks per ring?** An unconstrained ellipse has five free parameters (center `xc, yc`, semi-axes `a, b`, and rotation `θ`), so you need at least five non-collinear points to uniquely define it. If you click fewer than five points the fit becomes underdetermined; the workflow therefore requires five points unless you are reusing a saved click profile or bundle that already contains the necessary geometry.
+## Screenshots
 
-After each run, the overlay figure shows the fitted ellipses on top of the background-subtracted image and annotates the fitted parameters (xc, yc, a, b, θ). The saved fit profile also records an estimated detector tilt; the GUI and the `simulate` CLI subcommand will use this tilt as their starting Rot1/Rot2 defaults the next time you launch a simulation.
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/simulation.png" alt="Simulation view" width="100%" /><br />
+      <strong>Simulation</strong><br />
+      Main diffraction workspace for matching detector-space features.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/integration.png" alt="Integration view" width="100%" /><br />
+      <strong>Integration</strong><br />
+      Reduced-coordinate views for radial and azimuthal comparisons.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/calibrant.png" alt="Calibrant view" width="100%" /><br />
+      <strong>Calibrant</strong><br />
+      Ring fitting and geometry transfer from hBN calibrant data.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/parameters.png" alt="Parameters view" width="100%" /><br />
+      <strong>Parameters</strong><br />
+      Central control surface for geometry, mosaic, beam, and structure refinement.
+    </td>
+  </tr>
+</table>
 
-## Troubleshooting
+## Project Layout
 
-Set `RA_SIM_DEBUG=1` to enable verbose logging and additional diagnostic plots:
+- `ra_sim/` contains the core simulation, fitting, GUI, and CLI code.
+- `config/` contains default instrument, material, and path configuration files.
+- `docs/` contains GUI notes, figures, and supporting technical writeups.
+- `tests/` contains regression tests for the simulation, fitting, GUI helpers,
+  and CLI behavior.
+
+## Development
+
+The CI workflow runs on Python 3.10 through 3.13. Local checks:
 
 ```bash
-export RA_SIM_DEBUG=1  # Linux/macOS
-# or
-set RA_SIM_DEBUG=1     # Windows CMD
+ruff check .
+pytest -q
+python -m mypy ra_sim/config ra_sim/simulation ra_sim/fitting ra_sim/gui
 ```
+
+Set `RA_SIM_DEBUG=1` to enable verbose debug output and extra diagnostics.
 
 ## Citation
 
-If you use this software in published work, please cite the corresponding paper:
+If RA-SIM contributes to published work, please cite the accompanying manuscript:
 
 > D. V. Beckwitt *et al.*, "Quantitative simulation and refinement of diffraction from 2D oriented powders," (in preparation, 2024).
 
 ## License
 
-This project is distributed under the terms of the GNU General Public License v3.0. See [LICENSE](LICENSE) for details.
-
+RA-SIM is distributed under the GNU General Public License v3.0. See
+[LICENSE](LICENSE) for details.
