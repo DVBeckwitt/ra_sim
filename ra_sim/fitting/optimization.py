@@ -694,6 +694,19 @@ def _prepare_reflection_subset(
         table_idx, _ = source_key
         if table_idx < 0 or table_idx >= total_reflections or table_idx in selected_lookup:
             continue
+        raw_hkl = entry.get("hkl")
+        if isinstance(raw_hkl, tuple) and len(raw_hkl) == 3:
+            source_hkl = _miller_key_from_row(miller_arr[table_idx])
+            try:
+                measured_hkl = (
+                    int(raw_hkl[0]),
+                    int(raw_hkl[1]),
+                    int(raw_hkl[2]),
+                )
+            except Exception:
+                measured_hkl = None
+            if measured_hkl is not None and source_hkl != measured_hkl:
+                continue
         selected_lookup.add(table_idx)
         selected_original_indices.append(int(table_idx))
 
@@ -701,11 +714,11 @@ def _prepare_reflection_subset(
 
     fallback_hkl_keys: set[Tuple[int, int, int]] = set()
     for entry in normalized_measured:
-        source_key = _measured_source_indices(entry)
-        if source_key is not None:
-            table_idx, _ = source_key
-            if 0 <= table_idx < total_reflections:
-                continue
+        # Always retain the HKL-based fallback path, even when source-table
+        # indices are present. Manual geometry picks can carry stale source
+        # indices after the user clears/readds points or after the underlying
+        # reflection ordering changes, and relying on indices alone can reduce
+        # the simulation subset to the wrong reflections.
         raw_hkl = entry.get("hkl")
         if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
             continue
@@ -748,6 +761,9 @@ def _prepare_reflection_subset(
             if local_idx is not None:
                 remapped_entry["source_table_index"] = int(local_idx)
                 remapped_entry["source_row_index"] = int(row_idx)
+            else:
+                remapped_entry.pop("source_table_index", None)
+                remapped_entry.pop("source_row_index", None)
         remapped_measured.append(remapped_entry)
 
     reduced = len(original_indices) < total_reflections
@@ -3386,6 +3402,25 @@ def _resolve_fixed_source_matches(
                 "resolution_reason": "invalid_simulated_point",
             }
             continue
+        measured_hkl = entry.get("hkl")
+        if isinstance(measured_hkl, tuple) and len(measured_hkl) == 3:
+            try:
+                measured_hkl_key = (
+                    int(measured_hkl[0]),
+                    int(measured_hkl[1]),
+                    int(measured_hkl[2]),
+                )
+            except Exception:
+                measured_hkl_key = None
+            if measured_hkl_key is not None and measured_hkl_key != sim_hkl:
+                fallback_entries.append(entry)
+                resolution_lookup[id(entry)] = {
+                    **base_diag,
+                    "resolution_kind": "hkl_fallback",
+                    "resolution_reason": "source_hkl_mismatch",
+                    "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
+                }
+                continue
 
         resolved.append((entry, (sim_col, sim_row), sim_hkl))
         resolution_lookup[id(entry)] = {

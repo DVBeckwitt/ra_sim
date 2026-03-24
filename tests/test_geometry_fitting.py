@@ -566,6 +566,247 @@ def test_simulate_and_compare_hkl_restricts_to_measured_hkl_subset(monkeypatch):
     )
 
 
+def test_simulate_and_compare_hkl_keeps_hkl_fallback_when_source_indices_are_stale(
+    monkeypatch,
+):
+    process_millers = []
+
+    def fake_process(*args, **kwargs):
+        miller_arg = np.asarray(args[0], dtype=np.float64)
+        process_millers.append(miller_arg.copy())
+        image_size = int(args[2])
+        hit_tables = []
+        coord_map = {
+            (1, 0, 0): (1.0, 1.0),
+            (2, 0, 0): (4.0, 4.0),
+            (3, 0, 0): (7.0, 7.0),
+        }
+        for row in miller_arg:
+            hkl = tuple(int(round(v)) for v in row)
+            col, row_px = coord_map[hkl]
+            hit_tables.append(
+                np.array(
+                    [[1.0, col, row_px, 0.0, row[0], row[1], row[2]]],
+                    dtype=np.float64,
+                )
+            )
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 12
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 1,
+        }
+    ]
+
+    distances, sim_coords, meas_coords, sim_millers, meas_millers = opt.simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured,
+    )
+
+    assert process_millers
+    assert process_millers[0].shape == (1, 3)
+    assert np.allclose(
+        process_millers[0],
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+    )
+    assert distances.size == 2
+    assert sim_coords == [(4.0, 4.0)]
+    assert meas_coords == [(4.0, 4.0)]
+    assert sim_millers == [(2, 0, 0)]
+    assert meas_millers == [(2, 0, 0)]
+
+
+def test_simulate_and_compare_hkl_falls_back_when_in_range_source_indices_point_to_wrong_hkl(
+    monkeypatch,
+):
+    process_millers = []
+
+    def fake_process(*args, **kwargs):
+        miller_arg = np.asarray(args[0], dtype=np.float64)
+        process_millers.append(miller_arg.copy())
+        image_size = int(args[2])
+        hit_tables = []
+        coord_map = {
+            (1, 0, 0): (1.0, 1.0),
+            (2, 0, 0): (4.0, 4.0),
+            (3, 0, 0): (7.0, 7.0),
+        }
+        for row in miller_arg:
+            hkl = tuple(int(round(v)) for v in row)
+            col, row_px = coord_map[hkl]
+            hit_tables.append(
+                np.array(
+                    [[1.0, col, row_px, 0.0, row[0], row[1], row[2]]],
+                    dtype=np.float64,
+                )
+            )
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 12
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+        }
+    ]
+
+    distances, sim_coords, meas_coords, sim_millers, meas_millers = opt.simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured,
+    )
+
+    assert process_millers
+    assert process_millers[0].shape == (1, 3)
+    assert np.allclose(
+        process_millers[0],
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+    )
+    assert distances.size == 2
+    assert sim_coords == [(4.0, 4.0)]
+    assert meas_coords == [(4.0, 4.0)]
+    assert sim_millers == [(2, 0, 0)]
+    assert meas_millers == [(2, 0, 0)]
+
+
+def test_fit_geometry_parameters_pixel_path_tolerates_stale_in_range_source_indices(
+    monkeypatch,
+):
+    process_millers = []
+
+    def fake_process(*args, **kwargs):
+        miller_arg = np.asarray(args[0], dtype=np.float64)
+        process_millers.append(miller_arg.copy())
+        image_size = int(args[2])
+        hit_tables = []
+        coord_map = {
+            (1, 0, 0): (1.0, 1.0),
+            (2, 0, 0): (4.0, 4.0),
+            (3, 0, 0): (7.0, 7.0),
+        }
+        best_sample_indices_out = kwargs.get("best_sample_indices_out")
+        if isinstance(best_sample_indices_out, np.ndarray):
+            best_sample_indices_out[:] = 0
+        for row in miller_arg:
+            hkl = tuple(int(round(v)) for v in row)
+            col, row_px = coord_map[hkl]
+            hit_tables.append(
+                np.array(
+                    [[1.0, col, row_px, 0.0, row[0], row[1], row[2]]],
+                    dtype=np.float64,
+                )
+            )
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+        }
+    ]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={"solver": {"restarts": 0, "weighted_matching": False}},
+    )
+
+    assert result.success
+    assert process_millers
+    assert np.allclose(process_millers[0], np.array([[2.0, 0.0, 0.0]], dtype=np.float64))
+    assert result.fun.size == 2
+    assert np.allclose(result.fun, np.zeros(2, dtype=np.float64))
+    assert isinstance(result.point_match_summary, dict)
+    assert int(result.point_match_summary["fixed_source_resolved_count"]) == 0
+    assert int(result.point_match_summary["fallback_entry_count"]) == 1
+    assert isinstance(result.point_match_diagnostics, list)
+    assert len(result.point_match_diagnostics) == 1
+    assert result.point_match_diagnostics[0]["resolution_reason"] in {
+        "missing_source_indices",
+        "source_hkl_mismatch",
+    }
+    assert result.point_match_diagnostics[0]["match_status"] == "matched"
+
+
 def test_fit_geometry_parameters_supports_center_component_variables(monkeypatch):
     target_row = 2.5
     target_col = 5.5
