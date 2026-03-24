@@ -3763,7 +3763,7 @@ def fit_geometry_parameters(
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", False))
     use_measurement_uncertainty = bool(
-        solver_cfg.get("use_measurement_uncertainty", False)
+        solver_cfg.get("use_measurement_uncertainty", True)
     )
     stagnation_probe_enabled = bool(
         solver_cfg.get("stagnation_probe", point_match_mode)

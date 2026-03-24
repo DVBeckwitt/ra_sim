@@ -99,7 +99,7 @@ instrument:
       #   but no simulated points are matchable.
       # - weighted_matching: downweight large point-pair residuals.
       # - use_measurement_uncertainty: scale residuals by picked-point sigma.
-      #   Keep false for a pure point-to-point geometry fit.
+      #   Set false only for a pure point-to-point geometry fit.
       # - anisotropic_measurement_uncertainty: interpret measurement sigmas in
       #   detector radial/tangential coordinates rather than isotropically.
       # - radial_sigma_scale / tangential_sigma_scale: fallback scaling applied
@@ -118,7 +118,7 @@ instrument:
         restart_jitter: 0.15
         missing_pair_penalty_px: 20.0
         weighted_matching: false
-        use_measurement_uncertainty: false
+        use_measurement_uncertainty: true
         anisotropic_measurement_uncertainty: false
         radial_sigma_scale: 1.0
         tangential_sigma_scale: 1.0

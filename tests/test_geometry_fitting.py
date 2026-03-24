@@ -978,7 +978,7 @@ def test_fit_geometry_parameters_reports_unweighted_peak_rms(monkeypatch):
     assert float(result.rms_px) > float(result.weighted_residual_rms_px)
 
 
-def test_fit_geometry_parameters_scales_manual_peak_residuals_by_sigma(monkeypatch):
+def test_fit_geometry_parameters_uses_manual_peak_sigma_by_default(monkeypatch):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
         image = np.zeros((image_size, image_size), dtype=np.float64)
@@ -1035,7 +1035,6 @@ def test_fit_geometry_parameters_scales_manual_peak_residuals_by_sigma(monkeypat
             "solver": {
                 "restarts": 0,
                 "weighted_matching": False,
-                "use_measurement_uncertainty": True,
                 "f_scale_px": 1.0,
             }
         },
@@ -1057,7 +1056,7 @@ def test_fit_geometry_parameters_scales_manual_peak_residuals_by_sigma(monkeypat
     assert float(result.weighted_residual_rms_px) < float(result.rms_px)
 
 
-def test_fit_geometry_parameters_ignores_manual_peak_sigma_by_default(monkeypatch):
+def test_fit_geometry_parameters_can_ignore_manual_peak_sigma_when_disabled(monkeypatch):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
         image = np.zeros((image_size, image_size), dtype=np.float64)
@@ -1114,6 +1113,7 @@ def test_fit_geometry_parameters_ignores_manual_peak_sigma_by_default(monkeypatc
             "solver": {
                 "restarts": 0,
                 "weighted_matching": False,
+                "use_measurement_uncertainty": False,
                 "f_scale_px": 1.0,
             }
         },

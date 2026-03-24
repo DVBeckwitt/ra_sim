@@ -5442,6 +5442,57 @@ def _geometry_manual_zoom_bounds(
     return float(x_min), float(x_max), float(y_min), float(y_max)
 
 
+def _geometry_manual_anchor_axis_limits(
+    value: float,
+    span: float,
+    anchor_fraction: float,
+    lower_bound: float,
+    upper_bound: float,
+) -> tuple[float, float]:
+    """Return clamped axis limits that keep *value* at a fixed screen fraction."""
+
+    try:
+        span_signed = float(span)
+    except Exception:
+        span_signed = 0.0
+    if not np.isfinite(span_signed) or abs(span_signed) <= 1.0e-12:
+        value_f = float(value)
+        return value_f, value_f
+
+    try:
+        frac = float(anchor_fraction)
+    except Exception:
+        frac = 0.5
+    if not np.isfinite(frac):
+        frac = 0.5
+    frac = min(max(frac, 0.0), 1.0)
+
+    try:
+        bound_lo = float(min(lower_bound, upper_bound))
+        bound_hi = float(max(lower_bound, upper_bound))
+    except Exception:
+        bound_lo = float(lower_bound)
+        bound_hi = float(upper_bound)
+    available_span = max(0.0, bound_hi - bound_lo)
+    if available_span > 0.0:
+        span_abs = min(abs(span_signed), available_span)
+        span_signed = np.copysign(span_abs, span_signed)
+
+    start = float(value) - frac * span_signed
+    end = start + span_signed
+    low = min(start, end)
+    high = max(start, end)
+    if low < bound_lo:
+        shift = bound_lo - low
+        start += shift
+        end += shift
+    if high > bound_hi:
+        shift = high - bound_hi
+        start -= shift
+        end -= shift
+    return float(start), float(end)
+
+
 def _geometry_manual_group_target_count(
     group_key: tuple[object, ...] | None,
     group_entries: Sequence[dict[str, object]] | None,
@@ -5836,7 +5887,13 @@ def _restore_geometry_manual_pick_view(*, redraw: bool = True) -> None:
         canvas.draw_idle()
 
 
-def _apply_geometry_manual_pick_zoom(col: float, row: float) -> None:
+def _apply_geometry_manual_pick_zoom(
+    col: float,
+    row: float,
+    *,
+    anchor_fraction_x: float = 0.5,
+    anchor_fraction_y: float = 0.5,
+) -> None:
     """Zoom to a fixed local window while the user is placing manual points."""
 
     if not _geometry_manual_pick_session_active():
@@ -5844,21 +5901,48 @@ def _apply_geometry_manual_pick_zoom(col: float, row: float) -> None:
     display_background = _current_geometry_manual_pick_background_image()
     if display_background is None:
         return
+    try:
+        current_xlim = tuple(float(v) for v in ax.get_xlim())
+    except Exception:
+        current_xlim = (0.0, 1.0)
+    try:
+        current_ylim = tuple(float(v) for v in ax.get_ylim())
+    except Exception:
+        current_ylim = (0.0, 1.0)
+    x_sign = 1.0 if len(current_xlim) < 2 or current_xlim[1] >= current_xlim[0] else -1.0
+    y_sign = 1.0 if len(current_ylim) < 2 or current_ylim[1] >= current_ylim[0] else -1.0
     if _geometry_manual_pick_uses_caked_space():
-        x_min = float(col) - 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG)
-        x_max = float(col) + 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG)
-        y_min = float(row) - 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG)
-        y_max = float(row) + 0.5 * float(GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG)
         if last_caked_extent is not None and len(last_caked_extent) >= 4:
             x_lo = float(last_caked_extent[0])
             x_hi = float(last_caked_extent[1])
             y_lo = float(last_caked_extent[2])
             y_hi = float(last_caked_extent[3])
-            x_min = min(max(x_min, x_lo), x_hi)
-            x_max = min(max(x_max, x_lo), x_hi)
-            y_min = min(max(y_min, y_lo), y_hi)
-            y_max = min(max(y_max, y_lo), y_hi)
-        if x_max <= x_min or y_max <= y_min:
+        else:
+            x_lo, x_hi = sorted(current_xlim)
+            y_lo, y_hi = sorted(current_ylim)
+        x_span = x_sign * min(
+            abs(float(GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG)),
+            abs(float(x_hi) - float(x_lo)),
+        )
+        y_span = y_sign * min(
+            abs(float(GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG)),
+            abs(float(y_hi) - float(y_lo)),
+        )
+        x_min, x_max = _geometry_manual_anchor_axis_limits(
+            float(col),
+            float(x_span),
+            float(anchor_fraction_x),
+            float(x_lo),
+            float(x_hi),
+        )
+        y_min, y_max = _geometry_manual_anchor_axis_limits(
+            float(row),
+            float(y_span),
+            float(anchor_fraction_y),
+            float(y_lo),
+            float(y_hi),
+        )
+        if x_min == x_max or y_min == y_max:
             return
         if not bool(geometry_manual_pick_session.get("zoom_active", False)):
             geometry_manual_pick_session["saved_xlim"] = tuple(float(v) for v in ax.get_xlim())
@@ -5869,11 +5953,24 @@ def _apply_geometry_manual_pick_zoom(col: float, row: float) -> None:
         ax.set_ylim(float(y_min), float(y_max))
         canvas.draw_idle()
         return
-    x_min, x_max, y_min, y_max = _geometry_manual_zoom_bounds(
+    background_shape = np.asarray(display_background).shape
+    height = max(1.0, float(background_shape[0]))
+    width = max(1.0, float(background_shape[1]))
+    x_span = x_sign * min(float(GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX), width)
+    y_span = y_sign * min(float(GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX), height)
+    x_min, x_max = _geometry_manual_anchor_axis_limits(
         float(col),
+        float(x_span),
+        float(anchor_fraction_x),
+        0.0,
+        float(width),
+    )
+    y_min, y_max = _geometry_manual_anchor_axis_limits(
         float(row),
-        np.asarray(display_background).shape,
-        window_size_px=float(GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX),
+        float(y_span),
+        float(anchor_fraction_y),
+        0.0,
+        float(height),
     )
     if not bool(geometry_manual_pick_session.get("zoom_active", False)):
         geometry_manual_pick_session["saved_xlim"] = tuple(float(v) for v in ax.get_xlim())
@@ -5881,11 +5978,7 @@ def _apply_geometry_manual_pick_zoom(col: float, row: float) -> None:
     geometry_manual_pick_session["zoom_active"] = True
     geometry_manual_pick_session["zoom_center"] = (float(col), float(row))
     ax.set_xlim(x_min, x_max)
-    y_limits = ax.get_ylim()
-    if len(y_limits) >= 2 and y_limits[0] > y_limits[1]:
-        ax.set_ylim(y_max, y_min)
-    else:
-        ax.set_ylim(y_min, y_max)
+    ax.set_ylim(y_min, y_max)
     canvas.draw_idle()
 
 
@@ -10052,7 +10145,40 @@ def on_canvas_press(event):
         return
     if geometry_manual_pick_armed and _geometry_manual_pick_session_active():
         x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
-        _apply_geometry_manual_pick_zoom(x0, y0)
+        anchor_fraction_x = 0.5
+        anchor_fraction_y = 0.5
+        try:
+            bbox = getattr(ax, "bbox", None)
+            if (
+                bbox is not None
+                and np.isfinite(float(bbox.width))
+                and np.isfinite(float(bbox.height))
+                and float(bbox.width) > 0.0
+                and float(bbox.height) > 0.0
+            ):
+                anchor_fraction_x = float(
+                    np.clip(
+                        (float(event.x) - float(bbox.x0)) / float(bbox.width),
+                        0.0,
+                        1.0,
+                    )
+                )
+                anchor_fraction_y = float(
+                    np.clip(
+                        (float(event.y) - float(bbox.y0)) / float(bbox.height),
+                        0.0,
+                        1.0,
+                    )
+                )
+        except Exception:
+            anchor_fraction_x = 0.5
+            anchor_fraction_y = 0.5
+        _apply_geometry_manual_pick_zoom(
+            x0,
+            y0,
+            anchor_fraction_x=anchor_fraction_x,
+            anchor_fraction_y=anchor_fraction_y,
+        )
         _update_geometry_manual_pick_preview(x0, y0, force=True)
         return
     if unscaled_image_global is None:

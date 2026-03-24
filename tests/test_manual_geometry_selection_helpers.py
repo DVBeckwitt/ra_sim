@@ -269,6 +269,20 @@ def test_geometry_manual_zoom_bounds_returns_clamped_100px_window() -> None:
     assert edge_bounds == (0.0, 100.0, 0.0, 100.0)
 
 
+def test_geometry_manual_anchor_axis_limits_preserves_click_fraction() -> None:
+    namespace = _load_main_functions("_geometry_manual_anchor_axis_limits")
+    anchor_limits = namespace["_geometry_manual_anchor_axis_limits"]
+
+    x0, x1 = anchor_limits(150.0, 100.0, 0.25, 0.0, 300.0)
+    assert (x0, x1) == (125.0, 225.0)
+
+    y0, y1 = anchor_limits(80.0, -100.0, 0.75, 0.0, 200.0)
+    assert (y0, y1) == (155.0, 55.0)
+
+    edge0, edge1 = anchor_limits(12.0, 100.0, 0.2, 0.0, 300.0)
+    assert (edge0, edge1) == (0.0, 100.0)
+
+
 def test_geometry_manual_group_target_count_uses_single_bg_peak_for_00l() -> None:
     namespace = _load_main_functions(
         "_normalize_hkl_key",
