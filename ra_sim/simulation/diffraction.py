@@ -172,11 +172,11 @@ def custom_meshgrid(qx_vals, qy_vals, qz_vals):
     Qz = np.empty((nx, ny, nz), dtype=qz_vals.dtype)
 
     for i in prange(nx):
+        qx = qx_vals[i]
+        Qx[i, :, :] = qx
+        Qz[i, :, :] = qz_vals
         for j in range(ny):
-            for k in range(nz):
-                Qx[i, j, k] = qx_vals[i]
-                Qy[i, j, k] = qy_vals[j]
-                Qz[i, j, k] = qz_vals[k]
+            Qy[i, j, :] = qy_vals[j]
     return Qx, Qy, Qz
 
 
