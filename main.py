@@ -2417,7 +2417,11 @@ def _sync_background_theta_controls(
         schedule_update()
 
 
-def _apply_background_theta_metadata(*, trigger_update: bool = True) -> bool:
+def _apply_background_theta_metadata(
+    *,
+    trigger_update: bool = True,
+    sync_live_theta: bool = True,
+) -> bool:
     """Validate the theta list/offset entries and optionally refresh the display."""
 
     try:
@@ -2433,21 +2437,30 @@ def _apply_background_theta_metadata(*, trigger_update: bool = True) -> bool:
 
     _refresh_geometry_fit_theta_checkbox_label()
     _set_background_file_status_text()
-    if "theta_initial_var" in globals() and theta_initial_var is not None and theta_values:
+    if (
+        sync_live_theta
+        and "theta_initial_var" in globals()
+        and theta_initial_var is not None
+        and theta_values
+    ):
         theta_initial_var.set(_background_theta_for_index(current_background_index, strict_count=True))
     if trigger_update:
         schedule_update()
     return True
 
 
-def _apply_geometry_fit_background_selection(*, trigger_update: bool = False) -> bool:
+def _apply_geometry_fit_background_selection(
+    *,
+    trigger_update: bool = False,
+    sync_live_theta: bool = True,
+) -> bool:
     """Validate the geometry-fit background selection entry."""
 
     if geometry_fit_background_selection_var is None:
         return True
 
     live_theta_before = None
-    if "theta_initial_var" in globals() and theta_initial_var is not None:
+    if sync_live_theta and "theta_initial_var" in globals() and theta_initial_var is not None:
         try:
             live_theta_before = float(theta_initial_var.get())
         except Exception:
@@ -2476,7 +2489,7 @@ def _apply_geometry_fit_background_selection(*, trigger_update: bool = False) ->
     _set_background_file_status_text()
 
     theta_changed = False
-    if "theta_initial_var" in globals() and theta_initial_var is not None:
+    if sync_live_theta and "theta_initial_var" in globals() and theta_initial_var is not None:
         try:
             live_theta_after = float(
                 _background_theta_for_index(current_background_index, strict_count=False)
@@ -4363,7 +4376,9 @@ geometry_manual_pick_cache_signature = None
 geometry_manual_pick_cache_data: dict[str, object] = {}
 geometry_manual_pick_session: dict[str, object] = {}
 geometry_manual_undo_stack: list[dict[str, object]] = []
+geometry_fit_undo_stack: list[dict[str, object]] = []
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
+GEOMETRY_FIT_UNDO_LIMIT = 16
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
 GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX = 50.0
 GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX = 100.0
@@ -4374,6 +4389,8 @@ GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG = 24.0
 GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S = 0.03
 GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
 GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
+last_geometry_overlay_state: dict[str, object] | None = None
+undo_geometry_fit_button = None
 
 
 def _geometry_manual_position_error_px(
@@ -4634,6 +4651,201 @@ def _undo_last_geometry_manual_placement() -> None:
     progress_label_geometry.config(text="Undid the last manual placement change.")
 
 
+def _copy_geometry_fit_state_value(value):
+    """Deep-copy simple geometry-fit GUI state."""
+
+    if isinstance(value, np.ndarray):
+        return np.asarray(value).copy()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {
+            key: _copy_geometry_fit_state_value(val)
+            for key, val in value.items()
+        }
+    if isinstance(value, list):
+        return [_copy_geometry_fit_state_value(val) for val in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_geometry_fit_state_value(val) for val in value)
+    return value
+
+
+def _current_geometry_fit_ui_params() -> dict[str, object]:
+    """Capture the current geometry-fit UI parameter values."""
+
+    params = {
+        "zb": float(zb_var.get()),
+        "zs": float(zs_var.get()),
+        "theta_initial": float(theta_initial_var.get()),
+        "psi_z": float(psi_z_var.get()),
+        "chi": float(chi_var.get()),
+        "cor_angle": float(cor_angle_var.get()),
+        "gamma": float(gamma_var.get()),
+        "Gamma": float(Gamma_var.get()),
+        "corto_detector": float(corto_detector_var.get()),
+        "center_x": float(center_x_var.get()),
+        "center_y": float(center_y_var.get()),
+        "center": [float(center_x_var.get()), float(center_y_var.get())],
+    }
+    if geometry_theta_offset_var is not None:
+        params["theta_offset"] = float(_current_geometry_theta_offset(strict=False))
+    return params
+
+
+def _update_geometry_fit_undo_button_state() -> None:
+    """Enable the fit-undo button only when there is fit history."""
+
+    if undo_geometry_fit_button is None:
+        return
+    undo_geometry_fit_button.config(
+        state=("normal" if geometry_fit_undo_stack else "disabled")
+    )
+
+
+def _clear_geometry_fit_undo_stack() -> None:
+    """Discard the geometry-fit undo history."""
+
+    global geometry_fit_undo_stack, last_geometry_overlay_state
+
+    geometry_fit_undo_stack = []
+    last_geometry_overlay_state = None
+    _update_geometry_fit_undo_button_state()
+
+
+def _capture_geometry_fit_undo_state() -> dict[str, object]:
+    """Capture the current geometry-fit state for undo."""
+
+    overlay_state = _copy_geometry_fit_state_value(last_geometry_overlay_state)
+    try:
+        _, initial_pairs_display = _build_geometry_manual_initial_pairs_display(
+            int(current_background_index),
+            param_set=_current_geometry_fit_params(),
+            prefer_cache=True,
+        )
+        pending_pairs_display = _geometry_manual_session_initial_pairs_display()
+        combined_pairs_display = list(initial_pairs_display) + list(pending_pairs_display)
+        if combined_pairs_display:
+            overlay_state = {
+                "overlay_records": [],
+                "initial_pairs_display": _copy_geometry_fit_state_value(
+                    combined_pairs_display
+                ),
+                "max_display_markers": max(1, len(combined_pairs_display)),
+            }
+    except Exception:
+        pass
+
+    return {
+        "ui_params": _copy_geometry_fit_state_value(_current_geometry_fit_ui_params()),
+        "profile_cache": _copy_geometry_fit_state_value(profile_cache),
+        "overlay_state": overlay_state,
+    }
+
+
+def _push_geometry_fit_undo_state(state: dict[str, object] | None) -> None:
+    """Push one pre-fit state onto the geometry-fit undo stack."""
+
+    global geometry_fit_undo_stack
+
+    if not isinstance(state, dict):
+        return
+    geometry_fit_undo_stack.append(_copy_geometry_fit_state_value(state))
+    geometry_fit_undo_stack = geometry_fit_undo_stack[-int(GEOMETRY_FIT_UNDO_LIMIT):]
+    _update_geometry_fit_undo_button_state()
+
+
+def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
+    """Restore a previously captured geometry-fit state."""
+
+    global profile_cache, last_geometry_overlay_state, last_simulation_signature
+    global update_pending
+
+    if not isinstance(state, dict):
+        return
+
+    ui_params = state.get("ui_params", {}) or {}
+    for name, var in (
+        ("zb", zb_var),
+        ("zs", zs_var),
+        ("theta_initial", theta_initial_var),
+        ("psi_z", psi_z_var),
+        ("chi", chi_var),
+        ("cor_angle", cor_angle_var),
+        ("gamma", gamma_var),
+        ("Gamma", Gamma_var),
+        ("corto_detector", corto_detector_var),
+        ("center_x", center_x_var),
+        ("center_y", center_y_var),
+    ):
+        try:
+            value = float(ui_params.get(name))
+        except Exception:
+            continue
+        if np.isfinite(value):
+            var.set(value)
+
+    if geometry_theta_offset_var is not None:
+        try:
+            theta_offset = float(ui_params.get("theta_offset", 0.0))
+        except Exception:
+            theta_offset = 0.0
+        if np.isfinite(theta_offset):
+            geometry_theta_offset_var.set(f"{theta_offset:.6g}")
+
+    profile_cache = _copy_geometry_fit_state_value(state.get("profile_cache", {})) or {}
+    last_geometry_overlay_state = _copy_geometry_fit_state_value(
+        state.get("overlay_state")
+    )
+    last_simulation_signature = None
+
+    if update_pending is not None:
+        try:
+            root.after_cancel(update_pending)
+        except Exception:
+            pass
+        update_pending = None
+
+    do_update()
+
+    overlay_state = last_geometry_overlay_state or {}
+    overlay_records = overlay_state.get("overlay_records", []) or []
+    initial_pairs_display = overlay_state.get("initial_pairs_display", []) or []
+    max_display_markers = int(overlay_state.get("max_display_markers", 120))
+    max_display_markers = max(1, max_display_markers)
+    if overlay_records:
+        _draw_geometry_fit_overlay(
+            overlay_records,
+            max_display_markers=max_display_markers,
+        )
+    elif initial_pairs_display:
+        _draw_initial_geometry_pairs_overlay(
+            initial_pairs_display,
+            max_display_markers=max_display_markers,
+        )
+
+    _set_background_file_status_text()
+    _update_geometry_manual_pick_button_label()
+
+
+def _undo_last_geometry_fit() -> None:
+    """Restore the most recent geometry-fit state."""
+
+    if not geometry_fit_undo_stack:
+        progress_label_geometry.config(text="No geometry fit history available to undo.")
+        return
+
+    state = _copy_geometry_fit_state_value(geometry_fit_undo_stack[-1])
+    try:
+        _restore_geometry_fit_undo_state(state)
+    except Exception as exc:
+        progress_label_geometry.config(text=f"Failed to undo geometry fit: {exc}")
+        return
+
+    geometry_fit_undo_stack.pop()
+    _update_geometry_fit_undo_button_state()
+    progress_label_geometry.config(text="Restored the previous geometry-fit state.")
+
+
 def _geometry_manual_pair_entry_to_jsonable(
     entry: dict[str, object] | None,
 ) -> dict[str, object] | None:
@@ -4864,6 +5076,7 @@ def _apply_geometry_manual_pairs_rows(
     _cancel_geometry_manual_pick_session(restore_view=True, redraw=False)
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
+    _clear_geometry_fit_undo_stack()
     _render_current_geometry_manual_pairs(update_status=False)
     _update_geometry_manual_pick_button_label()
     _set_background_file_status_text()
@@ -12526,6 +12739,7 @@ def _load_background_files(file_paths, *, select_index=0):
     geometry_manual_pairs_by_background = {}
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
+    _clear_geometry_fit_undo_stack()
     _set_geometry_manual_pick_mode(False)
 
     background_display.set_data(current_background_display)
@@ -12581,6 +12795,7 @@ def switch_background():
     current_background_display = next_display
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
+    _clear_geometry_fit_undo_stack()
     if "theta_initial_var" in globals() and theta_initial_var is not None:
         try:
             theta_initial_var.set(
@@ -12598,6 +12813,7 @@ def reset_to_defaults():
     global caked_limits_user_override
     global simulation_limits_user_override, background_limits_user_override
     global scale_factor_user_override, suppress_simulation_limit_callback
+    _clear_geometry_fit_undo_stack()
     theta_initial_var.set(defaults['theta_initial'])
     if geometry_theta_offset_var is not None:
         geometry_theta_offset_var.set("0.0")
@@ -15037,6 +15253,9 @@ def _legacy_auto_match_on_fit_geometry_click():
         progress_label_geometry.config(text="No parameters selected!")
         return
     _cmd_line(f"start: vars={','.join(var_names)}")
+    preserve_live_theta = (
+        "theta_initial" not in var_names and "theta_offset" not in var_names
+    )
 
     geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
     if not isinstance(geometry_refine_cfg, dict):
@@ -15048,7 +15267,10 @@ def _legacy_auto_match_on_fit_geometry_click():
     if not isinstance(orientation_cfg, dict):
         orientation_cfg = {}
 
-    if not _apply_geometry_fit_background_selection(trigger_update=False):
+    if not _apply_geometry_fit_background_selection(
+        trigger_update=False,
+        sync_live_theta=not preserve_live_theta,
+    ):
         return
 
     try:
@@ -15075,7 +15297,10 @@ def _legacy_auto_match_on_fit_geometry_click():
     background_theta_values: list[float] = []
     shared_theta_offset_seed = 0.0
     if _geometry_fit_uses_shared_theta_offset(selected_background_indices):
-        if not _apply_background_theta_metadata(trigger_update=False):
+        if not _apply_background_theta_metadata(
+            trigger_update=False,
+            sync_live_theta=not preserve_live_theta,
+        ):
             _cmd_line("aborted: invalid background theta_i/shared offset settings")
             progress_label_geometry.config(
                 text="Geometry fit unavailable: invalid background theta_i/shared offset settings."
@@ -16293,7 +16518,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             elif name == 'center_y':
                 center_y_var.set(val)
 
-        if joint_background_mode:
+        if joint_background_mode and not preserve_live_theta:
             theta_initial_var.set(
                 _background_theta_for_index(current_background_index, strict_count=False)
             )
@@ -17193,7 +17418,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     elif name == 'center_x':       center_x_var.set(val)
                     elif name == 'center_y':       center_y_var.set(val)
 
-                if _geometry_fit_uses_shared_theta_offset():
+                if _geometry_fit_uses_shared_theta_offset() and not preserve_live_theta:
                     theta_initial_var.set(
                         _background_theta_for_index(current_background_index, strict_count=False)
                     )
@@ -17834,7 +18059,8 @@ def _build_geometry_manual_fit_dataset(
 def on_fit_geometry_click():
     """Fit geometry from the saved manual Qr/Qz pair selections."""
 
-    global profile_cache, last_simulation_signature, geometry_preview_skip_once
+    global profile_cache, last_geometry_overlay_state
+    global last_simulation_signature, geometry_preview_skip_once
 
     _clear_geometry_preview_artists()
     _clear_geometry_pick_artists()
@@ -17851,6 +18077,9 @@ def on_fit_geometry_click():
     if not var_names:
         progress_label_geometry.config(text="No geometry parameters are selected for fitting.")
         return
+    preserve_live_theta = (
+        "theta_initial" not in var_names and "theta_offset" not in var_names
+    )
 
     geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
     if not isinstance(geometry_refine_cfg, dict):
@@ -17867,7 +18096,10 @@ def on_fit_geometry_click():
         progress_label_geometry.config(text="Geometry fit unavailable: no background image is loaded.")
         return
 
-    if not _apply_geometry_fit_background_selection(trigger_update=False):
+    if not _apply_geometry_fit_background_selection(
+        trigger_update=False,
+        sync_live_theta=not preserve_live_theta,
+    ):
         return
 
     try:
@@ -17891,7 +18123,10 @@ def on_fit_geometry_click():
     joint_background_mode = False
     background_theta_values: list[float] = []
     if _geometry_fit_uses_shared_theta_offset(selected_background_indices):
-        if not _apply_background_theta_metadata(trigger_update=False):
+        if not _apply_background_theta_metadata(
+            trigger_update=False,
+            sync_live_theta=not preserve_live_theta,
+        ):
             progress_label_geometry.config(
                 text="Geometry fit unavailable: invalid background theta_i/shared offset settings."
             )
@@ -18078,6 +18313,7 @@ def on_fit_geometry_click():
             ],
         )
 
+        undo_state = _capture_geometry_fit_undo_state()
         for name, value in zip(var_names, getattr(result, "x", [])):
             val = float(value)
             if name == "zb":
@@ -18106,7 +18342,7 @@ def on_fit_geometry_click():
             elif name == "center_y":
                 center_y_var.set(val)
 
-        if joint_background_mode:
+        if joint_background_mode and not preserve_live_theta:
             theta_initial_var.set(
                 _background_theta_for_index(current_background_index, strict_count=False)
             )
@@ -18132,6 +18368,7 @@ def on_fit_geometry_click():
                 "center_y": center_y_var.get(),
             }
         )
+        _push_geometry_fit_undo_state(undo_state)
 
         geometry_preview_skip_once = True
         last_simulation_signature = None
@@ -18251,6 +18488,13 @@ def on_fit_geometry_click():
                 current_dataset["initial_pairs_display"],
                 max_display_markers=max_display_markers,
             )
+        last_geometry_overlay_state = {
+            "overlay_records": _copy_geometry_fit_state_value(overlay_records),
+            "initial_pairs_display": _copy_geometry_fit_state_value(
+                current_dataset["initial_pairs_display"]
+            ),
+            "max_display_markers": int(max_display_markers),
+        }
 
         export_recs = []
         for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
@@ -18359,6 +18603,14 @@ fit_button_geometry = ttk.Button(
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
+
+undo_geometry_fit_button = ttk.Button(
+    fit_actions_frame,
+    text="Undo Fit",
+    command=_undo_last_geometry_fit,
+)
+undo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+_update_geometry_fit_undo_button_state()
 
 live_geometry_preview_var = tk.BooleanVar(value=False)
 geometry_manual_pick_button_var = tk.StringVar(value="Pick Qr Sets on Image")

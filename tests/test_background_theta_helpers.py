@@ -251,3 +251,109 @@ def test_apply_geometry_fit_background_selection_preserves_live_theta_when_theta
     assert namespace["_apply_geometry_fit_background_selection"](trigger_update=True) is True
     assert namespace["theta_initial_var"].get() == 12.75
     assert scheduled["count"] == 0
+
+
+def test_apply_geometry_fit_background_selection_can_skip_live_theta_sync() -> None:
+    namespace = _load_main_functions(
+        "_background_theta_default_value",
+        "_format_geometry_fit_background_indices",
+        "_parse_background_theta_values",
+        "_parse_geometry_fit_background_indices",
+        "_current_geometry_fit_background_indices",
+        "_geometry_fit_uses_shared_theta_offset",
+        "_current_geometry_theta_offset",
+        "_current_background_theta_values",
+        "_background_theta_for_index",
+        "_apply_geometry_fit_background_selection",
+    )
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    scheduled = {"count": 0}
+
+    def _schedule_update() -> None:
+        scheduled["count"] += 1
+
+    namespace["theta_initial"] = 6.0
+    namespace["defaults"] = {"theta_initial": 6.0}
+    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
+    namespace["current_background_index"] = 0
+    namespace["background_theta_list_var"] = _Var("4.0, 7.5")
+    namespace["geometry_theta_offset_var"] = _Var("0.25")
+    namespace["theta_initial_var"] = _Var(12.75)
+    namespace["geometry_fit_background_selection_var"] = _Var("current")
+    namespace["_refresh_geometry_fit_theta_checkbox_label"] = lambda: None
+    namespace["_set_background_file_status_text"] = lambda: None
+    namespace["schedule_update"] = _schedule_update
+
+    assert (
+        namespace["_apply_geometry_fit_background_selection"](
+            trigger_update=True,
+            sync_live_theta=False,
+        )
+        is True
+    )
+    assert namespace["geometry_fit_background_selection_var"].get() == "current"
+    assert namespace["theta_initial_var"].get() == 12.75
+    assert scheduled["count"] == 0
+
+
+def test_apply_background_theta_metadata_can_skip_live_theta_sync() -> None:
+    namespace = _load_main_functions(
+        "_background_theta_default_value",
+        "_format_background_theta_values",
+        "_parse_background_theta_values",
+        "_parse_geometry_fit_background_indices",
+        "_current_geometry_fit_background_indices",
+        "_geometry_fit_uses_shared_theta_offset",
+        "_current_geometry_theta_offset",
+        "_current_background_theta_values",
+        "_background_theta_for_index",
+        "_apply_background_theta_metadata",
+    )
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    scheduled = {"count": 0}
+
+    def _schedule_update() -> None:
+        scheduled["count"] += 1
+
+    namespace["theta_initial"] = 6.0
+    namespace["defaults"] = {"theta_initial": 6.0}
+    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
+    namespace["current_background_index"] = 0
+    namespace["background_theta_list_var"] = _Var("4.0, 7.5")
+    namespace["geometry_theta_offset_var"] = _Var("0.25")
+    namespace["theta_initial_var"] = _Var(12.75)
+    namespace["geometry_fit_background_selection_var"] = _Var("all")
+    namespace["_refresh_geometry_fit_theta_checkbox_label"] = lambda: None
+    namespace["_set_background_file_status_text"] = lambda: None
+    namespace["schedule_update"] = _schedule_update
+
+    assert (
+        namespace["_apply_background_theta_metadata"](
+            trigger_update=False,
+            sync_live_theta=False,
+        )
+        is True
+    )
+    assert namespace["background_theta_list_var"].get() == "4, 7.5"
+    assert namespace["theta_initial_var"].get() == 12.75
+    assert scheduled["count"] == 0
