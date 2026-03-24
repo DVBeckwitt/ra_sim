@@ -2,7 +2,7 @@
 
 import json
 import numpy as np
-from pyFAI.azimuthalIntegrator import AzimuthalIntegrator
+from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
 def setup_azimuthal_integrator(parameters):
     detector_config = json.loads(parameters['Detector_config'])

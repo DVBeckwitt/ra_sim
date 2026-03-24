@@ -242,7 +242,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Rectangle
-import pyFAI
+from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from OSC_Reader import read_osc
 import Dans_Diffraction as dif
 import CifFile
@@ -12519,7 +12519,7 @@ def do_update():
     if _ai_cache.get("sig") != sig:
         _ai_cache = {
             "sig": sig,
-            "ai": pyFAI.AzimuthalIntegrator(
+            "ai": AzimuthalIntegrator(
                 dist=corto_det_up,
                 # Keep the legacy row/col mapping aligned with simulation pixels.
                 poni1=center_x_up * pixel_size_m,

@@ -12,10 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 try:
-    import pyFAI
     from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 except Exception:  # pragma: no cover - optional dependency may be absent
-    pyFAI = None
     class AzimuthalIntegrator:  # minimal stub for type hints
         pass
 from skimage import color, exposure, feature, io
@@ -351,7 +349,7 @@ def setup_azimuthal_integrator(parameters):
     max_shape = list(map(int, detector_config['max_shape']))  # Convert max_shape elements to integers
 
     # Initialize the AzimuthalIntegrator
-    ai = pyFAI.azimuthalIntegrator.AzimuthalIntegrator(
+    ai = AzimuthalIntegrator(
         dist=parameters['Distance'],
         poni1=parameters['Poni1'],
         poni2=  parameters['Poni2'],
