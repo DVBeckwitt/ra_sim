@@ -779,6 +779,42 @@ class GeometryFitDatasetContext:
     single_ray_indices: Optional[np.ndarray] = None
 
 
+def build_geometry_fit_central_mosaic_params(
+    params: Dict[str, object],
+) -> Dict[str, object]:
+    """Return a deterministic one-ray beam model for geometry fitting."""
+
+    mosaic_in = dict(params.get("mosaic_params", {}))
+    wavelength_array = mosaic_in.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic_in.get("wavelength_i_array")
+
+    nominal_lambda = float("nan")
+    try:
+        nominal_lambda = float(params.get("lambda", float("nan")))
+    except Exception:
+        nominal_lambda = float("nan")
+
+    if not (np.isfinite(nominal_lambda) and nominal_lambda > 0.0):
+        wave_arr = np.asarray(wavelength_array, dtype=np.float64).ravel()
+        wave_arr = wave_arr[np.isfinite(wave_arr) & (wave_arr > 0.0)]
+        if wave_arr.size:
+            nominal_lambda = float(np.mean(wave_arr))
+        else:
+            nominal_lambda = 1.0
+
+    central = dict(mosaic_in)
+    zero_arr = np.zeros(1, dtype=np.float64)
+    wave_single = np.array([float(nominal_lambda)], dtype=np.float64)
+    central["beam_x_array"] = zero_arr.copy()
+    central["beam_y_array"] = zero_arr.copy()
+    central["theta_array"] = zero_arr.copy()
+    central["phi_array"] = zero_arr.copy()
+    central["wavelength_array"] = wave_single
+    central["wavelength_i_array"] = wave_single.copy()
+    return central
+
+
 def _miller_key_from_row(row: Sequence[float]) -> Optional[Tuple[int, int, int]]:
     """Return an integer HKL tuple from a Miller-array row."""
 
@@ -1100,6 +1136,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
             "simulated_reflection_count": int(fit_miller.shape[0]),
             "total_reflection_count": int(simulation_subset.total_reflection_count),
             "subset_reduced": bool(simulation_subset.reduced),
+            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": bool(use_single_ray),
             "single_ray_forced_count": 0,
         }
@@ -1513,6 +1550,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         "fixed_source_reflection_count": int(simulation_subset.fixed_source_reflection_count),
         "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
         "subset_reduced": bool(simulation_subset.reduced),
+        "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
         "single_ray_enabled": bool(use_single_ray),
         "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
         if isinstance(single_ray_indices, np.ndarray)
@@ -3935,14 +3973,9 @@ def fit_geometry_parameters(
 
     point_match_mode = experimental_image is not None or bool(dataset_specs)
 
-    single_ray_cfg: Dict[str, float] = {}
+    # Geometry fitting compares peak positions against a deterministic
+    # center-beam / zero-divergence ray rather than the sampled beam cloud.
     use_single_ray = False
-    if point_match_mode:
-        if isinstance(refinement_config, dict):
-            single_ray_cfg = refinement_config.get("single_ray", {}) or {}
-        if not isinstance(single_ray_cfg, dict):
-            single_ray_cfg = {}
-        use_single_ray = bool(single_ray_cfg.get("enabled", True))
 
     solver_cfg: Dict[str, float] = {}
     if isinstance(refinement_config, dict):
@@ -3987,6 +4020,8 @@ def fit_geometry_parameters(
 
     solver_max_nfev = int(solver_cfg.get("max_nfev", 120 if point_match_mode else 60))
     solver_max_nfev = max(20, solver_max_nfev)
+    single_ray_polish_enabled = False
+    single_ray_polish_max_nfev = 0
 
     solver_restarts = int(solver_cfg.get("restarts", 4 if point_match_mode else 0))
     solver_restarts = max(0, solver_restarts)
@@ -4066,6 +4101,9 @@ def fit_geometry_parameters(
         center_col_default = 0.0
 
     params = dict(params)
+    if point_match_mode:
+        params["mosaic_params"] = build_geometry_fit_central_mosaic_params(params)
+        params["_geometry_central_ray_mode"] = True
     params["center"] = [center_row_default, center_col_default]
     params.setdefault("center_x", center_row_default)
     params.setdefault("center_y", center_col_default)
@@ -4668,6 +4706,7 @@ def fit_geometry_parameters(
                 "fixed_source_reflection_count": 0,
                 "subset_fallback_hkl_count": 0,
                 "subset_reduced": False,
+                "central_ray_mode": False,
                 "single_ray_enabled": bool(use_single_ray),
                 "single_ray_forced_count": 0,
             }
@@ -4686,6 +4725,7 @@ def fit_geometry_parameters(
             "fixed_source_reflection_count": 0,
             "subset_fallback_hkl_count": 0,
             "subset_reduced": False,
+            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
             "single_ray_enabled": bool(use_single_ray),
             "single_ray_forced_count": 0,
             "center_row": float(local['center'][0]) if len(local.get('center', [])) >= 2 else float("nan"),
@@ -4747,6 +4787,10 @@ def fit_geometry_parameters(
                 summary[key] = int(summary.get(key, 0)) + int(summary_i.get(key, 0))
             summary["subset_reduced"] = bool(
                 summary.get("subset_reduced", False) or bool(summary_i.get("subset_reduced", False))
+            )
+            summary["central_ray_mode"] = bool(
+                summary.get("central_ray_mode", False)
+                or bool(summary_i.get("central_ray_mode", False))
             )
             if collect_diagnostics and diagnostics_i:
                 diagnostics.extend(diagnostics_i)
@@ -6430,6 +6474,131 @@ def fit_geometry_parameters(
                 best_result = trial
                 best_cost = trial_cost
 
+    def _snapshot_single_ray_state() -> List[Optional[np.ndarray]]:
+        snapshot: List[Optional[np.ndarray]] = []
+        for dataset_ctx in dataset_contexts:
+            indices = dataset_ctx.single_ray_indices
+            if indices is None:
+                snapshot.append(None)
+            else:
+                snapshot.append(np.asarray(indices, dtype=np.int64).copy())
+        return snapshot
+
+    def _restore_single_ray_state(
+        snapshot: Sequence[Optional[np.ndarray]],
+    ) -> None:
+        for dataset_ctx, indices in zip(dataset_contexts, snapshot):
+            dataset_ctx.single_ray_indices = (
+                None if indices is None else np.asarray(indices, dtype=np.int64).copy()
+            )
+
+    def _maybe_run_single_ray_polish(
+        current_result: OptimizeResult,
+    ) -> Dict[str, object]:
+        nonlocal use_single_ray
+
+        summary: Dict[str, object] = {
+            "enabled": bool(single_ray_polish_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+            "coarse_single_ray_enabled": bool(use_single_ray),
+        }
+        if not point_match_mode:
+            summary["reason"] = "point_match_mode_disabled"
+            return summary
+        if not use_single_ray:
+            summary["reason"] = "single_ray_disabled"
+            return summary
+        if not single_ray_polish_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+        if not dataset_contexts:
+            summary["reason"] = "no_datasets"
+            return summary
+        if getattr(current_result, "x", None) is None:
+            summary["reason"] = "missing_parameter_vector"
+            return summary
+
+        has_forced_indices = any(
+            isinstance(dataset_ctx.single_ray_indices, np.ndarray)
+            and dataset_ctx.single_ray_indices.size > 0
+            for dataset_ctx in dataset_contexts
+        )
+        if not has_forced_indices:
+            summary["reason"] = "single_ray_indices_unavailable"
+            return summary
+
+        snapshot = _snapshot_single_ray_state()
+        start_x = np.asarray(current_result.x, dtype=float)
+        try:
+            for dataset_ctx in dataset_contexts:
+                dataset_ctx.single_ray_indices = None
+            use_single_ray = False
+
+            start_residual = np.asarray(residual_fn(start_x), dtype=float)
+            if start_residual.ndim != 1 or start_residual.size == 0:
+                _restore_single_ray_state(snapshot)
+                use_single_ray = True
+                summary["reason"] = "empty_full_ray_residual"
+                return summary
+
+            start_cost = _robust_cost(
+                start_residual,
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+            )
+            polish_result = least_squares(
+                residual_fn,
+                start_x,
+                bounds=(lower_bounds, upper_bounds),
+                x_scale=x_scale,
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+                max_nfev=single_ray_polish_max_nfev,
+            )
+            polish_result.fun = np.asarray(polish_result.fun, dtype=float)
+            final_cost = _robust_cost(
+                polish_result.fun,
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+            )
+        except Exception as exc:
+            _restore_single_ray_state(snapshot)
+            use_single_ray = True
+            summary["status"] = "failed"
+            summary["reason"] = f"unexpected_exception: {exc}"
+            return summary
+
+        improvement_tol = max(
+            1.0e-9 * max(abs(float(start_cost)), 1.0),
+            1.0e-12,
+        )
+        accepted = bool(
+            np.isfinite(final_cost)
+            and final_cost + improvement_tol < float(start_cost)
+        )
+        if not accepted:
+            _restore_single_ray_state(snapshot)
+            use_single_ray = True
+
+        summary.update(
+            {
+                "status": "accepted" if accepted else "rejected",
+                "reason": "accepted" if accepted else "full_ray_cost_not_improved",
+                "accepted": bool(accepted),
+                "start_cost": float(start_cost),
+                "final_cost": float(final_cost),
+                "nfev": int(getattr(polish_result, "nfev", 0)),
+                "success": bool(getattr(polish_result, "success", False)),
+                "message": str(getattr(polish_result, "message", "")),
+                "max_nfev": int(single_ray_polish_max_nfev),
+            }
+        )
+        if accepted:
+            summary["x"] = np.asarray(polish_result.x, dtype=float)
+        return summary
+
     def _append_result_message(current_result: OptimizeResult, note: str) -> None:
         message_text = str(getattr(current_result, "message", "") or "").strip()
         if not message_text:
@@ -6440,6 +6609,29 @@ def fit_geometry_parameters(
             current_result.message = f"{message_text}; {note}"
 
     result = best_result
+    single_ray_polish_summary: Dict[str, object] = {
+        "enabled": bool(single_ray_polish_enabled),
+        "status": "skipped",
+        "reason": "not_evaluated",
+        "accepted": False,
+        "coarse_single_ray_enabled": bool(use_single_ray),
+    }
+    if point_match_mode and getattr(result, "x", None) is not None:
+        try:
+            single_ray_polish_summary = _maybe_run_single_ray_polish(result)
+        except Exception as exc:
+            single_ray_polish_summary = {
+                "enabled": bool(single_ray_polish_enabled),
+                "status": "failed",
+                "reason": f"unexpected_exception: {exc}",
+                "accepted": False,
+                "coarse_single_ray_enabled": bool(use_single_ray),
+            }
+        refined_x = single_ray_polish_summary.get("x")
+        if single_ray_polish_summary.get("accepted") and refined_x is not None:
+            result.x = np.asarray(refined_x, dtype=float)
+            _append_result_message(result, "Full-ray single-ray polish accepted")
+
     ridge_refinement_summary: Dict[str, object] = {
         "enabled": bool(ridge_refinement_enabled),
         "status": "skipped",
@@ -6483,6 +6675,7 @@ def fit_geometry_parameters(
             _append_result_message(result, "ROI/image refinement accepted")
 
     result.restart_history = restart_history
+    result.single_ray_polish_summary = single_ray_polish_summary
     result.ridge_refinement_summary = ridge_refinement_summary
     result.image_refinement_summary = image_refinement_summary
     result.solver_loss = solver_loss
@@ -6518,6 +6711,15 @@ def fit_geometry_parameters(
             _, point_match_diagnostics, point_match_summary = _evaluate_pixel_matches(
                 final_local,
                 collect_diagnostics=True,
+            )
+            point_match_summary["single_ray_coarse_enabled"] = bool(
+                single_ray_polish_summary.get("coarse_single_ray_enabled", False)
+            )
+            point_match_summary["single_ray_polish_enabled"] = bool(
+                single_ray_polish_summary.get("enabled", False)
+            )
+            point_match_summary["single_ray_polish_accepted"] = bool(
+                single_ray_polish_summary.get("accepted", False)
             )
             result.point_match_diagnostics = point_match_diagnostics
             result.point_match_summary = point_match_summary

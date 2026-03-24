@@ -255,7 +255,7 @@ def wrap_to_pi(x):
     return x
 
 
-@njit
+@njit(parallel=True)
 def compute_intensity_array(Qx, Qy, Qz,
                             G_vec,
                             sigma,
@@ -309,13 +309,11 @@ def compute_intensity_array(Qx, Qy, Qz,
     denom_base = 2.0 * np.pi * G_mag * G_mag
 
     intensities = np.empty_like(Qx)
-    Qx_flat = Qx.ravel()
-    Qy_flat = Qy.ravel()
     Qz_flat = Qz.ravel()
     Qr_flat = Qr.ravel()
     out_flat = intensities.ravel()
 
-    for i in range(Qx_flat.size):
+    for i in prange(out_flat.size):
         theta = np.arctan2(Qz_flat[i], Qr_flat[i])
         dtheta = wrap_to_pi(theta - theta0)
 
@@ -864,6 +862,48 @@ def _flush_local_pixel_cache(image, image_size, cache_keys, cache_values):
         cache_keys[i] = -1
         cache_values[i] = 0.0
     return 0
+
+
+@njit(parallel=True)
+def _merge_thread_local_images(image, image_partials):
+    for r in prange(image.shape[0]):
+        for c in range(image.shape[1]):
+            total = image[r, c]
+            for tid in range(image_partials.shape[0]):
+                total += image_partials[tid, r, c]
+            image[r, c] = total
+
+
+@njit
+def _copy_scaled_hit_table(src_hits, scale, H, K, L):
+    n_src_hits = src_hits.shape[0]
+    pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
+    if n_src_hits <= 0:
+        return pixel_hits
+    pixel_hits[:, :] = src_hits
+    pixel_hits[:, 0] *= scale
+    pixel_hits[:, 4] = H
+    pixel_hits[:, 5] = K
+    pixel_hits[:, 6] = L
+    return pixel_hits
+
+
+@njit
+def _copy_miss_table(src_miss):
+    n_src_miss = src_miss.shape[0]
+    missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
+    if n_src_miss <= 0:
+        return missed_arr
+    missed_arr[:, :] = src_miss
+    return missed_arr
+
+
+@njit
+def _copy_scaled_q_rows(q_data, dst_idx, src_idx, qn, scale):
+    if qn <= 0:
+        return
+    q_data[dst_idx, :qn, :] = q_data[src_idx, :qn, :]
+    q_data[dst_idx, :qn, 3] *= scale
 
 
 @njit
@@ -1820,45 +1860,50 @@ def _solve_q_uniform(
         )
 
     target_dphi = (2.0 * pi) / float(n_steps)
-    valid_count = 0
+    window_steps = np.empty(window_count, dtype=np.int64)
+    total_samples = 0
     for i_win in range(window_count):
         span = ends[i_win] - starts[i_win]
         n_window = int(np.ceil(span / max(target_dphi, 1.0e-12)))
         if n_window < _LOCAL_ARC_MIN_STEPS_PER_WINDOW:
             n_window = _LOCAL_ARC_MIN_STEPS_PER_WINDOW
-        dphi_local = span / float(n_window)
-        ds = circle_r * dphi_local
-        for i_step in range(n_window):
-            phi_mid = starts[i_win] + (float(i_step) + 0.5) * dphi_local
-            Qx, Qy, Qz = _circle_point(
-                phi_mid, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z
-            )
-            intensity = _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv) * ds
-            if intensity > _INTENSITY_CUTOFF:
-                valid_count += 1
+        window_steps[i_win] = n_window
+        total_samples += n_window
 
-    out = np.zeros((valid_count, 4), dtype=np.float64)
-    out_idx = 0
+    Qx_arr = np.empty(total_samples, dtype=np.float64)
+    Qy_arr = np.empty(total_samples, dtype=np.float64)
+    Qz_arr = np.empty(total_samples, dtype=np.float64)
+    ds_arr = np.empty(total_samples, dtype=np.float64)
+    offset = 0
     for i_win in range(window_count):
+        n_window = int(window_steps[i_win])
         span = ends[i_win] - starts[i_win]
-        n_window = int(np.ceil(span / max(target_dphi, 1.0e-12)))
-        if n_window < _LOCAL_ARC_MIN_STEPS_PER_WINDOW:
-            n_window = _LOCAL_ARC_MIN_STEPS_PER_WINDOW
         dphi_local = span / float(n_window)
         ds = circle_r * dphi_local
-        for i_step in range(n_window):
-            phi_mid = starts[i_win] + (float(i_step) + 0.5) * dphi_local
-            Qx, Qy, Qz = _circle_point(
-                phi_mid, Ox, Oy, Oz, circle_r, e1x, e1y, e1z, e2x, e2y, e2z
-            )
-            intensity = _mosaic_density_scalar(Qx, Qy, Qz, G_vec, sigma, gamma_pv, eta_pv) * ds
-            if intensity <= _INTENSITY_CUTOFF:
-                continue
-            out[out_idx, 0] = Qx
-            out[out_idx, 1] = Qy
-            out[out_idx, 2] = Qz
-            out[out_idx, 3] = intensity
-            out_idx += 1
+        step_idx = np.arange(n_window, dtype=np.float64)
+        phi_mid = starts[i_win] + (step_idx + 0.5) * dphi_local
+        cos_phi = np.cos(phi_mid)
+        sin_phi = np.sin(phi_mid)
+        next_offset = offset + n_window
+
+        Qx_arr[offset:next_offset] = Ox + circle_r * (cos_phi * e1x + sin_phi * e2x)
+        Qy_arr[offset:next_offset] = Oy + circle_r * (cos_phi * e1y + sin_phi * e2y)
+        Qz_arr[offset:next_offset] = Oz + circle_r * (cos_phi * e1z + sin_phi * e2z)
+        ds_arr[offset:next_offset] = ds
+        offset = next_offset
+
+    sigma_arr = compute_intensity_array(
+        Qx_arr, Qy_arr, Qz_arr, G_vec, sigma, gamma_pv, eta_pv
+    )
+    all_int = sigma_arr * ds_arr
+    valid_idx = np.nonzero(all_int > _INTENSITY_CUTOFF)[0]
+    out = np.zeros((valid_idx.size, 4), dtype=np.float64)
+    for i in range(valid_idx.size):
+        idx = valid_idx[i]
+        out[i, 0] = Qx_arr[idx]
+        out[i, 1] = Qy_arr[idx]
+        out[i, 2] = Qz_arr[idx]
+        out[i, 3] = all_int[idx]
     return out
 
 
@@ -3782,10 +3827,7 @@ def process_peaks_parallel(
             if record_status:
                 src_status[i_src, :] = status_arr
 
-        for tid in range(image_partials.shape[0]):
-            for r in range(image_size):
-                for c in range(image_size):
-                    image[r, c] += image_partials[tid, r, c]
+        _merge_thread_local_images(image, image_partials)
 
         for i_src in range(source_count):
             i_pk = source_indices[i_src]
@@ -3955,28 +3997,13 @@ def process_peaks_parallel(
             if collect_tables:
                 if scale > 0.0:
                     src_hits = hit_tables[src_idx]
-                    n_src_hits = src_hits.shape[0]
-                    pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
-                    for i_hit in range(n_src_hits):
-                        pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
-                        pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
-                        pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
-                        pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
-                        pixel_hits[i_hit, 4] = H
-                        pixel_hits[i_hit, 5] = K
-                        pixel_hits[i_hit, 6] = L
+                    pixel_hits = _copy_scaled_hit_table(src_hits, scale, H, K, L)
                     hit_tables[i_pk] = pixel_hits
                 else:
                     hit_tables[i_pk] = np.empty((0, 7), dtype=np.float64)
 
                 src_miss = miss_tables[src_idx]
-                n_src_miss = src_miss.shape[0]
-                missed_arr = np.empty((n_src_miss, 3), dtype=np.float64)
-                for i_miss in range(n_src_miss):
-                    missed_arr[i_miss, 0] = src_miss[i_miss, 0]
-                    missed_arr[i_miss, 1] = src_miss[i_miss, 1]
-                    missed_arr[i_miss, 2] = src_miss[i_miss, 2]
-                miss_tables[i_pk] = missed_arr
+                miss_tables[i_pk] = _copy_miss_table(src_miss)
 
             if record_status:
                 all_status[i_pk, :] = all_status[src_idx, :]
@@ -3985,12 +4012,7 @@ def process_peaks_parallel(
                 if scale > 0.0:
                     src_q_count = q_count[src_idx]
                     q_count[i_pk] = src_q_count
-                    for i_q in range(src_q_count):
-                        q_data[i_pk, i_q, 0] = q_data[src_idx, i_q, 0]
-                        q_data[i_pk, i_q, 1] = q_data[src_idx, i_q, 1]
-                        q_data[i_pk, i_q, 2] = q_data[src_idx, i_q, 2]
-                        q_data[i_pk, i_q, 3] = q_data[src_idx, i_q, 3] * scale
-                        q_data[i_pk, i_q, 4] = q_data[src_idx, i_q, 4]
+                    _copy_scaled_q_rows(q_data, i_pk, src_idx, src_q_count, scale)
                 else:
                     q_count[i_pk] = 0
 
@@ -4025,22 +4047,12 @@ def process_peaks_parallel(
 
             if collect_tables:
                 src_hits = hit_tables[i_pk]
-                n_src_hits = src_hits.shape[0]
-                pixel_hits = np.empty((n_src_hits, 7), dtype=np.float64)
-                for i_hit in range(n_src_hits):
-                    pixel_hits[i_hit, 0] = src_hits[i_hit, 0] * scale
-                    pixel_hits[i_hit, 1] = src_hits[i_hit, 1]
-                    pixel_hits[i_hit, 2] = src_hits[i_hit, 2]
-                    pixel_hits[i_hit, 3] = src_hits[i_hit, 3]
-                    pixel_hits[i_hit, 4] = H
-                    pixel_hits[i_hit, 5] = K
-                    pixel_hits[i_hit, 6] = L
+                pixel_hits = _copy_scaled_hit_table(src_hits, scale, H, K, L)
                 hit_tables[i_pk] = pixel_hits
 
             if save_flag == 1 and abs(scale - 1.0) > 1e-15:
                 qn = q_count[i_pk]
-                for i_q in range(qn):
-                    q_data[i_pk, i_q, 3] *= scale
+                q_data[i_pk, :qn, 3] *= scale
 
     return image, hit_tables, q_data, q_count, all_status, miss_tables
 

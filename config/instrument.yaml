@@ -209,8 +209,8 @@ instrument:
         fit_iterations: 3
         min_matches: 12
         max_display_markers: 120
-      single_ray:
-        enabled: true
+      # Geometry fitting always evaluates a deterministic center-beam,
+      # zero-divergence ray rather than the full sampled beam cloud.
       # Set to false to avoid numba JIT during fitting (useful if numba
       # compilation fails on your Python build).
       use_numba: true

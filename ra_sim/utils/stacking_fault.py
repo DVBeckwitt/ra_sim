@@ -978,6 +978,17 @@ def _get_base_curves(
     unique_elements = list(dict.fromkeys(site_element))
     if iodine_active and "I" not in unique_elements:
         unique_elements.append("I")
+    site_indices_by_element: dict[str, np.ndarray] = {}
+    for elem in unique_elements:
+        indices = [idx for idx, site_el in enumerate(site_element) if site_el == elem]
+        site_indices_by_element[elem] = np.asarray(indices, dtype=np.int64)
+    if iodine_active:
+        iodine_indices = site_indices_by_element.get("I", np.empty((0,), dtype=np.int64))
+    else:
+        iodine_indices = np.empty((0,), dtype=np.int64)
+    non_iodine_elements = [
+        elem for elem in unique_elements if not (iodine_active and elem == "I")
+    ]
 
     base_L = None
     q_max = None
@@ -1023,7 +1034,7 @@ def _get_base_curves(
         state = {
             "L": L_vals,
             "ff_by_element": {},
-            "phase_z_by_site": [],
+            "phase_z_stack_by_element": {},
             "phase_z_iodine": None,
             "signature_cache": {},
         }
@@ -1039,16 +1050,24 @@ def _get_base_curves(
                 )
             state["ff_by_element"] = ff_by_element
 
-            phase_z_by_site = []
+            phase_z_stack_by_element = {}
             phase_z_cache: dict[float, np.ndarray] = {}
-            for z_val in site_z:
-                z_key = round(float(z_val), 12)
-                phase_z = phase_z_cache.get(z_key)
-                if phase_z is None:
-                    phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z_val) / z_div)))
-                    phase_z_cache[z_key] = phase_z
-                phase_z_by_site.append(phase_z)
-            state["phase_z_by_site"] = phase_z_by_site
+            for elem in non_iodine_elements:
+                elem_indices = site_indices_by_element[elem]
+                phase_z_stack = np.empty(
+                    (elem_indices.size, L_vals.size),
+                    dtype=np.complex128,
+                )
+                for row_idx, site_idx in enumerate(elem_indices):
+                    z_val = site_z[site_idx]
+                    z_key = round(float(z_val), 12)
+                    phase_z = phase_z_cache.get(z_key)
+                    if phase_z is None:
+                        phase_z = np.exp(1j * _TWO_PI * (L_vals * (float(z_val) / z_div)))
+                        phase_z_cache[z_key] = phase_z
+                    phase_z_stack[row_idx, :] = phase_z
+                phase_z_stack_by_element[elem] = phase_z_stack
+            state["phase_z_stack_by_element"] = phase_z_stack_by_element
 
             if iodine_active:
                 state["phase_z_iodine"] = np.exp(
@@ -1084,21 +1103,20 @@ def _get_base_curves(
         if reused_curve is None:
             F = np.zeros(L_vals.shape, dtype=np.complex128)
             ff_by_element = state["ff_by_element"]
-            phase_z_by_site = state["phase_z_by_site"]
+            phase_z_stack_by_element = state["phase_z_stack_by_element"]
 
-            if iodine_active and state["phase_z_iodine"] is not None:
-                iodine_coeff = 0.0 + 0.0j
-                for idx in range(site_count):
-                    if site_is_iodine[idx]:
-                        iodine_coeff += phase_xy[idx]
-                    else:
-                        el = site_element[idx]
-                        F += ff_by_element[el] * phase_xy[idx] * phase_z_by_site[idx]
+            for elem in non_iodine_elements:
+                elem_indices = site_indices_by_element[elem]
+                if elem_indices.size == 0:
+                    continue
+                F += ff_by_element[elem] * np.dot(
+                    phase_xy[elem_indices],
+                    phase_z_stack_by_element[elem],
+                )
+
+            if iodine_active and state["phase_z_iodine"] is not None and iodine_indices.size > 0:
+                iodine_coeff = np.sum(phase_xy[iodine_indices])
                 F += ff_by_element["I"] * iodine_coeff * state["phase_z_iodine"]
-            else:
-                for idx in range(site_count):
-                    el = site_element[idx]
-                    F += ff_by_element[el] * phase_xy[idx] * phase_z_by_site[idx]
 
             curve = {
                 "F2": np.abs(F) ** 2,

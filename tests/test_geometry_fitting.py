@@ -203,11 +203,20 @@ def test_fit_geometry_parameters_pixel_path_forwards_optics_mode(monkeypatch):
     assert all(mode == 1 for mode in optics_seen)
 
 
-def test_fit_geometry_parameters_pixel_path_enables_single_ray_by_default(monkeypatch):
+def test_fit_geometry_parameters_pixel_path_uses_central_geometry_ray(monkeypatch):
     process_calls = []
 
     def fake_process(*args, **kwargs):
-        process_calls.append(dict(kwargs))
+        process_calls.append(
+            {
+                "kwargs": dict(kwargs),
+                "wavelength_array": np.asarray(args[5], dtype=np.float64).copy(),
+                "beam_x_array": np.asarray(args[16], dtype=np.float64).copy(),
+                "beam_y_array": np.asarray(args[17], dtype=np.float64).copy(),
+                "theta_array": np.asarray(args[18], dtype=np.float64).copy(),
+                "phi_array": np.asarray(args[19], dtype=np.float64).copy(),
+            }
+        )
         return _fake_process_peaks(*args, **kwargs)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
@@ -246,30 +255,51 @@ def test_fit_geometry_parameters_pixel_path_enables_single_ray_by_default(monkey
 
     assert result.success
     assert process_calls
-    assert any(
-        call.get("best_sample_indices_out") is not None for call in process_calls
-    )
-    assert any(
-        isinstance(call.get("single_sample_indices"), np.ndarray)
-        for call in process_calls
-    )
+    for call in process_calls:
+        assert call["beam_x_array"].shape == (1,)
+        assert call["beam_y_array"].shape == (1,)
+        assert call["theta_array"].shape == (1,)
+        assert call["phi_array"].shape == (1,)
+        assert call["wavelength_array"].shape == (1,)
+        assert np.allclose(call["beam_x_array"], [0.0])
+        assert np.allclose(call["beam_y_array"], [0.0])
+        assert np.allclose(call["theta_array"], [0.0])
+        assert np.allclose(call["phi_array"], [0.0])
+        assert np.allclose(call["wavelength_array"], [1.0])
+        assert call["kwargs"].get("best_sample_indices_out") is None
+        assert call["kwargs"].get("single_sample_indices") is None
+    assert isinstance(result.point_match_summary, dict)
+    assert bool(result.point_match_summary["central_ray_mode"]) is True
+    assert bool(result.point_match_summary["single_ray_enabled"]) is False
+    assert int(result.point_match_summary["single_ray_forced_count"]) == 0
 
 
-def test_fit_geometry_parameters_pixel_path_can_disable_single_ray(monkeypatch):
-    process_calls = []
-
+def test_fit_geometry_parameters_pixel_path_runs_without_full_ray_polish(
+    monkeypatch,
+):
     def fake_process(*args, **kwargs):
-        process_calls.append(dict(kwargs))
-        return _fake_process_peaks(*args, **kwargs)
+        image_size = int(args[2])
+        gamma = float(args[8])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 2.0 + 4.0 * gamma, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    solve_calls = {"count": 0}
 
     def fake_least_squares(residual_fn, x0, **kwargs):
+        solve_calls["count"] += 1
         x = np.asarray(x0, dtype=float)
         return opt.OptimizeResult(
             x=x,
             fun=np.asarray(residual_fn(x), dtype=float),
             success=True,
             status=1,
-            message="ok",
+            message=f"solve#{solve_calls['count']}",
             nfev=1,
             active_mask=np.zeros_like(x, dtype=int),
             optimality=0.0,
@@ -278,7 +308,7 @@ def test_fit_geometry_parameters_pixel_path_can_disable_single_ray(monkeypatch):
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
 
-    image_size = 8
+    image_size = 12
     miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
     intensities = np.array([1.0], dtype=np.float64)
     params = _base_params(image_size, optics_mode=1)
@@ -293,27 +323,36 @@ def test_fit_geometry_parameters_pixel_path_can_disable_single_ray(monkeypatch):
         measured_peaks=measured,
         var_names=["gamma"],
         experimental_image=experimental_image,
-        refinement_config={
-            "solver": {"restarts": 0},
-            "single_ray": {"enabled": False},
-        },
+        refinement_config={"solver": {"restarts": 0, "stagnation_probe": False}},
     )
 
     assert result.success
-    assert process_calls
-    assert not any(
-        call.get("best_sample_indices_out") is not None for call in process_calls
-    )
-    assert all(
-        call.get("single_sample_indices") is None for call in process_calls
-    )
+    assert solve_calls["count"] == 1
+    assert isinstance(result.single_ray_polish_summary, dict)
+    assert bool(result.single_ray_polish_summary["enabled"]) is False
+    assert bool(result.single_ray_polish_summary["accepted"]) is False
+    assert str(result.single_ray_polish_summary["status"]) == "skipped"
+    assert isinstance(result.point_match_summary, dict)
+    assert bool(result.point_match_summary["central_ray_mode"]) is True
+    assert bool(result.point_match_summary["single_ray_polish_enabled"]) is False
+    assert bool(result.point_match_summary["single_ray_polish_accepted"]) is False
+    assert bool(result.point_match_summary["single_ray_enabled"]) is False
 
 
 def test_process_peaks_wrapper_prefers_python_runner_when_numba_disabled(monkeypatch):
     process_calls = []
 
     def fake_process(*args, **kwargs):
-        process_calls.append(dict(kwargs))
+        process_calls.append(
+            {
+                "kwargs": dict(kwargs),
+                "wavelength_array": np.asarray(args[5], dtype=np.float64).copy(),
+                "beam_x_array": np.asarray(args[16], dtype=np.float64).copy(),
+                "beam_y_array": np.asarray(args[17], dtype=np.float64).copy(),
+                "theta_array": np.asarray(args[18], dtype=np.float64).copy(),
+                "phi_array": np.asarray(args[19], dtype=np.float64).copy(),
+            }
+        )
         return _fake_process_peaks(*args, **kwargs)
 
     monkeypatch.setattr(opt, "process_peaks_parallel", fake_process)
@@ -323,6 +362,15 @@ def test_process_peaks_wrapper_prefers_python_runner_when_numba_disabled(monkeyp
     miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
     intensities = np.array([1.0], dtype=np.float64)
     params = _base_params(image_size, optics_mode=1)
+    params["mosaic_params"].update(
+        {
+            "beam_x_array": np.array([0.3, -0.2, 0.1], dtype=np.float64),
+            "beam_y_array": np.array([0.4, -0.1, 0.2], dtype=np.float64),
+            "theta_array": np.array([0.02, -0.03, 0.01], dtype=np.float64),
+            "phi_array": np.array([0.04, -0.05, 0.02], dtype=np.float64),
+            "wavelength_array": np.array([0.8, 1.2, 1.4], dtype=np.float64),
+        }
+    )
     measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
 
@@ -343,7 +391,13 @@ def test_process_peaks_wrapper_prefers_python_runner_when_numba_disabled(monkeyp
 
     assert result.success
     assert process_calls
-    assert all(call.get("prefer_python_runner") is True for call in process_calls)
+    assert all(call["kwargs"].get("prefer_python_runner") is True for call in process_calls)
+    for call in process_calls:
+        assert np.allclose(call["beam_x_array"], [0.0])
+        assert np.allclose(call["beam_y_array"], [0.0])
+        assert np.allclose(call["theta_array"], [0.0])
+        assert np.allclose(call["phi_array"], [0.0])
+        assert np.allclose(call["wavelength_array"], [1.0])
 
 
 def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_reflections(
@@ -355,6 +409,11 @@ def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_ref
         process_calls.append(
             {
                 "miller": np.asarray(args[0], dtype=np.float64).copy(),
+                "wavelength_array": np.asarray(args[5], dtype=np.float64).copy(),
+                "beam_x_array": np.asarray(args[16], dtype=np.float64).copy(),
+                "beam_y_array": np.asarray(args[17], dtype=np.float64).copy(),
+                "theta_array": np.asarray(args[18], dtype=np.float64).copy(),
+                "phi_array": np.asarray(args[19], dtype=np.float64).copy(),
                 "kwargs": dict(kwargs),
             }
         )
@@ -431,20 +490,21 @@ def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_ref
         np.allclose(call["miller"], np.array([[2.0, 0.0, 0.0]], dtype=np.float64))
         for call in process_calls
     )
-    assert any(
-        call["kwargs"].get("best_sample_indices_out") is not None
-        for call in process_calls
-    )
-    assert any(
-        isinstance(call["kwargs"].get("single_sample_indices"), np.ndarray)
-        for call in process_calls
-    )
+    for call in process_calls:
+        assert np.allclose(call["beam_x_array"], [0.0])
+        assert np.allclose(call["beam_y_array"], [0.0])
+        assert np.allclose(call["theta_array"], [0.0])
+        assert np.allclose(call["phi_array"], [0.0])
+        assert np.allclose(call["wavelength_array"], [1.0])
+        assert call["kwargs"].get("best_sample_indices_out") is None
+        assert call["kwargs"].get("single_sample_indices") is None
     assert isinstance(result.point_match_summary, dict)
     assert int(result.point_match_summary["simulated_reflection_count"]) == 1
     assert int(result.point_match_summary["total_reflection_count"]) == 3
     assert bool(result.point_match_summary["subset_reduced"]) is True
-    assert bool(result.point_match_summary["single_ray_enabled"]) is True
-    assert int(result.point_match_summary["single_ray_forced_count"]) == 1
+    assert bool(result.point_match_summary["central_ray_mode"]) is True
+    assert bool(result.point_match_summary["single_ray_enabled"]) is False
+    assert int(result.point_match_summary["single_ray_forced_count"]) == 0
 
 
 def test_fit_geometry_parameters_pixel_path_keeps_residual_size_when_pair_status_changes(

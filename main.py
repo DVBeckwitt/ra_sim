@@ -280,6 +280,7 @@ from ra_sim.io.data_loading import (
     save_gui_state_file,
 )
 from ra_sim.fitting.optimization import (
+    build_geometry_fit_central_mosaic_params,
     build_measured_dict,
     fit_geometry_parameters,
     fit_mosaic_widths_separable,
@@ -6819,11 +6820,6 @@ def _geometry_manual_simulated_peaks_for_params(
     prefer_cache: bool = True,
 ) -> list[dict[str, object]]:
     """Return preview-style simulated peaks for manual geometry pair selection."""
-
-    if prefer_cache:
-        cached = _build_live_preview_simulated_peaks_from_cache()
-        if cached:
-            return _project_geometry_manual_peaks_to_current_view(cached)
 
     try:
         params_local = dict(param_set) if isinstance(param_set, dict) else _current_geometry_fit_params()
@@ -14404,14 +14400,16 @@ def _simulate_hit_tables_for_fit(
 ) -> list[object]:
     """Simulate once and return raw hit tables for geometry fitting."""
 
-    mosaic = dict(param_set.get("mosaic_params", {}))
+    params_local = dict(param_set)
+    params_local["mosaic_params"] = build_geometry_fit_central_mosaic_params(params_local)
+    mosaic = dict(params_local.get("mosaic_params", {}))
     wavelength_array = mosaic.get("wavelength_array")
     if wavelength_array is None:
         wavelength_array = mosaic.get("wavelength_i_array")
     if wavelength_array is None:
         wavelength_array = np.full(
             int(np.size(mosaic.get("beam_x_array", []))),
-            float(param_set.get("lambda", 1.0)),
+            float(params_local.get("lambda", 1.0)),
             dtype=np.float64,
         )
 
@@ -14420,19 +14418,19 @@ def _simulate_hit_tables_for_fit(
         miller_array,
         intensity_array,
         image_size,
-        float(param_set["a"]),
-        float(param_set["c"]),
+        float(params_local["a"]),
+        float(params_local["c"]),
         wavelength_array,
         sim_buffer,
-        float(param_set["corto_detector"]),
-        float(param_set["gamma"]),
-        float(param_set["Gamma"]),
-        float(param_set["chi"]),
-        float(param_set.get("psi", 0.0)),
-        float(param_set.get("psi_z", 0.0)),
-        float(param_set["zs"]),
-        float(param_set["zb"]),
-        param_set["n2"],
+        float(params_local["corto_detector"]),
+        float(params_local["gamma"]),
+        float(params_local["Gamma"]),
+        float(params_local["chi"]),
+        float(params_local.get("psi", 0.0)),
+        float(params_local.get("psi_z", 0.0)),
+        float(params_local["zs"]),
+        float(params_local["zb"]),
+        params_local["n2"],
         np.asarray(mosaic["beam_x_array"], dtype=np.float64),
         np.asarray(mosaic["beam_y_array"], dtype=np.float64),
         np.asarray(mosaic["theta_array"], dtype=np.float64),
@@ -14441,15 +14439,15 @@ def _simulate_hit_tables_for_fit(
         float(mosaic["gamma_mosaic_deg"]),
         float(mosaic["eta"]),
         np.asarray(wavelength_array, dtype=np.float64),
-        float(param_set["debye_x"]),
-        float(param_set["debye_y"]),
-        [float(param_set["center"][0]), float(param_set["center"][1])],
-        float(param_set["theta_initial"]),
-        float(param_set.get("cor_angle", 0.0)),
+        float(params_local["debye_x"]),
+        float(params_local["debye_y"]),
+        [float(params_local["center"][0]), float(params_local["center"][1])],
+        float(params_local["theta_initial"]),
+        float(params_local.get("cor_angle", 0.0)),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
-        optics_mode=int(param_set.get("optics_mode", 0)),
+        optics_mode=int(params_local.get("optics_mode", 0)),
         solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
         solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
         solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
