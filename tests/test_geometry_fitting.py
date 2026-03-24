@@ -1235,6 +1235,93 @@ def test_fit_geometry_parameters_pixel_path_broad_restart_seed_escapes_far_coupl
     )
 
 
+def test_fit_geometry_parameters_parallelizes_restart_seed_search(monkeypatch):
+    threaded_calls = []
+
+    def fake_threaded_map(fn, items, *, max_workers, numba_threads=None):
+        item_list = list(items)
+        threaded_calls.append(
+            {
+                "max_workers": int(max_workers),
+                "numba_threads": numba_threads,
+                "count": len(item_list),
+            }
+        )
+        return [fn(item) for item in item_list]
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        gamma = float(args[8])
+        Gamma = float(args[9])
+        sim_col = 6.0 if gamma >= 0.75 and Gamma >= 0.75 else 2.0
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, sim_col, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="flat-local-solver",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_threaded_map", fake_threaded_map)
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 12
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 6.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "bounds": {
+                "gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+                "Gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+            },
+            "solver": {
+                "restarts": 4,
+                "restart_jitter": 0.15,
+                "weighted_matching": False,
+                "stagnation_probe": False,
+                "workers": 2,
+                "parallel_mode": "restarts",
+                "worker_numba_threads": 2,
+            },
+        },
+    )
+
+    assert result.x.shape == (2,)
+    assert float(result.x[0]) >= 0.75
+    assert float(result.x[1]) >= 0.75
+    assert threaded_calls
+    assert any(call["max_workers"] == 2 and call["count"] > 1 for call in threaded_calls)
+    assert any(call["numba_threads"] == 2 for call in threaded_calls)
+    assert result.parallelization_summary["dataset_workers"] == 1
+    assert result.parallelization_summary["restart_workers"] == 2
+
+
 def test_fit_geometry_parameters_reports_unweighted_peak_rms(monkeypatch):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
@@ -1530,6 +1617,89 @@ def test_fit_geometry_parameters_joint_backgrounds_share_theta_offset(monkeypatc
     assert {
         int(entry["dataset_index"]) for entry in result.point_match_diagnostics
     } == {0, 1}
+
+
+def test_fit_geometry_parameters_parallelizes_multi_dataset_point_matching(monkeypatch):
+    threaded_calls = []
+
+    def fake_threaded_map(fn, items, *, max_workers, numba_threads=None):
+        item_list = list(items)
+        threaded_calls.append(
+            {
+                "max_workers": int(max_workers),
+                "numba_threads": numba_threads,
+                "count": len(item_list),
+            }
+        )
+        return [fn(item) for item in item_list]
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        theta_initial = float(args[27])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, theta_initial, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_threaded_map", fake_threaded_map)
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["theta_offset"] = 0.0
+
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 3.0,
+            "measured_peaks": [{"label": "1,0,0", "x": 3.5, "y": 4.0}],
+            "experimental_image": experimental_image,
+        },
+        {
+            "dataset_index": 1,
+            "label": "bg1",
+            "theta_initial": 7.0,
+            "measured_peaks": [{"label": "1,0,0", "x": 7.5, "y": 4.0}],
+            "experimental_image": experimental_image,
+        },
+    ]
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=dataset_specs[0]["measured_peaks"],
+        var_names=["theta_offset"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "weighted_matching": False,
+                "max_nfev": 40,
+                "workers": 2,
+                "parallel_mode": "datasets",
+                "worker_numba_threads": 3,
+            },
+            "single_ray": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert threaded_calls
+    assert any(call["max_workers"] == 2 and call["count"] == 2 for call in threaded_calls)
+    assert any(call["numba_threads"] == 3 for call in threaded_calls)
+    assert result.parallelization_summary["dataset_workers"] == 2
+    assert result.parallelization_summary["restart_workers"] == 1
 
 
 def test_compute_sensitivity_weights_can_equalize_roi_totals():

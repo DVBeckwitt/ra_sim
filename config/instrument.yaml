@@ -95,6 +95,12 @@ instrument:
       # - max_nfev: max objective evaluations per local solve
       # - restarts: random multi-start retries to escape local minima
       # - restart_jitter: fractional perturbation size per restart
+      # - workers: outer CPU worker count for independent dataset/restart tasks.
+      #   Use auto to split the fit across a small number of threaded workers.
+      # - parallel_mode: auto prefers dataset-level parallelism when fitting
+      #   multiple backgrounds, otherwise restart-level parallelism.
+      # - worker_numba_threads: per-worker Numba thread mask; 0 auto-splits
+      #   the available Numba threads across the active outer workers.
       # - missing_pair_penalty_px: penalty when an HKL has measured peaks
       #   but no simulated points are matchable.
       # - weighted_matching: downweight large point-pair residuals.
@@ -116,6 +122,9 @@ instrument:
         max_nfev: 140
         restarts: 4
         restart_jitter: 0.15
+        workers: auto
+        parallel_mode: auto
+        worker_numba_threads: 0
         missing_pair_penalty_px: 20.0
         weighted_matching: false
         use_measurement_uncertainty: true

@@ -1,7 +1,9 @@
 """Optimization routines for fitting simulated data to experiments."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import math
+import os
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -23,6 +25,142 @@ from ra_sim.utils.calculations import d_spacing, two_theta
 RNG = np.random.default_rng(42)
 
 _USE_NUMBA_PROCESS_PEAKS = True
+
+try:
+    from numba import get_num_threads as _numba_get_num_threads
+    from numba import set_num_threads as _numba_set_num_threads
+except Exception:  # pragma: no cover - numba is an optional runtime dependency here
+    _numba_get_num_threads = None
+    _numba_set_num_threads = None
+
+
+def _available_parallel_thread_budget() -> int:
+    """Return the CPU thread budget available to outer geometry-fit workers."""
+
+    if callable(_numba_get_num_threads):
+        try:
+            count = int(_numba_get_num_threads())
+        except Exception:
+            count = 0
+        if count > 0:
+            return count
+    cpu_count = os.cpu_count() or 1
+    return max(int(cpu_count), 1)
+
+
+def _resolve_parallel_worker_count(
+    raw_value: object,
+    *,
+    max_tasks: int,
+) -> int:
+    """Normalize one worker-count config value against a concrete task count."""
+
+    if max_tasks <= 1:
+        return 1
+
+    requested = 0
+    if isinstance(raw_value, str):
+        text = raw_value.strip().lower()
+        if text in {"", "auto", "default"}:
+            requested = 0
+        else:
+            try:
+                requested = int(float(text))
+            except Exception:
+                requested = 1
+    elif raw_value is None:
+        requested = 0
+    else:
+        try:
+            requested = int(raw_value)
+        except Exception:
+            requested = 1
+
+    if requested <= 0:
+        requested = min(4, _available_parallel_thread_budget())
+    return max(1, min(int(requested), int(max_tasks)))
+
+
+def _resolve_numba_threads_per_worker(
+    worker_count: int,
+    raw_value: object,
+) -> Optional[int]:
+    """Return the Numba thread mask to use inside each outer worker."""
+
+    if worker_count <= 1:
+        return None
+
+    requested = 0
+    if isinstance(raw_value, str):
+        text = raw_value.strip().lower()
+        if text not in {"", "auto", "default"}:
+            try:
+                requested = int(float(text))
+            except Exception:
+                requested = 0
+    elif raw_value is not None:
+        try:
+            requested = int(raw_value)
+        except Exception:
+            requested = 0
+
+    if requested > 0:
+        return max(int(requested), 1)
+
+    thread_budget = _available_parallel_thread_budget()
+    return max(int(thread_budget // worker_count), 1)
+
+
+def _call_with_numba_thread_limit(
+    fn: Callable[..., object],
+    *args,
+    numba_threads: Optional[int] = None,
+    **kwargs,
+):
+    """Run *fn* while temporarily masking Numba's worker thread count."""
+
+    if numba_threads is None or not callable(_numba_set_num_threads):
+        return fn(*args, **kwargs)
+
+    original_threads: Optional[int] = None
+    if callable(_numba_get_num_threads):
+        try:
+            original_threads = int(_numba_get_num_threads())
+        except Exception:
+            original_threads = None
+
+    try:
+        _numba_set_num_threads(max(int(numba_threads), 1))
+        return fn(*args, **kwargs)
+    finally:
+        if original_threads is not None and callable(_numba_set_num_threads):
+            try:
+                _numba_set_num_threads(max(int(original_threads), 1))
+            except Exception:
+                pass
+
+
+def _threaded_map(
+    fn: Callable[[object], object],
+    items: Sequence[object],
+    *,
+    max_workers: int,
+    numba_threads: Optional[int] = None,
+) -> List[object]:
+    """Map *fn* over *items* using a small thread pool while preserving order."""
+
+    if max_workers <= 1 or len(items) <= 1:
+        return [fn(item) for item in items]
+
+    def _run(item: object) -> object:
+        return _call_with_numba_thread_limit(
+            fn,
+            item,
+            numba_threads=numba_threads,
+        )
+
+    with ThreadPoolExecutor(max_workers=int(max_workers)) as executor:
+        return list(executor.map(_run, items))
 
 
 def _set_numba_usage_from_config(
@@ -3852,6 +3990,19 @@ def fit_geometry_parameters(
     solver_restarts = int(solver_cfg.get("restarts", 4 if point_match_mode else 0))
     solver_restarts = max(0, solver_restarts)
 
+    solver_parallel_mode = str(
+        solver_cfg.get("parallel_mode", "auto")
+    ).strip().lower()
+    if solver_parallel_mode in {"false", "none", "disabled"}:
+        solver_parallel_mode = "off"
+    if solver_parallel_mode not in {"auto", "off", "datasets", "restarts"}:
+        solver_parallel_mode = "auto"
+    solver_workers_cfg = solver_cfg.get("workers", "auto")
+    solver_worker_numba_threads_cfg = solver_cfg.get(
+        "worker_numba_threads",
+        0,
+    )
+
     solver_restart_jitter = float(solver_cfg.get("restart_jitter", 0.15))
     solver_restart_jitter = max(0.0, solver_restart_jitter)
 
@@ -3928,6 +4079,45 @@ def fit_geometry_parameters(
         dataset_specs=dataset_specs,
     )
     multi_dataset_mode = ("theta_offset" in var_names) and len(dataset_contexts) > 0
+    dataset_parallel_workers = 1
+    restart_parallel_workers = 1
+    worker_numba_threads: Optional[int] = None
+    configured_parallel_workers = _resolve_parallel_worker_count(
+        solver_workers_cfg,
+        max_tasks=max(len(dataset_contexts), solver_restarts, 1),
+    )
+    if configured_parallel_workers > 1 and solver_parallel_mode != "off":
+        if (
+            solver_parallel_mode in {"auto", "datasets"}
+            and len(dataset_contexts) > 1
+        ):
+            dataset_parallel_workers = min(
+                configured_parallel_workers,
+                len(dataset_contexts),
+            )
+        elif (
+            solver_parallel_mode in {"auto", "restarts"}
+            and solver_restarts > 1
+        ):
+            restart_parallel_workers = min(
+                configured_parallel_workers,
+                solver_restarts,
+            )
+    active_outer_workers = max(dataset_parallel_workers, restart_parallel_workers)
+    worker_numba_threads = _resolve_numba_threads_per_worker(
+        active_outer_workers,
+        solver_worker_numba_threads_cfg,
+    )
+    parallelization_summary = {
+        "mode": str(solver_parallel_mode),
+        "configured_workers": int(configured_parallel_workers),
+        "dataset_workers": int(dataset_parallel_workers),
+        "restart_workers": int(restart_parallel_workers),
+        "worker_numba_threads": (
+            None if worker_numba_threads is None else int(worker_numba_threads)
+        ),
+        "numba_thread_budget": int(_available_parallel_thread_budget()),
+    }
 
     def _safe_float(value: object, fallback: float) -> float:
         try:
@@ -4404,34 +4594,51 @@ def fit_geometry_parameters(
             return float(theta_base + theta_offset)
         return _safe_float(local.get("theta_initial", theta_base), theta_base)
 
+    def _cost_fn_for_dataset(
+        item: Tuple[Dict[str, object], GeometryFitDatasetContext],
+    ) -> np.ndarray:
+        local, dataset_ctx = item
+        theta_value = _theta_initial_for_dataset(local, dataset_ctx)
+        args = [
+            local['gamma'], local['Gamma'], local['corto_detector'],
+            theta_value, local.get('cor_angle', 0.0), local['zs'], local['zb'],
+            local['chi'], local['a'], local['c'],
+            local['center'][0], local['center'][1]
+        ]
+        residual = compute_peak_position_error_geometry_local(
+            *args,
+            measured_peaks=dataset_ctx.subset.measured_entries,
+            miller=dataset_ctx.subset.miller,
+            intensities=dataset_ctx.subset.intensities,
+            image_size=image_size,
+            mosaic_params=local['mosaic_params'],
+            n2=local['n2'],
+            psi=local.get('psi', 0.0),
+            psi_z=local.get('psi_z', 0.0),
+            debye_x=local['debye_x'],
+            debye_y=local['debye_y'],
+            wavelength=local['lambda'],
+            pixel_tol=pixel_tol,
+            optics_mode=local.get('optics_mode', 0),
+        )
+        return np.asarray(residual, dtype=float)
+
     def cost_fn(x):
         local = _apply_trial_params(x)
         residual_blocks: List[np.ndarray] = []
-        for dataset_ctx in dataset_contexts:
-            theta_value = _theta_initial_for_dataset(local, dataset_ctx)
-            args = [
-                local['gamma'], local['Gamma'], local['corto_detector'],
-                theta_value, local.get('cor_angle', 0.0), local['zs'], local['zb'],
-                local['chi'], local['a'], local['c'],
-                local['center'][0], local['center'][1]
-            ]
-            residual = compute_peak_position_error_geometry_local(
-                *args,
-                measured_peaks=dataset_ctx.subset.measured_entries,
-                miller=dataset_ctx.subset.miller,
-                intensities=dataset_ctx.subset.intensities,
-                image_size=image_size,
-                mosaic_params=local['mosaic_params'],
-                n2=local['n2'],
-                psi=local.get('psi', 0.0),
-                psi_z=local.get('psi_z', 0.0),
-                debye_x=local['debye_x'],
-                debye_y=local['debye_y'],
-                wavelength=local['lambda'],
-                pixel_tol=pixel_tol,
-                optics_mode=local.get('optics_mode', 0),
+        dataset_items = [(local, dataset_ctx) for dataset_ctx in dataset_contexts]
+        if dataset_parallel_workers > 1 and len(dataset_items) > 1:
+            residual_results = _threaded_map(
+                _cost_fn_for_dataset,
+                dataset_items,
+                max_workers=dataset_parallel_workers,
+                numba_threads=worker_numba_threads,
             )
-            residual_arr = np.asarray(residual, dtype=float)
+        else:
+            residual_results = [
+                _cost_fn_for_dataset(item) for item in dataset_items
+            ]
+        for residual_arr in residual_results:
             if residual_arr.size:
                 residual_blocks.append(residual_arr)
         prior_residual = _parameter_prior_residuals(x)
@@ -4484,10 +4691,13 @@ def fit_geometry_parameters(
             "center_col": float(local['center'][1]) if len(local.get('center', [])) >= 2 else float("nan"),
         }
 
-        for dataset_ctx in dataset_contexts:
-            theta_value = _theta_initial_for_dataset(local, dataset_ctx)
-            residual_i, diagnostics_i, summary_i = _evaluate_geometry_fit_dataset_point_matches(
-                local,
+        def _evaluate_pixel_matches_for_dataset(
+            item: Tuple[Dict[str, object], GeometryFitDatasetContext],
+        ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+            local_item, dataset_ctx = item
+            theta_value = _theta_initial_for_dataset(local_item, dataset_ctx)
+            return _evaluate_geometry_fit_dataset_point_matches(
+                local_item,
                 dataset_ctx,
                 image_size=image_size,
                 pixel_tol=float(pixel_tol),
@@ -4502,6 +4712,22 @@ def fit_geometry_parameters(
                 tangential_sigma_scale=float(tangential_sigma_scale),
                 collect_diagnostics=collect_diagnostics,
             )
+
+        dataset_items = [(local, dataset_ctx) for dataset_ctx in dataset_contexts]
+        if dataset_parallel_workers > 1 and len(dataset_items) > 1:
+            dataset_results = _threaded_map(
+                _evaluate_pixel_matches_for_dataset,
+                dataset_items,
+                max_workers=dataset_parallel_workers,
+                numba_threads=worker_numba_threads,
+            )
+        else:
+            dataset_results = [
+                _evaluate_pixel_matches_for_dataset(item)
+                for item in dataset_items
+            ]
+
+        for residual_i, diagnostics_i, summary_i in dataset_results:
             residual_i = np.asarray(residual_i, dtype=float)
             if residual_i.size:
                 residual_blocks.append(residual_i)
@@ -4653,12 +4879,13 @@ def fit_geometry_parameters(
         if wavelength_array is None:
             wavelength_array = mosaic.get('wavelength_i_array')
 
-        for dataset_ctx in dataset_contexts:
+        def _compute_single_ray_indices(
+            dataset_ctx: GeometryFitDatasetContext,
+        ) -> Tuple[GeometryFitDatasetContext, Optional[np.ndarray]]:
             fit_miller = dataset_ctx.subset.miller
             fit_measured_peaks = dataset_ctx.subset.measured_entries
             if fit_miller.shape[0] <= 0 or not fit_measured_peaks:
-                dataset_ctx.single_ray_indices = None
-                continue
+                return dataset_ctx, None
             try:
                 theta_value = _theta_initial_for_dataset(local, dataset_ctx)
                 best_indices = np.full(fit_miller.shape[0], -1, dtype=np.int64)
@@ -4688,9 +4915,25 @@ def fit_geometry_parameters(
                     solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
                     best_sample_indices_out=best_indices,
                 )
-                dataset_ctx.single_ray_indices = best_indices
+                return dataset_ctx, best_indices
             except Exception:
-                dataset_ctx.single_ray_indices = None
+                return dataset_ctx, None
+
+        if dataset_parallel_workers > 1 and len(dataset_contexts) > 1:
+            single_ray_results = _threaded_map(
+                _compute_single_ray_indices,
+                dataset_contexts,
+                max_workers=dataset_parallel_workers,
+                numba_threads=worker_numba_threads,
+            )
+        else:
+            single_ray_results = [
+                _compute_single_ray_indices(dataset_ctx)
+                for dataset_ctx in dataset_contexts
+            ]
+
+        for dataset_ctx, best_indices in single_ray_results:
+            dataset_ctx.single_ray_indices = best_indices
 
     lower_bounds = []
     upper_bounds = []
@@ -5840,6 +6083,72 @@ def fit_geometry_parameters(
 
         return candidates
 
+    def _evaluate_restart_seed(
+        item: Tuple[int, np.ndarray, str, str],
+    ) -> Tuple[float, int, np.ndarray, np.ndarray, str, str]:
+        candidate_idx, trial_start, seed_kind, seed_label = item
+        seed_residual, seed_cost = _evaluate_cost_at(np.asarray(trial_start, dtype=float))
+        return (
+            float(seed_cost),
+            int(candidate_idx),
+            np.asarray(trial_start, dtype=float),
+            np.asarray(seed_residual, dtype=float),
+            str(seed_kind),
+            str(seed_label),
+        )
+
+    def _solve_restart_seed(
+        item: Tuple[float, int, np.ndarray, np.ndarray, str, str],
+    ) -> Tuple[np.ndarray, OptimizeResult, float, float, str, str]:
+        (
+            _seed_cost_sort,
+            _candidate_idx,
+            trial_start,
+            seed_residual,
+            seed_kind,
+            seed_label,
+        ) = item
+        trial_start = np.asarray(trial_start, dtype=float)
+        seed_residual = np.asarray(seed_residual, dtype=float)
+        seed_cost = _robust_cost(
+            seed_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        trial = _run_solver(trial_start)
+        trial_cost = _robust_cost(
+            np.asarray(trial.fun, dtype=float),
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+
+        if seed_cost + restart_selection_tol < trial_cost:
+            trial = _build_probe_result(
+                trial_start,
+                seed_residual,
+                message=(
+                    f"{seed_kind} {seed_label} improved the fit; "
+                    "local least-squares did not improve further."
+                ),
+            )
+            trial_cost = float(seed_cost)
+
+        result_message = str(getattr(trial, "message", "") or "").strip()
+        if result_message:
+            result_message = f"{seed_kind} {seed_label}: {result_message}"
+        else:
+            result_message = f"{seed_kind} {seed_label}"
+        trial.message = result_message
+
+        return (
+            trial_start,
+            trial,
+            float(trial_cost),
+            float(seed_cost),
+            str(seed_kind),
+            str(seed_label),
+        )
+
     result = _run_solver(x0_arr)
     best_result = result
     initial_cost = _robust_cost(
@@ -5867,16 +6176,41 @@ def fit_geometry_parameters(
         ranked_restart_candidates: List[
             Tuple[float, int, np.ndarray, np.ndarray, str, str]
         ] = []
-        for candidate_idx, (
+        restart_seed_items = [
+            (
+                int(candidate_idx),
+                np.asarray(trial_start, dtype=float),
+                str(seed_kind),
+                str(seed_label),
+            )
+            for candidate_idx, (trial_start, seed_kind, seed_label) in enumerate(
+                _build_restart_candidates()
+            )
+        ]
+        if restart_parallel_workers > 1 and len(restart_seed_items) > 1:
+            seed_results = _threaded_map(
+                _evaluate_restart_seed,
+                restart_seed_items,
+                max_workers=restart_parallel_workers,
+                numba_threads=worker_numba_threads,
+            )
+        else:
+            seed_results = [
+                _evaluate_restart_seed(item) for item in restart_seed_items
+            ]
+
+        for (
+            seed_cost,
+            _candidate_idx,
             trial_start,
+            seed_residual,
             seed_kind,
             seed_label,
-        ) in enumerate(_build_restart_candidates()):
-            seed_residual, seed_cost = _evaluate_cost_at(trial_start)
+        ) in seed_results:
             ranked_restart_candidates.append(
                 (
                     float(seed_cost),
-                    int(candidate_idx),
+                    int(_candidate_idx),
                     np.asarray(trial_start, dtype=float),
                     np.asarray(seed_residual, dtype=float),
                     str(seed_kind),
@@ -5900,45 +6234,27 @@ def fit_geometry_parameters(
             )
 
         ranked_restart_candidates.sort(key=lambda item: (item[0], item[1]))
+        selected_restart_candidates = ranked_restart_candidates[:solver_restarts]
+        if restart_parallel_workers > 1 and len(selected_restart_candidates) > 1:
+            solved_restarts = _threaded_map(
+                _solve_restart_seed,
+                selected_restart_candidates,
+                max_workers=restart_parallel_workers,
+                numba_threads=worker_numba_threads,
+            )
+        else:
+            solved_restarts = [
+                _solve_restart_seed(item) for item in selected_restart_candidates
+            ]
 
         for (
-            _seed_cost_sort,
-            _candidate_idx,
             trial_start,
-            seed_residual,
+            trial,
+            trial_cost,
+            seed_cost,
             seed_kind,
             seed_label,
-        ) in ranked_restart_candidates[:solver_restarts]:
-            seed_cost = _robust_cost(
-                np.asarray(seed_residual, dtype=float),
-                loss=solver_loss,
-                f_scale=solver_f_scale,
-            )
-            trial = _run_solver(trial_start)
-            trial_cost = _robust_cost(
-                np.asarray(trial.fun, dtype=float),
-                loss=solver_loss,
-                f_scale=solver_f_scale,
-            )
-
-            if seed_cost + restart_selection_tol < trial_cost:
-                trial = _build_probe_result(
-                    trial_start,
-                    seed_residual,
-                    message=(
-                        f"{seed_kind} {seed_label} improved the fit; "
-                        "local least-squares did not improve further."
-                    ),
-                )
-                trial_cost = float(seed_cost)
-
-            result_message = str(getattr(trial, "message", "") or "").strip()
-            if result_message:
-                result_message = f"{seed_kind} {seed_label}: {result_message}"
-            else:
-                result_message = f"{seed_kind} {seed_label}"
-            trial.message = result_message
-
+        ) in solved_restarts:
             restart_history.append(
                 {
                     "restart": len(restart_history),
@@ -5949,7 +6265,7 @@ def fit_geometry_parameters(
                     "success": bool(trial.success),
                     "seed_kind": str(seed_kind),
                     "seed_label": str(seed_label),
-                    "message": result_message,
+                    "message": str(getattr(trial, "message", "")),
                 }
             )
             if trial_cost < best_cost:
@@ -6171,6 +6487,7 @@ def fit_geometry_parameters(
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
     result.parameter_prior_summary = parameter_prior_summary
+    result.parallelization_summary = dict(parallelization_summary)
 
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)
