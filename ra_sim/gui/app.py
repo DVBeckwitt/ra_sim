@@ -1,15 +1,15 @@
 """Import-safe package entrypoint for the RA-SIM GUI.
 
-The live single-window GUI still lives in the temporary compatibility runtime
-at the repository root in `legacy_main.py`. This module keeps package imports
-safe by exposing a small compatibility surface and loading the runtime only
-when `main()` is called.
+The live single-window GUI lives in the packaged runtime module
+``ra_sim.gui.runtime``. This module keeps package imports safe by exposing a
+small compatibility surface and loading the runtime only when ``main()`` is
+called.
 """
 
 from __future__ import annotations
 
 import copy
-import importlib.util
+import importlib
 import math
 import os
 import sys
@@ -46,7 +46,7 @@ GEOMETRY_FIT_PARAM_ORDER = [
 ]
 
 _RUNTIME_MODULE = None
-_RUNTIME_MODULE_NAME = "ra_sim_legacy_main_runtime"
+_RUNTIME_MODULE_NAME = "ra_sim.gui.runtime"
 
 
 class _PlaceholderVar:
@@ -551,27 +551,13 @@ def _convert_hbn_bundle_geometry_reference(
     )
 
 
-def _runtime_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "legacy_main.py"
-
-
 def _load_runtime_module():
     global _RUNTIME_MODULE
 
     if _RUNTIME_MODULE is not None:
         return _RUNTIME_MODULE
 
-    runtime_path = _runtime_path()
-    if not runtime_path.exists():
-        raise FileNotFoundError(f"Missing GUI runtime module: {runtime_path}")
-
-    spec = importlib.util.spec_from_file_location(_RUNTIME_MODULE_NAME, runtime_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Unable to load GUI runtime from {runtime_path}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules.setdefault(_RUNTIME_MODULE_NAME, module)
-    spec.loader.exec_module(module)
+    module = importlib.import_module(_RUNTIME_MODULE_NAME)
     _RUNTIME_MODULE = module
     return module
 

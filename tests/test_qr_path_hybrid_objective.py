@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-GUI_APP_PATH = Path("legacy_main.py")
+GUI_APP_PATH = Path("ra_sim/gui/runtime.py")
 
 
 def _load_main_functions(*names: str) -> dict[str, object]:
