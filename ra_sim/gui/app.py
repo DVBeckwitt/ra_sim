@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from ra_sim.gui import state_io as gui_state_io
 
 write_excel = False
 
@@ -471,25 +472,16 @@ def _build_geometry_fit_runtime_config(
 
 
 def _canonicalize_gui_state_background_path(path: object) -> str:
-    return os.path.normcase(str(Path(str(path)).expanduser().resolve(strict=False)))
+    return gui_state_io.canonicalize_gui_state_background_path(path)
 
 
 def _background_files_match_loaded_state(file_paths: list[str]) -> bool:
-    if not file_paths:
-        return False
-    if len(file_paths) != len(osc_files):
-        return False
-    if len(background_images_native) != len(file_paths):
-        return False
-    if len(background_images_display) != len(file_paths):
-        return False
-    requested_paths = [
-        _canonicalize_gui_state_background_path(path) for path in file_paths
-    ]
-    current_paths = [
-        _canonicalize_gui_state_background_path(path) for path in osc_files
-    ]
-    return requested_paths == current_paths
+    return gui_state_io.background_files_match_loaded_state(
+        file_paths,
+        osc_files=osc_files,
+        background_images_native=background_images_native,
+        background_images_display=background_images_display,
+    )
 
 
 def _load_background_files_for_state(
@@ -500,36 +492,26 @@ def _load_background_files_for_state(
     global osc_files, background_images, background_images_native, background_images_display
     global current_background_index, current_background_image, current_background_display
 
-    normalized_paths = [
-        str(Path(str(path)).expanduser())
-        for path in file_paths
-        if path is not None
-    ]
-    if not normalized_paths:
+    updated_state = gui_state_io.load_background_files_for_state(
+        file_paths,
+        osc_files=osc_files,
+        background_images=background_images,
+        background_images_native=background_images_native,
+        background_images_display=background_images_display,
+        select_index=select_index,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        read_osc=read_osc,
+        set_background_display=background_display.set_data,
+    )
+    if updated_state is None:
         return
-    if _background_files_match_loaded_state(normalized_paths):
-        osc_files = list(normalized_paths)
-        index = max(0, min(int(select_index), len(background_images_native) - 1))
-        current_background_index = index
-        current_background_image = background_images_native[index]
-        current_background_display = background_images_display[index]
-        background_display.set_data(current_background_display)
-        return
-
-    loaded_native = [np.asarray(read_osc(path)) for path in normalized_paths]
-    if not loaded_native:
-        return
-    osc_files = list(normalized_paths)
-    background_images = [np.array(img) for img in loaded_native]
-    background_images_native = [np.array(img) for img in loaded_native]
-    background_images_display = [
-        np.rot90(img, DISPLAY_ROTATE_K) for img in background_images_native
-    ]
-    index = max(0, min(int(select_index), len(background_images_native) - 1))
-    current_background_index = index
-    current_background_image = background_images_native[index]
-    current_background_display = background_images_display[index]
-    background_display.set_data(current_background_display)
+    osc_files = list(updated_state["osc_files"])
+    background_images = list(updated_state["background_images"])
+    background_images_native = list(updated_state["background_images_native"])
+    background_images_display = list(updated_state["background_images_display"])
+    current_background_index = int(updated_state["current_background_index"])
+    current_background_image = updated_state["current_background_image"]
+    current_background_display = updated_state["current_background_display"]
 
 
 def _convert_hbn_bundle_geometry_reference(
