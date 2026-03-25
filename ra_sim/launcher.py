@@ -165,7 +165,10 @@ def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
 
     from ra_sim.gui.app import main as gui_main
 
-    gui_main(write_excel_flag=write_excel_flag)
+    gui_main(
+        write_excel_flag=write_excel_flag,
+        startup_mode="simulation",
+    )
 
 
 def launch_calibrant_gui(*, bundle: str | None = None) -> None:

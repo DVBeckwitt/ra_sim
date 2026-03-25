@@ -13,6 +13,4 @@ ALL_MODULES = sorted(
 
 @pytest.mark.parametrize("module_name", ALL_MODULES)
 def test_import_module(module_name: str) -> None:
-    if module_name == "ra_sim.gui.app":
-        pytest.skip("GUI runtime modules perform heavy startup I/O on import.")
     importlib.import_module(module_name)

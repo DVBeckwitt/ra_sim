@@ -13585,6 +13585,68 @@ def _is_persistable_gui_var(name: str, value: object) -> bool:
     return True
 
 
+def _canonicalize_gui_state_background_path(path: object) -> str:
+    return os.path.normcase(str(Path(str(path)).expanduser().resolve(strict=False)))
+
+
+def _background_files_match_loaded_state(file_paths: list[str]) -> bool:
+    if not file_paths:
+        return False
+    if len(file_paths) != len(osc_files):
+        return False
+    if len(background_images_native) != len(file_paths):
+        return False
+    if len(background_images_display) != len(file_paths):
+        return False
+    requested_paths = [
+        _canonicalize_gui_state_background_path(path) for path in file_paths
+    ]
+    current_paths = [
+        _canonicalize_gui_state_background_path(path) for path in osc_files
+    ]
+    return requested_paths == current_paths
+
+
+def _load_background_files_for_state(
+    file_paths: list[str],
+    *,
+    select_index: int = 0,
+) -> None:
+    global osc_files, background_images, background_images_native, background_images_display
+    global current_background_index, current_background_image, current_background_display
+
+    normalized_paths = [
+        str(Path(str(path)).expanduser())
+        for path in file_paths
+        if path is not None
+    ]
+    if not normalized_paths:
+        return
+    if _background_files_match_loaded_state(normalized_paths):
+        osc_files = list(normalized_paths)
+        index = max(0, min(int(select_index), len(background_images_native) - 1))
+        current_background_index = index
+        current_background_image = background_images_native[index]
+        current_background_display = background_images_display[index]
+        background_display.set_data(current_background_display)
+        return
+
+    loaded_native = [np.asarray(read_osc(path)) for path in normalized_paths]
+    if not loaded_native:
+        return
+    osc_files = list(normalized_paths)
+    background_images = [np.array(img) for img in loaded_native]
+    background_images_native = [np.array(img) for img in loaded_native]
+    background_images_display = [
+        np.rot90(img, DISPLAY_ROTATE_K) for img in background_images_native
+    ]
+    index = max(0, min(int(select_index), len(background_images_native) - 1))
+    current_background_index = index
+    current_background_image = background_images_native[index]
+    current_background_display = background_images_display[index]
+    background_display.set_data(current_background_display)
+
+
 def _collect_full_gui_state_snapshot() -> dict[str, object]:
     variables: dict[str, object] = {}
     for name, value in globals().items():

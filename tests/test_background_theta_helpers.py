@@ -1,7 +1,7 @@
 import ast
 from pathlib import Path
 
-GUI_APP_PATH = Path("ra_sim/gui/app.py")
+GUI_APP_PATH = Path("legacy_main.py")
 
 
 def _load_main_functions(*names: str) -> dict[str, object]:
