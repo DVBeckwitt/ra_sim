@@ -5,12 +5,9 @@ import tempfile
 import copy
 import yaml
 
-_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
+from ra_sim.config.loader import ENV_CONFIG_DIR
 
-_YAML_PATH = _CONFIG_DIR / "file_paths.yaml"
-_DIR_YAML_PATH = _CONFIG_DIR / "dir_paths.yaml"
-_MATERIALS_YAML_PATH = _CONFIG_DIR / "materials.yaml"
-_INSTRUMENT_YAML_PATH = _CONFIG_DIR / "instrument.yaml"
+_DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 
 DEFAULT_DIRS = {
     "downloads": str(Path.home() / "Downloads"),
@@ -54,33 +51,75 @@ def _load_yaml_with_windows_path_fallback(path: Path) -> dict:
         data = yaml.safe_load(sanitized)
     return data or {}
 
+PATHS: dict = {}
+DIRS: dict = dict(DEFAULT_DIRS)
+_MATERIAL_CONSTANTS: dict = {}
+_MATERIALS: dict = {}
+_DEFAULT_MATERIAL = None
+_instrument_raw: dict = {}
+_ACTIVE_CONFIG_DIR: Path | None = None
 
-PATHS = _load_yaml_with_windows_path_fallback(_YAML_PATH)
 
-if _DIR_YAML_PATH.exists():
-    yaml_dirs = _load_yaml_with_windows_path_fallback(_DIR_YAML_PATH)
-else:
-    yaml_dirs = {}
+def get_config_dir() -> Path:
+    """Return the active configuration directory."""
 
-DIRS = {**DEFAULT_DIRS, **yaml_dirs}
+    env_path = os.environ.get(ENV_CONFIG_DIR)
+    if env_path:
+        return Path(os.path.expanduser(env_path)).resolve()
+    return _DEFAULT_CONFIG_DIR
 
-if _MATERIALS_YAML_PATH.exists():
-    _materials_raw = _load_yaml_with_windows_path_fallback(_MATERIALS_YAML_PATH)
-else:  # pragma: no cover - configuration file is optional in tests
-    _materials_raw = {}
 
-_MATERIAL_CONSTANTS = _materials_raw.get("constants", {})
-_MATERIALS = _materials_raw.get("materials", {})
-_DEFAULT_MATERIAL = _materials_raw.get("default_material")
+def reload_config_cache() -> None:
+    """Reload cached YAML configuration from the active config directory."""
 
-if _INSTRUMENT_YAML_PATH.exists():
-    _instrument_raw = _load_yaml_with_windows_path_fallback(_INSTRUMENT_YAML_PATH)
-else:  # pragma: no cover - configuration file is optional in tests
-    _instrument_raw = {}
+    global PATHS, DIRS, _MATERIAL_CONSTANTS, _MATERIALS, _DEFAULT_MATERIAL
+    global _instrument_raw, _TEMP_DIR, _ACTIVE_CONFIG_DIR
+
+    config_dir = get_config_dir()
+    yaml_path = config_dir / "file_paths.yaml"
+    dir_yaml_path = config_dir / "dir_paths.yaml"
+    materials_yaml_path = config_dir / "materials.yaml"
+    instrument_yaml_path = config_dir / "instrument.yaml"
+
+    if yaml_path.exists():
+        PATHS = _load_yaml_with_windows_path_fallback(yaml_path)
+    else:  # pragma: no cover - configuration file is optional in tests
+        PATHS = {}
+
+    if dir_yaml_path.exists():
+        yaml_dirs = _load_yaml_with_windows_path_fallback(dir_yaml_path)
+    else:
+        yaml_dirs = {}
+    DIRS = {**DEFAULT_DIRS, **yaml_dirs}
+
+    if materials_yaml_path.exists():
+        materials_raw = _load_yaml_with_windows_path_fallback(materials_yaml_path)
+    else:  # pragma: no cover - configuration file is optional in tests
+        materials_raw = {}
+    _MATERIAL_CONSTANTS = materials_raw.get("constants", {})
+    _MATERIALS = materials_raw.get("materials", {})
+    _DEFAULT_MATERIAL = materials_raw.get("default_material")
+
+    if instrument_yaml_path.exists():
+        _instrument_raw = _load_yaml_with_windows_path_fallback(instrument_yaml_path)
+    else:  # pragma: no cover - configuration file is optional in tests
+        _instrument_raw = {}
+
+    _ACTIVE_CONFIG_DIR = config_dir
+    _TEMP_DIR = None
+
+
+def _ensure_config_cache_current() -> None:
+    if _ACTIVE_CONFIG_DIR != get_config_dir():
+        reload_config_cache()
+
+
+reload_config_cache()
 
 
 def get_path(key: str) -> str:
     """Return the configured path for *key* expanding '~'."""
+    _ensure_config_cache_current()
     value = PATHS.get(key)
     if value is None:
         raise KeyError(f"No path configured for {key!r}")
@@ -97,6 +136,7 @@ def get_path_first(*keys: str):
     accepted.
     """
 
+    _ensure_config_cache_current()
     for key in keys:
         if key in PATHS and PATHS.get(key) is not None:
             return get_path(key)
@@ -106,6 +146,7 @@ def get_path_first(*keys: str):
 
 def get_dir(key: str) -> Path:
     """Return the configured directory for *key*, creating it if needed."""
+    _ensure_config_cache_current()
     value = DIRS.get(key)
     if value is None:
         raise KeyError(f"No directory configured for {key!r}")
@@ -120,6 +161,7 @@ _TEMP_DIR = None
 def get_temp_dir() -> Path:
     """Return a dedicated temporary directory for the current session."""
     global _TEMP_DIR
+    _ensure_config_cache_current()
     if _TEMP_DIR is None:
         base = DIRS.get("temp_root")
         if base:
@@ -140,6 +182,7 @@ def get_material_config(material: str | None = None) -> dict:
     constants (``"constants"``).
     """
 
+    _ensure_config_cache_current()
     if not _MATERIALS:
         raise KeyError(
             "No materials configured. Expected materials.yaml to define at least one entry."
@@ -168,10 +211,12 @@ def get_material_config(material: str | None = None) -> dict:
 def list_materials() -> list[str]:
     """Return the list of available material identifiers."""
 
+    _ensure_config_cache_current()
     return sorted(_MATERIALS)
 
 
 def get_instrument_config() -> dict:
     """Return the parsed instrument configuration."""
 
+    _ensure_config_cache_current()
     return copy.deepcopy(_instrument_raw)

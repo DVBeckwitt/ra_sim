@@ -1,51 +1,29 @@
-import ast
-from pathlib import Path
+from __future__ import annotations
 
-from ra_sim.gui import state_io
-
-GUI_APP_PATH = Path("ra_sim/gui/runtime.py")
+from ra_sim.gui import background_theta, state_io
 
 
-def _load_main_functions(*names: str) -> dict[str, object]:
-    source = GUI_APP_PATH.read_text(encoding="utf-8")
-    module = ast.parse(source, filename=str(GUI_APP_PATH))
-    extracted: list[str] = []
-    available = {
-        node.name
-        for node in module.body
-        if isinstance(node, ast.FunctionDef)
-    }
-    missing = sorted(set(names) - available)
-    if missing:
-        raise AssertionError(
-            f"Failed to extract functions from {GUI_APP_PATH}: {missing}"
-        )
+class _Var:
+    def __init__(self, value):
+        self._value = value
 
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name in names:
-            fn_source = ast.get_source_segment(source, node)
-            if fn_source:
-                extracted.append(fn_source)
+    def get(self):
+        return self._value
 
-    namespace: dict[str, object] = {}
-    exec(
-        "import re\n"
-        "import numpy as np\n"
-        "from typing import Sequence\n\n"
-        + "\n\n".join(extracted),
-        namespace,
-    )
-    return namespace
+    def set(self, value) -> None:
+        self._value = value
 
 
 def test_parse_background_theta_values_accepts_common_delimiters() -> None:
-    namespace = _load_main_functions("_parse_background_theta_values")
-    parse_values = namespace["_parse_background_theta_values"]
-
-    assert parse_values("1.0, 2.5  3.25;4.0") == [1.0, 2.5, 3.25, 4.0]
+    assert background_theta.parse_background_theta_values("1.0, 2.5  3.25;4.0") == [
+        1.0,
+        2.5,
+        3.25,
+        4.0,
+    ]
 
     try:
-        parse_values("1.0, bad", expected_count=2)
+        background_theta.parse_background_theta_values("1.0, bad", expected_count=2)
     except ValueError as exc:
         assert "Invalid theta value" in str(exc)
     else:
@@ -53,41 +31,47 @@ def test_parse_background_theta_values_accepts_common_delimiters() -> None:
 
 
 def test_background_theta_for_index_adds_shared_offset_for_multiple_backgrounds() -> None:
-    namespace = _load_main_functions(
-        "_background_theta_default_value",
-        "_parse_background_theta_values",
-        "_parse_geometry_fit_background_indices",
-        "_current_geometry_fit_background_indices",
-        "_geometry_fit_uses_shared_theta_offset",
-        "_current_geometry_theta_offset",
-        "_current_background_theta_values",
-        "_background_theta_for_index",
+    theta_for_index = background_theta.background_theta_for_index
+
+    theta_initial_var = _Var(6.0)
+    background_theta_list_var = _Var("4.0, 7.5")
+    geometry_fit_background_selection_var = _Var("all")
+    geometry_theta_offset_var = _Var("0.25")
+
+    assert (
+        theta_for_index(
+            0,
+            osc_files=["bg0.osc", "bg1.osc"],
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=background_theta_list_var,
+            geometry_theta_offset_var=geometry_theta_offset_var,
+            geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+            current_background_index=0,
+            strict_count=True,
+        )
+        == 4.25
     )
-
-    class _Var:
-        def __init__(self, value: str):
-            self._value = value
-
-        def get(self) -> str:
-            return self._value
-
-    namespace["theta_initial"] = 6.0
-    namespace["defaults"] = {"theta_initial": 6.0}
-    namespace["background_theta_list_var"] = _Var("4.0, 7.5")
-    namespace["geometry_fit_background_selection_var"] = _Var("all")
-    namespace["geometry_theta_offset_var"] = _Var("0.25")
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["current_background_index"] = 0
-
-    theta_for_index = namespace["_background_theta_for_index"]
-
-    assert theta_for_index(0, strict_count=True) == 4.25
-    assert theta_for_index(1, strict_count=True) == 7.75
+    assert (
+        theta_for_index(
+            1,
+            osc_files=["bg0.osc", "bg1.osc"],
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=background_theta_list_var,
+            geometry_theta_offset_var=geometry_theta_offset_var,
+            geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+            current_background_index=0,
+            strict_count=True,
+        )
+        == 7.75
+    )
 
 
 def test_parse_geometry_fit_background_indices_supports_current_all_and_ranges() -> None:
-    namespace = _load_main_functions("_parse_geometry_fit_background_indices")
-    parse_selection = namespace["_parse_geometry_fit_background_indices"]
+    parse_selection = background_theta.parse_geometry_fit_background_indices
 
     assert parse_selection("current", total_count=4, current_index=2) == [2]
     assert parse_selection("all", total_count=3, current_index=1) == [0, 1, 2]
@@ -95,336 +79,229 @@ def test_parse_geometry_fit_background_indices_supports_current_all_and_ranges()
 
 
 def test_geometry_fit_shared_theta_offset_depends_on_selected_fit_backgrounds() -> None:
-    namespace = _load_main_functions(
-        "_parse_geometry_fit_background_indices",
-        "_current_geometry_fit_background_indices",
-        "_geometry_fit_uses_shared_theta_offset",
+    selection_var = _Var("current")
+
+    assert background_theta.current_geometry_fit_background_indices(
+        osc_files=["bg0.osc", "bg1.osc", "bg2.osc"],
+        current_background_index=1,
+        geometry_fit_background_selection_var=selection_var,
+        strict=True,
+    ) == [1]
+    assert (
+        background_theta.geometry_fit_uses_shared_theta_offset(
+            osc_files=["bg0.osc", "bg1.osc", "bg2.osc"],
+            current_background_index=1,
+            geometry_fit_background_selection_var=selection_var,
+        )
+        is False
     )
 
-    class _Var:
-        def __init__(self, value: str):
-            self._value = value
-
-        def get(self) -> str:
-            return self._value
-
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc", "bg2.osc"]
-    namespace["current_background_index"] = 1
-    namespace["geometry_fit_background_selection_var"] = _Var("current")
-
-    assert namespace["_current_geometry_fit_background_indices"](strict=True) == [1]
-    assert namespace["_geometry_fit_uses_shared_theta_offset"]() is False
-
-    namespace["geometry_fit_background_selection_var"] = _Var("1,3")
-    assert namespace["_current_geometry_fit_background_indices"](strict=True) == [0, 2]
-    assert namespace["_geometry_fit_uses_shared_theta_offset"]() is True
+    selection_var = _Var("1,3")
+    assert background_theta.current_geometry_fit_background_indices(
+        osc_files=["bg0.osc", "bg1.osc", "bg2.osc"],
+        current_background_index=1,
+        geometry_fit_background_selection_var=selection_var,
+        strict=True,
+    ) == [0, 2]
+    assert (
+        background_theta.geometry_fit_uses_shared_theta_offset(
+            osc_files=["bg0.osc", "bg1.osc", "bg2.osc"],
+            current_background_index=1,
+            geometry_fit_background_selection_var=selection_var,
+        )
+        is True
+    )
 
 
 def test_apply_geometry_fit_background_selection_skips_redraw_when_live_theta_is_unchanged() -> None:
-    namespace = _load_main_functions(
-        "_background_theta_default_value",
-        "_format_geometry_fit_background_indices",
-        "_parse_background_theta_values",
-        "_parse_geometry_fit_background_indices",
-        "_current_geometry_fit_background_indices",
-        "_geometry_fit_uses_shared_theta_offset",
-        "_current_geometry_theta_offset",
-        "_current_background_theta_values",
-        "_background_theta_for_index",
-        "_apply_geometry_fit_background_selection",
-    )
-
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     scheduled = {"count": 0}
 
     def _schedule_update() -> None:
         scheduled["count"] += 1
 
-    namespace["theta_initial"] = 6.0
-    namespace["defaults"] = {"theta_initial": 6.0}
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["current_background_index"] = 0
-    namespace["background_theta_list_var"] = _Var("4.0, 7.5")
-    namespace["geometry_theta_offset_var"] = _Var("0.0")
-    namespace["theta_initial_var"] = _Var(4.0)
-    namespace["geometry_fit_background_selection_var"] = _Var("current")
-    namespace["_refresh_geometry_fit_theta_checkbox_label"] = lambda: None
-    namespace["_set_background_file_status_text"] = lambda: None
-    namespace["schedule_update"] = _schedule_update
+    theta_initial_var = _Var(4.0)
 
-    assert namespace["_apply_geometry_fit_background_selection"](trigger_update=True) is True
-    assert namespace["geometry_fit_background_selection_var"].get() == "current"
-    assert namespace["theta_initial_var"].get() == 4.0
+    assert (
+        background_theta.apply_geometry_fit_background_selection(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var("4.0, 7.5"),
+            geometry_theta_offset_var=_Var("0.0"),
+            geometry_fit_background_selection_var=_Var("current"),
+            fit_theta_checkbutton=None,
+            theta_controls={},
+            set_background_file_status_text=lambda: None,
+            schedule_update=_schedule_update,
+            trigger_update=True,
+        )
+        is True
+    )
+    assert theta_initial_var.get() == 4.0
     assert scheduled["count"] == 0
 
 
 def test_apply_geometry_fit_background_selection_redraws_when_live_theta_changes() -> None:
-    namespace = _load_main_functions(
-        "_background_theta_default_value",
-        "_format_geometry_fit_background_indices",
-        "_parse_background_theta_values",
-        "_parse_geometry_fit_background_indices",
-        "_current_geometry_fit_background_indices",
-        "_geometry_fit_uses_shared_theta_offset",
-        "_current_geometry_theta_offset",
-        "_current_background_theta_values",
-        "_background_theta_for_index",
-        "_apply_geometry_fit_background_selection",
-    )
-
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     scheduled = {"count": 0}
 
     def _schedule_update() -> None:
         scheduled["count"] += 1
 
-    namespace["theta_initial"] = 6.0
-    namespace["defaults"] = {"theta_initial": 6.0}
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["current_background_index"] = 0
-    namespace["background_theta_list_var"] = _Var("4.0, 7.5")
-    namespace["geometry_theta_offset_var"] = _Var("0.25")
-    namespace["theta_initial_var"] = _Var(4.25)
-    namespace["geometry_fit_background_selection_var"] = _Var("current")
-    namespace["_refresh_geometry_fit_theta_checkbox_label"] = lambda: None
-    namespace["_set_background_file_status_text"] = lambda: None
-    namespace["schedule_update"] = _schedule_update
+    theta_initial_var = _Var(4.25)
 
-    assert namespace["_apply_geometry_fit_background_selection"](trigger_update=True) is True
-    assert namespace["theta_initial_var"].get() == 4.0
+    assert (
+        background_theta.apply_geometry_fit_background_selection(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var("4.0, 7.5"),
+            geometry_theta_offset_var=_Var("0.25"),
+            geometry_fit_background_selection_var=_Var("current"),
+            fit_theta_checkbutton=None,
+            theta_controls={},
+            set_background_file_status_text=lambda: None,
+            schedule_update=_schedule_update,
+            trigger_update=True,
+        )
+        is True
+    )
+    assert theta_initial_var.get() == 4.0
     assert scheduled["count"] == 1
 
 
 def test_apply_geometry_fit_background_selection_preserves_live_theta_when_theta_list_is_blank() -> None:
-    namespace = _load_main_functions(
-        "_background_theta_default_value",
-        "_format_geometry_fit_background_indices",
-        "_parse_background_theta_values",
-        "_parse_geometry_fit_background_indices",
-        "_current_geometry_fit_background_indices",
-        "_geometry_fit_uses_shared_theta_offset",
-        "_current_geometry_theta_offset",
-        "_current_background_theta_values",
-        "_background_theta_for_index",
-        "_apply_geometry_fit_background_selection",
-    )
-
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     scheduled = {"count": 0}
 
     def _schedule_update() -> None:
         scheduled["count"] += 1
 
-    namespace["theta_initial"] = 6.0
-    namespace["defaults"] = {"theta_initial": 6.0}
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["current_background_index"] = 0
-    namespace["background_theta_list_var"] = _Var("")
-    namespace["geometry_theta_offset_var"] = _Var("0.0")
-    namespace["theta_initial_var"] = _Var(12.75)
-    namespace["geometry_fit_background_selection_var"] = _Var("current")
-    namespace["_refresh_geometry_fit_theta_checkbox_label"] = lambda: None
-    namespace["_set_background_file_status_text"] = lambda: None
-    namespace["schedule_update"] = _schedule_update
+    theta_initial_var = _Var(12.75)
 
-    assert namespace["_apply_geometry_fit_background_selection"](trigger_update=True) is True
-    assert namespace["theta_initial_var"].get() == 12.75
+    assert (
+        background_theta.apply_geometry_fit_background_selection(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var(""),
+            geometry_theta_offset_var=_Var("0.0"),
+            geometry_fit_background_selection_var=_Var("current"),
+            fit_theta_checkbutton=None,
+            theta_controls={},
+            set_background_file_status_text=lambda: None,
+            schedule_update=_schedule_update,
+            trigger_update=True,
+        )
+        is True
+    )
+    assert theta_initial_var.get() == 12.75
     assert scheduled["count"] == 0
 
 
 def test_apply_geometry_fit_background_selection_can_skip_live_theta_sync() -> None:
-    namespace = _load_main_functions(
-        "_background_theta_default_value",
-        "_format_geometry_fit_background_indices",
-        "_parse_background_theta_values",
-        "_parse_geometry_fit_background_indices",
-        "_current_geometry_fit_background_indices",
-        "_geometry_fit_uses_shared_theta_offset",
-        "_current_geometry_theta_offset",
-        "_current_background_theta_values",
-        "_background_theta_for_index",
-        "_apply_geometry_fit_background_selection",
-    )
-
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     scheduled = {"count": 0}
 
     def _schedule_update() -> None:
         scheduled["count"] += 1
 
-    namespace["theta_initial"] = 6.0
-    namespace["defaults"] = {"theta_initial": 6.0}
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["current_background_index"] = 0
-    namespace["background_theta_list_var"] = _Var("4.0, 7.5")
-    namespace["geometry_theta_offset_var"] = _Var("0.25")
-    namespace["theta_initial_var"] = _Var(12.75)
-    namespace["geometry_fit_background_selection_var"] = _Var("current")
-    namespace["_refresh_geometry_fit_theta_checkbox_label"] = lambda: None
-    namespace["_set_background_file_status_text"] = lambda: None
-    namespace["schedule_update"] = _schedule_update
+    theta_initial_var = _Var(12.75)
+    selection_var = _Var("current")
 
     assert (
-        namespace["_apply_geometry_fit_background_selection"](
+        background_theta.apply_geometry_fit_background_selection(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var("4.0, 7.5"),
+            geometry_theta_offset_var=_Var("0.25"),
+            geometry_fit_background_selection_var=selection_var,
+            fit_theta_checkbutton=None,
+            theta_controls={},
+            set_background_file_status_text=lambda: None,
+            schedule_update=_schedule_update,
             trigger_update=True,
             sync_live_theta=False,
         )
         is True
     )
-    assert namespace["geometry_fit_background_selection_var"].get() == "current"
-    assert namespace["theta_initial_var"].get() == 12.75
+    assert selection_var.get() == "current"
+    assert theta_initial_var.get() == 12.75
     assert scheduled["count"] == 0
 
 
 def test_apply_background_theta_metadata_can_skip_live_theta_sync() -> None:
-    namespace = _load_main_functions(
-        "_background_theta_default_value",
-        "_format_background_theta_values",
-        "_parse_background_theta_values",
-        "_parse_geometry_fit_background_indices",
-        "_current_geometry_fit_background_indices",
-        "_geometry_fit_uses_shared_theta_offset",
-        "_current_geometry_theta_offset",
-        "_current_background_theta_values",
-        "_background_theta_for_index",
-        "_apply_background_theta_metadata",
-    )
-
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     scheduled = {"count": 0}
 
     def _schedule_update() -> None:
         scheduled["count"] += 1
 
-    namespace["theta_initial"] = 6.0
-    namespace["defaults"] = {"theta_initial": 6.0}
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["current_background_index"] = 0
-    namespace["background_theta_list_var"] = _Var("4.0, 7.5")
-    namespace["geometry_theta_offset_var"] = _Var("0.25")
-    namespace["theta_initial_var"] = _Var(12.75)
-    namespace["geometry_fit_background_selection_var"] = _Var("all")
-    namespace["_refresh_geometry_fit_theta_checkbox_label"] = lambda: None
-    namespace["_set_background_file_status_text"] = lambda: None
-    namespace["schedule_update"] = _schedule_update
+    theta_initial_var = _Var(12.75)
+    background_theta_list_var = _Var("4.0, 7.5")
 
     assert (
-        namespace["_apply_background_theta_metadata"](
+        background_theta.apply_background_theta_metadata(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=background_theta_list_var,
+            geometry_theta_offset_var=_Var("0.25"),
+            geometry_fit_background_selection_var=_Var("all"),
+            fit_theta_checkbutton=None,
+            theta_controls={},
+            set_background_file_status_text=lambda: None,
+            schedule_update=_schedule_update,
             trigger_update=False,
             sync_live_theta=False,
         )
         is True
     )
-    assert namespace["background_theta_list_var"].get() == "4, 7.5"
-    assert namespace["theta_initial_var"].get() == 12.75
+    assert background_theta_list_var.get() == "4, 7.5"
+    assert theta_initial_var.get() == 12.75
     assert scheduled["count"] == 0
 
 
 def test_apply_gui_state_background_theta_compatibility_seeds_legacy_theta_list() -> None:
-    namespace = _load_main_functions(
-        "_format_background_theta_values",
-        "_default_geometry_fit_background_selection",
-    )
-
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["theta_initial_var"] = _Var(12.75)
-    namespace["background_theta_list_var"] = _Var("6, 6")
-    namespace["geometry_theta_offset_var"] = _Var("1.5")
-    namespace["geometry_fit_background_selection_var"] = _Var("current")
+    osc_files = ["bg0.osc", "bg1.osc"]
+    theta_initial_var = _Var(12.75)
+    background_theta_list_var = _Var("6, 6")
+    geometry_theta_offset_var = _Var("1.5")
+    geometry_fit_background_selection_var = _Var("current")
 
     state_io.apply_gui_state_background_theta_compatibility(
         {"theta_initial_var": 12.75},
-        osc_files=namespace["osc_files"],
-        theta_initial_var=namespace["theta_initial_var"],
-        background_theta_list_var=namespace["background_theta_list_var"],
-        geometry_theta_offset_var=namespace["geometry_theta_offset_var"],
-        geometry_fit_background_selection_var=namespace[
-            "geometry_fit_background_selection_var"
-        ],
-        format_background_theta_values=namespace["_format_background_theta_values"],
-        default_geometry_fit_background_selection=namespace[
-            "_default_geometry_fit_background_selection"
-        ],
+        osc_files=osc_files,
+        theta_initial_var=theta_initial_var,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        format_background_theta_values=background_theta.format_background_theta_values,
+        default_geometry_fit_background_selection=lambda: (
+            background_theta.default_geometry_fit_background_selection(
+                osc_files=osc_files
+            )
+        ),
     )
 
-    assert namespace["background_theta_list_var"].get() == "12.75, 12.75"
-    assert namespace["geometry_theta_offset_var"].get() == "0.0"
-    assert namespace["geometry_fit_background_selection_var"].get() == "all"
+    assert background_theta_list_var.get() == "12.75, 12.75"
+    assert geometry_theta_offset_var.get() == "0.0"
+    assert geometry_fit_background_selection_var.get() == "all"
 
 
 def test_apply_gui_state_background_theta_compatibility_preserves_saved_metadata() -> None:
-    namespace = _load_main_functions("_default_geometry_fit_background_selection")
-
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
-    namespace["osc_files"] = ["bg0.osc", "bg1.osc"]
-    namespace["theta_initial_var"] = _Var(12.75)
-    namespace["background_theta_list_var"] = _Var("4, 7.5")
-    namespace["geometry_theta_offset_var"] = _Var("0.25")
-    namespace["geometry_fit_background_selection_var"] = _Var("current")
+    osc_files = ["bg0.osc", "bg1.osc"]
+    theta_initial_var = _Var(12.75)
+    background_theta_list_var = _Var("4, 7.5")
+    geometry_theta_offset_var = _Var("0.25")
+    geometry_fit_background_selection_var = _Var("current")
 
     state_io.apply_gui_state_background_theta_compatibility(
         {
@@ -433,19 +310,19 @@ def test_apply_gui_state_background_theta_compatibility_preserves_saved_metadata
             "geometry_theta_offset_var": "0.25",
             "geometry_fit_background_selection_var": "current",
         },
-        osc_files=namespace["osc_files"],
-        theta_initial_var=namespace["theta_initial_var"],
-        background_theta_list_var=namespace["background_theta_list_var"],
-        geometry_theta_offset_var=namespace["geometry_theta_offset_var"],
-        geometry_fit_background_selection_var=namespace[
-            "geometry_fit_background_selection_var"
-        ],
-        format_background_theta_values=lambda values: ", ".join(str(v) for v in values),
-        default_geometry_fit_background_selection=namespace[
-            "_default_geometry_fit_background_selection"
-        ],
+        osc_files=osc_files,
+        theta_initial_var=theta_initial_var,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        format_background_theta_values=background_theta.format_background_theta_values,
+        default_geometry_fit_background_selection=lambda: (
+            background_theta.default_geometry_fit_background_selection(
+                osc_files=osc_files
+            )
+        ),
     )
 
-    assert namespace["background_theta_list_var"].get() == "4, 7.5"
-    assert namespace["geometry_theta_offset_var"].get() == "0.25"
-    assert namespace["geometry_fit_background_selection_var"].get() == "current"
+    assert background_theta_list_var.get() == "4, 7.5"
+    assert geometry_theta_offset_var.get() == "0.25"
+    assert geometry_fit_background_selection_var.get() == "current"

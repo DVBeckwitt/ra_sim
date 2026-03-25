@@ -112,6 +112,7 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui import background as gui_background
+from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui.geometry_overlay import (
@@ -1879,33 +1880,16 @@ fit_theta_checkbutton = None
 
 def _background_theta_default_value() -> float:
     """Return the fallback theta value used when no per-background list exists."""
-
-    try:
-        if "theta_initial_var" in globals() and theta_initial_var is not None:
-            return float(theta_initial_var.get())
-    except Exception:
-        pass
-    try:
-        if "defaults" in globals():
-            return float(defaults.get("theta_initial", theta_initial))
-    except Exception:
-        pass
-    return float(theta_initial)
+    return gui_background_theta.background_theta_default_value(
+        theta_initial_var=globals().get("theta_initial_var"),
+        defaults=defaults,
+        theta_initial=theta_initial,
+    )
 
 
 def _format_background_theta_values(values: Sequence[object]) -> str:
     """Format per-background theta values for the GUI entry."""
-
-    formatted: list[str] = []
-    for value in values:
-        try:
-            theta_val = float(value)
-        except Exception:
-            continue
-        if not np.isfinite(theta_val):
-            continue
-        formatted.append(f"{theta_val:.6g}")
-    return ", ".join(formatted)
+    return gui_background_theta.format_background_theta_values(values)
 
 
 def _parse_background_theta_values(
@@ -1914,55 +1898,22 @@ def _parse_background_theta_values(
     expected_count: int | None = None,
 ) -> list[float]:
     """Parse comma/space/semicolon separated background theta values."""
-
-    text = str(raw_text or "").strip()
-    if not text:
-        if expected_count is not None:
-            raise ValueError(
-                f"Expected {expected_count} background theta values, got 0."
-            )
-        return []
-
-    tokens = [token for token in re.split(r"[\s,;]+", text) if token]
-    values: list[float] = []
-    for token in tokens:
-        try:
-            theta_val = float(token)
-        except Exception as exc:
-            raise ValueError(f"Invalid theta value '{token}'.") from exc
-        if not np.isfinite(theta_val):
-            raise ValueError(f"Non-finite theta value '{token}'.")
-        values.append(float(theta_val))
-
-    if expected_count is not None and len(values) != int(expected_count):
-        raise ValueError(
-            f"Expected {int(expected_count)} background theta values, got {len(values)}."
-        )
-    return values
+    return gui_background_theta.parse_background_theta_values(
+        raw_text,
+        expected_count=expected_count,
+    )
 
 
 def _default_geometry_fit_background_selection() -> str:
     """Return the default geometry-fit background selector text."""
-
-    try:
-        return "all" if len(osc_files) > 1 else "current"
-    except Exception:
-        return "current"
+    return gui_background_theta.default_geometry_fit_background_selection(
+        osc_files=osc_files,
+    )
 
 
 def _format_geometry_fit_background_indices(indices: Sequence[object]) -> str:
     """Format a background-index list using 1-based labels for the GUI entry."""
-
-    labels: list[str] = []
-    for raw_value in indices:
-        try:
-            idx = int(raw_value)
-        except Exception:
-            continue
-        if idx < 0:
-            continue
-        labels.append(str(idx + 1))
-    return ", ".join(labels)
+    return gui_background_theta.format_geometry_fit_background_indices(indices)
 
 
 def _parse_geometry_fit_background_indices(
@@ -1972,168 +1923,53 @@ def _parse_geometry_fit_background_indices(
     current_index: int = 0,
 ) -> list[int]:
     """Parse geometry-fit background selection text into 0-based indices."""
-
-    count = max(0, int(total_count))
-    if count <= 0:
-        return []
-
-    current_idx = max(0, min(int(current_index), count - 1))
-    text = str(raw_text or "").strip().lower()
-    if not text:
-        return list(range(count)) if count > 1 else [current_idx]
-
-    indices: list[int] = []
-    saw_all = False
-    tokens = [token for token in re.split(r"[\s,;]+", text) if token]
-    for token in tokens:
-        if token in {"all", "*"}:
-            saw_all = True
-            indices = list(range(count))
-            continue
-        if token in {"current", "cur", "active"}:
-            indices.append(int(current_idx))
-            continue
-
-        range_match = re.fullmatch(r"(\d+)-(\d+)", token)
-        if range_match:
-            start_idx = int(range_match.group(1))
-            stop_idx = int(range_match.group(2))
-            if start_idx < 1 or stop_idx < 1:
-                raise ValueError(f"Background ranges are 1-based; got '{token}'.")
-            lo = max(1, min(start_idx, stop_idx))
-            hi = min(count, max(start_idx, stop_idx))
-            if lo > count:
-                raise ValueError(
-                    f"Background range '{token}' is outside the loaded background list."
-                )
-            indices.extend(idx - 1 for idx in range(lo, hi + 1))
-            continue
-
-        try:
-            selected_idx = int(token)
-        except Exception as exc:
-            raise ValueError(
-                "Geometry fit backgrounds must be 'current', 'all', "
-                "a 1-based index, or a range like '1-3'."
-            ) from exc
-        if selected_idx < 1 or selected_idx > count:
-            raise ValueError(
-                f"Background index '{token}' is outside the loaded background list 1-{count}."
-            )
-        indices.append(selected_idx - 1)
-
-    if saw_all:
-        return list(range(count))
-
-    unique_indices: list[int] = []
-    seen: set[int] = set()
-    for idx in indices:
-        if idx in seen:
-            continue
-        seen.add(idx)
-        unique_indices.append(int(idx))
-    if not unique_indices:
-        raise ValueError("Select at least one background for geometry fitting.")
-    return unique_indices
+    return gui_background_theta.parse_geometry_fit_background_indices(
+        raw_text,
+        total_count=total_count,
+        current_index=current_index,
+    )
 
 
 def _current_geometry_fit_background_indices(*, strict: bool = False) -> list[int]:
     """Return the background indices currently selected for geometry fitting."""
-
-    try:
-        total_count = int(len(osc_files))
-    except Exception:
-        total_count = 0
-    if total_count <= 0:
-        return []
-
-    default_indices = (
-        list(range(total_count))
-        if total_count > 1
-        else [max(0, min(int(current_background_index), total_count - 1))]
+    return gui_background_theta.current_geometry_fit_background_indices(
+        osc_files=osc_files,
+        current_background_index=current_background_index,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        strict=strict,
     )
-    if geometry_fit_background_selection_var is None:
-        return default_indices
-
-    raw_value = geometry_fit_background_selection_var.get()
-    try:
-        indices = _parse_geometry_fit_background_indices(
-            raw_value,
-            total_count=total_count,
-            current_index=int(current_background_index),
-        )
-    except Exception as exc:
-        if strict:
-            raise ValueError(f"Invalid fit background selection '{raw_value}'.") from exc
-        return default_indices
-    return indices or default_indices
 
 
 def _geometry_fit_uses_shared_theta_offset(
     selected_indices: Sequence[int] | None = None,
 ) -> bool:
     """Return whether geometry fitting should use a shared theta offset."""
-
-    if selected_indices is None:
-        try:
-            selected_indices = _current_geometry_fit_background_indices(strict=False)
-        except Exception:
-            selected_indices = []
-    return len([int(idx) for idx in selected_indices]) > 1
+    return gui_background_theta.geometry_fit_uses_shared_theta_offset(
+        selected_indices,
+        osc_files=osc_files,
+        current_background_index=current_background_index,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+    )
 
 
 def _current_geometry_theta_offset(*, strict: bool = False) -> float:
     """Return the shared theta offset used by multi-background fitting."""
-
-    if geometry_theta_offset_var is None:
-        return 0.0
-    raw_value = geometry_theta_offset_var.get()
-    try:
-        theta_offset = float(raw_value)
-    except Exception as exc:
-        if strict:
-            raise ValueError(f"Invalid shared theta offset '{raw_value}'.") from exc
-        return 0.0
-    if not np.isfinite(theta_offset):
-        if strict:
-            raise ValueError("Shared theta offset must be finite.")
-        return 0.0
-    return float(theta_offset)
+    return gui_background_theta.current_geometry_theta_offset(
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        strict=strict,
+    )
 
 
 def _current_background_theta_values(*, strict_count: bool = False) -> list[float]:
     """Return one configured theta value per loaded background image."""
-
-    expected_count = int(len(osc_files))
-    default_theta = _background_theta_default_value()
-    raw_values: list[float] = []
-    if background_theta_list_var is not None:
-        try:
-            raw_values = _parse_background_theta_values(
-                background_theta_list_var.get(),
-                expected_count=expected_count if strict_count else None,
-            )
-        except Exception:
-            if strict_count:
-                raise
-            raw_values = []
-
-    if strict_count:
-        if expected_count != len(raw_values):
-            raise ValueError(
-                f"Expected {expected_count} background theta values, got {len(raw_values)}."
-            )
-        return raw_values
-
-    if expected_count <= 0:
-        return []
-    if not raw_values:
-        return [float(default_theta)] * expected_count
-
-    values = list(raw_values[:expected_count])
-    if len(values) < expected_count:
-        values.extend([float(default_theta)] * (expected_count - len(values)))
-    return [float(v) for v in values]
+    return gui_background_theta.current_background_theta_values(
+        osc_files=osc_files,
+        theta_initial_var=globals().get("theta_initial_var"),
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        strict_count=strict_count,
+    )
 
 
 def _background_theta_for_index(
@@ -2142,36 +1978,27 @@ def _background_theta_for_index(
     strict_count: bool = False,
 ) -> float:
     """Return the effective theta used for one background index."""
-
-    theta_values = _current_background_theta_values(strict_count=strict_count)
-    if not theta_values:
-        return _background_theta_default_value()
-    idx = max(0, min(int(index), len(theta_values) - 1))
-    theta_val = float(theta_values[idx])
-    if _geometry_fit_uses_shared_theta_offset():
-        theta_val += _current_geometry_theta_offset(strict=strict_count)
-    return float(theta_val)
+    return gui_background_theta.background_theta_for_index(
+        index,
+        osc_files=osc_files,
+        theta_initial_var=globals().get("theta_initial_var"),
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        current_background_index=current_background_index,
+        strict_count=strict_count,
+    )
 
 
 def _refresh_geometry_fit_theta_checkbox_label() -> None:
     """Update the theta fit toggle label for single vs multi-background mode."""
-
-    if fit_theta_checkbutton is None:
-        return
-    shared_theta = _geometry_fit_uses_shared_theta_offset()
-    fit_theta_checkbutton.config(
-        text="θ shared offset" if shared_theta else "θ sample tilt"
+    gui_background_theta.refresh_geometry_fit_theta_checkbox_label(
+        fit_theta_checkbutton=fit_theta_checkbutton,
+        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        shared_theta=_geometry_fit_uses_shared_theta_offset(),
     )
-    theta_controls = globals().get("geometry_fit_constraint_controls", {})
-    if not isinstance(theta_controls, dict):
-        theta_controls = {}
-    theta_control = theta_controls.get("theta_initial", {})
-    if isinstance(theta_control, dict):
-        row = theta_control.get("row")
-        if row is not None:
-            row.configure(
-                text="Theta Shared Offset" if shared_theta else "Theta Sample Tilt"
-            )
 
 
 def _sync_background_theta_controls(
@@ -2180,33 +2007,22 @@ def _sync_background_theta_controls(
     trigger_update: bool = False,
 ) -> None:
     """Keep the theta list entry aligned with the currently loaded backgrounds."""
-
-    expected_count = int(len(osc_files))
-    default_theta = _background_theta_default_value()
-    current_values: list[float] = []
-    if preserve_existing:
-        current_values = _current_background_theta_values(strict_count=False)
-    if expected_count > 0:
-        current_values = list(current_values[:expected_count])
-        if len(current_values) < expected_count:
-            current_values.extend([float(default_theta)] * (expected_count - len(current_values)))
-    else:
-        current_values = []
-
-    if background_theta_list_var is not None:
-        background_theta_list_var.set(_format_background_theta_values(current_values))
-
-    _refresh_geometry_fit_theta_checkbox_label()
-    _set_background_file_status_text()
-
-    if "theta_initial_var" in globals() and theta_initial_var is not None and expected_count > 0:
-        try:
-            theta_initial_var.set(_background_theta_for_index(current_background_index, strict_count=False))
-        except Exception:
-            theta_initial_var.set(float(default_theta))
-
-    if trigger_update:
-        schedule_update()
+    gui_background_theta.sync_background_theta_controls(
+        osc_files=osc_files,
+        current_background_index=current_background_index,
+        theta_initial_var=globals().get("theta_initial_var"),
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        fit_theta_checkbutton=fit_theta_checkbutton,
+        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        set_background_file_status_text=_set_background_file_status_text,
+        schedule_update=schedule_update,
+        preserve_existing=preserve_existing,
+        trigger_update=trigger_update,
+    )
 
 
 def _apply_background_theta_metadata(
@@ -2215,30 +2031,23 @@ def _apply_background_theta_metadata(
     sync_live_theta: bool = True,
 ) -> bool:
     """Validate the theta list/offset entries and optionally refresh the display."""
-
-    try:
-        theta_values = _current_background_theta_values(strict_count=True)
-        _ = _current_geometry_theta_offset(strict=True)
-    except Exception as exc:
-        if "progress_label" in globals():
-            progress_label.config(text=f"Invalid background theta settings: {exc}")
-        return False
-
-    if background_theta_list_var is not None:
-        background_theta_list_var.set(_format_background_theta_values(theta_values))
-
-    _refresh_geometry_fit_theta_checkbox_label()
-    _set_background_file_status_text()
-    if (
-        sync_live_theta
-        and "theta_initial_var" in globals()
-        and theta_initial_var is not None
-        and theta_values
-    ):
-        theta_initial_var.set(_background_theta_for_index(current_background_index, strict_count=True))
-    if trigger_update:
-        schedule_update()
-    return True
+    return gui_background_theta.apply_background_theta_metadata(
+        osc_files=osc_files,
+        current_background_index=current_background_index,
+        theta_initial_var=globals().get("theta_initial_var"),
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        fit_theta_checkbutton=fit_theta_checkbutton,
+        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        set_background_file_status_text=_set_background_file_status_text,
+        schedule_update=schedule_update,
+        progress_label=globals().get("progress_label"),
+        trigger_update=trigger_update,
+        sync_live_theta=sync_live_theta,
+    )
 
 
 def _apply_geometry_fit_background_selection(
@@ -2247,71 +2056,43 @@ def _apply_geometry_fit_background_selection(
     sync_live_theta: bool = True,
 ) -> bool:
     """Validate the geometry-fit background selection entry."""
-
-    if geometry_fit_background_selection_var is None:
-        return True
-
-    live_theta_before = None
-    if sync_live_theta and "theta_initial_var" in globals() and theta_initial_var is not None:
-        try:
-            live_theta_before = float(theta_initial_var.get())
-        except Exception:
-            live_theta_before = None
-
-    try:
-        selected_indices = _current_geometry_fit_background_indices(strict=True)
-    except Exception as exc:
-        if "progress_label_geometry" in globals():
-            progress_label_geometry.config(
-                text=f"Invalid geometry fit background selection: {exc}"
-            )
-        return False
-
-    total_count = len(osc_files)
-    if total_count > 1 and len(selected_indices) == total_count:
-        geometry_fit_background_selection_var.set("all")
-    elif len(selected_indices) == 1 and int(selected_indices[0]) == int(current_background_index):
-        geometry_fit_background_selection_var.set("current")
-    else:
-        geometry_fit_background_selection_var.set(
-            _format_geometry_fit_background_indices(selected_indices)
-        )
-
-    _refresh_geometry_fit_theta_checkbox_label()
-    _set_background_file_status_text()
-
-    theta_changed = False
-    if sync_live_theta and "theta_initial_var" in globals() and theta_initial_var is not None:
-        try:
-            live_theta_after = float(
-                _background_theta_for_index(current_background_index, strict_count=False)
-            )
-            theta_initial_var.set(live_theta_after)
-            if (
-                live_theta_before is None
-                or not np.isfinite(live_theta_before)
-                or abs(float(live_theta_after) - float(live_theta_before)) > 1.0e-12
-            ):
-                theta_changed = True
-        except Exception:
-            theta_changed = bool(trigger_update)
-
-    if trigger_update and theta_changed:
-        schedule_update()
-    return True
+    return gui_background_theta.apply_geometry_fit_background_selection(
+        osc_files=osc_files,
+        current_background_index=current_background_index,
+        theta_initial_var=globals().get("theta_initial_var"),
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        fit_theta_checkbutton=fit_theta_checkbutton,
+        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        set_background_file_status_text=_set_background_file_status_text,
+        schedule_update=schedule_update,
+        progress_label_geometry=globals().get("progress_label_geometry"),
+        trigger_update=trigger_update,
+        sync_live_theta=sync_live_theta,
+    )
 
 
 def _sync_geometry_fit_background_selection(*, preserve_existing: bool = True) -> None:
     """Keep the fit-background selector valid when the background list changes."""
-
-    if geometry_fit_background_selection_var is None:
-        return
-
-    if preserve_existing:
-        if _apply_geometry_fit_background_selection(trigger_update=False):
-            return
-    geometry_fit_background_selection_var.set(_default_geometry_fit_background_selection())
-    _apply_geometry_fit_background_selection(trigger_update=False)
+    gui_background_theta.sync_geometry_fit_background_selection(
+        osc_files=osc_files,
+        current_background_index=current_background_index,
+        theta_initial_var=globals().get("theta_initial_var"),
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        fit_theta_checkbutton=fit_theta_checkbutton,
+        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        set_background_file_status_text=_set_background_file_status_text,
+        schedule_update=schedule_update,
+        progress_label_geometry=globals().get("progress_label_geometry"),
+        preserve_existing=preserve_existing,
+    )
 
 
 def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]:
