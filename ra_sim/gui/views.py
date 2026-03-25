@@ -7,7 +7,11 @@ from collections.abc import Callable, Sequence
 import tkinter as tk
 from tkinter import ttk
 
-from .state import BraggQrManagerViewState, GeometryQGroupViewState
+from .state import (
+    BraggQrManagerViewState,
+    GeometryQGroupViewState,
+    HbnGeometryDebugViewState,
+)
 
 
 _GEOMETRY_Q_GROUP_EMPTY_TEXT = (
@@ -509,4 +513,94 @@ def refresh_bragg_qr_manager_l_list(
     ):
         return False
     set_bragg_qr_manager_status_text(view_state, l_text=status_text)
+    return True
+
+
+def hbn_geometry_debug_window_open(view_state: HbnGeometryDebugViewState) -> bool:
+    """Return whether the hBN geometry debug viewer currently exists."""
+
+    if view_state.window is None:
+        return False
+    try:
+        return bool(view_state.window.winfo_exists())
+    except tk.TclError:
+        return False
+
+
+def set_hbn_geometry_debug_text(
+    view_state: HbnGeometryDebugViewState,
+    text: str,
+) -> None:
+    """Replace the read-only debug report text shown in the viewer."""
+
+    if view_state.text_widget is None:
+        return
+    try:
+        view_state.text_widget.configure(state=tk.NORMAL)
+        view_state.text_widget.delete("1.0", tk.END)
+        view_state.text_widget.insert("1.0", str(text))
+        view_state.text_widget.configure(state=tk.DISABLED)
+    except tk.TclError:
+        return
+
+
+def close_hbn_geometry_debug_window(view_state: HbnGeometryDebugViewState) -> None:
+    """Destroy the hBN geometry debug viewer and clear its widget references."""
+
+    if view_state.window is not None:
+        try:
+            view_state.window.destroy()
+        except tk.TclError:
+            pass
+    view_state.window = None
+    view_state.text_widget = None
+
+
+def open_hbn_geometry_debug_window(
+    *,
+    root: tk.Misc,
+    view_state: HbnGeometryDebugViewState,
+    text: str,
+    on_close: Callable[[], None] | None = None,
+) -> bool:
+    """Open the hBN geometry debug viewer if needed and populate its report."""
+
+    if hbn_geometry_debug_window_open(view_state):
+        set_hbn_geometry_debug_text(view_state, text)
+        try:
+            view_state.window.lift()
+            view_state.window.focus_force()
+        except tk.TclError:
+            pass
+        return False
+
+    if on_close is None:
+        on_close = lambda: close_hbn_geometry_debug_window(view_state)
+
+    window = tk.Toplevel(root)
+    window.title("hBN Geometry Debug")
+    window.geometry("980x560")
+
+    frame = ttk.Frame(window, padding=8)
+    frame.pack(fill=tk.BOTH, expand=True)
+
+    text_widget = tk.Text(frame, wrap=tk.NONE)
+    text_widget.grid(row=0, column=0, sticky="nsew")
+    y_scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text_widget.yview)
+    y_scroll.grid(row=0, column=1, sticky="ns")
+    x_scroll = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=text_widget.xview)
+    x_scroll.grid(row=1, column=0, sticky="ew")
+    text_widget.configure(
+        yscrollcommand=y_scroll.set,
+        xscrollcommand=x_scroll.set,
+    )
+
+    frame.rowconfigure(0, weight=1)
+    frame.columnconfigure(0, weight=1)
+
+    window.protocol("WM_DELETE_WINDOW", on_close)
+
+    view_state.window = window
+    view_state.text_widget = text_widget
+    set_hbn_geometry_debug_text(view_state, text)
     return True

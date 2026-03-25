@@ -5634,6 +5634,7 @@ hkl_pick_button_var = None
 _suppress_drag_press_once = False
 bragg_qr_manager_state = gui_state.BraggQrManagerState()
 bragg_qr_manager_view_state = gui_state.BraggQrManagerViewState()
+hbn_geometry_debug_view_state = gui_state.HbnGeometryDebugViewState()
 
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
@@ -10623,29 +10624,19 @@ last_hbn_geometry_debug_report = (
 )
 
 
+def _close_hbn_geometry_debug_window() -> None:
+    gui_views.close_hbn_geometry_debug_window(hbn_geometry_debug_view_state)
+
+
 def show_last_hbn_geometry_debug():
     """Display the most recent hBN->simulation geometry debug report."""
 
-    win = tk.Toplevel(root)
-    win.title("hBN Geometry Debug")
-    win.geometry("980x560")
-
-    frame = ttk.Frame(win, padding=8)
-    frame.pack(fill=tk.BOTH, expand=True)
-
-    text = tk.Text(frame, wrap=tk.NONE)
-    text.grid(row=0, column=0, sticky="nsew")
-    y_scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
-    y_scroll.grid(row=0, column=1, sticky="ns")
-    x_scroll = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=text.xview)
-    x_scroll.grid(row=1, column=0, sticky="ew")
-    text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-
-    frame.rowconfigure(0, weight=1)
-    frame.columnconfigure(0, weight=1)
-
-    text.insert("1.0", str(last_hbn_geometry_debug_report))
-    text.configure(state=tk.DISABLED)
+    gui_views.open_hbn_geometry_debug_window(
+        root=root,
+        view_state=hbn_geometry_debug_view_state,
+        text=str(last_hbn_geometry_debug_report),
+        on_close=_close_hbn_geometry_debug_window,
+    )
 
 
 def import_hbn_tilt_from_bundle():
@@ -10821,6 +10812,10 @@ def import_hbn_tilt_from_bundle():
             simulation_center_col=applied_center_col,
         )
         last_hbn_geometry_debug_report = format_hbn_geometry_debug_trace(debug_trace)
+        gui_views.set_hbn_geometry_debug_text(
+            hbn_geometry_debug_view_state,
+            str(last_hbn_geometry_debug_report),
+        )
         print(last_hbn_geometry_debug_report)
         debug_text = " [debug report updated]"
 

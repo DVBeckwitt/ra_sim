@@ -65,6 +65,11 @@ class _FakeWindow:
     def __init__(self, exists: bool = True) -> None:
         self.exists = exists
         self.destroyed = False
+        self.title_text = None
+        self.geometry_text = None
+        self.protocols = {}
+        self.lifted = False
+        self.focused = False
 
     def winfo_exists(self) -> bool:
         if self.exists == "error":
@@ -73,6 +78,90 @@ class _FakeWindow:
 
     def destroy(self) -> None:
         self.destroyed = True
+
+    def title(self, text: str) -> None:
+        self.title_text = text
+
+    def geometry(self, text: str) -> None:
+        self.geometry_text = text
+
+    def protocol(self, name: str, callback) -> None:
+        self.protocols[name] = callback
+
+    def lift(self) -> None:
+        self.lifted = True
+
+    def focus_force(self) -> None:
+        self.focused = True
+
+
+class _FakeFrame:
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.rowconfigure_calls = []
+        self.columnconfigure_calls = []
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+    def rowconfigure(self, index: int, weight: int) -> None:
+        self.rowconfigure_calls.append((index, weight))
+
+    def columnconfigure(self, index: int, weight: int) -> None:
+        self.columnconfigure_calls.append((index, weight))
+
+
+class _FakeScrollbar:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.set_calls = []
+        _FakeScrollbar.created.append(self)
+
+    def grid(self, **_kwargs) -> None:
+        pass
+
+    def set(self, *args) -> None:
+        self.set_calls.append(args)
+
+
+class _FakeText:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.content = ""
+        self.state = None
+        self.yscrollcommand = None
+        self.xscrollcommand = None
+        _FakeText.created.append(self)
+
+    def grid(self, **_kwargs) -> None:
+        pass
+
+    def configure(self, **kwargs) -> None:
+        if "state" in kwargs:
+            self.state = kwargs["state"]
+        if "yscrollcommand" in kwargs:
+            self.yscrollcommand = kwargs["yscrollcommand"]
+        if "xscrollcommand" in kwargs:
+            self.xscrollcommand = kwargs["xscrollcommand"]
+
+    def delete(self, _start, _end) -> None:
+        self.content = ""
+
+    def insert(self, _index, text: str) -> None:
+        self.content = str(text)
+
+    def yview(self, *_args) -> None:
+        pass
+
+    def xview(self, *_args) -> None:
+        pass
 
 
 class _FakeLabel:
@@ -247,3 +336,75 @@ def test_refresh_bragg_qr_manager_lists_update_status_and_selection() -> None:
     assert view_state.l_listbox.items == ["l-a", "l-b", "l-c"]
     assert view_state.l_listbox.selected == [0, 2]
     assert view_state.l_status_label.text == "l-status"
+
+
+def test_hbn_geometry_debug_view_helpers_close_and_report_open() -> None:
+    view_state = state.HbnGeometryDebugViewState()
+
+    assert views.hbn_geometry_debug_window_open(view_state) is False
+
+    window = _FakeWindow()
+    view_state.window = window
+    view_state.text_widget = object()
+
+    assert views.hbn_geometry_debug_window_open(view_state) is True
+
+    views.close_hbn_geometry_debug_window(view_state)
+    assert window.destroyed is True
+    assert view_state.window is None
+    assert view_state.text_widget is None
+
+    view_state.window = _FakeWindow(exists="error")
+    assert views.hbn_geometry_debug_window_open(view_state) is False
+
+
+def test_open_hbn_geometry_debug_window_populates_and_reuses_existing_window(
+    monkeypatch,
+) -> None:
+    _FakeText.created = []
+    _FakeScrollbar.created = []
+    created_windows = []
+
+    monkeypatch.setattr(
+        views.tk,
+        "Toplevel",
+        lambda _root: created_windows.append(_FakeWindow()) or created_windows[-1],
+    )
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.tk, "Text", _FakeText)
+
+    closed = []
+    view_state = state.HbnGeometryDebugViewState()
+
+    opened = views.open_hbn_geometry_debug_window(
+        root=object(),
+        view_state=view_state,
+        text="first report",
+        on_close=lambda: closed.append(True),
+    )
+
+    assert opened is True
+    assert len(created_windows) == 1
+    assert created_windows[0].title_text == "hBN Geometry Debug"
+    assert created_windows[0].geometry_text == "980x560"
+    assert created_windows[0].protocols["WM_DELETE_WINDOW"] is not None
+    assert view_state.text_widget is _FakeText.created[0]
+    assert view_state.text_widget.content == "first report"
+    assert view_state.text_widget.state == tk.DISABLED
+
+    reopened = views.open_hbn_geometry_debug_window(
+        root=object(),
+        view_state=view_state,
+        text="updated report",
+        on_close=lambda: closed.append(False),
+    )
+
+    assert reopened is False
+    assert len(created_windows) == 1
+    assert created_windows[0].lifted is True
+    assert created_windows[0].focused is True
+    assert view_state.text_widget.content == "updated report"
+
+    created_windows[0].protocols["WM_DELETE_WINDOW"]()
+    assert closed == [True]

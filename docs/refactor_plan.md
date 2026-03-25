@@ -72,6 +72,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     toggle mutations.
   - `ra_sim.gui.views` now owns the Bragg Qr manager window lifecycle and
     listbox rendering helpers.
+- hBN geometry debug viewer migration has landed.
+  - Shared widget references for the debug viewer now live in
+    `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns the debug window lifecycle and report-text
+    rendering helper.
+  - Direct view tests now cover the extracted debug viewer helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -113,6 +119,9 @@ What is done:
 - The Bragg Qr manager is no longer built directly in `runtime.py`.
   - `ra_sim.gui.views` now owns its window construction and listbox refresh
     helpers.
+- The hBN geometry debug viewer is no longer built directly in `runtime.py`.
+  - `ra_sim.gui.views` now owns its window construction and report-text
+    rendering.
 
 What is left:
 
@@ -154,6 +163,9 @@ What is done:
 - `controllers.py` now also owns Bragg-Qr manager selection/toggle helpers.
 - `views.py` now also owns the Bragg Qr manager window lifecycle and list
   rendering.
+- `state.py` now also owns hBN geometry debug view state.
+- `views.py` now also owns the hBN geometry debug viewer lifecycle and
+  report-text rendering.
 
 What is left:
 
@@ -423,11 +435,11 @@ Why last:
 The next best step is:
 
 - build on the new manual-geometry / geometry-fit-history / preview /
-  Q-group state-controller-view slices by moving the next runtime-owned GUI
+  Q-group / Bragg-Qr / hBN-debug slices by moving the next runtime-owned GUI
   workflows into explicit state + controller + view boundaries
-- focus next on the remaining standalone Tk windows and widget-heavy helpers
-  that still live inline in `runtime.py`, such as the hBN geometry debug
-  viewer and any similar one-off dialogs
+- focus next on the remaining widget-heavy helpers and long-lived Tk widget
+  references that still live inline in `runtime.py`, even when they are not
+  separate standalone dialogs
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.

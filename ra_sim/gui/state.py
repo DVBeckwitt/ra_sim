@@ -109,6 +109,14 @@ class BraggQrManagerViewState:
 
 
 @dataclass
+class HbnGeometryDebugViewState:
+    """Widget references for the hBN geometry debug viewer window."""
+
+    window: Any = None
+    text_widget: Any = None
+
+
+@dataclass
 class AppState:
     """Minimal mutable state container for GUI controller/view coordination."""
 
@@ -130,4 +138,7 @@ class AppState:
     bragg_qr_manager: BraggQrManagerState = field(default_factory=BraggQrManagerState)
     bragg_qr_manager_view: BraggQrManagerViewState = field(
         default_factory=BraggQrManagerViewState
+    )
+    hbn_geometry_debug_view: HbnGeometryDebugViewState = field(
+        default_factory=HbnGeometryDebugViewState
     )
