@@ -688,6 +688,70 @@ def geometry_manual_pick_session_active(
     return True
 
 
+def geometry_manual_unassigned_group_candidates(
+    pick_session: dict[str, object] | None,
+    *,
+    current_background_index: object = None,
+    require_current_background: bool = True,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+) -> list[dict[str, object]]:
+    """Return manual-pick group candidates that do not yet have a BG assignment."""
+
+    if not geometry_manual_pick_session_active(
+        pick_session,
+        current_background_index=current_background_index,
+        require_current_background=require_current_background,
+    ):
+        return []
+    if pick_session is None:
+        return []
+
+    group_entries = pick_session.get("group_entries", [])
+    pending_entries = pick_session.get("pending_entries", [])
+    if not isinstance(group_entries, list) or not isinstance(pending_entries, list):
+        return []
+    assigned_keys = {
+        candidate_source_key(entry)
+        for entry in pending_entries
+        if isinstance(entry, dict)
+    }
+    out: list[dict[str, object]] = []
+    for raw_entry in group_entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        source_key = candidate_source_key(raw_entry)
+        if source_key in assigned_keys:
+            continue
+        out.append(dict(raw_entry))
+    return out
+
+
+def geometry_manual_current_pending_candidate(
+    pick_session: dict[str, object] | None,
+    *,
+    current_background_index: object = None,
+    require_current_background: bool = True,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+) -> dict[str, object] | None:
+    """Return one remaining simulated peak awaiting a manual background click."""
+
+    remaining = geometry_manual_unassigned_group_candidates(
+        pick_session,
+        current_background_index=current_background_index,
+        require_current_background=require_current_background,
+        candidate_source_key=candidate_source_key,
+    )
+    if not remaining:
+        return None
+    return dict(remaining[0])
+
+
 def geometry_manual_nearest_candidate_to_point(
     col: float,
     row: float,
@@ -800,6 +864,562 @@ def geometry_manual_preview_due(
     pick_session["preview_last_t"] = float(now)
     pick_session["preview_last_xy"] = (float(col), float(row))
     return True
+
+
+def geometry_manual_refine_preview_point(
+    candidate: dict[str, object] | None,
+    raw_col: float,
+    raw_row: float,
+    *,
+    display_background: np.ndarray | None = None,
+    cache_data: dict[str, object] | None = None,
+    build_cache_data: Callable[[], dict[str, object]] | None = None,
+    use_caked_space: bool,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    match_simulated_peaks_to_peak_context: Callable[
+        [Sequence[dict[str, object]], dict[str, object], dict[str, object]],
+        tuple[Sequence[dict[str, object]], object],
+    ] | None = None,
+    peak_maximum_near_in_image_fn: Callable[[np.ndarray | None, float, float], tuple[float, float]] = peak_maximum_near_in_image,
+    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
+    caked_image_index_to_axis_fn: Callable[[float, Sequence[float] | None], float] = caked_image_index_to_axis,
+    refine_caked_peak_center_fn: Callable[
+        [np.ndarray | None, Sequence[float] | None, Sequence[float] | None, float, float],
+        tuple[float, float],
+    ] = refine_caked_peak_center,
+) -> tuple[float, float]:
+    """Refine one manual raw click/release position to the best background peak."""
+
+    background_local = display_background
+    if background_local is None:
+        return float(raw_col), float(raw_row)
+
+    state = cache_data if isinstance(cache_data, dict) else {}
+    if not state and callable(build_cache_data):
+        try:
+            built_state = build_cache_data()
+        except Exception:
+            built_state = {}
+        if isinstance(built_state, dict):
+            state = built_state
+
+    match_cfg = dict(state.get("match_config", {})) if isinstance(state, dict) else {}
+    background_context = state.get("background_context") if isinstance(state, dict) else None
+    fallback_radius = max(
+        3,
+        int(round(min(8.0, 0.33 * float(match_cfg.get("search_radius_px", 18.0))))),
+    )
+
+    refined_col = float(raw_col)
+    refined_row = float(raw_row)
+    used_peak_context = False
+    if use_caked_space:
+        radial_axis_arr = np.asarray(radial_axis, dtype=float)
+        azimuth_axis_arr = np.asarray(azimuth_axis, dtype=float)
+        raw_col_local = caked_axis_to_image_index_fn(float(raw_col), radial_axis_arr)
+        raw_row_local = caked_axis_to_image_index_fn(float(raw_row), azimuth_axis_arr)
+        if (
+            isinstance(background_context, dict)
+            and bool(background_context.get("img_valid", False))
+            and callable(match_simulated_peaks_to_peak_context)
+            and np.isfinite(raw_col_local)
+            and np.isfinite(raw_row_local)
+        ):
+            seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
+            seed_entry["sim_col"] = float(raw_col)
+            seed_entry["sim_row"] = float(raw_row)
+            seed_entry["sim_col_global"] = float(raw_col)
+            seed_entry["sim_row_global"] = float(raw_row)
+            seed_entry["sim_col_local"] = float(raw_col_local)
+            seed_entry["sim_row_local"] = float(raw_row_local)
+            try:
+                manual_matches, _manual_stats = match_simulated_peaks_to_peak_context(
+                    [seed_entry],
+                    background_context,
+                    match_cfg,
+                )
+            except Exception:
+                manual_matches = []
+            if manual_matches:
+                try:
+                    refined_col = float(
+                        caked_image_index_to_axis_fn(
+                            float(manual_matches[0].get("x", raw_col_local)),
+                            radial_axis_arr,
+                        )
+                    )
+                    refined_row = float(
+                        caked_image_index_to_axis_fn(
+                            float(manual_matches[0].get("y", raw_row_local)),
+                            azimuth_axis_arr,
+                        )
+                    )
+                    used_peak_context = np.isfinite(refined_col) and np.isfinite(refined_row)
+                except Exception:
+                    refined_col = float(raw_col)
+                    refined_row = float(raw_row)
+        if not used_peak_context or not (np.isfinite(refined_col) and np.isfinite(refined_row)):
+            refined_col, refined_row = refine_caked_peak_center_fn(
+                np.asarray(background_local, dtype=float),
+                radial_axis_arr,
+                azimuth_axis_arr,
+                float(raw_col),
+                float(raw_row),
+            )
+        return float(refined_col), float(refined_row)
+
+    if (
+        isinstance(background_context, dict)
+        and bool(background_context.get("img_valid", False))
+        and callable(match_simulated_peaks_to_peak_context)
+    ):
+        seed_entry = dict(candidate) if isinstance(candidate, dict) else {}
+        seed_entry["sim_col"] = float(raw_col)
+        seed_entry["sim_row"] = float(raw_row)
+        try:
+            manual_matches, _manual_stats = match_simulated_peaks_to_peak_context(
+                [seed_entry],
+                background_context,
+                match_cfg,
+            )
+        except Exception:
+            manual_matches = []
+        if manual_matches:
+            try:
+                refined_col = float(manual_matches[0].get("x", refined_col))
+                refined_row = float(manual_matches[0].get("y", refined_row))
+                used_peak_context = np.isfinite(refined_col) and np.isfinite(refined_row)
+            except Exception:
+                refined_col = float(raw_col)
+                refined_row = float(raw_row)
+    if not used_peak_context or not (np.isfinite(refined_col) and np.isfinite(refined_row)):
+        refined_col, refined_row = peak_maximum_near_in_image_fn(
+            background_local,
+            float(raw_col),
+            float(raw_row),
+            search_radius=fallback_radius,
+        )
+    return float(refined_col), float(refined_row)
+
+
+def restore_geometry_manual_pick_view(
+    pick_session: dict[str, object] | None,
+    *,
+    axis: Any,
+    canvas: Any = None,
+    redraw: bool = True,
+) -> bool:
+    """Restore the pre-zoom axis view for manual background placement."""
+
+    if not isinstance(pick_session, dict):
+        return False
+    if not bool(pick_session.get("zoom_active", False)):
+        return False
+    saved_xlim = pick_session.get("saved_xlim")
+    saved_ylim = pick_session.get("saved_ylim")
+    if isinstance(saved_xlim, tuple) and len(saved_xlim) == 2:
+        axis.set_xlim(float(saved_xlim[0]), float(saved_xlim[1]))
+    if isinstance(saved_ylim, tuple) and len(saved_ylim) == 2:
+        axis.set_ylim(float(saved_ylim[0]), float(saved_ylim[1]))
+    pick_session["zoom_active"] = False
+    pick_session["zoom_center"] = None
+    pick_session["saved_xlim"] = None
+    pick_session["saved_ylim"] = None
+    if redraw and canvas is not None:
+        canvas.draw_idle()
+    return True
+
+
+def apply_geometry_manual_pick_zoom(
+    pick_session: dict[str, object] | None,
+    col: float,
+    row: float,
+    *,
+    display_background: np.ndarray | None,
+    axis: Any,
+    canvas: Any = None,
+    use_caked_space: bool,
+    last_caked_extent: Sequence[float] | None = None,
+    caked_zoom_tth_deg: float,
+    caked_zoom_phi_deg: float,
+    pick_zoom_window_px: float,
+    anchor_fraction_x: float = 0.5,
+    anchor_fraction_y: float = 0.5,
+    anchor_axis_limits_fn: Callable[[float, float, float, float, float], tuple[float, float]] = geometry_manual_anchor_axis_limits,
+) -> bool:
+    """Zoom to a fixed local window while the user is placing manual points."""
+
+    if not geometry_manual_pick_session_active(pick_session, require_current_background=False):
+        return False
+    if pick_session is None or display_background is None:
+        return False
+
+    try:
+        current_xlim = tuple(float(v) for v in axis.get_xlim())
+    except Exception:
+        current_xlim = (0.0, 1.0)
+    try:
+        current_ylim = tuple(float(v) for v in axis.get_ylim())
+    except Exception:
+        current_ylim = (0.0, 1.0)
+    x_sign = 1.0 if len(current_xlim) < 2 or current_xlim[1] >= current_xlim[0] else -1.0
+    y_sign = 1.0 if len(current_ylim) < 2 or current_ylim[1] >= current_ylim[0] else -1.0
+
+    if use_caked_space:
+        if last_caked_extent is not None and len(last_caked_extent) >= 4:
+            x_lo = float(last_caked_extent[0])
+            x_hi = float(last_caked_extent[1])
+            y_lo = float(last_caked_extent[2])
+            y_hi = float(last_caked_extent[3])
+        else:
+            x_lo, x_hi = sorted(current_xlim)
+            y_lo, y_hi = sorted(current_ylim)
+        x_span = x_sign * min(abs(float(caked_zoom_tth_deg)), abs(float(x_hi) - float(x_lo)))
+        y_span = y_sign * min(abs(float(caked_zoom_phi_deg)), abs(float(y_hi) - float(y_lo)))
+        x_min, x_max = anchor_axis_limits_fn(
+            float(col),
+            float(x_span),
+            float(anchor_fraction_x),
+            float(x_lo),
+            float(x_hi),
+        )
+        y_min, y_max = anchor_axis_limits_fn(
+            float(row),
+            float(y_span),
+            float(anchor_fraction_y),
+            float(y_lo),
+            float(y_hi),
+        )
+        if x_min == x_max or y_min == y_max:
+            return False
+        if not bool(pick_session.get("zoom_active", False)):
+            pick_session["saved_xlim"] = tuple(float(v) for v in axis.get_xlim())
+            pick_session["saved_ylim"] = tuple(float(v) for v in axis.get_ylim())
+        pick_session["zoom_active"] = True
+        pick_session["zoom_center"] = (float(col), float(row))
+        axis.set_xlim(float(x_min), float(x_max))
+        axis.set_ylim(float(y_min), float(y_max))
+        if canvas is not None:
+            canvas.draw_idle()
+        return True
+
+    background_shape = np.asarray(display_background).shape
+    height = max(1.0, float(background_shape[0]))
+    width = max(1.0, float(background_shape[1]))
+    x_span = x_sign * min(float(pick_zoom_window_px), width)
+    y_span = y_sign * min(float(pick_zoom_window_px), height)
+    x_min, x_max = anchor_axis_limits_fn(
+        float(col),
+        float(x_span),
+        float(anchor_fraction_x),
+        0.0,
+        float(width),
+    )
+    y_min, y_max = anchor_axis_limits_fn(
+        float(row),
+        float(y_span),
+        float(anchor_fraction_y),
+        0.0,
+        float(height),
+    )
+    if not bool(pick_session.get("zoom_active", False)):
+        pick_session["saved_xlim"] = tuple(float(v) for v in axis.get_xlim())
+        pick_session["saved_ylim"] = tuple(float(v) for v in axis.get_ylim())
+    pick_session["zoom_active"] = True
+    pick_session["zoom_center"] = (float(col), float(row))
+    axis.set_xlim(x_min, x_max)
+    axis.set_ylim(y_min, y_max)
+    if canvas is not None:
+        canvas.draw_idle()
+    return True
+
+
+def geometry_manual_pick_preview_state(
+    raw_col: float,
+    raw_row: float,
+    *,
+    pick_session: dict[str, object] | None,
+    current_background_index: object,
+    force: bool = False,
+    remaining_candidates: Sequence[dict[str, object]] | None,
+    display_background: np.ndarray | None,
+    cache_data: dict[str, object] | None = None,
+    build_cache_data: Callable[[], dict[str, object]] | None = None,
+    refine_preview_point: Callable[..., tuple[float, float]],
+    preview_due: Callable[[float, float], bool] | None = None,
+    nearest_candidate_to_point: Callable[
+        [float, float, Sequence[dict[str, object]] | None],
+        tuple[dict[str, object] | None, float],
+    ] = geometry_manual_nearest_candidate_to_point,
+    position_error_px: Callable[[float, float, float, float], float] = geometry_manual_position_error_px,
+    position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
+    use_caked_space: bool,
+    caked_angles_to_background_display_coords: Callable[[float, float], tuple[float | None, float | None]] | None = None,
+) -> dict[str, object] | None:
+    """Return preview state for one manual placement cursor position."""
+
+    if not geometry_manual_pick_session_active(
+        pick_session,
+        current_background_index=current_background_index,
+    ):
+        return None
+    if pick_session is None:
+        return None
+    if not force and callable(preview_due) and not preview_due(float(raw_col), float(raw_row)):
+        return None
+    if display_background is None:
+        return None
+
+    state = cache_data if isinstance(cache_data, dict) else None
+    if state is None and callable(build_cache_data):
+        try:
+            built_state = build_cache_data()
+        except Exception:
+            built_state = None
+        if isinstance(built_state, dict):
+            state = built_state
+
+    refined_col, refined_row = refine_preview_point(
+        None,
+        float(raw_col),
+        float(raw_row),
+        display_background=display_background,
+        cache_data=state,
+    )
+    candidate, sim_dist = nearest_candidate_to_point(
+        float(refined_col),
+        float(refined_row),
+        remaining_candidates,
+    )
+    delta = float(
+        position_error_px(
+            float(raw_col),
+            float(raw_row),
+            float(refined_col),
+            float(refined_row),
+        )
+    )
+    if use_caked_space and callable(caked_angles_to_background_display_coords):
+        raw_display = caked_angles_to_background_display_coords(float(raw_col), float(raw_row))
+        refined_display = caked_angles_to_background_display_coords(
+            float(refined_col),
+            float(refined_row),
+        )
+        if (
+            raw_display[0] is not None
+            and raw_display[1] is not None
+            and refined_display[0] is not None
+            and refined_display[1] is not None
+        ):
+            delta = float(
+                position_error_px(
+                    float(raw_display[0]),
+                    float(raw_display[1]),
+                    float(refined_display[0]),
+                    float(refined_display[1]),
+                )
+            )
+    sigma_px = position_sigma_px(delta)
+    candidate_label = str(candidate.get("label", "")) if isinstance(candidate, dict) else ""
+    q_label = str(
+        pick_session.get(
+            "q_label",
+            pick_session.get("group_key", "selected Qr/Qz set"),
+        )
+    )
+    message = (
+        f"Manual pick preview for {q_label}: "
+        f"release=({float(raw_col):.1f},{float(raw_row):.1f}) -> "
+        f"refined=({float(refined_col):.1f},{float(refined_row):.1f}), "
+        f"placement error={delta:.2f}px, sigma={float(sigma_px):.2f}px"
+    )
+    if candidate_label:
+        message += f" -> nearest sim [{candidate_label}]"
+        if np.isfinite(sim_dist):
+            message += f" ({float(sim_dist):.2f}{' deg' if use_caked_space else 'px'})"
+    return {
+        "raw_col": float(raw_col),
+        "raw_row": float(raw_row),
+        "refined_col": float(refined_col),
+        "refined_row": float(refined_row),
+        "candidate": candidate,
+        "sim_dist": float(sim_dist),
+        "delta": float(delta),
+        "sigma_px": float(sigma_px),
+        "message": message,
+    }
+
+
+def geometry_manual_session_initial_pairs_display(
+    pick_session: dict[str, object] | None,
+    *,
+    current_background_index: object = None,
+    require_current_background: bool = True,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+    entry_display_coords: Callable[
+        [dict[str, object] | None],
+        tuple[float, float] | None,
+    ],
+) -> list[dict[str, object]]:
+    """Return overlay-ready display entries for the in-progress manual pick session."""
+
+    if not geometry_manual_pick_session_active(
+        pick_session,
+        current_background_index=current_background_index,
+        require_current_background=require_current_background,
+    ):
+        return []
+    if pick_session is None:
+        return []
+
+    group_entries = pick_session.get("group_entries", [])
+    pending_entries = pick_session.get("pending_entries", [])
+    if not isinstance(group_entries, list) or not isinstance(pending_entries, list):
+        return []
+
+    pending_lookup: dict[tuple[object, ...], dict[str, object]] = {}
+    for raw_entry in pending_entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        source_key = candidate_source_key(raw_entry)
+        if source_key is not None:
+            pending_lookup[source_key] = raw_entry
+
+    initial_pairs_display: list[dict[str, object]] = []
+    for pair_idx, raw_entry in enumerate(group_entries):
+        if not isinstance(raw_entry, dict):
+            continue
+        entry: dict[str, object] = {
+            "overlay_match_index": int(pair_idx),
+            "hkl": raw_entry.get("hkl", raw_entry.get("label")),
+        }
+        try:
+            sim_col = float(raw_entry.get("sim_col"))
+            sim_row = float(raw_entry.get("sim_row"))
+        except Exception:
+            sim_col = float("nan")
+            sim_row = float("nan")
+        if np.isfinite(sim_col) and np.isfinite(sim_row):
+            entry["sim_display"] = (float(sim_col), float(sim_row))
+
+        source_key = candidate_source_key(raw_entry)
+        measured_entry = pending_lookup.get(source_key) if source_key is not None else None
+        if isinstance(measured_entry, dict):
+            bg_coords = entry_display_coords(measured_entry)
+            if bg_coords is not None:
+                entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
+        initial_pairs_display.append(entry)
+    return initial_pairs_display
+
+
+def cancel_geometry_manual_pick_session(
+    pick_session: dict[str, object] | None,
+    *,
+    current_background_index: object = None,
+    restore_view_fn: Callable[..., None],
+    clear_preview_artists_fn: Callable[..., None],
+    render_current_pairs_fn: Callable[..., None],
+    update_button_label_fn: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+    restore_view: bool = True,
+    redraw: bool = True,
+    message: str | None = None,
+) -> dict[str, object]:
+    """Discard any in-progress manual Qr/Qz placement state."""
+
+    had_session = geometry_manual_pick_session_active(
+        pick_session,
+        current_background_index=current_background_index,
+        require_current_background=False,
+    )
+    if restore_view:
+        restore_view_fn(redraw=False)
+    clear_preview_artists_fn(redraw=False)
+    if had_session and redraw:
+        render_current_pairs_fn(update_status=False)
+    update_button_label_fn()
+    if message and callable(set_status_text):
+        set_status_text(message)
+    return {}
+
+
+def match_geometry_manual_group_to_background(
+    candidate_entries: Sequence[dict[str, object]] | None,
+    *,
+    background_image: np.ndarray | None = None,
+    cache_data: dict[str, object] | None = None,
+    build_cache_data: Callable[[], dict[str, object]] | None = None,
+    auto_match_background_context: Callable[
+        [np.ndarray, dict[str, object]],
+        tuple[dict[str, object], dict[str, object]],
+    ] | None = None,
+    match_simulated_peaks_to_peak_context: Callable[
+        [Sequence[dict[str, object]], dict[str, object], dict[str, object]],
+        tuple[Sequence[dict[str, object]], object],
+    ],
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+) -> dict[tuple[object, ...], tuple[float, float]]:
+    """Return refined measured peak centers for one clicked symmetric Qr/Qz group."""
+
+    entries = [dict(entry) for entry in candidate_entries or [] if isinstance(entry, dict)]
+    if not entries:
+        return {}
+
+    background_local = background_image
+    if background_local is None:
+        return {}
+
+    state = cache_data if isinstance(cache_data, dict) else {}
+    if not state and callable(build_cache_data):
+        try:
+            built_state = build_cache_data()
+        except Exception:
+            built_state = {}
+        if isinstance(built_state, dict):
+            state = built_state
+
+    match_cfg = dict(state.get("match_config", {})) if isinstance(state, dict) else {}
+    background_context = state.get("background_context") if isinstance(state, dict) else None
+    if not isinstance(background_context, dict) or not bool(background_context.get("img_valid", False)):
+        if not callable(auto_match_background_context):
+            return {}
+        try:
+            match_cfg, background_context = auto_match_background_context(
+                background_local,
+                match_cfg,
+            )
+        except Exception:
+            return {}
+
+    try:
+        matches, _stats = match_simulated_peaks_to_peak_context(
+            entries,
+            background_context,
+            match_cfg,
+        )
+    except Exception:
+        return {}
+
+    matched_lookup: dict[tuple[object, ...], tuple[float, float]] = {}
+    for match_entry in matches:
+        source_key = candidate_source_key(match_entry)
+        if source_key is None:
+            continue
+        try:
+            match_col = float(match_entry.get("x", np.nan))
+            match_row = float(match_entry.get("y", np.nan))
+        except Exception:
+            continue
+        if np.isfinite(match_col) and np.isfinite(match_row):
+            matched_lookup[source_key] = (float(match_col), float(match_row))
+    return matched_lookup
 
 
 def ensure_geometry_fit_caked_view(

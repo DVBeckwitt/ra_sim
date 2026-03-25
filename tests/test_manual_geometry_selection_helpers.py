@@ -14,6 +14,32 @@ class _DummyVar:
         self._value = value
 
 
+class _DummyAxis:
+    def __init__(self, xlim=(0.0, 1.0), ylim=(0.0, 1.0)):
+        self._xlim = tuple(float(v) for v in xlim)
+        self._ylim = tuple(float(v) for v in ylim)
+
+    def get_xlim(self):
+        return self._xlim
+
+    def get_ylim(self):
+        return self._ylim
+
+    def set_xlim(self, left, right):
+        self._xlim = (float(left), float(right))
+
+    def set_ylim(self, bottom, top):
+        self._ylim = (float(bottom), float(top))
+
+
+class _DummyCanvas:
+    def __init__(self) -> None:
+        self.draws = 0
+
+    def draw_idle(self):
+        self.draws += 1
+
+
 def _pairs_for_index(pairs_by_background: dict[int, list[dict[str, object]]], index: int):
     return mg.geometry_manual_pairs_for_index(
         index,
@@ -460,3 +486,216 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
     assert restored["raw_y"] == 11.0
     assert restored["placement_error_px"] == 1.25
     assert restored["sigma_px"] == 1.46
+
+
+def test_geometry_manual_unassigned_candidates_and_current_pending_candidate() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {"label": "1,0,0", "source_table_index": 1, "source_row_index": 2},
+            {"label": "-1,0,0", "source_table_index": 1, "source_row_index": 3},
+        ],
+        "pending_entries": [
+            {"label": "1,0,0", "source_table_index": 1, "source_row_index": 2, "x": 8.0, "y": 9.0}
+        ],
+        "background_index": 0,
+    }
+
+    remaining = mg.geometry_manual_unassigned_group_candidates(
+        session,
+        current_background_index=0,
+    )
+    pending = mg.geometry_manual_current_pending_candidate(
+        session,
+        current_background_index=0,
+    )
+
+    assert len(remaining) == 1
+    assert remaining[0]["label"] == "-1,0,0"
+    assert pending["label"] == "-1,0,0"
+
+
+def test_geometry_manual_refine_preview_point_falls_back_to_local_peak_maximum() -> None:
+    image = np.zeros((9, 9), dtype=float)
+    image[6, 5] = 9.5
+
+    refined = mg.geometry_manual_refine_preview_point(
+        None,
+        4.9,
+        5.8,
+        display_background=image,
+        cache_data={"match_config": {}, "background_context": None},
+        use_caked_space=False,
+    )
+
+    assert refined == (5.0, 6.0)
+
+
+def test_restore_geometry_manual_pick_view_resets_zoom_state() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [],
+        "zoom_active": True,
+        "zoom_center": (5.0, 6.0),
+        "saved_xlim": (10.0, 20.0),
+        "saved_ylim": (30.0, 40.0),
+    }
+    axis = _DummyAxis()
+    canvas = _DummyCanvas()
+
+    restored = mg.restore_geometry_manual_pick_view(session, axis=axis, canvas=canvas)
+
+    assert restored is True
+    assert axis.get_xlim() == (10.0, 20.0)
+    assert axis.get_ylim() == (30.0, 40.0)
+    assert session["zoom_active"] is False
+    assert session["zoom_center"] is None
+    assert session["saved_xlim"] is None
+    assert session["saved_ylim"] is None
+    assert canvas.draws == 1
+
+
+def test_apply_geometry_manual_pick_zoom_updates_axis_and_session() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [],
+        "background_index": 0,
+        "zoom_active": False,
+    }
+    axis = _DummyAxis((0.0, 300.0), (0.0, 200.0))
+    canvas = _DummyCanvas()
+
+    updated = mg.apply_geometry_manual_pick_zoom(
+        session,
+        150.0,
+        80.0,
+        display_background=np.zeros((200, 300), dtype=float),
+        axis=axis,
+        canvas=canvas,
+        use_caked_space=False,
+        caked_zoom_tth_deg=4.0,
+        caked_zoom_phi_deg=24.0,
+        pick_zoom_window_px=100.0,
+    )
+
+    assert updated is True
+    assert axis.get_xlim() == (100.0, 200.0)
+    assert axis.get_ylim() == (30.0, 130.0)
+    assert session["zoom_active"] is True
+    assert session["zoom_center"] == (150.0, 80.0)
+    assert session["saved_xlim"] == (0.0, 300.0)
+    assert session["saved_ylim"] == (0.0, 200.0)
+    assert canvas.draws == 1
+
+
+def test_geometry_manual_pick_preview_state_builds_status_message() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "q_label": "test group",
+        "group_entries": [{"label": "1,0,0"}],
+        "background_index": 0,
+    }
+
+    preview = mg.geometry_manual_pick_preview_state(
+        10.0,
+        20.0,
+        pick_session=session,
+        current_background_index=0,
+        force=True,
+        remaining_candidates=[{"label": "right", "sim_col": 12.5, "sim_row": 14.5}],
+        display_background=np.zeros((8, 8), dtype=float),
+        refine_preview_point=lambda *_args, **_kwargs: (12.0, 14.0),
+        preview_due=lambda *_args, **_kwargs: True,
+        use_caked_space=False,
+    )
+
+    assert preview is not None
+    assert preview["refined_col"] == 12.0
+    assert preview["refined_row"] == 14.0
+    assert preview["delta"] > 0.0
+    assert preview["sigma_px"] > preview["delta"]
+    assert "test group" in preview["message"]
+    assert "nearest sim [right]" in preview["message"]
+
+
+def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_points() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 5.0,
+                "sim_row": 6.0,
+            }
+        ],
+        "pending_entries": [
+            {
+                "label": "1,0,0",
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "x": 9.0,
+                "y": 10.0,
+            }
+        ],
+        "background_index": 0,
+    }
+
+    entries = mg.geometry_manual_session_initial_pairs_display(
+        session,
+        current_background_index=0,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["sim_display"] == (5.0, 6.0)
+    assert entries[0]["bg_display"] == (9.0, 10.0)
+
+
+def test_cancel_geometry_manual_pick_session_clears_session_and_triggers_callbacks() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 0),
+        "group_entries": [],
+        "background_index": 0,
+    }
+    calls: list[tuple[str, object]] = []
+
+    cleared = mg.cancel_geometry_manual_pick_session(
+        session,
+        current_background_index=0,
+        restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
+        clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        update_button_label_fn=lambda: calls.append(("button", None)),
+        set_status_text=lambda text: calls.append(("status", text)),
+        message="done",
+    )
+
+    assert cleared == {}
+    assert ("restore", False) in calls
+    assert ("clear", False) in calls
+    assert ("render", False) in calls
+    assert ("button", None) in calls
+    assert ("status", "done") in calls
+
+
+def test_match_geometry_manual_group_to_background_builds_source_lookup() -> None:
+    matches = mg.match_geometry_manual_group_to_background(
+        [{"label": "1,0,0", "source_table_index": 3, "source_row_index": 8}],
+        background_image=np.zeros((8, 8), dtype=float),
+        cache_data={"match_config": {"search_radius_px": 12.0}, "background_context": {"img_valid": True}},
+        match_simulated_peaks_to_peak_context=lambda entries, _context, _cfg: (
+            [
+                {
+                    "source_table_index": entries[0]["source_table_index"],
+                    "source_row_index": entries[0]["source_row_index"],
+                    "x": 1.5,
+                    "y": 2.5,
+                }
+            ],
+            {},
+        ),
+    )
+
+    assert matches == {("source", 3, 8): (1.5, 2.5)}
