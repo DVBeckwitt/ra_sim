@@ -112,6 +112,7 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui import background as gui_background
+from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compute_geometry_overlay_frame_diagnostics,
@@ -2402,49 +2403,16 @@ def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k:
     The transformation mirrors what ``np.rot90`` does to the underlying image so
     point overlays stay aligned with whichever orientation we render.
     """
-
-    height, width = shape[:2]
-    col_new, row_new = float(col), float(row)
-
-    # Apply the 90° rotation step-by-step to mirror ``np.rot90``'s behavior for
-    # any integer ``k`` (positive for CCW, negative for CW).
-    for _ in range(k % 4):
-        row_new, col_new, height, width = width - 1 - col_new, row_new, width, height
-
-    return col_new, row_new
+    return gui_geometry_overlay.rotate_point_for_display(col, row, shape, k)
 
 
 def _rotate_measured_peaks_for_display(measured, rotated_shape):
     """Rotate measured-peak coordinates to match the displayed background."""
-
-    if measured is None:
-        return []
-
-    rotated_entries = []
-    for entry in measured:
-        if isinstance(entry, dict):
-            updated = dict(entry)
-            if "x" in updated and "y" in updated:
-                updated["x"], updated["y"] = _rotate_point_for_display(
-                    updated["x"], updated["y"], rotated_shape, DISPLAY_ROTATE_K
-                )
-            if "x_pix" in updated and "y_pix" in updated:
-                updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
-                    updated["x_pix"], updated["y_pix"], rotated_shape, DISPLAY_ROTATE_K
-                )
-            rotated_entries.append(updated)
-            continue
-
-        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
-            seq = list(entry)
-            seq[3], seq[4] = _rotate_point_for_display(
-                seq[3], seq[4], rotated_shape, DISPLAY_ROTATE_K
-            )
-            rotated_entries.append(type(entry)(seq))
-        else:
-            rotated_entries.append(entry)
-
-    return rotated_entries
+    return gui_geometry_overlay.rotate_measured_peaks_for_display(
+        measured,
+        rotated_shape,
+        display_rotate_k=DISPLAY_ROTATE_K,
+    )
 
 
 def _unrotate_display_peaks(measured, rotated_shape, *, k=None):
@@ -2455,38 +2423,12 @@ def _unrotate_display_peaks(measured, rotated_shape, *, k=None):
     native orientation.
     """
 
-    if measured is None:
-        return []
-
-    if k is None:
-        k = DISPLAY_ROTATE_K
-    inv_k = -int(k)
-
-    unrotated = []
-    for entry in measured:
-        if isinstance(entry, dict):
-            updated = dict(entry)
-            if "x" in updated and "y" in updated:
-                updated["x"], updated["y"] = _rotate_point_for_display(
-                    updated["x"], updated["y"], rotated_shape, inv_k
-                )
-            if "x_pix" in updated and "y_pix" in updated:
-                updated["x_pix"], updated["y_pix"] = _rotate_point_for_display(
-                    updated["x_pix"], updated["y_pix"], rotated_shape, inv_k
-                )
-            unrotated.append(updated)
-            continue
-
-        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
-            seq = list(entry)
-            seq[3], seq[4] = _rotate_point_for_display(
-                seq[3], seq[4], rotated_shape, inv_k
-            )
-            unrotated.append(type(entry)(seq))
-        else:
-            unrotated.append(entry)
-
-    return unrotated
+    return gui_geometry_overlay.unrotate_display_peaks(
+        measured,
+        rotated_shape,
+        k=k,
+        default_display_rotate_k=DISPLAY_ROTATE_K,
+    )
 
 
 def _apply_indexing_mode_to_entries(
@@ -2496,41 +2438,11 @@ def _apply_indexing_mode_to_entries(
     indexing_mode: str = "xy",
 ):
     """Swap x/y coordinates when using alternate indexing modes."""
-
-    if measured is None:
-        return []
-
-    _ = shape  # retained for signature parity with orientation helpers
-
-    mode = (indexing_mode or "xy").lower()
-    if mode == "xy":
-        return list(measured)
-
-    swapped_entries = []
-
-    def _swap_pair(col: float, row: float) -> tuple[float, float]:
-        return float(row), float(col)
-
-    for entry in measured:
-        if isinstance(entry, dict):
-            updated = dict(entry)
-            if "x" in updated and "y" in updated:
-                updated["x"], updated["y"] = _swap_pair(updated["x"], updated["y"])
-            if "x_pix" in updated and "y_pix" in updated:
-                updated["x_pix"], updated["y_pix"] = _swap_pair(
-                    updated["x_pix"], updated["y_pix"]
-                )
-            swapped_entries.append(updated)
-            continue
-
-        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
-            seq = list(entry)
-            seq[3], seq[4] = _swap_pair(seq[3], seq[4])
-            swapped_entries.append(type(entry)(seq))
-        else:
-            swapped_entries.append(entry)
-
-    return swapped_entries
+    return gui_geometry_overlay.apply_indexing_mode_to_entries(
+        measured,
+        shape,
+        indexing_mode=indexing_mode,
+    )
 
 
 def _apply_orientation_to_entries(
@@ -2544,56 +2456,15 @@ def _apply_orientation_to_entries(
     flip_order: str = "yx",
 ):
     """Apply backend-only rotations/flips to measured peak entries."""
-
-    if measured is None:
-        return []
-
-    indexed = _apply_indexing_mode_to_entries(
-        measured, rotated_shape, indexing_mode=indexing_mode
+    return gui_geometry_overlay.apply_orientation_to_entries(
+        measured,
+        rotated_shape,
+        indexing_mode=indexing_mode,
+        k=k,
+        flip_x=flip_x,
+        flip_y=flip_y,
+        flip_order=flip_order,
     )
-
-    k_mod = int(k) % 4
-    if k_mod == 0 and not flip_x and not flip_y:
-        return list(indexed)
-
-    # Points are already expressed in the requested indexing mode, so avoid
-    # double-swapping by keeping further transforms in XY and adjusting the
-    # shape to match that frame.
-    mode = (indexing_mode or "xy").lower()
-    oriented_shape = rotated_shape if mode == "xy" else (rotated_shape[1], rotated_shape[0])
-
-    def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
-        return _transform_points_orientation(
-            [(x_val, y_val)],
-            oriented_shape,
-            indexing_mode="xy",
-            k=k_mod,
-            flip_x=flip_x,
-            flip_y=flip_y,
-            flip_order=flip_order,
-        )[0]
-
-    oriented_entries = []
-    for entry in indexed:
-        if isinstance(entry, dict):
-            updated = dict(entry)
-            if "x" in updated and "y" in updated:
-                updated["x"], updated["y"] = _apply_pair(updated["x"], updated["y"])
-            if "x_pix" in updated and "y_pix" in updated:
-                updated["x_pix"], updated["y_pix"] = _apply_pair(
-                    updated["x_pix"], updated["y_pix"]
-                )
-            oriented_entries.append(updated)
-            continue
-
-        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
-            seq = list(entry)
-            seq[3], seq[4] = _apply_pair(seq[3], seq[4])
-            oriented_entries.append(type(entry)(seq))
-        else:
-            oriented_entries.append(entry)
-
-    return oriented_entries
 
 
 def _orient_image_for_fit(
@@ -2606,41 +2477,34 @@ def _orient_image_for_fit(
     flip_order: str = "yx",
 ):
     """Return a rotated/flipped copy of ``image`` for backend fitting only."""
-
-    if image is None:
-        return None
-
-    oriented = np.asarray(image)
-    mode = (indexing_mode or "xy").lower()
-    if mode == "yx":
-        oriented = np.swapaxes(oriented, 0, 1)
-    order = (flip_order or "yx").lower()
-    if order == "xy":
-        if flip_x:
-            oriented = np.flip(oriented, axis=1)
-        if flip_y:
-            oriented = np.flip(oriented, axis=0)
-    else:
-        if flip_y:
-            oriented = np.flip(oriented, axis=0)
-        if flip_x:
-            oriented = np.flip(oriented, axis=1)
-    k_mod = int(k) % 4
-    if k_mod:
-        oriented = np.rot90(oriented, k_mod)
-    return oriented
+    return gui_geometry_overlay.orient_image_for_fit(
+        image,
+        indexing_mode=indexing_mode,
+        k=k,
+        flip_x=flip_x,
+        flip_y=flip_y,
+        flip_order=flip_order,
+    )
 
 
 def _native_sim_to_display_coords(col: float, row: float, image_shape: tuple[int, ...]):
     """Rotate native simulation coordinates into the displayed frame."""
-
-    return _rotate_point_for_display(col, row, image_shape, SIM_DISPLAY_ROTATE_K)
+    return gui_geometry_overlay.native_sim_to_display_coords(
+        col,
+        row,
+        image_shape,
+        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+    )
 
 
 def _display_to_native_sim_coords(col: float, row: float, image_shape: tuple[int, ...]):
     """Map displayed simulation coordinates back into native simulation frame."""
-
-    return _rotate_point_for_display(col, row, image_shape, -SIM_DISPLAY_ROTATE_K)
+    return gui_geometry_overlay.display_to_native_sim_coords(
+        col,
+        row,
+        image_shape,
+        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+    )
 
 
 def _transform_points_orientation(
@@ -2654,42 +2518,15 @@ def _transform_points_orientation(
     flip_order: str = "yx",
 ) -> list[tuple[float, float]]:
     """Apply flips/rotations to a list of (col, row) points for diagnostics."""
-
-    base_height, base_width = shape
-    mode = (indexing_mode or "xy").lower()
-    if mode == "yx":
-        height, width = base_width, base_height
-    else:
-        height, width = base_height, base_width
-    transformed: list[tuple[float, float]] = []
-
-    order = (flip_order or "yx").lower()
-
-    def _flip_xy(col_t: float, row_t: float) -> tuple[float, float]:
-        if flip_x:
-            col_t = width - 1.0 - col_t
-        if flip_y:
-            row_t = height - 1.0 - row_t
-        return col_t, row_t
-
-    def _flip_yx(col_t: float, row_t: float) -> tuple[float, float]:
-        if flip_y:
-            row_t = height - 1.0 - row_t
-        if flip_x:
-            col_t = width - 1.0 - col_t
-        return col_t, row_t
-
-    flipper = _flip_xy if order == "xy" else _flip_yx
-
-    for col, row in points:
-        col_t, row_t = float(col), float(row)
-        if mode == "yx":
-            col_t, row_t = row_t, col_t
-        col_t, row_t = flipper(col_t, row_t)
-        col_t, row_t = _rotate_point_for_display(col_t, row_t, (height, width), k)
-        transformed.append((col_t, row_t))
-
-    return transformed
+    return gui_geometry_overlay.transform_points_orientation(
+        points,
+        shape,
+        indexing_mode=indexing_mode,
+        k=k,
+        flip_x=flip_x,
+        flip_y=flip_y,
+        flip_order=flip_order,
+    )
 
 
 def _best_orientation_alignment(
@@ -2698,63 +2535,11 @@ def _best_orientation_alignment(
     shape: tuple[int, int],
 ):
     """Search over 90° rotations and axis flips to minimize RMS distance."""
-
-    if not sim_coords or not meas_coords or len(sim_coords) != len(meas_coords):
-        return None
-
-    def _describe(
-        k: int, flip_x: bool, flip_y: bool, flip_order: str, indexing_mode: str
-    ) -> str:
-        parts: list[str] = []
-        if k % 4:
-            parts.append(f"rot{(k % 4) * 90}° CCW")
-        if flip_x:
-            parts.append("flip_x")
-        if flip_y:
-            parts.append("flip_y")
-        parts.append(f"order={flip_order}")
-        parts.append(f"indexing={indexing_mode}")
-        return " + ".join(parts)
-
-    best = None
-    for indexing_mode in ("xy", "yx"):
-        for flip_order in ("yx", "xy"):
-            for k in range(4):
-                for flip_x in (False, True):
-                    for flip_y in (False, True):
-                        transformed = _transform_points_orientation(
-                            meas_coords,
-                            shape,
-                            indexing_mode=indexing_mode,
-                            k=k,
-                            flip_x=flip_x,
-                            flip_y=flip_y,
-                            flip_order=flip_order,
-                        )
-                        deltas = [
-                            math.hypot(sx - mx, sy - my)
-                            for (sx, sy), (mx, my) in zip(sim_coords, transformed)
-                        ]
-                        if not deltas:
-                            continue
-                        rms = math.sqrt(sum(d * d for d in deltas) / len(deltas))
-                        mean = sum(deltas) / len(deltas)
-                        candidate = {
-                            "k": k,
-                            "flip_x": flip_x,
-                            "flip_y": flip_y,
-                            "flip_order": flip_order,
-                            "indexing_mode": indexing_mode,
-                            "rms": rms,
-                            "mean": mean,
-                            "label": _describe(
-                                k, flip_x, flip_y, flip_order, indexing_mode
-                            ),
-                        }
-                        if best is None or candidate["rms"] < best["rms"]:
-                            best = candidate
-
-    return best
+    return gui_geometry_overlay.best_orientation_alignment(
+        sim_coords,
+        meas_coords,
+        shape,
+    )
 
 
 def _orientation_metrics(
@@ -2769,8 +2554,8 @@ def _orientation_metrics(
     flip_order: str,
 ):
     """Return RMS/mean/max distance after transforming measured coordinates."""
-
-    transformed = _transform_points_orientation(
+    return gui_geometry_overlay.orientation_metrics(
+        sim_coords,
         meas_coords,
         shape,
         indexing_mode=indexing_mode,
@@ -2779,24 +2564,6 @@ def _orientation_metrics(
         flip_y=flip_y,
         flip_order=flip_order,
     )
-    deltas = [
-        math.hypot(sx - mx, sy - my)
-        for (sx, sy), (mx, my) in zip(sim_coords, transformed)
-    ]
-    if not deltas:
-        return {
-            "rms": float("nan"),
-            "mean": float("nan"),
-            "max": float("nan"),
-            "count": 0,
-        }
-    arr = np.asarray(deltas, dtype=float)
-    return {
-        "rms": float(np.sqrt(np.mean(arr * arr))),
-        "mean": float(np.mean(arr)),
-        "max": float(np.max(arr)),
-        "count": int(arr.size),
-    }
 
 
 def _select_fit_orientation(
@@ -2807,101 +2574,12 @@ def _select_fit_orientation(
     cfg: dict[str, object] | None = None,
 ):
     """Choose a measured-peak orientation transform that best aligns to simulation."""
-
-    identity = {
-        "k": 0,
-        "flip_x": False,
-        "flip_y": False,
-        "flip_order": "yx",
-        "indexing_mode": "xy",
-        "label": "identity",
-    }
-    config = cfg if isinstance(cfg, dict) else {}
-    enabled = bool(config.get("enabled", True))
-    min_improvement = max(0.0, float(config.get("min_improvement_px", 0.25)))
-    max_rms = float(config.get("max_rms_px", np.inf))
-
-    diagnostics = {
-        "enabled": bool(enabled),
-        "pairs": int(min(len(sim_coords), len(meas_coords))),
-        "identity_rms_px": float("nan"),
-        "best_rms_px": float("nan"),
-        "best_label": "identity",
-        "chosen_label": "identity",
-        "improvement_px": float("nan"),
-        "reason": "identity_fallback",
-    }
-
-    if not sim_coords or not meas_coords or len(sim_coords) != len(meas_coords):
-        diagnostics["reason"] = "insufficient_pairs"
-        return identity, diagnostics
-
-    identity_metrics = _orientation_metrics(
+    return gui_geometry_overlay.select_fit_orientation(
         sim_coords,
         meas_coords,
         shape,
-        indexing_mode="xy",
-        k=0,
-        flip_x=False,
-        flip_y=False,
-        flip_order="yx",
+        cfg=cfg,
     )
-    diagnostics["identity_rms_px"] = float(identity_metrics["rms"])
-
-    best = _best_orientation_alignment(sim_coords, meas_coords, shape)
-    if best is None:
-        diagnostics["reason"] = "no_candidate"
-        return identity, diagnostics
-
-    best_metrics = _orientation_metrics(
-        sim_coords,
-        meas_coords,
-        shape,
-        indexing_mode=str(best.get("indexing_mode", "xy")),
-        k=int(best.get("k", 0)),
-        flip_x=bool(best.get("flip_x", False)),
-        flip_y=bool(best.get("flip_y", False)),
-        flip_order=str(best.get("flip_order", "yx")),
-    )
-    best_rms = float(best_metrics["rms"])
-    identity_rms = float(identity_metrics["rms"])
-    improvement = identity_rms - best_rms
-
-    diagnostics.update(
-        {
-            "best_rms_px": best_rms,
-            "best_label": str(best.get("label", "candidate")),
-            "improvement_px": float(improvement),
-        }
-    )
-
-    if not enabled:
-        diagnostics["reason"] = "disabled_by_config"
-        return identity, diagnostics
-
-    if not np.isfinite(best_rms):
-        diagnostics["reason"] = "best_rms_not_finite"
-        return identity, diagnostics
-
-    if np.isfinite(max_rms) and best_rms > max_rms:
-        diagnostics["reason"] = "best_rms_above_threshold"
-        return identity, diagnostics
-
-    if not np.isfinite(improvement) or improvement < min_improvement:
-        diagnostics["reason"] = "insufficient_improvement"
-        return identity, diagnostics
-
-    chosen = {
-        "k": int(best.get("k", 0)),
-        "flip_x": bool(best.get("flip_x", False)),
-        "flip_y": bool(best.get("flip_y", False)),
-        "flip_order": str(best.get("flip_order", "yx")),
-        "indexing_mode": str(best.get("indexing_mode", "xy")),
-        "label": str(best.get("label", "candidate")),
-    }
-    diagnostics["chosen_label"] = str(chosen["label"])
-    diagnostics["reason"] = "selected_best"
-    return chosen, diagnostics
 
 
 def _aggregate_match_centers(
@@ -2911,132 +2589,35 @@ def _aggregate_match_centers(
     meas_millers: list[tuple[int, int, int]],
 ):
     """Collapse matched peaks by HKL and return centroid pairs."""
-
-    aggregated: dict[tuple[int, int, int], dict[str, list[tuple[float, float]]]] = {}
-    for hkl_sim, hkl_meas, sim_xy, meas_xy in zip(
-        sim_millers, meas_millers, sim_coords, meas_coords
-    ):
-        hkl_key = tuple(int(v) for v in (hkl_sim or hkl_meas))
-        entry = aggregated.setdefault(hkl_key, {"sim": [], "meas": []})
-        entry["sim"].append(sim_xy)
-        entry["meas"].append(meas_xy)
-
-    agg_sim_coords: list[tuple[float, float]] = []
-    agg_meas_coords: list[tuple[float, float]] = []
-    agg_millers: list[tuple[int, int, int]] = []
-
-    for hkl_key in sorted(aggregated):
-        sim_arr = np.array(aggregated[hkl_key]["sim"], dtype=float)
-        meas_arr = np.array(aggregated[hkl_key]["meas"], dtype=float)
-
-        sim_center = (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
-        meas_center = (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
-
-        agg_sim_coords.append(sim_center)
-        agg_meas_coords.append(meas_center)
-        agg_millers.append(hkl_key)
-
-    return agg_sim_coords, agg_meas_coords, agg_millers
+    return gui_geometry_overlay.aggregate_match_centers(
+        sim_coords,
+        meas_coords,
+        sim_millers,
+        meas_millers,
+    )
 
 
 def _normalize_hkl_key(
     value: object,
 ) -> tuple[int, int, int] | None:
     """Return a rounded integer HKL tuple when *value* looks like one."""
+    from ra_sim.gui.geometry_overlay import normalize_hkl_key
 
-    if isinstance(value, str):
-        parts = (
-            value.replace("(", "")
-            .replace(")", "")
-            .replace("[", "")
-            .replace("]", "")
-            .split(",")
-        )
-        if len(parts) < 3:
-            return None
-        try:
-            return tuple(int(np.rint(float(parts[i].strip()))) for i in range(3))
-        except Exception:
-            return None
-
-    if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 3:
-        try:
-            return tuple(int(np.rint(float(value[i]))) for i in range(3))
-        except Exception:
-            return None
-
-    return None
+    return normalize_hkl_key(value)
 
 
 def _aggregate_initial_geometry_display_pairs(
     initial_pairs_display: Sequence[dict[str, object]] | None,
 ) -> dict[tuple[int, int, int], dict[str, tuple[float, float]]]:
     """Aggregate initial display-frame picks by HKL."""
-
-    grouped: dict[tuple[int, int, int], dict[str, list[tuple[float, float]]]] = {}
-
-    def _parse_point(value: object) -> tuple[float, float] | None:
-        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
-            return None
-        try:
-            col = float(value[0])
-            row = float(value[1])
-        except Exception:
-            return None
-        if not (np.isfinite(col) and np.isfinite(row)):
-            return None
-        return col, row
-
-    for entry in initial_pairs_display or []:
-        if not isinstance(entry, dict):
-            continue
-        hkl_key = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
-        if hkl_key is None:
-            continue
-        bucket = grouped.setdefault(hkl_key, {"sim": [], "bg": []})
-        sim_pt = _parse_point(entry.get("sim_display"))
-        bg_pt = _parse_point(entry.get("bg_display"))
-        if sim_pt is not None:
-            bucket["sim"].append(sim_pt)
-        if bg_pt is not None:
-            bucket["bg"].append(bg_pt)
-
-    aggregated: dict[tuple[int, int, int], dict[str, tuple[float, float]]] = {}
-    for hkl_key, bucket in grouped.items():
-        item: dict[str, tuple[float, float]] = {}
-        if bucket["sim"]:
-            sim_arr = np.asarray(bucket["sim"], dtype=float)
-            item["sim_display"] = (
-                float(sim_arr[:, 0].mean()),
-                float(sim_arr[:, 1].mean()),
-            )
-        if bucket["bg"]:
-            bg_arr = np.asarray(bucket["bg"], dtype=float)
-            item["bg_display"] = (
-                float(bg_arr[:, 0].mean()),
-                float(bg_arr[:, 1].mean()),
-            )
-        if item:
-            aggregated[hkl_key] = item
-
-    return aggregated
+    return gui_geometry_overlay.aggregate_initial_geometry_display_pairs(
+        initial_pairs_display
+    )
 
 
 def _iter_orientation_transform_candidates():
     """Yield all discrete orientation transform candidates."""
-
-    for indexing_mode in ("xy", "yx"):
-        for flip_order in ("yx", "xy"):
-            for k in range(4):
-                for flip_x in (False, True):
-                    for flip_y in (False, True):
-                        yield {
-                            "indexing_mode": indexing_mode,
-                            "k": int(k),
-                            "flip_x": bool(flip_x),
-                            "flip_y": bool(flip_y),
-                            "flip_order": flip_order,
-                        }
+    return gui_geometry_overlay.iter_orientation_transform_candidates()
 
 
 def _inverse_orientation_transform(
@@ -3044,56 +2625,10 @@ def _inverse_orientation_transform(
     orientation_choice: dict[str, object] | None,
 ) -> dict[str, object]:
     """Return the inverse transform for an orientation-choice dict."""
-
-    if not isinstance(orientation_choice, dict):
-        return {
-            "indexing_mode": "xy",
-            "k": 0,
-            "flip_x": False,
-            "flip_y": False,
-            "flip_order": "yx",
-        }
-
-    forward = {
-        "indexing_mode": str(orientation_choice.get("indexing_mode", "xy")),
-        "k": int(orientation_choice.get("k", 0)),
-        "flip_x": bool(orientation_choice.get("flip_x", False)),
-        "flip_y": bool(orientation_choice.get("flip_y", False)),
-        "flip_order": str(orientation_choice.get("flip_order", "yx")),
-    }
-
-    h, w = int(shape[0]), int(shape[1])
-    refs = [
-        (0.0, 0.0),
-        (float(w - 1), 0.0),
-        (0.0, float(h - 1)),
-        (float(w - 1), float(h - 1)),
-        (0.5 * float(w - 1), 0.5 * float(h - 1)),
-    ]
-    mapped = _transform_points_orientation(refs, shape, **forward)
-
-    best = None
-    best_err = float("inf")
-    for candidate in _iter_orientation_transform_candidates():
-        unmapped = _transform_points_orientation(mapped, shape, **candidate)
-        err = 0.0
-        for (x_ref, y_ref), (x_back, y_back) in zip(refs, unmapped):
-            err = max(err, float(math.hypot(x_back - x_ref, y_back - y_ref)))
-        if err < best_err:
-            best_err = err
-            best = dict(candidate)
-        if err <= 1e-6:
-            break
-
-    if best is None:
-        return {
-            "indexing_mode": "xy",
-            "k": 0,
-            "flip_x": False,
-            "flip_y": False,
-            "flip_order": "yx",
-        }
-    return best
+    return gui_geometry_overlay.inverse_orientation_transform(
+        shape,
+        orientation_choice,
+    )
 
 
 def _draw_geometry_fit_overlay(
