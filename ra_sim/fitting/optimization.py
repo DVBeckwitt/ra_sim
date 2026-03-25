@@ -4107,6 +4107,35 @@ def fit_geometry_parameters(
         staged_release_max_cost_increase_fraction,
     )
     staged_release_blocks_cfg = staged_release_cfg.get("blocks", None)
+    reparameterize_cfg_raw = solver_cfg.get("reparameterize_pairs", {})
+    if isinstance(reparameterize_cfg_raw, bool):
+        reparameterize_cfg: Dict[str, object] = {
+            "enabled": bool(reparameterize_cfg_raw)
+        }
+    elif isinstance(reparameterize_cfg_raw, dict):
+        reparameterize_cfg = dict(reparameterize_cfg_raw)
+    else:
+        reparameterize_cfg = {}
+    reparameterize_enabled = bool(reparameterize_cfg.get("enabled", False))
+    reparameterize_max_nfev = int(
+        reparameterize_cfg.get("max_nfev", max(10, min(30, solver_max_nfev)))
+    )
+    reparameterize_max_nfev = max(5, reparameterize_max_nfev)
+    reparameterize_max_cost_increase_fraction = float(
+        reparameterize_cfg.get("max_cost_increase_fraction", 0.0)
+    )
+    if not np.isfinite(reparameterize_max_cost_increase_fraction):
+        reparameterize_max_cost_increase_fraction = 0.0
+    reparameterize_max_cost_increase_fraction = max(
+        0.0,
+        reparameterize_max_cost_increase_fraction,
+    )
+    reparameterize_pairs_cfg = reparameterize_cfg.get("pairs", None)
+    reparameterize_default_pairs = [
+        ["gamma", "Gamma"],
+        ["zs", "zb"],
+        ["theta_initial", "cor_angle"],
+    ]
 
     parameter_group_map = {
         "center_x": "center",
@@ -6297,6 +6326,311 @@ def fit_geometry_parameters(
             optimality=float("nan"),
         )
 
+    def _resolve_reparameterization_pairs() -> List[Dict[str, object]]:
+        if not reparameterize_enabled or len(var_names) <= 1:
+            return []
+
+        if reparameterize_pairs_cfg is None:
+            raw_pairs = list(reparameterize_default_pairs)
+        elif isinstance(reparameterize_pairs_cfg, (list, tuple)):
+            raw_pairs = list(reparameterize_pairs_cfg)
+        else:
+            raw_pairs = []
+
+        if not raw_pairs:
+            return []
+
+        name_to_index: Dict[str, int] = {}
+        for idx, name in enumerate(var_names):
+            key = str(name).strip()
+            if key and key not in name_to_index:
+                name_to_index[key] = int(idx)
+            lower_key = key.lower()
+            if lower_key and lower_key not in name_to_index:
+                name_to_index[lower_key] = int(idx)
+
+        pair_specs: List[Dict[str, object]] = []
+        used_indices: set[int] = set()
+        for raw_pair in raw_pairs:
+            pair_names = raw_pair
+            if isinstance(raw_pair, dict):
+                pair_names = raw_pair.get("pair", raw_pair.get("names"))
+            if not isinstance(pair_names, (list, tuple)) or len(pair_names) < 2:
+                continue
+            name_i = str(pair_names[0]).strip()
+            name_j = str(pair_names[1]).strip()
+            idx_i = name_to_index.get(name_i, name_to_index.get(name_i.lower(), -1))
+            idx_j = name_to_index.get(name_j, name_to_index.get(name_j.lower(), -1))
+            if (
+                idx_i is None
+                or idx_j is None
+                or int(idx_i) < 0
+                or int(idx_j) < 0
+                or int(idx_i) == int(idx_j)
+            ):
+                continue
+            if int(idx_i) in used_indices or int(idx_j) in used_indices:
+                continue
+            used_indices.add(int(idx_i))
+            used_indices.add(int(idx_j))
+            pair_specs.append(
+                {
+                    "index_i": int(idx_i),
+                    "index_j": int(idx_j),
+                    "name_i": str(var_names[int(idx_i)]),
+                    "name_j": str(var_names[int(idx_j)]),
+                    "mean_name": (
+                        f"{str(var_names[int(idx_i)])}+{str(var_names[int(idx_j)])}"
+                        "/2"
+                    ),
+                    "half_delta_name": (
+                        f"{str(var_names[int(idx_i)])}-{str(var_names[int(idx_j)])}"
+                        "/2"
+                    ),
+                }
+            )
+        return pair_specs
+
+    def _physical_to_reparameterized_vector(
+        x_physical: np.ndarray,
+        pair_specs: Sequence[Dict[str, object]],
+    ) -> np.ndarray:
+        out = np.asarray(x_physical, dtype=float).copy()
+        for pair_spec in pair_specs:
+            idx_i = int(pair_spec["index_i"])
+            idx_j = int(pair_spec["index_j"])
+            val_i = float(out[idx_i])
+            val_j = float(out[idx_j])
+            out[idx_i] = 0.5 * (val_i + val_j)
+            out[idx_j] = 0.5 * (val_i - val_j)
+        return out
+
+    def _reparameterized_to_physical_vector(
+        x_reparameterized: np.ndarray,
+        pair_specs: Sequence[Dict[str, object]],
+    ) -> np.ndarray:
+        out = np.asarray(x_reparameterized, dtype=float).copy()
+        for pair_spec in pair_specs:
+            idx_i = int(pair_spec["index_i"])
+            idx_j = int(pair_spec["index_j"])
+            mean_val = float(out[idx_i])
+            half_delta_val = float(out[idx_j])
+            out[idx_i] = mean_val + half_delta_val
+            out[idx_j] = mean_val - half_delta_val
+        return out
+
+    def _reparameterized_bound_residuals(x_physical: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x_physical, dtype=float)
+        scale = np.maximum(np.asarray(x_scale, dtype=float), 1.0e-6)
+        penalties: List[np.ndarray] = []
+        finite_lower = np.isfinite(lower_bounds)
+        if np.any(finite_lower):
+            penalties.append(
+                np.maximum(lower_bounds[finite_lower] - x_arr[finite_lower], 0.0)
+                / scale[finite_lower]
+            )
+        finite_upper = np.isfinite(upper_bounds)
+        if np.any(finite_upper):
+            penalties.append(
+                np.maximum(x_arr[finite_upper] - upper_bounds[finite_upper], 0.0)
+                / scale[finite_upper]
+            )
+        if not penalties:
+            return np.array([], dtype=float)
+        return np.concatenate([np.asarray(entry, dtype=float) for entry in penalties])
+
+    def _build_reparameterized_geometry(
+        pair_specs: Sequence[Dict[str, object]],
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        lower = np.asarray(lower_bounds, dtype=float).copy()
+        upper = np.asarray(upper_bounds, dtype=float).copy()
+        scale = np.maximum(np.asarray(x_scale, dtype=float).copy(), 1.0e-6)
+        for pair_spec in pair_specs:
+            idx_i = int(pair_spec["index_i"])
+            idx_j = int(pair_spec["index_j"])
+            lo_i = float(lower_bounds[idx_i])
+            hi_i = float(upper_bounds[idx_i])
+            lo_j = float(lower_bounds[idx_j])
+            hi_j = float(upper_bounds[idx_j])
+
+            if np.isfinite(lo_i) and np.isfinite(lo_j):
+                lower[idx_i] = 0.5 * (lo_i + lo_j)
+            else:
+                lower[idx_i] = -np.inf
+            if np.isfinite(hi_i) and np.isfinite(hi_j):
+                upper[idx_i] = 0.5 * (hi_i + hi_j)
+            else:
+                upper[idx_i] = np.inf
+
+            if np.isfinite(lo_i) and np.isfinite(hi_j):
+                lower[idx_j] = 0.5 * (lo_i - hi_j)
+            else:
+                lower[idx_j] = -np.inf
+            if np.isfinite(hi_i) and np.isfinite(lo_j):
+                upper[idx_j] = 0.5 * (hi_i - lo_j)
+            else:
+                upper[idx_j] = np.inf
+
+            mean_scale = max(
+                0.5 * (float(scale[idx_i]) + float(scale[idx_j])),
+                1.0e-6,
+            )
+            delta_scale = max(
+                0.5 * (float(scale[idx_i]) + float(scale[idx_j])),
+                1.0e-6,
+            )
+            scale[idx_i] = mean_scale
+            scale[idx_j] = delta_scale
+        return lower, upper, scale
+
+    def _maybe_run_reparameterization_seed(
+        x_start: np.ndarray,
+    ) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(reparameterize_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+            "pairs": [],
+        }
+        if not reparameterize_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+
+        start_x = np.asarray(x_start, dtype=float)
+        if start_x.ndim != 1 or start_x.size <= 1:
+            summary["reason"] = "insufficient_parameter_count"
+            return summary
+
+        pair_specs = _resolve_reparameterization_pairs()
+        if not pair_specs:
+            summary["reason"] = "no_supported_pairs"
+            return summary
+
+        summary["pairs"] = [
+            [str(pair_spec["name_i"]), str(pair_spec["name_j"])]
+            for pair_spec in pair_specs
+        ]
+        summary["transformed_parameters"] = [
+            str(pair_spec["mean_name"])
+            for pair_spec in pair_specs
+        ] + [
+            str(pair_spec["half_delta_name"])
+            for pair_spec in pair_specs
+        ]
+
+        start_residual = np.asarray(residual_fn(start_x), dtype=float)
+        if start_residual.ndim != 1 or start_residual.size == 0:
+            summary["reason"] = "empty_residual"
+            return summary
+        start_cost = _robust_cost(
+            start_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        summary["start_cost"] = float(start_cost)
+
+        transformed_start = _physical_to_reparameterized_vector(start_x, pair_specs)
+        reparam_lower_bounds, reparam_upper_bounds, reparam_x_scale = (
+            _build_reparameterized_geometry(pair_specs)
+        )
+        _emit_status(
+            "Geometry fit: reparameterizing pairs "
+            f"{summary['pairs']}"
+        )
+
+        def _reparameterized_residual(x_trial: np.ndarray) -> np.ndarray:
+            physical_trial = _reparameterized_to_physical_vector(
+                np.asarray(x_trial, dtype=float),
+                pair_specs,
+            )
+            clipped_trial = np.minimum(
+                np.maximum(physical_trial, lower_bounds),
+                upper_bounds,
+            )
+            residual = np.asarray(
+                residual_fn(np.asarray(clipped_trial, dtype=float)),
+                dtype=float,
+            )
+            penalty = _reparameterized_bound_residuals(physical_trial)
+            if penalty.size:
+                if residual.size:
+                    return np.concatenate((residual, penalty))
+                return np.asarray(penalty, dtype=float)
+            return residual
+
+        try:
+            stage_result = least_squares(
+                _reparameterized_residual,
+                np.asarray(transformed_start, dtype=float),
+                bounds=(
+                    np.asarray(reparam_lower_bounds, dtype=float),
+                    np.asarray(reparam_upper_bounds, dtype=float),
+                ),
+                x_scale=np.asarray(reparam_x_scale, dtype=float),
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+                max_nfev=reparameterize_max_nfev,
+            )
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["reason"] = f"reparameterization_failed: {exc}"
+            _emit_status(f"Geometry fit: pair reparameterization failed ({exc})")
+            return summary
+
+        final_physical = _reparameterized_to_physical_vector(
+            np.asarray(stage_result.x, dtype=float),
+            pair_specs,
+        )
+        final_physical = np.minimum(np.maximum(final_physical, lower_bounds), upper_bounds)
+        final_residual = np.asarray(
+            residual_fn(np.asarray(final_physical, dtype=float)),
+            dtype=float,
+        )
+        final_cost = _robust_cost(
+            final_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        cost_tol = max(
+            1.0e-9 * max(abs(float(start_cost)), 1.0),
+            1.0e-12,
+        )
+        if np.isfinite(start_cost) and start_cost > 1.0e-12:
+            cost_limit = float(
+                start_cost * (1.0 + reparameterize_max_cost_increase_fraction)
+            )
+        else:
+            cost_limit = float(start_cost + cost_tol)
+        accepted = bool(np.isfinite(final_cost) and final_cost <= cost_limit + cost_tol)
+        summary.update(
+            {
+                "status": "accepted" if accepted else "rejected",
+                "reason": "accepted" if accepted else "cost_regressed",
+                "accepted": bool(accepted),
+                "final_cost": float(final_cost),
+                "cost_limit": float(cost_limit),
+                "nfev": int(getattr(stage_result, "nfev", 0)),
+                "success": bool(getattr(stage_result, "success", False)),
+                "message": str(getattr(stage_result, "message", "")),
+                "max_nfev": int(reparameterize_max_nfev),
+                "start_x": np.asarray(start_x, dtype=float).tolist(),
+                "end_x": np.asarray(final_physical, dtype=float).tolist(),
+            }
+        )
+        if accepted:
+            summary["x"] = np.asarray(final_physical, dtype=float)
+            _emit_status(
+                "Geometry fit: pair reparameterization accepted "
+                f"(cost={float(final_cost):.6f})"
+            )
+        else:
+            _emit_status(
+                "Geometry fit: pair reparameterization rejected "
+                f"(cost={float(final_cost):.6f})"
+            )
+        return summary
+
     def _resolve_staged_release_blocks() -> List[Dict[str, object]]:
         if not staged_release_enabled or len(var_names) <= 1:
             return []
@@ -6769,6 +7103,12 @@ def fit_geometry_parameters(
             str(seed_kind),
             str(seed_label),
         )
+
+    reparameterization_summary = _maybe_run_reparameterization_seed(x0_arr)
+    reparameterized_x = reparameterization_summary.get("x")
+    if reparameterization_summary.get("accepted") and reparameterized_x is not None:
+        x0_arr = np.asarray(reparameterized_x, dtype=float)
+        fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
 
     staged_release_summary = _maybe_run_staged_release(x0_arr)
     staged_release_x = staged_release_summary.get("x")
@@ -7404,6 +7744,13 @@ def fit_geometry_parameters(
         return summary
 
     result = best_result
+    if reparameterization_summary.get("accepted"):
+        reparam_pairs = reparameterization_summary.get("pairs", [])
+        if reparam_pairs:
+            _append_result_message(
+                result,
+                f"Pair reparameterization seed accepted ({reparam_pairs})",
+            )
     if staged_release_summary.get("accepted"):
         accepted_stage_count = int(
             staged_release_summary.get("accepted_stage_count", 0)
@@ -7508,6 +7855,7 @@ def fit_geometry_parameters(
                 _append_result_message(result, "Auto-freeze accepted")
 
     result.restart_history = restart_history
+    result.reparameterization_summary = reparameterization_summary
     result.staged_release_summary = staged_release_summary
     result.single_ray_polish_summary = single_ray_polish_summary
     result.ridge_refinement_summary = ridge_refinement_summary

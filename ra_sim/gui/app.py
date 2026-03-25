@@ -6880,6 +6880,20 @@ def on_fit_geometry_click():
                     f"point_rms_after_px={float(image_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
                 ],
             )
+        reparameterization_summary = getattr(result, "reparameterization_summary", None)
+        if isinstance(reparameterization_summary, dict):
+            _log_section(
+                "Pair reparameterization:",
+                [
+                    f"enabled={bool(reparameterization_summary.get('enabled', False))}",
+                    f"status={reparameterization_summary.get('status', 'unknown')}",
+                    f"reason={reparameterization_summary.get('reason', 'n/a')}",
+                    f"accepted={bool(reparameterization_summary.get('accepted', False))}",
+                    f"pairs={list(reparameterization_summary.get('pairs', []))}",
+                    f"start_cost={float(reparameterization_summary.get('start_cost', np.nan)):.6f}",
+                    f"final_cost={float(reparameterization_summary.get('final_cost', np.nan)):.6f}",
+                ],
+            )
         staged_release_summary = getattr(result, "staged_release_summary", None)
         if isinstance(staged_release_summary, dict):
             stage_lines = [
@@ -7829,6 +7843,20 @@ def on_fit_geometry_click():
                             f"image_cost_after={float(image_refinement_summary.get('image_cost_after', np.nan)):.6f}",
                             f"point_rms_before_px={float(image_refinement_summary.get('point_rms_before_px', np.nan)):.6f}",
                             f"point_rms_after_px={float(image_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
+                        ],
+                    )
+                reparameterization_summary = getattr(result, "reparameterization_summary", None)
+                if isinstance(reparameterization_summary, dict):
+                    _log_section(
+                        "Pair reparameterization:",
+                        [
+                            f"enabled={bool(reparameterization_summary.get('enabled', False))}",
+                            f"status={reparameterization_summary.get('status', 'unknown')}",
+                            f"reason={reparameterization_summary.get('reason', 'n/a')}",
+                            f"accepted={bool(reparameterization_summary.get('accepted', False))}",
+                            f"pairs={list(reparameterization_summary.get('pairs', []))}",
+                            f"start_cost={float(reparameterization_summary.get('start_cost', np.nan)):.6f}",
+                            f"final_cost={float(reparameterization_summary.get('final_cost', np.nan)):.6f}",
                         ],
                     )
                 staged_release_summary = getattr(result, "staged_release_summary", None)
