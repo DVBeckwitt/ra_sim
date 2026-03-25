@@ -121,6 +121,8 @@ from ra_sim.gui.geometry_overlay import (
 )
 from ra_sim.gui import overlays as gui_overlays
 from ra_sim.gui import geometry_fit as gui_geometry_fit
+from ra_sim.gui import controllers as gui_controllers
+from ra_sim.gui import state as gui_state
 from ra_sim.gui import state_io as gui_state_io
 from ra_sim.gui.qr_cylinder_overlay import interpolate_trace_to_caked_coords
 from ra_sim.gui.sliders import create_slider
@@ -2494,11 +2496,9 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
     """Select one manual Qr/Qz group and arm background-point placement."""
 
     global _suppress_drag_press_once
-    global geometry_manual_pick_session
 
     def _set_pick_session(session: dict[str, object]) -> None:
-        global geometry_manual_pick_session
-        geometry_manual_pick_session = dict(session)
+        _set_geometry_manual_pick_session(session)
 
     handled, next_session, suppress_drag = gui_manual_geometry.geometry_manual_toggle_selection_at(
         float(col),
@@ -2527,7 +2527,7 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
         caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
         caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
     )
-    geometry_manual_pick_session = dict(next_session)
+    _set_geometry_manual_pick_session(next_session)
     _suppress_drag_press_once = bool(suppress_drag)
     return bool(handled)
 
@@ -2535,11 +2535,8 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
 def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
     """Record the next manual background point for the active Qr/Qz pick session."""
 
-    global geometry_manual_pick_session
-
     def _set_pick_session(session: dict[str, object]) -> None:
-        global geometry_manual_pick_session
-        geometry_manual_pick_session = dict(session)
+        _set_geometry_manual_pick_session(session)
 
     handled, next_session = gui_manual_geometry.geometry_manual_place_selection_at(
         float(col),
@@ -2564,7 +2561,7 @@ def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
         use_caked_space=_geometry_manual_pick_uses_caked_space(),
         caked_angles_to_background_display_coords=_caked_angles_to_background_display_coords,
     )
-    geometry_manual_pick_session = dict(next_session)
+    _set_geometry_manual_pick_session(next_session)
     return bool(handled)
 
 
@@ -2956,13 +2953,15 @@ geometry_q_group_refresh_requested = False
 geometry_preview_skip_once = False
 geometry_auto_match_background_cache_key = None
 geometry_auto_match_background_cache_data = None
-geometry_manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
+geometry_manual_state = gui_state.ManualGeometryState()
+# Keep these aliases for now while runtime still reads the state stores directly.
+geometry_manual_pairs_by_background = geometry_manual_state.pairs_by_background
 geometry_manual_pick_armed = False
 geometry_manual_pick_button_var = None
 geometry_manual_pick_cache_signature = None
 geometry_manual_pick_cache_data: dict[str, object] = {}
-geometry_manual_pick_session: dict[str, object] = {}
-geometry_manual_undo_stack: list[dict[str, object]] = []
+geometry_manual_pick_session = geometry_manual_state.pick_session
+geometry_manual_undo_stack = geometry_manual_state.undo_stack
 geometry_fit_undo_stack: list[dict[str, object]] = []
 geometry_fit_redo_stack: list[dict[str, object]] = []
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
@@ -3056,55 +3055,52 @@ def _geometry_manual_pair_group_count(index: int) -> int:
     )
 
 
+def _replace_geometry_manual_pairs_by_background(
+    pairs_by_background: dict[int, list[dict[str, object]]] | None,
+) -> dict[int, list[dict[str, object]]]:
+    """Replace the stored manual-geometry pair map in the shared state container."""
+    return gui_controllers.replace_manual_geometry_pairs_by_background(
+        geometry_manual_state,
+        pairs_by_background,
+    )
+
+
+def _set_geometry_manual_pick_session(
+    pick_session: dict[str, object] | None,
+) -> dict[str, object]:
+    """Replace the active manual-geometry pick session in the shared state container."""
+    return gui_controllers.replace_manual_geometry_pick_session(
+        geometry_manual_state,
+        pick_session,
+    )
+
+
 def _clear_geometry_manual_undo_stack() -> None:
     """Discard the manual-placement undo history."""
-
-    global geometry_manual_undo_stack
-
-    geometry_manual_undo_stack = []
+    gui_controllers.clear_manual_geometry_undo_stack(geometry_manual_state)
 
 
-def _geometry_manual_undo_snapshot() -> dict[str, object]:
+def _geometry_manual_undo_snapshot() -> gui_state.ManualGeometryUndoSnapshot:
     """Return a deep copy of the manual-placement state for undo."""
-
-    pairs_copy = copy.deepcopy(dict(geometry_manual_pairs_by_background))
-    session_copy = (
-        copy.deepcopy(dict(geometry_manual_pick_session))
-        if isinstance(geometry_manual_pick_session, dict)
-        else {}
-    )
-    return {
-        "pairs_by_background": pairs_copy,
-        "pick_session": session_copy,
-    }
+    return gui_controllers.build_manual_geometry_undo_snapshot(geometry_manual_state)
 
 
 def _push_geometry_manual_undo_state() -> None:
     """Push the current manual-placement state onto the undo stack."""
-
-    global geometry_manual_undo_stack
-
-    geometry_manual_undo_stack.append(_geometry_manual_undo_snapshot())
-    if len(geometry_manual_undo_stack) > int(GEOMETRY_MANUAL_UNDO_LIMIT):
-        geometry_manual_undo_stack = geometry_manual_undo_stack[
-            -int(GEOMETRY_MANUAL_UNDO_LIMIT):
-        ]
+    gui_controllers.push_manual_geometry_undo_state(
+        geometry_manual_state,
+        limit=int(GEOMETRY_MANUAL_UNDO_LIMIT),
+    )
 
 
 def _undo_last_geometry_manual_placement() -> None:
     """Restore the most recent manual-placement state."""
 
-    global geometry_manual_pairs_by_background, geometry_manual_pick_session
-
     if not geometry_manual_undo_stack:
         progress_label_geometry.config(text="No manual placement changes are available to undo.")
         return
 
-    snapshot = dict(geometry_manual_undo_stack.pop())
-    geometry_manual_pairs_by_background = copy.deepcopy(
-        dict(snapshot.get("pairs_by_background", {}))
-    )
-    geometry_manual_pick_session = copy.deepcopy(dict(snapshot.get("pick_session", {})))
+    gui_controllers.restore_last_manual_geometry_undo_state(geometry_manual_state)
     _clear_geometry_manual_preview_artists(redraw=False)
     _render_current_geometry_manual_pairs(update_status=True)
     _update_geometry_manual_pick_button_label()
@@ -3424,8 +3420,6 @@ def _apply_geometry_manual_pairs_rows(
 ) -> tuple[int, int, list[str]]:
     """Import saved manual geometry pairs onto the currently loaded backgrounds."""
 
-    global geometry_manual_pairs_by_background
-
     exact_path_lookup: dict[str, int] = {}
     name_lookup: defaultdict[str, list[int]] = defaultdict(list)
     for idx, raw_path in enumerate(osc_files):
@@ -3488,11 +3482,11 @@ def _apply_geometry_manual_pairs_rows(
             matched_backgrounds.add(int(target_index))
             pair_count += len(imported_entries)
 
-    geometry_manual_pairs_by_background = {
+    _replace_geometry_manual_pairs_by_background({
         int(idx): list(entries)
         for idx, entries in imported_map.items()
         if entries
-    }
+    })
     _clear_geometry_manual_preview_artists(redraw=False)
     _cancel_geometry_manual_pick_session(restore_view=True, redraw=False)
     _invalidate_geometry_manual_pick_cache()
@@ -3998,9 +3992,8 @@ def _cancel_geometry_manual_pick_session(
     message: str | None = None,
 ) -> None:
     """Discard any in-progress manual Qr/Qz placement state."""
-
-    global geometry_manual_pick_session
-    geometry_manual_pick_session = gui_manual_geometry.cancel_geometry_manual_pick_session(
+    _set_geometry_manual_pick_session(
+        gui_manual_geometry.cancel_geometry_manual_pick_session(
         geometry_manual_pick_session,
         current_background_index=current_background_index,
         restore_view_fn=_restore_geometry_manual_pick_view,
@@ -4011,6 +4004,7 @@ def _cancel_geometry_manual_pick_session(
         restore_view=restore_view,
         redraw=redraw,
         message=message,
+        )
     )
 
 
@@ -10405,7 +10399,6 @@ def _load_background_files(file_paths, *, select_index=0):
 
     global osc_files, background_images, background_images_native, background_images_display
     global current_background_index, current_background_image, current_background_display
-    global geometry_manual_pairs_by_background
 
     updated = gui_background.load_background_files(
         file_paths,
@@ -10421,7 +10414,7 @@ def _load_background_files(file_paths, *, select_index=0):
     current_background_index = int(updated["current_background_index"])
     current_background_image = updated["current_background_image"]
     current_background_display = updated["current_background_display"]
-    geometry_manual_pairs_by_background = {}
+    _replace_geometry_manual_pairs_by_background({})
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
     _clear_geometry_fit_undo_stack()
