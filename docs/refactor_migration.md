@@ -59,6 +59,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     `ra_sim.gui.manual_geometry`
   - backing manual-geometry state and undo/session mutations now flow through
     `ra_sim.gui.state` and `ra_sim.gui.controllers`
+- Geometry-fit history and Qr/Qz selector state have also started moving out of
+  runtime-owned globals:
+  - geometry-fit undo/redo history now uses shared GUI state
+  - Qr/Qz selector cached-entry and refresh mutations now flow through
+    `ra_sim.gui.controllers`
 - Direct tests were added for extracted controller/state behavior.
 
 ## Remaining Migration Focus

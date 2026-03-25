@@ -2947,9 +2947,9 @@ geometry_q_group_window = None
 geometry_q_group_canvas = None
 geometry_q_group_body = None
 geometry_q_group_status_label = None
-geometry_q_group_row_vars: dict[tuple[object, ...], tk.BooleanVar] = {}
-geometry_q_group_cached_entries: list[dict[str, object]] = []
-geometry_q_group_refresh_requested = False
+geometry_q_group_state = gui_state.GeometryQGroupState()
+geometry_q_group_row_vars = geometry_q_group_state.row_vars
+geometry_q_group_cached_entries = geometry_q_group_state.cached_entries
 geometry_preview_skip_once = False
 geometry_auto_match_background_cache_key = None
 geometry_auto_match_background_cache_data = None
@@ -2962,8 +2962,9 @@ geometry_manual_pick_cache_signature = None
 geometry_manual_pick_cache_data: dict[str, object] = {}
 geometry_manual_pick_session = geometry_manual_state.pick_session
 geometry_manual_undo_stack = geometry_manual_state.undo_stack
-geometry_fit_undo_stack: list[dict[str, object]] = []
-geometry_fit_redo_stack: list[dict[str, object]] = []
+geometry_fit_history_state = gui_state.GeometryFitHistoryState()
+geometry_fit_undo_stack = geometry_fit_history_state.undo_stack
+geometry_fit_redo_stack = geometry_fit_history_state.redo_stack
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
 GEOMETRY_FIT_UNDO_LIMIT = 16
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
@@ -2976,7 +2977,6 @@ GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG = 24.0
 GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S = 0.03
 GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
 GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
-last_geometry_overlay_state: dict[str, object] | None = None
 undo_geometry_fit_button = None
 redo_geometry_fit_button = None
 
@@ -3114,6 +3114,24 @@ def _copy_geometry_fit_state_value(value):
     return gui_geometry_fit.copy_geometry_fit_state_value(value)
 
 
+def _geometry_fit_last_overlay_state() -> dict[str, object] | None:
+    """Return the remembered geometry-fit overlay state."""
+
+    return geometry_fit_history_state.last_overlay_state
+
+
+def _set_geometry_fit_last_overlay_state(
+    overlay_state: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Replace the remembered geometry-fit overlay state."""
+
+    return gui_controllers.replace_geometry_fit_last_overlay_state(
+        geometry_fit_history_state,
+        overlay_state,
+        copy_state_value=_copy_geometry_fit_state_value,
+    )
+
+
 def _current_geometry_fit_ui_params() -> dict[str, object]:
     """Capture the current geometry-fit UI parameter values."""
 
@@ -3154,18 +3172,14 @@ def _update_geometry_fit_undo_button_state() -> None:
 def _clear_geometry_fit_undo_stack() -> None:
     """Discard the geometry-fit undo/redo history."""
 
-    global geometry_fit_undo_stack, geometry_fit_redo_stack, last_geometry_overlay_state
-
-    geometry_fit_undo_stack = []
-    geometry_fit_redo_stack = []
-    last_geometry_overlay_state = None
+    gui_controllers.clear_geometry_fit_history(geometry_fit_history_state)
     _update_geometry_fit_undo_button_state()
 
 
 def _capture_geometry_fit_undo_state() -> dict[str, object]:
     """Capture the current geometry-fit state for undo."""
 
-    overlay_state = _copy_geometry_fit_state_value(last_geometry_overlay_state)
+    overlay_state = _copy_geometry_fit_state_value(_geometry_fit_last_overlay_state())
     if not (
         isinstance(overlay_state, dict)
         and (
@@ -3201,33 +3215,30 @@ def _capture_geometry_fit_undo_state() -> dict[str, object]:
 
 def _push_geometry_fit_undo_state(state: dict[str, object] | None) -> None:
     """Push one pre-fit state onto the geometry-fit undo stack."""
-
-    global geometry_fit_undo_stack, geometry_fit_redo_stack
-
-    if not isinstance(state, dict):
-        return
-    geometry_fit_undo_stack.append(_copy_geometry_fit_state_value(state))
-    geometry_fit_undo_stack = geometry_fit_undo_stack[-int(GEOMETRY_FIT_UNDO_LIMIT):]
-    geometry_fit_redo_stack = []
+    gui_controllers.push_geometry_fit_undo_state(
+        geometry_fit_history_state,
+        state,
+        copy_state_value=_copy_geometry_fit_state_value,
+        limit=int(GEOMETRY_FIT_UNDO_LIMIT),
+    )
     _update_geometry_fit_undo_button_state()
 
 
 def _push_geometry_fit_redo_state(state: dict[str, object] | None) -> None:
     """Push one state onto the geometry-fit redo stack."""
-
-    global geometry_fit_redo_stack
-
-    if not isinstance(state, dict):
-        return
-    geometry_fit_redo_stack.append(_copy_geometry_fit_state_value(state))
-    geometry_fit_redo_stack = geometry_fit_redo_stack[-int(GEOMETRY_FIT_UNDO_LIMIT):]
+    gui_controllers.push_geometry_fit_redo_state(
+        geometry_fit_history_state,
+        state,
+        copy_state_value=_copy_geometry_fit_state_value,
+        limit=int(GEOMETRY_FIT_UNDO_LIMIT),
+    )
     _update_geometry_fit_undo_button_state()
 
 
 def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
     """Restore a previously captured geometry-fit state."""
 
-    global profile_cache, last_geometry_overlay_state, last_simulation_signature
+    global profile_cache, last_simulation_signature
     global update_pending
 
     if not isinstance(state, dict):
@@ -3253,7 +3264,7 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
         geometry_theta_offset_var=geometry_theta_offset_var,
     )
     profile_cache = restored["profile_cache"]
-    last_geometry_overlay_state = restored["overlay_state"]
+    _set_geometry_fit_last_overlay_state(restored["overlay_state"])
     last_simulation_signature = None
 
     if update_pending is not None:
@@ -3265,7 +3276,7 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
 
     do_update()
 
-    overlay_state = last_geometry_overlay_state or {}
+    overlay_state = _geometry_fit_last_overlay_state() or {}
     overlay_records = overlay_state.get("overlay_records", []) or []
     initial_pairs_display = overlay_state.get("initial_pairs_display", []) or []
     max_display_markers = int(overlay_state.get("max_display_markers", 120))
@@ -3293,15 +3304,26 @@ def _undo_last_geometry_fit() -> None:
         return
 
     current_state = _capture_geometry_fit_undo_state()
-    state = _copy_geometry_fit_state_value(geometry_fit_undo_stack[-1])
+    state = gui_controllers.peek_last_geometry_fit_undo_state(
+        geometry_fit_history_state,
+        copy_state_value=_copy_geometry_fit_state_value,
+    )
+    if not isinstance(state, dict):
+        progress_label_geometry.config(text="No geometry fit history available to undo.")
+        return
     try:
         _restore_geometry_fit_undo_state(state)
     except Exception as exc:
         progress_label_geometry.config(text=f"Failed to undo geometry fit: {exc}")
         return
 
-    geometry_fit_undo_stack.pop()
-    _push_geometry_fit_redo_state(current_state)
+    gui_controllers.commit_geometry_fit_undo(
+        geometry_fit_history_state,
+        current_state,
+        copy_state_value=_copy_geometry_fit_state_value,
+        limit=int(GEOMETRY_FIT_UNDO_LIMIT),
+    )
+    _update_geometry_fit_undo_button_state()
     progress_label_geometry.config(text="Restored the previous geometry-fit state.")
 
 
@@ -3313,16 +3335,25 @@ def _redo_last_geometry_fit() -> None:
         return
 
     current_state = _capture_geometry_fit_undo_state()
-    state = _copy_geometry_fit_state_value(geometry_fit_redo_stack[-1])
+    state = gui_controllers.peek_last_geometry_fit_redo_state(
+        geometry_fit_history_state,
+        copy_state_value=_copy_geometry_fit_state_value,
+    )
+    if not isinstance(state, dict):
+        progress_label_geometry.config(text="No geometry fit history available to redo.")
+        return
     try:
         _restore_geometry_fit_undo_state(state)
     except Exception as exc:
         progress_label_geometry.config(text=f"Failed to redo geometry fit: {exc}")
         return
 
-    geometry_fit_redo_stack.pop()
-    geometry_fit_undo_stack.append(_copy_geometry_fit_state_value(current_state))
-    geometry_fit_undo_stack = geometry_fit_undo_stack[-int(GEOMETRY_FIT_UNDO_LIMIT):]
+    gui_controllers.commit_geometry_fit_redo(
+        geometry_fit_history_state,
+        current_state,
+        copy_state_value=_copy_geometry_fit_state_value,
+        limit=int(GEOMETRY_FIT_UNDO_LIMIT),
+    )
     _update_geometry_fit_undo_button_state()
     progress_label_geometry.config(text="Reapplied the next geometry-fit state.")
 
@@ -5335,46 +5366,32 @@ def _clone_geometry_q_group_entries(
     entries: Sequence[dict[str, object]] | None,
 ) -> list[dict[str, object]]:
     """Return detached copies of Qr/Qz selector entries."""
-
-    cloned: list[dict[str, object]] = []
-    for raw_entry in entries or []:
-        if not isinstance(raw_entry, dict):
-            continue
-        entry = dict(raw_entry)
-        entry["hkl_preview"] = list(raw_entry.get("hkl_preview", []))
-        cloned.append(entry)
-    return cloned
+    return gui_controllers.clone_geometry_q_group_entries(entries)
 
 
 def _listed_geometry_q_group_entries() -> list[dict[str, object]]:
     """Return the manually refreshed Qr/Qz rows currently shown in the selector."""
-
-    return _clone_geometry_q_group_entries(geometry_q_group_cached_entries)
+    return gui_controllers.listed_geometry_q_group_entries(geometry_q_group_state)
 
 
 def _listed_geometry_q_group_keys(
     entries: Sequence[dict[str, object]] | None = None,
 ) -> set[tuple[object, ...]]:
     """Return the stable keys for the currently listed Qr/Qz rows."""
-
-    keys: set[tuple[object, ...]] = set()
-    for entry in entries if entries is not None else geometry_q_group_cached_entries:
-        if not isinstance(entry, dict):
-            continue
-        key = entry.get("key")
-        if key is not None:
-            keys.add(key)
-    return keys
+    return gui_controllers.listed_geometry_q_group_keys(
+        geometry_q_group_state,
+        entries,
+    )
 
 
 def _set_geometry_q_group_entries_snapshot(
     entries: Sequence[dict[str, object]] | None,
 ) -> list[dict[str, object]]:
     """Replace the listed Qr/Qz snapshot with the provided entries."""
-
-    global geometry_q_group_cached_entries
-
-    geometry_q_group_cached_entries = _clone_geometry_q_group_entries(entries)
+    gui_controllers.replace_geometry_q_group_cached_entries(
+        geometry_q_group_state,
+        entries,
+    )
     listed_keys = _listed_geometry_q_group_keys()
     if listed_keys:
         geometry_preview_excluded_q_groups.intersection_update(listed_keys)
@@ -5755,8 +5772,6 @@ def _update_geometry_q_group_window_status(entries: Sequence[dict[str, object]] 
 def _refresh_geometry_q_group_window() -> None:
     """Redraw the Qr/Qz selector window from the stored manual snapshot."""
 
-    global geometry_q_group_row_vars
-
     if not _geometry_q_group_window_open():
         return
     if geometry_q_group_body is None or geometry_q_group_canvas is None:
@@ -5771,7 +5786,7 @@ def _refresh_geometry_q_group_window() -> None:
 
     for child in geometry_q_group_body.winfo_children():
         child.destroy()
-    geometry_q_group_row_vars = {}
+    gui_controllers.clear_geometry_q_group_row_vars(geometry_q_group_state)
 
     if not entries:
         ttk.Label(
@@ -5792,7 +5807,11 @@ def _refresh_geometry_q_group_window() -> None:
         key = entry.get("key")
         included = key not in geometry_preview_excluded_q_groups
         var = tk.BooleanVar(value=included)
-        geometry_q_group_row_vars[key] = var
+        gui_controllers.set_geometry_q_group_row_var(
+            geometry_q_group_state,
+            key,
+            var,
+        )
         ttk.Checkbutton(
             geometry_q_group_body,
             text=_format_geometry_q_group_line(entry),
@@ -5868,9 +5887,7 @@ def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
 def _request_geometry_q_group_window_update() -> None:
     """Rebuild the listed Qr/Qz rows from the current simulation on demand."""
 
-    global geometry_q_group_refresh_requested, last_simulation_signature
-
-    geometry_q_group_refresh_requested = True
+    gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
     last_simulation_signature = None
     _invalidate_geometry_manual_pick_cache()
     progress_label_geometry.config(text="Updating listed Qr/Qz peaks from the current simulation...")
@@ -5881,7 +5898,7 @@ def _close_geometry_q_group_window() -> None:
     """Destroy the Qr/Qz selector window and clear its widget references."""
 
     global geometry_q_group_window, geometry_q_group_canvas, geometry_q_group_body
-    global geometry_q_group_status_label, geometry_q_group_row_vars
+    global geometry_q_group_status_label
 
     if geometry_q_group_window is not None:
         try:
@@ -5892,7 +5909,7 @@ def _close_geometry_q_group_window() -> None:
     geometry_q_group_canvas = None
     geometry_q_group_body = None
     geometry_q_group_status_label = None
-    geometry_q_group_row_vars = {}
+    gui_controllers.clear_geometry_q_group_row_vars(geometry_q_group_state)
 
 
 def _open_geometry_q_group_window() -> None:
@@ -9371,7 +9388,7 @@ def _should_collect_hit_tables_for_update() -> bool:
         hkl_pick_armed=bool(hkl_pick_armed),
         selected_hkl_target=selected_hkl_target,
         selected_peak_record=selected_peak_record,
-        geometry_q_group_refresh_requested=bool(geometry_q_group_refresh_requested),
+        geometry_q_group_refresh_requested=bool(geometry_q_group_state.refresh_requested),
         live_geometry_preview_enabled=_live_geometry_preview_enabled,
         current_manual_pick_background_image=_current_geometry_manual_pick_background_image,
         geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
@@ -9568,7 +9585,6 @@ def do_update():
     global update_pending, update_running, last_simulation_signature
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
-    global geometry_q_group_refresh_requested
     global geometry_preview_skip_once
     global stored_primary_sim_image, stored_secondary_sim_image
     global stored_primary_max_positions, stored_secondary_max_positions
@@ -9936,9 +9952,8 @@ def do_update():
             for _ in max_positions_local
         ]
 
-    if geometry_q_group_refresh_requested:
+    if gui_controllers.consume_geometry_q_group_refresh_request(geometry_q_group_state):
         listed_entries = _capture_geometry_q_group_entries_snapshot()
-        geometry_q_group_refresh_requested = False
         progress_label_geometry.config(
             text=(
                 f"Updated listed Qr/Qz peaks: {len(listed_entries)} groups, "
@@ -15511,7 +15526,7 @@ def _build_geometry_manual_fit_dataset(
 def on_fit_geometry_click():
     """Fit geometry from the saved manual Qr/Qz pair selections."""
 
-    global profile_cache, last_geometry_overlay_state
+    global profile_cache
     global last_simulation_signature, geometry_preview_skip_once
 
     _clear_geometry_preview_artists()
@@ -15946,13 +15961,13 @@ def on_fit_geometry_click():
                 current_dataset["initial_pairs_display"],
                 max_display_markers=max_display_markers,
             )
-        last_geometry_overlay_state = {
+        _set_geometry_fit_last_overlay_state({
             "overlay_records": _copy_geometry_fit_state_value(overlay_records),
             "initial_pairs_display": _copy_geometry_fit_state_value(
                 current_dataset["initial_pairs_display"]
             ),
             "max_display_markers": int(max_display_markers),
-        }
+        })
 
         export_recs = []
         for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):

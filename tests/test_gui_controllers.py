@@ -6,10 +6,16 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     other_state = state.AppState()
 
     assert isinstance(app_state.manual_geometry, state.ManualGeometryState)
+    assert isinstance(app_state.geometry_fit_history, state.GeometryFitHistoryState)
+    assert isinstance(app_state.geometry_q_groups, state.GeometryQGroupState)
     assert app_state.manual_geometry is not other_state.manual_geometry
+    assert app_state.geometry_fit_history is not other_state.geometry_fit_history
+    assert app_state.geometry_q_groups is not other_state.geometry_q_groups
 
     app_state.manual_geometry.pick_session["group_key"] = ("q_group", "primary", 1, 0)
+    app_state.geometry_q_groups.refresh_requested = True
     assert other_state.manual_geometry.pick_session == {}
+    assert other_state.geometry_q_groups.refresh_requested is False
 
 
 def test_replace_manual_geometry_state_updates_in_place() -> None:
@@ -104,3 +110,114 @@ def test_clear_manual_geometry_undo_stack_discards_history() -> None:
     assert len(manual_state.undo_stack) == 1
     controllers.clear_manual_geometry_undo_stack(manual_state)
     assert manual_state.undo_stack == []
+
+
+def test_geometry_fit_history_controller_tracks_overlay_and_undo_redo() -> None:
+    fit_state = state.GeometryFitHistoryState()
+
+    controllers.replace_geometry_fit_last_overlay_state(
+        fit_state,
+        {"overlay_records": [{"x": 1.0}], "max_display_markers": 4},
+    )
+    assert fit_state.last_overlay_state == {
+        "overlay_records": [{"x": 1.0}],
+        "max_display_markers": 4,
+    }
+
+    controllers.push_geometry_fit_undo_state(
+        fit_state,
+        {"ui_params": {"gamma": 1.0}},
+        copy_state_value=lambda value: dict(value),
+        limit=2,
+    )
+    controllers.push_geometry_fit_undo_state(
+        fit_state,
+        {"ui_params": {"gamma": 2.0}},
+        copy_state_value=lambda value: dict(value),
+        limit=2,
+    )
+    controllers.push_geometry_fit_undo_state(
+        fit_state,
+        {"ui_params": {"gamma": 3.0}},
+        copy_state_value=lambda value: dict(value),
+        limit=2,
+    )
+
+    assert len(fit_state.undo_stack) == 2
+    assert controllers.peek_last_geometry_fit_undo_state(
+        fit_state,
+        copy_state_value=lambda value: dict(value),
+    ) == {"ui_params": {"gamma": 3.0}}
+
+    controllers.commit_geometry_fit_undo(
+        fit_state,
+        {"ui_params": {"gamma": 9.0}},
+        copy_state_value=lambda value: dict(value),
+        limit=2,
+    )
+    assert len(fit_state.undo_stack) == 1
+    assert fit_state.redo_stack == [{"ui_params": {"gamma": 9.0}}]
+
+    assert controllers.peek_last_geometry_fit_redo_state(
+        fit_state,
+        copy_state_value=lambda value: dict(value),
+    ) == {"ui_params": {"gamma": 9.0}}
+
+    controllers.commit_geometry_fit_redo(
+        fit_state,
+        {"ui_params": {"gamma": 5.0}},
+        copy_state_value=lambda value: dict(value),
+        limit=2,
+    )
+    assert fit_state.redo_stack == []
+    assert fit_state.undo_stack[-1] == {"ui_params": {"gamma": 5.0}}
+
+    controllers.clear_geometry_fit_history(fit_state)
+    assert fit_state.undo_stack == []
+    assert fit_state.redo_stack == []
+    assert fit_state.last_overlay_state is None
+
+
+def test_geometry_q_group_controller_replaces_entries_row_vars_and_refresh_flag() -> None:
+    q_state = state.GeometryQGroupState()
+    row_vars_alias = q_state.row_vars
+    cached_alias = q_state.cached_entries
+
+    listed = controllers.replace_geometry_q_group_cached_entries(
+        q_state,
+        [
+            {
+                "key": ("q_group", "primary", 1, 0),
+                "hkl_preview": [(1, 0, 0)],
+                "peak_count": 2,
+            }
+        ],
+    )
+
+    assert q_state.row_vars is row_vars_alias
+    assert q_state.cached_entries is cached_alias
+    assert listed == [
+        {
+            "key": ("q_group", "primary", 1, 0),
+            "hkl_preview": [(1, 0, 0)],
+            "peak_count": 2,
+        }
+    ]
+    assert controllers.listed_geometry_q_group_keys(q_state) == {
+        ("q_group", "primary", 1, 0)
+    }
+
+    controllers.set_geometry_q_group_row_var(
+        q_state,
+        ("q_group", "primary", 1, 0),
+        "var-a",
+    )
+    assert q_state.row_vars == {("q_group", "primary", 1, 0): "var-a"}
+    controllers.clear_geometry_q_group_row_vars(q_state)
+    assert q_state.row_vars == {}
+
+    controllers.request_geometry_q_group_refresh(q_state)
+    assert q_state.refresh_requested is True
+    assert controllers.consume_geometry_q_group_refresh_request(q_state) is True
+    assert q_state.refresh_requested is False
+    assert controllers.consume_geometry_q_group_refresh_request(q_state) is False

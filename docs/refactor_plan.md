@@ -48,6 +48,11 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - Manual-geometry undo/session/pair-map mutations now flow through
     `ra_sim.gui.controllers`.
   - Direct controller tests cover in-place state replacement and undo restore.
+- Geometry-fit history and Q-group selector state migration has started.
+  - Geometry-fit undo/redo history now has shared state in `ra_sim.gui.state`.
+  - Q-group selector cached rows and refresh state now have shared state in
+    `ra_sim.gui.state`.
+  - Controller helpers now own the corresponding stack/list/refresh mutations.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -72,13 +77,18 @@ What is done:
 - Manual-geometry state is no longer just loose runtime-owned storage.
   - Shared state now has a `ManualGeometryState` container.
   - Undo snapshots and state replacement now flow through controller helpers.
+- Geometry-fit history and Q-group selector state are no longer only loose
+  runtime-owned storage.
+  - Shared state now has geometry-fit history and Q-group selector containers.
+  - Controller helpers now own fit-history stack transitions and Q-group
+    snapshot/refresh mutations.
 
 What is left:
 
 - `ra_sim/gui/runtime.py` is still very large and still owns too much mutable
   GUI state.
-- Manual-geometry state is still wired through runtime aliases and runtime
-  integration code, even though the backing storage has moved into shared state.
+- Extracted state is still wired through runtime aliases and runtime integration
+  code, even though the backing storage has moved into shared state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
 
 Why it matters:
@@ -104,6 +114,9 @@ What is done:
 - `ra_sim.gui.state`, `ra_sim.gui.controllers`, and `ra_sim.gui.views` exist.
 - `state.py` now owns real manual-geometry state structures.
 - `controllers.py` now owns real manual-geometry state/undo mutations.
+- `state.py` now also owns geometry-fit history and Q-group selector state.
+- `controllers.py` now also owns geometry-fit history and Q-group selector
+  mutations.
 
 What is left:
 
@@ -370,8 +383,9 @@ Why last:
 
 The next best step is:
 
-- build on the new manual-geometry state/controller slice by moving more
-  runtime-owned GUI state into explicit shared state containers
+- build on the new manual-geometry / geometry-fit-history / Q-group
+  state-controller slices by moving more runtime-owned GUI state into explicit
+  shared state containers
 - then expand `ra_sim.gui.controllers` beyond manual geometry so workflow
   orchestration stops accumulating in `ra_sim/gui/runtime.py`
 
