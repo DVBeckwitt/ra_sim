@@ -14,21 +14,27 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     )
     assert isinstance(app_state.geometry_q_groups, state.GeometryQGroupState)
     assert isinstance(app_state.geometry_q_group_view, state.GeometryQGroupViewState)
+    assert isinstance(app_state.bragg_qr_manager, state.BraggQrManagerState)
+    assert isinstance(app_state.bragg_qr_manager_view, state.BraggQrManagerViewState)
     assert app_state.manual_geometry is not other_state.manual_geometry
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
     assert app_state.geometry_preview is not other_state.geometry_preview
     assert app_state.geometry_preview.overlay is not other_state.geometry_preview.overlay
     assert app_state.geometry_q_groups is not other_state.geometry_q_groups
     assert app_state.geometry_q_group_view is not other_state.geometry_q_group_view
+    assert app_state.bragg_qr_manager is not other_state.bragg_qr_manager
+    assert app_state.bragg_qr_manager_view is not other_state.bragg_qr_manager_view
 
     app_state.manual_geometry.pick_session["group_key"] = ("q_group", "primary", 1, 0)
     app_state.geometry_preview.skip_once = True
     app_state.geometry_preview.overlay.pairs.append({"x": 1.0})
     app_state.geometry_q_groups.refresh_requested = True
+    app_state.bragg_qr_manager.selected_group_key = ("primary", 1)
     assert other_state.manual_geometry.pick_session == {}
     assert other_state.geometry_preview.skip_once is False
     assert other_state.geometry_preview.overlay.pairs == []
     assert other_state.geometry_q_groups.refresh_requested is False
+    assert other_state.bragg_qr_manager.selected_group_key is None
 
 
 def test_replace_manual_geometry_state_updates_in_place() -> None:
@@ -373,3 +379,79 @@ def test_geometry_q_group_controller_replaces_entries_row_vars_and_refresh_flag(
     assert controllers.consume_geometry_q_group_refresh_request(q_state) is True
     assert q_state.refresh_requested is False
     assert controllers.consume_geometry_q_group_refresh_request(q_state) is False
+
+
+def test_bragg_qr_manager_controller_tracks_indices_selection_and_mutations() -> None:
+    bragg_state = state.BraggQrManagerState()
+    qr_alias = bragg_state.qr_index_keys
+    l_alias = bragg_state.l_index_keys
+
+    assert controllers.replace_bragg_qr_index_keys(
+        bragg_state,
+        [("primary", 1), ["secondary", 2], "bad"],
+    ) == [("primary", 1), ("secondary", 2)]
+    assert bragg_state.qr_index_keys is qr_alias
+    assert controllers.replace_bragg_qr_l_index_keys(
+        bragg_state,
+        [0, "3", None],
+    ) == [0, 3]
+    assert bragg_state.l_index_keys is l_alias
+
+    assert controllers.selected_bragg_qr_keys(bragg_state, [1, 9]) == [
+        ("secondary", 2)
+    ]
+    assert controllers.selected_bragg_qr_l_keys(bragg_state, [0, 1, 7]) == [0, 3]
+    assert controllers.set_bragg_qr_selected_group_key(
+        bragg_state,
+        ["primary", "4"],
+    ) == ("primary", 4)
+    assert bragg_state.selected_group_key == ("primary", 4)
+
+    disabled_groups: set[tuple[str, int]] = set()
+    assert (
+        controllers.set_bragg_qr_groups_enabled(
+            disabled_groups,
+            [("primary", 1), ("secondary", 2)],
+            enabled=False,
+        )
+        == 2
+    )
+    assert disabled_groups == {("primary", 1), ("secondary", 2)}
+    assert controllers.toggle_bragg_qr_groups(disabled_groups, [("primary", 1)]) == 1
+    assert disabled_groups == {("secondary", 2)}
+
+    disabled_l_values: set[tuple[str, int, int]] = set()
+    assert (
+        controllers.set_bragg_qr_l_values_enabled(
+            disabled_l_values,
+            ("primary", 4),
+            [0, 2, -99],
+            enabled=False,
+            invalid_key=-99,
+        )
+        == 2
+    )
+    assert disabled_l_values == {("primary", 4, 0), ("primary", 4, 2)}
+    assert (
+        controllers.toggle_bragg_qr_l_values(
+            disabled_l_values,
+            ("primary", 4),
+            [2, 5],
+            invalid_key=-99,
+        )
+        == 2
+    )
+    assert disabled_l_values == {("primary", 4, 0), ("primary", 4, 5)}
+    assert (
+        controllers.clear_bragg_qr_l_values_for_group(
+            disabled_l_values,
+            ("primary", 4),
+        )
+        is True
+    )
+    assert disabled_l_values == set()
+
+    controllers.clear_bragg_qr_manager_state(bragg_state)
+    assert bragg_state.qr_index_keys == []
+    assert bragg_state.l_index_keys == []
+    assert bragg_state.selected_group_key is None

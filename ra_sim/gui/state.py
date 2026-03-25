@@ -89,6 +89,26 @@ class GeometryQGroupViewState:
 
 
 @dataclass
+class BraggQrManagerState:
+    """Selection/index bookkeeping for the Bragg Qr manager window."""
+
+    qr_index_keys: list[tuple[str, int]] = field(default_factory=list)
+    l_index_keys: list[int] = field(default_factory=list)
+    selected_group_key: tuple[str, int] | None = None
+
+
+@dataclass
+class BraggQrManagerViewState:
+    """Widget references for the Bragg Qr manager window."""
+
+    window: Any = None
+    qr_listbox: Any = None
+    qr_status_label: Any = None
+    l_listbox: Any = None
+    l_status_label: Any = None
+
+
+@dataclass
 class AppState:
     """Minimal mutable state container for GUI controller/view coordination."""
 
@@ -106,4 +126,8 @@ class AppState:
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)
     geometry_q_group_view: GeometryQGroupViewState = field(
         default_factory=GeometryQGroupViewState
+    )
+    bragg_qr_manager: BraggQrManagerState = field(default_factory=BraggQrManagerState)
+    bragg_qr_manager_view: BraggQrManagerViewState = field(
+        default_factory=BraggQrManagerViewState
     )

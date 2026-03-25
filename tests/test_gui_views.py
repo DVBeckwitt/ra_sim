@@ -41,6 +41,26 @@ class _FakeCanvas:
         self.y_moved_to = value
 
 
+class _FakeListbox:
+    def __init__(self) -> None:
+        self.items = []
+        self.selected = []
+        self.seen_index = None
+
+    def delete(self, _start, _end) -> None:
+        self.items = []
+        self.selected = []
+
+    def insert(self, _index, line) -> None:
+        self.items.append(line)
+
+    def selection_set(self, idx: int) -> None:
+        self.selected.append(int(idx))
+
+    def see(self, idx: int) -> None:
+        self.seen_index = int(idx)
+
+
 class _FakeWindow:
     def __init__(self, exists: bool = True) -> None:
         self.exists = exists
@@ -163,3 +183,67 @@ def test_refresh_geometry_q_group_window_updates_status_and_rows(monkeypatch) ->
 
     _FakeCheckbutton.created[1].command()
     assert toggled == [(("q_group", "secondary", 2, 1), False)]
+
+
+def test_bragg_qr_manager_view_helpers_close_and_report_open() -> None:
+    view_state = state.BraggQrManagerViewState()
+
+    assert views.bragg_qr_manager_window_open(view_state) is False
+
+    window = _FakeWindow()
+    view_state.window = window
+    view_state.qr_listbox = object()
+    view_state.qr_status_label = object()
+    view_state.l_listbox = object()
+    view_state.l_status_label = object()
+
+    assert views.bragg_qr_manager_window_open(view_state) is True
+
+    views.close_bragg_qr_manager_window(view_state)
+    assert window.destroyed is True
+    assert view_state.window is None
+    assert view_state.qr_listbox is None
+    assert view_state.qr_status_label is None
+    assert view_state.l_listbox is None
+    assert view_state.l_status_label is None
+
+    view_state.window = _FakeWindow(exists="error")
+    assert views.bragg_qr_manager_window_open(view_state) is False
+
+
+def test_refresh_bragg_qr_manager_lists_update_status_and_selection() -> None:
+    view_state = state.BraggQrManagerViewState(
+        window=_FakeWindow(),
+        qr_listbox=_FakeListbox(),
+        qr_status_label=_FakeLabel(None, text=""),
+        l_listbox=_FakeListbox(),
+        l_status_label=_FakeLabel(None, text=""),
+    )
+
+    assert (
+        views.refresh_bragg_qr_manager_qr_list(
+            view_state=view_state,
+            lines=["qr-a", "qr-b"],
+            selected_indices=[1],
+            status_text="qr-status",
+            see_index=1,
+        )
+        is True
+    )
+    assert view_state.qr_listbox.items == ["qr-a", "qr-b"]
+    assert view_state.qr_listbox.selected == [1]
+    assert view_state.qr_listbox.seen_index == 1
+    assert view_state.qr_status_label.text == "qr-status"
+
+    assert (
+        views.refresh_bragg_qr_manager_l_list(
+            view_state=view_state,
+            lines=["l-a", "l-b", "l-c"],
+            selected_indices=[0, 2],
+            status_text="l-status",
+        )
+        is True
+    )
+    assert view_state.l_listbox.items == ["l-a", "l-b", "l-c"]
+    assert view_state.l_listbox.selected == [0, 2]
+    assert view_state.l_status_label.text == "l-status"

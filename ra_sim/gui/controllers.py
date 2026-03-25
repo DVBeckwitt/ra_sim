@@ -10,6 +10,7 @@ from ra_sim.path_config import get_instrument_config
 
 from .state import (
     AppState,
+    BraggQrManagerState,
     GeometryFitHistoryState,
     GeometryPreviewOverlayState,
     GeometryPreviewState,
@@ -569,3 +570,244 @@ def consume_geometry_q_group_refresh_request(
     requested = bool(state.refresh_requested)
     state.refresh_requested = False
     return requested
+
+
+def clear_bragg_qr_manager_state(state: BraggQrManagerState) -> None:
+    """Discard all Bragg-Qr manager list bookkeeping."""
+
+    state.qr_index_keys.clear()
+    state.l_index_keys.clear()
+    state.selected_group_key = None
+
+
+def replace_bragg_qr_index_keys(
+    state: BraggQrManagerState,
+    keys: Sequence[object] | None,
+) -> list[tuple[str, int]]:
+    """Replace the stored Bragg-Qr group index-key list in place."""
+
+    normalized: list[tuple[str, int]] = []
+    for raw_key in keys or ():
+        if not isinstance(raw_key, (list, tuple)) or len(raw_key) < 2:
+            continue
+        try:
+            normalized.append((str(raw_key[0]), int(raw_key[1])))
+        except Exception:
+            continue
+    state.qr_index_keys.clear()
+    state.qr_index_keys.extend(normalized)
+    return list(state.qr_index_keys)
+
+
+def replace_bragg_qr_l_index_keys(
+    state: BraggQrManagerState,
+    keys: Sequence[object] | None,
+) -> list[int]:
+    """Replace the stored Bragg-Qr L-index list in place."""
+
+    normalized: list[int] = []
+    for raw_key in keys or ():
+        try:
+            normalized.append(int(raw_key))
+        except Exception:
+            continue
+    state.l_index_keys.clear()
+    state.l_index_keys.extend(normalized)
+    return list(state.l_index_keys)
+
+
+def set_bragg_qr_selected_group_key(
+    state: BraggQrManagerState,
+    group_key: tuple[str, int] | Sequence[object] | None,
+) -> tuple[str, int] | None:
+    """Store the currently selected Bragg-Qr group key."""
+
+    if not isinstance(group_key, (list, tuple)) or len(group_key) < 2:
+        state.selected_group_key = None
+    else:
+        try:
+            state.selected_group_key = (str(group_key[0]), int(group_key[1]))
+        except Exception:
+            state.selected_group_key = None
+    return state.selected_group_key
+
+
+def selected_bragg_qr_keys(
+    state: BraggQrManagerState,
+    selected_indices: Sequence[object] | None,
+) -> list[tuple[str, int]]:
+    """Map selected listbox indices to Bragg-Qr group keys."""
+
+    selected_keys: list[tuple[str, int]] = []
+    for raw_idx in selected_indices or ():
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        if 0 <= idx < len(state.qr_index_keys):
+            selected_keys.append(state.qr_index_keys[idx])
+    return selected_keys
+
+
+def selected_bragg_qr_l_keys(
+    state: BraggQrManagerState,
+    selected_indices: Sequence[object] | None,
+) -> list[int]:
+    """Map selected listbox indices to Bragg-Qr L keys."""
+
+    selected_keys: list[int] = []
+    for raw_idx in selected_indices or ():
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        if 0 <= idx < len(state.l_index_keys):
+            selected_keys.append(int(state.l_index_keys[idx]))
+    return selected_keys
+
+
+def set_bragg_qr_groups_enabled(
+    disabled_groups: set[tuple[str, int]],
+    group_keys: Sequence[tuple[str, int]] | None,
+    *,
+    enabled: bool,
+) -> int:
+    """Enable or disable the provided normalized Bragg-Qr groups in place."""
+
+    changed = 0
+    for raw_key in group_keys or ():
+        if not isinstance(raw_key, (list, tuple)) or len(raw_key) < 2:
+            continue
+        try:
+            key = (str(raw_key[0]), int(raw_key[1]))
+        except Exception:
+            continue
+        if enabled:
+            if key in disabled_groups:
+                disabled_groups.remove(key)
+                changed += 1
+        else:
+            if key not in disabled_groups:
+                disabled_groups.add(key)
+                changed += 1
+    return changed
+
+
+def toggle_bragg_qr_groups(
+    disabled_groups: set[tuple[str, int]],
+    group_keys: Sequence[tuple[str, int]] | None,
+) -> int:
+    """Toggle the provided normalized Bragg-Qr groups in place."""
+
+    changed = 0
+    for raw_key in group_keys or ():
+        if not isinstance(raw_key, (list, tuple)) or len(raw_key) < 2:
+            continue
+        try:
+            key = (str(raw_key[0]), int(raw_key[1]))
+        except Exception:
+            continue
+        if key in disabled_groups:
+            disabled_groups.remove(key)
+        else:
+            disabled_groups.add(key)
+        changed += 1
+    return changed
+
+
+def set_bragg_qr_l_values_enabled(
+    disabled_l_values: set[tuple[str, int, int]],
+    group_key: tuple[str, int] | Sequence[object] | None,
+    l_keys: Sequence[object] | None,
+    *,
+    enabled: bool,
+    invalid_key: int,
+) -> int:
+    """Enable or disable the provided normalized Bragg-Qr L values in place."""
+
+    if not isinstance(group_key, (list, tuple)) or len(group_key) < 2:
+        return 0
+    try:
+        source_label = str(group_key[0])
+        m_idx = int(group_key[1])
+    except Exception:
+        return 0
+
+    changed = 0
+    for raw_l_key in l_keys or ():
+        try:
+            l_key = int(raw_l_key)
+        except Exception:
+            continue
+        if l_key == int(invalid_key):
+            continue
+        key = (source_label, m_idx, l_key)
+        if enabled:
+            if key in disabled_l_values:
+                disabled_l_values.remove(key)
+                changed += 1
+        else:
+            if key not in disabled_l_values:
+                disabled_l_values.add(key)
+                changed += 1
+    return changed
+
+
+def toggle_bragg_qr_l_values(
+    disabled_l_values: set[tuple[str, int, int]],
+    group_key: tuple[str, int] | Sequence[object] | None,
+    l_keys: Sequence[object] | None,
+    *,
+    invalid_key: int,
+) -> int:
+    """Toggle the provided normalized Bragg-Qr L values in place."""
+
+    if not isinstance(group_key, (list, tuple)) or len(group_key) < 2:
+        return 0
+    try:
+        source_label = str(group_key[0])
+        m_idx = int(group_key[1])
+    except Exception:
+        return 0
+
+    changed = 0
+    for raw_l_key in l_keys or ():
+        try:
+            l_key = int(raw_l_key)
+        except Exception:
+            continue
+        if l_key == int(invalid_key):
+            continue
+        key = (source_label, m_idx, l_key)
+        if key in disabled_l_values:
+            disabled_l_values.remove(key)
+        else:
+            disabled_l_values.add(key)
+        changed += 1
+    return changed
+
+
+def clear_bragg_qr_l_values_for_group(
+    disabled_l_values: set[tuple[str, int, int]],
+    group_key: tuple[str, int] | Sequence[object] | None,
+) -> bool:
+    """Enable every L value for one normalized Bragg-Qr group."""
+
+    if not isinstance(group_key, (list, tuple)) or len(group_key) < 2:
+        return False
+    try:
+        source_label = str(group_key[0])
+        m_idx = int(group_key[1])
+    except Exception:
+        return False
+
+    filtered = {
+        (src, mm, lk)
+        for src, mm, lk in disabled_l_values
+        if not (str(src) == source_label and int(mm) == m_idx)
+    }
+    if len(filtered) == len(disabled_l_values):
+        return False
+    disabled_l_values.clear()
+    disabled_l_values.update(filtered)
+    return True

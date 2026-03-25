@@ -66,6 +66,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - Controller helpers now own preview exclusion toggles and preview overlay
     snapshot replacement.
   - Dead preview-selector scaffolding was removed from `runtime.py`.
+- Bragg Qr manager migration has started.
+  - Bragg-Qr selection/index bookkeeping now lives in `ra_sim.gui.state`.
+  - Controller helpers now own Bragg-Qr selection mapping and group/L-value
+    toggle mutations.
+  - `ra_sim.gui.views` now owns the Bragg Qr manager window lifecycle and
+    listbox rendering helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -104,6 +110,9 @@ What is done:
   `runtime.py`.
   - `ra_sim.gui.views` now owns the selector window/widget construction and row
     rendering helpers.
+- The Bragg Qr manager is no longer built directly in `runtime.py`.
+  - `ra_sim.gui.views` now owns its window construction and listbox refresh
+    helpers.
 
 What is left:
 
@@ -141,6 +150,10 @@ What is done:
 - `controllers.py` now also owns preview exclusion/skip/cache mutations and
   preview overlay snapshot replacement.
 - `views.py` now owns the Q-group selector window lifecycle and row rendering.
+- `state.py` now also owns Bragg-Qr manager state.
+- `controllers.py` now also owns Bragg-Qr manager selection/toggle helpers.
+- `views.py` now also owns the Bragg Qr manager window lifecycle and list
+  rendering.
 
 What is left:
 
@@ -412,8 +425,9 @@ The next best step is:
 - build on the new manual-geometry / geometry-fit-history / preview /
   Q-group state-controller-view slices by moving the next runtime-owned GUI
   workflows into explicit state + controller + view boundaries
-- focus next on the Bragg Qr group manager and the other runtime-owned Tk
-  windows that still construct their UI inline
+- focus next on the remaining standalone Tk windows and widget-heavy helpers
+  that still live inline in `runtime.py`, such as the hBN geometry debug
+  viewer and any similar one-off dialogs
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.
