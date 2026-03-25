@@ -113,6 +113,7 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
+from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compute_geometry_overlay_frame_diagnostics,
@@ -1453,8 +1454,7 @@ def _update_sf_prune_status_label() -> None:
 
 
 def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
-    label = str(source_label or "primary").strip().lower()
-    return "secondary" if label == "secondary" else "primary"
+    return gui_manual_geometry.normalize_bragg_qr_source_label(source_label)
 
 
 def _l_value_to_key(l_value: float) -> int:
@@ -3506,19 +3506,12 @@ def _geometry_manual_position_error_px(
     refined_row: float,
 ) -> float:
     """Return the click-to-refined placement error in display pixels."""
-
-    try:
-        delta = float(
-            np.hypot(
-                float(refined_col) - float(raw_col),
-                float(refined_row) - float(raw_row),
-            )
-        )
-    except Exception:
-        return 0.0
-    if not np.isfinite(delta):
-        return 0.0
-    return max(0.0, float(delta))
+    return gui_manual_geometry.geometry_manual_position_error_px(
+        raw_col,
+        raw_row,
+        refined_col,
+        refined_row,
+    )
 
 
 def _geometry_manual_position_sigma_px(
@@ -3527,143 +3520,33 @@ def _geometry_manual_position_sigma_px(
     floor_px: float | None = None,
 ) -> float:
     """Convert a manual click-placement error into a fit sigma in pixels."""
-
-    try:
-        error_px = float(placement_error_px)
-    except Exception:
-        error_px = 0.0
-    if not np.isfinite(error_px):
-        error_px = 0.0
-
     if floor_px is None:
         floor_px = float(globals().get("GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX", 0.75))
-    floor_val = max(1.0e-3, float(floor_px))
-    return float(np.hypot(float(error_px), floor_val))
+    return gui_manual_geometry.geometry_manual_position_sigma_px(
+        placement_error_px,
+        floor_px=float(floor_px),
+    )
 
 
 def _normalize_geometry_manual_pair_entry(
     entry: dict[str, object] | None,
 ) -> dict[str, object] | None:
     """Normalize one saved manual geometry-pair entry."""
-
-    if not isinstance(entry, dict):
-        return None
-    try:
-        x_val = float(entry.get("x", np.nan))
-        y_val = float(entry.get("y", np.nan))
-    except Exception:
-        return None
-    if not (np.isfinite(x_val) and np.isfinite(y_val)):
-        return None
-
-    normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
-    label = str(entry.get("label", "")) if entry.get("label") is not None else ""
-    if not label and normalized_hkl is not None:
-        label = f"{normalized_hkl[0]},{normalized_hkl[1]},{normalized_hkl[2]}"
-
-    normalized: dict[str, object] = {
-        "x": float(x_val),
-        "y": float(y_val),
-        "label": label,
-    }
-    if normalized_hkl is not None:
-        normalized["hkl"] = normalized_hkl
-
-    raw_group_key = entry.get("q_group_key")
-    if isinstance(raw_group_key, tuple):
-        normalized["q_group_key"] = raw_group_key
-    elif isinstance(raw_group_key, list):
-        normalized["q_group_key"] = tuple(raw_group_key)
-
-    for key in ("source_table_index", "source_row_index"):
-        if key not in entry:
-            continue
-        try:
-            normalized[key] = int(entry.get(key))  # type: ignore[arg-type]
-        except Exception:
-            pass
-
-    for key in ("source_label",):
-        if entry.get(key) is not None:
-            normalized[key] = str(entry.get(key))
-
-    raw_x = entry.get("raw_x")
-    raw_y = entry.get("raw_y")
-    try:
-        raw_x_val = float(raw_x) if raw_x is not None else float("nan")
-    except Exception:
-        raw_x_val = float("nan")
-    try:
-        raw_y_val = float(raw_y) if raw_y is not None else float("nan")
-    except Exception:
-        raw_y_val = float("nan")
-    if np.isfinite(raw_x_val) and np.isfinite(raw_y_val):
-        normalized["raw_x"] = float(raw_x_val)
-        normalized["raw_y"] = float(raw_y_val)
-
-    for x_key, y_key in (("caked_x", "caked_y"), ("raw_caked_x", "raw_caked_y")):
-        raw_x_local = entry.get(x_key)
-        raw_y_local = entry.get(y_key)
-        try:
-            caked_x_val = float(raw_x_local) if raw_x_local is not None else float("nan")
-        except Exception:
-            caked_x_val = float("nan")
-        try:
-            caked_y_val = float(raw_y_local) if raw_y_local is not None else float("nan")
-        except Exception:
-            caked_y_val = float("nan")
-        if np.isfinite(caked_x_val) and np.isfinite(caked_y_val):
-            normalized[x_key] = float(caked_x_val)
-            normalized[y_key] = float(caked_y_val)
-
-    placement_error_value = entry.get("placement_error_px")
-    if placement_error_value is None and np.isfinite(raw_x_val) and np.isfinite(raw_y_val):
-        placement_error_value = _geometry_manual_position_error_px(
-            float(raw_x_val),
-            float(raw_y_val),
-            float(x_val),
-            float(y_val),
-        )
-    try:
-        placement_error_px = (
-            float(placement_error_value) if placement_error_value is not None else float("nan")
-        )
-    except Exception:
-        placement_error_px = float("nan")
-    if np.isfinite(placement_error_px):
-        normalized["placement_error_px"] = max(0.0, float(placement_error_px))
-
-    sigma_value = (
-        entry.get("sigma_px")
-        if entry.get("sigma_px") is not None
-        else entry.get("position_sigma_px", entry.get("measurement_sigma_px"))
+    return gui_manual_geometry.normalize_geometry_manual_pair_entry(
+        entry,
+        normalize_hkl_key=_normalize_hkl_key,
+        sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
     )
-    if sigma_value is None and np.isfinite(placement_error_px):
-        sigma_value = _geometry_manual_position_sigma_px(float(placement_error_px))
-    try:
-        sigma_px = float(sigma_value) if sigma_value is not None else float("nan")
-    except Exception:
-        sigma_px = float("nan")
-    if np.isfinite(sigma_px) and sigma_px > 0.0:
-        normalized["sigma_px"] = float(sigma_px)
-
-    return normalized
 
 
 def _geometry_manual_pairs_for_index(index: int) -> list[dict[str, object]]:
     """Return normalized saved manual geometry pairs for one background index."""
-
-    try:
-        key = int(index)
-    except Exception:
-        return []
-    raw_entries = geometry_manual_pairs_by_background.get(key, [])
-    normalized_entries: list[dict[str, object]] = []
-    for raw_entry in raw_entries:
-        normalized = _normalize_geometry_manual_pair_entry(raw_entry)
-        if normalized is not None:
-            normalized_entries.append(normalized)
-    return normalized_entries
+    return gui_manual_geometry.geometry_manual_pairs_for_index(
+        index,
+        pairs_by_background=geometry_manual_pairs_by_background,
+        normalize_hkl_key=_normalize_hkl_key,
+        sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
+    )
 
 
 def _set_geometry_manual_pairs_for_index(
@@ -3671,34 +3554,23 @@ def _set_geometry_manual_pairs_for_index(
     entries: Sequence[dict[str, object]] | None,
 ) -> list[dict[str, object]]:
     """Replace one background's saved manual geometry-pair list."""
-
-    try:
-        key = int(index)
-    except Exception:
-        return []
-
-    normalized_entries: list[dict[str, object]] = []
-    for raw_entry in entries or []:
-        normalized = _normalize_geometry_manual_pair_entry(raw_entry)
-        if normalized is not None:
-            normalized_entries.append(normalized)
-
-    if normalized_entries:
-        geometry_manual_pairs_by_background[key] = normalized_entries
-    else:
-        geometry_manual_pairs_by_background.pop(key, None)
-    return list(normalized_entries)
+    return gui_manual_geometry.set_geometry_manual_pairs_for_index(
+        index,
+        entries,
+        pairs_by_background=geometry_manual_pairs_by_background,
+        normalize_hkl_key=_normalize_hkl_key,
+        sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
+    )
 
 
 def _geometry_manual_pair_group_count(index: int) -> int:
     """Return how many distinct Qr/Qz groups are saved for one background."""
-
-    group_keys = {
-        entry.get("q_group_key")
-        for entry in _geometry_manual_pairs_for_index(index)
-        if entry.get("q_group_key") is not None
-    }
-    return int(len(group_keys))
+    return gui_manual_geometry.geometry_manual_pair_group_count(
+        index,
+        pairs_by_background=geometry_manual_pairs_by_background,
+        normalize_hkl_key=_normalize_hkl_key,
+        sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
+    )
 
 
 def _clear_geometry_manual_undo_stack() -> None:
@@ -3980,86 +3852,22 @@ def _geometry_manual_pair_entry_to_jsonable(
     entry: dict[str, object] | None,
 ) -> dict[str, object] | None:
     """Convert one saved manual pair entry into a JSON-safe dictionary."""
-
-    normalized = _normalize_geometry_manual_pair_entry(entry)
-    if normalized is None:
-        return None
-
-    row: dict[str, object] = {
-        "x": float(normalized["x"]),
-        "y": float(normalized["y"]),
-        "label": str(normalized.get("label", "")),
-    }
-
-    for key in (
-        "raw_x",
-        "raw_y",
-        "caked_x",
-        "caked_y",
-        "raw_caked_x",
-        "raw_caked_y",
-        "placement_error_px",
-        "sigma_px",
-    ):
-        value = normalized.get(key)
-        if value is None:
-            continue
-        try:
-            numeric = float(value)
-        except Exception:
-            continue
-        if np.isfinite(numeric):
-            row[key] = float(numeric)
-
-    hkl_key = normalized.get("hkl")
-    if isinstance(hkl_key, tuple) and len(hkl_key) >= 3:
-        try:
-            row["hkl"] = [int(hkl_key[0]), int(hkl_key[1]), int(hkl_key[2])]
-        except Exception:
-            pass
-
-    serialized_group_key = _geometry_q_group_key_to_jsonable(normalized.get("q_group_key"))
-    if serialized_group_key is not None:
-        row["q_group_key"] = serialized_group_key
-
-    for key in ("source_table_index", "source_row_index"):
-        if key in normalized:
-            try:
-                row[key] = int(normalized[key])
-            except Exception:
-                continue
-
-    if normalized.get("source_label") is not None:
-        row["source_label"] = str(normalized.get("source_label"))
-
-    return row
+    return gui_manual_geometry.geometry_manual_pair_entry_to_jsonable(
+        entry,
+        normalize_hkl_key=_normalize_hkl_key,
+        sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
+    )
 
 
 def _geometry_manual_pair_entry_from_jsonable(
     row: dict[str, object] | None,
 ) -> dict[str, object] | None:
     """Rebuild one saved manual pair entry from imported JSON data."""
-
-    if not isinstance(row, dict):
-        return None
-
-    entry = dict(row)
-    raw_hkl = row.get("hkl")
-    if isinstance(raw_hkl, (list, tuple)) and len(raw_hkl) >= 3:
-        try:
-            entry["hkl"] = (
-                int(raw_hkl[0]),
-                int(raw_hkl[1]),
-                int(raw_hkl[2]),
-            )
-        except Exception:
-            pass
-
-    restored_group_key = _geometry_q_group_key_from_jsonable(row.get("q_group_key"))
-    if restored_group_key is not None:
-        entry["q_group_key"] = restored_group_key
-
-    return _normalize_geometry_manual_pair_entry(entry)
+    return gui_manual_geometry.geometry_manual_pair_entry_from_jsonable(
+        row,
+        normalize_hkl_key=_normalize_hkl_key,
+        sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
+    )
 
 
 def _normalized_background_path_for_compare(raw_path: object) -> str | None:
@@ -4291,23 +4099,7 @@ def _invalidate_geometry_manual_pick_cache() -> None:
 
 def _current_geometry_manual_match_config() -> dict[str, object]:
     """Return the refined background-peak matcher config for manual picking."""
-
-    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
-    if not isinstance(geometry_refine_cfg, dict):
-        geometry_refine_cfg = {}
-    auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
-    if not isinstance(auto_match_cfg, dict):
-        auto_match_cfg = {}
-
-    manual_cfg = dict(auto_match_cfg)
-    search_radius = max(1.0, float(manual_cfg.get("search_radius_px", 24.0)))
-    manual_cfg["console_progress"] = False
-    manual_cfg["relax_on_low_matches"] = False
-    manual_cfg.setdefault("context_margin_px", max(96.0, 6.0 * search_radius))
-    manual_cfg.setdefault("require_candidate_ownership", True)
-    manual_cfg.setdefault("k_neighbors", 12)
-    manual_cfg.setdefault("max_candidate_peaks", 1200)
-    return manual_cfg
+    return gui_manual_geometry.current_geometry_manual_match_config(fit_config)
 
 
 def _geometry_manual_pick_cache_signature(
@@ -4425,24 +4217,10 @@ def _geometry_manual_candidate_source_key(
     entry: dict[str, object] | None,
 ) -> tuple[object, ...] | None:
     """Return a stable lookup key for one manual-pick candidate or match."""
-
-    if not isinstance(entry, dict):
-        return None
-    try:
-        return (
-            "source",
-            int(entry.get("source_table_index")),
-            int(entry.get("source_row_index")),
-        )
-    except Exception:
-        pass
-    normalized_hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
-    if normalized_hkl is not None:
-        return ("hkl",) + tuple(int(v) for v in normalized_hkl)
-    label = str(entry.get("label", "")).strip()
-    if label:
-        return ("label", label)
-    return None
+    return gui_manual_geometry.geometry_manual_candidate_source_key(
+        entry,
+        normalize_hkl_key=_normalize_hkl_key,
+    )
 
 
 def _geometry_manual_choose_group_at(
@@ -4453,34 +4231,12 @@ def _geometry_manual_choose_group_at(
     window_size_px: float,
 ) -> tuple[tuple[object, ...] | None, list[dict[str, object]], float]:
     """Return the nearest clickable Qr/Qz group inside a local click window."""
-
-    best_group_key = None
-    best_group_entries: list[dict[str, object]] = []
-    best_d2 = float("inf")
-    half_window = max(1.0, 0.5 * float(window_size_px))
-    for group_key, candidate_entries in (grouped_candidates or {}).items():
-        for candidate in candidate_entries or []:
-            try:
-                sim_col = float(candidate.get("sim_col"))
-                sim_row = float(candidate.get("sim_row"))
-            except Exception:
-                continue
-            if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-                continue
-            if (
-                abs(sim_col - float(col)) > half_window
-                or abs(sim_row - float(row)) > half_window
-            ):
-                continue
-            d2 = (sim_col - float(col)) ** 2 + (sim_row - float(row)) ** 2
-            if d2 < best_d2:
-                best_d2 = float(d2)
-                best_group_key = group_key
-                best_group_entries = [dict(entry) for entry in candidate_entries]
-
-    if best_group_key is None or not np.isfinite(best_d2):
-        return None, [], float("nan")
-    return best_group_key, best_group_entries, float(np.sqrt(best_d2))
+    return gui_manual_geometry.geometry_manual_choose_group_at(
+        grouped_candidates,
+        col,
+        row,
+        window_size_px=window_size_px,
+    )
 
 
 def _geometry_manual_zoom_bounds(
@@ -4491,36 +4247,12 @@ def _geometry_manual_zoom_bounds(
     window_size_px: float = 100.0,
 ) -> tuple[float, float, float, float]:
     """Return clamped image-space bounds for a square manual-pick zoom window."""
-
-    try:
-        height = int(image_shape[0]) if image_shape is not None else 0
-        width = int(image_shape[1]) if image_shape is not None else 0
-    except Exception:
-        height = 0
-        width = 0
-    width = max(1, width)
-    height = max(1, height)
-    half = max(1.0, 0.5 * float(window_size_px))
-
-    x_min = float(col) - half
-    x_max = float(col) + half
-    y_min = float(row) - half
-    y_max = float(row) + half
-
-    if x_min < 0.0:
-        x_max = min(float(width), x_max - x_min)
-        x_min = 0.0
-    if x_max > float(width):
-        x_min = max(0.0, x_min - (x_max - float(width)))
-        x_max = float(width)
-    if y_min < 0.0:
-        y_max = min(float(height), y_max - y_min)
-        y_min = 0.0
-    if y_max > float(height):
-        y_min = max(0.0, y_min - (y_max - float(height)))
-        y_max = float(height)
-
-    return float(x_min), float(x_max), float(y_min), float(y_max)
+    return gui_manual_geometry.geometry_manual_zoom_bounds(
+        col,
+        row,
+        image_shape,
+        window_size_px=window_size_px,
+    )
 
 
 def _geometry_manual_anchor_axis_limits(
@@ -4531,47 +4263,13 @@ def _geometry_manual_anchor_axis_limits(
     upper_bound: float,
 ) -> tuple[float, float]:
     """Return clamped axis limits that keep *value* at a fixed screen fraction."""
-
-    try:
-        span_signed = float(span)
-    except Exception:
-        span_signed = 0.0
-    if not np.isfinite(span_signed) or abs(span_signed) <= 1.0e-12:
-        value_f = float(value)
-        return value_f, value_f
-
-    try:
-        frac = float(anchor_fraction)
-    except Exception:
-        frac = 0.5
-    if not np.isfinite(frac):
-        frac = 0.5
-    frac = min(max(frac, 0.0), 1.0)
-
-    try:
-        bound_lo = float(min(lower_bound, upper_bound))
-        bound_hi = float(max(lower_bound, upper_bound))
-    except Exception:
-        bound_lo = float(lower_bound)
-        bound_hi = float(upper_bound)
-    available_span = max(0.0, bound_hi - bound_lo)
-    if available_span > 0.0:
-        span_abs = min(abs(span_signed), available_span)
-        span_signed = np.copysign(span_abs, span_signed)
-
-    start = float(value) - frac * span_signed
-    end = start + span_signed
-    low = min(start, end)
-    high = max(start, end)
-    if low < bound_lo:
-        shift = bound_lo - low
-        start += shift
-        end += shift
-    if high > bound_hi:
-        shift = high - bound_hi
-        start -= shift
-        end -= shift
-    return float(start), float(end)
+    return gui_manual_geometry.geometry_manual_anchor_axis_limits(
+        value,
+        span,
+        anchor_fraction,
+        lower_bound,
+        upper_bound,
+    )
 
 
 def _geometry_manual_group_target_count(
@@ -4579,46 +4277,20 @@ def _geometry_manual_group_target_count(
     group_entries: Sequence[dict[str, object]] | None,
 ) -> int:
     """Return how many manual background peaks a selected group should collect."""
-
-    if isinstance(group_key, tuple) and len(group_key) >= 4:
-        try:
-            if int(group_key[2]) == 0:
-                return 1
-        except Exception:
-            pass
-
-    entries = [dict(entry) for entry in group_entries or [] if isinstance(entry, dict)]
-    if not entries:
-        return 0
-
-    all_00l = True
-    for entry in entries:
-        hkl = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
-        if hkl is None or int(hkl[0]) != 0 or int(hkl[1]) != 0:
-            all_00l = False
-            break
-    if all_00l:
-        return 1
-    return int(len(entries))
+    return gui_manual_geometry.geometry_manual_group_target_count(
+        group_key,
+        group_entries,
+        normalize_hkl_key=_normalize_hkl_key,
+    )
 
 
 def _geometry_manual_pick_session_active(*, require_current_background: bool = True) -> bool:
     """Return whether a manual background-placement session is in progress."""
-
-    if not isinstance(geometry_manual_pick_session, dict):
-        return False
-    if geometry_manual_pick_session.get("group_key") is None:
-        return False
-    if not isinstance(geometry_manual_pick_session.get("group_entries"), list):
-        return False
-    if require_current_background:
-        try:
-            return int(geometry_manual_pick_session.get("background_index")) == int(
-                current_background_index
-            )
-        except Exception:
-            return False
-    return True
+    return gui_manual_geometry.geometry_manual_pick_session_active(
+        geometry_manual_pick_session,
+        current_background_index=current_background_index,
+        require_current_background=require_current_background,
+    )
 
 
 def _geometry_manual_unassigned_group_candidates() -> list[dict[str, object]]:
@@ -4661,26 +4333,11 @@ def _geometry_manual_nearest_candidate_to_point(
     candidate_entries: Sequence[dict[str, object]] | None,
 ) -> tuple[dict[str, object] | None, float]:
     """Return the nearest simulated candidate to one display-space point."""
-
-    best_entry = None
-    best_d2 = float("inf")
-    for raw_entry in candidate_entries or []:
-        if not isinstance(raw_entry, dict):
-            continue
-        try:
-            sim_col = float(raw_entry.get("sim_col"))
-            sim_row = float(raw_entry.get("sim_row"))
-        except Exception:
-            continue
-        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
-            continue
-        d2 = (float(sim_col) - float(col)) ** 2 + (float(sim_row) - float(row)) ** 2
-        if d2 < best_d2:
-            best_d2 = float(d2)
-            best_entry = dict(raw_entry)
-    if best_entry is None or not np.isfinite(best_d2):
-        return None, float("nan")
-    return best_entry, float(np.sqrt(best_d2))
+    return gui_manual_geometry.geometry_manual_nearest_candidate_to_point(
+        col,
+        row,
+        candidate_entries,
+    )
 
 
 def _geometry_manual_pair_entry_from_candidate(
@@ -4699,33 +4356,21 @@ def _geometry_manual_pair_entry_from_candidate(
     sigma_px: float | None = None,
 ) -> dict[str, object] | None:
     """Build one saved manual pair entry from a candidate + measured background point."""
-
-    if not isinstance(candidate, dict):
-        return None
-    entry = {
-        "label": str(candidate.get("label", "")),
-        "hkl": _normalize_hkl_key(candidate.get("hkl", candidate.get("label"))),
-        "x": float(peak_col),
-        "y": float(peak_row),
-        "source_table_index": candidate.get("source_table_index"),
-        "source_row_index": candidate.get("source_row_index"),
-        "source_label": candidate.get("source_label"),
-        "q_group_key": group_key,
-    }
-    if raw_col is not None and raw_row is not None:
-        entry["raw_x"] = float(raw_col)
-        entry["raw_y"] = float(raw_row)
-    if caked_col is not None and caked_row is not None:
-        entry["caked_x"] = float(caked_col)
-        entry["caked_y"] = float(caked_row)
-    if raw_caked_col is not None and raw_caked_row is not None:
-        entry["raw_caked_x"] = float(raw_caked_col)
-        entry["raw_caked_y"] = float(raw_caked_row)
-    if placement_error_px is not None and np.isfinite(float(placement_error_px)):
-        entry["placement_error_px"] = max(0.0, float(placement_error_px))
-    if sigma_px is not None and np.isfinite(float(sigma_px)) and float(sigma_px) > 0.0:
-        entry["sigma_px"] = float(sigma_px)
-    return entry
+    return gui_manual_geometry.geometry_manual_pair_entry_from_candidate(
+        candidate,
+        peak_col,
+        peak_row,
+        group_key=group_key,
+        raw_col=raw_col,
+        raw_row=raw_row,
+        caked_col=caked_col,
+        caked_row=caked_row,
+        raw_caked_col=raw_caked_col,
+        raw_caked_row=raw_caked_row,
+        placement_error_px=placement_error_px,
+        sigma_px=sigma_px,
+        normalize_hkl_key=_normalize_hkl_key,
+    )
 
 
 def _clear_geometry_manual_preview_artists(*, redraw: bool = True) -> None:
@@ -4800,29 +4445,15 @@ def _show_geometry_manual_preview(
 
 def _geometry_manual_preview_due(col: float, row: float) -> bool:
     """Throttle manual-placement preview updates during mouse motion."""
-
-    if not _geometry_manual_pick_session_active():
-        return False
-    now = float(perf_counter())
-    last_t = float(geometry_manual_pick_session.get("preview_last_t", 0.0))
-    last_xy = geometry_manual_pick_session.get("preview_last_xy")
-    due = False
-    if not (isinstance(last_xy, tuple) and len(last_xy) >= 2):
-        due = True
-    else:
-        dx = float(col) - float(last_xy[0])
-        dy = float(row) - float(last_xy[1])
-        if (dx * dx + dy * dy) >= float(
-            GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX * GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX
-        ):
-            due = True
-    if not due and (now - last_t) >= float(GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S):
-        due = True
-    if not due:
-        return False
-    geometry_manual_pick_session["preview_last_t"] = float(now)
-    geometry_manual_pick_session["preview_last_xy"] = (float(col), float(row))
-    return True
+    return gui_manual_geometry.geometry_manual_preview_due(
+        col,
+        row,
+        pick_session=geometry_manual_pick_session,
+        current_background_index=current_background_index,
+        min_interval_s=float(GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S),
+        min_move_px=float(GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX),
+        perf_counter_fn=perf_counter,
+    )
 
 
 def _geometry_manual_refine_preview_point(
@@ -5335,36 +4966,20 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
     """Switch geometry fitting/import into the 2D caked integration view now."""
 
     global update_pending, integration_update_pending
-
-    needs_refresh = bool(force_refresh)
-    if not bool(show_caked_2d_var.get()):
-        show_caked_2d_var.set(True)
-        toggle_caked_2d()
-        needs_refresh = True
-    elif not _geometry_manual_pick_uses_caked_space():
-        needs_refresh = True
-
-    if not needs_refresh:
-        return
-
-    if integration_update_pending is not None:
-        try:
-            root.after_cancel(integration_update_pending)
-        except Exception:
-            pass
-        integration_update_pending = None
-    if update_pending is not None:
-        try:
-            root.after_cancel(update_pending)
-        except Exception:
-            pass
-        update_pending = None
-
-    if bool(globals().get("update_running", False)):
-        schedule_update()
-        return
-
-    do_update()
+    update_pending, integration_update_pending = (
+        gui_manual_geometry.ensure_geometry_fit_caked_view(
+            show_caked_2d_var=show_caked_2d_var,
+            pick_uses_caked_space=_geometry_manual_pick_uses_caked_space,
+            toggle_caked_2d=toggle_caked_2d,
+            do_update=do_update,
+            schedule_update=schedule_update,
+            root=root,
+            update_pending=update_pending,
+            integration_update_pending=integration_update_pending,
+            update_running=bool(globals().get("update_running", False)),
+            force_refresh=force_refresh,
+        )
+    )
 
 
 def _toggle_geometry_manual_pick_mode() -> None:
@@ -5405,30 +5020,12 @@ def _peak_maximum_near_in_image(
     search_radius: int = 5,
 ) -> tuple[float, float]:
     """Return the brightest local pixel near ``(col, row)`` in display coordinates."""
-
-    if image is None:
-        return float(col), float(row)
-    try:
-        image_arr = np.asarray(image, dtype=float)
-    except Exception:
-        return float(col), float(row)
-    if image_arr.ndim < 2 or image_arr.size == 0:
-        return float(col), float(row)
-
-    r = int(round(float(row)))
-    c = int(round(float(col)))
-    r0 = max(0, r - int(search_radius))
-    r1 = min(int(image_arr.shape[0]), r + int(search_radius) + 1)
-    c0 = max(0, c - int(search_radius))
-    c1 = min(int(image_arr.shape[1]), c + int(search_radius) + 1)
-
-    window = image_arr[r0:r1, c0:c1]
-    if window.size == 0 or not np.isfinite(window).any():
-        return float(col), float(row)
-
-    max_idx = int(np.nanargmax(window))
-    win_r, win_c = np.unravel_index(max_idx, window.shape)
-    return float(c0 + win_c), float(r0 + win_r)
+    return gui_manual_geometry.peak_maximum_near_in_image(
+        image,
+        col,
+        row,
+        search_radius=search_radius,
+    )
 
 
 def _detector_pixel_to_scattering_angles(
@@ -5499,23 +5096,7 @@ def _caked_axis_to_image_index(
     axis_values: Sequence[float] | None,
 ) -> float:
     """Map one caked-axis coordinate in degrees to a floating image index."""
-
-    if axis_values is None or not np.isfinite(value):
-        return float("nan")
-    axis_arr = np.asarray(axis_values, dtype=float).reshape(-1)
-    if axis_arr.size <= 0:
-        return float("nan")
-    finite_idx = np.flatnonzero(np.isfinite(axis_arr))
-    if finite_idx.size <= 0:
-        return float("nan")
-    if finite_idx.size == 1:
-        return float(finite_idx[0])
-    axis_used = axis_arr[finite_idx]
-    idx_used = finite_idx.astype(float)
-    if axis_used[0] > axis_used[-1]:
-        axis_used = axis_used[::-1]
-        idx_used = idx_used[::-1]
-    return float(np.interp(float(value), axis_used, idx_used))
+    return gui_manual_geometry.caked_axis_to_image_index(value, axis_values)
 
 
 def _caked_image_index_to_axis(
@@ -5523,23 +5104,7 @@ def _caked_image_index_to_axis(
     axis_values: Sequence[float] | None,
 ) -> float:
     """Map one floating caked image index back to axis-space degrees."""
-
-    if axis_values is None or not np.isfinite(index_value):
-        return float("nan")
-    axis_arr = np.asarray(axis_values, dtype=float).reshape(-1)
-    if axis_arr.size <= 0:
-        return float("nan")
-    finite_idx = np.flatnonzero(np.isfinite(axis_arr))
-    if finite_idx.size <= 0:
-        return float("nan")
-    if finite_idx.size == 1:
-        return float(axis_arr[finite_idx[0]])
-    axis_used = axis_arr[finite_idx]
-    idx_used = finite_idx.astype(float)
-    if axis_used[0] > axis_used[-1]:
-        axis_used = axis_used[::-1]
-        idx_used = idx_used[::-1]
-    return float(np.interp(float(index_value), idx_used, axis_used))
+    return gui_manual_geometry.caked_image_index_to_axis(index_value, axis_values)
 
 
 def _refine_profile_peak_index(
@@ -5547,38 +5112,7 @@ def _refine_profile_peak_index(
     seed_index: float,
 ) -> float:
     """Return one subpixel 1D peak center focused on the top of a local profile."""
-
-    arr = np.asarray(profile, dtype=float).reshape(-1)
-    if arr.size <= 0:
-        return float(seed_index)
-    finite = np.isfinite(arr)
-    if not np.any(finite):
-        return float(seed_index)
-    arr = np.where(finite, arr, np.nan)
-    baseline = float(np.nanpercentile(arr, 35.0))
-    weights = np.clip(arr - baseline, 0.0, None)
-    if not np.any(weights > 0.0):
-        floor = float(np.nanmin(arr))
-        weights = np.clip(arr - floor, 0.0, None)
-    if not np.any(weights > 0.0):
-        return float(np.nanargmax(arr))
-
-    peak_idx = int(np.nanargmax(weights))
-    half_window = 2
-    lo = max(0, peak_idx - half_window)
-    hi = min(arr.size, peak_idx + half_window + 1)
-    local_weights = np.asarray(weights[lo:hi], dtype=float)
-    local_idx = np.arange(lo, hi, dtype=float)
-    if local_weights.size <= 0 or not np.any(local_weights > 0.0):
-        return float(peak_idx)
-    crest_mask = local_weights >= 0.5 * float(np.max(local_weights))
-    if np.any(crest_mask):
-        local_weights = local_weights[crest_mask]
-        local_idx = local_idx[crest_mask]
-    total = float(np.sum(local_weights))
-    if not np.isfinite(total) or total <= 0.0:
-        return float(peak_idx)
-    return float(np.sum(local_weights * local_idx) / total)
+    return gui_manual_geometry.refine_profile_peak_index(profile, seed_index)
 
 
 def _refine_caked_peak_center(
@@ -5592,86 +5126,16 @@ def _refine_caked_peak_center(
     phi_window_deg: float | None = None,
 ) -> tuple[float, float]:
     """Refine one caked click to the crest of the local 2theta/phi ridge."""
-
-    if image is None:
-        return float(two_theta_deg), float(phi_deg)
-    img = np.asarray(image, dtype=float)
-    if img.ndim != 2 or img.size <= 0:
-        return float(two_theta_deg), float(phi_deg)
-    if radial_axis is None or azimuth_axis is None:
-        return float(two_theta_deg), float(phi_deg)
-
-    col_seed = _caked_axis_to_image_index(float(two_theta_deg), radial_axis)
-    row_seed = _caked_axis_to_image_index(float(phi_deg), azimuth_axis)
-    if not (np.isfinite(col_seed) and np.isfinite(row_seed)):
-        return float(two_theta_deg), float(phi_deg)
-
-    col_min = _caked_axis_to_image_index(
-        float(two_theta_deg) - float(
-            GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG if tth_window_deg is None else tth_window_deg
-        ),
+    return gui_manual_geometry.refine_caked_peak_center(
+        image,
         radial_axis,
-    )
-    col_max = _caked_axis_to_image_index(
-        float(two_theta_deg) + float(
-            GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG if tth_window_deg is None else tth_window_deg
-        ),
-        radial_axis,
-    )
-    row_min = _caked_axis_to_image_index(
-        float(phi_deg) - float(
-            GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG if phi_window_deg is None else phi_window_deg
-        ),
         azimuth_axis,
-    )
-    row_max = _caked_axis_to_image_index(
-        float(phi_deg) + float(
-            GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG if phi_window_deg is None else phi_window_deg
-        ),
-        azimuth_axis,
-    )
-    if not all(np.isfinite(v) for v in (col_min, col_max, row_min, row_max)):
-        return float(two_theta_deg), float(phi_deg)
-
-    c0 = max(0, int(np.floor(min(col_min, col_max))))
-    c1 = min(int(img.shape[1]), int(np.ceil(max(col_min, col_max))) + 1)
-    r0 = max(0, int(np.floor(min(row_min, row_max))))
-    r1 = min(int(img.shape[0]), int(np.ceil(max(row_min, row_max))) + 1)
-    if c0 >= c1 or r0 >= r1:
-        return float(two_theta_deg), float(phi_deg)
-
-    patch = np.asarray(img[r0:r1, c0:c1], dtype=float)
-    if patch.size <= 0 or not np.isfinite(patch).any():
-        return float(two_theta_deg), float(phi_deg)
-    baseline = float(np.nanpercentile(patch, 35.0))
-    signal = np.clip(patch - baseline, 0.0, None)
-    if not np.any(signal > 0.0):
-        signal = np.clip(patch - float(np.nanmin(patch)), 0.0, None)
-    if not np.any(signal > 0.0):
-        return float(two_theta_deg), float(phi_deg)
-
-    col_local = float(col_seed - c0)
-    row_local = float(row_seed - r0)
-    row_band = max(1, min(6, int(round(0.10 * signal.shape[0]))))
-    col_band = max(1, min(6, int(round(0.10 * signal.shape[1]))))
-    for _ in range(2):
-        row_center = int(np.clip(round(row_local), 0, max(signal.shape[0] - 1, 0)))
-        rr0 = max(0, row_center - row_band)
-        rr1 = min(signal.shape[0], row_center + row_band + 1)
-        radial_profile = np.nansum(signal[rr0:rr1, :], axis=0)
-        col_local = _refine_profile_peak_index(radial_profile, col_local)
-
-        col_center = int(np.clip(round(col_local), 0, max(signal.shape[1] - 1, 0)))
-        cc0 = max(0, col_center - col_band)
-        cc1 = min(signal.shape[1], col_center + col_band + 1)
-        az_profile = np.nansum(signal[:, cc0:cc1], axis=1)
-        row_local = _refine_profile_peak_index(az_profile, row_local)
-
-    refined_col = float(c0 + col_local)
-    refined_row = float(r0 + row_local)
-    return (
-        float(_caked_image_index_to_axis(refined_col, radial_axis)),
-        float(_caked_image_index_to_axis(refined_row, azimuth_axis)),
+        two_theta_deg,
+        phi_deg,
+        tth_window_deg=tth_window_deg,
+        phi_window_deg=phi_window_deg,
+        default_tth_window_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
+        default_phi_window_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
     )
 
 
@@ -5733,54 +5197,23 @@ def _caked_angles_to_background_display_coords(
     phi_deg: float,
 ) -> tuple[float | None, float | None]:
     """Back-project one caked-space point to the displayed detector background."""
-
-    ai = _ai_cache.get("ai")
-    native_background = _get_current_background_native()
+    center = None
     try:
-        two_theta_map, phi_map = _get_detector_angular_maps(ai)
-    except Exception:
-        two_theta_map, phi_map = None, None
-    if (
-        two_theta_map is None
-        or phi_map is None
-        or native_background is None
-        or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg))
-    ):
-        if native_background is None:
-            return None, None
         center = [float(center_x_var.get()), float(center_y_var.get())]
-        try:
-            native_point = _scattering_angles_to_detector_pixel(
-                float(two_theta_deg),
-                float(phi_deg),
-                center,
-                float(corto_detector_var.get()),
-                float(pixel_size_m),
-            )
-        except Exception:
-            return None, None
-        if native_point[0] is None or native_point[1] is None:
-            return None, None
-        return _rotate_point_for_display(
-            float(native_point[0]),
-            float(native_point[1]),
-            tuple(int(v) for v in native_background.shape[:2]),
-            DISPLAY_ROTATE_K,
-        )
-
-    dphi = ((np.asarray(phi_map, dtype=float) - float(phi_deg) + 180.0) % 360.0) - 180.0
-    dtth = np.asarray(two_theta_map, dtype=float) - float(two_theta_deg)
-    metric = dtth * dtth + dphi * dphi
-    finite_metric = np.where(np.isfinite(metric), metric, np.inf)
-    best_idx = int(np.argmin(finite_metric))
-    if not np.isfinite(finite_metric.flat[best_idx]):
-        return None, None
-    row_idx, col_idx = np.unravel_index(best_idx, finite_metric.shape)
-    return _rotate_point_for_display(
-        float(col_idx),
-        float(row_idx),
-        tuple(int(v) for v in native_background.shape[:2]),
-        DISPLAY_ROTATE_K,
+    except Exception:
+        center = None
+    return gui_manual_geometry.caked_angles_to_background_display_coords(
+        two_theta_deg,
+        phi_deg,
+        ai=_ai_cache.get("ai"),
+        native_background=_get_current_background_native(),
+        get_detector_angular_maps=_get_detector_angular_maps,
+        scattering_angles_to_detector_pixel=_scattering_angles_to_detector_pixel,
+        center=center,
+        detector_distance=float(corto_detector_var.get()),
+        pixel_size=float(pixel_size_m),
+        rotate_point_for_display=_rotate_point_for_display,
+        display_rotate_k=DISPLAY_ROTATE_K,
     )
 
 
@@ -5789,46 +5222,22 @@ def _native_detector_coords_to_caked_display_coords(
     row: float,
 ) -> tuple[float, float] | None:
     """Project one native detector pixel into the active caked display axes."""
-
+    center = None
     try:
-        col_val = float(col)
-        row_val = float(row)
+        center = [float(center_x_var.get()), float(center_y_var.get())]
     except Exception:
-        return None
-    if not (np.isfinite(col_val) and np.isfinite(row_val)):
-        return None
-
-    ai = _ai_cache.get("ai")
-    try:
-        two_theta_map, phi_map = _get_detector_angular_maps(ai)
-    except Exception:
-        two_theta_map, phi_map = None, None
-    if two_theta_map is not None and phi_map is not None:
-        try:
-            height, width = two_theta_map.shape[:2]
-            if height > 0 and width > 0:
-                col_idx = min(max(int(round(col_val)), 0), width - 1)
-                row_idx = min(max(int(round(row_val)), 0), height - 1)
-                two_theta = float(two_theta_map[row_idx, col_idx])
-                phi = float(phi_map[row_idx, col_idx])
-                if np.isfinite(two_theta) and np.isfinite(phi):
-                    return float(two_theta), float(_wrap_phi_range(phi))
-        except Exception:
-            pass
-
-    try:
-        two_theta, phi = _detector_pixel_to_scattering_angles(
-            col_val,
-            row_val,
-            [float(center_x_var.get()), float(center_y_var.get())],
-            float(corto_detector_var.get()),
-            float(pixel_size_m),
-        )
-    except Exception:
-        return None
-    if two_theta is None or phi is None:
-        return None
-    return float(two_theta), float(_wrap_phi_range(phi))
+        center = None
+    return gui_manual_geometry.native_detector_coords_to_caked_display_coords(
+        col,
+        row,
+        ai=_ai_cache.get("ai"),
+        get_detector_angular_maps=_get_detector_angular_maps,
+        detector_pixel_to_scattering_angles=_detector_pixel_to_scattering_angles,
+        center=center,
+        detector_distance=float(corto_detector_var.get()),
+        pixel_size=float(pixel_size_m),
+        wrap_phi_range=_wrap_phi_range,
+    )
 
 
 def _project_geometry_manual_peaks_to_current_view(
@@ -6489,25 +5898,12 @@ def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
 
 def _q_group_key_component(value: float) -> int | float:
     """Normalize a floating Q-group component into a stable hashable value."""
-
-    if np.isfinite(value) and abs(value - round(value)) <= 1e-6:
-        return int(round(value))
-    return round(float(value), 6)
+    return gui_manual_geometry.q_group_key_component(value)
 
 
 def _integer_gz_index(value: object, *, tol: float = 1e-6) -> int | None:
     """Return the integer Gz/L index when the value is close enough to an integer."""
-
-    try:
-        raw = float(value)
-    except Exception:
-        return None
-    if not np.isfinite(raw):
-        return None
-    rounded = int(round(raw))
-    if abs(raw - rounded) > float(tol):
-        return None
-    return rounded
+    return gui_manual_geometry.integer_gz_index(value, tol=tol)
 
 
 def _reflection_q_group_metadata(
@@ -6890,34 +6286,12 @@ def _capture_geometry_q_group_entries_snapshot() -> list[dict[str, object]]:
 
 def _geometry_q_group_key_to_jsonable(group_key: object) -> list[object] | None:
     """Convert one stable Qr/Qz group key into a JSON-safe list."""
-
-    if not isinstance(group_key, tuple) or len(group_key) < 4:
-        return None
-    try:
-        prefix = str(group_key[0])
-        source_label = _normalize_bragg_qr_source_label(str(group_key[1]))
-        m_component = _q_group_key_component(float(group_key[2]))
-        gz_index = int(group_key[3])
-    except Exception:
-        return None
-    return [prefix, source_label, m_component, gz_index]
+    return gui_manual_geometry.geometry_q_group_key_to_jsonable(group_key)
 
 
 def _geometry_q_group_key_from_jsonable(value: object) -> tuple[object, ...] | None:
     """Rebuild one stable Qr/Qz group key from JSON-loaded data."""
-
-    if not isinstance(value, (list, tuple)) or len(value) < 4:
-        return None
-    try:
-        prefix = str(value[0])
-        source_label = _normalize_bragg_qr_source_label(str(value[1]))
-        m_component = _q_group_key_component(float(value[2]))
-        gz_index = _integer_gz_index(value[3])
-    except Exception:
-        return None
-    if prefix != "q_group" or gz_index is None:
-        return None
-    return (prefix, source_label, m_component, int(gz_index))
+    return gui_manual_geometry.geometry_q_group_key_from_jsonable(value)
 
 
 def _geometry_q_group_float_for_json(value: object) -> float | None:
@@ -10881,24 +10255,17 @@ def schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS):
 
 def _should_collect_hit_tables_for_update() -> bool:
     """Return whether the next redraw needs per-hit detector tables."""
-
-    manual_geometry_overlay_requested = False
-    if background_visible and _current_geometry_manual_pick_background_image() is not None:
-        try:
-            manual_geometry_overlay_requested = bool(
-                _geometry_manual_pairs_for_index(current_background_index)
-                or _geometry_manual_pick_session_active()
-            )
-        except Exception:
-            manual_geometry_overlay_requested = False
-
-    return bool(
-        hkl_pick_armed
-        or selected_hkl_target is not None
-        or selected_peak_record is not None
-        or _live_geometry_preview_enabled()
-        or geometry_q_group_refresh_requested
-        or manual_geometry_overlay_requested
+    return gui_manual_geometry.should_collect_hit_tables_for_update(
+        background_visible=bool(background_visible),
+        current_background_index=current_background_index,
+        hkl_pick_armed=bool(hkl_pick_armed),
+        selected_hkl_target=selected_hkl_target,
+        selected_peak_record=selected_peak_record,
+        geometry_q_group_refresh_requested=bool(geometry_q_group_refresh_requested),
+        live_geometry_preview_enabled=_live_geometry_preview_enabled,
+        current_manual_pick_background_image=_current_geometry_manual_pick_background_image,
+        geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
+        geometry_manual_pick_session_active=_geometry_manual_pick_session_active,
     )
 
 peak_positions = []
