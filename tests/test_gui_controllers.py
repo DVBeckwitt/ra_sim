@@ -8,19 +8,26 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert isinstance(app_state.manual_geometry, state.ManualGeometryState)
     assert isinstance(app_state.geometry_fit_history, state.GeometryFitHistoryState)
     assert isinstance(app_state.geometry_preview, state.GeometryPreviewState)
+    assert isinstance(
+        app_state.geometry_preview.overlay,
+        state.GeometryPreviewOverlayState,
+    )
     assert isinstance(app_state.geometry_q_groups, state.GeometryQGroupState)
     assert isinstance(app_state.geometry_q_group_view, state.GeometryQGroupViewState)
     assert app_state.manual_geometry is not other_state.manual_geometry
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
     assert app_state.geometry_preview is not other_state.geometry_preview
+    assert app_state.geometry_preview.overlay is not other_state.geometry_preview.overlay
     assert app_state.geometry_q_groups is not other_state.geometry_q_groups
     assert app_state.geometry_q_group_view is not other_state.geometry_q_group_view
 
     app_state.manual_geometry.pick_session["group_key"] = ("q_group", "primary", 1, 0)
     app_state.geometry_preview.skip_once = True
+    app_state.geometry_preview.overlay.pairs.append({"x": 1.0})
     app_state.geometry_q_groups.refresh_requested = True
     assert other_state.manual_geometry.pick_session == {}
     assert other_state.geometry_preview.skip_once is False
+    assert other_state.geometry_preview.overlay.pairs == []
     assert other_state.geometry_q_groups.refresh_requested is False
 
 
@@ -186,6 +193,7 @@ def test_geometry_fit_history_controller_tracks_overlay_and_undo_redo() -> None:
 
 def test_geometry_preview_controller_tracks_exclusions_skip_flag_and_cache() -> None:
     preview_state = state.GeometryPreviewState()
+    excluded_keys_alias = preview_state.excluded_keys
     excluded_alias = preview_state.excluded_q_groups
 
     controllers.replace_geometry_preview_excluded_q_groups(
@@ -229,6 +237,62 @@ def test_geometry_preview_controller_tracks_exclusions_skip_flag_and_cache() -> 
         included=False,
     )
     assert preview_state.excluded_q_groups == {("q_group", "primary", 1, 0)}
+    assert preview_state.excluded_keys is excluded_keys_alias
+
+    controllers.set_geometry_preview_match_included(
+        preview_state,
+        ("hkl", 1, 0, 0),
+        included=False,
+    )
+    assert preview_state.excluded_keys == {("hkl", 1, 0, 0)}
+    controllers.set_geometry_preview_match_included(
+        preview_state,
+        ("hkl", 1, 0, 0),
+        included=True,
+    )
+    assert preview_state.excluded_keys == set()
+    controllers.set_geometry_preview_exclude_mode(preview_state, True)
+    assert preview_state.exclude_armed is True
+    controllers.set_geometry_preview_exclude_mode(preview_state, False)
+    assert preview_state.exclude_armed is False
+
+    overlay_alias = preview_state.overlay
+    pairs_alias = preview_state.overlay.pairs
+    attempts_alias = preview_state.overlay.auto_match_attempts
+    controllers.replace_geometry_preview_overlay_state(
+        preview_state,
+        {
+            "signature": ("sig", 1),
+            "pairs": [{"x": 1.0, "y": 2.0}],
+            "simulated_count": 8,
+            "min_matches": 6,
+            "best_radius": 12.5,
+            "mean_dist": 3.0,
+            "p90_dist": 4.5,
+            "quality_fail": True,
+            "max_display_markers": 5,
+            "auto_match_attempts": [{"name": "attempt-a"}],
+            "q_group_total": 10,
+            "q_group_excluded": 2,
+            "excluded_q_peaks": 4,
+            "collapsed_degenerate_peaks": 1,
+        },
+    )
+    assert preview_state.overlay is overlay_alias
+    assert preview_state.overlay.pairs is pairs_alias
+    assert preview_state.overlay.auto_match_attempts is attempts_alias
+    assert preview_state.overlay.signature == ("sig", 1)
+    assert preview_state.overlay.pairs == [{"x": 1.0, "y": 2.0}]
+    assert preview_state.overlay.simulated_count == 8
+    assert preview_state.overlay.min_matches == 6
+    assert preview_state.overlay.best_radius == 12.5
+    assert preview_state.overlay.quality_fail is True
+    assert preview_state.overlay.max_display_markers == 5
+    assert preview_state.overlay.auto_match_attempts == [{"name": "attempt-a"}]
+    assert preview_state.overlay.q_group_total == 10
+    assert preview_state.overlay.q_group_excluded == 2
+    assert preview_state.overlay.excluded_q_peaks == 4
+    assert preview_state.overlay.collapsed_degenerate_peaks == 1
 
     controllers.request_geometry_preview_skip_once(preview_state)
     assert preview_state.skip_once is True
@@ -260,6 +324,8 @@ def test_geometry_preview_controller_tracks_exclusions_skip_flag_and_cache() -> 
     controllers.clear_geometry_auto_match_background_cache(preview_state)
     assert preview_state.auto_match_background_cache_key is None
     assert preview_state.auto_match_background_cache_data is None
+    controllers.clear_geometry_preview_excluded_keys(preview_state)
+    assert preview_state.excluded_keys == set()
     controllers.clear_geometry_preview_excluded_q_groups(preview_state)
     assert preview_state.excluded_q_groups == set()
 

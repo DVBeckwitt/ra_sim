@@ -60,6 +60,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     `ra_sim.gui.views`.
   - Direct tests now cover the new preview controller helpers and extracted
     Q-group view rendering helpers.
+- Live geometry preview exclusion migration advanced further.
+  - Excluded preview-pair keys, exclude-mode armed state, and cached preview
+    overlay summary metrics now live in `ra_sim.gui.state`.
+  - Controller helpers now own preview exclusion toggles and preview overlay
+    snapshot replacement.
+  - Dead preview-selector scaffolding was removed from `runtime.py`.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -92,7 +98,8 @@ What is done:
 - Live geometry preview filter/cache state is no longer just loose runtime
   storage.
   - Shared state now has a preview-state container for excluded Q-groups, the
-    skip-once flag, and auto-match background cache data.
+    skip-once flag, excluded live-preview pairs, exclude-mode state, cached
+    overlay summary data, and auto-match background cache data.
 - The Q-group selector window lifecycle is no longer built directly in
   `runtime.py`.
   - `ra_sim.gui.views` now owns the selector window/widget construction and row
@@ -131,7 +138,8 @@ What is done:
 - `controllers.py` now also owns geometry-fit history and Q-group selector
   mutations.
 - `state.py` now also owns live geometry preview state and Q-group view state.
-- `controllers.py` now also owns preview exclusion/skip/cache mutations.
+- `controllers.py` now also owns preview exclusion/skip/cache mutations and
+  preview overlay snapshot replacement.
 - `views.py` now owns the Q-group selector window lifecycle and row rendering.
 
 What is left:
@@ -404,8 +412,8 @@ The next best step is:
 - build on the new manual-geometry / geometry-fit-history / preview /
   Q-group state-controller-view slices by moving the next runtime-owned GUI
   workflows into explicit state + controller + view boundaries
-- focus next on the remaining preview-selector / geometry-preview widget state
-  and any other runtime-owned Tk windows that still construct their UI inline
+- focus next on the Bragg Qr group manager and the other runtime-owned Tk
+  windows that still construct their UI inline
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.

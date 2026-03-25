@@ -11,6 +11,7 @@ from ra_sim.path_config import get_instrument_config
 from .state import (
     AppState,
     GeometryFitHistoryState,
+    GeometryPreviewOverlayState,
     GeometryPreviewState,
     GeometryQGroupState,
     ManualGeometryState,
@@ -292,6 +293,105 @@ def clear_geometry_preview_excluded_q_groups(
     """Clear all excluded Qr/Qz group keys."""
 
     state.excluded_q_groups.clear()
+
+
+def clear_geometry_preview_excluded_keys(
+    state: GeometryPreviewState,
+) -> None:
+    """Clear all excluded live-preview pair keys."""
+
+    state.excluded_keys.clear()
+
+
+def set_geometry_preview_match_included(
+    state: GeometryPreviewState,
+    match_key: tuple[object, ...] | None,
+    *,
+    included: bool,
+) -> bool:
+    """Toggle one live-preview match in the exclusion set."""
+
+    if match_key is None:
+        return False
+    if included:
+        state.excluded_keys.discard(match_key)
+    else:
+        state.excluded_keys.add(match_key)
+    return True
+
+
+def set_geometry_preview_exclude_mode(
+    state: GeometryPreviewState,
+    enabled: bool,
+) -> bool:
+    """Arm or disarm live-preview exclusion editing."""
+
+    state.exclude_armed = bool(enabled)
+    return state.exclude_armed
+
+
+def _preview_int(value: object, default: int = 0, *, minimum: int | None = None) -> int:
+    """Coerce one preview-state value to int with an optional lower bound."""
+
+    try:
+        numeric = int(value)
+    except Exception:
+        numeric = int(default)
+    if minimum is not None:
+        numeric = max(int(minimum), numeric)
+    return numeric
+
+
+def _preview_float(value: object, default: float) -> float:
+    """Coerce one preview-state value to float."""
+
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def replace_geometry_preview_overlay_state(
+    state: GeometryPreviewState,
+    overlay_state: Mapping[str, object] | None,
+) -> GeometryPreviewOverlayState:
+    """Replace cached live-preview overlay data and summary metrics in place."""
+
+    overlay = state.overlay
+    source = overlay_state if isinstance(overlay_state, Mapping) else {}
+
+    overlay.signature = source.get("signature")
+    overlay.pairs.clear()
+    overlay.pairs.extend(
+        copy.deepcopy(dict(entry))
+        for entry in source.get("pairs", [])
+        if isinstance(entry, Mapping)
+    )
+    overlay.simulated_count = _preview_int(source.get("simulated_count"), 0)
+    overlay.min_matches = _preview_int(source.get("min_matches"), 0)
+    overlay.best_radius = _preview_float(source.get("best_radius"), float("nan"))
+    overlay.mean_dist = _preview_float(source.get("mean_dist"), float("nan"))
+    overlay.p90_dist = _preview_float(source.get("p90_dist"), float("nan"))
+    overlay.quality_fail = bool(source.get("quality_fail", False))
+    overlay.max_display_markers = _preview_int(
+        source.get("max_display_markers"),
+        120,
+        minimum=1,
+    )
+    overlay.auto_match_attempts.clear()
+    overlay.auto_match_attempts.extend(
+        copy.deepcopy(dict(entry))
+        for entry in source.get("auto_match_attempts", [])
+        if isinstance(entry, Mapping)
+    )
+    overlay.q_group_total = _preview_int(source.get("q_group_total"), 0)
+    overlay.q_group_excluded = _preview_int(source.get("q_group_excluded"), 0)
+    overlay.excluded_q_peaks = _preview_int(source.get("excluded_q_peaks"), 0)
+    overlay.collapsed_degenerate_peaks = _preview_int(
+        source.get("collapsed_degenerate_peaks"),
+        0,
+    )
+    return overlay
 
 
 def set_geometry_preview_q_group_included(

@@ -2921,28 +2921,7 @@ qr_cylinder_overlay_cache: dict[str, object] = {
     "signature": None,
     "paths": [],
 }
-geometry_preview_excluded_keys: set[tuple[object, ...]] = set()
-geometry_preview_state: dict[str, object] = {
-    "signature": None,
-    "pairs": [],
-    "simulated_count": 0,
-    "min_matches": 0,
-    "best_radius": float("nan"),
-    "mean_dist": float("nan"),
-    "p90_dist": float("nan"),
-    "quality_fail": False,
-    "max_display_markers": 120,
-    "q_group_total": 0,
-    "q_group_excluded": 0,
-    "excluded_q_peaks": 0,
-}
-geometry_preview_exclude_armed = False
 geometry_preview_exclude_button_var = None
-geometry_preview_selector_window = None
-geometry_preview_selector_listbox = None
-geometry_preview_selector_status_label = None
-geometry_preview_selector_filter_var = None
-geometry_preview_selector_index_entries: list[dict[str, object]] = []
 geometry_preview_state = gui_state.GeometryPreviewState()
 geometry_q_group_view_state = gui_state.GeometryQGroupViewState()
 geometry_q_group_state = gui_state.GeometryQGroupState()
@@ -4863,7 +4842,7 @@ def _live_preview_match_is_excluded(entry: dict[str, object] | None) -> bool:
     """Return whether a preview match entry is currently excluded."""
 
     key = _live_preview_match_key(entry)
-    return key in geometry_preview_excluded_keys if key is not None else False
+    return key in geometry_preview_state.excluded_keys if key is not None else False
 
 
 def _filter_live_preview_matches(
@@ -4874,7 +4853,7 @@ def _filter_live_preview_matches(
     filtered: list[dict[str, object]] = []
     excluded_count = 0
     excluded_hkls: set[tuple[int, int, int]] = set()
-    for entry in geometry_preview_state.get("pairs", []) if isinstance(geometry_preview_state, dict) else []:
+    for entry in geometry_preview_state.overlay.pairs:
         if not isinstance(entry, dict):
             continue
         if not _live_preview_match_is_excluded(entry):
@@ -4890,7 +4869,7 @@ def _filter_live_preview_matches(
             continue
         entry = dict(raw_entry)
         key = _live_preview_match_key(entry)
-        excluded = key in geometry_preview_excluded_keys if key is not None else False
+        excluded = key in geometry_preview_state.excluded_keys if key is not None else False
         if not excluded:
             hkl_key = _live_preview_match_hkl(entry)
             if hkl_key is not None and hkl_key in excluded_hkls:
@@ -5932,9 +5911,10 @@ def _set_hkl_pick_mode(enabled: bool, *, message: str | None = None):
 def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = None):
     """Arm or disarm live-preview exclusion editing."""
 
-    global geometry_preview_exclude_armed
-    geometry_preview_exclude_armed = bool(enabled)
-    if geometry_preview_exclude_armed:
+    if gui_controllers.set_geometry_preview_exclude_mode(
+        geometry_preview_state,
+        enabled,
+    ):
         _set_hkl_pick_mode(False)
     _update_geometry_preview_exclude_button_label()
     if message:
@@ -5979,7 +5959,7 @@ def _distance_point_to_segment_sq(
 def _clear_live_geometry_preview_exclusions():
     """Clear all user-excluded live preview peaks and redraw the preview."""
 
-    geometry_preview_excluded_keys.clear()
+    gui_controllers.clear_geometry_preview_excluded_keys(geometry_preview_state)
     gui_controllers.clear_geometry_preview_excluded_q_groups(
         geometry_preview_state,
     )
@@ -5995,8 +5975,8 @@ def _clear_live_geometry_preview_exclusions():
 def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
     """Toggle exclusion for the nearest live preview pair near the click point."""
 
-    pairs = geometry_preview_state.get("pairs", [])
-    if not isinstance(pairs, list) or not pairs:
+    pairs = geometry_preview_state.overlay.pairs
+    if not pairs:
         progress_label_geometry.config(
             text="No live preview pairs are available to exclude."
         )
@@ -6047,11 +6027,19 @@ def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
         )
         return False
 
-    if key in geometry_preview_excluded_keys:
-        geometry_preview_excluded_keys.remove(key)
+    if key in geometry_preview_state.excluded_keys:
+        gui_controllers.set_geometry_preview_match_included(
+            geometry_preview_state,
+            key,
+            included=True,
+        )
         action = "Included"
     else:
-        geometry_preview_excluded_keys.add(key)
+        gui_controllers.set_geometry_preview_match_included(
+            geometry_preview_state,
+            key,
+            included=False,
+        )
         action = "Excluded"
 
     _render_live_geometry_preview_state(update_status=True)
@@ -7311,7 +7299,7 @@ def on_canvas_click(event):
     if event.button == 3 and geometry_manual_pick_armed:
         _set_geometry_manual_pick_mode(False, message="Manual geometry picking canceled.")
         return
-    if event.button == 3 and geometry_preview_exclude_armed:
+    if event.button == 3 and geometry_preview_state.exclude_armed:
         _set_geometry_preview_exclude_mode(
             False,
             message="Preview exclusion mode canceled.",
@@ -7332,7 +7320,7 @@ def on_canvas_click(event):
         return
     if show_caked_2d_var.get():
         return
-    if geometry_preview_exclude_armed:
+    if geometry_preview_state.exclude_armed:
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
         _toggle_live_geometry_preview_exclusion_at(
@@ -12343,10 +12331,9 @@ def _draw_live_geometry_preview_overlay(
 def _render_live_geometry_preview_state(*, update_status: bool = True) -> bool:
     """Redraw the live preview from cached state, applying exclusions."""
 
-    pairs = geometry_preview_state.get("pairs", [])
-    if not isinstance(pairs, list):
-        pairs = []
-    max_display_markers = int(geometry_preview_state.get("max_display_markers", 120))
+    preview_overlay_state = geometry_preview_state.overlay
+    pairs = preview_overlay_state.pairs
+    max_display_markers = int(preview_overlay_state.max_display_markers)
     _draw_live_geometry_preview_overlay(
         pairs,
         max_display_markers=max_display_markers,
@@ -12355,15 +12342,15 @@ def _render_live_geometry_preview_state(*, update_status: bool = True) -> bool:
     if not update_status:
         return bool(pairs)
 
-    simulated_count = int(geometry_preview_state.get("simulated_count", 0))
-    min_matches = int(geometry_preview_state.get("min_matches", 0))
-    best_radius = float(geometry_preview_state.get("best_radius", np.nan))
-    mean_dist = float(geometry_preview_state.get("mean_dist", np.nan))
-    p90_dist = float(geometry_preview_state.get("p90_dist", np.nan))
-    quality_fail = bool(geometry_preview_state.get("quality_fail", False))
-    q_group_total = int(geometry_preview_state.get("q_group_total", 0))
-    q_group_excluded = int(geometry_preview_state.get("q_group_excluded", 0))
-    collapsed_deg = int(geometry_preview_state.get("collapsed_degenerate_peaks", 0))
+    simulated_count = int(preview_overlay_state.simulated_count)
+    min_matches = int(preview_overlay_state.min_matches)
+    best_radius = float(preview_overlay_state.best_radius)
+    mean_dist = float(preview_overlay_state.mean_dist)
+    p90_dist = float(preview_overlay_state.p90_dist)
+    quality_fail = bool(preview_overlay_state.quality_fail)
+    q_group_total = int(preview_overlay_state.q_group_total)
+    q_group_excluded = int(preview_overlay_state.q_group_excluded)
+    collapsed_deg = int(preview_overlay_state.collapsed_degenerate_peaks)
     active_pairs, excluded_count = _filter_live_preview_matches(pairs)
     shown_count = min(len(pairs), max(1, int(max_display_markers)))
     summary = (
@@ -12473,7 +12460,8 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             progress_label_geometry.config(
                 text="Live auto-match preview unavailable: no Qr/Qz groups are selected."
             )
-        geometry_preview_state.update(
+        gui_controllers.replace_geometry_preview_overlay_state(
+            geometry_preview_state,
             {
                 "signature": _live_geometry_preview_signature(),
                 "pairs": [],
@@ -12489,7 +12477,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
                 "q_group_excluded": int(_geometry_q_group_excluded_count()),
                 "excluded_q_peaks": int(excluded_q_peaks),
                 "collapsed_degenerate_peaks": 0,
-            }
+            },
         )
         return False
     simulated_peaks, collapsed_deg_preview = _collapse_geometry_fit_simulated_peaks(
@@ -12533,7 +12521,8 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
         (np.isfinite(max_auto_p90) and np.isfinite(p90_dist) and p90_dist > max_auto_p90)
         or (np.isfinite(max_auto_mean) and np.isfinite(mean_dist) and mean_dist > max_auto_mean)
     )
-    geometry_preview_state.update(
+    gui_controllers.replace_geometry_preview_overlay_state(
+        geometry_preview_state,
         {
             "signature": _live_geometry_preview_signature(),
             "pairs": [dict(entry) for entry in matched_pairs],
@@ -12549,7 +12538,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             "q_group_excluded": int(_geometry_q_group_excluded_count()),
             "excluded_q_peaks": int(excluded_q_peaks),
             "collapsed_degenerate_peaks": int(collapsed_deg_preview),
-        }
+        },
     )
 
     return _render_live_geometry_preview_state(update_status=update_status)

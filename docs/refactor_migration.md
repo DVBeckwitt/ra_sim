@@ -70,6 +70,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     background cache state now use shared GUI state
   - the Qr/Qz selector window lifecycle and row rendering now flow through
     `ra_sim.gui.views`
+- Live geometry preview exclusion migration has continued:
+  - excluded preview-pair keys, exclude-mode armed state, and cached preview
+    overlay summary now use shared GUI state
+  - preview exclusion toggles and overlay snapshot replacement now flow
+    through `ra_sim.gui.controllers`
+  - dead preview-selector scaffolding was removed from `ra_sim.gui.runtime`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage and direct Qr/Qz view
     helper coverage
@@ -78,7 +84,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 
 - `ra_sim.gui.runtime` is still the largest remaining integration monolith.
 - `ra_sim.gui.views` is now active for the Qr/Qz selector, but other Tk-heavy
-  surfaces still need the same treatment.
+  surfaces still need the same treatment, especially the Bragg Qr manager.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

@@ -35,10 +35,35 @@ class GeometryFitHistoryState:
 
 
 @dataclass
+class GeometryPreviewOverlayState:
+    """Cached live-preview overlay data and summary metrics."""
+
+    signature: object = None
+    pairs: list[dict[str, object]] = field(default_factory=list)
+    simulated_count: int = 0
+    min_matches: int = 0
+    best_radius: float = float("nan")
+    mean_dist: float = float("nan")
+    p90_dist: float = float("nan")
+    quality_fail: bool = False
+    max_display_markers: int = 120
+    auto_match_attempts: list[dict[str, object]] = field(default_factory=list)
+    q_group_total: int = 0
+    q_group_excluded: int = 0
+    excluded_q_peaks: int = 0
+    collapsed_degenerate_peaks: int = 0
+
+
+@dataclass
 class GeometryPreviewState:
     """Mutable state for live geometry preview filters and caches."""
 
+    excluded_keys: set[tuple[object, ...]] = field(default_factory=set)
     excluded_q_groups: set[tuple[object, ...]] = field(default_factory=set)
+    exclude_armed: bool = False
+    overlay: GeometryPreviewOverlayState = field(
+        default_factory=GeometryPreviewOverlayState
+    )
     skip_once: bool = False
     auto_match_background_cache_key: object = None
     auto_match_background_cache_data: dict[str, object] | None = None
