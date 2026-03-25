@@ -3,10 +3,12 @@ from pathlib import Path
 
 import numpy as np
 
+GUI_APP_PATH = Path("ra_sim/gui/app.py")
+
 
 def _load_main_functions(*names: str) -> dict[str, object]:
-    source = Path("main.py").read_text(encoding="utf-8")
-    module = ast.parse(source, filename="main.py")
+    source = GUI_APP_PATH.read_text(encoding="utf-8")
+    module = ast.parse(source, filename=str(GUI_APP_PATH))
     extracted: list[str] = []
     for node in module.body:
         if isinstance(node, ast.FunctionDef) and node.name in names:
@@ -15,7 +17,9 @@ def _load_main_functions(*names: str) -> dict[str, object]:
                 extracted.append(fn_source)
     if len(extracted) != len(names):
         missing = sorted(set(names) - {node.name for node in module.body if isinstance(node, ast.FunctionDef)})
-        raise AssertionError(f"Failed to extract functions from main.py: {missing}")
+        raise AssertionError(
+            f"Failed to extract functions from {GUI_APP_PATH}: {missing}"
+        )
 
     namespace: dict[str, object] = {}
     exec(

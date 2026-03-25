@@ -31,6 +31,7 @@ from typing import Dict
 import numpy as np
 from PIL import Image
 
+from ra_sim import launcher
 from ra_sim.path_config import get_instrument_config, get_path
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.utils.stacking_fault import (
@@ -114,29 +115,16 @@ def _combine_qr_dicts(caches: list[Dict], weights: np.ndarray) -> Dict:
 
 
 def _cmd_gui(args: argparse.Namespace) -> None:
-    """Launch the Tkinter GUI (mirrors running main.py directly)."""
-
-    import main as gui_app
+    """Launch the Tkinter GUI through the packaged launcher."""
 
     write_excel_flag = None if not args.no_excel else False
-    gui_app.main(write_excel_flag=write_excel_flag)
+    launcher.launch_simulation_gui(write_excel_flag=write_excel_flag)
 
 
 def _cmd_calibrant(args: argparse.Namespace) -> None:
-    """Launch the hBN calibrant fitter GUI from `hbn_fitter/`."""
+    """Launch the hBN calibrant fitter GUI through the packaged launcher."""
 
-    import tkinter as tk
-
-    try:
-        from hbn_fitter.fitter import HBNFitterGUI
-    except Exception as exc:
-        raise RuntimeError(
-            "Unable to import hbn_fitter GUI. Ensure `hbn_fitter/fitter.py` exists."
-        ) from exc
-
-    root = tk.Tk()
-    _ = HBNFitterGUI(root, startup_bundle=args.bundle)
-    root.mainloop()
+    launcher.launch_calibrant_gui(bundle=args.bundle)
 
 
 def _prompt_startup_mode() -> str | None:

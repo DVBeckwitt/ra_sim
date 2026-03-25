@@ -1,10 +1,12 @@
 import ast
 from pathlib import Path
 
+GUI_APP_PATH = Path("ra_sim/gui/app.py")
+
 
 def _load_main_functions(*names: str) -> dict[str, object]:
-    source = Path("main.py").read_text(encoding="utf-8")
-    module = ast.parse(source, filename="main.py")
+    source = GUI_APP_PATH.read_text(encoding="utf-8")
+    module = ast.parse(source, filename=str(GUI_APP_PATH))
     extracted: list[str] = []
     available = {
         node.name
@@ -13,7 +15,9 @@ def _load_main_functions(*names: str) -> dict[str, object]:
     }
     missing = sorted(set(names) - available)
     if missing:
-        raise AssertionError(f"Failed to extract functions from main.py: {missing}")
+        raise AssertionError(
+            f"Failed to extract functions from {GUI_APP_PATH}: {missing}"
+        )
 
     for node in module.body:
         if isinstance(node, ast.FunctionDef) and node.name in names:

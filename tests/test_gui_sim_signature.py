@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+GUI_APP_PATH = ROOT / "ra_sim" / "gui" / "app.py"
 
 
 def _find_get_sim_signature_returns(path: Path) -> list[ast.Return]:
@@ -125,20 +126,9 @@ def _assert_psi_z_trace_clamp(path: Path) -> None:
 
 
 def test_packaged_gui_signature_includes_psi_z():
-    _assert_signature_includes_psi_z(ROOT / "ra_sim" / "gui" / "app.py")
-
-
-def test_legacy_gui_signature_includes_psi_z():
-    _assert_signature_includes_psi_z(ROOT / "main.py")
+    _assert_signature_includes_psi_z(GUI_APP_PATH)
 
 
 def test_packaged_gui_psi_z_slider_is_limited_and_clamped():
-    path = ROOT / "ra_sim" / "gui" / "app.py"
-    _assert_psi_z_slider_is_limited(path)
-    _assert_psi_z_trace_clamp(path)
-
-
-def test_legacy_gui_psi_z_slider_is_limited_and_clamped():
-    path = ROOT / "main.py"
-    _assert_psi_z_slider_is_limited(path)
-    _assert_psi_z_trace_clamp(path)
+    _assert_psi_z_slider_is_limited(GUI_APP_PATH)
+    _assert_psi_z_trace_clamp(GUI_APP_PATH)

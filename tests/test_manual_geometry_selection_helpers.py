@@ -3,6 +3,8 @@ from pathlib import Path
 
 import numpy as np
 
+GUI_APP_PATH = Path("ra_sim/gui/app.py")
+
 
 class _DummyVar:
     def __init__(self, value):
@@ -16,8 +18,8 @@ class _DummyVar:
 
 
 def _load_main_functions(*names: str) -> dict[str, object]:
-    source = Path("main.py").read_text(encoding="utf-8")
-    module = ast.parse(source, filename="main.py")
+    source = GUI_APP_PATH.read_text(encoding="utf-8")
+    module = ast.parse(source, filename=str(GUI_APP_PATH))
     available = {
         node.name
         for node in module.body
@@ -25,7 +27,9 @@ def _load_main_functions(*names: str) -> dict[str, object]:
     }
     missing = sorted(set(names) - available)
     if missing:
-        raise AssertionError(f"Failed to extract functions from main.py: {missing}")
+        raise AssertionError(
+            f"Failed to extract functions from {GUI_APP_PATH}: {missing}"
+        )
 
     extracted: list[str] = []
     for node in module.body:

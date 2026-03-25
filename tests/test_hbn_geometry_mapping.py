@@ -214,16 +214,11 @@ def test_legacy_bundle_without_canonical_metadata_raises_keyerror(tmp_path: Path
         load_bundle_npz(bundle, verbose=False)
 
 
-def test_main_and_app_use_same_conversion_helper() -> None:
-    main_text = Path("main.py").read_text(encoding="utf-8")
+def test_packaged_gui_uses_shared_conversion_helper() -> None:
     app_text = Path("ra_sim/gui/app.py").read_text(encoding="utf-8")
-    assert "convert_hbn_bundle_geometry_to_simulation(" in main_text
     assert "convert_hbn_bundle_geometry_to_simulation(" in app_text
-    assert "SIMULATION_GEOMETRY_ROTATE_K" in main_text
     assert "SIMULATION_GEOMETRY_ROTATE_K" in app_text
-    assert "HBN_FITTER_ROTATE_K" in main_text
     assert "HBN_FITTER_ROTATE_K" in app_text
-    assert "estimate_detector_tilt(" not in main_text
     assert "estimate_detector_tilt(" not in app_text
 
 

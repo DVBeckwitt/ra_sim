@@ -22,7 +22,7 @@ def _load_app_functions(*names: str) -> dict[str, object]:
 
     namespace: dict[str, object] = {}
     exec(
-        "import numpy as np\n\n" + "\n\n".join(extracted),
+        "import copy\nimport numpy as np\n\n" + "\n\n".join(extracted),
         namespace,
     )
     return namespace

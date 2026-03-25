@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+GUI_APP_PATH = "ra_sim/gui/app.py"
+
 
 class _DummyVar:
     def __init__(self, value):
@@ -55,19 +57,13 @@ def _load_literal_assignment(path: str, name: str):
 
 
 def test_main_geometry_fit_param_order_includes_lattice_parameters() -> None:
-    order = _load_literal_assignment("main.py", "GEOMETRY_FIT_PARAM_ORDER")
-    assert "a" in order
-    assert "c" in order
-
-
-def test_app_geometry_fit_param_order_includes_lattice_parameters() -> None:
-    order = _load_literal_assignment("ra_sim/gui/app.py", "GEOMETRY_FIT_PARAM_ORDER")
+    order = _load_literal_assignment(GUI_APP_PATH, "GEOMETRY_FIT_PARAM_ORDER")
     assert "a" in order
     assert "c" in order
 
 
 def test_main_current_geometry_fit_var_names_includes_lattice_parameters() -> None:
-    namespace = _load_functions("main.py", "_current_geometry_fit_var_names")
+    namespace = _load_functions(GUI_APP_PATH, "_current_geometry_fit_var_names")
     namespace["_geometry_fit_uses_shared_theta_offset"] = lambda *args, **kwargs: False
     namespace["fit_zb_var"] = _DummyVar(False)
     namespace["fit_zs_var"] = _DummyVar(False)
@@ -89,7 +85,7 @@ def test_main_current_geometry_fit_var_names_includes_lattice_parameters() -> No
 
 
 def test_main_geometry_fit_ui_params_capture_lattice_parameters() -> None:
-    namespace = _load_functions("main.py", "_current_geometry_fit_ui_params")
+    namespace = _load_functions(GUI_APP_PATH, "_current_geometry_fit_ui_params")
     namespace["zb_var"] = _DummyVar(0.0)
     namespace["zs_var"] = _DummyVar(0.0)
     namespace["theta_initial_var"] = _DummyVar(5.0)
@@ -113,7 +109,7 @@ def test_main_geometry_fit_ui_params_capture_lattice_parameters() -> None:
 
 def test_main_restore_geometry_fit_undo_state_restores_lattice_parameters() -> None:
     namespace = _load_functions(
-        "main.py",
+        GUI_APP_PATH,
         "_copy_geometry_fit_state_value",
         "_restore_geometry_fit_undo_state",
     )
@@ -153,67 +149,3 @@ def test_main_restore_geometry_fit_undo_state_restores_lattice_parameters() -> N
 
     assert namespace["a_var"].get() == 4.33
     assert namespace["c_var"].get() == 33.8
-
-
-def test_app_geometry_fit_ui_params_capture_lattice_parameters() -> None:
-    namespace = _load_functions("ra_sim/gui/app.py", "_current_geometry_fit_ui_params")
-    namespace["zb_var"] = _DummyVar(0.0)
-    namespace["zs_var"] = _DummyVar(0.0)
-    namespace["theta_initial_var"] = _DummyVar(5.0)
-    namespace["psi_z_var"] = _DummyVar(0.1)
-    namespace["chi_var"] = _DummyVar(0.2)
-    namespace["cor_angle_var"] = _DummyVar(0.3)
-    namespace["gamma_var"] = _DummyVar(0.4)
-    namespace["Gamma_var"] = _DummyVar(0.5)
-    namespace["corto_detector_var"] = _DummyVar(0.06)
-    namespace["a_var"] = _DummyVar(4.18)
-    namespace["c_var"] = _DummyVar(31.9)
-    namespace["center_x_var"] = _DummyVar(100.0)
-    namespace["center_y_var"] = _DummyVar(200.0)
-
-    params = namespace["_current_geometry_fit_ui_params"]()
-
-    assert params["a"] == 4.18
-    assert params["c"] == 31.9
-
-
-def test_app_restore_geometry_fit_undo_state_restores_lattice_parameters() -> None:
-    namespace = _load_functions(
-        "ra_sim/gui/app.py",
-        "_copy_geometry_fit_state_value",
-        "_restore_geometry_fit_undo_state",
-    )
-    namespace["profile_cache"] = {}
-    namespace["last_geometry_fit_params"] = None
-    namespace["last_geometry_matched_peaks"] = []
-    namespace["last_geometry_overlay_state"] = None
-    namespace["last_simulation_signature"] = None
-    namespace["schedule_update"] = lambda: None
-    namespace["_clear_geometry_pick_artists"] = lambda: None
-    namespace["_draw_geometry_fit_overlay"] = lambda *args, **kwargs: None
-    namespace["_draw_initial_geometry_pairs_overlay"] = lambda *args, **kwargs: None
-    namespace["zb_var"] = _DummyVar(0.0)
-    namespace["zs_var"] = _DummyVar(0.0)
-    namespace["theta_initial_var"] = _DummyVar(0.0)
-    namespace["psi_z_var"] = _DummyVar(0.0)
-    namespace["chi_var"] = _DummyVar(0.0)
-    namespace["cor_angle_var"] = _DummyVar(0.0)
-    namespace["gamma_var"] = _DummyVar(0.0)
-    namespace["Gamma_var"] = _DummyVar(0.0)
-    namespace["corto_detector_var"] = _DummyVar(0.0)
-    namespace["a_var"] = _DummyVar(0.0)
-    namespace["c_var"] = _DummyVar(0.0)
-    namespace["center_x_var"] = _DummyVar(0.0)
-    namespace["center_y_var"] = _DummyVar(0.0)
-
-    namespace["_restore_geometry_fit_undo_state"](
-        {
-            "ui_params": {
-                "a": 4.41,
-                "c": 34.2,
-            }
-        }
-    )
-
-    assert namespace["a_var"].get() == 4.41
-    assert namespace["c_var"].get() == 34.2
