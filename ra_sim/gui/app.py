@@ -1712,21 +1712,9 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
     schedule_update()
 
     _clear_geometry_pick_artists()
-    overlay_state = last_geometry_overlay_state or {}
-    overlay_records = overlay_state.get("overlay_records", []) or []
-    initial_pairs_display = overlay_state.get("initial_pairs_display", []) or []
-    max_display_markers = int(overlay_state.get("max_display_markers", 120))
-    max_display_markers = max(1, max_display_markers)
-    if overlay_records:
-        _draw_geometry_fit_overlay(
-            overlay_records,
-            max_display_markers=max_display_markers,
-        )
-    elif initial_pairs_display:
-        _draw_initial_geometry_pairs_overlay(
-            initial_pairs_display,
-            max_display_markers=max_display_markers,
-        )
+    _redraw_saved_geometry_overlay_state(
+        native_shape=tuple(int(v) for v in global_image_buffer.shape[:2]),
+    )
 
 
 def _undo_last_geometry_fit() -> None:
@@ -2229,6 +2217,167 @@ def _draw_initial_geometry_pairs_overlay(
             geometry_pick_artists.append(link)
 
     canvas.draw_idle()
+
+
+def _parse_overlay_point(value: object) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+        return None
+    try:
+        col = float(value[0])
+        row = float(value[1])
+    except Exception:
+        return None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _reproject_initial_geometry_pairs_display(
+    initial_pairs_display: Sequence[dict[str, object]] | None,
+    *,
+    native_shape: tuple[int, int],
+    ai: AzimuthalIntegrator | None = None,
+) -> list[dict[str, object]]:
+    """Rebuild initial overlay display coordinates from stored native anchors."""
+
+    reprojected = normalize_initial_geometry_pairs_display(initial_pairs_display)
+    for entry in reprojected:
+        sim_native = _parse_overlay_point(entry.get("sim_native"))
+        if sim_native is not None:
+            entry["sim_display"] = _project_native_detector_point_to_active_display(
+                sim_native[0],
+                sim_native[1],
+                native_shape,
+                ai=ai,
+            )
+        bg_native = _parse_overlay_point(entry.get("bg_native"))
+        if bg_native is not None:
+            entry["bg_display"] = _project_native_detector_point_to_active_display(
+                bg_native[0],
+                bg_native[1],
+                native_shape,
+                ai=ai,
+            )
+    return reprojected
+
+
+def _reproject_geometry_fit_overlay_records(
+    overlay_records: Sequence[dict[str, object]] | None,
+    *,
+    native_shape: tuple[int, int],
+    ai: AzimuthalIntegrator | None = None,
+    initial_pairs_display: Sequence[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    """Rebuild saved geometry-overlay display coordinates for the active view."""
+
+    initial_native_lookup: dict[int, dict[str, tuple[float, float]]] = {}
+    for fallback_idx, entry in enumerate(initial_pairs_display or []):
+        if not isinstance(entry, dict):
+            continue
+        try:
+            overlay_idx = int(entry.get("overlay_match_index", fallback_idx))
+        except Exception:
+            overlay_idx = int(fallback_idx)
+        initial_native_lookup[overlay_idx] = {}
+        sim_native = _parse_overlay_point(entry.get("sim_native"))
+        if sim_native is not None:
+            initial_native_lookup[overlay_idx]["sim_native"] = sim_native
+        bg_native = _parse_overlay_point(entry.get("bg_native"))
+        if bg_native is not None:
+            initial_native_lookup[overlay_idx]["bg_native"] = bg_native
+
+    reprojected: list[dict[str, object]] = []
+    for fallback_idx, raw_entry in enumerate(overlay_records or []):
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        try:
+            overlay_idx = int(entry.get("overlay_match_index", fallback_idx))
+        except Exception:
+            overlay_idx = int(fallback_idx)
+
+        initial_native = initial_native_lookup.get(overlay_idx, {})
+        sim_native = _parse_overlay_point(
+            entry.get("final_sim_native", initial_native.get("sim_native"))
+        )
+        if sim_native is not None:
+            entry["final_sim_display"] = _project_native_detector_point_to_active_display(
+                sim_native[0],
+                sim_native[1],
+                native_shape,
+                ai=ai,
+            )
+
+        bg_native = _parse_overlay_point(
+            entry.get("final_bg_native", initial_native.get("bg_native"))
+        )
+        if bg_native is not None:
+            entry["final_bg_display"] = _project_native_detector_point_to_active_display(
+                bg_native[0],
+                bg_native[1],
+                native_shape,
+                ai=ai,
+            )
+
+        initial_sim_native = _parse_overlay_point(
+            entry.get("initial_sim_native", initial_native.get("sim_native"))
+        )
+        if initial_sim_native is not None:
+            entry["initial_sim_display"] = _project_native_detector_point_to_active_display(
+                initial_sim_native[0],
+                initial_sim_native[1],
+                native_shape,
+                ai=ai,
+            )
+
+        initial_bg_native = _parse_overlay_point(
+            entry.get("initial_bg_native", initial_native.get("bg_native"))
+        )
+        if initial_bg_native is not None:
+            entry["initial_bg_display"] = _project_native_detector_point_to_active_display(
+                initial_bg_native[0],
+                initial_bg_native[1],
+                native_shape,
+                ai=ai,
+            )
+
+        reprojected.append(entry)
+
+    return reprojected
+
+
+def _redraw_saved_geometry_overlay_state(
+    *,
+    native_shape: tuple[int, int],
+    ai: AzimuthalIntegrator | None = None,
+) -> None:
+    """Redraw the last saved geometry-fit overlay in the current view."""
+
+    overlay_state = last_geometry_overlay_state or {}
+    overlay_records = overlay_state.get("overlay_records", []) or []
+    initial_pairs_display = overlay_state.get("initial_pairs_display", []) or []
+    max_display_markers = int(overlay_state.get("max_display_markers", 120))
+    max_display_markers = max(1, max_display_markers)
+
+    if overlay_records:
+        _draw_geometry_fit_overlay(
+            _reproject_geometry_fit_overlay_records(
+                overlay_records,
+                native_shape=native_shape,
+                ai=ai,
+                initial_pairs_display=initial_pairs_display,
+            ),
+            max_display_markers=max_display_markers,
+        )
+    elif initial_pairs_display:
+        _draw_initial_geometry_pairs_overlay(
+            _reproject_initial_geometry_pairs_display(
+                initial_pairs_display,
+                native_shape=native_shape,
+                ai=ai,
+            ),
+            max_display_markers=max_display_markers,
+        )
 
 
 def _geometry_overlay_frame_diagnostics(
@@ -2785,18 +2934,21 @@ def on_canvas_click(event):
     if best_i == -1:
         progress_label_positions.config(text="No peaks on screen.")
         return
+    distance_unit_label = "display units" if show_caked_2d_var.get() else "px"
     if best_d2 > float(HKL_PICK_MAX_DISTANCE_PX) ** 2:
         progress_label_positions.config(
             text=(
-                f"No simulated peak within {HKL_PICK_MAX_DISTANCE_PX:.0f}px "
-                f"(nearest is {best_d2**0.5:.1f}px away)."
+                f"No simulated peak within {HKL_PICK_MAX_DISTANCE_PX:.0f} {distance_unit_label} "
+                f"(nearest is {best_d2**0.5:.1f} {distance_unit_label} away)."
             )
         )
         return
 
-    cx, cy = int(round(click_col)), int(round(click_row))
     sim_shape = global_image_buffer.shape if global_image_buffer.size else (image_size, image_size)
-    clicked_native_col, clicked_native_row = _display_to_native_sim_coords(cx, cy, sim_shape)
+    clicked_native = None
+    if not show_caked_2d_var.get():
+        cx, cy = int(round(click_col)), int(round(click_row))
+        clicked_native = _display_to_native_sim_coords(cx, cy, sim_shape)
     selected_display = None
     selected_native = None
 
@@ -2811,7 +2963,7 @@ def on_canvas_click(event):
             )
             if ideal_native is not None:
                 selected_native = ideal_native
-                selected_display = _native_sim_to_display_coords(
+                selected_display = _project_native_detector_point_to_active_display(
                     ideal_native[0],
                     ideal_native[1],
                     sim_shape,
@@ -2822,24 +2974,38 @@ def on_canvas_click(event):
 
     if selected_native is None and best_i < len(peak_records) and isinstance(peak_records[best_i], dict):
         selected_native = (
-            float(peak_records[best_i].get("native_col", clicked_native_col)),
-            float(peak_records[best_i].get("native_row", clicked_native_row)),
+            float(
+                peak_records[best_i].get(
+                    "native_col",
+                    clicked_native[0] if clicked_native is not None else click_col,
+                )
+            ),
+            float(
+                peak_records[best_i].get(
+                    "native_row",
+                    clicked_native[1] if clicked_native is not None else click_row,
+                )
+            ),
         )
 
-    prefix = f"Nearest peak (Δ={best_d2**0.5:.1f}px)"
+    prefix = f"Nearest peak (Δ={best_d2**0.5:.1f} {distance_unit_label})"
     if selected_display is not None:
         snapped_dist = math.hypot(
             float(selected_display[0]) - click_col,
             float(selected_display[1]) - click_row,
         )
-        prefix = f"Ideal HKL center (click Δ={snapped_dist:.1f}px)"
+        prefix = f"Ideal HKL center (click Δ={snapped_dist:.1f} {distance_unit_label})"
 
     _select_peak_by_index(
         best_i,
         prefix=prefix,
         sync_hkl_vars=True,
         clicked_display=(click_col, click_row),
-        clicked_native=(float(clicked_native_col), float(clicked_native_row)),
+        clicked_native=(
+            (float(clicked_native[0]), float(clicked_native[1]))
+            if clicked_native is not None
+            else None
+        ),
         selected_display=selected_display,
         selected_native=selected_native,
     )
@@ -3650,6 +3816,190 @@ def caking(data, ai):
     )
 
 
+def _build_live_azimuthal_integrator(
+    dist_m: float,
+    center_row_px: float,
+    center_col_px: float,
+    gamma_deg: float,
+    Gamma_deg: float,
+    wavelength_m: float,
+) -> AzimuthalIntegrator:
+    """Build a pyFAI integrator from the current GUI detector geometry."""
+
+    return AzimuthalIntegrator(
+        dist=float(dist_m),
+        # Keep the legacy row/col mapping aligned with simulation pixels.
+        poni1=float(center_row_px) * pixel_size_m,
+        poni2=float(center_col_px) * pixel_size_m,
+        rot1=float(np.deg2rad(gamma_deg)),
+        rot2=float(np.deg2rad(Gamma_deg)),
+        rot3=0.0,
+        wavelength=float(wavelength_m),
+        pixel1=pixel_size_m,
+        pixel2=pixel_size_m,
+    )
+
+
+def _get_cached_azimuthal_integrator(
+    dist_m: float,
+    center_row_px: float,
+    center_col_px: float,
+    gamma_deg: float,
+    Gamma_deg: float,
+    wavelength_m: float,
+) -> AzimuthalIntegrator:
+    """Return a cached geometry-aware pyFAI integrator for the current GUI state."""
+
+    global _ai_cache
+
+    sig = (
+        float(dist_m),
+        float(center_row_px),
+        float(center_col_px),
+        float(gamma_deg),
+        float(Gamma_deg),
+        float(wavelength_m),
+    )
+    if _ai_cache.get("sig") != sig:
+        _ai_cache = {
+            "sig": sig,
+            "ai": _build_live_azimuthal_integrator(
+                dist_m,
+                center_row_px,
+                center_col_px,
+                gamma_deg,
+                Gamma_deg,
+                wavelength_m,
+            ),
+        }
+    return _ai_cache["ai"]
+
+
+def _get_cached_detector_angle_maps(
+    ai: AzimuthalIntegrator | None,
+    detector_shape: tuple[int, ...],
+) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    """Return cached detector two-theta and azimuth maps for the live geometry."""
+
+    global _ai_cache
+
+    if ai is None:
+        return None, None, None, None
+
+    shape_sig = tuple(int(v) for v in detector_shape[:2])
+    if _ai_cache.get("detector_shape") != shape_sig:
+        try:
+            two_theta = ai.twoThetaArray(shape=shape_sig, unit="2th_deg")
+        except TypeError:
+            two_theta = np.rad2deg(ai.twoThetaArray(shape=shape_sig))
+
+        try:
+            phi_vals = ai.chiArray(shape=shape_sig, unit="deg")
+        except TypeError:
+            phi_vals = np.rad2deg(ai.chiArray(shape=shape_sig))
+
+        phi_rad = np.deg2rad(phi_vals)
+        _ai_cache["detector_shape"] = shape_sig
+        _ai_cache["detector_two_theta"] = two_theta
+        _ai_cache["detector_phi"] = phi_vals
+        _ai_cache["detector_phi_sin"] = np.sin(phi_rad)
+        _ai_cache["detector_phi_cos"] = np.cos(phi_rad)
+
+    return (
+        _ai_cache.get("detector_two_theta"),
+        _ai_cache.get("detector_phi"),
+        _ai_cache.get("detector_phi_sin"),
+        _ai_cache.get("detector_phi_cos"),
+    )
+
+
+def _bilinear_sample_grid(grid: np.ndarray | None, col: float, row: float) -> float | None:
+    """Sample ``grid`` at fractional detector coordinates using bilinear weights."""
+
+    if grid is None:
+        return None
+
+    values = np.asarray(grid, dtype=float)
+    if values.ndim != 2 or values.shape[0] == 0 or values.shape[1] == 0:
+        return None
+
+    row_f = float(np.clip(float(row), 0.0, values.shape[0] - 1.0))
+    col_f = float(np.clip(float(col), 0.0, values.shape[1] - 1.0))
+    row0 = int(math.floor(row_f))
+    col0 = int(math.floor(col_f))
+    row1 = min(row0 + 1, values.shape[0] - 1)
+    col1 = min(col0 + 1, values.shape[1] - 1)
+    dr = row_f - row0
+    dc = col_f - col0
+
+    top = (1.0 - dc) * values[row0, col0] + dc * values[row0, col1]
+    bottom = (1.0 - dc) * values[row1, col0] + dc * values[row1, col1]
+    sampled = (1.0 - dr) * top + dr * bottom
+
+    if not np.isfinite(sampled):
+        return None
+    return float(sampled)
+
+
+def _project_native_detector_point_to_caked_display(
+    col: float,
+    row: float,
+    image_shape: tuple[int, ...],
+    *,
+    ai: AzimuthalIntegrator | None = None,
+) -> tuple[float, float] | None:
+    """Project one detector-native point into the current ``(2theta, phi)`` view."""
+
+    if ai is None:
+        ai = _get_cached_azimuthal_integrator(
+            corto_detector_var.get(),
+            center_x_var.get(),
+            center_y_var.get(),
+            gamma_var.get(),
+            Gamma_var.get(),
+            wave_m,
+        )
+
+    two_theta, _phi_raw, phi_sin, phi_cos = _get_cached_detector_angle_maps(
+        ai,
+        image_shape,
+    )
+    sampled_two_theta = _bilinear_sample_grid(two_theta, col, row)
+    sampled_phi_sin = _bilinear_sample_grid(phi_sin, col, row)
+    sampled_phi_cos = _bilinear_sample_grid(phi_cos, col, row)
+    if (
+        sampled_two_theta is None
+        or sampled_phi_sin is None
+        or sampled_phi_cos is None
+    ):
+        return None
+
+    phi_raw = float(np.degrees(np.arctan2(sampled_phi_sin, sampled_phi_cos)))
+    phi_display = float(_wrap_phi_range(_adjust_phi_zero(phi_raw)))
+    return float(sampled_two_theta), phi_display
+
+
+def _project_native_detector_point_to_active_display(
+    col: float,
+    row: float,
+    image_shape: tuple[int, ...],
+    *,
+    ai: AzimuthalIntegrator | None = None,
+) -> tuple[float, float]:
+    """Project one detector-native point into whichever 2D view is active."""
+
+    if show_caked_2d_var.get():
+        caked_xy = _project_native_detector_point_to_caked_display(
+            col,
+            row,
+            image_shape,
+            ai=ai,
+        )
+        if caked_xy is not None:
+            return caked_xy
+    return _native_sim_to_display_coords(col, row, image_shape)
+
+
 def _auto_caked_limits(image):
     """Return sensible display limits for a caked image."""
 
@@ -3746,30 +4096,14 @@ def update_integration_region_visuals(ai, sim_res2):
         integration_region_overlay.set_visible(False)
         return
 
-    detector_shape = global_image_buffer.shape
-    if _ai_cache.get("detector_shape") != detector_shape:
-        try:
-            two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
-        except TypeError:
-            two_theta = np.rad2deg(ai.twoThetaArray(shape=detector_shape))
-
-        try:
-            phi_vals = ai.chiArray(shape=detector_shape, unit="deg")
-        except TypeError:
-            phi_vals = np.rad2deg(ai.chiArray(shape=detector_shape))
-
-        _ai_cache["detector_shape"] = detector_shape
-        _ai_cache["detector_two_theta"] = two_theta
-        _ai_cache["detector_phi"] = phi_vals
-
-    two_theta = _ai_cache.get("detector_two_theta")
-    phi_vals = _ai_cache.get("detector_phi")
+    detector_shape = tuple(int(v) for v in global_image_buffer.shape[:2])
+    two_theta, phi_vals, _, _ = _get_cached_detector_angle_maps(ai, detector_shape)
 
     if two_theta is None or phi_vals is None:
         integration_region_overlay.set_visible(False)
         return
 
-    phi_vals = _adjust_phi_zero(phi_vals)
+    phi_vals = _wrap_phi_range(_adjust_phi_zero(phi_vals))
 
     mask = (
         (two_theta >= tth_min)
@@ -4169,6 +4503,15 @@ def do_update():
 
     redraw_update_start_time = perf_counter()
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
+    ai = _get_cached_azimuthal_integrator(
+        corto_det_up,
+        center_x_up,
+        center_y_up,
+        gamma_updated,
+        Gamma_updated,
+        wave_m,
+    )
+    active_2d_view = "caked" if show_caked_2d_var.get() else "detector_pixels"
     
     # ───── NEW: build peak lists from hit_tables ───────────────────────────
     peak_positions.clear()
@@ -4186,7 +4529,9 @@ def do_update():
             continue
         av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
         row_order = np.argsort(tbl_arr[:, 0])[::-1]
-        chosen_rows: list[tuple[int, np.ndarray, int, int, float, float]] = []
+        chosen_rows: list[
+            tuple[int, np.ndarray, float, float, float, float, float, float]
+        ] = []
 
         # Keep only the strongest distinct hit locations per reflection.
         for row_idx in row_order:
@@ -4194,22 +4539,52 @@ def do_update():
             I, xpix, ypix, _phi, H, K, L = row
             if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
                 continue
-            cx = int(round(xpix))
-            cy = int(round(ypix))
-            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, updated_image.shape)
+            native_col = float(xpix)
+            native_row = float(ypix)
+            disp_cx, disp_cy = _project_native_detector_point_to_active_display(
+                native_col,
+                native_row,
+                updated_image.shape,
+                ai=ai,
+            )
+            detector_disp_cx, detector_disp_cy = _native_sim_to_display_coords(
+                native_col,
+                native_row,
+                updated_image.shape,
+            )
             too_close = False
-            for _, _, _, _, prev_col, prev_row in chosen_rows:
+            for _, _, _, _, prev_col, prev_row, _, _ in chosen_rows:
                 d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
                 if d2 < min_sep_sq:
                     too_close = True
                     break
             if too_close:
                 continue
-            chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
+            chosen_rows.append(
+                (
+                    int(row_idx),
+                    row,
+                    native_col,
+                    native_row,
+                    disp_cx,
+                    disp_cy,
+                    detector_disp_cx,
+                    detector_disp_cy,
+                )
+            )
             if len(chosen_rows) >= max_hits_per_reflection:
                 break
 
-        for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
+        for (
+            row_idx,
+            row,
+            native_col,
+            native_row,
+            disp_cx,
+            disp_cy,
+            detector_disp_cx,
+            detector_disp_cy,
+        ) in chosen_rows:
             I, _xpix, _ypix, _phi, H, K, L = row
             peak_positions.append((disp_cx, disp_cy))      # display coords
             peak_intensities.append(float(I))
@@ -4226,13 +4601,16 @@ def do_update():
                 {
                     "display_col": float(disp_cx),
                     "display_row": float(disp_cy),
-                    "native_col": float(cx),
-                    "native_row": float(cy),
+                    "native_col": float(native_col),
+                    "native_row": float(native_row),
+                    "detector_display_col": float(detector_disp_cx),
+                    "detector_display_row": float(detector_disp_cy),
                     "hkl": hkl,
                     "hkl_raw": hkl_raw,
                     "intensity": float(I),
                     "qr": float(qr_val),
                     "phi": float(_phi),
+                    "display_space": active_2d_view,
                     "source_table_index": int(table_idx),
                     "source_row_index": int(row_idx),
                     "source_label": str(source_label),
@@ -4240,6 +4618,9 @@ def do_update():
                     "cv": float(cv_used),
                 }
             )
+            if active_2d_view == "caked":
+                peak_records[-1]["caked_two_theta"] = float(disp_cx)
+                peak_records[-1]["caked_phi"] = float(disp_cy)
 
     if selected_hkl_target is not None:
         _select_peak_by_hkl(
@@ -4287,36 +4668,16 @@ def do_update():
     # ---------------------------------------------------------------
     # pyFAI integrator setup is relatively expensive. Cache the
     # AzimuthalIntegrator instance and only recreate it when any of the
-    # geometry parameters actually change. This significantly reduces
-    # overhead when repeatedly redrawing the live simulation with
-    # unchanged geometry settings.
+    # geometry parameters actually change.
     # ---------------------------------------------------------------
-    global _ai_cache
-    sig = (
+    ai = _get_cached_azimuthal_integrator(
         corto_det_up,
         center_x_up,
         center_y_up,
-        Gamma_updated,
         gamma_updated,
+        Gamma_updated,
         wave_m,
     )
-    if _ai_cache.get("sig") != sig:
-        _ai_cache = {
-            "sig": sig,
-            "ai": AzimuthalIntegrator(
-                dist=corto_det_up,
-                # Keep the legacy row/col mapping aligned with simulation pixels.
-                poni1=center_x_up * pixel_size_m,
-                poni2=center_y_up * pixel_size_m,
-                rot1=0.0,
-                rot2=0.0,
-                rot3=0.0,
-                wavelength=wave_m,
-                pixel1=pixel_size_m,
-                pixel2=pixel_size_m,
-            ),
-        }
-    ai = _ai_cache["ai"]
 
     # Caked 2D or normal 2D?
     sim_res2 = None
@@ -4536,6 +4897,12 @@ def do_update():
     # Do not auto-rescale simulation display limits on every update.
     apply_scale_factor_to_existing_results(update_limits=False)
 
+    if last_geometry_overlay_state:
+        _redraw_saved_geometry_overlay_state(
+            native_shape=tuple(int(v) for v in updated_image.shape[:2]),
+            ai=ai,
+        )
+
     update_integration_region_visuals(ai, sim_res2)
 
     redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
@@ -4698,8 +5065,8 @@ def open_azimuthal_radial_view():
             'poni1': (center_x_var.get()) * pixel_size_m,
             'poni2': (center_y_var.get()) * pixel_size_m,
             'dist': corto_detector_var.get(),
-            'rot1': 0.0,
-            'rot2': 0.0,
+            'rot1': float(np.deg2rad(gamma_var.get())),
+            'rot2': float(np.deg2rad(Gamma_var.get())),
             'rot3': 0.0,
             'wavelength': wave_m
         }
@@ -6325,6 +6692,12 @@ def on_fit_geometry_click():
             (image_size, image_size),
             SIM_DISPLAY_ROTATE_K,
         )
+        bg_native = _rotate_point_for_display(
+            bg_col,
+            bg_row,
+            tuple(int(v) for v in display_background.shape[:2]),
+            -DISPLAY_ROTATE_K,
+        )
         initial_auto_pairs_display.append(
             {
                 "overlay_match_index": int(
@@ -6333,12 +6706,17 @@ def on_fit_geometry_click():
                 "hkl": normalized_hkl,
                 "sim_display": (float(sim_display[0]), float(sim_display[1])),
                 "bg_display": (float(bg_col), float(bg_row)),
+                "sim_native": (float(sim_col), float(sim_row)),
+                "bg_native": (float(bg_native[0]), float(bg_native[1])),
             }
         )
     preview_marker_limit = int(auto_match_cfg.get("max_display_markers", 120))
     preview_marker_limit = max(1, preview_marker_limit)
     _draw_initial_geometry_pairs_overlay(
-        initial_auto_pairs_display,
+        _reproject_initial_geometry_pairs_display(
+            initial_auto_pairs_display,
+            native_shape=tuple(int(v) for v in native_background.shape[:2]),
+        ),
         max_display_markers=preview_marker_limit,
     )
 
@@ -7169,16 +7547,6 @@ def on_fit_geometry_click():
             _log_line(f"WARNING: {frame_warning}")
             _log_line()
 
-        if overlay_records:
-            _draw_geometry_fit_overlay(
-                overlay_records,
-                max_display_markers=max_display_markers,
-            )
-        else:
-            _draw_initial_geometry_pairs_overlay(
-                initial_auto_pairs_display,
-                max_display_markers=max_display_markers,
-            )
         last_geometry_overlay_state = {
             "overlay_records": _copy_geometry_fit_state_value(overlay_records),
             "initial_pairs_display": _copy_geometry_fit_state_value(
@@ -7186,6 +7554,7 @@ def on_fit_geometry_click():
             ),
             "max_display_markers": int(max_display_markers),
         }
+        _redraw_saved_geometry_overlay_state(native_shape=native_overlay_shape)
 
         _log_section(
             "Pixel offsets (native frame):",
@@ -7267,7 +7636,7 @@ def on_fit_geometry_click():
 
         best_idx, best_d2 = None, float("inf")
         for idx, (px, py) in enumerate(peak_positions):
-            if px < 0 or py < 0:
+            if not (np.isfinite(px) and np.isfinite(py)):
                 continue
             d2 = (px - col) ** 2 + (py - row) ** 2
             if d2 < best_d2:
@@ -7315,6 +7684,7 @@ def on_fit_geometry_click():
         "expecting": "sim",
         "pending_hkl": None,
         "pending_sim_display": None,
+        "pending_sim_native": None,
     }
     canvas_widget = canvas.get_tk_widget()
 
@@ -8207,16 +8577,6 @@ def on_fit_geometry_click():
 
             max_display_markers = int(auto_match_cfg.get("max_display_markers", 120))
             max_display_markers = max(1, max_display_markers)
-            if overlay_records:
-                _draw_geometry_fit_overlay(
-                    overlay_records,
-                    max_display_markers=max_display_markers,
-                )
-            else:
-                _draw_initial_geometry_pairs_overlay(
-                    initial_manual_pairs_display,
-                    max_display_markers=max_display_markers,
-                )
             last_geometry_overlay_state = {
                 "overlay_records": _copy_geometry_fit_state_value(overlay_records),
                 "initial_pairs_display": _copy_geometry_fit_state_value(
@@ -8224,6 +8584,7 @@ def on_fit_geometry_click():
                 ),
                 "max_display_markers": int(max_display_markers),
             }
+            _redraw_saved_geometry_overlay_state(native_shape=native_overlay_shape)
 
             _log_section(
                 "Pixel offsets (native frame):",
@@ -8311,6 +8672,13 @@ def on_fit_geometry_click():
             selection_state["pending_hkl"] = peak_millers[idx]
             sim_col, sim_row = peak_positions[idx]
             selection_state["pending_sim_display"] = (float(sim_col), float(sim_row))
+            if idx < len(peak_records) and isinstance(peak_records[idx], dict):
+                selection_state["pending_sim_native"] = (
+                    float(peak_records[idx].get("native_col", sim_col)),
+                    float(peak_records[idx].get("native_row", sim_row)),
+                )
+            else:
+                selection_state["pending_sim_native"] = None
             _mark_pick(sim_col, sim_row, f"{selection_state['pending_hkl']} sim", '#00b894', 'o')
             progress_label_geometry.config(
                 text=(
@@ -8325,6 +8693,7 @@ def on_fit_geometry_click():
         if pending is None:
             selection_state["expecting"] = "sim"
             selection_state["pending_sim_display"] = None
+            selection_state["pending_sim_native"] = None
             progress_label_geometry.config(text="Pick a simulated peak first.")
             return
 
@@ -8332,6 +8701,15 @@ def on_fit_geometry_click():
         _mark_pick(peak_col, peak_row, f"{pending} real", '#e17055', 'x')
 
         pending_sim_display = selection_state.get("pending_sim_display")
+        pending_sim_native = selection_state.get("pending_sim_native")
+        bg_native = None
+        if not show_caked_2d_var.get():
+            bg_native = _rotate_point_for_display(
+                peak_col,
+                peak_row,
+                current_background_display.shape,
+                -DISPLAY_ROTATE_K,
+            )
         picked_pairs.append((pending, (peak_col, peak_row)))
         if pending_sim_display is not None:
             initial_manual_pairs_display.append(
@@ -8343,6 +8721,8 @@ def on_fit_geometry_click():
                         float(pending_sim_display[1]),
                     ),
                     "bg_display": (float(peak_col), float(peak_row)),
+                    "sim_native": pending_sim_native,
+                    "bg_native": bg_native,
                 }
             )
         progress_label_geometry.config(
@@ -8353,6 +8733,7 @@ def on_fit_geometry_click():
         )
         selection_state["expecting"] = "sim"
         selection_state["pending_sim_display"] = None
+        selection_state["pending_sim_native"] = None
 
     click_cid = canvas.mpl_connect('button_press_event', _on_geometry_pick)
     return
