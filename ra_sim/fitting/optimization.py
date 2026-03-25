@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import math
 import os
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from scipy.optimize import (
@@ -4264,6 +4264,41 @@ def fit_geometry_parameters(
         0.0,
         auto_freeze_max_cost_increase_fraction,
     )
+    selective_thaw_cfg_raw = identifiability_cfg.get("selective_thaw", {})
+    if isinstance(selective_thaw_cfg_raw, bool):
+        selective_thaw_cfg: Dict[str, object] = {
+            "enabled": bool(selective_thaw_cfg_raw)
+        }
+    elif isinstance(selective_thaw_cfg_raw, dict):
+        selective_thaw_cfg = dict(selective_thaw_cfg_raw)
+    else:
+        selective_thaw_cfg = {}
+    selective_thaw_enabled = bool(selective_thaw_cfg.get("enabled", False))
+    selective_thaw_max_parameters = int(
+        selective_thaw_cfg.get(
+            "max_parameters",
+            max(1, auto_freeze_max_parameters),
+        )
+    )
+    selective_thaw_max_parameters = max(0, selective_thaw_max_parameters)
+    selective_thaw_max_nfev = int(
+        selective_thaw_cfg.get(
+            "max_nfev",
+            max(10, min(40, solver_max_nfev)),
+        )
+    )
+    selective_thaw_max_nfev = max(5, selective_thaw_max_nfev)
+    selective_thaw_condition_number = float(
+        selective_thaw_cfg.get(
+            "max_condition_number",
+            identifiability_condition_warn,
+        )
+    )
+    if (
+        not np.isfinite(selective_thaw_condition_number)
+        or selective_thaw_condition_number <= 1.0
+    ):
+        selective_thaw_condition_number = identifiability_condition_warn
     anisotropic_uncertainty_enabled = bool(
         solver_cfg.get("anisotropic_measurement_uncertainty", False)
     )
@@ -7427,6 +7462,91 @@ def fit_geometry_parameters(
                 None if indices is None else np.asarray(indices, dtype=np.int64).copy()
             )
 
+    def _run_reduced_solver(
+        reference_x: np.ndarray,
+        active_indices: Sequence[int],
+        *,
+        max_nfev: int,
+    ) -> Dict[str, object]:
+        reference_arr = np.asarray(reference_x, dtype=float).copy()
+        active_arr = np.asarray(active_indices, dtype=np.int64).reshape(-1)
+        if reference_arr.ndim != 1 or reference_arr.size != len(var_names):
+            raise ValueError("reference_x shape mismatch")
+        if active_arr.size == 0:
+            raise ValueError("active_indices must not be empty")
+        active_arr = np.unique(active_arr)
+        active_arr = active_arr[
+            (active_arr >= 0) & (active_arr < len(var_names))
+        ]
+        if active_arr.size == 0:
+            raise ValueError("active_indices must include at least one valid index")
+
+        active_set = set(active_arr.tolist())
+        fixed_arr = np.asarray(
+            [idx for idx in range(len(var_names)) if idx not in active_set],
+            dtype=np.int64,
+        )
+
+        def _reduced_residual(x_active: np.ndarray) -> np.ndarray:
+            x_trial = np.asarray(reference_arr, dtype=float).copy()
+            x_trial[active_arr] = np.asarray(x_active, dtype=float)
+            return np.asarray(residual_fn(x_trial), dtype=float)
+
+        reduced_result = least_squares(
+            _reduced_residual,
+            np.asarray(reference_arr[active_arr], dtype=float),
+            bounds=(
+                np.asarray(lower_bounds[active_arr], dtype=float),
+                np.asarray(upper_bounds[active_arr], dtype=float),
+            ),
+            x_scale=np.asarray(x_scale[active_arr], dtype=float),
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+            max_nfev=int(max_nfev),
+        )
+
+        reduced_x = np.asarray(reference_arr, dtype=float).copy()
+        reduced_x[active_arr] = np.asarray(reduced_result.x, dtype=float)
+        reduced_x = np.minimum(np.maximum(reduced_x, lower_bounds), upper_bounds)
+        reduced_residual = np.asarray(
+            residual_fn(np.asarray(reduced_x, dtype=float)),
+            dtype=float,
+        )
+        final_cost = _robust_cost(
+            reduced_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        return {
+            "x": np.asarray(reduced_x, dtype=float),
+            "residual": np.asarray(reduced_residual, dtype=float),
+            "cost": float(final_cost),
+            "result": reduced_result,
+            "active_indices": np.asarray(active_arr, dtype=np.int64),
+            "fixed_indices": np.asarray(fixed_arr, dtype=np.int64),
+        }
+
+    def _build_identifiability_summary_for_x(
+        x_trial: np.ndarray,
+        current_result: Optional[OptimizeResult] = None,
+    ) -> Dict[str, object]:
+        x_arr = np.asarray(x_trial, dtype=float)
+        residual_arr = np.asarray(residual_fn(x_arr), dtype=float)
+        template_result = current_result or OptimizeResult()
+        return _build_identifiability_summary(
+            OptimizeResult(
+                x=x_arr,
+                fun=residual_arr,
+                success=bool(getattr(template_result, "success", False)),
+                status=int(getattr(template_result, "status", 0)),
+                message=str(getattr(template_result, "message", "")),
+                nfev=int(getattr(template_result, "nfev", 0)),
+                active_mask=np.zeros_like(x_arr, dtype=int),
+                optimality=float(getattr(template_result, "optimality", np.nan)),
+            ),
+            None,
+        )
+
     def _maybe_run_single_ray_polish(
         current_result: OptimizeResult,
     ) -> Dict[str, object]:
@@ -7581,19 +7701,7 @@ def fit_geometry_parameters(
             loss=solver_loss,
             f_scale=solver_f_scale,
         )
-        ident_summary = _build_identifiability_summary(
-            OptimizeResult(
-                x=start_x,
-                fun=start_residual,
-                success=bool(getattr(current_result, "success", False)),
-                status=int(getattr(current_result, "status", 0)),
-                message=str(getattr(current_result, "message", "")),
-                nfev=int(getattr(current_result, "nfev", 0)),
-                active_mask=np.zeros_like(start_x, dtype=int),
-                optimality=float(getattr(current_result, "optimality", np.nan)),
-            ),
-            None,
-        )
+        ident_summary = _build_identifiability_summary_for_x(start_x, current_result)
         summary["condition_number"] = float(
             ident_summary.get("condition_number", np.nan)
         )
@@ -7670,6 +7778,8 @@ def fit_geometry_parameters(
 
         summary["fixed_parameters"] = [str(var_names[idx]) for idx in fixed_indices.tolist()]
         summary["active_parameters"] = [str(var_names[idx]) for idx in active_indices.tolist()]
+        summary["fixed_indices"] = fixed_indices.tolist()
+        summary["active_indices"] = active_indices.tolist()
         summary["candidate_count"] = int(len(candidate_entries))
         summary["selected_count"] = int(fixed_indices.size)
         summary["truncated"] = bool(len(candidate_entries) > fixed_indices.size)
@@ -7679,24 +7789,10 @@ def fit_geometry_parameters(
             f"{summary['fixed_parameters']}"
         )
 
-        fixed_reference = np.asarray(start_x, dtype=float).copy()
-
-        def _reduced_residual(x_active: np.ndarray) -> np.ndarray:
-            x_trial = np.asarray(fixed_reference, dtype=float).copy()
-            x_trial[active_indices] = np.asarray(x_active, dtype=float)
-            return np.asarray(residual_fn(x_trial), dtype=float)
-
         try:
-            reduced_result = least_squares(
-                _reduced_residual,
-                np.asarray(fixed_reference[active_indices], dtype=float),
-                bounds=(
-                    np.asarray(lower_bounds[active_indices], dtype=float),
-                    np.asarray(upper_bounds[active_indices], dtype=float),
-                ),
-                x_scale=np.asarray(x_scale[active_indices], dtype=float),
-                loss=solver_loss,
-                f_scale=solver_f_scale,
+            reduced_summary = _run_reduced_solver(
+                start_x,
+                active_indices,
                 max_nfev=auto_freeze_max_nfev,
             )
         except Exception as exc:
@@ -7704,17 +7800,9 @@ def fit_geometry_parameters(
             summary["reason"] = f"auto_freeze_failed: {exc}"
             return summary
 
-        reduced_x = np.asarray(fixed_reference, dtype=float).copy()
-        reduced_x[active_indices] = np.asarray(reduced_result.x, dtype=float)
-        reduced_residual = np.asarray(
-            residual_fn(np.asarray(reduced_x, dtype=float)),
-            dtype=float,
-        )
-        final_cost = _robust_cost(
-            reduced_residual,
-            loss=solver_loss,
-            f_scale=solver_f_scale,
-        )
+        reduced_result = reduced_summary["result"]
+        reduced_x = np.asarray(reduced_summary["x"], dtype=float)
+        final_cost = float(reduced_summary["cost"])
         cost_tol = max(
             1.0e-9 * max(abs(float(start_cost)), 1.0),
             1.0e-12,
@@ -7741,6 +7829,412 @@ def fit_geometry_parameters(
         )
         if accepted:
             summary["x"] = reduced_x
+        return summary
+
+    def _maybe_run_selective_thaw(
+        current_result: OptimizeResult,
+        freeze_summary: Dict[str, object],
+    ) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(selective_thaw_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+            "thawed_parameters": [],
+            "thawed_groups": [],
+            "remaining_fixed_parameters": [],
+            "remaining_fixed_indices": [],
+            "steps": [],
+            "max_parameters": int(selective_thaw_max_parameters),
+            "max_nfev": int(selective_thaw_max_nfev),
+            "max_condition_number": float(selective_thaw_condition_number),
+        }
+        if not selective_thaw_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+        if not identifiability_enabled:
+            summary["reason"] = "identifiability_disabled"
+            return summary
+        if not isinstance(freeze_summary, dict) or not freeze_summary.get("accepted"):
+            summary["reason"] = "auto_freeze_not_accepted"
+            return summary
+        if selective_thaw_max_parameters <= 0:
+            summary["reason"] = "max_thaw_parameters_zero"
+            return summary
+        if getattr(current_result, "x", None) is None:
+            summary["reason"] = "missing_parameter_vector"
+            return summary
+
+        current_x = np.asarray(current_result.x, dtype=float)
+        if current_x.ndim != 1 or current_x.size != len(var_names):
+            summary["reason"] = "parameter_vector_shape_mismatch"
+            return summary
+
+        fixed_indices_raw = freeze_summary.get("fixed_indices", [])
+        fixed_indices = np.asarray(fixed_indices_raw, dtype=np.int64).reshape(-1)
+        fixed_indices = fixed_indices[
+            (fixed_indices >= 0) & (fixed_indices < len(var_names))
+        ]
+        if fixed_indices.size == 0:
+            fixed_names = [str(name) for name in freeze_summary.get("fixed_parameters", [])]
+            fixed_lookup = {str(name): idx for idx, name in enumerate(var_names)}
+            fixed_indices = np.asarray(
+                [
+                    fixed_lookup[name]
+                    for name in fixed_names
+                    if name in fixed_lookup
+                ],
+                dtype=np.int64,
+            )
+        if fixed_indices.size == 0:
+            summary["reason"] = "no_fixed_parameters"
+            return summary
+
+        current_fixed = np.unique(fixed_indices)
+        current_residual = np.asarray(residual_fn(current_x), dtype=float)
+        if current_residual.ndim != 1 or current_residual.size == 0:
+            summary["reason"] = "empty_residual"
+            return summary
+        current_cost = _robust_cost(
+            current_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        start_cost = float(current_cost)
+        summary["start_cost"] = start_cost
+        thawed_parameters: List[str] = []
+        thawed_groups: List[List[str]] = []
+        thawed_count = 0
+        accepted_any = False
+        current_template = current_result
+
+        while current_fixed.size > 0 and thawed_count < selective_thaw_max_parameters:
+            remaining_capacity = int(selective_thaw_max_parameters - thawed_count)
+            current_fixed_set = set(current_fixed.tolist())
+            current_ident_summary = _build_identifiability_summary_for_x(
+                current_x,
+                current_template,
+            )
+            if str(current_ident_summary.get("status", "")) != "ok":
+                summary["reason"] = (
+                    "identifiability_"
+                    f"{current_ident_summary.get('reason', 'failed')}"
+                )
+                break
+
+            parameter_entries = list(current_ident_summary.get("parameter_entries", []))
+            recommendation_map = {
+                int(entry.get("index", -1)): dict(entry)
+                for entry in current_ident_summary.get("freeze_recommendations", [])
+                if isinstance(entry, dict)
+            }
+            recommended_indices = {
+                int(idx)
+                for idx in current_ident_summary.get("recommended_fixed_indices", [])
+                if 0 <= int(idx) < len(var_names)
+            }
+
+            candidate_groups: List[Dict[str, object]] = []
+            for idx in current_fixed.tolist():
+                param_entry = (
+                    dict(parameter_entries[idx])
+                    if 0 <= idx < len(parameter_entries)
+                    and isinstance(parameter_entries[idx], dict)
+                    else {}
+                )
+                freeze_entry = recommendation_map.get(int(idx), {})
+                candidate_groups.append(
+                    {
+                        "indices": [int(idx)],
+                        "parameters": [str(var_names[int(idx)])],
+                        "kind": "single",
+                        "still_recommended": bool(int(idx) in recommended_indices),
+                        "max_abs_correlation": float(
+                            freeze_entry.get("max_abs_correlation", np.nan)
+                        ),
+                        "column_norm": float(param_entry.get("column_norm", np.nan)),
+                    }
+                )
+
+            if remaining_capacity >= 2 and current_fixed.size >= 2:
+                seen_pairs: Set[Tuple[int, int]] = set()
+                for pair_entry in current_ident_summary.get("high_correlation_pairs", []):
+                    if not isinstance(pair_entry, dict):
+                        continue
+                    i_idx = int(pair_entry.get("index_i", -1))
+                    j_idx = int(pair_entry.get("index_j", -1))
+                    if i_idx == j_idx:
+                        continue
+                    if i_idx not in current_fixed_set or j_idx not in current_fixed_set:
+                        continue
+                    pair_key = tuple(sorted((i_idx, j_idx)))
+                    if pair_key in seen_pairs:
+                        continue
+                    seen_pairs.add(pair_key)
+                    candidate_groups.append(
+                        {
+                            "indices": [int(pair_key[0]), int(pair_key[1])],
+                            "parameters": [
+                                str(var_names[int(pair_key[0])]),
+                                str(var_names[int(pair_key[1])]),
+                            ],
+                            "kind": "pair",
+                            "still_recommended": bool(
+                                int(pair_key[0]) in recommended_indices
+                                or int(pair_key[1]) in recommended_indices
+                            ),
+                            "max_abs_correlation": float(
+                                pair_entry.get("abs_correlation", np.nan)
+                            ),
+                            "column_norm": float(
+                                sum(
+                                    float(
+                                        parameter_entries[idx].get(
+                                            "column_norm",
+                                            0.0,
+                                        )
+                                    )
+                                    if (
+                                        0 <= idx < len(parameter_entries)
+                                        and isinstance(parameter_entries[idx], dict)
+                                        and np.isfinite(
+                                            float(
+                                                parameter_entries[idx].get(
+                                                    "column_norm",
+                                                    np.nan,
+                                                )
+                                            )
+                                        )
+                                    )
+                                    else 0.0
+                                    for idx in pair_key
+                                )
+                            ),
+                        }
+                    )
+
+            if not candidate_groups:
+                summary["reason"] = "no_thaw_candidates"
+                break
+
+            candidate_groups.sort(
+                key=lambda item: (
+                    0 if not bool(item.get("still_recommended", False)) else 1,
+                    len(item.get("indices", [])),
+                    float(item.get("max_abs_correlation", np.inf))
+                    if np.isfinite(float(item.get("max_abs_correlation", np.nan)))
+                    else float("inf"),
+                    -float(item.get("column_norm", 0.0))
+                    if np.isfinite(float(item.get("column_norm", np.nan)))
+                    else 0.0,
+                    tuple(int(idx) for idx in item.get("indices", [])),
+                )
+            )
+            candidate_labels = [list(item.get("parameters", [])) for item in candidate_groups]
+            _emit_status(
+                "Geometry fit: selective thaw step "
+                f"{len(summary['steps']) + 1} evaluating {candidate_labels}"
+            )
+
+            step_summary: Dict[str, object] = {
+                "step": int(len(summary["steps"]) + 1),
+                "start_cost": float(current_cost),
+                "fixed_parameters": [str(var_names[idx]) for idx in current_fixed.tolist()],
+                "candidate_attempts": [],
+            }
+            best_accept: Optional[Dict[str, object]] = None
+            cost_tol = max(
+                1.0e-9 * max(abs(float(current_cost)), 1.0),
+                1.0e-12,
+            )
+
+            for candidate in candidate_groups:
+                candidate_indices = np.asarray(
+                    candidate.get("indices", []),
+                    dtype=np.int64,
+                ).reshape(-1)
+                candidate_indices = candidate_indices[
+                    (candidate_indices >= 0) & (candidate_indices < len(var_names))
+                ]
+                if candidate_indices.size == 0:
+                    continue
+                if candidate_indices.size > remaining_capacity:
+                    continue
+                trial_fixed = np.asarray(
+                    [
+                        idx
+                        for idx in current_fixed.tolist()
+                        if idx not in set(candidate_indices.tolist())
+                    ],
+                    dtype=np.int64,
+                )
+                if trial_fixed.size == len(var_names):
+                    continue
+                trial_active = np.asarray(
+                    [
+                        idx
+                        for idx in range(len(var_names))
+                        if idx not in set(trial_fixed.tolist())
+                    ],
+                    dtype=np.int64,
+                )
+                attempt_entry: Dict[str, object] = {
+                    "kind": str(candidate.get("kind", "single")),
+                    "candidate_parameters": list(candidate.get("parameters", [])),
+                    "candidate_indices": candidate_indices.tolist(),
+                    "still_recommended": bool(
+                        candidate.get("still_recommended", False)
+                    ),
+                    "start_cost": float(current_cost),
+                }
+                try:
+                    reduced_summary = _run_reduced_solver(
+                        current_x,
+                        trial_active,
+                        max_nfev=selective_thaw_max_nfev,
+                    )
+                except Exception as exc:
+                    attempt_entry.update(
+                        {
+                            "status": "failed",
+                            "reason": f"thaw_failed: {exc}",
+                        }
+                    )
+                    step_summary["candidate_attempts"].append(attempt_entry)
+                    continue
+
+                trial_result = reduced_summary["result"]
+                trial_x = np.asarray(reduced_summary["x"], dtype=float)
+                trial_cost = float(reduced_summary["cost"])
+                trial_ident_summary = _build_identifiability_summary_for_x(
+                    trial_x,
+                    trial_result,
+                )
+                trial_condition = float(
+                    trial_ident_summary.get("condition_number", np.nan)
+                )
+                condition_ok = bool(
+                    np.isfinite(trial_condition)
+                    and trial_condition <= selective_thaw_condition_number
+                )
+                ident_ok = str(trial_ident_summary.get("status", "")) == "ok"
+                cost_improved = bool(
+                    np.isfinite(trial_cost)
+                    and trial_cost + cost_tol < float(current_cost)
+                )
+                accepted = bool(ident_ok and condition_ok and cost_improved)
+                attempt_entry.update(
+                    {
+                        "status": "accepted" if accepted else "rejected",
+                        "reason": (
+                            "accepted"
+                            if accepted
+                            else (
+                                f"identifiability_{trial_ident_summary.get('reason', 'failed')}"
+                                if not ident_ok
+                                else (
+                                    "condition_number_too_high"
+                                    if not condition_ok
+                                    else "cost_not_improved"
+                                )
+                            )
+                        ),
+                        "final_cost": float(trial_cost),
+                        "cost_improved": bool(cost_improved),
+                        "condition_number": float(trial_condition),
+                        "nfev": int(getattr(trial_result, "nfev", 0)),
+                        "success": bool(getattr(trial_result, "success", False)),
+                        "message": str(getattr(trial_result, "message", "")),
+                        "remaining_fixed_parameters": [
+                            str(var_names[idx]) for idx in trial_fixed.tolist()
+                        ],
+                    }
+                )
+                step_summary["candidate_attempts"].append(attempt_entry)
+                if not accepted:
+                    continue
+                if best_accept is None or trial_cost + cost_tol < float(best_accept["cost"]):
+                    best_accept = {
+                        "x": trial_x,
+                        "cost": float(trial_cost),
+                        "result": trial_result,
+                        "candidate_parameters": list(candidate.get("parameters", [])),
+                        "candidate_indices": candidate_indices.tolist(),
+                        "trial_fixed": np.asarray(trial_fixed, dtype=np.int64),
+                        "condition_number": float(trial_condition),
+                    }
+
+            if best_accept is None:
+                summary["steps"].append(step_summary)
+                if accepted_any:
+                    summary["reason"] = "no_additional_acceptable_candidate"
+                    _emit_status(
+                        "Geometry fit: selective thaw stopped "
+                        "(no additional acceptable candidate)"
+                    )
+                else:
+                    summary["reason"] = "no_acceptable_candidate"
+                    _emit_status("Geometry fit: selective thaw rejected")
+                break
+
+            accepted_any = True
+            accepted_group = [
+                str(name) for name in best_accept["candidate_parameters"]
+            ]
+            thawed_groups.append(accepted_group)
+            thawed_parameters.extend(accepted_group)
+            thawed_count += len(accepted_group)
+            current_x = np.asarray(best_accept["x"], dtype=float)
+            current_cost = float(best_accept["cost"])
+            current_fixed = np.asarray(best_accept["trial_fixed"], dtype=np.int64)
+            current_template = OptimizeResult(
+                x=np.asarray(current_x, dtype=float),
+                fun=np.asarray(residual_fn(np.asarray(current_x, dtype=float)), dtype=float),
+                success=bool(getattr(best_accept["result"], "success", False)),
+                status=int(getattr(best_accept["result"], "status", 0)),
+                message=str(getattr(best_accept["result"], "message", "")),
+                nfev=int(getattr(best_accept["result"], "nfev", 0)),
+                active_mask=np.zeros_like(current_x, dtype=int),
+                optimality=float(getattr(best_accept["result"], "optimality", np.nan)),
+            )
+            step_summary["accepted_parameters"] = accepted_group
+            step_summary["reason"] = "accepted"
+            step_summary["final_cost"] = float(current_cost)
+            step_summary["condition_number"] = float(best_accept["condition_number"])
+            step_summary["remaining_fixed_parameters"] = [
+                str(var_names[idx]) for idx in current_fixed.tolist()
+            ]
+            summary["steps"].append(step_summary)
+            _emit_status(
+                "Geometry fit: selective thaw accepted "
+                f"{accepted_group} "
+                f"(cost={float(current_cost):.6f})"
+            )
+
+        summary["thawed_parameters"] = thawed_parameters
+        summary["thawed_groups"] = thawed_groups
+        summary["remaining_fixed_indices"] = current_fixed.tolist()
+        summary["remaining_fixed_parameters"] = [
+            str(var_names[idx]) for idx in current_fixed.tolist()
+        ]
+        summary["final_cost"] = float(current_cost)
+        summary["accepted_count"] = int(len(thawed_parameters))
+        summary["accepted"] = bool(accepted_any)
+        if accepted_any:
+            summary["status"] = "accepted"
+            if not summary.get("reason"):
+                if current_fixed.size == 0:
+                    summary["reason"] = "all_candidates_thawed"
+                elif thawed_count >= selective_thaw_max_parameters:
+                    summary["reason"] = "max_thaw_parameters_reached"
+                else:
+                    summary["reason"] = "accepted"
+            summary["x"] = np.asarray(current_x, dtype=float)
+        elif not summary.get("reason"):
+            summary["status"] = "rejected"
+            summary["reason"] = "no_acceptable_candidate"
+        else:
+            summary["status"] = "rejected"
         return summary
 
     result = best_result
@@ -7854,6 +8348,38 @@ def fit_geometry_parameters(
             else:
                 _append_result_message(result, "Auto-freeze accepted")
 
+    selective_thaw_summary: Dict[str, object] = {
+        "enabled": bool(selective_thaw_enabled),
+        "status": "skipped",
+        "reason": "not_evaluated",
+        "accepted": False,
+    }
+    if getattr(result, "x", None) is not None:
+        try:
+            selective_thaw_summary = _maybe_run_selective_thaw(
+                result,
+                auto_freeze_summary,
+            )
+        except Exception as exc:
+            selective_thaw_summary = {
+                "enabled": bool(selective_thaw_enabled),
+                "status": "failed",
+                "reason": f"unexpected_exception: {exc}",
+                "accepted": False,
+            }
+        refined_x = selective_thaw_summary.get("x")
+        if selective_thaw_summary.get("accepted") and refined_x is not None:
+            result.x = np.asarray(refined_x, dtype=float)
+            thawed_names = selective_thaw_summary.get("thawed_parameters", [])
+            if thawed_names:
+                joined = ", ".join(str(name) for name in thawed_names)
+                _append_result_message(
+                    result,
+                    f"Selective thaw accepted ({joined})",
+                )
+            else:
+                _append_result_message(result, "Selective thaw accepted")
+
     result.restart_history = restart_history
     result.reparameterization_summary = reparameterization_summary
     result.staged_release_summary = staged_release_summary
@@ -7861,6 +8387,7 @@ def fit_geometry_parameters(
     result.ridge_refinement_summary = ridge_refinement_summary
     result.image_refinement_summary = image_refinement_summary
     result.auto_freeze_summary = auto_freeze_summary
+    result.selective_thaw_summary = selective_thaw_summary
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
     result.parameter_prior_summary = parameter_prior_summary

@@ -6935,6 +6935,39 @@ def on_fit_geometry_click():
                     f"final_cost={float(auto_freeze_summary.get('final_cost', np.nan)):.6f}",
                 ],
             )
+        selective_thaw_summary = getattr(result, "selective_thaw_summary", None)
+        if isinstance(selective_thaw_summary, dict):
+            thaw_lines = [
+                f"enabled={bool(selective_thaw_summary.get('enabled', False))}",
+                f"status={selective_thaw_summary.get('status', 'unknown')}",
+                f"reason={selective_thaw_summary.get('reason', 'n/a')}",
+                f"accepted={bool(selective_thaw_summary.get('accepted', False))}",
+                f"thawed_parameters={list(selective_thaw_summary.get('thawed_parameters', []))}",
+                f"remaining_fixed_parameters={list(selective_thaw_summary.get('remaining_fixed_parameters', []))}",
+                f"start_cost={float(selective_thaw_summary.get('start_cost', np.nan)):.6f}",
+                f"final_cost={float(selective_thaw_summary.get('final_cost', np.nan)):.6f}",
+            ]
+            for step_entry in selective_thaw_summary.get("steps", []) or []:
+                if not isinstance(step_entry, dict):
+                    continue
+                thaw_lines.append(
+                    "step[{step}] accepted={accepted} reason={reason} thawed={thawed} fixed={fixed} "
+                    "start_cost={start_cost:.6f} final_cost={final_cost:.6f}".format(
+                        step=int(step_entry.get("step", -1)),
+                        accepted=bool(step_entry.get("accepted_parameters", [])),
+                        reason=str(
+                            step_entry.get(
+                                "reason",
+                                selective_thaw_summary.get("reason", "n/a"),
+                            )
+                        ),
+                        thawed=list(step_entry.get("accepted_parameters", [])),
+                        fixed=list(step_entry.get("remaining_fixed_parameters", [])),
+                        start_cost=float(step_entry.get("start_cost", np.nan)),
+                        final_cost=float(step_entry.get("final_cost", np.nan)),
+                    )
+                )
+            _log_section("Selective thaw:", thaw_lines)
         identifiability_summary = getattr(result, "identifiability_summary", None)
         if isinstance(identifiability_summary, dict):
             _log_section(
@@ -7900,6 +7933,39 @@ def on_fit_geometry_click():
                             f"final_cost={float(auto_freeze_summary.get('final_cost', np.nan)):.6f}",
                         ],
                     )
+                selective_thaw_summary = getattr(result, "selective_thaw_summary", None)
+                if isinstance(selective_thaw_summary, dict):
+                    thaw_lines = [
+                        f"enabled={bool(selective_thaw_summary.get('enabled', False))}",
+                        f"status={selective_thaw_summary.get('status', 'unknown')}",
+                        f"reason={selective_thaw_summary.get('reason', 'n/a')}",
+                        f"accepted={bool(selective_thaw_summary.get('accepted', False))}",
+                        f"thawed_parameters={list(selective_thaw_summary.get('thawed_parameters', []))}",
+                        f"remaining_fixed_parameters={list(selective_thaw_summary.get('remaining_fixed_parameters', []))}",
+                        f"start_cost={float(selective_thaw_summary.get('start_cost', np.nan)):.6f}",
+                        f"final_cost={float(selective_thaw_summary.get('final_cost', np.nan)):.6f}",
+                    ]
+                    for step_entry in selective_thaw_summary.get("steps", []) or []:
+                        if not isinstance(step_entry, dict):
+                            continue
+                        thaw_lines.append(
+                            "step[{step}] accepted={accepted} reason={reason} thawed={thawed} fixed={fixed} "
+                            "start_cost={start_cost:.6f} final_cost={final_cost:.6f}".format(
+                                step=int(step_entry.get("step", -1)),
+                                accepted=bool(step_entry.get("accepted_parameters", [])),
+                                reason=str(
+                                    step_entry.get(
+                                        "reason",
+                                        selective_thaw_summary.get("reason", "n/a"),
+                                    )
+                                ),
+                                thawed=list(step_entry.get("accepted_parameters", [])),
+                                fixed=list(step_entry.get("remaining_fixed_parameters", [])),
+                                start_cost=float(step_entry.get("start_cost", np.nan)),
+                                final_cost=float(step_entry.get("final_cost", np.nan)),
+                            )
+                        )
+                    _log_section("Selective thaw:", thaw_lines)
                 identifiability_summary = getattr(result, "identifiability_summary", None)
                 if isinstance(identifiability_summary, dict):
                     _log_section(
