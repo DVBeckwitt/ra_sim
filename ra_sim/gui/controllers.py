@@ -11,6 +11,7 @@ from ra_sim.path_config import get_instrument_config
 from .state import (
     AppState,
     GeometryFitHistoryState,
+    GeometryPreviewState,
     GeometryQGroupState,
     ManualGeometryState,
     ManualGeometryUndoSnapshot,
@@ -245,6 +246,143 @@ def commit_geometry_fit_redo(
         max_items = max(1, int(limit))
         if len(state.undo_stack) > max_items:
             del state.undo_stack[:-max_items]
+
+
+def replace_geometry_preview_excluded_q_groups(
+    state: GeometryPreviewState,
+    excluded_q_groups: Sequence[object] | None,
+) -> set[tuple[object, ...]]:
+    """Replace the excluded Qr/Qz group key set in place."""
+
+    normalized: set[tuple[object, ...]] = set()
+    for raw_key in excluded_q_groups or ():
+        if isinstance(raw_key, tuple):
+            normalized.add(raw_key)
+        elif isinstance(raw_key, list):
+            normalized.add(tuple(raw_key))
+
+    state.excluded_q_groups.clear()
+    state.excluded_q_groups.update(normalized)
+    return state.excluded_q_groups
+
+
+def retain_geometry_preview_excluded_q_groups(
+    state: GeometryPreviewState,
+    allowed_keys: Sequence[object] | set[tuple[object, ...]] | None,
+) -> set[tuple[object, ...]]:
+    """Keep only excluded Qr/Qz keys that still exist in the listed snapshot."""
+
+    normalized: set[tuple[object, ...]] = set()
+    for raw_key in allowed_keys or ():
+        if isinstance(raw_key, tuple):
+            normalized.add(raw_key)
+        elif isinstance(raw_key, list):
+            normalized.add(tuple(raw_key))
+
+    if normalized:
+        state.excluded_q_groups.intersection_update(normalized)
+    else:
+        state.excluded_q_groups.clear()
+    return state.excluded_q_groups
+
+
+def clear_geometry_preview_excluded_q_groups(
+    state: GeometryPreviewState,
+) -> None:
+    """Clear all excluded Qr/Qz group keys."""
+
+    state.excluded_q_groups.clear()
+
+
+def set_geometry_preview_q_group_included(
+    state: GeometryPreviewState,
+    group_key: tuple[object, ...] | None,
+    *,
+    included: bool,
+) -> bool:
+    """Toggle one Qr/Qz group in the preview exclusion set."""
+
+    if group_key is None:
+        return False
+    if included:
+        state.excluded_q_groups.discard(group_key)
+    else:
+        state.excluded_q_groups.add(group_key)
+    return True
+
+
+def count_geometry_preview_excluded_q_groups(
+    state: GeometryPreviewState,
+    keys: Sequence[object] | None = None,
+) -> int:
+    """Count excluded Qr/Qz keys, optionally restricted to one listing."""
+
+    if keys is None:
+        return int(len(state.excluded_q_groups))
+
+    normalized: set[tuple[object, ...]] = set()
+    for raw_key in keys:
+        if isinstance(raw_key, tuple):
+            normalized.add(raw_key)
+        elif isinstance(raw_key, list):
+            normalized.add(tuple(raw_key))
+    return int(sum(1 for key in normalized if key in state.excluded_q_groups))
+
+
+def request_geometry_preview_skip_once(state: GeometryPreviewState) -> None:
+    """Skip one live-preview refresh on the next update cycle."""
+
+    state.skip_once = True
+
+
+def consume_geometry_preview_skip_once(
+    state: GeometryPreviewState,
+) -> bool:
+    """Return and clear the one-shot live-preview skip flag."""
+
+    requested = bool(state.skip_once)
+    state.skip_once = False
+    return requested
+
+
+def clear_geometry_preview_skip_once(state: GeometryPreviewState) -> None:
+    """Clear the one-shot live-preview skip flag."""
+
+    state.skip_once = False
+
+
+def get_geometry_auto_match_background_cache(
+    state: GeometryPreviewState,
+    cache_key: object,
+) -> dict[str, object] | None:
+    """Return the cached auto-match background context when the key matches."""
+
+    if state.auto_match_background_cache_key != cache_key:
+        return None
+    if not isinstance(state.auto_match_background_cache_data, dict):
+        return None
+    return state.auto_match_background_cache_data
+
+
+def replace_geometry_auto_match_background_cache(
+    state: GeometryPreviewState,
+    cache_key: object,
+    cache_data: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Replace the cached auto-match background context."""
+
+    state.auto_match_background_cache_key = cache_key
+    state.auto_match_background_cache_data = cache_data
+    return state.auto_match_background_cache_data
+
+
+def clear_geometry_auto_match_background_cache(
+    state: GeometryPreviewState,
+) -> None:
+    """Discard the cached auto-match background context."""
+
+    state.auto_match_background_cache_key = None
+    state.auto_match_background_cache_data = None
 
 
 def clone_geometry_q_group_entries(

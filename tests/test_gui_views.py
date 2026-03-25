@@ -1,0 +1,165 @@
+import tkinter as tk
+
+from ra_sim.gui import state, views
+
+
+class _FakeExistingChild:
+    def __init__(self) -> None:
+        self.destroyed = False
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
+class _FakeBody:
+    def __init__(self) -> None:
+        self.children = [_FakeExistingChild()]
+
+    def winfo_children(self):
+        return list(self.children)
+
+
+class _FakeCanvas:
+    def __init__(self) -> None:
+        self.updated = False
+        self.scrollregion = None
+        self.y_moved_to = None
+
+    def yview(self):
+        return (0.25, 1.0)
+
+    def update_idletasks(self) -> None:
+        self.updated = True
+
+    def configure(self, **kwargs) -> None:
+        self.scrollregion = kwargs.get("scrollregion")
+
+    def bbox(self, _value):
+        return (0, 0, 100, 200)
+
+    def yview_moveto(self, value: float) -> None:
+        self.y_moved_to = value
+
+
+class _FakeWindow:
+    def __init__(self, exists: bool = True) -> None:
+        self.exists = exists
+        self.destroyed = False
+
+    def winfo_exists(self) -> bool:
+        if self.exists == "error":
+            raise tk.TclError("gone")
+        return bool(self.exists)
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
+class _FakeLabel:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.text = kwargs.get("text", "")
+        _FakeLabel.created.append(self)
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+    def config(self, **kwargs) -> None:
+        self.text = kwargs.get("text", self.text)
+
+
+class _FakeCheckbutton:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.command = kwargs.get("command")
+        self.variable = kwargs.get("variable")
+        _FakeCheckbutton.created.append(self)
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+
+class _FakeVar:
+    def __init__(self, value: bool) -> None:
+        self._value = value
+
+    def get(self) -> bool:
+        return self._value
+
+
+def test_geometry_q_group_window_state_helpers_close_and_report_open() -> None:
+    view_state = state.GeometryQGroupViewState()
+
+    assert views.geometry_q_group_window_open(view_state) is False
+
+    window = _FakeWindow()
+    view_state.window = window
+    view_state.canvas = object()
+    view_state.body = object()
+    view_state.status_label = object()
+
+    assert views.geometry_q_group_window_open(view_state) is True
+
+    views.close_geometry_q_group_window(view_state)
+    assert window.destroyed is True
+    assert view_state.window is None
+    assert view_state.canvas is None
+    assert view_state.body is None
+    assert view_state.status_label is None
+
+    view_state.window = _FakeWindow(exists="error")
+    assert views.geometry_q_group_window_open(view_state) is False
+
+
+def test_refresh_geometry_q_group_window_updates_status_and_rows(monkeypatch) -> None:
+    _FakeLabel.created = []
+    _FakeCheckbutton.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+
+    view_state = state.GeometryQGroupViewState(
+        window=_FakeWindow(),
+        canvas=_FakeCanvas(),
+        body=_FakeBody(),
+        status_label=_FakeLabel(None, text=""),
+    )
+    registered = []
+    toggled = []
+    cleared = []
+
+    refreshed = views.refresh_geometry_q_group_window(
+        view_state=view_state,
+        entries=[
+            {"key": ("q_group", "primary", 1, 0), "peak_count": 2},
+            {"key": ("q_group", "secondary", 2, 1), "peak_count": 3},
+        ],
+        excluded_q_groups=[("q_group", "secondary", 2, 1)],
+        status_text="status text",
+        format_line=lambda entry: f"line:{entry['key']}",
+        on_toggle=lambda key, row_var: toggled.append((key, row_var.get())),
+        clear_row_vars=lambda: cleared.append(True),
+        register_row_var=lambda key, row_var: registered.append((key, row_var.get())),
+        boolean_var_factory=_FakeVar,
+    )
+
+    assert refreshed is True
+    assert cleared == [True]
+    assert registered == [
+        (("q_group", "primary", 1, 0), True),
+        (("q_group", "secondary", 2, 1), False),
+    ]
+    assert view_state.status_label.text == "status text"
+    assert view_state.canvas.updated is True
+    assert view_state.canvas.scrollregion == (0, 0, 100, 200)
+    assert view_state.canvas.y_moved_to == 0.25
+    assert view_state.body.children[0].destroyed is True
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "line:('q_group', 'primary', 1, 0)"
+
+    _FakeCheckbutton.created[1].command()
+    assert toggled == [(("q_group", "secondary", 2, 1), False)]

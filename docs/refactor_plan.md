@@ -53,6 +53,13 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - Q-group selector cached rows and refresh state now have shared state in
     `ra_sim.gui.state`.
   - Controller helpers now own the corresponding stack/list/refresh mutations.
+- Live geometry preview and Q-group view migration has started.
+  - Preview exclusion state, the one-shot preview skip flag, and the
+    auto-match background cache now live in `ra_sim.gui.state`.
+  - Q-group selector window/widget ownership now flows through
+    `ra_sim.gui.views`.
+  - Direct tests now cover the new preview controller helpers and extracted
+    Q-group view rendering helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -82,13 +89,19 @@ What is done:
   - Shared state now has geometry-fit history and Q-group selector containers.
   - Controller helpers now own fit-history stack transitions and Q-group
     snapshot/refresh mutations.
+- Live geometry preview filter/cache state is no longer just loose runtime
+  storage.
+  - Shared state now has a preview-state container for excluded Q-groups, the
+    skip-once flag, and auto-match background cache data.
+- The Q-group selector window lifecycle is no longer built directly in
+  `runtime.py`.
+  - `ra_sim.gui.views` now owns the selector window/widget construction and row
+    rendering helpers.
 
 What is left:
 
 - `ra_sim/gui/runtime.py` is still very large and still owns too much mutable
   GUI state.
-- Extracted state is still wired through runtime aliases and runtime integration
-  code, even though the backing storage has moved into shared state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
 
 Why it matters:
@@ -107,7 +120,7 @@ Definition of done:
 
 ### 2. Controllers / State / Views Migration
 
-Status: Not started in a meaningful way
+Status: In progress
 
 What is done:
 
@@ -117,14 +130,17 @@ What is done:
 - `state.py` now also owns geometry-fit history and Q-group selector state.
 - `controllers.py` now also owns geometry-fit history and Q-group selector
   mutations.
+- `state.py` now also owns live geometry preview state and Q-group view state.
+- `controllers.py` now also owns preview exclusion/skip/cache mutations.
+- `views.py` now owns the Q-group selector window lifecycle and row rendering.
 
 What is left:
 
-- `views.py` is still mostly a placeholder.
 - The GUI still does not flow broadly through an explicit
   state/controller/view boundary.
 - The new controller/state boundary is real for manual geometry, but it is not
-  yet the dominant app structure.
+  yet the dominant app structure across the rest of the runtime.
+- Other Tk-heavy surfaces still need to move behind `views.py` helpers.
 
 Why it matters:
 
@@ -289,6 +305,8 @@ Tasks:
 - Group more runtime globals into explicit state containers.
 - Reduce direct feature coordination in `runtime.py` where controller logic can
   own it instead.
+- Keep moving Tk-owned widget references out of runtime and into `views.py`
+  state/helpers.
 
 Why first:
 
@@ -383,11 +401,11 @@ Why last:
 
 The next best step is:
 
-- build on the new manual-geometry / geometry-fit-history / Q-group
-  state-controller slices by moving more runtime-owned GUI state into explicit
-  shared state containers
-- then expand `ra_sim.gui.controllers` beyond manual geometry so workflow
-  orchestration stops accumulating in `ra_sim/gui/runtime.py`
+- build on the new manual-geometry / geometry-fit-history / preview /
+  Q-group state-controller-view slices by moving the next runtime-owned GUI
+  workflows into explicit state + controller + view boundaries
+- focus next on the remaining preview-selector / geometry-preview widget state
+  and any other runtime-owned Tk windows that still construct their UI inline
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.

@@ -35,12 +35,32 @@ class GeometryFitHistoryState:
 
 
 @dataclass
+class GeometryPreviewState:
+    """Mutable state for live geometry preview filters and caches."""
+
+    excluded_q_groups: set[tuple[object, ...]] = field(default_factory=set)
+    skip_once: bool = False
+    auto_match_background_cache_key: object = None
+    auto_match_background_cache_data: dict[str, object] | None = None
+
+
+@dataclass
 class GeometryQGroupState:
     """Mutable state for the geometry-fit Qr/Qz selector workflow."""
 
     row_vars: dict[tuple[object, ...], Any] = field(default_factory=dict)
     cached_entries: list[dict[str, object]] = field(default_factory=list)
     refresh_requested: bool = False
+
+
+@dataclass
+class GeometryQGroupViewState:
+    """Widget references for the Qr/Qz selector window."""
+
+    window: Any = None
+    canvas: Any = None
+    body: Any = None
+    status_label: Any = None
 
 
 @dataclass
@@ -57,4 +77,8 @@ class AppState:
     geometry_fit_history: GeometryFitHistoryState = field(
         default_factory=GeometryFitHistoryState
     )
+    geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)
+    geometry_q_group_view: GeometryQGroupViewState = field(
+        default_factory=GeometryQGroupViewState
+    )

@@ -7,14 +7,20 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
 
     assert isinstance(app_state.manual_geometry, state.ManualGeometryState)
     assert isinstance(app_state.geometry_fit_history, state.GeometryFitHistoryState)
+    assert isinstance(app_state.geometry_preview, state.GeometryPreviewState)
     assert isinstance(app_state.geometry_q_groups, state.GeometryQGroupState)
+    assert isinstance(app_state.geometry_q_group_view, state.GeometryQGroupViewState)
     assert app_state.manual_geometry is not other_state.manual_geometry
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
+    assert app_state.geometry_preview is not other_state.geometry_preview
     assert app_state.geometry_q_groups is not other_state.geometry_q_groups
+    assert app_state.geometry_q_group_view is not other_state.geometry_q_group_view
 
     app_state.manual_geometry.pick_session["group_key"] = ("q_group", "primary", 1, 0)
+    app_state.geometry_preview.skip_once = True
     app_state.geometry_q_groups.refresh_requested = True
     assert other_state.manual_geometry.pick_session == {}
+    assert other_state.geometry_preview.skip_once is False
     assert other_state.geometry_q_groups.refresh_requested is False
 
 
@@ -176,6 +182,86 @@ def test_geometry_fit_history_controller_tracks_overlay_and_undo_redo() -> None:
     assert fit_state.undo_stack == []
     assert fit_state.redo_stack == []
     assert fit_state.last_overlay_state is None
+
+
+def test_geometry_preview_controller_tracks_exclusions_skip_flag_and_cache() -> None:
+    preview_state = state.GeometryPreviewState()
+    excluded_alias = preview_state.excluded_q_groups
+
+    controllers.replace_geometry_preview_excluded_q_groups(
+        preview_state,
+        [
+            ("q_group", "primary", 1, 0),
+            ["q_group", "secondary", 2, 1],
+        ],
+    )
+    assert preview_state.excluded_q_groups is excluded_alias
+    assert preview_state.excluded_q_groups == {
+        ("q_group", "primary", 1, 0),
+        ("q_group", "secondary", 2, 1),
+    }
+
+    controllers.retain_geometry_preview_excluded_q_groups(
+        preview_state,
+        {("q_group", "secondary", 2, 1)},
+    )
+    assert preview_state.excluded_q_groups == {("q_group", "secondary", 2, 1)}
+    assert controllers.count_geometry_preview_excluded_q_groups(preview_state) == 1
+    assert (
+        controllers.count_geometry_preview_excluded_q_groups(
+            preview_state,
+            [
+                ("q_group", "secondary", 2, 1),
+                ("q_group", "primary", 1, 0),
+            ],
+        )
+        == 1
+    )
+
+    controllers.set_geometry_preview_q_group_included(
+        preview_state,
+        ("q_group", "secondary", 2, 1),
+        included=True,
+    )
+    controllers.set_geometry_preview_q_group_included(
+        preview_state,
+        ("q_group", "primary", 1, 0),
+        included=False,
+    )
+    assert preview_state.excluded_q_groups == {("q_group", "primary", 1, 0)}
+
+    controllers.request_geometry_preview_skip_once(preview_state)
+    assert preview_state.skip_once is True
+    assert controllers.consume_geometry_preview_skip_once(preview_state) is True
+    assert preview_state.skip_once is False
+    assert controllers.consume_geometry_preview_skip_once(preview_state) is False
+    controllers.request_geometry_preview_skip_once(preview_state)
+    controllers.clear_geometry_preview_skip_once(preview_state)
+    assert preview_state.skip_once is False
+
+    cache_key = ("bg", 1, 2, 3)
+    cache_data = {"summit_records": [1, 2, 3]}
+    controllers.replace_geometry_auto_match_background_cache(
+        preview_state,
+        cache_key,
+        cache_data,
+    )
+    assert (
+        controllers.get_geometry_auto_match_background_cache(preview_state, cache_key)
+        is cache_data
+    )
+    assert (
+        controllers.get_geometry_auto_match_background_cache(
+            preview_state,
+            ("bg", 9),
+        )
+        is None
+    )
+    controllers.clear_geometry_auto_match_background_cache(preview_state)
+    assert preview_state.auto_match_background_cache_key is None
+    assert preview_state.auto_match_background_cache_data is None
+    controllers.clear_geometry_preview_excluded_q_groups(preview_state)
+    assert preview_state.excluded_q_groups == set()
 
 
 def test_geometry_q_group_controller_replaces_entries_row_vars_and_refresh_flag() -> None:

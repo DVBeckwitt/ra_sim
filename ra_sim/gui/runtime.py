@@ -115,6 +115,7 @@ from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
+from ra_sim.gui import views as gui_views
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compute_geometry_overlay_frame_diagnostics,
@@ -2942,17 +2943,9 @@ geometry_preview_selector_listbox = None
 geometry_preview_selector_status_label = None
 geometry_preview_selector_filter_var = None
 geometry_preview_selector_index_entries: list[dict[str, object]] = []
-geometry_preview_excluded_q_groups: set[tuple[object, ...]] = set()
-geometry_q_group_window = None
-geometry_q_group_canvas = None
-geometry_q_group_body = None
-geometry_q_group_status_label = None
+geometry_preview_state = gui_state.GeometryPreviewState()
+geometry_q_group_view_state = gui_state.GeometryQGroupViewState()
 geometry_q_group_state = gui_state.GeometryQGroupState()
-geometry_q_group_row_vars = geometry_q_group_state.row_vars
-geometry_q_group_cached_entries = geometry_q_group_state.cached_entries
-geometry_preview_skip_once = False
-geometry_auto_match_background_cache_key = None
-geometry_auto_match_background_cache_data = None
 geometry_manual_state = gui_state.ManualGeometryState()
 # Keep these aliases for now while runtime still reads the state stores directly.
 geometry_manual_pairs_by_background = geometry_manual_state.pairs_by_background
@@ -3625,8 +3618,8 @@ def _geometry_manual_pick_cache_signature(
             else background_image
         ),
         use_caked_space=bool(_geometry_manual_pick_uses_caked_space()),
-        geometry_preview_excluded_q_groups=geometry_preview_excluded_q_groups,
-        geometry_q_group_cached_entries=geometry_q_group_cached_entries,
+        geometry_preview_excluded_q_groups=geometry_preview_state.excluded_q_groups,
+        geometry_q_group_cached_entries=geometry_q_group_state.cached_entries,
         stored_max_positions_local=stored_max_positions_local,
         stored_peak_table_lattice=stored_peak_table_lattice,
     )
@@ -4770,12 +4763,7 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
 def _geometry_q_group_window_open() -> bool:
     """Return whether the Qr/Qz geometry-fit selector window is open."""
 
-    if geometry_q_group_window is None:
-        return False
-    try:
-        return bool(geometry_q_group_window.winfo_exists())
-    except tk.TclError:
-        return False
+    return gui_views.geometry_q_group_window_open(geometry_q_group_view_state)
 
 
 def _clear_all_geometry_overlay_artists():
@@ -5146,7 +5134,7 @@ def _filter_geometry_fit_simulated_peaks(
             continue
         if not restrict_to_listed:
             available_keys.add(group_key)
-        if group_key in geometry_preview_excluded_q_groups:
+        if group_key in geometry_preview_state.excluded_q_groups:
             excluded_count += 1
             continue
         filtered.append(entry)
@@ -5393,10 +5381,10 @@ def _set_geometry_q_group_entries_snapshot(
         entries,
     )
     listed_keys = _listed_geometry_q_group_keys()
-    if listed_keys:
-        geometry_preview_excluded_q_groups.intersection_update(listed_keys)
-    else:
-        geometry_preview_excluded_q_groups.clear()
+    gui_controllers.retain_geometry_preview_excluded_q_groups(
+        geometry_preview_state,
+        listed_keys,
+    )
     _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     return _listed_geometry_q_group_entries()
@@ -5458,7 +5446,7 @@ def _geometry_q_group_export_rows(
         rows.append(
             {
                 "key": serialized_key,
-                "included": bool(group_key not in geometry_preview_excluded_q_groups),
+                "included": bool(group_key not in geometry_preview_state.excluded_q_groups),
                 "source_label": str(entry.get("source_label", "")),
                 "qr": _geometry_q_group_float_for_json(entry.get("qr", np.nan)),
                 "qz": _geometry_q_group_float_for_json(entry.get("qz", np.nan)),
@@ -5585,11 +5573,13 @@ def _load_geometry_q_group_selection() -> None:
         )
         return
 
-    geometry_preview_excluded_q_groups.clear()
-    geometry_preview_excluded_q_groups.update(
-        key
-        for key in current_keys
-        if (key not in saved_state) or (not bool(saved_state.get(key, False)))
+    gui_controllers.replace_geometry_preview_excluded_q_groups(
+        geometry_preview_state,
+        [
+            key
+            for key in current_keys
+            if (key not in saved_state) or (not bool(saved_state.get(key, False)))
+        ],
     )
     _update_geometry_preview_exclude_button_label()
     _refresh_geometry_q_group_window()
@@ -5725,22 +5715,26 @@ def _geometry_q_group_excluded_count(
 
     keys = _listed_geometry_q_group_keys(entries)
     if not keys:
-        return int(len(geometry_preview_excluded_q_groups))
-    return int(sum(1 for key in keys if key in geometry_preview_excluded_q_groups))
+        return gui_controllers.count_geometry_preview_excluded_q_groups(
+            geometry_preview_state,
+        )
+    return gui_controllers.count_geometry_preview_excluded_q_groups(
+        geometry_preview_state,
+        keys,
+    )
 
 
-def _update_geometry_q_group_window_status(entries: Sequence[dict[str, object]] | None = None) -> None:
-    """Refresh the summary text at the top of the Qr/Qz selector window."""
-
-    if geometry_q_group_status_label is None:
-        return
+def _build_geometry_q_group_window_status_text(
+    entries: Sequence[dict[str, object]] | None = None,
+) -> str:
+    """Build the summary text shown above the Qr/Qz selector rows."""
 
     rows = list(entries) if entries is not None else _listed_geometry_q_group_entries()
     total_count = len(rows)
     included_rows = [
         entry
         for entry in rows
-        if entry.get("key") not in geometry_preview_excluded_q_groups
+        if entry.get("key") not in geometry_preview_state.excluded_q_groups
     ]
     selected_peak_count = int(
         sum(int(entry.get("peak_count", 0)) for entry in included_rows)
@@ -5756,77 +5750,46 @@ def _update_geometry_q_group_window_status(entries: Sequence[dict[str, object]] 
     total_intensity = float(
         sum(float(entry.get("total_intensity", 0.0)) for entry in rows)
     )
-    geometry_q_group_status_label.config(
-        text=(
-            f"Included Qr/Qz groups: {len(included_rows)}/{total_count}  "
-            f"Selected peaks: {selected_peak_count}/{total_peak_count}  "
-            f"Need >= {min_matches}"
-            + (f"  short {shortfall}" if shortfall > 0 else "  ready")
-            + "\n"
-            + f"Intensity={selected_intensity:.3f}/{total_intensity:.3f}  "
-            + 'Listed peaks stay fixed until you press "Update Listed Peaks".'
-        )
+    return (
+        f"Included Qr/Qz groups: {len(included_rows)}/{total_count}  "
+        f"Selected peaks: {selected_peak_count}/{total_peak_count}  "
+        f"Need >= {min_matches}"
+        + (f"  short {shortfall}" if shortfall > 0 else "  ready")
+        + "\n"
+        + f"Intensity={selected_intensity:.3f}/{total_intensity:.3f}  "
+        + 'Listed peaks stay fixed until you press "Update Listed Peaks".'
+    )
+
+
+def _update_geometry_q_group_window_status(entries: Sequence[dict[str, object]] | None = None) -> None:
+    """Refresh the summary text at the top of the Qr/Qz selector window."""
+
+    gui_views.set_geometry_q_group_status_text(
+        geometry_q_group_view_state,
+        _build_geometry_q_group_window_status_text(entries),
     )
 
 
 def _refresh_geometry_q_group_window() -> None:
     """Redraw the Qr/Qz selector window from the stored manual snapshot."""
 
-    if not _geometry_q_group_window_open():
-        return
-    if geometry_q_group_body is None or geometry_q_group_canvas is None:
-        return
-
-    try:
-        yview = geometry_q_group_canvas.yview()
-    except Exception:
-        yview = (0.0, 1.0)
-
     entries = _listed_geometry_q_group_entries()
-
-    for child in geometry_q_group_body.winfo_children():
-        child.destroy()
-    gui_controllers.clear_geometry_q_group_row_vars(geometry_q_group_state)
-
-    if not entries:
-        ttk.Label(
-            geometry_q_group_body,
-            text=(
-                "No Qr/Qz groups are listed yet. "
-                'Press "Update Listed Peaks" to snapshot the current simulation.'
-            ),
-            justify=tk.LEFT,
-            wraplength=760,
-        ).pack(anchor=tk.W, padx=8, pady=8)
-        _update_geometry_q_group_window_status(entries)
-        geometry_q_group_canvas.update_idletasks()
-        geometry_q_group_canvas.configure(scrollregion=geometry_q_group_canvas.bbox("all"))
-        return
-
-    for entry in entries:
-        key = entry.get("key")
-        included = key not in geometry_preview_excluded_q_groups
-        var = tk.BooleanVar(value=included)
-        gui_controllers.set_geometry_q_group_row_var(
+    gui_views.refresh_geometry_q_group_window(
+        view_state=geometry_q_group_view_state,
+        entries=entries,
+        excluded_q_groups=geometry_preview_state.excluded_q_groups,
+        status_text=_build_geometry_q_group_window_status_text(entries),
+        format_line=_format_geometry_q_group_line,
+        on_toggle=_on_geometry_q_group_checkbox_changed,
+        clear_row_vars=lambda: gui_controllers.clear_geometry_q_group_row_vars(
+            geometry_q_group_state
+        ),
+        register_row_var=lambda group_key, row_var: gui_controllers.set_geometry_q_group_row_var(
             geometry_q_group_state,
-            key,
-            var,
-        )
-        ttk.Checkbutton(
-            geometry_q_group_body,
-            text=_format_geometry_q_group_line(entry),
-            variable=var,
-            command=lambda row_key=key, row_var=var: _on_geometry_q_group_checkbox_changed(
-                row_key,
-                row_var,
-            ),
-        ).pack(anchor=tk.W, fill=tk.X, padx=6, pady=1)
-
-    _update_geometry_q_group_window_status(entries)
-    geometry_q_group_canvas.update_idletasks()
-    geometry_q_group_canvas.configure(scrollregion=geometry_q_group_canvas.bbox("all"))
-    if yview and np.isfinite(float(yview[0])):
-        geometry_q_group_canvas.yview_moveto(float(yview[0]))
+            group_key,
+            row_var,
+        ),
+    )
 
 
 def _on_geometry_q_group_checkbox_changed(
@@ -5839,10 +5802,18 @@ def _on_geometry_q_group_checkbox_changed(
         return
 
     if bool(row_var.get()):
-        geometry_preview_excluded_q_groups.discard(group_key)
+        gui_controllers.set_geometry_preview_q_group_included(
+            geometry_preview_state,
+            group_key,
+            included=True,
+        )
         action = "Included"
     else:
-        geometry_preview_excluded_q_groups.add(group_key)
+        gui_controllers.set_geometry_preview_q_group_included(
+            geometry_preview_state,
+            group_key,
+            included=False,
+        )
         action = "Excluded"
     _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
@@ -5865,11 +5836,18 @@ def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
         return
 
     if enabled:
-        geometry_preview_excluded_q_groups.clear()
+        gui_controllers.clear_geometry_preview_excluded_q_groups(
+            geometry_preview_state,
+        )
         action = "Included"
     else:
-        geometry_preview_excluded_q_groups.update(
-            entry["key"] for entry in entries if entry.get("key") is not None
+        gui_controllers.replace_geometry_preview_excluded_q_groups(
+            geometry_preview_state,
+            [
+                entry["key"]
+                for entry in entries
+                if entry.get("key") is not None
+            ],
         )
         action = "Excluded"
     _invalidate_geometry_manual_pick_cache()
@@ -5887,6 +5865,8 @@ def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
 def _request_geometry_q_group_window_update() -> None:
     """Rebuild the listed Qr/Qz rows from the current simulation on demand."""
 
+    global last_simulation_signature
+
     gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
     last_simulation_signature = None
     _invalidate_geometry_manual_pick_cache()
@@ -5897,119 +5877,23 @@ def _request_geometry_q_group_window_update() -> None:
 def _close_geometry_q_group_window() -> None:
     """Destroy the Qr/Qz selector window and clear its widget references."""
 
-    global geometry_q_group_window, geometry_q_group_canvas, geometry_q_group_body
-    global geometry_q_group_status_label
-
-    if geometry_q_group_window is not None:
-        try:
-            geometry_q_group_window.destroy()
-        except tk.TclError:
-            pass
-    geometry_q_group_window = None
-    geometry_q_group_canvas = None
-    geometry_q_group_body = None
-    geometry_q_group_status_label = None
+    gui_views.close_geometry_q_group_window(geometry_q_group_view_state)
     gui_controllers.clear_geometry_q_group_row_vars(geometry_q_group_state)
 
 
 def _open_geometry_q_group_window() -> None:
     """Open a scrollable Qr/Qz selector for geometry-fit peak inclusion."""
 
-    global geometry_q_group_window, geometry_q_group_canvas, geometry_q_group_body
-    global geometry_q_group_status_label
-
-    if _geometry_q_group_window_open():
-        try:
-            geometry_q_group_window.lift()
-            geometry_q_group_window.focus_force()
-        except tk.TclError:
-            pass
-        return
-
-    window = tk.Toplevel(root)
-    window.title("Geometry Fit Qr/Qz Selector")
-    window.geometry("860x520")
-    window.minsize(680, 320)
-    window.transient(root)
-
-    frame = ttk.Frame(window, padding=10)
-    frame.pack(fill=tk.BOTH, expand=True)
-
-    ttk.Label(
-        frame,
-        text=(
-            "Select which simulated Qr/Qz groups are allowed into the live preview "
-            "and geometry fitting. Only integer Gz/L groups are listed. "
-            'Unchecked rows are skipped, and the list only changes when you press "Update Listed Peaks".'
-        ),
-        justify=tk.LEFT,
-        wraplength=820,
-    ).pack(anchor=tk.W, pady=(0, 6))
-
-    geometry_q_group_status_label = ttk.Label(frame, text="")
-    geometry_q_group_status_label.pack(anchor=tk.W, pady=(0, 6))
-
-    list_frame = ttk.Frame(frame)
-    list_frame.pack(fill=tk.BOTH, expand=True)
-
-    canvas_widget = tk.Canvas(list_frame, highlightthickness=0)
-    scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas_widget.yview)
-    canvas_widget.configure(yscrollcommand=scrollbar.set)
-    canvas_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-    body = ttk.Frame(canvas_widget)
-    body_window = canvas_widget.create_window((0, 0), window=body, anchor="nw")
-
-    body.bind(
-        "<Configure>",
-        lambda _event: canvas_widget.configure(scrollregion=canvas_widget.bbox("all")),
+    gui_views.open_geometry_q_group_window(
+        root=root,
+        view_state=geometry_q_group_view_state,
+        on_include_all=lambda: _set_all_geometry_q_groups_enabled(True),
+        on_exclude_all=lambda: _set_all_geometry_q_groups_enabled(False),
+        on_update_listed_peaks=_request_geometry_q_group_window_update,
+        on_save=_save_geometry_q_group_selection,
+        on_load=_load_geometry_q_group_selection,
+        on_close=_close_geometry_q_group_window,
     )
-    canvas_widget.bind(
-        "<Configure>",
-        lambda event: canvas_widget.itemconfigure(body_window, width=event.width),
-    )
-
-    actions = ttk.Frame(frame)
-    actions.pack(fill=tk.X, pady=(8, 0))
-    ttk.Button(
-        actions,
-        text="Include All",
-        command=lambda: _set_all_geometry_q_groups_enabled(True),
-    ).pack(side=tk.LEFT, padx=(0, 5))
-    ttk.Button(
-        actions,
-        text="Exclude All",
-        command=lambda: _set_all_geometry_q_groups_enabled(False),
-    ).pack(side=tk.LEFT, padx=(0, 5))
-    ttk.Button(
-        actions,
-        text="Update Listed Peaks",
-        command=_request_geometry_q_group_window_update,
-    ).pack(side=tk.LEFT, padx=(0, 5))
-    ttk.Button(
-        actions,
-        text="Save List...",
-        command=_save_geometry_q_group_selection,
-    ).pack(side=tk.LEFT, padx=(0, 5))
-    ttk.Button(
-        actions,
-        text="Load List...",
-        command=_load_geometry_q_group_selection,
-    ).pack(side=tk.LEFT, padx=(0, 5))
-    ttk.Button(
-        actions,
-        text="Close",
-        command=_close_geometry_q_group_window,
-    ).pack(side=tk.RIGHT, padx=(5, 0))
-
-    window.protocol("WM_DELETE_WINDOW", _close_geometry_q_group_window)
-    window.bind("<Escape>", lambda _event: _close_geometry_q_group_window())
-
-    geometry_q_group_window = window
-    geometry_q_group_canvas = canvas_widget
-    geometry_q_group_body = body
-
     _refresh_geometry_q_group_window()
 
 
@@ -6096,7 +5980,9 @@ def _clear_live_geometry_preview_exclusions():
     """Clear all user-excluded live preview peaks and redraw the preview."""
 
     geometry_preview_excluded_keys.clear()
-    geometry_preview_excluded_q_groups.clear()
+    gui_controllers.clear_geometry_preview_excluded_q_groups(
+        geometry_preview_state,
+    )
     _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     _refresh_geometry_q_group_window()
@@ -9585,7 +9471,6 @@ def do_update():
     global update_pending, update_running, last_simulation_signature
     global unscaled_image_global, background_visible
     global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
-    global geometry_preview_skip_once
     global stored_primary_sim_image, stored_secondary_sim_image
     global stored_primary_max_positions, stored_secondary_max_positions
     global stored_primary_peak_table_lattice, stored_secondary_peak_table_lattice
@@ -10319,13 +10204,12 @@ def do_update():
     update_integration_region_visuals(ai, sim_res2)
     _refresh_qr_cylinder_overlay(redraw=True, update_status=False)
     if _live_geometry_preview_enabled():
-        if geometry_preview_skip_once:
-            geometry_preview_skip_once = False
+        if gui_controllers.consume_geometry_preview_skip_once(geometry_preview_state):
             _clear_geometry_preview_artists()
         else:
             _refresh_live_geometry_preview(update_status=True)
     else:
-        geometry_preview_skip_once = False
+        gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
         _clear_geometry_preview_artists()
     _render_current_geometry_manual_pairs(update_status=False)
 
@@ -11190,7 +11074,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
 
     geometry_state = gui_state_io.apply_gui_state_geometry(
         snapshot.get("geometry", {}),
-        geometry_preview_excluded_q_groups=geometry_preview_excluded_q_groups,
+        geometry_preview_excluded_q_groups=geometry_preview_state.excluded_q_groups,
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
         apply_geometry_manual_pairs_snapshot=_apply_geometry_manual_pairs_snapshot,
@@ -11907,8 +11791,6 @@ def _auto_match_background_context(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Return cached background peakness data for seed-local auto-matching."""
 
-    global geometry_auto_match_background_cache_key, geometry_auto_match_background_cache_data
-
     config = cfg if isinstance(cfg, dict) else {}
     local_max_size = int(config.get("local_max_size_px", 5))
     local_max_size = max(3, local_max_size)
@@ -11948,12 +11830,13 @@ def _auto_match_background_context(
         round(float(min_prominence_sigma), 6),
         round(float(fallback_percentile), 6),
     )
-    if (
-        geometry_auto_match_background_cache_key == cache_key
-        and isinstance(geometry_auto_match_background_cache_data, dict)
-    ):
+    cached_context = gui_controllers.get_geometry_auto_match_background_cache(
+        geometry_preview_state,
+        cache_key,
+    )
+    if cached_context is not None:
         _auto_match_console(config, f"context cache hit shape={bg_key[1]}")
-        return dict(config), geometry_auto_match_background_cache_data
+        return dict(config), cached_context
 
     cache_data = build_background_peak_context(
         background_image,
@@ -11966,8 +11849,11 @@ def _auto_match_background_context(
         f"summits={len(cache_data.get('summit_records', []))} "
         f"sigma_est={float(cache_data.get('sigma_est', np.nan)):.4f}",
     )
-    geometry_auto_match_background_cache_key = cache_key
-    geometry_auto_match_background_cache_data = cache_data
+    gui_controllers.replace_geometry_auto_match_background_cache(
+        geometry_preview_state,
+        cache_key,
+        cache_data,
+    )
     return dict(config), cache_data
 
 
@@ -12689,7 +12575,7 @@ def _on_live_geometry_preview_toggle():
 
 
 def _legacy_auto_match_on_fit_geometry_click():
-    global profile_cache, last_simulation_signature, geometry_preview_skip_once
+    global profile_cache, last_simulation_signature
     _clear_geometry_pick_artists()
     _clear_geometry_preview_artists()
 
@@ -14005,7 +13891,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             }
         )
 
-        geometry_preview_skip_once = True
+        gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
         last_simulation_signature = None
         schedule_update()
 
@@ -14339,7 +14225,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         canvas_widget.configure(cursor="")
 
     def _on_geometry_pick(event):
-        global profile_cache, last_simulation_signature, geometry_preview_skip_once
+        global profile_cache, last_simulation_signature
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
 
@@ -14913,7 +14799,9 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
 
                 # Force a fresh simulation with the fitted values.
-                geometry_preview_skip_once = True
+                gui_controllers.request_geometry_preview_skip_once(
+                    geometry_preview_state
+                )
                 last_simulation_signature = None
                 schedule_update()
 
@@ -15527,7 +15415,7 @@ def on_fit_geometry_click():
     """Fit geometry from the saved manual Qr/Qz pair selections."""
 
     global profile_cache
-    global last_simulation_signature, geometry_preview_skip_once
+    global last_simulation_signature
 
     _clear_geometry_preview_artists()
     _clear_geometry_pick_artists()
@@ -15841,7 +15729,7 @@ def on_fit_geometry_click():
         )
         _push_geometry_fit_undo_state(undo_state)
 
-        geometry_preview_skip_once = True
+        gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
         last_simulation_signature = None
         schedule_update()
 

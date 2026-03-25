@@ -64,12 +64,21 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - geometry-fit undo/redo history now uses shared GUI state
   - Qr/Qz selector cached-entry and refresh mutations now flow through
     `ra_sim.gui.controllers`
+- Live geometry preview and Qr/Qz selector view state have also started moving
+  out of runtime-owned globals:
+  - preview exclusion state, preview skip-once state, and auto-match
+    background cache state now use shared GUI state
+  - the Qr/Qz selector window lifecycle and row rendering now flow through
+    `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
+  - this now includes preview-state controller coverage and direct Qr/Qz view
+    helper coverage
 
 ## Remaining Migration Focus
 
 - `ra_sim.gui.runtime` is still the largest remaining integration monolith.
-- `ra_sim.gui.views` is still mostly placeholder scaffolding.
+- `ra_sim.gui.views` is now active for the Qr/Qz selector, but other Tk-heavy
+  surfaces still need the same treatment.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending
