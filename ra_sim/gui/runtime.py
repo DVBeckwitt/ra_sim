@@ -13331,171 +13331,27 @@ def import_hbn_tilt_from_bundle():
     )
 
 
-_GUI_STATE_EXCLUDED_VAR_NAMES = {
-    "background_file_status_var",
-    "cif_file_var",
-    "geometry_preview_exclude_button_var",
-    "hkl_pick_button_var",
-    "resolution_count_var",
-}
-
-
-def _is_persistable_gui_var(name: str, value: object) -> bool:
-    if not isinstance(value, tk.Variable):
-        return False
-    if name.startswith("_") or name in _GUI_STATE_EXCLUDED_VAR_NAMES:
-        return False
-    if name.endswith(("_button_var", "_entry_var", "_label_var", "_status_var")):
-        return False
-    return True
-
-
-def _canonicalize_gui_state_background_path(path: object) -> str:
-    return gui_state_io.canonicalize_gui_state_background_path(path)
-
-
-def _background_files_match_loaded_state(file_paths: list[str]) -> bool:
-    return gui_state_io.background_files_match_loaded_state(
-        file_paths,
-        osc_files=osc_files,
-        background_images_native=background_images_native,
-        background_images_display=background_images_display,
-    )
-
-
-def _load_background_files_for_state(
-    file_paths: list[str],
-    *,
-    select_index: int = 0,
-) -> None:
-    global osc_files, background_images, background_images_native, background_images_display
-    global current_background_index, current_background_image, current_background_display
-
-    updated_state = gui_state_io.load_background_files_for_state(
-        file_paths,
-        osc_files=osc_files,
-        background_images=background_images,
-        background_images_native=background_images_native,
-        background_images_display=background_images_display,
-        select_index=select_index,
-        display_rotate_k=DISPLAY_ROTATE_K,
-        read_osc=read_osc,
-        set_background_display=background_display.set_data,
-    )
-    if updated_state is None:
-        return
-    osc_files = list(updated_state["osc_files"])
-    background_images = list(updated_state["background_images"])
-    background_images_native = list(updated_state["background_images_native"])
-    background_images_display = list(updated_state["background_images_display"])
-    current_background_index = int(updated_state["current_background_index"])
-    current_background_image = updated_state["current_background_image"]
-    current_background_display = updated_state["current_background_display"]
-
-
 def _collect_full_gui_state_snapshot() -> dict[str, object]:
-    variables: dict[str, object] = {}
-    for name, value in globals().items():
-        if not _is_persistable_gui_var(name, value):
-            continue
-        try:
-            variables[name] = value.get()
-        except Exception:
-            continue
-
-    occupancy_values = []
-    for occ_var in globals().get("occ_vars", []):
-        try:
-            occupancy_values.append(float(occ_var.get()))
-        except Exception:
-            occupancy_values.append(None)
-
-    atom_site_values = []
-    for row in globals().get("atom_site_fract_vars", []):
-        if not isinstance(row, dict):
-            continue
-        atom_site_values.append(
-            {
-                "x": float(row["x"].get()),
-                "y": float(row["y"].get()),
-                "z": float(row["z"].get()),
-            }
-        )
-
-    geometry_state: dict[str, object] = {
-        "q_group_rows": _geometry_q_group_export_rows(),
-        "manual_pairs": _geometry_manual_pairs_export_rows(),
-    }
-    if isinstance(selected_hkl_target, tuple) and len(selected_hkl_target) == 3:
-        geometry_state["selected_hkl_target"] = [
-            int(selected_hkl_target[0]),
-            int(selected_hkl_target[1]),
-            int(selected_hkl_target[2]),
-        ]
-
-    return {
-        "variables": variables,
-        "dynamic_lists": {
-            "occupancy_values": occupancy_values,
-            "atom_site_fractional_values": atom_site_values,
-        },
-        "files": {
-            "primary_cif_path": str(cif_file),
-            "secondary_cif_path": str(cif_file2) if cif_file2 else None,
-            "background_files": [str(Path(str(path)).expanduser()) for path in osc_files],
-            "current_background_index": int(current_background_index),
-        },
-        "flags": {
-            "background_visible": bool(background_visible),
-            "background_backend_rotation_k": int(background_backend_rotation_k),
-            "background_backend_flip_x": bool(background_backend_flip_x),
-            "background_backend_flip_y": bool(background_backend_flip_y),
-            "background_limits_user_override": bool(background_limits_user_override),
-            "simulation_limits_user_override": bool(simulation_limits_user_override),
-            "scale_factor_user_override": bool(scale_factor_user_override),
-        },
-        "geometry": geometry_state,
-    }
-
-
-def _apply_gui_state_background_theta_compatibility(
-    saved_variables: dict[str, object] | None,
-) -> None:
-    """Backfill newer background-theta GUI state from legacy snapshots."""
-
-    if not isinstance(saved_variables, dict):
-        saved_variables = {}
-
-    if (
-        "background_theta_list_var" not in saved_variables
-        and "theta_initial_var" in saved_variables
-        and background_theta_list_var is not None
-        and len(osc_files) > 0
-    ):
-        try:
-            restored_theta = float(theta_initial_var.get())
-        except Exception:
-            restored_theta = None
-        if restored_theta is not None and np.isfinite(restored_theta):
-            background_theta_list_var.set(
-                _format_background_theta_values(
-                    [float(restored_theta)] * int(len(osc_files))
-                )
-            )
-
-    if (
-        geometry_theta_offset_var is not None
-        and "geometry_theta_offset_var" not in saved_variables
-    ):
-        geometry_theta_offset_var.set("0.0")
-
-    if (
-        geometry_fit_background_selection_var is not None
-        and "geometry_fit_background_selection_var" not in saved_variables
-    ):
-        geometry_fit_background_selection_var.set(
-            _default_geometry_fit_background_selection()
-        )
+    return gui_state_io.collect_full_gui_state_snapshot(
+        global_items=globals(),
+        tk_variable_type=tk.Variable,
+        occ_vars=globals().get("occ_vars", []),
+        atom_site_fract_vars=globals().get("atom_site_fract_vars", []),
+        geometry_q_group_rows=_geometry_q_group_export_rows(),
+        geometry_manual_pairs=_geometry_manual_pairs_export_rows(),
+        selected_hkl_target=selected_hkl_target,
+        primary_cif_path=cif_file,
+        secondary_cif_path=cif_file2,
+        osc_files=osc_files,
+        current_background_index=current_background_index,
+        background_visible=background_visible,
+        background_backend_rotation_k=background_backend_rotation_k,
+        background_backend_flip_x=background_backend_flip_x,
+        background_backend_flip_y=background_backend_flip_y,
+        background_limits_user_override=background_limits_user_override,
+        simulation_limits_user_override=simulation_limits_user_override,
+        scale_factor_user_override=scale_factor_user_override,
+    )
 
 
 def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
@@ -13504,133 +13360,82 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     global background_limits_user_override, simulation_limits_user_override
     global scale_factor_user_override, selected_hkl_target
 
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+
     warnings: list[str] = []
 
-    files = snapshot.get("files", {})
-    if isinstance(files, dict):
-        cif_path = files.get("primary_cif_path")
-        if cif_path:
-            candidate = Path(str(cif_path)).expanduser()
-            if candidate.is_file():
-                try:
-                    _apply_primary_cif_path(str(candidate))
-                except Exception as exc:
-                    warnings.append(f"primary CIF: {exc}")
-            else:
-                warnings.append(f"primary CIF missing: {candidate}")
-
-        raw_background_paths = files.get("background_files", [])
-        background_paths = []
-        if isinstance(raw_background_paths, list):
-            for raw_path in raw_background_paths:
-                if raw_path is None:
-                    continue
-                candidate = Path(str(raw_path)).expanduser()
-                if candidate.is_file():
-                    background_paths.append(str(candidate))
-                else:
-                    warnings.append(f"background missing: {candidate}")
-        if background_paths:
-            try:
-                _load_background_files(
-                    background_paths,
-                    select_index=int(files.get("current_background_index", 0)),
+    warnings.extend(
+        gui_state_io.apply_gui_state_files(
+            snapshot.get("files", {}),
+            apply_primary_cif_path=_apply_primary_cif_path,
+            load_background_files=(
+                lambda file_paths, select_index: _load_background_files(
+                    file_paths,
+                    select_index=select_index,
                 )
-            except Exception as exc:
-                warnings.append(f"backgrounds: {exc}")
-
-    variables = snapshot.get("variables", {})
-    if isinstance(variables, dict):
-        for name, stored_value in variables.items():
-            target_var = globals().get(str(name))
-            if not isinstance(target_var, tk.Variable):
-                continue
-            try:
-                target_var.set(stored_value)
-            except Exception as exc:
-                warnings.append(f"{name}: {exc}")
-
-    _apply_gui_state_background_theta_compatibility(
-        variables if isinstance(variables, dict) else {}
+            ),
+        )
     )
 
-    dynamic_lists = snapshot.get("dynamic_lists", {})
-    if isinstance(dynamic_lists, dict):
-        saved_occ = dynamic_lists.get("occupancy_values", [])
-        if isinstance(saved_occ, list):
-            for occ_var, stored_value in zip(globals().get("occ_vars", []), saved_occ):
-                try:
-                    occ_var.set(float(stored_value))
-                except Exception:
-                    continue
-
-        saved_atom_sites = dynamic_lists.get("atom_site_fractional_values", [])
-        if isinstance(saved_atom_sites, list):
-            for axis_vars, stored_row in zip(globals().get("atom_site_fract_vars", []), saved_atom_sites):
-                if not isinstance(axis_vars, dict) or not isinstance(stored_row, dict):
-                    continue
-                for axis_name in ("x", "y", "z"):
-                    axis_var = axis_vars.get(axis_name)
-                    if axis_var is None or axis_name not in stored_row:
-                        continue
-                    try:
-                        axis_var.set(float(stored_row[axis_name]))
-                    except Exception:
-                        continue
-
-    flags = snapshot.get("flags", {})
-    if isinstance(flags, dict):
-        desired_background_visible = bool(flags.get("background_visible", background_visible))
-        if desired_background_visible != bool(background_visible):
-            toggle_background()
-        background_backend_rotation_k = int(flags.get("background_backend_rotation_k", background_backend_rotation_k)) % 4
-        background_backend_flip_x = bool(flags.get("background_backend_flip_x", background_backend_flip_x))
-        background_backend_flip_y = bool(flags.get("background_backend_flip_y", background_backend_flip_y))
-        background_limits_user_override = bool(
-            flags.get("background_limits_user_override", background_limits_user_override)
+    variables = snapshot.get("variables", {})
+    warnings.extend(
+        gui_state_io.apply_gui_state_variables(
+            variables,
+            global_items=globals(),
+            tk_variable_type=tk.Variable,
         )
-        simulation_limits_user_override = bool(
-            flags.get("simulation_limits_user_override", simulation_limits_user_override)
-        )
-        scale_factor_user_override = bool(
-            flags.get("scale_factor_user_override", scale_factor_user_override)
-        )
+    )
 
-    geometry_state = snapshot.get("geometry", {})
-    if isinstance(geometry_state, dict):
-        saved_rows = geometry_state.get("q_group_rows", [])
-        if isinstance(saved_rows, list):
-            geometry_preview_excluded_q_groups.clear()
-            for row in saved_rows:
-                if not isinstance(row, dict):
-                    continue
-                group_key = _geometry_q_group_key_from_jsonable(row.get("key"))
-                if group_key is None:
-                    continue
-                if not bool(row.get("included", True)):
-                    geometry_preview_excluded_q_groups.add(group_key)
-            _invalidate_geometry_manual_pick_cache()
-        target_hkl = geometry_state.get("selected_hkl_target")
-        if isinstance(target_hkl, (list, tuple)) and len(target_hkl) >= 3:
-            try:
-                selected_hkl_target = (
-                    int(target_hkl[0]),
-                    int(target_hkl[1]),
-                    int(target_hkl[2]),
-                )
-            except Exception:
-                selected_hkl_target = None
-        try:
-            _ = _apply_geometry_manual_pairs_snapshot(
-                {
-                    "manual_pairs": geometry_state.get("manual_pairs", []),
-                    "background_files": [],
-                    "current_background_index": int(current_background_index),
-                },
-                allow_background_reload=False,
-            )
-        except Exception as exc:
-            warnings.append(f"manual placements: {exc}")
+    gui_state_io.apply_gui_state_background_theta_compatibility(
+        variables,
+        osc_files=osc_files,
+        theta_initial_var=theta_initial_var,
+        background_theta_list_var=background_theta_list_var,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+        format_background_theta_values=_format_background_theta_values,
+        default_geometry_fit_background_selection=_default_geometry_fit_background_selection,
+    )
+
+    gui_state_io.apply_dynamic_gui_state_lists(
+        snapshot.get("dynamic_lists", {}),
+        occ_vars=globals().get("occ_vars", []),
+        atom_site_fract_vars=globals().get("atom_site_fract_vars", []),
+    )
+
+    flag_state = gui_state_io.apply_gui_state_flags(
+        snapshot.get("flags", {}),
+        current_flags={
+            "background_visible": background_visible,
+            "background_backend_rotation_k": background_backend_rotation_k,
+            "background_backend_flip_x": background_backend_flip_x,
+            "background_backend_flip_y": background_backend_flip_y,
+            "background_limits_user_override": background_limits_user_override,
+            "simulation_limits_user_override": simulation_limits_user_override,
+            "scale_factor_user_override": scale_factor_user_override,
+        },
+        toggle_background=toggle_background,
+    )
+    background_visible = bool(flag_state["background_visible"])
+    background_backend_rotation_k = int(flag_state["background_backend_rotation_k"])
+    background_backend_flip_x = bool(flag_state["background_backend_flip_x"])
+    background_backend_flip_y = bool(flag_state["background_backend_flip_y"])
+    background_limits_user_override = bool(flag_state["background_limits_user_override"])
+    simulation_limits_user_override = bool(flag_state["simulation_limits_user_override"])
+    scale_factor_user_override = bool(flag_state["scale_factor_user_override"])
+
+    geometry_state = gui_state_io.apply_gui_state_geometry(
+        snapshot.get("geometry", {}),
+        geometry_preview_excluded_q_groups=geometry_preview_excluded_q_groups,
+        geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        apply_geometry_manual_pairs_snapshot=_apply_geometry_manual_pairs_snapshot,
+        current_background_index=current_background_index,
+        selected_hkl_target=selected_hkl_target,
+    )
+    selected_hkl_target = geometry_state["selected_hkl_target"]
+    warnings.extend(list(geometry_state["warnings"]))
 
     if _phase_delta_entry_var is not None:
         _phase_delta_entry_var.set(_current_phase_delta_expression())
@@ -13654,12 +13459,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     _refresh_live_geometry_preview(update_status=False)
     schedule_update()
 
-    summary = "Imported GUI state snapshot."
-    if warnings:
-        summary += " Warnings: " + "; ".join(warnings[:4])
-        if len(warnings) > 4:
-            summary += f"; +{len(warnings) - 4} more"
-    return summary
+    return gui_state_io.build_gui_state_import_summary(warnings)
 
 
 def _export_full_gui_state() -> None:

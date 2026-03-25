@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+from ra_sim.gui import state_io
+
 GUI_APP_PATH = Path("ra_sim/gui/runtime.py")
 
 
@@ -367,7 +369,6 @@ def test_apply_gui_state_background_theta_compatibility_seeds_legacy_theta_list(
     namespace = _load_main_functions(
         "_format_background_theta_values",
         "_default_geometry_fit_background_selection",
-        "_apply_gui_state_background_theta_compatibility",
     )
 
     class _Var:
@@ -386,8 +387,19 @@ def test_apply_gui_state_background_theta_compatibility_seeds_legacy_theta_list(
     namespace["geometry_theta_offset_var"] = _Var("1.5")
     namespace["geometry_fit_background_selection_var"] = _Var("current")
 
-    namespace["_apply_gui_state_background_theta_compatibility"](
-        {"theta_initial_var": 12.75}
+    state_io.apply_gui_state_background_theta_compatibility(
+        {"theta_initial_var": 12.75},
+        osc_files=namespace["osc_files"],
+        theta_initial_var=namespace["theta_initial_var"],
+        background_theta_list_var=namespace["background_theta_list_var"],
+        geometry_theta_offset_var=namespace["geometry_theta_offset_var"],
+        geometry_fit_background_selection_var=namespace[
+            "geometry_fit_background_selection_var"
+        ],
+        format_background_theta_values=namespace["_format_background_theta_values"],
+        default_geometry_fit_background_selection=namespace[
+            "_default_geometry_fit_background_selection"
+        ],
     )
 
     assert namespace["background_theta_list_var"].get() == "12.75, 12.75"
@@ -396,10 +408,7 @@ def test_apply_gui_state_background_theta_compatibility_seeds_legacy_theta_list(
 
 
 def test_apply_gui_state_background_theta_compatibility_preserves_saved_metadata() -> None:
-    namespace = _load_main_functions(
-        "_default_geometry_fit_background_selection",
-        "_apply_gui_state_background_theta_compatibility",
-    )
+    namespace = _load_main_functions("_default_geometry_fit_background_selection")
 
     class _Var:
         def __init__(self, value):
@@ -417,13 +426,24 @@ def test_apply_gui_state_background_theta_compatibility_preserves_saved_metadata
     namespace["geometry_theta_offset_var"] = _Var("0.25")
     namespace["geometry_fit_background_selection_var"] = _Var("current")
 
-    namespace["_apply_gui_state_background_theta_compatibility"](
+    state_io.apply_gui_state_background_theta_compatibility(
         {
             "theta_initial_var": 12.75,
             "background_theta_list_var": "4, 7.5",
             "geometry_theta_offset_var": "0.25",
             "geometry_fit_background_selection_var": "current",
-        }
+        },
+        osc_files=namespace["osc_files"],
+        theta_initial_var=namespace["theta_initial_var"],
+        background_theta_list_var=namespace["background_theta_list_var"],
+        geometry_theta_offset_var=namespace["geometry_theta_offset_var"],
+        geometry_fit_background_selection_var=namespace[
+            "geometry_fit_background_selection_var"
+        ],
+        format_background_theta_values=lambda values: ", ".join(str(v) for v in values),
+        default_geometry_fit_background_selection=namespace[
+            "_default_geometry_fit_background_selection"
+        ],
     )
 
     assert namespace["background_theta_list_var"].get() == "4, 7.5"
