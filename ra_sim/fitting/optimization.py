@@ -77,7 +77,7 @@ def _resolve_parallel_worker_count(
             requested = 1
 
     if requested <= 0:
-        requested = min(4, _available_parallel_thread_budget())
+        requested = _available_parallel_thread_budget()
     return max(1, min(int(requested), int(max_tasks)))
 
 
@@ -147,7 +147,7 @@ def _threaded_map(
     max_workers: int,
     numba_threads: Optional[int] = None,
 ) -> List[object]:
-    """Map *fn* over *items* using a small thread pool while preserving order."""
+    """Map *fn* over *items* using a thread pool while preserving order."""
 
     if max_workers <= 1 or len(items) <= 1:
         return [fn(item) for item in items]

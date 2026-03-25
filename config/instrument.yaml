@@ -96,7 +96,7 @@ instrument:
       # - restarts: random multi-start retries to escape local minima
       # - restart_jitter: fractional perturbation size per restart
       # - workers: outer CPU worker count for independent dataset/restart tasks.
-      #   Use auto to split the fit across a small number of threaded workers.
+      #   Use auto to scale up to the detected CPU/Numba thread budget.
       # - parallel_mode: auto prefers dataset-level parallelism when fitting
       #   multiple backgrounds, otherwise restart-level parallelism.
       # - worker_numba_threads: per-worker Numba thread mask; 0 auto-splits
