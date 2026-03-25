@@ -46,6 +46,20 @@ class GeometryFitConstraintsViewState:
 
 
 @dataclass
+class BackgroundThetaControlsViewState:
+    """Widget references and vars for background-theta control surfaces."""
+
+    background_theta_controls: Any = None
+    background_theta_list_var: Any = None
+    background_theta_entry: Any = None
+    geometry_theta_offset_var: Any = None
+    background_theta_offset_entry: Any = None
+    geometry_fit_background_controls: Any = None
+    geometry_fit_background_selection_var: Any = None
+    geometry_fit_background_entry: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -143,6 +157,9 @@ class AppState:
     )
     geometry_fit_constraints_view: GeometryFitConstraintsViewState = field(
         default_factory=GeometryFitConstraintsViewState
+    )
+    background_theta_controls_view: BackgroundThetaControlsViewState = field(
+        default_factory=BackgroundThetaControlsViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

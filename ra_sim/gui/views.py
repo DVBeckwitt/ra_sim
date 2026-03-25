@@ -9,6 +9,7 @@ from tkinter import ttk
 
 from .collapsible import CollapsibleFrame
 from .state import (
+    BackgroundThetaControlsViewState,
     BraggQrManagerViewState,
     GeometryFitConstraintsViewState,
     GeometryQGroupViewState,
@@ -23,6 +24,10 @@ _GEOMETRY_Q_GROUP_EMPTY_TEXT = (
 _GEOMETRY_FIT_CONSTRAINTS_HELP_TEXT = (
     "Each window is applied as current value +/- deviation during geometry fitting. "
     "Stay-close adds a soft pull back to the starting guess."
+)
+_BACKGROUND_THETA_HELP_TEXT = "Per-background theta_i values (deg, in load order)"
+_GEOMETRY_FIT_BACKGROUND_HELP_TEXT = (
+    "Use 'current', 'all', or 1-based indices/ranges like 1,3-5"
 )
 
 
@@ -190,6 +195,92 @@ def set_geometry_fit_constraint_control(
         "pull_var": pull_var,
         "_mapped": False,
     }
+
+
+def create_background_theta_controls(
+    *,
+    parent: tk.Misc,
+    view_state: BackgroundThetaControlsViewState,
+    background_theta_values_text: str,
+    geometry_theta_offset_text: str,
+    on_apply: Callable[[], None],
+) -> None:
+    """Create the workspace background-theta controls and store their refs."""
+
+    controls = ttk.LabelFrame(parent, text="Background Theta_i")
+    controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+    ttk.Label(
+        controls,
+        text=_BACKGROUND_THETA_HELP_TEXT,
+    ).pack(anchor=tk.W, padx=5, pady=(4, 0))
+
+    background_theta_list_var = tk.StringVar(value=str(background_theta_values_text))
+    row = ttk.Frame(controls)
+    row.pack(fill=tk.X, padx=5, pady=(2, 4))
+    background_theta_entry = ttk.Entry(
+        row,
+        textvariable=background_theta_list_var,
+    )
+    background_theta_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    geometry_theta_offset_var = tk.StringVar(value=str(geometry_theta_offset_text))
+    ttk.Label(row, text="shared offset").pack(side=tk.LEFT, padx=(8, 4))
+    background_theta_offset_entry = ttk.Entry(
+        row,
+        textvariable=geometry_theta_offset_var,
+        width=10,
+        justify=tk.RIGHT,
+    )
+    background_theta_offset_entry.pack(side=tk.LEFT)
+    ttk.Button(
+        row,
+        text="Apply",
+        command=on_apply,
+    ).pack(side=tk.LEFT, padx=(6, 0))
+    background_theta_entry.bind("<Return>", lambda _event: on_apply())
+    background_theta_offset_entry.bind("<Return>", lambda _event: on_apply())
+
+    view_state.background_theta_controls = controls
+    view_state.background_theta_list_var = background_theta_list_var
+    view_state.background_theta_entry = background_theta_entry
+    view_state.geometry_theta_offset_var = geometry_theta_offset_var
+    view_state.background_theta_offset_entry = background_theta_offset_entry
+
+
+def create_geometry_fit_background_controls(
+    *,
+    parent: tk.Misc,
+    view_state: BackgroundThetaControlsViewState,
+    selection_text: str,
+    on_apply: Callable[[], None],
+) -> None:
+    """Create the geometry-fit background selector controls and store refs."""
+
+    controls = ttk.LabelFrame(parent, text="Geometry Fit Backgrounds")
+    controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+    ttk.Label(
+        controls,
+        text=_GEOMETRY_FIT_BACKGROUND_HELP_TEXT,
+    ).pack(anchor=tk.W, padx=5, pady=(4, 0))
+
+    selection_var = tk.StringVar(value=str(selection_text))
+    row = ttk.Frame(controls)
+    row.pack(fill=tk.X, padx=5, pady=(2, 4))
+    geometry_fit_background_entry = ttk.Entry(
+        row,
+        textvariable=selection_var,
+    )
+    geometry_fit_background_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    ttk.Button(
+        row,
+        text="Apply",
+        command=on_apply,
+    ).pack(side=tk.LEFT, padx=(6, 0))
+    geometry_fit_background_entry.bind("<Return>", lambda _event: on_apply())
+
+    view_state.geometry_fit_background_controls = controls
+    view_state.geometry_fit_background_selection_var = selection_var
+    view_state.geometry_fit_background_entry = geometry_fit_background_entry
 
 
 def geometry_q_group_window_open(view_state: GeometryQGroupViewState) -> bool:

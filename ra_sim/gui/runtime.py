@@ -1875,6 +1875,7 @@ background_visible = True
 background_backend_rotation_k = 3
 background_backend_flip_x = False
 background_backend_flip_y = False
+background_theta_controls_view_state = gui_state.BackgroundThetaControlsViewState()
 background_theta_list_var = None
 geometry_theta_offset_var = None
 geometry_fit_background_selection_var = None
@@ -10401,70 +10402,27 @@ background_file_status_label = ttk.Label(
 background_file_status_label.pack(side=tk.TOP, padx=5, pady=(0, 2))
 _set_background_file_status_text()
 
-background_theta_controls = ttk.LabelFrame(workspace_backgrounds_frame, text="Background Theta_i")
-background_theta_controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
-ttk.Label(
-    background_theta_controls,
-    text="Per-background theta_i values (deg, in load order)",
-).pack(anchor=tk.W, padx=5, pady=(4, 0))
-background_theta_list_var = tk.StringVar(
-    value=_format_background_theta_values([_background_theta_default_value()] * len(osc_files))
+gui_views.create_background_theta_controls(
+    parent=workspace_backgrounds_frame,
+    view_state=background_theta_controls_view_state,
+    background_theta_values_text=_format_background_theta_values(
+        [_background_theta_default_value()] * len(osc_files)
+    ),
+    geometry_theta_offset_text="0.0",
+    on_apply=lambda: _apply_background_theta_metadata(trigger_update=True),
 )
-background_theta_row = ttk.Frame(background_theta_controls)
-background_theta_row.pack(fill=tk.X, padx=5, pady=(2, 4))
-background_theta_entry = ttk.Entry(
-    background_theta_row,
-    textvariable=background_theta_list_var,
-)
-background_theta_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-geometry_theta_offset_var = tk.StringVar(value="0.0")
-ttk.Label(background_theta_row, text="shared offset").pack(side=tk.LEFT, padx=(8, 4))
-background_theta_offset_entry = ttk.Entry(
-    background_theta_row,
-    textvariable=geometry_theta_offset_var,
-    width=10,
-    justify=tk.RIGHT,
-)
-background_theta_offset_entry.pack(side=tk.LEFT)
-ttk.Button(
-    background_theta_row,
-    text="Apply",
-    command=lambda: _apply_background_theta_metadata(trigger_update=True),
-).pack(side=tk.LEFT, padx=(6, 0))
-background_theta_entry.bind(
-    "<Return>",
-    lambda _event: _apply_background_theta_metadata(trigger_update=True),
-)
-background_theta_offset_entry.bind(
-    "<Return>",
-    lambda _event: _apply_background_theta_metadata(trigger_update=True),
-)
+background_theta_list_var = background_theta_controls_view_state.background_theta_list_var
+geometry_theta_offset_var = background_theta_controls_view_state.geometry_theta_offset_var
 _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
 
-geometry_fit_background_controls = ttk.LabelFrame(fit_body, text="Geometry Fit Backgrounds")
-geometry_fit_background_controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
-ttk.Label(
-    geometry_fit_background_controls,
-    text="Use 'current', 'all', or 1-based indices/ranges like 1,3-5",
-).pack(anchor=tk.W, padx=5, pady=(4, 0))
-geometry_fit_background_row = ttk.Frame(geometry_fit_background_controls)
-geometry_fit_background_row.pack(fill=tk.X, padx=5, pady=(2, 4))
-geometry_fit_background_selection_var = tk.StringVar(
-    value=_default_geometry_fit_background_selection()
+gui_views.create_geometry_fit_background_controls(
+    parent=fit_body,
+    view_state=background_theta_controls_view_state,
+    selection_text=_default_geometry_fit_background_selection(),
+    on_apply=lambda: _apply_geometry_fit_background_selection(trigger_update=True),
 )
-geometry_fit_background_entry = ttk.Entry(
-    geometry_fit_background_row,
-    textvariable=geometry_fit_background_selection_var,
-)
-geometry_fit_background_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-ttk.Button(
-    geometry_fit_background_row,
-    text="Apply",
-    command=lambda: _apply_geometry_fit_background_selection(trigger_update=True),
-).pack(side=tk.LEFT, padx=(6, 0))
-geometry_fit_background_entry.bind(
-    "<Return>",
-    lambda _event: _apply_geometry_fit_background_selection(trigger_update=True),
+geometry_fit_background_selection_var = (
+    background_theta_controls_view_state.geometry_fit_background_selection_var
 )
 _sync_geometry_fit_background_selection(preserve_existing=False)
 

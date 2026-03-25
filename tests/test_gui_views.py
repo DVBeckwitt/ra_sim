@@ -277,6 +277,44 @@ class _FakeVar:
         return self._value
 
 
+class _FakeStringVar:
+    def __init__(self, value="") -> None:
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value) -> None:
+        self._value = value
+
+
+class _FakeEntry:
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.textvariable = kwargs.get("textvariable")
+        self.bindings = {}
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+    def bind(self, event: str, callback) -> None:
+        self.bindings[event] = callback
+
+
+class _FakeButton:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.command = kwargs.get("command")
+        _FakeButton.created.append(self)
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+
 def test_geometry_q_group_window_state_helpers_close_and_report_open() -> None:
     view_state = state.GeometryQGroupViewState()
 
@@ -582,3 +620,74 @@ def test_scroll_geometry_fit_constraints_canvas_only_when_pointer_is_inside() ->
         is None
     )
     assert canvas.scrolled == [(-1, "units")]
+
+
+def test_create_background_theta_controls_stores_vars_and_binds_apply(monkeypatch) -> None:
+    _FakeLabel.created = []
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.BackgroundThetaControlsViewState()
+    applied = []
+
+    views.create_background_theta_controls(
+        parent=object(),
+        view_state=view_state,
+        background_theta_values_text="4, 7.5",
+        geometry_theta_offset_text="0.25",
+        on_apply=lambda: applied.append("apply"),
+    )
+
+    assert isinstance(view_state.background_theta_controls, _FakeFrame)
+    assert view_state.background_theta_controls.kwargs["text"] == "Background Theta_i"
+    assert isinstance(view_state.background_theta_entry, _FakeEntry)
+    assert isinstance(view_state.background_theta_offset_entry, _FakeEntry)
+    assert view_state.background_theta_list_var.get() == "4, 7.5"
+    assert view_state.geometry_theta_offset_var.get() == "0.25"
+    assert _FakeLabel.created[0].text == "Per-background theta_i values (deg, in load order)"
+
+    view_state.background_theta_entry.bindings["<Return>"](None)
+    view_state.background_theta_offset_entry.bindings["<Return>"](None)
+    _FakeButton.created[-1].command()
+    assert applied == ["apply", "apply", "apply"]
+
+
+def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.BackgroundThetaControlsViewState()
+    applied = []
+
+    views.create_geometry_fit_background_controls(
+        parent=object(),
+        view_state=view_state,
+        selection_text="all",
+        on_apply=lambda: applied.append("apply"),
+    )
+
+    assert isinstance(view_state.geometry_fit_background_controls, _FakeFrame)
+    assert (
+        view_state.geometry_fit_background_controls.kwargs["text"]
+        == "Geometry Fit Backgrounds"
+    )
+    assert isinstance(view_state.geometry_fit_background_entry, _FakeEntry)
+    assert view_state.geometry_fit_background_selection_var.get() == "all"
+    assert _FakeLabel.created[0].text == "Use 'current', 'all', or 1-based indices/ranges like 1,3-5"
+
+    view_state.geometry_fit_background_entry.bindings["<Return>"](None)
+    _FakeButton.created[-1].command()
+    assert applied == ["apply", "apply"]
