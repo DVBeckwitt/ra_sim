@@ -6920,6 +6920,36 @@ def on_fit_geometry_click():
                     )
                 )
             _log_section("Staged release:", stage_lines)
+        adaptive_regularization_summary = getattr(
+            result,
+            "adaptive_regularization_summary",
+            None,
+        )
+        if isinstance(adaptive_regularization_summary, dict):
+            adaptive_lines = [
+                f"enabled={bool(adaptive_regularization_summary.get('enabled', False))}",
+                f"status={adaptive_regularization_summary.get('status', 'unknown')}",
+                f"reason={adaptive_regularization_summary.get('reason', 'n/a')}",
+                f"accepted={bool(adaptive_regularization_summary.get('accepted', False))}",
+                f"applied_parameters={list(adaptive_regularization_summary.get('applied_parameters', []))}",
+                f"release_accepted={bool(adaptive_regularization_summary.get('release_accepted', False))}",
+                f"start_cost={float(adaptive_regularization_summary.get('start_cost', np.nan)):.6f}",
+                f"final_cost={float(adaptive_regularization_summary.get('final_cost', np.nan)):.6f}",
+                f"condition_before={float(adaptive_regularization_summary.get('condition_number_before', np.nan)):.6g}",
+                f"condition_after={float(adaptive_regularization_summary.get('final_condition_number', np.nan)):.6g}",
+            ]
+            for prior_entry in adaptive_regularization_summary.get("prior_entries", []) or []:
+                if not isinstance(prior_entry, dict):
+                    continue
+                adaptive_lines.append(
+                    "prior[{name}] center={center:.6f} sigma={sigma:.6f} reasons={reasons}".format(
+                        name=str(prior_entry.get("name", "unknown")),
+                        center=float(prior_entry.get("center", np.nan)),
+                        sigma=float(prior_entry.get("sigma", np.nan)),
+                        reasons=list(prior_entry.get("reasons", [])),
+                    )
+                )
+            _log_section("Adaptive regularization:", adaptive_lines)
         auto_freeze_summary = getattr(result, "auto_freeze_summary", None)
         if isinstance(auto_freeze_summary, dict):
             _log_section(
@@ -7918,6 +7948,36 @@ def on_fit_geometry_click():
                             )
                         )
                     _log_section("Staged release:", stage_lines)
+                adaptive_regularization_summary = getattr(
+                    result,
+                    "adaptive_regularization_summary",
+                    None,
+                )
+                if isinstance(adaptive_regularization_summary, dict):
+                    adaptive_lines = [
+                        f"enabled={bool(adaptive_regularization_summary.get('enabled', False))}",
+                        f"status={adaptive_regularization_summary.get('status', 'unknown')}",
+                        f"reason={adaptive_regularization_summary.get('reason', 'n/a')}",
+                        f"accepted={bool(adaptive_regularization_summary.get('accepted', False))}",
+                        f"applied_parameters={list(adaptive_regularization_summary.get('applied_parameters', []))}",
+                        f"release_accepted={bool(adaptive_regularization_summary.get('release_accepted', False))}",
+                        f"start_cost={float(adaptive_regularization_summary.get('start_cost', np.nan)):.6f}",
+                        f"final_cost={float(adaptive_regularization_summary.get('final_cost', np.nan)):.6f}",
+                        f"condition_before={float(adaptive_regularization_summary.get('condition_number_before', np.nan)):.6g}",
+                        f"condition_after={float(adaptive_regularization_summary.get('final_condition_number', np.nan)):.6g}",
+                    ]
+                    for prior_entry in adaptive_regularization_summary.get("prior_entries", []) or []:
+                        if not isinstance(prior_entry, dict):
+                            continue
+                        adaptive_lines.append(
+                            "prior[{name}] center={center:.6f} sigma={sigma:.6f} reasons={reasons}".format(
+                                name=str(prior_entry.get("name", "unknown")),
+                                center=float(prior_entry.get("center", np.nan)),
+                                sigma=float(prior_entry.get("sigma", np.nan)),
+                                reasons=list(prior_entry.get("reasons", [])),
+                            )
+                        )
+                    _log_section("Adaptive regularization:", adaptive_lines)
                 auto_freeze_summary = getattr(result, "auto_freeze_summary", None)
                 if isinstance(auto_freeze_summary, dict):
                     _log_section(

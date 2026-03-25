@@ -4299,6 +4299,102 @@ def fit_geometry_parameters(
         or selective_thaw_condition_number <= 1.0
     ):
         selective_thaw_condition_number = identifiability_condition_warn
+    adaptive_regularization_cfg_raw = identifiability_cfg.get(
+        "adaptive_regularization",
+        {},
+    )
+    if isinstance(adaptive_regularization_cfg_raw, bool):
+        adaptive_regularization_cfg: Dict[str, object] = {
+            "enabled": bool(adaptive_regularization_cfg_raw)
+        }
+    elif isinstance(adaptive_regularization_cfg_raw, dict):
+        adaptive_regularization_cfg = dict(adaptive_regularization_cfg_raw)
+    else:
+        adaptive_regularization_cfg = {}
+    adaptive_regularization_enabled = bool(
+        adaptive_regularization_cfg.get("enabled", False)
+    )
+    adaptive_regularization_max_parameters = int(
+        adaptive_regularization_cfg.get(
+            "max_parameters",
+            max(1, auto_freeze_max_parameters),
+        )
+    )
+    adaptive_regularization_max_parameters = max(
+        0,
+        adaptive_regularization_max_parameters,
+    )
+    adaptive_regularization_max_nfev = int(
+        adaptive_regularization_cfg.get(
+            "max_nfev",
+            max(10, min(30, solver_max_nfev)),
+        )
+    )
+    adaptive_regularization_max_nfev = max(5, adaptive_regularization_max_nfev)
+    adaptive_regularization_release_max_nfev = int(
+        adaptive_regularization_cfg.get(
+            "release_max_nfev",
+            max(5, min(20, solver_max_nfev)),
+        )
+    )
+    adaptive_regularization_release_max_nfev = max(
+        3,
+        adaptive_regularization_release_max_nfev,
+    )
+    adaptive_regularization_condition_number = float(
+        adaptive_regularization_cfg.get(
+            "condition_number_trigger",
+            identifiability_condition_warn,
+        )
+    )
+    if (
+        not np.isfinite(adaptive_regularization_condition_number)
+        or adaptive_regularization_condition_number <= 1.0
+    ):
+        adaptive_regularization_condition_number = identifiability_condition_warn
+    adaptive_regularization_correlation = float(
+        adaptive_regularization_cfg.get(
+            "correlation_trigger",
+            max(identifiability_correlation_warn, 0.98),
+        )
+    )
+    if (
+        not np.isfinite(adaptive_regularization_correlation)
+        or adaptive_regularization_correlation < 0.0
+    ):
+        adaptive_regularization_correlation = max(
+            identifiability_correlation_warn,
+            0.98,
+        )
+    adaptive_regularization_correlation = min(
+        max(adaptive_regularization_correlation, 0.0),
+        0.999999,
+    )
+    adaptive_regularization_sigma_scale = float(
+        adaptive_regularization_cfg.get("sigma_scale", 0.5)
+    )
+    if (
+        not np.isfinite(adaptive_regularization_sigma_scale)
+        or adaptive_regularization_sigma_scale <= 0.0
+    ):
+        adaptive_regularization_sigma_scale = 0.5
+    adaptive_regularization_min_sigma = float(
+        adaptive_regularization_cfg.get("min_sigma", 0.05)
+    )
+    if (
+        not np.isfinite(adaptive_regularization_min_sigma)
+        or adaptive_regularization_min_sigma <= 0.0
+    ):
+        adaptive_regularization_min_sigma = 0.05
+    adaptive_regularization_max_cost_increase_fraction = float(
+        adaptive_regularization_cfg.get("max_cost_increase_fraction", 0.02)
+    )
+    if not np.isfinite(adaptive_regularization_max_cost_increase_fraction):
+        adaptive_regularization_max_cost_increase_fraction = 0.02
+    adaptive_regularization_max_cost_increase_fraction = max(
+        0.0,
+        adaptive_regularization_max_cost_increase_fraction,
+    )
     anisotropic_uncertainty_enabled = bool(
         solver_cfg.get("anisotropic_measurement_uncertainty", False)
     )
@@ -6325,14 +6421,26 @@ def fit_geometry_parameters(
         return summary
 
     def _run_solver(x_start: np.ndarray) -> OptimizeResult:
+        return _run_solver_with_max_nfev(
+            x_start,
+            max_nfev=solver_max_nfev,
+        )
+
+    def _run_solver_with_max_nfev(
+        x_start: np.ndarray,
+        *,
+        max_nfev: int,
+        residual_callable: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    ) -> OptimizeResult:
+        solver_residual = residual_fn if residual_callable is None else residual_callable
         return least_squares(
-            residual_fn,
+            solver_residual,
             np.asarray(x_start, dtype=float),
             bounds=(lower_bounds, upper_bounds),
             x_scale=x_scale,
             loss=solver_loss,
             f_scale=solver_f_scale,
-            max_nfev=solver_max_nfev,
+            max_nfev=int(max_nfev),
         )
 
     def _evaluate_cost_at(x_trial: np.ndarray) -> Tuple[np.ndarray, float]:
@@ -6342,6 +6450,78 @@ def fit_geometry_parameters(
             loss=solver_loss,
             f_scale=solver_f_scale,
         )
+
+    def _build_identifiability_summary_at_x(
+        x_trial: np.ndarray,
+        current_result: Optional[OptimizeResult] = None,
+    ) -> Dict[str, object]:
+        x_arr = np.asarray(x_trial, dtype=float)
+        residual_arr = np.asarray(residual_fn(x_arr), dtype=float)
+        template_result = current_result or OptimizeResult()
+        return _build_identifiability_summary(
+            OptimizeResult(
+                x=x_arr,
+                fun=residual_arr,
+                success=bool(getattr(template_result, "success", False)),
+                status=int(getattr(template_result, "status", 0)),
+                message=str(getattr(template_result, "message", "")),
+                nfev=int(getattr(template_result, "nfev", 0)),
+                active_mask=np.zeros_like(x_arr, dtype=int),
+                optimality=float(getattr(template_result, "optimality", np.nan)),
+            ),
+            None,
+        )
+
+    def _identifiability_scale_for_index(idx: int, x_ref: np.ndarray) -> float:
+        scale_candidates = [
+            float(x_scale[idx]) if idx < len(x_scale) else float("nan"),
+            float(span[idx]) if idx < len(span) else float("nan"),
+            abs(float(x_ref[idx])) if idx < len(x_ref) else float("nan"),
+            1.0,
+        ]
+        finite_candidates = [
+            value for value in scale_candidates if np.isfinite(value) and value > 0.0
+        ]
+        if not finite_candidates:
+            return 1.0
+        return max(float(max(finite_candidates)), 1.0e-6)
+
+    def _condition_improved(
+        start_condition: float,
+        trial_condition: float,
+    ) -> bool:
+        if np.isfinite(trial_condition):
+            if not np.isfinite(start_condition):
+                return True
+            if start_condition <= 1.0:
+                return True
+            return bool(trial_condition <= 0.8 * start_condition)
+        return False
+
+    def _identifiability_progressed(
+        start_summary: Dict[str, object],
+        trial_summary: Dict[str, object],
+        *,
+        start_cost: float,
+        trial_cost: float,
+        cost_tol: float,
+    ) -> bool:
+        if np.isfinite(trial_cost) and trial_cost + cost_tol < float(start_cost):
+            return True
+        if bool(start_summary.get("underconstrained", False)) and not bool(
+            trial_summary.get("underconstrained", False)
+        ):
+            return True
+        if _condition_improved(
+            float(start_summary.get("condition_number", np.inf)),
+            float(trial_summary.get("condition_number", np.inf)),
+        ):
+            return True
+        start_recommended = len(start_summary.get("recommended_fixed_indices", []))
+        trial_recommended = len(trial_summary.get("recommended_fixed_indices", []))
+        if int(trial_recommended) < int(start_recommended):
+            return True
+        return False
 
     def _build_probe_result(
         x_trial: np.ndarray,
@@ -6943,6 +7123,356 @@ def fit_geometry_parameters(
             _emit_status("Geometry fit: staged release rejected")
         return summary
 
+    def _maybe_run_adaptive_regularization_seed(
+        x_start: np.ndarray,
+    ) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(adaptive_regularization_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+            "applied_parameters": [],
+            "prior_entries": [],
+            "release_attempted": False,
+            "release_accepted": False,
+            "candidates": [],
+        }
+        if not adaptive_regularization_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+        if not identifiability_enabled:
+            summary["reason"] = "identifiability_disabled"
+            return summary
+        if adaptive_regularization_max_parameters <= 0:
+            summary["reason"] = "max_regularized_parameters_zero"
+            return summary
+
+        start_x = np.asarray(x_start, dtype=float)
+        if start_x.ndim != 1 or start_x.size == 0:
+            summary["reason"] = "empty_parameter_vector"
+            return summary
+        if len(var_names) <= 0:
+            summary["reason"] = "insufficient_parameter_count"
+            return summary
+
+        start_residual = np.asarray(residual_fn(start_x), dtype=float)
+        if start_residual.ndim != 1 or start_residual.size == 0:
+            summary["reason"] = "empty_residual"
+            return summary
+        start_cost = _robust_cost(
+            start_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        cost_tol = max(
+            1.0e-9 * max(abs(float(start_cost)), 1.0),
+            1.0e-12,
+        )
+        if np.isfinite(start_cost) and start_cost > 1.0e-12:
+            cost_limit = float(
+                start_cost * (1.0 + adaptive_regularization_max_cost_increase_fraction)
+            )
+        else:
+            cost_limit = float(start_cost + cost_tol)
+        summary["start_cost"] = float(start_cost)
+        summary["cost_limit"] = float(cost_limit)
+
+        start_ident_summary = _build_identifiability_summary_at_x(start_x, None)
+        summary["condition_number_before"] = float(
+            start_ident_summary.get("condition_number", np.nan)
+        )
+        summary["underconstrained_before"] = bool(
+            start_ident_summary.get("underconstrained", False)
+        )
+        summary["warning_flags_before"] = list(
+            start_ident_summary.get("warning_flags", [])
+        )
+        summary["recommended_fixed_parameters_before"] = list(
+            start_ident_summary.get("recommended_fixed_parameters", [])
+        )
+        if str(start_ident_summary.get("status", "")) != "ok":
+            summary["reason"] = (
+                "identifiability_"
+                f"{start_ident_summary.get('reason', 'failed')}"
+            )
+            return summary
+
+        candidate_entries: List[Dict[str, object]] = []
+        has_high_correlation_candidate = False
+        for entry in start_ident_summary.get("freeze_recommendations", []):
+            if not isinstance(entry, dict):
+                continue
+            reasons = {str(reason) for reason in entry.get("reasons", [])}
+            max_abs_correlation = float(entry.get("max_abs_correlation", np.nan))
+            is_weak = bool(
+                reasons.intersection({"weak_sensitivity", "invalid_jacobian_column"})
+            )
+            is_high_corr = bool(
+                np.isfinite(max_abs_correlation)
+                and max_abs_correlation >= adaptive_regularization_correlation
+            )
+            if is_high_corr:
+                has_high_correlation_candidate = True
+            if not (is_weak or is_high_corr):
+                continue
+            candidate_entries.append(dict(entry))
+
+        if not candidate_entries:
+            summary["reason"] = "no_regularization_candidates"
+            return summary
+
+        condition_triggered = bool(
+            summary["underconstrained_before"]
+            or not np.isfinite(summary["condition_number_before"])
+            or float(summary["condition_number_before"])
+            >= adaptive_regularization_condition_number
+            or has_high_correlation_candidate
+        )
+        if not condition_triggered:
+            summary["reason"] = "condition_threshold_not_triggered"
+            return summary
+
+        selected_entries = candidate_entries[:adaptive_regularization_max_parameters]
+        if not selected_entries:
+            summary["reason"] = "max_regularized_parameters_zero"
+            return summary
+
+        prior_centers = np.full(start_x.shape, np.nan, dtype=float)
+        prior_sigmas = np.full(start_x.shape, np.nan, dtype=float)
+        applied_parameters: List[str] = []
+        prior_entries: List[Dict[str, object]] = []
+        for entry in selected_entries:
+            idx = int(entry.get("index", -1))
+            if idx < 0 or idx >= len(var_names):
+                continue
+            sigma = max(
+                adaptive_regularization_min_sigma,
+                adaptive_regularization_sigma_scale
+                * _identifiability_scale_for_index(idx, start_x),
+            )
+            prior_centers[idx] = float(start_x[idx])
+            prior_sigmas[idx] = float(sigma)
+            applied_parameters.append(str(var_names[idx]))
+            prior_entries.append(
+                {
+                    "name": str(var_names[idx]),
+                    "index": int(idx),
+                    "center": float(start_x[idx]),
+                    "sigma": float(sigma),
+                    "reasons": [str(reason) for reason in entry.get("reasons", [])],
+                    "partners": [str(name) for name in entry.get("partners", [])],
+                    "max_abs_correlation": float(
+                        entry.get("max_abs_correlation", np.nan)
+                    ),
+                }
+            )
+
+        adaptive_mask = (
+            np.isfinite(prior_centers)
+            & np.isfinite(prior_sigmas)
+            & (prior_sigmas > 0.0)
+        )
+        if not np.any(adaptive_mask):
+            summary["reason"] = "no_valid_regularization_entries"
+            return summary
+        summary["applied_parameters"] = applied_parameters
+        summary["prior_entries"] = prior_entries
+        _emit_status(
+            "Geometry fit: adaptive regularization evaluating "
+            f"{applied_parameters}"
+        )
+
+        def _adaptive_prior_residuals(x_trial: np.ndarray) -> np.ndarray:
+            x_arr = np.asarray(x_trial, dtype=float)
+            return (
+                (x_arr[adaptive_mask] - prior_centers[adaptive_mask])
+                / prior_sigmas[adaptive_mask]
+            )
+
+        def _regularized_residual(x_trial: np.ndarray) -> np.ndarray:
+            base_residual = np.asarray(residual_fn(np.asarray(x_trial, dtype=float)), dtype=float)
+            adaptive_residual = _adaptive_prior_residuals(np.asarray(x_trial, dtype=float))
+            if adaptive_residual.size:
+                if base_residual.size:
+                    return np.concatenate((base_residual, adaptive_residual))
+                return np.asarray(adaptive_residual, dtype=float)
+            return base_residual
+
+        def _candidate_record(
+            label: str,
+            trial_x: np.ndarray,
+            trial_cost: float,
+            trial_ident_summary: Dict[str, object],
+            trial_result: OptimizeResult,
+        ) -> Dict[str, object]:
+            ident_ok = str(trial_ident_summary.get("status", "")) == "ok"
+            progress = bool(
+                ident_ok
+                and _identifiability_progressed(
+                    start_ident_summary,
+                    trial_ident_summary,
+                    start_cost=float(start_cost),
+                    trial_cost=float(trial_cost),
+                    cost_tol=float(cost_tol),
+                )
+            )
+            cost_ok = bool(
+                np.isfinite(trial_cost)
+                and float(trial_cost) <= float(cost_limit) + float(cost_tol)
+            )
+            return {
+                "label": str(label),
+                "x": np.asarray(trial_x, dtype=float),
+                "cost": float(trial_cost),
+                "condition_number": float(
+                    trial_ident_summary.get("condition_number", np.nan)
+                ),
+                "underconstrained": bool(
+                    trial_ident_summary.get("underconstrained", False)
+                ),
+                "recommended_fixed_parameters": list(
+                    trial_ident_summary.get("recommended_fixed_parameters", [])
+                ),
+                "identifiability_status": str(
+                    trial_ident_summary.get("status", "unknown")
+                ),
+                "progress": bool(progress),
+                "cost_ok": bool(cost_ok),
+                "accepted": bool(progress and cost_ok),
+                "nfev": int(getattr(trial_result, "nfev", 0)),
+                "success": bool(getattr(trial_result, "success", False)),
+                "message": str(getattr(trial_result, "message", "")),
+            }
+
+        try:
+            regularized_result = _run_solver_with_max_nfev(
+                start_x,
+                max_nfev=adaptive_regularization_max_nfev,
+                residual_callable=_regularized_residual,
+            )
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["reason"] = f"adaptive_regularization_failed: {exc}"
+            _emit_status(
+                f"Geometry fit: adaptive regularization failed ({exc})"
+            )
+            return summary
+
+        regularized_x = np.minimum(
+            np.maximum(np.asarray(regularized_result.x, dtype=float), lower_bounds),
+            upper_bounds,
+        )
+        _, regularized_cost = _evaluate_cost_at(regularized_x)
+        regularized_ident_summary = _build_identifiability_summary_at_x(
+            regularized_x,
+            regularized_result,
+        )
+        regularized_candidate = _candidate_record(
+            "regularized",
+            regularized_x,
+            regularized_cost,
+            regularized_ident_summary,
+            regularized_result,
+        )
+        summary["regularized_cost"] = float(regularized_cost)
+        summary["regularized_condition_number"] = float(
+            regularized_candidate["condition_number"]
+        )
+        summary["candidates"].append(
+            {
+                key: value
+                for key, value in regularized_candidate.items()
+                if key != "x"
+            }
+        )
+
+        accepted_candidates: List[Dict[str, object]] = []
+        if bool(regularized_candidate.get("accepted", False)):
+            accepted_candidates.append(regularized_candidate)
+
+        summary["release_attempted"] = True
+        _emit_status("Geometry fit: adaptive regularization releasing seed")
+        try:
+            release_result = _run_solver_with_max_nfev(
+                regularized_x,
+                max_nfev=adaptive_regularization_release_max_nfev,
+            )
+        except Exception as exc:
+            summary["release_reason"] = f"release_failed: {exc}"
+        else:
+            release_x = np.minimum(
+                np.maximum(np.asarray(release_result.x, dtype=float), lower_bounds),
+                upper_bounds,
+            )
+            _, release_cost = _evaluate_cost_at(release_x)
+            release_ident_summary = _build_identifiability_summary_at_x(
+                release_x,
+                release_result,
+            )
+            release_candidate = _candidate_record(
+                "released",
+                release_x,
+                release_cost,
+                release_ident_summary,
+                release_result,
+            )
+            summary["released_cost"] = float(release_cost)
+            summary["released_condition_number"] = float(
+                release_candidate["condition_number"]
+            )
+            summary["candidates"].append(
+                {
+                    key: value
+                    for key, value in release_candidate.items()
+                    if key != "x"
+                }
+            )
+            if bool(release_candidate.get("accepted", False)):
+                accepted_candidates.append(release_candidate)
+
+        if not accepted_candidates:
+            summary["status"] = "rejected"
+            summary["reason"] = "no_acceptable_regularized_seed"
+            _emit_status("Geometry fit: adaptive regularization rejected")
+            return summary
+
+        accepted_candidates.sort(
+            key=lambda item: (
+                float(item.get("cost", np.inf)),
+                float(item.get("condition_number", np.inf))
+                if np.isfinite(float(item.get("condition_number", np.nan)))
+                else float("inf"),
+                0 if str(item.get("label", "")) == "released" else 1,
+            )
+        )
+        best_candidate = accepted_candidates[0]
+        summary["accepted"] = True
+        summary["status"] = "accepted"
+        summary["reason"] = f"{best_candidate['label']}_seed_accepted"
+        summary["release_accepted"] = bool(
+            str(best_candidate.get("label", "")) == "released"
+        )
+        summary["final_cost"] = float(best_candidate["cost"])
+        summary["final_condition_number"] = float(
+            best_candidate["condition_number"]
+        )
+        summary["underconstrained_after"] = bool(
+            best_candidate.get("underconstrained", False)
+        )
+        summary["recommended_fixed_parameters_after"] = list(
+            best_candidate.get("recommended_fixed_parameters", [])
+        )
+        summary["x"] = np.asarray(best_candidate["x"], dtype=float)
+        if summary["release_accepted"]:
+            summary["released_x"] = np.asarray(best_candidate["x"], dtype=float)
+        else:
+            summary["regularized_x"] = np.asarray(best_candidate["x"], dtype=float)
+        _emit_status(
+            "Geometry fit: adaptive regularization accepted "
+            f"(cost={float(best_candidate['cost']):.6f})"
+        )
+        return summary
+
     def _vector_key(x_trial: Sequence[float]) -> Tuple[float, ...]:
         return tuple(np.round(np.asarray(x_trial, dtype=float), 12).tolist())
 
@@ -7149,6 +7679,15 @@ def fit_geometry_parameters(
     staged_release_x = staged_release_summary.get("x")
     if staged_release_summary.get("accepted") and staged_release_x is not None:
         x0_arr = np.asarray(staged_release_x, dtype=float)
+        fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
+
+    adaptive_regularization_summary = _maybe_run_adaptive_regularization_seed(x0_arr)
+    adaptive_regularization_x = adaptive_regularization_summary.get("x")
+    if (
+        adaptive_regularization_summary.get("accepted")
+        and adaptive_regularization_x is not None
+    ):
+        x0_arr = np.asarray(adaptive_regularization_x, dtype=float)
         fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
 
     _emit_status("Geometry fit: running main solve")
@@ -7530,22 +8069,7 @@ def fit_geometry_parameters(
         x_trial: np.ndarray,
         current_result: Optional[OptimizeResult] = None,
     ) -> Dict[str, object]:
-        x_arr = np.asarray(x_trial, dtype=float)
-        residual_arr = np.asarray(residual_fn(x_arr), dtype=float)
-        template_result = current_result or OptimizeResult()
-        return _build_identifiability_summary(
-            OptimizeResult(
-                x=x_arr,
-                fun=residual_arr,
-                success=bool(getattr(template_result, "success", False)),
-                status=int(getattr(template_result, "status", 0)),
-                message=str(getattr(template_result, "message", "")),
-                nfev=int(getattr(template_result, "nfev", 0)),
-                active_mask=np.zeros_like(x_arr, dtype=int),
-                optimality=float(getattr(template_result, "optimality", np.nan)),
-            ),
-            None,
-        )
+        return _build_identifiability_summary_at_x(x_trial, current_result)
 
     def _maybe_run_single_ray_polish(
         current_result: OptimizeResult,
@@ -8254,6 +8778,19 @@ def fit_geometry_parameters(
                 result,
                 f"Staged release seed accepted ({accepted_stage_count} stage(s))",
             )
+    if adaptive_regularization_summary.get("accepted"):
+        adaptive_names = adaptive_regularization_summary.get("applied_parameters", [])
+        if adaptive_names:
+            joined = ", ".join(str(name) for name in adaptive_names)
+            _append_result_message(
+                result,
+                f"Adaptive regularization seed accepted ({joined})",
+            )
+        else:
+            _append_result_message(
+                result,
+                "Adaptive regularization seed accepted",
+            )
     single_ray_polish_summary: Dict[str, object] = {
         "enabled": bool(single_ray_polish_enabled),
         "status": "skipped",
@@ -8383,6 +8920,7 @@ def fit_geometry_parameters(
     result.restart_history = restart_history
     result.reparameterization_summary = reparameterization_summary
     result.staged_release_summary = staged_release_summary
+    result.adaptive_regularization_summary = adaptive_regularization_summary
     result.single_ray_polish_summary = single_ray_polish_summary
     result.ridge_refinement_summary = ridge_refinement_summary
     result.image_refinement_summary = image_refinement_summary

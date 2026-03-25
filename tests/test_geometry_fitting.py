@@ -2309,6 +2309,86 @@ def test_fit_geometry_parameters_can_auto_freeze_weak_parameter(monkeypatch):
     assert list(result.auto_freeze_summary["fixed_parameters"]) == ["Gamma"]
 
 
+def test_fit_geometry_parameters_can_seed_with_adaptive_regularization(monkeypatch):
+    solve_starts = []
+    status_messages = []
+
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        Gamma = float(args[1])
+        return np.array(
+            [gamma - 1.0, 0.1 * gamma * (Gamma - 2.0)],
+            dtype=np.float64,
+        )
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x0_arr = np.asarray(x0, dtype=float)
+        solve_starts.append(x0_arr.copy())
+        if len(solve_starts) == 1:
+            assert np.allclose(x0_arr, np.array([0.0, 0.0], dtype=float))
+            x = np.array([1.0, 0.25], dtype=float)
+        elif len(solve_starts) == 2:
+            assert np.allclose(x0_arr, np.array([1.0, 0.25], dtype=float))
+            x = np.array([1.0, 2.0], dtype=float)
+        elif len(solve_starts) == 3:
+            assert np.allclose(x0_arr, np.array([1.0, 2.0], dtype=float))
+            x = np.array([1.0, 2.0], dtype=float)
+        else:
+            raise AssertionError("unexpected least_squares call count")
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
+        var_names=["gamma", "Gamma"],
+        experimental_image=None,
+        refinement_config={
+            "solver": {"restarts": 0},
+            "identifiability": {
+                "enabled": True,
+                "adaptive_regularization": {
+                    "enabled": True,
+                    "max_parameters": 1,
+                },
+            },
+        },
+        status_callback=status_messages.append,
+    )
+
+    assert result.success
+    assert len(solve_starts) == 3
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0]))
+    assert isinstance(result.adaptive_regularization_summary, dict)
+    assert bool(result.adaptive_regularization_summary["accepted"]) is True
+    assert bool(result.adaptive_regularization_summary["release_accepted"]) is True
+    assert list(result.adaptive_regularization_summary["applied_parameters"]) == [
+        "Gamma"
+    ]
+    assert any("adaptive regularization evaluating" in msg for msg in status_messages)
+    assert any("adaptive regularization releasing seed" in msg for msg in status_messages)
+    assert any("adaptive regularization accepted" in msg for msg in status_messages)
+
+
 def test_fit_geometry_parameters_can_selectively_thaw_after_auto_freeze(monkeypatch):
     solve_starts = []
     status_messages = []
