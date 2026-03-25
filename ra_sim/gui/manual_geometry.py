@@ -1,4 +1,4 @@
-"""Pure helpers for manual geometry selection and serialization."""
+"""Helpers for manual geometry selection, caching, and serialization."""
 
 from __future__ import annotations
 
@@ -505,6 +505,148 @@ def current_geometry_manual_match_config(
     manual_cfg.setdefault("k_neighbors", 12)
     manual_cfg.setdefault("max_candidate_peaks", 1200)
     return manual_cfg
+
+
+def geometry_manual_pick_cache_signature(
+    *,
+    last_simulation_signature: object,
+    background_index: int,
+    background_image: object | None,
+    use_caked_space: bool,
+    geometry_preview_excluded_q_groups: Sequence[object] | None,
+    geometry_q_group_cached_entries: Sequence[object] | None,
+    stored_max_positions_local: Sequence[object] | None,
+    stored_peak_table_lattice: Sequence[object] | None,
+) -> tuple[object, ...]:
+    """Return a stable cache signature for reusable manual-pick state."""
+
+    bg_token = None
+    if background_image is not None:
+        raw_arr = np.asarray(background_image)
+        try:
+            bg_ptr = int(raw_arr.__array_interface__["data"][0])
+        except Exception:
+            bg_ptr = int(id(raw_arr))
+        bg_token = (
+            bg_ptr,
+            tuple(int(v) for v in raw_arr.shape),
+            tuple(int(v) for v in raw_arr.strides),
+            str(raw_arr.dtype),
+        )
+
+    excluded_keys = tuple(
+        sorted(repr(key) for key in (geometry_preview_excluded_q_groups or ()))
+    )
+    try:
+        listed_group_count = len(geometry_q_group_cached_entries or ())
+    except Exception:
+        listed_group_count = 0
+    try:
+        maxpos_count = len(stored_max_positions_local or ())
+    except Exception:
+        maxpos_count = 0
+    try:
+        peak_table_count = len(stored_peak_table_lattice or ())
+    except Exception:
+        peak_table_count = 0
+
+    return (
+        last_simulation_signature,
+        int(background_index),
+        bool(use_caked_space),
+        bg_token,
+        int(maxpos_count),
+        int(peak_table_count),
+        int(listed_group_count),
+        excluded_keys,
+    )
+
+
+def build_geometry_manual_pick_cache(
+    *,
+    param_set: dict[str, object] | None = None,
+    prefer_cache: bool = True,
+    background_index: int,
+    current_background_index: int,
+    background_image: object | None,
+    existing_cache_signature: object = None,
+    existing_cache_data: dict[str, object] | None = None,
+    cache_signature_fn: Callable[..., tuple[object, ...]],
+    simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]],
+    build_grouped_candidates: Callable[
+        [Sequence[dict[str, object]] | None],
+        dict[tuple[object, ...], list[dict[str, object]]],
+    ],
+    build_simulated_lookup: Callable[
+        [Sequence[dict[str, object]] | None],
+        dict[tuple[object, ...], dict[str, object]],
+    ],
+    current_match_config: Callable[[], dict[str, object]],
+    auto_match_background_context: Callable[
+        [object, dict[str, object]],
+        tuple[dict[str, object], object],
+    ]
+    | None = None,
+) -> tuple[dict[str, object], object, dict[str, object]]:
+    """Build or reuse the current manual-pick simulation/background cache."""
+
+    bg_index = int(background_index)
+    current_bg_index = int(current_background_index)
+    cache_sig = cache_signature_fn(
+        background_index=bg_index,
+        background_image=background_image,
+    )
+    if (
+        prefer_cache
+        and bg_index == current_bg_index
+        and existing_cache_signature == cache_sig
+        and isinstance(existing_cache_data, dict)
+    ):
+        return existing_cache_data, existing_cache_signature, existing_cache_data
+
+    simulated_peaks = [
+        dict(entry)
+        for entry in simulated_peaks_for_params(
+            param_set,
+            prefer_cache=prefer_cache and bg_index == current_bg_index,
+        )
+        if isinstance(entry, dict)
+    ]
+    grouped_candidates = build_grouped_candidates(simulated_peaks)
+    simulated_lookup = build_simulated_lookup(simulated_peaks)
+    match_cfg = dict(current_match_config())
+    resolved_match_cfg = dict(match_cfg)
+    background_context = None
+    if background_image is not None and callable(auto_match_background_context):
+        try:
+            resolved_match_cfg, background_context = auto_match_background_context(
+                background_image,
+                match_cfg,
+            )
+        except Exception:
+            resolved_match_cfg = dict(match_cfg)
+            background_context = None
+
+    cache_result = {
+        "signature": cache_sig,
+        "simulated_peaks": [dict(entry) for entry in simulated_peaks],
+        "simulated_lookup": dict(simulated_lookup),
+        "grouped_candidates": {
+            key: [dict(entry) for entry in entries]
+            for key, entries in grouped_candidates.items()
+        },
+        "match_config": dict(resolved_match_cfg),
+        "background_context": background_context,
+    }
+
+    next_cache_signature = existing_cache_signature
+    next_cache_data = (
+        existing_cache_data if isinstance(existing_cache_data, dict) else {}
+    )
+    if bg_index == current_bg_index:
+        next_cache_signature = cache_sig
+        next_cache_data = cache_result
+    return cache_result, next_cache_signature, next_cache_data
 
 
 def geometry_manual_choose_group_at(
@@ -1314,6 +1456,591 @@ def geometry_manual_session_initial_pairs_display(
                 entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         initial_pairs_display.append(entry)
     return initial_pairs_display
+
+
+def build_geometry_manual_initial_pairs_display(
+    background_index: int,
+    *,
+    param_set: dict[str, object] | None = None,
+    current_background_index: object = None,
+    prefer_cache: bool = False,
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
+    get_cache_data: Callable[..., dict[str, object]],
+    simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]],
+    build_simulated_lookup: Callable[
+        [Sequence[dict[str, object]] | None],
+        dict[tuple[object, ...], dict[str, object]],
+    ],
+    entry_display_coords: Callable[
+        [dict[str, object] | None],
+        tuple[float, float] | None,
+    ],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Build overlay-ready manual geometry pairs for one background image."""
+
+    saved_entries = [dict(entry) for entry in pairs_for_index(int(background_index))]
+    if not saved_entries:
+        return [], []
+
+    if isinstance(param_set, dict):
+        params_local = dict(param_set)
+    elif callable(current_geometry_fit_params):
+        params_local = dict(current_geometry_fit_params())
+    else:
+        params_local = {}
+
+    if prefer_cache and int(background_index) == int(current_background_index):
+        cache_data = get_cache_data(
+            param_set=params_local,
+            prefer_cache=True,
+            background_index=background_index,
+        )
+        simulated_lookup = dict(cache_data.get("simulated_lookup", {}))
+    else:
+        simulated_peaks = simulated_peaks_for_params(
+            params_local,
+            prefer_cache=False,
+        )
+        simulated_lookup = build_simulated_lookup(simulated_peaks)
+
+    measured_display: list[dict[str, object]] = []
+    initial_pairs_display: list[dict[str, object]] = []
+    for pair_idx, entry in enumerate(saved_entries):
+        measured_entry = dict(entry)
+        measured_entry["overlay_match_index"] = int(pair_idx)
+        measured_display.append(measured_entry)
+
+        initial_entry: dict[str, object] = {
+            "overlay_match_index": int(pair_idx),
+            "hkl": entry.get("hkl", entry.get("label")),
+        }
+        bg_coords = entry_display_coords(entry)
+        if bg_coords is not None:
+            initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
+        try:
+            source_key = (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            )
+        except Exception:
+            source_key = None
+        if source_key is not None:
+            sim_entry = simulated_lookup.get(source_key)
+            if isinstance(sim_entry, dict):
+                try:
+                    sim_col = float(sim_entry.get("sim_col"))
+                    sim_row = float(sim_entry.get("sim_row"))
+                except Exception:
+                    sim_col = float("nan")
+                    sim_row = float("nan")
+                if np.isfinite(sim_col) and np.isfinite(sim_row):
+                    initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+        initial_pairs_display.append(initial_entry)
+
+    return measured_display, initial_pairs_display
+
+
+def render_current_geometry_manual_pairs(
+    *,
+    background_visible: bool,
+    current_background_index: int,
+    current_background_image: object | None,
+    pick_session: dict[str, object] | None,
+    build_initial_pairs_display: Callable[
+        ...,
+        tuple[list[dict[str, object]], list[dict[str, object]]],
+    ],
+    session_initial_pairs_display: Callable[[], Sequence[dict[str, object]]],
+    clear_geometry_pick_artists: Callable[..., None],
+    draw_initial_geometry_pairs_overlay: Callable[..., None],
+    update_button_label_fn: Callable[[], None],
+    set_background_file_status_text_fn: Callable[[], None],
+    pair_group_count: Callable[[int], int],
+    set_status_text: Callable[[str], None] | None = None,
+    update_status: bool = False,
+) -> bool:
+    """Redraw the saved manual geometry-pair overlay for the current background."""
+
+    if not background_visible or current_background_image is None:
+        clear_geometry_pick_artists()
+        return False
+
+    measured_display, initial_pairs_display = build_initial_pairs_display(
+        int(current_background_index),
+        prefer_cache=True,
+    )
+    pending_pairs_display = list(session_initial_pairs_display())
+    combined_pairs_display = list(initial_pairs_display) + list(pending_pairs_display)
+
+    if not measured_display and not combined_pairs_display:
+        clear_geometry_pick_artists()
+        if update_status and callable(set_status_text):
+            set_status_text("No saved manual geometry pairs for the current background image.")
+        return False
+
+    draw_initial_geometry_pairs_overlay(
+        combined_pairs_display,
+        max_display_markers=max(1, len(combined_pairs_display)),
+    )
+    update_button_label_fn()
+    set_background_file_status_text_fn()
+
+    if update_status and callable(set_status_text):
+        if geometry_manual_pick_session_active(
+            pick_session,
+            current_background_index=current_background_index,
+        ):
+            pending_entries = pick_session.get("pending_entries", []) if isinstance(pick_session, dict) else []
+            target_count = pick_session.get("target_count") if isinstance(pick_session, dict) else None
+            q_label = str(
+                pick_session.get(
+                    "q_label",
+                    pick_session.get("group_key", "selected Qr/Qz set"),
+                )
+                if isinstance(pick_session, dict)
+                else "selected Qr/Qz set"
+            )
+            next_index = len(pending_entries) + 1 if isinstance(pending_entries, list) else 1
+            try:
+                total_count = int(target_count)
+            except Exception:
+                total_count = len(
+                    pick_session.get("group_entries", [])
+                    if isinstance(pick_session, dict)
+                    else []
+                )
+            set_status_text(
+                f"Click background peak {next_index} of {max(1, total_count)} for {q_label}. "
+                "It will attach to the nearest remaining simulated peak."
+            )
+        else:
+            set_status_text(
+                "Current background has "
+                f"{len(initial_pairs_display)} saved manual points across "
+                f"{pair_group_count(int(current_background_index))} Qr/Qz groups."
+            )
+    return True
+
+
+def geometry_manual_pick_button_label(
+    *,
+    armed: bool,
+    current_background_index: object,
+    pick_session: dict[str, object] | None,
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    pair_group_count: Callable[[int], int],
+    base_label: str = "Pick Qr Sets on Image",
+) -> str:
+    """Return the manual-geometry button label for the current GUI state."""
+
+    label = str(base_label)
+    if armed:
+        label += " (Armed)"
+    try:
+        pair_count = len(pairs_for_index(int(current_background_index)))
+        group_count = pair_group_count(int(current_background_index))
+    except Exception:
+        pair_count = 0
+        group_count = 0
+    if group_count > 0 or pair_count > 0:
+        label += f" [{group_count} groups/{pair_count} pts]"
+    if geometry_manual_pick_session_active(
+        pick_session,
+        current_background_index=current_background_index,
+    ):
+        pending_entries = pick_session.get("pending_entries", []) if isinstance(pick_session, dict) else []
+        target_count = pick_session.get("target_count") if isinstance(pick_session, dict) else None
+        if isinstance(pending_entries, list):
+            try:
+                total_count = int(target_count)
+            except Exception:
+                total_count = len(
+                    pick_session.get("group_entries", [])
+                    if isinstance(pick_session, dict)
+                    else []
+                )
+            label += f" <placing {len(pending_entries)}/{max(0, total_count)}>"
+    return label
+
+
+def geometry_manual_toggle_selection_at(
+    col: float,
+    row: float,
+    *,
+    pick_session: dict[str, object] | None,
+    current_background_index: int,
+    display_background: object | None,
+    get_cache_data: Callable[..., dict[str, object]],
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    set_pairs_for_index_fn: Callable[[int, Sequence[dict[str, object]] | None], Sequence[dict[str, object]]],
+    set_pick_session_fn: Callable[[dict[str, object]], None],
+    restore_view_fn: Callable[..., None],
+    clear_preview_artists_fn: Callable[..., None],
+    render_current_pairs_fn: Callable[..., None],
+    update_button_label_fn: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+    push_undo_state_fn: Callable[[], None] | None = None,
+    listed_q_group_entries: Callable[[], Sequence[dict[str, object]]] | Sequence[dict[str, object]] = (),
+    format_q_group_line: Callable[[dict[str, object]], str] | None = None,
+    choose_group_at_fn: Callable[..., tuple[tuple[object, ...] | None, list[dict[str, object]], float]] = geometry_manual_choose_group_at,
+    group_target_count_fn: Callable[
+        [tuple[object, ...] | None, Sequence[dict[str, object]] | None],
+        int,
+    ] = geometry_manual_group_target_count,
+    use_caked_space: bool,
+    pick_search_window_px: float,
+    caked_search_tth_deg: float = DEFAULT_CAKED_SEARCH_TTH_DEG,
+    caked_search_phi_deg: float = DEFAULT_CAKED_SEARCH_PHI_DEG,
+) -> tuple[bool, dict[str, object], bool]:
+    """Select one manual Qr/Qz group and arm background-point placement."""
+
+    current_session = dict(pick_session) if isinstance(pick_session, dict) else {}
+    if display_background is None:
+        if callable(set_status_text):
+            set_status_text("No background image is loaded for manual geometry picking.")
+        return False, current_session, False
+
+    cache_data = get_cache_data(background_image=display_background)
+    grouped_candidates = dict(cache_data.get("grouped_candidates", {}))
+    if not grouped_candidates:
+        if callable(set_status_text):
+            set_status_text(
+                "No simulated Qr/Qz groups are available to pick. Run a simulation update first."
+            )
+        return False, current_session, False
+
+    group_window = (
+        float(pick_search_window_px)
+        if not use_caked_space
+        else float(max(caked_search_phi_deg, 2.0 * caked_search_tth_deg))
+    )
+    best_group_key, best_group_entries, best_dist = choose_group_at_fn(
+        grouped_candidates,
+        float(col),
+        float(row),
+        window_size_px=float(group_window),
+    )
+    if best_group_key is None:
+        if callable(set_status_text):
+            set_status_text(
+                "No Qr/Qz set found within a "
+                f"{group_window:.1f}x"
+                f"{group_window:.1f}{' deg' if use_caked_space else 'px'} "
+                "window around the clicked position."
+            )
+        return False, current_session, False
+
+    existing_entries = [dict(entry) for entry in pairs_for_index(int(current_background_index))]
+    if any(entry.get("q_group_key") == best_group_key for entry in existing_entries):
+        if callable(push_undo_state_fn):
+            push_undo_state_fn()
+        restore_view_fn(redraw=False)
+        clear_preview_artists_fn(redraw=False)
+        set_pick_session_fn({})
+        remaining_entries = [
+            entry for entry in existing_entries if entry.get("q_group_key") != best_group_key
+        ]
+        set_pairs_for_index_fn(int(current_background_index), remaining_entries)
+        render_current_pairs_fn(update_status=False)
+        update_button_label_fn()
+        if callable(set_status_text):
+            set_status_text(
+                f"Removed one saved Qr/Qz set from background {int(current_background_index) + 1}."
+            )
+        return True, {}, False
+
+    q_entries = listed_q_group_entries() if callable(listed_q_group_entries) else listed_q_group_entries
+    q_entry = next(
+        (
+            entry
+            for entry in q_entries
+            if isinstance(entry, dict) and entry.get("key") == best_group_key
+        ),
+        None,
+    )
+    q_label = (
+        format_q_group_line(q_entry)
+        if isinstance(q_entry, dict) and callable(format_q_group_line)
+        else f"group={best_group_key}"
+    )
+    target_count = group_target_count_fn(
+        best_group_key,
+        best_group_entries,
+    )
+    next_session = {
+        "background_index": int(current_background_index),
+        "group_key": best_group_key,
+        "group_entries": [dict(entry) for entry in best_group_entries],
+        "pending_entries": [],
+        "target_count": int(target_count),
+        "base_entries": [
+            entry for entry in existing_entries if entry.get("q_group_key") != best_group_key
+        ],
+        "cache_signature": cache_data.get("signature") if isinstance(cache_data, dict) else None,
+        "q_label": q_label,
+        "zoom_active": False,
+        "zoom_center": None,
+        "saved_xlim": None,
+        "saved_ylim": None,
+        "preview_last_t": 0.0,
+        "preview_last_xy": None,
+    }
+    set_pick_session_fn(next_session)
+    render_current_pairs_fn(update_status=False)
+    update_button_label_fn()
+    if callable(set_status_text):
+        set_status_text(
+            f"Selected {q_label} (nearest seed {best_dist:.1f}{' deg' if use_caked_space else 'px'}). "
+            f"Click background peak 1 of {max(1, int(target_count))}; it will be assigned to the nearest simulated peak."
+        )
+    return True, next_session, True
+
+
+def geometry_manual_place_selection_at(
+    col: float,
+    row: float,
+    *,
+    pick_session: dict[str, object] | None,
+    current_background_index: object,
+    display_background: object | None,
+    get_cache_data: Callable[..., dict[str, object]],
+    refine_preview_point: Callable[..., tuple[float, float]],
+    set_pairs_for_index_fn: Callable[[int, Sequence[dict[str, object]] | None], Sequence[dict[str, object]]],
+    set_pick_session_fn: Callable[[dict[str, object]], None],
+    clear_preview_artists_fn: Callable[..., None],
+    restore_view_fn: Callable[..., None],
+    render_current_pairs_fn: Callable[..., None],
+    update_button_label_fn: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+    push_undo_state_fn: Callable[[], None] | None = None,
+    use_caked_space: bool,
+    caked_angles_to_background_display_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+    nearest_candidate_to_point_fn: Callable[
+        [float, float, Sequence[dict[str, object]] | None],
+        tuple[dict[str, object] | None, float],
+    ] = geometry_manual_nearest_candidate_to_point,
+    pair_entry_from_candidate_fn: Callable[..., dict[str, object] | None] = geometry_manual_pair_entry_from_candidate,
+    position_error_px: Callable[[float, float, float, float], float] = geometry_manual_position_error_px,
+    position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
+) -> tuple[bool, dict[str, object]]:
+    """Record the next manual background point for the active Qr/Qz pick session."""
+
+    current_session = dict(pick_session) if isinstance(pick_session, dict) else {}
+    if not geometry_manual_pick_session_active(
+        pick_session,
+        current_background_index=current_background_index,
+    ):
+        return False, current_session
+    if display_background is None:
+        if callable(set_status_text):
+            set_status_text("No background image is loaded for manual geometry picking.")
+        return False, current_session
+
+    remaining_candidates = geometry_manual_unassigned_group_candidates(
+        pick_session,
+        current_background_index=current_background_index,
+        candidate_source_key=candidate_source_key,
+    )
+    if not remaining_candidates:
+        restore_view_fn(redraw=False)
+        clear_preview_artists_fn(redraw=False)
+        set_pick_session_fn({})
+        render_current_pairs_fn(update_status=False)
+        update_button_label_fn()
+        if callable(set_status_text):
+            set_status_text(
+                "Manual geometry picking had no remaining simulated peaks to place."
+            )
+        return False, {}
+
+    cache_data = get_cache_data(background_image=display_background)
+    peak_col, peak_row = refine_preview_point(
+        None,
+        float(col),
+        float(row),
+        display_background=display_background,
+        cache_data=cache_data,
+    )
+    candidate, candidate_dist = nearest_candidate_to_point_fn(
+        float(peak_col),
+        float(peak_row),
+        remaining_candidates,
+    )
+    if candidate is None:
+        if callable(set_status_text):
+            set_status_text(
+                "Manual geometry picking could not find an unassigned simulated peak for that background point."
+            )
+        return False, current_session
+
+    pair_kwargs: dict[str, object] = {
+        "peak_col": float(peak_col),
+        "peak_row": float(peak_row),
+        "raw_col": float(col),
+        "raw_row": float(row),
+    }
+    placement_error_px_value = position_error_px(
+        float(col),
+        float(row),
+        float(peak_col),
+        float(peak_row),
+    )
+    if use_caked_space:
+        raw_display = (
+            caked_angles_to_background_display_coords(float(col), float(row))
+            if callable(caked_angles_to_background_display_coords)
+            else (None, None)
+        )
+        peak_display = (
+            caked_angles_to_background_display_coords(float(peak_col), float(peak_row))
+            if callable(caked_angles_to_background_display_coords)
+            else (None, None)
+        )
+        if (
+            raw_display[0] is None
+            or raw_display[1] is None
+            or peak_display[0] is None
+            or peak_display[1] is None
+        ):
+            if callable(set_status_text):
+                set_status_text(
+                    "Manual geometry picking could not back-project the selected caked peak onto the detector."
+                )
+            return False, current_session
+        placement_error_px_value = position_error_px(
+            float(raw_display[0]),
+            float(raw_display[1]),
+            float(peak_display[0]),
+            float(peak_display[1]),
+        )
+        pair_kwargs = {
+            "peak_col": float(peak_display[0]),
+            "peak_row": float(peak_display[1]),
+            "raw_col": float(raw_display[0]),
+            "raw_row": float(raw_display[1]),
+            "caked_col": float(peak_col),
+            "caked_row": float(peak_row),
+            "raw_caked_col": float(col),
+            "raw_caked_row": float(row),
+        }
+
+    sigma_px_value = position_sigma_px(float(placement_error_px_value))
+    pair_entry = pair_entry_from_candidate_fn(
+        candidate,
+        float(pair_kwargs["peak_col"]),
+        float(pair_kwargs["peak_row"]),
+        group_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+        raw_col=float(pair_kwargs["raw_col"]),
+        raw_row=float(pair_kwargs["raw_row"]),
+        caked_col=(
+            float(pair_kwargs["caked_col"])
+            if "caked_col" in pair_kwargs
+            else None
+        ),
+        caked_row=(
+            float(pair_kwargs["caked_row"])
+            if "caked_row" in pair_kwargs
+            else None
+        ),
+        raw_caked_col=(
+            float(pair_kwargs["raw_caked_col"])
+            if "raw_caked_col" in pair_kwargs
+            else None
+        ),
+        raw_caked_row=(
+            float(pair_kwargs["raw_caked_row"])
+            if "raw_caked_row" in pair_kwargs
+            else None
+        ),
+        placement_error_px=float(placement_error_px_value),
+        sigma_px=float(sigma_px_value),
+    )
+    if pair_entry is None:
+        if callable(set_status_text):
+            set_status_text("Failed to build the manual geometry pair entry.")
+        return False, current_session
+
+    if callable(push_undo_state_fn):
+        push_undo_state_fn()
+
+    next_session = dict(current_session)
+    pending_entries = next_session.get("pending_entries", [])
+    if not isinstance(pending_entries, list):
+        pending_entries = []
+    pending_entries = [dict(entry) for entry in pending_entries if isinstance(entry, dict)]
+    pending_entries.append(pair_entry)
+    next_session["pending_entries"] = pending_entries
+
+    try:
+        total_count = int(next_session.get("target_count", 0))
+    except Exception:
+        total_count = 0
+    if total_count <= 0:
+        group_entries = next_session.get("group_entries", [])
+        total_count = len(group_entries) if isinstance(group_entries, list) else len(pending_entries)
+    placed_count = len(pending_entries)
+    q_label = str(
+        next_session.get(
+            "q_label",
+            next_session.get("group_key", "selected Qr/Qz set"),
+        )
+    )
+    candidate_label = str(candidate.get("label", "")) if isinstance(candidate, dict) else ""
+
+    clear_preview_artists_fn(redraw=False)
+    restore_view_fn(redraw=False)
+    next_session["zoom_active"] = False
+    next_session["zoom_center"] = None
+    next_session["saved_xlim"] = None
+    next_session["saved_ylim"] = None
+
+    if placed_count >= total_count:
+        base_entries = next_session.get("base_entries", [])
+        updated_entries = list(base_entries) if isinstance(base_entries, list) else []
+        updated_entries.extend(dict(entry) for entry in pending_entries if isinstance(entry, dict))
+        set_pick_session_fn({})
+        set_pairs_for_index_fn(int(current_background_index), updated_entries)
+        render_current_pairs_fn(update_status=False)
+        update_button_label_fn()
+        if callable(set_status_text):
+            set_status_text(
+                f"Saved {placed_count} manual background points for {q_label} "
+                f"on background {int(current_background_index) + 1}. "
+                f"Last placement error={float(placement_error_px_value):.2f}px, sigma={float(sigma_px_value):.2f}px."
+            )
+        return True, {}
+
+    set_pick_session_fn(next_session)
+    render_current_pairs_fn(update_status=False)
+    update_button_label_fn()
+    next_index = placed_count + 1
+    if callable(set_status_text):
+        set_status_text(
+            f"Placed peak {placed_count} of {total_count} for {q_label}. "
+            + (
+                f"Assigned to {candidate_label}"
+                + (
+                    f" ({float(candidate_dist):.2f}{' deg' if use_caked_space else 'px'} from sim)."
+                    if np.isfinite(candidate_dist)
+                    else "."
+                )
+                if candidate_label
+                else ""
+            )
+            + " "
+            + f"Placement error={float(placement_error_px_value):.2f}px, sigma={float(sigma_px_value):.2f}px. "
+            + f"Click background peak {next_index} of {total_count}; it will be assigned to the nearest remaining simulated peak."
+        )
+    return True, next_session
 
 
 def cancel_geometry_manual_pick_session(

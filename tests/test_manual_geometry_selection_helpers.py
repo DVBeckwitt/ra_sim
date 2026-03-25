@@ -699,3 +699,253 @@ def test_match_geometry_manual_group_to_background_builds_source_lookup() -> Non
     )
 
     assert matches == {("source", 3, 8): (1.5, 2.5)}
+
+
+def test_geometry_manual_pick_cache_signature_tracks_background_state() -> None:
+    signature = mg.geometry_manual_pick_cache_signature(
+        last_simulation_signature=("sim", 7),
+        background_index=2,
+        background_image=np.zeros((6, 5), dtype=float),
+        use_caked_space=True,
+        geometry_preview_excluded_q_groups=[("q_group", "primary", 1, 0)],
+        geometry_q_group_cached_entries=[{"key": ("q_group", "primary", 1, 0)}],
+        stored_max_positions_local=[{"x": 1.0}],
+        stored_peak_table_lattice=[{"hkl": (1, 0, 0)}, {"hkl": (0, 0, 2)}],
+    )
+
+    assert signature[0] == ("sim", 7)
+    assert signature[1] == 2
+    assert signature[2] is True
+    assert signature[4] == 1
+    assert signature[5] == 2
+    assert signature[6] == 1
+    assert signature[7] == ("('q_group', 'primary', 1, 0)",)
+
+
+def test_build_geometry_manual_pick_cache_reuses_existing_current_background_state() -> None:
+    existing_cache = {"signature": ("cached",), "value": 9}
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((3, 3), dtype=float),
+        existing_cache_signature=("cached",),
+        existing_cache_data=existing_cache,
+        cache_signature_fn=lambda **_kwargs: ("cached",),
+        simulated_peaks_for_params=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache miss")
+        ),
+        build_grouped_candidates=lambda _entries: {},
+        build_simulated_lookup=lambda _entries: {},
+        current_match_config=lambda: {},
+    )
+
+    assert cache_data is existing_cache
+    assert next_sig == ("cached",)
+    assert next_state is existing_cache
+
+
+def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None:
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        pairs_for_index=lambda _idx: [
+            {
+                "label": "1,0,2",
+                "hkl": (1, 0, 2),
+                "x": 9.0,
+                "y": 11.0,
+                "source_table_index": 4,
+                "source_row_index": 7,
+            }
+        ],
+        current_geometry_fit_params=lambda: {"a": 1.0},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                (4, 7): {"sim_col": 13.5, "sim_row": 15.5},
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+            "sim_display": (13.5, 15.5),
+        }
+    ]
+
+
+def test_render_current_geometry_manual_pairs_updates_active_session_status() -> None:
+    calls: list[tuple[str, object]] = []
+    status_messages: list[str] = []
+
+    rendered = mg.render_current_geometry_manual_pairs(
+        background_visible=True,
+        current_background_index=2,
+        current_background_image=np.zeros((5, 5), dtype=float),
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "group_entries": [{"label": "1,0,0"}, {"label": "-1,0,0"}, {"label": "0,0,2"}],
+            "pending_entries": [{"label": "1,0,0", "x": 9.0, "y": 10.0}],
+            "target_count": 3,
+            "q_label": "test group",
+            "background_index": 2,
+        },
+        build_initial_pairs_display=lambda *_args, **_kwargs: (
+            [{"overlay_match_index": 0}],
+            [{"overlay_match_index": 0, "bg_display": (1.0, 2.0)}],
+        ),
+        session_initial_pairs_display=lambda: [],
+        clear_geometry_pick_artists=lambda **kwargs: calls.append(("clear", kwargs)),
+        draw_initial_geometry_pairs_overlay=lambda entries, **kwargs: calls.append(
+            ("draw", (list(entries), kwargs.get("max_display_markers")))
+        ),
+        update_button_label_fn=lambda: calls.append(("button", None)),
+        set_background_file_status_text_fn=lambda: calls.append(("background", None)),
+        pair_group_count=lambda _idx: 4,
+        set_status_text=status_messages.append,
+        update_status=True,
+    )
+
+    assert rendered is True
+    assert ("button", None) in calls
+    assert ("background", None) in calls
+    assert calls[0][0] == "draw"
+    assert "Click background peak 2 of 3 for test group" in status_messages[-1]
+
+
+def test_geometry_manual_pick_button_label_includes_progress() -> None:
+    label = mg.geometry_manual_pick_button_label(
+        armed=True,
+        current_background_index=0,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "group_entries": [{"label": "1,0,0"}, {"label": "-1,0,0"}],
+            "pending_entries": [{"label": "1,0,0", "x": 9.0, "y": 10.0}],
+            "target_count": 2,
+            "background_index": 0,
+        },
+        pairs_for_index=lambda _idx: [{"x": 1.0, "y": 2.0}, {"x": 3.0, "y": 4.0}],
+        pair_group_count=lambda _idx: 1,
+    )
+
+    assert label == "Pick Qr Sets on Image (Armed) [1 groups/2 pts] <placing 1/2>"
+
+
+def test_geometry_manual_toggle_selection_at_starts_session() -> None:
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    calls: list[tuple[str, object]] = []
+    group_key = ("q_group", "primary", 1, 0)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "1,0,0",
+                        "hkl": (1, 0, 0),
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    }
+                ]
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
+        clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        update_button_label_fn=lambda: calls.append(("button", None)),
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["target_count"] == 1
+    assert set_sessions[-1]["group_key"] == group_key
+    assert ("render", False) in calls
+    assert ("button", None) in calls
+    assert "Selected selected group" in status_messages[-1]
+
+
+def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
+    set_sessions: list[dict[str, object]] = []
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    status_messages: list[str] = []
+    calls: list[tuple[str, object]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        4.8,
+        5.9,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "group_entries": [
+                {
+                    "label": "1,0,0",
+                    "hkl": (1, 0, 0),
+                    "sim_col": 5.0,
+                    "sim_row": 6.0,
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [{"label": "kept", "x": 1.0, "y": 2.0}],
+            "q_label": "selected group",
+            "background_index": 0,
+            "zoom_active": True,
+            "zoom_center": (5.0, 6.0),
+            "saved_xlim": (0.0, 10.0),
+            "saved_ylim": (0.0, 10.0),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (5.0, 6.0),
+        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(list(entries or [])) or list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
+        restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        update_button_label_fn=lambda: calls.append(("button", None)),
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: calls.append(("undo", None)),
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert set_sessions[-1] == {}
+    assert ("undo", None) in calls
+    assert ("clear", False) in calls
+    assert ("restore", False) in calls
+    assert ("render", False) in calls
+    assert saved_entry_sets
+    assert saved_entry_sets[-1][0]["label"] == "kept"
+    assert saved_entry_sets[-1][1]["label"] == "1,0,0"
+    assert saved_entry_sets[-1][1]["q_group_key"] == ("q_group", "primary", 1, 0)
+    assert saved_entry_sets[-1][1]["placement_error_px"] > 0.0
+    assert "Saved 1 manual background points for selected group" in status_messages[-1]
