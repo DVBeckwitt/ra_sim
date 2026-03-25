@@ -111,6 +111,7 @@ from ra_sim.simulation.diffraction_debug import (
     dump_debug_log,
 )
 from ra_sim.simulation.simulation import simulate_diffraction
+from ra_sim.gui import background as gui_background
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compute_geometry_overlay_frame_diagnostics,
@@ -254,18 +255,15 @@ SIMULATION_GEOMETRY_ROTATE_K = DISPLAY_ROTATE_K - SIM_DISPLAY_ROTATE_K
 
 # Preserve native-orientation copies for fitting/analysis. Load only the first
 # background at startup and lazy-load the rest on demand to improve first paint.
-_initial_background_native = np.asarray(read_osc(str(osc_files[0])))
-if _initial_background_native.ndim < 2:
-    raise ValueError(
-        f"Background '{Path(str(osc_files[0])).name}' is not a 2D image."
-    )
-
-background_images = [None] * len(osc_files)
-background_images_native = [None] * len(osc_files)
-background_images_display = [None] * len(osc_files)
-background_images[0] = np.array(_initial_background_native)
-background_images_native[0] = np.array(_initial_background_native)
-background_images_display[0] = np.rot90(background_images_native[0], DISPLAY_ROTATE_K)
+_initial_background_state = gui_background.initialize_background_cache(
+    str(osc_files[0]),
+    total_count=len(osc_files),
+    display_rotate_k=DISPLAY_ROTATE_K,
+    read_osc=read_osc,
+)
+background_images = list(_initial_background_state["background_images"])
+background_images_native = list(_initial_background_state["background_images_native"])
+background_images_display = list(_initial_background_state["background_images_display"])
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -1865,9 +1863,9 @@ def export_initial_excel():
 
     print(f"Excel file saved at {excel_path}")
 
-current_background_image = background_images_native[0]
-current_background_display = background_images_display[0]
-current_background_index = 0
+current_background_image = _initial_background_state["current_background_image"]
+current_background_display = _initial_background_state["current_background_display"]
+current_background_index = int(_initial_background_state["current_background_index"])
 background_visible = True
 background_backend_rotation_k = 3
 background_backend_flip_x = False
@@ -2318,78 +2316,78 @@ def _sync_geometry_fit_background_selection(*, preserve_existing: bool = True) -
 def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]:
     """Return cached background arrays for *index*, loading from disk if needed."""
 
-    idx = int(index)
-    if idx < 0 or idx >= len(osc_files):
-        raise IndexError(f"Background index out of range: {idx}")
+    global background_images, background_images_native, background_images_display
 
-    native_cached = background_images_native[idx]
-    display_cached = background_images_display[idx]
-    if native_cached is not None and display_cached is not None:
-        return np.asarray(native_cached), np.asarray(display_cached)
-
-    file_path_local = str(osc_files[idx])
-    raw_image = read_osc(file_path_local)
-    image_array = np.asarray(raw_image)
-    if image_array.ndim < 2:
-        raise ValueError(
-            f"Background '{Path(file_path_local).name}' is not a 2D image."
-        )
-
-    first_native = np.asarray(background_images_native[0])
-    expected_shape = tuple(int(v) for v in first_native.shape[:2])
-    image_shape = tuple(int(v) for v in image_array.shape[:2])
-    if image_shape != expected_shape:
-        raise ValueError(
-            f"Background '{Path(file_path_local).name}' has shape {image_shape}, "
-            f"expected {expected_shape}."
-        )
-
-    native = np.array(image_array)
-    display = np.rot90(native, DISPLAY_ROTATE_K)
-    background_images[idx] = native
-    background_images_native[idx] = native
-    background_images_display[idx] = display
-    return native, display
+    updated = gui_background.load_background_image_by_index(
+        int(index),
+        osc_files=osc_files,
+        background_images=background_images,
+        background_images_native=background_images_native,
+        background_images_display=background_images_display,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        read_osc=read_osc,
+    )
+    background_images = list(updated["background_images"])
+    background_images_native = list(updated["background_images_native"])
+    background_images_display = list(updated["background_images_display"])
+    return (
+        np.asarray(updated["background_image"]),
+        np.asarray(updated["background_display"]),
+    )
 
 
 def _get_current_background_native() -> np.ndarray:
     """Return the unrotated background image corresponding to the current index."""
 
-    if 0 <= current_background_index < len(background_images_native):
-        try:
-            native, _ = _load_background_image_by_index(current_background_index)
-            return native
-        except Exception:
-            return np.asarray(current_background_image)
-    return current_background_image
+    global background_images, background_images_native, background_images_display
+
+    updated = gui_background.get_current_background_native(
+        osc_files=osc_files,
+        background_images=background_images,
+        background_images_native=background_images_native,
+        background_images_display=background_images_display,
+        current_background_index=current_background_index,
+        current_background_image=current_background_image,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        read_osc=read_osc,
+    )
+    background_images = list(updated["background_images"])
+    background_images_native = list(updated["background_images_native"])
+    background_images_display = list(updated["background_images_display"])
+    return np.asarray(updated["background_image"])
 
 
 def _get_current_background_display() -> np.ndarray:
     """Return the rotated background image used for GUI display."""
 
-    if 0 <= current_background_index < len(background_images_display):
-        try:
-            _, display = _load_background_image_by_index(current_background_index)
-            return display
-        except Exception:
-            return np.asarray(current_background_display)
-    return np.rot90(_get_current_background_native(), DISPLAY_ROTATE_K)
+    global background_images, background_images_native, background_images_display
+
+    updated = gui_background.get_current_background_display(
+        osc_files=osc_files,
+        background_images=background_images,
+        background_images_native=background_images_native,
+        background_images_display=background_images_display,
+        current_background_index=current_background_index,
+        current_background_image=current_background_image,
+        current_background_display=current_background_display,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        read_osc=read_osc,
+    )
+    background_images = list(updated["background_images"])
+    background_images_native = list(updated["background_images_native"])
+    background_images_display = list(updated["background_images_display"])
+    return np.asarray(updated["background_display"])
 
 
 def _apply_background_backend_orientation(image: np.ndarray | None) -> np.ndarray | None:
     """Apply debug-only backend rotations/flips to the background array."""
 
-    if image is None:
-        return None
-    oriented = np.asarray(image)
-    if background_backend_flip_y:
-        oriented = np.flip(oriented, axis=0)
-    if background_backend_flip_x:
-        oriented = np.flip(oriented, axis=1)
-    k_mod = int(background_backend_rotation_k) % 4
-    if k_mod:
-        oriented = np.rot90(oriented, k_mod)
-    return oriented
+    return gui_background.apply_background_backend_orientation(
+        image,
+        flip_x=background_backend_flip_x,
+        flip_y=background_backend_flip_y,
+        rotation_k=background_backend_rotation_k,
+    )
 
 
 def _get_current_background_backend() -> np.ndarray | None:
@@ -12629,54 +12627,20 @@ def _load_background_files(file_paths, *, select_index=0):
     global current_background_index, current_background_image, current_background_display
     global geometry_manual_pairs_by_background
 
-    normalized_paths = []
-    for raw_path in file_paths:
-        text_path = str(raw_path).strip().strip('"').strip("'")
-        if not text_path:
-            continue
-        candidate = Path(text_path).expanduser()
-        if not candidate.is_file():
-            raise FileNotFoundError(f"File not found: {candidate}")
-        normalized_paths.append(str(candidate))
-
-    if not normalized_paths:
-        raise ValueError("No background files selected.")
-
-    expected_shape = (int(image_size), int(image_size))
-    loaded_native = []
-    for file_path_local in normalized_paths:
-        try:
-            raw_image = read_osc(file_path_local)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to read background file '{file_path_local}': {exc}"
-            ) from exc
-
-        image_array = np.asarray(raw_image)
-        if image_array.ndim < 2:
-            raise ValueError(
-                f"Background '{Path(file_path_local).name}' is not a 2D image."
-            )
-        image_shape = tuple(int(v) for v in image_array.shape[:2])
-        if image_shape != expected_shape:
-            raise ValueError(
-                f"Background '{Path(file_path_local).name}' has shape {image_shape}, "
-                f"expected {expected_shape}."
-            )
-        loaded_native.append(np.array(image_array))
-
-    osc_files = list(normalized_paths)
-    background_images = [np.array(img) for img in loaded_native]
-    background_images_native = [np.array(img) for img in loaded_native]
-    background_images_display = [
-        np.rot90(img, DISPLAY_ROTATE_K) for img in background_images_native
-    ]
-
-    index = int(select_index)
-    index = max(0, min(index, len(background_images_native) - 1))
-    current_background_index = index
-    current_background_image = background_images_native[index]
-    current_background_display = background_images_display[index]
+    updated = gui_background.load_background_files(
+        file_paths,
+        image_size=image_size,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        read_osc=read_osc,
+        select_index=select_index,
+    )
+    osc_files = list(updated["osc_files"])
+    background_images = list(updated["background_images"])
+    background_images_native = list(updated["background_images_native"])
+    background_images_display = list(updated["background_images_display"])
+    current_background_index = int(updated["current_background_index"])
+    current_background_image = updated["current_background_image"]
+    current_background_display = updated["current_background_display"]
     geometry_manual_pairs_by_background = {}
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
@@ -12719,21 +12683,32 @@ def _browse_background_files():
 
 
 def switch_background():
+    global background_images, background_images_native, background_images_display
     global current_background_index, current_background_image, current_background_display
     if not osc_files:
         progress_label.config(text="No background images loaded.")
         return
 
-    next_index = (current_background_index + 1) % len(osc_files)
     try:
-        next_native, next_display = _load_background_image_by_index(next_index)
+        updated = gui_background.switch_background(
+            osc_files=osc_files,
+            background_images=background_images,
+            background_images_native=background_images_native,
+            background_images_display=background_images_display,
+            current_background_index=current_background_index,
+            display_rotate_k=DISPLAY_ROTATE_K,
+            read_osc=read_osc,
+        )
     except Exception as exc:
         progress_label.config(text=f"Failed to switch background: {exc}")
         return
 
-    current_background_index = next_index
-    current_background_image = next_native
-    current_background_display = next_display
+    background_images = list(updated["background_images"])
+    background_images_native = list(updated["background_images_native"])
+    background_images_display = list(updated["background_images_display"])
+    current_background_index = int(updated["current_background_index"])
+    current_background_image = updated["current_background_image"]
+    current_background_display = updated["current_background_display"]
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
     _clear_geometry_fit_undo_stack()
