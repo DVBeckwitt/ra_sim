@@ -20,10 +20,21 @@ class _FakeBody:
 
 
 class _FakeCanvas:
-    def __init__(self) -> None:
+    def __init__(self, parent=None, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
         self.updated = False
         self.scrollregion = None
         self.y_moved_to = None
+        self.yscrollcommand = None
+        self.created_window = None
+        self.bindings = {}
+        self.itemconfigure_calls = []
+        self.scrolled = []
+        self.rootx = 10
+        self.rooty = 20
+        self.width = 300
+        self.height = 200
 
     def yview(self):
         return (0.25, 1.0)
@@ -33,12 +44,45 @@ class _FakeCanvas:
 
     def configure(self, **kwargs) -> None:
         self.scrollregion = kwargs.get("scrollregion")
+        self.yscrollcommand = kwargs.get("yscrollcommand", self.yscrollcommand)
 
     def bbox(self, _value):
         return (0, 0, 100, 200)
 
     def yview_moveto(self, value: float) -> None:
         self.y_moved_to = value
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+    def bind(self, event: str, callback) -> None:
+        self.bindings[event] = callback
+
+    def create_window(self, coords, *, window, anchor):
+        self.created_window = {
+            "coords": coords,
+            "window": window,
+            "anchor": anchor,
+        }
+        return "body-window"
+
+    def itemconfigure(self, item, **kwargs) -> None:
+        self.itemconfigure_calls.append((item, kwargs))
+
+    def yview_scroll(self, delta: int, units: str) -> None:
+        self.scrolled.append((delta, units))
+
+    def winfo_rootx(self) -> int:
+        return self.rootx
+
+    def winfo_rooty(self) -> int:
+        return self.rooty
+
+    def winfo_width(self) -> int:
+        return self.width
+
+    def winfo_height(self) -> int:
+        return self.height
 
 
 class _FakeListbox:
@@ -101,6 +145,7 @@ class _FakeFrame:
         self.kwargs = kwargs
         self.rowconfigure_calls = []
         self.columnconfigure_calls = []
+        self.bindings = {}
 
     def pack(self, **_kwargs) -> None:
         pass
@@ -110,6 +155,9 @@ class _FakeFrame:
 
     def columnconfigure(self, index: int, weight: int) -> None:
         self.columnconfigure_calls.append((index, weight))
+
+    def bind(self, event: str, callback) -> None:
+        self.bindings[event] = callback
 
 
 class _FakeScrollbar:
@@ -122,6 +170,9 @@ class _FakeScrollbar:
         _FakeScrollbar.created.append(self)
 
     def grid(self, **_kwargs) -> None:
+        pass
+
+    def pack(self, **_kwargs) -> None:
         pass
 
     def set(self, *args) -> None:
@@ -162,6 +213,30 @@ class _FakeText:
 
     def xview(self, *_args) -> None:
         pass
+
+
+class _FakeRoot:
+    def __init__(self, screenheight: int = 1000) -> None:
+        self.screenheight = screenheight
+        self.bind_all_calls = []
+
+    def winfo_screenheight(self) -> int:
+        return self.screenheight
+
+    def bind_all(self, sequence: str, callback, add=None) -> None:
+        self.bind_all_calls.append((sequence, callback, add))
+
+
+class _FakeCollapsibleFrame:
+    def __init__(self, parent, text: str = "", expanded: bool = False) -> None:
+        self.parent = parent
+        self.text = text
+        self.expanded = expanded
+        self.frame = _FakeFrame(self)
+        self.pack_calls = []
+
+    def pack(self, **kwargs) -> None:
+        self.pack_calls.append(kwargs)
 
 
 class _FakeLabel:
@@ -408,3 +483,102 @@ def test_open_hbn_geometry_debug_window_populates_and_reuses_existing_window(
 
     created_windows[0].protocols["WM_DELETE_WINDOW"]()
     assert closed == [True]
+
+
+def test_create_geometry_fit_constraints_panel_stores_refs_and_binds_handlers(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeScrollbar.created = []
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
+
+    root = _FakeRoot()
+    view_state = state.GeometryFitConstraintsViewState(
+        controls={"old": {"row": object()}},
+    )
+    after_marker = object()
+    wheel_events = []
+
+    views.create_geometry_fit_constraints_panel(
+        parent=object(),
+        root=root,
+        view_state=view_state,
+        after=after_marker,
+        on_mousewheel=lambda event: wheel_events.append(event),
+    )
+
+    assert isinstance(view_state.panel, _FakeCollapsibleFrame)
+    assert view_state.panel.text == "Geometry Fit Constraints"
+    assert view_state.panel.expanded is True
+    assert view_state.panel.pack_calls == [
+        {
+            "side": tk.TOP,
+            "fill": tk.X,
+            "padx": 5,
+            "pady": 5,
+            "after": after_marker,
+        }
+    ]
+    assert isinstance(view_state.canvas, _FakeCanvas)
+    assert isinstance(view_state.body, _FakeFrame)
+    assert view_state.body_window == "body-window"
+    assert view_state.controls == {}
+    assert _FakeLabel.created[0].text.startswith("Each window is applied")
+    assert [call[0] for call in root.bind_all_calls] == [
+        "<MouseWheel>",
+        "<Button-4>",
+        "<Button-5>",
+    ]
+
+    views.set_geometry_fit_constraint_control(
+        view_state,
+        name="theta_initial",
+        row="row",
+        window_var="window",
+        pull_var="pull",
+    )
+    assert view_state.controls["theta_initial"]["window_var"] == "window"
+
+    view_state.body.bindings["<Configure>"](None)
+    assert view_state.canvas.scrollregion == (0, 0, 100, 200)
+
+    resize_event = type("Event", (), {"width": 321})()
+    view_state.canvas.bindings["<Configure>"](resize_event)
+    assert view_state.canvas.itemconfigure_calls[-1] == ("body-window", {"width": 321})
+
+
+def test_scroll_geometry_fit_constraints_canvas_only_when_pointer_is_inside() -> None:
+    canvas = _FakeCanvas()
+    canvas.rootx = 50
+    canvas.rooty = 75
+    canvas.width = 200
+    canvas.height = 120
+    view_state = state.GeometryFitConstraintsViewState(canvas=canvas)
+
+    inside_event = type("Event", (), {"delta": 120, "num": None})()
+    assert (
+        views.scroll_geometry_fit_constraints_canvas(
+            view_state,
+            pointer_x=100,
+            pointer_y=100,
+            event=inside_event,
+        )
+        == "break"
+    )
+    assert canvas.scrolled == [(-1, "units")]
+
+    outside_event = type("Event", (), {"delta": 120, "num": None})()
+    assert (
+        views.scroll_geometry_fit_constraints_canvas(
+            view_state,
+            pointer_x=500,
+            pointer_y=500,
+            event=outside_event,
+        )
+        is None
+    )
+    assert canvas.scrolled == [(-1, "units")]

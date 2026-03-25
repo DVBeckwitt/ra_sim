@@ -78,6 +78,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.views` now owns the debug window lifecycle and report-text
     rendering helper.
   - Direct view tests now cover the extracted debug viewer helpers.
+- Geometry-fit constraints panel migration has landed.
+  - Shared widget references and row-control state for the constraints panel
+    now live in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns the scrollable constraints panel construction
+    and mouse-wheel routing helpers.
+  - Direct view tests now cover the extracted constraints panel helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -122,6 +128,10 @@ What is done:
 - The hBN geometry debug viewer is no longer built directly in `runtime.py`.
   - `ra_sim.gui.views` now owns its window construction and report-text
     rendering.
+- The geometry-fit constraints panel is no longer assembled directly in
+  `runtime.py`.
+  - `ra_sim.gui.views` now owns its scrollable panel construction and
+    mouse-wheel routing helpers.
 
 What is left:
 
@@ -166,6 +176,10 @@ What is done:
 - `state.py` now also owns hBN geometry debug view state.
 - `views.py` now also owns the hBN geometry debug viewer lifecycle and
   report-text rendering.
+- `state.py` now also owns geometry-fit constraints view state and its
+  row-control registry.
+- `views.py` now also owns the geometry-fit constraints panel construction and
+  scroll helpers.
 
 What is left:
 
@@ -435,11 +449,13 @@ Why last:
 The next best step is:
 
 - build on the new manual-geometry / geometry-fit-history / preview /
-  Q-group / Bragg-Qr / hBN-debug slices by moving the next runtime-owned GUI
-  workflows into explicit state + controller + view boundaries
+  Q-group / Bragg-Qr / hBN-debug / geometry-fit-constraints slices by moving
+  the next runtime-owned GUI workflows into explicit state + controller +
+  view boundaries
 - focus next on the remaining widget-heavy helpers and long-lived Tk widget
-  references that still live inline in `runtime.py`, even when they are not
-  separate standalone dialogs
+  references that still live inline in `runtime.py`, especially the
+  background-theta / geometry-fit background control surfaces and similar
+  inline workspace panels
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.

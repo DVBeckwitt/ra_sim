@@ -86,16 +86,22 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - shared widget references for the debug viewer now use shared GUI state
   - the hBN geometry debug window lifecycle and report-text rendering now flow
     through `ra_sim.gui.views`
+- Geometry-fit constraints panel migration has also landed:
+  - shared widget references and row-control state for the constraints panel
+    now use shared GUI state
+  - the scrollable constraints panel construction and mouse-wheel routing now
+    flow through `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
-    coverage, and direct Qr/Qz/Bragg/hBN view helper coverage
+    coverage, and direct Qr/Qz/Bragg/hBN/constraints view helper coverage
 
 ## Remaining Migration Focus
 
 - `ra_sim.gui.runtime` is still the largest remaining integration monolith.
 - `ra_sim.gui.views` is now active for the Qr/Qz selector, but other Tk-heavy
   surfaces still need the same treatment, especially the remaining widget-heavy
-  runtime-owned helpers that still assemble long-lived Tk references inline.
+  runtime-owned helpers that still assemble long-lived Tk references inline,
+  such as the background-theta / geometry-fit background control surfaces.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

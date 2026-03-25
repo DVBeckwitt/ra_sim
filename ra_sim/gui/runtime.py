@@ -1999,7 +1999,7 @@ def _refresh_geometry_fit_theta_checkbox_label() -> None:
     """Update the theta fit toggle label for single vs multi-background mode."""
     gui_background_theta.refresh_geometry_fit_theta_checkbox_label(
         fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        theta_controls=geometry_fit_constraints_view_state.controls,
         shared_theta=_geometry_fit_uses_shared_theta_offset(),
     )
 
@@ -2020,7 +2020,7 @@ def _sync_background_theta_controls(
         geometry_theta_offset_var=geometry_theta_offset_var,
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        theta_controls=geometry_fit_constraints_view_state.controls,
         set_background_file_status_text=_set_background_file_status_text,
         schedule_update=schedule_update,
         preserve_existing=preserve_existing,
@@ -2044,7 +2044,7 @@ def _apply_background_theta_metadata(
         geometry_theta_offset_var=geometry_theta_offset_var,
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        theta_controls=geometry_fit_constraints_view_state.controls,
         set_background_file_status_text=_set_background_file_status_text,
         schedule_update=schedule_update,
         progress_label=globals().get("progress_label"),
@@ -2069,7 +2069,7 @@ def _apply_geometry_fit_background_selection(
         geometry_theta_offset_var=geometry_theta_offset_var,
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        theta_controls=geometry_fit_constraints_view_state.controls,
         set_background_file_status_text=_set_background_file_status_text,
         schedule_update=schedule_update,
         progress_label_geometry=globals().get("progress_label_geometry"),
@@ -2090,7 +2090,7 @@ def _sync_geometry_fit_background_selection(*, preserve_existing: bool = True) -
         geometry_theta_offset_var=geometry_theta_offset_var,
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=globals().get("geometry_fit_constraint_controls", {}),
+        theta_controls=geometry_fit_constraints_view_state.controls,
         set_background_file_status_text=_set_background_file_status_text,
         schedule_update=schedule_update,
         progress_label_geometry=globals().get("progress_label_geometry"),
@@ -2935,6 +2935,7 @@ geometry_manual_pick_cache_data: dict[str, object] = {}
 geometry_manual_pick_session = geometry_manual_state.pick_session
 geometry_manual_undo_stack = geometry_manual_state.undo_stack
 geometry_fit_history_state = gui_state.GeometryFitHistoryState()
+geometry_fit_constraints_view_state = gui_state.GeometryFitConstraintsViewState()
 geometry_fit_undo_stack = geometry_fit_history_state.undo_stack
 geometry_fit_redo_stack = geometry_fit_history_state.redo_stack
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
@@ -11254,12 +11255,12 @@ geometry_fit_toggle_vars = {
     "center_y": fit_center_y_var,
 }
 geometry_fit_parameter_specs = {}
-geometry_fit_constraint_controls = {}
 
 
 def _sync_geometry_fit_constraint_rows(*_args) -> None:
+    controls = geometry_fit_constraints_view_state.controls
     for name in GEOMETRY_FIT_PARAM_ORDER:
-        control = geometry_fit_constraint_controls.get(name)
+        control = controls.get(name)
         if not isinstance(control, dict):
             continue
         row = control.get("row")
@@ -12058,11 +12059,13 @@ def _current_geometry_fit_constraint_state(
     names: Sequence[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     selected_names = (
-        list(names) if names is not None else list(geometry_fit_constraint_controls)
+        list(names)
+        if names is not None
+        else list(geometry_fit_constraints_view_state.controls)
     )
     state: dict[str, dict[str, float]] = {}
     for name in selected_names:
-        control = geometry_fit_constraint_controls.get(
+        control = geometry_fit_constraints_view_state.controls.get(
             _geometry_fit_constraint_source_name(name)
         )
         if not isinstance(control, dict):
@@ -16944,107 +16947,25 @@ def _default_geometry_fit_pull(name: str, window: float) -> float:
     return min(max(float(inferred), 0.0), 1.0)
 
 
-geometry_fit_constraints_frame = CollapsibleFrame(
-    fit_body,
-    text="Geometry Fit Constraints",
-    expanded=True,
-)
-geometry_fit_constraints_frame.pack(
-    side=tk.TOP,
-    fill=tk.X,
-    padx=5,
-    pady=5,
+gui_views.create_geometry_fit_constraints_panel(
+    parent=fit_body,
+    root=root,
+    view_state=geometry_fit_constraints_view_state,
     after=fit_frame,
+    on_mousewheel=lambda event: _scroll_geometry_fit_constraints(event),
 )
-ttk.Label(
-    geometry_fit_constraints_frame.frame,
-    text=(
-        "Each window is applied as current value ± deviation during geometry fitting. "
-        "Stay-close adds a soft pull back to the starting guess."
-    ),
-    wraplength=420,
-    justify="left",
-).pack(fill=tk.X, padx=6, pady=(2, 6))
-
-geometry_fit_constraints_list_frame = ttk.Frame(geometry_fit_constraints_frame.frame)
-geometry_fit_constraints_list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
-
-geometry_fit_constraints_canvas_height = int(
-    min(max(root.winfo_screenheight() * 0.35, 220), 420)
-)
-geometry_fit_constraints_canvas = tk.Canvas(
-    geometry_fit_constraints_list_frame,
-    highlightthickness=0,
-    borderwidth=0,
-    height=geometry_fit_constraints_canvas_height,
-)
-geometry_fit_constraints_scrollbar = ttk.Scrollbar(
-    geometry_fit_constraints_list_frame,
-    orient=tk.VERTICAL,
-    command=geometry_fit_constraints_canvas.yview,
-)
-geometry_fit_constraints_canvas.configure(
-    yscrollcommand=geometry_fit_constraints_scrollbar.set
-)
-geometry_fit_constraints_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-geometry_fit_constraints_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-geometry_fit_constraints_body = ttk.Frame(geometry_fit_constraints_canvas)
-geometry_fit_constraints_body_window = geometry_fit_constraints_canvas.create_window(
-    (0, 0),
-    window=geometry_fit_constraints_body,
-    anchor="nw",
-)
-
-
-def _refresh_geometry_fit_constraints_scrollregion(_event=None) -> None:
-    geometry_fit_constraints_canvas.configure(
-        scrollregion=geometry_fit_constraints_canvas.bbox("all")
-    )
-
-
-def _resize_geometry_fit_constraints_body(event) -> None:
-    geometry_fit_constraints_canvas.itemconfigure(
-        geometry_fit_constraints_body_window,
-        width=event.width,
-    )
+geometry_fit_constraints_body = geometry_fit_constraints_view_state.body
+if geometry_fit_constraints_body is None:
+    raise RuntimeError("Geometry-fit constraints body was not created.")
 
 
 def _scroll_geometry_fit_constraints(event):
-    pointer_x = root.winfo_pointerx()
-    pointer_y = root.winfo_pointery()
-    canvas_x = geometry_fit_constraints_canvas.winfo_rootx()
-    canvas_y = geometry_fit_constraints_canvas.winfo_rooty()
-    if not (
-        canvas_x <= pointer_x <= canvas_x + geometry_fit_constraints_canvas.winfo_width()
-        and canvas_y <= pointer_y <= canvas_y + geometry_fit_constraints_canvas.winfo_height()
-    ):
-        return None
-
-    delta = 0
-    if getattr(event, "delta", 0):
-        delta = int(-event.delta / 120)
-    elif getattr(event, "num", None) == 4:
-        delta = -1
-    elif getattr(event, "num", None) == 5:
-        delta = 1
-    if delta:
-        geometry_fit_constraints_canvas.yview_scroll(delta, "units")
-        return "break"
-    return None
-
-
-geometry_fit_constraints_body.bind(
-    "<Configure>",
-    _refresh_geometry_fit_constraints_scrollregion,
-)
-geometry_fit_constraints_canvas.bind(
-    "<Configure>",
-    _resize_geometry_fit_constraints_body,
-)
-root.bind_all("<MouseWheel>", _scroll_geometry_fit_constraints, add="+")
-root.bind_all("<Button-4>", _scroll_geometry_fit_constraints, add="+")
-root.bind_all("<Button-5>", _scroll_geometry_fit_constraints, add="+")
+    return gui_views.scroll_geometry_fit_constraints_canvas(
+        geometry_fit_constraints_view_state,
+        pointer_x=root.winfo_pointerx(),
+        pointer_y=root.winfo_pointery(),
+        event=event,
+    )
 
 for name in GEOMETRY_FIT_PARAM_ORDER:
     spec = geometry_fit_parameter_specs.get(name, {})
@@ -17100,12 +17021,13 @@ for name in GEOMETRY_FIT_PARAM_ORDER:
         wraplength=360,
         justify="left",
     ).pack(fill=tk.X, padx=6, pady=(0, 4))
-    geometry_fit_constraint_controls[name] = {
-        "row": row,
-        "window_var": window_var,
-        "pull_var": pull_var,
-        "_mapped": False,
-    }
+    gui_views.set_geometry_fit_constraint_control(
+        geometry_fit_constraints_view_state,
+        name=name,
+        row=row,
+        window_var=window_var,
+        pull_var=pull_var,
+    )
 
 for _toggle_var in geometry_fit_toggle_vars.values():
     _toggle_var.trace_add("write", _sync_geometry_fit_constraint_rows)

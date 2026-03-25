@@ -7,8 +7,10 @@ from collections.abc import Callable, Sequence
 import tkinter as tk
 from tkinter import ttk
 
+from .collapsible import CollapsibleFrame
 from .state import (
     BraggQrManagerViewState,
+    GeometryFitConstraintsViewState,
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
 )
@@ -18,6 +20,10 @@ _GEOMETRY_Q_GROUP_EMPTY_TEXT = (
     "No Qr/Qz groups are listed yet. "
     'Press "Update Listed Peaks" to snapshot the current simulation.'
 )
+_GEOMETRY_FIT_CONSTRAINTS_HELP_TEXT = (
+    "Each window is applied as current value +/- deviation during geometry fitting. "
+    "Stay-close adds a soft pull back to the starting guess."
+)
 
 
 def create_root_window(title: str = "RA Simulation") -> tk.Tk:
@@ -26,6 +32,164 @@ def create_root_window(title: str = "RA Simulation") -> tk.Tk:
     root = tk.Tk()
     root.title(title)
     return root
+
+
+def create_geometry_fit_constraints_panel(
+    *,
+    parent: tk.Misc,
+    root: tk.Misc,
+    view_state: GeometryFitConstraintsViewState,
+    after: object | None = None,
+    on_mousewheel: Callable[[object], object] | None = None,
+) -> None:
+    """Create the scrollable geometry-fit constraints panel and store its widgets."""
+
+    panel = CollapsibleFrame(
+        parent,
+        text="Geometry Fit Constraints",
+        expanded=True,
+    )
+    pack_kwargs = {
+        "side": tk.TOP,
+        "fill": tk.X,
+        "padx": 5,
+        "pady": 5,
+    }
+    if after is not None:
+        pack_kwargs["after"] = after
+    panel.pack(**pack_kwargs)
+
+    ttk.Label(
+        panel.frame,
+        text=_GEOMETRY_FIT_CONSTRAINTS_HELP_TEXT,
+        wraplength=420,
+        justify="left",
+    ).pack(fill=tk.X, padx=6, pady=(2, 6))
+
+    list_frame = ttk.Frame(panel.frame)
+    list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+    canvas_height = int(min(max(root.winfo_screenheight() * 0.35, 220), 420))
+    canvas = tk.Canvas(
+        list_frame,
+        highlightthickness=0,
+        borderwidth=0,
+        height=canvas_height,
+    )
+    scrollbar = ttk.Scrollbar(
+        list_frame,
+        orient=tk.VERTICAL,
+        command=canvas.yview,
+    )
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    body = ttk.Frame(canvas)
+    body_window = canvas.create_window(
+        (0, 0),
+        window=body,
+        anchor="nw",
+    )
+
+    view_state.panel = panel
+    view_state.canvas = canvas
+    view_state.body = body
+    view_state.body_window = body_window
+    view_state.controls.clear()
+
+    body.bind(
+        "<Configure>",
+        lambda _event: refresh_geometry_fit_constraints_scrollregion(view_state),
+    )
+    canvas.bind(
+        "<Configure>",
+        lambda event: resize_geometry_fit_constraints_body(
+            view_state,
+            getattr(event, "width", 0),
+        ),
+    )
+
+    if on_mousewheel is not None:
+        root.bind_all("<MouseWheel>", on_mousewheel, add="+")
+        root.bind_all("<Button-4>", on_mousewheel, add="+")
+        root.bind_all("<Button-5>", on_mousewheel, add="+")
+
+
+def refresh_geometry_fit_constraints_scrollregion(
+    view_state: GeometryFitConstraintsViewState,
+) -> None:
+    """Update the constraints canvas scrollregion from its current content."""
+
+    if view_state.canvas is None:
+        return
+    view_state.canvas.configure(scrollregion=view_state.canvas.bbox("all"))
+
+
+def resize_geometry_fit_constraints_body(
+    view_state: GeometryFitConstraintsViewState,
+    width: int | float,
+) -> None:
+    """Match the constraints body width to the visible canvas width."""
+
+    if view_state.canvas is None or view_state.body_window is None:
+        return
+    view_state.canvas.itemconfigure(
+        view_state.body_window,
+        width=width,
+    )
+
+
+def scroll_geometry_fit_constraints_canvas(
+    view_state: GeometryFitConstraintsViewState,
+    *,
+    pointer_x: int,
+    pointer_y: int,
+    event: object,
+) -> str | None:
+    """Scroll the constraints canvas when the pointer is over the panel."""
+
+    canvas = view_state.canvas
+    if canvas is None:
+        return None
+
+    canvas_x = canvas.winfo_rootx()
+    canvas_y = canvas.winfo_rooty()
+    if not (
+        canvas_x <= pointer_x <= canvas_x + canvas.winfo_width()
+        and canvas_y <= pointer_y <= canvas_y + canvas.winfo_height()
+    ):
+        return None
+
+    delta = 0
+    if getattr(event, "delta", 0):
+        delta = int(-event.delta / 120)
+    elif getattr(event, "num", None) == 4:
+        delta = -1
+    elif getattr(event, "num", None) == 5:
+        delta = 1
+    if delta:
+        canvas.yview_scroll(delta, "units")
+        return "break"
+    return None
+
+
+def set_geometry_fit_constraint_control(
+    view_state: GeometryFitConstraintsViewState,
+    *,
+    name: str,
+    row: object,
+    window_var: object,
+    pull_var: object,
+) -> None:
+    """Register one geometry-fit constraint row in the shared view-state map."""
+
+    view_state.controls[str(name)] = {
+        "row": row,
+        "window_var": window_var,
+        "pull_var": pull_var,
+        "_mapped": False,
+    }
 
 
 def geometry_q_group_window_open(view_state: GeometryQGroupViewState) -> bool:

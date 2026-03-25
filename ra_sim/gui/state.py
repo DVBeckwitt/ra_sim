@@ -35,6 +35,17 @@ class GeometryFitHistoryState:
 
 
 @dataclass
+class GeometryFitConstraintsViewState:
+    """Widget references for the geometry-fit constraints panel."""
+
+    panel: Any = None
+    canvas: Any = None
+    body: Any = None
+    body_window: Any = None
+    controls: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -129,6 +140,9 @@ class AppState:
     manual_geometry: ManualGeometryState = field(default_factory=ManualGeometryState)
     geometry_fit_history: GeometryFitHistoryState = field(
         default_factory=GeometryFitHistoryState
+    )
+    geometry_fit_constraints_view: GeometryFitConstraintsViewState = field(
+        default_factory=GeometryFitConstraintsViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)
