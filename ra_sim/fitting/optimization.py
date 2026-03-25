@@ -3963,6 +3963,7 @@ def fit_geometry_parameters(
     *, experimental_image: Optional[np.ndarray] = None,
     dataset_specs: Optional[Sequence[Dict[str, object]]] = None,
     refinement_config: Optional[Dict[str, Dict[str, float]]] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
 ):
     """
     Least-squares fit for a subset of geometry parameters.
@@ -3970,6 +3971,20 @@ def fit_geometry_parameters(
     """
 
     _set_numba_usage_from_config(refinement_config)
+
+    def _emit_status(message: str) -> None:
+        if not callable(status_callback):
+            return
+        try:
+            text = str(message).strip()
+        except Exception:
+            text = ""
+        if not text:
+            return
+        try:
+            status_callback(text)
+        except Exception:
+            pass
 
     point_match_mode = experimental_image is not None or bool(dataset_specs)
 
@@ -4068,6 +4083,56 @@ def fit_geometry_parameters(
         solver_cfg.get("stagnation_probe_random_directions", 0)
     )
     stagnation_probe_random_directions = max(0, stagnation_probe_random_directions)
+    staged_release_cfg_raw = solver_cfg.get("staged_release", {})
+    if isinstance(staged_release_cfg_raw, bool):
+        staged_release_cfg: Dict[str, object] = {
+            "enabled": bool(staged_release_cfg_raw)
+        }
+    elif isinstance(staged_release_cfg_raw, dict):
+        staged_release_cfg = dict(staged_release_cfg_raw)
+    else:
+        staged_release_cfg = {}
+    staged_release_enabled = bool(staged_release_cfg.get("enabled", False))
+    staged_release_max_nfev = int(
+        staged_release_cfg.get("max_nfev", max(10, min(30, solver_max_nfev)))
+    )
+    staged_release_max_nfev = max(5, staged_release_max_nfev)
+    staged_release_max_cost_increase_fraction = float(
+        staged_release_cfg.get("max_cost_increase_fraction", 0.0)
+    )
+    if not np.isfinite(staged_release_max_cost_increase_fraction):
+        staged_release_max_cost_increase_fraction = 0.0
+    staged_release_max_cost_increase_fraction = max(
+        0.0,
+        staged_release_max_cost_increase_fraction,
+    )
+    staged_release_blocks_cfg = staged_release_cfg.get("blocks", None)
+
+    parameter_group_map = {
+        "center_x": "center",
+        "center_y": "center",
+        "gamma": "tilt",
+        "Gamma": "tilt",
+        "chi": "tilt",
+        "cor_angle": "tilt",
+        "theta_initial": "tilt",
+        "theta_offset": "tilt",
+        "corto_detector": "distance",
+        "zs": "distance",
+        "zb": "distance",
+        "a": "lattice",
+        "c": "lattice",
+        "psi_z": "lattice",
+    }
+
+    def _parameter_group(name: str) -> str:
+        return str(parameter_group_map.get(str(name), "other"))
+
+    staged_release_default_blocks = [
+        ["center", "tilt"],
+        ["distance"],
+        ["lattice", "other"],
+    ]
 
     image_refinement_enabled = bool(
         image_refinement_cfg.get("enabled", False)
@@ -4077,6 +4142,98 @@ def fit_geometry_parameters(
     )
     identifiability_enabled = bool(
         identifiability_cfg.get("enabled", point_match_mode)
+    )
+    identifiability_fd_step_fraction = float(
+        identifiability_cfg.get("fd_step_fraction", 0.02)
+    )
+    if (
+        not np.isfinite(identifiability_fd_step_fraction)
+        or identifiability_fd_step_fraction <= 0.0
+    ):
+        identifiability_fd_step_fraction = 0.02
+    identifiability_fd_min_step = float(
+        identifiability_cfg.get("fd_min_step", 1.0e-4)
+    )
+    if (
+        not np.isfinite(identifiability_fd_min_step)
+        or identifiability_fd_min_step <= 0.0
+    ):
+        identifiability_fd_min_step = 1.0e-4
+    identifiability_condition_warn = float(
+        identifiability_cfg.get("condition_number_warn", 1.0e8)
+    )
+    if (
+        not np.isfinite(identifiability_condition_warn)
+        or identifiability_condition_warn <= 1.0
+    ):
+        identifiability_condition_warn = 1.0e8
+    identifiability_top_peaks_per_parameter = int(
+        identifiability_cfg.get("top_peaks_per_parameter", 3)
+    )
+    identifiability_top_peaks_per_parameter = max(
+        1,
+        identifiability_top_peaks_per_parameter,
+    )
+    identifiability_correlation_warn = float(
+        identifiability_cfg.get("correlation_warn", 0.95)
+    )
+    if (
+        not np.isfinite(identifiability_correlation_warn)
+        or identifiability_correlation_warn < 0.0
+    ):
+        identifiability_correlation_warn = 0.95
+    identifiability_correlation_warn = min(
+        max(identifiability_correlation_warn, 0.0),
+        0.999999,
+    )
+    identifiability_weak_norm_ratio = float(
+        identifiability_cfg.get("weak_column_norm_ratio", 1.0e-6)
+    )
+    if (
+        not np.isfinite(identifiability_weak_norm_ratio)
+        or identifiability_weak_norm_ratio < 0.0
+    ):
+        identifiability_weak_norm_ratio = 1.0e-6
+    auto_freeze_enabled = bool(identifiability_cfg.get("auto_freeze", False))
+    auto_freeze_condition_number = float(
+        identifiability_cfg.get(
+            "auto_freeze_condition_number",
+            identifiability_condition_warn,
+        )
+    )
+    if (
+        not np.isfinite(auto_freeze_condition_number)
+        or auto_freeze_condition_number <= 1.0
+    ):
+        auto_freeze_condition_number = identifiability_condition_warn
+    auto_freeze_correlation = float(
+        identifiability_cfg.get(
+            "auto_freeze_correlation",
+            max(identifiability_correlation_warn, 0.98),
+        )
+    )
+    if not np.isfinite(auto_freeze_correlation) or auto_freeze_correlation < 0.0:
+        auto_freeze_correlation = max(identifiability_correlation_warn, 0.98)
+    auto_freeze_correlation = min(max(auto_freeze_correlation, 0.0), 0.999999)
+    auto_freeze_max_parameters = int(
+        identifiability_cfg.get("auto_freeze_max_parameters", 2)
+    )
+    auto_freeze_max_parameters = max(0, auto_freeze_max_parameters)
+    auto_freeze_max_nfev = int(
+        identifiability_cfg.get(
+            "auto_freeze_max_nfev",
+            max(20, min(60, solver_max_nfev)),
+        )
+    )
+    auto_freeze_max_nfev = max(10, auto_freeze_max_nfev)
+    auto_freeze_max_cost_increase_fraction = float(
+        identifiability_cfg.get("auto_freeze_max_cost_increase_fraction", 0.0)
+    )
+    if not np.isfinite(auto_freeze_max_cost_increase_fraction):
+        auto_freeze_max_cost_increase_fraction = 0.0
+    auto_freeze_max_cost_increase_fraction = max(
+        0.0,
+        auto_freeze_max_cost_increase_fraction,
     )
     anisotropic_uncertainty_enabled = bool(
         solver_cfg.get("anisotropic_measurement_uncertainty", False)
@@ -5230,6 +5387,7 @@ def fit_geometry_parameters(
         stage_cfg["downsample_factor"] = max(1, int(stage_cfg["downsample_factor"]))
         stage_cfg["max_nfev"] = max(10, int(stage_cfg["max_nfev"]))
 
+        _emit_status("Geometry fit: running ridge refinement")
         try:
             updated_params, ridge_result = _stage_one_initialize(
                 np.asarray(ctx["experimental_image"], dtype=np.float64),
@@ -5459,6 +5617,7 @@ def fit_geometry_parameters(
         stage_cfg["max_reflections"] = max(1, int(stage_cfg["max_reflections"]))
         stage_cfg["max_nfev"] = max(10, int(stage_cfg["max_nfev"]))
 
+        _emit_status("Geometry fit: running ROI/image refinement")
         try:
             _, preview_maxpos = ctx["simulator"](point_local)
             preview_rois = build_tube_rois(
@@ -5664,22 +5823,6 @@ def fit_geometry_parameters(
             summary["reason"] = "empty_residual"
             return summary
 
-        fd_step_fraction = float(identifiability_cfg.get("fd_step_fraction", 0.02))
-        if not np.isfinite(fd_step_fraction) or fd_step_fraction <= 0.0:
-            fd_step_fraction = 0.02
-        fd_min_step = float(identifiability_cfg.get("fd_min_step", 1.0e-4))
-        if not np.isfinite(fd_min_step) or fd_min_step <= 0.0:
-            fd_min_step = 1.0e-4
-        condition_warn = float(
-            identifiability_cfg.get("condition_number_warn", 1.0e8)
-        )
-        if not np.isfinite(condition_warn) or condition_warn <= 1.0:
-            condition_warn = 1.0e8
-        top_peaks_per_parameter = int(
-            identifiability_cfg.get("top_peaks_per_parameter", 3)
-        )
-        top_peaks_per_parameter = max(1, top_peaks_per_parameter)
-
         jacobian = np.full((residual_ref.size, x_ref.size), np.nan, dtype=np.float64)
         steps = np.full(x_ref.size, np.nan, dtype=np.float64)
         residual_plus_cache: Dict[int, np.ndarray] = {}
@@ -5734,10 +5877,13 @@ def fit_geometry_parameters(
             )
             if idx < len(span) and np.isfinite(span[idx]) and span[idx] > 1.0e-12:
                 probe_scale = max(probe_scale, float(span[idx]))
-            step = max(fd_min_step, fd_step_fraction * probe_scale)
+            step = max(
+                identifiability_fd_min_step,
+                identifiability_fd_step_fraction * probe_scale,
+            )
             if idx < len(span) and np.isfinite(span[idx]) and span[idx] > 1.0e-12:
                 step = min(step, 0.25 * float(span[idx]))
-            step = max(step, fd_min_step)
+            step = max(step, identifiability_fd_min_step)
             x_plus = np.asarray(x_ref, dtype=float).copy()
             x_minus = np.asarray(x_ref, dtype=float).copy()
             x_plus[idx] = min(float(upper_bounds[idx]), float(x_plus[idx] + step))
@@ -5856,25 +6002,9 @@ def fit_geometry_parameters(
                             cov_valid[i_local, j_local] / denom
                         )
 
-        group_map = {
-            "center_x": "center",
-            "center_y": "center",
-            "gamma": "tilt",
-            "Gamma": "tilt",
-            "chi": "tilt",
-            "cor_angle": "tilt",
-            "theta_initial": "tilt",
-            "theta_offset": "tilt",
-            "corto_detector": "distance",
-            "zs": "distance",
-            "zb": "distance",
-            "a": "lattice",
-            "c": "lattice",
-            "psi_z": "lattice",
-        }
         group_sensitivity: Dict[str, float] = {}
         for entry in param_entries:
-            group = group_map.get(str(entry["name"]), "other")
+            group = _parameter_group(str(entry["name"]))
             column_norm = float(entry.get("column_norm", np.nan))
             if np.isfinite(column_norm):
                 group_sensitivity[group] = float(
@@ -5884,7 +6014,7 @@ def fit_geometry_parameters(
         underconstrained = bool(
             rank < int(np.count_nonzero(valid_columns))
             or not np.isfinite(condition_number)
-            or condition_number >= condition_warn
+            or condition_number >= identifiability_condition_warn
             or residual_ref.size < int(np.count_nonzero(valid_columns))
         )
         if underconstrained:
@@ -5934,7 +6064,161 @@ def fit_geometry_parameters(
                     key=lambda item: float(item.get("sensitivity", 0.0)),
                     reverse=True,
                 )
-                top_peak_sensitivity[str(name)] = peak_scores[:top_peaks_per_parameter]
+                top_peak_sensitivity[str(name)] = peak_scores[
+                    :identifiability_top_peaks_per_parameter
+                ]
+
+        max_column_norm = 0.0
+        finite_column_norms = full_column_norms[np.isfinite(full_column_norms)]
+        if finite_column_norms.size:
+            max_column_norm = float(np.max(finite_column_norms))
+        weak_norm_threshold = max(
+            max_column_norm * identifiability_weak_norm_ratio,
+            1.0e-12,
+        )
+        weak_parameters: List[Dict[str, object]] = []
+        freeze_recommendation_map: Dict[int, Dict[str, object]] = {}
+
+        def _ensure_freeze_recommendation(idx: int) -> Dict[str, object]:
+            entry = freeze_recommendation_map.get(int(idx))
+            if entry is not None:
+                return entry
+            param_entry = param_entries[int(idx)]
+            entry = {
+                "name": str(param_entry.get("name", var_names[int(idx)])),
+                "index": int(idx),
+                "reasons": [],
+                "column_norm": float(param_entry.get("column_norm", np.nan)),
+                "relative_sensitivity": float(
+                    param_entry.get("relative_sensitivity", np.nan)
+                ),
+                "valid": bool(param_entry.get("valid", False)),
+                "partners": [],
+                "max_abs_correlation": float("nan"),
+            }
+            freeze_recommendation_map[int(idx)] = entry
+            return entry
+
+        for idx, entry in enumerate(param_entries):
+            column_norm = float(entry.get("column_norm", np.nan))
+            is_weak = (
+                not bool(entry.get("valid", False))
+                or (
+                    np.isfinite(column_norm)
+                    and column_norm <= weak_norm_threshold
+                )
+            )
+            if not is_weak:
+                continue
+            weak_reason = (
+                "invalid_jacobian_column"
+                if not bool(entry.get("valid", False))
+                else "weak_sensitivity"
+            )
+            weak_parameters.append(
+                {
+                    "name": str(entry.get("name", var_names[idx])),
+                    "index": int(idx),
+                    "reason": weak_reason,
+                    "column_norm": column_norm,
+                    "relative_sensitivity": float(
+                        entry.get("relative_sensitivity", np.nan)
+                    ),
+                    "valid": bool(entry.get("valid", False)),
+                }
+            )
+            recommendation = _ensure_freeze_recommendation(idx)
+            if weak_reason not in recommendation["reasons"]:
+                recommendation["reasons"].append(weak_reason)
+
+        high_correlation_pairs: List[Dict[str, object]] = []
+        for i in range(x_ref.size):
+            for j in range(i + 1, x_ref.size):
+                corr_val = float(correlation[i, j])
+                if not np.isfinite(corr_val):
+                    continue
+                abs_corr = abs(corr_val)
+                if abs_corr < identifiability_correlation_warn:
+                    continue
+                norm_i = float(param_entries[i].get("column_norm", np.nan))
+                norm_j = float(param_entries[j].get("column_norm", np.nan))
+                if not np.isfinite(norm_i):
+                    norm_i = float("inf")
+                if not np.isfinite(norm_j):
+                    norm_j = float("inf")
+                preferred_idx = int(i) if norm_i <= norm_j else int(j)
+                partner_idx = int(j) if preferred_idx == int(i) else int(i)
+                high_correlation_pairs.append(
+                    {
+                        "name_i": str(param_entries[i].get("name", var_names[i])),
+                        "index_i": int(i),
+                        "name_j": str(param_entries[j].get("name", var_names[j])),
+                        "index_j": int(j),
+                        "correlation": float(corr_val),
+                        "abs_correlation": float(abs_corr),
+                        "preferred_freeze": str(
+                            param_entries[preferred_idx].get(
+                                "name",
+                                var_names[preferred_idx],
+                            )
+                        ),
+                        "preferred_freeze_index": int(preferred_idx),
+                    }
+                )
+                recommendation = _ensure_freeze_recommendation(preferred_idx)
+                if "high_correlation" not in recommendation["reasons"]:
+                    recommendation["reasons"].append("high_correlation")
+                partner_name = str(
+                    param_entries[partner_idx].get("name", var_names[partner_idx])
+                )
+                if partner_name not in recommendation["partners"]:
+                    recommendation["partners"].append(partner_name)
+                current_max_corr = float(
+                    recommendation.get("max_abs_correlation", np.nan)
+                )
+                if not np.isfinite(current_max_corr) or abs_corr > current_max_corr:
+                    recommendation["max_abs_correlation"] = float(abs_corr)
+
+        weak_parameters.sort(
+            key=lambda item: (
+                float(item.get("column_norm", np.inf))
+                if np.isfinite(float(item.get("column_norm", np.nan)))
+                else float("inf"),
+                int(item.get("index", 0)),
+            )
+        )
+        high_correlation_pairs.sort(
+            key=lambda item: (
+                -float(item.get("abs_correlation", 0.0)),
+                int(item.get("index_i", 0)),
+                int(item.get("index_j", 0)),
+            )
+        )
+        freeze_recommendations = list(freeze_recommendation_map.values())
+        freeze_recommendations.sort(
+            key=lambda item: (
+                0
+                if (
+                    "weak_sensitivity" in item.get("reasons", [])
+                    or "invalid_jacobian_column" in item.get("reasons", [])
+                )
+                else 1,
+                -float(item.get("max_abs_correlation", 0.0))
+                if np.isfinite(float(item.get("max_abs_correlation", np.nan)))
+                else 0.0,
+                float(item.get("column_norm", np.inf))
+                if np.isfinite(float(item.get("column_norm", np.nan)))
+                else float("inf"),
+                int(item.get("index", 0)),
+            )
+        )
+        warning_flags: List[str] = []
+        if underconstrained:
+            warning_flags.append("underconstrained")
+        if high_correlation_pairs:
+            warning_flags.append("high_correlation")
+        if weak_parameters:
+            warning_flags.append("weak_sensitivity")
 
         summary.update(
             {
@@ -5946,6 +6230,8 @@ def fit_geometry_parameters(
                 "num_residuals": int(residual_ref.size),
                 "rank": int(rank),
                 "condition_number": float(condition_number),
+                "condition_number_warn": float(identifiability_condition_warn),
+                "correlation_warn": float(identifiability_correlation_warn),
                 "singular_values": singular_values.tolist(),
                 "residual_variance": float(residual_variance),
                 "parameter_entries": param_entries,
@@ -5957,6 +6243,19 @@ def fit_geometry_parameters(
                 "dominant_group": str(dominant_group),
                 "underconstrained": bool(underconstrained),
                 "top_peak_sensitivity": top_peak_sensitivity,
+                "weak_column_norm_threshold": float(weak_norm_threshold),
+                "weak_parameters": weak_parameters,
+                "high_correlation_pairs": high_correlation_pairs,
+                "freeze_recommendations": freeze_recommendations,
+                "recommended_fixed_parameters": [
+                    str(entry.get("name", ""))
+                    for entry in freeze_recommendations
+                ],
+                "recommended_fixed_indices": [
+                    int(entry.get("index", 0))
+                    for entry in freeze_recommendations
+                ],
+                "warning_flags": warning_flags,
             }
         )
         return summary
@@ -5997,6 +6296,283 @@ def fit_geometry_parameters(
             active_mask=np.zeros_like(trial_x, dtype=int),
             optimality=float("nan"),
         )
+
+    def _resolve_staged_release_blocks() -> List[Dict[str, object]]:
+        if not staged_release_enabled or len(var_names) <= 1:
+            return []
+
+        if staged_release_blocks_cfg is None:
+            raw_blocks = list(staged_release_default_blocks)
+        elif isinstance(staged_release_blocks_cfg, (list, tuple)):
+            raw_blocks = list(staged_release_blocks_cfg)
+        else:
+            raw_blocks = []
+
+        if not raw_blocks:
+            return []
+
+        name_to_indices: Dict[str, List[int]] = {}
+        for idx, name in enumerate(var_names):
+            key = str(name)
+            name_to_indices.setdefault(key, []).append(int(idx))
+            name_to_indices.setdefault(key.lower(), []).append(int(idx))
+
+        valid_group_tokens = {"center", "tilt", "distance", "lattice", "other"}
+        stage_specs: List[Dict[str, object]] = []
+        prior_key: Optional[Tuple[int, ...]] = None
+        cumulative_indices: set[int] = set()
+
+        for raw_block in raw_blocks:
+            if isinstance(raw_block, str):
+                tokens = [raw_block]
+            elif isinstance(raw_block, (list, tuple, set)):
+                tokens = list(raw_block)
+            else:
+                continue
+
+            active_set = set(cumulative_indices)
+            label_tokens: List[str] = []
+            for raw_token in tokens:
+                token = str(raw_token).strip()
+                if not token:
+                    continue
+                label_tokens.append(token)
+                token_key = token.lower()
+                if token_key in {"remaining", "rest", "all"}:
+                    active_set.update(range(len(var_names)))
+                    continue
+                if token_key in valid_group_tokens:
+                    for idx, name in enumerate(var_names):
+                        if _parameter_group(str(name)) == token_key:
+                            active_set.add(int(idx))
+                    continue
+                active_set.update(name_to_indices.get(token, []))
+                active_set.update(name_to_indices.get(token_key, []))
+
+            cumulative_indices = set(active_set)
+            if not active_set:
+                continue
+
+            active_key = tuple(sorted(int(idx) for idx in active_set))
+            if prior_key is not None and active_key == prior_key:
+                continue
+            prior_key = active_key
+            if len(active_key) >= len(var_names):
+                continue
+
+            active_indices = np.asarray(active_key, dtype=np.int64)
+            fixed_indices = np.asarray(
+                [idx for idx in range(len(var_names)) if idx not in active_set],
+                dtype=np.int64,
+            )
+            stage_specs.append(
+                {
+                    "active_indices": active_indices,
+                    "fixed_indices": fixed_indices,
+                    "active_parameters": [
+                        str(var_names[idx]) for idx in active_indices.tolist()
+                    ],
+                    "fixed_parameters": [
+                        str(var_names[idx]) for idx in fixed_indices.tolist()
+                    ],
+                    "label": ", ".join(label_tokens) if label_tokens else "auto",
+                }
+            )
+
+        return stage_specs
+
+    def _maybe_run_staged_release(
+        x_start: np.ndarray,
+    ) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(staged_release_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+            "stages": [],
+        }
+        if not staged_release_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+
+        x_seed = np.asarray(x_start, dtype=float)
+        if x_seed.ndim != 1 or x_seed.size <= 1:
+            summary["reason"] = "insufficient_parameter_count"
+            return summary
+
+        stage_specs = _resolve_staged_release_blocks()
+        summary["planned_stage_count"] = int(len(stage_specs))
+        if not stage_specs:
+            summary["reason"] = "no_reduced_stage_blocks"
+            return summary
+
+        _emit_status(
+            f"Geometry fit: staged release enabled ({len(stage_specs)} stage(s))"
+        )
+        current_x = np.asarray(x_seed, dtype=float).copy()
+        accepted_stage_count = 0
+        any_failed = False
+
+        for stage_number, stage_spec in enumerate(stage_specs, start=1):
+            active_indices = np.asarray(stage_spec["active_indices"], dtype=np.int64)
+            fixed_indices = np.asarray(stage_spec["fixed_indices"], dtype=np.int64)
+            stage_start = np.asarray(current_x, dtype=float).copy()
+            stage_start_residual = np.asarray(residual_fn(stage_start), dtype=float)
+            _emit_status(
+                "Geometry fit: staged stage "
+                f"{stage_number}/{len(stage_specs)} "
+                f"active={list(stage_spec.get('active_parameters', []))}"
+            )
+            if stage_start_residual.ndim != 1 or stage_start_residual.size == 0:
+                summary["stages"].append(
+                    {
+                        "stage": int(stage_number),
+                        "label": str(stage_spec.get("label", "auto")),
+                        "status": "failed",
+                        "reason": "empty_residual",
+                        "accepted": False,
+                        "active_parameters": list(
+                            stage_spec.get("active_parameters", [])
+                        ),
+                        "fixed_parameters": list(
+                            stage_spec.get("fixed_parameters", [])
+                        ),
+                    }
+                )
+                any_failed = True
+                _emit_status(
+                    f"Geometry fit: staged stage {stage_number} failed (empty residual)"
+                )
+                continue
+
+            start_cost = _robust_cost(
+                stage_start_residual,
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+            )
+
+            def _stage_residual(x_active: np.ndarray) -> np.ndarray:
+                trial_x = np.asarray(stage_start, dtype=float).copy()
+                trial_x[active_indices] = np.asarray(x_active, dtype=float)
+                return np.asarray(residual_fn(trial_x), dtype=float)
+
+            try:
+                stage_result = least_squares(
+                    _stage_residual,
+                    np.asarray(stage_start[active_indices], dtype=float),
+                    bounds=(
+                        np.asarray(lower_bounds[active_indices], dtype=float),
+                        np.asarray(upper_bounds[active_indices], dtype=float),
+                    ),
+                    x_scale=np.asarray(x_scale[active_indices], dtype=float),
+                    loss=solver_loss,
+                    f_scale=solver_f_scale,
+                    max_nfev=staged_release_max_nfev,
+                )
+            except Exception as exc:
+                summary["stages"].append(
+                    {
+                        "stage": int(stage_number),
+                        "label": str(stage_spec.get("label", "auto")),
+                        "status": "failed",
+                        "reason": f"stage_failed: {exc}",
+                        "accepted": False,
+                        "active_parameters": list(
+                            stage_spec.get("active_parameters", [])
+                        ),
+                        "fixed_parameters": list(
+                            stage_spec.get("fixed_parameters", [])
+                        ),
+                    }
+                )
+                any_failed = True
+                _emit_status(
+                    f"Geometry fit: staged stage {stage_number} failed ({exc})"
+                )
+                continue
+
+            trial_x = np.asarray(stage_start, dtype=float).copy()
+            trial_x[active_indices] = np.asarray(stage_result.x, dtype=float)
+            trial_x = np.minimum(np.maximum(trial_x, lower_bounds), upper_bounds)
+            final_residual = np.asarray(residual_fn(trial_x), dtype=float)
+            final_cost = _robust_cost(
+                final_residual,
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+            )
+            cost_tol = max(
+                1.0e-9 * max(abs(float(start_cost)), 1.0),
+                1.0e-12,
+            )
+            if np.isfinite(start_cost) and start_cost > 1.0e-12:
+                cost_limit = float(
+                    start_cost * (1.0 + staged_release_max_cost_increase_fraction)
+                )
+            else:
+                cost_limit = float(start_cost + cost_tol)
+            accepted = bool(np.isfinite(final_cost) and final_cost <= cost_limit + cost_tol)
+            stage_status = "accepted" if accepted else "rejected"
+            stage_reason = "accepted"
+            if accepted and final_cost + cost_tol < start_cost:
+                stage_reason = "accepted_improved"
+            elif accepted:
+                stage_reason = "accepted_no_regression"
+            else:
+                stage_reason = "cost_regressed"
+
+            summary["stages"].append(
+                {
+                    "stage": int(stage_number),
+                    "label": str(stage_spec.get("label", "auto")),
+                    "status": stage_status,
+                    "reason": stage_reason,
+                    "accepted": bool(accepted),
+                    "active_parameters": list(stage_spec.get("active_parameters", [])),
+                    "fixed_parameters": list(stage_spec.get("fixed_parameters", [])),
+                    "active_count": int(active_indices.size),
+                    "fixed_count": int(fixed_indices.size),
+                    "start_cost": float(start_cost),
+                    "final_cost": float(final_cost),
+                    "cost_limit": float(cost_limit),
+                    "nfev": int(getattr(stage_result, "nfev", 0)),
+                    "success": bool(getattr(stage_result, "success", False)),
+                    "message": str(getattr(stage_result, "message", "")),
+                    "start_x": stage_start.tolist(),
+                    "end_x": trial_x.tolist(),
+                }
+            )
+            if accepted:
+                current_x = np.asarray(trial_x, dtype=float)
+                accepted_stage_count += 1
+                _emit_status(
+                    f"Geometry fit: staged stage {stage_number} accepted "
+                    f"(cost={float(final_cost):.6f})"
+                )
+            else:
+                _emit_status(
+                    f"Geometry fit: staged stage {stage_number} rejected "
+                    f"(cost={float(final_cost):.6f})"
+                )
+
+        summary["accepted_stage_count"] = int(accepted_stage_count)
+        if accepted_stage_count > 0:
+            summary["status"] = "accepted"
+            summary["reason"] = "accepted"
+            summary["accepted"] = True
+            summary["x"] = np.asarray(current_x, dtype=float)
+            _emit_status(
+                "Geometry fit: staged release accepted "
+                f"({accepted_stage_count}/{len(stage_specs)} stage(s))"
+            )
+        elif any_failed:
+            summary["status"] = "failed"
+            summary["reason"] = "no_stage_accepted"
+            _emit_status("Geometry fit: staged release failed")
+        else:
+            summary["status"] = "rejected"
+            summary["reason"] = "no_stage_accepted"
+            _emit_status("Geometry fit: staged release rejected")
+        return summary
 
     def _vector_key(x_trial: Sequence[float]) -> Tuple[float, ...]:
         return tuple(np.round(np.asarray(x_trial, dtype=float), 12).tolist())
@@ -6194,6 +6770,13 @@ def fit_geometry_parameters(
             str(seed_label),
         )
 
+    staged_release_summary = _maybe_run_staged_release(x0_arr)
+    staged_release_x = staged_release_summary.get("x")
+    if staged_release_summary.get("accepted") and staged_release_x is not None:
+        x0_arr = np.asarray(staged_release_x, dtype=float)
+        fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
+
+    _emit_status("Geometry fit: running main solve")
     result = _run_solver(x0_arr)
     best_result = result
     initial_cost = _robust_cost(
@@ -6214,6 +6797,9 @@ def fit_geometry_parameters(
     ]
 
     if solver_restarts > 0 and x0_arr.size > 0:
+        _emit_status(
+            f"Geometry fit: evaluating {solver_restarts} restart seed(s)"
+        )
         restart_selection_tol = max(
             1e-9 * max(abs(float(initial_cost)), 1.0),
             1e-12,
@@ -6316,6 +6902,10 @@ def fit_geometry_parameters(
             if trial_cost < best_cost:
                 best_result = trial
                 best_cost = trial_cost
+        _emit_status(
+            "Geometry fit: restart search complete "
+            f"(best_cost={float(best_cost):.6f})"
+        )
 
     stagnation_tol = max(
         stagnation_probe_min_improvement,
@@ -6333,6 +6923,7 @@ def fit_geometry_parameters(
         and x0_arr.size > 0
         and (best_is_initial or best_improvement <= stagnation_tol)
     ):
+        _emit_status("Geometry fit: probing stagnation directions")
         probe_anchor = np.asarray(best_x, dtype=float)
         probe_scale = np.where(
             finite_span,
@@ -6473,6 +7064,10 @@ def fit_geometry_parameters(
             if trial_cost < best_cost:
                 best_result = trial
                 best_cost = trial_cost
+        _emit_status(
+            "Geometry fit: stagnation probing complete "
+            f"(best_cost={float(best_cost):.6f})"
+        )
 
     def _snapshot_single_ray_state() -> List[Optional[np.ndarray]]:
         snapshot: List[Optional[np.ndarray]] = []
@@ -6531,6 +7126,7 @@ def fit_geometry_parameters(
 
         snapshot = _snapshot_single_ray_state()
         start_x = np.asarray(current_result.x, dtype=float)
+        _emit_status("Geometry fit: running full-ray polish")
         try:
             for dataset_ctx in dataset_contexts:
                 dataset_ctx.single_ray_indices = None
@@ -6608,7 +7204,215 @@ def fit_geometry_parameters(
         if note not in existing_parts:
             current_result.message = f"{message_text}; {note}"
 
+    def _maybe_run_auto_freeze(
+        current_result: OptimizeResult,
+    ) -> Dict[str, object]:
+        summary: Dict[str, object] = {
+            "enabled": bool(auto_freeze_enabled),
+            "status": "skipped",
+            "reason": "",
+            "accepted": False,
+            "fixed_parameters": [],
+            "active_parameters": [],
+        }
+        if not auto_freeze_enabled:
+            summary["reason"] = "disabled_by_config"
+            return summary
+        if not identifiability_enabled:
+            summary["reason"] = "identifiability_disabled"
+            return summary
+        if getattr(current_result, "x", None) is None:
+            summary["reason"] = "missing_parameter_vector"
+            return summary
+        if len(var_names) <= 1:
+            summary["reason"] = "insufficient_parameter_count"
+            return summary
+
+        start_x = np.asarray(current_result.x, dtype=float)
+        if start_x.ndim != 1 or start_x.size != len(var_names):
+            summary["reason"] = "parameter_vector_shape_mismatch"
+            return summary
+        start_residual = np.asarray(residual_fn(start_x), dtype=float)
+        if start_residual.ndim != 1 or start_residual.size == 0:
+            summary["reason"] = "empty_residual"
+            return summary
+        start_cost = _robust_cost(
+            start_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        ident_summary = _build_identifiability_summary(
+            OptimizeResult(
+                x=start_x,
+                fun=start_residual,
+                success=bool(getattr(current_result, "success", False)),
+                status=int(getattr(current_result, "status", 0)),
+                message=str(getattr(current_result, "message", "")),
+                nfev=int(getattr(current_result, "nfev", 0)),
+                active_mask=np.zeros_like(start_x, dtype=int),
+                optimality=float(getattr(current_result, "optimality", np.nan)),
+            ),
+            None,
+        )
+        summary["condition_number"] = float(
+            ident_summary.get("condition_number", np.nan)
+        )
+        summary["underconstrained"] = bool(
+            ident_summary.get("underconstrained", False)
+        )
+        summary["warning_flags"] = list(ident_summary.get("warning_flags", []))
+        summary["freeze_recommendations"] = list(
+            ident_summary.get("freeze_recommendations", [])
+        )
+        if str(ident_summary.get("status", "")) != "ok":
+            summary["reason"] = f"identifiability_{ident_summary.get('reason', 'failed')}"
+            return summary
+
+        candidate_entries: List[Dict[str, object]] = []
+        for entry in ident_summary.get("freeze_recommendations", []):
+            if not isinstance(entry, dict):
+                continue
+            reasons = {str(reason) for reason in entry.get("reasons", [])}
+            max_abs_correlation = float(entry.get("max_abs_correlation", np.nan))
+            is_weak = bool(
+                reasons.intersection({"weak_sensitivity", "invalid_jacobian_column"})
+            )
+            is_high_corr = (
+                np.isfinite(max_abs_correlation)
+                and max_abs_correlation >= auto_freeze_correlation
+            )
+            if not (is_weak or is_high_corr):
+                continue
+            candidate_entries.append(dict(entry))
+
+        condition_triggered = bool(
+            summary["underconstrained"]
+            or not np.isfinite(summary["condition_number"])
+            or float(summary["condition_number"]) >= auto_freeze_condition_number
+        )
+        if not candidate_entries:
+            summary["reason"] = "no_freeze_candidates"
+            return summary
+        if not condition_triggered:
+            has_weak_candidate = any(
+                {
+                    str(reason)
+                    for reason in entry.get("reasons", [])
+                }.intersection({"weak_sensitivity", "invalid_jacobian_column"})
+                for entry in candidate_entries
+            )
+            if not has_weak_candidate:
+                summary["reason"] = "condition_threshold_not_triggered"
+                return summary
+
+        selected_entries = candidate_entries[:auto_freeze_max_parameters]
+        if not selected_entries or auto_freeze_max_parameters <= 0:
+            summary["reason"] = "max_freeze_parameters_zero"
+            return summary
+
+        fixed_indices = np.array(
+            [int(entry.get("index", -1)) for entry in selected_entries],
+            dtype=np.int64,
+        )
+        fixed_indices = fixed_indices[
+            (fixed_indices >= 0) & (fixed_indices < len(var_names))
+        ]
+        if fixed_indices.size == 0:
+            summary["reason"] = "no_valid_fixed_indices"
+            return summary
+        fixed_indices = np.unique(fixed_indices)
+        fixed_mask = np.zeros(len(var_names), dtype=bool)
+        fixed_mask[fixed_indices] = True
+        active_indices = np.flatnonzero(~fixed_mask)
+        if active_indices.size == 0:
+            summary["reason"] = "all_parameters_would_be_fixed"
+            return summary
+
+        summary["fixed_parameters"] = [str(var_names[idx]) for idx in fixed_indices.tolist()]
+        summary["active_parameters"] = [str(var_names[idx]) for idx in active_indices.tolist()]
+        summary["candidate_count"] = int(len(candidate_entries))
+        summary["selected_count"] = int(fixed_indices.size)
+        summary["truncated"] = bool(len(candidate_entries) > fixed_indices.size)
+        summary["start_cost"] = float(start_cost)
+        _emit_status(
+            "Geometry fit: auto-freeze evaluating "
+            f"{summary['fixed_parameters']}"
+        )
+
+        fixed_reference = np.asarray(start_x, dtype=float).copy()
+
+        def _reduced_residual(x_active: np.ndarray) -> np.ndarray:
+            x_trial = np.asarray(fixed_reference, dtype=float).copy()
+            x_trial[active_indices] = np.asarray(x_active, dtype=float)
+            return np.asarray(residual_fn(x_trial), dtype=float)
+
+        try:
+            reduced_result = least_squares(
+                _reduced_residual,
+                np.asarray(fixed_reference[active_indices], dtype=float),
+                bounds=(
+                    np.asarray(lower_bounds[active_indices], dtype=float),
+                    np.asarray(upper_bounds[active_indices], dtype=float),
+                ),
+                x_scale=np.asarray(x_scale[active_indices], dtype=float),
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+                max_nfev=auto_freeze_max_nfev,
+            )
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["reason"] = f"auto_freeze_failed: {exc}"
+            return summary
+
+        reduced_x = np.asarray(fixed_reference, dtype=float).copy()
+        reduced_x[active_indices] = np.asarray(reduced_result.x, dtype=float)
+        reduced_residual = np.asarray(
+            residual_fn(np.asarray(reduced_x, dtype=float)),
+            dtype=float,
+        )
+        final_cost = _robust_cost(
+            reduced_residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+        cost_tol = max(
+            1.0e-9 * max(abs(float(start_cost)), 1.0),
+            1.0e-12,
+        )
+        if np.isfinite(start_cost) and start_cost > 1.0e-12:
+            cost_limit = float(
+                start_cost * (1.0 + auto_freeze_max_cost_increase_fraction)
+            )
+        else:
+            cost_limit = float(start_cost + cost_tol)
+        accepted = bool(final_cost <= cost_limit + cost_tol)
+        summary.update(
+            {
+                "status": "accepted" if accepted else "rejected",
+                "accepted": bool(accepted),
+                "reason": "accepted" if accepted else "cost_regressed",
+                "final_cost": float(final_cost),
+                "cost_limit": float(cost_limit),
+                "nfev": int(getattr(reduced_result, "nfev", 0)),
+                "success": bool(getattr(reduced_result, "success", False)),
+                "message": str(getattr(reduced_result, "message", "")),
+                "max_nfev": int(auto_freeze_max_nfev),
+            }
+        )
+        if accepted:
+            summary["x"] = reduced_x
+        return summary
+
     result = best_result
+    if staged_release_summary.get("accepted"):
+        accepted_stage_count = int(
+            staged_release_summary.get("accepted_stage_count", 0)
+        )
+        if accepted_stage_count > 0:
+            _append_result_message(
+                result,
+                f"Staged release seed accepted ({accepted_stage_count} stage(s))",
+            )
     single_ray_polish_summary: Dict[str, object] = {
         "enabled": bool(single_ray_polish_enabled),
         "status": "skipped",
@@ -6674,10 +7478,41 @@ def fit_geometry_parameters(
             result.x = np.asarray(refined_x, dtype=float)
             _append_result_message(result, "ROI/image refinement accepted")
 
+    auto_freeze_summary: Dict[str, object] = {
+        "enabled": bool(auto_freeze_enabled),
+        "status": "skipped",
+        "reason": "not_evaluated",
+        "accepted": False,
+    }
+    if getattr(result, "x", None) is not None:
+        try:
+            auto_freeze_summary = _maybe_run_auto_freeze(result)
+        except Exception as exc:
+            auto_freeze_summary = {
+                "enabled": bool(auto_freeze_enabled),
+                "status": "failed",
+                "reason": f"unexpected_exception: {exc}",
+                "accepted": False,
+            }
+        refined_x = auto_freeze_summary.get("x")
+        if auto_freeze_summary.get("accepted") and refined_x is not None:
+            result.x = np.asarray(refined_x, dtype=float)
+            fixed_names = auto_freeze_summary.get("fixed_parameters", [])
+            if fixed_names:
+                joined = ", ".join(str(name) for name in fixed_names)
+                _append_result_message(
+                    result,
+                    f"Auto-freeze accepted ({joined})",
+                )
+            else:
+                _append_result_message(result, "Auto-freeze accepted")
+
     result.restart_history = restart_history
+    result.staged_release_summary = staged_release_summary
     result.single_ray_polish_summary = single_ray_polish_summary
     result.ridge_refinement_summary = ridge_refinement_summary
     result.image_refinement_summary = image_refinement_summary
+    result.auto_freeze_summary = auto_freeze_summary
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
     result.parameter_prior_summary = parameter_prior_summary
@@ -6748,6 +7583,11 @@ def fit_geometry_parameters(
         getattr(result, "point_match_diagnostics", None),
     )
     result.identifiability_summary = identifiability_summary
+    _emit_status(
+        "Geometry fit: complete "
+        f"(cost={float(getattr(result, 'cost', np.nan)):.6f}, "
+        f"rms={float(getattr(result, 'rms_px', np.nan)):.4f}px)"
+    )
 
     return result
 

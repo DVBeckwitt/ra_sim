@@ -6383,6 +6383,18 @@ def on_fit_geometry_click():
             _log_line(f"  {line}")
         _log_line()
 
+    _last_fit_status = {"text": ""}
+
+    def _fit_status_update(text: str) -> None:
+        message = "" if text is None else str(text).strip()
+        if not message:
+            return
+        progress_label_geometry.config(text=message)
+        root.update_idletasks()
+        if message != _last_fit_status["text"]:
+            _log_line(f"[status] {message}")
+            _last_fit_status["text"] = message
+
     progress_label_geometry.config(text="Running geometry fit (auto-matched peaks)…")
     root.update_idletasks()
 
@@ -6598,6 +6610,7 @@ def on_fit_geometry_click():
                 pixel_tol=float('inf'),
                 experimental_image=experimental_image_for_fit,
                 refinement_config=geometry_runtime_cfg,
+                status_callback=_fit_status_update,
             )
 
             if getattr(result, "x", None) is None or len(result.x) != len(var_names):
@@ -6865,6 +6878,47 @@ def on_fit_geometry_click():
                     f"image_cost_after={float(image_refinement_summary.get('image_cost_after', np.nan)):.6f}",
                     f"point_rms_before_px={float(image_refinement_summary.get('point_rms_before_px', np.nan)):.6f}",
                     f"point_rms_after_px={float(image_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
+                ],
+            )
+        staged_release_summary = getattr(result, "staged_release_summary", None)
+        if isinstance(staged_release_summary, dict):
+            stage_lines = [
+                f"enabled={bool(staged_release_summary.get('enabled', False))}",
+                f"status={staged_release_summary.get('status', 'unknown')}",
+                f"reason={staged_release_summary.get('reason', 'n/a')}",
+                f"accepted={bool(staged_release_summary.get('accepted', False))}",
+                f"planned_stage_count={int(staged_release_summary.get('planned_stage_count', 0))}",
+                f"accepted_stage_count={int(staged_release_summary.get('accepted_stage_count', 0))}",
+            ]
+            for stage_entry in staged_release_summary.get("stages", []) or []:
+                if not isinstance(stage_entry, dict):
+                    continue
+                stage_lines.append(
+                    "stage[{stage}] status={status} reason={reason} active={active} fixed={fixed} "
+                    "start_cost={start_cost:.6f} final_cost={final_cost:.6f}".format(
+                        stage=int(stage_entry.get("stage", -1)),
+                        status=str(stage_entry.get("status", "unknown")),
+                        reason=str(stage_entry.get("reason", "n/a")),
+                        active=list(stage_entry.get("active_parameters", [])),
+                        fixed=list(stage_entry.get("fixed_parameters", [])),
+                        start_cost=float(stage_entry.get("start_cost", np.nan)),
+                        final_cost=float(stage_entry.get("final_cost", np.nan)),
+                    )
+                )
+            _log_section("Staged release:", stage_lines)
+        auto_freeze_summary = getattr(result, "auto_freeze_summary", None)
+        if isinstance(auto_freeze_summary, dict):
+            _log_section(
+                "Auto-freeze:",
+                [
+                    f"enabled={bool(auto_freeze_summary.get('enabled', False))}",
+                    f"status={auto_freeze_summary.get('status', 'unknown')}",
+                    f"reason={auto_freeze_summary.get('reason', 'n/a')}",
+                    f"accepted={bool(auto_freeze_summary.get('accepted', False))}",
+                    f"fixed_parameters={list(auto_freeze_summary.get('fixed_parameters', []))}",
+                    f"active_parameters={list(auto_freeze_summary.get('active_parameters', []))}",
+                    f"start_cost={float(auto_freeze_summary.get('start_cost', np.nan)):.6f}",
+                    f"final_cost={float(auto_freeze_summary.get('final_cost', np.nan)):.6f}",
                 ],
             )
         identifiability_summary = getattr(result, "identifiability_summary", None)
@@ -7229,6 +7283,18 @@ def on_fit_geometry_click():
                 for line in lines:
                     _log_line(f"  {line}")
                 _log_line()
+
+            _last_fit_status = {"text": ""}
+
+            def _fit_status_update(text: str) -> None:
+                message = "" if text is None else str(text).strip()
+                if not message:
+                    return
+                progress_label_geometry.config(text=message)
+                root.update_idletasks()
+                if message != _last_fit_status["text"]:
+                    _log_line(f"[status] {message}")
+                    _last_fit_status["text"] = message
 
             progress_label_geometry.config(text="Running geometry fit…")
             root.update_idletasks()
@@ -7686,6 +7752,7 @@ def on_fit_geometry_click():
                     pixel_tol=float('inf'),
                     experimental_image=experimental_image_for_fit,
                     refinement_config=geometry_runtime_cfg,
+                    status_callback=_fit_status_update,
                 )
 
                 _log_section(
@@ -7762,6 +7829,47 @@ def on_fit_geometry_click():
                             f"image_cost_after={float(image_refinement_summary.get('image_cost_after', np.nan)):.6f}",
                             f"point_rms_before_px={float(image_refinement_summary.get('point_rms_before_px', np.nan)):.6f}",
                             f"point_rms_after_px={float(image_refinement_summary.get('point_rms_after_px', np.nan)):.6f}",
+                        ],
+                    )
+                staged_release_summary = getattr(result, "staged_release_summary", None)
+                if isinstance(staged_release_summary, dict):
+                    stage_lines = [
+                        f"enabled={bool(staged_release_summary.get('enabled', False))}",
+                        f"status={staged_release_summary.get('status', 'unknown')}",
+                        f"reason={staged_release_summary.get('reason', 'n/a')}",
+                        f"accepted={bool(staged_release_summary.get('accepted', False))}",
+                        f"planned_stage_count={int(staged_release_summary.get('planned_stage_count', 0))}",
+                        f"accepted_stage_count={int(staged_release_summary.get('accepted_stage_count', 0))}",
+                    ]
+                    for stage_entry in staged_release_summary.get("stages", []) or []:
+                        if not isinstance(stage_entry, dict):
+                            continue
+                        stage_lines.append(
+                            "stage[{stage}] status={status} reason={reason} active={active} fixed={fixed} "
+                            "start_cost={start_cost:.6f} final_cost={final_cost:.6f}".format(
+                                stage=int(stage_entry.get("stage", -1)),
+                                status=str(stage_entry.get("status", "unknown")),
+                                reason=str(stage_entry.get("reason", "n/a")),
+                                active=list(stage_entry.get("active_parameters", [])),
+                                fixed=list(stage_entry.get("fixed_parameters", [])),
+                                start_cost=float(stage_entry.get("start_cost", np.nan)),
+                                final_cost=float(stage_entry.get("final_cost", np.nan)),
+                            )
+                        )
+                    _log_section("Staged release:", stage_lines)
+                auto_freeze_summary = getattr(result, "auto_freeze_summary", None)
+                if isinstance(auto_freeze_summary, dict):
+                    _log_section(
+                        "Auto-freeze:",
+                        [
+                            f"enabled={bool(auto_freeze_summary.get('enabled', False))}",
+                            f"status={auto_freeze_summary.get('status', 'unknown')}",
+                            f"reason={auto_freeze_summary.get('reason', 'n/a')}",
+                            f"accepted={bool(auto_freeze_summary.get('accepted', False))}",
+                            f"fixed_parameters={list(auto_freeze_summary.get('fixed_parameters', []))}",
+                            f"active_parameters={list(auto_freeze_summary.get('active_parameters', []))}",
+                            f"start_cost={float(auto_freeze_summary.get('start_cost', np.nan)):.6f}",
+                            f"final_cost={float(auto_freeze_summary.get('final_cost', np.nan)):.6f}",
                         ],
                     )
                 identifiability_summary = getattr(result, "identifiability_summary", None)

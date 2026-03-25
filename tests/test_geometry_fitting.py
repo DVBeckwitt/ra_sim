@@ -2246,3 +2246,243 @@ def test_fit_geometry_parameters_reports_identifiability(monkeypatch):
     assert [entry["name"] for entry in parameter_entries] == ["gamma", "Gamma"]
     assert float(parameter_entries[0]["column_norm"]) > 0.0
     assert np.isclose(float(parameter_entries[1]["column_norm"]), 0.0)
+    assert list(result.identifiability_summary["recommended_fixed_parameters"]) == [
+        "Gamma"
+    ]
+    weak_parameters = result.identifiability_summary["weak_parameters"]
+    assert len(weak_parameters) == 1
+    assert str(weak_parameters[0]["name"]) == "Gamma"
+
+
+def test_fit_geometry_parameters_can_auto_freeze_weak_parameter(monkeypatch):
+    solve_dims = []
+
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        return np.array([gamma - 1.0], dtype=np.float64)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x0_arr = np.asarray(x0, dtype=float)
+        solve_dims.append(int(x0_arr.size))
+        if x0_arr.size == 2:
+            x = np.array([0.5, 2.0], dtype=float)
+        else:
+            x = np.array([1.0], dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
+        var_names=["gamma", "Gamma"],
+        experimental_image=None,
+        refinement_config={
+            "solver": {"restarts": 0},
+            "identifiability": {"enabled": True, "auto_freeze": True},
+        },
+    )
+
+    assert result.success
+    assert solve_dims == [2, 1]
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0]))
+    assert isinstance(result.auto_freeze_summary, dict)
+    assert bool(result.auto_freeze_summary["accepted"]) is True
+    assert list(result.auto_freeze_summary["fixed_parameters"]) == ["Gamma"]
+
+
+def test_fit_geometry_parameters_reports_high_correlation_pairs(monkeypatch):
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        Gamma = float(args[1])
+        coupled = gamma + Gamma - 1.0
+        return np.array([coupled, 2.0 * coupled], dtype=np.float64)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
+        var_names=["gamma", "Gamma"],
+        experimental_image=None,
+        refinement_config={
+            "solver": {"restarts": 0},
+            "identifiability": {"enabled": True},
+        },
+    )
+
+    high_pairs = result.identifiability_summary["high_correlation_pairs"]
+    assert len(high_pairs) == 1
+    assert {
+        str(high_pairs[0]["name_i"]),
+        str(high_pairs[0]["name_j"]),
+    } == {"gamma", "Gamma"}
+    assert float(high_pairs[0]["abs_correlation"]) > 0.99
+    assert len(result.identifiability_summary["recommended_fixed_parameters"]) == 1
+
+
+def test_fit_geometry_parameters_can_stage_parameter_release(monkeypatch):
+    solve_starts = []
+
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        Gamma = float(args[1])
+        dist = float(args[2])
+        return np.array([gamma - 1.0, Gamma - 2.0, dist - 3.0], dtype=np.float64)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x0_arr = np.asarray(x0, dtype=float)
+        solve_starts.append(x0_arr.copy())
+        if x0_arr.size == 2:
+            x = np.array([1.0, 2.0], dtype=float)
+        else:
+            assert np.allclose(x0_arr, np.array([1.0, 2.0, 0.1], dtype=float))
+            x = np.array([1.0, 2.0, 3.0], dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+    params["corto_detector"] = 0.1
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[],
+        var_names=["gamma", "Gamma", "corto_detector"],
+        experimental_image=None,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "staged_release": {"enabled": True},
+            },
+            "identifiability": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert len(solve_starts) == 2
+    assert solve_starts[0].size == 2
+    assert solve_starts[1].size == 3
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0, 3.0]))
+    assert isinstance(result.staged_release_summary, dict)
+    assert bool(result.staged_release_summary["accepted"]) is True
+    assert int(result.staged_release_summary["accepted_stage_count"]) == 1
+    stage_entries = result.staged_release_summary["stages"]
+    assert len(stage_entries) == 1
+    assert list(stage_entries[0]["active_parameters"]) == ["gamma", "Gamma"]
+
+
+def test_fit_geometry_parameters_emits_status_updates(monkeypatch):
+    status_messages = []
+
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        Gamma = float(args[1])
+        dist = float(args[2])
+        return np.array([gamma - 1.0, Gamma - 2.0, dist - 3.0], dtype=np.float64)
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x0_arr = np.asarray(x0, dtype=float)
+        if x0_arr.size == 2:
+            x = np.array([1.0, 2.0], dtype=float)
+        else:
+            x = np.array([1.0, 2.0, 3.0], dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+    params["corto_detector"] = 0.1
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[],
+        var_names=["gamma", "Gamma", "corto_detector"],
+        experimental_image=None,
+        refinement_config={
+            "solver": {
+                "restarts": 0,
+                "staged_release": {"enabled": True},
+            },
+            "identifiability": {"enabled": False},
+        },
+        status_callback=status_messages.append,
+    )
+
+    assert result.success
+    assert any("staged release enabled" in msg for msg in status_messages)
+    assert any("staged stage 1/1" in msg for msg in status_messages)
+    assert any("running main solve" in msg for msg in status_messages)
+    assert any("complete" in msg for msg in status_messages)
