@@ -1,41 +1,7 @@
-import ast
-from pathlib import Path
-
-GUI_APP_PATH = Path("ra_sim/gui/app.py")
-
-
-def _load_main_functions(*names: str) -> dict[str, object]:
-    source = GUI_APP_PATH.read_text(encoding="utf-8")
-    module = ast.parse(source, filename=str(GUI_APP_PATH))
-    extracted: list[str] = []
-    discovered = {
-        node.name
-        for node in module.body
-        if isinstance(node, ast.FunctionDef)
-    }
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name in names:
-            fn_source = ast.get_source_segment(source, node)
-            if fn_source:
-                extracted.append(fn_source)
-    missing = sorted(set(names) - discovered)
-    if missing:
-        raise AssertionError(
-            f"Failed to extract functions from {GUI_APP_PATH}: {missing}"
-        )
-
-    namespace: dict[str, object] = {}
-    exec(
-        "import copy\nimport numpy as np\n\n" + "\n\n".join(extracted),
-        namespace,
-    )
-    return namespace
+from ra_sim.gui.geometry_fit import build_geometry_fit_runtime_config
 
 
 def test_main_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_bounds() -> None:
-    namespace = _load_main_functions("_build_geometry_fit_runtime_config")
-    build = namespace["_build_geometry_fit_runtime_config"]
-
     base_config = {
         "bounds": {
             "theta_initial": {"mode": "relative", "min": -0.5, "max": 0.5},
@@ -57,7 +23,7 @@ def test_main_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_
         "gamma": (-5.0, 5.0),
     }
 
-    runtime_cfg = build(
+    runtime_cfg = build_geometry_fit_runtime_config(
         base_config,
         current_params,
         control_settings,
@@ -77,10 +43,7 @@ def test_main_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_
 
 
 def test_main_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> None:
-    namespace = _load_main_functions("_build_geometry_fit_runtime_config")
-    build = namespace["_build_geometry_fit_runtime_config"]
-
-    runtime_cfg = build(
+    runtime_cfg = build_geometry_fit_runtime_config(
         {},
         {"center_x": 98.0},
         {"center_x": {"window": 10.0, "pull": 1.0}},

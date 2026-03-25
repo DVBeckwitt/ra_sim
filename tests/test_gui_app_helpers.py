@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+from ra_sim.gui.geometry_fit import build_geometry_fit_runtime_config
+
 
 def _load_app_functions(*names: str) -> dict[str, object]:
     source = Path("ra_sim/gui/app.py").read_text(encoding="utf-8")
@@ -21,10 +23,7 @@ def _load_app_functions(*names: str) -> dict[str, object]:
         raise AssertionError(f"Failed to extract functions from app.py: {missing}")
 
     namespace: dict[str, object] = {}
-    exec(
-        "import copy\nimport numpy as np\n\n" + "\n\n".join(extracted),
-        namespace,
-    )
+    exec("import numpy as np\n\n" + "\n\n".join(extracted), namespace)
     return namespace
 
 
@@ -40,12 +39,6 @@ def test_app_normalize_hkl_key_accepts_common_label_formats() -> None:
 
 
 def test_app_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_bounds() -> None:
-    namespace = _load_app_functions(
-        "_copy_geometry_fit_state_value",
-        "_build_geometry_fit_runtime_config",
-    )
-    build = namespace["_build_geometry_fit_runtime_config"]
-
     base_config = {
         "bounds": {
             "theta_initial": {"mode": "relative", "min": -0.5, "max": 0.5},
@@ -67,7 +60,7 @@ def test_app_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_b
         "gamma": (-5.0, 5.0),
     }
 
-    runtime_cfg = build(
+    runtime_cfg = build_geometry_fit_runtime_config(
         base_config,
         current_params,
         control_settings,
@@ -87,13 +80,7 @@ def test_app_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_b
 
 
 def test_app_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> None:
-    namespace = _load_app_functions(
-        "_copy_geometry_fit_state_value",
-        "_build_geometry_fit_runtime_config",
-    )
-    build = namespace["_build_geometry_fit_runtime_config"]
-
-    runtime_cfg = build(
+    runtime_cfg = build_geometry_fit_runtime_config(
         {},
         {"center_x": 98.0},
         {"center_x": {"window": 10.0, "pull": 1.0}},

@@ -326,6 +326,7 @@ from ra_sim.gui.geometry_overlay import (
     compute_geometry_overlay_frame_diagnostics,
     normalize_initial_geometry_pairs_display,
 )
+from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import state_io as gui_state_io
 from ra_sim.gui.qr_cylinder_overlay import interpolate_trace_to_caked_coords
 from ra_sim.gui.sliders import create_slider
@@ -4658,44 +4659,31 @@ def _undo_last_geometry_manual_placement() -> None:
 def _copy_geometry_fit_state_value(value):
     """Deep-copy simple geometry-fit GUI state."""
 
-    if isinstance(value, np.ndarray):
-        return np.asarray(value).copy()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {
-            key: _copy_geometry_fit_state_value(val)
-            for key, val in value.items()
-        }
-    if isinstance(value, list):
-        return [_copy_geometry_fit_state_value(val) for val in value]
-    if isinstance(value, tuple):
-        return tuple(_copy_geometry_fit_state_value(val) for val in value)
-    return value
+    return gui_geometry_fit.copy_geometry_fit_state_value(value)
 
 
 def _current_geometry_fit_ui_params() -> dict[str, object]:
     """Capture the current geometry-fit UI parameter values."""
 
-    params = {
-        "zb": float(zb_var.get()),
-        "zs": float(zs_var.get()),
-        "theta_initial": float(theta_initial_var.get()),
-        "psi_z": float(psi_z_var.get()),
-        "chi": float(chi_var.get()),
-        "cor_angle": float(cor_angle_var.get()),
-        "gamma": float(gamma_var.get()),
-        "Gamma": float(Gamma_var.get()),
-        "corto_detector": float(corto_detector_var.get()),
-        "a": float(a_var.get()),
-        "c": float(c_var.get()),
-        "center_x": float(center_x_var.get()),
-        "center_y": float(center_y_var.get()),
-        "center": [float(center_x_var.get()), float(center_y_var.get())],
-    }
+    theta_offset = None
     if geometry_theta_offset_var is not None:
-        params["theta_offset"] = float(_current_geometry_theta_offset(strict=False))
-    return params
+        theta_offset = float(_current_geometry_theta_offset(strict=False))
+    return gui_geometry_fit.current_geometry_fit_ui_params(
+        zb=float(zb_var.get()),
+        zs=float(zs_var.get()),
+        theta_initial=float(theta_initial_var.get()),
+        psi_z=float(psi_z_var.get()),
+        chi=float(chi_var.get()),
+        cor_angle=float(cor_angle_var.get()),
+        gamma=float(gamma_var.get()),
+        Gamma=float(Gamma_var.get()),
+        corto_detector=float(corto_detector_var.get()),
+        a=float(a_var.get()),
+        c=float(c_var.get()),
+        center_x=float(center_x_var.get()),
+        center_y=float(center_y_var.get()),
+        theta_offset=theta_offset,
+    )
 
 
 def _update_geometry_fit_undo_button_state() -> None:
@@ -4793,41 +4781,27 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
     if not isinstance(state, dict):
         return
 
-    ui_params = state.get("ui_params", {}) or {}
-    for name, var in (
-        ("zb", zb_var),
-        ("zs", zs_var),
-        ("theta_initial", theta_initial_var),
-        ("psi_z", psi_z_var),
-        ("chi", chi_var),
-        ("cor_angle", cor_angle_var),
-        ("gamma", gamma_var),
-        ("Gamma", Gamma_var),
-        ("corto_detector", corto_detector_var),
-        ("a", a_var),
-        ("c", c_var),
-        ("center_x", center_x_var),
-        ("center_y", center_y_var),
-    ):
-        try:
-            value = float(ui_params.get(name))
-        except Exception:
-            continue
-        if np.isfinite(value):
-            var.set(value)
-
-    if geometry_theta_offset_var is not None:
-        try:
-            theta_offset = float(ui_params.get("theta_offset", 0.0))
-        except Exception:
-            theta_offset = 0.0
-        if np.isfinite(theta_offset):
-            geometry_theta_offset_var.set(f"{theta_offset:.6g}")
-
-    profile_cache = _copy_geometry_fit_state_value(state.get("profile_cache", {})) or {}
-    last_geometry_overlay_state = _copy_geometry_fit_state_value(
-        state.get("overlay_state")
+    restored = gui_geometry_fit.apply_geometry_fit_undo_state(
+        state,
+        var_map={
+            "zb": zb_var,
+            "zs": zs_var,
+            "theta_initial": theta_initial_var,
+            "psi_z": psi_z_var,
+            "chi": chi_var,
+            "cor_angle": cor_angle_var,
+            "gamma": gamma_var,
+            "Gamma": Gamma_var,
+            "corto_detector": corto_detector_var,
+            "a": a_var,
+            "c": c_var,
+            "center_x": center_x_var,
+            "center_y": center_y_var,
+        },
+        geometry_theta_offset_var=geometry_theta_offset_var,
     )
+    profile_cache = restored["profile_cache"]
+    last_geometry_overlay_state = restored["overlay_state"]
     last_simulation_signature = None
 
     if update_pending is not None:
@@ -14166,19 +14140,7 @@ for _idx, _widget in enumerate(fit_toggle_widgets):
 _refresh_geometry_fit_theta_checkbox_label()
 
 GEOMETRY_FIT_PARAM_ORDER = [
-    "zb",
-    "zs",
-    "theta_initial",
-    "psi_z",
-    "chi",
-    "cor_angle",
-    "gamma",
-    "Gamma",
-    "corto_detector",
-    "a",
-    "c",
-    "center_x",
-    "center_y",
+    *gui_geometry_fit.GEOMETRY_FIT_PARAM_ORDER,
 ]
 geometry_fit_toggle_vars = {
     "zb": fit_zb_var,
@@ -14920,36 +14882,22 @@ def _auto_match_background_peaks_with_relaxation(
 def _current_geometry_fit_var_names() -> list[str]:
     """Return the currently selected geometry variables for LSQ fitting."""
 
-    var_names: list[str] = []
-    if fit_zb_var.get():
-        var_names.append("zb")
-    if fit_zs_var.get():
-        var_names.append("zs")
-    if fit_theta_var.get():
-        var_names.append(
-            "theta_offset" if _geometry_fit_uses_shared_theta_offset() else "theta_initial"
-        )
-    if fit_psi_z_var.get():
-        var_names.append("psi_z")
-    if fit_chi_var.get():
-        var_names.append("chi")
-    if fit_cor_var.get():
-        var_names.append("cor_angle")
-    if fit_gamma_var.get():
-        var_names.append("gamma")
-    if fit_Gamma_var.get():
-        var_names.append("Gamma")
-    if fit_dist_var.get():
-        var_names.append("corto_detector")
-    if fit_a_var.get():
-        var_names.append("a")
-    if fit_c_var.get():
-        var_names.append("c")
-    if fit_center_x_var.get():
-        var_names.append("center_x")
-    if fit_center_y_var.get():
-        var_names.append("center_y")
-    return var_names
+    return gui_geometry_fit.current_geometry_fit_var_names(
+        fit_zb=bool(fit_zb_var.get()),
+        fit_zs=bool(fit_zs_var.get()),
+        fit_theta=bool(fit_theta_var.get()),
+        fit_psi_z=bool(fit_psi_z_var.get()),
+        fit_chi=bool(fit_chi_var.get()),
+        fit_cor=bool(fit_cor_var.get()),
+        fit_gamma=bool(fit_gamma_var.get()),
+        fit_Gamma=bool(fit_Gamma_var.get()),
+        fit_dist=bool(fit_dist_var.get()),
+        fit_a=bool(fit_a_var.get()),
+        fit_c=bool(fit_c_var.get()),
+        fit_center_x=bool(fit_center_x_var.get()),
+        fit_center_y=bool(fit_center_y_var.get()),
+        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
+    )
 
 
 def _current_geometry_fit_params() -> dict[str, object]:
@@ -15118,75 +15066,12 @@ def _build_geometry_fit_runtime_config(
     control_settings,
     parameter_domains,
 ):
-    runtime_cfg = copy.deepcopy(base_config) if isinstance(base_config, dict) else {}
-    if not isinstance(runtime_cfg, dict):
-        runtime_cfg = {}
-
-    bounds_cfg = runtime_cfg.get("bounds", {}) or {}
-    if not isinstance(bounds_cfg, dict):
-        bounds_cfg = {}
-    runtime_cfg["bounds"] = bounds_cfg
-
-    priors_cfg = runtime_cfg.get("priors", {}) or {}
-    if not isinstance(priors_cfg, dict):
-        priors_cfg = {}
-    runtime_cfg["priors"] = priors_cfg
-
-    for name, current in (current_params or {}).items():
-        try:
-            current_value = float(current)
-        except Exception:
-            continue
-        if not np.isfinite(current_value):
-            continue
-
-        control = (control_settings or {}).get(name, {}) or {}
-        try:
-            window = float(control.get("window", 0.0))
-        except Exception:
-            window = 0.0
-        if not np.isfinite(window):
-            window = 0.0
-        window = max(0.0, float(window))
-
-        lo = float(current_value - window)
-        hi = float(current_value + window)
-
-        domain = (parameter_domains or {}).get(name)
-        if isinstance(domain, (list, tuple)) and len(domain) >= 2:
-            try:
-                domain_lo = float(domain[0])
-                domain_hi = float(domain[1])
-            except Exception:
-                domain_lo = float("nan")
-                domain_hi = float("nan")
-            if np.isfinite(domain_lo):
-                lo = max(lo, float(domain_lo))
-            if np.isfinite(domain_hi):
-                hi = min(hi, float(domain_hi))
-
-        if hi < lo:
-            lo = hi = min(max(current_value, lo), hi)
-
-        bounds_cfg[str(name)] = [float(lo), float(hi)]
-
-        try:
-            pull = float(control.get("pull", 0.0))
-        except Exception:
-            pull = 0.0
-        if not np.isfinite(pull):
-            pull = 0.0
-        pull = min(max(float(pull), 0.0), 1.0)
-        if pull > 0.0 and window > 0.0:
-            sigma_scale = max(0.05, 1.0 - 0.95 * pull)
-            priors_cfg[str(name)] = {
-                "center": float(current_value),
-                "sigma": float(max(window * sigma_scale, 1.0e-6)),
-            }
-        else:
-            priors_cfg.pop(str(name), None)
-
-    return runtime_cfg
+    return gui_geometry_fit.build_geometry_fit_runtime_config(
+        base_config,
+        current_params,
+        control_settings,
+        parameter_domains,
+    )
 
 
 def _live_geometry_preview_enabled() -> bool:
