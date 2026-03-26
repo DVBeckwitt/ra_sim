@@ -265,6 +265,10 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     `ra_sim.gui.structure_model`, including snapshot/restore helpers for the
     structure-model state slice and diffuse-HT request packaging reused by the
     open/export actions.
+  - The primary-CIF browse dialog plus the diffuse-HT open/export dialog
+    workflow now also flow through `ra_sim.gui.structure_model`, leaving
+    `ra_sim.gui.runtime` with thin delegate wrappers plus control-var rebuild
+    callbacks.
 - Bragg-Qr / structure-factor pruning workflow extraction has advanced.
   - `ra_sim.gui.controllers` now owns the Bragg-Qr source/L-key normalization,
     disabled-filter pruning, filtered rod/HKL rebuild helpers, and status-text
@@ -460,8 +464,8 @@ What is left:
 - The follow-on runtime cleanup is now the remaining controller/view workflow
   glue still inline in `runtime.py`, not another round of GUI runtime-state
   extraction or the structure-model / diffuse-HT rebuild path.
-- The remaining structure-model runtime code is now mostly Tk-facing wiring:
-  file dialogs, progress-label updates, and control-var rebuild callbacks.
+- The remaining structure-model runtime code is now mostly thin delegate
+  wrappers, progress-label wiring, and control-var rebuild callbacks.
 - The remaining Bragg-Qr runtime code is now mostly window-action wiring
   around the extracted controller/view helpers.
 - The remaining Bragg-Qr manager runtime code is now mostly thin delegate

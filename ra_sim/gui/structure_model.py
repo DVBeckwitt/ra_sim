@@ -848,6 +848,148 @@ def build_diffuse_ht_request(
     )
 
 
+def _set_status_text(
+    set_status_text: Callable[[str], None] | None,
+    text: str,
+) -> None:
+    if callable(set_status_text):
+        set_status_text(str(text))
+
+
+def primary_cif_dialog_initial_dir(current_cif_path: object, default_dir: object) -> str:
+    """Return the preferred initial directory for the primary-CIF file dialog."""
+
+    try:
+        return str(Path(str(current_cif_path)).expanduser().parent)
+    except Exception:
+        return str(default_dir)
+
+
+def browse_primary_cif_with_dialog(
+    *,
+    current_cif_path: object,
+    file_dialog_dir: object,
+    askopenfilename: Callable[..., object],
+    set_cif_path_text: Callable[[str], None],
+    apply_primary_cif_path: Callable[[str], None],
+) -> bool:
+    """Open the primary-CIF picker and apply the selected path."""
+
+    selected = askopenfilename(
+        title="Select Primary CIF",
+        initialdir=primary_cif_dialog_initial_dir(current_cif_path, file_dialog_dir),
+        filetypes=[("CIF files", "*.cif *.CIF"), ("All files", "*.*")],
+    )
+    if not selected:
+        return False
+
+    selected_path = str(selected)
+    set_cif_path_text(selected_path)
+    apply_primary_cif_path(selected_path)
+    return True
+
+
+def open_diffuse_ht_view_with_status(
+    *,
+    build_request: Callable[[], DiffuseHTRequest],
+    open_view: Callable[[DiffuseHTRequest], None],
+    set_status_text: Callable[[str], None] | None = None,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+) -> bool:
+    """Open the diffuse-HT viewer and report GUI status text."""
+
+    input_error_types = tuple(tcl_error_types) + (ValueError,)
+    try:
+        request = build_request()
+    except FileNotFoundError as exc:
+        _set_status_text(set_status_text, str(exc))
+        return False
+    except Exception as exc:
+        if isinstance(exc, input_error_types):
+            _set_status_text(
+                set_status_text,
+                f"Failed to read diffuse HT inputs: {exc}",
+            )
+            return False
+        raise
+
+    try:
+        open_view(request)
+    except Exception as exc:
+        _set_status_text(
+            set_status_text,
+            f"Failed to open diffuse HT viewer: {exc}",
+        )
+        return False
+
+    _set_status_text(
+        set_status_text,
+        f"Opened diffuse HT viewer: {Path(request.source_cif).name}",
+    )
+    return True
+
+
+def export_diffuse_ht_txt_with_dialog(
+    *,
+    build_request: Callable[[], DiffuseHTRequest],
+    get_download_dir: Callable[[], object] | None,
+    asksaveasfilename: Callable[..., object],
+    export_table: Callable[[str, DiffuseHTRequest], int],
+    set_status_text: Callable[[str], None] | None = None,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+) -> bool:
+    """Export one algebraic HT table through a save-file dialog."""
+
+    input_error_types = tuple(tcl_error_types) + (ValueError,)
+    try:
+        request = build_request()
+    except FileNotFoundError as exc:
+        _set_status_text(set_status_text, str(exc))
+        return False
+    except Exception as exc:
+        if isinstance(exc, input_error_types):
+            _set_status_text(
+                set_status_text,
+                f"Failed to read algebraic HT export inputs: {exc}",
+            )
+            return False
+        raise
+
+    try:
+        initial_dir = (
+            str(get_download_dir()) if callable(get_download_dir) else None
+        )
+    except Exception:
+        initial_dir = None
+    if not initial_dir:
+        initial_dir = str(Path(request.source_cif).expanduser().parent)
+
+    save_path = asksaveasfilename(
+        title="Export Algebraic HT Table",
+        defaultextension=".txt",
+        initialdir=initial_dir,
+        initialfile=f"{Path(request.source_cif).stem}_algebraic_ht.txt",
+        filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+    )
+    if not save_path:
+        return False
+
+    try:
+        row_count = int(export_table(str(save_path), request))
+    except Exception as exc:
+        _set_status_text(
+            set_status_text,
+            f"Failed to export algebraic HT table: {exc}",
+        )
+        return False
+
+    _set_status_text(
+        set_status_text,
+        f"Exported algebraic HT table ({row_count} rows): {Path(str(save_path)).name}",
+    )
+    return True
+
+
 def build_ht_cache(
     state: StructureModelState,
     p_val,

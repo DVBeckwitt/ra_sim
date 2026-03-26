@@ -243,6 +243,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the primary-CIF reload state transition and diffuse-HT request packaging
     now also defer to `ra_sim.gui.structure_model`, leaving runtime with the
     Tk-facing control rebuild, file-dialog, and status-label work
+  - the primary-CIF browse dialog plus the diffuse-HT open/export dialog
+    workflow now also defer to `ra_sim.gui.structure_model`, leaving runtime
+    with thin delegate wrappers plus control-var rebuild callbacks
 - Bragg-Qr / structure-factor pruning workflow extraction has also advanced:
   - Bragg-Qr source/L-key normalization, disabled-filter pruning, filtered
     rod/HKL rebuild helpers, and status-text formatting now live in
@@ -300,6 +303,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   remaining controller/view orchestration that still live inline in
   `ra_sim.gui.runtime`, not long-lived GUI runtime-state ownership or the
   extracted structure-model rebuild path.
+- The remaining structure-model runtime code is now mostly thin delegate
+  wrappers, progress-label wiring, and control-var rebuild callbacks.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   delegate wrappers and window lifecycle wiring around the extracted
   manager/view helpers.

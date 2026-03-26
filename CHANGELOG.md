@@ -39,7 +39,7 @@
   - Reduced the remaining `runtime.py` module globals to structure-model / diffuse-HT rebuild state and the legacy `write_excel` flag.
   - Moved the structure-model / diffuse-HT bootstrap and rebuild workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/structure_model.py`, including initial HT cache setup, weighted intensity recompute, and the live occupancy/stacking rebuild path.
   - Replaced the remaining inline primary-CIF / atom-site helper implementations in `ra_sim/gui/runtime.py` with thin delegates to `ra_sim/gui/structure_model.py` for occupancy metadata, atom-site override CIF generation, and CIF numeric parsing.
-  - Moved the primary-CIF reload state transition and diffuse-HT request packaging out of `ra_sim/gui/runtime.py` into `ra_sim/gui/structure_model.py`, leaving the runtime path as Tk control rebuild/file-dialog/status wiring.
+  - Expanded `ra_sim/gui/structure_model.py` to own the primary-CIF browse dialog plus the diffuse-HT open/export dialog workflow and status handling, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus control rebuild callbacks.
   - Moved the Bragg-Qr / structure-factor pruning filter pipeline out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including Bragg-Qr source/L-key normalization, disabled-filter pruning, and filtered rod/HKL rebuild helpers.
   - Moved the remaining Bragg-Qr manager list-building workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including group entry formatting, L-value mapping, and list-model/status construction for the manager window.
   - Expanded `ra_sim/gui/bragg_qr_manager.py` to own the remaining Bragg-Qr manager selection, refresh, and enable/disable/toggle action workflow, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus the live filter-apply callbacks.
@@ -59,7 +59,7 @@
 - **Tests**
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.
-  - Extended `tests/test_gui_structure_model.py` with primary-CIF reload snapshot/restore coverage and diffuse-HT request packaging coverage.
+  - Extended `tests/test_gui_structure_model.py` with primary-CIF dialog workflow plus diffuse-HT open/export dialog workflow coverage in addition to the existing reload snapshot/restore and request-packaging tests.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr / structure-factor pruning filter pipeline coverage.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr manager entry/L-value/list-model coverage.
   - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr manager action and window-lifecycle helpers.

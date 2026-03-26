@@ -17,6 +17,10 @@ class _Var:
         self._value = value
 
 
+def _raise(exc):
+    raise exc
+
+
 def test_extract_atom_site_fractional_metadata_handles_duplicate_labels_and_fraction_text() -> None:
     cif_block = {
         "_atom_site_label": ["I", "I", "Nb"],
@@ -450,3 +454,158 @@ def test_build_diffuse_ht_request_packages_runtime_inputs(monkeypatch, tmp_path)
     assert request.iodine_z == 0.42
     assert request.phase_delta_expression == "0"
     assert request.phi_l_divisor == 2.0
+
+
+def test_primary_cif_dialog_helpers_choose_initial_dir_and_apply_selection(tmp_path) -> None:
+    current_cif = tmp_path / "nested" / "sample.cif"
+    current_cif.parent.mkdir()
+    current_cif.write_text("data_test", encoding="utf-8")
+    calls = []
+
+    def _askopenfilename(**kwargs):
+        calls.append(("dialog", kwargs))
+        return str(tmp_path / "updated.cif")
+
+    applied = structure_model.browse_primary_cif_with_dialog(
+        current_cif_path=str(current_cif),
+        file_dialog_dir=tmp_path / "fallback",
+        askopenfilename=_askopenfilename,
+        set_cif_path_text=lambda text: calls.append(("set", text)),
+        apply_primary_cif_path=lambda text: calls.append(("apply", text)),
+    )
+
+    assert applied is True
+    assert (
+        structure_model.primary_cif_dialog_initial_dir(
+            str(current_cif),
+            tmp_path / "fallback",
+        )
+        == str(current_cif.parent)
+    )
+    assert calls == [
+        (
+            "dialog",
+            {
+                "title": "Select Primary CIF",
+                "initialdir": str(current_cif.parent),
+                "filetypes": [("CIF files", "*.cif *.CIF"), ("All files", "*.*")],
+            },
+        ),
+        ("set", str(tmp_path / "updated.cif")),
+        ("apply", str(tmp_path / "updated.cif")),
+    ]
+
+
+def test_open_diffuse_ht_view_with_status_reports_success_and_errors() -> None:
+    request = structure_model.DiffuseHTRequest(
+        source_cif="C:/data/primary.cif",
+        active_cif="C:/data/primary.cif",
+        occ=[1.0],
+        p_values=[0.1, 0.2, 0.3],
+        w_values=[50.0, 30.0, 20.0],
+    )
+    events = []
+
+    ok = structure_model.open_diffuse_ht_view_with_status(
+        build_request=lambda: request,
+        open_view=lambda req: events.append(("open", req.source_cif)),
+        set_status_text=lambda text: events.append(("status", text)),
+    )
+
+    assert ok is True
+    assert events == [
+        ("open", "C:/data/primary.cif"),
+        ("status", "Opened diffuse HT viewer: primary.cif"),
+    ]
+
+    errors = []
+    ok = structure_model.open_diffuse_ht_view_with_status(
+        build_request=lambda: _raise(FileNotFoundError("missing.cif")),
+        open_view=lambda req: None,
+        set_status_text=lambda text: errors.append(text),
+    )
+    assert ok is False
+    assert errors == ["missing.cif"]
+
+    errors = []
+    ok = structure_model.open_diffuse_ht_view_with_status(
+        build_request=lambda: _raise(ValueError("bad inputs")),
+        open_view=lambda req: None,
+        set_status_text=lambda text: errors.append(text),
+    )
+    assert ok is False
+    assert errors == ["Failed to read diffuse HT inputs: bad inputs"]
+
+    errors = []
+    ok = structure_model.open_diffuse_ht_view_with_status(
+        build_request=lambda: request,
+        open_view=lambda req: _raise(RuntimeError("viewer boom")),
+        set_status_text=lambda text: errors.append(text),
+    )
+    assert ok is False
+    assert errors == ["Failed to open diffuse HT viewer: viewer boom"]
+
+
+def test_export_diffuse_ht_txt_with_dialog_reports_status_and_uses_fallback_dir(
+    tmp_path,
+) -> None:
+    source_cif = tmp_path / "source.cif"
+    source_cif.write_text("data_test", encoding="utf-8")
+    request = structure_model.DiffuseHTRequest(
+        source_cif=str(source_cif),
+        active_cif=str(source_cif),
+        occ=[1.0],
+        p_values=[0.1, 0.2, 0.3],
+        w_values=[50.0, 30.0, 20.0],
+    )
+    captured = {}
+    messages = []
+
+    def _asksaveasfilename(**kwargs):
+        captured["dialog"] = kwargs
+        return str(tmp_path / "out.txt")
+
+    ok = structure_model.export_diffuse_ht_txt_with_dialog(
+        build_request=lambda: request,
+        get_download_dir=lambda: "downloads-dir",
+        asksaveasfilename=_asksaveasfilename,
+        export_table=lambda save_path, req: (
+            captured.update({"save_path": save_path, "request": req}) or 7
+        ),
+        set_status_text=lambda text: messages.append(text),
+    )
+
+    assert ok is True
+    assert captured["dialog"]["initialdir"] == "downloads-dir"
+    assert captured["dialog"]["initialfile"] == "source_algebraic_ht.txt"
+    assert captured["save_path"] == str(tmp_path / "out.txt")
+    assert captured["request"] is request
+    assert messages == ["Exported algebraic HT table (7 rows): out.txt"]
+
+    def _fallback_save_dialog(**kwargs):
+        fallback["dialog"] = kwargs
+        return ""
+
+    fallback = {}
+    ok = structure_model.export_diffuse_ht_txt_with_dialog(
+        build_request=lambda: request,
+        get_download_dir=lambda: _raise(RuntimeError("no downloads")),
+        asksaveasfilename=_fallback_save_dialog,
+        export_table=lambda save_path, req: 0,
+        set_status_text=lambda text: messages.append(text),
+    )
+
+    assert ok is False
+    assert fallback["dialog"]["initialdir"] == str(source_cif.parent)
+
+    errors = []
+    ok = structure_model.export_diffuse_ht_txt_with_dialog(
+        build_request=lambda: _raise(ValueError("bad export inputs")),
+        get_download_dir=lambda: "downloads-dir",
+        asksaveasfilename=lambda **kwargs: "",
+        export_table=lambda save_path, req: 0,
+        set_status_text=lambda text: errors.append(text),
+    )
+
+    assert ok is False
+    assert errors == ["Failed to read algebraic HT export inputs: bad export inputs"]

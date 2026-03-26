@@ -15115,21 +15115,13 @@ def _apply_primary_cif_path(raw_path):
 
 def _browse_primary_cif():
     """Open a file picker and apply the selected primary CIF path."""
-
-    try:
-        initial_dir = str(Path(cif_file).expanduser().parent)
-    except Exception:
-        initial_dir = str(get_dir("file_dialog_dir"))
-
-    selected = filedialog.askopenfilename(
-        title="Select Primary CIF",
-        initialdir=initial_dir,
-        filetypes=[("CIF files", "*.cif *.CIF"), ("All files", "*.*")],
+    gui_structure_model.browse_primary_cif_with_dialog(
+        current_cif_path=cif_file,
+        file_dialog_dir=get_dir("file_dialog_dir"),
+        askopenfilename=filedialog.askopenfilename,
+        set_cif_path_text=cif_file_var.set,
+        apply_primary_cif_path=_apply_primary_cif_path,
     )
-    if not selected:
-        return
-    cif_file_var.set(selected)
-    _apply_primary_cif_path(selected)
 
 
 def _apply_primary_cif_from_entry(_event=None):
@@ -15161,94 +15153,59 @@ def _build_diffuse_ht_request():
 
 def _open_diffuse_cif_toggle():
     """Open algebraic HT diffuse viewer using the active simulation inputs."""
-
-    try:
-        request = _build_diffuse_ht_request()
-    except FileNotFoundError as exc:
-        progress_label.config(text=str(exc))
-        return
-    except (tk.TclError, ValueError) as exc:
-        progress_label.config(text=f"Failed to read diffuse HT inputs: {exc}")
-        return
-
-    try:
-        open_diffuse_cif_toggle_algebraic(
-            cif_path=request.active_cif,
-            occ=request.occ,
-            p_values=request.p_values,
-            w_values=request.w_values,
-            a_lattice=request.a_lattice,
-            c_lattice=request.c_lattice,
-            lambda_angstrom=request.lambda_angstrom,
-            mx=request.mx,
-            two_theta_max=request.two_theta_max,
-            finite_stack=request.finite_stack,
-            stack_layers=request.stack_layers,
-            iodine_z=request.iodine_z,
-            phase_delta_expression=request.phase_delta_expression,
-            phi_l_divisor=request.phi_l_divisor,
-        )
-        progress_label.config(
-            text=f"Opened diffuse HT viewer: {Path(request.source_cif).name}"
-        )
-    except Exception as exc:
-        progress_label.config(text=f"Failed to open diffuse HT viewer: {exc}")
+    gui_structure_model.open_diffuse_ht_view_with_status(
+        build_request=_build_diffuse_ht_request,
+        open_view=(
+            lambda request: open_diffuse_cif_toggle_algebraic(
+                cif_path=request.active_cif,
+                occ=request.occ,
+                p_values=request.p_values,
+                w_values=request.w_values,
+                a_lattice=request.a_lattice,
+                c_lattice=request.c_lattice,
+                lambda_angstrom=request.lambda_angstrom,
+                mx=request.mx,
+                two_theta_max=request.two_theta_max,
+                finite_stack=request.finite_stack,
+                stack_layers=request.stack_layers,
+                iodine_z=request.iodine_z,
+                phase_delta_expression=request.phase_delta_expression,
+                phi_l_divisor=request.phi_l_divisor,
+            )
+        ),
+        set_status_text=lambda text: progress_label.config(text=text),
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _export_diffuse_ht_txt():
     """Export algebraic HT values to a fixed-width text table."""
-
-    try:
-        request = _build_diffuse_ht_request()
-    except FileNotFoundError as exc:
-        progress_label.config(text=str(exc))
-        return
-    except (tk.TclError, ValueError) as exc:
-        progress_label.config(text=f"Failed to read algebraic HT export inputs: {exc}")
-        return
-
-    default_name = f"{Path(request.source_cif).stem}_algebraic_ht.txt"
-    try:
-        initial_dir = str(get_dir("downloads"))
-    except Exception:
-        initial_dir = str(Path(request.source_cif).expanduser().parent)
-
-    save_path = filedialog.asksaveasfilename(
-        title="Export Algebraic HT Table",
-        defaultextension=".txt",
-        initialdir=initial_dir,
-        initialfile=default_name,
-        filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-    )
-    if not save_path:
-        return
-
-    try:
-        row_count = export_algebraic_ht_txt(
-            output_path=save_path,
-            cif_path=request.active_cif,
-            occ=request.occ,
-            p_values=request.p_values,
-            w_values=request.w_values,
-            a_lattice=request.a_lattice,
-            c_lattice=request.c_lattice,
-            lambda_angstrom=request.lambda_angstrom,
-            mx=request.mx,
-            two_theta_max=request.two_theta_max,
-            finite_stack=request.finite_stack,
-            stack_layers=request.stack_layers,
-            iodine_z=request.iodine_z,
-            phase_delta_expression=request.phase_delta_expression,
-            phi_l_divisor=request.phi_l_divisor,
-        )
-        progress_label.config(
-            text=(
-                f"Exported algebraic HT table ({row_count} rows): "
-                f"{Path(save_path).name}"
+    gui_structure_model.export_diffuse_ht_txt_with_dialog(
+        build_request=_build_diffuse_ht_request,
+        get_download_dir=lambda: get_dir("downloads"),
+        asksaveasfilename=filedialog.asksaveasfilename,
+        export_table=(
+            lambda save_path, request: export_algebraic_ht_txt(
+                output_path=save_path,
+                cif_path=request.active_cif,
+                occ=request.occ,
+                p_values=request.p_values,
+                w_values=request.w_values,
+                a_lattice=request.a_lattice,
+                c_lattice=request.c_lattice,
+                lambda_angstrom=request.lambda_angstrom,
+                mx=request.mx,
+                two_theta_max=request.two_theta_max,
+                finite_stack=request.finite_stack,
+                stack_layers=request.stack_layers,
+                iodine_z=request.iodine_z,
+                phase_delta_expression=request.phase_delta_expression,
+                phi_l_divisor=request.phi_l_divisor,
             )
-        )
-    except Exception as exc:
-        progress_label.config(text=f"Failed to export algebraic HT table: {exc}")
+        ),
+        set_status_text=lambda text: progress_label.config(text=text),
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 _rebuild_occupancy_controls()
