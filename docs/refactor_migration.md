@@ -83,6 +83,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     through `ra_sim.gui.controllers`
   - the Bragg Qr manager window lifecycle and listbox rendering now flow
     through `ra_sim.gui.views`
+  - Bragg-Qr source/L-key normalization and the filtered rod/HKL rebuild
+    helpers now also flow through `ra_sim.gui.controllers`
 - hBN geometry debug viewer migration has also landed:
   - shared widget references for the debug viewer now use shared GUI state
   - the hBN geometry debug window lifecycle and report-text rendering now flow
@@ -234,6 +236,13 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the primary-CIF reload state transition and diffuse-HT request packaging
     now also defer to `ra_sim.gui.structure_model`, leaving runtime with the
     Tk-facing control rebuild, file-dialog, and status-label work
+- Bragg-Qr / structure-factor pruning workflow extraction has also advanced:
+  - Bragg-Qr source/L-key normalization, disabled-filter pruning, filtered
+    rod/HKL rebuild helpers, and status-text formatting now live in
+    `ra_sim.gui.controllers`
+  - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning filter
+    application through those helpers and keeps only the window refresh,
+    cache invalidation, and Tk status wiring inline
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -242,7 +251,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   display-controls/pruning-controls/beam-mosaic-slider/stacking-parameter/
   primary-CIF/CIF-weight/fit-checklist/integration-range/app-shell/status
   helper coverage plus direct structure-model coverage for primary-CIF reload
-  snapshot/restore and diffuse-HT request assembly
+  snapshot/restore, diffuse-HT request assembly, and Bragg-Qr / SF-pruning
+  filter application
 
 ## Remaining Migration Focus
 

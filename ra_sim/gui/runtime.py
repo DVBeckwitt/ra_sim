@@ -801,18 +801,11 @@ simulation_runtime_state.sim_miller2 = simulation_runtime_state.sim_miller2_all.
 simulation_runtime_state.sim_intens2 = simulation_runtime_state.sim_intens2_all.copy()
 simulation_runtime_state.sim_primary_qr = {}
 
-BRAGG_QR_L_KEY_SCALE = int(1_000_000)
-BRAGG_QR_L_INVALID_KEY = int(np.iinfo(np.int64).min)
+BRAGG_QR_L_KEY_SCALE = gui_controllers.BRAGG_QR_L_KEY_SCALE
+BRAGG_QR_L_INVALID_KEY = gui_controllers.BRAGG_QR_L_INVALID_KEY
 
-SF_PRUNE_BIAS_MIN = -2.0
-SF_PRUNE_BIAS_MAX = 2.0
-_SF_PRUNE_RETAIN_BASE = 0.9997
-_SF_PRUNE_RETAIN_MAX = 0.99998
-_SF_PRUNE_RETAIN_MIN = 0.90
-_SF_PRUNE_REL_FLOOR_BASE = 3.0e-5
-_SF_PRUNE_REL_FLOOR_MIN = 1.0e-8
-_SF_PRUNE_REL_FLOOR_MAX = 8.0e-2
-_SF_PRUNE_MIN_KEEP_BASE = 18
+SF_PRUNE_BIAS_MIN = gui_controllers.SF_PRUNE_BIAS_MIN
+SF_PRUNE_BIAS_MAX = gui_controllers.SF_PRUNE_BIAS_MAX
 
 simulation_runtime_state.sf_prune_stats = {
     "qr_total": 0,
@@ -845,256 +838,36 @@ def _current_sf_prune_bias() -> float:
 
 
 def _sf_prune_profile_from_bias(bias: float) -> tuple[float, float, int, int]:
-    bias_clipped = _clip_sf_prune_bias(bias)
-
-    if bias_clipped >= 0.0:
-        extra_aggressive = max(0.0, bias_clipped - 1.0)
-        retain_fraction = (
-            _SF_PRUNE_RETAIN_BASE
-            - 0.0045 * bias_clipped
-            - 0.0200 * (extra_aggressive ** 1.35)
-        )
-    else:
-        retain_fraction = _SF_PRUNE_RETAIN_BASE + 0.00028 * ((-bias_clipped) ** 1.1)
-    retain_fraction = float(
-        np.clip(retain_fraction, _SF_PRUNE_RETAIN_MIN, _SF_PRUNE_RETAIN_MAX)
-    )
-
-    extra_aggressive = max(0.0, bias_clipped - 1.0)
-    rel_floor_exp = (1.8 * bias_clipped) + (2.2 * extra_aggressive)
-    rel_floor = _SF_PRUNE_REL_FLOOR_BASE * (10.0 ** rel_floor_exp)
-    rel_floor = float(np.clip(rel_floor, _SF_PRUNE_REL_FLOOR_MIN, _SF_PRUNE_REL_FLOOR_MAX))
-
-    min_keep = int(
-        round(
-            _SF_PRUNE_MIN_KEEP_BASE
-            - 8.0 * bias_clipped
-            - 10.0 * extra_aggressive
-        )
-    )
-    min_keep = int(max(3, min_keep))
-
-    neighbor_span = 1 if bias_clipped <= 0.7 else 0
-    return retain_fraction, rel_floor, min_keep, neighbor_span
-
-
-def _prune_l_intensity_curve(
-    l_vals: np.ndarray,
-    i_vals: np.ndarray,
-    *,
-    bias: float,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
-    l_arr = np.asarray(l_vals, dtype=np.float64).reshape(-1)
-    i_arr = np.asarray(i_vals, dtype=np.float64).reshape(-1)
-    row_count = min(l_arr.shape[0], i_arr.shape[0])
-    if row_count <= 0:
-        return (
-            np.empty((0,), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            0,
-            0,
-        )
-
-    l_arr = l_arr[:row_count]
-    i_arr = i_arr[:row_count]
-    finite_mask = np.isfinite(l_arr) & np.isfinite(i_arr) & (i_arr > 0.0)
-    if not np.any(finite_mask):
-        return (
-            np.empty((0,), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            row_count,
-            0,
-        )
-
-    l_valid = l_arr[finite_mask]
-    i_valid = i_arr[finite_mask]
-    total_count = int(i_valid.shape[0])
-    if total_count <= 8:
-        return l_valid.copy(), i_valid.copy(), total_count, total_count
-
-    retain_fraction, rel_floor, min_keep, neighbor_span = _sf_prune_profile_from_bias(bias)
-    order = np.argsort(i_valid)[::-1]
-    keep_mask = np.zeros(total_count, dtype=bool)
-
-    top_n = min(total_count, max(1, min_keep))
-    keep_mask[order[:top_n]] = True
-
-    i_max = float(i_valid[order[0]])
-    if i_max > 0.0:
-        keep_mask |= i_valid >= (i_max * rel_floor)
-
-    total_mass = float(np.sum(i_valid))
-    if total_mass > 0.0:
-        target_mass = retain_fraction * total_mass
-        cum_mass = np.cumsum(i_valid[order])
-        mass_n = int(np.searchsorted(cum_mass, target_mass, side="left")) + 1
-        keep_mask[order[:mass_n]] = True
-
-    if neighbor_span > 0:
-        expanded_mask = keep_mask.copy()
-        for delta in range(1, neighbor_span + 1):
-            expanded_mask[:-delta] |= keep_mask[delta:]
-            expanded_mask[delta:] |= keep_mask[:-delta]
-        keep_mask = expanded_mask
-
-    keep_idx = np.nonzero(keep_mask)[0]
-    if keep_idx.size == 0:
-        keep_idx = order[:1]
-
-    keep_idx = np.sort(keep_idx)
-    kept_count = int(keep_idx.size)
-    return (
-        l_valid[keep_idx].copy(),
-        i_valid[keep_idx].copy(),
-        total_count,
-        kept_count,
-    )
-
-
-def _prune_reflection_rows(
-    miller_arr: np.ndarray,
-    intens_arr: np.ndarray,
-    *,
-    bias: float,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
-    arr = np.asarray(miller_arr, dtype=np.float64)
-    intens = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
-    if arr.ndim != 2 or arr.shape[1] < 3:
-        return (
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            0,
-            0,
-        )
-
-    row_count = min(arr.shape[0], intens.shape[0])
-    if row_count <= 0:
-        return (
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            0,
-            0,
-        )
-
-    arr = arr[:row_count, :]
-    intens = intens[:row_count]
-    finite_mask = (
-        np.isfinite(arr[:, 0])
-        & np.isfinite(arr[:, 1])
-        & np.isfinite(arr[:, 2])
-        & np.isfinite(intens)
-        & (intens > 0.0)
-    )
-    if not np.any(finite_mask):
-        return (
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            row_count,
-            0,
-        )
-
-    arr_valid = arr[finite_mask, :]
-    intens_valid = intens[finite_mask]
-    total_count = int(intens_valid.shape[0])
-    if total_count <= 8:
-        return arr_valid.copy(), intens_valid.copy(), total_count, total_count
-
-    retain_fraction, rel_floor, min_keep, _ = _sf_prune_profile_from_bias(bias)
-    order = np.argsort(intens_valid)[::-1]
-    keep_mask = np.zeros(total_count, dtype=bool)
-
-    top_n = min(total_count, max(1, min_keep))
-    keep_mask[order[:top_n]] = True
-
-    i_max = float(intens_valid[order[0]])
-    if i_max > 0.0:
-        keep_mask |= intens_valid >= (i_max * rel_floor)
-
-    total_mass = float(np.sum(intens_valid))
-    if total_mass > 0.0:
-        target_mass = retain_fraction * total_mass
-        cum_mass = np.cumsum(intens_valid[order])
-        mass_n = int(np.searchsorted(cum_mass, target_mass, side="left")) + 1
-        keep_mask[order[:mass_n]] = True
-
-    keep_idx = np.nonzero(keep_mask)[0]
-    if keep_idx.size == 0:
-        keep_idx = order[:1]
-    keep_idx = np.sort(keep_idx)
-    kept_count = int(keep_idx.size)
-
-    return (
-        arr_valid[keep_idx, :].copy(),
-        intens_valid[keep_idx].copy(),
-        total_count,
-        kept_count,
-    )
+    return gui_controllers.structure_factor_prune_profile_from_bias(bias)
 
 
 def _update_sf_prune_status_label() -> None:
     view_state = globals().get("structure_factor_pruning_controls_view_state")
     if getattr(view_state, "sf_prune_status_var", None) is None:
         return
-
-    qr_total = int(simulation_runtime_state.sf_prune_stats.get("qr_total", 0))
-    qr_kept = int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0))
-    hk_total = int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_total", 0))
-    hk_kept = int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0))
-    bias = _current_sf_prune_bias()
-
-    if qr_total > 0:
-        pct = (100.0 * qr_kept / qr_total) if qr_total else 0.0
-        gui_views.set_structure_factor_pruning_status_text(
-            view_state,
-            f"SF pruning keeps {qr_kept:,}/{qr_total:,} rod points ({pct:.1f}%), bias={bias:+.2f}"
-        )
-        return
-
-    if hk_total > 0:
-        pct = (100.0 * hk_kept / hk_total) if hk_total else 0.0
-        gui_views.set_structure_factor_pruning_status_text(
-            view_state,
-            f"SF pruning keeps {hk_kept:,}/{hk_total:,} HKL points ({pct:.1f}%), bias={bias:+.2f}"
-        )
-        return
-
     gui_views.set_structure_factor_pruning_status_text(
         view_state,
-        f"SF pruning bias={bias:+.2f}",
+        gui_controllers.format_structure_factor_pruning_status(
+            simulation_runtime_state.sf_prune_stats,
+            prune_bias=_current_sf_prune_bias(),
+        ),
     )
 
 
 def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
-    return gui_manual_geometry.normalize_bragg_qr_source_label(source_label)
+    return gui_controllers.normalize_bragg_qr_source_label(source_label)
 
 
 def _l_value_to_key(l_value: float) -> int:
-    try:
-        val = float(l_value)
-    except (TypeError, ValueError):
-        return BRAGG_QR_L_INVALID_KEY
-    if not np.isfinite(val):
-        return BRAGG_QR_L_INVALID_KEY
-    return int(np.rint(val * BRAGG_QR_L_KEY_SCALE))
+    return gui_controllers.bragg_qr_l_value_to_key(l_value)
 
 
 def _l_key_to_value(l_key: int) -> float:
-    key = int(l_key)
-    if key == BRAGG_QR_L_INVALID_KEY:
-        return float("nan")
-    return float(key / BRAGG_QR_L_KEY_SCALE)
+    return gui_controllers.bragg_qr_l_key_to_value(l_key)
 
 
 def _l_keys_from_l_array(l_vals: np.ndarray) -> np.ndarray:
-    arr = np.asarray(l_vals, dtype=np.float64).reshape(-1)
-    out = np.full(arr.shape, BRAGG_QR_L_INVALID_KEY, dtype=np.int64)
-    finite_mask = np.isfinite(arr)
-    if np.any(finite_mask):
-        out[finite_mask] = np.rint(arr[finite_mask] * BRAGG_QR_L_KEY_SCALE).astype(
-            np.int64,
-            copy=False,
-        )
-    return out
+    return gui_controllers.bragg_qr_l_keys_from_l_array(l_vals)
 
 
 def _source_all_miller_for_label(source_label: str | None) -> np.ndarray:
@@ -1105,284 +878,18 @@ def _source_all_miller_for_label(source_label: str | None) -> np.ndarray:
 
 
 def _m_indices_from_miller_array(miller_arr: np.ndarray, *, unique: bool = False) -> np.ndarray:
-    arr = np.asarray(miller_arr, dtype=np.float64)
-    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
-        return np.empty((0,), dtype=np.int64)
-
-    finite_mask = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1])
-    if not np.any(finite_mask):
-        return np.empty((0,), dtype=np.int64)
-
-    hk_rows = arr[finite_mask, :2]
-    h_vals = np.rint(hk_rows[:, 0]).astype(np.int64, copy=False)
-    k_vals = np.rint(hk_rows[:, 1]).astype(np.int64, copy=False)
-    m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
-    if unique:
-        return np.unique(m_vals)
-    return m_vals
-
-
-def _copy_qr_dict(qr_dict: dict | None) -> dict[int, dict[str, object]]:
-    out: dict[int, dict[str, object]] = {}
-    if not isinstance(qr_dict, dict):
-        return out
-
-    for m_raw, data in qr_dict.items():
-        try:
-            m_idx = int(m_raw)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        out[m_idx] = {
-            "L": np.asarray(data.get("L", []), dtype=np.float64).copy(),
-            "I": np.asarray(data.get("I", []), dtype=np.float64).copy(),
-            "hk": tuple(data.get("hk", (0, 0))),
-            "deg": int(data.get("deg", 1)),
-        }
-    return out
-
-
-def _available_bragg_qr_group_keys() -> set[tuple[str, int]]:
-    keys: set[tuple[str, int]] = set()
-
-    if isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
-        for m_raw in simulation_runtime_state.sim_primary_qr_all.keys():
-            try:
-                m_idx = int(m_raw)
-            except (TypeError, ValueError):
-                continue
-            keys.add(("primary", m_idx))
-
-    for source_label in ("primary", "secondary"):
-        m_vals = _m_indices_from_miller_array(
-            _source_all_miller_for_label(source_label),
-            unique=True,
-        )
-        for m_val in m_vals:
-            keys.add((source_label, int(m_val)))
-
-    return keys
-
-
-def _available_bragg_qr_l_keys() -> set[tuple[str, int, int]]:
-    keys: set[tuple[str, int, int]] = set()
-
-    if isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
-        for m_idx, entry in _copy_qr_dict(simulation_runtime_state.sim_primary_qr_all).items():
-            l_keys = _l_keys_from_l_array(entry.get("L", []))
-            for l_key in l_keys:
-                lk = int(l_key)
-                if lk == BRAGG_QR_L_INVALID_KEY:
-                    continue
-                keys.add(("primary", int(m_idx), lk))
-
-    for source_label in ("primary", "secondary"):
-        arr = np.asarray(_source_all_miller_for_label(source_label), dtype=np.float64)
-        if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 3:
-            continue
-        finite_mask = (
-            np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
-        )
-        if not np.any(finite_mask):
-            continue
-        rows = arr[finite_mask, :3]
-        h_vals = np.rint(rows[:, 0]).astype(np.int64, copy=False)
-        k_vals = np.rint(rows[:, 1]).astype(np.int64, copy=False)
-        m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
-        l_keys = _l_keys_from_l_array(rows[:, 2])
-        for m_idx, l_key in zip(m_vals, l_keys):
-            lk = int(l_key)
-            if lk == BRAGG_QR_L_INVALID_KEY:
-                continue
-            keys.add((_normalize_bragg_qr_source_label(source_label), int(m_idx), lk))
-
-    return keys
-
-
-def _prune_disabled_bragg_qr_filters() -> None:
-
-    available_groups = _available_bragg_qr_group_keys()
-    bragg_qr_manager_state.disabled_groups = {
-        (_normalize_bragg_qr_source_label(src), int(m_idx))
-        for src, m_idx in bragg_qr_manager_state.disabled_groups
-        if (_normalize_bragg_qr_source_label(src), int(m_idx)) in available_groups
-    }
-
-    available_l = _available_bragg_qr_l_keys()
-    bragg_qr_manager_state.disabled_l_values = {
-        (_normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
-        for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values
-        if (_normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
-        in available_l
-    }
-
-
-def _filtered_primary_qr_dict() -> tuple[dict[int, dict[str, object]], int, int]:
-    out: dict[int, dict[str, object]] = {}
-    total_before_prune = 0
-    total_after_prune = 0
-    prune_bias = _current_sf_prune_bias()
-    disabled_primary_m = {
-        int(m_idx)
-        for src, m_idx in bragg_qr_manager_state.disabled_groups
-        if _normalize_bragg_qr_source_label(src) == "primary"
-    }
-    disabled_primary_l: dict[int, set[int]] = defaultdict(set)
-    for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values:
-        if _normalize_bragg_qr_source_label(src) != "primary":
-            continue
-        disabled_primary_l[int(m_idx)].add(int(l_key))
-
-    for m_idx, entry in _copy_qr_dict(simulation_runtime_state.sim_primary_qr_all).items():
-        m_int = int(m_idx)
-        if m_int in disabled_primary_m:
-            continue
-
-        l_vals = np.asarray(entry.get("L", []), dtype=np.float64).reshape(-1)
-        i_vals = np.asarray(entry.get("I", []), dtype=np.float64).reshape(-1)
-        row_count = min(l_vals.shape[0], i_vals.shape[0])
-        if row_count <= 0:
-            continue
-
-        l_vals = l_vals[:row_count]
-        i_vals = i_vals[:row_count]
-
-        disabled_l_for_m = disabled_primary_l.get(m_int)
-        if disabled_l_for_m:
-            l_keys = _l_keys_from_l_array(l_vals)
-            disabled_arr = np.fromiter(
-                disabled_l_for_m,
-                dtype=np.int64,
-                count=len(disabled_l_for_m),
-            )
-            keep_mask = ~np.isin(l_keys, disabled_arr)
-            if not np.any(keep_mask):
-                continue
-            l_vals = l_vals[keep_mask]
-            i_vals = i_vals[keep_mask]
-
-        pruned_l, pruned_i, src_count, kept_count = _prune_l_intensity_curve(
-            l_vals,
-            i_vals,
-            bias=prune_bias,
-        )
-        total_before_prune += int(src_count)
-        total_after_prune += int(kept_count)
-        if kept_count <= 0:
-            continue
-
-        filtered = dict(entry)
-        filtered["L"] = pruned_l
-        filtered["I"] = pruned_i
-        out[m_int] = filtered
-
-    return out, total_before_prune, total_after_prune
-
-
-def _filtered_miller_and_intensities(
-    miller_arr: np.ndarray,
-    intens_arr: np.ndarray,
-    source_label: str,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
-    arr = np.asarray(miller_arr, dtype=np.float64)
-    intens = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
-
-    if arr.ndim != 2 or arr.shape[1] < 3:
-        return (
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            0,
-            0,
-        )
-
-    row_count = min(arr.shape[0], intens.shape[0])
-    if row_count <= 0:
-        return (
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            0,
-            0,
-        )
-
-    arr = arr[:row_count, :]
-    intens = intens[:row_count]
-    source_norm = _normalize_bragg_qr_source_label(source_label)
-    disabled_m = {
-        int(m_idx)
-        for src, m_idx in bragg_qr_manager_state.disabled_groups
-        if _normalize_bragg_qr_source_label(src) == source_norm
-    }
-    disabled_l_pairs = [
-        (int(m_idx), int(l_key))
-        for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values
-        if _normalize_bragg_qr_source_label(src) == source_norm
-    ]
-    m_vals = _m_indices_from_miller_array(arr, unique=False)
-    if m_vals.shape[0] != arr.shape[0]:
-        return arr.copy(), intens.copy(), int(arr.shape[0]), int(arr.shape[0])
-
-    keep_mask = np.ones(arr.shape[0], dtype=bool)
-    if disabled_m:
-        disabled_arr = np.fromiter(disabled_m, dtype=np.int64, count=len(disabled_m))
-        keep_mask &= ~np.isin(m_vals, disabled_arr)
-
-    if disabled_l_pairs:
-        l_keys = _l_keys_from_l_array(arr[:, 2])
-        for m_idx, l_key in disabled_l_pairs:
-            keep_mask &= ~((m_vals == int(m_idx)) & (l_keys == int(l_key)))
-
-    filtered_arr = arr[keep_mask]
-    filtered_intens = intens[keep_mask]
-    total_after_manual = int(filtered_arr.shape[0])
-    if total_after_manual <= 0:
-        return (
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-            int(arr.shape[0]),
-            0,
-        )
-
-    # Keep secondary CIF reflections unchanged; only primary SF gets adaptive pruning.
-    if source_norm != "primary":
-        return (
-            filtered_arr.copy(),
-            filtered_intens.copy(),
-            total_after_manual,
-            total_after_manual,
-        )
-
-    pruned_arr, pruned_intens, src_count, kept_count = _prune_reflection_rows(
-        filtered_arr,
-        filtered_intens,
-        bias=_current_sf_prune_bias(),
+    return gui_controllers.bragg_qr_m_indices_from_miller_array(
+        miller_arr,
+        unique=unique,
     )
-    return pruned_arr, pruned_intens, int(src_count), int(kept_count)
 
 
 def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
-
-    _prune_disabled_bragg_qr_filters()
-
-    simulation_runtime_state.sim_primary_qr, qr_total, qr_kept = _filtered_primary_qr_dict()
-    simulation_runtime_state.sim_miller1, simulation_runtime_state.sim_intens1, hkl_primary_total, hkl_primary_kept = _filtered_miller_and_intensities(
-        simulation_runtime_state.sim_miller1_all,
-        simulation_runtime_state.sim_intens1_all,
-        "primary",
+    gui_controllers.apply_bragg_qr_filters(
+        simulation_runtime_state,
+        bragg_qr_manager_state,
+        prune_bias=_current_sf_prune_bias(),
     )
-    simulation_runtime_state.sim_miller2, simulation_runtime_state.sim_intens2, hkl_secondary_total, hkl_secondary_kept = _filtered_miller_and_intensities(
-        simulation_runtime_state.sim_miller2_all,
-        simulation_runtime_state.sim_intens2_all,
-        "secondary",
-    )
-    simulation_runtime_state.sf_prune_stats = {
-        "qr_total": int(qr_total),
-        "qr_kept": int(qr_kept),
-        "hkl_primary_total": int(hkl_primary_total),
-        "hkl_primary_kept": int(hkl_primary_kept),
-        "hkl_secondary_total": int(hkl_secondary_total),
-        "hkl_secondary_kept": int(hkl_secondary_kept),
-    }
     _update_sf_prune_status_label()
 
     simulation_runtime_state.last_simulation_signature = None

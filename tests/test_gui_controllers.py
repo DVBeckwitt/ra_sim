@@ -770,3 +770,116 @@ def test_bragg_qr_manager_controller_tracks_indices_selection_and_mutations() ->
     assert bragg_state.qr_index_keys == []
     assert bragg_state.l_index_keys == []
     assert bragg_state.selected_group_key is None
+
+
+def test_bragg_qr_filter_controller_applies_group_and_l_disables() -> None:
+    sim_state = state.SimulationRuntimeState(
+        sim_primary_qr_all={
+            1: {
+                "L": np.array([0.0, 1.0, 2.0]),
+                "I": np.array([5.0, 4.0, 3.0]),
+                "hk": (1, 0),
+                "deg": 1,
+            },
+            3: {
+                "L": np.array([0.0]),
+                "I": np.array([2.5]),
+                "hk": (1, 1),
+                "deg": 1,
+            },
+        },
+        sim_miller1_all=np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 0.0, 2.0],
+                [1.0, 1.0, 0.0],
+            ]
+        ),
+        sim_intens1_all=np.array([10.0, 5.0, 1.0, 8.0]),
+        sim_miller2_all=np.array(
+            [
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 1.0],
+            ]
+        ),
+        sim_intens2_all=np.array([7.0, 6.0]),
+    )
+    bragg_state = state.BraggQrManagerState(
+        disabled_groups={("primary", 3), ("primary", 99)},
+        disabled_l_values={
+            ("primary", 1, controllers.bragg_qr_l_value_to_key(1.0)),
+            ("primary", 7, controllers.bragg_qr_l_value_to_key(0.0)),
+        },
+    )
+
+    stats = controllers.apply_bragg_qr_filters(
+        sim_state,
+        bragg_state,
+        prune_bias=0.0,
+    )
+
+    assert bragg_state.disabled_groups == {("primary", 3)}
+    assert bragg_state.disabled_l_values == {
+        ("primary", 1, controllers.bragg_qr_l_value_to_key(1.0))
+    }
+    assert set(sim_state.sim_primary_qr) == {1}
+    assert np.array_equal(sim_state.sim_primary_qr[1]["L"], np.array([0.0, 2.0]))
+    assert np.array_equal(sim_state.sim_primary_qr[1]["I"], np.array([5.0, 3.0]))
+    assert np.array_equal(
+        sim_state.sim_miller1,
+        np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 2.0],
+            ]
+        ),
+    )
+    assert np.array_equal(sim_state.sim_intens1, np.array([10.0, 1.0]))
+    assert np.array_equal(sim_state.sim_miller2, sim_state.sim_miller2_all)
+    assert np.array_equal(sim_state.sim_intens2, sim_state.sim_intens2_all)
+    assert stats == {
+        "qr_total": 2,
+        "qr_kept": 2,
+        "hkl_primary_total": 2,
+        "hkl_primary_kept": 2,
+        "hkl_secondary_total": 2,
+        "hkl_secondary_kept": 2,
+    }
+    assert sim_state.sf_prune_stats == stats
+
+
+def test_bragg_qr_controller_helpers_format_status_and_keys() -> None:
+    assert controllers.normalize_bragg_qr_source_label("SECONDARY") == "secondary"
+    assert controllers.normalize_bragg_qr_source_label("anything else") == "primary"
+    assert controllers.bragg_qr_l_value_to_key(1.25) == 1250000
+    assert controllers.bragg_qr_l_key_to_value(1250000) == 1.25
+    assert np.array_equal(
+        controllers.bragg_qr_l_keys_from_l_array(np.array([0.0, np.nan, 1.5])),
+        np.array(
+            [
+                0,
+                controllers.BRAGG_QR_L_INVALID_KEY,
+                1500000,
+            ],
+            dtype=np.int64,
+        ),
+    )
+    assert np.array_equal(
+        controllers.bragg_qr_m_indices_from_miller_array(
+            np.array([[1.0, 0.0, 0.0], [1.0, 1.0, 0.0]])
+        ),
+        np.array([1, 3], dtype=np.int64),
+    )
+    assert (
+        controllers.format_structure_factor_pruning_status(
+            {
+                "qr_total": 10,
+                "qr_kept": 4,
+                "hkl_primary_total": 0,
+                "hkl_primary_kept": 0,
+            },
+            prune_bias=0.5,
+        )
+        == "SF pruning keeps 4/10 rod points (40.0%), bias=+0.50"
+    )

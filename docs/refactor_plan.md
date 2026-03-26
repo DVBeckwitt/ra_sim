@@ -75,6 +75,8 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     toggle mutations.
   - `ra_sim.gui.views` now owns the Bragg Qr manager window lifecycle and
     listbox rendering helpers.
+  - The Bragg-Qr source/L-key normalization and filtered rod/HKL rebuild
+    pipeline now also live in `ra_sim.gui.controllers`.
 - hBN geometry debug viewer migration has landed.
   - Shared widget references for the debug viewer now live in
     `ra_sim.gui.state`.
@@ -256,6 +258,13 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     `ra_sim.gui.structure_model`, including snapshot/restore helpers for the
     structure-model state slice and diffuse-HT request packaging reused by the
     open/export actions.
+- Bragg-Qr / structure-factor pruning workflow extraction has advanced.
+  - `ra_sim.gui.controllers` now owns the Bragg-Qr source/L-key normalization,
+    disabled-filter pruning, filtered rod/HKL rebuild helpers, and status-text
+    formatting used by the live GUI.
+  - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning filter
+    application through controller helpers and keeps only the window refresh,
+    cache invalidation, and Tk status wiring inline.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -415,6 +424,8 @@ What is left:
   extraction or the structure-model / diffuse-HT rebuild path.
 - The remaining structure-model runtime code is now mostly Tk-facing wiring:
   file dialogs, progress-label updates, and control-var rebuild callbacks.
+- The remaining Bragg-Qr runtime code is now mostly window-action wiring
+  around the extracted controller/view helpers.
 
 Why it matters:
 
