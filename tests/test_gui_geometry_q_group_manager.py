@@ -183,6 +183,86 @@ def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> No
     assert fallback_peaks[0]["q_group_key"] == ("q_group", "primary", 3, 0)
 
 
+def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    key2 = ("q_group", "primary", 1, 1)
+    filtered, excluded_count, total_groups = (
+        geometry_q_group_manager.filter_geometry_fit_simulated_peaks(
+            [
+                {"hkl": (1, 0, 0), "source_label": "primary", "av": 3.0, "cv": 5.0},
+                {"hkl": (1, 0, 1), "source_label": "primary", "av": 3.0, "cv": 5.0},
+                {"hkl": (2, 0, 0), "source_label": "secondary", "av": 4.0, "cv": 6.0},
+                {"hkl": "bad"},
+            ],
+            listed_keys=[key1, key2],
+            excluded_q_groups={key2},
+        )
+    )
+
+    assert [entry["q_group_key"] for entry in filtered] == [key1]
+    assert excluded_count == 3
+    assert total_groups == 2
+
+
+def test_geometry_q_group_manager_collapses_degenerate_simulated_peaks() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    key2 = ("q_group", "secondary", 3, 0)
+    collapsed, collapsed_count = (
+        geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
+            [
+                {
+                    "q_group_key": key1,
+                    "hkl": (1, 0, 0),
+                    "label": "1,0,0",
+                    "sim_col": 10.0,
+                    "sim_row": 10.0,
+                    "weight": 2.0,
+                    "source_peak_index": 5,
+                },
+                {
+                    "q_group_key": key1,
+                    "hkl": (0, 1, 0),
+                    "label": "0,1,0",
+                    "sim_col": 11.0,
+                    "sim_row": 12.0,
+                    "weight": 3.0,
+                    "source_peak_index": 1,
+                },
+                {
+                    "q_group_key": key1,
+                    "hkl": (1, 0, 1),
+                    "label": "1,0,1",
+                    "sim_col": 30.0,
+                    "sim_row": 30.0,
+                    "weight": 0.0,
+                    "source_peak_index": 7,
+                },
+                {
+                    "q_group_key": key2,
+                    "hkl": (1, 1, 0),
+                    "label": "1,1,0",
+                    "sim_col": 50.0,
+                    "sim_row": 50.0,
+                    "weight": 4.0,
+                    "source_peak_index": 0,
+                },
+            ],
+            merge_radius_px=3.0,
+        )
+    )
+
+    assert collapsed_count == 1
+    assert [entry["q_group_key"] for entry in collapsed] == [key1, key1, key2]
+    assert collapsed[0]["source_peak_index"] == 1
+    assert collapsed[0]["weight"] == 5.0
+    assert collapsed[0]["degenerate_count"] == 2
+    assert collapsed[0]["degenerate_hkls"] == [(1, 0, 0), (0, 1, 0)]
+    assert collapsed[1]["weight"] == 1.0
+    assert collapsed[1]["degenerate_count"] == 1
+    assert collapsed[1]["degenerate_hkls"] == [(1, 0, 1)]
+    assert collapsed[2]["weight"] == 4.0
+
+
 def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)

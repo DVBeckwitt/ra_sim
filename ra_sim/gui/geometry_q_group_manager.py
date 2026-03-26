@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +14,7 @@ import numpy as np
 
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
+from . import geometry_overlay as gui_geometry_overlay
 from . import views as gui_views
 
 
@@ -413,6 +415,192 @@ def build_geometry_fit_simulated_peaks(
             )
 
     return simulated_peaks
+
+
+def filter_geometry_fit_simulated_peaks(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    *,
+    listed_keys: Sequence[tuple[object, ...]] | None = None,
+    excluded_q_groups: Sequence[tuple[object, ...]] | set[tuple[object, ...]] | None = None,
+) -> tuple[list[dict[str, object]], int, int]:
+    """Apply the current Qr/Qz selector state to geometry-fit seeds."""
+
+    filtered: list[dict[str, object]] = []
+    excluded_count = 0
+    available_keys: set[tuple[object, ...]] = set()
+    listed_keys_local = set(listed_keys or ())
+    restrict_to_listed = bool(listed_keys_local)
+    if restrict_to_listed:
+        available_keys = set(listed_keys_local)
+    excluded_q_group_keys = set(excluded_q_groups or ())
+
+    for raw_entry in simulated_peaks or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        group_key = geometry_q_group_key_from_entry(entry)
+        if group_key is None:
+            excluded_count += 1
+            continue
+        entry["q_group_key"] = group_key
+        if restrict_to_listed and group_key not in listed_keys_local:
+            excluded_count += 1
+            continue
+        if not restrict_to_listed:
+            available_keys.add(group_key)
+        if group_key in excluded_q_group_keys:
+            excluded_count += 1
+            continue
+        filtered.append(entry)
+
+    return filtered, int(excluded_count), int(len(available_keys))
+
+
+def _geometry_fit_seed_representative_sort_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[object, ...]:
+    """Return a stable ordering key for degenerate geometry-fit seeds."""
+
+    if not isinstance(entry, Mapping):
+        return (2, "")
+    try:
+        return (0, int(entry.get("source_peak_index")))
+    except Exception:
+        pass
+    hkl_key = gui_geometry_overlay.normalize_hkl_key(
+        entry.get("hkl", entry.get("label"))
+    )
+    if hkl_key is not None:
+        return (1, int(hkl_key[0]), int(hkl_key[1]), int(hkl_key[2]))
+    return (2, str(entry.get("label", "")))
+
+
+def _geometry_fit_seed_sim_point(
+    entry: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    """Return the simulated detector point for one geometry-fit seed entry."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        sim_col = float(entry.get("sim_col", np.nan))
+        sim_row = float(entry.get("sim_row", np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return None
+    return float(sim_col), float(sim_row)
+
+
+def _geometry_fit_seed_cluster_anchor(
+    entries: Sequence[dict[str, object]],
+) -> tuple[float, float] | None:
+    """Return the mean simulated point for one cluster of seed entries."""
+
+    cols: list[float] = []
+    rows: list[float] = []
+    for entry in entries:
+        point = _geometry_fit_seed_sim_point(entry)
+        if point is None:
+            continue
+        cols.append(float(point[0]))
+        rows.append(float(point[1]))
+    if not cols or not rows:
+        return None
+    return float(np.mean(np.asarray(cols, dtype=float))), float(
+        np.mean(np.asarray(rows, dtype=float))
+    )
+
+
+def collapse_geometry_fit_simulated_peaks(
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    *,
+    merge_radius_px: float = 6.0,
+) -> tuple[list[dict[str, object]], int]:
+    """Collapse overlapping degenerate geometry-fit seeds within each Qr/Qz group."""
+
+    grouped_entries: dict[object, list[dict[str, object]]] = {}
+    ordered_keys: list[object] = []
+    ungrouped_index = 0
+    merge_radius = max(0.0, float(merge_radius_px))
+
+    for raw_entry in simulated_peaks or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        group_key = entry.get("q_group_key")
+        if group_key is None:
+            group_key = ("ungrouped", ungrouped_index)
+            ungrouped_index += 1
+        if group_key not in grouped_entries:
+            grouped_entries[group_key] = []
+            ordered_keys.append(group_key)
+        grouped_entries[group_key].append(entry)
+
+    collapsed: list[dict[str, object]] = []
+    collapsed_degenerate_count = 0
+
+    for group_key in ordered_keys:
+        entries = grouped_entries.get(group_key, [])
+        if not entries:
+            continue
+
+        clusters: list[list[dict[str, object]]] = []
+        cluster_anchors: list[tuple[float, float] | None] = []
+        for entry in entries:
+            point = _geometry_fit_seed_sim_point(entry)
+            chosen_cluster_idx = None
+            chosen_cluster_dist = float("inf")
+            if point is not None and merge_radius > 0.0:
+                for cluster_idx, anchor in enumerate(cluster_anchors):
+                    if anchor is None:
+                        continue
+                    dist = float(math.hypot(point[0] - anchor[0], point[1] - anchor[1]))
+                    if dist <= merge_radius and dist < chosen_cluster_dist:
+                        chosen_cluster_idx = cluster_idx
+                        chosen_cluster_dist = dist
+            if chosen_cluster_idx is None:
+                clusters.append([entry])
+                cluster_anchors.append(point)
+                continue
+            clusters[chosen_cluster_idx].append(entry)
+            cluster_anchors[chosen_cluster_idx] = _geometry_fit_seed_cluster_anchor(
+                clusters[chosen_cluster_idx]
+            )
+
+        for cluster_entries in clusters:
+            representative = min(
+                cluster_entries,
+                key=_geometry_fit_seed_representative_sort_key,
+            )
+            merged = dict(representative)
+            degenerate_hkls: list[tuple[int, int, int]] = []
+            seen_hkls: set[tuple[int, int, int]] = set()
+            total_weight = 0.0
+
+            for entry in cluster_entries:
+                hkl_key = gui_geometry_overlay.normalize_hkl_key(
+                    entry.get("hkl", entry.get("label"))
+                )
+                if hkl_key is not None and hkl_key not in seen_hkls:
+                    seen_hkls.add(hkl_key)
+                    degenerate_hkls.append(hkl_key)
+                try:
+                    weight = float(entry.get("weight", 0.0))
+                except Exception:
+                    weight = 0.0
+                if np.isfinite(weight) and weight > 0.0:
+                    total_weight += float(weight)
+                else:
+                    total_weight += 1.0
+
+            merged["weight"] = float(total_weight)
+            merged["degenerate_count"] = int(len(cluster_entries))
+            merged["degenerate_hkls"] = list(degenerate_hkls)
+            collapsed_degenerate_count += max(0, len(cluster_entries) - 1)
+            collapsed.append(merged)
+
+    return collapsed, int(collapsed_degenerate_count)
 
 
 def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:

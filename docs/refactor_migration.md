@@ -300,6 +300,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     now also live in `ra_sim.gui.geometry_q_group_manager`
   - simulated-peak assembly from cached hit tables and geometry-fit hit-
     table exports now also lives in `ra_sim.gui.geometry_q_group_manager`
+  - shared geometry-fit seed filtering and degenerate-collapse helpers used
+    by the live preview, geometry fit, and manual-pick grouping workflows
+    now also live in `ra_sim.gui.geometry_q_group_manager`
   - cached-entry snapshot replacement/capture plus the preview-exclusion
     open/status helper used by the live update cycle and geometry tool
     controls now also live in `ra_sim.gui.geometry_q_group_manager`
@@ -307,9 +310,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions
   - `ra_sim.gui.runtime` now keeps only one bound geometry-selector factory/
-    callback bundle plus thin fit-preview/cached-hit value sources, a
-    narrowed update-cycle refresh call site, and toolbar wiring around that
-    workflow
+    callback bundle plus preview-exclusion/live-preview orchestration, thin
+    fit-preview/cached-hit value sources, a narrowed update-cycle refresh
+    call site, and toolbar wiring around that workflow
 - Background-file workflow extraction has also advanced:
   - background-file state transition, file-dialog initial-dir selection,
     background status refresh, and the post-load/post-switch redraw/reset
@@ -388,9 +391,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   value plus thin active-entry/render-config value sources and a few
   manager/overlay call sites around the extracted controller/view modules.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
-  bound factory/callback bundle plus thin fit-preview/cached-hit value
-  sources, image-shape/display-coordinate value plumbing, and a couple of
-  delegated call sites around the extracted manager/view helpers.
+  bound factory/callback bundle plus preview-exclusion/live-preview
+  rendering orchestration, thin fit-preview/cached-hit value sources,
+  image-shape/display-coordinate value plumbing, and a couple of delegated
+  call sites around the extracted manager/view helpers.
 - The remaining Bragg-Qr manager runtime code is now mostly the bound
   factory wiring used by the live filter pipeline and HKL lookup controls
   around the extracted manager helpers.
