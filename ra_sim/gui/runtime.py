@@ -2483,7 +2483,7 @@ def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> boo
         background_visible=background_visible,
         current_background_index=int(current_background_index),
         current_background_image=_current_geometry_manual_pick_background_image(),
-        pick_session=geometry_manual_pick_session,
+        pick_session=geometry_manual_state.pick_session,
         build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
         session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
@@ -2507,7 +2507,7 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
     handled, next_session, suppress_drag = gui_manual_geometry.geometry_manual_toggle_selection_at(
         float(col),
         float(row),
-        pick_session=geometry_manual_pick_session,
+        pick_session=geometry_manual_state.pick_session,
         current_background_index=int(current_background_index),
         display_background=_current_geometry_manual_pick_background_image(),
         get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
@@ -2545,7 +2545,7 @@ def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
     handled, next_session = gui_manual_geometry.geometry_manual_place_selection_at(
         float(col),
         float(row),
-        pick_session=geometry_manual_pick_session,
+        pick_session=geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         display_background=_current_geometry_manual_pick_background_image(),
         get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
@@ -2933,18 +2933,12 @@ geometry_preview_state = gui_state.GeometryPreviewState()
 geometry_q_group_view_state = gui_state.GeometryQGroupViewState()
 geometry_q_group_state = gui_state.GeometryQGroupState()
 geometry_manual_state = gui_state.ManualGeometryState()
-# Keep these aliases for now while runtime still reads the state stores directly.
-geometry_manual_pairs_by_background = geometry_manual_state.pairs_by_background
 geometry_manual_pick_armed = False
 geometry_manual_pick_button_var = None
 geometry_manual_pick_cache_signature = None
 geometry_manual_pick_cache_data: dict[str, object] = {}
-geometry_manual_pick_session = geometry_manual_state.pick_session
-geometry_manual_undo_stack = geometry_manual_state.undo_stack
 geometry_fit_history_state = gui_state.GeometryFitHistoryState()
 geometry_fit_constraints_view_state = gui_state.GeometryFitConstraintsViewState()
-geometry_fit_undo_stack = geometry_fit_history_state.undo_stack
-geometry_fit_redo_stack = geometry_fit_history_state.redo_stack
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
 GEOMETRY_FIT_UNDO_LIMIT = 16
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
@@ -3005,7 +2999,7 @@ def _geometry_manual_pairs_for_index(index: int) -> list[dict[str, object]]:
     """Return normalized saved manual geometry pairs for one background index."""
     return gui_manual_geometry.geometry_manual_pairs_for_index(
         index,
-        pairs_by_background=geometry_manual_pairs_by_background,
+        pairs_by_background=geometry_manual_state.pairs_by_background,
         normalize_hkl_key=_normalize_hkl_key,
         sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
     )
@@ -3019,7 +3013,7 @@ def _set_geometry_manual_pairs_for_index(
     return gui_manual_geometry.set_geometry_manual_pairs_for_index(
         index,
         entries,
-        pairs_by_background=geometry_manual_pairs_by_background,
+        pairs_by_background=geometry_manual_state.pairs_by_background,
         normalize_hkl_key=_normalize_hkl_key,
         sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
     )
@@ -3029,7 +3023,7 @@ def _geometry_manual_pair_group_count(index: int) -> int:
     """Return how many distinct Qr/Qz groups are saved for one background."""
     return gui_manual_geometry.geometry_manual_pair_group_count(
         index,
-        pairs_by_background=geometry_manual_pairs_by_background,
+        pairs_by_background=geometry_manual_state.pairs_by_background,
         normalize_hkl_key=_normalize_hkl_key,
         sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
     )
@@ -3076,7 +3070,7 @@ def _push_geometry_manual_undo_state() -> None:
 def _undo_last_geometry_manual_placement() -> None:
     """Restore the most recent manual-placement state."""
 
-    if not geometry_manual_undo_stack:
+    if not geometry_manual_state.undo_stack:
         progress_label_geometry.config(text="No manual placement changes are available to undo.")
         return
 
@@ -3141,11 +3135,11 @@ def _update_geometry_fit_undo_button_state() -> None:
 
     if undo_geometry_fit_button is not None:
         undo_geometry_fit_button.config(
-            state=("normal" if geometry_fit_undo_stack else "disabled")
+            state=("normal" if geometry_fit_history_state.undo_stack else "disabled")
         )
     if redo_geometry_fit_button is not None:
         redo_geometry_fit_button.config(
-            state=("normal" if geometry_fit_redo_stack else "disabled")
+            state=("normal" if geometry_fit_history_state.redo_stack else "disabled")
         )
 
 
@@ -3279,7 +3273,7 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
 def _undo_last_geometry_fit() -> None:
     """Restore the most recent geometry-fit state."""
 
-    if not geometry_fit_undo_stack:
+    if not geometry_fit_history_state.undo_stack:
         progress_label_geometry.config(text="No geometry fit history available to undo.")
         return
 
@@ -3310,7 +3304,7 @@ def _undo_last_geometry_fit() -> None:
 def _redo_last_geometry_fit() -> None:
     """Reapply the most recently undone geometry-fit state."""
 
-    if not geometry_fit_redo_stack:
+    if not geometry_fit_history_state.redo_stack:
         progress_label_geometry.config(text="No geometry fit history available to redo.")
         return
 
@@ -3376,7 +3370,7 @@ def _geometry_manual_pairs_export_rows() -> list[dict[str, object]]:
     """Return the saved manual geometry pairs as JSON-safe background rows."""
 
     background_indices: set[int] = set()
-    for raw_idx in geometry_manual_pairs_by_background.keys():
+    for raw_idx in geometry_manual_state.pairs_by_background.keys():
         try:
             background_indices.add(int(raw_idx))
         except Exception:
@@ -3721,7 +3715,7 @@ def _geometry_manual_group_target_count(
 def _geometry_manual_pick_session_active(*, require_current_background: bool = True) -> bool:
     """Return whether a manual background-placement session is in progress."""
     return gui_manual_geometry.geometry_manual_pick_session_active(
-        geometry_manual_pick_session,
+        geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         require_current_background=require_current_background,
     )
@@ -3730,7 +3724,7 @@ def _geometry_manual_pick_session_active(*, require_current_background: bool = T
 def _geometry_manual_unassigned_group_candidates() -> list[dict[str, object]]:
     """Return manual-pick group candidates that do not yet have a BG assignment."""
     return gui_manual_geometry.geometry_manual_unassigned_group_candidates(
-        geometry_manual_pick_session,
+        geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         candidate_source_key=_geometry_manual_candidate_source_key,
     )
@@ -3739,7 +3733,7 @@ def _geometry_manual_unassigned_group_candidates() -> list[dict[str, object]]:
 def _geometry_manual_current_pending_candidate() -> dict[str, object] | None:
     """Return one remaining simulated peak awaiting a manual background click."""
     return gui_manual_geometry.geometry_manual_current_pending_candidate(
-        geometry_manual_pick_session,
+        geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         candidate_source_key=_geometry_manual_candidate_source_key,
     )
@@ -3866,7 +3860,7 @@ def _geometry_manual_preview_due(col: float, row: float) -> bool:
     return gui_manual_geometry.geometry_manual_preview_due(
         col,
         row,
-        pick_session=geometry_manual_pick_session,
+        pick_session=geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         min_interval_s=float(GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S),
         min_move_px=float(GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX),
@@ -3913,7 +3907,7 @@ def _geometry_manual_refine_preview_point(
 def _restore_geometry_manual_pick_view(*, redraw: bool = True) -> None:
     """Restore the pre-zoom axis view for manual background placement."""
     gui_manual_geometry.restore_geometry_manual_pick_view(
-        geometry_manual_pick_session,
+        geometry_manual_state.pick_session,
         axis=ax,
         canvas=canvas,
         redraw=redraw,
@@ -3929,7 +3923,7 @@ def _apply_geometry_manual_pick_zoom(
 ) -> None:
     """Zoom to a fixed local window while the user is placing manual points."""
     gui_manual_geometry.apply_geometry_manual_pick_zoom(
-        geometry_manual_pick_session,
+        geometry_manual_state.pick_session,
         col,
         row,
         display_background=_current_geometry_manual_pick_background_image(),
@@ -3957,7 +3951,7 @@ def _update_geometry_manual_pick_preview(
     preview_state = gui_manual_geometry.geometry_manual_pick_preview_state(
         float(raw_col),
         float(raw_row),
-        pick_session=geometry_manual_pick_session,
+        pick_session=geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         force=force,
         remaining_candidates=_geometry_manual_unassigned_group_candidates(),
@@ -3989,7 +3983,7 @@ def _update_geometry_manual_pick_preview(
 def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
     """Return overlay-ready display entries for the in-progress manual pick session."""
     return gui_manual_geometry.geometry_manual_session_initial_pairs_display(
-        geometry_manual_pick_session,
+        geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         candidate_source_key=_geometry_manual_candidate_source_key,
         entry_display_coords=_geometry_manual_entry_display_coords,
@@ -4005,7 +3999,7 @@ def _cancel_geometry_manual_pick_session(
     """Discard any in-progress manual Qr/Qz placement state."""
     _set_geometry_manual_pick_session(
         gui_manual_geometry.cancel_geometry_manual_pick_session(
-        geometry_manual_pick_session,
+        geometry_manual_state.pick_session,
         current_background_index=current_background_index,
         restore_view_fn=_restore_geometry_manual_pick_view,
         clear_preview_artists_fn=_clear_geometry_manual_preview_artists,
@@ -4053,7 +4047,7 @@ def _update_geometry_manual_pick_button_label() -> None:
         gui_manual_geometry.geometry_manual_pick_button_label(
             armed=geometry_manual_pick_armed,
             current_background_index=current_background_index,
-            pick_session=geometry_manual_pick_session,
+            pick_session=geometry_manual_state.pick_session,
             pairs_for_index=_geometry_manual_pairs_for_index,
             pair_group_count=_geometry_manual_pair_group_count,
         )
@@ -7551,7 +7545,7 @@ def on_canvas_motion(event):
     if (
         geometry_manual_pick_armed
         and _geometry_manual_pick_session_active()
-        and bool(geometry_manual_pick_session.get("zoom_active", False))
+        and bool(geometry_manual_state.pick_session.get("zoom_active", False))
     ):
         if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
             x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
@@ -7610,7 +7604,7 @@ def on_canvas_release(event):
     if (
         geometry_manual_pick_armed
         and _geometry_manual_pick_session_active()
-        and bool(geometry_manual_pick_session.get("zoom_active", False))
+        and bool(geometry_manual_state.pick_session.get("zoom_active", False))
     ):
         if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
             x_sel, y_sel = _clamp_to_axis_view(event.xdata, event.ydata)

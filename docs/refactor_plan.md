@@ -98,6 +98,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     background-file status text wiring, reusable stacked-button rendering, and
     background backend/orientation debug control construction.
   - Direct view tests now cover the extracted workspace/debug control helpers.
+- Manual-geometry / geometry-fit-history alias cleanup has advanced.
+  - `runtime.py` no longer keeps direct module-level aliases to the
+    manual-geometry pair/session/undo stores or the geometry-fit undo/redo
+    stacks.
+  - Those reads now go straight through the shared state containers and the
+    existing controller helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -158,6 +164,10 @@ What is done:
   directly in `runtime.py`.
   - `ra_sim.gui.views` now owns their widget construction and the corresponding
     Tk var/status-label view state.
+- `runtime.py` no longer keeps direct aliases to the shared manual-geometry
+  state stores or geometry-fit history stacks.
+  - Remaining runtime reads now go through the shared state containers
+    themselves and the existing controller helpers.
 
 What is left:
 
@@ -215,6 +225,9 @@ What is done:
 - `views.py` now also owns workspace panel helpers, background-file status
   updates, reusable stacked-button rendering, and background
   backend/orientation debug control construction.
+- The runtime now reads manual-geometry state and geometry-fit history
+  directly from shared state containers instead of keeping separate alias
+  globals for those stores.
 
 What is left:
 
@@ -489,9 +502,9 @@ The next best step is:
   moving the next runtime-owned GUI
   workflows into explicit state + controller + view boundaries
 - focus next on the remaining runtime-owned workflow/state coordination in
-  `runtime.py`, especially the lingering manual-geometry aliases, scattered
-  cross-feature globals, and other still-inline Tk-heavy helpers that prevent
-  the extracted scaffolding modules from becoming the dominant app structure
+  `runtime.py`, especially the scattered cross-feature globals and other
+  still-inline Tk-heavy helpers that prevent the extracted scaffolding modules
+  from becoming the dominant app structure
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.

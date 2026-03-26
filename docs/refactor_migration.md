@@ -103,6 +103,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - workspace panel construction, background-file status updates, reusable
     stacked-button rendering, and background backend/orientation debug control
     construction now flow through `ra_sim.gui.views`
+- Manual-geometry / geometry-fit-history alias cleanup has also advanced:
+  - `ra_sim.gui.runtime` no longer keeps direct module-level aliases to the
+    manual-geometry pair/session/undo stores or the geometry-fit undo/redo
+    stacks
+  - those reads now go straight through the shared state containers and
+    existing controller helpers
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
