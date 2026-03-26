@@ -298,6 +298,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - shared propagated-hit filtering, reflection Qr/Qz group metadata,
     stable group-key reconstruction, and selector-entry snapshot assembly
     now also live in `ra_sim.gui.geometry_q_group_manager`
+  - simulated-peak assembly from cached hit tables and geometry-fit hit-
+    table exports now also lives in `ra_sim.gui.geometry_q_group_manager`
   - cached-entry snapshot replacement/capture plus the preview-exclusion
     open/status helper used by the live update cycle and geometry tool
     controls now also live in `ra_sim.gui.geometry_q_group_manager`
@@ -387,8 +389,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   manager/overlay call sites around the extracted controller/view modules.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
   bound factory/callback bundle plus thin fit-preview/cached-hit value
-  sources and a couple of delegated call sites around the extracted
-  manager/view helpers.
+  sources, image-shape/display-coordinate value plumbing, and a couple of
+  delegated call sites around the extracted manager/view helpers.
 - The remaining Bragg-Qr manager runtime code is now mostly the bound
   factory wiring used by the live filter pipeline and HKL lookup controls
   around the extracted manager helpers.

@@ -321,6 +321,9 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
     hit filtering, reflection Qr/Qz group metadata, stable group-key
     reconstruction, and selector-entry snapshot assembly used by the live
     geometry workflows.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns simulated-peak
+    assembly from cached hit tables and geometry-fit hit-table exports used
+    by the live preview and fit workflows.
   - `ra_sim.gui.geometry_q_group_manager` now also owns cached-entry
     snapshot replacement/capture plus the preview-exclusion open/status
     helper used by the live update cycle and geometry tool controls.
@@ -550,8 +553,8 @@ What is left:
   around the extracted manager helpers.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
   bound factory/callback bundle plus thin fit-preview/cached-hit value
-  sources and a couple of delegated call sites around the extracted
-  manager/view helpers.
+  sources, image-shape/display-coordinate value plumbing, and a couple of
+  delegated call sites around the extracted manager/view helpers.
 - The remaining background runtime code is now mostly one bound callback
   bundle plus thin status-refresh and control-wiring call sites around the
   extracted background manager.

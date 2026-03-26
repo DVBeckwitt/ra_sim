@@ -3739,68 +3739,25 @@ def _apply_live_preview_match_exclusions(
 def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
     """Build simulated peaks from all detector solutions of the selected beam sample."""
 
-    simulated_peaks: list[dict[str, object]] = []
     max_positions_local = simulation_runtime_state.stored_max_positions_local
     if max_positions_local is None:
-        return simulated_peaks
-    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
-    if (
-        not peak_table_lattice_local
-        or len(peak_table_lattice_local) != len(max_positions_local)
-    ):
-        peak_table_lattice_local = [
-            (float(a_var.get()), float(c_var.get()), "primary")
-            for _ in max_positions_local
-        ]
+        return []
 
     image_shape = (
         tuple(int(v) for v in simulation_runtime_state.stored_sim_image.shape[:2])
         if simulation_runtime_state.stored_sim_image is not None
         else (int(image_size), int(image_size))
     )
-
-    for table_idx, tbl in enumerate(max_positions_local):
-        rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(tbl)
-        if not rows:
-            continue
-        av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
-        for row_idx, row in enumerate(rows):
-            I, xpix, ypix, _phi, H, K, L = row[:7]
-            cx = int(round(float(xpix)))
-            cy = int(round(float(ypix)))
-            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, image_shape)
-            hkl_key = tuple(int(np.rint(v)) for v in (H, K, L))
-            hkl_raw = (float(H), float(K), float(L))
-            q_group_key, qr_val, qz_val = (
-                gui_geometry_q_group_manager.reflection_q_group_metadata(
-                hkl_raw,
-                source_label=source_label,
-                a_value=av_used,
-                c_value=cv_used,
-                )
-            )
-            if q_group_key is None:
-                continue
-            simulated_peaks.append(
-                {
-                    "hkl": hkl_key,
-                    "label": f"{hkl_key[0]},{hkl_key[1]},{hkl_key[2]}",
-                    "sim_col": float(disp_cx),
-                    "sim_row": float(disp_cy),
-                    "weight": max(0.0, float(I)),
-                    "source_peak_index": int(len(simulated_peaks)),
-                    "source_label": str(source_label),
-                    "source_table_index": int(table_idx),
-                    "source_row_index": int(row_idx),
-                    "hkl_raw": hkl_raw,
-                    "av": float(av_used),
-                    "cv": float(cv_used),
-                    "qr": float(qr_val),
-                    "qz": float(qz_val),
-                    "q_group_key": q_group_key,
-                }
-            )
-    return simulated_peaks
+    return gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        max_positions_local,
+        image_shape=image_shape,
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+        primary_a=float(a_var.get()),
+        primary_c=float(c_var.get()),
+        default_source_label="primary",
+        round_pixel_centers=True,
+    )
 
 
 def _filter_geometry_fit_simulated_peaks(
@@ -7641,70 +7598,16 @@ def _build_simulated_peaks_from_hit_tables(
     peak_table_lattice: Sequence[Sequence[object]] | None = None,
 ) -> list[dict[str, object]]:
     """Build simulated peaks from all detector solutions of the selected beam sample."""
-
-    simulated_peaks: list[dict[str, object]] = []
-
-    for table_idx, tbl in enumerate(hit_tables):
-        rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(tbl)
-        if not rows:
-            continue
-
-        source_label = f"table_{table_idx}"
-        av_used = float(a_var.get())
-        cv_used = float(c_var.get())
-        if (
-            peak_table_lattice is not None
-            and table_idx < len(peak_table_lattice)
-            and len(peak_table_lattice[table_idx]) >= 3
-        ):
-            try:
-                av_used = float(peak_table_lattice[table_idx][0])
-                cv_used = float(peak_table_lattice[table_idx][1])
-                source_label = str(peak_table_lattice[table_idx][2])
-            except Exception:
-                source_label = f"table_{table_idx}"
-
-        for row_idx, row in enumerate(rows):
-            I, xpix, ypix, _phi, H, K, L = row[:7]
-            if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
-                continue
-
-            cx = float(xpix)
-            cy = float(ypix)
-            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, image_shape)
-            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
-            hkl_raw = (float(H), float(K), float(L))
-            q_group_key, qr_val, qz_val = (
-                gui_geometry_q_group_manager.reflection_q_group_metadata(
-                hkl_raw,
-                source_label=source_label,
-                a_value=av_used,
-                c_value=cv_used,
-                )
-            )
-            if q_group_key is None:
-                continue
-            simulated_peaks.append(
-                {
-                    "hkl": hkl,
-                    "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
-                    "sim_col": float(disp_cx),
-                    "sim_row": float(disp_cy),
-                    "weight": float(abs(I)),
-                    "source_peak_index": int(len(simulated_peaks)),
-                    "source_label": str(source_label),
-                    "source_table_index": int(table_idx),
-                    "source_row_index": int(row_idx),
-                    "hkl_raw": hkl_raw,
-                    "av": float(av_used),
-                    "cv": float(cv_used),
-                    "qr": float(qr_val),
-                    "qz": float(qz_val),
-                    "q_group_key": q_group_key,
-                }
-            )
-
-    return simulated_peaks
+    return gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        hit_tables,
+        image_shape=image_shape,
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        peak_table_lattice=peak_table_lattice,
+        primary_a=float(a_var.get()),
+        primary_c=float(c_var.get()),
+        default_source_label=None,
+        round_pixel_centers=False,
+    )
 
 
 def _simulate_hit_tables_for_fit(

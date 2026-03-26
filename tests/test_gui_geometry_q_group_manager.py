@@ -128,6 +128,61 @@ def test_geometry_q_group_manager_builds_entries_from_hit_tables() -> None:
     )
 
 
+def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> None:
+    peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        [
+            np.asarray(
+                [
+                    [10.0, 1.2, 2.8, 0.0, 1.0, 0.0, 0.0],
+                    [8.0, 3.0, 4.0, 0.0, 1.0, 0.0, 1.0],
+                ],
+                dtype=float,
+            )
+        ],
+        image_shape=(20, 30),
+        native_sim_to_display_coords=lambda col, row, shape: (
+            col + float(shape[1]),
+            row + float(shape[0]),
+        ),
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        primary_a=7.0,
+        primary_c=9.0,
+        default_source_label=None,
+        round_pixel_centers=False,
+    )
+
+    assert len(peaks) == 2
+    assert peaks[0]["hkl"] == (1, 0, 0)
+    assert peaks[0]["sim_col"] == 31.2
+    assert peaks[0]["sim_row"] == 22.8
+    assert peaks[0]["source_label"] == "primary"
+    assert peaks[0]["source_peak_index"] == 0
+    assert peaks[1]["q_group_key"] == ("q_group", "primary", 1, 1)
+    assert peaks[1]["source_row_index"] == 1
+
+    fallback_peaks = geometry_q_group_manager.build_geometry_fit_simulated_peaks(
+        [
+            np.asarray(
+                [
+                    [4.0, 1.2, 2.8, 0.0, 1.0, 1.0, 0.0],
+                ],
+                dtype=float,
+            )
+        ],
+        image_shape=(20, 30),
+        native_sim_to_display_coords=lambda col, row, shape: (col, row),
+        peak_table_lattice=None,
+        primary_a=4.0,
+        primary_c=6.0,
+        default_source_label=None,
+        round_pixel_centers=True,
+    )
+    assert fallback_peaks[0]["source_label"] == "table_0"
+    assert fallback_peaks[0]["sim_col"] == 1.0
+    assert fallback_peaks[0]["sim_row"] == 3.0
+    assert fallback_peaks[0]["q_group_key"] == ("q_group", "primary", 3, 0)
+
+
 def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)

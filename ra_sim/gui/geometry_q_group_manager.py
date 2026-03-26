@@ -307,6 +307,114 @@ def build_geometry_q_group_entries(
     return entries
 
 
+def build_geometry_fit_simulated_peaks(
+    hit_tables: Sequence[object] | None,
+    *,
+    image_shape: tuple[int, int],
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+    peak_table_lattice: Sequence[Sequence[object]] | None = None,
+    primary_a: object = np.nan,
+    primary_c: object = np.nan,
+    default_source_label: str | None = "primary",
+    round_pixel_centers: bool = False,
+) -> list[dict[str, object]]:
+    """Build simulated-peak records from detector hit tables for geometry workflows."""
+
+    if not hit_tables:
+        return []
+
+    try:
+        default_primary_a = float(primary_a)
+    except Exception:
+        default_primary_a = float("nan")
+    try:
+        default_primary_c = float(primary_c)
+    except Exception:
+        default_primary_c = float("nan")
+
+    simulated_peaks: list[dict[str, object]] = []
+    peak_table_lattice_local = list(peak_table_lattice or [])
+    for table_idx, tbl in enumerate(hit_tables):
+        rows = geometry_reference_hit_rows(tbl)
+        if not rows:
+            continue
+
+        source_label = (
+            str(default_source_label)
+            if default_source_label is not None
+            else f"table_{table_idx}"
+        )
+        av_used = default_primary_a
+        cv_used = default_primary_c
+        if table_idx < len(peak_table_lattice_local):
+            lattice_entry = peak_table_lattice_local[table_idx]
+            if isinstance(lattice_entry, Sequence) and len(lattice_entry) >= 3:
+                try:
+                    av_used = float(lattice_entry[0])
+                    cv_used = float(lattice_entry[1])
+                    source_label = str(lattice_entry[2])
+                except Exception:
+                    av_used = default_primary_a
+                    cv_used = default_primary_c
+                    source_label = (
+                        str(default_source_label)
+                        if default_source_label is not None
+                        else f"table_{table_idx}"
+                    )
+
+        for row_idx, row in enumerate(rows):
+            intensity, xpix, ypix, _phi, h_val, k_val, l_val = row[:7]
+            if not (np.isfinite(intensity) and np.isfinite(xpix) and np.isfinite(ypix)):
+                continue
+
+            native_col = float(xpix)
+            native_row = float(ypix)
+            if round_pixel_centers:
+                native_col = float(int(round(native_col)))
+                native_row = float(int(round(native_row)))
+
+            display_col, display_row = native_sim_to_display_coords(
+                native_col,
+                native_row,
+                image_shape,
+            )
+            hkl = tuple(int(np.rint(val)) for val in (h_val, k_val, l_val))
+            hkl_raw = (float(h_val), float(k_val), float(l_val))
+            q_group_key, qr_val, qz_val = reflection_q_group_metadata(
+                hkl_raw,
+                source_label=source_label,
+                a_value=av_used,
+                c_value=cv_used,
+            )
+            if q_group_key is None:
+                continue
+
+            simulated_peaks.append(
+                {
+                    "hkl": hkl,
+                    "label": f"{hkl[0]},{hkl[1]},{hkl[2]}",
+                    "sim_col": float(display_col),
+                    "sim_row": float(display_row),
+                    "weight": max(0.0, float(abs(intensity))),
+                    "source_peak_index": int(len(simulated_peaks)),
+                    "source_label": str(source_label),
+                    "source_table_index": int(table_idx),
+                    "source_row_index": int(row_idx),
+                    "hkl_raw": hkl_raw,
+                    "av": float(av_used),
+                    "cv": float(cv_used),
+                    "qr": float(qr_val),
+                    "qz": float(qz_val),
+                    "q_group_key": q_group_key,
+                }
+            )
+
+    return simulated_peaks
+
+
 def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:
     """Return a compact label for one Qr/Qz selector row."""
 
