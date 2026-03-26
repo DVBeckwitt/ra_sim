@@ -77,6 +77,8 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     listbox rendering helpers.
   - The Bragg-Qr source/L-key normalization and filtered rod/HKL rebuild
     pipeline now also live in `ra_sim.gui.controllers`.
+  - The Bragg-Qr group-entry listing, L-value mapping, and list-model/status
+    formatting for that manager now also live in `ra_sim.gui.controllers`.
 - hBN geometry debug viewer migration has landed.
   - Shared widget references for the debug viewer now live in
     `ra_sim.gui.state`.
@@ -265,6 +267,9 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning filter
     application through controller helpers and keeps only the window refresh,
     cache invalidation, and Tk status wiring inline.
+  - The Bragg-Qr manager list-building workflow now also delegates through
+    controller helpers, leaving runtime with listbox selection reads and the
+    enable/disable action callbacks.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 

@@ -883,3 +883,115 @@ def test_bragg_qr_controller_helpers_format_status_and_keys() -> None:
         )
         == "SF pruning keeps 4/10 rod points (40.0%), bias=+0.50"
     )
+
+
+def test_bragg_qr_manager_entry_and_l_value_helpers_build_expected_data() -> None:
+    sim_state = state.SimulationRuntimeState(
+        sim_primary_qr_all={
+            2: {
+                "L": np.array([0.25, 0.75]),
+                "I": np.array([4.0, 2.0]),
+                "hk": (1, 0),
+                "deg": 1,
+            }
+        },
+        sim_miller1_all=np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.5],
+            ]
+        ),
+        sim_miller2_all=np.array(
+            [
+                [1.0, 0.0, 0.25],
+                [1.0, 0.0, 0.5],
+            ]
+        ),
+    )
+
+    entries = controllers.build_bragg_qr_entries(
+        sim_state,
+        primary_a=3.0,
+        secondary_a=4.0,
+    )
+
+    assert [entry["key"] for entry in entries] == [
+        ("primary", 1),
+        ("primary", 2),
+        ("primary", 3),
+        ("secondary", 1),
+    ]
+    assert entries[1]["hk_preview"] == "n/a"
+    assert entries[0]["hk_preview"] == "(1 0)"
+    assert entries[2]["hk_preview"] == "(1 1)"
+    assert entries[0]["qr"] == controllers.qr_value_for_m(1, 3.0)
+    assert entries[3]["qr"] == controllers.qr_value_for_m(1, 4.0)
+
+    assert controllers.build_bragg_qr_l_value_map(sim_state, "primary", 2) == {
+        controllers.bragg_qr_l_value_to_key(0.25): 0.25,
+        controllers.bragg_qr_l_value_to_key(0.75): 0.75,
+    }
+    assert controllers.build_bragg_qr_l_value_map(sim_state, "secondary", 1) == {
+        controllers.bragg_qr_l_value_to_key(0.25): 0.25,
+        controllers.bragg_qr_l_value_to_key(0.5): 0.5,
+    }
+
+
+def test_bragg_qr_manager_list_models_format_selection_and_status() -> None:
+    bragg_state = state.BraggQrManagerState(
+        selected_group_key=("secondary", 1),
+        disabled_groups={("secondary", 1)},
+        disabled_l_values={
+            ("secondary", 1, controllers.bragg_qr_l_value_to_key(0.5))
+        },
+    )
+    entries = [
+        {
+            "key": ("primary", 1),
+            "source": "primary",
+            "m": 1,
+            "qr": 1.23456,
+            "hk_preview": "(1 0)",
+        },
+        {
+            "key": ("secondary", 1),
+            "source": "secondary",
+            "m": 1,
+            "qr": 0.98765,
+            "hk_preview": "(1 0), (0 1)",
+        },
+    ]
+
+    qr_model = controllers.build_bragg_qr_qr_list_model(
+        bragg_state,
+        entries,
+        selected_keys=[],
+    )
+
+    assert qr_model["index_keys"] == [("primary", 1), ("secondary", 1)]
+    assert qr_model["selected_indices"] == [1]
+    assert qr_model["see_index"] == 1
+    assert qr_model["status_text"] == "Enabled: 1 / 2"
+    assert qr_model["lines"][0] == "[ON ] primary   Qr=1.2346 A^-1  m=  1  HK=(1 0)"
+    assert qr_model["lines"][1] == "[OFF] secondary Qr=0.9877 A^-1  m=  1  HK=(1 0), (0 1)"
+
+    l_model = controllers.build_bragg_qr_l_list_model(
+        bragg_state,
+        group_key=("secondary", 1),
+        l_value_map={
+            controllers.bragg_qr_l_value_to_key(0.25): 0.25,
+            controllers.bragg_qr_l_value_to_key(0.5): 0.5,
+        },
+        selected_l_keys=[controllers.bragg_qr_l_value_to_key(0.5)],
+    )
+
+    assert l_model["selected_group_key"] == ("secondary", 1)
+    assert l_model["index_keys"] == [
+        controllers.bragg_qr_l_value_to_key(0.25),
+        controllers.bragg_qr_l_value_to_key(0.5),
+    ]
+    assert l_model["selected_indices"] == [1]
+    assert l_model["status_text"] == (
+        "Selected: secondary m=1 | Enabled L: 0 / 2 | Qr group disabled"
+    )
+    assert l_model["lines"] == ["[OFF] L=0.2500", "[OFF] L=0.5000"]

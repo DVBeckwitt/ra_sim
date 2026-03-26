@@ -5463,37 +5463,13 @@ def _open_selected_peak_intersection_figure():
 
 
 def _qr_value_for_m(m_idx: int, lattice_a: float) -> float:
-    try:
-        m_val = float(m_idx)
-        a_val = float(lattice_a)
-    except (TypeError, ValueError):
-        return float("nan")
-    if not np.isfinite(m_val) or not np.isfinite(a_val) or a_val <= 0.0 or m_val < 0.0:
-        return float("nan")
-    return float((2.0 * np.pi / a_val) * np.sqrt((4.0 / 3.0) * m_val))
+    return gui_controllers.qr_value_for_m(m_idx, lattice_a)
 
 
 def _hk_pairs_grouped_by_m(source_label: str) -> dict[int, list[tuple[int, int]]]:
-    grouped: dict[int, set[tuple[int, int]]] = defaultdict(set)
-    miller_arr = _source_all_miller_for_label(source_label)
-    arr = np.asarray(miller_arr, dtype=np.float64)
-    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
-        return {}
-
-    for row in arr:
-        h_val = row[0]
-        k_val = row[1]
-        if not (np.isfinite(h_val) and np.isfinite(k_val)):
-            continue
-        h_int = int(np.rint(float(h_val)))
-        k_int = int(np.rint(float(k_val)))
-        m_idx = int(h_int * h_int + h_int * k_int + k_int * k_int)
-        grouped[m_idx].add((h_int, k_int))
-
-    return {
-        int(m_idx): sorted(pairs, key=lambda pair: (pair[0], pair[1]))
-        for m_idx, pairs in grouped.items()
-    }
+    return gui_controllers.hk_pairs_grouped_by_m(
+        _source_all_miller_for_label(source_label)
+    )
 
 
 def _build_bragg_qr_entries() -> list[dict[str, object]]:
@@ -5511,42 +5487,11 @@ def _build_bragg_qr_entries() -> list[dict[str, object]]:
     except Exception:
         secondary_a = primary_a
 
-    primary_hk = _hk_pairs_grouped_by_m("primary")
-    secondary_hk = _hk_pairs_grouped_by_m("secondary")
-
-    primary_m_values = set(primary_hk.keys())
-    if isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
-        for m_raw in simulation_runtime_state.sim_primary_qr_all.keys():
-            try:
-                primary_m_values.add(int(m_raw))
-            except (TypeError, ValueError):
-                continue
-
-    secondary_m_values = set(secondary_hk.keys())
-    entries: list[dict[str, object]] = []
-    for source_label, m_values, lattice_a, hk_map in (
-        ("primary", primary_m_values, primary_a, primary_hk),
-        ("secondary", secondary_m_values, secondary_a, secondary_hk),
-    ):
-        for m_idx in sorted(m_values):
-            hk_pairs = hk_map.get(m_idx, [])
-            preview_pairs = hk_pairs[:8]
-            preview = ", ".join(f"({h} {k})" for h, k in preview_pairs)
-            if len(hk_pairs) > len(preview_pairs):
-                preview += f", +{len(hk_pairs) - len(preview_pairs)}"
-            if not preview:
-                preview = "n/a"
-            entries.append(
-                {
-                    "key": (source_label, int(m_idx)),
-                    "source": source_label,
-                    "m": int(m_idx),
-                    "qr": _qr_value_for_m(int(m_idx), lattice_a),
-                    "hk_preview": preview,
-                }
-            )
-
-    return entries
+    return gui_controllers.build_bragg_qr_entries(
+        simulation_runtime_state,
+        primary_a=primary_a,
+        secondary_a=secondary_a,
+    )
 
 
 def _selected_bragg_qr_window_keys() -> list[tuple[str, int]]:
@@ -5590,47 +5535,11 @@ def _selected_bragg_qr_l_window_keys() -> list[int]:
 
 
 def _l_value_map_for_qr(source_label: str, m_idx: int) -> dict[int, float]:
-    source_norm = _normalize_bragg_qr_source_label(source_label)
-    m_target = int(m_idx)
-    out: dict[int, float] = {}
-
-    arr = np.asarray(_source_all_miller_for_label(source_norm), dtype=np.float64)
-    if arr.ndim == 2 and arr.shape[0] > 0 and arr.shape[1] >= 3:
-        finite_mask = (
-            np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
-        )
-        if np.any(finite_mask):
-            rows = arr[finite_mask, :3]
-            h_vals = np.rint(rows[:, 0]).astype(np.int64, copy=False)
-            k_vals = np.rint(rows[:, 1]).astype(np.int64, copy=False)
-            m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
-            l_keys = _l_keys_from_l_array(rows[:, 2])
-            for mm, l_key in zip(m_vals, l_keys):
-                lk = int(l_key)
-                if int(mm) != m_target or lk == BRAGG_QR_L_INVALID_KEY:
-                    continue
-                if lk not in out:
-                    out[lk] = _l_key_to_value(lk)
-
-    if source_norm == "primary" and isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
-        for m_raw, data in simulation_runtime_state.sim_primary_qr_all.items():
-            try:
-                mm = int(m_raw)
-            except (TypeError, ValueError):
-                continue
-            if mm != m_target or not isinstance(data, dict):
-                continue
-            l_vals = np.asarray(data.get("L", []), dtype=np.float64).reshape(-1)
-            l_keys = _l_keys_from_l_array(l_vals)
-            for l_key in l_keys:
-                lk = int(l_key)
-                if lk == BRAGG_QR_L_INVALID_KEY:
-                    continue
-                if lk not in out:
-                    out[lk] = _l_key_to_value(lk)
-            break
-
-    return out
+    return gui_controllers.build_bragg_qr_l_value_map(
+        simulation_runtime_state,
+        source_label,
+        int(m_idx),
+    )
 
 
 def _refresh_bragg_qr_l_toggle_listbox() -> None:
@@ -5642,77 +5551,29 @@ def _refresh_bragg_qr_l_toggle_listbox() -> None:
     selected_l_keys = set(_selected_bragg_qr_l_window_keys())
 
     selected_group = _selected_primary_bragg_qr_window_key()
-    if selected_group is None:
-        gui_controllers.set_bragg_qr_selected_group_key(
-            bragg_qr_manager_state,
-            None,
-        )
-        gui_controllers.replace_bragg_qr_l_index_keys(bragg_qr_manager_state, [])
-        gui_views.refresh_bragg_qr_manager_l_list(
-            view_state=bragg_qr_manager_view_state,
-            lines=["Select a Qr group on the left to view L values."],
-            selected_indices=[],
-            status_text="No Qr group selected.",
-        )
-        return
-
-    source_label, m_idx = selected_group
+    l_model = gui_controllers.build_bragg_qr_l_list_model(
+        bragg_qr_manager_state,
+        group_key=selected_group,
+        l_value_map=(
+            _l_value_map_for_qr(selected_group[0], int(selected_group[1]))
+            if selected_group is not None
+            else None
+        ),
+        selected_l_keys=list(selected_l_keys),
+    )
     gui_controllers.set_bragg_qr_selected_group_key(
         bragg_qr_manager_state,
-        (source_label, int(m_idx)),
+        l_model["selected_group_key"],
     )
-    l_value_map = _l_value_map_for_qr(source_label, int(m_idx))
-
-    if not l_value_map:
-        gui_controllers.replace_bragg_qr_l_index_keys(bragg_qr_manager_state, [])
-        gui_views.refresh_bragg_qr_manager_l_list(
-            view_state=bragg_qr_manager_view_state,
-            lines=["No L values available for the selected Qr group."],
-            selected_indices=[],
-            status_text=f"{source_label} m={int(m_idx)} has no L entries.",
-        )
-        return
-
-    group_disabled = (
-        _normalize_bragg_qr_source_label(source_label),
-        int(m_idx),
-    ) in bragg_qr_manager_state.disabled_groups
-
-    enabled_count = 0
-    lines: list[str] = []
-    l_index_keys: list[int] = []
-    for l_key, l_val in sorted(l_value_map.items(), key=lambda item: item[1]):
-        l_disabled = (
-            _normalize_bragg_qr_source_label(source_label),
-            int(m_idx),
-            int(l_key),
-        ) in bragg_qr_manager_state.disabled_l_values
-        is_enabled = (not group_disabled) and (not l_disabled)
-        if is_enabled:
-            enabled_count += 1
-        state_text = "ON " if is_enabled else "OFF"
-        lines.append(f"[{state_text}] L={float(l_val):.4f}")
-        l_index_keys.append(int(l_key))
-
     gui_controllers.replace_bragg_qr_l_index_keys(
         bragg_qr_manager_state,
-        l_index_keys,
+        l_model["index_keys"],
     )
-    selected_indices = [
-        idx
-        for idx, l_key in enumerate(bragg_qr_manager_state.l_index_keys)
-        if int(l_key) in selected_l_keys
-    ]
-    suffix = " | Qr group disabled" if group_disabled else ""
     gui_views.refresh_bragg_qr_manager_l_list(
         view_state=bragg_qr_manager_view_state,
-        lines=lines,
-        selected_indices=selected_indices,
-        status_text=(
-            f"Selected: {source_label} m={int(m_idx)} | "
-            f"Enabled L: {enabled_count} / {len(bragg_qr_manager_state.l_index_keys)}"
-            f"{suffix}"
-        )
+        lines=l_model["lines"],
+        selected_indices=l_model["selected_indices"],
+        status_text=l_model["status_text"],
     )
 
 
@@ -5741,56 +5602,22 @@ def _refresh_bragg_qr_toggle_window() -> None:
     if bragg_qr_manager_view_state.qr_listbox is None:
         return
 
-    selected_keys = set(_selected_bragg_qr_window_keys())
-    entries = _build_bragg_qr_entries()
-
-    enabled_count = 0
-    qr_index_keys: list[tuple[str, int]] = []
-    lines: list[str] = []
-
-    for entry in entries:
-        key = entry["key"]
-        is_enabled = key not in bragg_qr_manager_state.disabled_groups
-        if is_enabled:
-            enabled_count += 1
-        state_text = "ON " if is_enabled else "OFF"
-        qr_val = float(entry["qr"])
-        qr_text = f"{qr_val:.4f}" if np.isfinite(qr_val) else "nan"
-        line = (
-            f"[{state_text}] {entry['source']:<9} "
-            f"Qr={qr_text} A^-1  m={int(entry['m']):>3}  HK={entry['hk_preview']}"
-        )
-        lines.append(line)
-        qr_index_keys.append(key)
-
-    if not entries:
-        lines = ["No Bragg Qr groups are available for the current simulation."]
-
+    qr_model = gui_controllers.build_bragg_qr_qr_list_model(
+        bragg_qr_manager_state,
+        _build_bragg_qr_entries(),
+        selected_keys=_selected_bragg_qr_window_keys(),
+    )
     gui_controllers.replace_bragg_qr_index_keys(
         bragg_qr_manager_state,
-        qr_index_keys,
+        qr_model["index_keys"],
     )
-    selected_indices = [
-        idx
-        for idx, key in enumerate(bragg_qr_manager_state.qr_index_keys)
-        if key in selected_keys
-    ]
-    see_index = selected_indices[0] if selected_indices else None
-    if bragg_qr_manager_state.qr_index_keys and not selected_indices:
-        default_idx = 0
-        if bragg_qr_manager_state.selected_group_key in bragg_qr_manager_state.qr_index_keys:
-            default_idx = bragg_qr_manager_state.qr_index_keys.index(
-                bragg_qr_manager_state.selected_group_key
-            )
-        selected_indices = [default_idx]
-        see_index = default_idx
 
     gui_views.refresh_bragg_qr_manager_qr_list(
         view_state=bragg_qr_manager_view_state,
-        lines=lines,
-        selected_indices=selected_indices,
-        status_text=f"Enabled: {enabled_count} / {len(entries)}",
-        see_index=see_index,
+        lines=qr_model["lines"],
+        selected_indices=qr_model["selected_indices"],
+        status_text=qr_model["status_text"],
+        see_index=qr_model["see_index"],
     )
 
     _on_bragg_qr_selection_changed()
