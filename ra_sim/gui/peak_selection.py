@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +55,94 @@ class SelectedPeakCanvasPickConfig:
     max_distance_px: float
     min_separation_px: float
     image_shape: tuple[int, ...] | None = None
+
+
+@dataclass
+class SelectedPeakRuntimeBindings:
+    """Runtime callbacks and shared state used by selected-peak workflows."""
+
+    simulation_runtime_state: Any
+    peak_selection_state: Any
+    hkl_lookup_view_state: Any
+    selected_peak_marker: Any
+    current_primary_a_factory: object
+    caked_view_enabled_factory: object
+    current_canvas_pick_config_factory: object
+    current_intersection_config_factory: object
+    ensure_peak_overlay_data: Callable[..., object]
+    sync_peak_selection_state: Callable[[], None] | None = None
+    schedule_update: Callable[[], None] | None = None
+    set_status_text: Callable[[str], None] | None = None
+    draw_idle: Callable[[], None] | None = None
+    display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None
+    native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None
+    simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None
+    deactivate_conflicting_modes: Callable[[], None] | None = None
+    n2: Any = None
+    tcl_error_types: tuple[type[BaseException], ...] = ()
+
+
+@dataclass(frozen=True)
+class SelectedPeakRuntimeCallbacks:
+    """Bound callbacks for the runtime selected-peak workflow."""
+
+    update_hkl_pick_button_label: Callable[[], None]
+    set_hkl_pick_mode: Callable[[bool, str | None], None]
+    toggle_hkl_pick_mode: Callable[[], None]
+    reselect_current_peak: Callable[[], bool]
+    select_peak_from_hkl_controls: Callable[[], bool]
+    clear_selected_peak: Callable[[], None]
+    open_selected_peak_intersection_figure: Callable[[], bool]
+    select_peak_from_canvas_click: Callable[[float, float], bool]
+
+
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
+
+
+def _set_status_text(setter: Callable[[str], None] | None, text: str) -> None:
+    if callable(setter):
+        setter(str(text))
+
+
+def _sync_runtime_peak_selection_state(bindings: SelectedPeakRuntimeBindings) -> None:
+    if callable(bindings.sync_peak_selection_state):
+        bindings.sync_peak_selection_state()
+
+
+def _runtime_draw_idle(bindings: SelectedPeakRuntimeBindings) -> None:
+    if callable(bindings.draw_idle):
+        bindings.draw_idle()
+
+
+def _runtime_primary_a(bindings: SelectedPeakRuntimeBindings) -> float:
+    try:
+        return float(_resolve_runtime_value(bindings.current_primary_a_factory))
+    except Exception:
+        return float("nan")
+
+
+def _runtime_canvas_pick_config(
+    bindings: SelectedPeakRuntimeBindings,
+) -> SelectedPeakCanvasPickConfig | None:
+    config = _resolve_runtime_value(bindings.current_canvas_pick_config_factory)
+    if isinstance(config, SelectedPeakCanvasPickConfig):
+        return config
+    return None
+
+
+def _runtime_intersection_config(
+    bindings: SelectedPeakRuntimeBindings,
+) -> SelectedPeakIntersectionConfig | None:
+    config = _resolve_runtime_value(bindings.current_intersection_config_factory)
+    if isinstance(config, SelectedPeakIntersectionConfig):
+        return config
+    return None
 
 
 def hkl_pick_button_text(armed: bool) -> str:
@@ -884,3 +972,302 @@ def open_selected_peak_intersection_figure(
     except Exception as exc:
         set_status_text(f"Intersection analysis failed for selected peak: {exc}")
         return False
+
+
+def update_runtime_hkl_pick_button_label(
+    bindings: SelectedPeakRuntimeBindings,
+) -> None:
+    """Refresh the runtime HKL image-pick button label."""
+
+    if bindings.hkl_lookup_view_state is None:
+        return
+    gui_views.set_hkl_pick_button_text(
+        bindings.hkl_lookup_view_state,
+        hkl_pick_button_text(bool(bindings.peak_selection_state.hkl_pick_armed)),
+    )
+
+
+def set_runtime_hkl_pick_mode(
+    bindings: SelectedPeakRuntimeBindings,
+    enabled: bool,
+    *,
+    message: str | None = None,
+) -> None:
+    """Arm or disarm runtime HKL image-pick mode."""
+
+    bindings.peak_selection_state.hkl_pick_armed = bool(enabled)
+    _sync_runtime_peak_selection_state(bindings)
+    if bindings.peak_selection_state.hkl_pick_armed and callable(
+        bindings.deactivate_conflicting_modes
+    ):
+        bindings.deactivate_conflicting_modes()
+    update_runtime_hkl_pick_button_label(bindings)
+    if message:
+        _set_status_text(bindings.set_status_text, message)
+
+
+def toggle_runtime_hkl_pick_mode(bindings: SelectedPeakRuntimeBindings) -> None:
+    """Toggle runtime HKL image-pick mode using the current GUI state."""
+
+    toggle_hkl_pick_mode(
+        bindings.simulation_runtime_state,
+        bindings.peak_selection_state,
+        caked_view_enabled=bool(
+            _resolve_runtime_value(bindings.caked_view_enabled_factory)
+        ),
+        ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
+        schedule_update=(
+            bindings.schedule_update if callable(bindings.schedule_update) else lambda: None
+        ),
+        set_pick_mode=lambda enabled, message=None: set_runtime_hkl_pick_mode(
+            bindings,
+            enabled,
+            message=message,
+        ),
+        set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
+    )
+
+
+def select_peak_by_hkl_runtime(
+    bindings: SelectedPeakRuntimeBindings,
+    h: int,
+    k: int,
+    l: int,
+    *,
+    sync_hkl_vars: bool = True,
+    silent_if_missing: bool = False,
+) -> bool:
+    """Select one peak by HKL using live runtime bindings."""
+
+    if bindings.selected_peak_marker is None:
+        return False
+    return select_peak_by_hkl(
+        bindings.simulation_runtime_state,
+        bindings.peak_selection_state,
+        bindings.hkl_lookup_view_state,
+        bindings.selected_peak_marker,
+        h,
+        k,
+        l,
+        primary_a=_runtime_primary_a(bindings),
+        ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
+        schedule_update=(
+            bindings.schedule_update if callable(bindings.schedule_update) else lambda: None
+        ),
+        sync_peak_selection_state=lambda: _sync_runtime_peak_selection_state(bindings),
+        set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
+        draw_idle=lambda: _runtime_draw_idle(bindings),
+        sync_hkl_vars=sync_hkl_vars,
+        silent_if_missing=silent_if_missing,
+    )
+
+
+def reselect_runtime_selected_peak(bindings: SelectedPeakRuntimeBindings) -> bool:
+    """Refresh the currently selected HKL target after a simulation update."""
+
+    target = getattr(bindings.peak_selection_state, "selected_hkl_target", None)
+    if target is None or len(target) < 3:
+        return False
+    return select_peak_by_hkl_runtime(
+        bindings,
+        int(target[0]),
+        int(target[1]),
+        int(target[2]),
+        sync_hkl_vars=False,
+        silent_if_missing=True,
+    )
+
+
+def select_peak_from_runtime_hkl_controls(
+    bindings: SelectedPeakRuntimeBindings,
+) -> bool:
+    """Select one peak from the live HKL lookup controls."""
+
+    if bindings.selected_peak_marker is None:
+        return False
+    return select_peak_from_hkl_controls(
+        bindings.simulation_runtime_state,
+        bindings.peak_selection_state,
+        bindings.hkl_lookup_view_state,
+        bindings.selected_peak_marker,
+        primary_a=_runtime_primary_a(bindings),
+        ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
+        schedule_update=(
+            bindings.schedule_update if callable(bindings.schedule_update) else lambda: None
+        ),
+        sync_peak_selection_state=lambda: _sync_runtime_peak_selection_state(bindings),
+        set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
+        draw_idle=lambda: _runtime_draw_idle(bindings),
+        tcl_error_types=tuple(bindings.tcl_error_types or ()),
+    )
+
+
+def clear_runtime_selected_peak(bindings: SelectedPeakRuntimeBindings) -> None:
+    """Clear the selected runtime peak state."""
+
+    if bindings.selected_peak_marker is None:
+        return
+    clear_selected_peak(
+        bindings.simulation_runtime_state,
+        bindings.peak_selection_state,
+        bindings.selected_peak_marker,
+        sync_peak_selection_state=lambda: _sync_runtime_peak_selection_state(bindings),
+        set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
+        draw_idle=lambda: _runtime_draw_idle(bindings),
+    )
+
+
+def open_runtime_selected_peak_intersection_figure(
+    bindings: SelectedPeakRuntimeBindings,
+) -> bool:
+    """Open the selected-peak intersection plot using live runtime controls."""
+
+    config = _runtime_intersection_config(bindings)
+    if config is None:
+        _set_status_text(bindings.set_status_text, "Selected-peak analysis is unavailable.")
+        return False
+    return open_selected_peak_intersection_figure(
+        bindings.simulation_runtime_state,
+        config=config,
+        n2=bindings.n2,
+        set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
+    )
+
+
+def select_peak_from_runtime_canvas_click(
+    bindings: SelectedPeakRuntimeBindings,
+    click_col: float,
+    click_row: float,
+) -> bool:
+    """Resolve one raw-image click through the live runtime bindings."""
+
+    if bindings.selected_peak_marker is None:
+        return False
+    config = _runtime_canvas_pick_config(bindings)
+    if config is None:
+        _set_status_text(bindings.set_status_text, "HKL image-pick is unavailable.")
+        return False
+    if not (
+        callable(bindings.display_to_native_sim_coords)
+        and callable(bindings.native_sim_to_display_coords)
+        and callable(bindings.simulate_ideal_hkl_native_center)
+    ):
+        return False
+    return select_peak_from_canvas_click(
+        bindings.simulation_runtime_state,
+        bindings.peak_selection_state,
+        float(click_col),
+        float(click_row),
+        config=config,
+        ensure_peak_overlay_data=bindings.ensure_peak_overlay_data,
+        schedule_update=(
+            bindings.schedule_update if callable(bindings.schedule_update) else lambda: None
+        ),
+        display_to_native_sim_coords=bindings.display_to_native_sim_coords,
+        native_sim_to_display_coords=bindings.native_sim_to_display_coords,
+        simulate_ideal_hkl_native_center=bindings.simulate_ideal_hkl_native_center,
+        select_peak_by_index=lambda idx, **kwargs: select_peak_by_index(
+            bindings.simulation_runtime_state,
+            bindings.peak_selection_state,
+            bindings.hkl_lookup_view_state,
+            bindings.selected_peak_marker,
+            idx,
+            primary_a=_runtime_primary_a(bindings),
+            sync_peak_selection_state=lambda: _sync_runtime_peak_selection_state(bindings),
+            set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
+            draw_idle=lambda: _runtime_draw_idle(bindings),
+            **kwargs,
+        ),
+        set_pick_mode=lambda enabled, message=None: set_runtime_hkl_pick_mode(
+            bindings,
+            enabled,
+            message=message,
+        ),
+        sync_peak_selection_state=lambda: _sync_runtime_peak_selection_state(bindings),
+        set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
+    )
+
+
+def make_runtime_peak_selection_bindings_factory(
+    *,
+    simulation_runtime_state,
+    peak_selection_state,
+    hkl_lookup_view_state_factory: object,
+    selected_peak_marker_factory: object,
+    current_primary_a_factory: object,
+    caked_view_enabled_factory: object,
+    current_canvas_pick_config_factory: object,
+    current_intersection_config_factory: object,
+    ensure_peak_overlay_data: Callable[..., object],
+    sync_peak_selection_state: Callable[[], None] | None,
+    schedule_update_factory: object = None,
+    set_status_text_factory: object = None,
+    draw_idle_factory: object = None,
+    display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None,
+    native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None,
+    simulate_ideal_hkl_native_center: Callable[..., tuple[float, float] | None] | None = None,
+    deactivate_conflicting_modes_factory: object = None,
+    n2: Any = None,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+):
+    """Build a factory that resolves the live runtime peak-selection bindings."""
+
+    def _build() -> SelectedPeakRuntimeBindings:
+        return SelectedPeakRuntimeBindings(
+            simulation_runtime_state=simulation_runtime_state,
+            peak_selection_state=peak_selection_state,
+            hkl_lookup_view_state=_resolve_runtime_value(hkl_lookup_view_state_factory),
+            selected_peak_marker=_resolve_runtime_value(selected_peak_marker_factory),
+            current_primary_a_factory=current_primary_a_factory,
+            caked_view_enabled_factory=caked_view_enabled_factory,
+            current_canvas_pick_config_factory=current_canvas_pick_config_factory,
+            current_intersection_config_factory=current_intersection_config_factory,
+            ensure_peak_overlay_data=ensure_peak_overlay_data,
+            sync_peak_selection_state=sync_peak_selection_state,
+            schedule_update=_resolve_runtime_value(schedule_update_factory),
+            set_status_text=_resolve_runtime_value(set_status_text_factory),
+            draw_idle=_resolve_runtime_value(draw_idle_factory),
+            display_to_native_sim_coords=display_to_native_sim_coords,
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            simulate_ideal_hkl_native_center=simulate_ideal_hkl_native_center,
+            deactivate_conflicting_modes=_resolve_runtime_value(
+                deactivate_conflicting_modes_factory
+            ),
+            n2=n2,
+            tcl_error_types=tuple(tcl_error_types or ()),
+        )
+
+    return _build
+
+
+def make_runtime_peak_selection_callbacks(
+    bindings_factory: Callable[[], SelectedPeakRuntimeBindings],
+) -> SelectedPeakRuntimeCallbacks:
+    """Build bound callbacks for the runtime selected-peak workflow."""
+
+    return SelectedPeakRuntimeCallbacks(
+        update_hkl_pick_button_label=lambda: update_runtime_hkl_pick_button_label(
+            bindings_factory()
+        ),
+        set_hkl_pick_mode=lambda enabled, message=None: set_runtime_hkl_pick_mode(
+            bindings_factory(),
+            enabled,
+            message=message,
+        ),
+        toggle_hkl_pick_mode=lambda: toggle_runtime_hkl_pick_mode(bindings_factory()),
+        reselect_current_peak=lambda: reselect_runtime_selected_peak(bindings_factory()),
+        select_peak_from_hkl_controls=lambda: select_peak_from_runtime_hkl_controls(
+            bindings_factory()
+        ),
+        clear_selected_peak=lambda: clear_runtime_selected_peak(bindings_factory()),
+        open_selected_peak_intersection_figure=lambda: (
+            open_runtime_selected_peak_intersection_figure(bindings_factory())
+        ),
+        select_peak_from_canvas_click=lambda click_col, click_row: (
+            select_peak_from_runtime_canvas_click(
+                bindings_factory(),
+                float(click_col),
+                float(click_row),
+            )
+        ),
+    )

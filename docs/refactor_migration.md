@@ -308,9 +308,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     toggle / raw-image click selection workflow, and selected-peak
     Bragg/Ewald intersection analysis now live in
     `ra_sim.gui.peak_selection`
-  - `ra_sim.gui.runtime` now delegates that workflow through the extracted
-    module and keeps only cross-feature click-mode dispatch plus current
-    control-value delegation inline
+  - `ra_sim.gui.peak_selection` now also owns the runtime binding/callback
+    bundle for HKL-pick button labels, mode toggles, selected-peak refresh,
+    HKL-control selection, raw-image click selection, and the selected-peak
+    Bragg/Ewald action
+  - `ra_sim.gui.runtime` now keeps only cross-feature click-mode dispatch
+    plus the live config-factory wiring around that workflow
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -350,8 +353,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining background runtime code is now mostly one bound callback
   bundle plus a few call sites around the extracted background manager.
 - The remaining selected-peak runtime code is now mostly cross-feature
-  event-dispatch and click-mode arbitration around the extracted peak
-  selection helpers.
+  event-dispatch and drag/click-mode arbitration around the extracted peak
+  selection callbacks.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

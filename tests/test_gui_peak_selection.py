@@ -628,3 +628,326 @@ def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_c
     assert peak_state.suppress_drag_press_once is True
     assert sync_calls == [True]
     assert status_messages == []
+
+
+def test_peak_selection_runtime_binding_factory_builds_live_bindings(
+    monkeypatch,
+) -> None:
+    calls = []
+    counters = {"view": 0, "marker": 0, "status": 0, "schedule": 0, "draw": 0, "deactivate": 0}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "SelectedPeakRuntimeBindings",
+        lambda **kwargs: calls.append(kwargs) or kwargs,
+    )
+
+    def build_view():
+        counters["view"] += 1
+        return f"view-{counters['view']}"
+
+    def build_marker():
+        counters["marker"] += 1
+        return f"marker-{counters['marker']}"
+
+    def build_status():
+        counters["status"] += 1
+        idx = counters["status"]
+        return lambda text: f"status-{idx}:{text}"
+
+    def build_schedule():
+        counters["schedule"] += 1
+        idx = counters["schedule"]
+        return lambda: f"schedule-{idx}"
+
+    def build_draw():
+        counters["draw"] += 1
+        idx = counters["draw"]
+        return lambda: f"draw-{idx}"
+
+    def build_deactivate():
+        counters["deactivate"] += 1
+        idx = counters["deactivate"]
+        return lambda: f"deactivate-{idx}"
+
+    factory = peak_selection.make_runtime_peak_selection_bindings_factory(
+        simulation_runtime_state="runtime-state",
+        peak_selection_state="peak-state",
+        hkl_lookup_view_state_factory=build_view,
+        selected_peak_marker_factory=build_marker,
+        current_primary_a_factory=lambda: 5.5,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        sync_peak_selection_state=lambda: None,
+        schedule_update_factory=build_schedule,
+        set_status_text_factory=build_status,
+        draw_idle_factory=build_draw,
+        display_to_native_sim_coords=lambda col, row, image_shape: (col, row),
+        native_sim_to_display_coords=lambda col, row, image_shape: (col, row),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        deactivate_conflicting_modes_factory=build_deactivate,
+        n2="n2",
+        tcl_error_types=(RuntimeError,),
+    )
+
+    assert factory()["simulation_runtime_state"] == "runtime-state"
+    assert factory()["simulation_runtime_state"] == "runtime-state"
+    assert calls[0]["peak_selection_state"] == "peak-state"
+    assert calls[0]["hkl_lookup_view_state"] == "view-1"
+    assert calls[1]["hkl_lookup_view_state"] == "view-2"
+    assert calls[0]["selected_peak_marker"] == "marker-1"
+    assert calls[1]["selected_peak_marker"] == "marker-2"
+    assert callable(calls[0]["set_status_text"])
+    assert callable(calls[0]["schedule_update"])
+    assert callable(calls[0]["draw_idle"])
+    assert callable(calls[0]["deactivate_conflicting_modes"])
+    assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]
+    assert calls[0]["schedule_update"] is not calls[1]["schedule_update"]
+    assert calls[0]["draw_idle"] is not calls[1]["draw_idle"]
+    assert calls[0]["deactivate_conflicting_modes"] is not calls[1]["deactivate_conflicting_modes"]
+    assert calls[0]["tcl_error_types"] == (RuntimeError,)
+
+
+def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindings(
+    monkeypatch,
+) -> None:
+    runtime_state = state.SimulationRuntimeState()
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 2, 3))
+    view_state = state.HklLookupViewState(hkl_pick_button_var=_FakeVar())
+    marker = _FakeMarker()
+    messages = []
+    sync_calls = []
+    deactivate_calls = []
+    calls = []
+
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=view_state,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.5,
+        caked_view_enabled_factory=lambda: True,
+        current_canvas_pick_config_factory=_canvas_pick_config,
+        current_intersection_config_factory=_intersection_config,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        sync_peak_selection_state=lambda: sync_calls.append(True),
+        schedule_update=lambda: None,
+        set_status_text=messages.append,
+        draw_idle=lambda: None,
+        display_to_native_sim_coords=lambda col, row, image_shape: (col, row),
+        native_sim_to_display_coords=lambda col, row, image_shape: (col, row),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        deactivate_conflicting_modes=lambda: deactivate_calls.append(True),
+        n2="n2",
+        tcl_error_types=(RuntimeError,),
+    )
+
+    peak_selection.update_runtime_hkl_pick_button_label(bindings)
+    assert view_state.hkl_pick_button_var.get() == "Pick HKL on Image"
+
+    peak_selection.set_runtime_hkl_pick_mode(bindings, True, message="armed")
+    assert peak_state.hkl_pick_armed is True
+    assert view_state.hkl_pick_button_var.get() == "Pick HKL on Image (Armed)"
+    assert sync_calls == [True]
+    assert deactivate_calls == [True]
+    assert messages == ["armed"]
+
+    monkeypatch.setattr(
+        peak_selection,
+        "toggle_hkl_pick_mode",
+        lambda runtime_state_arg, peak_state_arg, **kwargs: calls.append(
+            ("toggle", runtime_state_arg, peak_state_arg, kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_by_hkl",
+        lambda runtime_state_arg, peak_state_arg, view_state_arg, marker_arg, h, k, l, **kwargs: (
+            calls.append(
+                (
+                    "select_hkl",
+                    runtime_state_arg,
+                    peak_state_arg,
+                    view_state_arg,
+                    marker_arg,
+                    h,
+                    k,
+                    l,
+                    kwargs,
+                )
+            ),
+            True,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_from_hkl_controls",
+        lambda runtime_state_arg, peak_state_arg, view_state_arg, marker_arg, **kwargs: (
+            calls.append(
+                (
+                    "controls",
+                    runtime_state_arg,
+                    peak_state_arg,
+                    view_state_arg,
+                    marker_arg,
+                    kwargs,
+                )
+            ),
+            False,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "clear_selected_peak",
+        lambda runtime_state_arg, peak_state_arg, marker_arg, **kwargs: calls.append(
+            ("clear", runtime_state_arg, peak_state_arg, marker_arg, kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "open_selected_peak_intersection_figure",
+        lambda runtime_state_arg, *, config, n2, set_status_text: (
+            calls.append(("open", runtime_state_arg, config, n2)),
+            True,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_from_canvas_click",
+        lambda runtime_state_arg, peak_state_arg, click_col, click_row, **kwargs: (
+            calls.append(
+                ("click", runtime_state_arg, peak_state_arg, click_col, click_row, kwargs)
+            ),
+            True,
+        )[-1],
+    )
+
+    peak_selection.toggle_runtime_hkl_pick_mode(bindings)
+    toggle_call = calls[0]
+    assert toggle_call[0] == "toggle"
+    assert toggle_call[1] is runtime_state
+    assert toggle_call[2] is peak_state
+    assert toggle_call[3]["caked_view_enabled"] is True
+
+    assert peak_selection.reselect_runtime_selected_peak(bindings) is True
+    select_hkl_call = calls[1]
+    assert select_hkl_call[0] == "select_hkl"
+    assert select_hkl_call[1] is runtime_state
+    assert select_hkl_call[2] is peak_state
+    assert select_hkl_call[3] is view_state
+    assert select_hkl_call[4] is marker
+    assert select_hkl_call[5:8] == (1, 2, 3)
+    assert select_hkl_call[8]["primary_a"] == 5.5
+    assert select_hkl_call[8]["sync_hkl_vars"] is False
+    assert select_hkl_call[8]["silent_if_missing"] is True
+
+    assert peak_selection.select_peak_from_runtime_hkl_controls(bindings) is False
+    controls_call = calls[2]
+    assert controls_call[0] == "controls"
+    assert controls_call[1] is runtime_state
+    assert controls_call[2] is peak_state
+    assert controls_call[3] is view_state
+    assert controls_call[4] is marker
+    assert controls_call[5]["primary_a"] == 5.5
+    assert controls_call[5]["tcl_error_types"] == (RuntimeError,)
+
+    peak_selection.clear_runtime_selected_peak(bindings)
+    clear_call = calls[3]
+    assert clear_call[0] == "clear"
+    assert clear_call[1] is runtime_state
+    assert clear_call[2] is peak_state
+    assert clear_call[3] is marker
+
+    assert peak_selection.open_runtime_selected_peak_intersection_figure(bindings) is True
+    open_call = calls[4]
+    assert open_call[0] == "open"
+    assert open_call[1] is runtime_state
+    assert isinstance(open_call[2], peak_selection.SelectedPeakIntersectionConfig)
+    assert open_call[3] == "n2"
+
+    assert peak_selection.select_peak_from_runtime_canvas_click(bindings, 9.5, 11.5) is True
+    click_call = calls[5]
+    assert click_call[0] == "click"
+    assert click_call[1] is runtime_state
+    assert click_call[2] is peak_state
+    assert click_call[3:5] == (9.5, 11.5)
+    assert isinstance(click_call[5]["config"], peak_selection.SelectedPeakCanvasPickConfig)
+    assert callable(click_call[5]["select_peak_by_index"])
+    assert callable(click_call[5]["set_pick_mode"])
+
+    callback_calls = []
+    versions = {"count": 0}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "update_runtime_hkl_pick_button_label",
+        lambda bindings_arg: callback_calls.append(("label", bindings_arg)),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "set_runtime_hkl_pick_mode",
+        lambda bindings_arg, enabled, *, message=None: callback_calls.append(
+            ("set", bindings_arg, enabled, message)
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "toggle_runtime_hkl_pick_mode",
+        lambda bindings_arg: callback_calls.append(("toggle_cb", bindings_arg)),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "reselect_runtime_selected_peak",
+        lambda bindings_arg: callback_calls.append(("reselect", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_from_runtime_hkl_controls",
+        lambda bindings_arg: callback_calls.append(("controls_cb", bindings_arg)) or False,
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "clear_runtime_selected_peak",
+        lambda bindings_arg: callback_calls.append(("clear_cb", bindings_arg)),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "open_runtime_selected_peak_intersection_figure",
+        lambda bindings_arg: callback_calls.append(("open_cb", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "select_peak_from_runtime_canvas_click",
+        lambda bindings_arg, click_col, click_row: callback_calls.append(
+            ("click_cb", bindings_arg, click_col, click_row)
+        )
+        or False,
+    )
+
+    def build_bindings():
+        versions["count"] += 1
+        return f"bindings-{versions['count']}"
+
+    callbacks = peak_selection.make_runtime_peak_selection_callbacks(build_bindings)
+
+    callbacks.update_hkl_pick_button_label()
+    callbacks.set_hkl_pick_mode(False, "off")
+    callbacks.toggle_hkl_pick_mode()
+    assert callbacks.reselect_current_peak() is True
+    assert callbacks.select_peak_from_hkl_controls() is False
+    callbacks.clear_selected_peak()
+    assert callbacks.open_selected_peak_intersection_figure() is True
+    assert callbacks.select_peak_from_canvas_click(3.0, 4.0) is False
+
+    assert callback_calls == [
+        ("label", "bindings-1"),
+        ("set", "bindings-2", False, "off"),
+        ("toggle_cb", "bindings-3"),
+        ("reselect", "bindings-4"),
+        ("controls_cb", "bindings-5"),
+        ("clear_cb", "bindings-6"),
+        ("open_cb", "bindings-7"),
+        ("click_cb", "bindings-8", 3.0, 4.0),
+    ]

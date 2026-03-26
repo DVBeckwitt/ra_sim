@@ -3056,7 +3056,7 @@ def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None)
         if not bool(analysis_view_controls_view_state.show_caked_2d_var.get()):
             analysis_view_controls_view_state.show_caked_2d_var.set(True)
             toggle_caked_2d()
-        _set_hkl_pick_mode(False)
+        peak_selection_runtime_callbacks.set_hkl_pick_mode(False)
         _set_geometry_preview_exclude_mode(False)
     else:
         _cancel_geometry_manual_pick_session(restore_view=True, redraw=True)
@@ -4467,23 +4467,6 @@ def _update_geometry_preview_exclude_button_label():
     )
 
 
-def _update_hkl_pick_button_label():
-    gui_views.set_hkl_pick_button_text(
-        hkl_lookup_view_state,
-        gui_peak_selection.hkl_pick_button_text(peak_selection_state.hkl_pick_armed),
-    )
-
-
-def _set_hkl_pick_mode(enabled: bool, *, message: str | None = None):
-    peak_selection_state.hkl_pick_armed = bool(enabled)
-    _sync_peak_selection_state()
-    if peak_selection_state.hkl_pick_armed:
-        _set_geometry_preview_exclude_mode(False)
-    _update_hkl_pick_button_label()
-    if message:
-        progress_label_positions.config(text=message)
-
-
 def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = None):
     """Arm or disarm live-preview exclusion editing."""
 
@@ -4491,7 +4474,7 @@ def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = N
         geometry_preview_state,
         enabled,
     ):
-        _set_hkl_pick_mode(False)
+        peak_selection_runtime_callbacks.set_hkl_pick_mode(False)
     _update_geometry_preview_exclude_button_label()
     if message:
         progress_label_geometry.config(text=message)
@@ -4623,177 +4606,6 @@ def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
         text=f"{action} live preview peak HKL={hkl_key} from geometry fit."
     )
     return True
-
-
-def _toggle_hkl_pick_mode():
-    gui_peak_selection.toggle_hkl_pick_mode(
-        simulation_runtime_state,
-        peak_selection_state,
-        caked_view_enabled=analysis_view_controls_view_state.show_caked_2d_var.get(),
-        ensure_peak_overlay_data=_ensure_peak_overlay_data,
-        schedule_update=schedule_update,
-        set_pick_mode=_set_hkl_pick_mode,
-        set_status_text=lambda text: progress_label_positions.config(text=text),
-    )
-
-
-def _nearest_integer_hkl(h: float, k: float, l: float) -> tuple[int, int, int]:
-    return gui_peak_selection.nearest_integer_hkl(h, k, l)
-
-
-def _format_hkl_triplet(h: int, k: int, l: int) -> str:
-    return gui_peak_selection.format_hkl_triplet(h, k, l)
-
-
-def _source_miller_for_label(source_label: str | None) -> np.ndarray:
-    return gui_peak_selection.source_miller_for_label(
-        simulation_runtime_state,
-        source_label,
-    )
-
-
-def _degenerate_hkls_for_qr(
-    h: int,
-    k: int,
-    l: int,
-    *,
-    source_label: str | None,
-) -> list[tuple[int, int, int]]:
-    return gui_peak_selection.degenerate_hkls_for_qr(
-        simulation_runtime_state,
-        h,
-        k,
-        l,
-        source_label=source_label,
-    )
-
-
-def _selected_peak_qr_and_degenerates(
-    H: float,
-    K: float,
-    L: float,
-    selected_peak: dict | None,
-) -> tuple[float, list[tuple[int, int, int]]]:
-    return gui_peak_selection.selected_peak_qr_and_degenerates(
-        simulation_runtime_state,
-        H,
-        K,
-        L,
-        selected_peak,
-        primary_a=float(av),
-    )
-
-
-def _select_peak_by_index(
-    idx: int,
-    *,
-    prefix: str = "Selected peak",
-    sync_hkl_vars: bool = True,
-    clicked_display: tuple[float, float] | None = None,
-    clicked_native: tuple[float, float] | None = None,
-    selected_display: tuple[float, float] | None = None,
-    selected_native: tuple[float, float] | None = None,
-):
-    return gui_peak_selection.select_peak_by_index(
-        simulation_runtime_state,
-        peak_selection_state,
-        hkl_lookup_view_state,
-        selected_peak_marker,
-        idx,
-        primary_a=float(av),
-        sync_peak_selection_state=_sync_peak_selection_state,
-        set_status_text=lambda text: progress_label_positions.config(text=text),
-        draw_idle=canvas.draw_idle,
-        prefix=prefix,
-        sync_hkl_vars=sync_hkl_vars,
-        clicked_display=clicked_display,
-        clicked_native=clicked_native,
-        selected_display=selected_display,
-        selected_native=selected_native,
-    )
-
-
-def _select_peak_by_hkl(
-    h: int,
-    k: int,
-    l: int,
-    *,
-    sync_hkl_vars: bool = True,
-    silent_if_missing: bool = False,
-):
-    return gui_peak_selection.select_peak_by_hkl(
-        simulation_runtime_state,
-        peak_selection_state,
-        hkl_lookup_view_state,
-        selected_peak_marker,
-        h,
-        k,
-        l,
-        primary_a=float(av),
-        ensure_peak_overlay_data=_ensure_peak_overlay_data,
-        schedule_update=schedule_update,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        set_status_text=lambda text: progress_label_positions.config(text=text),
-        draw_idle=canvas.draw_idle,
-        sync_hkl_vars=sync_hkl_vars,
-        silent_if_missing=silent_if_missing,
-    )
-
-
-def _select_peak_from_hkl_controls():
-    gui_peak_selection.select_peak_from_hkl_controls(
-        simulation_runtime_state,
-        peak_selection_state,
-        hkl_lookup_view_state,
-        selected_peak_marker,
-        primary_a=float(av),
-        ensure_peak_overlay_data=_ensure_peak_overlay_data,
-        schedule_update=schedule_update,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        set_status_text=lambda text: progress_label_positions.config(text=text),
-        draw_idle=canvas.draw_idle,
-        tcl_error_types=(tk.TclError,),
-    )
-
-
-def _clear_selected_peak():
-    gui_peak_selection.clear_selected_peak(
-        simulation_runtime_state,
-        peak_selection_state,
-        selected_peak_marker,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        set_status_text=lambda text: progress_label_positions.config(text=text),
-        draw_idle=canvas.draw_idle,
-    )
-
-
-def _open_selected_peak_intersection_figure():
-    gui_peak_selection.open_selected_peak_intersection_figure(
-        simulation_runtime_state,
-        config=gui_peak_selection.SelectedPeakIntersectionConfig(
-            image_size=int(image_size),
-            center_col=float(center_y_var.get()),
-            center_row=float(center_x_var.get()),
-            distance_cor_to_detector=float(corto_detector_var.get()),
-            gamma_deg=float(gamma_var.get()),
-            Gamma_deg=float(Gamma_var.get()),
-            chi_deg=float(chi_var.get()),
-            psi_deg=float(psi),
-            psi_z_deg=float(psi_z_var.get()),
-            zs=float(zs_var.get()),
-            zb=float(zb_var.get()),
-            theta_initial_deg=float(theta_initial_var.get()),
-            cor_angle_deg=float(cor_angle_var.get()),
-            sigma_mosaic_deg=float(sigma_mosaic_var.get()),
-            gamma_mosaic_deg=float(gamma_mosaic_var.get()),
-            eta=float(eta_var.get()),
-            solve_q_steps=_current_solve_q_steps(),
-            solve_q_rel_tol=_current_solve_q_rel_tol(),
-            solve_q_mode=_current_solve_q_mode_flag(),
-        ),
-        n2=n2,
-        set_status_text=lambda text: progress_label_positions.config(text=text),
-    )
 
 
 bragg_qr_runtime_bindings_factory = gui_bragg_qr_manager.make_runtime_bragg_qr_bindings_factory(
@@ -4954,10 +4766,90 @@ def _simulate_ideal_hkl_native_center(
     )
 
 
+peak_selection_runtime_bindings_factory = (
+    gui_peak_selection.make_runtime_peak_selection_bindings_factory(
+        simulation_runtime_state=simulation_runtime_state,
+        peak_selection_state=peak_selection_state,
+        hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
+        selected_peak_marker_factory=lambda: selected_peak_marker,
+        current_primary_a_factory=lambda: float(av),
+        caked_view_enabled_factory=lambda: (
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+            if analysis_view_controls_view_state.show_caked_2d_var is not None
+            else False
+        ),
+        current_canvas_pick_config_factory=lambda: (
+            gui_peak_selection.SelectedPeakCanvasPickConfig(
+                image_size=int(image_size),
+                primary_a=float(av),
+                primary_c=float(cv),
+                max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
+                min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
+                image_shape=(
+                    tuple(int(v) for v in global_image_buffer.shape)
+                    if global_image_buffer.size
+                    else (int(image_size), int(image_size))
+                ),
+            )
+        ),
+        current_intersection_config_factory=lambda: (
+            gui_peak_selection.SelectedPeakIntersectionConfig(
+                image_size=int(image_size),
+                center_col=float(center_y_var.get()),
+                center_row=float(center_x_var.get()),
+                distance_cor_to_detector=float(corto_detector_var.get()),
+                gamma_deg=float(gamma_var.get()),
+                Gamma_deg=float(Gamma_var.get()),
+                chi_deg=float(chi_var.get()),
+                psi_deg=float(psi),
+                psi_z_deg=float(psi_z_var.get()),
+                zs=float(zs_var.get()),
+                zb=float(zb_var.get()),
+                theta_initial_deg=float(theta_initial_var.get()),
+                cor_angle_deg=float(cor_angle_var.get()),
+                sigma_mosaic_deg=float(sigma_mosaic_var.get()),
+                gamma_mosaic_deg=float(gamma_mosaic_var.get()),
+                eta=float(eta_var.get()),
+                solve_q_steps=_current_solve_q_steps(),
+                solve_q_rel_tol=_current_solve_q_rel_tol(),
+                solve_q_mode=_current_solve_q_mode_flag(),
+            )
+        ),
+        ensure_peak_overlay_data=lambda **kwargs: _ensure_peak_overlay_data(**kwargs),
+        sync_peak_selection_state=_sync_peak_selection_state,
+        schedule_update_factory=lambda: (
+            globals().get("schedule_update")
+            if callable(globals().get("schedule_update"))
+            else None
+        ),
+        set_status_text_factory=lambda: (
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+        display_to_native_sim_coords=_display_to_native_sim_coords,
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        simulate_ideal_hkl_native_center=_simulate_ideal_hkl_native_center,
+        deactivate_conflicting_modes_factory=lambda: (
+            lambda: _set_geometry_preview_exclude_mode(False)
+        ),
+        n2=n2,
+        tcl_error_types=(tk.TclError,),
+    )
+)
+peak_selection_runtime_callbacks = gui_peak_selection.make_runtime_peak_selection_callbacks(
+    peak_selection_runtime_bindings_factory
+)
+
+
 def on_canvas_click(event):
 
     if event.button == 3 and peak_selection_state.hkl_pick_armed:
-        _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
+        peak_selection_runtime_callbacks.set_hkl_pick_mode(
+            False,
+            "HKL image-pick canceled.",
+        )
         return
     if event.button == 3 and geometry_runtime_state.manual_pick_armed:
         _set_geometry_manual_pick_mode(False, message="Manual geometry picking canceled.")
@@ -4995,32 +4887,9 @@ def on_canvas_click(event):
         return
     if event.inaxes is not ax or event.xdata is None or event.ydata is None:
         return                               # click was outside the image
-    gui_peak_selection.select_peak_from_canvas_click(
-        simulation_runtime_state,
-        peak_selection_state,
+    peak_selection_runtime_callbacks.select_peak_from_canvas_click(
         float(event.xdata),
         float(event.ydata),
-        config=gui_peak_selection.SelectedPeakCanvasPickConfig(
-            image_size=int(image_size),
-            primary_a=float(av),
-            primary_c=float(cv),
-            max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
-            min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
-            image_shape=(
-                tuple(int(v) for v in global_image_buffer.shape)
-                if global_image_buffer.size
-                else (int(image_size), int(image_size))
-            ),
-        ),
-        ensure_peak_overlay_data=_ensure_peak_overlay_data,
-        schedule_update=schedule_update,
-        display_to_native_sim_coords=_display_to_native_sim_coords,
-        native_sim_to_display_coords=_native_sim_to_display_coords,
-        simulate_ideal_hkl_native_center=_simulate_ideal_hkl_native_center,
-        select_peak_by_index=_select_peak_by_index,
-        set_pick_mode=_set_hkl_pick_mode,
-        sync_peak_selection_state=_sync_peak_selection_state,
-        set_status_text=lambda text: progress_label_positions.config(text=text),
     )
 
 
@@ -7241,13 +7110,7 @@ def do_update():
         simulation_runtime_state.peak_records.clear()
 
     if peak_selection_state.selected_hkl_target is not None:
-        _select_peak_by_hkl(
-            peak_selection_state.selected_hkl_target[0],
-            peak_selection_state.selected_hkl_target[1],
-            peak_selection_state.selected_hkl_target[2],
-            sync_hkl_vars=False,
-            silent_if_missing=True,
-        )
+        peak_selection_runtime_callbacks.reselect_current_peak()
     normalization_scale = 1.0
     native_background = _get_current_background_backend()
     if native_background is not None and display_image is not None:
@@ -8291,7 +8154,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     background_runtime_callbacks.refresh_status()
     _update_geometry_preview_exclude_button_label()
     geometry_q_group_runtime_callbacks.refresh_window()
-    _update_hkl_pick_button_label()
+    peak_selection_runtime_callbacks.update_hkl_pick_button_label()
     ensure_valid_resolution_choice()
     toggle_1d_plots()
     toggle_caked_2d()
@@ -13096,16 +12959,18 @@ _update_geometry_preview_exclude_button_label()
 gui_views.create_hkl_lookup_controls(
     parent=app_shell_view_state.fit_actions_frame,
     view_state=hkl_lookup_view_state,
-    on_select_hkl=_select_peak_from_hkl_controls,
-    on_toggle_hkl_pick=_toggle_hkl_pick_mode,
-    on_clear_selected_peak=_clear_selected_peak,
-    on_show_bragg_ewald=_open_selected_peak_intersection_figure,
+    on_select_hkl=peak_selection_runtime_callbacks.select_peak_from_hkl_controls,
+    on_toggle_hkl_pick=peak_selection_runtime_callbacks.toggle_hkl_pick_mode,
+    on_clear_selected_peak=peak_selection_runtime_callbacks.clear_selected_peak,
+    on_show_bragg_ewald=(
+        peak_selection_runtime_callbacks.open_selected_peak_intersection_figure
+    ),
     on_open_bragg_qr_groups=gui_bragg_qr_manager.make_runtime_bragg_qr_open_callback(
         root=root,
         bindings_factory=bragg_qr_runtime_bindings_factory,
     ),
 )
-_update_hkl_pick_button_label()
+peak_selection_runtime_callbacks.update_hkl_pick_button_label()
 
 def _on_qr_cylinder_overlay_toggle():
     overlay_var = geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
@@ -13137,7 +13002,7 @@ def toggle_caked_2d():
     else:
         # Entering caked view should start from auto-scaled simulation limits.
         display_controls_state.simulation_limits_user_override = False
-        _set_hkl_pick_mode(False)
+        peak_selection_runtime_callbacks.set_hkl_pick_mode(False)
     _drag_select_state["active"] = False
     _drag_select_state["mode"] = None
     drag_select_rect.set_visible(False)

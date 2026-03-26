@@ -329,9 +329,12 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     clear-selection state transitions, HKL-pick toggle / raw-image click
     selection workflow, and selected-peak Bragg/Ewald intersection analysis
     used by the live GUI.
-  - `ra_sim.gui.runtime` now delegates that workflow through the extracted
-    module and keeps only cross-feature click-mode dispatch plus current
-    control-value delegation inline.
+  - `ra_sim.gui.peak_selection` now also owns the runtime binding/callback
+    bundle used for HKL-pick button labels, mode toggles, selected-peak
+    refresh, HKL-control selection, raw-image click selection, and the
+    selected-peak Bragg/Ewald action.
+  - `ra_sim.gui.runtime` now keeps only cross-feature click-mode dispatch
+    plus the live config-factory wiring around that workflow.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -506,8 +509,8 @@ What is left:
 - The remaining background runtime code is now mostly one bound callback
   bundle plus a few call sites around the extracted background manager.
 - The remaining selected-peak runtime code is now mostly cross-feature
-  event-dispatch and click-mode arbitration around the extracted peak-
-  selection helpers.
+  event-dispatch and drag/click-mode arbitration around the extracted
+  peak-selection callbacks.
 
 Why it matters:
 
