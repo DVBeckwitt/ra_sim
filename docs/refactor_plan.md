@@ -119,6 +119,14 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     bindings, and helper updates for the HKL values and image-pick button
     label.
   - Direct view tests now cover the extracted HKL lookup helpers.
+- Geometry overlay / analysis-view control migration has landed.
+  - Shared widget references and `BooleanVar` state for the Qr-cylinder
+    overlay, fit-mosaic, and 1D/caked/log analysis toggles now live in
+    `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns construction of those overlay/action and
+    analysis-view control clusters.
+  - Direct view tests now cover the extracted overlay/action and analysis-view
+    helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -191,6 +199,10 @@ What is done:
   `runtime.py`.
   - `ra_sim.gui.views` now owns that panel construction and the related HKL
     entry/button-var helpers.
+- The Qr-cylinder / fit-mosaic action controls and the 1D/caked/log analysis
+  toggles are no longer assembled directly in `runtime.py`.
+  - `ra_sim.gui.views` now owns those control-cluster constructors and the
+    corresponding `BooleanVar` view state.
 
 What is left:
 
@@ -258,6 +270,10 @@ What is done:
 - `state.py` now also owns HKL lookup view state for the peak-selection panel.
 - `views.py` now also owns the HKL lookup control construction and helper
   updates for its entry vars and pick-button label.
+- `state.py` now also owns the geometry overlay / fit-mosaic action view state
+  and the analysis-view toggle view state.
+- `views.py` now also owns those overlay/action and analysis-view control
+  constructors.
 
 What is left:
 

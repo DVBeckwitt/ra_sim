@@ -121,11 +121,17 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - HKL lookup control construction, its entry bindings, and helper updates
     for the HKL values and image-pick button label now flow through
     `ra_sim.gui.views`
+- Geometry overlay / analysis-view control migration has also landed:
+  - shared widget references and `BooleanVar` state for the Qr-cylinder
+    overlay, fit-mosaic, and 1D/caked/log analysis toggles now use shared GUI
+    state
+  - overlay/action and analysis-view control construction now flow through
+    `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
-    background-theta/background-debug/geometry-tool-action/HKL-lookup view
-    helper coverage
+    background-theta/background-debug/geometry-tool-action/HKL-lookup/
+    overlay-action/analysis-view view helper coverage
 
 ## Remaining Migration Focus
 

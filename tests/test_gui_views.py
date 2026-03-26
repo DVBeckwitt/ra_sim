@@ -775,6 +775,79 @@ def test_hkl_lookup_controls_store_vars_bind_entries_and_support_updates(
     ]
 
 
+def test_geometry_overlay_action_controls_store_refs_and_commands(
+    monkeypatch,
+) -> None:
+    _FakeButton.created = []
+    _FakeCheckbutton.created = []
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+
+    view_state = state.GeometryOverlayActionsViewState()
+    calls = []
+
+    views.create_geometry_overlay_action_controls(
+        parent=object(),
+        view_state=view_state,
+        on_toggle_qr_cylinder_overlay=lambda: calls.append("toggle-overlay"),
+        on_clear_geometry_overlays=lambda: calls.append("clear-overlays"),
+        on_fit_mosaic=lambda: calls.append("fit-mosaic"),
+    )
+
+    assert view_state.show_qr_cylinder_overlay_var.get() is False
+    assert view_state.show_qr_cylinder_overlay_checkbutton is _FakeCheckbutton.created[0]
+    assert view_state.clear_geometry_markers_button is _FakeButton.created[0]
+    assert view_state.fit_button_mosaic is _FakeButton.created[1]
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Qr Cylinder Lines"
+    assert [button.kwargs["text"] for button in _FakeButton.created] == [
+        "Clear Geometry Overlays",
+        "Fit Mosaic Widths",
+    ]
+
+    _FakeCheckbutton.created[0].command()
+    _FakeButton.created[0].command()
+    _FakeButton.created[1].command()
+    assert calls == ["toggle-overlay", "clear-overlays", "fit-mosaic"]
+
+
+def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
+    _FakeCheckbutton.created = []
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+
+    view_state = state.AnalysisViewControlsViewState()
+    calls = []
+
+    views.create_analysis_view_controls(
+        parent=object(),
+        view_state=view_state,
+        on_toggle_1d_plots=lambda: calls.append("toggle-1d"),
+        on_toggle_caked_2d=lambda: calls.append("toggle-2d"),
+        on_toggle_log_radial=lambda: calls.append("toggle-radial"),
+        on_toggle_log_azimuth=lambda: calls.append("toggle-azimuth"),
+    )
+
+    assert view_state.show_1d_var.get() is False
+    assert view_state.show_caked_2d_var.get() is False
+    assert view_state.log_radial_var.get() is False
+    assert view_state.log_azimuth_var.get() is False
+    assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
+        "Show 1D Integration",
+        "Show 2D Caked Integration",
+        "Log Radial",
+        "Log Azimuth",
+    ]
+    assert view_state.check_1d is _FakeCheckbutton.created[0]
+    assert view_state.check_2d is _FakeCheckbutton.created[1]
+    assert view_state.check_log_radial is _FakeCheckbutton.created[2]
+    assert view_state.check_log_azimuth is _FakeCheckbutton.created[3]
+
+    for checkbutton in _FakeCheckbutton.created:
+        checkbutton.command()
+    assert calls == ["toggle-1d", "toggle-2d", "toggle-radial", "toggle-azimuth"]
+
+
 def test_background_backend_debug_controls_store_status_label_and_commands(
     monkeypatch,
 ) -> None:

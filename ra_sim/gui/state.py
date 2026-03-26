@@ -119,6 +119,30 @@ class HklLookupViewState:
 
 
 @dataclass
+class GeometryOverlayActionsViewState:
+    """Widget references and vars for overlay/mosaic action controls."""
+
+    show_qr_cylinder_overlay_var: Any = None
+    show_qr_cylinder_overlay_checkbutton: Any = None
+    clear_geometry_markers_button: Any = None
+    fit_button_mosaic: Any = None
+
+
+@dataclass
+class AnalysisViewControlsViewState:
+    """Widget references and vars for 1D/caked/log analysis view controls."""
+
+    show_1d_var: Any = None
+    check_1d: Any = None
+    show_caked_2d_var: Any = None
+    check_2d: Any = None
+    log_radial_var: Any = None
+    check_log_radial: Any = None
+    log_azimuth_var: Any = None
+    check_log_azimuth: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -231,6 +255,12 @@ class AppState:
     )
     hkl_lookup_view: HklLookupViewState = field(
         default_factory=HklLookupViewState
+    )
+    geometry_overlay_actions_view: GeometryOverlayActionsViewState = field(
+        default_factory=GeometryOverlayActionsViewState
+    )
+    analysis_view_controls_view: AnalysisViewControlsViewState = field(
+        default_factory=AnalysisViewControlsViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

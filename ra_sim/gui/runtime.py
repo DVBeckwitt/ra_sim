@@ -2432,7 +2432,7 @@ def _draw_geometry_fit_overlay(
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
         draw_idle=canvas.draw_idle,
         max_display_markers=max_display_markers,
-        show_caked_2d=bool(show_caked_2d_var.get()),
+        show_caked_2d=bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
         native_detector_coords_to_caked_display_coords=(
             _native_detector_coords_to_caked_display_coords
         ),
@@ -4052,8 +4052,8 @@ def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None)
 
     geometry_manual_pick_armed = bool(enabled)
     if geometry_manual_pick_armed:
-        if not bool(show_caked_2d_var.get()):
-            show_caked_2d_var.set(True)
+        if not bool(analysis_view_controls_view_state.show_caked_2d_var.get()):
+            analysis_view_controls_view_state.show_caked_2d_var.set(True)
             toggle_caked_2d()
         _set_hkl_pick_mode(False)
         _set_geometry_preview_exclude_mode(False)
@@ -4074,7 +4074,7 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
     global update_pending, integration_update_pending
     update_pending, integration_update_pending = (
         gui_manual_geometry.ensure_geometry_fit_caked_view(
-            show_caked_2d_var=show_caked_2d_var,
+            show_caked_2d_var=analysis_view_controls_view_state.show_caked_2d_var,
             pick_uses_caked_space=_geometry_manual_pick_uses_caked_space,
             toggle_caked_2d=toggle_caked_2d,
             do_update=do_update,
@@ -4248,7 +4248,7 @@ def _refine_caked_peak_center(
 def _geometry_manual_pick_uses_caked_space() -> bool:
     """Return whether manual geometry picking is currently operating in caked space."""
 
-    if not bool(show_caked_2d_var.get()):
+    if not bool(analysis_view_controls_view_state.show_caked_2d_var.get()):
         return False
     return (
         isinstance(last_caked_background_image_unscaled, np.ndarray)
@@ -4587,7 +4587,7 @@ def _qr_cylinder_overlay_signature(
     )
     return (
         tuple(qr_keys),
-        bool(show_caked_2d_var.get()),
+        bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
         int(image_size),
         int(SIM_DISPLAY_ROTATE_K),
         float(center_x_var.get()),
@@ -4614,7 +4614,7 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
 
     global qr_cylinder_overlay_cache
 
-    overlay_var = globals().get("show_qr_cylinder_overlay_var")
+    overlay_var = geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
     if overlay_var is None or not bool(overlay_var.get()):
         _clear_qr_cylinder_overlay_artists(redraw=redraw)
         return
@@ -4632,7 +4632,7 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
     signature = _qr_cylinder_overlay_signature(entries)
     cached_sig = qr_cylinder_overlay_cache.get("signature")
     if cached_sig != signature:
-        render_in_caked_space = bool(show_caked_2d_var.get())
+        render_in_caked_space = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
         ai = _ai_cache.get("ai")
         two_theta_map = None
         phi_map = None
@@ -4760,7 +4760,9 @@ def _live_geometry_preview_signature() -> tuple[object, ...]:
         int(current_background_index),
         id(current_background_display),
         bool(background_visible),
-        bool(show_caked_2d_var.get()) if "show_caked_2d_var" in globals() else False,
+        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        if analysis_view_controls_view_state.show_caked_2d_var is not None
+        else False,
     )
 
 
@@ -5629,6 +5631,8 @@ _suppress_drag_press_once = False
 bragg_qr_manager_state = gui_state.BraggQrManagerState()
 bragg_qr_manager_view_state = gui_state.BraggQrManagerViewState()
 hbn_geometry_debug_view_state = gui_state.HbnGeometryDebugViewState()
+geometry_overlay_actions_view_state = gui_state.GeometryOverlayActionsViewState()
+analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
 
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
@@ -6039,7 +6043,7 @@ def _toggle_hkl_pick_mode():
         _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
         return
 
-    if show_caked_2d_var.get():
+    if analysis_view_controls_view_state.show_caked_2d_var.get():
         progress_label_positions.config(
             text="Switch off 2D caked view before picking HKL in the image."
         )
@@ -7185,7 +7189,7 @@ def on_canvas_click(event):
             float(event.ydata),
         )
         return
-    if show_caked_2d_var.get():
+    if analysis_view_controls_view_state.show_caked_2d_var.get():
         return
     if geometry_preview_state.exclude_armed:
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
@@ -7487,7 +7491,7 @@ def on_canvas_press(event):
         progress_label_positions.config(text="Run a simulation first.")
         return
 
-    if show_caked_2d_var.get():
+    if analysis_view_controls_view_state.show_caked_2d_var.get():
         x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
         _drag_select_state["active"] = True
         _drag_select_state["mode"] = "caked"
@@ -7544,7 +7548,7 @@ def on_canvas_motion(event):
 
     mode = _drag_select_state["mode"]
     if mode == "caked":
-        if not show_caked_2d_var.get():
+        if not analysis_view_controls_view_state.show_caked_2d_var.get():
             return
 
         if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
@@ -7565,7 +7569,7 @@ def on_canvas_motion(event):
         )
         return
 
-    if mode != "raw" or show_caked_2d_var.get():
+    if mode != "raw" or analysis_view_controls_view_state.show_caked_2d_var.get():
         return
 
     ai = _ai_cache.get("ai")
@@ -7610,7 +7614,7 @@ def on_canvas_release(event):
     _drag_select_state["active"] = False
 
     if mode == "caked":
-        if show_caked_2d_var.get() and event.inaxes is ax and event.xdata is not None and event.ydata is not None:
+        if analysis_view_controls_view_state.show_caked_2d_var.get() and event.inaxes is ax and event.xdata is not None and event.ydata is not None:
             x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
             _drag_select_state["x1"] = x1
             _drag_select_state["y1"] = y1
@@ -7629,7 +7633,7 @@ def on_canvas_release(event):
     if mode == "raw":
         ai = _ai_cache.get("ai")
         if (
-            not show_caked_2d_var.get()
+            not analysis_view_controls_view_state.show_caked_2d_var.get()
             and ai is not None
             and event.inaxes is ax
             and event.xdata is not None
@@ -8208,7 +8212,7 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             background_min_var.get(),
             background_max_var.get(),
         )
-        if not show_caked_2d_var.get():
+        if not analysis_view_controls_view_state.show_caked_2d_var.get():
             if background_visible and current_background_display is not None:
                 background_display.set_data(current_background_display)
                 background_display.set_visible(True)
@@ -8245,7 +8249,7 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             scaled_image, reset_override=update_limits
         )
 
-    if not show_caked_2d_var.get():
+    if not analysis_view_controls_view_state.show_caked_2d_var.get():
         _set_image_origin(image_display, 'upper')
         image_display.set_extent([0, image_size, image_size, 0])
         image_display.set_data(global_image_buffer)
@@ -8262,7 +8266,7 @@ def apply_scale_factor_to_existing_results(update_limits=False):
         image_display.set_data(scaled_caked)
         image_display.set_extent(last_caked_extent)
 
-    if show_caked_2d_var.get():
+    if analysis_view_controls_view_state.show_caked_2d_var.get():
         caked_min = float(simulation_min_var.get())
         caked_max = float(simulation_max_var.get())
         caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
@@ -8272,7 +8276,7 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             vmax_caked_var.set(caked_max)
 
     if (
-        show_1d_var.get()
+        analysis_view_controls_view_state.show_1d_var.get()
         and "line_1d_rad" in globals()
         and "line_1d_az" in globals()
     ):
@@ -8300,7 +8304,7 @@ def apply_scale_factor_to_existing_results(update_limits=False):
         background_max_var.get(),
     )
 
-    if not show_caked_2d_var.get():
+    if not analysis_view_controls_view_state.show_caked_2d_var.get():
         if background_visible and current_background_display is not None:
             background_display.set_data(current_background_display)
             background_display.set_visible(True)
@@ -8657,7 +8661,7 @@ def _get_detector_angular_maps(ai):
 
 
 def update_integration_region_visuals(ai, sim_res2):
-    show_region = show_1d_var.get() and unscaled_image_global is not None
+    show_region = analysis_view_controls_view_state.show_1d_var.get() and unscaled_image_global is not None
 
     if not show_region:
         integration_region_overlay.set_visible(False)
@@ -8669,7 +8673,7 @@ def update_integration_region_visuals(ai, sim_res2):
     tth_min, tth_max = tth_values
     phi_min, phi_max = phi_values
 
-    if show_caked_2d_var.get() and sim_res2 is not None:
+    if analysis_view_controls_view_state.show_caked_2d_var.get() and sim_res2 is not None:
         integration_region_overlay.set_visible(False)
         integration_region_rect.set_xy((tth_min, phi_min))
         integration_region_rect.set_width(tth_max - tth_min)
@@ -8783,8 +8787,8 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
         last_1d_integration_data["azimuths_bg"] = None
         last_1d_integration_data["intensities_azimuth_bg"] = None
 
-    ax_1d_radial.set_yscale('log' if log_radial_var.get() else 'linear')
-    ax_1d_azim.set_yscale('log' if log_azimuth_var.get() else 'linear')
+    ax_1d_radial.set_yscale('log' if analysis_view_controls_view_state.log_radial_var.get() else 'linear')
+    ax_1d_azim.set_yscale('log' if analysis_view_controls_view_state.log_azimuth_var.get() else 'linear')
     ax_1d_radial.relim()
     ax_1d_radial.autoscale_view()
     ax_1d_azim.relim()
@@ -8796,7 +8800,7 @@ def _refresh_integration_from_cached_results():
     global last_res2_sim, last_res2_background
 
     ai = _ai_cache.get("ai")
-    if not show_1d_var.get():
+    if not analysis_view_controls_view_state.show_1d_var.get():
         _clear_1d_plot_cache_and_lines()
         update_integration_region_visuals(ai, last_res2_sim)
         canvas.draw_idle()
@@ -9841,7 +9845,7 @@ def do_update():
     # Caked 2D or normal 2D?
     sim_res2 = None
     bg_res2 = None
-    if show_caked_2d_var.get() and unscaled_image_global is not None:
+    if analysis_view_controls_view_state.show_caked_2d_var.get() and unscaled_image_global is not None:
         if (
             caking_cache.get("sim_sig") == sim_caking_sig
             and caking_cache.get("sim_res2") is not None
@@ -10021,7 +10025,7 @@ def do_update():
             background_display.set_visible(False)
         
     # 1D integration
-    if show_1d_var.get() and unscaled_image_global is not None:
+    if analysis_view_controls_view_state.show_1d_var.get() and unscaled_image_global is not None:
         if sim_res2 is None:
             if (
                 caking_cache.get("sim_sig") == sim_caking_sig
@@ -10313,8 +10317,8 @@ def reset_to_defaults():
     tth_max_var.set(80.0)
     phi_min_var.set(-15.0)
     phi_max_var.set(15.0)
-    show_1d_var.set(False)
-    show_caked_2d_var.set(False)
+    analysis_view_controls_view_state.show_1d_var.set(False)
+    analysis_view_controls_view_state.show_caked_2d_var.set(False)
     vmin_caked_var.set(0.0)
     vmax_caked_var.set(2000.0)
     caked_limits_user_override = False
@@ -12115,7 +12119,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
         _clear_geometry_preview_artists()
         return False
 
-    if show_caked_2d_var.get():
+    if analysis_view_controls_view_state.show_caked_2d_var.get():
         _clear_geometry_preview_artists()
         if update_status:
             progress_label_geometry.config(
@@ -15707,11 +15711,9 @@ gui_views.create_hkl_lookup_controls(
 )
 _update_hkl_pick_button_label()
 
-show_qr_cylinder_overlay_var = tk.BooleanVar(value=False)
-
-
 def _on_qr_cylinder_overlay_toggle():
-    if show_qr_cylinder_overlay_var.get():
+    overlay_var = geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
+    if overlay_var is not None and overlay_var.get():
         _refresh_qr_cylinder_overlay(redraw=True, update_status=True)
     else:
         _clear_qr_cylinder_overlay_artists(redraw=True)
@@ -15719,43 +15721,23 @@ def _on_qr_cylinder_overlay_toggle():
             progress_label_positions.config(text="Qr cylinder overlay hidden.")
 
 
-ttk.Checkbutton(
-    fit_actions_frame,
-    text="Show Qr Cylinder Lines",
-    variable=show_qr_cylinder_overlay_var,
-    command=_on_qr_cylinder_overlay_toggle,
-).pack(side=tk.TOP, padx=5, pady=2)
-
-clear_geometry_markers_button = ttk.Button(
-    fit_actions_frame,
-    text="Clear Geometry Overlays",
-    command=_clear_all_geometry_overlay_artists,
+gui_views.create_geometry_overlay_action_controls(
+    parent=fit_actions_frame,
+    view_state=geometry_overlay_actions_view_state,
+    on_toggle_qr_cylinder_overlay=_on_qr_cylinder_overlay_toggle,
+    on_clear_geometry_overlays=_clear_all_geometry_overlay_artists,
+    on_fit_mosaic=on_fit_mosaic_click,
 )
-clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
 
-fit_button_mosaic = ttk.Button(
-    fit_actions_frame,
-    text="Fit Mosaic Widths",
-    command=on_fit_mosaic_click,
-)
-fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
 
-show_1d_var = tk.BooleanVar(value=False)
 def toggle_1d_plots():
     schedule_range_update()
 
-check_1d = ttk.Checkbutton(
-    analysis_views_frame,
-    text="Show 1D Integration",
-    variable=show_1d_var,
-    command=toggle_1d_plots
-)
-check_1d.pack(side=tk.TOP, padx=5, pady=2)
 
-show_caked_2d_var = tk.BooleanVar(value=False)
 def toggle_caked_2d():
     global caked_limits_user_override, simulation_limits_user_override
-    if not show_caked_2d_var.get():
+    show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
+    if show_caked_2d_var is None or not show_caked_2d_var.get():
         caked_limits_user_override = False
     else:
         # Entering caked view should start from auto-scaled simulation limits.
@@ -15767,38 +15749,23 @@ def toggle_caked_2d():
     canvas.draw_idle()
     schedule_update()
 
-check_2d = ttk.Checkbutton(
-    analysis_views_frame,
-    text="Show 2D Caked Integration",
-    variable=show_caked_2d_var,
-    command=toggle_caked_2d
-)
-check_2d.pack(side=tk.TOP, padx=5, pady=2)
-
-log_radial_var = tk.BooleanVar(value=False)
-log_azimuth_var = tk.BooleanVar(value=False)
 
 def toggle_log_radial():
     schedule_range_update()
 
+
 def toggle_log_azimuth():
     schedule_range_update()
 
-check_log_radial = ttk.Checkbutton(
-    analysis_views_frame,
-    text="Log Radial",
-    variable=log_radial_var,
-    command=toggle_log_radial
-)
-check_log_radial.pack(side=tk.TOP, padx=5, pady=2)
 
-check_log_azimuth = ttk.Checkbutton(
-    analysis_views_frame,
-    text="Log Azimuth",
-    variable=log_azimuth_var,
-    command=toggle_log_azimuth
+gui_views.create_analysis_view_controls(
+    parent=analysis_views_frame,
+    view_state=analysis_view_controls_view_state,
+    on_toggle_1d_plots=toggle_1d_plots,
+    on_toggle_caked_2d=toggle_caked_2d,
+    on_toggle_log_radial=toggle_log_radial,
+    on_toggle_log_azimuth=toggle_log_azimuth,
 )
-check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
 
 # Option to add fractional rods between integer L values. This can be enabled via
 # configuration; the GUI control has been removed to reduce interface clutter.

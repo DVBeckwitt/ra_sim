@@ -24,6 +24,14 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         app_state.hkl_lookup_view,
         state.HklLookupViewState,
     )
+    assert isinstance(
+        app_state.geometry_overlay_actions_view,
+        state.GeometryOverlayActionsViewState,
+    )
+    assert isinstance(
+        app_state.analysis_view_controls_view,
+        state.AnalysisViewControlsViewState,
+    )
     assert isinstance(app_state.geometry_preview, state.GeometryPreviewState)
     assert isinstance(
         app_state.geometry_preview.overlay,
@@ -40,6 +48,14 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
     assert app_state.geometry_tool_actions_view is not other_state.geometry_tool_actions_view
     assert app_state.hkl_lookup_view is not other_state.hkl_lookup_view
+    assert (
+        app_state.geometry_overlay_actions_view
+        is not other_state.geometry_overlay_actions_view
+    )
+    assert (
+        app_state.analysis_view_controls_view
+        is not other_state.analysis_view_controls_view
+    )
     assert app_state.geometry_preview is not other_state.geometry_preview
     assert app_state.geometry_preview.overlay is not other_state.geometry_preview.overlay
     assert app_state.geometry_q_groups is not other_state.geometry_q_groups

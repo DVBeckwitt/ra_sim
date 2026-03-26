@@ -9,9 +9,11 @@ from tkinter import ttk
 
 from .collapsible import CollapsibleFrame
 from .state import (
+    AnalysisViewControlsViewState,
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
+    GeometryOverlayActionsViewState,
     GeometryToolActionsViewState,
     GeometryFitConstraintsViewState,
     HklLookupViewState,
@@ -401,6 +403,109 @@ def set_hkl_pick_button_text(
     setter = getattr(view_state.hkl_pick_button_var, "set", None)
     if callable(setter):
         setter(str(text))
+
+
+def create_geometry_overlay_action_controls(
+    *,
+    parent: tk.Misc,
+    view_state: GeometryOverlayActionsViewState,
+    on_toggle_qr_cylinder_overlay: Callable[[], None],
+    on_clear_geometry_overlays: Callable[[], None],
+    on_fit_mosaic: Callable[[], None],
+    show_qr_cylinder_overlay: bool = False,
+) -> None:
+    """Create the overlay/mosaic action controls for the fit-actions column."""
+
+    show_qr_cylinder_overlay_var = tk.BooleanVar(value=bool(show_qr_cylinder_overlay))
+    show_qr_cylinder_overlay_checkbutton = ttk.Checkbutton(
+        parent,
+        text="Show Qr Cylinder Lines",
+        variable=show_qr_cylinder_overlay_var,
+        command=on_toggle_qr_cylinder_overlay,
+    )
+    show_qr_cylinder_overlay_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
+
+    clear_geometry_markers_button = ttk.Button(
+        parent,
+        text="Clear Geometry Overlays",
+        command=on_clear_geometry_overlays,
+    )
+    clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    fit_button_mosaic = ttk.Button(
+        parent,
+        text="Fit Mosaic Widths",
+        command=on_fit_mosaic,
+    )
+    fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
+
+    view_state.show_qr_cylinder_overlay_var = show_qr_cylinder_overlay_var
+    view_state.show_qr_cylinder_overlay_checkbutton = (
+        show_qr_cylinder_overlay_checkbutton
+    )
+    view_state.clear_geometry_markers_button = clear_geometry_markers_button
+    view_state.fit_button_mosaic = fit_button_mosaic
+
+
+def create_analysis_view_controls(
+    *,
+    parent: tk.Misc,
+    view_state: AnalysisViewControlsViewState,
+    on_toggle_1d_plots: Callable[[], None],
+    on_toggle_caked_2d: Callable[[], None],
+    on_toggle_log_radial: Callable[[], None],
+    on_toggle_log_azimuth: Callable[[], None],
+    show_1d: bool = False,
+    show_caked_2d: bool = False,
+    log_radial: bool = False,
+    log_azimuth: bool = False,
+) -> None:
+    """Create the analysis view toggle controls and store their vars."""
+
+    show_1d_var = tk.BooleanVar(value=bool(show_1d))
+    check_1d = ttk.Checkbutton(
+        parent,
+        text="Show 1D Integration",
+        variable=show_1d_var,
+        command=on_toggle_1d_plots,
+    )
+    check_1d.pack(side=tk.TOP, padx=5, pady=2)
+
+    show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
+    check_2d = ttk.Checkbutton(
+        parent,
+        text="Show 2D Caked Integration",
+        variable=show_caked_2d_var,
+        command=on_toggle_caked_2d,
+    )
+    check_2d.pack(side=tk.TOP, padx=5, pady=2)
+
+    log_radial_var = tk.BooleanVar(value=bool(log_radial))
+    check_log_radial = ttk.Checkbutton(
+        parent,
+        text="Log Radial",
+        variable=log_radial_var,
+        command=on_toggle_log_radial,
+    )
+    check_log_radial.pack(side=tk.TOP, padx=5, pady=2)
+
+    log_azimuth_var = tk.BooleanVar(value=bool(log_azimuth))
+    check_log_azimuth = ttk.Checkbutton(
+        parent,
+        text="Log Azimuth",
+        variable=log_azimuth_var,
+        command=on_toggle_log_azimuth,
+    )
+    check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
+
+    view_state.show_1d_var = show_1d_var
+    view_state.check_1d = check_1d
+    view_state.show_caked_2d_var = show_caked_2d_var
+    view_state.check_2d = check_2d
+    view_state.log_radial_var = log_radial_var
+    view_state.check_log_radial = check_log_radial
+    view_state.log_azimuth_var = log_azimuth_var
+    view_state.check_log_azimuth = check_log_azimuth
 
 
 def set_background_file_status_text(
