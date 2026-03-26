@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Sequence
+from typing import Any
 import tkinter as tk
 from tkinter import ttk
 
@@ -20,6 +21,7 @@ from .state import (
     DisplayControlsViewState,
     FiniteStackControlsViewState,
     GeometryOverlayActionsViewState,
+    GeometryFitParameterControlsViewState,
     GeometryToolActionsViewState,
     GeometryFitConstraintsViewState,
     HklLookupViewState,
@@ -178,6 +180,57 @@ def create_primary_cif_controls(
     view_state.apply_button = apply_button
     view_state.diffuse_ht_button = diffuse_ht_button
     view_state.export_diffuse_ht_button = export_diffuse_ht_button
+
+
+def create_geometry_fit_parameter_controls(
+    *,
+    parent: tk.Misc,
+    view_state: GeometryFitParameterControlsViewState,
+    initial_values: dict[str, bool] | None = None,
+) -> None:
+    """Create the fit-geometry parameter checklist and store its refs/vars."""
+
+    values = dict(initial_values or {})
+    frame = ttk.LabelFrame(parent, text="Fit geometry parameters")
+    frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+    specs = [
+        ("zb", "fit_zb_var", "fit_zb_checkbutton", "z_b beam offset"),
+        ("zs", "fit_zs_var", "fit_zs_checkbutton", "z_s sample offset"),
+        ("theta_initial", "fit_theta_var", "fit_theta_checkbutton", "θ sample tilt"),
+        ("psi_z", "fit_psi_z_var", "fit_psi_z_checkbutton", "Goniometer Axis Yaw (about z)"),
+        ("chi", "fit_chi_var", "fit_chi_checkbutton", "χ sample pitch"),
+        ("cor_angle", "fit_cor_var", "fit_cor_checkbutton", "Goniometer Axis Pitch (about y)"),
+        ("gamma", "fit_gamma_var", "fit_gamma_checkbutton", "γ detector tilt"),
+        ("Gamma", "fit_Gamma_var", "fit_Gamma_checkbutton", "Γ detector tilt"),
+        ("corto_detector", "fit_dist_var", "fit_dist_checkbutton", "distance"),
+        ("a", "fit_a_var", "fit_a_checkbutton", "a lattice"),
+        ("c", "fit_c_var", "fit_c_checkbutton", "c lattice"),
+        ("center_x", "fit_center_x_var", "fit_center_x_checkbutton", "center row"),
+        ("center_y", "fit_center_y_var", "fit_center_y_checkbutton", "center col"),
+    ]
+
+    toggle_vars: dict[str, Any] = {}
+    toggle_checkbuttons: dict[str, Any] = {}
+    widgets: list[Any] = []
+    for key, var_attr, widget_attr, label in specs:
+        toggle_var = tk.BooleanVar(value=bool(values.get(key, False)))
+        checkbutton = ttk.Checkbutton(frame, text=label, variable=toggle_var)
+        setattr(view_state, var_attr, toggle_var)
+        setattr(view_state, widget_attr, checkbutton)
+        toggle_vars[key] = toggle_var
+        toggle_checkbuttons[key] = checkbutton
+        widgets.append(checkbutton)
+
+    for col_idx in range(4):
+        frame.columnconfigure(col_idx, weight=1)
+    for idx, widget in enumerate(widgets):
+        row_idx, col_idx = divmod(idx, 4)
+        widget.grid(row=row_idx, column=col_idx, sticky="w", padx=4, pady=2)
+
+    view_state.frame = frame
+    view_state.toggle_vars = toggle_vars
+    view_state.toggle_checkbuttons = toggle_checkbuttons
 
 
 def create_cif_weight_controls(

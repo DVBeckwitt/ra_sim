@@ -46,6 +46,41 @@ class GeometryFitConstraintsViewState:
 
 
 @dataclass
+class GeometryFitParameterControlsViewState:
+    """Widget references and vars for the fit-geometry parameter checklist."""
+
+    frame: Any = None
+    fit_zb_var: Any = None
+    fit_zb_checkbutton: Any = None
+    fit_zs_var: Any = None
+    fit_zs_checkbutton: Any = None
+    fit_theta_var: Any = None
+    fit_theta_checkbutton: Any = None
+    fit_psi_z_var: Any = None
+    fit_psi_z_checkbutton: Any = None
+    fit_chi_var: Any = None
+    fit_chi_checkbutton: Any = None
+    fit_cor_var: Any = None
+    fit_cor_checkbutton: Any = None
+    fit_gamma_var: Any = None
+    fit_gamma_checkbutton: Any = None
+    fit_Gamma_var: Any = None
+    fit_Gamma_checkbutton: Any = None
+    fit_dist_var: Any = None
+    fit_dist_checkbutton: Any = None
+    fit_a_var: Any = None
+    fit_a_checkbutton: Any = None
+    fit_c_var: Any = None
+    fit_c_checkbutton: Any = None
+    fit_center_x_var: Any = None
+    fit_center_x_checkbutton: Any = None
+    fit_center_y_var: Any = None
+    fit_center_y_checkbutton: Any = None
+    toggle_vars: dict[str, Any] = field(default_factory=dict)
+    toggle_checkbuttons: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class BackgroundThetaControlsViewState:
     """Widget references and vars for background-theta control surfaces."""
 
@@ -436,6 +471,9 @@ class AppState:
     manual_geometry: ManualGeometryState = field(default_factory=ManualGeometryState)
     geometry_fit_history: GeometryFitHistoryState = field(
         default_factory=GeometryFitHistoryState
+    )
+    geometry_fit_parameter_controls_view: GeometryFitParameterControlsViewState = field(
+        default_factory=GeometryFitParameterControlsViewState
     )
     geometry_fit_constraints_view: GeometryFitConstraintsViewState = field(
         default_factory=GeometryFitConstraintsViewState

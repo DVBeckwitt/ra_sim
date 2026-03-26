@@ -705,6 +705,83 @@ def test_background_file_controls_store_status_var_and_update_text(monkeypatch) 
     assert loaded == [True]
 
 
+def test_geometry_fit_parameter_controls_store_toggle_vars_and_grid_checkbuttons(
+    monkeypatch,
+) -> None:
+    class _GridCheckbutton:
+        created = []
+
+        def __init__(self, parent, **kwargs) -> None:
+            self.parent = parent
+            self.kwargs = kwargs
+            self.variable = kwargs.get("variable")
+            self.text = kwargs.get("text", "")
+            self.grid_kwargs = None
+            _GridCheckbutton.created.append(self)
+
+        def grid(self, **kwargs) -> None:
+            self.grid_kwargs = kwargs
+
+        def config(self, **kwargs) -> None:
+            self.text = kwargs.get("text", self.text)
+
+        def configure(self, **kwargs) -> None:
+            self.config(**kwargs)
+
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _GridCheckbutton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+
+    view_state = state.GeometryFitParameterControlsViewState()
+
+    views.create_geometry_fit_parameter_controls(
+        parent=object(),
+        view_state=view_state,
+        initial_values={
+            "zb": True,
+            "zs": True,
+            "theta_initial": True,
+            "psi_z": False,
+            "chi": True,
+            "cor_angle": False,
+            "gamma": True,
+            "Gamma": True,
+            "corto_detector": True,
+            "a": False,
+            "c": False,
+            "center_x": True,
+            "center_y": False,
+        },
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert view_state.fit_zb_var.get() is True
+    assert view_state.fit_psi_z_var.get() is False
+    assert view_state.fit_center_x_var.get() is True
+    assert view_state.fit_center_y_var.get() is False
+    assert view_state.fit_theta_checkbutton is _GridCheckbutton.created[2]
+    assert view_state.toggle_vars["theta_initial"] is view_state.fit_theta_var
+    assert view_state.toggle_checkbuttons["theta_initial"] is view_state.fit_theta_checkbutton
+    assert view_state.frame.columnconfigure_calls == [(0, 1), (1, 1), (2, 1), (3, 1)]
+    assert _GridCheckbutton.created[0].text == "z_b beam offset"
+    assert _GridCheckbutton.created[2].text == "θ sample tilt"
+    assert _GridCheckbutton.created[-1].text == "center col"
+    assert _GridCheckbutton.created[0].grid_kwargs == {
+        "row": 0,
+        "column": 0,
+        "sticky": "w",
+        "padx": 4,
+        "pady": 2,
+    }
+    assert _GridCheckbutton.created[-1].grid_kwargs == {
+        "row": 3,
+        "column": 0,
+        "sticky": "w",
+        "padx": 4,
+        "pady": 2,
+    }
+
+
 def test_primary_cif_controls_store_vars_and_bind_actions(monkeypatch) -> None:
     _FakeButton.created = []
     _FakeLabel.created = []

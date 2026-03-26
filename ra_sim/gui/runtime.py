@@ -2938,6 +2938,9 @@ geometry_manual_pick_armed = False
 geometry_manual_pick_cache_signature = None
 geometry_manual_pick_cache_data: dict[str, object] = {}
 geometry_fit_history_state = gui_state.GeometryFitHistoryState()
+geometry_fit_parameter_controls_view_state = (
+    gui_state.GeometryFitParameterControlsViewState()
+)
 geometry_fit_constraints_view_state = gui_state.GeometryFitConstraintsViewState()
 geometry_tool_actions_view_state = gui_state.GeometryToolActionsViewState()
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
@@ -11084,99 +11087,48 @@ gui_views.populate_stacked_button_group(
 )
 
 # Frame for selecting which geometry params to fit
-fit_frame = ttk.LabelFrame(fit_body, text="Fit geometry parameters")
-fit_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
-
-fit_zb_var    = tk.BooleanVar(value=True)
-fit_zs_var    = tk.BooleanVar(value=True)
-fit_theta_var = tk.BooleanVar(value=True)  # theta_initial
-fit_psi_z_var = tk.BooleanVar(value=True)
-fit_chi_var   = tk.BooleanVar(value=True)
-fit_cor_var   = tk.BooleanVar(value=True)
-fit_gamma_var = tk.BooleanVar(value=True)
-fit_Gamma_var = tk.BooleanVar(value=True)
-fit_dist_var = tk.BooleanVar(value=True)
-fit_a_var = tk.BooleanVar(value=False)
-fit_c_var = tk.BooleanVar(value=False)
-fit_center_x_var = tk.BooleanVar(value=False)
-fit_center_y_var = tk.BooleanVar(value=False)
-
-fit_toggle_widgets = []
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="z_b beam offset", variable=fit_zb_var)
+gui_views.create_geometry_fit_parameter_controls(
+    parent=fit_body,
+    view_state=geometry_fit_parameter_controls_view_state,
+    initial_values={
+        "zb": True,
+        "zs": True,
+        "theta_initial": True,
+        "psi_z": True,
+        "chi": True,
+        "cor_angle": True,
+        "gamma": True,
+        "Gamma": True,
+        "corto_detector": True,
+        "a": False,
+        "c": False,
+        "center_x": False,
+        "center_y": False,
+    },
 )
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="z_s sample offset", variable=fit_zs_var)
-)
-fit_theta_checkbutton = ttk.Checkbutton(
-    fit_frame,
-    text="θ sample tilt",
-    variable=fit_theta_var,
-)
-fit_toggle_widgets.append(fit_theta_checkbutton)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(
-        fit_frame,
-        text="Goniometer Axis Yaw (about z)",
-        variable=fit_psi_z_var,
-    )
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="χ sample pitch", variable=fit_chi_var)
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(
-        fit_frame,
-        text="Goniometer Axis Pitch (about y)",
-        variable=fit_cor_var,
-    )
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="γ detector tilt", variable=fit_gamma_var)
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="Γ detector tilt", variable=fit_Gamma_var)
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="distance", variable=fit_dist_var)
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="a lattice", variable=fit_a_var)
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="c lattice", variable=fit_c_var)
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="center row", variable=fit_center_x_var)
-)
-fit_toggle_widgets.append(
-    ttk.Checkbutton(fit_frame, text="center col", variable=fit_center_y_var)
-)
-for _col in range(4):
-    fit_frame.columnconfigure(_col, weight=1)
-for _idx, _widget in enumerate(fit_toggle_widgets):
-    _row, _col = divmod(_idx, 4)
-    _widget.grid(row=_row, column=_col, sticky="w", padx=4, pady=2)
+fit_frame = geometry_fit_parameter_controls_view_state.frame
+fit_zb_var = geometry_fit_parameter_controls_view_state.fit_zb_var
+fit_zs_var = geometry_fit_parameter_controls_view_state.fit_zs_var
+fit_theta_var = geometry_fit_parameter_controls_view_state.fit_theta_var
+fit_psi_z_var = geometry_fit_parameter_controls_view_state.fit_psi_z_var
+fit_chi_var = geometry_fit_parameter_controls_view_state.fit_chi_var
+fit_cor_var = geometry_fit_parameter_controls_view_state.fit_cor_var
+fit_gamma_var = geometry_fit_parameter_controls_view_state.fit_gamma_var
+fit_Gamma_var = geometry_fit_parameter_controls_view_state.fit_Gamma_var
+fit_dist_var = geometry_fit_parameter_controls_view_state.fit_dist_var
+fit_a_var = geometry_fit_parameter_controls_view_state.fit_a_var
+fit_c_var = geometry_fit_parameter_controls_view_state.fit_c_var
+fit_center_x_var = geometry_fit_parameter_controls_view_state.fit_center_x_var
+fit_center_y_var = geometry_fit_parameter_controls_view_state.fit_center_y_var
+fit_theta_checkbutton = geometry_fit_parameter_controls_view_state.fit_theta_checkbutton
+if fit_frame is None:
+    raise RuntimeError("Geometry-fit parameter controls did not create the frame.")
 _refresh_geometry_fit_theta_checkbox_label()
 
 GEOMETRY_FIT_PARAM_ORDER = [
     *gui_geometry_fit.GEOMETRY_FIT_PARAM_ORDER,
 ]
-geometry_fit_toggle_vars = {
-    "zb": fit_zb_var,
-    "zs": fit_zs_var,
-    "theta_initial": fit_theta_var,
-    "psi_z": fit_psi_z_var,
-    "chi": fit_chi_var,
-    "cor_angle": fit_cor_var,
-    "gamma": fit_gamma_var,
-    "Gamma": fit_Gamma_var,
-    "corto_detector": fit_dist_var,
-    "a": fit_a_var,
-    "c": fit_c_var,
-    "center_x": fit_center_x_var,
-    "center_y": fit_center_y_var,
-}
+geometry_fit_toggle_vars = dict(geometry_fit_parameter_controls_view_state.toggle_vars)
 geometry_fit_parameter_specs = {}
 
 
