@@ -273,9 +273,13 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.controllers` now owns the Bragg-Qr source/L-key normalization,
     disabled-filter pruning, filtered rod/HKL rebuild helpers, and status-text
     formatting used by the live GUI.
-  - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning filter
-    application through controller helpers and keeps only the window refresh,
-    cache invalidation, and Tk status wiring inline.
+  - `ra_sim.gui.structure_factor_pruning` now owns the remaining
+    structure-factor pruning / solve-q control callback workflow, pruning-
+    status refresh, Bragg-Qr filter side effects, and adaptive-control sync
+    used by the live GUI.
+  - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning control
+    workflow through that module and keeps only thin delegate wrappers plus
+    current-value helpers inline.
   - The Bragg-Qr manager list-building workflow now also delegates through
     controller helpers, leaving runtime with listbox selection reads and the
     enable/disable action callbacks.
@@ -287,8 +291,8 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     wiring for that manager now also flows through one shared runtime-binding
     context in that module.
   - `ra_sim.gui.runtime` now keeps only the Bragg-Qr entry/L-value builders,
-    the refresh wrapper used by the filter pipeline, and the manager window
-    entrypoint for that workflow.
+    current-value helpers, the refresh wrapper used by the filter pipeline,
+    and the manager window entrypoint for that workflow.
 - Geometry-fit Qr/Qz selector workflow extraction has advanced.
   - `ra_sim.gui.geometry_q_group_manager` now owns the selector line/status
     formatting, window refresh, checkbox/bulk include-exclude side effects,
@@ -472,8 +476,9 @@ What is left:
   extraction or the structure-model / diffuse-HT rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining Bragg-Qr runtime code is now mostly window-action wiring
-  around the extracted controller/view helpers.
+- The remaining Bragg-Qr runtime code is now mostly current-value helpers,
+  refresh wiring, and manager entrypoint glue around the extracted
+  controller/view modules.
 - The remaining Bragg-Qr manager runtime code is now mostly the refresh
   wrapper used by the live filter pipeline plus the manager window entrypoint
   around the extracted manager helpers.

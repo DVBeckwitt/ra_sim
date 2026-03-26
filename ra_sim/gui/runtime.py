@@ -122,6 +122,7 @@ from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import state as gui_state
 from ra_sim.gui import state_io as gui_state_io
+from ra_sim.gui import structure_factor_pruning as gui_structure_factor_pruning
 from ra_sim.gui.qr_cylinder_overlay import interpolate_trace_to_caked_coords
 from ra_sim.gui.sliders import create_slider
 from ra_sim.gui.diffuse_cif_toggle import (
@@ -841,16 +842,34 @@ def _sf_prune_profile_from_bias(bias: float) -> tuple[float, float, int, int]:
     return gui_controllers.structure_factor_prune_profile_from_bias(bias)
 
 
-def _update_sf_prune_status_label() -> None:
-    view_state = globals().get("structure_factor_pruning_controls_view_state")
-    if getattr(view_state, "sf_prune_status_var", None) is None:
-        return
-    gui_views.set_structure_factor_pruning_status_text(
-        view_state,
-        gui_controllers.format_structure_factor_pruning_status(
-            simulation_runtime_state.sf_prune_stats,
-            prune_bias=_current_sf_prune_bias(),
+def _structure_factor_pruning_runtime_bindings(
+) -> gui_structure_factor_pruning.StructureFactorPruningRuntimeBindings:
+    return gui_structure_factor_pruning.StructureFactorPruningRuntimeBindings(
+        view_state=globals().get("structure_factor_pruning_controls_view_state"),
+        simulation_runtime_state=simulation_runtime_state,
+        bragg_qr_manager_state=bragg_qr_manager_state,
+        clip_prune_bias=_clip_sf_prune_bias,
+        clip_solve_q_steps=lambda value: _clip_solve_q_steps(value),
+        clip_solve_q_rel_tol=lambda value: _clip_solve_q_rel_tol(value),
+        normalize_solve_q_mode_label=lambda value: _normalize_solve_q_mode_label(
+            value
         ),
+        schedule_update=(
+            globals().get("schedule_update")
+            if callable(globals().get("schedule_update"))
+            else None
+        ),
+        refresh_window=(
+            globals().get("_refresh_bragg_qr_toggle_window")
+            if callable(globals().get("_refresh_bragg_qr_toggle_window"))
+            else None
+        ),
+    )
+
+
+def _update_sf_prune_status_label() -> None:
+    gui_structure_factor_pruning.update_runtime_structure_factor_pruning_status(
+        _structure_factor_pruning_runtime_bindings()
     )
 
 
@@ -885,27 +904,10 @@ def _m_indices_from_miller_array(miller_arr: np.ndarray, *, unique: bool = False
 
 
 def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
-    gui_controllers.apply_bragg_qr_filters(
-        simulation_runtime_state,
-        bragg_qr_manager_state,
-        prune_bias=_current_sf_prune_bias(),
+    gui_structure_factor_pruning.apply_runtime_bragg_qr_filters(
+        _structure_factor_pruning_runtime_bindings(),
+        trigger_update=trigger_update,
     )
-    _update_sf_prune_status_label()
-
-    simulation_runtime_state.last_simulation_signature = None
-    simulation_runtime_state.stored_max_positions_local = None
-    simulation_runtime_state.stored_sim_image = None
-    simulation_runtime_state.stored_peak_table_lattice = None
-    simulation_runtime_state.selected_peak_record = None
-
-    refresh_window_fn = globals().get("_refresh_bragg_qr_toggle_window")
-    if callable(refresh_window_fn):
-        refresh_window_fn()
-
-    if trigger_update:
-        schedule_update_fn = globals().get("schedule_update")
-        if callable(schedule_update_fn):
-            schedule_update_fn()
 
 
 _apply_bragg_qr_filters(trigger_update=False)
@@ -6687,15 +6689,9 @@ def _clip_solve_q_steps(value) -> int:
 
 
 def _current_solve_q_steps() -> int:
-    view_state = globals().get("structure_factor_pruning_controls_view_state")
-    var = getattr(view_state, "solve_q_steps_var", None)
-    if var is None:
-        return _clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
-    try:
-        raw = var.get()
-    except Exception:
-        raw = defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)
-    return _clip_solve_q_steps(raw)
+    return gui_structure_factor_pruning.current_runtime_solve_q_steps(
+        _structure_factor_pruning_runtime_bindings()
+    )
 
 
 def _clip_solve_q_rel_tol(value) -> float:
@@ -6708,15 +6704,9 @@ def _clip_solve_q_rel_tol(value) -> float:
 
 
 def _current_solve_q_rel_tol() -> float:
-    view_state = globals().get("structure_factor_pruning_controls_view_state")
-    var = getattr(view_state, "solve_q_rel_tol_var", None)
-    if var is None:
-        return _clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
-    try:
-        raw = var.get()
-    except Exception:
-        raw = defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)
-    return _clip_solve_q_rel_tol(raw)
+    return gui_structure_factor_pruning.current_runtime_solve_q_rel_tol(
+        _structure_factor_pruning_runtime_bindings()
+    )
 
 
 def _normalize_solve_q_mode_label(value) -> str:
@@ -6732,15 +6722,11 @@ def _solve_q_mode_flag_from_label(label: str) -> int:
 
 
 def _current_solve_q_mode_flag() -> int:
-    view_state = globals().get("structure_factor_pruning_controls_view_state")
-    var = getattr(view_state, "solve_q_mode_var", None)
-    if var is None:
-        return _solve_q_mode_flag_from_label(defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM))
-    try:
-        raw = var.get()
-    except Exception:
-        raw = defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM)
-    return _solve_q_mode_flag_from_label(raw)
+    return _solve_q_mode_flag_from_label(
+        gui_structure_factor_pruning.current_runtime_solve_q_mode_label(
+            _structure_factor_pruning_runtime_bindings()
+        )
+    )
 
 
 def update_mosaic_cache():
@@ -13823,75 +13809,33 @@ optics_mode_var.trace_add('write', on_optics_mode_change)
 
 
 def on_sf_prune_bias_change(*_):
-
-    try:
-        raw_value = float(sf_prune_bias_var.get())
-    except (tk.TclError, ValueError, TypeError):
-        raw_value = float(defaults.get("sf_prune_bias", 0.0))
-
-    clipped_value = _clip_sf_prune_bias(raw_value)
-    if not np.isclose(raw_value, clipped_value, rtol=0.0, atol=1e-12):
-        sf_prune_bias_var.set(clipped_value)
-        return
-
-    _apply_bragg_qr_filters(trigger_update=False)
-    simulation_runtime_state.last_simulation_signature = None
-    schedule_update()
+    gui_structure_factor_pruning.on_runtime_sf_prune_bias_change(
+        _structure_factor_pruning_runtime_bindings()
+    )
 
 
 def on_solve_q_steps_change(*_):
-
-    try:
-        raw_value = float(solve_q_steps_var.get())
-    except (tk.TclError, ValueError, TypeError):
-        raw_value = float(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
-
-    clipped_value = _clip_solve_q_steps(raw_value)
-    if not np.isclose(raw_value, float(clipped_value), rtol=0.0, atol=1e-12):
-        solve_q_steps_var.set(float(clipped_value))
-        return
-
-    simulation_runtime_state.last_simulation_signature = None
-    schedule_update()
+    gui_structure_factor_pruning.on_runtime_solve_q_steps_change(
+        _structure_factor_pruning_runtime_bindings()
+    )
 
 
 def on_solve_q_rel_tol_change(*_):
-
-    try:
-        raw_value = float(solve_q_rel_tol_var.get())
-    except (tk.TclError, ValueError, TypeError):
-        raw_value = float(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
-
-    clipped_value = _clip_solve_q_rel_tol(raw_value)
-    if not np.isclose(raw_value, float(clipped_value), rtol=0.0, atol=1e-12):
-        solve_q_rel_tol_var.set(float(clipped_value))
-        return
-
-    simulation_runtime_state.last_simulation_signature = None
-    schedule_update()
+    gui_structure_factor_pruning.on_runtime_solve_q_rel_tol_change(
+        _structure_factor_pruning_runtime_bindings()
+    )
 
 
 def _set_solve_q_control_states():
-    solve_q_mode_var = structure_factor_pruning_controls_view_state.solve_q_mode_var
-    if solve_q_mode_var is None:
-        return
-    mode = _normalize_solve_q_mode_label(solve_q_mode_var.get())
-    gui_views.set_structure_factor_pruning_rel_tol_enabled(
-        structure_factor_pruning_controls_view_state,
-        enabled=(mode != "uniform"),
+    gui_structure_factor_pruning.set_runtime_solve_q_control_states(
+        _structure_factor_pruning_runtime_bindings()
     )
 
 
 def on_solve_q_mode_change(*_):
-
-    normalized = _normalize_solve_q_mode_label(solve_q_mode_var.get())
-    if normalized != solve_q_mode_var.get():
-        solve_q_mode_var.set(normalized)
-        return
-
-    _set_solve_q_control_states()
-    simulation_runtime_state.last_simulation_signature = None
-    schedule_update()
+    gui_structure_factor_pruning.on_runtime_solve_q_mode_change(
+        _structure_factor_pruning_runtime_bindings()
+    )
 
 
 gui_views.create_structure_factor_pruning_controls(

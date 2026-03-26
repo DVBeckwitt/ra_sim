@@ -36,12 +36,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - Extracted GUI feature modules:
   - `ra_sim.gui.bootstrap`
   - `ra_sim.gui.background`
+  - `ra_sim.gui.background_manager`
   - `ra_sim.gui.background_theta`
   - `ra_sim.gui.bragg_qr_manager`
   - `ra_sim.gui.geometry_fit`
   - `ra_sim.gui.geometry_overlay`
+  - `ra_sim.gui.geometry_q_group_manager`
   - `ra_sim.gui.manual_geometry`
   - `ra_sim.gui.overlays`
+  - `ra_sim.gui.peak_selection`
+  - `ra_sim.gui.structure_factor_pruning`
   - `ra_sim.gui.structure_model`
   - `ra_sim.gui.state_io`
 - Utility package namespace:
@@ -250,9 +254,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - Bragg-Qr source/L-key normalization, disabled-filter pruning, filtered
     rod/HKL rebuild helpers, and status-text formatting now live in
     `ra_sim.gui.controllers`
-  - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning filter
-    application through those helpers and keeps only the window refresh,
-    cache invalidation, and Tk status wiring inline
+  - the remaining structure-factor pruning / solve-q control callback
+    workflow, pruning-status refresh, Bragg-Qr filter side effects, and
+    adaptive-control sync now live in `ra_sim.gui.structure_factor_pruning`
+  - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning control
+    workflow through that module and keeps only thin delegate wrappers plus
+    current-value helpers inline
   - the Bragg-Qr manager list-building workflow now also delegates through
     those helpers, leaving runtime with listbox selection reads and the
     enable/disable action callbacks
@@ -264,8 +271,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     callback wiring for that manager now also flows through one shared
     runtime-binding context in that module
   - `ra_sim.gui.runtime` now keeps only the Bragg-Qr entry/L-value builders,
-    the refresh wrapper used by the filter pipeline, and the manager window
-    entrypoint for that workflow
+    current-value helpers, the refresh wrapper used by the filter pipeline,
+    and the manager window entrypoint for that workflow
 - Geometry-fit Qr/Qz selector workflow extraction has also advanced:
   - selector line/status formatting, window refresh, checkbox/bulk include-
     exclude side effects, update-listed-peaks request flow, and save/load
@@ -299,10 +306,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   helper coverage plus direct structure-model coverage for primary-CIF reload
   snapshot/restore, diffuse-HT request assembly, Bragg-Qr / SF-pruning filter
   application, Bragg-Qr manager list-model assembly, Bragg-Qr manager
-  selection/refresh/action workflow, geometry-fit Qr/Qz selector workflow,
-  background-file workflow, HKL lookup / selected-peak workflow,
-  selected-peak HKL-pick click workflow, and selected-peak Bragg/Ewald
-  intersection workflow
+  selection/refresh/action workflow, structure-factor pruning / solve-q
+  workflow, geometry-fit Qr/Qz selector workflow, background-file workflow,
+  HKL lookup / selected-peak workflow, selected-peak HKL-pick click
+  workflow, and selected-peak Bragg/Ewald intersection workflow
 
 ## Remaining Migration Focus
 

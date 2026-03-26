@@ -41,6 +41,7 @@
   - Replaced the remaining inline primary-CIF / atom-site helper implementations in `ra_sim/gui/runtime.py` with thin delegates to `ra_sim/gui/structure_model.py` for occupancy metadata, atom-site override CIF generation, and CIF numeric parsing.
   - Expanded `ra_sim/gui/structure_model.py` to own the primary-CIF browse dialog plus the diffuse-HT open/export dialog workflow and status handling, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus control rebuild callbacks.
   - Moved the Bragg-Qr / structure-factor pruning filter pipeline out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including Bragg-Qr source/L-key normalization, disabled-filter pruning, and filtered rod/HKL rebuild helpers.
+  - Added `ra_sim/gui/structure_factor_pruning.py` and moved the remaining structure-factor pruning / solve-q control callback workflow out of `ra_sim/gui/runtime.py`, including pruning-status refresh, Bragg-Qr filter side effects, cache invalidation, and adaptive-control state sync, leaving runtime with thin delegate wrappers plus current-value helpers.
   - Moved the remaining Bragg-Qr manager list-building workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including group entry formatting, L-value mapping, and list-model/status construction for the manager window.
   - Expanded `ra_sim/gui/bragg_qr_manager.py` with a shared runtime-binding context for the remaining Bragg-Qr manager action wiring, leaving `ra_sim/gui/runtime.py` with the Bragg-Qr entry/L-value builders, the filter-triggered refresh wrapper, and the manager window entrypoint.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` to own the remaining geometry-fit Qr/Qz selector checkbox/bulk-toggle side effects, update-listed-peaks request flow, and save/load dialog workflow, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus window lifecycle wiring.
@@ -61,6 +62,7 @@
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.
   - Extended `tests/test_gui_structure_model.py` with primary-CIF dialog workflow plus diffuse-HT open/export dialog workflow coverage in addition to the existing reload snapshot/restore and request-packaging tests.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr / structure-factor pruning filter pipeline coverage.
+  - Added `tests/test_gui_structure_factor_pruning.py` for the extracted structure-factor pruning / solve-q runtime-binding and callback workflow.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr manager entry/L-value/list-model coverage.
   - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr manager runtime-binding, action, and window-lifecycle helpers.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted geometry-fit Qr/Qz selector side-effect and dialog workflow helpers.
