@@ -898,11 +898,6 @@ on_solve_q_mode_change = (
     )
 )
 
-
-def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
-    return gui_controllers.normalize_bragg_qr_source_label(source_label)
-
-
 apply_bragg_qr_filters(trigger_update=False)
 
 # Build summary and details dataframes using the helper.
@@ -3741,29 +3736,6 @@ def _apply_live_preview_match_exclusions(
     return filtered_pairs, stats, int(excluded_count)
 
 
-def _geometry_reference_hit_rows(table: object) -> list[np.ndarray]:
-    """Return all propagated hit rows recorded for the selected beam sample."""
-
-    tbl_arr = np.asarray(table, dtype=float)
-    if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0 or tbl_arr.shape[1] < 7:
-        return []
-    rows: list[np.ndarray] = []
-    for row in tbl_arr:
-        if row.shape[0] < 7:
-            continue
-        if not (
-            np.isfinite(row[0])
-            and np.isfinite(row[1])
-            and np.isfinite(row[2])
-            and np.isfinite(row[4])
-            and np.isfinite(row[5])
-            and np.isfinite(row[6])
-        ):
-            continue
-        rows.append(np.asarray(row[:7], dtype=float))
-    return rows
-
-
 def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
     """Build simulated peaks from all detector solutions of the selected beam sample."""
 
@@ -3788,7 +3760,7 @@ def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
     )
 
     for table_idx, tbl in enumerate(max_positions_local):
-        rows = _geometry_reference_hit_rows(tbl)
+        rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(tbl)
         if not rows:
             continue
         av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
@@ -3799,11 +3771,13 @@ def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
             disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, image_shape)
             hkl_key = tuple(int(np.rint(v)) for v in (H, K, L))
             hkl_raw = (float(H), float(K), float(L))
-            q_group_key, qr_val, qz_val = _reflection_q_group_metadata(
+            q_group_key, qr_val, qz_val = (
+                gui_geometry_q_group_manager.reflection_q_group_metadata(
                 hkl_raw,
                 source_label=source_label,
                 a_value=av_used,
                 c_value=cv_used,
+                )
             )
             if q_group_key is None:
                 continue
@@ -3829,88 +3803,6 @@ def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
     return simulated_peaks
 
 
-def _q_group_key_component(value: float) -> int | float:
-    """Normalize a floating Q-group component into a stable hashable value."""
-    return gui_manual_geometry.q_group_key_component(value)
-
-
-def _integer_gz_index(value: object, *, tol: float = 1e-6) -> int | None:
-    """Return the integer Gz/L index when the value is close enough to an integer."""
-    return gui_manual_geometry.integer_gz_index(value, tol=tol)
-
-
-def _reflection_q_group_metadata(
-    hkl_value: object,
-    *,
-    source_label: object = "primary",
-    a_value: object = np.nan,
-    c_value: object = np.nan,
-    qr_value: object = np.nan,
-) -> tuple[tuple[object, ...] | None, float, float]:
-    """Return stable Qr/Qz grouping metadata for a simulated reflection."""
-
-    if isinstance(hkl_value, (list, tuple, np.ndarray)) and len(hkl_value) >= 3:
-        try:
-            h_raw = float(hkl_value[0])
-            k_raw = float(hkl_value[1])
-            l_raw = float(hkl_value[2])
-        except Exception:
-            return None, float("nan"), float("nan")
-    else:
-        return None, float("nan"), float("nan")
-
-    m_val = h_raw * h_raw + h_raw * k_raw + k_raw * k_raw
-    l_int = _integer_gz_index(l_raw)
-    if l_int is None:
-        return None, float("nan"), float("nan")
-
-    try:
-        qr_val = float(qr_value)
-    except Exception:
-        qr_val = float("nan")
-    try:
-        a_used = float(a_value)
-    except Exception:
-        a_used = float("nan")
-    try:
-        c_used = float(c_value)
-    except Exception:
-        c_used = float("nan")
-
-    if not np.isfinite(qr_val):
-        if np.isfinite(a_used) and a_used > 0.0 and m_val >= 0.0:
-            qr_val = (2.0 * np.pi / a_used) * np.sqrt((4.0 / 3.0) * m_val)
-        else:
-            qr_val = float("nan")
-    qz_val = (
-        (2.0 * np.pi / c_used) * float(l_int)
-        if np.isfinite(c_used) and c_used > 0.0
-        else float("nan")
-    )
-    key = (
-        "q_group",
-        _normalize_bragg_qr_source_label(str(source_label) if source_label is not None else "primary"),
-        _q_group_key_component(m_val),
-        int(l_int),
-    )
-    return key, float(qr_val), float(qz_val)
-
-
-def _geometry_q_group_key_from_entry(entry: dict[str, object] | None) -> tuple[object, ...] | None:
-    """Return the stable Qr/Qz group key for a simulated peak entry."""
-
-    if not isinstance(entry, dict):
-        return None
-    key, _, _ = _reflection_q_group_metadata(
-        entry.get("hkl_raw", entry.get("hkl")),
-        source_label=entry.get("source_label", "primary"),
-        a_value=entry.get("av", np.nan),
-        c_value=entry.get("cv", np.nan),
-        qr_value=entry.get("qr", np.nan),
-    )
-    return key
-
-
 def _filter_geometry_fit_simulated_peaks(
     simulated_peaks: Sequence[dict[str, object]] | None,
 ) -> tuple[list[dict[str, object]], int, int]:
@@ -3928,7 +3820,7 @@ def _filter_geometry_fit_simulated_peaks(
         if not isinstance(raw_entry, dict):
             continue
         entry = dict(raw_entry)
-        group_key = _geometry_q_group_key_from_entry(entry)
+        group_key = gui_geometry_q_group_manager.geometry_q_group_key_from_entry(entry)
         if group_key is None:
             excluded_count += 1
             continue
@@ -4091,67 +3983,12 @@ def _collapse_geometry_fit_simulated_peaks(
 
 def _build_geometry_q_group_entries() -> list[dict[str, object]]:
     """Aggregate current simulated hit tables into unique Qr/Qz selector rows."""
-
-    entries_by_key: dict[tuple[object, ...], dict[str, object]] = {}
-
-    max_positions_local = simulation_runtime_state.stored_max_positions_local
-    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
-    if max_positions_local is None:
-        return []
-    if (
-        not peak_table_lattice_local
-        or len(peak_table_lattice_local) != len(max_positions_local)
-    ):
-        peak_table_lattice_local = [
-            (float(a_var.get()), float(c_var.get()), "primary")
-            for _ in max_positions_local
-        ]
-
-    for table_idx, tbl in enumerate(max_positions_local):
-        rows = _geometry_reference_hit_rows(tbl)
-        if not rows:
-            continue
-        av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
-        for row in rows:
-            I, _xpix, _ypix, _phi, H, K, L = row[:7]
-            if not np.isfinite(I):
-                continue
-            group_key, qr_val, qz_val = _reflection_q_group_metadata(
-                (H, K, L),
-                source_label=source_label,
-                a_value=av_used,
-                c_value=cv_used,
-            )
-            if group_key is None:
-                continue
-            hkl_key = tuple(int(np.rint(v)) for v in (H, K, L))
-            entry = entries_by_key.get(group_key)
-            if entry is None:
-                entry = {
-                    "key": group_key,
-                    "source_label": str(source_label),
-                    "qr": float(qr_val),
-                    "qz": float(qz_val),
-                    "gz_index": int(group_key[3]),
-                    "total_intensity": 0.0,
-                    "peak_count": 0,
-                    "hkl_preview": [],
-                }
-                entries_by_key[group_key] = entry
-            entry["total_intensity"] = float(entry["total_intensity"]) + float(abs(I))
-            entry["peak_count"] = int(entry["peak_count"]) + 1
-            if len(entry["hkl_preview"]) < 4 and hkl_key not in entry["hkl_preview"]:
-                entry["hkl_preview"].append(hkl_key)
-
-    entries = list(entries_by_key.values())
-    entries.sort(
-        key=lambda entry: (
-            str(entry.get("source_label", "")),
-            float(entry.get("qr", np.nan)) if np.isfinite(float(entry.get("qr", np.nan))) else float("inf"),
-            float(entry.get("qz", np.nan)) if np.isfinite(float(entry.get("qz", np.nan))) else float("inf"),
-        )
+    return gui_geometry_q_group_manager.build_geometry_q_group_entries(
+        simulation_runtime_state.stored_max_positions_local,
+        peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+        primary_a=float(a_var.get()),
+        primary_c=float(c_var.get()),
     )
-    return entries
 
 
 def _clone_geometry_q_group_entries(
@@ -5955,12 +5792,14 @@ def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
                 if float(av_used) > 0.0 and np.isfinite(float(av_used)) and m_val >= 0.0
                 else float("nan")
             )
-            q_group_key, _, qz_val = _reflection_q_group_metadata(
+            q_group_key, _, qz_val = (
+                gui_geometry_q_group_manager.reflection_q_group_metadata(
                 hkl_raw,
                 source_label=source_label,
                 a_value=av_used,
                 c_value=cv_used,
                 qr_value=qr_val,
+                )
             )
             simulation_runtime_state.peak_millers.append(hkl)
             simulation_runtime_state.peak_records.append(
@@ -7806,7 +7645,7 @@ def _build_simulated_peaks_from_hit_tables(
     simulated_peaks: list[dict[str, object]] = []
 
     for table_idx, tbl in enumerate(hit_tables):
-        rows = _geometry_reference_hit_rows(tbl)
+        rows = gui_geometry_q_group_manager.geometry_reference_hit_rows(tbl)
         if not rows:
             continue
 
@@ -7835,11 +7674,13 @@ def _build_simulated_peaks_from_hit_tables(
             disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, image_shape)
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
             hkl_raw = (float(H), float(K), float(L))
-            q_group_key, qr_val, qz_val = _reflection_q_group_metadata(
+            q_group_key, qr_val, qz_val = (
+                gui_geometry_q_group_manager.reflection_q_group_metadata(
                 hkl_raw,
                 source_label=source_label,
                 a_value=av_used,
                 c_value=cv_used,
+                )
             )
             if q_group_key is None:
                 continue

@@ -317,6 +317,10 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
     formatting, window refresh, checkbox/bulk include-exclude side effects,
     update-listed-peaks request flow, and save/load dialog workflow used by
     the live GUI.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns shared propagated-
+    hit filtering, reflection Qr/Qz group metadata, stable group-key
+    reconstruction, and selector-entry snapshot assembly used by the live
+    geometry workflows.
   - `ra_sim.gui.geometry_q_group_manager` now also owns cached-entry
     snapshot replacement/capture plus the preview-exclusion open/status
     helper used by the live update cycle and geometry tool controls.
@@ -324,8 +328,9 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions.
   - `ra_sim.gui.runtime` now keeps only one bound geometry-selector factory/
-    callback bundle plus a narrowed update-cycle refresh call site and
-    toolbar wiring around that workflow.
+    callback bundle plus thin fit-preview/cached-hit value sources, a
+    narrowed update-cycle refresh call site, and toolbar wiring around that
+    workflow.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -544,8 +549,9 @@ What is left:
   factory wiring used by the live filter pipeline and HKL lookup controls
   around the extracted manager helpers.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
-  bound factory/callback bundle plus a couple of delegated call sites around
-  the extracted manager/view helpers.
+  bound factory/callback bundle plus thin fit-preview/cached-hit value
+  sources and a couple of delegated call sites around the extracted
+  manager/view helpers.
 - The remaining background runtime code is now mostly one bound callback
   bundle plus thin status-refresh and control-wiring call sites around the
   extracted background manager.

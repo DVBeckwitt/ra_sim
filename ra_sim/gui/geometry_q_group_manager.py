@@ -101,6 +101,212 @@ def _row_var_value(row_var: object) -> bool:
         return bool(row_var)
 
 
+def geometry_reference_hit_rows(table: object) -> list[np.ndarray]:
+    """Return the finite propagated hit rows recorded for one beam sample."""
+
+    try:
+        tbl_arr = np.asarray(table, dtype=object)
+    except Exception:
+        return []
+    if tbl_arr.ndim not in (1, 2) or tbl_arr.shape[0] == 0:
+        return []
+
+    rows: list[np.ndarray] = []
+    for row in list(tbl_arr):
+        try:
+            row_arr = np.asarray(row, dtype=float)
+        except Exception:
+            continue
+        if row_arr.ndim != 1 or row_arr.shape[0] < 7:
+            continue
+        if not (
+            np.isfinite(row_arr[0])
+            and np.isfinite(row_arr[1])
+            and np.isfinite(row_arr[2])
+            and np.isfinite(row_arr[4])
+            and np.isfinite(row_arr[5])
+            and np.isfinite(row_arr[6])
+        ):
+            continue
+        rows.append(np.asarray(row_arr[:7], dtype=float))
+    return rows
+
+
+def reflection_q_group_metadata(
+    hkl_value: object,
+    *,
+    source_label: object = "primary",
+    a_value: object = np.nan,
+    c_value: object = np.nan,
+    qr_value: object = np.nan,
+) -> tuple[tuple[object, ...] | None, float, float]:
+    """Return stable Qr/Qz grouping metadata for one simulated reflection."""
+
+    if isinstance(hkl_value, (list, tuple, np.ndarray)) and len(hkl_value) >= 3:
+        try:
+            h_raw = float(hkl_value[0])
+            k_raw = float(hkl_value[1])
+            l_raw = float(hkl_value[2])
+        except Exception:
+            return None, float("nan"), float("nan")
+    else:
+        return None, float("nan"), float("nan")
+
+    m_val = h_raw * h_raw + h_raw * k_raw + k_raw * k_raw
+    l_int = gui_manual_geometry.integer_gz_index(l_raw)
+    if l_int is None:
+        return None, float("nan"), float("nan")
+
+    try:
+        qr_val = float(qr_value)
+    except Exception:
+        qr_val = float("nan")
+    try:
+        a_used = float(a_value)
+    except Exception:
+        a_used = float("nan")
+    try:
+        c_used = float(c_value)
+    except Exception:
+        c_used = float("nan")
+
+    if not np.isfinite(qr_val):
+        if np.isfinite(a_used) and a_used > 0.0 and m_val >= 0.0:
+            qr_val = (2.0 * np.pi / a_used) * np.sqrt((4.0 / 3.0) * m_val)
+        else:
+            qr_val = float("nan")
+    qz_val = (
+        (2.0 * np.pi / c_used) * float(l_int)
+        if np.isfinite(c_used) and c_used > 0.0
+        else float("nan")
+    )
+    key = (
+        "q_group",
+        gui_controllers.normalize_bragg_qr_source_label(
+            str(source_label) if source_label is not None else "primary"
+        ),
+        gui_manual_geometry.q_group_key_component(m_val),
+        int(l_int),
+    )
+    return key, float(qr_val), float(qz_val)
+
+
+def geometry_q_group_key_from_entry(
+    entry: Mapping[str, object] | None,
+) -> tuple[object, ...] | None:
+    """Return the stable Qr/Qz group key for one simulated peak record."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    key, _, _ = reflection_q_group_metadata(
+        entry.get("hkl_raw", entry.get("hkl")),
+        source_label=entry.get("source_label", "primary"),
+        a_value=entry.get("av", np.nan),
+        c_value=entry.get("cv", np.nan),
+        qr_value=entry.get("qr", np.nan),
+    )
+    return key
+
+
+def build_geometry_q_group_entries(
+    max_positions_local: Sequence[object] | None,
+    *,
+    peak_table_lattice: Sequence[Sequence[object]] | None = None,
+    primary_a: object = np.nan,
+    primary_c: object = np.nan,
+) -> list[dict[str, object]]:
+    """Aggregate simulated hit tables into unique Qr/Qz selector rows."""
+
+    if max_positions_local is None:
+        return []
+
+    try:
+        default_primary_a = float(primary_a)
+    except Exception:
+        default_primary_a = float("nan")
+    try:
+        default_primary_c = float(primary_c)
+    except Exception:
+        default_primary_c = float("nan")
+
+    peak_table_lattice_local = list(peak_table_lattice or [])
+    if not peak_table_lattice_local or len(peak_table_lattice_local) != len(
+        max_positions_local
+    ):
+        peak_table_lattice_local = [
+            (default_primary_a, default_primary_c, "primary")
+            for _ in max_positions_local
+        ]
+
+    entries_by_key: dict[tuple[object, ...], dict[str, object]] = {}
+    for table_idx, tbl in enumerate(max_positions_local):
+        rows = geometry_reference_hit_rows(tbl)
+        if not rows:
+            continue
+
+        av_used = default_primary_a
+        cv_used = default_primary_c
+        source_label = "primary"
+        if table_idx < len(peak_table_lattice_local):
+            try:
+                av_used = float(peak_table_lattice_local[table_idx][0])
+                cv_used = float(peak_table_lattice_local[table_idx][1])
+                source_label = str(peak_table_lattice_local[table_idx][2])
+            except Exception:
+                av_used = default_primary_a
+                cv_used = default_primary_c
+                source_label = "primary"
+
+        for row in rows:
+            intensity, _xpix, _ypix, _phi, h_val, k_val, l_val = row[:7]
+            if not np.isfinite(intensity):
+                continue
+            hkl_key = tuple(int(np.rint(v)) for v in (h_val, k_val, l_val))
+            group_key, qr_val, qz_val = reflection_q_group_metadata(
+                (h_val, k_val, l_val),
+                source_label=source_label,
+                a_value=av_used,
+                c_value=cv_used,
+            )
+            if group_key is None:
+                continue
+
+            entry = entries_by_key.get(group_key)
+            if entry is None:
+                entry = {
+                    "key": group_key,
+                    "source_label": str(source_label),
+                    "qr": float(qr_val),
+                    "qz": float(qz_val),
+                    "gz_index": int(group_key[3]),
+                    "total_intensity": 0.0,
+                    "peak_count": 0,
+                    "hkl_preview": [],
+                }
+                entries_by_key[group_key] = entry
+
+            entry["total_intensity"] = float(entry["total_intensity"]) + float(
+                abs(intensity)
+            )
+            entry["peak_count"] = int(entry["peak_count"]) + 1
+            if len(entry["hkl_preview"]) < 4 and hkl_key not in entry["hkl_preview"]:
+                entry["hkl_preview"].append(hkl_key)
+
+    def _sort_value(value: object) -> float:
+        numeric = _coerce_float(value, float("nan"))
+        return numeric if np.isfinite(numeric) else float("inf")
+
+    entries = list(entries_by_key.values())
+    entries.sort(
+        key=lambda entry: (
+            str(entry.get("source_label", "")),
+            _sort_value(entry.get("qr", np.nan)),
+            _sort_value(entry.get("qz", np.nan)),
+        )
+    )
+    return entries
+
+
 def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:
     """Return a compact label for one Qr/Qz selector row."""
 

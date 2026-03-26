@@ -1,4 +1,7 @@
 from datetime import datetime
+
+import numpy as np
+
 from ra_sim.gui import geometry_q_group_manager, state
 
 
@@ -21,6 +24,108 @@ def _entry(group_key, *, peak_count, total_intensity, source="primary"):
         "peak_count": peak_count,
         "hkl_preview": [(1, 0, 0), (1, 1, 0), (2, 0, 0), (2, 1, 0)],
     }
+
+
+def test_geometry_q_group_manager_geometry_metadata_helpers() -> None:
+    rows = geometry_q_group_manager.geometry_reference_hit_rows(
+        [
+            [10.0, 1.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+            [5.0, np.nan, 2.0, 0.0, 1.0, 0.0, 0.0],
+            [7.0, 1.0, 2.0, 0.0, 1.0, 0.0],
+        ]
+    )
+    key, qr_val, qz_val = geometry_q_group_manager.reflection_q_group_metadata(
+        (1.0, 0.0, 2.0),
+        source_label="SECONDARY",
+        a_value=2.5,
+        c_value=5.0,
+    )
+
+    assert len(rows) == 1
+    np.testing.assert_allclose(rows[0], [10.0, 1.0, 2.0, 0.0, 1.0, 0.0, 0.0])
+    assert key == ("q_group", "secondary", 1, 2)
+    assert np.isclose(qr_val, (2.0 * np.pi / 2.5) * np.sqrt(4.0 / 3.0))
+    assert np.isclose(qz_val, (2.0 * np.pi / 5.0) * 2.0)
+    assert (
+        geometry_q_group_manager.geometry_q_group_key_from_entry(
+            {
+                "hkl_raw": (1.0, 0.0, 2.0),
+                "source_label": "secondary",
+                "av": 2.5,
+                "cv": 5.0,
+            }
+        )
+        == key
+    )
+    missing_key, missing_qr, missing_qz = (
+        geometry_q_group_manager.reflection_q_group_metadata(
+            (1.0, 0.0, 1.25),
+            source_label="primary",
+            a_value=3.0,
+            c_value=6.0,
+        )
+    )
+    assert missing_key is None
+    assert np.isnan(missing_qr)
+    assert np.isnan(missing_qz)
+
+
+def test_geometry_q_group_manager_builds_entries_from_hit_tables() -> None:
+    entries = geometry_q_group_manager.build_geometry_q_group_entries(
+        [
+            np.asarray(
+                [
+                    [10.0, 1.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                    [5.0, 3.0, 4.0, 0.0, 1.0, 0.0, 0.0],
+                    [8.0, 5.0, 6.0, 0.0, 1.0, 0.0, 1.0],
+                ],
+                dtype=float,
+            ),
+            np.asarray(
+                [
+                    [6.0, 7.0, 8.0, 0.0, 1.0, 1.0, 0.0],
+                ],
+                dtype=float,
+            ),
+        ],
+        peak_table_lattice=[
+            (3.0, 5.0, "primary"),
+            (4.0, 6.0, "secondary"),
+        ],
+    )
+
+    assert [entry["key"] for entry in entries] == [
+        ("q_group", "primary", 1, 0),
+        ("q_group", "primary", 1, 1),
+        ("q_group", "secondary", 3, 0),
+    ]
+    assert entries[0]["total_intensity"] == 15.0
+    assert entries[0]["peak_count"] == 2
+    assert entries[0]["hkl_preview"] == [(1, 0, 0)]
+    assert np.isclose(entries[1]["qz"], 2.0 * np.pi / 5.0)
+    assert np.isclose(
+        entries[2]["qr"],
+        (2.0 * np.pi / 4.0) * np.sqrt((4.0 / 3.0) * 3.0),
+    )
+
+    fallback_entries = geometry_q_group_manager.build_geometry_q_group_entries(
+        [
+            np.asarray(
+                [
+                    [4.0, 1.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=float,
+            )
+        ],
+        peak_table_lattice=None,
+        primary_a=7.0,
+        primary_c=9.0,
+    )
+    assert fallback_entries[0]["source_label"] == "primary"
+    assert np.isclose(
+        fallback_entries[0]["qr"],
+        (2.0 * np.pi / 7.0) * np.sqrt(4.0 / 3.0),
+    )
 
 
 def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None:
