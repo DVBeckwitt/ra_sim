@@ -139,12 +139,21 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     and summary-label updates now flow through `ra_sim.gui.views`
   - sampling-count parsing, resolution-choice normalization, and summary
     formatting now flow through `ra_sim.gui.controllers`
+- Finite-stack control migration has also landed:
+  - shared widget references and Tk var state for the finite-stack toggle,
+    layer count, phi-L divisor, and phase-delta equation controls now use
+    shared GUI state
+  - finite-stack control construction, layer-widget enable/disable updates,
+    scale-range growth, and entry-text updates now flow through
+    `ra_sim.gui.views`
+  - finite-stack layer-count and Hendricks-Teller input normalization /
+    formatting now flow through `ra_sim.gui.controllers`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
     background-theta/background-debug/geometry-tool-action/HKL-lookup/
-    overlay-action/analysis-view/analysis-export/sampling-optics view helper
-    coverage
+    overlay-action/analysis-view/analysis-export/sampling-optics/finite-stack
+    view helper coverage
 
 ## Remaining Migration Focus
 
@@ -153,8 +162,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   surfaces still need the same treatment, especially the remaining widget-heavy
   runtime-owned helpers and cross-feature workflow glue that still assemble
   long-lived Tk references or own mutable GUI state inline.
-- The next bounded GUI targets are the finite-stack and display-control panels
-  that are still built directly in `ra_sim.gui.runtime`.
+- The next bounded GUI target is the display-control panel cluster that is
+  still built directly in `ra_sim.gui.runtime`.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

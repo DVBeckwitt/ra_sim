@@ -5635,6 +5635,7 @@ geometry_overlay_actions_view_state = gui_state.GeometryOverlayActionsViewState(
 analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
 analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
 sampling_optics_controls_view_state = gui_state.SamplingOpticsControlsViewState()
+finite_stack_controls_view_state = gui_state.FiniteStackControlsViewState()
 
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
@@ -9018,7 +9019,7 @@ def _current_phase_delta_expression() -> str:
         defaults.get("phase_delta_expression", DEFAULT_PHASE_DELTA_EXPRESSION),
         fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
     )
-    var = globals().get("phase_delta_expr_var")
+    var = finite_stack_controls_view_state.phase_delta_expr_var
     if var is None:
         return fallback
 
@@ -9041,7 +9042,7 @@ def _current_phi_l_divisor() -> float:
         defaults.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR),
         fallback=DEFAULT_PHI_L_DIVISOR,
     )
-    var = globals().get("phi_l_divisor_var")
+    var = finite_stack_controls_view_state.phi_l_divisor_var
     if var is None:
         return fallback
 
@@ -10360,10 +10361,16 @@ def reset_to_defaults():
     stack_layers_var.set(int(defaults['stack_layers']))
     phase_delta_expr_var.set(str(defaults['phase_delta_expression']))
     phi_l_divisor_var.set(float(defaults['phi_l_divisor']))
-    if _phase_delta_entry_var is not None:
-        _phase_delta_entry_var.set(_current_phase_delta_expression())
-    if _phi_l_divisor_entry_var is not None:
-        _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
+    if finite_stack_controls_view_state.phase_delta_entry_var is not None:
+        gui_views.set_finite_stack_phase_delta_entry_text(
+            finite_stack_controls_view_state,
+            _current_phase_delta_expression(),
+        )
+    if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
+        gui_views.set_finite_stack_phi_l_divisor_entry_text(
+            finite_stack_controls_view_state,
+            gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
+        )
     _sync_finite_controls()
 
     update_mosaic_cache()
@@ -10884,10 +10891,16 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     selected_hkl_target = geometry_state["selected_hkl_target"]
     warnings.extend(list(geometry_state["warnings"]))
 
-    if _phase_delta_entry_var is not None:
-        _phase_delta_entry_var.set(_current_phase_delta_expression())
-    if _phi_l_divisor_entry_var is not None:
-        _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
+    if finite_stack_controls_view_state.phase_delta_entry_var is not None:
+        gui_views.set_finite_stack_phase_delta_entry_text(
+            finite_stack_controls_view_state,
+            _current_phase_delta_expression(),
+        )
+    if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
+        gui_views.set_finite_stack_phi_l_divisor_entry_text(
+            finite_stack_controls_view_state,
+            gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
+        )
     _sync_finite_controls()
     _apply_geometry_fit_background_selection(trigger_update=False)
     _set_background_file_status_text()
@@ -10986,10 +10999,18 @@ def _import_full_gui_state() -> None:
             solve_q_rel_tol_var=solve_q_rel_tol_var,
             solve_q_mode_var=solve_q_mode_var,
         )
-        if _phase_delta_entry_var is not None:
-            _phase_delta_entry_var.set(_current_phase_delta_expression())
-        if _phi_l_divisor_entry_var is not None:
-            _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
+        if finite_stack_controls_view_state.phase_delta_entry_var is not None:
+            gui_views.set_finite_stack_phase_delta_entry_text(
+                finite_stack_controls_view_state,
+                _current_phase_delta_expression(),
+            )
+        if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
+            gui_views.set_finite_stack_phi_l_divisor_entry_text(
+                finite_stack_controls_view_state,
+                gui_controllers.format_finite_stack_phi_l_divisor(
+                    _current_phi_l_divisor()
+                ),
+            )
         _sync_finite_controls()
         ensure_valid_resolution_choice()
         schedule_update()
@@ -16766,15 +16787,6 @@ atom_site_fract_vars = [
     }
     for row in atom_site_fractional_metadata
 ]
-finite_stack_var = tk.BooleanVar(value=defaults['finite_stack'])
-stack_layers_var = tk.IntVar(value=int(defaults['stack_layers']))
-phase_delta_expr_var = tk.StringVar(value=str(defaults['phase_delta_expression']))
-phi_l_divisor_var = tk.DoubleVar(value=float(defaults['phi_l_divisor']))
-_layers_scale_widget = None
-_layers_entry_widget = None
-_layers_entry_var = None
-_phase_delta_entry_var = None
-_phi_l_divisor_entry_var = None
 
 
 def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
@@ -17012,52 +17024,59 @@ def update_occupancies(*args):
 
 
 def _sync_finite_controls():
-    global _layers_scale_widget, _layers_entry_widget
-    state = tk.NORMAL if finite_stack_var.get() else tk.DISABLED
-    if _layers_scale_widget is not None:
-        _layers_scale_widget.configure(state=state)
-    if _layers_entry_widget is not None:
-        _layers_entry_widget.configure(state=state)
+    enabled = bool(
+        finite_stack_controls_view_state.finite_stack_var is not None
+        and finite_stack_controls_view_state.finite_stack_var.get()
+    )
+    gui_views.set_finite_stack_layer_controls_enabled(
+        finite_stack_controls_view_state,
+        enabled=enabled,
+    )
 
 
 def _normalize_layer_value(raw_value):
-    try:
-        value = int(round(float(raw_value)))
-    except (TypeError, ValueError):
-        value = stack_layers_var.get()
-    if value < 1:
-        value = 1
-    return value
+    fallback = (
+        stack_layers_var.get()
+        if finite_stack_controls_view_state.stack_layers_var is not None
+        else 1
+    )
+    return gui_controllers.normalize_finite_stack_layer_count(raw_value, fallback)
 
 
 def _normalize_phase_delta_expression_value(raw_value):
     fallback = _current_phase_delta_expression()
-    normalized = normalize_phase_delta_expression(raw_value, fallback=fallback)
-    return validate_phase_delta_expression(normalized)
+    return gui_controllers.normalize_finite_stack_phase_delta_expression(
+        raw_value,
+        fallback=fallback,
+    )
 
 
 def _normalize_phi_l_divisor_value(raw_value):
-    return normalize_phi_l_divisor(raw_value, fallback=_current_phi_l_divisor())
+    return gui_controllers.normalize_finite_stack_phi_l_divisor(
+        raw_value,
+        fallback=_current_phi_l_divisor(),
+    )
 
 
 def _sync_layer_entry_from_var(*_):
-    global _layers_entry_var
-    if _layers_entry_var is None:
+    if finite_stack_controls_view_state.layers_entry_var is None:
         return
-    normalized = str(int(max(1, stack_layers_var.get())))
-    if _layers_entry_var.get().strip() != normalized:
-        _layers_entry_var.set(normalized)
+    normalized = gui_controllers.format_finite_stack_layer_count(stack_layers_var.get())
+    if finite_stack_controls_view_state.layers_entry_var.get().strip() != normalized:
+        gui_views.set_finite_stack_layer_entry_text(
+            finite_stack_controls_view_state,
+            normalized,
+        )
 
 
 def _commit_layer_entry(_event=None):
-    global _layers_scale_widget, _layers_entry_var
-    if _layers_entry_var is None:
+    if finite_stack_controls_view_state.layers_entry_var is None:
         return
-    value = _normalize_layer_value(_layers_entry_var.get())
-    if _layers_scale_widget is not None:
-        current_to = int(round(float(_layers_scale_widget.cget("to"))))
-        if value > current_to:
-            _layers_scale_widget.configure(to=value)
+    value = _normalize_layer_value(finite_stack_controls_view_state.layers_entry_var.get())
+    gui_views.ensure_finite_stack_layer_scale_max(
+        finite_stack_controls_view_state,
+        value,
+    )
     changed = stack_layers_var.get() != value
     if changed:
         stack_layers_var.set(value)
@@ -17067,43 +17086,58 @@ def _commit_layer_entry(_event=None):
 
 
 def _commit_phase_delta_expression_entry(_event=None):
-    global _phase_delta_entry_var
-    if _phase_delta_entry_var is None:
+    if finite_stack_controls_view_state.phase_delta_entry_var is None:
         return
 
     try:
-        value = _normalize_phase_delta_expression_value(_phase_delta_entry_var.get())
+        value = _normalize_phase_delta_expression_value(
+            finite_stack_controls_view_state.phase_delta_entry_var.get()
+        )
     except ValueError as exc:
-        _phase_delta_entry_var.set(_current_phase_delta_expression())
+        gui_views.set_finite_stack_phase_delta_entry_text(
+            finite_stack_controls_view_state,
+            _current_phase_delta_expression(),
+        )
         progress_label.config(text=f"Invalid phase delta equation: {exc}")
         return
 
     current = _current_phase_delta_expression()
     if current != value:
         phase_delta_expr_var.set(value)
-        _phase_delta_entry_var.set(value)
+        gui_views.set_finite_stack_phase_delta_entry_text(
+            finite_stack_controls_view_state,
+            value,
+        )
         update_occupancies()
         progress_label.config(text="Updated phase delta equation.")
         return
 
-    _phase_delta_entry_var.set(value)
+    gui_views.set_finite_stack_phase_delta_entry_text(
+        finite_stack_controls_view_state,
+        value,
+    )
 
 
 def _sync_phi_l_divisor_entry_from_var(*_):
-    global _phi_l_divisor_entry_var
-    if _phi_l_divisor_entry_var is None:
+    if finite_stack_controls_view_state.phi_l_divisor_entry_var is None:
         return
-    normalized = f"{_current_phi_l_divisor():.6g}"
-    if _phi_l_divisor_entry_var.get().strip() != normalized:
-        _phi_l_divisor_entry_var.set(normalized)
+    normalized = gui_controllers.format_finite_stack_phi_l_divisor(
+        _current_phi_l_divisor()
+    )
+    if finite_stack_controls_view_state.phi_l_divisor_entry_var.get().strip() != normalized:
+        gui_views.set_finite_stack_phi_l_divisor_entry_text(
+            finite_stack_controls_view_state,
+            normalized,
+        )
 
 
 def _commit_phi_l_divisor_entry(_event=None):
-    global _phi_l_divisor_entry_var
-    if _phi_l_divisor_entry_var is None:
+    if finite_stack_controls_view_state.phi_l_divisor_entry_var is None:
         return
 
-    value = _normalize_phi_l_divisor_value(_phi_l_divisor_entry_var.get())
+    value = _normalize_phi_l_divisor_value(
+        finite_stack_controls_view_state.phi_l_divisor_entry_var.get()
+    )
     current = _current_phi_l_divisor()
     if not math.isclose(current, value, rel_tol=1e-12, abs_tol=1e-12):
         phi_l_divisor_var.set(float(value))
@@ -17132,74 +17166,28 @@ def _on_layer_slider(val):
 # Sliders for three disorder probabilities and weights inside a collapsible frame
 stack_frame = CollapsibleFrame(right_col, text='Stacking Probabilities')
 stack_frame.pack(fill=tk.X, padx=5, pady=5)
-finite_frame = ttk.Frame(stack_frame.frame)
-finite_frame.pack(fill=tk.X, padx=5, pady=5)
-ttk.Checkbutton(
-    finite_frame,
-    text="Finite Stack",
-    variable=finite_stack_var,
-    command=_on_finite_toggle,
-).pack(anchor=tk.W, padx=5, pady=2)
-
-layers_row = ttk.Frame(finite_frame)
-layers_row.pack(fill=tk.X, padx=5, pady=2)
-ttk.Label(layers_row, text="Layers:").grid(row=0, column=0, sticky="w")
-_layers_entry_var = tk.StringVar(value=str(int(max(1, stack_layers_var.get()))))
-layers_entry = ttk.Entry(
-    layers_row,
-    textvariable=_layers_entry_var,
-    width=8,
-    justify="right",
+gui_views.create_finite_stack_controls(
+    parent=stack_frame.frame,
+    view_state=finite_stack_controls_view_state,
+    finite_stack=bool(defaults['finite_stack']),
+    stack_layers=int(defaults['stack_layers']),
+    phi_l_divisor=float(defaults['phi_l_divisor']),
+    phase_delta_expression=str(defaults['phase_delta_expression']),
+    on_toggle_finite_stack=_on_finite_toggle,
+    on_layer_slider=_on_layer_slider,
+    on_commit_layer_entry=_commit_layer_entry,
+    on_commit_phi_l_divisor_entry=_commit_phi_l_divisor_entry,
+    on_commit_phase_delta_expression_entry=_commit_phase_delta_expression_entry,
 )
-layers_entry.grid(row=0, column=2, sticky="e", padx=(5, 0))
-layers_entry.bind("<Return>", _commit_layer_entry)
-layers_entry.bind("<FocusOut>", _commit_layer_entry)
-
-layers_scale = tk.Scale(
-    layers_row,
-    from_=1,
-    to=1000,
-    orient=tk.HORIZONTAL,
-    resolution=1,
-    showvalue=False,
-    variable=stack_layers_var,
-    command=_on_layer_slider,
-)
-layers_scale.grid(row=0, column=1, sticky="ew", padx=(5, 5))
-layers_row.columnconfigure(1, weight=1)
-
-_layers_scale_widget = layers_scale
-_layers_entry_widget = layers_entry
+finite_stack_var = finite_stack_controls_view_state.finite_stack_var
+stack_layers_var = finite_stack_controls_view_state.stack_layers_var
+phase_delta_expr_var = finite_stack_controls_view_state.phase_delta_expr_var
+phi_l_divisor_var = finite_stack_controls_view_state.phi_l_divisor_var
 stack_layers_var.trace_add("write", _sync_layer_entry_from_var)
 _sync_layer_entry_from_var()
 _sync_finite_controls()
-phi_div_row = ttk.Frame(finite_frame)
-phi_div_row.pack(fill=tk.X, padx=5, pady=2)
-ttk.Label(phi_div_row, text="Phi L divisor:").pack(side=tk.LEFT)
-_phi_l_divisor_entry_var = tk.StringVar(value=f"{_current_phi_l_divisor():.6g}")
-phi_div_entry = ttk.Entry(
-    phi_div_row,
-    textvariable=_phi_l_divisor_entry_var,
-    width=12,
-    justify="right",
-)
-phi_div_entry.pack(side=tk.RIGHT)
-phi_div_entry.bind("<Return>", _commit_phi_l_divisor_entry)
-phi_div_entry.bind("<FocusOut>", _commit_phi_l_divisor_entry)
 phi_l_divisor_var.trace_add("write", _sync_phi_l_divisor_entry_from_var)
 _sync_phi_l_divisor_entry_from_var()
-phase_row = ttk.Frame(finite_frame)
-phase_row.pack(fill=tk.X, padx=5, pady=2)
-ttk.Label(phase_row, text="Phase delta equation:").pack(side=tk.LEFT)
-_phase_delta_entry_var = tk.StringVar(value=_current_phase_delta_expression())
-phase_entry = ttk.Entry(
-    phase_row,
-    textvariable=_phase_delta_entry_var,
-    width=36,
-)
-phase_entry.pack(side=tk.RIGHT)
-phase_entry.bind("<Return>", _commit_phase_delta_expression_entry)
-phase_entry.bind("<FocusOut>", _commit_phase_delta_expression_entry)
 p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
                           stack_frame.frame, update_occupancies)
 w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
@@ -17787,10 +17775,18 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             solve_q_rel_tol_var=solve_q_rel_tol_var,
             solve_q_mode_var=solve_q_mode_var,
         )
-        if _phase_delta_entry_var is not None:
-            _phase_delta_entry_var.set(_current_phase_delta_expression())
-        if _phi_l_divisor_entry_var is not None:
-            _phi_l_divisor_entry_var.set(f"{_current_phi_l_divisor():.6g}")
+        if finite_stack_controls_view_state.phase_delta_entry_var is not None:
+            gui_views.set_finite_stack_phase_delta_entry_text(
+                finite_stack_controls_view_state,
+                _current_phase_delta_expression(),
+            )
+        if finite_stack_controls_view_state.phi_l_divisor_entry_var is not None:
+            gui_views.set_finite_stack_phi_l_divisor_entry_text(
+                finite_stack_controls_view_state,
+                gui_controllers.format_finite_stack_phi_l_divisor(
+                    _current_phi_l_divisor()
+                ),
+            )
         ensure_valid_resolution_choice()
         profile_loaded = True
     else:

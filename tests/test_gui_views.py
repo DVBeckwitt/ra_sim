@@ -356,6 +356,34 @@ class _FakeRadiobutton:
         pass
 
 
+class _FakeScale:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.state = kwargs.get("state")
+        self.bounds = {
+            "to": kwargs.get("to"),
+        }
+        _FakeScale.created.append(self)
+
+    def grid(self, **_kwargs) -> None:
+        pass
+
+    def configure(self, **kwargs) -> None:
+        if "state" in kwargs:
+            self.state = kwargs["state"]
+        if "to" in kwargs:
+            self.bounds["to"] = kwargs["to"]
+
+    def config(self, **kwargs) -> None:
+        self.configure(**kwargs)
+
+    def cget(self, key: str):
+        return self.bounds[key]
+
+
 class _FakeSpinbox:
     created = []
 
@@ -713,6 +741,77 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     view_state.custom_samples_entry.bindings["<Return>"](None)
     _FakeButton.created[0].command()
     assert applied == ["apply", "apply"]
+
+
+def test_finite_stack_controls_store_vars_bindings_and_helper_updates(
+    monkeypatch,
+) -> None:
+    _FakeButton.created = []
+    _FakeLabel.created = []
+    _FakeCheckbutton.created = []
+    _FakeScale.created = []
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "IntVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    monkeypatch.setattr(views.tk, "Scale", _FakeScale)
+
+    view_state = state.FiniteStackControlsViewState()
+    calls = []
+
+    views.create_finite_stack_controls(
+        parent=object(),
+        view_state=view_state,
+        finite_stack=True,
+        stack_layers=64,
+        phi_l_divisor=3.5,
+        phase_delta_expression="2*pi*L/3",
+        on_toggle_finite_stack=lambda: calls.append("toggle"),
+        on_layer_slider=lambda value: calls.append(("slider", value)),
+        on_commit_layer_entry=lambda _event: calls.append("layers"),
+        on_commit_phi_l_divisor_entry=lambda _event: calls.append("phi"),
+        on_commit_phase_delta_expression_entry=lambda _event: calls.append("phase"),
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert view_state.finite_stack_var.get() is True
+    assert view_state.stack_layers_var.get() == 64
+    assert view_state.layers_entry_var.get() == "64"
+    assert view_state.phi_l_divisor_var.get() == 3.5
+    assert view_state.phi_l_divisor_entry_var.get() == "3.5"
+    assert view_state.phase_delta_expr_var.get() == "2*pi*L/3"
+    assert view_state.phase_delta_entry_var.get() == "2*pi*L/3"
+    assert _FakeCheckbutton.created[0].kwargs["text"] == "Finite Stack"
+    assert _FakeScale.created[0].kwargs["variable"] is view_state.stack_layers_var
+
+    views.set_finite_stack_layer_controls_enabled(view_state, enabled=False)
+    assert view_state.layers_scale.state == tk.DISABLED
+    assert view_state.layers_entry.state == tk.DISABLED
+
+    views.set_finite_stack_layer_controls_enabled(view_state, enabled=True)
+    assert view_state.layers_scale.state == tk.NORMAL
+    assert view_state.layers_entry.state == tk.NORMAL
+
+    views.ensure_finite_stack_layer_scale_max(view_state, 1200)
+    assert view_state.layers_scale.cget("to") == 1200
+
+    views.set_finite_stack_layer_entry_text(view_state, "72")
+    views.set_finite_stack_phi_l_divisor_entry_text(view_state, "4")
+    views.set_finite_stack_phase_delta_entry_text(view_state, "L/2")
+    assert view_state.layers_entry_var.get() == "72"
+    assert view_state.phi_l_divisor_entry_var.get() == "4"
+    assert view_state.phase_delta_entry_var.get() == "L/2"
+
+    _FakeCheckbutton.created[0].command()
+    view_state.layers_entry.bindings["<Return>"](None)
+    view_state.layers_entry.bindings["<FocusOut>"](None)
+    view_state.phi_l_divisor_entry.bindings["<Return>"](None)
+    view_state.phase_delta_entry.bindings["<FocusOut>"](None)
+    assert calls == ["toggle", "layers", "layers", "phi", "phase"]
 
 
 def test_geometry_tool_action_controls_store_refs_and_support_updates(

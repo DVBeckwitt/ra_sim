@@ -21,6 +21,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         state.SamplingOpticsControlsViewState,
     )
     assert isinstance(
+        app_state.finite_stack_controls_view,
+        state.FiniteStackControlsViewState,
+    )
+    assert isinstance(
         app_state.geometry_tool_actions_view,
         state.GeometryToolActionsViewState,
     )
@@ -57,6 +61,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert (
         app_state.sampling_optics_controls_view
         is not other_state.sampling_optics_controls_view
+    )
+    assert (
+        app_state.finite_stack_controls_view
+        is not other_state.finite_stack_controls_view
     )
     assert app_state.geometry_tool_actions_view is not other_state.geometry_tool_actions_view
     assert app_state.hkl_lookup_view is not other_state.hkl_lookup_view
@@ -139,6 +147,23 @@ def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> 
         fallback_resolution="Low",
         fallback_count=16,
     ) == "32 samples"
+
+
+def test_finite_stack_controller_helpers_normalize_and_format() -> None:
+    assert controllers.normalize_finite_stack_layer_count("72", 10) == 72
+    assert controllers.normalize_finite_stack_layer_count("bad", 10) == 10
+    assert controllers.format_finite_stack_layer_count(9.8) == "10"
+
+    assert controllers.normalize_finite_stack_phase_delta_expression(
+        "pi*L/2",
+        fallback="0",
+    ) == "pi*L/2"
+
+    assert controllers.normalize_finite_stack_phi_l_divisor(
+        "3.5",
+        fallback=1.0,
+    ) == 3.5
+    assert controllers.format_finite_stack_phi_l_divisor(4.0) == "4"
 
 
 def test_replace_manual_geometry_state_updates_in_place() -> None:

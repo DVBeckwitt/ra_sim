@@ -103,6 +103,26 @@ class SamplingOpticsControlsViewState:
 
 
 @dataclass
+class FiniteStackControlsViewState:
+    """Widget references and vars for finite-stack HT controls."""
+
+    frame: Any = None
+    finite_stack_var: Any = None
+    finite_stack_checkbutton: Any = None
+    layers_row: Any = None
+    stack_layers_var: Any = None
+    layers_scale: Any = None
+    layers_entry_var: Any = None
+    layers_entry: Any = None
+    phi_l_divisor_var: Any = None
+    phi_l_divisor_entry_var: Any = None
+    phi_l_divisor_entry: Any = None
+    phase_delta_expr_var: Any = None
+    phase_delta_entry_var: Any = None
+    phase_delta_entry: Any = None
+
+
+@dataclass
 class GeometryToolActionsViewState:
     """Widget references and vars for fit-history/manual-geometry action controls."""
 
@@ -280,6 +300,9 @@ class AppState:
     )
     sampling_optics_controls_view: SamplingOpticsControlsViewState = field(
         default_factory=SamplingOpticsControlsViewState
+    )
+    finite_stack_controls_view: FiniteStackControlsViewState = field(
+        default_factory=FiniteStackControlsViewState
     )
     geometry_tool_actions_view: GeometryToolActionsViewState = field(
         default_factory=GeometryToolActionsViewState

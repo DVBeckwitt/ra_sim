@@ -142,6 +142,15 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     resolution-choice normalization, and summary formatting helpers.
   - Direct controller/view tests now cover the extracted sampling/optics
     helpers.
+- Finite-stack control migration has landed.
+  - Shared widget references and Tk var state for the finite-stack toggle,
+    layer count, phi-L divisor, and phase-delta equation controls now live in
+    `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns construction of that control cluster plus the
+    layer-widget enable/disable, scale-range growth, and entry-text helpers.
+  - `ra_sim.gui.controllers` now owns the finite-stack layer-count and
+    Hendricks-Teller input normalization / formatting helpers.
+  - Direct controller/view tests now cover the extracted finite-stack helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -227,6 +236,12 @@ What is done:
     custom-sample widget-state / summary-label helpers.
   - `ra_sim.gui.controllers` now owns the sampling-count parsing,
     resolution-choice normalization, and summary formatting helpers.
+- The finite-stack controls are no longer assembled directly in `runtime.py`.
+  - `ra_sim.gui.state` now owns their shared widget/Tk-var view state.
+  - `ra_sim.gui.views` now owns that control-cluster construction and the
+    layer-widget enable/disable, scale-range, and entry-text helpers.
+  - `ra_sim.gui.controllers` now owns the finite-stack layer-count and
+    Hendricks-Teller input normalization / formatting helpers.
 
 What is left:
 
@@ -234,7 +249,7 @@ What is left:
   GUI state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
 - The next bounded GUI slices are still assembled inline in `runtime.py`,
-  especially the finite-stack and display-control panels.
+  especially the display-control panels.
 
 Why it matters:
 
@@ -308,6 +323,11 @@ What is done:
   updates for the custom-sample widgets and summary label.
 - `controllers.py` now also owns the sampling-count parsing,
   resolution-choice normalization, and summary formatting helpers.
+- `state.py` now also owns finite-stack control view state.
+- `views.py` now also owns the finite-stack control construction and helper
+  updates for the layer widgets and entry text.
+- `controllers.py` now also owns the finite-stack layer-count and
+  Hendricks-Teller input normalization / formatting helpers.
 
 What is left:
 
@@ -316,8 +336,8 @@ What is left:
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
 - Other Tk-heavy surfaces still need to move behind `views.py` helpers.
-- The next practical view-state targets are the remaining inline finite-stack
-  and display-control clusters.
+- The next practical view-state target is the remaining inline display-control
+  cluster.
 
 Why it matters:
 
@@ -480,8 +500,8 @@ Tasks:
 
 - Group more runtime globals into explicit state containers.
 - Move the next remaining inline control clusters
-  (finite-stack, display controls, and similar surfaces) into `views.py`
-  helpers and shared view state.
+  (display controls and similar surfaces) into `views.py` helpers and shared
+  view state.
 - Reduce direct feature coordination in `runtime.py` where controller logic or
   shared state can own it instead.
 - Keep moving Tk-owned widget references out of runtime and into `views.py`
@@ -583,8 +603,9 @@ The next best step is:
 - build on the newer geometry-tool / HKL-lookup / overlay-action /
   analysis-view / analysis-export slices by moving the next runtime-owned GUI
   control clusters into explicit state + controller + view boundaries
-- focus next on the finite-stack controls in `runtime.py`, then on the
-  display-control panels if they remain similarly isolated
+- focus next on the display-control panels in `runtime.py`, then on the
+  remaining cross-feature runtime-owned state/helpers that are still similarly
+  isolated
 - keep shrinking the remaining cross-feature globals and inline Tk-heavy
   helpers that prevent the extracted scaffolding modules from becoming the
   dominant app structure

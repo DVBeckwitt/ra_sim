@@ -7,6 +7,11 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ra_sim.path_config import get_instrument_config
+from ra_sim.utils.stacking_fault import (
+    normalize_phi_l_divisor,
+    normalize_phase_delta_expression,
+    validate_phase_delta_expression,
+)
 
 from .state import (
     AppState,
@@ -105,6 +110,49 @@ def format_sampling_resolution_summary(
     )
     suffix = " (custom)" if normalized == custom_label else ""
     return f"{count:,} samples{suffix}" if count >= 1000 else f"{count} samples{suffix}"
+
+
+def normalize_finite_stack_layer_count(
+    raw_value: object,
+    fallback: object,
+) -> int:
+    """Normalize one finite-stack layer-count input to a positive integer."""
+
+    return parse_sampling_count(raw_value, fallback)
+
+
+def format_finite_stack_layer_count(value: object) -> str:
+    """Format one finite-stack layer count for entry display."""
+
+    return str(normalize_finite_stack_layer_count(value, 1))
+
+
+def normalize_finite_stack_phase_delta_expression(
+    raw_value: object,
+    *,
+    fallback: object,
+) -> str:
+    """Normalize and validate one finite-stack phase-delta expression."""
+
+    normalized = normalize_phase_delta_expression(raw_value, fallback=str(fallback))
+    return validate_phase_delta_expression(normalized)
+
+
+def normalize_finite_stack_phi_l_divisor(
+    raw_value: object,
+    *,
+    fallback: object,
+) -> float:
+    """Normalize one finite-stack phi-L divisor to a positive finite float."""
+
+    return normalize_phi_l_divisor(raw_value, fallback=float(fallback))
+
+
+def format_finite_stack_phi_l_divisor(value: object) -> str:
+    """Format one finite-stack phi-L divisor for entry display."""
+
+    normalized = normalize_finite_stack_phi_l_divisor(value, fallback=1.0)
+    return f"{normalized:.6g}"
 
 
 def build_initial_state() -> AppState:
