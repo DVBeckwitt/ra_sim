@@ -14,6 +14,7 @@ from .state import (
     GeometryFitConstraintsViewState,
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
+    WorkspacePanelsViewState,
 )
 
 
@@ -37,6 +38,82 @@ def create_root_window(title: str = "RA Simulation") -> tk.Tk:
     root = tk.Tk()
     root.title(title)
     return root
+
+
+def create_workspace_panels(
+    *,
+    parent: tk.Misc,
+    view_state: WorkspacePanelsViewState,
+) -> None:
+    """Create and store the workspace action/background/session panel frames."""
+
+    workspace_actions_frame = ttk.LabelFrame(parent, text="Workspace Actions")
+    workspace_actions_frame.pack(fill=tk.X, padx=5, pady=5)
+
+    workspace_backgrounds_frame = ttk.Frame(parent)
+    workspace_backgrounds_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+    workspace_session_frame = ttk.LabelFrame(parent, text="Session")
+    workspace_session_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+    view_state.workspace_actions_frame = workspace_actions_frame
+    view_state.workspace_backgrounds_frame = workspace_backgrounds_frame
+    view_state.workspace_session_frame = workspace_session_frame
+
+
+def populate_stacked_button_group(
+    parent: tk.Misc,
+    button_specs: Sequence[tuple[str, Callable[[], None]]],
+) -> None:
+    """Append one vertical stack of standard buttons to a panel."""
+
+    for text, command in button_specs:
+        ttk.Button(
+            parent,
+            text=str(text),
+            command=command,
+        ).pack(side=tk.TOP, padx=5, pady=2)
+
+
+def create_background_file_controls(
+    *,
+    parent: tk.Misc,
+    view_state: WorkspacePanelsViewState,
+    on_load_backgrounds: Callable[[], None],
+    status_text: str = "",
+) -> None:
+    """Create the background-file load button and status label."""
+
+    ttk.Button(
+        parent,
+        text="Load Background Files...",
+        command=on_load_backgrounds,
+    ).pack(side=tk.TOP, padx=5, pady=2)
+
+    background_file_status_var = tk.StringVar(value=str(status_text))
+    background_file_status_label = ttk.Label(
+        parent,
+        textvariable=background_file_status_var,
+        wraplength=520,
+        justify=tk.LEFT,
+    )
+    background_file_status_label.pack(side=tk.TOP, padx=5, pady=(0, 2))
+
+    view_state.background_file_status_var = background_file_status_var
+    view_state.background_file_status_label = background_file_status_label
+
+
+def set_background_file_status_text(
+    view_state: WorkspacePanelsViewState,
+    text: str,
+) -> None:
+    """Update the background-file status line in the workspace panel."""
+
+    if view_state.background_file_status_var is None:
+        return
+    setter = getattr(view_state.background_file_status_var, "set", None)
+    if callable(setter):
+        setter(str(text))
 
 
 def create_geometry_fit_constraints_panel(

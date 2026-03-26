@@ -60,6 +60,17 @@ class BackgroundThetaControlsViewState:
 
 
 @dataclass
+class WorkspacePanelsViewState:
+    """Widget references for the workspace action/background/session panels."""
+
+    workspace_actions_frame: Any = None
+    workspace_backgrounds_frame: Any = None
+    workspace_session_frame: Any = None
+    background_file_status_var: Any = None
+    background_file_status_label: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -160,6 +171,9 @@ class AppState:
     )
     background_theta_controls_view: BackgroundThetaControlsViewState = field(
         default_factory=BackgroundThetaControlsViewState
+    )
+    workspace_panels_view: WorkspacePanelsViewState = field(
+        default_factory=WorkspacePanelsViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

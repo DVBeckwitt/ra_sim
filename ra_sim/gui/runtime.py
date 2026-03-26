@@ -1876,6 +1876,7 @@ background_backend_rotation_k = 3
 background_backend_flip_x = False
 background_backend_flip_y = False
 background_theta_controls_view_state = gui_state.BackgroundThetaControlsViewState()
+workspace_panels_view_state = gui_state.WorkspacePanelsViewState()
 background_theta_list_var = None
 geometry_theta_offset_var = None
 geometry_fit_background_selection_var = None
@@ -2701,12 +2702,19 @@ _bind_notebook_state(
     },
 )
 
-workspace_actions_frame = ttk.LabelFrame(workspace_body, text="Workspace Actions")
-workspace_actions_frame.pack(fill=tk.X, padx=5, pady=5)
-workspace_backgrounds_frame = ttk.Frame(workspace_body)
-workspace_backgrounds_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
-workspace_session_frame = ttk.LabelFrame(workspace_body, text="Session")
-workspace_session_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+gui_views.create_workspace_panels(
+    parent=workspace_body,
+    view_state=workspace_panels_view_state,
+)
+workspace_actions_frame = workspace_panels_view_state.workspace_actions_frame
+workspace_backgrounds_frame = workspace_panels_view_state.workspace_backgrounds_frame
+workspace_session_frame = workspace_panels_view_state.workspace_session_frame
+if (
+    workspace_actions_frame is None
+    or workspace_backgrounds_frame is None
+    or workspace_session_frame is None
+):
+    raise RuntimeError("Workspace panels were not created.")
 
 fit_actions_frame = ttk.LabelFrame(fit_body, text="Geometry Tools")
 fit_actions_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -10110,10 +10118,13 @@ def toggle_background():
 def _set_background_file_status_text():
     """Refresh the background-file status line shown in the GUI."""
 
-    if "background_file_status_var" not in globals():
+    if workspace_panels_view_state.background_file_status_var is None:
         return
     if not osc_files:
-        background_file_status_var.set("Background: no files loaded")
+        gui_views.set_background_file_status_text(
+            workspace_panels_view_state,
+            "Background: no files loaded",
+        )
         return
 
     idx = int(current_background_index) % len(osc_files)
@@ -10157,7 +10168,10 @@ def _set_background_file_status_text():
                 status_text += f" | fit=bg {fit_idx}"
     except Exception:
         pass
-    background_file_status_var.set(status_text)
+    gui_views.set_background_file_status_text(
+        workspace_panels_view_state,
+        status_text,
+    )
 
 
 def _load_background_files(file_paths, *, select_index=0):
@@ -10371,35 +10385,21 @@ def reset_to_defaults():
     last_simulation_signature = None
     schedule_update()
 
-toggle_button = ttk.Button(
+gui_views.populate_stacked_button_group(
     workspace_actions_frame,
-    text="Toggle Background",
-    command=toggle_background
+    [
+        ("Toggle Background", toggle_background),
+        ("Switch Background", switch_background),
+    ],
 )
-toggle_button.pack(side=tk.TOP, padx=5, pady=2)
 
-switch_button = ttk.Button(
-    workspace_actions_frame,
-    text="Switch Background",
-    command=switch_background
+gui_views.create_background_file_controls(
+    parent=workspace_backgrounds_frame,
+    view_state=workspace_panels_view_state,
+    on_load_backgrounds=_browse_background_files,
+    status_text="",
 )
-switch_button.pack(side=tk.TOP, padx=5, pady=2)
-
-load_backgrounds_button = ttk.Button(
-    workspace_backgrounds_frame,
-    text="Load Background Files...",
-    command=_browse_background_files,
-)
-load_backgrounds_button.pack(side=tk.TOP, padx=5, pady=2)
-
-background_file_status_var = tk.StringVar(value="")
-background_file_status_label = ttk.Label(
-    workspace_backgrounds_frame,
-    textvariable=background_file_status_var,
-    wraplength=520,
-    justify=tk.LEFT,
-)
-background_file_status_label.pack(side=tk.TOP, padx=5, pady=(0, 2))
+background_file_status_var = workspace_panels_view_state.background_file_status_var
 _set_background_file_status_text()
 
 gui_views.create_background_theta_controls(
@@ -10426,64 +10426,61 @@ geometry_fit_background_selection_var = (
 )
 _sync_geometry_fit_background_selection(preserve_existing=False)
 
-reset_button_top = ttk.Button(
+gui_views.populate_stacked_button_group(
     workspace_actions_frame,
-    text="Reset to Defaults",
-    command=reset_to_defaults
-)
-reset_button_top.pack(side=tk.TOP, padx=5, pady=2)
-
-azimuthal_button = ttk.Button(
-    workspace_actions_frame,
-    text="Azim vs Radial Plot Demo",
-    command=lambda: view_azimuthal_radial(
-        simulate_diffraction(
-            theta_initial=theta_initial_var.get(),
-            cor_angle=cor_angle_var.get(),
-            gamma=gamma_var.get(),
-            Gamma=Gamma_var.get(),
-            chi=chi_var.get(),
-            psi_z=psi_z_var.get(),
-            zs=zs_var.get(),
-            zb=zb_var.get(),
-            debye_x_value=debye_x_var.get(),
-            debye_y_value=debye_y_var.get(),
-            corto_detector_value=corto_detector_var.get(),
-            miller=miller,
-            intensities=intensities,
-            image_size=image_size,
-            av=a_var.get(),
-            cv=c_var.get(),
-            lambda_=lambda_,
-            psi=psi,
-            n2=n2,
-            center=[center_x_var.get(), center_y_var.get()],
-            num_samples=num_samples,
-            divergence_sigma=divergence_sigma,
-            bw_sigma=bw_sigma,
-            sigma_mosaic_var=sigma_mosaic_var,
-            gamma_mosaic_var=gamma_mosaic_var,
-            eta_var=eta_var,
-            bandwidth=_current_bandwidth_fraction(),
-            optics_mode=_current_optics_mode_flag(),
-            solve_q_steps=_current_solve_q_steps(),
-            solve_q_rel_tol=_current_solve_q_rel_tol(),
-            solve_q_mode=_current_solve_q_mode_flag(),
+    [
+        ("Reset to Defaults", reset_to_defaults),
+        (
+            "Azim vs Radial Plot Demo",
+            lambda: view_azimuthal_radial(
+                simulate_diffraction(
+                    theta_initial=theta_initial_var.get(),
+                    cor_angle=cor_angle_var.get(),
+                    gamma=gamma_var.get(),
+                    Gamma=Gamma_var.get(),
+                    chi=chi_var.get(),
+                    psi_z=psi_z_var.get(),
+                    zs=zs_var.get(),
+                    zb=zb_var.get(),
+                    debye_x_value=debye_x_var.get(),
+                    debye_y_value=debye_y_var.get(),
+                    corto_detector_value=corto_detector_var.get(),
+                    miller=miller,
+                    intensities=intensities,
+                    image_size=image_size,
+                    av=a_var.get(),
+                    cv=c_var.get(),
+                    lambda_=lambda_,
+                    psi=psi,
+                    n2=n2,
+                    center=[center_x_var.get(), center_y_var.get()],
+                    num_samples=num_samples,
+                    divergence_sigma=divergence_sigma,
+                    bw_sigma=bw_sigma,
+                    sigma_mosaic_var=sigma_mosaic_var,
+                    gamma_mosaic_var=gamma_mosaic_var,
+                    eta_var=eta_var,
+                    bandwidth=_current_bandwidth_fraction(),
+                    optics_mode=_current_optics_mode_flag(),
+                    solve_q_steps=_current_solve_q_steps(),
+                    solve_q_rel_tol=_current_solve_q_rel_tol(),
+                    solve_q_mode=_current_solve_q_mode_flag(),
+                ),
+                [center_x_var.get(), center_y_var.get()],
+                {
+                    'pixel_size': pixel_size_m,
+                    'poni1': (center_x_var.get()) * pixel_size_m,
+                    'poni2': (center_y_var.get()) * pixel_size_m,
+                    'dist': corto_detector_var.get(),
+                    'rot1': 0.0,
+                    'rot2': 0.0,
+                    'rot3': 0.0,
+                    'wavelength': wave_m
+                }
+            ),
         ),
-        [center_x_var.get(), center_y_var.get()],
-        {
-            'pixel_size': pixel_size_m,
-            'poni1': (center_x_var.get()) * pixel_size_m,
-            'poni2': (center_y_var.get()) * pixel_size_m,
-            'dist': corto_detector_var.get(),
-            'rot1': 0.0,
-            'rot2': 0.0,
-            'rot3': 0.0,
-            'wavelength': wave_m
-        }
-    )
+    ],
 )
-azimuthal_button.pack(side=tk.TOP, padx=5, pady=2)
 
 def _compact_status_text(text: object, *, max_chars: int = 120) -> str:
     summary = " ".join(str(text).split())
@@ -11089,34 +11086,19 @@ def _import_geometry_manual_pairs() -> None:
     progress_label_geometry.config(text=message)
 
 
-save_button = ttk.Button(
-    workspace_session_frame,
-    text="Export GUI State...",
-    command=_export_full_gui_state,
-)
-save_button.pack(side=tk.TOP, padx=5, pady=2)
-
-load_button = ttk.Button(
-    workspace_session_frame,
-    text="Import GUI State...",
-    command=_import_full_gui_state,
-)
-load_button.pack(side=tk.TOP, padx=5, pady=2)
-
-import_hbn_button = ttk.Button(
-    workspace_session_frame,
-    text="Import hBN Bundle Tilt",
-    command=import_hbn_tilt_from_bundle,
-)
-import_hbn_button.pack(side=tk.TOP, padx=5, pady=2)
-
+session_button_specs = [
+    ("Export GUI State...", _export_full_gui_state),
+    ("Import GUI State...", _import_full_gui_state),
+    ("Import hBN Bundle Tilt", import_hbn_tilt_from_bundle),
+]
 if HBN_GEOMETRY_DEBUG_ENABLED:
-    show_hbn_debug_button = ttk.Button(
-        workspace_session_frame,
-        text="Show hBN Geometry Debug",
-        command=show_last_hbn_geometry_debug,
+    session_button_specs.append(
+        ("Show hBN Geometry Debug", show_last_hbn_geometry_debug)
     )
-    show_hbn_debug_button.pack(side=tk.TOP, padx=5, pady=2)
+gui_views.populate_stacked_button_group(
+    workspace_session_frame,
+    session_button_specs,
+)
 
 # Frame for selecting which geometry params to fit
 fit_frame = ttk.LabelFrame(fit_body, text="Fit geometry parameters")
@@ -16226,20 +16208,13 @@ def run_debug_simulation():
     dump_debug_log()
     progress_label.config(text="Debug simulation complete. Log saved.")
 
-debug_button = ttk.Button(
+gui_views.populate_stacked_button_group(
     workspace_actions_frame,
-    text="Run Debug Simulation",
-    command=run_debug_simulation
+    [
+        ("Run Debug Simulation", run_debug_simulation),
+        ("Force Update", lambda: update_occupancies()),
+    ],
 )
-debug_button.pack(side=tk.TOP, padx=5, pady=2)
-
-# Button to force a full update (re-read occupancies and recalc everything).
-force_update_button = ttk.Button(
-    workspace_actions_frame,
-    text="Force Update",
-    command=lambda: update_occupancies()
-)
-force_update_button.pack(side=tk.TOP, padx=5, pady=2)
 
 # Group related sliders in collapsible sections so the interface remains
 # manageable as more controls are added.
