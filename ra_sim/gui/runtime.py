@@ -121,6 +121,7 @@ from ra_sim.gui.geometry_overlay import (
     compute_geometry_overlay_frame_diagnostics,
 )
 from ra_sim.gui import overlays as gui_overlays
+from ra_sim.gui import peak_selection as gui_peak_selection
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import state as gui_state
@@ -4740,7 +4741,7 @@ def _update_geometry_preview_exclude_button_label():
 def _update_hkl_pick_button_label():
     gui_views.set_hkl_pick_button_text(
         hkl_lookup_view_state,
-        "Pick HKL on Image (Armed)" if peak_selection_state.hkl_pick_armed else "Pick HKL on Image",
+        gui_peak_selection.hkl_pick_button_text(peak_selection_state.hkl_pick_armed),
     )
 
 
@@ -4928,24 +4929,18 @@ def _toggle_hkl_pick_mode():
 
 
 def _nearest_integer_hkl(h: float, k: float, l: float) -> tuple[int, int, int]:
-    return (
-        int(np.rint(float(h))),
-        int(np.rint(float(k))),
-        int(np.rint(float(l))),
-    )
+    return gui_peak_selection.nearest_integer_hkl(h, k, l)
 
 
 def _format_hkl_triplet(h: int, k: int, l: int) -> str:
-    return f"({int(h)} {int(k)} {int(l)})"
+    return gui_peak_selection.format_hkl_triplet(h, k, l)
 
 
 def _source_miller_for_label(source_label: str | None) -> np.ndarray:
-    label = str(source_label or "primary").lower()
-    if label == "secondary" and isinstance(simulation_runtime_state.sim_miller2, np.ndarray) and simulation_runtime_state.sim_miller2.size:
-        return np.asarray(simulation_runtime_state.sim_miller2, dtype=float)
-    if isinstance(simulation_runtime_state.sim_miller1, np.ndarray) and simulation_runtime_state.sim_miller1.size:
-        return np.asarray(simulation_runtime_state.sim_miller1, dtype=float)
-    return np.empty((0, 3), dtype=float)
+    return gui_peak_selection.source_miller_for_label(
+        simulation_runtime_state,
+        source_label,
+    )
 
 
 def _degenerate_hkls_for_qr(
@@ -4955,40 +4950,13 @@ def _degenerate_hkls_for_qr(
     *,
     source_label: str | None,
 ) -> list[tuple[int, int, int]]:
-    source_miller = _source_miller_for_label(source_label)
-    if source_miller.ndim != 2 or source_miller.shape[1] < 3 or source_miller.shape[0] == 0:
-        return []
-
-    finite = np.isfinite(source_miller[:, 0]) & np.isfinite(source_miller[:, 1]) & np.isfinite(source_miller[:, 2])
-    if not np.any(finite):
-        return []
-    source_int = np.rint(source_miller[finite, :3]).astype(np.int64, copy=False)
-
-    h_vals = source_int[:, 0]
-    k_vals = source_int[:, 1]
-    l_vals = source_int[:, 2]
-    m_vals = h_vals * h_vals + h_vals * k_vals + k_vals * k_vals
-    m_target = int(h * h + h * k + k * k)
-
-    mask = (l_vals == int(l)) & (m_vals == m_target)
-    if not np.any(mask):
-        rod_mask = m_vals == m_target
-        if not np.any(rod_mask):
-            return []
-        nearest_l = int(l_vals[rod_mask][np.argmin(np.abs(l_vals[rod_mask] - int(l)))])
-        mask = rod_mask & (l_vals == nearest_l)
-
-    out: list[tuple[int, int, int]] = []
-    seen: set[tuple[int, int, int]] = set()
-    for hh, kk, ll in source_int[mask]:
-        key = (int(hh), int(kk), int(ll))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append((int(hh), int(kk), int(ll)))
-
-    out.sort(key=lambda vals: (vals[0], vals[1], vals[2]))
-    return out
+    return gui_peak_selection.degenerate_hkls_for_qr(
+        simulation_runtime_state,
+        h,
+        k,
+        l,
+        source_label=source_label,
+    )
 
 
 def _selected_peak_qr_and_degenerates(
@@ -4997,37 +4965,14 @@ def _selected_peak_qr_and_degenerates(
     L: float,
     selected_peak: dict | None,
 ) -> tuple[float, list[tuple[int, int, int]]]:
-    h_raw, k_raw, l_raw = float(H), float(K), float(L)
-    source_label = "primary"
-    a_used = float(av)
-    if isinstance(selected_peak, dict):
-        raw_hkl = selected_peak.get("hkl_raw")
-        if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
-            h_raw = float(raw_hkl[0])
-            k_raw = float(raw_hkl[1])
-            l_raw = float(raw_hkl[2])
-        source_label = str(selected_peak.get("source_label", "primary"))
-        try:
-            a_used = float(selected_peak.get("av", av))
-        except (TypeError, ValueError):
-            a_used = float(av)
-
-    h_int, k_int, l_int = _nearest_integer_hkl(h_raw, k_raw, l_raw)
-    m_val = float(h_int * h_int + h_int * k_int + k_int * k_int)
-    if a_used > 0.0 and np.isfinite(a_used) and m_val >= 0.0:
-        qr_val = (2.0 * np.pi / a_used) * np.sqrt((4.0 / 3.0) * m_val)
-    else:
-        qr_val = float("nan")
-
-    deg_hkls = _degenerate_hkls_for_qr(
-        h_int,
-        k_int,
-        l_int,
-        source_label=source_label,
+    return gui_peak_selection.selected_peak_qr_and_degenerates(
+        simulation_runtime_state,
+        H,
+        K,
+        L,
+        selected_peak,
+        primary_a=float(av),
     )
-    if not deg_hkls:
-        deg_hkls = [(h_int, k_int, l_int)]
-    return float(qr_val), deg_hkls
 
 
 def _select_peak_by_index(
@@ -5040,72 +4985,23 @@ def _select_peak_by_index(
     selected_display: tuple[float, float] | None = None,
     selected_native: tuple[float, float] | None = None,
 ):
-    if idx < 0 or idx >= len(simulation_runtime_state.peak_positions):
-        return False
-
-    px, py = simulation_runtime_state.peak_positions[idx]
-    H, K, L = simulation_runtime_state.peak_millers[idx]
-    I = simulation_runtime_state.peak_intensities[idx]
-    disp_col, disp_row = (
-        (float(selected_display[0]), float(selected_display[1]))
-        if selected_display is not None
-        else (float(px), float(py))
+    return gui_peak_selection.select_peak_by_index(
+        simulation_runtime_state,
+        peak_selection_state,
+        hkl_lookup_view_state,
+        selected_peak_marker,
+        idx,
+        primary_a=float(av),
+        sync_peak_selection_state=_sync_peak_selection_state,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
+        draw_idle=canvas.draw_idle,
+        prefix=prefix,
+        sync_hkl_vars=sync_hkl_vars,
+        clicked_display=clicked_display,
+        clicked_native=clicked_native,
+        selected_display=selected_display,
+        selected_native=selected_native,
     )
-
-    selected_peak_marker.set_data([disp_col], [disp_row])
-    selected_peak_marker.set_visible(True)
-
-    peak_selection_state.selected_hkl_target = (int(H), int(K), int(L))
-    _sync_peak_selection_state()
-    simulation_runtime_state.selected_peak_record = dict(simulation_runtime_state.peak_records[idx]) if idx < len(simulation_runtime_state.peak_records) else None
-    if simulation_runtime_state.selected_peak_record is not None:
-        if clicked_display is not None:
-            simulation_runtime_state.selected_peak_record["clicked_display_col"] = float(clicked_display[0])
-            simulation_runtime_state.selected_peak_record["clicked_display_row"] = float(clicked_display[1])
-        if clicked_native is not None:
-            simulation_runtime_state.selected_peak_record["clicked_native_col"] = float(clicked_native[0])
-            simulation_runtime_state.selected_peak_record["clicked_native_row"] = float(clicked_native[1])
-        if selected_display is not None:
-            simulation_runtime_state.selected_peak_record["selected_display_col"] = float(selected_display[0])
-            simulation_runtime_state.selected_peak_record["selected_display_row"] = float(selected_display[1])
-        if selected_native is not None:
-            simulation_runtime_state.selected_peak_record["selected_native_col"] = float(selected_native[0])
-            simulation_runtime_state.selected_peak_record["selected_native_row"] = float(selected_native[1])
-        elif clicked_native is not None:
-            simulation_runtime_state.selected_peak_record["selected_native_col"] = float(clicked_native[0])
-            simulation_runtime_state.selected_peak_record["selected_native_row"] = float(clicked_native[1])
-        else:
-            simulation_runtime_state.selected_peak_record["selected_native_col"] = float(simulation_runtime_state.selected_peak_record["native_col"])
-            simulation_runtime_state.selected_peak_record["selected_native_row"] = float(simulation_runtime_state.selected_peak_record["native_row"])
-    if sync_hkl_vars:
-        gui_views.set_hkl_lookup_values(
-            hkl_lookup_view_state,
-            h_text=str(int(H)),
-            k_text=str(int(K)),
-            l_text=str(int(L)),
-        )
-
-    qr_val, deg_hkls = _selected_peak_qr_and_degenerates(H, K, L, simulation_runtime_state.selected_peak_record)
-    if simulation_runtime_state.selected_peak_record is not None:
-        simulation_runtime_state.selected_peak_record["qr"] = float(qr_val)
-        simulation_runtime_state.selected_peak_record["degenerate_hkls"] = [
-            (int(hv), int(kv), int(lv)) for hv, kv, lv in deg_hkls
-        ]
-
-    shown_deg = deg_hkls[:12]
-    deg_text = ", ".join(_format_hkl_triplet(hv, kv, lv) for hv, kv, lv in shown_deg)
-    if len(deg_hkls) > len(shown_deg):
-        deg_text += f", ... (+{len(deg_hkls) - len(shown_deg)} more)"
-    qr_text = f"  Qr={qr_val:.4f} A^-1" if np.isfinite(qr_val) else ""
-
-    progress_label_positions.config(
-        text=(
-            f"{prefix}: HKL=({int(H)} {int(K)} {int(L)})  pixel=({disp_col:.1f},{disp_row:.1f})  "
-            f"I={I:.2g}{qr_text}  HKLs@same Qr,L: {deg_text}"
-        )
-    )
-    canvas.draw_idle()
-    return True
 
 
 def _select_peak_by_hkl(
@@ -5116,92 +5012,50 @@ def _select_peak_by_hkl(
     sync_hkl_vars: bool = True,
     silent_if_missing: bool = False,
 ):
-    _ensure_peak_overlay_data(force=False)
-    target = (int(h), int(k), int(l))
-
-    if not simulation_runtime_state.peak_positions:
-        if not silent_if_missing and simulation_runtime_state.unscaled_image is not None:
-            schedule_update()
-        if not silent_if_missing:
-            progress_label_positions.config(
-                text="Preparing simulated peak map... try again after update."
-            )
-        return False
-
-    def _m_idx(hkl_triplet: tuple[int, int, int]) -> int:
-        h0, k0, _l0 = hkl_triplet
-        return int(h0 * h0 + h0 * k0 + k0 * k0)
-
-    matches = [
-        idx for idx, hkl in enumerate(simulation_runtime_state.peak_millers)
-        if tuple(int(np.rint(v)) for v in hkl) == target and simulation_runtime_state.peak_positions[idx][0] >= 0
-    ]
-
-    # When primary simulation runs on Qr rods, only one representative HKL is
-    # present per m/L in simulation_runtime_state.peak_millers. Fall back to m/L matching so any
-    # degenerate HKL can still select the corresponding rod peak.
-    if not matches:
-        m_target = _m_idx(target)
-        l_target = int(target[2])
-        matches = [
-            idx
-            for idx, hkl in enumerate(simulation_runtime_state.peak_millers)
-            if (
-                simulation_runtime_state.peak_positions[idx][0] >= 0
-                and int(np.rint(hkl[2])) == l_target
-                and _m_idx(
-                    (
-                        int(np.rint(hkl[0])),
-                        int(np.rint(hkl[1])),
-                        int(np.rint(hkl[2])),
-                    )
-                ) == m_target
-            )
-        ]
-
-    if not matches:
-        if not silent_if_missing:
-            progress_label_positions.config(
-                text=f"HKL ({target[0]} {target[1]} {target[2]}) not found in current simulation."
-            )
-        peak_selection_state.selected_hkl_target = target
-        _sync_peak_selection_state()
-        simulation_runtime_state.selected_peak_record = None
-        return False
-
-    def _score(i: int) -> float:
-        val = simulation_runtime_state.peak_intensities[i]
-        return float(val) if np.isfinite(val) else float("-inf")
-
-    best_idx = max(matches, key=_score)
-    return _select_peak_by_index(
-        best_idx,
-        prefix="Selected peak",
+    return gui_peak_selection.select_peak_by_hkl(
+        simulation_runtime_state,
+        peak_selection_state,
+        hkl_lookup_view_state,
+        selected_peak_marker,
+        h,
+        k,
+        l,
+        primary_a=float(av),
+        ensure_peak_overlay_data=_ensure_peak_overlay_data,
+        schedule_update=schedule_update,
+        sync_peak_selection_state=_sync_peak_selection_state,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
+        draw_idle=canvas.draw_idle,
         sync_hkl_vars=sync_hkl_vars,
+        silent_if_missing=silent_if_missing,
     )
 
 
 def _select_peak_from_hkl_controls():
-    try:
-        h = int(round(float(hkl_lookup_view_state.selected_h_var.get().strip())))
-        k = int(round(float(hkl_lookup_view_state.selected_k_var.get().strip())))
-        l = int(round(float(hkl_lookup_view_state.selected_l_var.get().strip())))
-    except (ValueError, tk.TclError, AttributeError):
-        progress_label_positions.config(text="Enter numeric H, K, L values.")
-        return
-
-    peak_selection_state.selected_hkl_target = (h, k, l)
-    _sync_peak_selection_state()
-    _select_peak_by_hkl(h, k, l, sync_hkl_vars=True, silent_if_missing=False)
+    gui_peak_selection.select_peak_from_hkl_controls(
+        simulation_runtime_state,
+        peak_selection_state,
+        hkl_lookup_view_state,
+        selected_peak_marker,
+        primary_a=float(av),
+        ensure_peak_overlay_data=_ensure_peak_overlay_data,
+        schedule_update=schedule_update,
+        sync_peak_selection_state=_sync_peak_selection_state,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
+        draw_idle=canvas.draw_idle,
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _clear_selected_peak():
-    peak_selection_state.selected_hkl_target = None
-    _sync_peak_selection_state()
-    simulation_runtime_state.selected_peak_record = None
-    selected_peak_marker.set_visible(False)
-    progress_label_positions.config(text="Peak selection cleared.")
-    canvas.draw_idle()
+    gui_peak_selection.clear_selected_peak(
+        simulation_runtime_state,
+        peak_selection_state,
+        selected_peak_marker,
+        sync_peak_selection_state=_sync_peak_selection_state,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
+        draw_idle=canvas.draw_idle,
+    )
 
 
 def _open_selected_peak_intersection_figure():
