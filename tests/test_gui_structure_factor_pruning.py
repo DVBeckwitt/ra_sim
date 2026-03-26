@@ -100,6 +100,60 @@ def test_structure_factor_pruning_runtime_current_value_helpers_and_status_text(
     assert view_state.sf_prune_status_var.get() == text
 
 
+def test_structure_factor_pruning_runtime_helpers_tolerate_missing_view_state(
+    monkeypatch,
+) -> None:
+    simulation_runtime_state = state.SimulationRuntimeState(
+        sf_prune_stats={"qr_total": 8, "qr_kept": 5}
+    )
+    calls = []
+    bindings = structure_factor_pruning.StructureFactorPruningRuntimeBindings(
+        view_state=None,
+        simulation_runtime_state=simulation_runtime_state,
+        bragg_qr_manager_state=state.BraggQrManagerState(),
+        clip_prune_bias=lambda value: controllers.clip_structure_factor_prune_bias(
+            value,
+            fallback=0.0,
+            minimum=-2.0,
+            maximum=2.0,
+        ),
+        clip_solve_q_steps=lambda value: controllers.clip_solve_q_steps(
+            value,
+            fallback=32,
+            minimum=4,
+            maximum=128,
+        ),
+        clip_solve_q_rel_tol=lambda value: controllers.clip_solve_q_rel_tol(
+            value,
+            fallback=1.0e-3,
+            minimum=1.0e-6,
+            maximum=1.0e-2,
+        ),
+        normalize_solve_q_mode_label=controllers.normalize_solve_q_mode_label,
+        apply_filters=controllers.apply_bragg_qr_filters,
+    )
+
+    monkeypatch.setattr(
+        structure_factor_pruning.gui_views,
+        "set_structure_factor_pruning_status_text",
+        lambda *args, **kwargs: calls.append(("status", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        structure_factor_pruning.gui_views,
+        "set_structure_factor_pruning_rel_tol_enabled",
+        lambda *args, **kwargs: calls.append(("rel_tol", args, kwargs)),
+    )
+
+    text = structure_factor_pruning.update_runtime_structure_factor_pruning_status(
+        bindings
+    )
+    mode = structure_factor_pruning.set_runtime_solve_q_control_states(bindings)
+
+    assert text == "SF pruning keeps 5/8 rod points (62.5%), bias=+0.00"
+    assert mode == "uniform"
+    assert calls == []
+
+
 def test_apply_runtime_bragg_qr_filters_updates_status_invalidates_and_refreshes() -> None:
     view_state = state.StructureFactorPruningControlsViewState(
         sf_prune_bias_var=_FakeVar("0.5"),

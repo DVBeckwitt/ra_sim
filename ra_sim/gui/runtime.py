@@ -1821,6 +1821,7 @@ ax.add_patch(integration_region_rect)
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
 def build_mosaic_params():
+    update_mosaic_cache()
     return {
         "beam_x_array":       simulation_runtime_state.profile_cache["beam_x_array"],
         "beam_y_array":       simulation_runtime_state.profile_cache["beam_y_array"],
@@ -4920,7 +4921,7 @@ integration_range_drag_runtime_bindings_factory = (
         integration_region_overlay=integration_region_overlay,
         integration_region_rect=integration_region_rect,
         image_display=image_display,
-        get_detector_angular_maps=_get_detector_angular_maps,
+        get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
         caked_view_enabled_factory=lambda: (
             bool(analysis_view_controls_view_state.show_caked_2d_var.get())
             if analysis_view_controls_view_state.show_caked_2d_var is not None

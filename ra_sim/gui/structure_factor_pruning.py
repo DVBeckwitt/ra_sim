@@ -216,7 +216,8 @@ def update_runtime_structure_factor_pruning_status(
         bindings.simulation_runtime_state.sf_prune_stats,
         prune_bias=current_runtime_sf_prune_bias(bindings),
     )
-    gui_views.set_structure_factor_pruning_status_text(bindings.view_state, text)
+    if bindings.view_state is not None:
+        gui_views.set_structure_factor_pruning_status_text(bindings.view_state, text)
     return str(text)
 
 
@@ -259,10 +260,11 @@ def set_runtime_solve_q_control_states(
     """Sync the adaptive relative-tolerance enabled state from the current mode."""
 
     mode = current_runtime_solve_q_mode_label(bindings)
-    gui_views.set_structure_factor_pruning_rel_tol_enabled(
-        bindings.view_state,
-        enabled=(mode != "uniform"),
-    )
+    if bindings.view_state is not None:
+        gui_views.set_structure_factor_pruning_rel_tol_enabled(
+            bindings.view_state,
+            enabled=(mode != "uniform"),
+        )
     return mode
 
 
