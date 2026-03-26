@@ -2928,17 +2928,16 @@ qr_cylinder_overlay_cache: dict[str, object] = {
     "signature": None,
     "paths": [],
 }
-geometry_preview_exclude_button_var = None
 geometry_preview_state = gui_state.GeometryPreviewState()
 geometry_q_group_view_state = gui_state.GeometryQGroupViewState()
 geometry_q_group_state = gui_state.GeometryQGroupState()
 geometry_manual_state = gui_state.ManualGeometryState()
 geometry_manual_pick_armed = False
-geometry_manual_pick_button_var = None
 geometry_manual_pick_cache_signature = None
 geometry_manual_pick_cache_data: dict[str, object] = {}
 geometry_fit_history_state = gui_state.GeometryFitHistoryState()
 geometry_fit_constraints_view_state = gui_state.GeometryFitConstraintsViewState()
+geometry_tool_actions_view_state = gui_state.GeometryToolActionsViewState()
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
 GEOMETRY_FIT_UNDO_LIMIT = 16
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
@@ -2951,8 +2950,6 @@ GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG = 24.0
 GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S = 0.03
 GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX = 0.8
 GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX = 0.75
-undo_geometry_fit_button = None
-redo_geometry_fit_button = None
 
 
 def _geometry_manual_position_error_px(
@@ -3133,14 +3130,11 @@ def _current_geometry_fit_ui_params() -> dict[str, object]:
 def _update_geometry_fit_undo_button_state() -> None:
     """Enable fit history buttons only when the relevant history exists."""
 
-    if undo_geometry_fit_button is not None:
-        undo_geometry_fit_button.config(
-            state=("normal" if geometry_fit_history_state.undo_stack else "disabled")
-        )
-    if redo_geometry_fit_button is not None:
-        redo_geometry_fit_button.config(
-            state=("normal" if geometry_fit_history_state.redo_stack else "disabled")
-        )
+    gui_views.set_geometry_fit_history_button_state(
+        geometry_tool_actions_view_state,
+        can_undo=bool(geometry_fit_history_state.undo_stack),
+        can_redo=bool(geometry_fit_history_state.redo_stack),
+    )
 
 
 def _clear_geometry_fit_undo_stack() -> None:
@@ -4038,19 +4032,16 @@ def _match_geometry_manual_group_to_background(
 
 
 def _update_geometry_manual_pick_button_label() -> None:
-    if (
-        "geometry_manual_pick_button_var" not in globals()
-        or geometry_manual_pick_button_var is None
-    ):
-        return
-    geometry_manual_pick_button_var.set(
-        gui_manual_geometry.geometry_manual_pick_button_label(
-            armed=geometry_manual_pick_armed,
-            current_background_index=current_background_index,
-            pick_session=geometry_manual_state.pick_session,
-            pairs_for_index=_geometry_manual_pairs_for_index,
-            pair_group_count=_geometry_manual_pair_group_count,
-        )
+    label = gui_manual_geometry.geometry_manual_pick_button_label(
+        armed=geometry_manual_pick_armed,
+        current_background_index=current_background_index,
+        pick_session=geometry_manual_state.pick_session,
+        pairs_for_index=_geometry_manual_pairs_for_index,
+        pair_group_count=_geometry_manual_pair_group_count,
+    )
+    gui_views.set_geometry_tool_action_texts(
+        geometry_tool_actions_view_state,
+        manual_pick_text=label,
     )
 
 
@@ -5875,16 +5866,14 @@ def _open_geometry_q_group_window() -> None:
 
 
 def _update_geometry_preview_exclude_button_label():
-    if (
-        "geometry_preview_exclude_button_var" not in globals()
-        or geometry_preview_exclude_button_var is None
-    ):
-        return
     label = "Select Qr/Qz Peaks"
     excluded_count = _geometry_q_group_excluded_count()
     if excluded_count > 0:
         label += f" ({excluded_count} off)"
-    geometry_preview_exclude_button_var.set(label)
+    gui_views.set_geometry_tool_action_texts(
+        geometry_tool_actions_view_state,
+        preview_exclude_text=label,
+    )
 
 
 def _update_hkl_pick_button_label():
@@ -15692,67 +15681,22 @@ fit_button_geometry = ttk.Button(
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
 
-undo_geometry_fit_button = ttk.Button(
-    fit_actions_frame,
-    text="Undo Fit",
-    command=_undo_last_geometry_fit,
-)
-undo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
-
-redo_geometry_fit_button = ttk.Button(
-    fit_actions_frame,
-    text="Redo Fit",
-    command=_redo_last_geometry_fit,
-)
-redo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
-_update_geometry_fit_undo_button_state()
-
 live_geometry_preview_var = tk.BooleanVar(value=False)
-geometry_manual_pick_button_var = tk.StringVar(value="Pick Qr Sets on Image")
-geometry_manual_pick_button = ttk.Button(
-    fit_actions_frame,
-    textvariable=geometry_manual_pick_button_var,
-    command=_toggle_geometry_manual_pick_mode,
+gui_views.create_geometry_tool_action_controls(
+    parent=fit_actions_frame,
+    view_state=geometry_tool_actions_view_state,
+    on_undo_fit=_undo_last_geometry_fit,
+    on_redo_fit=_redo_last_geometry_fit,
+    on_toggle_manual_pick=_toggle_geometry_manual_pick_mode,
+    on_undo_manual_placement=_undo_last_geometry_manual_placement,
+    on_export_manual_pairs=_export_geometry_manual_pairs,
+    on_import_manual_pairs=_import_geometry_manual_pairs,
+    on_toggle_preview_exclude=_toggle_geometry_preview_exclude_mode,
+    on_clear_manual_pairs=_clear_current_geometry_manual_pairs,
 )
-geometry_manual_pick_button.pack(side=tk.TOP, padx=5, pady=2)
+_update_geometry_fit_undo_button_state()
 _update_geometry_manual_pick_button_label()
-
-geometry_manual_undo_button = ttk.Button(
-    fit_actions_frame,
-    text="Undo Placement",
-    command=_undo_last_geometry_manual_placement,
-)
-geometry_manual_undo_button.pack(side=tk.TOP, padx=5, pady=2)
-
-geometry_manual_export_button = ttk.Button(
-    fit_actions_frame,
-    text="Export Placements...",
-    command=_export_geometry_manual_pairs,
-)
-geometry_manual_export_button.pack(side=tk.TOP, padx=5, pady=2)
-
-geometry_manual_import_button = ttk.Button(
-    fit_actions_frame,
-    text="Import Placements...",
-    command=_import_geometry_manual_pairs,
-)
-geometry_manual_import_button.pack(side=tk.TOP, padx=5, pady=2)
-
-geometry_preview_exclude_button_var = tk.StringVar(value="Select Qr/Qz Peaks")
-geometry_preview_exclude_button = ttk.Button(
-    fit_actions_frame,
-    textvariable=geometry_preview_exclude_button_var,
-    command=_toggle_geometry_preview_exclude_mode,
-)
-geometry_preview_exclude_button.pack(side=tk.TOP, padx=5, pady=2)
 _update_geometry_preview_exclude_button_label()
-
-clear_geometry_preview_exclusions_button = ttk.Button(
-    fit_actions_frame,
-    text="Clear Current Image Pairs",
-    command=_clear_current_geometry_manual_pairs,
-)
-clear_geometry_preview_exclusions_button.pack(side=tk.TOP, padx=5, pady=2)
 
 hkl_lookup_frame = ttk.LabelFrame(fit_actions_frame, text="Peak Lookup (HKL)")
 hkl_lookup_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4)

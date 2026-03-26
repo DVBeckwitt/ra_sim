@@ -312,10 +312,14 @@ class _FakeButton:
         self.parent = parent
         self.kwargs = kwargs
         self.command = kwargs.get("command")
+        self.state = kwargs.get("state")
         _FakeButton.created.append(self)
 
     def pack(self, **_kwargs) -> None:
         pass
+
+    def config(self, **kwargs) -> None:
+        self.state = kwargs.get("state", self.state)
 
 
 class _FakeSpinbox:
@@ -618,6 +622,73 @@ def test_background_file_controls_store_status_var_and_update_text(monkeypatch) 
 
     _FakeButton.created[0].command()
     assert loaded == [True]
+
+
+def test_geometry_tool_action_controls_store_refs_and_support_updates(
+    monkeypatch,
+) -> None:
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.GeometryToolActionsViewState()
+    calls = []
+
+    views.create_geometry_tool_action_controls(
+        parent=object(),
+        view_state=view_state,
+        on_undo_fit=lambda: calls.append("undo-fit"),
+        on_redo_fit=lambda: calls.append("redo-fit"),
+        on_toggle_manual_pick=lambda: calls.append("toggle-pick"),
+        on_undo_manual_placement=lambda: calls.append("undo-placement"),
+        on_export_manual_pairs=lambda: calls.append("export"),
+        on_import_manual_pairs=lambda: calls.append("import"),
+        on_toggle_preview_exclude=lambda: calls.append("toggle-preview"),
+        on_clear_manual_pairs=lambda: calls.append("clear"),
+    )
+
+    assert view_state.geometry_manual_pick_button_var.get() == "Pick Qr Sets on Image"
+    assert view_state.geometry_preview_exclude_button_var.get() == "Select Qr/Qz Peaks"
+    assert [button.kwargs.get("text") for button in _FakeButton.created[:4]] == [
+        "Undo Fit",
+        "Redo Fit",
+        None,
+        "Undo Placement",
+    ]
+    assert _FakeButton.created[2].kwargs["textvariable"] is view_state.geometry_manual_pick_button_var
+    assert _FakeButton.created[6].kwargs["textvariable"] is (
+        view_state.geometry_preview_exclude_button_var
+    )
+
+    views.set_geometry_tool_action_texts(
+        view_state,
+        manual_pick_text="manual-updated",
+        preview_exclude_text="preview-updated",
+    )
+    assert view_state.geometry_manual_pick_button_var.get() == "manual-updated"
+    assert view_state.geometry_preview_exclude_button_var.get() == "preview-updated"
+
+    views.set_geometry_fit_history_button_state(
+        view_state,
+        can_undo=True,
+        can_redo=False,
+    )
+    assert view_state.undo_geometry_fit_button.state == "normal"
+    assert view_state.redo_geometry_fit_button.state == "disabled"
+
+    for button in _FakeButton.created:
+        if callable(button.command):
+            button.command()
+    assert calls == [
+        "undo-fit",
+        "redo-fit",
+        "toggle-pick",
+        "undo-placement",
+        "export",
+        "import",
+        "toggle-preview",
+        "clear",
+    ]
 
 
 def test_background_backend_debug_controls_store_status_label_and_commands(

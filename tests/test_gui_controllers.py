@@ -16,6 +16,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         app_state.background_backend_debug_view,
         state.BackgroundBackendDebugViewState,
     )
+    assert isinstance(
+        app_state.geometry_tool_actions_view,
+        state.GeometryToolActionsViewState,
+    )
     assert isinstance(app_state.geometry_preview, state.GeometryPreviewState)
     assert isinstance(
         app_state.geometry_preview.overlay,
@@ -30,6 +34,7 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.background_theta_controls_view is not other_state.background_theta_controls_view
     assert app_state.workspace_panels_view is not other_state.workspace_panels_view
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
+    assert app_state.geometry_tool_actions_view is not other_state.geometry_tool_actions_view
     assert app_state.geometry_preview is not other_state.geometry_preview
     assert app_state.geometry_preview.overlay is not other_state.geometry_preview.overlay
     assert app_state.geometry_q_groups is not other_state.geometry_q_groups

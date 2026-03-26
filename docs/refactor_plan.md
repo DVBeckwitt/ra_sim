@@ -104,6 +104,14 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     stacks.
   - Those reads now go straight through the shared state containers and the
     existing controller helpers.
+- Geometry-tool action control migration has landed.
+  - Shared widget references and `StringVar` state for the fit-history,
+    manual-placement, and preview-exclusion action controls now live in
+    `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns construction of that geometry-tools action
+    cluster, plus helper updates for the fit-history button enabled state and
+    the manual-pick / preview-exclude button labels.
+  - Direct view tests now cover the extracted geometry-tool action helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -168,6 +176,10 @@ What is done:
   state stores or geometry-fit history stacks.
   - Remaining runtime reads now go through the shared state containers
     themselves and the existing controller helpers.
+- The geometry-tools fit-history/manual-placement/preview-exclusion action
+  controls are no longer assembled directly in `runtime.py`.
+  - `ra_sim.gui.views` now owns that action-control construction and the
+    related button-var/button-state helpers.
 
 What is left:
 
@@ -228,6 +240,10 @@ What is done:
 - The runtime now reads manual-geometry state and geometry-fit history
   directly from shared state containers instead of keeping separate alias
   globals for those stores.
+- `state.py` now also owns geometry-tool action view state for the fit-history
+  and manual-geometry control cluster.
+- `views.py` now also owns the geometry-tools action-control construction and
+  helper updates for those button refs and `StringVar`s.
 
 What is left:
 

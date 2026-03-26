@@ -84,6 +84,22 @@ class BackgroundBackendDebugViewState:
 
 
 @dataclass
+class GeometryToolActionsViewState:
+    """Widget references and vars for fit-history/manual-geometry action controls."""
+
+    undo_geometry_fit_button: Any = None
+    redo_geometry_fit_button: Any = None
+    geometry_manual_pick_button_var: Any = None
+    geometry_manual_pick_button: Any = None
+    geometry_manual_undo_button: Any = None
+    geometry_manual_export_button: Any = None
+    geometry_manual_import_button: Any = None
+    geometry_preview_exclude_button_var: Any = None
+    geometry_preview_exclude_button: Any = None
+    clear_geometry_preview_exclusions_button: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -190,6 +206,9 @@ class AppState:
     )
     background_backend_debug_view: BackgroundBackendDebugViewState = field(
         default_factory=BackgroundBackendDebugViewState
+    )
+    geometry_tool_actions_view: GeometryToolActionsViewState = field(
+        default_factory=GeometryToolActionsViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

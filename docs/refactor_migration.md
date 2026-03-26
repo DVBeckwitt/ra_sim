@@ -109,10 +109,17 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     stacks
   - those reads now go straight through the shared state containers and
     existing controller helpers
+- Geometry-tool action control migration has also landed:
+  - shared widget references and `StringVar` state for the fit-history,
+    manual-placement, and preview-exclusion action controls now use shared GUI
+    state
+  - geometry-tools action-control construction and the related label/state
+    update helpers now flow through `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
-    background-theta/background-debug view helper coverage
+    background-theta/background-debug/geometry-tool-action view helper
+    coverage
 
 ## Remaining Migration Focus
 

@@ -12,6 +12,7 @@ from .state import (
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
+    GeometryToolActionsViewState,
     GeometryFitConstraintsViewState,
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
@@ -102,6 +103,138 @@ def create_background_file_controls(
 
     view_state.background_file_status_var = background_file_status_var
     view_state.background_file_status_label = background_file_status_label
+
+
+def create_geometry_tool_action_controls(
+    *,
+    parent: tk.Misc,
+    view_state: GeometryToolActionsViewState,
+    on_undo_fit: Callable[[], None],
+    on_redo_fit: Callable[[], None],
+    on_toggle_manual_pick: Callable[[], None],
+    on_undo_manual_placement: Callable[[], None],
+    on_export_manual_pairs: Callable[[], None],
+    on_import_manual_pairs: Callable[[], None],
+    on_toggle_preview_exclude: Callable[[], None],
+    on_clear_manual_pairs: Callable[[], None],
+    manual_pick_text: str = "Pick Qr Sets on Image",
+    preview_exclude_text: str = "Select Qr/Qz Peaks",
+) -> None:
+    """Create fit-history/manual-geometry action controls and store their refs."""
+
+    undo_geometry_fit_button = ttk.Button(
+        parent,
+        text="Undo Fit",
+        command=on_undo_fit,
+    )
+    undo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    redo_geometry_fit_button = ttk.Button(
+        parent,
+        text="Redo Fit",
+        command=on_redo_fit,
+    )
+    redo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    geometry_manual_pick_button_var = tk.StringVar(value=str(manual_pick_text))
+    geometry_manual_pick_button = ttk.Button(
+        parent,
+        textvariable=geometry_manual_pick_button_var,
+        command=on_toggle_manual_pick,
+    )
+    geometry_manual_pick_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    geometry_manual_undo_button = ttk.Button(
+        parent,
+        text="Undo Placement",
+        command=on_undo_manual_placement,
+    )
+    geometry_manual_undo_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    geometry_manual_export_button = ttk.Button(
+        parent,
+        text="Export Placements...",
+        command=on_export_manual_pairs,
+    )
+    geometry_manual_export_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    geometry_manual_import_button = ttk.Button(
+        parent,
+        text="Import Placements...",
+        command=on_import_manual_pairs,
+    )
+    geometry_manual_import_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    geometry_preview_exclude_button_var = tk.StringVar(value=str(preview_exclude_text))
+    geometry_preview_exclude_button = ttk.Button(
+        parent,
+        textvariable=geometry_preview_exclude_button_var,
+        command=on_toggle_preview_exclude,
+    )
+    geometry_preview_exclude_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    clear_geometry_preview_exclusions_button = ttk.Button(
+        parent,
+        text="Clear Current Image Pairs",
+        command=on_clear_manual_pairs,
+    )
+    clear_geometry_preview_exclusions_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    view_state.undo_geometry_fit_button = undo_geometry_fit_button
+    view_state.redo_geometry_fit_button = redo_geometry_fit_button
+    view_state.geometry_manual_pick_button_var = geometry_manual_pick_button_var
+    view_state.geometry_manual_pick_button = geometry_manual_pick_button
+    view_state.geometry_manual_undo_button = geometry_manual_undo_button
+    view_state.geometry_manual_export_button = geometry_manual_export_button
+    view_state.geometry_manual_import_button = geometry_manual_import_button
+    view_state.geometry_preview_exclude_button_var = geometry_preview_exclude_button_var
+    view_state.geometry_preview_exclude_button = geometry_preview_exclude_button
+    view_state.clear_geometry_preview_exclusions_button = (
+        clear_geometry_preview_exclusions_button
+    )
+
+
+def set_geometry_tool_action_texts(
+    view_state: GeometryToolActionsViewState,
+    *,
+    manual_pick_text: str | None = None,
+    preview_exclude_text: str | None = None,
+) -> None:
+    """Update geometry-tool action button labels backed by Tk vars."""
+
+    if manual_pick_text is not None and view_state.geometry_manual_pick_button_var is not None:
+        setter = getattr(view_state.geometry_manual_pick_button_var, "set", None)
+        if callable(setter):
+            setter(str(manual_pick_text))
+    if (
+        preview_exclude_text is not None
+        and view_state.geometry_preview_exclude_button_var is not None
+    ):
+        setter = getattr(view_state.geometry_preview_exclude_button_var, "set", None)
+        if callable(setter):
+            setter(str(preview_exclude_text))
+
+
+def set_geometry_fit_history_button_state(
+    view_state: GeometryToolActionsViewState,
+    *,
+    can_undo: bool,
+    can_redo: bool,
+) -> None:
+    """Enable or disable the fit-history action buttons."""
+
+    if view_state.undo_geometry_fit_button is not None:
+        configure = getattr(view_state.undo_geometry_fit_button, "config", None)
+        if configure is None:
+            configure = getattr(view_state.undo_geometry_fit_button, "configure", None)
+        if callable(configure):
+            configure(state=("normal" if can_undo else "disabled"))
+    if view_state.redo_geometry_fit_button is not None:
+        configure = getattr(view_state.redo_geometry_fit_button, "config", None)
+        if configure is None:
+            configure = getattr(view_state.redo_geometry_fit_button, "configure", None)
+        if callable(configure):
+            configure(state=("normal" if can_redo else "disabled"))
 
 
 def set_background_file_status_text(
