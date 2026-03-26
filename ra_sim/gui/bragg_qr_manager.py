@@ -198,6 +198,27 @@ def build_runtime_bragg_qr_bindings(
     )
 
 
+def make_runtime_bragg_qr_refresh_callback(
+    bindings_factory: Callable[[], BraggQrRuntimeBindings],
+) -> Callable[[], bool]:
+    """Return a zero-arg callback that refreshes the Bragg-Qr runtime window."""
+
+    return lambda: refresh_runtime_bragg_qr_toggle_window(bindings_factory())
+
+
+def make_runtime_bragg_qr_open_callback(
+    *,
+    root,
+    bindings_factory: Callable[[], BraggQrRuntimeBindings],
+) -> Callable[[], bool]:
+    """Return a zero-arg callback that opens the Bragg-Qr runtime window."""
+
+    return lambda: open_runtime_bragg_qr_toggle_window(
+        root=root,
+        bindings=bindings_factory(),
+    )
+
+
 def _safe_listbox_curselection(
     listbox: object,
     *,

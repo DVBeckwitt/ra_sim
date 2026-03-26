@@ -860,8 +860,10 @@ def _structure_factor_pruning_runtime_bindings(
             else None
         ),
         refresh_window=(
-            globals().get("_refresh_bragg_qr_toggle_window")
-            if callable(globals().get("_refresh_bragg_qr_toggle_window"))
+            gui_bragg_qr_manager.make_runtime_bragg_qr_refresh_callback(
+                globals().get("_bragg_qr_runtime_bindings")
+            )
+            if callable(globals().get("_bragg_qr_runtime_bindings"))
             else None
         ),
     )
@@ -4930,19 +4932,6 @@ def _bragg_qr_runtime_bindings() -> gui_bragg_qr_manager.BraggQrRuntimeBindings:
         ),
         invalid_key=BRAGG_QR_L_INVALID_KEY,
         tcl_error_types=(tk.TclError,),
-    )
-
-
-def _refresh_bragg_qr_toggle_window() -> None:
-    gui_bragg_qr_manager.refresh_runtime_bragg_qr_toggle_window(
-        _bragg_qr_runtime_bindings()
-    )
-
-
-def _open_bragg_qr_toggle_window() -> None:
-    gui_bragg_qr_manager.open_runtime_bragg_qr_toggle_window(
-        root=root,
-        bindings=_bragg_qr_runtime_bindings(),
     )
 
 
@@ -13243,7 +13232,10 @@ gui_views.create_hkl_lookup_controls(
     on_toggle_hkl_pick=_toggle_hkl_pick_mode,
     on_clear_selected_peak=_clear_selected_peak,
     on_show_bragg_ewald=_open_selected_peak_intersection_figure,
-    on_open_bragg_qr_groups=_open_bragg_qr_toggle_window,
+    on_open_bragg_qr_groups=gui_bragg_qr_manager.make_runtime_bragg_qr_open_callback(
+        root=root,
+        bindings_factory=_bragg_qr_runtime_bindings,
+    ),
 )
 _update_hkl_pick_button_label()
 

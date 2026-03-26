@@ -423,6 +423,43 @@ def test_bragg_qr_runtime_binding_builder_reads_live_lattice_values(monkeypatch)
     assert bindings.invalid_key == -999
 
 
+def test_bragg_qr_runtime_callback_factories_build_zero_arg_delegates(
+    monkeypatch,
+) -> None:
+    calls = []
+    versions = {"count": 0}
+
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "refresh_runtime_bragg_qr_toggle_window",
+        lambda bindings: calls.append(("refresh", bindings)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "open_runtime_bragg_qr_toggle_window",
+        lambda *, root, bindings: calls.append(("open", root, bindings)) or True,
+    )
+
+    def build_bindings():
+        versions["count"] += 1
+        return f"bindings-{versions['count']}"
+
+    refresh_callback = bragg_qr_manager.make_runtime_bragg_qr_refresh_callback(
+        build_bindings
+    )
+    open_callback = bragg_qr_manager.make_runtime_bragg_qr_open_callback(
+        root="root-window",
+        bindings_factory=build_bindings,
+    )
+
+    assert refresh_callback() is True
+    assert open_callback() is True
+    assert calls == [
+        ("refresh", "bindings-1"),
+        ("open", "root-window", "bindings-2"),
+    ]
+
+
 def test_bragg_qr_manager_runtime_refresh_uses_shared_bindings(monkeypatch) -> None:
     view_state = state.BraggQrManagerViewState(
         qr_listbox=_FakeListbox([0]),
