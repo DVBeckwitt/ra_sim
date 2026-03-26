@@ -174,7 +174,6 @@ from ra_sim.path_config import (
     get_path,
     get_path_first,
     get_dir,
-    get_instrument_config,
 )
 
 
@@ -229,7 +228,11 @@ def _ensure_numeric_vector(values, fallback, length):
     return out
 
 
-instrument_config = get_instrument_config().get("instrument", {})
+app_state = gui_controllers.build_initial_state()
+background_runtime_state = app_state.background_runtime
+peak_selection_state = app_state.peak_selection
+
+instrument_config = app_state.instrument_config.get("instrument", {})
 detector_config = instrument_config.get("detector", {})
 geometry_config = instrument_config.get("geometry_defaults", {})
 beam_config = instrument_config.get("beam", {})
@@ -247,6 +250,7 @@ if not osc_files:
     raise ValueError(
         "No oscillation images configured in simulation_background_osc_files/osc_files"
     )
+app_state.file_paths["simulation_background_osc_files"] = list(osc_files)
 
 # Background and simulated overlays can use different display orientations.
 # ``k`` is the np.rot90 factor; -1 is 90° clockwise, 0 keeps native orientation.
@@ -270,9 +274,13 @@ _initial_background_state = gui_background.initialize_background_cache(
 background_images = list(_initial_background_state["background_images"])
 background_images_native = list(_initial_background_state["background_images_native"])
 background_images_display = list(_initial_background_state["background_images_display"])
+background_runtime_state.background_images = list(background_images)
+background_runtime_state.background_images_native = list(background_images_native)
+background_runtime_state.background_images_display = list(background_images_display)
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
+app_state.file_paths["geometry_poni"] = str(poni_file_path)
 parameters = parse_poni_file(poni_file_path)
 
 Distance_CoR_to_Detector = parameters.get(
@@ -337,7 +345,7 @@ if tilt_hint:
             f"(Dist={hinted_distance:.4f} m)."
         )
 
-image_size = detector_config.get("image_size", 3000)
+image_size = int(app_state.image_size)
 pixel_size_m = float(detector_config.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
 resolution_sample_counts = {
     "Low": 25,
@@ -1880,15 +1888,41 @@ background_visible = True
 background_backend_rotation_k = 3
 background_backend_flip_x = False
 background_backend_flip_y = False
-app_shell_view_state = gui_state.AppShellViewState()
-status_panel_view_state = gui_state.StatusPanelViewState()
-background_theta_controls_view_state = gui_state.BackgroundThetaControlsViewState()
-workspace_panels_view_state = gui_state.WorkspacePanelsViewState()
-background_backend_debug_view_state = gui_state.BackgroundBackendDebugViewState()
+background_runtime_state.current_background_image = current_background_image
+background_runtime_state.current_background_display = current_background_display
+background_runtime_state.current_background_index = current_background_index
+background_runtime_state.visible = background_visible
+background_runtime_state.backend_rotation_k = background_backend_rotation_k
+background_runtime_state.backend_flip_x = background_backend_flip_x
+background_runtime_state.backend_flip_y = background_backend_flip_y
+app_shell_view_state = app_state.app_shell_view
+status_panel_view_state = app_state.status_panel_view
+background_theta_controls_view_state = app_state.background_theta_controls_view
+workspace_panels_view_state = app_state.workspace_panels_view
+background_backend_debug_view_state = app_state.background_backend_debug_view
 background_theta_list_var = None
 geometry_theta_offset_var = None
 geometry_fit_background_selection_var = None
 fit_theta_checkbutton = None
+
+
+def _sync_background_runtime_state() -> None:
+    """Mirror runtime-managed background/cache globals into the shared app state."""
+
+    background_runtime_state.background_images = list(background_images)
+    background_runtime_state.background_images_native = list(background_images_native)
+    background_runtime_state.background_images_display = list(background_images_display)
+    background_runtime_state.current_background_image = current_background_image
+    background_runtime_state.current_background_display = current_background_display
+    background_runtime_state.current_background_index = int(current_background_index)
+    background_runtime_state.visible = bool(background_visible)
+    background_runtime_state.backend_rotation_k = int(background_backend_rotation_k)
+    background_runtime_state.backend_flip_x = bool(background_backend_flip_x)
+    background_runtime_state.backend_flip_y = bool(background_backend_flip_y)
+    app_state.file_paths["simulation_background_osc_files"] = list(osc_files)
+
+
+_sync_background_runtime_state()
 
 
 def _background_theta_default_value() -> float:
@@ -2125,6 +2159,7 @@ def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]
     background_images = list(updated["background_images"])
     background_images_native = list(updated["background_images_native"])
     background_images_display = list(updated["background_images_display"])
+    _sync_background_runtime_state()
     return (
         np.asarray(updated["background_image"]),
         np.asarray(updated["background_display"]),
@@ -2149,6 +2184,7 @@ def _get_current_background_native() -> np.ndarray:
     background_images = list(updated["background_images"])
     background_images_native = list(updated["background_images_native"])
     background_images_display = list(updated["background_images_display"])
+    _sync_background_runtime_state()
     return np.asarray(updated["background_image"])
 
 
@@ -2171,6 +2207,7 @@ def _get_current_background_display() -> np.ndarray:
     background_images = list(updated["background_images"])
     background_images_native = list(updated["background_images_native"])
     background_images_display = list(updated["background_images_display"])
+    _sync_background_runtime_state()
     return np.asarray(updated["background_display"])
 
 
@@ -2540,6 +2577,7 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
     )
     _set_geometry_manual_pick_session(next_session)
     _suppress_drag_press_once = bool(suppress_drag)
+    _sync_peak_selection_state()
     return bool(handled)
 
 
@@ -2813,19 +2851,19 @@ qr_cylinder_overlay_cache: dict[str, object] = {
     "signature": None,
     "paths": [],
 }
-geometry_preview_state = gui_state.GeometryPreviewState()
-geometry_q_group_view_state = gui_state.GeometryQGroupViewState()
-geometry_q_group_state = gui_state.GeometryQGroupState()
-geometry_manual_state = gui_state.ManualGeometryState()
+geometry_preview_state = app_state.geometry_preview
+geometry_q_group_view_state = app_state.geometry_q_group_view
+geometry_q_group_state = app_state.geometry_q_groups
+geometry_manual_state = app_state.manual_geometry
 geometry_manual_pick_armed = False
 geometry_manual_pick_cache_signature = None
 geometry_manual_pick_cache_data: dict[str, object] = {}
-geometry_fit_history_state = gui_state.GeometryFitHistoryState()
+geometry_fit_history_state = app_state.geometry_fit_history
 geometry_fit_parameter_controls_view_state = (
-    gui_state.GeometryFitParameterControlsViewState()
+    app_state.geometry_fit_parameter_controls_view
 )
-geometry_fit_constraints_view_state = gui_state.GeometryFitConstraintsViewState()
-geometry_tool_actions_view_state = gui_state.GeometryToolActionsViewState()
+geometry_fit_constraints_view_state = app_state.geometry_fit_constraints_view
+geometry_tool_actions_view_state = app_state.geometry_tool_actions_view
 GEOMETRY_MANUAL_UNDO_LIMIT = 100
 GEOMETRY_FIT_UNDO_LIMIT = 16
 GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX = 14.0
@@ -5480,6 +5518,7 @@ def _update_background_backend_status():
 def _rotate_background_backend(delta_k: int):
     global background_backend_rotation_k
     background_backend_rotation_k = (int(background_backend_rotation_k) + int(delta_k)) % 4
+    _sync_background_runtime_state()
     _update_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
@@ -5493,6 +5532,7 @@ def _toggle_background_backend_flip(axis: str):
         background_backend_flip_x = not background_backend_flip_x
     elif axis == "y":
         background_backend_flip_y = not background_backend_flip_y
+    _sync_background_runtime_state()
     _update_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
@@ -5504,6 +5544,7 @@ def _reset_background_backend_orientation():
     background_backend_rotation_k = 0
     background_backend_flip_x = False
     background_backend_flip_y = False
+    _sync_background_runtime_state()
     _update_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
@@ -5512,30 +5553,41 @@ def _reset_background_backend_orientation():
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
-selected_hkl_target = None
-hkl_pick_armed = False
-hkl_lookup_view_state = gui_state.HklLookupViewState()
-_suppress_drag_press_once = False
-bragg_qr_manager_state = gui_state.BraggQrManagerState()
-bragg_qr_manager_view_state = gui_state.BraggQrManagerViewState()
-hbn_geometry_debug_view_state = gui_state.HbnGeometryDebugViewState()
-geometry_overlay_actions_view_state = gui_state.GeometryOverlayActionsViewState()
-analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
-analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
-integration_range_controls_view_state = gui_state.IntegrationRangeControlsViewState()
-display_controls_state = gui_state.DisplayControlsState()
-display_controls_view_state = gui_state.DisplayControlsViewState()
-primary_cif_controls_view_state = gui_state.PrimaryCifControlsViewState()
-cif_weight_controls_view_state = gui_state.CifWeightControlsViewState()
+selected_hkl_target = peak_selection_state.selected_hkl_target
+hkl_pick_armed = peak_selection_state.hkl_pick_armed
+hkl_lookup_view_state = app_state.hkl_lookup_view
+_suppress_drag_press_once = peak_selection_state.suppress_drag_press_once
+bragg_qr_manager_state = app_state.bragg_qr_manager
+bragg_qr_manager_view_state = app_state.bragg_qr_manager_view
+hbn_geometry_debug_view_state = app_state.hbn_geometry_debug_view
+geometry_overlay_actions_view_state = app_state.geometry_overlay_actions_view
+analysis_view_controls_view_state = app_state.analysis_view_controls_view
+analysis_export_controls_view_state = app_state.analysis_export_controls_view
+integration_range_controls_view_state = app_state.integration_range_controls_view
+display_controls_state = app_state.display_controls_state
+display_controls_view_state = app_state.display_controls_view
+primary_cif_controls_view_state = app_state.primary_cif_controls_view
+cif_weight_controls_view_state = app_state.cif_weight_controls_view
 structure_factor_pruning_controls_view_state = (
-    gui_state.StructureFactorPruningControlsViewState()
+    app_state.structure_factor_pruning_controls_view
 )
 beam_mosaic_parameter_sliders_view_state = (
-    gui_state.BeamMosaicParameterSlidersViewState()
+    app_state.beam_mosaic_parameter_sliders_view
 )
-sampling_optics_controls_view_state = gui_state.SamplingOpticsControlsViewState()
-finite_stack_controls_view_state = gui_state.FiniteStackControlsViewState()
-stacking_parameter_controls_view_state = gui_state.StackingParameterControlsViewState()
+sampling_optics_controls_view_state = app_state.sampling_optics_controls_view
+finite_stack_controls_view_state = app_state.finite_stack_controls_view
+stacking_parameter_controls_view_state = app_state.stacking_parameter_controls_view
+
+
+def _sync_peak_selection_state() -> None:
+    """Mirror peak/HKL interaction flags into the shared app state."""
+
+    peak_selection_state.selected_hkl_target = selected_hkl_target
+    peak_selection_state.hkl_pick_armed = bool(hkl_pick_armed)
+    peak_selection_state.suppress_drag_press_once = bool(_suppress_drag_press_once)
+
+
+_sync_peak_selection_state()
 
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
@@ -5793,6 +5845,7 @@ def _update_hkl_pick_button_label():
 def _set_hkl_pick_mode(enabled: bool, *, message: str | None = None):
     global hkl_pick_armed
     hkl_pick_armed = bool(enabled)
+    _sync_peak_selection_state()
     if hkl_pick_armed:
         _set_geometry_preview_exclude_mode(False)
     _update_hkl_pick_button_label()
@@ -6103,6 +6156,7 @@ def _select_peak_by_index(
     selected_peak_marker.set_visible(True)
 
     selected_hkl_target = (int(H), int(K), int(L))
+    _sync_peak_selection_state()
     selected_peak_record = dict(peak_records[idx]) if idx < len(peak_records) else None
     if selected_peak_record is not None:
         if clicked_display is not None:
@@ -6212,6 +6266,7 @@ def _select_peak_by_hkl(
                 text=f"HKL ({target[0]} {target[1]} {target[2]}) not found in current simulation."
             )
         selected_hkl_target = target
+        _sync_peak_selection_state()
         selected_peak_record = None
         return False
 
@@ -6238,12 +6293,14 @@ def _select_peak_from_hkl_controls():
         return
 
     selected_hkl_target = (h, k, l)
+    _sync_peak_selection_state()
     _select_peak_by_hkl(h, k, l, sync_hkl_vars=True, silent_if_missing=False)
 
 
 def _clear_selected_peak():
     global selected_hkl_target, selected_peak_record
     selected_hkl_target = None
+    _sync_peak_selection_state()
     selected_peak_record = None
     selected_peak_marker.set_visible(False)
     progress_label_positions.config(text="Peak selection cleared.")
@@ -7208,6 +7265,7 @@ def on_canvas_click(event):
     if picked:
         _set_hkl_pick_mode(False)
         _suppress_drag_press_once = True
+        _sync_peak_selection_state()
 
 
 drag_select_rect = Rectangle(
@@ -7346,6 +7404,7 @@ def on_canvas_press(event):
 
     if _suppress_drag_press_once:
         _suppress_drag_press_once = False
+        _sync_peak_selection_state()
         return
 
     if event.button != 1:
@@ -9858,6 +9917,7 @@ def do_update():
 def toggle_background():
     global background_visible
     background_visible = not background_visible
+    _sync_background_runtime_state()
     # ↓ force opaque if the background is hidden, 0.5 otherwise
     image_display.set_alpha(0.5 if background_visible else 1.0)
     schedule_update()
@@ -9942,6 +10002,7 @@ def _load_background_files(file_paths, *, select_index=0):
     current_background_index = int(updated["current_background_index"])
     current_background_image = updated["current_background_image"]
     current_background_display = updated["current_background_display"]
+    _sync_background_runtime_state()
     _replace_geometry_manual_pairs_by_background({})
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
@@ -10010,6 +10071,7 @@ def switch_background():
     current_background_index = int(updated["current_background_index"])
     current_background_image = updated["current_background_image"]
     current_background_display = updated["current_background_display"]
+    _sync_background_runtime_state()
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
     _clear_geometry_fit_undo_stack()
@@ -10166,8 +10228,8 @@ background_theta_list_var = background_theta_controls_view_state.background_thet
 geometry_theta_offset_var = background_theta_controls_view_state.geometry_theta_offset_var
 _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
 
-    gui_views.create_geometry_fit_background_controls(
-        parent=app_shell_view_state.fit_body,
+gui_views.create_geometry_fit_background_controls(
+    parent=app_shell_view_state.fit_body,
     view_state=background_theta_controls_view_state,
     selection_text=_default_geometry_fit_background_selection(),
     on_apply=lambda: _apply_geometry_fit_background_selection(trigger_update=True),
@@ -10503,15 +10565,15 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         atom_site_fract_vars=globals().get("atom_site_fract_vars", []),
         geometry_q_group_rows=_geometry_q_group_export_rows(),
         geometry_manual_pairs=_geometry_manual_pairs_export_rows(),
-        selected_hkl_target=selected_hkl_target,
+        selected_hkl_target=peak_selection_state.selected_hkl_target,
         primary_cif_path=cif_file,
         secondary_cif_path=cif_file2,
         osc_files=osc_files,
-        current_background_index=current_background_index,
-        background_visible=background_visible,
-        background_backend_rotation_k=background_backend_rotation_k,
-        background_backend_flip_x=background_backend_flip_x,
-        background_backend_flip_y=background_backend_flip_y,
+        current_background_index=background_runtime_state.current_background_index,
+        background_visible=background_runtime_state.visible,
+        background_backend_rotation_k=background_runtime_state.backend_rotation_k,
+        background_backend_flip_x=background_runtime_state.backend_flip_x,
+        background_backend_flip_y=background_runtime_state.backend_flip_y,
         background_limits_user_override=(
             display_controls_state.background_limits_user_override
         ),
@@ -10594,6 +10656,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     background_backend_rotation_k = int(flag_state["background_backend_rotation_k"])
     background_backend_flip_x = bool(flag_state["background_backend_flip_x"])
     background_backend_flip_y = bool(flag_state["background_backend_flip_y"])
+    _sync_background_runtime_state()
     display_controls_state.background_limits_user_override = bool(
         flag_state["background_limits_user_override"]
     )
@@ -10614,6 +10677,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         selected_hkl_target=selected_hkl_target,
     )
     selected_hkl_target = geometry_state["selected_hkl_target"]
+    _sync_peak_selection_state()
     warnings.extend(list(geometry_state["warnings"]))
 
     if finite_stack_controls_view_state.phase_delta_entry_var is not None:

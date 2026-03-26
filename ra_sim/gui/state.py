@@ -541,15 +541,41 @@ class StatusPanelViewState:
 
 
 @dataclass
+class BackgroundRuntimeState:
+    """Long-lived background-image cache and display-orientation state."""
+
+    background_images: list[np.ndarray] = field(default_factory=list)
+    background_images_native: list[np.ndarray] = field(default_factory=list)
+    background_images_display: list[np.ndarray] = field(default_factory=list)
+    current_background_index: int = 0
+    current_background_image: np.ndarray | None = None
+    current_background_display: np.ndarray | None = None
+    visible: bool = True
+    backend_rotation_k: int = 3
+    backend_flip_x: bool = False
+    backend_flip_y: bool = False
+
+
+@dataclass
+class PeakSelectionState:
+    """Cross-feature peak/HKL image-picking interaction state."""
+
+    selected_hkl_target: tuple[int, int, int] | None = None
+    hkl_pick_armed: bool = False
+    suppress_drag_press_once: bool = False
+
+
+@dataclass
 class AppState:
     """Minimal mutable state container for GUI controller/view coordination."""
 
     instrument_config: dict[str, Any] = field(default_factory=dict)
     file_paths: dict[str, Any] = field(default_factory=dict)
     image_size: int = 3000
-    background_images_native: list[np.ndarray] = field(default_factory=list)
-    background_images_display: list[np.ndarray] = field(default_factory=list)
-    current_background_index: int = 0
+    background_runtime: BackgroundRuntimeState = field(
+        default_factory=BackgroundRuntimeState
+    )
+    peak_selection: PeakSelectionState = field(default_factory=PeakSelectionState)
     manual_geometry: ManualGeometryState = field(default_factory=ManualGeometryState)
     geometry_fit_history: GeometryFitHistoryState = field(
         default_factory=GeometryFitHistoryState

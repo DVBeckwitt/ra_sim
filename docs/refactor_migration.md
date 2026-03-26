@@ -207,6 +207,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - top-level shell construction, notebook state synchronization, compact
     console-backed status labels, and status-panel construction now flow
     through `ra_sim.gui.views`
+- Shared app-state ownership of extracted GUI/runtime state has also landed:
+  - `ra_sim.gui.runtime` now initializes the extracted view/state containers
+    through one shared `AppState` instead of instantiating them piecemeal as
+    separate runtime globals
+  - background-cache/orientation state and HKL image-pick interaction state
+    now also use explicit runtime-state containers in `ra_sim.gui.state`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -222,9 +228,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining runtime-decomposition work is now the cross-feature workflow
   glue and long-lived mutable state ownership that still live inline in
   `ra_sim.gui.runtime`, not the top-level widget shell.
-- The next bounded GUI targets are the remaining cross-feature runtime-owned
-  helpers and workflow/state transitions that still bypass the newer
-  state/controller/view modules.
+- The next bounded GUI targets are the remaining cross-feature workflow/state
+  transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

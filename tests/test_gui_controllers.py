@@ -9,9 +9,15 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
 
     assert isinstance(app_state.manual_geometry, state.ManualGeometryState)
     assert isinstance(app_state.geometry_fit_history, state.GeometryFitHistoryState)
+    assert isinstance(app_state.background_runtime, state.BackgroundRuntimeState)
+    assert isinstance(app_state.peak_selection, state.PeakSelectionState)
     assert isinstance(
         app_state.geometry_fit_parameter_controls_view,
         state.GeometryFitParameterControlsViewState,
+    )
+    assert isinstance(
+        app_state.geometry_fit_constraints_view,
+        state.GeometryFitConstraintsViewState,
     )
     assert isinstance(
         app_state.background_theta_controls_view,
@@ -91,11 +97,23 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert isinstance(app_state.geometry_q_group_view, state.GeometryQGroupViewState)
     assert isinstance(app_state.bragg_qr_manager, state.BraggQrManagerState)
     assert isinstance(app_state.bragg_qr_manager_view, state.BraggQrManagerViewState)
+    assert isinstance(
+        app_state.hbn_geometry_debug_view,
+        state.HbnGeometryDebugViewState,
+    )
+    assert isinstance(app_state.app_shell_view, state.AppShellViewState)
+    assert isinstance(app_state.status_panel_view, state.StatusPanelViewState)
     assert app_state.manual_geometry is not other_state.manual_geometry
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
+    assert app_state.background_runtime is not other_state.background_runtime
+    assert app_state.peak_selection is not other_state.peak_selection
     assert (
         app_state.geometry_fit_parameter_controls_view
         is not other_state.geometry_fit_parameter_controls_view
+    )
+    assert (
+        app_state.geometry_fit_constraints_view
+        is not other_state.geometry_fit_constraints_view
     )
     assert app_state.background_theta_controls_view is not other_state.background_theta_controls_view
     assert app_state.workspace_panels_view is not other_state.workspace_panels_view
@@ -148,17 +166,45 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.geometry_q_group_view is not other_state.geometry_q_group_view
     assert app_state.bragg_qr_manager is not other_state.bragg_qr_manager
     assert app_state.bragg_qr_manager_view is not other_state.bragg_qr_manager_view
+    assert app_state.hbn_geometry_debug_view is not other_state.hbn_geometry_debug_view
+    assert app_state.app_shell_view is not other_state.app_shell_view
+    assert app_state.status_panel_view is not other_state.status_panel_view
 
+    app_state.background_runtime.current_background_index = 3
+    app_state.background_runtime.visible = False
+    app_state.background_runtime.backend_flip_x = True
+    app_state.peak_selection.selected_hkl_target = (1, 2, 3)
+    app_state.peak_selection.hkl_pick_armed = True
     app_state.manual_geometry.pick_session["group_key"] = ("q_group", "primary", 1, 0)
     app_state.geometry_preview.skip_once = True
     app_state.geometry_preview.overlay.pairs.append({"x": 1.0})
     app_state.geometry_q_groups.refresh_requested = True
     app_state.bragg_qr_manager.selected_group_key = ("primary", 1)
+    assert other_state.background_runtime.current_background_index == 0
+    assert other_state.background_runtime.visible is True
+    assert other_state.background_runtime.backend_flip_x is False
+    assert other_state.peak_selection.selected_hkl_target is None
+    assert other_state.peak_selection.hkl_pick_armed is False
     assert other_state.manual_geometry.pick_session == {}
     assert other_state.geometry_preview.skip_once is False
     assert other_state.geometry_preview.overlay.pairs == []
     assert other_state.geometry_q_groups.refresh_requested is False
     assert other_state.bragg_qr_manager.selected_group_key is None
+
+
+def test_build_initial_state_reads_instrument_config(monkeypatch) -> None:
+    monkeypatch.setattr(
+        controllers,
+        "get_instrument_config",
+        lambda: {"instrument": {"detector": {"image_size": 4096}}},
+    )
+
+    app_state = controllers.build_initial_state()
+
+    assert app_state.instrument_config == {
+        "instrument": {"detector": {"image_size": 4096}}
+    }
+    assert app_state.image_size == 4096
 
 
 def test_display_control_controller_helpers_normalize_scale_and_ranges() -> None:

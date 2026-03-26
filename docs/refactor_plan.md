@@ -224,6 +224,13 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     panel construction.
   - Direct view tests now cover the extracted app-shell and status-panel
     helpers.
+- Shared app-state ownership of extracted GUI/runtime state has landed.
+  - `ra_sim.gui.runtime` now initializes the extracted view/state containers
+    through one shared `AppState` instance instead of instantiating them
+    piecemeal as separate runtime globals.
+  - Background-cache/orientation state and HKL image-pick interaction state now
+    also have explicit runtime-state containers in `ra_sim.gui.state` and are
+    synchronized into that shared app state.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -356,12 +363,21 @@ What is done:
 - The bottom status panel is no longer built directly in `runtime.py`.
   - `ra_sim.gui.views` now owns the compact console-backed status-label wrapper
     and the shared status-panel construction helper.
+- The extracted GUI state containers are no longer instantiated ad hoc in
+  `runtime.py`.
+  - `ra_sim.gui.runtime` now builds them through one shared `AppState`
+    instance.
+- Background-cache/orientation state and HKL image-pick interaction state are
+  no longer only loose runtime globals.
+  - `ra_sim.gui.state` now has explicit runtime-state containers for those
+    slices, and `runtime.py` synchronizes them through the shared app state.
 
 What is left:
 
 - `ra_sim/gui/runtime.py` is still very large and still owns too much mutable
   GUI state.
-- The runtime still coordinates too many cross-feature globals and Tk widgets.
+- The runtime still coordinates too many cross-feature workflow transitions and
+  Tk widgets inline.
 - The main remaining runtime-decomposition work is now cross-feature workflow
   glue and long-lived mutable state ownership rather than isolated widget
   construction.
@@ -481,13 +497,17 @@ What is done:
 - `views.py` now also owns the top-level pane/notebook shell construction,
   notebook state synchronization, compact status-label wrapper, and shared
   status-panel construction.
+- `state.py` now also owns explicit background-runtime and peak-selection state
+  containers used by `runtime.py`.
+- `controllers.build_initial_state()` now returns the shared `AppState` used by
+  `runtime.py` to initialize the extracted GUI state containers.
 
 What is left:
 
 - The GUI still does not flow broadly through an explicit
   state/controller/view boundary.
-- The new controller/state boundary is real for manual geometry, but it is not
-  yet the dominant app structure across the rest of the runtime.
+- The new controller/state boundary is now real for a larger share of the GUI,
+  but it is not yet the dominant app structure across the rest of the runtime.
 - The next practical boundary targets are the remaining cross-feature
   runtime-owned helpers and workflow/state transitions that still live inline
   in `runtime.py`.
