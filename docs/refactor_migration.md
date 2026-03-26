@@ -195,13 +195,18 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     checklist now use shared GUI state
   - fit-geometry checklist construction and checkbutton layout now flow
     through `ra_sim.gui.views`
+- 1D integration-range control migration has also landed:
+  - shared widget references and Tk var state for the 1D integration-range
+    sliders, labels, and entry widgets now use shared GUI state
+  - integration-range control construction and entry bindings now flow through
+    `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
   background-theta/background-debug/geometry-tool-action/HKL-lookup/
   overlay-action/analysis-view/analysis-export/sampling-optics/finite-stack/
   display-controls/pruning-controls/beam-mosaic-slider/stacking-parameter/
-  primary-CIF/CIF-weight/fit-checklist helper coverage
+  primary-CIF/CIF-weight/fit-checklist/integration-range helper coverage
 
 ## Remaining Migration Focus
 
@@ -210,9 +215,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   surfaces still need the same treatment, especially the remaining widget-heavy
   runtime-owned helpers and cross-feature workflow glue that still assemble
   long-lived Tk references or own mutable GUI state inline.
-- The next bounded GUI targets are the 1D integration-range controls and the
-  remaining cross-feature runtime-owned helpers that are still built directly
-  in `ra_sim.gui.runtime`.
+- The next bounded GUI targets are the remaining cross-feature runtime-owned
+  helpers and similarly isolated Tk-heavy parameter surfaces that are still
+  built directly in `ra_sim.gui.runtime`.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

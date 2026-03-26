@@ -27,6 +27,7 @@ from .state import (
     HklLookupViewState,
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
+    IntegrationRangeControlsViewState,
     PrimaryCifControlsViewState,
     SamplingOpticsControlsViewState,
     StackingParameterControlsViewState,
@@ -1723,6 +1724,120 @@ def create_analysis_view_controls(
     view_state.check_log_radial = check_log_radial
     view_state.log_azimuth_var = log_azimuth_var
     view_state.check_log_azimuth = check_log_azimuth
+
+
+def create_integration_range_controls(
+    *,
+    parent: tk.Misc,
+    view_state: IntegrationRangeControlsViewState,
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+    on_tth_min_changed: Callable[[object], None],
+    on_tth_max_changed: Callable[[object], None],
+    on_phi_min_changed: Callable[[object], None],
+    on_phi_max_changed: Callable[[object], None],
+    on_apply_entry: Callable[[object, object, object], None],
+) -> None:
+    """Create the 1D integration-range controls and store their widget refs."""
+
+    frame = CollapsibleFrame(parent, text="Integration Ranges", expanded=True)
+    frame.pack(side=tk.TOP, fill=tk.X, pady=5)
+    range_frame = frame.frame
+
+    def _create_range_row(
+        *,
+        prefix: str,
+        label_text: str,
+        initial_value: float,
+        lower_bound: float,
+        upper_bound: float,
+        slider_command: Callable[[object], None],
+    ) -> None:
+        container = ttk.Frame(range_frame)
+        container.pack(side=tk.TOP, fill=tk.X, pady=2)
+        ttk.Label(container, text=label_text).pack(side=tk.LEFT, padx=5)
+
+        value_var = tk.DoubleVar(value=float(initial_value))
+        label_var = tk.StringVar(value=f"{value_var.get():.1f}")
+        entry_var = tk.StringVar(value=f"{value_var.get():.4f}")
+        setattr(view_state, f"{prefix}_container", container)
+        setattr(view_state, f"{prefix}_var", value_var)
+        setattr(view_state, f"{prefix}_label_var", label_var)
+        setattr(view_state, f"{prefix}_entry_var", entry_var)
+
+        slider = ttk.Scale(
+            container,
+            from_=float(lower_bound),
+            to=float(upper_bound),
+            orient=tk.HORIZONTAL,
+            variable=value_var,
+            command=slider_command,
+        )
+        slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        label = ttk.Label(container, textvariable=label_var, width=6)
+        label.pack(side=tk.LEFT, padx=4)
+
+        entry = ttk.Entry(container, textvariable=entry_var, width=8)
+        entry.pack(side=tk.LEFT, padx=(0, 5))
+        entry.bind(
+            "<Return>",
+            lambda _event, entry_var=entry_var, value_var=value_var, slider=slider: on_apply_entry(
+                entry_var,
+                value_var,
+                slider,
+            ),
+        )
+        entry.bind(
+            "<FocusOut>",
+            lambda _event, entry_var=entry_var, value_var=value_var, slider=slider: on_apply_entry(
+                entry_var,
+                value_var,
+                slider,
+            ),
+        )
+
+        setattr(view_state, f"{prefix}_slider", slider)
+        setattr(view_state, f"{prefix}_label", label)
+        setattr(view_state, f"{prefix}_entry", entry)
+
+    _create_range_row(
+        prefix="tth_min",
+        label_text="2θ Min (°):",
+        initial_value=tth_min,
+        lower_bound=0.0,
+        upper_bound=90.0,
+        slider_command=on_tth_min_changed,
+    )
+    _create_range_row(
+        prefix="tth_max",
+        label_text="2θ Max (°):",
+        initial_value=tth_max,
+        lower_bound=0.0,
+        upper_bound=90.0,
+        slider_command=on_tth_max_changed,
+    )
+    _create_range_row(
+        prefix="phi_min",
+        label_text="φ Min (°):",
+        initial_value=phi_min,
+        lower_bound=-90.0,
+        upper_bound=90.0,
+        slider_command=on_phi_min_changed,
+    )
+    _create_range_row(
+        prefix="phi_max",
+        label_text="φ Max (°):",
+        initial_value=phi_max,
+        lower_bound=-90.0,
+        upper_bound=90.0,
+        slider_command=on_phi_max_changed,
+    )
+
+    view_state.frame = frame
+    view_state.range_frame = range_frame
 
 
 def create_analysis_export_controls(

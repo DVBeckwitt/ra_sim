@@ -209,6 +209,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.views` now owns that checklist construction and checkbutton
     layout.
   - Direct view tests now cover the extracted fit-parameter checklist helper.
+- 1D integration-range control migration has landed.
+  - Shared widget references and Tk var state for the 1D integration-range
+    sliders, labels, and entry widgets now live in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns that control-cluster construction and entry
+    bindings.
+  - Direct view tests now cover the extracted integration-range helper.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -329,6 +335,11 @@ What is done:
     occupancy and atom-site control rebuild helpers.
   - `ra_sim.gui.controllers` now owns the occupancy clamp and stacking
     weight-normalization helpers reused by that control family.
+- The 1D integration-range controls are no longer assembled directly in
+  `runtime.py`.
+  - `ra_sim.gui.state` now owns their shared widget/Tk-var view state.
+  - `ra_sim.gui.views` now owns that control-cluster construction and entry
+    bindings.
 
 What is left:
 
@@ -446,6 +457,9 @@ What is done:
 - `controllers.py` now also owns the weighted-CIF intensity combination helper.
 - `state.py` now also owns the fit-geometry parameter checklist view state.
 - `views.py` now also owns that checklist construction and checkbutton layout.
+- `state.py` now also owns the 1D integration-range control view state.
+- `views.py` now also owns that control-cluster construction and entry
+  bindings.
 
 What is left:
 
@@ -454,8 +468,8 @@ What is left:
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
 - Other Tk-heavy surfaces still need to move behind `views.py` helpers.
-- The next practical view-state targets are the 1D integration-range controls
-  and the remaining cross-feature runtime-owned helpers.
+- The next practical view-state targets are the remaining cross-feature
+  runtime-owned helpers and similarly isolated Tk-heavy parameter surfaces.
 
 Why it matters:
 
@@ -719,13 +733,12 @@ Why last:
 The next best step is:
 
 - build on the newer display-control, pruning-control, beam/mosaic-slider, and
-  stacking/occupancy/atom-site, primary-CIF, CIF-weight, and fit-checklist
-  extractions by moving the next
+  stacking/occupancy/atom-site, primary-CIF, CIF-weight, fit-checklist, and
+  integration-range extractions by moving the next
   runtime-owned GUI control clusters into explicit state + controller + view
   boundaries
-- focus next on the 1D integration-range controls in `runtime.py`, then the
-  remaining cross-feature runtime-owned state/helpers and similarly isolated
-  Tk-heavy parameter surfaces
+- focus next on the remaining cross-feature runtime-owned state/helpers and
+  similarly isolated Tk-heavy parameter surfaces in `runtime.py`
 - keep shrinking the remaining cross-feature globals and inline Tk-heavy
   helpers that prevent the extracted scaffolding modules from becoming the
   dominant app structure

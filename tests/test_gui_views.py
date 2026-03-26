@@ -381,18 +381,27 @@ class _FakeScale:
     def __init__(self, parent, **kwargs) -> None:
         self.parent = parent
         self.kwargs = kwargs
+        self.command = kwargs.get("command")
+        self.variable = kwargs.get("variable")
         self.state = kwargs.get("state")
         self.bounds = {
+            "from": kwargs.get("from_"),
             "to": kwargs.get("to"),
         }
+        self.pack_calls = []
         _FakeScale.created.append(self)
 
     def grid(self, **_kwargs) -> None:
         pass
 
+    def pack(self, **kwargs) -> None:
+        self.pack_calls.append(kwargs)
+
     def configure(self, **kwargs) -> None:
         if "state" in kwargs:
             self.state = kwargs["state"]
+        if "from_" in kwargs:
+            self.bounds["from"] = kwargs["from_"]
         if "to" in kwargs:
             self.bounds["to"] = kwargs["to"]
 
@@ -1704,6 +1713,87 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
     for checkbutton in _FakeCheckbutton.created:
         checkbutton.command()
     assert calls == ["toggle-1d", "toggle-2d", "toggle-radial", "toggle-azimuth"]
+
+
+def test_create_integration_range_controls_store_vars_bindings_and_commands(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeScale.created = []
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Scale", _FakeScale)
+    monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.IntegrationRangeControlsViewState()
+    slider_calls = []
+    apply_calls = []
+
+    views.create_integration_range_controls(
+        parent=object(),
+        view_state=view_state,
+        tth_min=1.5,
+        tth_max=55.4,
+        phi_min=-12.6,
+        phi_max=18.7,
+        on_tth_min_changed=lambda value: slider_calls.append(("tth-min", float(value))),
+        on_tth_max_changed=lambda value: slider_calls.append(("tth-max", float(value))),
+        on_phi_min_changed=lambda value: slider_calls.append(("phi-min", float(value))),
+        on_phi_max_changed=lambda value: slider_calls.append(("phi-max", float(value))),
+        on_apply_entry=lambda entry_var, value_var, slider: apply_calls.append(
+            (
+                entry_var.get(),
+                value_var.get(),
+                slider.cget("from"),
+                slider.cget("to"),
+            )
+        ),
+    )
+
+    assert isinstance(view_state.frame, _FakeCollapsibleFrame)
+    assert view_state.frame.text == "Integration Ranges"
+    assert view_state.frame.expanded is True
+    assert view_state.range_frame is view_state.frame.frame
+    assert isinstance(view_state.tth_min_container, _FakeFrame)
+    assert isinstance(view_state.phi_max_container, _FakeFrame)
+    assert view_state.tth_min_var.get() == 1.5
+    assert view_state.tth_max_var.get() == 55.4
+    assert view_state.phi_min_var.get() == -12.6
+    assert view_state.phi_max_var.get() == 18.7
+    assert view_state.tth_min_label_var.get() == "1.5"
+    assert view_state.tth_max_label_var.get() == "55.4"
+    assert view_state.phi_min_label_var.get() == "-12.6"
+    assert view_state.phi_max_label_var.get() == "18.7"
+    assert view_state.tth_min_entry_var.get() == "1.5000"
+    assert view_state.phi_max_entry_var.get() == "18.7000"
+    assert view_state.tth_min_label.kwargs["textvariable"] is view_state.tth_min_label_var
+    assert view_state.phi_max_label.kwargs["textvariable"] is view_state.phi_max_label_var
+    assert view_state.tth_min_entry.textvariable is view_state.tth_min_entry_var
+    assert view_state.phi_max_entry.textvariable is view_state.phi_max_entry_var
+    assert view_state.tth_min_slider is _FakeScale.created[0]
+    assert view_state.tth_max_slider is _FakeScale.created[1]
+    assert view_state.phi_min_slider is _FakeScale.created[2]
+    assert view_state.phi_max_slider is _FakeScale.created[3]
+    assert view_state.tth_min_slider.cget("from") == 0.0
+    assert view_state.tth_min_slider.cget("to") == 90.0
+    assert view_state.phi_min_slider.cget("from") == -90.0
+    assert view_state.phi_max_slider.cget("to") == 90.0
+    assert "<Return>" in view_state.tth_min_entry.bindings
+    assert "<FocusOut>" in view_state.phi_max_entry.bindings
+
+    view_state.tth_min_slider.command("3.0")
+    view_state.phi_max_slider.command("17.5")
+    assert slider_calls == [("tth-min", 3.0), ("phi-max", 17.5)]
+
+    view_state.tth_min_entry.bindings["<Return>"](None)
+    view_state.phi_max_entry.bindings["<FocusOut>"](None)
+    assert apply_calls == [
+        ("1.5000", 1.5, 0.0, 90.0),
+        ("18.7000", 18.7, -90.0, 90.0),
+    ]
 
 
 def test_analysis_export_controls_store_refs_and_commands(monkeypatch) -> None:

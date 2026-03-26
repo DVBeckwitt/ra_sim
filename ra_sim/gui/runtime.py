@@ -5639,6 +5639,7 @@ hbn_geometry_debug_view_state = gui_state.HbnGeometryDebugViewState()
 geometry_overlay_actions_view_state = gui_state.GeometryOverlayActionsViewState()
 analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
 analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
+integration_range_controls_view_state = gui_state.IntegrationRangeControlsViewState()
 display_controls_state = gui_state.DisplayControlsState()
 display_controls_view_state = gui_state.DisplayControlsViewState()
 primary_cif_controls_view_state = gui_state.PrimaryCifControlsViewState()
@@ -8311,30 +8312,22 @@ ax_1d_azim.set_title('Azimuthal Integration (φ)')
 
 canvas_1d.draw()
 
-tth_min_var = tk.DoubleVar(value=0.0)
-tth_max_var = tk.DoubleVar(value=60.0)
-phi_min_var = tk.DoubleVar(value=-15.0)
-phi_max_var = tk.DoubleVar(value=15.0)
-
-tth_min_label_var = tk.StringVar(value=f"{tth_min_var.get():.1f}")
-tth_max_label_var = tk.StringVar(value=f"{tth_max_var.get():.1f}")
-phi_min_label_var = tk.StringVar(value=f"{phi_min_var.get():.1f}")
-phi_max_label_var = tk.StringVar(value=f"{phi_max_var.get():.1f}")
-tth_min_entry_var = tk.StringVar(value=f"{tth_min_var.get():.4f}")
-tth_max_entry_var = tk.StringVar(value=f"{tth_max_var.get():.4f}")
-phi_min_entry_var = tk.StringVar(value=f"{phi_min_var.get():.4f}")
-phi_max_entry_var = tk.StringVar(value=f"{phi_max_var.get():.4f}")
-
-
 def _sync_range_text_vars():
-    tth_min_label_var.set(f"{tth_min_var.get():.1f}")
-    tth_max_label_var.set(f"{tth_max_var.get():.1f}")
-    phi_min_label_var.set(f"{phi_min_var.get():.1f}")
-    phi_max_label_var.set(f"{phi_max_var.get():.1f}")
-    tth_min_entry_var.set(f"{tth_min_var.get():.4f}")
-    tth_max_entry_var.set(f"{tth_max_var.get():.4f}")
-    phi_min_entry_var.set(f"{phi_min_var.get():.4f}")
-    phi_max_entry_var.set(f"{phi_max_var.get():.4f}")
+    range_view = integration_range_controls_view_state
+    specs = (
+        (range_view.tth_min_var, range_view.tth_min_label_var, range_view.tth_min_entry_var),
+        (range_view.tth_max_var, range_view.tth_max_label_var, range_view.tth_max_entry_var),
+        (range_view.phi_min_var, range_view.phi_min_label_var, range_view.phi_min_entry_var),
+        (range_view.phi_max_var, range_view.phi_max_label_var, range_view.phi_max_entry_var),
+    )
+    if any(
+        value_var is None or label_var is None or entry_var is None
+        for value_var, label_var, entry_var in specs
+    ):
+        return
+    for value_var, label_var, entry_var in specs:
+        label_var.set(f"{value_var.get():.1f}")
+        entry_var.set(f"{value_var.get():.4f}")
 
 
 def _apply_range_entry(entry_var, value_var, slider):
@@ -8356,132 +8349,80 @@ def _on_range_var_write(*_args):
     _sync_range_text_vars()
 
 
-for _var in (tth_min_var, tth_max_var, phi_min_var, phi_max_var):
-    _var.trace_add("write", _on_range_var_write)
-
 def tth_min_slider_command(val):
+    value_var = integration_range_controls_view_state.tth_min_var
+    if value_var is None:
+        return
     val_f = float(val)
-    tth_min_var.set(val_f)
+    value_var.set(val_f)
     _sync_range_text_vars()
     schedule_range_update()
 
 def tth_max_slider_command(val):
+    value_var = integration_range_controls_view_state.tth_max_var
+    if value_var is None:
+        return
     val_f = float(val)
-    tth_max_var.set(val_f)
+    value_var.set(val_f)
     _sync_range_text_vars()
     schedule_range_update()
 
 def phi_min_slider_command(val):
+    value_var = integration_range_controls_view_state.phi_min_var
+    if value_var is None:
+        return
     val_f = float(val)
-    phi_min_var.set(val_f)
+    value_var.set(val_f)
     _sync_range_text_vars()
     schedule_range_update()
 
 def phi_max_slider_command(val):
+    value_var = integration_range_controls_view_state.phi_max_var
+    if value_var is None:
+        return
     val_f = float(val)
-    phi_max_var.set(val_f)
+    value_var.set(val_f)
     _sync_range_text_vars()
     schedule_range_update()
 
-range_cf = CollapsibleFrame(plot_frame_1d, text='Integration Ranges', expanded=True)
-range_cf.pack(side=tk.TOP, fill=tk.X, pady=5)
-range_frame = range_cf.frame
+gui_views.create_integration_range_controls(
+    parent=plot_frame_1d,
+    view_state=integration_range_controls_view_state,
+    tth_min=0.0,
+    tth_max=60.0,
+    phi_min=-15.0,
+    phi_max=15.0,
+    on_tth_min_changed=tth_min_slider_command,
+    on_tth_max_changed=tth_max_slider_command,
+    on_phi_min_changed=phi_min_slider_command,
+    on_phi_max_changed=phi_max_slider_command,
+    on_apply_entry=_apply_range_entry,
+)
+tth_min_var = integration_range_controls_view_state.tth_min_var
+tth_max_var = integration_range_controls_view_state.tth_max_var
+phi_min_var = integration_range_controls_view_state.phi_min_var
+phi_max_var = integration_range_controls_view_state.phi_max_var
+tth_min_slider = integration_range_controls_view_state.tth_min_slider
+tth_max_slider = integration_range_controls_view_state.tth_max_slider
+phi_min_slider = integration_range_controls_view_state.phi_min_slider
+phi_max_slider = integration_range_controls_view_state.phi_max_slider
+if any(
+    ref is None
+    for ref in (
+        tth_min_var,
+        tth_max_var,
+        phi_min_var,
+        phi_max_var,
+        tth_min_slider,
+        tth_max_slider,
+        phi_min_slider,
+        phi_max_slider,
+    )
+):
+    raise RuntimeError("Integration-range controls did not create the expected widgets.")
 
-tth_min_container = ttk.Frame(range_frame)
-tth_min_container.pack(side=tk.TOP, fill=tk.X, pady=2)
-ttk.Label(tth_min_container, text="2θ Min (°):").pack(side=tk.LEFT, padx=5)
-tth_min_slider = ttk.Scale(
-    tth_min_container,
-    from_=0.0,
-    to=90.0,
-    orient=tk.HORIZONTAL,
-    variable=tth_min_var,
-    command=tth_min_slider_command
-)
-tth_min_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-ttk.Label(tth_min_container, textvariable=tth_min_label_var, width=6).pack(side=tk.LEFT, padx=4)
-tth_min_entry = ttk.Entry(tth_min_container, textvariable=tth_min_entry_var, width=8)
-tth_min_entry.pack(side=tk.LEFT, padx=(0, 5))
-tth_min_entry.bind(
-    "<Return>",
-    lambda _e: _apply_range_entry(tth_min_entry_var, tth_min_var, tth_min_slider),
-)
-tth_min_entry.bind(
-    "<FocusOut>",
-    lambda _e: _apply_range_entry(tth_min_entry_var, tth_min_var, tth_min_slider),
-)
-
-tth_max_container = ttk.Frame(range_frame)
-tth_max_container.pack(side=tk.TOP, fill=tk.X, pady=2)
-ttk.Label(tth_max_container, text="2θ Max (°):").pack(side=tk.LEFT, padx=5)
-tth_max_slider = ttk.Scale(
-    tth_max_container,
-    from_=0.0,
-    to=90.0,
-    orient=tk.HORIZONTAL,
-    variable=tth_max_var,
-    command=tth_max_slider_command
-)
-tth_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-ttk.Label(tth_max_container, textvariable=tth_max_label_var, width=6).pack(side=tk.LEFT, padx=4)
-tth_max_entry = ttk.Entry(tth_max_container, textvariable=tth_max_entry_var, width=8)
-tth_max_entry.pack(side=tk.LEFT, padx=(0, 5))
-tth_max_entry.bind(
-    "<Return>",
-    lambda _e: _apply_range_entry(tth_max_entry_var, tth_max_var, tth_max_slider),
-)
-tth_max_entry.bind(
-    "<FocusOut>",
-    lambda _e: _apply_range_entry(tth_max_entry_var, tth_max_var, tth_max_slider),
-)
-
-phi_min_container = ttk.Frame(range_frame)
-phi_min_container.pack(side=tk.TOP, fill=tk.X, pady=2)
-ttk.Label(phi_min_container, text="φ Min (°):").pack(side=tk.LEFT, padx=5)
-phi_min_slider = ttk.Scale(
-    phi_min_container,
-    from_=-90.0,
-    to=90.0,
-    orient=tk.HORIZONTAL,
-    variable=phi_min_var,
-    command=phi_min_slider_command
-)
-phi_min_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-ttk.Label(phi_min_container, textvariable=phi_min_label_var, width=6).pack(side=tk.LEFT, padx=4)
-phi_min_entry = ttk.Entry(phi_min_container, textvariable=phi_min_entry_var, width=8)
-phi_min_entry.pack(side=tk.LEFT, padx=(0, 5))
-phi_min_entry.bind(
-    "<Return>",
-    lambda _e: _apply_range_entry(phi_min_entry_var, phi_min_var, phi_min_slider),
-)
-phi_min_entry.bind(
-    "<FocusOut>",
-    lambda _e: _apply_range_entry(phi_min_entry_var, phi_min_var, phi_min_slider),
-)
-
-phi_max_container = ttk.Frame(range_frame)
-phi_max_container.pack(side=tk.TOP, fill=tk.X, pady=2)
-ttk.Label(phi_max_container, text="φ Max (°):").pack(side=tk.LEFT, padx=5)
-phi_max_slider = ttk.Scale(
-    phi_max_container,
-    from_=-90.0,
-    to=90.0,
-    orient=tk.HORIZONTAL,
-    variable=phi_max_var,
-    command=phi_max_slider_command
-)
-phi_max_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-ttk.Label(phi_max_container, textvariable=phi_max_label_var, width=6).pack(side=tk.LEFT, padx=4)
-phi_max_entry = ttk.Entry(phi_max_container, textvariable=phi_max_entry_var, width=8)
-phi_max_entry.pack(side=tk.LEFT, padx=(0, 5))
-phi_max_entry.bind(
-    "<Return>",
-    lambda _e: _apply_range_entry(phi_max_entry_var, phi_max_var, phi_max_slider),
-)
-phi_max_entry.bind(
-    "<FocusOut>",
-    lambda _e: _apply_range_entry(phi_max_entry_var, phi_max_var, phi_max_slider),
-)
+for _var in (tth_min_var, tth_max_var, phi_min_var, phi_max_var):
+    _var.trace_add("write", _on_range_var_write)
 
 _sync_range_text_vars()
 

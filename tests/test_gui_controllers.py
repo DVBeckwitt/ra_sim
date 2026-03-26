@@ -78,6 +78,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         app_state.analysis_export_controls_view,
         state.AnalysisExportControlsViewState,
     )
+    assert isinstance(
+        app_state.integration_range_controls_view,
+        state.IntegrationRangeControlsViewState,
+    )
     assert isinstance(app_state.geometry_preview, state.GeometryPreviewState)
     assert isinstance(
         app_state.geometry_preview.overlay,
@@ -133,6 +137,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert (
         app_state.analysis_export_controls_view
         is not other_state.analysis_export_controls_view
+    )
+    assert (
+        app_state.integration_range_controls_view
+        is not other_state.integration_range_controls_view
     )
     assert app_state.geometry_preview is not other_state.geometry_preview
     assert app_state.geometry_preview.overlay is not other_state.geometry_preview.overlay

@@ -377,6 +377,42 @@ class AnalysisExportControlsViewState:
 
 
 @dataclass
+class IntegrationRangeControlsViewState:
+    """Widget references and vars for the 1D integration-range controls."""
+
+    frame: Any = None
+    range_frame: Any = None
+    tth_min_container: Any = None
+    tth_min_var: Any = None
+    tth_min_label_var: Any = None
+    tth_min_label: Any = None
+    tth_min_slider: Any = None
+    tth_min_entry_var: Any = None
+    tth_min_entry: Any = None
+    tth_max_container: Any = None
+    tth_max_var: Any = None
+    tth_max_label_var: Any = None
+    tth_max_label: Any = None
+    tth_max_slider: Any = None
+    tth_max_entry_var: Any = None
+    tth_max_entry: Any = None
+    phi_min_container: Any = None
+    phi_min_var: Any = None
+    phi_min_label_var: Any = None
+    phi_min_label: Any = None
+    phi_min_slider: Any = None
+    phi_min_entry_var: Any = None
+    phi_min_entry: Any = None
+    phi_max_container: Any = None
+    phi_max_var: Any = None
+    phi_max_label_var: Any = None
+    phi_max_label: Any = None
+    phi_max_slider: Any = None
+    phi_max_entry_var: Any = None
+    phi_max_entry: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -528,6 +564,9 @@ class AppState:
     )
     analysis_export_controls_view: AnalysisExportControlsViewState = field(
         default_factory=AnalysisExportControlsViewState
+    )
+    integration_range_controls_view: IntegrationRangeControlsViewState = field(
+        default_factory=IntegrationRangeControlsViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)
