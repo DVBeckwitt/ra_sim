@@ -3497,18 +3497,6 @@ def _clear_geometry_preview_artists(*, redraw: bool = True):
         redraw=redraw,
     )
 
-
-def _clear_qr_cylinder_overlay_artists(*, redraw: bool = True):
-    """Remove analytic Qr-cylinder detector traces from the plot."""
-
-
-    gui_overlays.clear_artists(
-        geometry_runtime_state.qr_cylinder_overlay_artists,
-        draw_idle=canvas.draw_idle,
-        redraw=redraw,
-    )
-
-
 def _active_qr_cylinder_overlay_entries() -> list[dict[str, object]]:
     """Return active Qr groups from the current simulation state."""
 
@@ -3521,26 +3509,8 @@ def _active_qr_cylinder_overlay_entries() -> list[dict[str, object]]:
         secondary_miller_all=(lambda: globals().get("SIM_MILLER2")),
     )
 
-def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = False):
-    """Draw analytic Ewald/constant-Qr traces in the current detector or caked view."""
-
-
-    overlay_var = geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
-    if overlay_var is None or not bool(overlay_var.get()):
-        _clear_qr_cylinder_overlay_artists(redraw=redraw)
-        return
-
-    entries = _active_qr_cylinder_overlay_entries()
-    if not entries:
-        geometry_runtime_state.qr_cylinder_overlay_cache = {"signature": None, "paths": []}
-        _clear_qr_cylinder_overlay_artists(redraw=redraw)
-        if update_status and "progress_label_positions" in globals():
-            progress_label_positions.config(
-                text="Qr cylinder overlay unavailable: no active Bragg Qr groups."
-            )
-        return
-
-    render_config = gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
+def _current_qr_cylinder_overlay_render_config():
+    return gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
         render_in_caked_space=bool(
             analysis_view_controls_view_state.show_caked_2d_var.get()
         ),
@@ -3562,49 +3532,42 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
         wavelength=float(lambda_),
         n2=n2,
     )
-    signature = gui_qr_cylinder_overlay.build_qr_cylinder_overlay_signature(
-        entries,
-        config=render_config,
-    )
-    cached_sig = geometry_runtime_state.qr_cylinder_overlay_cache.get("signature")
-    if cached_sig != signature:
-        render_in_caked_space = bool(render_config.render_in_caked_space)
-        ai = simulation_runtime_state.ai_cache.get("ai")
-        two_theta_map = None
-        phi_map = None
-        if render_in_caked_space:
-            two_theta_map, phi_map = _get_detector_angular_maps(ai)
-        paths = gui_qr_cylinder_overlay.build_qr_cylinder_overlay_paths(
-            entries,
-            config=render_config,
-            two_theta_map=two_theta_map,
-            phi_map_deg=phi_map,
-            native_sim_to_display_coords=_native_sim_to_display_coords,
-        )
-        geometry_runtime_state.qr_cylinder_overlay_cache = {"signature": signature, "paths": paths}
 
-    paths = geometry_runtime_state.qr_cylinder_overlay_cache.get("paths", [])
-    if not paths:
-        _clear_qr_cylinder_overlay_artists(redraw=False)
-        if redraw:
-            canvas.draw_idle()
-        if update_status and "progress_label_positions" in globals():
-            progress_label_positions.config(
-                text="Qr cylinder overlay found no visible traces in the current view."
-            )
-        return
-    gui_overlays.draw_qr_cylinder_overlay_paths(
-        ax,
-        paths,
-        qr_cylinder_overlay_artists=geometry_runtime_state.qr_cylinder_overlay_artists,
-        clear_qr_cylinder_overlay_artists=_clear_qr_cylinder_overlay_artists,
-        draw_idle=canvas.draw_idle,
-        redraw=redraw,
+
+qr_cylinder_overlay_runtime_bindings_factory = (
+    gui_qr_cylinder_overlay.make_runtime_qr_cylinder_overlay_bindings_factory(
+        ax=ax,
+        overlay_artists=geometry_runtime_state.qr_cylinder_overlay_artists,
+        overlay_cache=geometry_runtime_state.qr_cylinder_overlay_cache,
+        overlay_enabled_factory=lambda: (
+            bool(geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get())
+            if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is not None
+            else False
+        ),
+        get_active_entries=_active_qr_cylinder_overlay_entries,
+        render_config_factory=_current_qr_cylinder_overlay_render_config,
+        ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
+        get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+        set_status_text_factory=lambda: (
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
     )
-    if update_status and "progress_label_positions" in globals():
-        progress_label_positions.config(
-            text=f"Showing analytic Qr-cylinder traces for {len(entries)} active Qr groups."
-        )
+)
+qr_cylinder_overlay_runtime_refresh = (
+    gui_qr_cylinder_overlay.make_runtime_qr_cylinder_overlay_refresh_callback(
+        qr_cylinder_overlay_runtime_bindings_factory
+    )
+)
+qr_cylinder_overlay_runtime_toggle = (
+    gui_qr_cylinder_overlay.make_runtime_qr_cylinder_overlay_toggle_callback(
+        qr_cylinder_overlay_runtime_bindings_factory
+    )
+)
+
 def _clear_all_geometry_overlay_artists():
     """Clear fitted markers and live preview overlays together."""
 
@@ -6751,7 +6714,7 @@ def do_update():
     apply_scale_factor_to_existing_results(update_limits=False)
 
     update_integration_region_visuals(ai, sim_res2)
-    _refresh_qr_cylinder_overlay(redraw=True, update_status=False)
+    qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
     if _live_geometry_preview_enabled():
         if gui_controllers.consume_geometry_preview_skip_once(geometry_preview_state):
             _clear_geometry_preview_artists()
@@ -7494,7 +7457,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     background_runtime_callbacks.refresh_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
-    _refresh_qr_cylinder_overlay(redraw=True, update_status=False)
+    qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
     _refresh_live_geometry_preview(update_status=False)
     schedule_update()
 
@@ -12311,20 +12274,10 @@ gui_views.create_hkl_lookup_controls(
 )
 peak_selection_runtime_callbacks.update_hkl_pick_button_label()
 
-def _on_qr_cylinder_overlay_toggle():
-    overlay_var = geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
-    if overlay_var is not None and overlay_var.get():
-        _refresh_qr_cylinder_overlay(redraw=True, update_status=True)
-    else:
-        _clear_qr_cylinder_overlay_artists(redraw=True)
-        if "progress_label_positions" in globals():
-            progress_label_positions.config(text="Qr cylinder overlay hidden.")
-
-
 gui_views.create_geometry_overlay_action_controls(
     parent=app_shell_view_state.fit_actions_frame,
     view_state=geometry_overlay_actions_view_state,
-    on_toggle_qr_cylinder_overlay=_on_qr_cylinder_overlay_toggle,
+    on_toggle_qr_cylinder_overlay=qr_cylinder_overlay_runtime_toggle,
     on_clear_geometry_overlays=_clear_all_geometry_overlay_artists,
     on_fit_mosaic=on_fit_mosaic_click,
 )

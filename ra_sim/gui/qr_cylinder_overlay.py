@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from . import overlays as gui_overlays
 from ra_sim.simulation.intersection_analysis import (
     IntersectionGeometry,
     project_qr_cylinder_to_detector,
@@ -37,6 +38,60 @@ class QrCylinderOverlayRenderConfig:
     n2: complex
     phi_samples: int = 721
     two_theta_limits: tuple[float, float] = (0.0, 90.0)
+
+
+@dataclass
+class QrCylinderOverlayRuntimeBindings:
+    """Runtime callbacks and shared state used by the live overlay workflow."""
+
+    ax: Any
+    overlay_artists: list[object]
+    overlay_cache: dict[str, object]
+    overlay_enabled_factory: object
+    get_active_entries: Callable[[], Sequence[dict[str, object]]]
+    render_config_factory: object
+    ai_factory: object
+    get_detector_angular_maps: Callable[[Any], tuple[object, object]]
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ]
+    draw_idle: Callable[[], None] | None = None
+    set_status_text: Callable[[str], None] | None = None
+
+
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
+
+
+def _set_status_text(
+    bindings: QrCylinderOverlayRuntimeBindings,
+    text: str,
+) -> None:
+    if callable(bindings.set_status_text):
+        bindings.set_status_text(str(text))
+
+
+def _overlay_enabled(bindings: QrCylinderOverlayRuntimeBindings) -> bool:
+    return bool(_resolve_runtime_value(bindings.overlay_enabled_factory))
+
+
+def _runtime_render_config(
+    bindings: QrCylinderOverlayRuntimeBindings,
+) -> QrCylinderOverlayRenderConfig | None:
+    config = _resolve_runtime_value(bindings.render_config_factory)
+    if isinstance(config, QrCylinderOverlayRenderConfig):
+        return config
+    return None
+
+
+def _runtime_ai(bindings: QrCylinderOverlayRuntimeBindings):
+    return _resolve_runtime_value(bindings.ai_factory)
 
 
 def build_qr_cylinder_overlay_render_config(
@@ -245,6 +300,120 @@ def build_qr_cylinder_overlay_paths(
     return paths
 
 
+def clear_runtime_qr_cylinder_overlay_artists(
+    bindings: QrCylinderOverlayRuntimeBindings,
+    *,
+    redraw: bool = True,
+) -> None:
+    """Remove live Qr-cylinder overlay artists from the current axes."""
+
+    gui_overlays.clear_artists(
+        bindings.overlay_artists,
+        draw_idle=bindings.draw_idle,
+        redraw=redraw,
+    )
+
+
+def refresh_runtime_qr_cylinder_overlay(
+    bindings: QrCylinderOverlayRuntimeBindings,
+    *,
+    redraw: bool = True,
+    update_status: bool = False,
+) -> None:
+    """Refresh the live detector/caked Qr-cylinder overlay from runtime inputs."""
+
+    if not _overlay_enabled(bindings):
+        clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=redraw)
+        return
+
+    entries = list(bindings.get_active_entries() or [])
+    if not entries:
+        bindings.overlay_cache["signature"] = None
+        bindings.overlay_cache["paths"] = []
+        clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=redraw)
+        if update_status:
+            _set_status_text(
+                bindings,
+                "Qr cylinder overlay unavailable: no active Bragg Qr groups.",
+            )
+        return
+
+    render_config = _runtime_render_config(bindings)
+    if render_config is None:
+        clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=redraw)
+        return
+
+    signature = build_qr_cylinder_overlay_signature(
+        entries,
+        config=render_config,
+    )
+    cached_signature = bindings.overlay_cache.get("signature")
+    if cached_signature != signature:
+        two_theta_map = None
+        phi_map_deg = None
+        if bool(render_config.render_in_caked_space):
+            two_theta_map, phi_map_deg = bindings.get_detector_angular_maps(
+                _runtime_ai(bindings)
+            )
+        paths = build_qr_cylinder_overlay_paths(
+            entries,
+            config=render_config,
+            two_theta_map=two_theta_map,
+            phi_map_deg=phi_map_deg,
+            native_sim_to_display_coords=bindings.native_sim_to_display_coords,
+        )
+        bindings.overlay_cache["signature"] = signature
+        bindings.overlay_cache["paths"] = paths
+
+    paths = list(bindings.overlay_cache.get("paths", []) or [])
+    if not paths:
+        clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=False)
+        if redraw and callable(bindings.draw_idle):
+            bindings.draw_idle()
+        if update_status:
+            _set_status_text(
+                bindings,
+                "Qr cylinder overlay found no visible traces in the current view.",
+            )
+        return
+
+    gui_overlays.draw_qr_cylinder_overlay_paths(
+        bindings.ax,
+        paths,
+        qr_cylinder_overlay_artists=bindings.overlay_artists,
+        clear_qr_cylinder_overlay_artists=(
+            lambda *, redraw=False: clear_runtime_qr_cylinder_overlay_artists(
+                bindings,
+                redraw=redraw,
+            )
+        ),
+        draw_idle=bindings.draw_idle or (lambda: None),
+        redraw=redraw,
+    )
+    if update_status:
+        _set_status_text(
+            bindings,
+            f"Showing analytic Qr-cylinder traces for {len(entries)} active Qr groups.",
+        )
+
+
+def toggle_runtime_qr_cylinder_overlay(
+    bindings: QrCylinderOverlayRuntimeBindings,
+) -> None:
+    """Handle one user toggle of the live Qr-cylinder overlay."""
+
+    if _overlay_enabled(bindings):
+        refresh_runtime_qr_cylinder_overlay(
+            bindings,
+            redraw=True,
+            update_status=True,
+        )
+        return
+
+    clear_runtime_qr_cylinder_overlay_artists(bindings, redraw=True)
+    _set_status_text(bindings, "Qr cylinder overlay hidden.")
+
+
 def wrap_caked_phi_degrees(phi_values: np.ndarray | float) -> np.ndarray:
     """Wrap azimuth values into the ``[-180, 180)`` interval."""
 
@@ -384,3 +553,60 @@ def interpolate_trace_to_caked_coords(
             phi[jump_idx] = np.nan
 
     return tth, phi
+
+
+def make_runtime_qr_cylinder_overlay_bindings_factory(
+    *,
+    ax: Any,
+    overlay_artists: list[object],
+    overlay_cache: dict[str, object],
+    overlay_enabled_factory: object,
+    get_active_entries: Callable[[], Sequence[dict[str, object]]],
+    render_config_factory: object,
+    ai_factory: object,
+    get_detector_angular_maps: Callable[[Any], tuple[object, object]],
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+    draw_idle_factory: object = None,
+    set_status_text_factory: object = None,
+) -> Callable[[], QrCylinderOverlayRuntimeBindings]:
+    """Return a zero-arg factory for live Qr-cylinder overlay bindings."""
+
+    def _build() -> QrCylinderOverlayRuntimeBindings:
+        return QrCylinderOverlayRuntimeBindings(
+            ax=ax,
+            overlay_artists=overlay_artists,
+            overlay_cache=overlay_cache,
+            overlay_enabled_factory=overlay_enabled_factory,
+            get_active_entries=get_active_entries,
+            render_config_factory=render_config_factory,
+            ai_factory=ai_factory,
+            get_detector_angular_maps=get_detector_angular_maps,
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            draw_idle=_resolve_runtime_value(draw_idle_factory),
+            set_status_text=_resolve_runtime_value(set_status_text_factory),
+        )
+
+    return _build
+
+
+def make_runtime_qr_cylinder_overlay_refresh_callback(
+    bindings_factory: Callable[[], QrCylinderOverlayRuntimeBindings],
+) -> Callable[..., None]:
+    """Return one callback that refreshes the live Qr-cylinder overlay."""
+
+    return lambda *, redraw=True, update_status=False: refresh_runtime_qr_cylinder_overlay(
+        bindings_factory(),
+        redraw=redraw,
+        update_status=update_status,
+    )
+
+
+def make_runtime_qr_cylinder_overlay_toggle_callback(
+    bindings_factory: Callable[[], QrCylinderOverlayRuntimeBindings],
+) -> Callable[[], None]:
+    """Return one callback that handles overlay checkbox toggles."""
+
+    return lambda: toggle_runtime_qr_cylinder_overlay(bindings_factory())
