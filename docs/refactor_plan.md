@@ -57,6 +57,8 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - Q-group selector cached rows and refresh state now have shared state in
     `ra_sim.gui.state`.
   - Controller helpers now own the corresponding stack/list/refresh mutations.
+  - The selector formatting/status/save-load workflow now also lives in
+    `ra_sim.gui.geometry_q_group_manager`.
 - Live geometry preview and Q-group view migration has started.
   - Preview exclusion state, the one-shot preview skip flag, and the
     auto-match background cache now live in `ra_sim.gui.state`.
@@ -276,6 +278,13 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - The Bragg-Qr manager selection/list-refresh flow now also delegates
     through `ra_sim.gui.bragg_qr_manager`, leaving runtime with the manager
     window lifecycle and enable/disable action callbacks.
+- Geometry-fit Qr/Qz selector workflow extraction has advanced.
+  - `ra_sim.gui.geometry_q_group_manager` now owns the selector line/status
+    formatting, window refresh, bulk include/exclude actions, and save/load
+    payload translation used by the live GUI.
+  - `ra_sim.gui.runtime` now delegates that selector workflow through the
+    extracted module and keeps only the file-dialog and live-preview/status
+    side effects inline.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -437,6 +446,9 @@ What is left:
   file dialogs, progress-label updates, and control-var rebuild callbacks.
 - The remaining Bragg-Qr runtime code is now mostly window-action wiring
   around the extracted controller/view helpers.
+- The remaining geometry-fit Qr/Qz selector runtime code is now mostly
+  file-dialog plumbing and live-preview/status callbacks around the extracted
+  manager/view helpers.
 
 Why it matters:
 

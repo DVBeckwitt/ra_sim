@@ -110,6 +110,7 @@ from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
+from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import views as gui_views
@@ -4380,65 +4381,28 @@ def _capture_geometry_q_group_entries_snapshot() -> list[dict[str, object]]:
 
 def _geometry_q_group_key_to_jsonable(group_key: object) -> list[object] | None:
     """Convert one stable Qr/Qz group key into a JSON-safe list."""
-    return gui_manual_geometry.geometry_q_group_key_to_jsonable(group_key)
+    return gui_geometry_q_group_manager.geometry_q_group_key_to_jsonable(group_key)
 
 
 def _geometry_q_group_key_from_jsonable(value: object) -> tuple[object, ...] | None:
     """Rebuild one stable Qr/Qz group key from JSON-loaded data."""
-    return gui_manual_geometry.geometry_q_group_key_from_jsonable(value)
+    return gui_geometry_q_group_manager.geometry_q_group_key_from_jsonable(value)
 
 
 def _geometry_q_group_float_for_json(value: object) -> float | None:
     """Return a finite float for JSON export, or ``None`` when unavailable."""
-
-    try:
-        numeric = float(value)
-    except Exception:
-        return None
-    if not np.isfinite(numeric):
-        return None
-    return float(numeric)
+    return gui_geometry_q_group_manager.geometry_q_group_float_for_json(value)
 
 
 def _geometry_q_group_export_rows(
     entries: Sequence[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     """Build JSON export rows for the current Qr/Qz selector listing."""
-
-    rows: list[dict[str, object]] = []
-    source_entries = entries if entries is not None else _listed_geometry_q_group_entries()
-    for entry in source_entries:
-        if not isinstance(entry, dict):
-            continue
-        group_key = entry.get("key")
-        serialized_key = _geometry_q_group_key_to_jsonable(group_key)
-        if serialized_key is None:
-            continue
-        hkl_preview = []
-        for hkl_value in entry.get("hkl_preview", [])[:8]:
-            if not isinstance(hkl_value, (list, tuple, np.ndarray)) or len(hkl_value) < 3:
-                continue
-            try:
-                hkl_preview.append([int(hkl_value[0]), int(hkl_value[1]), int(hkl_value[2])])
-            except Exception:
-                continue
-        rows.append(
-            {
-                "key": serialized_key,
-                "included": bool(group_key not in geometry_preview_state.excluded_q_groups),
-                "source_label": str(entry.get("source_label", "")),
-                "qr": _geometry_q_group_float_for_json(entry.get("qr", np.nan)),
-                "qz": _geometry_q_group_float_for_json(entry.get("qz", np.nan)),
-                "gz_index": int(entry.get("gz_index", serialized_key[3])),
-                "total_intensity": _geometry_q_group_float_for_json(
-                    entry.get("total_intensity", np.nan)
-                ),
-                "peak_count": int(entry.get("peak_count", 0)),
-                "hkl_preview": hkl_preview,
-                "display_label": _format_geometry_q_group_line(entry),
-            }
-        )
-    return rows
+    return gui_geometry_q_group_manager.build_geometry_q_group_export_rows(
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        entries=entries,
+    )
 
 
 def _save_geometry_q_group_selection() -> None:
@@ -4463,16 +4427,10 @@ def _save_geometry_q_group_selection() -> None:
         progress_label_geometry.config(text="Save Qr/Qz peak list canceled.")
         return
 
-    payload = {
-        "type": "ra_sim.geometry_q_group_selection",
-        "version": 1,
-        "saved_at": datetime.now().isoformat(timespec="seconds"),
-        "row_count": int(len(export_rows)),
-        "included_count": int(
-            sum(1 for row in export_rows if bool(row.get("included", False)))
-        ),
-        "rows": export_rows,
-    }
+    payload = gui_geometry_q_group_manager.build_geometry_q_group_save_payload(
+        export_rows,
+        saved_at=datetime.now().isoformat(timespec="seconds"),
+    )
     try:
         with open(file_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
@@ -4504,77 +4462,36 @@ def _load_geometry_q_group_selection() -> None:
         progress_label_geometry.config(text=f"Failed to load Qr/Qz peak list: {exc}")
         return
 
-    if not isinstance(payload, dict):
-        progress_label_geometry.config(text="Invalid Qr/Qz peak list file: expected a JSON object.")
-        return
-    if str(payload.get("type", "")) != "ra_sim.geometry_q_group_selection":
-        progress_label_geometry.config(text="Invalid Qr/Qz peak list file type.")
-        return
-
-    saved_rows = payload.get("rows", [])
-    if not isinstance(saved_rows, list) or not saved_rows:
-        progress_label_geometry.config(text="Loaded Qr/Qz peak list is empty.")
-        return
-
-    saved_state: dict[tuple[object, ...], bool] = {}
-    for row in saved_rows:
-        if not isinstance(row, dict):
-            continue
-        group_key = _geometry_q_group_key_from_jsonable(row.get("key"))
-        if group_key is None:
-            continue
-        saved_state[group_key] = bool(row.get("included", True))
-
-    if not saved_state:
-        progress_label_geometry.config(text="Loaded Qr/Qz peak list does not contain any valid rows.")
-        return
-
-    current_entries = _listed_geometry_q_group_entries()
-    current_keys = [
-        entry.get("key")
-        for entry in current_entries
-        if isinstance(entry, dict) and entry.get("key") is not None
-    ]
-    if not current_keys:
-        progress_label_geometry.config(
-            text=(
-                "No listed Qr/Qz groups are available to match against the saved list. "
-                'Press "Update Listed Peaks" first.'
-            )
-        )
-        return
-
-    current_key_set = set(current_keys)
-    matched_keys = current_key_set.intersection(saved_state.keys())
-    if not matched_keys:
-        progress_label_geometry.config(
-            text="Loaded Qr/Qz peak list does not match any currently listed groups."
-        )
-        return
-
-    gui_controllers.replace_geometry_preview_excluded_q_groups(
-        geometry_preview_state,
-        [
-            key
-            for key in current_keys
-            if (key not in saved_state) or (not bool(saved_state.get(key, False)))
-        ],
+    saved_state, error = gui_geometry_q_group_manager.load_geometry_q_group_saved_state(
+        payload
     )
+    if error is not None:
+        progress_label_geometry.config(text=error)
+        return
+
+    summary, error = (
+        gui_geometry_q_group_manager.apply_loaded_geometry_q_group_saved_state(
+            preview_state=geometry_preview_state,
+            q_group_state=geometry_q_group_state,
+            saved_state=saved_state,
+        )
+    )
+    if error is not None:
+        progress_label_geometry.config(text=error)
+        return
+
     _update_geometry_preview_exclude_button_label()
     _refresh_geometry_q_group_window()
 
     if _live_geometry_preview_enabled():
         _refresh_live_geometry_preview(update_status=False)
 
-    matched_total = int(len(matched_keys))
-    included_total = int(sum(1 for key in matched_keys if bool(saved_state.get(key, False))))
-    current_only = int(sum(1 for key in current_keys if key not in saved_state))
-    saved_only = int(sum(1 for key in saved_state if key not in current_key_set))
     progress_label_geometry.config(
         text=(
             f"Loaded Qr/Qz peak list from {Path(file_path).name}: "
-            f"matched {matched_total}, enabled {included_total}, "
-            f"current-only excluded {current_only}, saved-only missing {saved_only}."
+            f"matched {summary['matched_total']}, enabled {summary['included_total']}, "
+            f"current-only excluded {summary['current_only']}, "
+            f"saved-only missing {summary['saved_only']}."
         )
     )
 
@@ -4663,62 +4580,25 @@ _sync_peak_selection_state()
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
     """Return a compact label for one Qr/Qz selector row."""
-
-    qr_val = float(entry.get("qr", np.nan))
-    qz_val = float(entry.get("qz", np.nan))
-    total_intensity = float(entry.get("total_intensity", 0.0))
-    peak_count = int(entry.get("peak_count", 0))
-    source_label = str(entry.get("source_label", ""))
-    gz_index = entry.get("gz_index")
-    if gz_index is None:
-        key = entry.get("key")
-        if isinstance(key, tuple) and len(key) >= 4:
-            gz_index = key[3]
-    hkl_preview = ", ".join(str(hkl) for hkl in entry.get("hkl_preview", [])[:3])
-    if len(entry.get("hkl_preview", [])) > 3:
-        hkl_preview += ", ..."
-    gz_text = f"{int(gz_index):4d}" if gz_index is not None else " n/a"
-    return (
-        f"{source_label:<9}  "
-        f"Qr={qr_val:8.4f}  "
-        f"Gz={gz_text}  "
-        f"Qz={qz_val:8.4f}  "
-        f"I={total_intensity:10.3f}  "
-        f"hits={peak_count:4d}"
-        + (f"  HKL={hkl_preview}" if hkl_preview else "")
-    )
+    return gui_geometry_q_group_manager.format_geometry_q_group_line(entry)
 
 
 def _current_geometry_auto_match_min_matches() -> int:
     """Return the current minimum match count required by the geometry auto-match gate."""
-
-    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
-    if not isinstance(geometry_refine_cfg, dict):
-        geometry_refine_cfg = {}
-    auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
-    if not isinstance(auto_match_cfg, dict):
-        auto_match_cfg = {}
-    default_min_matches = max(6, len(_current_geometry_fit_var_names()) + 2)
-    try:
-        min_matches = int(auto_match_cfg.get("min_matches", default_min_matches))
-    except Exception:
-        min_matches = int(default_min_matches)
-    return max(1, int(min_matches))
+    return gui_geometry_q_group_manager.current_geometry_auto_match_min_matches(
+        fit_config,
+        _current_geometry_fit_var_names(),
+    )
 
 
 def _geometry_q_group_excluded_count(
     entries: Sequence[dict[str, object]] | None = None,
 ) -> int:
     """Return how many listed Qr/Qz rows are currently excluded."""
-
-    keys = _listed_geometry_q_group_keys(entries)
-    if not keys:
-        return gui_controllers.count_geometry_preview_excluded_q_groups(
-            geometry_preview_state,
-        )
-    return gui_controllers.count_geometry_preview_excluded_q_groups(
+    return gui_geometry_q_group_manager.geometry_q_group_excluded_count(
         geometry_preview_state,
-        keys,
+        geometry_q_group_state,
+        entries,
     )
 
 
@@ -4726,67 +4606,36 @@ def _build_geometry_q_group_window_status_text(
     entries: Sequence[dict[str, object]] | None = None,
 ) -> str:
     """Build the summary text shown above the Qr/Qz selector rows."""
-
-    rows = list(entries) if entries is not None else _listed_geometry_q_group_entries()
-    total_count = len(rows)
-    included_rows = [
-        entry
-        for entry in rows
-        if entry.get("key") not in geometry_preview_state.excluded_q_groups
-    ]
-    selected_peak_count = int(
-        sum(int(entry.get("peak_count", 0)) for entry in included_rows)
-    )
-    total_peak_count = int(
-        sum(int(entry.get("peak_count", 0)) for entry in rows)
-    )
-    min_matches = _current_geometry_auto_match_min_matches()
-    shortfall = max(0, int(min_matches - selected_peak_count))
-    selected_intensity = float(
-        sum(float(entry.get("total_intensity", 0.0)) for entry in included_rows)
-    )
-    total_intensity = float(
-        sum(float(entry.get("total_intensity", 0.0)) for entry in rows)
-    )
-    return (
-        f"Included Qr/Qz groups: {len(included_rows)}/{total_count}  "
-        f"Selected peaks: {selected_peak_count}/{total_peak_count}  "
-        f"Need >= {min_matches}"
-        + (f"  short {shortfall}" if shortfall > 0 else "  ready")
-        + "\n"
-        + f"Intensity={selected_intensity:.3f}/{total_intensity:.3f}  "
-        + 'Listed peaks stay fixed until you press "Update Listed Peaks".'
+    return gui_geometry_q_group_manager.build_geometry_q_group_window_status_text(
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        fit_config=fit_config,
+        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
+        entries=entries,
     )
 
 
 def _update_geometry_q_group_window_status(entries: Sequence[dict[str, object]] | None = None) -> None:
     """Refresh the summary text at the top of the Qr/Qz selector window."""
-
-    gui_views.set_geometry_q_group_status_text(
-        geometry_q_group_view_state,
-        _build_geometry_q_group_window_status_text(entries),
+    gui_geometry_q_group_manager.update_geometry_q_group_window_status(
+        view_state=geometry_q_group_view_state,
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        fit_config=fit_config,
+        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
+        entries=entries,
     )
 
 
 def _refresh_geometry_q_group_window() -> None:
     """Redraw the Qr/Qz selector window from the stored manual snapshot."""
-
-    entries = _listed_geometry_q_group_entries()
-    gui_views.refresh_geometry_q_group_window(
+    gui_geometry_q_group_manager.refresh_geometry_q_group_window(
         view_state=geometry_q_group_view_state,
-        entries=entries,
-        excluded_q_groups=geometry_preview_state.excluded_q_groups,
-        status_text=_build_geometry_q_group_window_status_text(entries),
-        format_line=_format_geometry_q_group_line,
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        fit_config=fit_config,
+        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
         on_toggle=_on_geometry_q_group_checkbox_changed,
-        clear_row_vars=lambda: gui_controllers.clear_geometry_q_group_row_vars(
-            geometry_q_group_state
-        ),
-        register_row_var=lambda group_key, row_var: gui_controllers.set_geometry_q_group_row_var(
-            geometry_q_group_state,
-            group_key,
-            row_var,
-        ),
     )
 
 
@@ -4795,24 +4644,14 @@ def _on_geometry_q_group_checkbox_changed(
     row_var: tk.BooleanVar,
 ) -> None:
     """Apply one Qr/Qz include/exclude toggle from the selector window."""
-
-    if group_key is None:
+    action = gui_geometry_q_group_manager.apply_geometry_q_group_checkbox_change(
+        geometry_preview_state,
+        group_key,
+        row_var,
+    )
+    if action is None:
         return
 
-    if bool(row_var.get()):
-        gui_controllers.set_geometry_preview_q_group_included(
-            geometry_preview_state,
-            group_key,
-            included=True,
-        )
-        action = "Included"
-    else:
-        gui_controllers.set_geometry_preview_q_group_included(
-            geometry_preview_state,
-            group_key,
-            included=False,
-        )
-        action = "Excluded"
     _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     _update_geometry_q_group_window_status()
@@ -4825,29 +4664,17 @@ def _on_geometry_q_group_checkbox_changed(
 
 def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
     """Enable or disable every currently listed Qr/Qz group."""
-
-    entries = _listed_geometry_q_group_entries()
-    if not entries:
+    action, count = gui_geometry_q_group_manager.set_all_geometry_q_groups_enabled(
+        geometry_preview_state,
+        geometry_q_group_state,
+        enabled=enabled,
+    )
+    if count <= 0:
         progress_label_geometry.config(
             text='No listed Qr/Qz groups are available. Press "Update Listed Peaks" first.'
         )
         return
 
-    if enabled:
-        gui_controllers.clear_geometry_preview_excluded_q_groups(
-            geometry_preview_state,
-        )
-        action = "Included"
-    else:
-        gui_controllers.replace_geometry_preview_excluded_q_groups(
-            geometry_preview_state,
-            [
-                entry["key"]
-                for entry in entries
-                if entry.get("key") is not None
-            ],
-        )
-        action = "Excluded"
     _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
     _refresh_geometry_q_group_window()
@@ -4856,15 +4683,15 @@ def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
         _refresh_live_geometry_preview(update_status=True)
     else:
         progress_label_geometry.config(
-            text=f"{action} {len(entries)} Qr/Qz groups for geometry fitting."
+            text=f"{action} {count} Qr/Qz groups for geometry fitting."
         )
 
 
 def _request_geometry_q_group_window_update() -> None:
     """Rebuild the listed Qr/Qz rows from the current simulation on demand."""
-
-
-    gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
+    gui_geometry_q_group_manager.request_geometry_q_group_window_update(
+        geometry_q_group_state
+    )
     simulation_runtime_state.last_simulation_signature = None
     _invalidate_geometry_manual_pick_cache()
     progress_label_geometry.config(text="Updating listed Qr/Qz peaks from the current simulation...")
@@ -4873,17 +4700,22 @@ def _request_geometry_q_group_window_update() -> None:
 
 def _close_geometry_q_group_window() -> None:
     """Destroy the Qr/Qz selector window and clear its widget references."""
-
-    gui_views.close_geometry_q_group_window(geometry_q_group_view_state)
-    gui_controllers.clear_geometry_q_group_row_vars(geometry_q_group_state)
+    gui_geometry_q_group_manager.close_geometry_q_group_window(
+        geometry_q_group_view_state,
+        geometry_q_group_state,
+    )
 
 
 def _open_geometry_q_group_window() -> None:
     """Open a scrollable Qr/Qz selector for geometry-fit peak inclusion."""
-
-    gui_views.open_geometry_q_group_window(
+    gui_geometry_q_group_manager.open_geometry_q_group_window(
         root=root,
         view_state=geometry_q_group_view_state,
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        fit_config=fit_config,
+        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
+        on_toggle=_on_geometry_q_group_checkbox_changed,
         on_include_all=lambda: _set_all_geometry_q_groups_enabled(True),
         on_exclude_all=lambda: _set_all_geometry_q_groups_enabled(False),
         on_update_listed_peaks=_request_geometry_q_group_window_update,
@@ -4891,7 +4723,6 @@ def _open_geometry_q_group_window() -> None:
         on_load=_load_geometry_q_group_selection,
         on_close=_close_geometry_q_group_window,
     )
-    _refresh_geometry_q_group_window()
 
 
 def _update_geometry_preview_exclude_button_label():
