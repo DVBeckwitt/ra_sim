@@ -115,11 +115,17 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     state
   - geometry-tools action-control construction and the related label/state
     update helpers now flow through `ra_sim.gui.views`
+- HKL lookup control migration has also landed:
+  - shared widget references and `StringVar` state for the HKL lookup /
+    peak-selection panel now use shared GUI state
+  - HKL lookup control construction, its entry bindings, and helper updates
+    for the HKL values and image-pick button label now flow through
+    `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
-    background-theta/background-debug/geometry-tool-action view helper
-    coverage
+    background-theta/background-debug/geometry-tool-action/HKL-lookup view
+    helper coverage
 
 ## Remaining Migration Focus
 

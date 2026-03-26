@@ -100,6 +100,25 @@ class GeometryToolActionsViewState:
 
 
 @dataclass
+class HklLookupViewState:
+    """Widget references and vars for the HKL lookup / peak-selection controls."""
+
+    frame: Any = None
+    selected_h_var: Any = None
+    selected_k_var: Any = None
+    selected_l_var: Any = None
+    h_entry: Any = None
+    k_entry: Any = None
+    l_entry: Any = None
+    select_button: Any = None
+    hkl_pick_button_var: Any = None
+    hkl_pick_button: Any = None
+    clear_button: Any = None
+    show_bragg_ewald_button: Any = None
+    bragg_qr_groups_button: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -209,6 +228,9 @@ class AppState:
     )
     geometry_tool_actions_view: GeometryToolActionsViewState = field(
         default_factory=GeometryToolActionsViewState
+    )
+    hkl_lookup_view: HklLookupViewState = field(
+        default_factory=HklLookupViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

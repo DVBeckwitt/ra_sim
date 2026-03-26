@@ -112,6 +112,13 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     cluster, plus helper updates for the fit-history button enabled state and
     the manual-pick / preview-exclude button labels.
   - Direct view tests now cover the extracted geometry-tool action helpers.
+- HKL lookup control migration has landed.
+  - Shared widget references and `StringVar` state for the HKL lookup /
+    peak-selection controls now live in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns the HKL lookup panel construction, its entry
+    bindings, and helper updates for the HKL values and image-pick button
+    label.
+  - Direct view tests now cover the extracted HKL lookup helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -180,6 +187,10 @@ What is done:
   controls are no longer assembled directly in `runtime.py`.
   - `ra_sim.gui.views` now owns that action-control construction and the
     related button-var/button-state helpers.
+- The HKL lookup / peak-selection controls are no longer assembled directly in
+  `runtime.py`.
+  - `ra_sim.gui.views` now owns that panel construction and the related HKL
+    entry/button-var helpers.
 
 What is left:
 
@@ -244,6 +255,9 @@ What is done:
   and manual-geometry control cluster.
 - `views.py` now also owns the geometry-tools action-control construction and
   helper updates for those button refs and `StringVar`s.
+- `state.py` now also owns HKL lookup view state for the peak-selection panel.
+- `views.py` now also owns the HKL lookup control construction and helper
+  updates for its entry vars and pick-button label.
 
 What is left:
 

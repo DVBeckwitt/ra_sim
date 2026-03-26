@@ -5624,7 +5624,7 @@ def _reset_background_backend_orientation():
 # -----------------------------------------------------------
 selected_hkl_target = None
 hkl_pick_armed = False
-hkl_pick_button_var = None
+hkl_lookup_view_state = gui_state.HklLookupViewState()
 _suppress_drag_press_once = False
 bragg_qr_manager_state = gui_state.BraggQrManagerState()
 bragg_qr_manager_view_state = gui_state.BraggQrManagerViewState()
@@ -5877,12 +5877,10 @@ def _update_geometry_preview_exclude_button_label():
 
 
 def _update_hkl_pick_button_label():
-    if "hkl_pick_button_var" not in globals() or hkl_pick_button_var is None:
-        return
-    if hkl_pick_armed:
-        hkl_pick_button_var.set("Pick HKL on Image (Armed)")
-    else:
-        hkl_pick_button_var.set("Pick HKL on Image")
+    gui_views.set_hkl_pick_button_text(
+        hkl_lookup_view_state,
+        "Pick HKL on Image (Armed)" if hkl_pick_armed else "Pick HKL on Image",
+    )
 
 
 def _set_hkl_pick_mode(enabled: bool, *, message: str | None = None):
@@ -6219,12 +6217,12 @@ def _select_peak_by_index(
             selected_peak_record["selected_native_col"] = float(selected_peak_record["native_col"])
             selected_peak_record["selected_native_row"] = float(selected_peak_record["native_row"])
     if sync_hkl_vars:
-        if "selected_h_var" in globals():
-            selected_h_var.set(str(int(H)))
-        if "selected_k_var" in globals():
-            selected_k_var.set(str(int(K)))
-        if "selected_l_var" in globals():
-            selected_l_var.set(str(int(L)))
+        gui_views.set_hkl_lookup_values(
+            hkl_lookup_view_state,
+            h_text=str(int(H)),
+            k_text=str(int(K)),
+            l_text=str(int(L)),
+        )
 
     qr_val, deg_hkls = _selected_peak_qr_and_degenerates(H, K, L, selected_peak_record)
     if selected_peak_record is not None:
@@ -6325,9 +6323,9 @@ def _select_peak_by_hkl(
 def _select_peak_from_hkl_controls():
     global selected_hkl_target
     try:
-        h = int(round(float(selected_h_var.get().strip())))
-        k = int(round(float(selected_k_var.get().strip())))
-        l = int(round(float(selected_l_var.get().strip())))
+        h = int(round(float(hkl_lookup_view_state.selected_h_var.get().strip())))
+        k = int(round(float(hkl_lookup_view_state.selected_k_var.get().strip())))
+        l = int(round(float(hkl_lookup_view_state.selected_l_var.get().strip())))
     except (ValueError, tk.TclError, AttributeError):
         progress_label_positions.config(text="Enter numeric H, K, L values.")
         return
@@ -15698,59 +15696,16 @@ _update_geometry_fit_undo_button_state()
 _update_geometry_manual_pick_button_label()
 _update_geometry_preview_exclude_button_label()
 
-hkl_lookup_frame = ttk.LabelFrame(fit_actions_frame, text="Peak Lookup (HKL)")
-hkl_lookup_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4)
-
-selected_h_var = tk.StringVar(value="0")
-selected_k_var = tk.StringVar(value="0")
-selected_l_var = tk.StringVar(value="0")
-
-for _col in range(8):
-    hkl_lookup_frame.columnconfigure(_col, weight=1 if _col in {1, 3, 5} else 0)
-
-ttk.Label(hkl_lookup_frame, text="H").grid(row=0, column=0, sticky="w", padx=(6, 2), pady=(4, 2))
-h_entry = ttk.Entry(hkl_lookup_frame, width=5, textvariable=selected_h_var)
-h_entry.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(4, 2))
-
-ttk.Label(hkl_lookup_frame, text="K").grid(row=0, column=2, sticky="w", padx=(0, 2), pady=(4, 2))
-k_entry = ttk.Entry(hkl_lookup_frame, width=5, textvariable=selected_k_var)
-k_entry.grid(row=0, column=3, sticky="ew", padx=(0, 6), pady=(4, 2))
-
-ttk.Label(hkl_lookup_frame, text="L").grid(row=0, column=4, sticky="w", padx=(0, 2), pady=(4, 2))
-l_entry = ttk.Entry(hkl_lookup_frame, width=5, textvariable=selected_l_var)
-l_entry.grid(row=0, column=5, sticky="ew", padx=(0, 8), pady=(4, 2))
-
-ttk.Button(
-    hkl_lookup_frame,
-    text="Select HKL",
-    command=_select_peak_from_hkl_controls,
-).grid(row=0, column=6, sticky="ew", padx=(0, 4), pady=(4, 2))
-
-hkl_pick_button_var = tk.StringVar(value="Pick HKL on Image")
-ttk.Button(
-    hkl_lookup_frame,
-    textvariable=hkl_pick_button_var,
-    command=_toggle_hkl_pick_mode,
-).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(6, 4), pady=(2, 6))
+gui_views.create_hkl_lookup_controls(
+    parent=fit_actions_frame,
+    view_state=hkl_lookup_view_state,
+    on_select_hkl=_select_peak_from_hkl_controls,
+    on_toggle_hkl_pick=_toggle_hkl_pick_mode,
+    on_clear_selected_peak=_clear_selected_peak,
+    on_show_bragg_ewald=_open_selected_peak_intersection_figure,
+    on_open_bragg_qr_groups=_open_bragg_qr_toggle_window,
+)
 _update_hkl_pick_button_label()
-
-ttk.Button(
-    hkl_lookup_frame,
-    text="Clear",
-    command=_clear_selected_peak,
-).grid(row=0, column=7, sticky="ew", padx=(0, 6), pady=(4, 2))
-
-ttk.Button(
-    hkl_lookup_frame,
-    text="Show Bragg/Ewald",
-    command=_open_selected_peak_intersection_figure,
-).grid(row=1, column=2, columnspan=3, sticky="ew", padx=(0, 4), pady=(2, 6))
-
-ttk.Button(
-    hkl_lookup_frame,
-    text="Bragg Qr Groups",
-    command=_open_bragg_qr_toggle_window,
-).grid(row=1, column=5, columnspan=3, sticky="ew", padx=(0, 6), pady=(2, 6))
 
 show_qr_cylinder_overlay_var = tk.BooleanVar(value=False)
 
@@ -15770,9 +15725,6 @@ ttk.Checkbutton(
     variable=show_qr_cylinder_overlay_var,
     command=_on_qr_cylinder_overlay_toggle,
 ).pack(side=tk.TOP, padx=5, pady=2)
-
-for _entry in (h_entry, k_entry, l_entry):
-    _entry.bind("<Return>", lambda _event: _select_peak_from_hkl_controls())
 
 clear_geometry_markers_button = ttk.Button(
     fit_actions_frame,

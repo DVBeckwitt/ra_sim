@@ -14,6 +14,7 @@ from .state import (
     BraggQrManagerViewState,
     GeometryToolActionsViewState,
     GeometryFitConstraintsViewState,
+    HklLookupViewState,
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
     WorkspacePanelsViewState,
@@ -235,6 +236,171 @@ def set_geometry_fit_history_button_state(
             configure = getattr(view_state.redo_geometry_fit_button, "configure", None)
         if callable(configure):
             configure(state=("normal" if can_redo else "disabled"))
+
+
+def create_hkl_lookup_controls(
+    *,
+    parent: tk.Misc,
+    view_state: HklLookupViewState,
+    on_select_hkl: Callable[[], None],
+    on_toggle_hkl_pick: Callable[[], None],
+    on_clear_selected_peak: Callable[[], None],
+    on_show_bragg_ewald: Callable[[], None],
+    on_open_bragg_qr_groups: Callable[[], None],
+    selected_h_text: str = "0",
+    selected_k_text: str = "0",
+    selected_l_text: str = "0",
+    hkl_pick_text: str = "Pick HKL on Image",
+) -> None:
+    """Create the HKL lookup / peak-selection control cluster."""
+
+    frame = ttk.LabelFrame(parent, text="Peak Lookup (HKL)")
+    frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4)
+
+    selected_h_var = tk.StringVar(value=str(selected_h_text))
+    selected_k_var = tk.StringVar(value=str(selected_k_text))
+    selected_l_var = tk.StringVar(value=str(selected_l_text))
+    hkl_pick_button_var = tk.StringVar(value=str(hkl_pick_text))
+
+    for col in range(8):
+        frame.columnconfigure(col, weight=1 if col in {1, 3, 5} else 0)
+
+    ttk.Label(frame, text="H").grid(
+        row=0,
+        column=0,
+        sticky="w",
+        padx=(6, 2),
+        pady=(4, 2),
+    )
+    h_entry = ttk.Entry(frame, width=5, textvariable=selected_h_var)
+    h_entry.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=(4, 2))
+
+    ttk.Label(frame, text="K").grid(
+        row=0,
+        column=2,
+        sticky="w",
+        padx=(0, 2),
+        pady=(4, 2),
+    )
+    k_entry = ttk.Entry(frame, width=5, textvariable=selected_k_var)
+    k_entry.grid(row=0, column=3, sticky="ew", padx=(0, 6), pady=(4, 2))
+
+    ttk.Label(frame, text="L").grid(
+        row=0,
+        column=4,
+        sticky="w",
+        padx=(0, 2),
+        pady=(4, 2),
+    )
+    l_entry = ttk.Entry(frame, width=5, textvariable=selected_l_var)
+    l_entry.grid(row=0, column=5, sticky="ew", padx=(0, 8), pady=(4, 2))
+
+    select_button = ttk.Button(
+        frame,
+        text="Select HKL",
+        command=on_select_hkl,
+    )
+    select_button.grid(row=0, column=6, sticky="ew", padx=(0, 4), pady=(4, 2))
+
+    hkl_pick_button = ttk.Button(
+        frame,
+        textvariable=hkl_pick_button_var,
+        command=on_toggle_hkl_pick,
+    )
+    hkl_pick_button.grid(
+        row=1,
+        column=0,
+        columnspan=2,
+        sticky="ew",
+        padx=(6, 4),
+        pady=(2, 6),
+    )
+
+    clear_button = ttk.Button(
+        frame,
+        text="Clear",
+        command=on_clear_selected_peak,
+    )
+    clear_button.grid(row=0, column=7, sticky="ew", padx=(0, 6), pady=(4, 2))
+
+    show_bragg_ewald_button = ttk.Button(
+        frame,
+        text="Show Bragg/Ewald",
+        command=on_show_bragg_ewald,
+    )
+    show_bragg_ewald_button.grid(
+        row=1,
+        column=2,
+        columnspan=3,
+        sticky="ew",
+        padx=(0, 4),
+        pady=(2, 6),
+    )
+
+    bragg_qr_groups_button = ttk.Button(
+        frame,
+        text="Bragg Qr Groups",
+        command=on_open_bragg_qr_groups,
+    )
+    bragg_qr_groups_button.grid(
+        row=1,
+        column=5,
+        columnspan=3,
+        sticky="ew",
+        padx=(0, 6),
+        pady=(2, 6),
+    )
+
+    for entry in (h_entry, k_entry, l_entry):
+        entry.bind("<Return>", lambda _event: on_select_hkl())
+
+    view_state.frame = frame
+    view_state.selected_h_var = selected_h_var
+    view_state.selected_k_var = selected_k_var
+    view_state.selected_l_var = selected_l_var
+    view_state.h_entry = h_entry
+    view_state.k_entry = k_entry
+    view_state.l_entry = l_entry
+    view_state.select_button = select_button
+    view_state.hkl_pick_button_var = hkl_pick_button_var
+    view_state.hkl_pick_button = hkl_pick_button
+    view_state.clear_button = clear_button
+    view_state.show_bragg_ewald_button = show_bragg_ewald_button
+    view_state.bragg_qr_groups_button = bragg_qr_groups_button
+
+
+def set_hkl_lookup_values(
+    view_state: HklLookupViewState,
+    *,
+    h_text: str | None = None,
+    k_text: str | None = None,
+    l_text: str | None = None,
+) -> None:
+    """Update the HKL entry vars for the lookup controls."""
+
+    for var, value in (
+        (view_state.selected_h_var, h_text),
+        (view_state.selected_k_var, k_text),
+        (view_state.selected_l_var, l_text),
+    ):
+        if value is None or var is None:
+            continue
+        setter = getattr(var, "set", None)
+        if callable(setter):
+            setter(str(value))
+
+
+def set_hkl_pick_button_text(
+    view_state: HklLookupViewState,
+    text: str,
+) -> None:
+    """Update the HKL image-pick button label."""
+
+    if view_state.hkl_pick_button_var is None:
+        return
+    setter = getattr(view_state.hkl_pick_button_var, "set", None)
+    if callable(setter):
+        setter(str(text))
 
 
 def set_background_file_status_text(

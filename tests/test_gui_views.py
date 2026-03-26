@@ -251,6 +251,9 @@ class _FakeLabel:
     def pack(self, **_kwargs) -> None:
         pass
 
+    def grid(self, **_kwargs) -> None:
+        pass
+
     def config(self, **kwargs) -> None:
         self.text = kwargs.get("text", self.text)
 
@@ -301,6 +304,9 @@ class _FakeEntry:
     def pack(self, **_kwargs) -> None:
         pass
 
+    def grid(self, **_kwargs) -> None:
+        pass
+
     def bind(self, event: str, callback) -> None:
         self.bindings[event] = callback
 
@@ -316,6 +322,9 @@ class _FakeButton:
         _FakeButton.created.append(self)
 
     def pack(self, **_kwargs) -> None:
+        pass
+
+    def grid(self, **_kwargs) -> None:
         pass
 
     def config(self, **kwargs) -> None:
@@ -688,6 +697,81 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
         "import",
         "toggle-preview",
         "clear",
+    ]
+
+
+def test_hkl_lookup_controls_store_vars_bind_entries_and_support_updates(
+    monkeypatch,
+) -> None:
+    _FakeButton.created = []
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.HklLookupViewState()
+    calls = []
+
+    views.create_hkl_lookup_controls(
+        parent=object(),
+        view_state=view_state,
+        on_select_hkl=lambda: calls.append("select"),
+        on_toggle_hkl_pick=lambda: calls.append("pick"),
+        on_clear_selected_peak=lambda: calls.append("clear"),
+        on_show_bragg_ewald=lambda: calls.append("bragg-ewald"),
+        on_open_bragg_qr_groups=lambda: calls.append("bragg-qr"),
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert view_state.frame.kwargs["text"] == "Peak Lookup (HKL)"
+    assert view_state.selected_h_var.get() == "0"
+    assert view_state.selected_k_var.get() == "0"
+    assert view_state.selected_l_var.get() == "0"
+    assert view_state.hkl_pick_button_var.get() == "Pick HKL on Image"
+    assert view_state.h_entry.textvariable is view_state.selected_h_var
+    assert view_state.k_entry.textvariable is view_state.selected_k_var
+    assert view_state.l_entry.textvariable is view_state.selected_l_var
+    assert [button.kwargs.get("text") for button in _FakeButton.created] == [
+        "Select HKL",
+        None,
+        "Clear",
+        "Show Bragg/Ewald",
+        "Bragg Qr Groups",
+    ]
+    assert _FakeButton.created[1].kwargs["textvariable"] is view_state.hkl_pick_button_var
+
+    view_state.h_entry.bindings["<Return>"](None)
+    view_state.k_entry.bindings["<Return>"](None)
+    view_state.l_entry.bindings["<Return>"](None)
+    assert calls == ["select", "select", "select"]
+
+    views.set_hkl_lookup_values(
+        view_state,
+        h_text="1",
+        k_text="2",
+        l_text="-3",
+    )
+    assert view_state.selected_h_var.get() == "1"
+    assert view_state.selected_k_var.get() == "2"
+    assert view_state.selected_l_var.get() == "-3"
+
+    views.set_hkl_pick_button_text(view_state, "Pick HKL on Image (Armed)")
+    assert view_state.hkl_pick_button_var.get() == "Pick HKL on Image (Armed)"
+
+    for button in _FakeButton.created:
+        if callable(button.command):
+            button.command()
+    assert calls == [
+        "select",
+        "select",
+        "select",
+        "select",
+        "pick",
+        "clear",
+        "bragg-ewald",
+        "bragg-qr",
     ]
 
 
