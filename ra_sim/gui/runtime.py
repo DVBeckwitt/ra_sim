@@ -234,6 +234,7 @@ peak_selection_state = app_state.peak_selection
 atom_site_override_state = app_state.atom_site_override
 geometry_runtime_state = app_state.geometry_runtime
 simulation_runtime_state = app_state.simulation_runtime
+bragg_qr_manager_state = app_state.bragg_qr_manager
 
 instrument_config = app_state.instrument_config.get("instrument", {})
 detector_config = instrument_config.get("detector", {})
@@ -1200,11 +1201,6 @@ simulation_runtime_state.sim_intens1 = simulation_runtime_state.sim_intens1_all.
 simulation_runtime_state.sim_miller2 = simulation_runtime_state.sim_miller2_all.copy()
 simulation_runtime_state.sim_intens2 = simulation_runtime_state.sim_intens2_all.copy()
 simulation_runtime_state.sim_primary_qr = {}
-
-# Tracks disabled Qr groups by (source_label, m-index).
-bragg_qr_manager_state.disabled_groups: set[tuple[str, int]] = set()
-# Tracks disabled L values by (source_label, m-index, quantized_l_key).
-bragg_qr_manager_state.disabled_l_values: set[tuple[str, int, int]] = set()
 
 BRAGG_QR_L_KEY_SCALE = int(1_000_000)
 BRAGG_QR_L_INVALID_KEY = int(np.iinfo(np.int64).min)
@@ -5524,7 +5520,6 @@ def _reset_background_backend_orientation():
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
 hkl_lookup_view_state = app_state.hkl_lookup_view
-bragg_qr_manager_state = app_state.bragg_qr_manager
 bragg_qr_manager_view_state = app_state.bragg_qr_manager_view
 hbn_geometry_debug_view_state = app_state.hbn_geometry_debug_view
 geometry_overlay_actions_view_state = app_state.geometry_overlay_actions_view
