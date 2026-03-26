@@ -11,6 +11,7 @@ from tkinter import ttk
 from .collapsible import CollapsibleFrame
 from .sliders import create_slider
 from .state import (
+    AppShellViewState,
     AnalysisViewControlsViewState,
     AnalysisExportControlsViewState,
     BeamMosaicParameterSlidersViewState,
@@ -31,6 +32,7 @@ from .state import (
     PrimaryCifControlsViewState,
     SamplingOpticsControlsViewState,
     StackingParameterControlsViewState,
+    StatusPanelViewState,
     StructureFactorPruningControlsViewState,
     WorkspacePanelsViewState,
 )
@@ -56,6 +58,309 @@ def create_root_window(title: str = "RA Simulation") -> tk.Tk:
     root = tk.Tk()
     root.title(title)
     return root
+
+
+def _create_scrolled_frame(parent: tk.Misc) -> tuple[tk.Misc, tk.Misc, tk.Canvas]:
+    """Return a vertically scrollable frame body for notebook/control panels."""
+
+    container = ttk.Frame(parent)
+    canvas = tk.Canvas(container, highlightthickness=0, borderwidth=0)
+    scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+    body = ttk.Frame(canvas)
+    body_window = canvas.create_window((0, 0), window=body, anchor="nw")
+
+    def _refresh_scrollregion(_event=None) -> None:
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _resize_body(event) -> None:
+        canvas.itemconfigure(body_window, width=event.width)
+
+    body.bind("<Configure>", _refresh_scrollregion)
+    canvas.bind("<Configure>", _resize_body)
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    return container, body, canvas
+
+
+def _bind_notebook_state(
+    notebook: Any,
+    tab_var: Any,
+    tab_frames: dict[str, Any],
+) -> None:
+    """Keep a notebook selection synchronized with a persisted ``StringVar``."""
+
+    def _select_from_var(*_args) -> None:
+        key = str(tab_var.get()).strip().lower()
+        target = tab_frames.get(key)
+        if target is None:
+            return
+        try:
+            if str(notebook.select()) != str(target):
+                notebook.select(target)
+        except tk.TclError:
+            return
+
+    def _sync_from_notebook(_event=None) -> None:
+        try:
+            selected = notebook.select()
+        except tk.TclError:
+            return
+        for key, tab in tab_frames.items():
+            if str(tab) == str(selected):
+                if tab_var.get() != key:
+                    tab_var.set(key)
+                break
+
+    tab_var.trace_add("write", _select_from_var)
+    notebook.bind("<<NotebookTabChanged>>", _sync_from_notebook, add="+")
+    _select_from_var()
+
+
+def create_app_shell(
+    *,
+    root: tk.Misc,
+    view_state: AppShellViewState,
+) -> None:
+    """Create the shared top-level GUI shell and notebook layout."""
+
+    main_pane = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
+    main_pane.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
+
+    controls_panel = ttk.Frame(main_pane)
+    figure_panel = ttk.Frame(main_pane)
+    main_pane.add(controls_panel, weight=1)
+    main_pane.add(figure_panel, weight=3)
+
+    controls_notebook = ttk.Notebook(controls_panel)
+    controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
+
+    workspace_tab = ttk.Frame(controls_notebook)
+    fit_tab = ttk.Frame(controls_notebook)
+    parameters_tab = ttk.Frame(controls_notebook)
+    analysis_tab = ttk.Frame(controls_notebook)
+    controls_notebook.add(workspace_tab, text="Workspace")
+    controls_notebook.add(fit_tab, text="Fit")
+    controls_notebook.add(parameters_tab, text="Parameters")
+    controls_notebook.add(analysis_tab, text="Analysis")
+
+    workspace_scroll_frame, workspace_body, _workspace_canvas = _create_scrolled_frame(
+        workspace_tab
+    )
+    workspace_scroll_frame.pack(fill=tk.BOTH, expand=True)
+    fit_scroll_frame, fit_body, _fit_canvas = _create_scrolled_frame(fit_tab)
+    fit_scroll_frame.pack(fill=tk.BOTH, expand=True)
+
+    parameter_notebook = ttk.Notebook(parameters_tab)
+    parameter_notebook.pack(fill=tk.BOTH, expand=True)
+    parameter_geometry_tab = ttk.Frame(parameter_notebook)
+    parameter_structure_tab = ttk.Frame(parameter_notebook)
+    parameter_notebook.add(parameter_geometry_tab, text="Geometry && Beam")
+    parameter_notebook.add(parameter_structure_tab, text="Structure && CIF")
+    parameter_geometry_scroll, parameter_geometry_body, _parameter_geometry_canvas = (
+        _create_scrolled_frame(parameter_geometry_tab)
+    )
+    parameter_geometry_scroll.pack(fill=tk.BOTH, expand=True)
+    parameter_structure_scroll, parameter_structure_body, _parameter_structure_canvas = (
+        _create_scrolled_frame(parameter_structure_tab)
+    )
+    parameter_structure_scroll.pack(fill=tk.BOTH, expand=True)
+
+    control_tab_var = tk.StringVar(value="parameters")
+    parameter_tab_var = tk.StringVar(value="geometry")
+    _bind_notebook_state(
+        controls_notebook,
+        control_tab_var,
+        {
+            "workspace": workspace_tab,
+            "fit": fit_tab,
+            "parameters": parameters_tab,
+            "analysis": analysis_tab,
+        },
+    )
+    _bind_notebook_state(
+        parameter_notebook,
+        parameter_tab_var,
+        {
+            "geometry": parameter_geometry_tab,
+            "structure": parameter_structure_tab,
+        },
+    )
+
+    fit_actions_frame = ttk.LabelFrame(fit_body, text="Geometry Tools")
+    fit_actions_frame.pack(fill=tk.X, padx=5, pady=5)
+
+    analysis_controls_frame = ttk.Frame(analysis_tab, padding=(10, 10, 10, 0))
+    analysis_controls_frame.pack(side=tk.TOP, fill=tk.X)
+    analysis_views_frame = ttk.LabelFrame(analysis_controls_frame, text="Views")
+    analysis_views_frame.pack(fill=tk.X, pady=(0, 5))
+    analysis_exports_frame = ttk.LabelFrame(analysis_controls_frame, text="Exports")
+    analysis_exports_frame.pack(fill=tk.X)
+
+    status_frame = ttk.LabelFrame(root, text="Status", padding=(6, 4))
+    status_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=6)
+
+    fig_frame = ttk.Frame(figure_panel)
+    fig_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    canvas_frame = ttk.Frame(fig_frame)
+    canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    left_col = ttk.Frame(parameter_geometry_body, padding=10)
+    left_col.pack(fill=tk.BOTH, expand=True)
+
+    right_col = ttk.Frame(parameter_structure_body, padding=10)
+    right_col.pack(fill=tk.BOTH, expand=True)
+
+    plot_frame_1d = ttk.Frame(analysis_tab, padding=(10, 8, 10, 10))
+    plot_frame_1d.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    view_state.main_pane = main_pane
+    view_state.controls_panel = controls_panel
+    view_state.figure_panel = figure_panel
+    view_state.controls_notebook = controls_notebook
+    view_state.workspace_tab = workspace_tab
+    view_state.fit_tab = fit_tab
+    view_state.parameters_tab = parameters_tab
+    view_state.analysis_tab = analysis_tab
+    view_state.workspace_body = workspace_body
+    view_state.fit_body = fit_body
+    view_state.parameter_notebook = parameter_notebook
+    view_state.parameter_geometry_tab = parameter_geometry_tab
+    view_state.parameter_structure_tab = parameter_structure_tab
+    view_state.parameter_geometry_body = parameter_geometry_body
+    view_state.parameter_structure_body = parameter_structure_body
+    view_state.control_tab_var = control_tab_var
+    view_state.parameter_tab_var = parameter_tab_var
+    view_state.fit_actions_frame = fit_actions_frame
+    view_state.analysis_controls_frame = analysis_controls_frame
+    view_state.analysis_views_frame = analysis_views_frame
+    view_state.analysis_exports_frame = analysis_exports_frame
+    view_state.status_frame = status_frame
+    view_state.fig_frame = fig_frame
+    view_state.canvas_frame = canvas_frame
+    view_state.left_col = left_col
+    view_state.right_col = right_col
+    view_state.plot_frame_1d = plot_frame_1d
+
+
+def _compact_status_text(text: object, *, max_chars: int = 120) -> str:
+    summary = " ".join(str(text).split())
+    if len(summary) > max_chars:
+        return summary[: max_chars - 1] + "..."
+    return summary
+
+
+class ConsoleStatusLabel:
+    """Mirror verbose GUI status messages to the terminal and keep GUI text compact."""
+
+    def __init__(
+        self,
+        parent,
+        *,
+        name: str,
+        max_gui_chars: int = 120,
+        **label_kwargs,
+    ) -> None:
+        self._name = str(name)
+        self._max_gui_chars = max(16, int(max_gui_chars))
+        self._last_full_text = ""
+        self._label = ttk.Label(
+            parent,
+            wraplength=0,
+            justify=tk.LEFT,
+            anchor=tk.W,
+            **label_kwargs,
+        )
+
+    def config(self, cnf=None, **kwargs):
+        options = {}
+        if isinstance(cnf, dict):
+            options.update(cnf)
+        options.update(kwargs)
+        if "text" in options:
+            raw_text = "" if options["text"] is None else str(options["text"])
+            if raw_text != self._last_full_text:
+                if raw_text.strip():
+                    print(f"[{self._name}] {raw_text}", flush=True)
+                self._last_full_text = raw_text
+            options["text"] = _compact_status_text(
+                raw_text,
+                max_chars=self._max_gui_chars,
+            )
+            options.pop("wraplength", None)
+        return self._label.config(**options)
+
+    configure = config
+
+    def cget(self, key):
+        return self._label.cget(key)
+
+    def __getattr__(self, name):
+        return getattr(self._label, name)
+
+
+def create_status_panel(
+    *,
+    parent: tk.Misc,
+    view_state: StatusPanelViewState,
+) -> None:
+    """Create the shared bottom status-panel labels and progress bar."""
+
+    progress_label_positions = ConsoleStatusLabel(
+        parent,
+        name="positions",
+        max_gui_chars=110,
+    )
+    progress_label_positions.pack(side=tk.BOTTOM, padx=5)
+
+    progress_label_geometry = ConsoleStatusLabel(
+        parent,
+        name="geometry",
+        max_gui_chars=110,
+    )
+    progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
+
+    mosaic_progressbar = ttk.Progressbar(parent, mode="indeterminate", length=240)
+    mosaic_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
+
+    progress_label_mosaic = ConsoleStatusLabel(
+        parent,
+        name="mosaic",
+        max_gui_chars=110,
+    )
+    progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
+
+    progress_label = ConsoleStatusLabel(
+        parent,
+        name="gui",
+        max_gui_chars=110,
+        font=("Helvetica", 8),
+    )
+    progress_label.pack(side=tk.BOTTOM, padx=5)
+
+    update_timing_label = ttk.Label(
+        parent,
+        text="Timing | image generation: n/a | redraw/update: n/a | total: n/a",
+        font=("Helvetica", 8),
+    )
+    update_timing_label.pack(side=tk.BOTTOM, padx=5)
+
+    chi_square_label = ttk.Label(
+        parent,
+        text="Chi-Squared: ",
+        font=("Helvetica", 8),
+    )
+    chi_square_label.pack(side=tk.BOTTOM, padx=5)
+
+    view_state.progress_label_positions = progress_label_positions
+    view_state.progress_label_geometry = progress_label_geometry
+    view_state.mosaic_progressbar = mosaic_progressbar
+    view_state.progress_label_mosaic = progress_label_mosaic
+    view_state.progress_label = progress_label
+    view_state.update_timing_label = update_timing_label
+    view_state.chi_square_label = chi_square_label
 
 
 def create_workspace_panels(

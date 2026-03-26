@@ -160,6 +160,45 @@ class _FakeFrame:
         self.bindings[event] = callback
 
 
+class _FakePanedwindow:
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.added = []
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+    def add(self, child, *, weight: int) -> None:
+        self.added.append((child, weight))
+
+
+class _FakeNotebook:
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.tabs = []
+        self.bindings = {}
+        self.selected_tab = None
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+    def add(self, child, *, text: str) -> None:
+        self.tabs.append((child, text))
+        if self.selected_tab is None:
+            self.selected_tab = child
+
+    def bind(self, event: str, callback, add=None) -> None:
+        self.bindings[event] = (callback, add)
+
+    def select(self, value=None):
+        if value is None:
+            return self.selected_tab
+        self.selected_tab = value
+        return self.selected_tab
+
+
 class _FakeScrollbar:
     created = []
 
@@ -257,6 +296,22 @@ class _FakeLabel:
     def config(self, **kwargs) -> None:
         self.text = kwargs.get("text", self.text)
 
+    configure = config
+
+    def cget(self, key: str):
+        if key == "text":
+            return self.text
+        return self.kwargs.get(key)
+
+
+class _FakeProgressbar:
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
 
 class _FakeCheckbutton:
     created = []
@@ -286,12 +341,19 @@ class _FakeVar:
 class _FakeStringVar:
     def __init__(self, value="") -> None:
         self._value = value
+        self._trace_callbacks = []
 
     def get(self):
         return self._value
 
     def set(self, value) -> None:
         self._value = value
+
+        for callback in list(self._trace_callbacks):
+            callback()
+
+    def trace_add(self, _mode: str, callback) -> None:
+        self._trace_callbacks.append(callback)
 
 
 class _FakeEntry:
@@ -644,6 +706,107 @@ def test_open_hbn_geometry_debug_window_populates_and_reuses_existing_window(
 
     created_windows[0].protocols["WM_DELETE_WINDOW"]()
     assert closed == [True]
+
+
+def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
+    monkeypatch,
+) -> None:
+    _FakeScrollbar.created = []
+    monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
+    monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.AppShellViewState()
+    views.create_app_shell(root=object(), view_state=view_state)
+
+    assert isinstance(view_state.main_pane, _FakePanedwindow)
+    assert view_state.main_pane.added == [
+        (view_state.controls_panel, 1),
+        (view_state.figure_panel, 3),
+    ]
+    assert isinstance(view_state.controls_notebook, _FakeNotebook)
+    assert [text for _, text in view_state.controls_notebook.tabs] == [
+        "Workspace",
+        "Fit",
+        "Parameters",
+        "Analysis",
+    ]
+    assert [text for _, text in view_state.parameter_notebook.tabs] == [
+        "Geometry && Beam",
+        "Structure && CIF",
+    ]
+    assert isinstance(view_state.workspace_body, _FakeFrame)
+    assert isinstance(view_state.fit_body, _FakeFrame)
+    assert isinstance(view_state.parameter_geometry_body, _FakeFrame)
+    assert isinstance(view_state.parameter_structure_body, _FakeFrame)
+    assert isinstance(view_state.fit_actions_frame, _FakeFrame)
+    assert isinstance(view_state.analysis_views_frame, _FakeFrame)
+    assert isinstance(view_state.analysis_exports_frame, _FakeFrame)
+    assert isinstance(view_state.status_frame, _FakeFrame)
+    assert isinstance(view_state.fig_frame, _FakeFrame)
+    assert isinstance(view_state.canvas_frame, _FakeFrame)
+    assert isinstance(view_state.left_col, _FakeFrame)
+    assert isinstance(view_state.right_col, _FakeFrame)
+    assert isinstance(view_state.plot_frame_1d, _FakeFrame)
+    assert view_state.control_tab_var.get() == "parameters"
+    assert view_state.parameter_tab_var.get() == "geometry"
+    assert view_state.controls_notebook.selected_tab is view_state.parameters_tab
+    assert view_state.parameter_notebook.selected_tab is view_state.parameter_geometry_tab
+
+    view_state.control_tab_var.set("fit")
+    assert view_state.controls_notebook.selected_tab is view_state.fit_tab
+
+    callback, add = view_state.parameter_notebook.bindings["<<NotebookTabChanged>>"]
+    assert add == "+"
+    view_state.parameter_notebook.select(view_state.parameter_structure_tab)
+    callback(None)
+    assert view_state.parameter_tab_var.get() == "structure"
+
+
+def test_console_status_label_compacts_text_and_logs_once(monkeypatch) -> None:
+    _FakeLabel.created = []
+    printed = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(
+        "builtins.print",
+        lambda *args, **kwargs: printed.append((args, kwargs)),
+    )
+
+    label = views.ConsoleStatusLabel(
+        object(),
+        name="gui",
+        max_gui_chars=20,
+    )
+    label.config(text="This is a fairly long status line")
+
+    assert printed == [
+        (("[gui] This is a fairly long status line",), {"flush": True}),
+    ]
+    assert label.cget("text") == "This is a fairly lo..."
+
+    label.config(text="This is a fairly long status line")
+    assert len(printed) == 1
+
+
+def test_create_status_panel_stores_console_labels_and_progressbar(monkeypatch) -> None:
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Progressbar", _FakeProgressbar)
+
+    view_state = state.StatusPanelViewState()
+    views.create_status_panel(parent=object(), view_state=view_state)
+
+    assert isinstance(view_state.progress_label_positions, views.ConsoleStatusLabel)
+    assert isinstance(view_state.progress_label_geometry, views.ConsoleStatusLabel)
+    assert isinstance(view_state.mosaic_progressbar, _FakeProgressbar)
+    assert isinstance(view_state.progress_label_mosaic, views.ConsoleStatusLabel)
+    assert isinstance(view_state.progress_label, views.ConsoleStatusLabel)
+    assert view_state.update_timing_label.text.startswith("Timing | image generation:")
+    assert view_state.chi_square_label.text == "Chi-Squared: "
 
 
 def test_create_workspace_panels_stores_panel_refs(monkeypatch) -> None:

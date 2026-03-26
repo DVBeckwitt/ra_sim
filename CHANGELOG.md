@@ -33,6 +33,7 @@
   - Moved the optional CIF-weight control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers and reused a controller helper for weighted intensity recompute.
   - Moved the fit-geometry parameter checklist out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
   - Moved the 1D integration-range control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
+  - Moved the top-level GUI shell and bottom status panel out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers, including notebook state sync and compact console-backed status labels.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.

@@ -215,6 +215,15 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.views` now owns that control-cluster construction and entry
     bindings.
   - Direct view tests now cover the extracted integration-range helper.
+- GUI shell / status-panel migration has landed.
+  - Shared widget references for the top-level notebook shell, scrolled panel
+    bodies, parameter columns, analysis containers, and bottom status panel now
+    live in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns the top-level shell construction, notebook
+    state synchronization, compact console-backed status labels, and status
+    panel construction.
+  - Direct view tests now cover the extracted app-shell and status-panel
+    helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -340,15 +349,22 @@ What is done:
   - `ra_sim.gui.state` now owns their shared widget/Tk-var view state.
   - `ra_sim.gui.views` now owns that control-cluster construction and entry
     bindings.
+- The top-level GUI shell is no longer assembled directly in `runtime.py`.
+  - `ra_sim.gui.state` now owns the notebook-shell/status-panel view state.
+  - `ra_sim.gui.views` now owns the top-level pane/notebook/scrolled-frame
+    construction and notebook selection synchronization helpers.
+- The bottom status panel is no longer built directly in `runtime.py`.
+  - `ra_sim.gui.views` now owns the compact console-backed status-label wrapper
+    and the shared status-panel construction helper.
 
 What is left:
 
 - `ra_sim/gui/runtime.py` is still very large and still owns too much mutable
   GUI state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
-- Other bounded GUI slices are still assembled inline in `runtime.py`,
-  especially the remaining Tk-heavy parameter surfaces and cross-feature
-  workflow glue.
+- The main remaining runtime-decomposition work is now cross-feature workflow
+  glue and long-lived mutable state ownership rather than isolated widget
+  construction.
 
 Why it matters:
 
@@ -460,6 +476,11 @@ What is done:
 - `state.py` now also owns the 1D integration-range control view state.
 - `views.py` now also owns that control-cluster construction and entry
   bindings.
+- `state.py` now also owns the top-level app-shell and status-panel view
+  state.
+- `views.py` now also owns the top-level pane/notebook shell construction,
+  notebook state synchronization, compact status-label wrapper, and shared
+  status-panel construction.
 
 What is left:
 
@@ -467,9 +488,9 @@ What is left:
   state/controller/view boundary.
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
-- Other Tk-heavy surfaces still need to move behind `views.py` helpers.
-- The next practical view-state targets are the remaining cross-feature
-  runtime-owned helpers and similarly isolated Tk-heavy parameter surfaces.
+- The next practical boundary targets are the remaining cross-feature
+  runtime-owned helpers and workflow/state transitions that still live inline
+  in `runtime.py`.
 
 Why it matters:
 
@@ -631,9 +652,8 @@ Goal:
 Tasks:
 
 - Group more runtime globals into explicit state containers.
-- Move the next remaining inline control clusters
-  (remaining Tk-heavy parameter surfaces and similar controls) into `views.py`
-  helpers and shared view state.
+- Move remaining long-lived runtime-owned widget/state coordination into shared
+  state containers and `views.py` helpers where it still exists.
 - Reduce direct feature coordination in `runtime.py` where controller logic or
   shared state can own it instead.
 - Keep moving Tk-owned widget references out of runtime and into `views.py`
@@ -732,18 +752,16 @@ Why last:
 
 The next best step is:
 
-- build on the newer display-control, pruning-control, beam/mosaic-slider, and
-  stacking/occupancy/atom-site, primary-CIF, CIF-weight, fit-checklist, and
-  integration-range extractions by moving the next
-  runtime-owned GUI control clusters into explicit state + controller + view
-  boundaries
-- focus next on the remaining cross-feature runtime-owned state/helpers and
-  similarly isolated Tk-heavy parameter surfaces in `runtime.py`
-- keep shrinking the remaining cross-feature globals and inline Tk-heavy
-  helpers that prevent the extracted scaffolding modules from becoming the
-  dominant app structure
+- build on the new app-shell/status-panel extraction by moving the remaining
+  cross-feature runtime-owned workflow/state glue into explicit state +
+  controller + view boundaries
+- focus next on the remaining long-lived mutable state ownership and
+  cross-feature helper orchestration that still lives inline in
+  `ra_sim/gui/runtime.py`
+- keep shrinking the remaining cross-feature globals that prevent the extracted
+  scaffolding modules from becoming the dominant app structure
 
-That is the point where the migration stops being “more helper extraction” and
+That is the point where the migration stops being "more helper extraction" and
 starts becoming a real architectural finish.
 
 ## Tracking Notes

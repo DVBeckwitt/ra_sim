@@ -200,24 +200,31 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     sliders, labels, and entry widgets now use shared GUI state
   - integration-range control construction and entry bindings now flow through
     `ra_sim.gui.views`
+- GUI shell / status-panel migration has also landed:
+  - shared widget references for the top-level notebook shell, scrolled panel
+    bodies, parameter columns, analysis containers, and status panel now use
+    shared GUI state
+  - top-level shell construction, notebook state synchronization, compact
+    console-backed status labels, and status-panel construction now flow
+    through `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
   background-theta/background-debug/geometry-tool-action/HKL-lookup/
   overlay-action/analysis-view/analysis-export/sampling-optics/finite-stack/
   display-controls/pruning-controls/beam-mosaic-slider/stacking-parameter/
-  primary-CIF/CIF-weight/fit-checklist/integration-range helper coverage
+  primary-CIF/CIF-weight/fit-checklist/integration-range/app-shell/status
+  helper coverage
 
 ## Remaining Migration Focus
 
 - `ra_sim.gui.runtime` is still the largest remaining integration monolith.
-- `ra_sim.gui.views` is now active for the Qr/Qz selector, but other Tk-heavy
-  surfaces still need the same treatment, especially the remaining widget-heavy
-  runtime-owned helpers and cross-feature workflow glue that still assemble
-  long-lived Tk references or own mutable GUI state inline.
+- The remaining runtime-decomposition work is now the cross-feature workflow
+  glue and long-lived mutable state ownership that still live inline in
+  `ra_sim.gui.runtime`, not the top-level widget shell.
 - The next bounded GUI targets are the remaining cross-feature runtime-owned
-  helpers and similarly isolated Tk-heavy parameter surfaces that are still
-  built directly in `ra_sim.gui.runtime`.
+  helpers and workflow/state transitions that still bypass the newer
+  state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

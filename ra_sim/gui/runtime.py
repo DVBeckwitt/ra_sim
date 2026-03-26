@@ -1880,6 +1880,8 @@ background_visible = True
 background_backend_rotation_k = 3
 background_backend_flip_x = False
 background_backend_flip_y = False
+app_shell_view_state = gui_state.AppShellViewState()
+status_panel_view_state = gui_state.StatusPanelViewState()
 background_theta_controls_view_state = gui_state.BackgroundThetaControlsViewState()
 workspace_panels_view_state = gui_state.WorkspacePanelsViewState()
 background_backend_debug_view_state = gui_state.BackgroundBackendDebugViewState()
@@ -2588,128 +2590,25 @@ measured_peaks = []
 ###############################################################################
 #                                  TK SETUP
 ###############################################################################
-root = tk.Tk()
-root.title("RA-SIM Simulation")
+root = gui_views.create_root_window("RA-SIM Simulation")
 root.minsize(1200, 760)
-
-main_pane = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
-main_pane.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
-
-controls_panel = ttk.Frame(main_pane)
-figure_panel = ttk.Frame(main_pane)
-main_pane.add(controls_panel, weight=1)
-main_pane.add(figure_panel, weight=3)
-
-
-def _create_scrolled_frame(parent):
-    """Return a vertically scrollable frame body for notebook/control panels."""
-
-    container = ttk.Frame(parent)
-    canvas = tk.Canvas(container, highlightthickness=0, borderwidth=0)
-    scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
-    body = ttk.Frame(canvas)
-    body_window = canvas.create_window((0, 0), window=body, anchor="nw")
-
-    def _refresh_scrollregion(_event=None):
-        canvas.configure(scrollregion=canvas.bbox("all"))
-
-    def _resize_body(event):
-        canvas.itemconfigure(body_window, width=event.width)
-
-    body.bind("<Configure>", _refresh_scrollregion)
-    canvas.bind("<Configure>", _resize_body)
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    return container, body, canvas
-
-
-def _bind_notebook_state(notebook, tab_var, tab_frames):
-    """Keep a notebook selection synchronized with a persisted ``StringVar``."""
-
-    def _select_from_var(*_args):
-        key = str(tab_var.get()).strip().lower()
-        target = tab_frames.get(key)
-        if target is None:
-            return
-        try:
-            if str(notebook.select()) != str(target):
-                notebook.select(target)
-        except tk.TclError:
-            return
-
-    def _sync_from_notebook(_event=None):
-        try:
-            selected = notebook.select()
-        except tk.TclError:
-            return
-        for key, tab in tab_frames.items():
-            if str(tab) == str(selected):
-                if tab_var.get() != key:
-                    tab_var.set(key)
-                break
-
-    tab_var.trace_add("write", _select_from_var)
-    notebook.bind("<<NotebookTabChanged>>", _sync_from_notebook, add="+")
-    _select_from_var()
-
-
-controls_notebook = ttk.Notebook(controls_panel)
-controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
-
-workspace_tab = ttk.Frame(controls_notebook)
-fit_tab = ttk.Frame(controls_notebook)
-parameters_tab = ttk.Frame(controls_notebook)
-analysis_tab = ttk.Frame(controls_notebook)
-controls_notebook.add(workspace_tab, text="Workspace")
-controls_notebook.add(fit_tab, text="Fit")
-controls_notebook.add(parameters_tab, text="Parameters")
-controls_notebook.add(analysis_tab, text="Analysis")
-
-workspace_scroll_frame, workspace_body, _workspace_canvas = _create_scrolled_frame(workspace_tab)
-workspace_scroll_frame.pack(fill=tk.BOTH, expand=True)
-fit_scroll_frame, fit_body, _fit_canvas = _create_scrolled_frame(fit_tab)
-fit_scroll_frame.pack(fill=tk.BOTH, expand=True)
-
-parameter_notebook = ttk.Notebook(parameters_tab)
-parameter_notebook.pack(fill=tk.BOTH, expand=True)
-parameter_geometry_tab = ttk.Frame(parameter_notebook)
-parameter_structure_tab = ttk.Frame(parameter_notebook)
-parameter_notebook.add(parameter_geometry_tab, text="Geometry && Beam")
-parameter_notebook.add(parameter_structure_tab, text="Structure && CIF")
-parameter_geometry_scroll, parameter_geometry_body, _parameter_geometry_canvas = _create_scrolled_frame(
-    parameter_geometry_tab
-)
-parameter_geometry_scroll.pack(fill=tk.BOTH, expand=True)
-parameter_structure_scroll, parameter_structure_body, _parameter_structure_canvas = _create_scrolled_frame(
-    parameter_structure_tab
-)
-parameter_structure_scroll.pack(fill=tk.BOTH, expand=True)
-
-control_tab_var = tk.StringVar(value="parameters")
-parameter_tab_var = tk.StringVar(value="geometry")
-_bind_notebook_state(
-    controls_notebook,
-    control_tab_var,
-    {
-        "workspace": workspace_tab,
-        "fit": fit_tab,
-        "parameters": parameters_tab,
-        "analysis": analysis_tab,
-    },
-)
-_bind_notebook_state(
-    parameter_notebook,
-    parameter_tab_var,
-    {
-        "geometry": parameter_geometry_tab,
-        "structure": parameter_structure_tab,
-    },
-)
+gui_views.create_app_shell(root=root, view_state=app_shell_view_state)
+if (
+    app_shell_view_state.workspace_body is None
+    or app_shell_view_state.fit_body is None
+    or app_shell_view_state.analysis_views_frame is None
+    or app_shell_view_state.analysis_exports_frame is None
+    or app_shell_view_state.status_frame is None
+    or app_shell_view_state.fig_frame is None
+    or app_shell_view_state.canvas_frame is None
+    or app_shell_view_state.left_col is None
+    or app_shell_view_state.right_col is None
+    or app_shell_view_state.plot_frame_1d is None
+):
+    raise RuntimeError("Top-level GUI shell was not created.")
 
 gui_views.create_workspace_panels(
-    parent=workspace_body,
+    parent=app_shell_view_state.workspace_body,
     view_state=workspace_panels_view_state,
 )
 if (
@@ -2718,22 +2617,6 @@ if (
     or workspace_panels_view_state.workspace_session_frame is None
 ):
     raise RuntimeError("Workspace panels were not created.")
-
-fit_actions_frame = ttk.LabelFrame(fit_body, text="Geometry Tools")
-fit_actions_frame.pack(fill=tk.X, padx=5, pady=5)
-
-analysis_controls_frame = ttk.Frame(analysis_tab, padding=(10, 10, 10, 0))
-analysis_controls_frame.pack(side=tk.TOP, fill=tk.X)
-analysis_views_frame = ttk.LabelFrame(analysis_controls_frame, text="Views")
-analysis_views_frame.pack(fill=tk.X, pady=(0, 5))
-analysis_exports_frame = ttk.LabelFrame(analysis_controls_frame, text="Exports")
-analysis_exports_frame.pack(fill=tk.X)
-
-status_frame = ttk.LabelFrame(root, text="Status", padding=(6, 4))
-status_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=6)
-
-fig_frame = ttk.Frame(figure_panel)
-fig_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 
 def _shutdown_gui():
@@ -2755,12 +2638,12 @@ def _shutdown_gui():
 
 root.protocol("WM_DELETE_WINDOW", _shutdown_gui)
 
-canvas_frame = ttk.Frame(fig_frame)
-canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
 fig, ax = plt.subplots(figsize=(8, 8))
 ax.set_aspect("auto")
-canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(fig, master=canvas_frame)
+canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
+    fig,
+    master=app_shell_view_state.canvas_frame,
+)
 canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
 global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
@@ -7779,7 +7662,7 @@ scale_factor_slider_max = 2.0
 scale_factor_step = 0.0001
 
 gui_views.create_display_controls(
-    parent=fig_frame,
+    parent=app_shell_view_state.fig_frame,
     view_state=display_controls_view_state,
     background_range=(background_slider_min, background_slider_max),
     background_defaults=(background_vmin_default, background_vmax_default),
@@ -8280,20 +8163,11 @@ caked_limits_user_override = False
 vmin_caked_var = tk.DoubleVar(value=0.0)
 vmax_caked_var = tk.DoubleVar(value=2000.0)
 
-slider_frame = ttk.Frame(parameters_tab)
-slider_frame.pack(fill=tk.BOTH, expand=True)
-
-left_col = ttk.Frame(parameter_geometry_body, padding=10)
-left_col.pack(fill=tk.BOTH, expand=True)
-
-right_col = ttk.Frame(parameter_structure_body, padding=10)
-right_col.pack(fill=tk.BOTH, expand=True)
-
-plot_frame_1d = ttk.Frame(analysis_tab, padding=(10, 8, 10, 10))
-plot_frame_1d.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
 fig_1d, (ax_1d_radial, ax_1d_azim) = plt.subplots(2, 1, figsize=(5, 8))
-canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(fig_1d, master=plot_frame_1d)
+canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
+    fig_1d,
+    master=app_shell_view_state.plot_frame_1d,
+)
 canvas_1d.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
 line_1d_rad, = ax_1d_radial.plot([], [], 'b-', label='Simulated (2θ)')
@@ -8386,7 +8260,7 @@ def phi_max_slider_command(val):
     schedule_range_update()
 
 gui_views.create_integration_range_controls(
-    parent=plot_frame_1d,
+    parent=app_shell_view_state.plot_frame_1d,
     view_state=integration_range_controls_view_state,
     tth_min=0.0,
     tth_max=60.0,
@@ -10292,8 +10166,8 @@ background_theta_list_var = background_theta_controls_view_state.background_thet
 geometry_theta_offset_var = background_theta_controls_view_state.geometry_theta_offset_var
 _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
 
-gui_views.create_geometry_fit_background_controls(
-    parent=fit_body,
+    gui_views.create_geometry_fit_background_controls(
+        parent=app_shell_view_state.fit_body,
     view_state=background_theta_controls_view_state,
     selection_text=_default_geometry_fit_background_selection(),
     on_apply=lambda: _apply_geometry_fit_background_selection(trigger_update=True),
@@ -10359,97 +10233,27 @@ gui_views.populate_stacked_button_group(
     ],
 )
 
-def _compact_status_text(text: object, *, max_chars: int = 120) -> str:
-    summary = " ".join(str(text).split())
-    if len(summary) > max_chars:
-        return summary[: max_chars - 1] + "..."
-    return summary
-
-
-class ConsoleStatusLabel:
-    """Mirror verbose GUI status messages to the terminal and keep GUI text compact."""
-
-    def __init__(
-        self,
-        parent,
-        *,
-        name: str,
-        max_gui_chars: int = 120,
-        **label_kwargs,
-    ) -> None:
-        self._name = str(name)
-        self._max_gui_chars = max(16, int(max_gui_chars))
-        self._last_full_text = ""
-        self._label = ttk.Label(parent, wraplength=0, justify=tk.LEFT, anchor=tk.W, **label_kwargs)
-
-    def config(self, cnf=None, **kwargs):
-        options = {}
-        if isinstance(cnf, dict):
-            options.update(cnf)
-        options.update(kwargs)
-        if "text" in options:
-            raw_text = "" if options["text"] is None else str(options["text"])
-            if raw_text != self._last_full_text:
-                if raw_text.strip():
-                    print(f"[{self._name}] {raw_text}", flush=True)
-                self._last_full_text = raw_text
-            options["text"] = _compact_status_text(
-                raw_text,
-                max_chars=self._max_gui_chars,
-            )
-            options.pop("wraplength", None)
-        return self._label.config(**options)
-
-    configure = config
-
-    def cget(self, key):
-        return self._label.cget(key)
-
-    def __getattr__(self, name):
-        return getattr(self._label, name)
-
-
-progress_label_positions = ConsoleStatusLabel(
-    status_frame,
-    name="positions",
-    max_gui_chars=110,
+gui_views.create_status_panel(
+    parent=app_shell_view_state.status_frame,
+    view_state=status_panel_view_state,
 )
-progress_label_positions.pack(side=tk.BOTTOM, padx=5)
-
-progress_label_geometry = ConsoleStatusLabel(
-    status_frame,
-    name="geometry",
-    max_gui_chars=110,
-)
-progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
-
-mosaic_progressbar = ttk.Progressbar(status_frame, mode="indeterminate", length=240)
-mosaic_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
-
-progress_label_mosaic = ConsoleStatusLabel(
-    status_frame,
-    name="mosaic",
-    max_gui_chars=110,
-)
-progress_label_mosaic.pack(side=tk.BOTTOM, padx=5)
-
-progress_label = ConsoleStatusLabel(
-    status_frame,
-    name="gui",
-    max_gui_chars=110,
-    font=("Helvetica", 8),
-)
-progress_label.pack(side=tk.BOTTOM, padx=5)
-
-update_timing_label = ttk.Label(
-    status_frame,
-    text="Timing | image generation: n/a | redraw/update: n/a | total: n/a",
-    font=("Helvetica", 8),
-)
-update_timing_label.pack(side=tk.BOTTOM, padx=5)
-
-chi_square_label = ttk.Label(status_frame, text="Chi-Squared: ", font=("Helvetica", 8))
-chi_square_label.pack(side=tk.BOTTOM, padx=5)
+progress_label_positions = status_panel_view_state.progress_label_positions
+progress_label_geometry = status_panel_view_state.progress_label_geometry
+mosaic_progressbar = status_panel_view_state.mosaic_progressbar
+progress_label_mosaic = status_panel_view_state.progress_label_mosaic
+progress_label = status_panel_view_state.progress_label
+update_timing_label = status_panel_view_state.update_timing_label
+chi_square_label = status_panel_view_state.chi_square_label
+if (
+    progress_label_positions is None
+    or progress_label_geometry is None
+    or mosaic_progressbar is None
+    or progress_label_mosaic is None
+    or progress_label is None
+    or update_timing_label is None
+    or chi_square_label is None
+):
+    raise RuntimeError("Status panel was not created.")
 
 last_hbn_geometry_debug_report = (
     "No hBN geometry debug report yet.\n"
@@ -11029,7 +10833,7 @@ gui_views.populate_stacked_button_group(
 
 # Frame for selecting which geometry params to fit
 gui_views.create_geometry_fit_parameter_controls(
-    parent=fit_body,
+    parent=app_shell_view_state.fit_body,
     view_state=geometry_fit_parameter_controls_view_state,
     initial_values={
         "zb": True,
@@ -11094,7 +10898,7 @@ def _sync_geometry_fit_constraint_rows(*_args) -> None:
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     gui_views.create_background_backend_debug_controls(
-        parent=fit_body,
+        parent=app_shell_view_state.fit_body,
         view_state=background_backend_debug_view_state,
         status_text=_background_backend_status(),
         on_rotate_minus_90=lambda: _rotate_background_backend(-1),
@@ -11106,7 +10910,7 @@ if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
 
 if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
     gui_views.create_backend_orientation_debug_controls(
-        parent=fit_body,
+        parent=app_shell_view_state.fit_body,
         view_state=background_backend_debug_view_state,
     )
 
@@ -15569,7 +15373,7 @@ def on_fit_geometry_click():
 
 
 fit_button_geometry = ttk.Button(
-    fit_actions_frame,
+    app_shell_view_state.fit_actions_frame,
     text="Fit Positions & Geometry",
     command=on_fit_geometry_click
 )
@@ -15578,7 +15382,7 @@ fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_cl
 
 live_geometry_preview_var = tk.BooleanVar(value=False)
 gui_views.create_geometry_tool_action_controls(
-    parent=fit_actions_frame,
+    parent=app_shell_view_state.fit_actions_frame,
     view_state=geometry_tool_actions_view_state,
     on_undo_fit=_undo_last_geometry_fit,
     on_redo_fit=_redo_last_geometry_fit,
@@ -15594,7 +15398,7 @@ _update_geometry_manual_pick_button_label()
 _update_geometry_preview_exclude_button_label()
 
 gui_views.create_hkl_lookup_controls(
-    parent=fit_actions_frame,
+    parent=app_shell_view_state.fit_actions_frame,
     view_state=hkl_lookup_view_state,
     on_select_hkl=_select_peak_from_hkl_controls,
     on_toggle_hkl_pick=_toggle_hkl_pick_mode,
@@ -15615,7 +15419,7 @@ def _on_qr_cylinder_overlay_toggle():
 
 
 gui_views.create_geometry_overlay_action_controls(
-    parent=fit_actions_frame,
+    parent=app_shell_view_state.fit_actions_frame,
     view_state=geometry_overlay_actions_view_state,
     on_toggle_qr_cylinder_overlay=_on_qr_cylinder_overlay_toggle,
     on_clear_geometry_overlays=_clear_all_geometry_overlay_artists,
@@ -15652,7 +15456,7 @@ def toggle_log_azimuth():
 
 
 gui_views.create_analysis_view_controls(
-    parent=analysis_views_frame,
+    parent=app_shell_view_state.analysis_views_frame,
     view_state=analysis_view_controls_view_state,
     on_toggle_1d_plots=toggle_1d_plots,
     on_toggle_caked_2d=toggle_caked_2d,
@@ -15799,7 +15603,7 @@ def save_1d_permutations():
     pass
 
 gui_views.create_analysis_export_controls(
-    parent=analysis_exports_frame,
+    parent=app_shell_view_state.analysis_exports_frame,
     view_state=analysis_export_controls_view_state,
     on_save_snapshot=save_1d_snapshot,
     on_save_q_space=save_q_space_representation,
@@ -15885,19 +15689,30 @@ gui_views.populate_stacked_button_group(
 
 # Group related sliders in collapsible sections so the interface remains
 # manageable as more controls are added.
-geo_frame = CollapsibleFrame(left_col, text='Geometry', expanded=True)
+geo_frame = CollapsibleFrame(
+    app_shell_view_state.left_col,
+    text='Geometry',
+    expanded=True,
+)
 geo_frame.pack(fill=tk.X, padx=5, pady=5)
 
-debye_frame = CollapsibleFrame(left_col, text='Debye Parameters')
+debye_frame = CollapsibleFrame(app_shell_view_state.left_col, text='Debye Parameters')
 debye_frame.pack(fill=tk.X, padx=5, pady=5)
 
-detector_frame = CollapsibleFrame(right_col, text='Detector')
+detector_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Detector')
 detector_frame.pack(fill=tk.X, padx=5, pady=5)
 
-lattice_frame = CollapsibleFrame(right_col, text='Lattice Parameters', expanded=True)
+lattice_frame = CollapsibleFrame(
+    app_shell_view_state.right_col,
+    text='Lattice Parameters',
+    expanded=True,
+)
 lattice_frame.pack(fill=tk.X, padx=5, pady=5)
 
-mosaic_frame = CollapsibleFrame(right_col, text='Mosaic Broadening')
+mosaic_frame = CollapsibleFrame(
+    app_shell_view_state.right_col,
+    text='Mosaic Broadening',
+)
 mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
 
 initial_resolution = defaults.get('sampling_resolution', 'Low')
@@ -16160,7 +15975,7 @@ solve_q_rel_tol_var.trace_add('write', on_solve_q_rel_tol_change)
 solve_q_mode_var.trace_add('write', on_solve_q_mode_change)
 _set_solve_q_control_states()
 
-center_frame = CollapsibleFrame(right_col, text='Beam Controls')
+center_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
 gui_views.create_beam_mosaic_parameter_sliders(
@@ -16439,7 +16254,7 @@ def _default_geometry_fit_pull(name: str, window: float) -> float:
 
 
 gui_views.create_geometry_fit_constraints_panel(
-    parent=fit_body,
+    parent=app_shell_view_state.fit_body,
     root=root,
     view_state=geometry_fit_constraints_view_state,
     after=fit_frame,
@@ -16528,7 +16343,7 @@ _refresh_geometry_fit_theta_checkbox_label()
 # Slider controlling contribution of the first CIF file, only if a second CIF
 # was provided.
 gui_views.create_cif_weight_controls(
-    parent=right_col,
+    parent=app_shell_view_state.right_col,
     view_state=cif_weight_controls_view_state,
     has_second_cif=bool(has_second_cif),
     weight1=float(weight1),
@@ -16948,7 +16763,7 @@ def _on_layer_slider(val):
 
 # Sliders for three disorder probabilities and weights inside a collapsible frame
 gui_views.create_stacking_parameter_panels(
-    parent=right_col,
+    parent=app_shell_view_state.right_col,
     view_state=stacking_parameter_controls_view_state,
 )
 gui_views.create_finite_stack_controls(
@@ -17377,7 +17192,7 @@ _rebuild_occupancy_controls()
 _rebuild_atom_site_fractional_controls()
 
 gui_views.create_primary_cif_controls(
-    parent=right_col,
+    parent=app_shell_view_state.right_col,
     view_state=primary_cif_controls_view_state,
     cif_path_text=str(cif_file),
     on_apply_from_entry=_apply_primary_cif_from_entry,

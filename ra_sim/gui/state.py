@@ -495,6 +495,52 @@ class HbnGeometryDebugViewState:
 
 
 @dataclass
+class AppShellViewState:
+    """Widget references for the top-level GUI shell and notebook layout."""
+
+    main_pane: Any = None
+    controls_panel: Any = None
+    figure_panel: Any = None
+    controls_notebook: Any = None
+    workspace_tab: Any = None
+    fit_tab: Any = None
+    parameters_tab: Any = None
+    analysis_tab: Any = None
+    workspace_body: Any = None
+    fit_body: Any = None
+    parameter_notebook: Any = None
+    parameter_geometry_tab: Any = None
+    parameter_structure_tab: Any = None
+    parameter_geometry_body: Any = None
+    parameter_structure_body: Any = None
+    control_tab_var: Any = None
+    parameter_tab_var: Any = None
+    fit_actions_frame: Any = None
+    analysis_controls_frame: Any = None
+    analysis_views_frame: Any = None
+    analysis_exports_frame: Any = None
+    status_frame: Any = None
+    fig_frame: Any = None
+    canvas_frame: Any = None
+    left_col: Any = None
+    right_col: Any = None
+    plot_frame_1d: Any = None
+
+
+@dataclass
+class StatusPanelViewState:
+    """Widget references for the bottom status panel."""
+
+    progress_label_positions: Any = None
+    progress_label_geometry: Any = None
+    mosaic_progressbar: Any = None
+    progress_label_mosaic: Any = None
+    progress_label: Any = None
+    update_timing_label: Any = None
+    chi_square_label: Any = None
+
+
+@dataclass
 class AppState:
     """Minimal mutable state container for GUI controller/view coordination."""
 
@@ -579,4 +625,8 @@ class AppState:
     )
     hbn_geometry_debug_view: HbnGeometryDebugViewState = field(
         default_factory=HbnGeometryDebugViewState
+    )
+    app_shell_view: AppShellViewState = field(default_factory=AppShellViewState)
+    status_panel_view: StatusPanelViewState = field(
+        default_factory=StatusPanelViewState
     )
