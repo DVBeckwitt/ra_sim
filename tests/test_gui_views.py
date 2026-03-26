@@ -848,6 +848,35 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
     assert calls == ["toggle-1d", "toggle-2d", "toggle-radial", "toggle-azimuth"]
 
 
+def test_analysis_export_controls_store_refs_and_commands(monkeypatch) -> None:
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+
+    view_state = state.AnalysisExportControlsViewState()
+    calls = []
+
+    views.create_analysis_export_controls(
+        parent=object(),
+        view_state=view_state,
+        on_save_snapshot=lambda: calls.append("snapshot"),
+        on_save_q_space=lambda: calls.append("q-space"),
+        on_save_1d_grid=lambda: calls.append("grid"),
+    )
+
+    assert view_state.snapshot_button is _FakeButton.created[0]
+    assert view_state.save_q_button is _FakeButton.created[1]
+    assert view_state.save_1d_grid_button is _FakeButton.created[2]
+    assert [button.kwargs["text"] for button in _FakeButton.created] == [
+        "Save 1D Snapshot",
+        "Save Q-Space Snapshot",
+        "Save 1D Grid",
+    ]
+
+    for button in _FakeButton.created:
+        button.command()
+    assert calls == ["snapshot", "q-space", "grid"]
+
+
 def test_background_backend_debug_controls_store_status_label_and_commands(
     monkeypatch,
 ) -> None:

@@ -5633,6 +5633,7 @@ bragg_qr_manager_view_state = gui_state.BraggQrManagerViewState()
 hbn_geometry_debug_view_state = gui_state.HbnGeometryDebugViewState()
 geometry_overlay_actions_view_state = gui_state.GeometryOverlayActionsViewState()
 analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
+analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
 
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
@@ -15801,13 +15802,6 @@ def save_1d_snapshot():
     except Exception as e:
         progress_label.config(text=f"Error saving simulated image: {e}")
 
-snapshot_button = ttk.Button(
-    analysis_exports_frame,
-    text="Save 1D Snapshot",
-    command=save_1d_snapshot
-)
-snapshot_button.pack(side=tk.TOP, padx=5, pady=2)
-
 def save_q_space_representation():
     file_path = filedialog.asksaveasfilename(
         defaultextension=".npy",
@@ -15909,22 +15903,16 @@ def save_q_space_representation():
     np.save(file_path, data_dict, allow_pickle=True)
     progress_label.config(text=f"Saved Q-Space representation to {file_path}")
 
-save_q_button = ttk.Button(
-    analysis_exports_frame,
-    text="Save Q-Space Snapshot",
-    command=save_q_space_representation
-)
-save_q_button.pack(side=tk.TOP, padx=5, pady=2)
-
 def save_1d_permutations():
     pass
 
-save_1d_grid_button = ttk.Button(
-    analysis_exports_frame,
-    text="Save 1D Grid",
-    command=save_1d_permutations
+gui_views.create_analysis_export_controls(
+    parent=analysis_exports_frame,
+    view_state=analysis_export_controls_view_state,
+    on_save_snapshot=save_1d_snapshot,
+    on_save_q_space=save_q_space_representation,
+    on_save_1d_grid=save_1d_permutations,
 )
-save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
 
 def run_debug_simulation():
 

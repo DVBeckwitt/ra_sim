@@ -127,6 +127,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     analysis-view control clusters.
   - Direct view tests now cover the extracted overlay/action and analysis-view
     helpers.
+- Analysis export control migration has landed.
+  - Shared widget references for the analysis export buttons now live in
+    `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns construction of the snapshot/Q-space/grid
+    export control cluster.
+  - Direct view tests now cover the extracted analysis export helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -203,6 +209,8 @@ What is done:
   toggles are no longer assembled directly in `runtime.py`.
   - `ra_sim.gui.views` now owns those control-cluster constructors and the
     corresponding `BooleanVar` view state.
+- The analysis export buttons are no longer assembled directly in `runtime.py`.
+  - `ra_sim.gui.views` now owns that export-control construction.
 
 What is left:
 
@@ -274,6 +282,8 @@ What is done:
   and the analysis-view toggle view state.
 - `views.py` now also owns those overlay/action and analysis-view control
   constructors.
+- `state.py` now also owns analysis export control view state.
+- `views.py` now also owns the analysis export control constructor.
 
 What is left:
 

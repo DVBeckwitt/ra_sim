@@ -10,6 +10,7 @@ from tkinter import ttk
 from .collapsible import CollapsibleFrame
 from .state import (
     AnalysisViewControlsViewState,
+    AnalysisExportControlsViewState,
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
@@ -506,6 +507,42 @@ def create_analysis_view_controls(
     view_state.check_log_radial = check_log_radial
     view_state.log_azimuth_var = log_azimuth_var
     view_state.check_log_azimuth = check_log_azimuth
+
+
+def create_analysis_export_controls(
+    *,
+    parent: tk.Misc,
+    view_state: AnalysisExportControlsViewState,
+    on_save_snapshot: Callable[[], None],
+    on_save_q_space: Callable[[], None],
+    on_save_1d_grid: Callable[[], None],
+) -> None:
+    """Create the analysis export buttons and store their widget refs."""
+
+    snapshot_button = ttk.Button(
+        parent,
+        text="Save 1D Snapshot",
+        command=on_save_snapshot,
+    )
+    snapshot_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    save_q_button = ttk.Button(
+        parent,
+        text="Save Q-Space Snapshot",
+        command=on_save_q_space,
+    )
+    save_q_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    save_1d_grid_button = ttk.Button(
+        parent,
+        text="Save 1D Grid",
+        command=on_save_1d_grid,
+    )
+    save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    view_state.snapshot_button = snapshot_button
+    view_state.save_q_button = save_q_button
+    view_state.save_1d_grid_button = save_1d_grid_button
 
 
 def set_background_file_status_text(

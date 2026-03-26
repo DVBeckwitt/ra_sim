@@ -143,6 +143,15 @@ class AnalysisViewControlsViewState:
 
 
 @dataclass
+class AnalysisExportControlsViewState:
+    """Widget references for analysis export controls."""
+
+    snapshot_button: Any = None
+    save_q_button: Any = None
+    save_1d_grid_button: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -261,6 +270,9 @@ class AppState:
     )
     analysis_view_controls_view: AnalysisViewControlsViewState = field(
         default_factory=AnalysisViewControlsViewState
+    )
+    analysis_export_controls_view: AnalysisExportControlsViewState = field(
+        default_factory=AnalysisExportControlsViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

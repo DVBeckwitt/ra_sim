@@ -127,11 +127,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     state
   - overlay/action and analysis-view control construction now flow through
     `ra_sim.gui.views`
+- Analysis export control migration has also landed:
+  - shared widget references for the analysis export buttons now use shared
+    GUI state
+  - snapshot/Q-space/grid export control construction now flows through
+    `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
     background-theta/background-debug/geometry-tool-action/HKL-lookup/
-    overlay-action/analysis-view view helper coverage
+    overlay-action/analysis-view/analysis-export view helper coverage
 
 ## Remaining Migration Focus
 
