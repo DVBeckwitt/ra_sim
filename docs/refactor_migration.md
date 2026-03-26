@@ -266,6 +266,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.runtime` now delegates that selector workflow through the
     extracted module and keeps only the file-dialog and live-preview/status
     side effects inline
+- Background-file workflow extraction has also advanced:
+  - background-file state transition, file-dialog initial-dir selection, and
+    status-text assembly now live in `ra_sim.gui.background_manager`
+  - `ra_sim.gui.runtime` now delegates that workflow through the extracted
+    module and keeps only the file-dialog, redraw/reset, and other
+    cross-feature side effects inline
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -276,7 +282,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   helper coverage plus direct structure-model coverage for primary-CIF reload
   snapshot/restore, diffuse-HT request assembly, Bragg-Qr / SF-pruning filter
   application, Bragg-Qr manager list-model assembly, Bragg-Qr manager
-  selection/refresh/action workflow, and geometry-fit Qr/Qz selector workflow
+  selection/refresh/action workflow, geometry-fit Qr/Qz selector workflow,
+  and background-file workflow
 
 ## Remaining Migration Focus
 
@@ -291,6 +298,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining Bragg-Qr manager runtime code is now mostly thin delegate
   wrappers plus the live filter-apply callbacks around the extracted manager
   helpers.
+- The remaining background runtime code is now mostly redraw/reset work and
+  other cross-feature side effects around the extracted background manager.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

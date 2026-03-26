@@ -288,6 +288,13 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.runtime` now delegates that selector workflow through the
     extracted module and keeps only the file-dialog and live-preview/status
     side effects inline.
+- Background-file workflow extraction has advanced.
+  - `ra_sim.gui.background_manager` now owns the background-file state
+    transition, file-dialog initial-dir selection, and status-text assembly
+    used by the live GUI.
+  - `ra_sim.gui.runtime` now delegates that workflow through the extracted
+    module and keeps only the file-dialog, redraw/reset, and other
+    cross-feature side effects inline.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -455,6 +462,8 @@ What is left:
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly
   file-dialog plumbing and live-preview/status callbacks around the extracted
   manager/view helpers.
+- The remaining background runtime code is now mostly redraw/reset work and
+  other cross-feature side effects around the extracted background manager.
 
 Why it matters:
 

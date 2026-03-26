@@ -108,6 +108,7 @@ from ra_sim.simulation.diffraction_debug import (
 )
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui import background as gui_background
+from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
@@ -8432,78 +8433,76 @@ def _set_background_file_status_text():
 
     if workspace_panels_view_state.background_file_status_var is None:
         return
-    if not background_runtime_state.osc_files:
-        gui_views.set_background_file_status_text(
-            workspace_panels_view_state,
-            "Background: no files loaded",
-        )
-        return
-
-    idx = int(background_runtime_state.current_background_index) % len(background_runtime_state.osc_files)
-    current_name = Path(str(background_runtime_state.osc_files[idx])).name
-    status_text = f"Background {idx + 1}/{len(background_runtime_state.osc_files)}: {current_name}"
+    theta_base = None
+    theta_effective = None
+    use_shared_theta_offset = False
     try:
         theta_values = _current_background_theta_values(strict_count=False)
         if theta_values:
+            idx = int(background_runtime_state.current_background_index) % max(
+                1,
+                len(background_runtime_state.osc_files),
+            )
             theta_base = float(theta_values[idx])
-            theta_effective = float(_background_theta_for_index(idx, strict_count=False))
-            if _geometry_fit_uses_shared_theta_offset():
-                status_text += (
-                    f" | theta_i={theta_base:.4f}°"
-                    f" | theta={theta_effective:.4f}°"
-                )
-            else:
-                status_text += f" | theta={theta_base:.4f}°"
+            theta_effective = float(
+                _background_theta_for_index(idx, strict_count=False)
+            )
+            use_shared_theta_offset = _geometry_fit_uses_shared_theta_offset()
     except Exception:
         pass
+
+    pair_count = 0
+    group_count = 0
+    sigma_values: list[float] = []
     try:
-        pair_count = len(_geometry_manual_pairs_for_index(idx))
+        idx = int(background_runtime_state.current_background_index) % max(
+            1,
+            len(background_runtime_state.osc_files),
+        )
+        pair_rows = _geometry_manual_pairs_for_index(idx)
+        pair_count = len(pair_rows)
         group_count = _geometry_manual_pair_group_count(idx)
-        if pair_count > 0:
-            status_text += f" | manual={group_count} groups/{pair_count} pts"
-            sigma_values = [
-                float(entry.get("sigma_px", np.nan))
-                for entry in _geometry_manual_pairs_for_index(idx)
-                if np.isfinite(float(entry.get("sigma_px", np.nan)))
-            ]
-            if sigma_values:
-                status_text += f" | sigma~{float(np.median(np.asarray(sigma_values, dtype=float))):.2f}px"
+        sigma_values = [
+            float(entry.get("sigma_px", np.nan))
+            for entry in pair_rows
+            if np.isfinite(float(entry.get("sigma_px", np.nan)))
+        ]
     except Exception:
         pass
+
+    fit_indices: list[int] = []
     try:
         fit_indices = _current_geometry_fit_background_indices(strict=False)
-        if fit_indices:
-            if len(fit_indices) > 1:
-                status_text += f" | fit={len(fit_indices)} backgrounds"
-            elif len(background_runtime_state.osc_files) > 1:
-                fit_idx = int(fit_indices[0]) + 1
-                status_text += f" | fit=bg {fit_idx}"
     except Exception:
         pass
+
     gui_views.set_background_file_status_text(
         workspace_panels_view_state,
-        status_text,
+        gui_background_manager.build_background_file_status_text(
+            osc_files=background_runtime_state.osc_files,
+            current_background_index=background_runtime_state.current_background_index,
+            theta_base=theta_base,
+            theta_effective=theta_effective,
+            use_shared_theta_offset=use_shared_theta_offset,
+            pair_count=pair_count,
+            group_count=group_count,
+            sigma_values=sigma_values,
+            fit_indices=fit_indices,
+        ),
     )
 
 
 def _load_background_files(file_paths, *, select_index=0):
     """Replace background images from selected OSC file paths."""
 
-
-    updated = gui_background.load_background_files(
+    gui_background_manager.load_background_files(
+        background_runtime_state,
         file_paths,
         image_size=image_size,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
         select_index=select_index,
     )
-    background_runtime_state.osc_files = list(updated["osc_files"])
-    background_runtime_state.background_images = list(updated["background_images"])
-    background_runtime_state.background_images_native = list(updated["background_images_native"])
-    background_runtime_state.background_images_display = list(updated["background_images_display"])
-    background_runtime_state.current_background_index = int(updated["current_background_index"])
-    background_runtime_state.current_background_image = updated["current_background_image"]
-    background_runtime_state.current_background_display = updated["current_background_display"]
     _sync_background_runtime_state()
     _replace_geometry_manual_pairs_by_background({})
     _invalidate_geometry_manual_pick_cache()
@@ -8523,13 +8522,11 @@ def _load_background_files(file_paths, *, select_index=0):
 def _browse_background_files():
     """Choose one or more OSC backgrounds and load them into the GUI."""
 
-    try:
-        if background_runtime_state.osc_files:
-            initial_dir = str(Path(str(background_runtime_state.osc_files[background_runtime_state.current_background_index])).expanduser().parent)
-        else:
-            initial_dir = str(get_dir("file_dialog_dir"))
-    except Exception:
-        initial_dir = str(get_dir("file_dialog_dir"))
+    initial_dir = gui_background_manager.background_file_dialog_initial_dir(
+        background_runtime_state.osc_files,
+        background_runtime_state.current_background_index,
+        get_dir("file_dialog_dir"),
+    )
 
     selected = filedialog.askopenfilenames(
         title="Select Background OSC Files",
@@ -8552,12 +8549,8 @@ def switch_background():
         return
 
     try:
-        updated = gui_background.switch_background(
-            osc_files=background_runtime_state.osc_files,
-            background_images=background_runtime_state.background_images,
-            background_images_native=background_runtime_state.background_images_native,
-            background_images_display=background_runtime_state.background_images_display,
-            current_background_index=background_runtime_state.current_background_index,
+        gui_background_manager.switch_background(
+            background_runtime_state,
             display_rotate_k=DISPLAY_ROTATE_K,
             read_osc=read_osc,
         )
@@ -8565,12 +8558,6 @@ def switch_background():
         progress_label.config(text=f"Failed to switch background: {exc}")
         return
 
-    background_runtime_state.background_images = list(updated["background_images"])
-    background_runtime_state.background_images_native = list(updated["background_images_native"])
-    background_runtime_state.background_images_display = list(updated["background_images_display"])
-    background_runtime_state.current_background_index = int(updated["current_background_index"])
-    background_runtime_state.current_background_image = updated["current_background_image"]
-    background_runtime_state.current_background_display = updated["current_background_display"]
     _sync_background_runtime_state()
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()

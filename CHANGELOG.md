@@ -44,6 +44,7 @@
   - Moved the remaining Bragg-Qr manager list-building workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including group entry formatting, L-value mapping, and list-model/status construction for the manager window.
   - Expanded `ra_sim/gui/bragg_qr_manager.py` to own the remaining Bragg-Qr manager selection, refresh, and enable/disable/toggle action workflow, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus the live filter-apply callbacks.
   - Added `ra_sim/gui/geometry_q_group_manager.py` and moved the geometry-fit Qr/Qz selector formatting, status, refresh, bulk include/exclude, and save/load payload workflow out of `ra_sim/gui/runtime.py`, leaving runtime with file-dialog and live-preview/status side effects.
+  - Added `ra_sim/gui/background_manager.py` and moved the background-file state transition, dialog initial-dir selection, and status-text workflow out of `ra_sim/gui/runtime.py`, leaving runtime with file-dialog, redraw/reset, and other cross-feature side effects.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
@@ -62,6 +63,7 @@
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr manager entry/L-value/list-model coverage.
   - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr manager action and window-lifecycle helpers.
   - Added `tests/test_gui_geometry_q_group_manager.py` for the extracted geometry-fit Qr/Qz selector helpers and save/load workflow.
+  - Added `tests/test_gui_background_manager.py` for the extracted background-file workflow helpers.
   - Added `tests/test_hbn_geometry_mapping.py` for geometry mapping math, metadata validation, sign handling, and startup/import consistency.
   - Added regression coverage for blank background-theta selections preserving the active live theta value.
   - Added regression coverage for manual-geometry overlay redraws requesting hit tables only when the overlay is visible.
