@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,67 @@ import numpy as np
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
 from . import views as gui_views
+
+
+@dataclass
+class GeometryQGroupRuntimeBindings:
+    """Runtime callbacks and shared state used by the geometry Q-group selector."""
+
+    view_state: Any
+    preview_state: Any
+    q_group_state: Any
+    fit_config: Mapping[str, object] | None
+    current_geometry_fit_var_names_factory: object
+    invalidate_geometry_manual_pick_cache: Callable[[], None]
+    update_geometry_preview_exclude_button_label: Callable[[], None]
+    live_geometry_preview_enabled: Callable[[], bool]
+    refresh_live_geometry_preview: Callable[[], None]
+    refresh_live_geometry_preview_quiet: Callable[[], None] | None = None
+    clear_last_simulation_signature: Callable[[], None] | None = None
+    schedule_update: Callable[[], None] | None = None
+    set_status_text: Callable[[str], None] | None = None
+    file_dialog_dir: object | None = None
+    asksaveasfilename: Callable[..., object] | None = None
+    askopenfilename: Callable[..., object] | None = None
+
+
+@dataclass(frozen=True)
+class GeometryQGroupRuntimeCallbacks:
+    """Bound zero-arg callbacks for the runtime Qr/Qz selector workflow."""
+
+    update_window_status: Callable[[Sequence[dict[str, object]] | None], None]
+    refresh_window: Callable[[], bool]
+    on_toggle: Callable[[tuple[object, ...] | None, object], bool]
+    include_all: Callable[[], bool]
+    exclude_all: Callable[[], bool]
+    update_listed_peaks: Callable[[], None]
+    save_selection: Callable[[], bool]
+    load_selection: Callable[[], bool]
+    close_window: Callable[[], None]
+    open_window: Callable[[], bool]
+
+
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
+
+
+def _runtime_geometry_fit_var_names(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> list[object]:
+    raw_value = _resolve_runtime_value(bindings.current_geometry_fit_var_names_factory)
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)):
+        return list(raw_value)
+    try:
+        return list(raw_value)
+    except Exception:
+        return []
 
 
 def _coerce_float(value: object, default: float) -> float:
@@ -483,6 +545,278 @@ def apply_loaded_geometry_q_group_saved_state(
 def _set_status_text(set_status_text: Callable[[str], None] | None, text: str) -> None:
     if callable(set_status_text):
         set_status_text(str(text))
+
+
+def make_runtime_geometry_q_group_bindings_factory(
+    *,
+    view_state,
+    preview_state,
+    q_group_state,
+    fit_config: Mapping[str, object] | None,
+    current_geometry_fit_var_names_factory: object,
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    update_geometry_preview_exclude_button_label: Callable[[], None],
+    live_geometry_preview_enabled: Callable[[], bool],
+    refresh_live_geometry_preview: Callable[[], None],
+    refresh_live_geometry_preview_quiet: Callable[[], None] | None = None,
+    clear_last_simulation_signature: Callable[[], None] | None = None,
+    schedule_update_factory: object | None = None,
+    set_status_text_factory: object | None = None,
+    file_dialog_dir_factory: object | None = None,
+    asksaveasfilename: Callable[..., object] | None = None,
+    askopenfilename: Callable[..., object] | None = None,
+) -> Callable[[], GeometryQGroupRuntimeBindings]:
+    """Return a zero-arg factory for live geometry Q-group runtime bindings."""
+
+    def _build_bindings() -> GeometryQGroupRuntimeBindings:
+        return GeometryQGroupRuntimeBindings(
+            view_state=view_state,
+            preview_state=preview_state,
+            q_group_state=q_group_state,
+            fit_config=fit_config,
+            current_geometry_fit_var_names_factory=current_geometry_fit_var_names_factory,
+            invalidate_geometry_manual_pick_cache=invalidate_geometry_manual_pick_cache,
+            update_geometry_preview_exclude_button_label=update_geometry_preview_exclude_button_label,
+            live_geometry_preview_enabled=live_geometry_preview_enabled,
+            refresh_live_geometry_preview=refresh_live_geometry_preview,
+            refresh_live_geometry_preview_quiet=refresh_live_geometry_preview_quiet,
+            clear_last_simulation_signature=clear_last_simulation_signature,
+            schedule_update=_resolve_runtime_value(schedule_update_factory),
+            set_status_text=_resolve_runtime_value(set_status_text_factory),
+            file_dialog_dir=_resolve_runtime_value(file_dialog_dir_factory),
+            asksaveasfilename=asksaveasfilename,
+            askopenfilename=askopenfilename,
+        )
+
+    return _build_bindings
+
+
+def update_runtime_geometry_q_group_window_status(
+    bindings: GeometryQGroupRuntimeBindings,
+    entries: Sequence[dict[str, object]] | None = None,
+) -> None:
+    """Refresh the runtime selector status text from live bindings."""
+
+    update_geometry_q_group_window_status(
+        view_state=bindings.view_state,
+        preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
+        fit_config=bindings.fit_config,
+        current_geometry_fit_var_names=_runtime_geometry_fit_var_names(bindings),
+        entries=entries,
+    )
+
+
+def on_runtime_geometry_q_group_checkbox_changed(
+    bindings: GeometryQGroupRuntimeBindings,
+    group_key: tuple[object, ...] | None,
+    row_var: object,
+) -> bool:
+    """Apply one runtime Qr/Qz selector checkbox toggle."""
+
+    return apply_geometry_q_group_checkbox_change_with_side_effects(
+        preview_state=bindings.preview_state,
+        group_key=group_key,
+        row_var=row_var,
+        invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
+        update_geometry_q_group_window_status=lambda: update_runtime_geometry_q_group_window_status(
+            bindings
+        ),
+        live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
+        refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
+        set_status_text=bindings.set_status_text,
+    )
+
+
+def refresh_runtime_geometry_q_group_window(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> bool:
+    """Redraw the runtime Qr/Qz selector window from live bindings."""
+
+    return refresh_geometry_q_group_window(
+        view_state=bindings.view_state,
+        preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
+        fit_config=bindings.fit_config,
+        current_geometry_fit_var_names=_runtime_geometry_fit_var_names(bindings),
+        on_toggle=lambda group_key, row_var: on_runtime_geometry_q_group_checkbox_changed(
+            bindings,
+            group_key,
+            row_var,
+        ),
+    )
+
+
+def set_all_geometry_q_groups_enabled_runtime(
+    bindings: GeometryQGroupRuntimeBindings,
+    *,
+    enabled: bool,
+) -> bool:
+    """Apply one runtime bulk include/exclude selector action."""
+
+    return set_all_geometry_q_groups_enabled_with_side_effects(
+        preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
+        enabled=enabled,
+        invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
+        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(
+            bindings
+        ),
+        live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
+        refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
+        set_status_text=bindings.set_status_text,
+    )
+
+
+def request_runtime_geometry_q_group_window_update(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> None:
+    """Request one runtime refresh of the listed Qr/Qz peaks."""
+
+    request_geometry_q_group_window_update_with_side_effects(
+        q_group_state=bindings.q_group_state,
+        clear_last_simulation_signature=(
+            bindings.clear_last_simulation_signature or (lambda: None)
+        ),
+        invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
+        set_status_text=bindings.set_status_text,
+        schedule_update=bindings.schedule_update or (lambda: None),
+    )
+
+
+def save_geometry_q_group_selection_runtime(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> bool:
+    """Export the runtime Qr/Qz selector state through the configured dialog."""
+
+    if not callable(bindings.asksaveasfilename):
+        _set_status_text(bindings.set_status_text, "Save Qr/Qz peak list unavailable.")
+        return False
+    return save_geometry_q_group_selection_with_dialog(
+        preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
+        file_dialog_dir=bindings.file_dialog_dir,
+        asksaveasfilename=bindings.asksaveasfilename,
+        set_status_text=bindings.set_status_text,
+    )
+
+
+def load_geometry_q_group_selection_runtime(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> bool:
+    """Import the runtime Qr/Qz selector state through the configured dialog."""
+
+    if not callable(bindings.askopenfilename):
+        _set_status_text(bindings.set_status_text, "Load Qr/Qz peak list unavailable.")
+        return False
+    return load_geometry_q_group_selection_with_dialog(
+        preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
+        file_dialog_dir=bindings.file_dialog_dir,
+        askopenfilename=bindings.askopenfilename,
+        update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
+        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(
+            bindings
+        ),
+        live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
+        refresh_live_geometry_preview=(
+            bindings.refresh_live_geometry_preview_quiet
+            or bindings.refresh_live_geometry_preview
+        ),
+        set_status_text=bindings.set_status_text,
+    )
+
+
+def close_runtime_geometry_q_group_window(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> None:
+    """Close the runtime Qr/Qz selector window using the live bindings."""
+
+    close_geometry_q_group_window(bindings.view_state, bindings.q_group_state)
+
+
+def open_runtime_geometry_q_group_window(
+    *,
+    root,
+    bindings_factory: Callable[[], GeometryQGroupRuntimeBindings],
+) -> bool:
+    """Open the runtime Qr/Qz selector window and wire live callbacks."""
+
+    bindings = bindings_factory()
+    return open_geometry_q_group_window(
+        root=root,
+        view_state=bindings.view_state,
+        preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
+        fit_config=bindings.fit_config,
+        current_geometry_fit_var_names=_runtime_geometry_fit_var_names(bindings),
+        on_toggle=lambda group_key, row_var: on_runtime_geometry_q_group_checkbox_changed(
+            bindings_factory(),
+            group_key,
+            row_var,
+        ),
+        on_include_all=lambda: set_all_geometry_q_groups_enabled_runtime(
+            bindings_factory(),
+            enabled=True,
+        ),
+        on_exclude_all=lambda: set_all_geometry_q_groups_enabled_runtime(
+            bindings_factory(),
+            enabled=False,
+        ),
+        on_update_listed_peaks=lambda: request_runtime_geometry_q_group_window_update(
+            bindings_factory()
+        ),
+        on_save=lambda: save_geometry_q_group_selection_runtime(bindings_factory()),
+        on_load=lambda: load_geometry_q_group_selection_runtime(bindings_factory()),
+        on_close=lambda: close_runtime_geometry_q_group_window(bindings_factory()),
+    )
+
+
+def make_runtime_geometry_q_group_callbacks(
+    *,
+    root,
+    bindings_factory: Callable[[], GeometryQGroupRuntimeBindings],
+) -> GeometryQGroupRuntimeCallbacks:
+    """Return bound zero-arg callbacks for the runtime Qr/Qz selector workflow."""
+
+    return GeometryQGroupRuntimeCallbacks(
+        update_window_status=lambda entries=None: update_runtime_geometry_q_group_window_status(
+            bindings_factory(),
+            entries=entries,
+        ),
+        refresh_window=lambda: refresh_runtime_geometry_q_group_window(
+            bindings_factory()
+        ),
+        on_toggle=lambda group_key, row_var: on_runtime_geometry_q_group_checkbox_changed(
+            bindings_factory(),
+            group_key,
+            row_var,
+        ),
+        include_all=lambda: set_all_geometry_q_groups_enabled_runtime(
+            bindings_factory(),
+            enabled=True,
+        ),
+        exclude_all=lambda: set_all_geometry_q_groups_enabled_runtime(
+            bindings_factory(),
+            enabled=False,
+        ),
+        update_listed_peaks=lambda: request_runtime_geometry_q_group_window_update(
+            bindings_factory()
+        ),
+        save_selection=lambda: save_geometry_q_group_selection_runtime(
+            bindings_factory()
+        ),
+        load_selection=lambda: load_geometry_q_group_selection_runtime(
+            bindings_factory()
+        ),
+        close_window=lambda: close_runtime_geometry_q_group_window(bindings_factory()),
+        open_window=lambda: open_runtime_geometry_q_group_window(
+            root=root,
+            bindings_factory=bindings_factory,
+        ),
+    )
 
 
 def _save_json_payload(file_path: str, payload: Mapping[str, object]) -> None:

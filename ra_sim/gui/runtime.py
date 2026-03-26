@@ -4318,7 +4318,7 @@ def _capture_geometry_q_group_entries_snapshot() -> list[dict[str, object]]:
 
     entries = _set_geometry_q_group_entries_snapshot(_build_geometry_q_group_entries())
     if _geometry_q_group_window_open():
-        _refresh_geometry_q_group_window()
+        geometry_q_group_runtime_callbacks.refresh_window()
     return entries
 
 
@@ -4336,35 +4336,6 @@ def _geometry_q_group_export_rows(
         q_group_state=geometry_q_group_state,
         entries=entries,
     )
-
-
-def _save_geometry_q_group_selection() -> None:
-    """Export the currently listed Qr/Qz rows and checkbox state to JSON."""
-    gui_geometry_q_group_manager.save_geometry_q_group_selection_with_dialog(
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        file_dialog_dir=get_dir("file_dialog_dir"),
-        asksaveasfilename=filedialog.asksaveasfilename,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-    )
-
-
-def _load_geometry_q_group_selection() -> None:
-    """Import a saved Qr/Qz selector list and apply it to the current rows."""
-    gui_geometry_q_group_manager.load_geometry_q_group_selection_with_dialog(
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        file_dialog_dir=get_dir("file_dialog_dir"),
-        askopenfilename=filedialog.askopenfilename,
-        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
-        refresh_geometry_q_group_window=_refresh_geometry_q_group_window,
-        live_geometry_preview_enabled=_live_geometry_preview_enabled,
-        refresh_live_geometry_preview=(
-            lambda: _refresh_live_geometry_preview(update_status=False)
-        ),
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-    )
-
 
 def _background_backend_status() -> str:
     return (
@@ -4485,111 +4456,6 @@ def _build_geometry_q_group_window_status_text(
     )
 
 
-def _update_geometry_q_group_window_status(entries: Sequence[dict[str, object]] | None = None) -> None:
-    """Refresh the summary text at the top of the Qr/Qz selector window."""
-    gui_geometry_q_group_manager.update_geometry_q_group_window_status(
-        view_state=geometry_q_group_view_state,
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        fit_config=fit_config,
-        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
-        entries=entries,
-    )
-
-
-def _refresh_geometry_q_group_window() -> None:
-    """Redraw the Qr/Qz selector window from the stored manual snapshot."""
-    gui_geometry_q_group_manager.refresh_geometry_q_group_window(
-        view_state=geometry_q_group_view_state,
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        fit_config=fit_config,
-        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
-        on_toggle=_on_geometry_q_group_checkbox_changed,
-    )
-
-
-def _on_geometry_q_group_checkbox_changed(
-    group_key: tuple[object, ...] | None,
-    row_var: tk.BooleanVar,
-) -> None:
-    """Apply one Qr/Qz include/exclude toggle from the selector window."""
-    gui_geometry_q_group_manager.apply_geometry_q_group_checkbox_change_with_side_effects(
-        preview_state=geometry_preview_state,
-        group_key=group_key,
-        row_var=row_var,
-        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
-        update_geometry_q_group_window_status=_update_geometry_q_group_window_status,
-        live_geometry_preview_enabled=_live_geometry_preview_enabled,
-        refresh_live_geometry_preview=(
-            lambda: _refresh_live_geometry_preview(update_status=True)
-        ),
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-    )
-
-
-def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
-    """Enable or disable every currently listed Qr/Qz group."""
-    gui_geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        enabled=enabled,
-        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
-        refresh_geometry_q_group_window=_refresh_geometry_q_group_window,
-        live_geometry_preview_enabled=_live_geometry_preview_enabled,
-        refresh_live_geometry_preview=(
-            lambda: _refresh_live_geometry_preview(update_status=True)
-        ),
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-    )
-
-
-def _request_geometry_q_group_window_update() -> None:
-    """Rebuild the listed Qr/Qz rows from the current simulation on demand."""
-    gui_geometry_q_group_manager.request_geometry_q_group_window_update_with_side_effects(
-        q_group_state=geometry_q_group_state,
-        clear_last_simulation_signature=(
-            lambda: setattr(
-                simulation_runtime_state,
-                "last_simulation_signature",
-                None,
-            )
-        ),
-        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        schedule_update=schedule_update,
-    )
-
-
-def _close_geometry_q_group_window() -> None:
-    """Destroy the Qr/Qz selector window and clear its widget references."""
-    gui_geometry_q_group_manager.close_geometry_q_group_window(
-        geometry_q_group_view_state,
-        geometry_q_group_state,
-    )
-
-
-def _open_geometry_q_group_window() -> None:
-    """Open a scrollable Qr/Qz selector for geometry-fit peak inclusion."""
-    gui_geometry_q_group_manager.open_geometry_q_group_window(
-        root=root,
-        view_state=geometry_q_group_view_state,
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        fit_config=fit_config,
-        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
-        on_toggle=_on_geometry_q_group_checkbox_changed,
-        on_include_all=lambda: _set_all_geometry_q_groups_enabled(True),
-        on_exclude_all=lambda: _set_all_geometry_q_groups_enabled(False),
-        on_update_listed_peaks=_request_geometry_q_group_window_update,
-        on_save=_save_geometry_q_group_selection,
-        on_load=_load_geometry_q_group_selection,
-        on_close=_close_geometry_q_group_window,
-    )
-
-
 def _update_geometry_preview_exclude_button_label():
     label = "Select Qr/Qz Peaks"
     excluded_count = _geometry_q_group_excluded_count()
@@ -4632,7 +4498,7 @@ def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = N
 
 
 def _toggle_geometry_preview_exclude_mode():
-    _open_geometry_q_group_window()
+    geometry_q_group_runtime_callbacks.open_window()
     progress_label_geometry.config(
         text=(
             "Opened the Qr/Qz selector for manual geometry picking. "
@@ -4675,7 +4541,7 @@ def _clear_live_geometry_preview_exclusions():
     )
     _invalidate_geometry_manual_pick_cache()
     _update_geometry_preview_exclude_button_label()
-    _refresh_geometry_q_group_window()
+    geometry_q_group_runtime_callbacks.refresh_window()
     if _live_geometry_preview_enabled():
         _refresh_live_geometry_preview(update_status=True)
     else:
@@ -8477,7 +8343,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     _apply_geometry_fit_background_selection(trigger_update=False)
     _set_background_file_status_text()
     _update_geometry_preview_exclude_button_label()
-    _refresh_geometry_q_group_window()
+    geometry_q_group_runtime_callbacks.refresh_window()
     _update_hkl_pick_button_label()
     ensure_valid_resolution_choice()
     toggle_1d_plots()
@@ -9817,6 +9683,48 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     return _render_live_geometry_preview_state(update_status=update_status)
 
 
+geometry_q_group_runtime_bindings_factory = (
+    gui_geometry_q_group_manager.make_runtime_geometry_q_group_bindings_factory(
+        view_state=geometry_q_group_view_state,
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        fit_config=fit_config,
+        current_geometry_fit_var_names_factory=_current_geometry_fit_var_names,
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
+        live_geometry_preview_enabled=_live_geometry_preview_enabled,
+        refresh_live_geometry_preview=(
+            lambda: _refresh_live_geometry_preview(update_status=True)
+        ),
+        refresh_live_geometry_preview_quiet=(
+            lambda: _refresh_live_geometry_preview(update_status=False)
+        ),
+        clear_last_simulation_signature=(
+            lambda: setattr(
+                simulation_runtime_state,
+                "last_simulation_signature",
+                None,
+            )
+        ),
+        schedule_update_factory=schedule_update,
+        set_status_text_factory=lambda: (
+            (lambda text: progress_label_geometry.config(text=text))
+            if "progress_label_geometry" in globals()
+            else None
+        ),
+        file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
+        asksaveasfilename=filedialog.asksaveasfilename,
+        askopenfilename=filedialog.askopenfilename,
+    )
+)
+geometry_q_group_runtime_callbacks = (
+    gui_geometry_q_group_manager.make_runtime_geometry_q_group_callbacks(
+        root=root,
+        bindings_factory=geometry_q_group_runtime_bindings_factory,
+    )
+)
+
+
 def _on_live_geometry_preview_toggle():
     """Enable or disable the live geometry auto-match preview."""
 
@@ -9826,7 +9734,7 @@ def _on_live_geometry_preview_toggle():
         progress_label_geometry.config(text="Live auto-match preview disabled.")
         return
 
-    _open_geometry_q_group_window()
+    geometry_q_group_runtime_callbacks.open_window()
 
     if simulation_runtime_state.update_running or simulation_runtime_state.stored_max_positions_local is None:
         schedule_update()

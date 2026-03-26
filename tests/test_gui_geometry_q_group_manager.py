@@ -412,3 +412,160 @@ def test_geometry_q_group_manager_load_dialog_workflow_applies_state_and_refresh
         events[5]
         == "Loaded Qr/Qz peak list from selector.json: matched 2, enabled 1, current-only excluded 1, saved-only missing 0."
     )
+
+
+def test_geometry_q_group_runtime_binding_factory_builds_live_bindings(
+    monkeypatch,
+) -> None:
+    calls = []
+    counters = {"status": 0, "schedule": 0, "dir": 0}
+
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "GeometryQGroupRuntimeBindings",
+        lambda **kwargs: calls.append(kwargs) or kwargs,
+    )
+
+    def build_status():
+        counters["status"] += 1
+        idx = counters["status"]
+        return lambda text: f"status-{idx}:{text}"
+
+    def build_schedule():
+        counters["schedule"] += 1
+        idx = counters["schedule"]
+        return lambda: f"schedule-{idx}"
+
+    def build_dialog_dir():
+        counters["dir"] += 1
+        return f"C:/dialogs/{counters['dir']}"
+
+    factory = geometry_q_group_manager.make_runtime_geometry_q_group_bindings_factory(
+        view_state="view-state",
+        preview_state="preview-state",
+        q_group_state="q-group-state",
+        fit_config={"geometry": {}},
+        current_geometry_fit_var_names_factory=lambda: ["gamma"],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: None,
+        refresh_live_geometry_preview_quiet=lambda: None,
+        clear_last_simulation_signature=lambda: None,
+        schedule_update_factory=build_schedule,
+        set_status_text_factory=build_status,
+        file_dialog_dir_factory=build_dialog_dir,
+        asksaveasfilename=lambda **kwargs: "save.json",
+        askopenfilename=lambda **kwargs: "load.json",
+    )
+
+    assert factory()["view_state"] == "view-state"
+    assert factory()["view_state"] == "view-state"
+    assert calls[0]["preview_state"] == "preview-state"
+    assert calls[0]["q_group_state"] == "q-group-state"
+    assert calls[0]["fit_config"] == {"geometry": {}}
+    assert callable(calls[0]["set_status_text"])
+    assert callable(calls[0]["schedule_update"])
+    assert calls[0]["file_dialog_dir"] == "C:/dialogs/1"
+    assert calls[1]["file_dialog_dir"] == "C:/dialogs/2"
+    assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]
+    assert calls[0]["schedule_update"] is not calls[1]["schedule_update"]
+
+
+def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
+    monkeypatch,
+) -> None:
+    calls = []
+    versions = {"count": 0}
+
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "update_runtime_geometry_q_group_window_status",
+        lambda bindings, entries=None: calls.append(("status", bindings, entries)),
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "refresh_runtime_geometry_q_group_window",
+        lambda bindings: calls.append(("refresh", bindings)) or True,
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "on_runtime_geometry_q_group_checkbox_changed",
+        lambda bindings, group_key, row_var: (
+            calls.append(("toggle", bindings, group_key, row_var)),
+            True,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "set_all_geometry_q_groups_enabled_runtime",
+        lambda bindings, *, enabled: (
+            calls.append(("bulk", bindings, enabled)),
+            enabled,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "request_runtime_geometry_q_group_window_update",
+        lambda bindings: calls.append(("update", bindings)),
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "save_geometry_q_group_selection_runtime",
+        lambda bindings: calls.append(("save", bindings)) or True,
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "load_geometry_q_group_selection_runtime",
+        lambda bindings: calls.append(("load", bindings)) or False,
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "close_runtime_geometry_q_group_window",
+        lambda bindings: calls.append(("close", bindings)),
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "open_runtime_geometry_q_group_window",
+        lambda *, root, bindings_factory: (
+            calls.append(("open", root, bindings_factory())),
+            True,
+        )[-1],
+    )
+
+    def build_bindings():
+        versions["count"] += 1
+        return f"bindings-{versions['count']}"
+
+    callbacks = geometry_q_group_manager.make_runtime_geometry_q_group_callbacks(
+        root="root-window",
+        bindings_factory=build_bindings,
+    )
+
+    entries = [{"key": ("q_group", "primary", 1, 0)}]
+    row_var = _FakeVar(True)
+    group_key = ("q_group", "primary", 1, 0)
+
+    callbacks.update_window_status(entries)
+    assert callbacks.refresh_window() is True
+    assert callbacks.on_toggle(group_key, row_var) is True
+    assert callbacks.include_all() is True
+    assert callbacks.exclude_all() is False
+    callbacks.update_listed_peaks()
+    assert callbacks.save_selection() is True
+    assert callbacks.load_selection() is False
+    callbacks.close_window()
+    assert callbacks.open_window() is True
+
+    assert calls == [
+        ("status", "bindings-1", entries),
+        ("refresh", "bindings-2"),
+        ("toggle", "bindings-3", group_key, row_var),
+        ("bulk", "bindings-4", True),
+        ("bulk", "bindings-5", False),
+        ("update", "bindings-6"),
+        ("save", "bindings-7"),
+        ("load", "bindings-8"),
+        ("close", "bindings-9"),
+        ("open", "root-window", "bindings-10"),
+    ]

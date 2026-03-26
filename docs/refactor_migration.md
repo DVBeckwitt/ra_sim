@@ -288,9 +288,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     exclude side effects, update-listed-peaks request flow, and save/load
     dialog workflow now live in
     `ra_sim.gui.geometry_q_group_manager`
-  - `ra_sim.gui.runtime` now delegates that selector workflow through the
-    extracted module and keeps only thin delegate wrappers plus window
-    lifecycle wiring inline
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
+    binding/callback bundle used for selector open/refresh/toggle/include/
+    exclude/save/load/update actions
+  - `ra_sim.gui.runtime` now keeps only one bound geometry-selector factory/
+    callback bundle plus the remaining call sites around that workflow
 - Background-file workflow extraction has also advanced:
   - background-file state transition, file-dialog initial-dir selection,
     background status refresh, and the post-load/post-switch redraw/reset
@@ -336,8 +338,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
   value plus thin manager/overlay call sites around the extracted
   controller/view modules.
-- The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
-  delegate wrappers and window lifecycle wiring around the extracted
+- The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
+  bound factory/callback bundle plus a few call sites around the extracted
   manager/view helpers.
 - The remaining Bragg-Qr manager runtime code is now mostly the bound
   factory wiring used by the live filter pipeline and HKL lookup controls
