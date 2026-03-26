@@ -45,7 +45,7 @@
   - Expanded `ra_sim/gui/bragg_qr_manager.py` with a shared runtime-binding context for the remaining Bragg-Qr manager action wiring, leaving `ra_sim/gui/runtime.py` with the Bragg-Qr entry/L-value builders, the filter-triggered refresh wrapper, and the manager window entrypoint.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` to own the remaining geometry-fit Qr/Qz selector checkbox/bulk-toggle side effects, update-listed-peaks request flow, and save/load dialog workflow, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus window lifecycle wiring.
   - Added `ra_sim/gui/background_manager.py` and moved the background-file state transition, dialog initial-dir selection, background status refresh, and post-load/post-switch side-effect workflow out of `ra_sim/gui/runtime.py`, leaving runtime with file-dialog plus progress/error text.
-  - Added `ra_sim/gui/peak_selection.py` and moved the HKL lookup / selected-peak summary, degenerate-HKL lookup, selection-by-index/HKL, and clear-selection workflow out of `ra_sim/gui/runtime.py`, leaving runtime with canvas-click plumbing and Bragg/Ewald intersection plotting.
+  - Expanded `ra_sim/gui/peak_selection.py` to own the selected-peak Bragg/Ewald intersection analysis workflow, including geometry/beam/mosaic request packaging, figure-open handling, and status text updates, leaving `ra_sim/gui/runtime.py` with canvas-click plumbing plus thin control-value delegation.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
@@ -65,7 +65,7 @@
   - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr manager runtime-binding, action, and window-lifecycle helpers.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted geometry-fit Qr/Qz selector side-effect and dialog workflow helpers.
   - Extended `tests/test_gui_background_manager.py` with direct coverage for extracted background status refresh and post-load/post-switch workflow helpers.
-  - Added `tests/test_gui_peak_selection.py` for the extracted HKL lookup and selected-peak workflow helpers.
+  - Extended `tests/test_gui_peak_selection.py` with direct coverage for the extracted selected-peak Bragg/Ewald intersection workflow in addition to the existing HKL lookup and selected-peak state helpers.
   - Added `tests/test_hbn_geometry_mapping.py` for geometry mapping math, metadata validation, sign handling, and startup/import consistency.
   - Added regression coverage for blank background-theta selections preserving the active live theta value.
   - Added regression coverage for manual-geometry overlay redraws requesting hit tables only when the overlay is visible.

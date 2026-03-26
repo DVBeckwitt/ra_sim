@@ -94,11 +94,7 @@ from ra_sim.simulation.diffraction import (
     process_qr_rods_parallel,
 )
 from ra_sim.simulation.intersection_analysis import (
-    BeamSamples as IntersectionBeamSamples,
     IntersectionGeometry,
-    MosaicParams as IntersectionMosaicParams,
-    analyze_reflection_intersection,
-    plot_intersection_analysis,
     project_qr_cylinder_to_detector,
 )
 from ra_sim.simulation.diffraction_debug import (
@@ -4981,32 +4977,9 @@ def _clear_selected_peak():
 
 
 def _open_selected_peak_intersection_figure():
-    """Open a Bragg/Ewald intersection analysis plot for the selected peak."""
-
-    if simulation_runtime_state.selected_peak_record is None:
-        progress_label_positions.config(
-            text="Select a Bragg peak first (arm Pick HKL on Image or use HKL controls)."
-        )
-        return
-
-    try:
-        h, k, l = tuple(int(v) for v in simulation_runtime_state.selected_peak_record["hkl"])
-        native_col = float(
-            simulation_runtime_state.selected_peak_record.get(
-                "selected_native_col",
-                simulation_runtime_state.selected_peak_record.get("native_col"),
-            )
-        )
-        native_row = float(
-            simulation_runtime_state.selected_peak_record.get(
-                "selected_native_row",
-                simulation_runtime_state.selected_peak_record.get("native_row"),
-            )
-        )
-        lattice_a = float(simulation_runtime_state.selected_peak_record["av"])
-        lattice_c = float(simulation_runtime_state.selected_peak_record["cv"])
-
-        geometry = IntersectionGeometry(
+    gui_peak_selection.open_selected_peak_intersection_figure(
+        simulation_runtime_state,
+        config=gui_peak_selection.SelectedPeakIntersectionConfig(
             image_size=int(image_size),
             center_col=float(center_y_var.get()),
             center_row=float(center_x_var.get()),
@@ -5020,55 +4993,16 @@ def _open_selected_peak_intersection_figure():
             zb=float(zb_var.get()),
             theta_initial_deg=float(theta_initial_var.get()),
             cor_angle_deg=float(cor_angle_var.get()),
-            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
-            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
-        )
-        beam = IntersectionBeamSamples(
-            beam_x_array=np.asarray(simulation_runtime_state.profile_cache["beam_x_array"], dtype=np.float64),
-            beam_y_array=np.asarray(simulation_runtime_state.profile_cache["beam_y_array"], dtype=np.float64),
-            theta_array=np.asarray(simulation_runtime_state.profile_cache["theta_array"], dtype=np.float64),
-            phi_array=np.asarray(simulation_runtime_state.profile_cache["phi_array"], dtype=np.float64),
-            wavelength_array=np.asarray(simulation_runtime_state.profile_cache["wavelength_array"], dtype=np.float64),
-        )
-        mosaic = IntersectionMosaicParams(
             sigma_mosaic_deg=float(sigma_mosaic_var.get()),
             gamma_mosaic_deg=float(gamma_mosaic_var.get()),
             eta=float(eta_var.get()),
             solve_q_steps=_current_solve_q_steps(),
             solve_q_rel_tol=_current_solve_q_rel_tol(),
             solve_q_mode=_current_solve_q_mode_flag(),
-        )
-
-        analysis = analyze_reflection_intersection(
-            h=h,
-            k=k,
-            l=l,
-            lattice_a=lattice_a,
-            lattice_c=lattice_c,
-            selected_native_col=native_col,
-            selected_native_row=native_row,
-            geometry=geometry,
-            beam=beam,
-            mosaic=mosaic,
-            n2=n2,
-        )
-        fig_analysis = plot_intersection_analysis(analysis)
-        manager = getattr(fig_analysis.canvas, "manager", None)
-        if manager is not None:
-            manager.set_window_title(f"Bragg/Ewald HKL=({h},{k},{l})")
-            manager.show()
-        else:
-            fig_analysis.show()
-        progress_label_positions.config(
-            text=(
-                f"Opened Bragg/Ewald analysis for HKL=({h} {k} {l}) "
-                f"from source={simulation_runtime_state.selected_peak_record.get('source_label', 'unknown')}."
-            )
-        )
-    except Exception as exc:
-        progress_label_positions.config(
-            text=f"Intersection analysis failed for selected peak: {exc}"
-        )
+        ),
+        n2=n2,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
+    )
 
 
 def _qr_value_for_m(m_idx: int, lattice_a: float) -> float:

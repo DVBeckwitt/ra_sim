@@ -3,11 +3,46 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from ra_sim.simulation.intersection_analysis import (
+    BeamSamples as IntersectionBeamSamples,
+    IntersectionGeometry,
+    MosaicParams as IntersectionMosaicParams,
+    analyze_reflection_intersection,
+    plot_intersection_analysis,
+)
+
 from . import views as gui_views
+
+
+@dataclass(frozen=True)
+class SelectedPeakIntersectionConfig:
+    """Scalar GUI inputs needed to inspect one selected peak intersection."""
+
+    image_size: int
+    center_col: float
+    center_row: float
+    distance_cor_to_detector: float
+    gamma_deg: float
+    Gamma_deg: float
+    chi_deg: float
+    psi_deg: float
+    psi_z_deg: float
+    zs: float
+    zb: float
+    theta_initial_deg: float
+    cor_angle_deg: float
+    sigma_mosaic_deg: float
+    gamma_mosaic_deg: float
+    eta: float
+    solve_q_steps: int
+    solve_q_rel_tol: float
+    solve_q_mode: int
+    pixel_size_m: float = 100e-6
 
 
 def hkl_pick_button_text(armed: bool) -> str:
@@ -488,3 +523,111 @@ def clear_selected_peak(
     selected_peak_marker.set_visible(False)
     set_status_text("Peak selection cleared.")
     draw_idle()
+
+
+def open_selected_peak_intersection_figure(
+    simulation_runtime_state,
+    *,
+    config: SelectedPeakIntersectionConfig,
+    n2: Any,
+    set_status_text: Any,
+    geometry_factory: Any = IntersectionGeometry,
+    beam_factory: Any = IntersectionBeamSamples,
+    mosaic_factory: Any = IntersectionMosaicParams,
+    analyze_intersection: Any = analyze_reflection_intersection,
+    plot_intersection: Any = plot_intersection_analysis,
+) -> bool:
+    """Open a Bragg/Ewald intersection analysis plot for the selected peak."""
+
+    selected_peak = simulation_runtime_state.selected_peak_record
+    if not isinstance(selected_peak, Mapping):
+        set_status_text(
+            "Select a Bragg peak first (arm Pick HKL on Image or use HKL controls)."
+        )
+        return False
+
+    try:
+        h, k, l = tuple(int(v) for v in selected_peak["hkl"])
+        native_col = float(
+            selected_peak.get(
+                "selected_native_col",
+                selected_peak.get("native_col"),
+            )
+        )
+        native_row = float(
+            selected_peak.get(
+                "selected_native_row",
+                selected_peak.get("native_row"),
+            )
+        )
+        lattice_a = float(selected_peak["av"])
+        lattice_c = float(selected_peak["cv"])
+
+        geometry = geometry_factory(
+            image_size=int(config.image_size),
+            center_col=float(config.center_col),
+            center_row=float(config.center_row),
+            distance_cor_to_detector=float(config.distance_cor_to_detector),
+            gamma_deg=float(config.gamma_deg),
+            Gamma_deg=float(config.Gamma_deg),
+            chi_deg=float(config.chi_deg),
+            psi_deg=float(config.psi_deg),
+            psi_z_deg=float(config.psi_z_deg),
+            zs=float(config.zs),
+            zb=float(config.zb),
+            theta_initial_deg=float(config.theta_initial_deg),
+            cor_angle_deg=float(config.cor_angle_deg),
+            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            pixel_size_m=float(config.pixel_size_m),
+        )
+
+        profile_cache = simulation_runtime_state.profile_cache
+        beam = beam_factory(
+            beam_x_array=np.asarray(profile_cache["beam_x_array"], dtype=np.float64),
+            beam_y_array=np.asarray(profile_cache["beam_y_array"], dtype=np.float64),
+            theta_array=np.asarray(profile_cache["theta_array"], dtype=np.float64),
+            phi_array=np.asarray(profile_cache["phi_array"], dtype=np.float64),
+            wavelength_array=np.asarray(
+                profile_cache["wavelength_array"],
+                dtype=np.float64,
+            ),
+        )
+        mosaic = mosaic_factory(
+            sigma_mosaic_deg=float(config.sigma_mosaic_deg),
+            gamma_mosaic_deg=float(config.gamma_mosaic_deg),
+            eta=float(config.eta),
+            solve_q_steps=int(config.solve_q_steps),
+            solve_q_rel_tol=float(config.solve_q_rel_tol),
+            solve_q_mode=int(config.solve_q_mode),
+        )
+
+        analysis = analyze_intersection(
+            h=h,
+            k=k,
+            l=l,
+            lattice_a=lattice_a,
+            lattice_c=lattice_c,
+            selected_native_col=native_col,
+            selected_native_row=native_row,
+            geometry=geometry,
+            beam=beam,
+            mosaic=mosaic,
+            n2=n2,
+        )
+        fig_analysis = plot_intersection(analysis)
+        manager = getattr(getattr(fig_analysis, "canvas", None), "manager", None)
+        if manager is not None:
+            manager.set_window_title(f"Bragg/Ewald HKL=({h},{k},{l})")
+            manager.show()
+        else:
+            fig_analysis.show()
+
+        set_status_text(
+            f"Opened Bragg/Ewald analysis for HKL=({h} {k} {l}) "
+            f"from source={selected_peak.get('source_label', 'unknown')}."
+        )
+        return True
+    except Exception as exc:
+        set_status_text(f"Intersection analysis failed for selected peak: {exc}")
+        return False
