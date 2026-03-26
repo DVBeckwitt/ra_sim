@@ -116,6 +116,7 @@ from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import views as gui_views
+from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compute_geometry_overlay_frame_diagnostics,
@@ -959,243 +960,128 @@ defaults = {
 # ---------------------------------------------------------------------------
 # Replace the old miller_generator call with the new Hendricks–Teller helper.
 # ---------------------------------------------------------------------------
-def build_ht_cache(
-    p_val,
-    occ_vals,
-    a_axis,
-    c_axis,
-    iodine_z,
-    phi_l_divisor,
-    finite_stack_flag,
-    stack_layers_count,
-    phase_delta_expression,
-    *,
-    cif_path_override=None,
-):
-    layers = int(max(1, stack_layers_count))
-    occ_expanded = _expand_occupancy_values_for_generated_sites(occ_vals)
-    active_cif_path = str(cif_path_override) if cif_path_override is not None else str(cif_file)
-    curves_raw = ht_Iinf_dict(
-        cif_path=active_cif_path,
-        mx=mx,
-        occ=occ_expanded,
-        p=p_val,
-        L_step=0.01,
-        two_theta_max=two_theta_range[1],
-        lambda_=lambda_,
-        a_lattice=a_axis,
-        c_lattice=c_axis,
-        phase_z_divisor=phi_l_divisor,
-        iodine_z=iodine_z,
-        phase_delta_expression=phase_delta_expression,
-        phi_l_divisor=phi_l_divisor,
-        finite_stack=finite_stack_flag,
-        stack_layers=layers,
-    )
-    curves = {}
-    for hk, data in curves_raw.items():
-        L_vals = np.asarray(data["L"], dtype=float)
-        I_vals = np.asarray(data["I"], dtype=float)
-        keep = np.isfinite(L_vals) & np.isfinite(I_vals) & (L_vals > 0.0)
-        if not np.any(keep):
-            continue
-        curves[hk] = {"L": L_vals[keep], "I": I_vals[keep]}
-    qr = ht_dict_to_qr_dict(curves)
-    arrays = ht_dict_to_arrays(curves)
-    return {
-        "p": p_val,
-        "occ": tuple(occ_vals),
-        "ht": curves,
-        "qr": qr,
-        "arrays": arrays,
-        "two_theta_max": two_theta_range[1],
-        "a": float(a_axis),
-        "c": float(c_axis),
-        "iodine_z": float(iodine_z),
-        "phi_l_divisor": float(phi_l_divisor),
-        "phase_delta_expression": str(phase_delta_expression),
-        "finite_stack": bool(finite_stack_flag),
-        "stack_layers": layers,
-        "cif_path": active_cif_path,
-    }
-
-# Precompute curves for the three p values
-default_a_axis = float(defaults['a'])
-default_c_axis = float(defaults['c'])
-ht_cache_multi = {
-    "p0": build_ht_cache(
-        defaults['p0'],
-        occ,
-        default_a_axis,
-        default_c_axis,
-        defaults['iodine_z'],
-        defaults['phi_l_divisor'],
-        defaults['finite_stack'],
-        defaults['stack_layers'],
-        defaults['phase_delta_expression'],
-    ),
-    "p1": build_ht_cache(
-        defaults['p1'],
-        occ,
-        default_a_axis,
-        default_c_axis,
-        defaults['iodine_z'],
-        defaults['phi_l_divisor'],
-        defaults['finite_stack'],
-        defaults['stack_layers'],
-        defaults['phase_delta_expression'],
-    ),
-    "p2": build_ht_cache(
-        defaults['p2'],
-        occ,
-        default_a_axis,
-        default_c_axis,
-        defaults['iodine_z'],
-        defaults['phi_l_divisor'],
-        defaults['finite_stack'],
-        defaults['stack_layers'],
-        defaults['phase_delta_expression'],
-    ),
-}
-
-def combine_ht_dicts(caches, weights):
-    import numpy as np
-    out = {}
-    for cache, w in zip(caches, weights):
-        ht_curves = cache["ht"]
-        for hk, data in ht_curves.items():
-            if hk not in out:
-                out[hk] = {
-                    "L": data["L"].copy(),
-                    "I": w * data["I"].copy(),
-                }
-            else:
-                entry = out[hk]
-                if entry["L"].shape != data["L"].shape or not np.allclose(entry["L"], data["L"]):
-                    union_L = np.union1d(entry["L"], data["L"])
-                    entry_I = np.interp(union_L, entry["L"], entry["I"], left=0.0, right=0.0)
-                    add_I = w * np.interp(union_L, data["L"], data["I"], left=0.0, right=0.0)
-                    entry["L"] = union_L
-                    entry["I"] = entry_I + add_I
-                else:
-                    entry["I"] += w * data["I"]
-    return out
-
-weights_init = np.array([defaults['w0'], defaults['w1'], defaults['w2']], dtype=float)
-weights_init /= weights_init.sum() if weights_init.sum() else 1.0
-combined_ht = combine_ht_dicts(
-    [ht_cache_multi['p0'], ht_cache_multi['p1'], ht_cache_multi['p2']],
-    weights_init,
+structure_model_state = gui_structure_model.build_initial_structure_model_state(
+    cif_file=cif_file,
+    cf=cf,
+    blk=blk,
+    cif_file2=cif_file2,
+    occupancy_site_labels=occupancy_site_labels,
+    occupancy_site_expanded_map=occupancy_site_expanded_map,
+    occ=occ,
+    atom_site_fractional_metadata=atom_site_fractional_metadata,
+    av=av,
+    bv=bv,
+    cv=cv,
+    av2=av2,
+    cv2=cv2,
+    defaults=defaults,
+    mx=mx,
+    lambda_angstrom=lambda_,
+    intensity_threshold=intensity_threshold,
+    two_theta_range=two_theta_range,
+    include_rods_flag=include_rods_flag,
+    combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
+    miller_generator=miller_generator,
+    inject_fractional_reflections=inject_fractional_reflections,
+    debug_print=debug_print,
 )
-combined_qr = ht_dict_to_qr_dict(combined_ht)
-miller1, intens1, degeneracy1, details1 = ht_dict_to_arrays(combined_ht)
-ht_curves_cache = {
-    "curves": combined_ht,
-    "qr_curves": combined_qr,
-    "arrays": (miller1, intens1, degeneracy1, details1),
-    "a": default_a_axis,
-    "c": default_c_axis,
-    "iodine_z": float(defaults['iodine_z']),
-    "phi_l_divisor": float(defaults['phi_l_divisor']),
-    "phase_delta_expression": str(defaults['phase_delta_expression']),
-    "finite_stack": defaults['finite_stack'],
-    "stack_layers": defaults['stack_layers'],
-}
-_last_occ_for_ht = list(occ)
-_last_p_triplet = [defaults['p0'], defaults['p1'], defaults['p2']]
-_last_weights = list(weights_init)
-_last_a_for_ht = default_a_axis
-_last_c_for_ht = default_c_axis
-_last_iodine_z_for_ht = float(defaults['iodine_z'])
-_last_phi_l_divisor = float(defaults['phi_l_divisor'])
-_last_phase_delta_expression = str(defaults['phase_delta_expression'])
-_last_finite_stack = bool(defaults['finite_stack'])
-_last_stack_layers = int(max(1, defaults['stack_layers']))
-_last_atom_site_fractional_signature = _atom_site_fractional_defaults_signature()
-# ---- convert the dict → arrays compatible with the downstream code ----
-debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
-debug_print("miller1 sample:", miller1[:5])
 
+
+def _sync_structure_model_aliases() -> None:
+    global cif_file, cf, blk, cf2, blk2
+    global occupancy_site_labels, occupancy_site_count, occupancy_site_expanded_map
+    global occ, occ_vars
+    global atom_site_fractional_metadata, atom_site_fract_vars
+    global av, cv, av2, cv2
+    global defaults
+    global ht_cache_multi, ht_curves_cache
+    global miller, intensities, degeneracy, details
+    global df_summary, df_details
+    global intensities_cif1, intensities_cif2
+    global _last_occ_for_ht, _last_p_triplet, _last_weights
+    global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
+    global _last_phi_l_divisor, _last_phase_delta_expression
+    global _last_finite_stack, _last_stack_layers
+    global _last_atom_site_fractional_signature
+
+    cif_file = structure_model_state.cif_file
+    cf = structure_model_state.cf
+    blk = structure_model_state.blk
+    cf2 = structure_model_state.cf2
+    blk2 = structure_model_state.blk2
+    occupancy_site_labels = list(structure_model_state.occupancy_site_labels)
+    occupancy_site_count = int(structure_model_state.occupancy_site_count)
+    occupancy_site_expanded_map = list(structure_model_state.occupancy_site_expanded_map)
+    occ = list(structure_model_state.occ)
+    occ_vars = list(structure_model_state.occ_vars)
+    atom_site_fractional_metadata = [
+        dict(row) for row in structure_model_state.atom_site_fractional_metadata
+    ]
+    atom_site_fract_vars = list(structure_model_state.atom_site_fract_vars)
+    av = float(structure_model_state.av)
+    cv = float(structure_model_state.cv)
+    av2 = structure_model_state.av2
+    cv2 = structure_model_state.cv2
+    defaults = structure_model_state.defaults
+    ht_cache_multi = structure_model_state.ht_cache_multi
+    ht_curves_cache = structure_model_state.ht_curves_cache
+    miller = structure_model_state.miller
+    intensities = structure_model_state.intensities
+    degeneracy = structure_model_state.degeneracy
+    details = structure_model_state.details
+    df_summary = structure_model_state.df_summary
+    df_details = structure_model_state.df_details
+    intensities_cif1 = structure_model_state.intensities_cif1
+    intensities_cif2 = structure_model_state.intensities_cif2
+    _last_occ_for_ht = list(structure_model_state.last_occ_for_ht)
+    _last_p_triplet = list(structure_model_state.last_p_triplet)
+    _last_weights = list(structure_model_state.last_weights)
+    _last_a_for_ht = float(structure_model_state.last_a_for_ht)
+    _last_c_for_ht = float(structure_model_state.last_c_for_ht)
+    _last_iodine_z_for_ht = float(structure_model_state.last_iodine_z_for_ht)
+    _last_phi_l_divisor = float(structure_model_state.last_phi_l_divisor)
+    _last_phase_delta_expression = str(structure_model_state.last_phase_delta_expression)
+    _last_finite_stack = bool(structure_model_state.last_finite_stack)
+    _last_stack_layers = int(structure_model_state.last_stack_layers)
+    _last_atom_site_fractional_signature = tuple(
+        structure_model_state.last_atom_site_fractional_signature
+    )
+
+
+_sync_structure_model_aliases()
+
+primary_miller, primary_intens, _, _ = structure_model_state.ht_curves_cache["arrays"]
 if DEBUG_ENABLED:
     from ra_sim.debug_utils import check_ht_arrays
-    check_ht_arrays(miller1, intens1)
-    # Manual inspection snippet recommended in the README
-    debug_print('miller1 dtype:', miller1.dtype, 'shape:', miller1.shape)
-    debug_print('L range:', miller1[:, 2].min(), miller1[:, 2].max())
-    debug_print('intens1 dtype:', intens1.dtype, 'min:', intens1.min(), 'max:', intens1.max())
-    debug_print('miller1 contiguous:', miller1.flags['C_CONTIGUOUS'])
-    debug_print('intens1 contiguous:', intens1.flags['C_CONTIGUOUS'])
 
-has_second_cif = bool(cif_file2)
+    check_ht_arrays(primary_miller, primary_intens)
+    debug_print("miller1 dtype:", primary_miller.dtype, "shape:", primary_miller.shape)
+    debug_print("L range:", primary_miller[:, 2].min(), primary_miller[:, 2].max())
+    debug_print(
+        "intens1 dtype:",
+        primary_intens.dtype,
+        "min:",
+        primary_intens.min(),
+        "max:",
+        primary_intens.max(),
+    )
+    debug_print("miller1 contiguous:", primary_miller.flags["C_CONTIGUOUS"])
+    debug_print("intens1 contiguous:", primary_intens.flags["C_CONTIGUOUS"])
+
+has_second_cif = structure_model_state.has_second_cif
+weight1 = 0.5 if has_second_cif else 1.0
+weight2 = 0.5 if has_second_cif else 0.0
 if has_second_cif:
-    miller2, intens2, degeneracy2, details2 = miller_generator(
-        mx,
-        cif_file2,
-        occ,
-        lambda_,
-        energy,
-        intensity_threshold,
-        two_theta_range,
-    )
-    if include_rods_flag:
-        miller2, intens2 = inject_fractional_reflections(miller2, intens2, mx)
-    union_set = {tuple(hkl) for hkl in miller1} | {tuple(hkl) for hkl in miller2}
-    miller = np.array(sorted(union_set), dtype=float)
-    debug_print("combined miller count:", miller.shape[0])
-
-    int1_dict = {tuple(h): i for h, i in zip(miller1, intens1)}
-    int2_dict = {tuple(h): i for h, i in zip(miller2, intens2)}
-    deg_dict1 = {tuple(h): d for h, d in zip(miller1, degeneracy1)}
-    deg_dict2 = {tuple(h): d for h, d in zip(miller2, degeneracy2)}
-    details_dict1 = {tuple(miller1[i]): details1[i] for i in range(len(miller1))}
-    details_dict2 = {tuple(miller2[i]): details2[i] for i in range(len(miller2))}
-
-    intensities_cif1 = np.array([int1_dict.get(tuple(h), 0.0) for h in miller])
-    intensities_cif2 = np.array([int2_dict.get(tuple(h), 0.0) for h in miller])
-    degeneracy = np.array(
-        [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
-        dtype=np.int32,
-    )
-    details = [
-        details_dict1.get(tuple(h), []) + details_dict2.get(tuple(h), [])
-        for h in miller
-    ]
-
-    weight1 = 0.5
-    weight2 = 0.5
-    intensities = weight1 * intensities_cif1 + weight2 * intensities_cif2
-    max_I = intensities.max() if intensities.size else 0.0
-    if max_I > 0:
-        intensities = intensities * (100.0 / max_I)
-    miller1_sim = miller1
-    intensities1_sim = intens1
-    miller2_sim = miller2
-    intensities2_sim = intens2
+    debug_print("combined miller count:", structure_model_state.miller.shape[0])
 else:
-    miller = miller1
-    intensities_cif1 = intens1
-    intensities_cif2 = np.zeros_like(intensities_cif1)
-    degeneracy = degeneracy1
-    details = details1
-    weight1 = 1.0
-    weight2 = 0.0
-    intensities = intensities_cif1.copy()
-    miller1_sim = miller1
-    intensities1_sim = intens1
-    miller2_sim = np.empty((0,3), dtype=np.int32)
-    intensities2_sim = np.empty((0,), dtype=np.float64)
-    debug_print("single CIF miller count:", miller.shape[0])
+    debug_print("single CIF miller count:", structure_model_state.miller.shape[0])
 
-# Save simulation data for later use
-simulation_runtime_state.sim_miller1_all = np.asarray(miller1_sim, dtype=np.float64)
-simulation_runtime_state.sim_intens1_all = np.asarray(intensities1_sim, dtype=np.float64)
-simulation_runtime_state.sim_miller2_all = np.asarray(miller2_sim, dtype=np.float64)
-simulation_runtime_state.sim_intens2_all = np.asarray(intensities2_sim, dtype=np.float64)
-# Primary HT simulation uses Qr rods (m-grouped) for speed, while HKL arrays
-# above are retained for selector/degeneracy lookup.
-simulation_runtime_state.sim_primary_qr_all = combined_qr
+simulation_runtime_state.sim_miller1_all = structure_model_state.sim_miller1_all.copy()
+simulation_runtime_state.sim_intens1_all = structure_model_state.sim_intens1_all.copy()
+simulation_runtime_state.sim_miller2_all = structure_model_state.sim_miller2_all.copy()
+simulation_runtime_state.sim_intens2_all = structure_model_state.sim_intens2_all.copy()
+simulation_runtime_state.sim_primary_qr_all = dict(structure_model_state.sim_primary_qr_all)
 
-# Active simulation arrays (possibly filtered by the Bragg Qr manager).
 simulation_runtime_state.sim_miller1 = simulation_runtime_state.sim_miller1_all.copy()
 simulation_runtime_state.sim_intens1 = simulation_runtime_state.sim_intens1_all.copy()
 simulation_runtime_state.sim_miller2 = simulation_runtime_state.sim_miller2_all.copy()
@@ -1808,6 +1694,9 @@ _apply_bragg_qr_filters(trigger_update=False)
 df_summary, df_details = build_intensity_dataframes(
     miller, intensities, degeneracy, details
 )
+structure_model_state.df_summary = df_summary
+structure_model_state.df_details = df_details
+_sync_structure_model_aliases()
 
 def export_initial_excel():
     """Write the initial intensity tables to Excel when enabled."""
@@ -16320,15 +16209,14 @@ if weight1_var is None or weight2_var is None:
 
 def update_weights(*args):
     """Recompute intensities using the current CIF weights."""
-    global intensities, df_summary
-    intensities = gui_controllers.combine_cif_weighted_intensities(
-        intensities_cif1,
-        intensities_cif2,
+    gui_structure_model.update_weighted_intensities(
+        structure_model_state,
         weight1=weight1_var.get(),
         weight2=weight2_var.get(),
+        combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
+        schedule_update=schedule_update,
     )
-    df_summary['Intensity'] = intensities
-    schedule_update()
+    _sync_structure_model_aliases()
 
 
 if has_second_cif:
@@ -16346,6 +16234,9 @@ atom_site_fract_vars = [
     }
     for row in atom_site_fractional_metadata
 ]
+structure_model_state.occ_vars = list(occ_vars)
+structure_model_state.atom_site_fract_vars = list(atom_site_fract_vars)
+_sync_structure_model_aliases()
 
 
 def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
@@ -16372,178 +16263,33 @@ def _rebuild_diffraction_inputs(
     trigger_update=True,
 ):
     """Refresh cached HT curves and peak lists for the current settings."""
-
-    global miller, intensities, degeneracy, details
-    global df_summary, df_details
-    global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
-    global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
-    global _last_phi_l_divisor, _last_phase_delta_expression
-    global _last_finite_stack, _last_stack_layers, _last_atom_site_fractional_signature
-    global intensities_cif1, intensities_cif2
-
-    finite_flag = bool(finite_stack_var.get())
-    layers = int(max(1, stack_layers_var.get()))
-    phase_delta_expression_current = _current_phase_delta_expression()
-    phi_l_divisor_current = _current_phi_l_divisor()
-    atom_site_values = _current_atom_site_fractional_values()
-    atom_site_signature = _atom_site_fractional_signature(atom_site_values)
-    active_cif_path = _active_primary_cif_path(atom_site_values)
-    iodine_z_current = _current_iodine_z(active_cif_path)
-
-    if (
-        not force
-        and list(new_occ) == _last_occ_for_ht
-        and list(p_vals) == _last_p_triplet
-        and list(weights) == _last_weights
-        and math.isclose(float(a_axis), _last_a_for_ht, rel_tol=1e-9, abs_tol=1e-9)
-        and math.isclose(float(c_axis), _last_c_for_ht, rel_tol=1e-9, abs_tol=1e-9)
-        and math.isclose(iodine_z_current, _last_iodine_z_for_ht, rel_tol=1e-9, abs_tol=1e-9)
-        and math.isclose(float(phi_l_divisor_current), float(_last_phi_l_divisor), rel_tol=1e-9, abs_tol=1e-9)
-        and phase_delta_expression_current == _last_phase_delta_expression
-        and _last_finite_stack == finite_flag
-        and (not finite_flag or _last_stack_layers == layers)
-        and atom_site_signature == _last_atom_site_fractional_signature
-    ):
-        simulation_runtime_state.last_simulation_signature = None
-        if trigger_update:
-            schedule_update()
-        return
-
-    def get_cache(label, p_val):
-        cache = ht_cache_multi.get(label)
-        if (
-            cache is None
-            or cache["p"] != p_val
-            or list(cache["occ"]) != list(new_occ)
-            or cache.get("two_theta_max") != two_theta_range[1]
-            or not math.isclose(cache.get("a", float("nan")), float(a_axis), rel_tol=1e-9, abs_tol=1e-9)
-            or not math.isclose(cache.get("c", float("nan")), float(c_axis), rel_tol=1e-9, abs_tol=1e-9)
-            or not math.isclose(cache.get("iodine_z", float("nan")), iodine_z_current, rel_tol=1e-9, abs_tol=1e-9)
-            or not math.isclose(cache.get("phi_l_divisor", float("nan")), float(phi_l_divisor_current), rel_tol=1e-9, abs_tol=1e-9)
-            or cache.get("phase_delta_expression", "") != phase_delta_expression_current
-            or bool(cache.get("finite_stack")) != finite_flag
-            or (finite_flag and cache.get("stack_layers") != layers)
-            or cache.get("cif_path", str(cif_file)) != active_cif_path
-        ):
-            cache = build_ht_cache(
-                p_val,
-                new_occ,
-                a_axis,
-                c_axis,
-                iodine_z_current,
-                phi_l_divisor_current,
-                finite_flag,
-                layers,
-                phase_delta_expression_current,
-                cif_path_override=active_cif_path,
-            )
-            ht_cache_multi[label] = cache
-        return cache
-
-    caches = [
-        get_cache("p0", p_vals[0]),
-        get_cache("p1", p_vals[1]),
-        get_cache("p2", p_vals[2]),
-    ]
-
-    combined_ht_local = combine_ht_dicts(caches, weights)
-    combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
-    arrays_local = ht_dict_to_arrays(combined_ht_local)
-    ht_curves_cache = {
-        "curves": combined_ht_local,
-        "qr_curves": combined_qr_local,
-        "arrays": arrays_local,
-        "a": float(a_axis),
-        "c": float(c_axis),
-        "iodine_z": float(iodine_z_current),
-        "phi_l_divisor": float(phi_l_divisor_current),
-        "phase_delta_expression": phase_delta_expression_current,
-        "finite_stack": finite_flag,
-        "stack_layers": layers,
-    }
-    _last_occ_for_ht = list(new_occ)
-    _last_p_triplet = list(p_vals)
-    _last_weights = list(weights)
-    _last_a_for_ht = float(a_axis)
-    _last_c_for_ht = float(c_axis)
-    _last_iodine_z_for_ht = float(iodine_z_current)
-    _last_phi_l_divisor = float(phi_l_divisor_current)
-    _last_phase_delta_expression = phase_delta_expression_current
-    _last_finite_stack = finite_flag
-    _last_stack_layers = layers
-    _last_atom_site_fractional_signature = atom_site_signature
-
-    m1, i1, d1, det1 = arrays_local
-
-    deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}
-    det_dict1 = {tuple(m1[i]): det1[i] for i in range(len(m1))}
-
-    if has_second_cif:
-        m2, i2, d2, det2 = miller_generator(
-            mx,
-            cif_file2,
-            new_occ,
-            lambda_,
-            energy,
-            intensity_threshold,
-            two_theta_range,
-        )
-        if include_rods_flag:
-            m2, i2 = inject_fractional_reflections(m2, i2, mx)
-
-        deg_dict2 = {tuple(m2[i]): int(d2[i]) for i in range(len(m2))}
-        det_dict2 = {tuple(m2[i]): det2[i] for i in range(len(m2))}
-
-        union = {tuple(h) for h in m1} | {tuple(h) for h in m2}
-        miller = np.array(sorted(union), dtype=float)
-        int1 = {tuple(h): v for h, v in zip(m1, i1)}
-        int2 = {tuple(h): v for h, v in zip(m2, i2)}
-        intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
-        intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in miller])
-        intensities = gui_controllers.combine_cif_weighted_intensities(
-            intensities_cif1,
-            intensities_cif2,
-            weight1=weight1_var.get(),
-            weight2=weight2_var.get(),
-        )
-
-        simulation_runtime_state.sim_miller1_all = np.asarray(m1, dtype=np.float64)
-        simulation_runtime_state.sim_intens1_all = np.asarray(i1, dtype=np.float64)
-        simulation_runtime_state.sim_primary_qr_all = combined_qr_local
-        simulation_runtime_state.sim_miller2_all = np.asarray(m2, dtype=np.float64)
-        simulation_runtime_state.sim_intens2_all = np.asarray(i2, dtype=np.float64)
-
-        degeneracy = np.array(
-            [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
-            dtype=np.int32,
-        )
-        details = [
-            det_dict1.get(tuple(h), []) + det_dict2.get(tuple(h), [])
-            for h in miller
-        ]
-    else:
-        miller = m1
-        intensities_cif1 = i1
-        intensities_cif2 = np.zeros_like(intensities_cif1)
-        intensities = intensities_cif1
-        degeneracy = d1
-        details = det1
-
-        simulation_runtime_state.sim_miller1_all = np.asarray(m1, dtype=np.float64)
-        simulation_runtime_state.sim_intens1_all = np.asarray(i1, dtype=np.float64)
-        simulation_runtime_state.sim_primary_qr_all = combined_qr_local
-        simulation_runtime_state.sim_miller2_all = np.empty((0, 3), dtype=np.float64)
-        simulation_runtime_state.sim_intens2_all = np.empty((0,), dtype=np.float64)
-
-    _apply_bragg_qr_filters(trigger_update=False)
-
-    df_summary, df_details = build_intensity_dataframes(
-        miller, intensities, degeneracy, details
+    structure_model_state.two_theta_range = two_theta_range
+    gui_structure_model.rebuild_diffraction_inputs(
+        structure_model_state,
+        new_occ=new_occ,
+        p_vals=p_vals,
+        weights=weights,
+        a_axis=a_axis,
+        c_axis=c_axis,
+        finite_stack_flag=bool(finite_stack_var.get()),
+        layers=int(max(1, stack_layers_var.get())),
+        phase_delta_expression_current=_current_phase_delta_expression(),
+        phi_l_divisor_current=_current_phi_l_divisor(),
+        atom_site_values=_current_atom_site_fractional_values(),
+        iodine_z_current=_current_iodine_z(),
+        atom_site_override_state=atom_site_override_state,
+        simulation_runtime_state=simulation_runtime_state,
+        combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
+        build_intensity_dataframes=build_intensity_dataframes,
+        apply_bragg_qr_filters=_apply_bragg_qr_filters,
+        schedule_update=schedule_update,
+        weight1=weight1_var.get(),
+        weight2=weight2_var.get(),
+        tcl_error_types=(tk.TclError,),
+        force=force,
+        trigger_update=trigger_update,
     )
-
-    simulation_runtime_state.last_simulation_signature = None
-    if trigger_update:
-        schedule_update()
+    _sync_structure_model_aliases()
 
 
 def update_occupancies(*args):
@@ -16787,15 +16533,10 @@ def _rebuild_occupancy_controls():
 def _current_occupancy_values():
     """Return the occupancy values currently shown in the controls."""
 
-    values = []
-    for idx, occ_var in enumerate(occ_vars):
-        try:
-            value = float(occ_var.get())
-        except (tk.TclError, ValueError):
-            fallback = occ[idx] if idx < len(occ) else 1.0
-            value = float(fallback)
-        values.append(min(1.0, max(0.0, value)))
-    return values
+    return gui_structure_model.current_occupancy_values(
+        structure_model_state,
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _atom_site_fractional_label_text(site_idx: int) -> str:
@@ -16841,6 +16582,8 @@ def _apply_primary_cif_path(raw_path):
     old_cif_file = cif_file
     old_cf = cf
     old_blk = blk
+    old_cf2 = cf2
+    old_blk2 = blk2
     old_labels = list(occupancy_site_labels)
     old_expanded_map = list(occupancy_site_expanded_map)
     old_occ = list(occ)
@@ -16851,6 +16594,7 @@ def _apply_primary_cif_path(raw_path):
     old_cv = float(cv)
     old_av2 = av2
     old_cv2 = cv2
+    old_ht_cache_multi = dict(ht_cache_multi)
     old_default_a = float(defaults.get("a", old_av))
     old_default_c = float(defaults.get("c", old_cv))
     old_default_iodine = float(defaults.get("iodine_z", 0.0))
@@ -16908,15 +16652,6 @@ def _apply_primary_cif_path(raw_path):
 
         c_axis = float(new_cv)
 
-        cif_file = str(candidate)
-        cf = new_cf
-        blk = new_blk
-        occupancy_site_labels = new_labels
-        occupancy_site_expanded_map = list(new_expanded_map)
-        occupancy_site_count = site_count
-        occ = list(new_occ_values)
-        atom_site_fractional_metadata = [dict(row) for row in new_atom_site_metadata]
-
         if len(occ_vars) != site_count:
             occ_vars = [tk.DoubleVar(value=float(v)) for v in new_occ_values]
         else:
@@ -16933,12 +16668,35 @@ def _apply_primary_cif_path(raw_path):
         _rebuild_occupancy_controls()
         _rebuild_atom_site_fractional_controls()
 
+        structure_model_state.cif_file = str(candidate)
+        structure_model_state.cf = new_cf
+        structure_model_state.blk = new_blk
+        structure_model_state.occupancy_site_labels = list(new_labels)
+        structure_model_state.occupancy_site_expanded_map = list(new_expanded_map)
+        structure_model_state.occupancy_site_count = int(site_count)
+        structure_model_state.occ = list(new_occ_values)
+        structure_model_state.atom_site_fractional_metadata = [
+            dict(row) for row in new_atom_site_metadata
+        ]
+        structure_model_state.occ_vars = list(occ_vars)
+        structure_model_state.atom_site_fract_vars = list(atom_site_fract_vars)
+        structure_model_state.av = float(new_av)
+        structure_model_state.cv = float(new_cv)
+        structure_model_state.defaults["a"] = float(new_av)
+        structure_model_state.defaults["c"] = float(new_cv)
+        structure_model_state.defaults["iodine_z"] = float(new_iodine_z)
+        structure_model_state.ht_cache_multi = {}
+        if has_second_cif:
+            structure_model_state.cf2 = old_cf2
+            structure_model_state.blk2 = old_blk2
+            if blk2.get("_cell_length_a") is None:
+                structure_model_state.av2 = float(new_av)
+            if blk2.get("_cell_length_c") is None:
+                structure_model_state.cv2 = float(new_cv)
+        _sync_structure_model_aliases()
+
         cif_file_var.set(cif_file)
         _reset_atom_site_override_cache()
-        _last_atom_site_fractional_signature = _atom_site_fractional_signature(
-            _current_atom_site_fractional_values()
-        )
-        ht_cache_multi = {}
         _rebuild_diffraction_inputs(
             new_occ_values,
             p_vals,
@@ -16948,37 +16706,11 @@ def _apply_primary_cif_path(raw_path):
             force=True,
             trigger_update=True,
         )
-        av = float(new_av)
-        cv = float(new_cv)
-        defaults["a"] = av
-        defaults["c"] = cv
-        defaults["iodine_z"] = float(new_iodine_z)
-        if has_second_cif:
-            if blk2.get("_cell_length_a") is None:
-                av2 = av
-            if blk2.get("_cell_length_c") is None:
-                cv2 = cv
         a_var.set(av)
         c_var.set(cv)
         simulation_runtime_state.last_simulation_signature = None
         progress_label.config(text=f"Loaded CIF: {Path(cif_file).name}")
     except Exception as exc:
-        cif_file = old_cif_file
-        cf = old_cf
-        blk = old_blk
-        occupancy_site_labels = old_labels
-        occupancy_site_expanded_map = old_expanded_map
-        occupancy_site_count = len(old_labels) if old_labels else max(1, len(old_occ_values))
-        occ = old_occ if old_occ else list(old_occ_values)
-        atom_site_fractional_metadata = [dict(row) for row in old_atom_site_metadata]
-        av = old_av
-        cv = old_cv
-        av2 = old_av2
-        cv2 = old_cv2
-        defaults["a"] = old_default_a
-        defaults["c"] = old_default_c
-        defaults["iodine_z"] = old_default_iodine
-
         if len(occ_vars) != len(old_occ_values):
             occ_vars = [tk.DoubleVar(value=float(v)) for v in old_occ_values]
         else:
@@ -16994,10 +16726,32 @@ def _apply_primary_cif_path(raw_path):
         ]
         _rebuild_occupancy_controls()
         _rebuild_atom_site_fractional_controls()
-        _reset_atom_site_override_cache()
-        _last_atom_site_fractional_signature = _atom_site_fractional_signature(
-            _current_atom_site_fractional_values()
+        structure_model_state.cif_file = old_cif_file
+        structure_model_state.cf = old_cf
+        structure_model_state.blk = old_blk
+        structure_model_state.cf2 = old_cf2
+        structure_model_state.blk2 = old_blk2
+        structure_model_state.occupancy_site_labels = list(old_labels)
+        structure_model_state.occupancy_site_expanded_map = list(old_expanded_map)
+        structure_model_state.occupancy_site_count = (
+            len(old_labels) if old_labels else max(1, len(old_occ_values))
         )
+        structure_model_state.occ = old_occ if old_occ else list(old_occ_values)
+        structure_model_state.atom_site_fractional_metadata = [
+            dict(row) for row in old_atom_site_metadata
+        ]
+        structure_model_state.occ_vars = list(occ_vars)
+        structure_model_state.atom_site_fract_vars = list(atom_site_fract_vars)
+        structure_model_state.av = old_av
+        structure_model_state.cv = old_cv
+        structure_model_state.av2 = old_av2
+        structure_model_state.cv2 = old_cv2
+        structure_model_state.defaults["a"] = old_default_a
+        structure_model_state.defaults["c"] = old_default_c
+        structure_model_state.defaults["iodine_z"] = old_default_iodine
+        structure_model_state.ht_cache_multi = dict(old_ht_cache_multi)
+        _reset_atom_site_override_cache()
+        _sync_structure_model_aliases()
         a_var.set(float(old_slider_a))
         c_var.set(float(old_slider_c))
 

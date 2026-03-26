@@ -16,9 +16,10 @@ high-level migration summary; this file is the working plan.
 
 As of 2026-03-25, the refactor has made real progress. The legacy root-script
 problem is largely solved, the last broad GUI runtime-state extraction pass has
-landed, and the main remaining cleanup target is now the workflow/orchestration
-logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
-`mosaic_profiles.py`.
+landed, the structure-model / diffuse-HT rebuild workflow has moved into an
+extracted helper module, and the main remaining cleanup target is now the
+residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
+not `main.py` or `mosaic_profiles.py`.
 
 ### What Is Already Done
 
@@ -38,6 +39,7 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.geometry_overlay`
   - `ra_sim.gui.manual_geometry`
   - `ra_sim.gui.overlays`
+  - `ra_sim.gui.structure_model`
   - `ra_sim.gui.state_io`
 - Manual geometry migration advanced substantially.
   - Selection helpers, caked-coordinate helpers, serialization helpers,
@@ -241,6 +243,12 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
   - The remaining `global` lines in `ra_sim.gui.runtime` are now limited to
     structure-model / diffuse-HT rebuild state plus the legacy `write_excel`
     flag.
+- Structure-model / diffuse-HT workflow extraction has landed.
+  - `ra_sim.gui.structure_model` now owns the primary CIF metadata parsing,
+    atom-site override CIF generation, HT-cache bootstrap/rebuild helpers, and
+    weighted intensity recompute used by the live GUI.
+  - `ra_sim.gui.runtime` now delegates the initial structure-model boot path
+    and the occupancy / stacking rebuild flow through that extracted module.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -395,9 +403,9 @@ What is left:
 - No further GUI runtime-state extraction blockers remain.
 - `ra_sim/gui/runtime.py` is still very large and still coordinates too many
   cross-feature workflow transitions and Tk widgets inline.
-- The follow-on runtime cleanup is now workflow glue and simulation /
-  structure-model orchestration that still live inline in `runtime.py`, not
-  another round of GUI runtime-state extraction.
+- The follow-on runtime cleanup is now the remaining controller/view workflow
+  glue still inline in `runtime.py`, not another round of GUI runtime-state
+  extraction or the structure-model / diffuse-HT rebuild path.
 
 Why it matters:
 
@@ -526,7 +534,7 @@ What is left:
 - The new controller/state boundary is now real for a larger share of the GUI,
   but it is not yet the dominant app structure across the rest of the runtime.
 - The next practical boundary targets are the remaining cross-feature
-  runtime-owned helpers plus the simulation/structure-model workflow
+  runtime-owned helpers plus the remaining controller/view workflow
   transitions that still live inline in `runtime.py`.
 
 Why it matters:
@@ -796,9 +804,8 @@ The next best step is:
 
 - build on the completed runtime-state extraction by moving the remaining
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
-- focus next on controller-owned user-action flows plus the
-  simulation/structure-model rebuild orchestration that still lives inline in
-  `runtime.py`
+- focus next on controller-owned user-action flows plus the remaining
+  cross-feature runtime workflow glue that still lives inline in `runtime.py`
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 

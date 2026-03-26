@@ -41,6 +41,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.geometry_overlay`
   - `ra_sim.gui.manual_geometry`
   - `ra_sim.gui.overlays`
+  - `ra_sim.gui.structure_model`
   - `ra_sim.gui.state_io`
 - Utility package namespace:
   - `ra_sim.tools.plot_excel_scatter`
@@ -222,6 +223,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the remaining `global` lines in `ra_sim.gui.runtime` are now limited to
     structure-model / diffuse-HT rebuild state plus the legacy `write_excel`
     flag
+- Structure-model / diffuse-HT workflow extraction has also landed:
+  - CIF metadata parsing, atom-site override CIF generation, HT bootstrap /
+    rebuild helpers, and weighted intensity recompute now live in
+    `ra_sim.gui.structure_model`
+  - `ra_sim.gui.runtime` now delegates the initial structure-model boot path
+    and live occupancy / stacking rebuild flow through that module
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -235,8 +242,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 
 - `ra_sim.gui.runtime` is still the largest remaining integration monolith.
 - The remaining runtime work is now the cross-feature workflow glue and the
-  simulation/structure-model rebuild orchestration that still live inline in
-  `ra_sim.gui.runtime`, not long-lived GUI runtime-state ownership.
+  remaining controller/view orchestration that still live inline in
+  `ra_sim.gui.runtime`, not long-lived GUI runtime-state ownership or the
+  extracted structure-model rebuild path.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

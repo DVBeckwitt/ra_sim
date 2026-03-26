@@ -37,6 +37,7 @@
   - Wired `ra_sim/gui/runtime.py` through the shared `AppState` container for extracted GUI view state plus background/HKL interaction runtime state.
   - Extracted the remaining GUI runtime-owned state in `ra_sim/gui/runtime.py` into explicit `AppState` slices covering background selection/orientation, geometry interaction caches/artists, simulation/update/caking/peak caches, atom-site override cache bookkeeping, Bragg-Qr disabled state, hBN debug-report text, sampling count, and the caked-view override flag.
   - Reduced the remaining `runtime.py` module globals to structure-model / diffuse-HT rebuild state and the legacy `write_excel` flag.
+  - Moved the structure-model / diffuse-HT bootstrap and rebuild workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/structure_model.py`, including initial HT cache setup, weighted intensity recompute, and the live occupancy/stacking rebuild path.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
@@ -49,6 +50,7 @@
 
 - **Tests**
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
+  - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.
   - Added `tests/test_hbn_geometry_mapping.py` for geometry mapping math, metadata validation, sign handling, and startup/import consistency.
   - Added regression coverage for blank background-theta selections preserving the active live theta value.
   - Added regression coverage for manual-geometry overlay redraws requesting hit tables only when the overlay is visible.
