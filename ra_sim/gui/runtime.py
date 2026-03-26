@@ -1232,7 +1232,8 @@ def _clip_sf_prune_bias(value) -> float:
 
 
 def _current_sf_prune_bias() -> float:
-    var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
+    view_state = globals().get("structure_factor_pruning_controls_view_state")
+    var = getattr(view_state, "sf_prune_bias_var", None)
     if var is None:
         return _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0))
     try:
@@ -1429,7 +1430,8 @@ def _prune_reflection_rows(
 
 
 def _update_sf_prune_status_label() -> None:
-    if structure_factor_pruning_controls_view_state.sf_prune_status_var is None:
+    view_state = globals().get("structure_factor_pruning_controls_view_state")
+    if getattr(view_state, "sf_prune_status_var", None) is None:
         return
 
     qr_total = int(sf_prune_stats.get("qr_total", 0))
@@ -1441,7 +1443,7 @@ def _update_sf_prune_status_label() -> None:
     if qr_total > 0:
         pct = (100.0 * qr_kept / qr_total) if qr_total else 0.0
         gui_views.set_structure_factor_pruning_status_text(
-            structure_factor_pruning_controls_view_state,
+            view_state,
             f"SF pruning keeps {qr_kept:,}/{qr_total:,} rod points ({pct:.1f}%), bias={bias:+.2f}"
         )
         return
@@ -1449,13 +1451,13 @@ def _update_sf_prune_status_label() -> None:
     if hk_total > 0:
         pct = (100.0 * hk_kept / hk_total) if hk_total else 0.0
         gui_views.set_structure_factor_pruning_status_text(
-            structure_factor_pruning_controls_view_state,
+            view_state,
             f"SF pruning keeps {hk_kept:,}/{hk_total:,} HKL points ({pct:.1f}%), bias={bias:+.2f}"
         )
         return
 
     gui_views.set_structure_factor_pruning_status_text(
-        structure_factor_pruning_controls_view_state,
+        view_state,
         f"SF pruning bias={bias:+.2f}",
     )
 
@@ -8066,7 +8068,7 @@ def _auto_match_scale_factor_to_radial_peak():
 
 
 ttk.Button(
-    simulation_controls,
+    display_controls_view_state.simulation_controls_frame,
     text="Auto-Match Scale (Radial Peak)",
     command=_auto_match_scale_factor_to_radial_peak,
 ).pack(anchor=tk.W, padx=5, pady=(0, 6))
@@ -8811,7 +8813,8 @@ def _clip_solve_q_steps(value) -> int:
 
 
 def _current_solve_q_steps() -> int:
-    var = structure_factor_pruning_controls_view_state.solve_q_steps_var
+    view_state = globals().get("structure_factor_pruning_controls_view_state")
+    var = getattr(view_state, "solve_q_steps_var", None)
     if var is None:
         return _clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
     try:
@@ -8831,7 +8834,8 @@ def _clip_solve_q_rel_tol(value) -> float:
 
 
 def _current_solve_q_rel_tol() -> float:
-    var = structure_factor_pruning_controls_view_state.solve_q_rel_tol_var
+    view_state = globals().get("structure_factor_pruning_controls_view_state")
+    var = getattr(view_state, "solve_q_rel_tol_var", None)
     if var is None:
         return _clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
     try:
@@ -8854,7 +8858,8 @@ def _solve_q_mode_flag_from_label(label: str) -> int:
 
 
 def _current_solve_q_mode_flag() -> int:
-    var = structure_factor_pruning_controls_view_state.solve_q_mode_var
+    view_state = globals().get("structure_factor_pruning_controls_view_state")
+    var = getattr(view_state, "solve_q_mode_var", None)
     if var is None:
         return _solve_q_mode_flag_from_label(defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM))
     try:
@@ -17695,6 +17700,14 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             do_update()
         except Exception as exc:
             progress_label.config(text=f"Startup initialization failed: {exc}")
+            try:
+                import traceback
+
+                traceback.print_exc()
+            except Exception:
+                pass
+        else:
+            progress_label.config(text="Simulation ready.")
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)
