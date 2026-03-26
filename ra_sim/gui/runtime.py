@@ -1223,17 +1223,16 @@ sf_prune_stats = {
 
 
 def _clip_sf_prune_bias(value) -> float:
-    try:
-        bias = float(value)
-    except (TypeError, ValueError):
-        bias = float(defaults.get("sf_prune_bias", 0.0))
-    if not np.isfinite(bias):
-        bias = float(defaults.get("sf_prune_bias", 0.0))
-    return float(np.clip(bias, SF_PRUNE_BIAS_MIN, SF_PRUNE_BIAS_MAX))
+    return gui_controllers.clip_structure_factor_prune_bias(
+        value,
+        fallback=defaults.get("sf_prune_bias", 0.0),
+        minimum=SF_PRUNE_BIAS_MIN,
+        maximum=SF_PRUNE_BIAS_MAX,
+    )
 
 
 def _current_sf_prune_bias() -> float:
-    var = globals().get("sf_prune_bias_var")
+    var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
     if var is None:
         return _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0))
     try:
@@ -1430,8 +1429,7 @@ def _prune_reflection_rows(
 
 
 def _update_sf_prune_status_label() -> None:
-    status_var = globals().get("sf_prune_status_var")
-    if status_var is None:
+    if structure_factor_pruning_controls_view_state.sf_prune_status_var is None:
         return
 
     qr_total = int(sf_prune_stats.get("qr_total", 0))
@@ -1442,19 +1440,24 @@ def _update_sf_prune_status_label() -> None:
 
     if qr_total > 0:
         pct = (100.0 * qr_kept / qr_total) if qr_total else 0.0
-        status_var.set(
+        gui_views.set_structure_factor_pruning_status_text(
+            structure_factor_pruning_controls_view_state,
             f"SF pruning keeps {qr_kept:,}/{qr_total:,} rod points ({pct:.1f}%), bias={bias:+.2f}"
         )
         return
 
     if hk_total > 0:
         pct = (100.0 * hk_kept / hk_total) if hk_total else 0.0
-        status_var.set(
+        gui_views.set_structure_factor_pruning_status_text(
+            structure_factor_pruning_controls_view_state,
             f"SF pruning keeps {hk_kept:,}/{hk_total:,} HKL points ({pct:.1f}%), bias={bias:+.2f}"
         )
         return
 
-    status_var.set(f"SF pruning bias={bias:+.2f}")
+    gui_views.set_structure_factor_pruning_status_text(
+        structure_factor_pruning_controls_view_state,
+        f"SF pruning bias={bias:+.2f}",
+    )
 
 
 def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
@@ -5633,6 +5636,9 @@ analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
 analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
 display_controls_state = gui_state.DisplayControlsState()
 display_controls_view_state = gui_state.DisplayControlsViewState()
+structure_factor_pruning_controls_view_state = (
+    gui_state.StructureFactorPruningControlsViewState()
+)
 sampling_optics_controls_view_state = gui_state.SamplingOpticsControlsViewState()
 finite_stack_controls_view_state = gui_state.FiniteStackControlsViewState()
 
@@ -8793,18 +8799,16 @@ def _current_bandwidth_fraction() -> float:
 
 
 def _clip_solve_q_steps(value) -> int:
-    fallback = int(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
-    try:
-        parsed = int(round(float(value)))
-    except (TypeError, ValueError, tk.TclError):
-        parsed = fallback
-    if not np.isfinite(parsed):
-        parsed = fallback
-    return int(np.clip(parsed, MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS))
+    return gui_controllers.clip_solve_q_steps(
+        value,
+        fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        minimum=MIN_SOLVE_Q_STEPS,
+        maximum=MAX_SOLVE_Q_STEPS,
+    )
 
 
 def _current_solve_q_steps() -> int:
-    var = globals().get("solve_q_steps_var")
+    var = structure_factor_pruning_controls_view_state.solve_q_steps_var
     if var is None:
         return _clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
     try:
@@ -8815,18 +8819,16 @@ def _current_solve_q_steps() -> int:
 
 
 def _clip_solve_q_rel_tol(value) -> float:
-    fallback = float(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError, tk.TclError):
-        parsed = fallback
-    if not np.isfinite(parsed):
-        parsed = fallback
-    return float(np.clip(parsed, MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL))
+    return gui_controllers.clip_solve_q_rel_tol(
+        value,
+        fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+        minimum=MIN_SOLVE_Q_REL_TOL,
+        maximum=MAX_SOLVE_Q_REL_TOL,
+    )
 
 
 def _current_solve_q_rel_tol() -> float:
-    var = globals().get("solve_q_rel_tol_var")
+    var = structure_factor_pruning_controls_view_state.solve_q_rel_tol_var
     if var is None:
         return _clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
     try:
@@ -8837,27 +8839,19 @@ def _current_solve_q_rel_tol() -> float:
 
 
 def _normalize_solve_q_mode_label(value) -> str:
-    if isinstance(value, (int, np.integer, float, np.floating)):
-        return "uniform" if int(round(float(value))) == SOLVE_Q_MODE_UNIFORM else "adaptive"
-
-    text = str(value).strip().lower()
-    if text in {"uniform", "fast", "0"}:
-        return "uniform"
-    if text in {"adaptive", "robust", "1"}:
-        return "adaptive"
-    return "uniform"
+    return gui_controllers.normalize_solve_q_mode_label(value)
 
 
 def _solve_q_mode_flag_from_label(label: str) -> int:
-    return (
-        SOLVE_Q_MODE_UNIFORM
-        if _normalize_solve_q_mode_label(label) == "uniform"
-        else SOLVE_Q_MODE_ADAPTIVE
+    return gui_controllers.solve_q_mode_flag_from_label(
+        label,
+        uniform_flag=SOLVE_Q_MODE_UNIFORM,
+        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
     )
 
 
 def _current_solve_q_mode_flag() -> int:
-    var = globals().get("solve_q_mode_var")
+    var = structure_factor_pruning_controls_view_state.solve_q_mode_var
     if var is None:
         return _solve_q_mode_flag_from_label(defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM))
     try:
@@ -16200,12 +16194,14 @@ def on_solve_q_rel_tol_change(*_):
 
 
 def _set_solve_q_control_states():
+    solve_q_mode_var = structure_factor_pruning_controls_view_state.solve_q_mode_var
+    if solve_q_mode_var is None:
+        return
     mode = _normalize_solve_q_mode_label(solve_q_mode_var.get())
-    tol_state = "disabled" if mode == "uniform" else "normal"
-    try:
-        solve_q_rel_tol_scale.configure(state=tol_state)
-    except Exception:
-        pass
+    gui_views.set_structure_factor_pruning_rel_tol_enabled(
+        structure_factor_pruning_controls_view_state,
+        enabled=(mode != "uniform"),
+    )
 
 
 def on_solve_q_mode_change(*_):
@@ -16221,75 +16217,40 @@ def on_solve_q_mode_change(*_):
     schedule_update()
 
 
-sf_prune_var_frame = ttk.Frame(mosaic_frame.frame)
-sf_prune_var_frame.pack(fill=tk.X, pady=(2, 2))
-ttk.Label(sf_prune_var_frame, text="Structure-Factor Pruning").pack(anchor=tk.W, padx=5)
-ttk.Label(
-    sf_prune_var_frame,
-    text="Bias: -2.0 keeps more, 0.0 recommended default, +2.0 prunes much harder.",
-).pack(anchor=tk.W, padx=5)
-sf_prune_bias_var, sf_prune_bias_scale = create_slider(
-    "SF Prune Bias",
-    SF_PRUNE_BIAS_MIN,
-    SF_PRUNE_BIAS_MAX,
-    _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0)),
-    0.01,
-    sf_prune_var_frame,
-    update_callback=None,
+gui_views.create_structure_factor_pruning_controls(
+    parent=mosaic_frame.frame,
+    view_state=structure_factor_pruning_controls_view_state,
+    sf_prune_bias_range=(SF_PRUNE_BIAS_MIN, SF_PRUNE_BIAS_MAX),
+    sf_prune_bias_value=_clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0)),
+    solve_q_mode=_normalize_solve_q_mode_label(
+        defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM)
+    ),
+    solve_q_steps_range=(float(MIN_SOLVE_Q_STEPS), float(MAX_SOLVE_Q_STEPS)),
+    solve_q_steps_value=float(
+        _clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
+    ),
+    solve_q_rel_tol_range=(
+        float(MIN_SOLVE_Q_REL_TOL),
+        float(MAX_SOLVE_Q_REL_TOL),
+    ),
+    solve_q_rel_tol_value=float(
+        _clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
+    ),
+    status_text="",
 )
-sf_prune_status_var = tk.StringVar(value="")
-ttk.Label(
-    sf_prune_var_frame,
-    textvariable=sf_prune_status_var,
-    wraplength=420,
-    justify=tk.LEFT,
-).pack(anchor=tk.W, padx=5, pady=(0, 2))
+sf_prune_bias_var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
+sf_prune_bias_scale = structure_factor_pruning_controls_view_state.sf_prune_bias_scale
+sf_prune_status_var = structure_factor_pruning_controls_view_state.sf_prune_status_var
+solve_q_mode_var = structure_factor_pruning_controls_view_state.solve_q_mode_var
+solve_q_steps_var = structure_factor_pruning_controls_view_state.solve_q_steps_var
+solve_q_steps_scale = structure_factor_pruning_controls_view_state.solve_q_steps_scale
+solve_q_rel_tol_var = structure_factor_pruning_controls_view_state.solve_q_rel_tol_var
+solve_q_rel_tol_scale = (
+    structure_factor_pruning_controls_view_state.solve_q_rel_tol_scale
+)
 sf_prune_bias_var.trace_add('write', on_sf_prune_bias_change)
 _update_sf_prune_status_label()
-ttk.Label(
-    sf_prune_var_frame,
-    text=(
-        "Uniform mode uses fixed arc sampling (fast). Adaptive mode uses "
-        "max-interval budget + relative tolerance (robust tails, slower)."
-    ),
-).pack(anchor=tk.W, padx=5, pady=(4, 0))
-solve_q_mode_var = tk.StringVar(
-    value=_normalize_solve_q_mode_label(defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM))
-)
-mode_row = ttk.Frame(sf_prune_var_frame)
-mode_row.pack(fill=tk.X, padx=5, pady=(2, 2))
-ttk.Label(mode_row, text="Arc Integration Mode").pack(anchor=tk.W)
-ttk.Radiobutton(
-    mode_row,
-    text="Uniform Fast",
-    variable=solve_q_mode_var,
-    value="uniform",
-).pack(anchor=tk.W, padx=10)
-ttk.Radiobutton(
-    mode_row,
-    text="Adaptive Robust",
-    variable=solve_q_mode_var,
-    value="adaptive",
-).pack(anchor=tk.W, padx=10)
-solve_q_steps_var, solve_q_steps_scale = create_slider(
-    "Arc Max Intervals",
-    float(MIN_SOLVE_Q_STEPS),
-    float(MAX_SOLVE_Q_STEPS),
-    float(_clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))),
-    1.0,
-    sf_prune_var_frame,
-    update_callback=None,
-)
 solve_q_steps_var.trace_add('write', on_solve_q_steps_change)
-solve_q_rel_tol_var, solve_q_rel_tol_scale = create_slider(
-    "Arc Relative Tol",
-    float(MIN_SOLVE_Q_REL_TOL),
-    float(MAX_SOLVE_Q_REL_TOL),
-    float(_clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))),
-    1e-6,
-    sf_prune_var_frame,
-    update_callback=None,
-)
 solve_q_rel_tol_var.trace_add('write', on_solve_q_rel_tol_change)
 solve_q_mode_var.trace_add('write', on_solve_q_mode_change)
 _set_solve_q_control_states()

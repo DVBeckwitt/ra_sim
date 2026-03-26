@@ -805,6 +805,89 @@ def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
     ]
 
 
+def test_structure_factor_pruning_controls_store_refs_and_support_helpers(
+    monkeypatch,
+) -> None:
+    created = []
+
+    def _fake_create_slider(
+        label,
+        min_val,
+        max_val,
+        initial_val,
+        step_size,
+        parent,
+        update_callback=None,
+        **_kwargs,
+    ):
+        var = _FakeVar(initial_val)
+        slider = _FakeScale(parent, to=max_val)
+        created.append(
+            {
+                "label": label,
+                "var": var,
+                "slider": slider,
+                "step": step_size,
+                "parent": parent,
+                "update_callback": update_callback,
+                "min": min_val,
+                "max": max_val,
+            }
+        )
+        return var, slider
+
+    _FakeLabel.created = []
+    _FakeRadiobutton.created = []
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    monkeypatch.setattr(views, "create_slider", _fake_create_slider)
+
+    view_state = state.StructureFactorPruningControlsViewState()
+
+    views.create_structure_factor_pruning_controls(
+        parent=object(),
+        view_state=view_state,
+        sf_prune_bias_range=(-2.0, 2.0),
+        sf_prune_bias_value=0.25,
+        solve_q_mode="adaptive",
+        solve_q_steps_range=(4.0, 128.0),
+        solve_q_steps_value=32.0,
+        solve_q_rel_tol_range=(1e-6, 1e-2),
+        solve_q_rel_tol_value=1e-4,
+        status_text="ready",
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert view_state.sf_prune_bias_var.get() == 0.25
+    assert view_state.sf_prune_status_var.get() == "ready"
+    assert view_state.solve_q_mode_var.get() == "adaptive"
+    assert view_state.solve_q_steps_var.get() == 32.0
+    assert view_state.solve_q_rel_tol_var.get() == 1e-4
+    assert view_state.sf_prune_bias_scale is created[0]["slider"]
+    assert view_state.solve_q_steps_scale is created[1]["slider"]
+    assert view_state.solve_q_rel_tol_scale is created[2]["slider"]
+    assert [item["label"] for item in created] == [
+        "SF Prune Bias",
+        "Arc Max Intervals",
+        "Arc Relative Tol",
+    ]
+    assert [radio.value for radio in _FakeRadiobutton.created] == [
+        "uniform",
+        "adaptive",
+    ]
+
+    views.set_structure_factor_pruning_status_text(view_state, "updated")
+    assert view_state.sf_prune_status_var.get() == "updated"
+
+    views.set_structure_factor_pruning_rel_tol_enabled(view_state, enabled=False)
+    assert view_state.solve_q_rel_tol_scale.state == "disabled"
+
+    views.set_structure_factor_pruning_rel_tol_enabled(view_state, enabled=True)
+    assert view_state.solve_q_rel_tol_scale.state == "normal"
+
+
 def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     monkeypatch,
 ) -> None:

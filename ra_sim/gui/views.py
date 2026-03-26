@@ -24,6 +24,7 @@ from .state import (
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
     SamplingOpticsControlsViewState,
+    StructureFactorPruningControlsViewState,
     WorkspacePanelsViewState,
 )
 
@@ -227,6 +228,133 @@ def create_display_controls(
     view_state.simulation_max_slider = simulation_max_slider
     view_state.scale_factor_slider = scale_factor_slider
     view_state.scale_factor_entry = _find_slider_entry(scale_factor_slider)
+
+
+def create_structure_factor_pruning_controls(
+    *,
+    parent: tk.Misc,
+    view_state: StructureFactorPruningControlsViewState,
+    sf_prune_bias_range: tuple[float, float],
+    sf_prune_bias_value: float,
+    solve_q_mode: str,
+    solve_q_steps_range: tuple[float, float],
+    solve_q_steps_value: float,
+    solve_q_rel_tol_range: tuple[float, float],
+    solve_q_rel_tol_value: float,
+    status_text: str = "",
+) -> None:
+    """Create the SF-pruning / arc-integration controls and store refs."""
+
+    frame = ttk.Frame(parent)
+    frame.pack(fill=tk.X, pady=(2, 2))
+    ttk.Label(frame, text="Structure-Factor Pruning").pack(anchor=tk.W, padx=5)
+    ttk.Label(
+        frame,
+        text="Bias: -2.0 keeps more, 0.0 recommended default, +2.0 prunes much harder.",
+    ).pack(anchor=tk.W, padx=5)
+
+    sf_prune_bias_var, sf_prune_bias_scale = create_slider(
+        "SF Prune Bias",
+        float(sf_prune_bias_range[0]),
+        float(sf_prune_bias_range[1]),
+        float(sf_prune_bias_value),
+        0.01,
+        frame,
+        update_callback=None,
+    )
+
+    sf_prune_status_var = tk.StringVar(value=str(status_text))
+    sf_prune_status_label = ttk.Label(
+        frame,
+        textvariable=sf_prune_status_var,
+        wraplength=420,
+        justify=tk.LEFT,
+    )
+    sf_prune_status_label.pack(anchor=tk.W, padx=5, pady=(0, 2))
+
+    ttk.Label(
+        frame,
+        text=(
+            "Uniform mode uses fixed arc sampling (fast). Adaptive mode uses "
+            "max-interval budget + relative tolerance (robust tails, slower)."
+        ),
+    ).pack(anchor=tk.W, padx=5, pady=(4, 0))
+
+    solve_q_mode_var = tk.StringVar(value=str(solve_q_mode))
+    solve_q_mode_row = ttk.Frame(frame)
+    solve_q_mode_row.pack(fill=tk.X, padx=5, pady=(2, 2))
+    ttk.Label(solve_q_mode_row, text="Arc Integration Mode").pack(anchor=tk.W)
+
+    solve_q_uniform_button = ttk.Radiobutton(
+        solve_q_mode_row,
+        text="Uniform Fast",
+        variable=solve_q_mode_var,
+        value="uniform",
+    )
+    solve_q_uniform_button.pack(anchor=tk.W, padx=10)
+
+    solve_q_adaptive_button = ttk.Radiobutton(
+        solve_q_mode_row,
+        text="Adaptive Robust",
+        variable=solve_q_mode_var,
+        value="adaptive",
+    )
+    solve_q_adaptive_button.pack(anchor=tk.W, padx=10)
+
+    solve_q_steps_var, solve_q_steps_scale = create_slider(
+        "Arc Max Intervals",
+        float(solve_q_steps_range[0]),
+        float(solve_q_steps_range[1]),
+        float(solve_q_steps_value),
+        1.0,
+        frame,
+        update_callback=None,
+    )
+    solve_q_rel_tol_var, solve_q_rel_tol_scale = create_slider(
+        "Arc Relative Tol",
+        float(solve_q_rel_tol_range[0]),
+        float(solve_q_rel_tol_range[1]),
+        float(solve_q_rel_tol_value),
+        1e-6,
+        frame,
+        update_callback=None,
+    )
+
+    view_state.frame = frame
+    view_state.sf_prune_bias_var = sf_prune_bias_var
+    view_state.sf_prune_bias_scale = sf_prune_bias_scale
+    view_state.sf_prune_status_var = sf_prune_status_var
+    view_state.sf_prune_status_label = sf_prune_status_label
+    view_state.solve_q_mode_row = solve_q_mode_row
+    view_state.solve_q_mode_var = solve_q_mode_var
+    view_state.solve_q_uniform_button = solve_q_uniform_button
+    view_state.solve_q_adaptive_button = solve_q_adaptive_button
+    view_state.solve_q_steps_var = solve_q_steps_var
+    view_state.solve_q_steps_scale = solve_q_steps_scale
+    view_state.solve_q_rel_tol_var = solve_q_rel_tol_var
+    view_state.solve_q_rel_tol_scale = solve_q_rel_tol_scale
+
+
+def set_structure_factor_pruning_status_text(
+    view_state: StructureFactorPruningControlsViewState,
+    text: str,
+) -> None:
+    """Update the SF-pruning status label text."""
+
+    setter = getattr(view_state.sf_prune_status_var, "set", None)
+    if callable(setter):
+        setter(str(text))
+
+
+def set_structure_factor_pruning_rel_tol_enabled(
+    view_state: StructureFactorPruningControlsViewState,
+    *,
+    enabled: bool,
+) -> None:
+    """Enable or disable the adaptive relative-tolerance slider."""
+
+    state_value = "normal" if enabled else "disabled"
+    _configure_widget_state(view_state.solve_q_rel_tol_scale, state_value)
 
 
 def create_sampling_optics_controls(

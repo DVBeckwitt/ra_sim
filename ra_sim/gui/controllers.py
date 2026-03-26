@@ -204,6 +204,101 @@ def normalize_display_scale_factor(
     return max(0.0, float(normalized))
 
 
+def clip_structure_factor_prune_bias(
+    value: object,
+    *,
+    fallback: object,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Clamp one SF-pruning bias input to the supported finite range."""
+
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = 0.0
+    return float(min(max(float(normalized), float(minimum)), float(maximum)))
+
+
+def clip_solve_q_steps(
+    value: object,
+    *,
+    fallback: object,
+    minimum: int,
+    maximum: int,
+) -> int:
+    """Clamp one solve-q interval-count input to the supported integer range."""
+
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = float(minimum)
+    rounded = int(round(float(normalized)))
+    return int(min(max(rounded, int(minimum)), int(maximum)))
+
+
+def clip_solve_q_rel_tol(
+    value: object,
+    *,
+    fallback: object,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Clamp one solve-q relative tolerance input to the supported range."""
+
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = float(minimum)
+    return float(min(max(float(normalized), float(minimum)), float(maximum)))
+
+
+def normalize_solve_q_mode_label(value: object) -> str:
+    """Normalize one solve-q mode input to the supported label set."""
+
+    if not isinstance(value, (str, bytes)) and not isinstance(value, bool):
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            numeric_value = None
+        if numeric_value is not None and math.isfinite(numeric_value):
+            return "uniform" if int(round(float(numeric_value))) == 0 else "adaptive"
+
+    text = str(value).strip().lower()
+    if text in {"uniform", "fast", "0"}:
+        return "uniform"
+    if text in {"adaptive", "robust", "1"}:
+        return "adaptive"
+    return "uniform"
+
+
+def solve_q_mode_flag_from_label(
+    label: object,
+    *,
+    uniform_flag: int,
+    adaptive_flag: int,
+) -> int:
+    """Convert one normalized solve-q mode label into a runtime flag."""
+
+    return (
+        int(uniform_flag)
+        if normalize_solve_q_mode_label(label) == "uniform"
+        else int(adaptive_flag)
+    )
+
+
 def build_initial_state() -> AppState:
     """Build the initial GUI state snapshot from current configuration."""
 

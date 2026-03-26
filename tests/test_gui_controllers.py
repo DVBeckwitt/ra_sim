@@ -25,6 +25,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         state.DisplayControlsViewState,
     )
     assert isinstance(
+        app_state.structure_factor_pruning_controls_view,
+        state.StructureFactorPruningControlsViewState,
+    )
+    assert isinstance(
         app_state.sampling_optics_controls_view,
         state.SamplingOpticsControlsViewState,
     )
@@ -68,6 +72,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
     assert app_state.display_controls_state is not other_state.display_controls_state
     assert app_state.display_controls_view is not other_state.display_controls_view
+    assert (
+        app_state.structure_factor_pruning_controls_view
+        is not other_state.structure_factor_pruning_controls_view
+    )
     assert (
         app_state.sampling_optics_controls_view
         is not other_state.sampling_optics_controls_view
@@ -115,6 +123,19 @@ def test_display_control_controller_helpers_normalize_scale_and_ranges() -> None
     assert controllers.normalize_display_scale_factor("2.5", fallback=1.0) == 2.5
     assert controllers.normalize_display_scale_factor("-3", fallback=1.0) == 0.0
     assert controllers.normalize_display_scale_factor("bad", fallback="4.5") == 4.5
+
+
+def test_structure_factor_pruning_controller_helpers_clip_and_normalize_inputs() -> None:
+    assert controllers.clip_structure_factor_prune_bias("1.5", fallback=0.0, minimum=-2.0, maximum=2.0) == 1.5
+    assert controllers.clip_structure_factor_prune_bias("bad", fallback=0.25, minimum=-2.0, maximum=2.0) == 0.25
+    assert controllers.clip_solve_q_steps("12.6", fallback=8, minimum=4, maximum=20) == 13
+    assert controllers.clip_solve_q_steps("bad", fallback=8, minimum=4, maximum=20) == 8
+    assert controllers.clip_solve_q_rel_tol("1e-4", fallback=1e-3, minimum=1e-6, maximum=1e-2) == 1e-4
+    assert controllers.clip_solve_q_rel_tol("bad", fallback=1e-3, minimum=1e-6, maximum=1e-2) == 1e-3
+    assert controllers.normalize_solve_q_mode_label("fast") == "uniform"
+    assert controllers.normalize_solve_q_mode_label("robust") == "adaptive"
+    assert controllers.solve_q_mode_flag_from_label("uniform", uniform_flag=7, adaptive_flag=9) == 7
+    assert controllers.solve_q_mode_flag_from_label("adaptive", uniform_flag=7, adaptive_flag=9) == 9
 
 
 def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> None:

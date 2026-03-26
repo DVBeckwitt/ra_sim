@@ -118,6 +118,25 @@ class DisplayControlsViewState:
 
 
 @dataclass
+class StructureFactorPruningControlsViewState:
+    """Widget references and vars for SF-pruning / arc-integration controls."""
+
+    frame: Any = None
+    sf_prune_bias_var: Any = None
+    sf_prune_bias_scale: Any = None
+    sf_prune_status_var: Any = None
+    sf_prune_status_label: Any = None
+    solve_q_mode_row: Any = None
+    solve_q_mode_var: Any = None
+    solve_q_uniform_button: Any = None
+    solve_q_adaptive_button: Any = None
+    solve_q_steps_var: Any = None
+    solve_q_steps_scale: Any = None
+    solve_q_rel_tol_var: Any = None
+    solve_q_rel_tol_scale: Any = None
+
+
+@dataclass
 class SamplingOpticsControlsViewState:
     """Widget references and vars for sampling-resolution / optics controls."""
 
@@ -337,6 +356,9 @@ class AppState:
     )
     display_controls_view: DisplayControlsViewState = field(
         default_factory=DisplayControlsViewState
+    )
+    structure_factor_pruning_controls_view: StructureFactorPruningControlsViewState = field(
+        default_factory=StructureFactorPruningControlsViewState
     )
     sampling_optics_controls_view: SamplingOpticsControlsViewState = field(
         default_factory=SamplingOpticsControlsViewState

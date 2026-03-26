@@ -155,12 +155,19 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     flow through `ra_sim.gui.views`
   - shared display-intensity range validation and display scale-factor
     normalization now flow through `ra_sim.gui.controllers`
+- Structure-factor pruning / arc-integration control migration has also landed:
+  - shared widget references and Tk var state for the prune-bias status/mode
+    controls and solve-q inputs now use shared GUI state
+  - pruning / arc-integration control construction plus the adaptive
+    relative-tolerance enabled-state helper now flow through `ra_sim.gui.views`
+  - prune-bias clipping and solve-q mode/step/tolerance normalization now flow
+    through `ra_sim.gui.controllers`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
     background-theta/background-debug/geometry-tool-action/HKL-lookup/
     overlay-action/analysis-view/analysis-export/sampling-optics/finite-stack/
-    display-controls view helper coverage
+    display-controls/pruning-controls view helper coverage
 
 ## Remaining Migration Focus
 
@@ -169,9 +176,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   surfaces still need the same treatment, especially the remaining widget-heavy
   runtime-owned helpers and cross-feature workflow glue that still assemble
   long-lived Tk references or own mutable GUI state inline.
-- The next bounded GUI target is the structure-factor pruning /
-  arc-integration control cluster that is still built directly in
-  `ra_sim.gui.runtime`.
+- The next bounded GUI target is the beam/mosaic parameter slider cluster that
+  is still built directly in `ra_sim.gui.runtime`.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

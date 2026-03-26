@@ -161,6 +161,15 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     scale-factor normalization helpers used by that control surface.
   - Direct controller/view tests now cover the extracted display-control
     helpers.
+- Structure-factor pruning / arc-integration control migration has landed.
+  - Shared widget references and Tk var state for the prune-bias status/mode
+    controls and solve-q inputs now live in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns construction of that control cluster plus the
+    adaptive relative-tolerance enable/disable helper.
+  - `ra_sim.gui.controllers` now owns the prune-bias clipping and solve-q
+    mode/step/tolerance normalization helpers.
+  - Direct controller/view tests now cover the extracted pruning / arc-
+    integration helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -260,6 +269,13 @@ What is done:
     scale-factor entry lookup.
   - `ra_sim.gui.controllers` now owns the shared display-intensity range and
     scale-factor normalization helpers.
+- The structure-factor pruning / arc-integration controls are no longer
+  assembled directly in `runtime.py`.
+  - `ra_sim.gui.state` now owns their widget refs and Tk-var view state.
+  - `ra_sim.gui.views` now owns that control-cluster construction and the
+    relative-tolerance enabled-state helper.
+  - `ra_sim.gui.controllers` now owns the prune-bias clipping and solve-q
+    mode/step/tolerance normalization helpers.
 
 What is left:
 
@@ -267,8 +283,8 @@ What is left:
   GUI state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
 - The next bounded GUI slices are still assembled inline in `runtime.py`,
-  especially the structure-factor pruning / arc-integration controls and other
-  Tk-heavy parameter panels.
+  especially the beam/mosaic parameter slider panels and other Tk-heavy
+  parameter surfaces.
 
 Why it matters:
 
@@ -353,6 +369,12 @@ What is done:
   construction and scale-factor entry discovery.
 - `controllers.py` now also owns shared display-intensity range validation and
   display scale-factor normalization helpers.
+- `state.py` now also owns structure-factor pruning / arc-integration control
+  view state.
+- `views.py` now also owns that control-cluster construction and the adaptive
+  relative-tolerance enabled-state helper.
+- `controllers.py` now also owns the prune-bias clipping and solve-q
+  mode/step/tolerance normalization helpers.
 
 What is left:
 
@@ -361,8 +383,8 @@ What is left:
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
 - Other Tk-heavy surfaces still need to move behind `views.py` helpers.
-- The next practical view-state target is the remaining structure-factor
-  pruning / arc-integration cluster.
+- The next practical view-state target is the remaining beam/mosaic parameter
+  slider cluster.
 
 Why it matters:
 
@@ -525,8 +547,8 @@ Tasks:
 
 - Group more runtime globals into explicit state containers.
 - Move the next remaining inline control clusters
-  (structure-factor pruning / arc-integration controls and similar surfaces)
-  into `views.py` helpers and shared view state.
+  (beam/mosaic parameter sliders and similar surfaces) into `views.py` helpers
+  and shared view state.
 - Reduce direct feature coordination in `runtime.py` where controller logic or
   shared state can own it instead.
 - Keep moving Tk-owned widget references out of runtime and into `views.py`
@@ -625,12 +647,13 @@ Why last:
 
 The next best step is:
 
-- build on the newer display-control extraction by moving the next
+- build on the newer display-control and pruning-control extractions by moving
+  the next
   runtime-owned GUI control clusters into explicit state + controller + view
   boundaries
-- focus next on the structure-factor pruning / arc-integration controls in
-  `runtime.py`, then on the remaining cross-feature runtime-owned state/helpers
-  that are still similarly isolated
+- focus next on the beam/mosaic parameter slider panels in `runtime.py`, then
+  on the remaining cross-feature runtime-owned state/helpers that are still
+  similarly isolated
 - keep shrinking the remaining cross-feature globals and inline Tk-heavy
   helpers that prevent the extracted scaffolding modules from becoming the
   dominant app structure
