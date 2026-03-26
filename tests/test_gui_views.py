@@ -1110,6 +1110,186 @@ def test_finite_stack_controls_store_vars_bindings_and_helper_updates(
     assert calls == ["toggle", "layers", "layers", "phi", "phase"]
 
 
+def test_stacking_parameter_panels_and_slider_refs_are_stored(monkeypatch) -> None:
+    created = []
+
+    def _fake_create_slider(
+        label,
+        min_val,
+        max_val,
+        initial_val,
+        step_size,
+        parent,
+        update_callback=None,
+        **_kwargs,
+    ):
+        var = _FakeVar(initial_val)
+        slider = _FakeScale(parent, to=max_val)
+        created.append(
+            {
+                "label": label,
+                "var": var,
+                "slider": slider,
+                "step": step_size,
+                "parent": parent,
+                "update_callback": update_callback,
+            }
+        )
+        return var, slider
+
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views, "create_slider", _fake_create_slider)
+
+    view_state = state.StackingParameterControlsViewState()
+
+    views.create_stacking_parameter_panels(parent=object(), view_state=view_state)
+    views.create_stacking_probability_sliders(
+        parent=view_state.stack_frame.frame,
+        view_state=view_state,
+        values={
+            "p0": 0.02,
+            "w0": 10.0,
+            "p1": 0.95,
+            "w1": 20.0,
+            "p2": 0.40,
+            "w2": 70.0,
+        },
+        on_update=lambda *_args: None,
+    )
+
+    assert isinstance(view_state.stack_frame, _FakeCollapsibleFrame)
+    assert isinstance(view_state.occupancy_frame, _FakeCollapsibleFrame)
+    assert isinstance(view_state.atom_site_frame, _FakeCollapsibleFrame)
+    assert isinstance(view_state.occ_slider_frame, _FakeFrame)
+    assert isinstance(view_state.occ_entry_frame, _FakeFrame)
+    assert isinstance(view_state.atom_site_table_frame, _FakeFrame)
+    assert view_state.p0_var.get() == 0.02
+    assert view_state.w0_var.get() == 10.0
+    assert view_state.p1_var.get() == 0.95
+    assert view_state.w1_var.get() == 20.0
+    assert view_state.p2_var.get() == 0.40
+    assert view_state.w2_var.get() == 70.0
+    assert view_state.p0_scale is created[0]["slider"]
+    assert view_state.w0_scale is created[1]["slider"]
+    assert view_state.p1_scale is created[2]["slider"]
+    assert view_state.w1_scale is created[3]["slider"]
+    assert view_state.p2_scale is created[4]["slider"]
+    assert view_state.w2_scale is created[5]["slider"]
+    assert [item["label"] for item in created] == [
+        "p≈0",
+        "w(p≈0)%",
+        "p≈1",
+        "w(p≈1)%",
+        "p",
+        "w(p)%",
+    ]
+
+
+def test_stacking_parameter_rebuild_helpers_render_dynamic_controls(monkeypatch) -> None:
+    class _TrackedFrame:
+        def __init__(self, _parent=None, **_kwargs) -> None:
+            self.children = []
+            self.columnconfigure_calls = []
+
+        def winfo_children(self):
+            return list(self.children)
+
+        def columnconfigure(self, index: int, weight: int) -> None:
+            self.columnconfigure_calls.append((index, weight))
+
+    class _TrackedWidget:
+        def __init__(self, parent, **kwargs) -> None:
+            self.parent = parent
+            self.kwargs = kwargs
+            self.bindings = {}
+            self.destroyed = False
+            if hasattr(parent, "children"):
+                parent.children.append(self)
+
+        def pack(self, **_kwargs) -> None:
+            pass
+
+        def grid(self, **_kwargs) -> None:
+            pass
+
+        def bind(self, event: str, callback) -> None:
+            self.bindings[event] = callback
+
+        def destroy(self) -> None:
+            self.destroyed = True
+
+    class _TrackedLabel(_TrackedWidget):
+        pass
+
+    class _TrackedEntry(_TrackedWidget):
+        pass
+
+    class _TrackedScale(_TrackedWidget):
+        pass
+
+    monkeypatch.setattr(views.ttk, "Label", _TrackedLabel)
+    monkeypatch.setattr(views.ttk, "Entry", _TrackedEntry)
+    monkeypatch.setattr(views.ttk, "Scale", _TrackedScale)
+
+    view_state = state.StackingParameterControlsViewState(
+        occ_slider_frame=_TrackedFrame(),
+        occ_entry_frame=_TrackedFrame(),
+        atom_site_table_frame=_TrackedFrame(),
+    )
+    old_occ_slider_child = _FakeExistingChild()
+    old_occ_entry_child = _FakeExistingChild()
+    old_atom_child = _FakeExistingChild()
+    view_state.occ_slider_frame.children.append(old_occ_slider_child)
+    view_state.occ_entry_frame.children.append(old_occ_entry_child)
+    view_state.atom_site_table_frame.children.append(old_atom_child)
+
+    occ_vars = [_FakeVar(0.4), _FakeVar(0.8)]
+    atom_site_vars = [
+        {
+            "x": _FakeVar(0.1),
+            "y": _FakeVar(0.2),
+            "z": _FakeVar(0.3),
+        }
+    ]
+
+    views.rebuild_occupancy_controls(
+        view_state=view_state,
+        occ_vars=occ_vars,
+        occupancy_label_text=lambda idx: f"Occupancy {idx + 1}",
+        occupancy_input_label_text=lambda idx: f"Input {idx + 1}",
+        on_update=lambda *_args: None,
+    )
+    views.rebuild_atom_site_fractional_controls(
+        view_state=view_state,
+        atom_site_fract_vars=atom_site_vars,
+        atom_site_label_text=lambda idx: f"site_{idx + 1}",
+        on_update=lambda *_args: None,
+        empty_text="empty",
+    )
+
+    assert old_occ_slider_child.destroyed is True
+    assert old_occ_entry_child.destroyed is True
+    assert old_atom_child.destroyed is True
+    assert len(view_state.occ_label_widgets) == 2
+    assert len(view_state.occ_scale_widgets) == 2
+    assert len(view_state.occ_entry_label_widgets) == 2
+    assert len(view_state.occ_entry_widgets) == 2
+    assert view_state.occ_label_widgets[0].kwargs["text"] == "Occupancy 1"
+    assert view_state.occ_entry_label_widgets[0].kwargs["text"] == "Input 1:"
+    assert "<Return>" in view_state.occ_entry_widgets[0].bindings
+    assert "<FocusOut>" in view_state.occ_entry_widgets[0].bindings
+    assert len(view_state.atom_site_coord_entry_widgets) == 3
+    assert "<Return>" in view_state.atom_site_coord_entry_widgets[0].bindings
+    assert "<FocusOut>" in view_state.atom_site_coord_entry_widgets[0].bindings
+    assert view_state.atom_site_table_frame.columnconfigure_calls == [
+        (0, 1),
+        (1, 1),
+        (2, 1),
+        (3, 1),
+    ]
+
+
 def test_geometry_tool_action_controls_store_refs_and_support_updates(
     monkeypatch,
 ) -> None:

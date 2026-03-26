@@ -220,6 +220,35 @@ class FiniteStackControlsViewState:
 
 
 @dataclass
+class StackingParameterControlsViewState:
+    """Widget references and vars for stacking/occupancy/atom-site controls."""
+
+    stack_frame: Any = None
+    p0_var: Any = None
+    p0_scale: Any = None
+    w0_var: Any = None
+    w0_scale: Any = None
+    p1_var: Any = None
+    p1_scale: Any = None
+    w1_var: Any = None
+    w1_scale: Any = None
+    p2_var: Any = None
+    p2_scale: Any = None
+    w2_var: Any = None
+    w2_scale: Any = None
+    occupancy_frame: Any = None
+    occ_slider_frame: Any = None
+    occ_entry_frame: Any = None
+    occ_scale_widgets: list[Any] = field(default_factory=list)
+    occ_label_widgets: list[Any] = field(default_factory=list)
+    occ_entry_widgets: list[Any] = field(default_factory=list)
+    occ_entry_label_widgets: list[Any] = field(default_factory=list)
+    atom_site_frame: Any = None
+    atom_site_table_frame: Any = None
+    atom_site_coord_entry_widgets: list[Any] = field(default_factory=list)
+
+
+@dataclass
 class GeometryToolActionsViewState:
     """Widget references and vars for fit-history/manual-geometry action controls."""
 
@@ -412,6 +441,9 @@ class AppState:
     )
     finite_stack_controls_view: FiniteStackControlsViewState = field(
         default_factory=FiniteStackControlsViewState
+    )
+    stacking_parameter_controls_view: StackingParameterControlsViewState = field(
+        default_factory=StackingParameterControlsViewState
     )
     geometry_tool_actions_view: GeometryToolActionsViewState = field(
         default_factory=GeometryToolActionsViewState

@@ -25,6 +25,7 @@ from .state import (
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
     SamplingOpticsControlsViewState,
+    StackingParameterControlsViewState,
     StructureFactorPruningControlsViewState,
     WorkspacePanelsViewState,
 )
@@ -898,6 +899,270 @@ def set_finite_stack_phase_delta_entry_text(
     setter = getattr(view_state.phase_delta_entry_var, "set", None)
     if callable(setter):
         setter(str(text))
+
+
+def _destroy_children(parent: object | None) -> None:
+    children = getattr(parent, "winfo_children", None)
+    if not callable(children):
+        return
+    for child in children():
+        destroy = getattr(child, "destroy", None)
+        if callable(destroy):
+            destroy()
+
+
+def create_stacking_parameter_panels(
+    *,
+    parent: tk.Misc,
+    view_state: StackingParameterControlsViewState,
+) -> None:
+    """Create collapsible stacking/occupancy/atom-site panels and store refs."""
+
+    stack_frame = CollapsibleFrame(parent, text="Stacking Probabilities")
+    stack_frame.pack(fill=tk.X, padx=5, pady=5)
+
+    occupancy_frame = CollapsibleFrame(parent, text="Site Occupancies")
+    occupancy_frame.pack(fill=tk.X, padx=5, pady=5)
+    occ_slider_frame = ttk.Frame(occupancy_frame.frame)
+    occ_slider_frame.pack(fill=tk.X, padx=0, pady=0)
+    occ_entry_frame = ttk.Frame(occupancy_frame.frame)
+    occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
+
+    atom_site_frame = CollapsibleFrame(parent, text="Atom Site Fractional Coordinates")
+    atom_site_frame.pack(fill=tk.X, padx=5, pady=5)
+    atom_site_table_frame = ttk.Frame(atom_site_frame.frame)
+    atom_site_table_frame.pack(fill=tk.X, padx=5, pady=5)
+
+    view_state.stack_frame = stack_frame
+    view_state.occupancy_frame = occupancy_frame
+    view_state.occ_slider_frame = occ_slider_frame
+    view_state.occ_entry_frame = occ_entry_frame
+    view_state.atom_site_frame = atom_site_frame
+    view_state.atom_site_table_frame = atom_site_table_frame
+
+
+def create_stacking_probability_sliders(
+    *,
+    parent: tk.Misc,
+    view_state: StackingParameterControlsViewState,
+    values: dict[str, float],
+    on_update: Callable[..., None],
+) -> None:
+    """Create the stacking probability/weight sliders and store refs."""
+
+    _create_stored_slider(
+        view_state=view_state,
+        attr_prefix="p0",
+        label="p≈0",
+        min_val=0.0,
+        max_val=0.2,
+        initial_val=float(values["p0"]),
+        step_size=0.001,
+        parent=parent,
+        update_callback=on_update,
+    )
+    _create_stored_slider(
+        view_state=view_state,
+        attr_prefix="w0",
+        label="w(p≈0)%",
+        min_val=0.0,
+        max_val=100.0,
+        initial_val=float(values["w0"]),
+        step_size=0.1,
+        parent=parent,
+        update_callback=on_update,
+    )
+    _create_stored_slider(
+        view_state=view_state,
+        attr_prefix="p1",
+        label="p≈1",
+        min_val=0.8,
+        max_val=1.0,
+        initial_val=float(values["p1"]),
+        step_size=0.001,
+        parent=parent,
+        update_callback=on_update,
+    )
+    _create_stored_slider(
+        view_state=view_state,
+        attr_prefix="w1",
+        label="w(p≈1)%",
+        min_val=0.0,
+        max_val=100.0,
+        initial_val=float(values["w1"]),
+        step_size=0.1,
+        parent=parent,
+        update_callback=on_update,
+    )
+    _create_stored_slider(
+        view_state=view_state,
+        attr_prefix="p2",
+        label="p",
+        min_val=0.0,
+        max_val=1.0,
+        initial_val=float(values["p2"]),
+        step_size=0.001,
+        parent=parent,
+        update_callback=on_update,
+    )
+    _create_stored_slider(
+        view_state=view_state,
+        attr_prefix="w2",
+        label="w(p)%",
+        min_val=0.0,
+        max_val=100.0,
+        initial_val=float(values["w2"]),
+        step_size=0.1,
+        parent=parent,
+        update_callback=on_update,
+    )
+
+
+def rebuild_occupancy_controls(
+    *,
+    view_state: StackingParameterControlsViewState,
+    occ_vars: Sequence[object],
+    occupancy_label_text: Callable[[int], str],
+    occupancy_input_label_text: Callable[[int], str],
+    on_update: Callable[..., None],
+) -> None:
+    """Recreate the occupancy sliders and entry rows for the current vars."""
+
+    _destroy_children(view_state.occ_slider_frame)
+    _destroy_children(view_state.occ_entry_frame)
+
+    view_state.occ_scale_widgets.clear()
+    view_state.occ_label_widgets.clear()
+    view_state.occ_entry_widgets.clear()
+    view_state.occ_entry_label_widgets.clear()
+
+    if view_state.occ_slider_frame is None or view_state.occ_entry_frame is None:
+        return
+
+    for idx, occ_var in enumerate(occ_vars):
+        occ_label = ttk.Label(
+            view_state.occ_slider_frame,
+            text=str(occupancy_label_text(int(idx))),
+        )
+        occ_label.pack(padx=5, pady=2)
+        view_state.occ_label_widgets.append(occ_label)
+
+        occ_scale = ttk.Scale(
+            view_state.occ_slider_frame,
+            from_=0.0,
+            to=1.0,
+            orient=tk.HORIZONTAL,
+            variable=occ_var,
+            command=on_update,
+        )
+        occ_scale.pack(fill=tk.X, padx=5, pady=2)
+        view_state.occ_scale_widgets.append(occ_scale)
+
+    for idx, occ_var in enumerate(occ_vars):
+        occ_entry_label = ttk.Label(
+            view_state.occ_entry_frame,
+            text=str(occupancy_input_label_text(int(idx))) + ":",
+        )
+        occ_entry_label.grid(row=idx, column=0, sticky="w", padx=5, pady=2)
+        view_state.occ_entry_label_widgets.append(occ_entry_label)
+
+        occ_entry = ttk.Entry(view_state.occ_entry_frame, textvariable=occ_var, width=7)
+        occ_entry.grid(row=idx, column=1, padx=5, pady=2, sticky="ew")
+        occ_entry.bind("<Return>", on_update)
+        occ_entry.bind("<FocusOut>", on_update)
+        view_state.occ_entry_widgets.append(occ_entry)
+
+    view_state.occ_entry_frame.columnconfigure(1, weight=1)
+
+
+def rebuild_atom_site_fractional_controls(
+    *,
+    view_state: StackingParameterControlsViewState,
+    atom_site_fract_vars: Sequence[object],
+    atom_site_label_text: Callable[[int], str],
+    on_update: Callable[..., None],
+    empty_text: str,
+) -> None:
+    """Recreate the atom-site fractional-coordinate entry table."""
+
+    _destroy_children(view_state.atom_site_table_frame)
+    view_state.atom_site_coord_entry_widgets.clear()
+
+    if view_state.atom_site_table_frame is None:
+        return
+
+    if not atom_site_fract_vars:
+        ttk.Label(
+            view_state.atom_site_table_frame,
+            text=str(empty_text),
+        ).grid(row=0, column=0, sticky="w", padx=2, pady=2)
+        return
+
+    ttk.Label(view_state.atom_site_table_frame, text="Site").grid(
+        row=0,
+        column=0,
+        sticky="w",
+        padx=2,
+        pady=2,
+    )
+    ttk.Label(view_state.atom_site_table_frame, text="x").grid(
+        row=0,
+        column=1,
+        sticky="w",
+        padx=2,
+        pady=2,
+    )
+    ttk.Label(view_state.atom_site_table_frame, text="y").grid(
+        row=0,
+        column=2,
+        sticky="w",
+        padx=2,
+        pady=2,
+    )
+    ttk.Label(view_state.atom_site_table_frame, text="z").grid(
+        row=0,
+        column=3,
+        sticky="w",
+        padx=2,
+        pady=2,
+    )
+
+    for idx, axis_vars in enumerate(atom_site_fract_vars):
+        ttk.Label(
+            view_state.atom_site_table_frame,
+            text=str(atom_site_label_text(int(idx))),
+        ).grid(row=idx + 1, column=0, sticky="w", padx=2, pady=2)
+
+        entry_x = ttk.Entry(
+            view_state.atom_site_table_frame,
+            textvariable=axis_vars["x"],
+            width=10,
+        )
+        entry_y = ttk.Entry(
+            view_state.atom_site_table_frame,
+            textvariable=axis_vars["y"],
+            width=10,
+        )
+        entry_z = ttk.Entry(
+            view_state.atom_site_table_frame,
+            textvariable=axis_vars["z"],
+            width=10,
+        )
+        entry_x.grid(row=idx + 1, column=1, padx=2, pady=2, sticky="ew")
+        entry_y.grid(row=idx + 1, column=2, padx=2, pady=2, sticky="ew")
+        entry_z.grid(row=idx + 1, column=3, padx=2, pady=2, sticky="ew")
+        entry_x.bind("<Return>", on_update)
+        entry_y.bind("<Return>", on_update)
+        entry_z.bind("<Return>", on_update)
+        entry_x.bind("<FocusOut>", on_update)
+        entry_y.bind("<FocusOut>", on_update)
+        entry_z.bind("<FocusOut>", on_update)
+        view_state.atom_site_coord_entry_widgets.extend([entry_x, entry_y, entry_z])
+
+    view_state.atom_site_table_frame.columnconfigure(0, weight=1)
+    view_state.atom_site_table_frame.columnconfigure(1, weight=1)
+    view_state.atom_site_table_frame.columnconfigure(2, weight=1)
+    view_state.atom_site_table_frame.columnconfigure(3, weight=1)
 
 
 def create_geometry_tool_action_controls(

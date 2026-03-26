@@ -5646,6 +5646,7 @@ beam_mosaic_parameter_sliders_view_state = (
 )
 sampling_optics_controls_view_state = gui_state.SamplingOpticsControlsViewState()
 finite_stack_controls_view_state = gui_state.FiniteStackControlsViewState()
+stacking_parameter_controls_view_state = gui_state.StackingParameterControlsViewState()
 
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
@@ -9350,8 +9351,9 @@ def do_update():
         current_occ = [occ_var.get() for occ_var in occ_vars]
         current_p = [p0_var.get(), p1_var.get(), p2_var.get()]
         weight_values = [w0_var.get(), w1_var.get(), w2_var.get()]
-        weight_sum = sum(weight_values) or 1.0
-        normalized_weights = [w / weight_sum for w in weight_values]
+        normalized_weights = gui_controllers.normalize_stacking_weight_values(
+            weight_values
+        )
         _rebuild_diffraction_inputs(
             current_occ,
             current_p,
@@ -16885,7 +16887,10 @@ def update_occupancies(*args):
         return
 
     # Keep occupancies physically meaningful and reflect clamped values in the UI.
-    clamped_occ = [min(1.0, max(0.0, v)) for v in new_occ]
+    clamped_occ = gui_controllers.clamp_site_occupancy_values(
+        new_occ,
+        fallback_values=occ,
+    )
     for var, val in zip(occ_vars, clamped_occ):
         try:
             current = float(var.get())
@@ -16900,8 +16905,7 @@ def update_occupancies(*args):
         w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
     except (tk.TclError, ValueError):
         return
-    w_sum = sum(w_raw) or 1.0
-    weights = [w / w_sum for w in w_raw]
+    weights = gui_controllers.normalize_stacking_weight_values(w_raw)
 
     _rebuild_diffraction_inputs(new_occ, p_vals, weights, a_var.get(), c_var.get())
 
@@ -17047,10 +17051,12 @@ def _on_layer_slider(val):
 
 
 # Sliders for three disorder probabilities and weights inside a collapsible frame
-stack_frame = CollapsibleFrame(right_col, text='Stacking Probabilities')
-stack_frame.pack(fill=tk.X, padx=5, pady=5)
+gui_views.create_stacking_parameter_panels(
+    parent=right_col,
+    view_state=stacking_parameter_controls_view_state,
+)
 gui_views.create_finite_stack_controls(
-    parent=stack_frame.frame,
+    parent=stacking_parameter_controls_view_state.stack_frame.frame,
     view_state=finite_stack_controls_view_state,
     finite_stack=bool(defaults['finite_stack']),
     stack_layers=int(defaults['stack_layers']),
@@ -17071,90 +17077,40 @@ _sync_layer_entry_from_var()
 _sync_finite_controls()
 phi_l_divisor_var.trace_add("write", _sync_phi_l_divisor_entry_from_var)
 _sync_phi_l_divisor_entry_from_var()
-p0_var, _ = create_slider('p≈0', 0.0, 0.2, defaults['p0'], 0.001,
-                          stack_frame.frame, update_occupancies)
-w0_var, _ = create_slider('w(p≈0)%', 0.0, 100.0, defaults['w0'], 0.1,
-                          stack_frame.frame, update_occupancies)
-p1_var, _ = create_slider('p≈1', 0.8, 1.0, defaults['p1'], 0.001,
-                          stack_frame.frame, update_occupancies)
-w1_var, _ = create_slider('w(p≈1)%', 0.0, 100.0, defaults['w1'], 0.1,
-                          stack_frame.frame, update_occupancies)
-p2_var, _ = create_slider('p', 0.0, 1.0, defaults['p2'], 0.001,
-                          stack_frame.frame, update_occupancies)
-w2_var, _ = create_slider('w(p)%', 0.0, 100.0, defaults['w2'], 0.1,
-                          stack_frame.frame, update_occupancies)
-
-# Occupancy sliders grouped in a collapsible frame
-occ_frame = CollapsibleFrame(right_col, text='Site Occupancies')
-occ_frame.pack(fill=tk.X, padx=5, pady=5)
-
-occ_scale_widgets = []
-occ_label_widgets = []
-occ_entry_widgets = []
-occ_entry_label_widgets = []
-
-occ_slider_frame = ttk.Frame(occ_frame.frame)
-occ_slider_frame.pack(fill=tk.X, padx=0, pady=0)
-
-# --- Add numeric input fields and a Force Update button ---
-occ_entry_frame = ttk.Frame(occ_frame.frame)
-occ_entry_frame.pack(fill=tk.X, padx=5, pady=5)
-
-# Fractional atom-site coordinate controls from raw CIF rows.
-atom_site_frame = CollapsibleFrame(right_col, text='Atom Site Fractional Coordinates')
-atom_site_frame.pack(fill=tk.X, padx=5, pady=5)
-atom_site_table_frame = ttk.Frame(atom_site_frame.frame)
-atom_site_table_frame.pack(fill=tk.X, padx=5, pady=5)
-atom_site_coord_entry_widgets = []
+gui_views.create_stacking_probability_sliders(
+    parent=stacking_parameter_controls_view_state.stack_frame.frame,
+    view_state=stacking_parameter_controls_view_state,
+    values={
+        "p0": float(defaults["p0"]),
+        "w0": float(defaults["w0"]),
+        "p1": float(defaults["p1"]),
+        "w1": float(defaults["w1"]),
+        "p2": float(defaults["p2"]),
+        "w2": float(defaults["w2"]),
+    },
+    on_update=update_occupancies,
+)
+p0_var = stacking_parameter_controls_view_state.p0_var
+w0_var = stacking_parameter_controls_view_state.w0_var
+p1_var = stacking_parameter_controls_view_state.p1_var
+w1_var = stacking_parameter_controls_view_state.w1_var
+p2_var = stacking_parameter_controls_view_state.p2_var
+w2_var = stacking_parameter_controls_view_state.w2_var
 
 
 def _rebuild_occupancy_controls():
     """Recreate occupancy sliders/entries for the current ``occ_vars`` list."""
 
-    global occ_scale_widgets, occ_label_widgets, occ_entry_widgets, occ_entry_label_widgets
-
-    for child in occ_slider_frame.winfo_children():
-        child.destroy()
-    for child in occ_entry_frame.winfo_children():
-        child.destroy()
-
-    occ_scale_widgets = []
-    occ_label_widgets = []
-    occ_entry_widgets = []
-    occ_entry_label_widgets = []
-
-    for idx, occ_var in enumerate(occ_vars):
-        occ_label = ttk.Label(
-            occ_slider_frame,
-            text=_occupancy_label_text(idx),
-        )
-        occ_label.pack(padx=5, pady=2)
-        occ_label_widgets.append(occ_label)
-        occ_scale = ttk.Scale(
-            occ_slider_frame,
-            from_=0.0,
-            to=1.0,
-            orient=tk.HORIZONTAL,
-            variable=occ_var,
-            command=update_occupancies,
-        )
-        occ_scale.pack(fill=tk.X, padx=5, pady=2)
-        occ_scale_widgets.append(occ_scale)
-
-    for idx, occ_var in enumerate(occ_vars):
-        occ_entry_label = ttk.Label(
-            occ_entry_frame,
-            text=_occupancy_label_text(idx, input_label=True) + ":",
-        )
-        occ_entry_label.grid(row=idx, column=0, sticky="w", padx=5, pady=2)
-        occ_entry_label_widgets.append(occ_entry_label)
-        occ_entry = ttk.Entry(occ_entry_frame, textvariable=occ_var, width=7)
-        occ_entry.grid(row=idx, column=1, padx=5, pady=2, sticky="ew")
-        occ_entry.bind("<Return>", update_occupancies)
-        occ_entry.bind("<FocusOut>", update_occupancies)
-        occ_entry_widgets.append(occ_entry)
-
-    occ_entry_frame.columnconfigure(1, weight=1)
+    gui_views.rebuild_occupancy_controls(
+        view_state=stacking_parameter_controls_view_state,
+        occ_vars=occ_vars,
+        occupancy_label_text=lambda idx: _occupancy_label_text(idx),
+        occupancy_input_label_text=lambda idx: _occupancy_label_text(
+            idx,
+            input_label=True,
+        ),
+        on_update=update_occupancies,
+    )
 
 
 def _current_occupancy_values():
@@ -17181,47 +17137,13 @@ def _atom_site_fractional_label_text(site_idx: int) -> str:
 def _rebuild_atom_site_fractional_controls():
     """Recreate x/y/z entry controls for atom-site fractional coordinates."""
 
-    global atom_site_coord_entry_widgets
-    for child in atom_site_table_frame.winfo_children():
-        child.destroy()
-    atom_site_coord_entry_widgets = []
-
-    if not atom_site_fract_vars:
-        ttk.Label(
-            atom_site_table_frame,
-            text="No _atom_site_fract_x/_y/_z loop found in the active CIF.",
-        ).grid(row=0, column=0, sticky="w", padx=2, pady=2)
-        return
-
-    ttk.Label(atom_site_table_frame, text="Site").grid(row=0, column=0, sticky="w", padx=2, pady=2)
-    ttk.Label(atom_site_table_frame, text="x").grid(row=0, column=1, sticky="w", padx=2, pady=2)
-    ttk.Label(atom_site_table_frame, text="y").grid(row=0, column=2, sticky="w", padx=2, pady=2)
-    ttk.Label(atom_site_table_frame, text="z").grid(row=0, column=3, sticky="w", padx=2, pady=2)
-
-    for idx, axis_vars in enumerate(atom_site_fract_vars):
-        ttk.Label(
-            atom_site_table_frame,
-            text=_atom_site_fractional_label_text(idx),
-        ).grid(row=idx + 1, column=0, sticky="w", padx=2, pady=2)
-
-        entry_x = ttk.Entry(atom_site_table_frame, textvariable=axis_vars["x"], width=10)
-        entry_y = ttk.Entry(atom_site_table_frame, textvariable=axis_vars["y"], width=10)
-        entry_z = ttk.Entry(atom_site_table_frame, textvariable=axis_vars["z"], width=10)
-        entry_x.grid(row=idx + 1, column=1, padx=2, pady=2, sticky="ew")
-        entry_y.grid(row=idx + 1, column=2, padx=2, pady=2, sticky="ew")
-        entry_z.grid(row=idx + 1, column=3, padx=2, pady=2, sticky="ew")
-        entry_x.bind("<Return>", update_occupancies)
-        entry_y.bind("<Return>", update_occupancies)
-        entry_z.bind("<Return>", update_occupancies)
-        entry_x.bind("<FocusOut>", update_occupancies)
-        entry_y.bind("<FocusOut>", update_occupancies)
-        entry_z.bind("<FocusOut>", update_occupancies)
-        atom_site_coord_entry_widgets.extend([entry_x, entry_y, entry_z])
-
-    atom_site_table_frame.columnconfigure(0, weight=1)
-    atom_site_table_frame.columnconfigure(1, weight=1)
-    atom_site_table_frame.columnconfigure(2, weight=1)
-    atom_site_table_frame.columnconfigure(3, weight=1)
+    gui_views.rebuild_atom_site_fractional_controls(
+        view_state=stacking_parameter_controls_view_state,
+        atom_site_fract_vars=atom_site_fract_vars,
+        atom_site_label_text=_atom_site_fractional_label_text,
+        on_update=update_occupancies,
+        empty_text="No _atom_site_fract_x/_y/_z loop found in the active CIF.",
+    )
 
 
 def _apply_primary_cif_path(raw_path):
@@ -17291,8 +17213,9 @@ def _apply_primary_cif_path(raw_path):
 
         new_labels, new_expanded_map = _extract_occupancy_site_metadata(new_blk, str(candidate))
         site_count = len(new_labels) if new_labels else max(1, len(old_occ_values))
-        new_occ_values = _ensure_numeric_vector(old_occ_values, [1.0], site_count)
-        new_occ_values = [min(1.0, max(0.0, float(v))) for v in new_occ_values]
+        new_occ_values = gui_controllers.clamp_site_occupancy_values(
+            _ensure_numeric_vector(old_occ_values, [1.0], site_count),
+        )
         new_atom_site_metadata = _extract_atom_site_fractional_metadata(new_blk)
         if new_atom_site_metadata:
             new_atom_site_values = [
@@ -17310,8 +17233,7 @@ def _apply_primary_cif_path(raw_path):
             w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
         except (tk.TclError, ValueError):
             w_raw = [float(defaults['w0']), float(defaults['w1']), float(defaults['w2'])]
-        w_sum = sum(w_raw) or 1.0
-        weights = [w / w_sum for w in w_raw]
+        weights = gui_controllers.normalize_stacking_weight_values(w_raw)
 
         c_axis = float(new_cv)
 

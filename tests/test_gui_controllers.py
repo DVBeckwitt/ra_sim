@@ -41,6 +41,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         state.FiniteStackControlsViewState,
     )
     assert isinstance(
+        app_state.stacking_parameter_controls_view,
+        state.StackingParameterControlsViewState,
+    )
+    assert isinstance(
         app_state.geometry_tool_actions_view,
         state.GeometryToolActionsViewState,
     )
@@ -91,6 +95,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert (
         app_state.finite_stack_controls_view
         is not other_state.finite_stack_controls_view
+    )
+    assert (
+        app_state.stacking_parameter_controls_view
+        is not other_state.stacking_parameter_controls_view
     )
     assert app_state.geometry_tool_actions_view is not other_state.geometry_tool_actions_view
     assert app_state.hkl_lookup_view is not other_state.hkl_lookup_view
@@ -218,6 +226,24 @@ def test_finite_stack_controller_helpers_normalize_and_format() -> None:
         fallback=1.0,
     ) == 3.5
     assert controllers.format_finite_stack_phi_l_divisor(4.0) == "4"
+
+
+def test_stacking_parameter_controller_helpers_clamp_and_normalize() -> None:
+    assert controllers.clamp_site_occupancy_values([1.2, -0.5, "bad"]) == [1.0, 0.0, 1.0]
+    assert controllers.clamp_site_occupancy_values(
+        [float("nan"), "bad"],
+        fallback_values=[0.25, 0.75],
+    ) == [0.25, 0.75]
+    assert controllers.normalize_stacking_weight_values([20.0, 30.0, 50.0]) == [
+        0.2,
+        0.3,
+        0.5,
+    ]
+    assert controllers.normalize_stacking_weight_values([0.0, 0.0, 0.0]) == [
+        0.0,
+        0.0,
+        0.0,
+    ]
 
 
 def test_replace_manual_geometry_state_updates_in_place() -> None:

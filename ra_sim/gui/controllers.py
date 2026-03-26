@@ -156,6 +156,53 @@ def format_finite_stack_phi_l_divisor(value: object) -> str:
     return f"{normalized:.6g}"
 
 
+def clamp_site_occupancy_values(
+    values: Sequence[object],
+    *,
+    fallback_values: Sequence[object] | None = None,
+) -> list[float]:
+    """Clamp occupancy values to finite fractions in the inclusive [0, 1] range."""
+
+    fallbacks = list(fallback_values or [])
+    clamped: list[float] = []
+    for idx, raw_value in enumerate(values):
+        try:
+            normalized = float(raw_value)
+        except (TypeError, ValueError):
+            fallback = fallbacks[idx] if idx < len(fallbacks) else 1.0
+            try:
+                normalized = float(fallback)
+            except (TypeError, ValueError):
+                normalized = 1.0
+        if not math.isfinite(normalized):
+            fallback = fallbacks[idx] if idx < len(fallbacks) else 1.0
+            try:
+                normalized = float(fallback)
+            except (TypeError, ValueError):
+                normalized = 1.0
+            if not math.isfinite(normalized):
+                normalized = 1.0
+        clamped.append(min(1.0, max(0.0, float(normalized))))
+    return clamped
+
+
+def normalize_stacking_weight_values(values: Sequence[object]) -> list[float]:
+    """Normalize stacking-disorder weight percentages to fractional weights."""
+
+    normalized: list[float] = []
+    for raw_value in values:
+        try:
+            weight = float(raw_value)
+        except (TypeError, ValueError):
+            weight = 0.0
+        if not math.isfinite(weight):
+            weight = 0.0
+        normalized.append(float(weight))
+
+    weight_sum = float(sum(normalized)) or 1.0
+    return [float(weight) / weight_sum for weight in normalized]
+
+
 def ensure_display_intensity_range(
     min_value: object,
     max_value: object,

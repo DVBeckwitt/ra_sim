@@ -180,6 +180,16 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     used by the remaining psi-z range guard.
   - Direct controller/view tests now cover the extracted beam/mosaic slider
     helpers.
+- Stacking-probability / occupancy / atom-site control migration has landed.
+  - Shared widget references and Tk var state for the stacking probability
+    sliders, occupancy panels, and atom-site fractional-coordinate table now
+    live in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns those panel constructors and the dynamic
+    occupancy / atom-site rebuild helpers.
+  - `ra_sim.gui.controllers` now owns the occupancy clamp and stacking
+    weight-normalization helpers used by that control family.
+  - Direct controller/view tests now cover the extracted stacking / occupancy /
+    atom-site helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -292,6 +302,14 @@ What is done:
   - `ra_sim.gui.views` now owns that slider construction and callback wiring.
   - `ra_sim.gui.controllers` now owns the shared slider-bounds clamp helper
     used by the remaining psi-z guard.
+- The stacking-probability / occupancy / atom-site control cluster is no longer
+  assembled directly in `runtime.py`.
+  - `ra_sim.gui.state` now owns the corresponding slider/widget/Tk-var view
+    state.
+  - `ra_sim.gui.views` now owns that panel construction plus the dynamic
+    occupancy and atom-site control rebuild helpers.
+  - `ra_sim.gui.controllers` now owns the occupancy clamp and stacking
+    weight-normalization helpers reused by that control family.
 
 What is left:
 
@@ -299,8 +317,8 @@ What is left:
   GUI state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
 - The next bounded GUI slices are still assembled inline in `runtime.py`,
-  especially the stacking-probability / occupancy / atom-site parameter panels
-  and other Tk-heavy parameter surfaces.
+  especially the primary-CIF / diffuse-HT parameter panels and other Tk-heavy
+  parameter surfaces.
 
 Why it matters:
 
@@ -395,6 +413,12 @@ What is done:
 - `views.py` now also owns that slider construction and callback wiring.
 - `controllers.py` now also owns the shared slider-bounds clamp helper used by
   the remaining psi-z guard.
+- `state.py` now also owns the stacking probability / occupancy / atom-site
+  control view state.
+- `views.py` now also owns those control constructors plus the dynamic
+  occupancy / atom-site rebuild helpers.
+- `controllers.py` now also owns the occupancy clamp and stacking
+  weight-normalization helpers.
 
 What is left:
 
@@ -403,8 +427,8 @@ What is left:
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
 - Other Tk-heavy surfaces still need to move behind `views.py` helpers.
-- The next practical view-state target is the remaining stacking-probability /
-  occupancy / atom-site parameter cluster.
+- The next practical view-state target is the primary-CIF / diffuse-HT control
+  cluster.
 
 Why it matters:
 
@@ -567,8 +591,8 @@ Tasks:
 
 - Group more runtime globals into explicit state containers.
 - Move the next remaining inline control clusters
-  (stacking-probability / occupancy / atom-site controls and similar
-  surfaces) into `views.py` helpers and shared view state.
+  (primary-CIF / diffuse-HT controls and similar surfaces) into `views.py`
+  helpers and shared view state.
 - Reduce direct feature coordination in `runtime.py` where controller logic or
   shared state can own it instead.
 - Keep moving Tk-owned widget references out of runtime and into `views.py`
@@ -667,13 +691,13 @@ Why last:
 
 The next best step is:
 
-- build on the newer display-control, pruning-control, and beam/mosaic-slider
-  extractions by moving the next
+- build on the newer display-control, pruning-control, beam/mosaic-slider, and
+  stacking/occupancy/atom-site extractions by moving the next
   runtime-owned GUI control clusters into explicit state + controller + view
   boundaries
-- focus next on the stacking-probability / occupancy / atom-site parameter
-  panels in `runtime.py`, then on the remaining cross-feature runtime-owned
-  state/helpers that are still similarly isolated
+- focus next on the primary-CIF / diffuse-HT parameter panels in `runtime.py`,
+  then on the remaining cross-feature runtime-owned state/helpers that are
+  still similarly isolated
 - keep shrinking the remaining cross-feature globals and inline Tk-heavy
   helpers that prevent the extracted scaffolding modules from becoming the
   dominant app structure
