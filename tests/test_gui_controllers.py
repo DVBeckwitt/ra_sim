@@ -7,6 +7,15 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
 
     assert isinstance(app_state.manual_geometry, state.ManualGeometryState)
     assert isinstance(app_state.geometry_fit_history, state.GeometryFitHistoryState)
+    assert isinstance(
+        app_state.background_theta_controls_view,
+        state.BackgroundThetaControlsViewState,
+    )
+    assert isinstance(app_state.workspace_panels_view, state.WorkspacePanelsViewState)
+    assert isinstance(
+        app_state.background_backend_debug_view,
+        state.BackgroundBackendDebugViewState,
+    )
     assert isinstance(app_state.geometry_preview, state.GeometryPreviewState)
     assert isinstance(
         app_state.geometry_preview.overlay,
@@ -18,6 +27,9 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert isinstance(app_state.bragg_qr_manager_view, state.BraggQrManagerViewState)
     assert app_state.manual_geometry is not other_state.manual_geometry
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
+    assert app_state.background_theta_controls_view is not other_state.background_theta_controls_view
+    assert app_state.workspace_panels_view is not other_state.workspace_panels_view
+    assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
     assert app_state.geometry_preview is not other_state.geometry_preview
     assert app_state.geometry_preview.overlay is not other_state.geometry_preview.overlay
     assert app_state.geometry_q_groups is not other_state.geometry_q_groups

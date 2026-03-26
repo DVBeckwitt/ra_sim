@@ -270,11 +270,14 @@ class _FakeCheckbutton:
 
 
 class _FakeVar:
-    def __init__(self, value: bool) -> None:
+    def __init__(self, value=None) -> None:
         self._value = value
 
-    def get(self) -> bool:
+    def get(self):
         return self._value
+
+    def set(self, value) -> None:
+        self._value = value
 
 
 class _FakeStringVar:
@@ -310,6 +313,32 @@ class _FakeButton:
         self.kwargs = kwargs
         self.command = kwargs.get("command")
         _FakeButton.created.append(self)
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+
+class _FakeSpinbox:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        _FakeSpinbox.created.append(self)
+
+    def pack(self, **_kwargs) -> None:
+        pass
+
+
+class _FakeOptionMenu:
+    created = []
+
+    def __init__(self, parent, variable, default, *values) -> None:
+        self.parent = parent
+        self.variable = variable
+        self.default = default
+        self.values = values
+        _FakeOptionMenu.created.append(self)
 
     def pack(self, **_kwargs) -> None:
         pass
@@ -521,6 +550,163 @@ def test_open_hbn_geometry_debug_window_populates_and_reuses_existing_window(
 
     created_windows[0].protocols["WM_DELETE_WINDOW"]()
     assert closed == [True]
+
+
+def test_create_workspace_panels_stores_panel_refs(monkeypatch) -> None:
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+
+    view_state = state.WorkspacePanelsViewState()
+
+    views.create_workspace_panels(
+        parent=object(),
+        view_state=view_state,
+    )
+
+    assert isinstance(view_state.workspace_actions_frame, _FakeFrame)
+    assert view_state.workspace_actions_frame.kwargs["text"] == "Workspace Actions"
+    assert isinstance(view_state.workspace_backgrounds_frame, _FakeFrame)
+    assert "text" not in view_state.workspace_backgrounds_frame.kwargs
+    assert isinstance(view_state.workspace_session_frame, _FakeFrame)
+    assert view_state.workspace_session_frame.kwargs["text"] == "Session"
+
+
+def test_populate_stacked_button_group_creates_buttons_in_order(monkeypatch) -> None:
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+
+    called = []
+    views.populate_stacked_button_group(
+        object(),
+        [
+            ("First", lambda: called.append("first")),
+            ("Second", lambda: called.append("second")),
+        ],
+    )
+
+    assert [button.kwargs["text"] for button in _FakeButton.created] == ["First", "Second"]
+
+    _FakeButton.created[0].command()
+    _FakeButton.created[1].command()
+    assert called == ["first", "second"]
+
+
+def test_background_file_controls_store_status_var_and_update_text(monkeypatch) -> None:
+    _FakeButton.created = []
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.WorkspacePanelsViewState()
+    loaded = []
+
+    views.create_background_file_controls(
+        parent=object(),
+        view_state=view_state,
+        on_load_backgrounds=lambda: loaded.append(True),
+        status_text="initial status",
+    )
+
+    assert view_state.background_file_status_var.get() == "initial status"
+    assert view_state.background_file_status_label.kwargs["textvariable"] is (
+        view_state.background_file_status_var
+    )
+
+    views.set_background_file_status_text(view_state, "updated status")
+    assert view_state.background_file_status_var.get() == "updated status"
+
+    _FakeButton.created[0].command()
+    assert loaded == [True]
+
+
+def test_background_backend_debug_controls_store_status_label_and_commands(
+    monkeypatch,
+) -> None:
+    _FakeButton.created = []
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+
+    view_state = state.BackgroundBackendDebugViewState()
+    calls = []
+
+    views.create_background_backend_debug_controls(
+        parent=object(),
+        view_state=view_state,
+        status_text="k=3 flip_x=False flip_y=False",
+        on_rotate_minus_90=lambda: calls.append("rot-"),
+        on_rotate_plus_90=lambda: calls.append("rot+"),
+        on_flip_x=lambda: calls.append("flip-x"),
+        on_flip_y=lambda: calls.append("flip-y"),
+        on_reset=lambda: calls.append("reset"),
+    )
+
+    assert isinstance(view_state.background_backend_frame, _FakeFrame)
+    assert view_state.background_backend_frame.kwargs["text"] == "Background Backend (debug)"
+    assert view_state.background_backend_status_label.text == "k=3 flip_x=False flip_y=False"
+
+    views.set_background_backend_status_text(view_state, "updated")
+    assert view_state.background_backend_status_label.text == "updated"
+
+    for button in _FakeButton.created:
+        button.command()
+    assert calls == ["rot-", "rot+", "flip-x", "flip-y", "reset"]
+
+
+def test_backend_orientation_debug_controls_store_vars_and_reset(monkeypatch) -> None:
+    _FakeButton.created = []
+    _FakeLabel.created = []
+    _FakeCheckbutton.created = []
+    _FakeSpinbox.created = []
+    _FakeOptionMenu.created = []
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "Spinbox", _FakeSpinbox)
+    monkeypatch.setattr(views.tk, "OptionMenu", _FakeOptionMenu)
+    monkeypatch.setattr(views.tk, "IntVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.BackgroundBackendDebugViewState()
+
+    views.create_backend_orientation_debug_controls(
+        parent=object(),
+        view_state=view_state,
+        rotation_value=2,
+        flip_y_axis=True,
+        flip_x_axis=True,
+        flip_order="xy",
+    )
+
+    assert isinstance(view_state.backend_orientation_frame, _FakeFrame)
+    assert view_state.backend_orientation_frame.kwargs["text"] == "Backend orientation (debug)"
+    assert view_state.backend_rotation_var.get() == 2
+    assert view_state.backend_flip_y_axis_var.get() is True
+    assert view_state.backend_flip_x_axis_var.get() is True
+    assert view_state.backend_flip_order_var.get() == "xy"
+    assert _FakeSpinbox.created[0].kwargs["textvariable"] is view_state.backend_rotation_var
+    assert _FakeOptionMenu.created[0].variable is view_state.backend_flip_order_var
+    assert _FakeOptionMenu.created[0].default == "xy"
+
+    views.reset_backend_orientation_debug_controls(view_state)
+    assert view_state.backend_rotation_var.get() == 0
+    assert view_state.backend_flip_y_axis_var.get() is False
+    assert view_state.backend_flip_x_axis_var.get() is False
+    assert view_state.backend_flip_order_var.get() == "yx"
+
+    view_state.backend_rotation_var.set(3)
+    view_state.backend_flip_y_axis_var.set(True)
+    view_state.backend_flip_x_axis_var.set(True)
+    view_state.backend_flip_order_var.set("xy")
+    _FakeButton.created[-1].command()
+    assert view_state.backend_rotation_var.get() == 0
+    assert view_state.backend_flip_y_axis_var.get() is False
+    assert view_state.backend_flip_x_axis_var.get() is False
+    assert view_state.backend_flip_order_var.get() == "yx"
 
 
 def test_create_geometry_fit_constraints_panel_stores_refs_and_binds_handlers(

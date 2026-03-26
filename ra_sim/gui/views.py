@@ -10,6 +10,7 @@ from tkinter import ttk
 from .collapsible import CollapsibleFrame
 from .state import (
     BackgroundThetaControlsViewState,
+    BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
     GeometryFitConstraintsViewState,
     GeometryQGroupViewState,
@@ -114,6 +115,149 @@ def set_background_file_status_text(
     setter = getattr(view_state.background_file_status_var, "set", None)
     if callable(setter):
         setter(str(text))
+
+
+def create_background_backend_debug_controls(
+    *,
+    parent: tk.Misc,
+    view_state: BackgroundBackendDebugViewState,
+    status_text: str,
+    on_rotate_minus_90: Callable[[], None],
+    on_rotate_plus_90: Callable[[], None],
+    on_flip_x: Callable[[], None],
+    on_flip_y: Callable[[], None],
+    on_reset: Callable[[], None],
+) -> None:
+    """Create the backend background-orientation debug controls."""
+
+    frame = ttk.LabelFrame(parent, text="Background Backend (debug)")
+    frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+    status_label = ttk.Label(frame, text=str(status_text))
+    status_label.pack(side=tk.LEFT, padx=4)
+
+    ttk.Button(
+        frame,
+        text="Rot -90",
+        command=on_rotate_minus_90,
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        frame,
+        text="Rot +90",
+        command=on_rotate_plus_90,
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        frame,
+        text="Flip X",
+        command=on_flip_x,
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        frame,
+        text="Flip Y",
+        command=on_flip_y,
+    ).pack(side=tk.LEFT, padx=2)
+    ttk.Button(
+        frame,
+        text="Reset",
+        command=on_reset,
+    ).pack(side=tk.LEFT, padx=2)
+
+    view_state.background_backend_frame = frame
+    view_state.background_backend_status_label = status_label
+
+
+def set_background_backend_status_text(
+    view_state: BackgroundBackendDebugViewState,
+    text: str,
+) -> None:
+    """Update the backend-background debug status text."""
+
+    if view_state.background_backend_status_label is None:
+        return
+    configure = getattr(view_state.background_backend_status_label, "config", None)
+    if configure is None:
+        configure = getattr(view_state.background_backend_status_label, "configure", None)
+    if callable(configure):
+        configure(text=str(text))
+
+
+def _set_var_value(var: object | None, value: object) -> None:
+    setter = getattr(var, "set", None)
+    if callable(setter):
+        setter(value)
+
+
+def reset_backend_orientation_debug_controls(
+    view_state: BackgroundBackendDebugViewState,
+) -> None:
+    """Reset the backend-orientation debug vars to their default values."""
+
+    _set_var_value(view_state.backend_rotation_var, 0)
+    _set_var_value(view_state.backend_flip_y_axis_var, False)
+    _set_var_value(view_state.backend_flip_x_axis_var, False)
+    _set_var_value(view_state.backend_flip_order_var, "yx")
+
+
+def create_backend_orientation_debug_controls(
+    *,
+    parent: tk.Misc,
+    view_state: BackgroundBackendDebugViewState,
+    rotation_value: int = 0,
+    flip_y_axis: bool = False,
+    flip_x_axis: bool = False,
+    flip_order: str = "yx",
+) -> None:
+    """Create the backend-orientation debug controls and store their vars."""
+
+    frame = ttk.LabelFrame(parent, text="Backend orientation (debug)")
+    frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+    rotation_var = tk.IntVar(value=int(rotation_value))
+    flip_y_axis_var = tk.BooleanVar(value=bool(flip_y_axis))
+    flip_x_axis_var = tk.BooleanVar(value=bool(flip_x_axis))
+    flip_order_var = tk.StringVar(value=str(flip_order))
+
+    ttk.Label(frame, text="Rotate ×90° (k):").pack(side=tk.LEFT, padx=2)
+    tk.Spinbox(
+        frame,
+        from_=-3,
+        to=3,
+        width=4,
+        textvariable=rotation_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Checkbutton(
+        frame,
+        text="Flip about y-axis",
+        variable=flip_y_axis_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Checkbutton(
+        frame,
+        text="Flip about x-axis",
+        variable=flip_x_axis_var,
+    ).pack(side=tk.LEFT, padx=2)
+
+    ttk.Label(frame, text="Flip order:").pack(side=tk.LEFT, padx=2)
+    tk.OptionMenu(
+        frame,
+        flip_order_var,
+        str(flip_order),
+        "yx",
+        "xy",
+    ).pack(side=tk.LEFT, padx=2)
+
+    view_state.backend_orientation_frame = frame
+    view_state.backend_rotation_var = rotation_var
+    view_state.backend_flip_y_axis_var = flip_y_axis_var
+    view_state.backend_flip_x_axis_var = flip_x_axis_var
+    view_state.backend_flip_order_var = flip_order_var
+
+    ttk.Button(
+        frame,
+        text="Reset",
+        command=lambda: reset_backend_orientation_debug_controls(view_state),
+    ).pack(side=tk.LEFT, padx=4)
 
 
 def create_geometry_fit_constraints_panel(

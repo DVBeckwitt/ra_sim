@@ -71,6 +71,19 @@ class WorkspacePanelsViewState:
 
 
 @dataclass
+class BackgroundBackendDebugViewState:
+    """Widget references and vars for background backend/orientation debug UI."""
+
+    background_backend_frame: Any = None
+    background_backend_status_label: Any = None
+    backend_orientation_frame: Any = None
+    backend_rotation_var: Any = None
+    backend_flip_y_axis_var: Any = None
+    backend_flip_x_axis_var: Any = None
+    backend_flip_order_var: Any = None
+
+
+@dataclass
 class GeometryPreviewOverlayState:
     """Cached live-preview overlay data and summary metrics."""
 
@@ -174,6 +187,9 @@ class AppState:
     )
     workspace_panels_view: WorkspacePanelsViewState = field(
         default_factory=WorkspacePanelsViewState
+    )
+    background_backend_debug_view: BackgroundBackendDebugViewState = field(
+        default_factory=BackgroundBackendDebugViewState
     )
     geometry_preview: GeometryPreviewState = field(default_factory=GeometryPreviewState)
     geometry_q_groups: GeometryQGroupState = field(default_factory=GeometryQGroupState)

@@ -1877,6 +1877,7 @@ background_backend_flip_x = False
 background_backend_flip_y = False
 background_theta_controls_view_state = gui_state.BackgroundThetaControlsViewState()
 workspace_panels_view_state = gui_state.WorkspacePanelsViewState()
+background_backend_debug_view_state = gui_state.BackgroundBackendDebugViewState()
 background_theta_list_var = None
 geometry_theta_offset_var = None
 geometry_fit_background_selection_var = None
@@ -2706,13 +2707,10 @@ gui_views.create_workspace_panels(
     parent=workspace_body,
     view_state=workspace_panels_view_state,
 )
-workspace_actions_frame = workspace_panels_view_state.workspace_actions_frame
-workspace_backgrounds_frame = workspace_panels_view_state.workspace_backgrounds_frame
-workspace_session_frame = workspace_panels_view_state.workspace_session_frame
 if (
-    workspace_actions_frame is None
-    or workspace_backgrounds_frame is None
-    or workspace_session_frame is None
+    workspace_panels_view_state.workspace_actions_frame is None
+    or workspace_panels_view_state.workspace_backgrounds_frame is None
+    or workspace_panels_view_state.workspace_session_frame is None
 ):
     raise RuntimeError("Workspace panels were not created.")
 
@@ -5598,9 +5596,10 @@ def _background_backend_status() -> str:
 
 
 def _update_background_backend_status():
-    label = globals().get("background_backend_status_label")
-    if label is not None:
-        label.config(text=_background_backend_status())
+    gui_views.set_background_backend_status_text(
+        background_backend_debug_view_state,
+        _background_backend_status(),
+    )
 
 
 def _rotate_background_backend(delta_k: int):
@@ -10386,7 +10385,7 @@ def reset_to_defaults():
     schedule_update()
 
 gui_views.populate_stacked_button_group(
-    workspace_actions_frame,
+    workspace_panels_view_state.workspace_actions_frame,
     [
         ("Toggle Background", toggle_background),
         ("Switch Background", switch_background),
@@ -10394,16 +10393,15 @@ gui_views.populate_stacked_button_group(
 )
 
 gui_views.create_background_file_controls(
-    parent=workspace_backgrounds_frame,
+    parent=workspace_panels_view_state.workspace_backgrounds_frame,
     view_state=workspace_panels_view_state,
     on_load_backgrounds=_browse_background_files,
     status_text="",
 )
-background_file_status_var = workspace_panels_view_state.background_file_status_var
 _set_background_file_status_text()
 
 gui_views.create_background_theta_controls(
-    parent=workspace_backgrounds_frame,
+    parent=workspace_panels_view_state.workspace_backgrounds_frame,
     view_state=background_theta_controls_view_state,
     background_theta_values_text=_format_background_theta_values(
         [_background_theta_default_value()] * len(osc_files)
@@ -10427,7 +10425,7 @@ geometry_fit_background_selection_var = (
 _sync_geometry_fit_background_selection(preserve_existing=False)
 
 gui_views.populate_stacked_button_group(
-    workspace_actions_frame,
+    workspace_panels_view_state.workspace_actions_frame,
     [
         ("Reset to Defaults", reset_to_defaults),
         (
@@ -11096,7 +11094,7 @@ if HBN_GEOMETRY_DEBUG_ENABLED:
         ("Show hBN Geometry Debug", show_last_hbn_geometry_debug)
     )
 gui_views.populate_stacked_button_group(
-    workspace_session_frame,
+    workspace_panels_view_state.workspace_session_frame,
     session_button_specs,
 )
 
@@ -11217,90 +11215,22 @@ def _sync_geometry_fit_constraint_rows(*_args) -> None:
             control["_mapped"] = False
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
-    background_backend_frame = ttk.LabelFrame(fit_body, text="Background Backend (debug)")
-    background_backend_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
-
-    background_backend_status_label = ttk.Label(
-        background_backend_frame,
-        text=_background_backend_status(),
+    gui_views.create_background_backend_debug_controls(
+        parent=fit_body,
+        view_state=background_backend_debug_view_state,
+        status_text=_background_backend_status(),
+        on_rotate_minus_90=lambda: _rotate_background_backend(-1),
+        on_rotate_plus_90=lambda: _rotate_background_backend(1),
+        on_flip_x=lambda: _toggle_background_backend_flip("x"),
+        on_flip_y=lambda: _toggle_background_backend_flip("y"),
+        on_reset=_reset_background_backend_orientation,
     )
-    background_backend_status_label.pack(side=tk.LEFT, padx=4)
-
-    ttk.Button(
-        background_backend_frame,
-        text="Rot -90",
-        command=lambda: _rotate_background_backend(-1),
-    ).pack(side=tk.LEFT, padx=2)
-    ttk.Button(
-        background_backend_frame,
-        text="Rot +90",
-        command=lambda: _rotate_background_backend(1),
-    ).pack(side=tk.LEFT, padx=2)
-    ttk.Button(
-        background_backend_frame,
-        text="Flip X",
-        command=lambda: _toggle_background_backend_flip("x"),
-    ).pack(side=tk.LEFT, padx=2)
-    ttk.Button(
-        background_backend_frame,
-        text="Flip Y",
-        command=lambda: _toggle_background_backend_flip("y"),
-    ).pack(side=tk.LEFT, padx=2)
-    ttk.Button(
-        background_backend_frame,
-        text="Reset",
-        command=_reset_background_backend_orientation,
-    ).pack(side=tk.LEFT, padx=2)
-
-backend_rotation_var = tk.IntVar(value=0)
-backend_flip_y_axis_var = tk.BooleanVar(value=False)
-backend_flip_x_axis_var = tk.BooleanVar(value=False)
-backend_flip_order_var = tk.StringVar(value="yx")
 
 if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
-    backend_orient_frame = ttk.LabelFrame(fit_body, text="Backend orientation (debug)")
-    backend_orient_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
-
-    ttk.Label(backend_orient_frame, text="Rotate ×90° (k):").pack(side=tk.LEFT, padx=2)
-    tk.Spinbox(
-        backend_orient_frame,
-        from_=-3,
-        to=3,
-        width=4,
-        textvariable=backend_rotation_var,
-    ).pack(side=tk.LEFT, padx=2)
-
-    ttk.Checkbutton(
-        backend_orient_frame,
-        text="Flip about y-axis",
-        variable=backend_flip_y_axis_var,
-    ).pack(side=tk.LEFT, padx=2)
-
-    ttk.Checkbutton(
-        backend_orient_frame,
-        text="Flip about x-axis",
-        variable=backend_flip_x_axis_var,
-    ).pack(side=tk.LEFT, padx=2)
-
-    ttk.Label(backend_orient_frame, text="Flip order:").pack(side=tk.LEFT, padx=2)
-    tk.OptionMenu(
-        backend_orient_frame,
-        backend_flip_order_var,
-        "yx",
-        "yx",
-        "xy",
-    ).pack(side=tk.LEFT, padx=2)
-
-    ttk.Button(
-        backend_orient_frame,
-        text="Reset",  # return to no rotation/flip
-        command=lambda: (
-            backend_rotation_var.set(0),
-            backend_flip_y_axis_var.set(False),
-            backend_flip_x_axis_var.set(False),
-            backend_flip_order_var.set("yx"),
-        ),
-    ).pack(side=tk.LEFT, padx=4)
+    gui_views.create_backend_orientation_debug_controls(
+        parent=fit_body,
+        view_state=background_backend_debug_view_state,
+    )
 
 
 def _center_from_maxpos_entry(entry: Sequence[float]) -> tuple[float, float] | None:
@@ -16209,7 +16139,7 @@ def run_debug_simulation():
     progress_label.config(text="Debug simulation complete. Log saved.")
 
 gui_views.populate_stacked_button_group(
-    workspace_actions_frame,
+    workspace_panels_view_state.workspace_actions_frame,
     [
         ("Run Debug Simulation", run_debug_simulation),
         ("Force Update", lambda: update_occupancies()),

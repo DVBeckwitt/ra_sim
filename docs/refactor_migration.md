@@ -96,19 +96,25 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     shared GUI state
   - the background-theta panel construction and event bindings now flow
     through `ra_sim.gui.views`
+- Workspace panel / background-backend debug control migration has also landed:
+  - shared widget references for the workspace action/background/session
+    panels and the background backend/orientation debug controls now use
+    shared GUI state
+  - workspace panel construction, background-file status updates, reusable
+    stacked-button rendering, and background backend/orientation debug control
+    construction now flow through `ra_sim.gui.views`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
-    coverage, and direct Qr/Qz/Bragg/hBN/constraints/background-theta view
-    helper coverage
+    coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
+    background-theta/background-debug view helper coverage
 
 ## Remaining Migration Focus
 
 - `ra_sim.gui.runtime` is still the largest remaining integration monolith.
 - `ra_sim.gui.views` is now active for the Qr/Qz selector, but other Tk-heavy
   surfaces still need the same treatment, especially the remaining widget-heavy
-  runtime-owned helpers that still assemble long-lived Tk references inline,
-  such as the workspace/session/background panels and background
-  backend/orientation debug controls.
+  runtime-owned helpers and cross-feature workflow glue that still assemble
+  long-lived Tk references or own mutable GUI state inline.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

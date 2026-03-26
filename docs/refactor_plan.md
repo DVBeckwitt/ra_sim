@@ -90,6 +90,14 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.views` now owns the panel construction and event binding for
     those background-theta controls.
   - Direct view tests now cover the extracted background-theta control helpers.
+- Workspace panel / background-backend debug control migration has landed.
+  - Shared widget references for the workspace action/background/session
+    panels and the background backend/orientation debug controls now live in
+    `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns the workspace panel construction,
+    background-file status text wiring, reusable stacked-button rendering, and
+    background backend/orientation debug control construction.
+  - Direct view tests now cover the extracted workspace/debug control helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -142,6 +150,14 @@ What is done:
   directly in `runtime.py`.
   - `ra_sim.gui.views` now owns their panel construction and entry/button
     bindings.
+- The workspace action/background/session panels are no longer built directly
+  in `runtime.py`.
+  - `ra_sim.gui.views` now owns their panel construction, background-file
+    status label wiring, and reusable button-stack rendering.
+- The background backend/orientation debug controls are no longer built
+  directly in `runtime.py`.
+  - `ra_sim.gui.views` now owns their widget construction and the corresponding
+    Tk var/status-label view state.
 
 What is left:
 
@@ -194,6 +210,11 @@ What is done:
   `StringVar` references.
 - `views.py` now also owns the background-theta and geometry-fit background
   control construction helpers.
+- `state.py` now also owns workspace panel view state and background
+  backend/orientation debug control view state.
+- `views.py` now also owns workspace panel helpers, background-file status
+  updates, reusable stacked-button rendering, and background
+  backend/orientation debug control construction.
 
 What is left:
 
@@ -464,12 +485,13 @@ The next best step is:
 
 - build on the new manual-geometry / geometry-fit-history / preview /
   Q-group / Bragg-Qr / hBN-debug / geometry-fit-constraints /
-  background-theta-control slices by moving the next runtime-owned GUI
+  background-theta-control / workspace-panel / background-debug slices by
+  moving the next runtime-owned GUI
   workflows into explicit state + controller + view boundaries
-- focus next on the remaining widget-heavy helpers and long-lived Tk widget
-  references that still live inline in `runtime.py`, especially the remaining
-  workspace/session/background panels and the background backend/orientation
-  debug controls
+- focus next on the remaining runtime-owned workflow/state coordination in
+  `runtime.py`, especially the lingering manual-geometry aliases, scattered
+  cross-feature globals, and other still-inline Tk-heavy helpers that prevent
+  the extracted scaffolding modules from becoming the dominant app structure
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.
