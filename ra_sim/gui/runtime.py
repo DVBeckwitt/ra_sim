@@ -107,6 +107,7 @@ from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
+from ra_sim.gui import canvas_interactions as gui_canvas_interactions
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import integration_range_drag as gui_integration_range_drag
@@ -4846,56 +4847,6 @@ peak_selection_runtime_callbacks = gui_peak_selection.make_runtime_peak_selectio
 )
 
 
-def on_canvas_click(event):
-
-    if event.button == 3 and peak_selection_state.hkl_pick_armed:
-        peak_selection_runtime_callbacks.set_hkl_pick_mode(
-            False,
-            "HKL image-pick canceled.",
-        )
-        return
-    if event.button == 3 and geometry_runtime_state.manual_pick_armed:
-        _set_geometry_manual_pick_mode(False, message="Manual geometry picking canceled.")
-        return
-    if event.button == 3 and geometry_preview_state.exclude_armed:
-        _set_geometry_preview_exclude_mode(
-            False,
-            message="Preview exclusion mode canceled.",
-        )
-        return
-
-    if event.button != 1:
-        return
-    if geometry_runtime_state.manual_pick_armed:
-        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
-            return
-        if _geometry_manual_pick_session_active():
-            return
-        _toggle_geometry_manual_selection_at(
-            float(event.xdata),
-            float(event.ydata),
-        )
-        return
-    if analysis_view_controls_view_state.show_caked_2d_var.get():
-        return
-    if geometry_preview_state.exclude_armed:
-        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
-            return
-        _toggle_live_geometry_preview_exclusion_at(
-            float(event.xdata),
-            float(event.ydata),
-        )
-        return
-    if not peak_selection_state.hkl_pick_armed:
-        return
-    if event.inaxes is not ax or event.xdata is None or event.ydata is None:
-        return                               # click was outside the image
-    peak_selection_runtime_callbacks.select_peak_from_canvas_click(
-        float(event.xdata),
-        float(event.ydata),
-    )
-
-
 drag_select_rect = Rectangle(
     (0.0, 0.0),
     0.0,
@@ -4956,107 +4907,53 @@ integration_range_drag_runtime_callbacks = (
         integration_range_drag_runtime_bindings_factory
     )
 )
-
-
-def on_canvas_press(event):
-
-    if geometry_runtime_state.manual_pick_armed and _geometry_manual_pick_session_active():
-        if event.button != 1:
-            return
-        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
-            return
-        x0, y0 = gui_integration_range_drag.clamp_to_axis_view(
-            ax,
-            event.xdata,
-            event.ydata,
-        )
-        anchor_fraction_x = 0.5
-        anchor_fraction_y = 0.5
-        try:
-            bbox = getattr(ax, "bbox", None)
-            if (
-                bbox is not None
-                and np.isfinite(float(bbox.width))
-                and np.isfinite(float(bbox.height))
-                and float(bbox.width) > 0.0
-                and float(bbox.height) > 0.0
-            ):
-                anchor_fraction_x = float(
-                    np.clip(
-                        (float(event.x) - float(bbox.x0)) / float(bbox.width),
-                        0.0,
-                        1.0,
-                    )
-                )
-                anchor_fraction_y = float(
-                    np.clip(
-                        (float(event.y) - float(bbox.y0)) / float(bbox.height),
-                        0.0,
-                        1.0,
-                    )
-                )
-        except Exception:
-            anchor_fraction_x = 0.5
-            anchor_fraction_y = 0.5
-        _apply_geometry_manual_pick_zoom(
-            x0,
-            y0,
-            anchor_fraction_x=anchor_fraction_x,
-            anchor_fraction_y=anchor_fraction_y,
-        )
-        _update_geometry_manual_pick_preview(x0, y0, force=True)
-        return
-    integration_range_drag_runtime_callbacks.on_press(event)
-
-
-def on_canvas_motion(event):
-    if (
-        geometry_runtime_state.manual_pick_armed
-        and _geometry_manual_pick_session_active()
-        and bool(geometry_manual_state.pick_session.get("zoom_active", False))
-    ):
-        if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-            x1, y1 = gui_integration_range_drag.clamp_to_axis_view(
-                ax,
-                event.xdata,
-                event.ydata,
-            )
-            _update_geometry_manual_pick_preview(x1, y1)
-        return
-    integration_range_drag_runtime_callbacks.on_motion(event)
-
-
-def on_canvas_release(event):
-    if event.button != 1:
-        return
-    if (
-        geometry_runtime_state.manual_pick_armed
-        and _geometry_manual_pick_session_active()
-        and bool(geometry_manual_state.pick_session.get("zoom_active", False))
-    ):
-        if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-            x_sel, y_sel = gui_integration_range_drag.clamp_to_axis_view(
-                ax,
-                event.xdata,
-                event.ydata,
-            )
-            _place_geometry_manual_selection_at(float(x_sel), float(y_sel))
-        else:
-            _clear_geometry_manual_preview_artists(redraw=False)
-            _restore_geometry_manual_pick_view(redraw=False)
-            _render_current_geometry_manual_pairs(update_status=False)
-            progress_label_geometry.config(text="Manual point placement canceled: release inside the image.")
-            canvas.draw_idle()
-        return
-    integration_range_drag_runtime_callbacks.on_release(event)
+canvas_interaction_runtime_bindings_factory = (
+    gui_canvas_interactions.make_runtime_canvas_interaction_bindings_factory(
+        axis=ax,
+        geometry_runtime_state=geometry_runtime_state,
+        geometry_preview_state=geometry_preview_state,
+        geometry_manual_state=geometry_manual_state,
+        peak_selection_state=peak_selection_state,
+        peak_selection_callbacks=peak_selection_runtime_callbacks,
+        integration_range_drag_callbacks=integration_range_drag_runtime_callbacks,
+        manual_pick_session_active=_geometry_manual_pick_session_active,
+        set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
+        set_geometry_preview_exclude_mode=_set_geometry_preview_exclude_mode,
+        toggle_geometry_manual_selection_at=_toggle_geometry_manual_selection_at,
+        toggle_live_geometry_preview_exclusion_at=_toggle_live_geometry_preview_exclusion_at,
+        clamp_to_axis_view=gui_integration_range_drag.clamp_to_axis_view,
+        apply_geometry_manual_pick_zoom=_apply_geometry_manual_pick_zoom,
+        update_geometry_manual_pick_preview=_update_geometry_manual_pick_preview,
+        place_geometry_manual_selection_at=_place_geometry_manual_selection_at,
+        clear_geometry_manual_preview_artists=_clear_geometry_manual_preview_artists,
+        restore_geometry_manual_pick_view=_restore_geometry_manual_pick_view,
+        render_current_geometry_manual_pairs=_render_current_geometry_manual_pairs,
+        caked_view_enabled_factory=lambda: (
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+            if analysis_view_controls_view_state.show_caked_2d_var is not None
+            else False
+        ),
+        set_geometry_status_text_factory=lambda: (
+            (lambda text: progress_label_geometry.config(text=text))
+            if "progress_label_geometry" in globals()
+            else None
+        ),
+        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+    )
+)
+canvas_interaction_runtime_callbacks = (
+    gui_canvas_interactions.make_runtime_canvas_interaction_callbacks(
+        canvas_interaction_runtime_bindings_factory
+    )
+)
 
 # -----------------------------------------------------------
 # 3)  Bind the handler
 # -----------------------------------------------------------
-canvas.mpl_connect('button_press_event', on_canvas_click)
-canvas.mpl_connect('button_press_event', on_canvas_press)
-canvas.mpl_connect('motion_notify_event', on_canvas_motion)
-canvas.mpl_connect('button_release_event', on_canvas_release)
+canvas.mpl_connect('button_press_event', canvas_interaction_runtime_callbacks.on_click)
+canvas.mpl_connect('button_press_event', canvas_interaction_runtime_callbacks.on_press)
+canvas.mpl_connect('motion_notify_event', canvas_interaction_runtime_callbacks.on_motion)
+canvas.mpl_connect('button_release_event', canvas_interaction_runtime_callbacks.on_release)
 
 
 # ---------------------------------------------------------------------------

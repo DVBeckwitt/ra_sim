@@ -39,6 +39,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.background_manager`
   - `ra_sim.gui.background_theta`
   - `ra_sim.gui.bragg_qr_manager`
+  - `ra_sim.gui.canvas_interactions`
   - `ra_sim.gui.geometry_fit`
   - `ra_sim.gui.geometry_overlay`
   - `ra_sim.gui.geometry_q_group_manager`
@@ -323,6 +324,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     Bragg/Ewald action
   - `ra_sim.gui.runtime` now keeps only cross-feature click-mode dispatch
     plus the live config-factory wiring around that workflow
+- Canvas interaction workflow extraction has also advanced:
+  - top-level raw-image canvas click/drag arbitration between
+    manual-geometry placement, preview exclusion, HKL picking, and
+    integration-range dragging now lives in `ra_sim.gui.canvas_interactions`
+  - `ra_sim.gui.runtime` now keeps only the drag-rectangle construction plus
+    one bound canvas callback bundle around that workflow
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -361,11 +368,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   around the extracted manager helpers.
 - The remaining background runtime code is now mostly one bound callback
   bundle plus a few call sites around the extracted background manager.
-- The remaining selected-peak runtime code is now mostly cross-feature
-  click-mode arbitration at the top-level canvas dispatcher.
-- The remaining integration-range drag runtime code is now mostly the same
-  top-level canvas event routing plus the manual-geometry-specific canvas
-  branches around the extracted drag callbacks.
+- The remaining selected-peak runtime code is now mostly live config-factory
+  wiring plus a few call sites around the extracted peak-selection and
+  canvas-interaction modules.
+- The remaining integration-range drag runtime code is now mostly the
+  drag-rectangle construction plus the bound canvas callback wiring around the
+  extracted drag and canvas-interaction modules.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
