@@ -213,6 +213,15 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     separate runtime globals
   - background-cache/orientation state and HKL image-pick interaction state
     now also use explicit runtime-state containers in `ra_sim.gui.state`
+- Final GUI runtime-state extraction has also landed:
+  - background file/current-orientation state, geometry interaction/cache
+    state, simulation/update/caking/peak cache state, atom-site override cache
+    state, Bragg-Qr disabled-toggle state, hBN debug-report text, sampling
+    count state, and the caked-view override flag now use explicit
+    `ra_sim.gui.state` containers
+  - the remaining `global` lines in `ra_sim.gui.runtime` are now limited to
+    structure-model / diffuse-HT rebuild state plus the legacy `write_excel`
+    flag
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -225,9 +234,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 ## Remaining Migration Focus
 
 - `ra_sim.gui.runtime` is still the largest remaining integration monolith.
-- The remaining runtime-decomposition work is now the cross-feature workflow
-  glue and long-lived mutable state ownership that still live inline in
-  `ra_sim.gui.runtime`, not the top-level widget shell.
+- The remaining runtime work is now the cross-feature workflow glue and the
+  simulation/structure-model rebuild orchestration that still live inline in
+  `ra_sim.gui.runtime`, not long-lived GUI runtime-state ownership.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

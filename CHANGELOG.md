@@ -35,6 +35,8 @@
   - Moved the 1D integration-range control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
   - Moved the top-level GUI shell and bottom status panel out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers, including notebook state sync and compact console-backed status labels.
   - Wired `ra_sim/gui/runtime.py` through the shared `AppState` container for extracted GUI view state plus background/HKL interaction runtime state.
+  - Extracted the remaining GUI runtime-owned state in `ra_sim/gui/runtime.py` into explicit `AppState` slices covering background selection/orientation, geometry interaction caches/artists, simulation/update/caking/peak caches, atom-site override cache bookkeeping, Bragg-Qr disabled state, hBN debug-report text, sampling count, and the caked-view override flag.
+  - Reduced the remaining `runtime.py` module globals to structure-model / diffuse-HT rebuild state and the legacy `write_excel` flag.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.

@@ -231,6 +231,9 @@ def _ensure_numeric_vector(values, fallback, length):
 app_state = gui_controllers.build_initial_state()
 background_runtime_state = app_state.background_runtime
 peak_selection_state = app_state.peak_selection
+atom_site_override_state = app_state.atom_site_override
+geometry_runtime_state = app_state.geometry_runtime
+simulation_runtime_state = app_state.simulation_runtime
 
 instrument_config = app_state.instrument_config.get("instrument", {})
 detector_config = instrument_config.get("detector", {})
@@ -243,14 +246,15 @@ hendricks_config = instrument_config.get("hendricks_teller", {})
 output_config = instrument_config.get("output", {})
 fit_config = instrument_config.get("fit", {})
 
-osc_files = get_path_first("simulation_background_osc_files", "osc_files")
-if isinstance(osc_files, str):
-    osc_files = [osc_files]
-if not osc_files:
+background_runtime_state.osc_files = get_path_first("simulation_background_osc_files", "osc_files")
+if isinstance(background_runtime_state.osc_files, str):
+    background_runtime_state.osc_files = [background_runtime_state.osc_files]
+if not background_runtime_state.osc_files:
     raise ValueError(
         "No oscillation images configured in simulation_background_osc_files/osc_files"
     )
-app_state.file_paths["simulation_background_osc_files"] = list(osc_files)
+app_state.file_paths["simulation_background_osc_files"] = list(background_runtime_state.osc_files)
+background_runtime_state.osc_files = list(background_runtime_state.osc_files)
 
 # Background and simulated overlays can use different display orientations.
 # ``k`` is the np.rot90 factor; -1 is 90° clockwise, 0 keeps native orientation.
@@ -266,17 +270,17 @@ SIMULATION_GEOMETRY_ROTATE_K = DISPLAY_ROTATE_K - SIM_DISPLAY_ROTATE_K
 # Preserve native-orientation copies for fitting/analysis. Load only the first
 # background at startup and lazy-load the rest on demand to improve first paint.
 _initial_background_state = gui_background.initialize_background_cache(
-    str(osc_files[0]),
-    total_count=len(osc_files),
+    str(background_runtime_state.osc_files[0]),
+    total_count=len(background_runtime_state.osc_files),
     display_rotate_k=DISPLAY_ROTATE_K,
     read_osc=read_osc,
 )
-background_images = list(_initial_background_state["background_images"])
-background_images_native = list(_initial_background_state["background_images_native"])
-background_images_display = list(_initial_background_state["background_images_display"])
-background_runtime_state.background_images = list(background_images)
-background_runtime_state.background_images_native = list(background_images_native)
-background_runtime_state.background_images_display = list(background_images_display)
+background_runtime_state.background_images = list(_initial_background_state["background_images"])
+background_runtime_state.background_images_native = list(_initial_background_state["background_images_native"])
+background_runtime_state.background_images_display = list(_initial_background_state["background_images_display"])
+background_runtime_state.background_images = list(background_runtime_state.background_images)
+background_runtime_state.background_images_native = list(background_runtime_state.background_images_native)
+background_runtime_state.background_images_display = list(background_runtime_state.background_images_display)
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -353,7 +357,7 @@ resolution_sample_counts = {
     "High": 500,
 }
 CUSTOM_SAMPLING_OPTION = "Custom"
-num_samples = resolution_sample_counts["Low"]
+simulation_runtime_state.num_samples = resolution_sample_counts["Low"]
 write_excel = output_config.get("write_excel", write_excel)
 intensity_threshold = detector_config.get("intensity_threshold", 1.0)
 vmax_default = detector_config.get("vmax", 1000)
@@ -674,9 +678,6 @@ def _extract_atom_site_fractional_metadata(cif_block):
 
 atom_site_fractional_metadata = _extract_atom_site_fractional_metadata(blk)
 atom_site_fract_vars = []
-_atom_site_override_temp_path = None
-_atom_site_override_source_path = None
-_atom_site_override_signature = None
 
 
 def _atom_site_fractional_default_values():
@@ -752,10 +753,6 @@ def _atom_site_fractional_values_are_default(values):
 def _active_primary_cif_path(atom_site_values=None):
     """Return primary CIF path with optional atom-site coordinate overrides."""
 
-    global _atom_site_override_temp_path
-    global _atom_site_override_source_path
-    global _atom_site_override_signature
-
     source_path = str(cif_file)
     if not atom_site_fractional_metadata:
         return source_path
@@ -771,12 +768,12 @@ def _active_primary_cif_path(atom_site_values=None):
     signature = _atom_site_fractional_signature(current_values)
     abs_source = os.path.abspath(source_path)
     if (
-        _atom_site_override_temp_path
-        and _atom_site_override_source_path == abs_source
-        and _atom_site_override_signature == signature
-        and Path(_atom_site_override_temp_path).is_file()
+        atom_site_override_state.temp_path
+        and atom_site_override_state.source_path == abs_source
+        and atom_site_override_state.signature == signature
+        and Path(atom_site_override_state.temp_path).is_file()
     ):
-        return _atom_site_override_temp_path
+        return atom_site_override_state.temp_path
 
     with redirect_stdout(io.StringIO()):
         cf_local = CifFile.ReadCif(abs_source)
@@ -814,28 +811,30 @@ def _active_primary_cif_path(atom_site_values=None):
     block["_atom_site_fract_y"] = y_vals
     block["_atom_site_fract_z"] = z_vals
 
-    if _atom_site_override_temp_path is None or _atom_site_override_source_path != abs_source:
+    if (
+        atom_site_override_state.temp_path is None
+        or atom_site_override_state.source_path != abs_source
+    ):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".cif")
         tmp.close()
-        _atom_site_override_temp_path = tmp.name
+        atom_site_override_state.temp_path = tmp.name
 
     try:
         with redirect_stdout(io.StringIO()):
-            CifFile.WriteCif(cf_local, _atom_site_override_temp_path)
+            CifFile.WriteCif(cf_local, atom_site_override_state.temp_path)
     except AttributeError:
-        with open(_atom_site_override_temp_path, "w", encoding="utf-8") as fh:
+        with open(atom_site_override_state.temp_path, "w", encoding="utf-8") as fh:
             with redirect_stdout(io.StringIO()):
                 fh.write(cf_local.WriteOut())
 
-    _atom_site_override_source_path = abs_source
-    _atom_site_override_signature = signature
-    return _atom_site_override_temp_path
+    atom_site_override_state.source_path = abs_source
+    atom_site_override_state.signature = signature
+    return atom_site_override_state.temp_path
 
 
 def _reset_atom_site_override_cache():
-    global _atom_site_override_source_path, _atom_site_override_signature
-    _atom_site_override_source_path = None
-    _atom_site_override_signature = None
+    atom_site_override_state.source_path = None
+    atom_site_override_state.signature = None
 
 # pull the raw text
 a_text = blk.get("_cell_length_a")
@@ -1187,25 +1186,25 @@ else:
     debug_print("single CIF miller count:", miller.shape[0])
 
 # Save simulation data for later use
-SIM_MILLER1_ALL = np.asarray(miller1_sim, dtype=np.float64)
-SIM_INTENS1_ALL = np.asarray(intensities1_sim, dtype=np.float64)
-SIM_MILLER2_ALL = np.asarray(miller2_sim, dtype=np.float64)
-SIM_INTENS2_ALL = np.asarray(intensities2_sim, dtype=np.float64)
+simulation_runtime_state.sim_miller1_all = np.asarray(miller1_sim, dtype=np.float64)
+simulation_runtime_state.sim_intens1_all = np.asarray(intensities1_sim, dtype=np.float64)
+simulation_runtime_state.sim_miller2_all = np.asarray(miller2_sim, dtype=np.float64)
+simulation_runtime_state.sim_intens2_all = np.asarray(intensities2_sim, dtype=np.float64)
 # Primary HT simulation uses Qr rods (m-grouped) for speed, while HKL arrays
 # above are retained for selector/degeneracy lookup.
-SIM_PRIMARY_QR_ALL = combined_qr
+simulation_runtime_state.sim_primary_qr_all = combined_qr
 
 # Active simulation arrays (possibly filtered by the Bragg Qr manager).
-SIM_MILLER1 = SIM_MILLER1_ALL.copy()
-SIM_INTENS1 = SIM_INTENS1_ALL.copy()
-SIM_MILLER2 = SIM_MILLER2_ALL.copy()
-SIM_INTENS2 = SIM_INTENS2_ALL.copy()
-SIM_PRIMARY_QR = {}
+simulation_runtime_state.sim_miller1 = simulation_runtime_state.sim_miller1_all.copy()
+simulation_runtime_state.sim_intens1 = simulation_runtime_state.sim_intens1_all.copy()
+simulation_runtime_state.sim_miller2 = simulation_runtime_state.sim_miller2_all.copy()
+simulation_runtime_state.sim_intens2 = simulation_runtime_state.sim_intens2_all.copy()
+simulation_runtime_state.sim_primary_qr = {}
 
 # Tracks disabled Qr groups by (source_label, m-index).
-disabled_bragg_qr_groups: set[tuple[str, int]] = set()
+bragg_qr_manager_state.disabled_groups: set[tuple[str, int]] = set()
 # Tracks disabled L values by (source_label, m-index, quantized_l_key).
-disabled_bragg_qr_l_values: set[tuple[str, int, int]] = set()
+bragg_qr_manager_state.disabled_l_values: set[tuple[str, int, int]] = set()
 
 BRAGG_QR_L_KEY_SCALE = int(1_000_000)
 BRAGG_QR_L_INVALID_KEY = int(np.iinfo(np.int64).min)
@@ -1220,7 +1219,7 @@ _SF_PRUNE_REL_FLOOR_MIN = 1.0e-8
 _SF_PRUNE_REL_FLOOR_MAX = 8.0e-2
 _SF_PRUNE_MIN_KEEP_BASE = 18
 
-sf_prune_stats = {
+simulation_runtime_state.sf_prune_stats = {
     "qr_total": 0,
     "qr_kept": 0,
     "hkl_primary_total": 0,
@@ -1442,10 +1441,10 @@ def _update_sf_prune_status_label() -> None:
     if getattr(view_state, "sf_prune_status_var", None) is None:
         return
 
-    qr_total = int(sf_prune_stats.get("qr_total", 0))
-    qr_kept = int(sf_prune_stats.get("qr_kept", 0))
-    hk_total = int(sf_prune_stats.get("hkl_primary_total", 0))
-    hk_kept = int(sf_prune_stats.get("hkl_primary_kept", 0))
+    qr_total = int(simulation_runtime_state.sf_prune_stats.get("qr_total", 0))
+    qr_kept = int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0))
+    hk_total = int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_total", 0))
+    hk_kept = int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0))
     bias = _current_sf_prune_bias()
 
     if qr_total > 0:
@@ -1506,8 +1505,8 @@ def _l_keys_from_l_array(l_vals: np.ndarray) -> np.ndarray:
 def _source_all_miller_for_label(source_label: str | None) -> np.ndarray:
     label = _normalize_bragg_qr_source_label(source_label)
     if label == "secondary":
-        return np.asarray(SIM_MILLER2_ALL, dtype=np.float64)
-    return np.asarray(SIM_MILLER1_ALL, dtype=np.float64)
+        return np.asarray(simulation_runtime_state.sim_miller2_all, dtype=np.float64)
+    return np.asarray(simulation_runtime_state.sim_miller1_all, dtype=np.float64)
 
 
 def _m_indices_from_miller_array(miller_arr: np.ndarray, *, unique: bool = False) -> np.ndarray:
@@ -1552,8 +1551,8 @@ def _copy_qr_dict(qr_dict: dict | None) -> dict[int, dict[str, object]]:
 def _available_bragg_qr_group_keys() -> set[tuple[str, int]]:
     keys: set[tuple[str, int]] = set()
 
-    if isinstance(SIM_PRIMARY_QR_ALL, dict):
-        for m_raw in SIM_PRIMARY_QR_ALL.keys():
+    if isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
+        for m_raw in simulation_runtime_state.sim_primary_qr_all.keys():
             try:
                 m_idx = int(m_raw)
             except (TypeError, ValueError):
@@ -1574,8 +1573,8 @@ def _available_bragg_qr_group_keys() -> set[tuple[str, int]]:
 def _available_bragg_qr_l_keys() -> set[tuple[str, int, int]]:
     keys: set[tuple[str, int, int]] = set()
 
-    if isinstance(SIM_PRIMARY_QR_ALL, dict):
-        for m_idx, entry in _copy_qr_dict(SIM_PRIMARY_QR_ALL).items():
+    if isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
+        for m_idx, entry in _copy_qr_dict(simulation_runtime_state.sim_primary_qr_all).items():
             l_keys = _l_keys_from_l_array(entry.get("L", []))
             for l_key in l_keys:
                 lk = int(l_key)
@@ -1607,19 +1606,18 @@ def _available_bragg_qr_l_keys() -> set[tuple[str, int, int]]:
 
 
 def _prune_disabled_bragg_qr_filters() -> None:
-    global disabled_bragg_qr_groups, disabled_bragg_qr_l_values
 
     available_groups = _available_bragg_qr_group_keys()
-    disabled_bragg_qr_groups = {
+    bragg_qr_manager_state.disabled_groups = {
         (_normalize_bragg_qr_source_label(src), int(m_idx))
-        for src, m_idx in disabled_bragg_qr_groups
+        for src, m_idx in bragg_qr_manager_state.disabled_groups
         if (_normalize_bragg_qr_source_label(src), int(m_idx)) in available_groups
     }
 
     available_l = _available_bragg_qr_l_keys()
-    disabled_bragg_qr_l_values = {
+    bragg_qr_manager_state.disabled_l_values = {
         (_normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
-        for src, m_idx, l_key in disabled_bragg_qr_l_values
+        for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values
         if (_normalize_bragg_qr_source_label(src), int(m_idx), int(l_key))
         in available_l
     }
@@ -1632,16 +1630,16 @@ def _filtered_primary_qr_dict() -> tuple[dict[int, dict[str, object]], int, int]
     prune_bias = _current_sf_prune_bias()
     disabled_primary_m = {
         int(m_idx)
-        for src, m_idx in disabled_bragg_qr_groups
+        for src, m_idx in bragg_qr_manager_state.disabled_groups
         if _normalize_bragg_qr_source_label(src) == "primary"
     }
     disabled_primary_l: dict[int, set[int]] = defaultdict(set)
-    for src, m_idx, l_key in disabled_bragg_qr_l_values:
+    for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values:
         if _normalize_bragg_qr_source_label(src) != "primary":
             continue
         disabled_primary_l[int(m_idx)].add(int(l_key))
 
-    for m_idx, entry in _copy_qr_dict(SIM_PRIMARY_QR_ALL).items():
+    for m_idx, entry in _copy_qr_dict(simulation_runtime_state.sim_primary_qr_all).items():
         m_int = int(m_idx)
         if m_int in disabled_primary_m:
             continue
@@ -1717,12 +1715,12 @@ def _filtered_miller_and_intensities(
     source_norm = _normalize_bragg_qr_source_label(source_label)
     disabled_m = {
         int(m_idx)
-        for src, m_idx in disabled_bragg_qr_groups
+        for src, m_idx in bragg_qr_manager_state.disabled_groups
         if _normalize_bragg_qr_source_label(src) == source_norm
     }
     disabled_l_pairs = [
         (int(m_idx), int(l_key))
-        for src, m_idx, l_key in disabled_bragg_qr_l_values
+        for src, m_idx, l_key in bragg_qr_manager_state.disabled_l_values
         if _normalize_bragg_qr_source_label(src) == source_norm
     ]
     m_vals = _m_indices_from_miller_array(arr, unique=False)
@@ -1768,27 +1766,21 @@ def _filtered_miller_and_intensities(
 
 
 def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
-    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
-    global SIM_MILLER1_ALL, SIM_INTENS1_ALL, SIM_MILLER2_ALL, SIM_INTENS2_ALL, SIM_PRIMARY_QR_ALL
-    global last_simulation_signature
-    global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
-    global selected_peak_record
-    global sf_prune_stats
 
     _prune_disabled_bragg_qr_filters()
 
-    SIM_PRIMARY_QR, qr_total, qr_kept = _filtered_primary_qr_dict()
-    SIM_MILLER1, SIM_INTENS1, hkl_primary_total, hkl_primary_kept = _filtered_miller_and_intensities(
-        SIM_MILLER1_ALL,
-        SIM_INTENS1_ALL,
+    simulation_runtime_state.sim_primary_qr, qr_total, qr_kept = _filtered_primary_qr_dict()
+    simulation_runtime_state.sim_miller1, simulation_runtime_state.sim_intens1, hkl_primary_total, hkl_primary_kept = _filtered_miller_and_intensities(
+        simulation_runtime_state.sim_miller1_all,
+        simulation_runtime_state.sim_intens1_all,
         "primary",
     )
-    SIM_MILLER2, SIM_INTENS2, hkl_secondary_total, hkl_secondary_kept = _filtered_miller_and_intensities(
-        SIM_MILLER2_ALL,
-        SIM_INTENS2_ALL,
+    simulation_runtime_state.sim_miller2, simulation_runtime_state.sim_intens2, hkl_secondary_total, hkl_secondary_kept = _filtered_miller_and_intensities(
+        simulation_runtime_state.sim_miller2_all,
+        simulation_runtime_state.sim_intens2_all,
         "secondary",
     )
-    sf_prune_stats = {
+    simulation_runtime_state.sf_prune_stats = {
         "qr_total": int(qr_total),
         "qr_kept": int(qr_kept),
         "hkl_primary_total": int(hkl_primary_total),
@@ -1798,11 +1790,11 @@ def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
     }
     _update_sf_prune_status_label()
 
-    last_simulation_signature = None
-    stored_max_positions_local = None
-    stored_sim_image = None
-    stored_peak_table_lattice = None
-    selected_peak_record = None
+    simulation_runtime_state.last_simulation_signature = None
+    simulation_runtime_state.stored_max_positions_local = None
+    simulation_runtime_state.stored_sim_image = None
+    simulation_runtime_state.stored_peak_table_lattice = None
+    simulation_runtime_state.selected_peak_record = None
 
     refresh_window_fn = globals().get("_refresh_bragg_qr_toggle_window")
     if callable(refresh_window_fn):
@@ -1881,20 +1873,13 @@ def export_initial_excel():
 
     print(f"Excel file saved at {excel_path}")
 
-current_background_image = _initial_background_state["current_background_image"]
-current_background_display = _initial_background_state["current_background_display"]
-current_background_index = int(_initial_background_state["current_background_index"])
-background_visible = True
-background_backend_rotation_k = 3
-background_backend_flip_x = False
-background_backend_flip_y = False
-background_runtime_state.current_background_image = current_background_image
-background_runtime_state.current_background_display = current_background_display
-background_runtime_state.current_background_index = current_background_index
-background_runtime_state.visible = background_visible
-background_runtime_state.backend_rotation_k = background_backend_rotation_k
-background_runtime_state.backend_flip_x = background_backend_flip_x
-background_runtime_state.backend_flip_y = background_backend_flip_y
+background_runtime_state.current_background_image = _initial_background_state["current_background_image"]
+background_runtime_state.current_background_display = _initial_background_state["current_background_display"]
+background_runtime_state.current_background_index = int(_initial_background_state["current_background_index"])
+background_runtime_state.visible = True
+background_runtime_state.backend_rotation_k = 3
+background_runtime_state.backend_flip_x = False
+background_runtime_state.backend_flip_y = False
 app_shell_view_state = app_state.app_shell_view
 status_panel_view_state = app_state.status_panel_view
 background_theta_controls_view_state = app_state.background_theta_controls_view
@@ -1907,19 +1892,23 @@ fit_theta_checkbutton = None
 
 
 def _sync_background_runtime_state() -> None:
-    """Mirror runtime-managed background/cache globals into the shared app state."""
+    """Normalize shared background-runtime state after one update path mutates it."""
 
-    background_runtime_state.background_images = list(background_images)
-    background_runtime_state.background_images_native = list(background_images_native)
-    background_runtime_state.background_images_display = list(background_images_display)
-    background_runtime_state.current_background_image = current_background_image
-    background_runtime_state.current_background_display = current_background_display
-    background_runtime_state.current_background_index = int(current_background_index)
-    background_runtime_state.visible = bool(background_visible)
-    background_runtime_state.backend_rotation_k = int(background_backend_rotation_k)
-    background_runtime_state.backend_flip_x = bool(background_backend_flip_x)
-    background_runtime_state.backend_flip_y = bool(background_backend_flip_y)
-    app_state.file_paths["simulation_background_osc_files"] = list(osc_files)
+    background_runtime_state.background_images = list(
+        background_runtime_state.background_images
+    )
+    background_runtime_state.background_images_native = list(
+        background_runtime_state.background_images_native
+    )
+    background_runtime_state.background_images_display = list(
+        background_runtime_state.background_images_display
+    )
+    background_runtime_state.current_background_index = int(background_runtime_state.current_background_index)
+    background_runtime_state.visible = bool(background_runtime_state.visible)
+    background_runtime_state.backend_rotation_k = int(background_runtime_state.backend_rotation_k)
+    background_runtime_state.backend_flip_x = bool(background_runtime_state.backend_flip_x)
+    background_runtime_state.backend_flip_y = bool(background_runtime_state.backend_flip_y)
+    app_state.file_paths["simulation_background_osc_files"] = list(background_runtime_state.osc_files)
 
 
 _sync_background_runtime_state()
@@ -1954,7 +1943,7 @@ def _parse_background_theta_values(
 def _default_geometry_fit_background_selection() -> str:
     """Return the default geometry-fit background selector text."""
     return gui_background_theta.default_geometry_fit_background_selection(
-        osc_files=osc_files,
+        osc_files=background_runtime_state.osc_files,
     )
 
 
@@ -1980,8 +1969,8 @@ def _parse_geometry_fit_background_indices(
 def _current_geometry_fit_background_indices(*, strict: bool = False) -> list[int]:
     """Return the background indices currently selected for geometry fitting."""
     return gui_background_theta.current_geometry_fit_background_indices(
-        osc_files=osc_files,
-        current_background_index=current_background_index,
+        osc_files=background_runtime_state.osc_files,
+        current_background_index=background_runtime_state.current_background_index,
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         strict=strict,
     )
@@ -1993,8 +1982,8 @@ def _geometry_fit_uses_shared_theta_offset(
     """Return whether geometry fitting should use a shared theta offset."""
     return gui_background_theta.geometry_fit_uses_shared_theta_offset(
         selected_indices,
-        osc_files=osc_files,
-        current_background_index=current_background_index,
+        osc_files=background_runtime_state.osc_files,
+        current_background_index=background_runtime_state.current_background_index,
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
     )
 
@@ -2010,7 +1999,7 @@ def _current_geometry_theta_offset(*, strict: bool = False) -> float:
 def _current_background_theta_values(*, strict_count: bool = False) -> list[float]:
     """Return one configured theta value per loaded background image."""
     return gui_background_theta.current_background_theta_values(
-        osc_files=osc_files,
+        osc_files=background_runtime_state.osc_files,
         theta_initial_var=globals().get("theta_initial_var"),
         defaults=defaults,
         theta_initial=theta_initial,
@@ -2027,14 +2016,14 @@ def _background_theta_for_index(
     """Return the effective theta used for one background index."""
     return gui_background_theta.background_theta_for_index(
         index,
-        osc_files=osc_files,
+        osc_files=background_runtime_state.osc_files,
         theta_initial_var=globals().get("theta_initial_var"),
         defaults=defaults,
         theta_initial=theta_initial,
         background_theta_list_var=background_theta_list_var,
         geometry_theta_offset_var=geometry_theta_offset_var,
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         strict_count=strict_count,
     )
 
@@ -2055,8 +2044,8 @@ def _sync_background_theta_controls(
 ) -> None:
     """Keep the theta list entry aligned with the currently loaded backgrounds."""
     gui_background_theta.sync_background_theta_controls(
-        osc_files=osc_files,
-        current_background_index=current_background_index,
+        osc_files=background_runtime_state.osc_files,
+        current_background_index=background_runtime_state.current_background_index,
         theta_initial_var=globals().get("theta_initial_var"),
         defaults=defaults,
         theta_initial=theta_initial,
@@ -2079,8 +2068,8 @@ def _apply_background_theta_metadata(
 ) -> bool:
     """Validate the theta list/offset entries and optionally refresh the display."""
     return gui_background_theta.apply_background_theta_metadata(
-        osc_files=osc_files,
-        current_background_index=current_background_index,
+        osc_files=background_runtime_state.osc_files,
+        current_background_index=background_runtime_state.current_background_index,
         theta_initial_var=globals().get("theta_initial_var"),
         defaults=defaults,
         theta_initial=theta_initial,
@@ -2104,8 +2093,8 @@ def _apply_geometry_fit_background_selection(
 ) -> bool:
     """Validate the geometry-fit background selection entry."""
     return gui_background_theta.apply_geometry_fit_background_selection(
-        osc_files=osc_files,
-        current_background_index=current_background_index,
+        osc_files=background_runtime_state.osc_files,
+        current_background_index=background_runtime_state.current_background_index,
         theta_initial_var=globals().get("theta_initial_var"),
         defaults=defaults,
         theta_initial=theta_initial,
@@ -2125,8 +2114,8 @@ def _apply_geometry_fit_background_selection(
 def _sync_geometry_fit_background_selection(*, preserve_existing: bool = True) -> None:
     """Keep the fit-background selector valid when the background list changes."""
     gui_background_theta.sync_geometry_fit_background_selection(
-        osc_files=osc_files,
-        current_background_index=current_background_index,
+        osc_files=background_runtime_state.osc_files,
+        current_background_index=background_runtime_state.current_background_index,
         theta_initial_var=globals().get("theta_initial_var"),
         defaults=defaults,
         theta_initial=theta_initial,
@@ -2145,20 +2134,19 @@ def _sync_geometry_fit_background_selection(*, preserve_existing: bool = True) -
 def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]:
     """Return cached background arrays for *index*, loading from disk if needed."""
 
-    global background_images, background_images_native, background_images_display
 
     updated = gui_background.load_background_image_by_index(
         int(index),
-        osc_files=osc_files,
-        background_images=background_images,
-        background_images_native=background_images_native,
-        background_images_display=background_images_display,
+        osc_files=background_runtime_state.osc_files,
+        background_images=background_runtime_state.background_images,
+        background_images_native=background_runtime_state.background_images_native,
+        background_images_display=background_runtime_state.background_images_display,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
     )
-    background_images = list(updated["background_images"])
-    background_images_native = list(updated["background_images_native"])
-    background_images_display = list(updated["background_images_display"])
+    background_runtime_state.background_images = list(updated["background_images"])
+    background_runtime_state.background_images_native = list(updated["background_images_native"])
+    background_runtime_state.background_images_display = list(updated["background_images_display"])
     _sync_background_runtime_state()
     return (
         np.asarray(updated["background_image"]),
@@ -2169,21 +2157,20 @@ def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]
 def _get_current_background_native() -> np.ndarray:
     """Return the unrotated background image corresponding to the current index."""
 
-    global background_images, background_images_native, background_images_display
 
     updated = gui_background.get_current_background_native(
-        osc_files=osc_files,
-        background_images=background_images,
-        background_images_native=background_images_native,
-        background_images_display=background_images_display,
-        current_background_index=current_background_index,
-        current_background_image=current_background_image,
+        osc_files=background_runtime_state.osc_files,
+        background_images=background_runtime_state.background_images,
+        background_images_native=background_runtime_state.background_images_native,
+        background_images_display=background_runtime_state.background_images_display,
+        current_background_index=background_runtime_state.current_background_index,
+        current_background_image=background_runtime_state.current_background_image,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
     )
-    background_images = list(updated["background_images"])
-    background_images_native = list(updated["background_images_native"])
-    background_images_display = list(updated["background_images_display"])
+    background_runtime_state.background_images = list(updated["background_images"])
+    background_runtime_state.background_images_native = list(updated["background_images_native"])
+    background_runtime_state.background_images_display = list(updated["background_images_display"])
     _sync_background_runtime_state()
     return np.asarray(updated["background_image"])
 
@@ -2191,22 +2178,21 @@ def _get_current_background_native() -> np.ndarray:
 def _get_current_background_display() -> np.ndarray:
     """Return the rotated background image used for GUI display."""
 
-    global background_images, background_images_native, background_images_display
 
     updated = gui_background.get_current_background_display(
-        osc_files=osc_files,
-        background_images=background_images,
-        background_images_native=background_images_native,
-        background_images_display=background_images_display,
-        current_background_index=current_background_index,
-        current_background_image=current_background_image,
-        current_background_display=current_background_display,
+        osc_files=background_runtime_state.osc_files,
+        background_images=background_runtime_state.background_images,
+        background_images_native=background_runtime_state.background_images_native,
+        background_images_display=background_runtime_state.background_images_display,
+        current_background_index=background_runtime_state.current_background_index,
+        current_background_image=background_runtime_state.current_background_image,
+        current_background_display=background_runtime_state.current_background_display,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
     )
-    background_images = list(updated["background_images"])
-    background_images_native = list(updated["background_images_native"])
-    background_images_display = list(updated["background_images_display"])
+    background_runtime_state.background_images = list(updated["background_images"])
+    background_runtime_state.background_images_native = list(updated["background_images_native"])
+    background_runtime_state.background_images_display = list(updated["background_images_display"])
     _sync_background_runtime_state()
     return np.asarray(updated["background_display"])
 
@@ -2216,9 +2202,9 @@ def _apply_background_backend_orientation(image: np.ndarray | None) -> np.ndarra
 
     return gui_background.apply_background_backend_orientation(
         image,
-        flip_x=background_backend_flip_x,
-        flip_y=background_backend_flip_y,
-        rotation_k=background_backend_rotation_k,
+        flip_x=background_runtime_state.backend_flip_x,
+        flip_y=background_runtime_state.backend_flip_y,
+        rotation_k=background_runtime_state.backend_rotation_k,
     )
 
 
@@ -2472,7 +2458,7 @@ def _draw_geometry_fit_overlay(
     gui_overlays.draw_geometry_fit_overlay(
         ax,
         overlay_records,
-        geometry_pick_artists=geometry_pick_artists,
+        geometry_pick_artists=geometry_runtime_state.pick_artists,
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
         draw_idle=canvas.draw_idle,
         max_display_markers=max_display_markers,
@@ -2493,7 +2479,7 @@ def _draw_initial_geometry_pairs_overlay(
     gui_overlays.draw_initial_geometry_pairs_overlay(
         ax,
         initial_pairs_display,
-        geometry_pick_artists=geometry_pick_artists,
+        geometry_pick_artists=geometry_runtime_state.pick_artists,
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
         draw_idle=canvas.draw_idle,
         max_display_markers=max_display_markers,
@@ -2510,7 +2496,7 @@ def _build_geometry_manual_initial_pairs_display(
     return gui_manual_geometry.build_geometry_manual_initial_pairs_display(
         background_index,
         param_set=param_set,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         prefer_cache=prefer_cache,
         pairs_for_index=_geometry_manual_pairs_for_index,
         current_geometry_fit_params=_current_geometry_fit_params,
@@ -2524,8 +2510,8 @@ def _build_geometry_manual_initial_pairs_display(
 def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> bool:
     """Redraw the saved manual geometry-pair overlay for the current background."""
     return gui_manual_geometry.render_current_geometry_manual_pairs(
-        background_visible=background_visible,
-        current_background_index=int(current_background_index),
+        background_visible=background_runtime_state.visible,
+        current_background_index=int(background_runtime_state.current_background_index),
         current_background_image=_current_geometry_manual_pick_background_image(),
         pick_session=geometry_manual_state.pick_session,
         build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
@@ -2543,7 +2529,6 @@ def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> boo
 def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
     """Select one manual Qr/Qz group and arm background-point placement."""
 
-    global _suppress_drag_press_once
 
     def _set_pick_session(session: dict[str, object]) -> None:
         _set_geometry_manual_pick_session(session)
@@ -2552,7 +2537,7 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
         float(col),
         float(row),
         pick_session=geometry_manual_state.pick_session,
-        current_background_index=int(current_background_index),
+        current_background_index=int(background_runtime_state.current_background_index),
         display_background=_current_geometry_manual_pick_background_image(),
         get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
             param_set=_current_geometry_fit_params(),
@@ -2576,7 +2561,7 @@ def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
         caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
     )
     _set_geometry_manual_pick_session(next_session)
-    _suppress_drag_press_once = bool(suppress_drag)
+    peak_selection_state.suppress_drag_press_once = bool(suppress_drag)
     _sync_peak_selection_state()
     return bool(handled)
 
@@ -2591,7 +2576,7 @@ def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
         float(col),
         float(row),
         pick_session=geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         display_background=_current_geometry_manual_pick_background_image(),
         get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
             param_set=_current_geometry_fit_params(),
@@ -2685,7 +2670,7 @@ canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
 canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
 global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-unscaled_image_global = None
+simulation_runtime_state.unscaled_image = None
 
 # ── replace the original imshow call ────────────────────────────
 image_display = ax.imshow(
@@ -2698,7 +2683,7 @@ image_display = ax.imshow(
 
 
 background_display = ax.imshow(
-    current_background_display,
+    background_runtime_state.current_background_display,
     cmap='turbo',
     zorder=0,
     origin='upper'
@@ -2738,11 +2723,11 @@ ax.add_patch(integration_region_rect)
 # ---------------------------------------------------------------------------
 def build_mosaic_params():
     return {
-        "beam_x_array":       profile_cache["beam_x_array"],
-        "beam_y_array":       profile_cache["beam_y_array"],
-        "theta_array":        profile_cache["theta_array"],
-        "phi_array":          profile_cache["phi_array"],
-        "wavelength_array":   profile_cache["wavelength_array"],   #  <<< name fixed
+        "beam_x_array":       simulation_runtime_state.profile_cache["beam_x_array"],
+        "beam_y_array":       simulation_runtime_state.profile_cache["beam_y_array"],
+        "theta_array":        simulation_runtime_state.profile_cache["theta_array"],
+        "phi_array":          simulation_runtime_state.profile_cache["phi_array"],
+        "wavelength_array":   simulation_runtime_state.profile_cache["wavelength_array"],   #  <<< name fixed
         "sigma_mosaic_deg":   sigma_mosaic_var.get(),
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
         "eta":                eta_var.get(),
@@ -2843,11 +2828,11 @@ selected_peak_marker, = ax.plot([], [], 'ys',  # yellow square outline
 selected_peak_marker.set_visible(False)
 
 # Geometry click markers (sim vs real)
-geometry_pick_artists = []
-geometry_preview_artists = []
-geometry_manual_preview_artists = []
-qr_cylinder_overlay_artists = []
-qr_cylinder_overlay_cache: dict[str, object] = {
+geometry_runtime_state.pick_artists = []
+geometry_runtime_state.preview_artists = []
+geometry_runtime_state.manual_preview_artists = []
+geometry_runtime_state.qr_cylinder_overlay_artists = []
+geometry_runtime_state.qr_cylinder_overlay_cache = {
     "signature": None,
     "paths": [],
 }
@@ -2855,9 +2840,9 @@ geometry_preview_state = app_state.geometry_preview
 geometry_q_group_view_state = app_state.geometry_q_group_view
 geometry_q_group_state = app_state.geometry_q_groups
 geometry_manual_state = app_state.manual_geometry
-geometry_manual_pick_armed = False
-geometry_manual_pick_cache_signature = None
-geometry_manual_pick_cache_data: dict[str, object] = {}
+geometry_runtime_state.manual_pick_armed = False
+geometry_runtime_state.manual_pick_cache_signature = None
+geometry_runtime_state.manual_pick_cache_data = {}
 geometry_fit_history_state = app_state.geometry_fit_history
 geometry_fit_parameter_controls_view_state = (
     app_state.geometry_fit_parameter_controls_view
@@ -3083,7 +3068,7 @@ def _capture_geometry_fit_undo_state() -> dict[str, object]:
     ):
         try:
             _, initial_pairs_display = _build_geometry_manual_initial_pairs_display(
-                int(current_background_index),
+                int(background_runtime_state.current_background_index),
                 param_set=_current_geometry_fit_params(),
                 prefer_cache=True,
             )
@@ -3102,7 +3087,7 @@ def _capture_geometry_fit_undo_state() -> dict[str, object]:
 
     return {
         "ui_params": _copy_geometry_fit_state_value(_current_geometry_fit_ui_params()),
-        "profile_cache": _copy_geometry_fit_state_value(profile_cache),
+        "profile_cache": _copy_geometry_fit_state_value(simulation_runtime_state.profile_cache),
         "overlay_state": overlay_state,
     }
 
@@ -3132,8 +3117,6 @@ def _push_geometry_fit_redo_state(state: dict[str, object] | None) -> None:
 def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
     """Restore a previously captured geometry-fit state."""
 
-    global profile_cache, last_simulation_signature
-    global update_pending
 
     if not isinstance(state, dict):
         return
@@ -3157,16 +3140,16 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
         },
         geometry_theta_offset_var=geometry_theta_offset_var,
     )
-    profile_cache = restored["profile_cache"]
+    simulation_runtime_state.profile_cache = restored["profile_cache"]
     _set_geometry_fit_last_overlay_state(restored["overlay_state"])
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
 
-    if update_pending is not None:
+    if simulation_runtime_state.update_pending is not None:
         try:
-            root.after_cancel(update_pending)
+            root.after_cancel(simulation_runtime_state.update_pending)
         except Exception:
             pass
-        update_pending = None
+        simulation_runtime_state.update_pending = None
 
     do_update()
 
@@ -3308,13 +3291,13 @@ def _geometry_manual_pairs_export_rows() -> list[dict[str, object]]:
         if not entries:
             continue
         background_path = (
-            str(Path(str(osc_files[background_idx])).expanduser())
-            if 0 <= int(background_idx) < len(osc_files)
+            str(Path(str(background_runtime_state.osc_files[background_idx])).expanduser())
+            if 0 <= int(background_idx) < len(background_runtime_state.osc_files)
             else None
         )
         background_name = (
-            Path(str(osc_files[background_idx])).name
-            if 0 <= int(background_idx) < len(osc_files)
+            Path(str(background_runtime_state.osc_files[background_idx])).name
+            if 0 <= int(background_idx) < len(background_runtime_state.osc_files)
             else f"background_{int(background_idx) + 1}"
         )
         rows.append(
@@ -3332,8 +3315,8 @@ def _collect_geometry_manual_pairs_snapshot() -> dict[str, object]:
     """Return a portable snapshot of all saved manual geometry placements."""
 
     return {
-        "background_files": [str(Path(str(path)).expanduser()) for path in osc_files],
-        "current_background_index": int(current_background_index),
+        "background_files": [str(Path(str(path)).expanduser()) for path in background_runtime_state.osc_files],
+        "current_background_index": int(background_runtime_state.current_background_index),
         "manual_pairs": _geometry_manual_pairs_export_rows(),
     }
 
@@ -3347,7 +3330,7 @@ def _apply_geometry_manual_pairs_rows(
 
     exact_path_lookup: dict[str, int] = {}
     name_lookup: defaultdict[str, list[int]] = defaultdict(list)
-    for idx, raw_path in enumerate(osc_files):
+    for idx, raw_path in enumerate(background_runtime_state.osc_files):
         normalized_path = _normalized_background_path_for_compare(raw_path)
         if normalized_path is not None:
             exact_path_lookup[normalized_path] = int(idx)
@@ -3359,7 +3342,7 @@ def _apply_geometry_manual_pairs_rows(
     else:
         imported_map = {
             int(idx): _geometry_manual_pairs_for_index(idx)
-            for idx in range(len(osc_files))
+            for idx in range(len(background_runtime_state.osc_files))
             if _geometry_manual_pairs_for_index(idx)
         }
 
@@ -3385,7 +3368,7 @@ def _apply_geometry_manual_pairs_rows(
                 fallback_index = int(raw_row.get("background_index"))
             except Exception:
                 fallback_index = None
-            if fallback_index is not None and 0 <= fallback_index < len(osc_files):
+            if fallback_index is not None and 0 <= fallback_index < len(background_runtime_state.osc_files):
                 target_index = int(fallback_index)
 
         if target_index is None:
@@ -3451,7 +3434,7 @@ def _apply_geometry_manual_pairs_snapshot(
             current_paths_norm = [
                 path_norm
                 for path_norm in (
-                    _normalized_background_path_for_compare(path) for path in osc_files
+                    _normalized_background_path_for_compare(path) for path in background_runtime_state.osc_files
                 )
                 if path_norm is not None
             ]
@@ -3493,10 +3476,9 @@ def _apply_geometry_manual_pairs_snapshot(
 def _invalidate_geometry_manual_pick_cache() -> None:
     """Drop cached manual-pick simulation/background state."""
 
-    global geometry_manual_pick_cache_signature, geometry_manual_pick_cache_data
 
-    geometry_manual_pick_cache_signature = None
-    geometry_manual_pick_cache_data = {}
+    geometry_runtime_state.manual_pick_cache_signature = None
+    geometry_runtime_state.manual_pick_cache_data = {}
 
 
 def _current_geometry_manual_match_config() -> dict[str, object]:
@@ -3511,8 +3493,8 @@ def _geometry_manual_pick_cache_signature(
 ) -> tuple[object, ...]:
     """Return a cache signature for reusable manual-pick state."""
     return gui_manual_geometry.geometry_manual_pick_cache_signature(
-        last_simulation_signature=last_simulation_signature,
-        background_index=int(current_background_index if background_index is None else background_index),
+        last_simulation_signature=simulation_runtime_state.last_simulation_signature,
+        background_index=int(background_runtime_state.current_background_index if background_index is None else background_index),
         background_image=(
             _current_geometry_manual_pick_background_image()
             if background_image is None
@@ -3521,8 +3503,8 @@ def _geometry_manual_pick_cache_signature(
         use_caked_space=bool(_geometry_manual_pick_uses_caked_space()),
         geometry_preview_excluded_q_groups=geometry_preview_state.excluded_q_groups,
         geometry_q_group_cached_entries=geometry_q_group_state.cached_entries,
-        stored_max_positions_local=stored_max_positions_local,
-        stored_peak_table_lattice=stored_peak_table_lattice,
+        stored_max_positions_local=simulation_runtime_state.stored_max_positions_local,
+        stored_peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
     )
 
 
@@ -3535,21 +3517,20 @@ def _get_geometry_manual_pick_cache(
 ) -> dict[str, object]:
     """Build or reuse the current manual-pick simulation/background cache."""
 
-    global geometry_manual_pick_cache_signature, geometry_manual_pick_cache_data
 
-    bg_index = int(current_background_index if background_index is None else background_index)
+    bg_index = int(background_runtime_state.current_background_index if background_index is None else background_index)
     background_local = (
         _current_geometry_manual_pick_background_image() if background_image is None else background_image
     )
-    cache_data, geometry_manual_pick_cache_signature, geometry_manual_pick_cache_data = (
+    cache_data, geometry_runtime_state.manual_pick_cache_signature, geometry_manual_pick_cache_data = (
         gui_manual_geometry.build_geometry_manual_pick_cache(
             param_set=param_set,
             prefer_cache=prefer_cache,
             background_index=bg_index,
-            current_background_index=int(current_background_index),
+            current_background_index=int(background_runtime_state.current_background_index),
             background_image=background_local,
-            existing_cache_signature=geometry_manual_pick_cache_signature,
-            existing_cache_data=geometry_manual_pick_cache_data,
+            existing_cache_signature=geometry_runtime_state.manual_pick_cache_signature,
+            existing_cache_data=geometry_runtime_state.manual_pick_cache_data,
             cache_signature_fn=_geometry_manual_pick_cache_signature,
             simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
             build_grouped_candidates=_geometry_manual_pick_candidates,
@@ -3636,7 +3617,7 @@ def _geometry_manual_pick_session_active(*, require_current_background: bool = T
     """Return whether a manual background-placement session is in progress."""
     return gui_manual_geometry.geometry_manual_pick_session_active(
         geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         require_current_background=require_current_background,
     )
 
@@ -3645,7 +3626,7 @@ def _geometry_manual_unassigned_group_candidates() -> list[dict[str, object]]:
     """Return manual-pick group candidates that do not yet have a BG assignment."""
     return gui_manual_geometry.geometry_manual_unassigned_group_candidates(
         geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         candidate_source_key=_geometry_manual_candidate_source_key,
     )
 
@@ -3654,7 +3635,7 @@ def _geometry_manual_current_pending_candidate() -> dict[str, object] | None:
     """Return one remaining simulated peak awaiting a manual background click."""
     return gui_manual_geometry.geometry_manual_current_pending_candidate(
         geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         candidate_source_key=_geometry_manual_candidate_source_key,
     )
 
@@ -3708,14 +3689,13 @@ def _geometry_manual_pair_entry_from_candidate(
 def _clear_geometry_manual_preview_artists(*, redraw: bool = True) -> None:
     """Remove manual-placement preview markers from the plot."""
 
-    global geometry_manual_preview_artists
 
-    for artist in geometry_manual_preview_artists:
+    for artist in geometry_runtime_state.manual_preview_artists:
         try:
             artist.remove()
         except ValueError:
             pass
-    geometry_manual_preview_artists.clear()
+    geometry_runtime_state.manual_preview_artists.clear()
     if redraw:
         canvas.draw_idle()
 
@@ -3728,7 +3708,6 @@ def _show_geometry_manual_preview(
 ) -> None:
     """Draw raw and refined manual-placement preview markers."""
 
-    global geometry_manual_preview_artists
 
     _clear_geometry_manual_preview_artists(redraw=False)
     raw_artist, = ax.plot(
@@ -3742,7 +3721,7 @@ def _show_geometry_manual_preview(
         linestyle="none",
         zorder=11,
     )
-    geometry_manual_preview_artists.append(raw_artist)
+    geometry_runtime_state.manual_preview_artists.append(raw_artist)
 
     if (
         refined_col is not None
@@ -3770,7 +3749,7 @@ def _show_geometry_manual_preview(
             alpha=0.75,
             zorder=11,
         )
-        geometry_manual_preview_artists.extend([refined_artist, link_artist])
+        geometry_runtime_state.manual_preview_artists.extend([refined_artist, link_artist])
 
     canvas.draw_idle()
 
@@ -3781,7 +3760,7 @@ def _geometry_manual_preview_due(col: float, row: float) -> bool:
         col,
         row,
         pick_session=geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         min_interval_s=float(GEOMETRY_MANUAL_PREVIEW_MIN_INTERVAL_S),
         min_move_px=float(GEOMETRY_MANUAL_PREVIEW_MIN_MOVE_PX),
         perf_counter_fn=perf_counter,
@@ -3814,8 +3793,8 @@ def _geometry_manual_refine_preview_point(
             background_image=background_local,
         ),
         use_caked_space=_geometry_manual_pick_uses_caked_space(),
-        radial_axis=np.asarray(last_caked_radial_values, dtype=float),
-        azimuth_axis=np.asarray(last_caked_azimuth_values, dtype=float),
+        radial_axis=np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float),
+        azimuth_axis=np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float),
         match_simulated_peaks_to_peak_context=match_simulated_peaks_to_peak_context,
         peak_maximum_near_in_image_fn=_peak_maximum_near_in_image,
         caked_axis_to_image_index_fn=_caked_axis_to_image_index,
@@ -3850,7 +3829,7 @@ def _apply_geometry_manual_pick_zoom(
         axis=ax,
         canvas=canvas,
         use_caked_space=_geometry_manual_pick_uses_caked_space(),
-        last_caked_extent=last_caked_extent,
+        last_caked_extent=simulation_runtime_state.last_caked_extent,
         caked_zoom_tth_deg=float(GEOMETRY_MANUAL_CAKED_ZOOM_TTH_DEG),
         caked_zoom_phi_deg=float(GEOMETRY_MANUAL_CAKED_ZOOM_PHI_DEG),
         pick_zoom_window_px=float(GEOMETRY_MANUAL_PICK_ZOOM_WINDOW_PX),
@@ -3872,7 +3851,7 @@ def _update_geometry_manual_pick_preview(
         float(raw_col),
         float(raw_row),
         pick_session=geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         force=force,
         remaining_candidates=_geometry_manual_unassigned_group_candidates(),
         display_background=display_background,
@@ -3904,7 +3883,7 @@ def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
     """Return overlay-ready display entries for the in-progress manual pick session."""
     return gui_manual_geometry.geometry_manual_session_initial_pairs_display(
         geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         candidate_source_key=_geometry_manual_candidate_source_key,
         entry_display_coords=_geometry_manual_entry_display_coords,
     )
@@ -3920,7 +3899,7 @@ def _cancel_geometry_manual_pick_session(
     _set_geometry_manual_pick_session(
         gui_manual_geometry.cancel_geometry_manual_pick_session(
         geometry_manual_state.pick_session,
-        current_background_index=current_background_index,
+        current_background_index=background_runtime_state.current_background_index,
         restore_view_fn=_restore_geometry_manual_pick_view,
         clear_preview_artists_fn=_clear_geometry_manual_preview_artists,
         render_current_pairs_fn=_render_current_geometry_manual_pairs,
@@ -3959,8 +3938,8 @@ def _match_geometry_manual_group_to_background(
 
 def _update_geometry_manual_pick_button_label() -> None:
     label = gui_manual_geometry.geometry_manual_pick_button_label(
-        armed=geometry_manual_pick_armed,
-        current_background_index=current_background_index,
+        armed=geometry_runtime_state.manual_pick_armed,
+        current_background_index=background_runtime_state.current_background_index,
         pick_session=geometry_manual_state.pick_session,
         pairs_for_index=_geometry_manual_pairs_for_index,
         pair_group_count=_geometry_manual_pair_group_count,
@@ -3974,10 +3953,9 @@ def _update_geometry_manual_pick_button_label() -> None:
 def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None) -> None:
     """Arm or disarm manual Qr-set selection on the detector image."""
 
-    global geometry_manual_pick_armed
 
-    geometry_manual_pick_armed = bool(enabled)
-    if geometry_manual_pick_armed:
+    geometry_runtime_state.manual_pick_armed = bool(enabled)
+    if geometry_runtime_state.manual_pick_armed:
         if not bool(analysis_view_controls_view_state.show_caked_2d_var.get()):
             analysis_view_controls_view_state.show_caked_2d_var.set(True)
             toggle_caked_2d()
@@ -3987,7 +3965,7 @@ def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None)
         _cancel_geometry_manual_pick_session(restore_view=True, redraw=True)
     _update_geometry_manual_pick_button_label()
     try:
-        canvas.get_tk_widget().configure(cursor="crosshair" if geometry_manual_pick_armed else "")
+        canvas.get_tk_widget().configure(cursor="crosshair" if geometry_runtime_state.manual_pick_armed else "")
     except Exception:
         pass
     if message:
@@ -3997,8 +3975,7 @@ def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None)
 def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
     """Switch geometry fitting/import into the 2D caked integration view now."""
 
-    global update_pending, integration_update_pending
-    update_pending, integration_update_pending = (
+    simulation_runtime_state.update_pending, integration_update_pending = (
         gui_manual_geometry.ensure_geometry_fit_caked_view(
             show_caked_2d_var=analysis_view_controls_view_state.show_caked_2d_var,
             pick_uses_caked_space=_geometry_manual_pick_uses_caked_space,
@@ -4006,8 +3983,8 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
             do_update=do_update,
             schedule_update=schedule_update,
             root=root,
-            update_pending=update_pending,
-            integration_update_pending=integration_update_pending,
+            update_pending=simulation_runtime_state.update_pending,
+            integration_update_pending=simulation_runtime_state.integration_update_pending,
             update_running=bool(globals().get("update_running", False)),
             force_refresh=force_refresh,
         )
@@ -4018,14 +3995,14 @@ def _toggle_geometry_manual_pick_mode() -> None:
     """Toggle manual geometry Qr-set selection on the image."""
 
     _set_geometry_manual_pick_mode(
-        not geometry_manual_pick_armed,
+        not geometry_runtime_state.manual_pick_armed,
         message=(
             (
                 "Manual geometry picking armed in 2D caked phi-vs-2theta view. "
                 "Click a Qr/Qz set once, then click the matching background peaks "
                 "for each simulated member of that set."
             )
-            if not geometry_manual_pick_armed
+            if not geometry_runtime_state.manual_pick_armed
             else "Manual geometry picking disabled."
         ),
     )
@@ -4034,10 +4011,10 @@ def _toggle_geometry_manual_pick_mode() -> None:
 def _clear_current_geometry_manual_pairs() -> None:
     """Clear saved manual geometry pairs for the current background image."""
 
-    if _geometry_manual_pairs_for_index(current_background_index) or _geometry_manual_pick_session_active():
+    if _geometry_manual_pairs_for_index(background_runtime_state.current_background_index) or _geometry_manual_pick_session_active():
         _push_geometry_manual_undo_state()
     _cancel_geometry_manual_pick_session(restore_view=True, redraw=False)
-    _set_geometry_manual_pairs_for_index(current_background_index, [])
+    _set_geometry_manual_pairs_for_index(background_runtime_state.current_background_index, [])
     _clear_geometry_pick_artists()
     _update_geometry_manual_pick_button_label()
     _set_background_file_status_text()
@@ -4177,11 +4154,11 @@ def _geometry_manual_pick_uses_caked_space() -> bool:
     if not bool(analysis_view_controls_view_state.show_caked_2d_var.get()):
         return False
     return (
-        isinstance(last_caked_background_image_unscaled, np.ndarray)
-        and last_caked_background_image_unscaled.ndim == 2
-        and last_caked_background_image_unscaled.size > 0
-        and np.asarray(last_caked_radial_values, dtype=float).size > 1
-        and np.asarray(last_caked_azimuth_values, dtype=float).size > 1
+        isinstance(simulation_runtime_state.last_caked_background_image_unscaled, np.ndarray)
+        and simulation_runtime_state.last_caked_background_image_unscaled.ndim == 2
+        and simulation_runtime_state.last_caked_background_image_unscaled.size > 0
+        and np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float).size > 1
+        and np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float).size > 1
     )
 
 
@@ -4189,7 +4166,7 @@ def _current_geometry_manual_pick_background_image():
     """Return the background image currently used by manual geometry picking."""
 
     if _geometry_manual_pick_uses_caked_space():
-        return last_caked_background_image_unscaled
+        return simulation_runtime_state.last_caked_background_image_unscaled
     return _get_current_background_display()
 
 
@@ -4215,7 +4192,7 @@ def _geometry_manual_entry_display_coords(
         except Exception:
             raw_col = float("nan")
             raw_row = float("nan")
-        angles = _display_to_detector_angles(raw_col, raw_row, _ai_cache.get("ai"))
+        angles = _display_to_detector_angles(raw_col, raw_row, simulation_runtime_state.ai_cache.get("ai"))
         if angles is not None:
             col = float(angles[0])
             row = float(_wrap_phi_range(float(angles[1])))
@@ -4237,7 +4214,7 @@ def _caked_angles_to_background_display_coords(
     return gui_manual_geometry.caked_angles_to_background_display_coords(
         two_theta_deg,
         phi_deg,
-        ai=_ai_cache.get("ai"),
+        ai=simulation_runtime_state.ai_cache.get("ai"),
         native_background=_get_current_background_native(),
         get_detector_angular_maps=_get_detector_angular_maps,
         scattering_angles_to_detector_pixel=_scattering_angles_to_detector_pixel,
@@ -4262,7 +4239,7 @@ def _native_detector_coords_to_caked_display_coords(
     return gui_manual_geometry.native_detector_coords_to_caked_display_coords(
         col,
         row,
-        ai=_ai_cache.get("ai"),
+        ai=simulation_runtime_state.ai_cache.get("ai"),
         get_detector_angular_maps=_get_detector_angular_maps,
         detector_pixel_to_scattering_angles=_detector_pixel_to_scattering_angles,
         center=center,
@@ -4279,10 +4256,10 @@ def _project_geometry_manual_peaks_to_current_view(
 
     projected: list[dict[str, object]] = []
     use_caked = _geometry_manual_pick_uses_caked_space()
-    ai = _ai_cache.get("ai")
+    ai = simulation_runtime_state.ai_cache.get("ai")
     sim_shape = (int(image_size), int(image_size))
-    radial_axis = np.asarray(last_caked_radial_values, dtype=float) if use_caked else np.array([])
-    azimuth_axis = np.asarray(last_caked_azimuth_values, dtype=float) if use_caked else np.array([])
+    radial_axis = np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float) if use_caked else np.array([])
+    azimuth_axis = np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float) if use_caked else np.array([])
 
     for raw_entry in simulated_peaks or []:
         if not isinstance(raw_entry, dict):
@@ -4409,10 +4386,9 @@ def _geometry_manual_simulated_lookup(
 def _clear_geometry_pick_artists(*, redraw: bool = True):
     """Remove geometry fit markers from the plot and reset the cache."""
 
-    global geometry_pick_artists
 
     gui_overlays.clear_artists(
-        geometry_pick_artists,
+        geometry_runtime_state.pick_artists,
         draw_idle=canvas.draw_idle,
         redraw=redraw,
     )
@@ -4421,10 +4397,9 @@ def _clear_geometry_pick_artists(*, redraw: bool = True):
 def _clear_geometry_preview_artists(*, redraw: bool = True):
     """Remove live geometry preview markers from the plot and reset the cache."""
 
-    global geometry_preview_artists
 
     gui_overlays.clear_artists(
-        geometry_preview_artists,
+        geometry_runtime_state.preview_artists,
         draw_idle=canvas.draw_idle,
         redraw=redraw,
     )
@@ -4433,10 +4408,9 @@ def _clear_geometry_preview_artists(*, redraw: bool = True):
 def _clear_qr_cylinder_overlay_artists(*, redraw: bool = True):
     """Remove analytic Qr-cylinder detector traces from the plot."""
 
-    global qr_cylinder_overlay_artists
 
     gui_overlays.clear_artists(
-        qr_cylinder_overlay_artists,
+        geometry_runtime_state.qr_cylinder_overlay_artists,
         draw_idle=canvas.draw_idle,
         redraw=redraw,
     )
@@ -4472,8 +4446,8 @@ def _active_qr_cylinder_overlay_entries() -> list[dict[str, object]]:
         secondary_a = primary_a
 
     primary_m = set()
-    if isinstance(SIM_PRIMARY_QR, dict):
-        for m_raw in SIM_PRIMARY_QR.keys():
+    if isinstance(simulation_runtime_state.sim_primary_qr, dict):
+        for m_raw in simulation_runtime_state.sim_primary_qr.keys():
             try:
                 primary_m.add(int(m_raw))
             except (TypeError, ValueError):
@@ -4538,7 +4512,6 @@ def _qr_cylinder_overlay_signature(
 def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = False):
     """Draw analytic Ewald/constant-Qr traces in the current detector or caked view."""
 
-    global qr_cylinder_overlay_cache
 
     overlay_var = geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
     if overlay_var is None or not bool(overlay_var.get()):
@@ -4547,7 +4520,7 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
 
     entries = _active_qr_cylinder_overlay_entries()
     if not entries:
-        qr_cylinder_overlay_cache = {"signature": None, "paths": []}
+        geometry_runtime_state.qr_cylinder_overlay_cache = {"signature": None, "paths": []}
         _clear_qr_cylinder_overlay_artists(redraw=redraw)
         if update_status and "progress_label_positions" in globals():
             progress_label_positions.config(
@@ -4556,10 +4529,10 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
         return
 
     signature = _qr_cylinder_overlay_signature(entries)
-    cached_sig = qr_cylinder_overlay_cache.get("signature")
+    cached_sig = geometry_runtime_state.qr_cylinder_overlay_cache.get("signature")
     if cached_sig != signature:
         render_in_caked_space = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        ai = _ai_cache.get("ai")
+        ai = simulation_runtime_state.ai_cache.get("ai")
         two_theta_map = None
         phi_map = None
         if render_in_caked_space:
@@ -4632,9 +4605,9 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
                         "rows": display_rows,
                     }
                 )
-        qr_cylinder_overlay_cache = {"signature": signature, "paths": paths}
+        geometry_runtime_state.qr_cylinder_overlay_cache = {"signature": signature, "paths": paths}
 
-    paths = qr_cylinder_overlay_cache.get("paths", [])
+    paths = geometry_runtime_state.qr_cylinder_overlay_cache.get("paths", [])
     if not paths:
         _clear_qr_cylinder_overlay_artists(redraw=False)
         if redraw:
@@ -4647,7 +4620,7 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
     gui_overlays.draw_qr_cylinder_overlay_paths(
         ax,
         paths,
-        qr_cylinder_overlay_artists=qr_cylinder_overlay_artists,
+        qr_cylinder_overlay_artists=geometry_runtime_state.qr_cylinder_overlay_artists,
         clear_qr_cylinder_overlay_artists=_clear_qr_cylinder_overlay_artists,
         draw_idle=canvas.draw_idle,
         redraw=redraw,
@@ -4682,10 +4655,10 @@ def _live_geometry_preview_signature() -> tuple[object, ...]:
     """Return a lightweight signature for the current live preview context."""
 
     return (
-        last_simulation_signature,
-        int(current_background_index),
-        id(current_background_display),
-        bool(background_visible),
+        simulation_runtime_state.last_simulation_signature,
+        int(background_runtime_state.current_background_index),
+        id(background_runtime_state.current_background_display),
+        bool(background_runtime_state.visible),
         bool(analysis_view_controls_view_state.show_caked_2d_var.get())
         if analysis_view_controls_view_state.show_caked_2d_var is not None
         else False,
@@ -4864,10 +4837,10 @@ def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
     """Build simulated peaks from all detector solutions of the selected beam sample."""
 
     simulated_peaks: list[dict[str, object]] = []
-    max_positions_local = stored_max_positions_local
+    max_positions_local = simulation_runtime_state.stored_max_positions_local
     if max_positions_local is None:
         return simulated_peaks
-    peak_table_lattice_local = stored_peak_table_lattice
+    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
     if (
         not peak_table_lattice_local
         or len(peak_table_lattice_local) != len(max_positions_local)
@@ -4878,8 +4851,8 @@ def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
         ]
 
     image_shape = (
-        tuple(int(v) for v in stored_sim_image.shape[:2])
-        if stored_sim_image is not None
+        tuple(int(v) for v in simulation_runtime_state.stored_sim_image.shape[:2])
+        if simulation_runtime_state.stored_sim_image is not None
         else (int(image_size), int(image_size))
     )
 
@@ -5190,8 +5163,8 @@ def _build_geometry_q_group_entries() -> list[dict[str, object]]:
 
     entries_by_key: dict[tuple[object, ...], dict[str, object]] = {}
 
-    max_positions_local = stored_max_positions_local
-    peak_table_lattice_local = stored_peak_table_lattice
+    max_positions_local = simulation_runtime_state.stored_max_positions_local
+    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
     if max_positions_local is None:
         return []
     if (
@@ -5502,9 +5475,9 @@ def _load_geometry_q_group_selection() -> None:
 
 def _background_backend_status() -> str:
     return (
-        f"k={int(background_backend_rotation_k) % 4} "
-        f"flip_x={bool(background_backend_flip_x)} "
-        f"flip_y={bool(background_backend_flip_y)}"
+        f"k={int(background_runtime_state.backend_rotation_k) % 4} "
+        f"flip_x={bool(background_runtime_state.backend_flip_x)} "
+        f"flip_y={bool(background_runtime_state.backend_flip_y)}"
     )
 
 
@@ -5516,8 +5489,7 @@ def _update_background_backend_status():
 
 
 def _rotate_background_backend(delta_k: int):
-    global background_backend_rotation_k
-    background_backend_rotation_k = (int(background_backend_rotation_k) + int(delta_k)) % 4
+    background_runtime_state.backend_rotation_k = (int(background_runtime_state.backend_rotation_k) + int(delta_k)) % 4
     _sync_background_runtime_state()
     _update_background_backend_status()
     _mark_chi_square_dirty()
@@ -5526,12 +5498,11 @@ def _rotate_background_backend(delta_k: int):
 
 
 def _toggle_background_backend_flip(axis: str):
-    global background_backend_flip_x, background_backend_flip_y
     axis = (axis or "").lower()
     if axis == "x":
-        background_backend_flip_x = not background_backend_flip_x
+        background_runtime_state.backend_flip_x = not background_runtime_state.backend_flip_x
     elif axis == "y":
-        background_backend_flip_y = not background_backend_flip_y
+        background_runtime_state.backend_flip_y = not background_runtime_state.backend_flip_y
     _sync_background_runtime_state()
     _update_background_backend_status()
     _mark_chi_square_dirty()
@@ -5540,10 +5511,9 @@ def _toggle_background_backend_flip(axis: str):
 
 
 def _reset_background_backend_orientation():
-    global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
-    background_backend_rotation_k = 0
-    background_backend_flip_x = False
-    background_backend_flip_y = False
+    background_runtime_state.backend_rotation_k = 0
+    background_runtime_state.backend_flip_x = False
+    background_runtime_state.backend_flip_y = False
     _sync_background_runtime_state()
     _update_background_backend_status()
     _mark_chi_square_dirty()
@@ -5553,10 +5523,7 @@ def _reset_background_backend_orientation():
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
-selected_hkl_target = peak_selection_state.selected_hkl_target
-hkl_pick_armed = peak_selection_state.hkl_pick_armed
 hkl_lookup_view_state = app_state.hkl_lookup_view
-_suppress_drag_press_once = peak_selection_state.suppress_drag_press_once
 bragg_qr_manager_state = app_state.bragg_qr_manager
 bragg_qr_manager_view_state = app_state.bragg_qr_manager_view
 hbn_geometry_debug_view_state = app_state.hbn_geometry_debug_view
@@ -5580,11 +5547,10 @@ stacking_parameter_controls_view_state = app_state.stacking_parameter_controls_v
 
 
 def _sync_peak_selection_state() -> None:
-    """Mirror peak/HKL interaction flags into the shared app state."""
+    """Normalize peak/HKL interaction flags stored in shared app state."""
 
-    peak_selection_state.selected_hkl_target = selected_hkl_target
-    peak_selection_state.hkl_pick_armed = bool(hkl_pick_armed)
-    peak_selection_state.suppress_drag_press_once = bool(_suppress_drag_press_once)
+    peak_selection_state.hkl_pick_armed = bool(peak_selection_state.hkl_pick_armed)
+    peak_selection_state.suppress_drag_press_once = bool(peak_selection_state.suppress_drag_press_once)
 
 
 _sync_peak_selection_state()
@@ -5792,10 +5758,9 @@ def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
 def _request_geometry_q_group_window_update() -> None:
     """Rebuild the listed Qr/Qz rows from the current simulation on demand."""
 
-    global last_simulation_signature
 
     gui_controllers.request_geometry_q_group_refresh(geometry_q_group_state)
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     _invalidate_geometry_manual_pick_cache()
     progress_label_geometry.config(text="Updating listed Qr/Qz peaks from the current simulation...")
     schedule_update()
@@ -5838,15 +5803,14 @@ def _update_geometry_preview_exclude_button_label():
 def _update_hkl_pick_button_label():
     gui_views.set_hkl_pick_button_text(
         hkl_lookup_view_state,
-        "Pick HKL on Image (Armed)" if hkl_pick_armed else "Pick HKL on Image",
+        "Pick HKL on Image (Armed)" if peak_selection_state.hkl_pick_armed else "Pick HKL on Image",
     )
 
 
 def _set_hkl_pick_mode(enabled: bool, *, message: str | None = None):
-    global hkl_pick_armed
-    hkl_pick_armed = bool(enabled)
+    peak_selection_state.hkl_pick_armed = bool(enabled)
     _sync_peak_selection_state()
-    if hkl_pick_armed:
+    if peak_selection_state.hkl_pick_armed:
         _set_geometry_preview_exclude_mode(False)
     _update_hkl_pick_button_label()
     if message:
@@ -5995,7 +5959,7 @@ def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
 
 
 def _toggle_hkl_pick_mode():
-    if hkl_pick_armed:
+    if peak_selection_state.hkl_pick_armed:
         _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
         return
 
@@ -6005,11 +5969,11 @@ def _toggle_hkl_pick_mode():
         )
         return
 
-    if unscaled_image_global is None:
+    if simulation_runtime_state.unscaled_image is None:
         progress_label_positions.config(text="Run a simulation first.")
         return
 
-    if not _ensure_peak_overlay_data(force=False) or not peak_positions:
+    if not _ensure_peak_overlay_data(force=False) or not simulation_runtime_state.peak_positions:
         _set_hkl_pick_mode(
             True,
             message=(
@@ -6040,10 +6004,10 @@ def _format_hkl_triplet(h: int, k: int, l: int) -> str:
 
 def _source_miller_for_label(source_label: str | None) -> np.ndarray:
     label = str(source_label or "primary").lower()
-    if label == "secondary" and isinstance(SIM_MILLER2, np.ndarray) and SIM_MILLER2.size:
-        return np.asarray(SIM_MILLER2, dtype=float)
-    if isinstance(SIM_MILLER1, np.ndarray) and SIM_MILLER1.size:
-        return np.asarray(SIM_MILLER1, dtype=float)
+    if label == "secondary" and isinstance(simulation_runtime_state.sim_miller2, np.ndarray) and simulation_runtime_state.sim_miller2.size:
+        return np.asarray(simulation_runtime_state.sim_miller2, dtype=float)
+    if isinstance(simulation_runtime_state.sim_miller1, np.ndarray) and simulation_runtime_state.sim_miller1.size:
+        return np.asarray(simulation_runtime_state.sim_miller1, dtype=float)
     return np.empty((0, 3), dtype=float)
 
 
@@ -6139,13 +6103,12 @@ def _select_peak_by_index(
     selected_display: tuple[float, float] | None = None,
     selected_native: tuple[float, float] | None = None,
 ):
-    global selected_hkl_target, selected_peak_record
-    if idx < 0 or idx >= len(peak_positions):
+    if idx < 0 or idx >= len(simulation_runtime_state.peak_positions):
         return False
 
-    px, py = peak_positions[idx]
-    H, K, L = peak_millers[idx]
-    I = peak_intensities[idx]
+    px, py = simulation_runtime_state.peak_positions[idx]
+    H, K, L = simulation_runtime_state.peak_millers[idx]
+    I = simulation_runtime_state.peak_intensities[idx]
     disp_col, disp_row = (
         (float(selected_display[0]), float(selected_display[1]))
         if selected_display is not None
@@ -6155,28 +6118,28 @@ def _select_peak_by_index(
     selected_peak_marker.set_data([disp_col], [disp_row])
     selected_peak_marker.set_visible(True)
 
-    selected_hkl_target = (int(H), int(K), int(L))
+    peak_selection_state.selected_hkl_target = (int(H), int(K), int(L))
     _sync_peak_selection_state()
-    selected_peak_record = dict(peak_records[idx]) if idx < len(peak_records) else None
-    if selected_peak_record is not None:
+    simulation_runtime_state.selected_peak_record = dict(simulation_runtime_state.peak_records[idx]) if idx < len(simulation_runtime_state.peak_records) else None
+    if simulation_runtime_state.selected_peak_record is not None:
         if clicked_display is not None:
-            selected_peak_record["clicked_display_col"] = float(clicked_display[0])
-            selected_peak_record["clicked_display_row"] = float(clicked_display[1])
+            simulation_runtime_state.selected_peak_record["clicked_display_col"] = float(clicked_display[0])
+            simulation_runtime_state.selected_peak_record["clicked_display_row"] = float(clicked_display[1])
         if clicked_native is not None:
-            selected_peak_record["clicked_native_col"] = float(clicked_native[0])
-            selected_peak_record["clicked_native_row"] = float(clicked_native[1])
+            simulation_runtime_state.selected_peak_record["clicked_native_col"] = float(clicked_native[0])
+            simulation_runtime_state.selected_peak_record["clicked_native_row"] = float(clicked_native[1])
         if selected_display is not None:
-            selected_peak_record["selected_display_col"] = float(selected_display[0])
-            selected_peak_record["selected_display_row"] = float(selected_display[1])
+            simulation_runtime_state.selected_peak_record["selected_display_col"] = float(selected_display[0])
+            simulation_runtime_state.selected_peak_record["selected_display_row"] = float(selected_display[1])
         if selected_native is not None:
-            selected_peak_record["selected_native_col"] = float(selected_native[0])
-            selected_peak_record["selected_native_row"] = float(selected_native[1])
+            simulation_runtime_state.selected_peak_record["selected_native_col"] = float(selected_native[0])
+            simulation_runtime_state.selected_peak_record["selected_native_row"] = float(selected_native[1])
         elif clicked_native is not None:
-            selected_peak_record["selected_native_col"] = float(clicked_native[0])
-            selected_peak_record["selected_native_row"] = float(clicked_native[1])
+            simulation_runtime_state.selected_peak_record["selected_native_col"] = float(clicked_native[0])
+            simulation_runtime_state.selected_peak_record["selected_native_row"] = float(clicked_native[1])
         else:
-            selected_peak_record["selected_native_col"] = float(selected_peak_record["native_col"])
-            selected_peak_record["selected_native_row"] = float(selected_peak_record["native_row"])
+            simulation_runtime_state.selected_peak_record["selected_native_col"] = float(simulation_runtime_state.selected_peak_record["native_col"])
+            simulation_runtime_state.selected_peak_record["selected_native_row"] = float(simulation_runtime_state.selected_peak_record["native_row"])
     if sync_hkl_vars:
         gui_views.set_hkl_lookup_values(
             hkl_lookup_view_state,
@@ -6185,10 +6148,10 @@ def _select_peak_by_index(
             l_text=str(int(L)),
         )
 
-    qr_val, deg_hkls = _selected_peak_qr_and_degenerates(H, K, L, selected_peak_record)
-    if selected_peak_record is not None:
-        selected_peak_record["qr"] = float(qr_val)
-        selected_peak_record["degenerate_hkls"] = [
+    qr_val, deg_hkls = _selected_peak_qr_and_degenerates(H, K, L, simulation_runtime_state.selected_peak_record)
+    if simulation_runtime_state.selected_peak_record is not None:
+        simulation_runtime_state.selected_peak_record["qr"] = float(qr_val)
+        simulation_runtime_state.selected_peak_record["degenerate_hkls"] = [
             (int(hv), int(kv), int(lv)) for hv, kv, lv in deg_hkls
         ]
 
@@ -6216,12 +6179,11 @@ def _select_peak_by_hkl(
     sync_hkl_vars: bool = True,
     silent_if_missing: bool = False,
 ):
-    global selected_hkl_target, selected_peak_record
     _ensure_peak_overlay_data(force=False)
     target = (int(h), int(k), int(l))
 
-    if not peak_positions:
-        if not silent_if_missing and unscaled_image_global is not None:
+    if not simulation_runtime_state.peak_positions:
+        if not silent_if_missing and simulation_runtime_state.unscaled_image is not None:
             schedule_update()
         if not silent_if_missing:
             progress_label_positions.config(
@@ -6234,21 +6196,21 @@ def _select_peak_by_hkl(
         return int(h0 * h0 + h0 * k0 + k0 * k0)
 
     matches = [
-        idx for idx, hkl in enumerate(peak_millers)
-        if tuple(int(np.rint(v)) for v in hkl) == target and peak_positions[idx][0] >= 0
+        idx for idx, hkl in enumerate(simulation_runtime_state.peak_millers)
+        if tuple(int(np.rint(v)) for v in hkl) == target and simulation_runtime_state.peak_positions[idx][0] >= 0
     ]
 
     # When primary simulation runs on Qr rods, only one representative HKL is
-    # present per m/L in peak_millers. Fall back to m/L matching so any
+    # present per m/L in simulation_runtime_state.peak_millers. Fall back to m/L matching so any
     # degenerate HKL can still select the corresponding rod peak.
     if not matches:
         m_target = _m_idx(target)
         l_target = int(target[2])
         matches = [
             idx
-            for idx, hkl in enumerate(peak_millers)
+            for idx, hkl in enumerate(simulation_runtime_state.peak_millers)
             if (
-                peak_positions[idx][0] >= 0
+                simulation_runtime_state.peak_positions[idx][0] >= 0
                 and int(np.rint(hkl[2])) == l_target
                 and _m_idx(
                     (
@@ -6265,13 +6227,13 @@ def _select_peak_by_hkl(
             progress_label_positions.config(
                 text=f"HKL ({target[0]} {target[1]} {target[2]}) not found in current simulation."
             )
-        selected_hkl_target = target
+        peak_selection_state.selected_hkl_target = target
         _sync_peak_selection_state()
-        selected_peak_record = None
+        simulation_runtime_state.selected_peak_record = None
         return False
 
     def _score(i: int) -> float:
-        val = peak_intensities[i]
+        val = simulation_runtime_state.peak_intensities[i]
         return float(val) if np.isfinite(val) else float("-inf")
 
     best_idx = max(matches, key=_score)
@@ -6283,7 +6245,6 @@ def _select_peak_by_hkl(
 
 
 def _select_peak_from_hkl_controls():
-    global selected_hkl_target
     try:
         h = int(round(float(hkl_lookup_view_state.selected_h_var.get().strip())))
         k = int(round(float(hkl_lookup_view_state.selected_k_var.get().strip())))
@@ -6292,16 +6253,15 @@ def _select_peak_from_hkl_controls():
         progress_label_positions.config(text="Enter numeric H, K, L values.")
         return
 
-    selected_hkl_target = (h, k, l)
+    peak_selection_state.selected_hkl_target = (h, k, l)
     _sync_peak_selection_state()
     _select_peak_by_hkl(h, k, l, sync_hkl_vars=True, silent_if_missing=False)
 
 
 def _clear_selected_peak():
-    global selected_hkl_target, selected_peak_record
-    selected_hkl_target = None
+    peak_selection_state.selected_hkl_target = None
     _sync_peak_selection_state()
-    selected_peak_record = None
+    simulation_runtime_state.selected_peak_record = None
     selected_peak_marker.set_visible(False)
     progress_label_positions.config(text="Peak selection cleared.")
     canvas.draw_idle()
@@ -6310,28 +6270,28 @@ def _clear_selected_peak():
 def _open_selected_peak_intersection_figure():
     """Open a Bragg/Ewald intersection analysis plot for the selected peak."""
 
-    if selected_peak_record is None:
+    if simulation_runtime_state.selected_peak_record is None:
         progress_label_positions.config(
             text="Select a Bragg peak first (arm Pick HKL on Image or use HKL controls)."
         )
         return
 
     try:
-        h, k, l = tuple(int(v) for v in selected_peak_record["hkl"])
+        h, k, l = tuple(int(v) for v in simulation_runtime_state.selected_peak_record["hkl"])
         native_col = float(
-            selected_peak_record.get(
+            simulation_runtime_state.selected_peak_record.get(
                 "selected_native_col",
-                selected_peak_record.get("native_col"),
+                simulation_runtime_state.selected_peak_record.get("native_col"),
             )
         )
         native_row = float(
-            selected_peak_record.get(
+            simulation_runtime_state.selected_peak_record.get(
                 "selected_native_row",
-                selected_peak_record.get("native_row"),
+                simulation_runtime_state.selected_peak_record.get("native_row"),
             )
         )
-        lattice_a = float(selected_peak_record["av"])
-        lattice_c = float(selected_peak_record["cv"])
+        lattice_a = float(simulation_runtime_state.selected_peak_record["av"])
+        lattice_c = float(simulation_runtime_state.selected_peak_record["cv"])
 
         geometry = IntersectionGeometry(
             image_size=int(image_size),
@@ -6351,11 +6311,11 @@ def _open_selected_peak_intersection_figure():
             unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
         )
         beam = IntersectionBeamSamples(
-            beam_x_array=np.asarray(profile_cache["beam_x_array"], dtype=np.float64),
-            beam_y_array=np.asarray(profile_cache["beam_y_array"], dtype=np.float64),
-            theta_array=np.asarray(profile_cache["theta_array"], dtype=np.float64),
-            phi_array=np.asarray(profile_cache["phi_array"], dtype=np.float64),
-            wavelength_array=np.asarray(profile_cache["wavelength_array"], dtype=np.float64),
+            beam_x_array=np.asarray(simulation_runtime_state.profile_cache["beam_x_array"], dtype=np.float64),
+            beam_y_array=np.asarray(simulation_runtime_state.profile_cache["beam_y_array"], dtype=np.float64),
+            theta_array=np.asarray(simulation_runtime_state.profile_cache["theta_array"], dtype=np.float64),
+            phi_array=np.asarray(simulation_runtime_state.profile_cache["phi_array"], dtype=np.float64),
+            wavelength_array=np.asarray(simulation_runtime_state.profile_cache["wavelength_array"], dtype=np.float64),
         )
         mosaic = IntersectionMosaicParams(
             sigma_mosaic_deg=float(sigma_mosaic_var.get()),
@@ -6389,7 +6349,7 @@ def _open_selected_peak_intersection_figure():
         progress_label_positions.config(
             text=(
                 f"Opened Bragg/Ewald analysis for HKL=({h} {k} {l}) "
-                f"from source={selected_peak_record.get('source_label', 'unknown')}."
+                f"from source={simulation_runtime_state.selected_peak_record.get('source_label', 'unknown')}."
             )
         )
     except Exception as exc:
@@ -6451,8 +6411,8 @@ def _build_bragg_qr_entries() -> list[dict[str, object]]:
     secondary_hk = _hk_pairs_grouped_by_m("secondary")
 
     primary_m_values = set(primary_hk.keys())
-    if isinstance(SIM_PRIMARY_QR_ALL, dict):
-        for m_raw in SIM_PRIMARY_QR_ALL.keys():
+    if isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
+        for m_raw in simulation_runtime_state.sim_primary_qr_all.keys():
             try:
                 primary_m_values.add(int(m_raw))
             except (TypeError, ValueError):
@@ -6548,8 +6508,8 @@ def _l_value_map_for_qr(source_label: str, m_idx: int) -> dict[int, float]:
                 if lk not in out:
                     out[lk] = _l_key_to_value(lk)
 
-    if source_norm == "primary" and isinstance(SIM_PRIMARY_QR_ALL, dict):
-        for m_raw, data in SIM_PRIMARY_QR_ALL.items():
+    if source_norm == "primary" and isinstance(simulation_runtime_state.sim_primary_qr_all, dict):
+        for m_raw, data in simulation_runtime_state.sim_primary_qr_all.items():
             try:
                 mm = int(m_raw)
             except (TypeError, ValueError):
@@ -6612,7 +6572,7 @@ def _refresh_bragg_qr_l_toggle_listbox() -> None:
     group_disabled = (
         _normalize_bragg_qr_source_label(source_label),
         int(m_idx),
-    ) in disabled_bragg_qr_groups
+    ) in bragg_qr_manager_state.disabled_groups
 
     enabled_count = 0
     lines: list[str] = []
@@ -6622,7 +6582,7 @@ def _refresh_bragg_qr_l_toggle_listbox() -> None:
             _normalize_bragg_qr_source_label(source_label),
             int(m_idx),
             int(l_key),
-        ) in disabled_bragg_qr_l_values
+        ) in bragg_qr_manager_state.disabled_l_values
         is_enabled = (not group_disabled) and (not l_disabled)
         if is_enabled:
             enabled_count += 1
@@ -6686,7 +6646,7 @@ def _refresh_bragg_qr_toggle_window() -> None:
 
     for entry in entries:
         key = entry["key"]
-        is_enabled = key not in disabled_bragg_qr_groups
+        is_enabled = key not in bragg_qr_manager_state.disabled_groups
         if is_enabled:
             enabled_count += 1
         state_text = "ON " if is_enabled else "OFF"
@@ -6736,7 +6696,6 @@ def _set_bragg_qr_groups_enabled(
     group_keys: list[tuple[str, int]],
     enabled: bool,
 ) -> None:
-    global disabled_bragg_qr_groups
 
     normalized_keys: list[tuple[str, int]] = []
     for source_label, m_idx in group_keys:
@@ -6750,7 +6709,7 @@ def _set_bragg_qr_groups_enabled(
         return
 
     changed_count = gui_controllers.set_bragg_qr_groups_enabled(
-        disabled_bragg_qr_groups,
+        bragg_qr_manager_state.disabled_groups,
         normalized_keys,
         enabled=enabled,
     )
@@ -6772,7 +6731,6 @@ def _set_bragg_qr_l_values_enabled(
     l_keys: list[int],
     enabled: bool,
 ) -> None:
-    global disabled_bragg_qr_l_values
 
     if group_key is None:
         gui_views.set_bragg_qr_manager_status_text(
@@ -6791,7 +6749,7 @@ def _set_bragg_qr_l_values_enabled(
     m_idx = int(group_key[1])
 
     changed_count = gui_controllers.set_bragg_qr_l_values_enabled(
-        disabled_bragg_qr_l_values,
+        bragg_qr_manager_state.disabled_l_values,
         (source_label, m_idx),
         l_keys,
         enabled=enabled,
@@ -6836,14 +6794,13 @@ def _enable_selected_bragg_qr_groups() -> None:
 
 
 def _toggle_selected_bragg_qr_groups(_event=None) -> None:
-    global disabled_bragg_qr_groups
 
     keys = _selected_bragg_qr_window_keys()
     if not keys:
         return
 
     changed_count = gui_controllers.toggle_bragg_qr_groups(
-        disabled_bragg_qr_groups,
+        bragg_qr_manager_state.disabled_groups,
         [
             (_normalize_bragg_qr_source_label(source_label), int(m_idx))
             for source_label, m_idx in keys
@@ -6877,7 +6834,7 @@ def _toggle_selected_bragg_qr_l_values(_event=None) -> None:
     source_label = _normalize_bragg_qr_source_label(group_key[0])
     m_idx = int(group_key[1])
     changed_count = gui_controllers.toggle_bragg_qr_l_values(
-        disabled_bragg_qr_l_values,
+        bragg_qr_manager_state.disabled_l_values,
         (source_label, m_idx),
         l_keys,
         invalid_key=BRAGG_QR_L_INVALID_KEY,
@@ -6895,13 +6852,12 @@ def _disable_all_bragg_qr_groups() -> None:
 
 
 def _enable_all_bragg_qr_groups() -> None:
-    global disabled_bragg_qr_groups
 
-    if not disabled_bragg_qr_groups:
+    if not bragg_qr_manager_state.disabled_groups:
         _refresh_bragg_qr_toggle_window()
         return
 
-    disabled_bragg_qr_groups.clear()
+    bragg_qr_manager_state.disabled_groups.clear()
     _apply_bragg_qr_filters(trigger_update=True)
     if "progress_label_positions" in globals():
         progress_label_positions.config(text="Enabled all Bragg Qr groups.")
@@ -6928,7 +6884,6 @@ def _disable_all_bragg_qr_l_values_for_selected_qr() -> None:
 
 
 def _enable_all_bragg_qr_l_values_for_selected_qr() -> None:
-    global disabled_bragg_qr_l_values
 
     group_key = _selected_primary_bragg_qr_window_key()
     if group_key is None:
@@ -6941,7 +6896,7 @@ def _enable_all_bragg_qr_l_values_for_selected_qr() -> None:
     source_label = _normalize_bragg_qr_source_label(group_key[0])
     m_idx = int(group_key[1])
     changed = gui_controllers.clear_bragg_qr_l_values_for_group(
-        disabled_bragg_qr_l_values,
+        bragg_qr_manager_state.disabled_l_values,
         (source_label, m_idx),
     )
     if not changed:
@@ -7086,12 +7041,12 @@ def _simulate_ideal_hkl_native_center(
         return strict_center
 
     # Fallback: force the least-divergent sampled beam state from the profile.
-    beam_x = np.asarray(profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
-    beam_y = np.asarray(profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
-    theta_arr = np.asarray(profile_cache.get("theta_array", []), dtype=np.float64).ravel()
-    phi_arr = np.asarray(profile_cache.get("phi_array", []), dtype=np.float64).ravel()
+    beam_x = np.asarray(simulation_runtime_state.profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
+    beam_y = np.asarray(simulation_runtime_state.profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
+    theta_arr = np.asarray(simulation_runtime_state.profile_cache.get("theta_array", []), dtype=np.float64).ravel()
+    phi_arr = np.asarray(simulation_runtime_state.profile_cache.get("phi_array", []), dtype=np.float64).ravel()
     wavelength_arr = np.asarray(
-        profile_cache.get("wavelength_array", []), dtype=np.float64
+        simulation_runtime_state.profile_cache.get("wavelength_array", []), dtype=np.float64
     ).ravel()
 
     n_samp = beam_x.size
@@ -7122,12 +7077,11 @@ def _simulate_ideal_hkl_native_center(
 
 
 def on_canvas_click(event):
-    global _suppress_drag_press_once
 
-    if event.button == 3 and hkl_pick_armed:
+    if event.button == 3 and peak_selection_state.hkl_pick_armed:
         _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
         return
-    if event.button == 3 and geometry_manual_pick_armed:
+    if event.button == 3 and geometry_runtime_state.manual_pick_armed:
         _set_geometry_manual_pick_mode(False, message="Manual geometry picking canceled.")
         return
     if event.button == 3 and geometry_preview_state.exclude_armed:
@@ -7139,7 +7093,7 @@ def on_canvas_click(event):
 
     if event.button != 1:
         return
-    if geometry_manual_pick_armed:
+    if geometry_runtime_state.manual_pick_armed:
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
         if _geometry_manual_pick_session_active():
@@ -7159,12 +7113,12 @@ def on_canvas_click(event):
             float(event.ydata),
         )
         return
-    if not hkl_pick_armed:
+    if not peak_selection_state.hkl_pick_armed:
         return
     if event.inaxes is not ax or event.xdata is None or event.ydata is None:
         return                               # click was outside the image
     _ensure_peak_overlay_data(force=False)
-    if not peak_positions:                   # no simulation yet
+    if not simulation_runtime_state.peak_positions:                   # no simulation yet
         schedule_update()
         progress_label_positions.config(
             text="Preparing simulated peak map... click again after update."
@@ -7177,11 +7131,11 @@ def on_canvas_click(event):
     # Find nearest stored peak
     best_i, best_d2 = -1, float("inf")
     best_i_val = float("-inf")
-    for i, (px, py) in enumerate(peak_positions):
+    for i, (px, py) in enumerate(simulation_runtime_state.peak_positions):
         if px < 0:              # invalid entries kept as (-1,-1)
             continue
         d2 = (px - click_col) ** 2 + (py - click_row) ** 2
-        val = peak_intensities[i]
+        val = simulation_runtime_state.peak_intensities[i]
         score_val = float(val) if np.isfinite(val) else float("-inf")
         if d2 < best_d2 - 1e-9 or (abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val):
             best_i, best_d2 = i, d2
@@ -7205,8 +7159,8 @@ def on_canvas_click(event):
     selected_display = None
     selected_native = None
 
-    if best_i < len(peak_records) and isinstance(peak_records[best_i], dict):
-        peak_record = peak_records[best_i]
+    if best_i < len(simulation_runtime_state.peak_records) and isinstance(simulation_runtime_state.peak_records[best_i], dict):
+        peak_record = simulation_runtime_state.peak_records[best_i]
         try:
             raw_hkl = peak_record.get("hkl_raw")
             if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
@@ -7214,7 +7168,7 @@ def on_canvas_click(event):
                 rec_k = float(raw_hkl[1])
                 rec_l = float(raw_hkl[2])
             else:
-                rec_h, rec_k, rec_l = tuple(float(v) for v in peak_millers[best_i])
+                rec_h, rec_k, rec_l = tuple(float(v) for v in simulation_runtime_state.peak_millers[best_i])
             rec_av = float(peak_record.get("av", float(a_var.get())))
             rec_cv = float(peak_record.get("cv", float(c_var.get())))
             ideal_native = _simulate_ideal_hkl_native_center(
@@ -7226,7 +7180,7 @@ def on_canvas_click(event):
                     ideal_native[1],
                     sim_shape,
                 )
-                base_display = peak_positions[best_i]
+                base_display = simulation_runtime_state.peak_positions[best_i]
                 snap_delta = math.hypot(
                     float(ideal_display[0]) - float(base_display[0]),
                     float(ideal_display[1]) - float(base_display[1]),
@@ -7239,10 +7193,10 @@ def on_canvas_click(event):
             selected_display = None
             selected_native = None
 
-    if selected_native is None and best_i < len(peak_records) and isinstance(peak_records[best_i], dict):
+    if selected_native is None and best_i < len(simulation_runtime_state.peak_records) and isinstance(simulation_runtime_state.peak_records[best_i], dict):
         selected_native = (
-            float(peak_records[best_i].get("native_col", clicked_native_col)),
-            float(peak_records[best_i].get("native_row", clicked_native_row)),
+            float(simulation_runtime_state.peak_records[best_i].get("native_col", clicked_native_col)),
+            float(simulation_runtime_state.peak_records[best_i].get("native_row", clicked_native_row)),
         )
 
     prefix = f"Nearest peak (Δ={best_d2**0.5:.1f}px)"
@@ -7264,7 +7218,7 @@ def on_canvas_click(event):
     )
     if picked:
         _set_hkl_pick_mode(False)
-        _suppress_drag_press_once = True
+        peak_selection_state.suppress_drag_press_once = True
         _sync_peak_selection_state()
 
 
@@ -7400,10 +7354,9 @@ def _set_range_from_drag(x0, y0, x1, y1):
 
 
 def on_canvas_press(event):
-    global _suppress_drag_press_once
 
-    if _suppress_drag_press_once:
-        _suppress_drag_press_once = False
+    if peak_selection_state.suppress_drag_press_once:
+        peak_selection_state.suppress_drag_press_once = False
         _sync_peak_selection_state()
         return
 
@@ -7411,7 +7364,7 @@ def on_canvas_press(event):
         return
     if event.inaxes is not ax or event.xdata is None or event.ydata is None:
         return
-    if geometry_manual_pick_armed and _geometry_manual_pick_session_active():
+    if geometry_runtime_state.manual_pick_armed and _geometry_manual_pick_session_active():
         x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
         anchor_fraction_x = 0.5
         anchor_fraction_y = 0.5
@@ -7449,7 +7402,7 @@ def on_canvas_press(event):
         )
         _update_geometry_manual_pick_preview(x0, y0, force=True)
         return
-    if unscaled_image_global is None:
+    if simulation_runtime_state.unscaled_image is None:
         progress_label_positions.config(text="Run a simulation first.")
         return
 
@@ -7468,10 +7421,10 @@ def on_canvas_press(event):
         _update_drag_rect(x0, y0, x0, y0)
         return
 
-    if hkl_pick_armed:
+    if peak_selection_state.hkl_pick_armed:
         return
 
-    ai = _ai_cache.get("ai")
+    ai = simulation_runtime_state.ai_cache.get("ai")
     if ai is None:
         return
 
@@ -7496,7 +7449,7 @@ def on_canvas_press(event):
 
 def on_canvas_motion(event):
     if (
-        geometry_manual_pick_armed
+        geometry_runtime_state.manual_pick_armed
         and _geometry_manual_pick_session_active()
         and bool(geometry_manual_state.pick_session.get("zoom_active", False))
     ):
@@ -7534,7 +7487,7 @@ def on_canvas_motion(event):
     if mode != "raw" or analysis_view_controls_view_state.show_caked_2d_var.get():
         return
 
-    ai = _ai_cache.get("ai")
+    ai = simulation_runtime_state.ai_cache.get("ai")
     if ai is None:
         return
 
@@ -7555,7 +7508,7 @@ def on_canvas_release(event):
     if event.button != 1:
         return
     if (
-        geometry_manual_pick_armed
+        geometry_runtime_state.manual_pick_armed
         and _geometry_manual_pick_session_active()
         and bool(geometry_manual_state.pick_session.get("zoom_active", False))
     ):
@@ -7593,7 +7546,7 @@ def on_canvas_release(event):
         return
 
     if mode == "raw":
-        ai = _ai_cache.get("ai")
+        ai = simulation_runtime_state.ai_cache.get("ai")
         if (
             not analysis_view_controls_view_state.show_caked_2d_var.get()
             and ai is not None
@@ -7617,7 +7570,7 @@ def on_canvas_release(event):
         if None not in (tth0, phi0, tth1, phi1):
             _set_range_from_drag(tth0, phi0, tth1, phi1)
         else:
-            update_integration_region_visuals(ai, last_res2_sim)
+            update_integration_region_visuals(ai, simulation_runtime_state.last_res2_sim)
             canvas.draw_idle()
 
     _drag_select_state["mode"] = None
@@ -7696,11 +7649,11 @@ def _apply_simulation_limits():
     apply_scale_factor_to_existing_results()
 
 
-background_min_candidate = _finite_percentile(current_background_display, 1, 0.0)
+background_min_candidate = _finite_percentile(background_runtime_state.current_background_display, 1, 0.0)
 background_vmin_default = 0.0
 _, background_vmax_default = _ensure_valid_range(
     background_vmin_default,
-    _finite_percentile(current_background_display, 99, 1.0),
+    _finite_percentile(background_runtime_state.current_background_display, 99, 1.0),
 )
 
 background_slider_min = min(background_min_candidate, 0.0)
@@ -7936,17 +7889,16 @@ def _suggest_scale_factor(sim_image, bg_image):
 
 
 def _mark_chi_square_dirty():
-    global chi_square_update_token
-    chi_square_update_token = int(globals().get("chi_square_update_token", 0)) + 1
+    simulation_runtime_state.chi_square_update_token = int(globals().get("chi_square_update_token", 0)) + 1
 
 
 def _auto_match_scale_factor_to_radial_peak():
-    sim_curve = last_1d_integration_data.get("intensities_2theta_sim")
-    bg_curve = last_1d_integration_data.get("intensities_2theta_bg")
+    sim_curve = simulation_runtime_state.last_1d_integration_data.get("intensities_2theta_sim")
+    bg_curve = simulation_runtime_state.last_1d_integration_data.get("intensities_2theta_bg")
 
     if sim_curve is None or bg_curve is None:
-        ai = _ai_cache.get("ai")
-        sim_img = last_1d_integration_data.get("simulated_2d_image")
+        ai = simulation_runtime_state.ai_cache.get("ai")
+        sim_img = simulation_runtime_state.last_1d_integration_data.get("simulated_2d_image")
         bg_img = _get_current_background_backend()
         if ai is not None and sim_img is not None and bg_img is not None:
             try:
@@ -7970,8 +7922,8 @@ def _auto_match_scale_factor_to_radial_peak():
                 )
                 sim_curve = i2t_sim
                 bg_curve = i2t_bg
-                last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
-                last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
+                simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
+                simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
             except Exception:
                 sim_curve = None
                 bg_curve = None
@@ -8053,7 +8005,7 @@ def _update_chi_square_display(force=False):
         native_background = _get_current_background_backend()
         text = "Chi-Squared: N/A"
         if (
-            background_visible
+            background_runtime_state.visible
             and native_background is not None
             and global_image_buffer.size
         ):
@@ -8094,16 +8046,16 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             "last_text": "Chi-Squared: N/A",
         },
     )
-    if unscaled_image_global is None:
+    if simulation_runtime_state.unscaled_image is None:
         background_min_var = display_controls_view_state.background_min_var
         background_max_var = display_controls_view_state.background_max_var
         chi_square_sig = (
             None,
-            bool(background_visible),
-            int(current_background_index),
-            int(background_backend_rotation_k) % 4,
-            bool(background_backend_flip_x),
-            bool(background_backend_flip_y),
+            bool(background_runtime_state.visible),
+            int(background_runtime_state.current_background_index),
+            int(background_runtime_state.backend_rotation_k) % 4,
+            bool(background_runtime_state.backend_flip_x),
+            bool(background_runtime_state.backend_flip_y),
         )
         if chi_state.get("buffer_sig") != chi_square_sig:
             chi_state["buffer_sig"] = chi_square_sig
@@ -8113,8 +8065,8 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             background_max_var.get(),
         )
         if not analysis_view_controls_view_state.show_caked_2d_var.get():
-            if background_visible and current_background_display is not None:
-                background_display.set_data(current_background_display)
+            if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
+                background_display.set_data(background_runtime_state.current_background_display)
                 background_display.set_visible(True)
             else:
                 background_display.set_visible(False)
@@ -8124,19 +8076,19 @@ def apply_scale_factor_to_existing_results(update_limits=False):
 
     scale = _get_scale_factor_value(default=1.0)
     if abs(float(scale) - 1.0) <= 1e-12:
-        np.copyto(global_image_buffer, unscaled_image_global, casting="unsafe")
+        np.copyto(global_image_buffer, simulation_runtime_state.unscaled_image, casting="unsafe")
     else:
-        np.multiply(unscaled_image_global, float(scale), out=global_image_buffer)
+        np.multiply(simulation_runtime_state.unscaled_image, float(scale), out=global_image_buffer)
     scaled_image = global_image_buffer
     base_unscaled_sig = globals().get("last_unscaled_image_signature")
     chi_square_sig = (
         base_unscaled_sig,
         round(float(scale), 9),
-        bool(background_visible),
-        int(current_background_index),
-        int(background_backend_rotation_k) % 4,
-        bool(background_backend_flip_x),
-        bool(background_backend_flip_y),
+        bool(background_runtime_state.visible),
+        int(background_runtime_state.current_background_index),
+        int(background_runtime_state.backend_rotation_k) % 4,
+        bool(background_runtime_state.backend_flip_x),
+        bool(background_runtime_state.backend_flip_y),
     )
     if chi_state.get("buffer_sig") != chi_square_sig:
         chi_state["buffer_sig"] = chi_square_sig
@@ -8158,20 +8110,20 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             display_controls_view_state.simulation_max_var.get(),
         )
         colorbar_main.update_normal(image_display)
-    elif last_caked_image_unscaled is not None and last_caked_extent is not None:
+    elif simulation_runtime_state.last_caked_image_unscaled is not None and simulation_runtime_state.last_caked_extent is not None:
         _set_image_origin(image_display, 'lower')
-        scaled_caked = last_caked_image_unscaled * scale
+        scaled_caked = simulation_runtime_state.last_caked_image_unscaled * scale
         if not display_controls_state.simulation_limits_user_override:
             _update_simulation_sliders_from_image(scaled_caked, reset_override=True)
         image_display.set_data(scaled_caked)
-        image_display.set_extent(last_caked_extent)
+        image_display.set_extent(simulation_runtime_state.last_caked_extent)
 
     if analysis_view_controls_view_state.show_caked_2d_var.get():
         caked_min = float(display_controls_view_state.simulation_min_var.get())
         caked_max = float(display_controls_view_state.simulation_max_var.get())
         caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
         image_display.set_clim(caked_min, caked_max)
-        if not caked_limits_user_override:
+        if not simulation_runtime_state.caked_limits_user_override:
             vmin_caked_var.set(caked_min)
             vmax_caked_var.set(caked_max)
 
@@ -8181,20 +8133,20 @@ def apply_scale_factor_to_existing_results(update_limits=False):
         and "line_1d_az" in globals()
     ):
         if (
-            last_1d_integration_data["radials_sim"] is not None
-            and last_1d_integration_data["intensities_2theta_sim"] is not None
+            simulation_runtime_state.last_1d_integration_data["radials_sim"] is not None
+            and simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] is not None
         ):
             line_1d_rad.set_data(
-                last_1d_integration_data["radials_sim"],
-                last_1d_integration_data["intensities_2theta_sim"] * scale,
+                simulation_runtime_state.last_1d_integration_data["radials_sim"],
+                simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] * scale,
             )
         if (
-            last_1d_integration_data["azimuths_sim"] is not None
-            and last_1d_integration_data["intensities_azimuth_sim"] is not None
+            simulation_runtime_state.last_1d_integration_data["azimuths_sim"] is not None
+            and simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] is not None
         ):
             line_1d_az.set_data(
-                last_1d_integration_data["azimuths_sim"],
-                last_1d_integration_data["intensities_azimuth_sim"] * scale,
+                simulation_runtime_state.last_1d_integration_data["azimuths_sim"],
+                simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] * scale,
             )
         if "canvas_1d" in globals():
             canvas_1d.draw_idle()
@@ -8205,19 +8157,19 @@ def apply_scale_factor_to_existing_results(update_limits=False):
     )
 
     if not analysis_view_controls_view_state.show_caked_2d_var.get():
-        if background_visible and current_background_display is not None:
-            background_display.set_data(current_background_display)
+        if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
+            background_display.set_data(background_runtime_state.current_background_display)
             background_display.set_visible(True)
         else:
             background_display.set_visible(False)
 
     canvas.draw_idle()
     _update_chi_square_display()
-_update_background_slider_defaults(current_background_display, reset_override=True)
+_update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
 
 
 # Track caked intensity limits without exposing separate sliders in the UI.
-caked_limits_user_override = False
+simulation_runtime_state.caked_limits_user_override = False
 
 vmin_caked_var = tk.DoubleVar(value=0.0)
 vmax_caked_var = tk.DoubleVar(value=2000.0)
@@ -8468,7 +8420,7 @@ def _get_detector_angular_maps(ai):
     if detector_shape[0] <= 0 or detector_shape[1] <= 0:
         return None, None
 
-    if _ai_cache.get("detector_shape") != detector_shape:
+    if simulation_runtime_state.ai_cache.get("detector_shape") != detector_shape:
         try:
             two_theta = ai.twoThetaArray(shape=detector_shape, unit="2th_deg")
         except TypeError:
@@ -8479,12 +8431,12 @@ def _get_detector_angular_maps(ai):
         except TypeError:
             phi_vals = np.rad2deg(ai.chiArray(shape=detector_shape))
 
-        _ai_cache["detector_shape"] = detector_shape
-        _ai_cache["detector_two_theta"] = two_theta
-        _ai_cache["detector_phi"] = phi_vals
+        simulation_runtime_state.ai_cache["detector_shape"] = detector_shape
+        simulation_runtime_state.ai_cache["detector_two_theta"] = two_theta
+        simulation_runtime_state.ai_cache["detector_phi"] = phi_vals
 
-    two_theta = _ai_cache.get("detector_two_theta")
-    phi_vals = _ai_cache.get("detector_phi")
+    two_theta = simulation_runtime_state.ai_cache.get("detector_two_theta")
+    phi_vals = simulation_runtime_state.ai_cache.get("detector_phi")
     if two_theta is None or phi_vals is None:
         return None, None
 
@@ -8492,7 +8444,7 @@ def _get_detector_angular_maps(ai):
 
 
 def update_integration_region_visuals(ai, sim_res2):
-    show_region = analysis_view_controls_view_state.show_1d_var.get() and unscaled_image_global is not None
+    show_region = analysis_view_controls_view_state.show_1d_var.get() and simulation_runtime_state.unscaled_image is not None
 
     if not show_region:
         integration_region_overlay.set_visible(False)
@@ -8539,8 +8491,8 @@ def update_integration_region_visuals(ai, sim_res2):
     integration_region_overlay.set_visible(True)
 
 
-profile_cache = {}
-last_1d_integration_data = {
+simulation_runtime_state.profile_cache = {}
+simulation_runtime_state.last_1d_integration_data = {
     "radials_sim": None,
     "intensities_2theta_sim": None,
     "azimuths_sim": None,
@@ -8552,15 +8504,15 @@ last_1d_integration_data = {
     "simulated_2d_image": None
 }
 
-last_caked_image_unscaled = None
-last_caked_extent = None
-last_caked_background_image_unscaled = None
-last_caked_radial_values = None
-last_caked_azimuth_values = None
+simulation_runtime_state.last_caked_image_unscaled = None
+simulation_runtime_state.last_caked_extent = None
+simulation_runtime_state.last_caked_background_image_unscaled = None
+simulation_runtime_state.last_caked_radial_values = None
+simulation_runtime_state.last_caked_azimuth_values = None
 
-last_res2_background = None
-last_res2_sim = None
-_ai_cache = {}
+simulation_runtime_state.last_res2_background = None
+simulation_runtime_state.last_res2_sim = None
+simulation_runtime_state.ai_cache = {}
 
 
 def _clear_1d_plot_cache_and_lines():
@@ -8569,14 +8521,14 @@ def _clear_1d_plot_cache_and_lines():
     line_1d_rad_bg.set_data([], [])
     line_1d_az_bg.set_data([], [])
     canvas_1d.draw_idle()
-    last_1d_integration_data["radials_sim"] = None
-    last_1d_integration_data["intensities_2theta_sim"] = None
-    last_1d_integration_data["azimuths_sim"] = None
-    last_1d_integration_data["intensities_azimuth_sim"] = None
-    last_1d_integration_data["radials_bg"] = None
-    last_1d_integration_data["intensities_2theta_bg"] = None
-    last_1d_integration_data["azimuths_bg"] = None
-    last_1d_integration_data["intensities_azimuth_bg"] = None
+    simulation_runtime_state.last_1d_integration_data["radials_sim"] = None
+    simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = None
+    simulation_runtime_state.last_1d_integration_data["azimuths_sim"] = None
+    simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] = None
+    simulation_runtime_state.last_1d_integration_data["radials_bg"] = None
+    simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = None
+    simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = None
+    simulation_runtime_state.last_1d_integration_data["intensities_azimuth_bg"] = None
 
 
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
@@ -8587,10 +8539,10 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
         phi_min_var.get(),
         phi_max_var.get(),
     )
-    last_1d_integration_data["radials_sim"] = rad_sim
-    last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
-    last_1d_integration_data["azimuths_sim"] = az_sim
-    last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
+    simulation_runtime_state.last_1d_integration_data["radials_sim"] = rad_sim
+    simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = i2t_sim
+    simulation_runtime_state.last_1d_integration_data["azimuths_sim"] = az_sim
+    simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] = i_phi_sim
 
     scale = _get_scale_factor_value(default=1.0)
     line_1d_rad.set_data(rad_sim, i2t_sim * scale)
@@ -8604,19 +8556,19 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
             phi_min_var.get(),
             phi_max_var.get(),
         )
-        last_1d_integration_data["radials_bg"] = rad_bg
-        last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
-        last_1d_integration_data["azimuths_bg"] = az_bg
-        last_1d_integration_data["intensities_azimuth_bg"] = i_phi_bg
+        simulation_runtime_state.last_1d_integration_data["radials_bg"] = rad_bg
+        simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = i2t_bg
+        simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = az_bg
+        simulation_runtime_state.last_1d_integration_data["intensities_azimuth_bg"] = i_phi_bg
         line_1d_rad_bg.set_data(rad_bg, i2t_bg)
         line_1d_az_bg.set_data(az_bg, i_phi_bg)
     else:
         line_1d_rad_bg.set_data([], [])
         line_1d_az_bg.set_data([], [])
-        last_1d_integration_data["radials_bg"] = None
-        last_1d_integration_data["intensities_2theta_bg"] = None
-        last_1d_integration_data["azimuths_bg"] = None
-        last_1d_integration_data["intensities_azimuth_bg"] = None
+        simulation_runtime_state.last_1d_integration_data["radials_bg"] = None
+        simulation_runtime_state.last_1d_integration_data["intensities_2theta_bg"] = None
+        simulation_runtime_state.last_1d_integration_data["azimuths_bg"] = None
+        simulation_runtime_state.last_1d_integration_data["intensities_azimuth_bg"] = None
 
     ax_1d_radial.set_yscale('log' if analysis_view_controls_view_state.log_radial_var.get() else 'linear')
     ax_1d_azim.set_yscale('log' if analysis_view_controls_view_state.log_azimuth_var.get() else 'linear')
@@ -8628,35 +8580,34 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
 
 
 def _refresh_integration_from_cached_results():
-    global last_res2_sim, last_res2_background
 
-    ai = _ai_cache.get("ai")
+    ai = simulation_runtime_state.ai_cache.get("ai")
     if not analysis_view_controls_view_state.show_1d_var.get():
         _clear_1d_plot_cache_and_lines()
-        update_integration_region_visuals(ai, last_res2_sim)
+        update_integration_region_visuals(ai, simulation_runtime_state.last_res2_sim)
         canvas.draw_idle()
         return True
 
-    if unscaled_image_global is None:
+    if simulation_runtime_state.unscaled_image is None:
         return False
 
     if ai is None:
         return False
 
-    if last_res2_sim is None:
-        last_res2_sim = caking(unscaled_image_global, ai)
+    if simulation_runtime_state.last_res2_sim is None:
+        simulation_runtime_state.last_res2_sim = caking(simulation_runtime_state.unscaled_image, ai)
 
     bg_res2 = None
     native_background = _get_current_background_backend()
-    if background_visible and native_background is not None:
-        if last_res2_background is None:
-            last_res2_background = caking(native_background, ai)
-        bg_res2 = last_res2_background
+    if background_runtime_state.visible and native_background is not None:
+        if simulation_runtime_state.last_res2_background is None:
+            simulation_runtime_state.last_res2_background = caking(native_background, ai)
+        bg_res2 = simulation_runtime_state.last_res2_background
     else:
-        last_res2_background = None
+        simulation_runtime_state.last_res2_background = None
 
-    _update_1d_plots_from_caked(last_res2_sim, bg_res2)
-    update_integration_region_visuals(ai, last_res2_sim)
+    _update_1d_plots_from_caked(simulation_runtime_state.last_res2_sim, bg_res2)
+    update_integration_region_visuals(ai, simulation_runtime_state.last_res2_sim)
     canvas.draw_idle()
     return True
 
@@ -8757,39 +8708,38 @@ def update_mosaic_cache():
     simulation updates so changing unrelated sliders does not re-randomize the
     detector pattern.
     """
-    global profile_cache
     active_bandwidth = _current_bandwidth_fraction()
     sampling_signature = (
-        int(num_samples),
+        int(simulation_runtime_state.num_samples),
         float(divergence_sigma),
         float(bw_sigma),
         float(lambda_),
         float(active_bandwidth),
     )
 
-    beam_x_cached = np.asarray(profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
-    beam_y_cached = np.asarray(profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
-    theta_cached = np.asarray(profile_cache.get("theta_array", []), dtype=np.float64).ravel()
-    phi_cached = np.asarray(profile_cache.get("phi_array", []), dtype=np.float64).ravel()
-    wavelength_cached = np.asarray(profile_cache.get("wavelength_array", []), dtype=np.float64).ravel()
+    beam_x_cached = np.asarray(simulation_runtime_state.profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
+    beam_y_cached = np.asarray(simulation_runtime_state.profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
+    theta_cached = np.asarray(simulation_runtime_state.profile_cache.get("theta_array", []), dtype=np.float64).ravel()
+    phi_cached = np.asarray(simulation_runtime_state.profile_cache.get("phi_array", []), dtype=np.float64).ravel()
+    wavelength_cached = np.asarray(simulation_runtime_state.profile_cache.get("wavelength_array", []), dtype=np.float64).ravel()
 
     has_cached_samples = (
         beam_x_cached.size > 0
-        and beam_x_cached.size == int(num_samples)
+        and beam_x_cached.size == int(simulation_runtime_state.num_samples)
         and beam_y_cached.size == beam_x_cached.size
         and theta_cached.size == beam_x_cached.size
         and phi_cached.size == beam_x_cached.size
         and wavelength_cached.size == beam_x_cached.size
     )
 
-    cached_signature = profile_cache.get("_sampling_signature")
+    cached_signature = simulation_runtime_state.profile_cache.get("_sampling_signature")
     should_resample = not has_cached_samples
     if has_cached_samples:
         if cached_signature is None:
             # Existing externally-provided samples: keep them and adopt the
             # current signature so future explicit sampling-input changes can
             # trigger a re-sample.
-            profile_cache["_sampling_signature"] = sampling_signature
+            simulation_runtime_state.profile_cache["_sampling_signature"] = sampling_signature
         else:
             should_resample = tuple(cached_signature) != sampling_signature
 
@@ -8799,13 +8749,13 @@ def update_mosaic_cache():
          theta_array,
          phi_array,
          wavelength_array) = generate_random_profiles(
-             num_samples=num_samples,
+             num_samples=simulation_runtime_state.num_samples,
              divergence_sigma=divergence_sigma,
              bw_sigma=bw_sigma,
              lambda0=lambda_,
              bandwidth=active_bandwidth
          )
-        profile_cache = {
+        simulation_runtime_state.profile_cache = {
             "beam_x_array": beam_x_array,
             "beam_y_array": beam_y_array,
             "theta_array": theta_array,
@@ -8814,7 +8764,7 @@ def update_mosaic_cache():
             "_sampling_signature": sampling_signature,
         }
 
-    profile_cache.update(
+    simulation_runtime_state.profile_cache.update(
         {
             "sigma_mosaic_deg": sigma_mosaic_var.get(),
             "gamma_mosaic_deg": gamma_mosaic_var.get(),
@@ -8911,26 +8861,24 @@ UPDATE_DEBOUNCE_MS = 120
 RANGE_UPDATE_DEBOUNCE_MS = 120
 CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
 
-update_pending = None
-integration_update_pending = None
-update_running = False
+simulation_runtime_state.update_pending = None
+simulation_runtime_state.integration_update_pending = None
+simulation_runtime_state.update_running = False
 
 def schedule_update():
     """Queue a throttled simulation/redraw update."""
-    global update_pending, integration_update_pending
-    if integration_update_pending is not None:
-        root.after_cancel(integration_update_pending)
-        integration_update_pending = None
-    if update_pending is not None:
-        root.after_cancel(update_pending)
-    update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
+    if simulation_runtime_state.integration_update_pending is not None:
+        root.after_cancel(simulation_runtime_state.integration_update_pending)
+        simulation_runtime_state.integration_update_pending = None
+    if simulation_runtime_state.update_pending is not None:
+        root.after_cancel(simulation_runtime_state.update_pending)
+    simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
 
 
 def _run_scheduled_range_update():
-    global integration_update_pending
-    integration_update_pending = None
+    simulation_runtime_state.integration_update_pending = None
 
-    if update_running:
+    if simulation_runtime_state.update_running:
         schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS)
         return
 
@@ -8940,21 +8888,20 @@ def _run_scheduled_range_update():
 
 def schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS):
     """Queue throttled redraw-only integration updates."""
-    global integration_update_pending
-    if integration_update_pending is not None:
-        root.after_cancel(integration_update_pending)
+    if simulation_runtime_state.integration_update_pending is not None:
+        root.after_cancel(simulation_runtime_state.integration_update_pending)
     delay = max(RANGE_UPDATE_DEBOUNCE_MS, int(delay_ms))
-    integration_update_pending = root.after(delay, _run_scheduled_range_update)
+    simulation_runtime_state.integration_update_pending = root.after(delay, _run_scheduled_range_update)
 
 
 def _should_collect_hit_tables_for_update() -> bool:
     """Return whether the next redraw needs per-hit detector tables."""
     return gui_manual_geometry.should_collect_hit_tables_for_update(
-        background_visible=bool(background_visible),
-        current_background_index=current_background_index,
-        hkl_pick_armed=bool(hkl_pick_armed),
-        selected_hkl_target=selected_hkl_target,
-        selected_peak_record=selected_peak_record,
+        background_visible=bool(background_runtime_state.visible),
+        current_background_index=background_runtime_state.current_background_index,
+        hkl_pick_armed=bool(peak_selection_state.hkl_pick_armed),
+        selected_hkl_target=peak_selection_state.selected_hkl_target,
+        selected_peak_record=simulation_runtime_state.selected_peak_record,
         geometry_q_group_refresh_requested=bool(geometry_q_group_state.refresh_requested),
         live_geometry_preview_enabled=_live_geometry_preview_enabled,
         current_manual_pick_background_image=_current_geometry_manual_pick_background_image,
@@ -8962,46 +8909,46 @@ def _should_collect_hit_tables_for_update() -> bool:
         geometry_manual_pick_session_active=_geometry_manual_pick_session_active,
     )
 
-peak_positions = []
-peak_millers = []
-peak_intensities = []
-peak_records = []
-selected_peak_record = None
+simulation_runtime_state.peak_positions = []
+simulation_runtime_state.peak_millers = []
+simulation_runtime_state.peak_intensities = []
+simulation_runtime_state.peak_records = []
+simulation_runtime_state.selected_peak_record = None
 # 0 disables the cap and keeps all distinct per-reflection hit candidates.
 HKL_PICK_MAX_HITS_PER_REFLECTION = 0
 HKL_PICK_MIN_SEPARATION_PX = 2.0
 HKL_PICK_MAX_DISTANCE_PX = 12.0
 
-prev_background_visible = True
-last_bg_signature = None
-last_sim_signature = None
-last_simulation_signature = None
-stored_max_positions_local = None
-stored_sim_image = None
-stored_peak_table_lattice = None
-stored_primary_sim_image = None
-stored_secondary_sim_image = None
-stored_primary_max_positions = None
-stored_secondary_max_positions = None
-stored_primary_peak_table_lattice = None
-stored_secondary_peak_table_lattice = None
-last_unscaled_image_signature = None
-normalization_scale_cache = {"sig": None, "value": 1.0}
-peak_overlay_cache = {
+simulation_runtime_state.prev_background_visible = True
+simulation_runtime_state.last_bg_signature = None
+simulation_runtime_state.last_sim_signature = None
+simulation_runtime_state.last_simulation_signature = None
+simulation_runtime_state.stored_max_positions_local = None
+simulation_runtime_state.stored_sim_image = None
+simulation_runtime_state.stored_peak_table_lattice = None
+simulation_runtime_state.stored_primary_sim_image = None
+simulation_runtime_state.stored_secondary_sim_image = None
+simulation_runtime_state.stored_primary_max_positions = None
+simulation_runtime_state.stored_secondary_max_positions = None
+simulation_runtime_state.stored_primary_peak_table_lattice = None
+simulation_runtime_state.stored_secondary_peak_table_lattice = None
+simulation_runtime_state.last_unscaled_image_signature = None
+simulation_runtime_state.normalization_scale_cache = {"sig": None, "value": 1.0}
+simulation_runtime_state.peak_overlay_cache = {
     "sig": None,
     "positions": [],
     "millers": [],
     "intensities": [],
     "records": [],
 }
-caking_cache = {
+simulation_runtime_state.caking_cache = {
     "sim_sig": None,
     "sim_res2": None,
     "bg_sig": None,
     "bg_res2": None,
 }
-chi_square_update_token = 0
-chi_square_state = {
+simulation_runtime_state.chi_square_update_token = 0
+simulation_runtime_state.chi_square_state = {
     "last_ts": 0.0,
     "last_token": -1,
     "last_text": "Chi-Squared: N/A",
@@ -9011,18 +8958,17 @@ chi_square_state = {
 def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
     """Ensure peak overlay lists are available for the current simulation cache."""
 
-    global peak_positions, peak_millers, peak_intensities, peak_records
 
-    if stored_max_positions_local is None or stored_sim_image is None:
-        peak_positions.clear()
-        peak_millers.clear()
-        peak_intensities.clear()
-        peak_records.clear()
+    if simulation_runtime_state.stored_max_positions_local is None or simulation_runtime_state.stored_sim_image is None:
+        simulation_runtime_state.peak_positions.clear()
+        simulation_runtime_state.peak_millers.clear()
+        simulation_runtime_state.peak_intensities.clear()
+        simulation_runtime_state.peak_records.clear()
         return False
 
-    max_positions_local = stored_max_positions_local
-    updated_image = stored_sim_image
-    peak_table_lattice_local = stored_peak_table_lattice
+    max_positions_local = simulation_runtime_state.stored_max_positions_local
+    updated_image = simulation_runtime_state.stored_sim_image
+    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
 
     if (
         not peak_table_lattice_local
@@ -9034,25 +8980,25 @@ def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
         ]
 
     peak_sig = (
-        last_simulation_signature,
+        simulation_runtime_state.last_simulation_signature,
         id(max_positions_local),
         len(max_positions_local),
         tuple(updated_image.shape),
         int(HKL_PICK_MAX_HITS_PER_REFLECTION),
         float(HKL_PICK_MIN_SEPARATION_PX),
     )
-    peak_cached = (not force) and peak_overlay_cache.get("sig") == peak_sig
+    peak_cached = (not force) and simulation_runtime_state.peak_overlay_cache.get("sig") == peak_sig
 
-    peak_positions.clear()
-    peak_millers.clear()
-    peak_intensities.clear()
-    peak_records.clear()
+    simulation_runtime_state.peak_positions.clear()
+    simulation_runtime_state.peak_millers.clear()
+    simulation_runtime_state.peak_intensities.clear()
+    simulation_runtime_state.peak_records.clear()
 
     if peak_cached:
-        peak_positions.extend(list(peak_overlay_cache.get("positions", ())))
-        peak_millers.extend(list(peak_overlay_cache.get("millers", ())))
-        peak_intensities.extend(list(peak_overlay_cache.get("intensities", ())))
-        peak_records.extend(dict(rec) for rec in peak_overlay_cache.get("records", ()))
+        simulation_runtime_state.peak_positions.extend(list(simulation_runtime_state.peak_overlay_cache.get("positions", ())))
+        simulation_runtime_state.peak_millers.extend(list(simulation_runtime_state.peak_overlay_cache.get("millers", ())))
+        simulation_runtime_state.peak_intensities.extend(list(simulation_runtime_state.peak_overlay_cache.get("intensities", ())))
+        simulation_runtime_state.peak_records.extend(dict(rec) for rec in simulation_runtime_state.peak_overlay_cache.get("records", ()))
         return True
 
     try:
@@ -9095,8 +9041,8 @@ def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
 
         for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
             I, _xpix, _ypix, _phi, H, K, L = row
-            peak_positions.append((disp_cx, disp_cy))
-            peak_intensities.append(float(I))
+            simulation_runtime_state.peak_positions.append((disp_cx, disp_cy))
+            simulation_runtime_state.peak_intensities.append(float(I))
             hkl = tuple(int(np.rint(val)) for val in (H, K, L))
             hkl_raw = (float(H), float(K), float(L))
             m_val = float(H * H + H * K + K * K)
@@ -9112,8 +9058,8 @@ def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
                 c_value=cv_used,
                 qr_value=qr_val,
             )
-            peak_millers.append(hkl)
-            peak_records.append(
+            simulation_runtime_state.peak_millers.append(hkl)
+            simulation_runtime_state.peak_records.append(
                 {
                     "display_col": float(disp_cx),
                     "display_row": float(disp_cy),
@@ -9134,13 +9080,13 @@ def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
                 }
             )
 
-    peak_overlay_cache.update(
+    simulation_runtime_state.peak_overlay_cache.update(
         {
             "sig": peak_sig,
-            "positions": list(peak_positions),
-            "millers": list(peak_millers),
-            "intensities": list(peak_intensities),
-            "records": [dict(rec) for rec in peak_records],
+            "positions": list(simulation_runtime_state.peak_positions),
+            "millers": list(simulation_runtime_state.peak_millers),
+            "intensities": list(simulation_runtime_state.peak_intensities),
+            "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
         }
     )
     return True
@@ -9149,27 +9095,15 @@ def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
 #                              MAIN UPDATE
 ###############################################################################
 def do_update():
-    global update_pending, update_running, last_simulation_signature
-    global unscaled_image_global, background_visible
-    global stored_max_positions_local, stored_sim_image, stored_peak_table_lattice
-    global stored_primary_sim_image, stored_secondary_sim_image
-    global stored_primary_max_positions, stored_secondary_max_positions
-    global stored_primary_peak_table_lattice, stored_secondary_peak_table_lattice
-    global peak_positions, peak_millers, peak_intensities, peak_records, selected_peak_record
-    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
     global av2, cv2
-    global last_caked_image_unscaled, last_caked_extent
-    global last_caked_background_image_unscaled, last_caked_radial_values, last_caked_azimuth_values
-    global last_res2_sim, last_res2_background
-    global last_unscaled_image_signature
 
-    if update_running:
+    if simulation_runtime_state.update_running:
         # another update is in progress; try again shortly
-        update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
+        simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
         return
 
-    update_pending = None
-    update_running = True
+    simulation_runtime_state.update_pending = None
+    simulation_runtime_state.update_running = True
     update_start_time = perf_counter()
     image_generation_elapsed_ms = 0.0
     image_generation_cached = True
@@ -9276,29 +9210,24 @@ def do_update():
             int(mosaic_params["solve_q_mode"]),
             round(_current_bandwidth_fraction(), 8),
             round(_current_sf_prune_bias(), 3),
-            int(sf_prune_stats.get("qr_kept", 0)),
-            int(sf_prune_stats.get("hkl_primary_kept", 0)),
+            int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0)),
+            int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0)),
             int(optics_mode_flag),
-            int(num_samples),
+            int(simulation_runtime_state.num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
             int(np.size(mosaic_params["theta_array"])),
             int(collect_hit_tables_requested),
         )
 
-    # 1 – place near other globals
-
-    # … inside do_update() …
-    global stored_max_positions_local        # <- add
-
     new_sim_sig = get_sim_signature()
-    if new_sim_sig != last_simulation_signature:
+    if new_sim_sig != simulation_runtime_state.last_simulation_signature:
         _invalidate_geometry_manual_pick_cache()
-        last_simulation_signature = new_sim_sig
-        peak_positions.clear()
-        peak_millers.clear()
-        peak_intensities.clear()
-        peak_records.clear()
-        selected_peak_record = None
+        simulation_runtime_state.last_simulation_signature = new_sim_sig
+        simulation_runtime_state.peak_positions.clear()
+        simulation_runtime_state.peak_millers.clear()
+        simulation_runtime_state.peak_intensities.clear()
+        simulation_runtime_state.peak_records.clear()
+        simulation_runtime_state.selected_peak_record = None
         image_generation_cached = False
         image_generation_start_time = perf_counter()
 
@@ -9407,7 +9336,7 @@ def do_update():
         w1 = float(weight1_var.get())
         w2 = float(weight2_var.get())
         run_primary = abs(w1) > 1e-12
-        run_secondary = bool(SIM_MILLER2.size > 0 and abs(w2) > 1e-12)
+        run_secondary = bool(simulation_runtime_state.sim_miller2.size > 0 and abs(w2) > 1e-12)
 
         img1 = np.zeros((image_size, image_size), dtype=np.float64)
         img2 = np.zeros((image_size, image_size), dtype=np.float64)
@@ -9416,21 +9345,21 @@ def do_update():
 
         if run_primary:
             primary_data = (
-                SIM_PRIMARY_QR
-                if isinstance(SIM_PRIMARY_QR, dict) and len(SIM_PRIMARY_QR) > 0
-                else SIM_MILLER1
+                simulation_runtime_state.sim_primary_qr
+                if isinstance(simulation_runtime_state.sim_primary_qr, dict) and len(simulation_runtime_state.sim_primary_qr) > 0
+                else simulation_runtime_state.sim_miller1
             )
             img1, maxpos1, _, _, _, _, _ = run_one(
                 primary_data,
-                SIM_INTENS1,
+                simulation_runtime_state.sim_intens1,
                 a_updated,
                 c_updated,
             )
 
         if run_secondary:
             img2, maxpos2, _, _, _, _, _ = run_one(
-                SIM_MILLER2,
-                SIM_INTENS2,
+                simulation_runtime_state.sim_miller2,
+                simulation_runtime_state.sim_intens2,
                 av2,
                 cv2,
             )
@@ -9450,68 +9379,68 @@ def do_update():
                 for _ in secondary_max_positions_local
             ]
 
-        stored_primary_sim_image = img1
-        stored_secondary_sim_image = img2
-        stored_primary_max_positions = primary_max_positions_local
-        stored_secondary_max_positions = secondary_max_positions_local
-        stored_primary_peak_table_lattice = primary_peak_table_lattice_local
-        stored_secondary_peak_table_lattice = secondary_peak_table_lattice_local
+        simulation_runtime_state.stored_primary_sim_image = img1
+        simulation_runtime_state.stored_secondary_sim_image = img2
+        simulation_runtime_state.stored_primary_max_positions = primary_max_positions_local
+        simulation_runtime_state.stored_secondary_max_positions = secondary_max_positions_local
+        simulation_runtime_state.stored_primary_peak_table_lattice = primary_peak_table_lattice_local
+        simulation_runtime_state.stored_secondary_peak_table_lattice = secondary_peak_table_lattice_local
 
-        updated_image = w1 * stored_primary_sim_image + w2 * stored_secondary_sim_image
+        updated_image = w1 * simulation_runtime_state.stored_primary_sim_image + w2 * simulation_runtime_state.stored_secondary_sim_image
         max_positions_local = []
         peak_table_lattice_local = []
         if run_primary:
-            max_positions_local.extend(stored_primary_max_positions)
-            peak_table_lattice_local.extend(stored_primary_peak_table_lattice)
+            max_positions_local.extend(simulation_runtime_state.stored_primary_max_positions)
+            peak_table_lattice_local.extend(simulation_runtime_state.stored_primary_peak_table_lattice)
         if run_secondary:
-            max_positions_local.extend(stored_secondary_max_positions)
-            peak_table_lattice_local.extend(stored_secondary_peak_table_lattice)
+            max_positions_local.extend(simulation_runtime_state.stored_secondary_max_positions)
+            peak_table_lattice_local.extend(simulation_runtime_state.stored_secondary_peak_table_lattice)
 
-        stored_max_positions_local = list(max_positions_local)
-        stored_peak_table_lattice = list(peak_table_lattice_local)
-        stored_sim_image = updated_image
+        simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+        simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
+        simulation_runtime_state.stored_sim_image = updated_image
         image_generation_elapsed_ms = (
             perf_counter() - image_generation_start_time
         ) * 1e3
     else:
         # fall back to the cached arrays
-        if stored_primary_sim_image is None and stored_secondary_sim_image is None:
+        if simulation_runtime_state.stored_primary_sim_image is None and simulation_runtime_state.stored_secondary_sim_image is None:
             # first run after programme start – force a simulation
-            last_simulation_signature = None
-            update_running = False
+            simulation_runtime_state.last_simulation_signature = None
+            simulation_runtime_state.update_running = False
             return do_update()          # re-enter with computation path
 
         w1 = float(weight1_var.get())
         w2 = float(weight2_var.get())
-        run_primary = bool(stored_primary_sim_image is not None and abs(w1) > 1e-12)
-        run_secondary = bool(stored_secondary_sim_image is not None and abs(w2) > 1e-12)
+        run_primary = bool(simulation_runtime_state.stored_primary_sim_image is not None and abs(w1) > 1e-12)
+        run_secondary = bool(simulation_runtime_state.stored_secondary_sim_image is not None and abs(w2) > 1e-12)
 
         img1 = (
-            stored_primary_sim_image
-            if stored_primary_sim_image is not None
+            simulation_runtime_state.stored_primary_sim_image
+            if simulation_runtime_state.stored_primary_sim_image is not None
             else np.zeros((image_size, image_size), dtype=np.float64)
         )
         img2 = (
-            stored_secondary_sim_image
-            if stored_secondary_sim_image is not None
+            simulation_runtime_state.stored_secondary_sim_image
+            if simulation_runtime_state.stored_secondary_sim_image is not None
             else np.zeros((image_size, image_size), dtype=np.float64)
         )
 
         updated_image = w1 * img1 + w2 * img2
         max_positions_local = []
         peak_table_lattice_local = []
-        if run_primary and stored_primary_max_positions is not None:
-            max_positions_local.extend(stored_primary_max_positions)
-            if stored_primary_peak_table_lattice is not None:
-                peak_table_lattice_local.extend(stored_primary_peak_table_lattice)
-        if run_secondary and stored_secondary_max_positions is not None:
-            max_positions_local.extend(stored_secondary_max_positions)
-            if stored_secondary_peak_table_lattice is not None:
-                peak_table_lattice_local.extend(stored_secondary_peak_table_lattice)
+        if run_primary and simulation_runtime_state.stored_primary_max_positions is not None:
+            max_positions_local.extend(simulation_runtime_state.stored_primary_max_positions)
+            if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
+                peak_table_lattice_local.extend(simulation_runtime_state.stored_primary_peak_table_lattice)
+        if run_secondary and simulation_runtime_state.stored_secondary_max_positions is not None:
+            max_positions_local.extend(simulation_runtime_state.stored_secondary_max_positions)
+            if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
+                peak_table_lattice_local.extend(simulation_runtime_state.stored_secondary_peak_table_lattice)
 
-        stored_max_positions_local = list(max_positions_local)
-        stored_peak_table_lattice = list(peak_table_lattice_local)
-        stored_sim_image = updated_image
+        simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+        simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
+        simulation_runtime_state.stored_sim_image = updated_image
 
     if not peak_table_lattice_local or len(peak_table_lattice_local) != len(max_positions_local):
         peak_table_lattice_local = [
@@ -9531,24 +9460,24 @@ def do_update():
     redraw_update_start_time = perf_counter()
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
     need_peak_overlay = bool(
-        hkl_pick_armed
-        or selected_hkl_target is not None
-        or selected_peak_record is not None
+        peak_selection_state.hkl_pick_armed
+        or peak_selection_state.selected_hkl_target is not None
+        or simulation_runtime_state.selected_peak_record is not None
         or _live_geometry_preview_enabled()
     )
     if need_peak_overlay:
         _ensure_peak_overlay_data(force=False)
     else:
-        peak_positions.clear()
-        peak_millers.clear()
-        peak_intensities.clear()
-        peak_records.clear()
+        simulation_runtime_state.peak_positions.clear()
+        simulation_runtime_state.peak_millers.clear()
+        simulation_runtime_state.peak_intensities.clear()
+        simulation_runtime_state.peak_records.clear()
 
-    if selected_hkl_target is not None:
+    if peak_selection_state.selected_hkl_target is not None:
         _select_peak_by_hkl(
-            selected_hkl_target[0],
-            selected_hkl_target[1],
-            selected_hkl_target[2],
+            peak_selection_state.selected_hkl_target[0],
+            peak_selection_state.selected_hkl_target[1],
+            peak_selection_state.selected_hkl_target[2],
             sync_hkl_vars=False,
             silent_if_missing=True,
         )
@@ -9557,52 +9486,52 @@ def do_update():
     if native_background is not None and display_image is not None:
         normalization_sig = (
             new_sim_sig,
-            int(current_background_index),
-            id(current_background_image),
-            int(background_backend_rotation_k) % 4,
-            bool(background_backend_flip_x),
-            bool(background_backend_flip_y),
+            int(background_runtime_state.current_background_index),
+            id(background_runtime_state.current_background_image),
+            int(background_runtime_state.backend_rotation_k) % 4,
+            bool(background_runtime_state.backend_flip_x),
+            bool(background_runtime_state.backend_flip_y),
             tuple(display_image.shape),
             tuple(np.asarray(native_background).shape),
         )
-        if normalization_scale_cache.get("sig") == normalization_sig:
-            normalization_scale = float(normalization_scale_cache.get("value", 1.0))
+        if simulation_runtime_state.normalization_scale_cache.get("sig") == normalization_sig:
+            normalization_scale = float(simulation_runtime_state.normalization_scale_cache.get("value", 1.0))
         else:
             normalization_scale = _suggest_scale_factor(
                 display_image, native_background
             )
-            normalization_scale_cache["sig"] = normalization_sig
-            normalization_scale_cache["value"] = float(normalization_scale)
+            simulation_runtime_state.normalization_scale_cache["sig"] = normalization_sig
+            simulation_runtime_state.normalization_scale_cache["value"] = float(normalization_scale)
         if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
             normalization_scale = 1.0
 
-    unscaled_image_global = None
-    last_unscaled_image_signature = None
+    simulation_runtime_state.unscaled_image = None
+    simulation_runtime_state.last_unscaled_image_signature = None
     if display_image is not None:
         if abs(float(normalization_scale) - 1.0) <= 1e-12:
-            unscaled_image_global = display_image
+            simulation_runtime_state.unscaled_image = display_image
         else:
-            unscaled_image_global = display_image * normalization_scale
-        last_unscaled_image_signature = (
+            simulation_runtime_state.unscaled_image = display_image * normalization_scale
+        simulation_runtime_state.last_unscaled_image_signature = (
             new_sim_sig,
             round(float(normalization_scale), 9),
             tuple(display_image.shape),
-            int(current_background_index),
-            id(current_background_image),
-            int(background_backend_rotation_k) % 4,
-            bool(background_backend_flip_x),
-            bool(background_backend_flip_y),
+            int(background_runtime_state.current_background_index),
+            id(background_runtime_state.current_background_image),
+            int(background_runtime_state.backend_rotation_k) % 4,
+            bool(background_runtime_state.backend_flip_x),
+            bool(background_runtime_state.backend_flip_y),
         )
-        if peak_intensities and normalization_scale != 1.0:
-            peak_intensities[:] = [
-                intensity * normalization_scale for intensity in peak_intensities
+        if simulation_runtime_state.peak_intensities and normalization_scale != 1.0:
+            simulation_runtime_state.peak_intensities[:] = [
+                intensity * normalization_scale for intensity in simulation_runtime_state.peak_intensities
             ]
-            for rec in peak_records:
+            for rec in simulation_runtime_state.peak_records:
                 rec["intensity"] = float(rec.get("intensity", 0.0)) * normalization_scale
 
-    last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
+    simulation_runtime_state.last_1d_integration_data["simulated_2d_image"] = simulation_runtime_state.unscaled_image
 
-    if unscaled_image_global is not None:
+    if simulation_runtime_state.unscaled_image is not None:
         if display_controls_state.scale_factor_user_override:
             _set_scale_factor_value(
                 _get_scale_factor_value(default=1.0),
@@ -9622,7 +9551,6 @@ def do_update():
     # overhead when repeatedly redrawing the live simulation with
     # unchanged geometry settings.
     # ---------------------------------------------------------------
-    global _ai_cache
     sig = (
         corto_det_up,
         center_x_up,
@@ -9631,8 +9559,8 @@ def do_update():
         gamma_updated,
         wave_m,
     )
-    if _ai_cache.get("sig") != sig:
-        _ai_cache = {
+    if simulation_runtime_state.ai_cache.get("sig") != sig:
+        simulation_runtime_state.ai_cache = {
             "sig": sig,
             "ai": AzimuthalIntegrator(
                 dist=corto_det_up,
@@ -9647,7 +9575,7 @@ def do_update():
                 pixel2=pixel_size_m,
             ),
         }
-    ai = _ai_cache["ai"]
+    ai = simulation_runtime_state.ai_cache["ai"]
     sim_caking_sig = (
         new_sim_sig,
         sig,
@@ -9657,27 +9585,27 @@ def do_update():
     if native_background is not None:
         bg_caking_sig = (
             sig,
-            int(current_background_index),
-            id(current_background_image),
-            int(background_backend_rotation_k) % 4,
-            bool(background_backend_flip_x),
-            bool(background_backend_flip_y),
+            int(background_runtime_state.current_background_index),
+            id(background_runtime_state.current_background_image),
+            int(background_runtime_state.backend_rotation_k) % 4,
+            bool(background_runtime_state.backend_flip_x),
+            bool(background_runtime_state.backend_flip_y),
             tuple(np.asarray(native_background).shape),
         )
 
     # Caked 2D or normal 2D?
     sim_res2 = None
     bg_res2 = None
-    if analysis_view_controls_view_state.show_caked_2d_var.get() and unscaled_image_global is not None:
+    if analysis_view_controls_view_state.show_caked_2d_var.get() and simulation_runtime_state.unscaled_image is not None:
         if (
-            caking_cache.get("sim_sig") == sim_caking_sig
-            and caking_cache.get("sim_res2") is not None
+            simulation_runtime_state.caking_cache.get("sim_sig") == sim_caking_sig
+            and simulation_runtime_state.caking_cache.get("sim_res2") is not None
         ):
-            sim_res2 = caking_cache["sim_res2"]
+            sim_res2 = simulation_runtime_state.caking_cache["sim_res2"]
         else:
-            sim_res2 = caking(unscaled_image_global, ai)
-            caking_cache["sim_sig"] = sim_caking_sig
-            caking_cache["sim_res2"] = sim_res2
+            sim_res2 = caking(simulation_runtime_state.unscaled_image, ai)
+            simulation_runtime_state.caking_cache["sim_sig"] = sim_caking_sig
+            simulation_runtime_state.caking_cache["sim_res2"] = sim_res2
         caked_img = sim_res2.intensity
         radial_vals = np.asarray(sim_res2.radial, dtype=float)
         azimuth_vals = _wrap_phi_range(_adjust_phi_zero(sim_res2.azimuthal))
@@ -9692,9 +9620,9 @@ def do_update():
             radial_vals = radial_vals[radial_mask]
             caked_img = caked_img[:, radial_mask]
 
-        last_caked_image_unscaled = caked_img
-        last_caked_radial_values = np.asarray(radial_vals, dtype=float)
-        last_caked_azimuth_values = np.asarray(azimuth_vals, dtype=float)
+        simulation_runtime_state.last_caked_image_unscaled = caked_img
+        simulation_runtime_state.last_caked_radial_values = np.asarray(radial_vals, dtype=float)
+        simulation_runtime_state.last_caked_azimuth_values = np.asarray(azimuth_vals, dtype=float)
 
         current_scale = _get_scale_factor_value(default=1.0)
         scaled_caked_for_limits = caked_img * current_scale
@@ -9705,7 +9633,7 @@ def do_update():
                 scaled_caked_for_limits, reset_override=True
             )
 
-        if not caked_limits_user_override:
+        if not simulation_runtime_state.caked_limits_user_override:
             vmin_caked_var.set(auto_vmin)
             vmax_caked_var.set(auto_vmax)
 
@@ -9732,17 +9660,17 @@ def do_update():
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
 
         background_caked_available = False
-        last_caked_background_image_unscaled = None
-        if background_visible and native_background is not None:
+        simulation_runtime_state.last_caked_background_image_unscaled = None
+        if background_runtime_state.visible and native_background is not None:
             if (
-                caking_cache.get("bg_sig") == bg_caking_sig
-                and caking_cache.get("bg_res2") is not None
+                simulation_runtime_state.caking_cache.get("bg_sig") == bg_caking_sig
+                and simulation_runtime_state.caking_cache.get("bg_res2") is not None
             ):
-                bg_res2 = caking_cache["bg_res2"]
+                bg_res2 = simulation_runtime_state.caking_cache["bg_res2"]
             else:
                 bg_res2 = caking(native_background, ai)
-                caking_cache["bg_sig"] = bg_caking_sig
-                caking_cache["bg_res2"] = bg_res2
+                simulation_runtime_state.caking_cache["bg_sig"] = bg_caking_sig
+                simulation_runtime_state.caking_cache["bg_res2"] = bg_res2
             bg_caked = bg_res2.intensity
             bg_radial = np.asarray(bg_res2.radial, dtype=float)
             bg_azimuth = _wrap_phi_range(_adjust_phi_zero(bg_res2.azimuthal))
@@ -9757,7 +9685,7 @@ def do_update():
                 bg_radial = bg_radial[bg_radial_mask]
                 bg_caked = bg_caked[:, bg_radial_mask]
 
-            last_caked_background_image_unscaled = np.asarray(bg_caked, dtype=float)
+            simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(bg_caked, dtype=float)
             _set_image_origin(background_display, 'lower')
             background_display.set_data(bg_caked)
             bg_display_vmax = vmax_val
@@ -9792,7 +9720,7 @@ def do_update():
         else:
             azimuth_min, azimuth_max = -180.0, 180.0
 
-        last_caked_extent = [
+        simulation_runtime_state.last_caked_extent = [
             radial_min,
             radial_max,
             azimuth_min,
@@ -9823,11 +9751,11 @@ def do_update():
         ax.set_ylabel('φ (degrees)')
         ax.set_title('2D Caked Integration')
     else:
-        last_caked_image_unscaled = None
-        last_caked_extent = None
-        last_caked_background_image_unscaled = None
-        last_caked_radial_values = None
-        last_caked_azimuth_values = None
+        simulation_runtime_state.last_caked_image_unscaled = None
+        simulation_runtime_state.last_caked_extent = None
+        simulation_runtime_state.last_caked_background_image_unscaled = None
+        simulation_runtime_state.last_caked_radial_values = None
+        simulation_runtime_state.last_caked_azimuth_values = None
         ax.set_xlim(0, image_size)
         ax.set_ylim(image_size, 0)
         ax.set_aspect("auto")
@@ -9837,8 +9765,8 @@ def do_update():
 
         _set_image_origin(background_display, 'upper')
         background_display.set_extent([0, image_size, image_size, 0])
-        if background_visible and current_background_display is not None:
-            background_display.set_data(current_background_display)
+        if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
+            background_display.set_data(background_runtime_state.current_background_display)
             background_display.set_clim(
                 display_controls_view_state.background_min_var.get(),
                 display_controls_view_state.background_max_var.get(),
@@ -9848,36 +9776,36 @@ def do_update():
             background_display.set_visible(False)
         
     # 1D integration
-    if analysis_view_controls_view_state.show_1d_var.get() and unscaled_image_global is not None:
+    if analysis_view_controls_view_state.show_1d_var.get() and simulation_runtime_state.unscaled_image is not None:
         if sim_res2 is None:
             if (
-                caking_cache.get("sim_sig") == sim_caking_sig
-                and caking_cache.get("sim_res2") is not None
+                simulation_runtime_state.caking_cache.get("sim_sig") == sim_caking_sig
+                and simulation_runtime_state.caking_cache.get("sim_res2") is not None
             ):
-                sim_res2 = caking_cache["sim_res2"]
+                sim_res2 = simulation_runtime_state.caking_cache["sim_res2"]
             else:
-                sim_res2 = caking(unscaled_image_global, ai)
-                caking_cache["sim_sig"] = sim_caking_sig
-                caking_cache["sim_res2"] = sim_res2
+                sim_res2 = caking(simulation_runtime_state.unscaled_image, ai)
+                simulation_runtime_state.caking_cache["sim_sig"] = sim_caking_sig
+                simulation_runtime_state.caking_cache["sim_res2"] = sim_res2
 
-        if background_visible and native_background is not None:
+        if background_runtime_state.visible and native_background is not None:
             if (
-                caking_cache.get("bg_sig") == bg_caking_sig
-                and caking_cache.get("bg_res2") is not None
+                simulation_runtime_state.caking_cache.get("bg_sig") == bg_caking_sig
+                and simulation_runtime_state.caking_cache.get("bg_res2") is not None
             ):
-                bg_res2 = caking_cache["bg_res2"]
+                bg_res2 = simulation_runtime_state.caking_cache["bg_res2"]
             else:
                 bg_res2 = caking(native_background, ai)
-                caking_cache["bg_sig"] = bg_caking_sig
-                caking_cache["bg_res2"] = bg_res2
+                simulation_runtime_state.caking_cache["bg_sig"] = bg_caking_sig
+                simulation_runtime_state.caking_cache["bg_res2"] = bg_res2
         else:
             bg_res2 = None
         _update_1d_plots_from_caked(sim_res2, bg_res2)
     else:
         _clear_1d_plot_cache_and_lines()
 
-    last_res2_sim = sim_res2
-    last_res2_background = bg_res2
+    simulation_runtime_state.last_res2_sim = sim_res2
+    simulation_runtime_state.last_res2_background = bg_res2
 
     # Keep simulation display limits sticky across regenerated simulations.
     # Users can still change limits manually or reset defaults explicitly.
@@ -9911,15 +9839,14 @@ def do_update():
         )
 
     # mark update completion so future updates can run
-    update_running = False
+    simulation_runtime_state.update_running = False
 
-# ── after you’ve updated background_visible in toggle_background() ──
+# ── after you’ve updated background_runtime_state.visible in toggle_background() ──
 def toggle_background():
-    global background_visible
-    background_visible = not background_visible
+    background_runtime_state.visible = not background_runtime_state.visible
     _sync_background_runtime_state()
     # ↓ force opaque if the background is hidden, 0.5 otherwise
-    image_display.set_alpha(0.5 if background_visible else 1.0)
+    image_display.set_alpha(0.5 if background_runtime_state.visible else 1.0)
     schedule_update()
 
 
@@ -9928,16 +9855,16 @@ def _set_background_file_status_text():
 
     if workspace_panels_view_state.background_file_status_var is None:
         return
-    if not osc_files:
+    if not background_runtime_state.osc_files:
         gui_views.set_background_file_status_text(
             workspace_panels_view_state,
             "Background: no files loaded",
         )
         return
 
-    idx = int(current_background_index) % len(osc_files)
-    current_name = Path(str(osc_files[idx])).name
-    status_text = f"Background {idx + 1}/{len(osc_files)}: {current_name}"
+    idx = int(background_runtime_state.current_background_index) % len(background_runtime_state.osc_files)
+    current_name = Path(str(background_runtime_state.osc_files[idx])).name
+    status_text = f"Background {idx + 1}/{len(background_runtime_state.osc_files)}: {current_name}"
     try:
         theta_values = _current_background_theta_values(strict_count=False)
         if theta_values:
@@ -9971,7 +9898,7 @@ def _set_background_file_status_text():
         if fit_indices:
             if len(fit_indices) > 1:
                 status_text += f" | fit={len(fit_indices)} backgrounds"
-            elif len(osc_files) > 1:
+            elif len(background_runtime_state.osc_files) > 1:
                 fit_idx = int(fit_indices[0]) + 1
                 status_text += f" | fit=bg {fit_idx}"
     except Exception:
@@ -9985,8 +9912,6 @@ def _set_background_file_status_text():
 def _load_background_files(file_paths, *, select_index=0):
     """Replace background images from selected OSC file paths."""
 
-    global osc_files, background_images, background_images_native, background_images_display
-    global current_background_index, current_background_image, current_background_display
 
     updated = gui_background.load_background_files(
         file_paths,
@@ -9995,13 +9920,13 @@ def _load_background_files(file_paths, *, select_index=0):
         read_osc=read_osc,
         select_index=select_index,
     )
-    osc_files = list(updated["osc_files"])
-    background_images = list(updated["background_images"])
-    background_images_native = list(updated["background_images_native"])
-    background_images_display = list(updated["background_images_display"])
-    current_background_index = int(updated["current_background_index"])
-    current_background_image = updated["current_background_image"]
-    current_background_display = updated["current_background_display"]
+    background_runtime_state.osc_files = list(updated["osc_files"])
+    background_runtime_state.background_images = list(updated["background_images"])
+    background_runtime_state.background_images_native = list(updated["background_images_native"])
+    background_runtime_state.background_images_display = list(updated["background_images_display"])
+    background_runtime_state.current_background_index = int(updated["current_background_index"])
+    background_runtime_state.current_background_image = updated["current_background_image"]
+    background_runtime_state.current_background_display = updated["current_background_display"]
     _sync_background_runtime_state()
     _replace_geometry_manual_pairs_by_background({})
     _invalidate_geometry_manual_pick_cache()
@@ -10009,8 +9934,8 @@ def _load_background_files(file_paths, *, select_index=0):
     _clear_geometry_fit_undo_stack()
     _set_geometry_manual_pick_mode(False)
 
-    background_display.set_data(current_background_display)
-    _update_background_slider_defaults(current_background_display, reset_override=True)
+    background_display.set_data(background_runtime_state.current_background_display)
+    _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
     _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
     _sync_geometry_fit_background_selection(preserve_existing=True)
     _clear_geometry_pick_artists()
@@ -10022,8 +9947,8 @@ def _browse_background_files():
     """Choose one or more OSC backgrounds and load them into the GUI."""
 
     try:
-        if osc_files:
-            initial_dir = str(Path(str(osc_files[current_background_index])).expanduser().parent)
+        if background_runtime_state.osc_files:
+            initial_dir = str(Path(str(background_runtime_state.osc_files[background_runtime_state.current_background_index])).expanduser().parent)
         else:
             initial_dir = str(get_dir("file_dialog_dir"))
     except Exception:
@@ -10039,25 +9964,23 @@ def _browse_background_files():
 
     try:
         _load_background_files(selected, select_index=0)
-        progress_label.config(text=f"Loaded {len(osc_files)} background file(s).")
+        progress_label.config(text=f"Loaded {len(background_runtime_state.osc_files)} background file(s).")
     except Exception as exc:
         progress_label.config(text=f"Failed to load background files: {exc}")
 
 
 def switch_background():
-    global background_images, background_images_native, background_images_display
-    global current_background_index, current_background_image, current_background_display
-    if not osc_files:
+    if not background_runtime_state.osc_files:
         progress_label.config(text="No background images loaded.")
         return
 
     try:
         updated = gui_background.switch_background(
-            osc_files=osc_files,
-            background_images=background_images,
-            background_images_native=background_images_native,
-            background_images_display=background_images_display,
-            current_background_index=current_background_index,
+            osc_files=background_runtime_state.osc_files,
+            background_images=background_runtime_state.background_images,
+            background_images_native=background_runtime_state.background_images_native,
+            background_images_display=background_runtime_state.background_images_display,
+            current_background_index=background_runtime_state.current_background_index,
             display_rotate_k=DISPLAY_ROTATE_K,
             read_osc=read_osc,
         )
@@ -10065,12 +9988,12 @@ def switch_background():
         progress_label.config(text=f"Failed to switch background: {exc}")
         return
 
-    background_images = list(updated["background_images"])
-    background_images_native = list(updated["background_images_native"])
-    background_images_display = list(updated["background_images_display"])
-    current_background_index = int(updated["current_background_index"])
-    current_background_image = updated["current_background_image"]
-    current_background_display = updated["current_background_display"]
+    background_runtime_state.background_images = list(updated["background_images"])
+    background_runtime_state.background_images_native = list(updated["background_images_native"])
+    background_runtime_state.background_images_display = list(updated["background_images_display"])
+    background_runtime_state.current_background_index = int(updated["current_background_index"])
+    background_runtime_state.current_background_image = updated["current_background_image"]
+    background_runtime_state.current_background_display = updated["current_background_display"]
     _sync_background_runtime_state()
     _invalidate_geometry_manual_pick_cache()
     _clear_geometry_manual_undo_stack()
@@ -10078,18 +10001,17 @@ def switch_background():
     if "theta_initial_var" in globals() and theta_initial_var is not None:
         try:
             theta_initial_var.set(
-                _background_theta_for_index(current_background_index, strict_count=False)
+                _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
             )
         except Exception:
             pass
-    background_display.set_data(current_background_display)
-    _update_background_slider_defaults(current_background_display, reset_override=True)
+    background_display.set_data(background_runtime_state.current_background_display)
+    _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
     _set_background_file_status_text()
     _render_current_geometry_manual_pairs(update_status=False)
     schedule_update()
 
 def reset_to_defaults():
-    global caked_limits_user_override
     _clear_geometry_fit_undo_stack()
     theta_initial_var.set(defaults['theta_initial'])
     if geometry_theta_offset_var is not None:
@@ -10145,13 +10067,13 @@ def reset_to_defaults():
     analysis_view_controls_view_state.show_caked_2d_var.set(False)
     vmin_caked_var.set(0.0)
     vmax_caked_var.set(2000.0)
-    caked_limits_user_override = False
+    simulation_runtime_state.caked_limits_user_override = False
 
     display_controls_state.background_limits_user_override = False
     display_controls_state.simulation_limits_user_override = False
     display_controls_state.scale_factor_user_override = False
 
-    _update_background_slider_defaults(current_background_display, reset_override=True)
+    _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
 
     display_controls_state.suppress_simulation_limit_callback = True
     display_controls_view_state.simulation_min_var.set(0.0)
@@ -10195,8 +10117,7 @@ def reset_to_defaults():
     _sync_finite_controls()
 
     update_mosaic_cache()
-    global last_simulation_signature
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
 gui_views.populate_stacked_button_group(
@@ -10219,7 +10140,7 @@ gui_views.create_background_theta_controls(
     parent=workspace_panels_view_state.workspace_backgrounds_frame,
     view_state=background_theta_controls_view_state,
     background_theta_values_text=_format_background_theta_values(
-        [_background_theta_default_value()] * len(osc_files)
+        [_background_theta_default_value()] * len(background_runtime_state.osc_files)
     ),
     geometry_theta_offset_text="0.0",
     on_apply=lambda: _apply_background_theta_metadata(trigger_update=True),
@@ -10267,7 +10188,7 @@ gui_views.populate_stacked_button_group(
                     psi=psi,
                     n2=n2,
                     center=[center_x_var.get(), center_y_var.get()],
-                    num_samples=num_samples,
+                    num_samples=simulation_runtime_state.num_samples,
                     divergence_sigma=divergence_sigma,
                     bw_sigma=bw_sigma,
                     sigma_mosaic_var=sigma_mosaic_var,
@@ -10317,7 +10238,7 @@ if (
 ):
     raise RuntimeError("Status panel was not created.")
 
-last_hbn_geometry_debug_report = (
+hbn_geometry_debug_view_state.report_text = (
     "No hBN geometry debug report yet.\n"
     "Import an hBN bundle to generate one."
 )
@@ -10333,7 +10254,7 @@ def show_last_hbn_geometry_debug():
     gui_views.open_hbn_geometry_debug_window(
         root=root,
         view_state=hbn_geometry_debug_view_state,
-        text=str(last_hbn_geometry_debug_report),
+        text=str(hbn_geometry_debug_view_state.report_text),
         on_close=_close_hbn_geometry_debug_window,
     )
 
@@ -10348,7 +10269,6 @@ def import_hbn_tilt_from_bundle():
     if not bundle_path:
         return
 
-    global last_hbn_geometry_debug_report
     mean_dist = None
     tilt_x_deg = None
     tilt_y_deg = None
@@ -10510,12 +10430,12 @@ def import_hbn_tilt_from_bundle():
             simulation_center_row=applied_center_row,
             simulation_center_col=applied_center_col,
         )
-        last_hbn_geometry_debug_report = format_hbn_geometry_debug_trace(debug_trace)
+        hbn_geometry_debug_view_state.report_text = format_hbn_geometry_debug_trace(debug_trace)
         gui_views.set_hbn_geometry_debug_text(
             hbn_geometry_debug_view_state,
-            str(last_hbn_geometry_debug_report),
+            str(hbn_geometry_debug_view_state.report_text),
         )
-        print(last_hbn_geometry_debug_report)
+        print(hbn_geometry_debug_view_state.report_text)
         debug_text = " [debug report updated]"
 
     schedule_update()
@@ -10568,7 +10488,7 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         selected_hkl_target=peak_selection_state.selected_hkl_target,
         primary_cif_path=cif_file,
         secondary_cif_path=cif_file2,
-        osc_files=osc_files,
+        osc_files=background_runtime_state.osc_files,
         current_background_index=background_runtime_state.current_background_index,
         background_visible=background_runtime_state.visible,
         background_backend_rotation_k=background_runtime_state.backend_rotation_k,
@@ -10585,9 +10505,6 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
 
 
 def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
-    global background_visible
-    global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
-    global selected_hkl_target
 
     if not isinstance(snapshot, dict):
         snapshot = {}
@@ -10618,7 +10535,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
 
     gui_state_io.apply_gui_state_background_theta_compatibility(
         variables,
-        osc_files=osc_files,
+        osc_files=background_runtime_state.osc_files,
         theta_initial_var=theta_initial_var,
         background_theta_list_var=background_theta_list_var,
         geometry_theta_offset_var=geometry_theta_offset_var,
@@ -10636,10 +10553,10 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     flag_state = gui_state_io.apply_gui_state_flags(
         snapshot.get("flags", {}),
         current_flags={
-            "background_visible": background_visible,
-            "background_backend_rotation_k": background_backend_rotation_k,
-            "background_backend_flip_x": background_backend_flip_x,
-            "background_backend_flip_y": background_backend_flip_y,
+            "background_visible": background_runtime_state.visible,
+            "background_backend_rotation_k": background_runtime_state.backend_rotation_k,
+            "background_backend_flip_x": background_runtime_state.backend_flip_x,
+            "background_backend_flip_y": background_runtime_state.backend_flip_y,
             "background_limits_user_override": (
                 display_controls_state.background_limits_user_override
             ),
@@ -10652,10 +10569,10 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         },
         toggle_background=toggle_background,
     )
-    background_visible = bool(flag_state["background_visible"])
-    background_backend_rotation_k = int(flag_state["background_backend_rotation_k"])
-    background_backend_flip_x = bool(flag_state["background_backend_flip_x"])
-    background_backend_flip_y = bool(flag_state["background_backend_flip_y"])
+    background_runtime_state.visible = bool(flag_state["background_visible"])
+    background_runtime_state.backend_rotation_k = int(flag_state["background_backend_rotation_k"])
+    background_runtime_state.backend_flip_x = bool(flag_state["background_backend_flip_x"])
+    background_runtime_state.backend_flip_y = bool(flag_state["background_backend_flip_y"])
     _sync_background_runtime_state()
     display_controls_state.background_limits_user_override = bool(
         flag_state["background_limits_user_override"]
@@ -10673,10 +10590,10 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
         apply_geometry_manual_pairs_snapshot=_apply_geometry_manual_pairs_snapshot,
-        current_background_index=current_background_index,
-        selected_hkl_target=selected_hkl_target,
+        current_background_index=background_runtime_state.current_background_index,
+        selected_hkl_target=peak_selection_state.selected_hkl_target,
     )
-    selected_hkl_target = geometry_state["selected_hkl_target"]
+    peak_selection_state.selected_hkl_target = geometry_state["selected_hkl_target"]
     _sync_peak_selection_state()
     warnings.extend(list(geometry_state["warnings"]))
 
@@ -10818,7 +10735,7 @@ def _import_full_gui_state() -> None:
 def _export_geometry_manual_pairs() -> None:
     """Write the saved manual geometry placements to a JSON file."""
 
-    if not any(_geometry_manual_pairs_for_index(idx) for idx in range(len(osc_files))):
+    if not any(_geometry_manual_pairs_for_index(idx) for idx in range(len(background_runtime_state.osc_files))):
         progress_label_geometry.config(text="No saved manual placements are available to export.")
         return
 
@@ -11212,7 +11129,7 @@ def _simulate_preview_style_peaks_for_fit(
         param_set,
     )
     peak_table_lattice = (
-        stored_peak_table_lattice if isinstance(stored_peak_table_lattice, list) else None
+        simulation_runtime_state.stored_peak_table_lattice if isinstance(simulation_runtime_state.stored_peak_table_lattice, list) else None
     )
     return _build_simulated_peaks_from_hit_tables(
         hit_tables,
@@ -11623,7 +11540,7 @@ def _current_geometry_fit_params() -> dict[str, object]:
         _current_geometry_theta_offset(strict=False) if use_theta_offset else 0.0
     )
     theta_current = (
-        _background_theta_for_index(current_background_index, strict_count=False)
+        _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
         if use_theta_offset
         else theta_initial_var.get()
     )
@@ -11809,7 +11726,7 @@ def _draw_live_geometry_preview_overlay(
     gui_overlays.draw_live_geometry_preview_overlay(
         ax,
         matched_pairs,
-        geometry_preview_artists=geometry_preview_artists,
+        geometry_preview_artists=geometry_runtime_state.preview_artists,
         clear_geometry_preview_artists=_clear_geometry_preview_artists,
         draw_idle=canvas.draw_idle,
         normalize_hkl_key=_normalize_hkl_key,
@@ -11889,7 +11806,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
         return False
 
     display_background = _get_current_background_display()
-    if not background_visible or display_background is None:
+    if not background_runtime_state.visible or display_background is None:
         _clear_geometry_preview_artists()
         if update_status:
             progress_label_geometry.config(
@@ -11917,7 +11834,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
 
     simulated_peaks = _build_live_preview_simulated_peaks_from_cache()
 
-    if not simulated_peaks and stored_max_positions_local:
+    if not simulated_peaks and simulation_runtime_state.stored_max_positions_local:
         try:
             simulated_peaks = _simulate_preview_style_peaks_for_fit(
                 np.asarray(miller, dtype=np.float64),
@@ -12045,7 +11962,7 @@ def _on_live_geometry_preview_toggle():
 
     _open_geometry_q_group_window()
 
-    if update_running or stored_max_positions_local is None:
+    if simulation_runtime_state.update_running or simulation_runtime_state.stored_max_positions_local is None:
         schedule_update()
         return
 
@@ -12054,7 +11971,6 @@ def _on_live_geometry_preview_toggle():
 
 
 def _legacy_auto_match_on_fit_geometry_click():
-    global profile_cache, last_simulation_signature
     _clear_geometry_pick_artists()
     _clear_geometry_preview_artists()
 
@@ -12103,7 +12019,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             text=f"Geometry fit unavailable: invalid fit background selection ({exc})."
         )
         return
-    if int(current_background_index) not in {
+    if int(background_runtime_state.current_background_index) not in {
         int(idx) for idx in selected_background_indices
     }:
         _cmd_line("aborted: active background missing from fit selection")
@@ -12142,7 +12058,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         if background_theta_values:
             try:
                 params["theta_initial"] = float(
-                    background_theta_values[int(current_background_index)] + shared_theta_offset_seed
+                    background_theta_values[int(background_runtime_state.current_background_index)] + shared_theta_offset_seed
                 )
             except Exception:
                 pass
@@ -12151,7 +12067,7 @@ def _legacy_auto_match_on_fit_geometry_click():
 
     native_background = _get_current_background_native()
     backend_background = _get_current_background_backend()
-    display_background = current_background_display
+    display_background = background_runtime_state.current_background_display
     if display_background is None and native_background is not None:
         display_background = np.rot90(native_background, DISPLAY_ROTATE_K)
     if native_background is None or display_background is None:
@@ -12767,11 +12683,11 @@ def _legacy_auto_match_on_fit_geometry_click():
             if not joint_background_mode:
                 return dataset_specs_local, dataset_summary_lines
 
-            current_theta_base = float(background_theta_values[int(current_background_index)])
+            current_theta_base = float(background_theta_values[int(background_runtime_state.current_background_index)])
             dataset_specs_local.append(
                 {
-                    "dataset_index": int(current_background_index),
-                    "label": Path(str(osc_files[current_background_index])).name,
+                    "dataset_index": int(background_runtime_state.current_background_index),
+                    "label": Path(str(background_runtime_state.osc_files[background_runtime_state.current_background_index])).name,
                     "theta_initial": float(current_theta_base),
                     "measured_peaks": list(measured_for_fit),
                     "experimental_image": experimental_image_for_fit,
@@ -12781,8 +12697,8 @@ def _legacy_auto_match_on_fit_geometry_click():
                 "current[{idx}] {name}: theta_i={theta_base:.6f} theta={theta_eff:.6f} "
                 "matches={matches} excluded={excluded}"
                 .format(
-                    idx=int(current_background_index),
-                    name=Path(str(osc_files[current_background_index])).name,
+                    idx=int(background_runtime_state.current_background_index),
+                    name=Path(str(background_runtime_state.osc_files[background_runtime_state.current_background_index])).name,
                     theta_base=float(current_theta_base),
                     theta_eff=float(current_theta_base + float(base_fit_params.get("theta_offset", 0.0))),
                     matches=len(matched_pairs),
@@ -12791,7 +12707,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             )
 
             for bg_idx in selected_background_indices:
-                if int(bg_idx) == int(current_background_index):
+                if int(bg_idx) == int(background_runtime_state.current_background_index):
                     continue
                 theta_base = float(background_theta_values[int(bg_idx)])
 
@@ -12811,14 +12727,14 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
                 if not simulated_i:
                     raise RuntimeError(
-                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) has no simulated peaks"
+                        f"background {bg_idx + 1} ({Path(str(background_runtime_state.osc_files[bg_idx])).name}) has no simulated peaks"
                     )
                 simulated_i, excluded_q_i, q_group_total_i = _filter_geometry_fit_simulated_peaks(
                     simulated_i
                 )
                 if not simulated_i:
                     raise RuntimeError(
-                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) has no selected Qr/Qz groups"
+                        f"background {bg_idx + 1} ({Path(str(background_runtime_state.osc_files[bg_idx])).name}) has no selected Qr/Qz groups"
                     )
                 simulated_i, collapsed_deg_i = _collapse_geometry_fit_simulated_peaks(
                     simulated_i,
@@ -12834,7 +12750,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
                 if not simulated_i:
                     raise RuntimeError(
-                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) has no seeds after Qr/Qz collapse"
+                        f"background {bg_idx + 1} ({Path(str(background_runtime_state.osc_files[bg_idx])).name}) has no seeds after Qr/Qz collapse"
                     )
 
                 matched_i, stats_i, _, _ = _auto_match_background_peaks_with_relaxation(
@@ -12851,7 +12767,7 @@ def _legacy_auto_match_on_fit_geometry_click():
 
                 if len(matched_i) < min_matches:
                     raise RuntimeError(
-                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) matched "
+                        f"background {bg_idx + 1} ({Path(str(background_runtime_state.osc_files[bg_idx])).name}) matched "
                         f"{len(matched_i)}/{int(stats_i.get('simulated_count', len(simulated_i)))} peaks "
                         f"(need {min_matches})"
                     )
@@ -12864,7 +12780,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
                 if quality_fail_i:
                     raise RuntimeError(
-                        f"background {bg_idx + 1} ({Path(str(osc_files[bg_idx])).name}) failed the quality gate "
+                        f"background {bg_idx + 1} ({Path(str(background_runtime_state.osc_files[bg_idx])).name}) failed the quality gate "
                         f"(mean={mean_i:.2f}px, p90={p90_i:.2f}px)"
                     )
 
@@ -12894,7 +12810,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 dataset_specs_local.append(
                     {
                         "dataset_index": int(bg_idx),
-                        "label": Path(str(osc_files[bg_idx])).name,
+                        "label": Path(str(background_runtime_state.osc_files[bg_idx])).name,
                         "theta_initial": float(theta_base),
                         "measured_peaks": measured_i_for_fit,
                         "experimental_image": experimental_i_for_fit,
@@ -12906,7 +12822,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     "excluded={excluded} q_groups_on={q_on}/{q_total} collapsed={collapsed} excluded_q={excluded_q}"
                     .format(
                         idx=int(bg_idx),
-                        name=Path(str(osc_files[bg_idx])).name,
+                        name=Path(str(background_runtime_state.osc_files[bg_idx])).name,
                         theta_base=float(theta_base),
                         theta_eff=float(theta_base + float(base_fit_params.get("theta_offset", 0.0))),
                         matches=len(matched_i),
@@ -13346,13 +13262,13 @@ def _legacy_auto_match_on_fit_geometry_click():
 
         if joint_background_mode and not preserve_live_theta:
             theta_initial_var.set(
-                _background_theta_for_index(current_background_index, strict_count=False)
+                _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
             )
             _set_background_file_status_text()
 
-        profile_cache = dict(profile_cache)
-        profile_cache.update(mosaic_params)
-        profile_cache.update(
+        simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
+        simulation_runtime_state.profile_cache.update(mosaic_params)
+        simulation_runtime_state.profile_cache.update(
             {
                 "theta_initial": theta_initial_var.get(),
                 "theta_offset": _current_geometry_theta_offset(strict=False),
@@ -13371,7 +13287,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         )
 
         gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
-        last_simulation_signature = None
+        simulation_runtime_state.last_simulation_signature = None
         schedule_update()
 
         rms = (
@@ -13483,7 +13399,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 dict(entry)
                 for entry in overlay_point_match_diagnostics
                 if isinstance(entry, dict)
-                and int(entry.get("dataset_index", -1)) == int(current_background_index)
+                and int(entry.get("dataset_index", -1)) == int(background_runtime_state.current_background_index)
             ]
         overlay_records = build_geometry_fit_overlay_records(
             initial_auto_pairs_display,
@@ -13628,7 +13544,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         except Exception:
             pass
 
-    if not _ensure_peak_overlay_data(force=False) or not peak_positions:
+    if not _ensure_peak_overlay_data(force=False) or not simulation_runtime_state.peak_positions:
         progress_label_geometry.config(text="No simulated peaks available to pick.")
         return
 
@@ -13636,7 +13552,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         """Return (index, distance^2) of the nearest simulated peak, or (None, inf)."""
 
         best_idx, best_d2 = None, float("inf")
-        for idx, (px, py) in enumerate(peak_positions):
+        for idx, (px, py) in enumerate(simulation_runtime_state.peak_positions):
             if px < 0 or py < 0:
                 continue
             d2 = (px - col) ** 2 + (py - row) ** 2
@@ -13650,11 +13566,11 @@ def _legacy_auto_match_on_fit_geometry_click():
         r = int(round(row))
         c = int(round(col))
         r0 = max(0, r - search_radius)
-        r1 = min(current_background_display.shape[0], r + search_radius + 1)
+        r1 = min(background_runtime_state.current_background_display.shape[0], r + search_radius + 1)
         c0 = max(0, c - search_radius)
-        c1 = min(current_background_display.shape[1], c + search_radius + 1)
+        c1 = min(background_runtime_state.current_background_display.shape[1], c + search_radius + 1)
 
-        window = np.asarray(current_background_display[r0:r1, c0:c1], dtype=float)
+        window = np.asarray(background_runtime_state.current_background_display[r0:r1, c0:c1], dtype=float)
         if window.size == 0 or not np.isfinite(window).any():
             return float(col), float(row)
 
@@ -13676,7 +13592,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             zorder=8,
             bbox=dict(facecolor='white', alpha=0.75, edgecolor='none', pad=1.0),
         )
-        geometry_pick_artists.extend([point, text])
+        geometry_runtime_state.pick_artists.extend([point, text])
         canvas.draw_idle()
 
     picked_pairs = []  # list[(h,k,l), (x_real, y_real)]
@@ -13696,7 +13612,6 @@ def _legacy_auto_match_on_fit_geometry_click():
     click_cid = None
 
     def _finish_pair_collection():
-        global profile_cache, last_simulation_signature
         nonlocal click_cid
         if click_cid is not None:
             canvas.mpl_disconnect(click_cid)
@@ -13704,7 +13619,6 @@ def _legacy_auto_match_on_fit_geometry_click():
         canvas_widget.configure(cursor="")
 
     def _on_geometry_pick(event):
-        global profile_cache, last_simulation_signature
         if event.inaxes is not ax or event.xdata is None or event.ydata is None:
             return
 
@@ -13758,7 +13672,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 backend_background = native_background
             measured_native = _unrotate_display_peaks(
                 measured_from_clicks,
-                current_background_display.shape,
+                background_runtime_state.current_background_display.shape,
                 k=DISPLAY_ROTATE_K,
             )
             picked_frames = [
@@ -14250,16 +14164,16 @@ def _legacy_auto_match_on_fit_geometry_click():
 
                 if _geometry_fit_uses_shared_theta_offset() and not preserve_live_theta:
                     theta_initial_var.set(
-                        _background_theta_for_index(current_background_index, strict_count=False)
+                        _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
                     )
                     _set_background_file_status_text()
 
                 # Keep the cached profile in sync with the fitted geometry so the
                 # next simulation uses the updated parameters even when diagnostics
                 # are disabled.
-                profile_cache = dict(profile_cache)
-                profile_cache.update(mosaic_params)
-                profile_cache.update(
+                simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
+                simulation_runtime_state.profile_cache.update(mosaic_params)
+                simulation_runtime_state.profile_cache.update(
                     {
                         "theta_initial": theta_initial_var.get(),
                         "theta_offset": _current_geometry_theta_offset(strict=False),
@@ -14281,7 +14195,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 gui_controllers.request_geometry_preview_skip_once(
                     geometry_preview_state
                 )
-                last_simulation_signature = None
+                simulation_runtime_state.last_simulation_signature = None
                 schedule_update()
 
                 rms = (
@@ -14509,8 +14423,8 @@ def _legacy_auto_match_on_fit_geometry_click():
             if idx is None:
                 progress_label_geometry.config(text="No simulated peaks available to pick.")
                 return
-            selection_state["pending_hkl"] = peak_millers[idx]
-            sim_col, sim_row = peak_positions[idx]
+            selection_state["pending_hkl"] = simulation_runtime_state.peak_millers[idx]
+            sim_col, sim_row = simulation_runtime_state.peak_positions[idx]
             selection_state["pending_sim_display"] = (float(sim_col), float(sim_row))
             _mark_pick(sim_col, sim_row, f"{selection_state['pending_hkl']} sim", '#00b894', 'o')
             progress_label_geometry.config(
@@ -14562,7 +14476,6 @@ def _legacy_auto_match_on_fit_geometry_click():
 def on_fit_mosaic_click():
     """Run the separable mosaic-width optimizer and apply the results."""
 
-    global profile_cache, last_simulation_signature
 
     miller_array = np.asarray(miller, dtype=np.float64)
     if miller_array.ndim != 2 or miller_array.shape[1] != 3 or miller_array.size == 0:
@@ -14662,10 +14575,10 @@ def on_fit_mosaic_click():
 
     best_params = getattr(result, "best_params", None)
     if best_params and "mosaic_params" in best_params:
-        profile_cache = dict(best_params["mosaic_params"])
+        simulation_runtime_state.profile_cache = dict(best_params["mosaic_params"])
     else:
-        profile_cache = dict(mosaic_params)
-        profile_cache.update(
+        simulation_runtime_state.profile_cache = dict(mosaic_params)
+        simulation_runtime_state.profile_cache.update(
             {
                 "sigma_mosaic_deg": sigma_deg,
                 "gamma_mosaic_deg": gamma_deg,
@@ -14673,7 +14586,7 @@ def on_fit_mosaic_click():
             }
         )
 
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
     residual_norm = 0.0
@@ -14740,7 +14653,7 @@ def _build_geometry_manual_fit_dataset(
     params_i["theta_initial"] = float(theta_base + theta_offset)
     simulated_peaks = _geometry_manual_simulated_peaks_for_params(
         params_i,
-        prefer_cache=(background_idx == int(current_background_index)),
+        prefer_cache=(background_idx == int(background_runtime_state.current_background_index)),
     )
     simulated_lookup = _geometry_manual_simulated_lookup(simulated_peaks)
 
@@ -14841,8 +14754,8 @@ def _build_geometry_manual_fit_dataset(
     )
 
     label = (
-        Path(str(osc_files[background_idx])).name
-        if 0 <= background_idx < len(osc_files)
+        Path(str(background_runtime_state.osc_files[background_idx])).name
+        if 0 <= background_idx < len(background_runtime_state.osc_files)
         else f"background_{background_idx}"
     )
     group_count = len(
@@ -14893,8 +14806,6 @@ def _build_geometry_manual_fit_dataset(
 def on_fit_geometry_click():
     """Fit geometry from the saved manual Qr/Qz pair selections."""
 
-    global profile_cache
-    global last_simulation_signature
 
     _clear_geometry_preview_artists()
     _clear_geometry_pick_artists()
@@ -14926,7 +14837,7 @@ def on_fit_geometry_click():
         overlay_cfg = {}
     max_display_markers = max(1, int(overlay_cfg.get("max_display_markers", 120)))
 
-    if not osc_files:
+    if not background_runtime_state.osc_files:
         progress_label_geometry.config(text="Geometry fit unavailable: no background image is loaded.")
         return
 
@@ -14943,7 +14854,7 @@ def on_fit_geometry_click():
             text=f"Geometry fit unavailable: invalid fit background selection ({exc})."
         )
         return
-    if int(current_background_index) not in {
+    if int(background_runtime_state.current_background_index) not in {
         int(idx) for idx in selected_background_indices
     }:
         progress_label_geometry.config(
@@ -14976,7 +14887,7 @@ def on_fit_geometry_click():
         joint_background_mode = len(selected_background_indices) > 1
         if background_theta_values:
             params["theta_initial"] = float(
-                background_theta_values[int(current_background_index)]
+                background_theta_values[int(background_runtime_state.current_background_index)]
                 + float(params.get("theta_offset", 0.0))
             )
     else:
@@ -14986,7 +14897,7 @@ def on_fit_geometry_click():
     required_indices = (
         list(selected_background_indices)
         if joint_background_mode
-        else [int(current_background_index)]
+        else [int(background_runtime_state.current_background_index)]
     )
     missing_indices = [
         idx
@@ -14995,9 +14906,9 @@ def on_fit_geometry_click():
     ]
     if missing_indices:
         missing_names = [
-            Path(str(osc_files[idx])).name
+            Path(str(background_runtime_state.osc_files[idx])).name
             for idx in missing_indices
-            if 0 <= idx < len(osc_files)
+            if 0 <= idx < len(background_runtime_state.osc_files)
         ]
         progress_label_geometry.config(
             text=(
@@ -15040,12 +14951,12 @@ def on_fit_geometry_click():
 
         dataset_infos: list[dict[str, object]] = []
         current_theta_base = (
-            float(background_theta_values[int(current_background_index)])
+            float(background_theta_values[int(background_runtime_state.current_background_index)])
             if joint_background_mode
             else float(params.get("theta_initial", theta_initial_var.get()))
         )
         current_dataset = _build_geometry_manual_fit_dataset(
-            int(current_background_index),
+            int(background_runtime_state.current_background_index),
             theta_base=float(current_theta_base),
             base_fit_params=params,
             orientation_cfg=orientation_cfg,
@@ -15053,7 +14964,7 @@ def on_fit_geometry_click():
         dataset_infos.append(current_dataset)
         if joint_background_mode:
             for bg_idx in selected_background_indices:
-                if int(bg_idx) == int(current_background_index):
+                if int(bg_idx) == int(background_runtime_state.current_background_index):
                     continue
                 theta_base = float(background_theta_values[int(bg_idx)])
                 dataset_infos.append(
@@ -15182,14 +15093,14 @@ def on_fit_geometry_click():
 
         if joint_background_mode and not preserve_live_theta:
             theta_initial_var.set(
-                _background_theta_for_index(current_background_index, strict_count=False)
+                _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
             )
         _set_background_file_status_text()
         _update_geometry_manual_pick_button_label()
 
-        profile_cache = dict(profile_cache)
-        profile_cache.update(mosaic_params)
-        profile_cache.update(
+        simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
+        simulation_runtime_state.profile_cache.update(mosaic_params)
+        simulation_runtime_state.profile_cache.update(
             {
                 "theta_initial": theta_initial_var.get(),
                 "theta_offset": _current_geometry_theta_offset(strict=False),
@@ -15209,7 +15120,7 @@ def on_fit_geometry_click():
         _push_geometry_fit_undo_state(undo_state)
 
         gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
-        last_simulation_signature = None
+        simulation_runtime_state.last_simulation_signature = None
         schedule_update()
 
         rms = (
@@ -15294,7 +15205,7 @@ def on_fit_geometry_click():
                 dict(entry)
                 for entry in overlay_point_match_diagnostics
                 if isinstance(entry, dict)
-                and int(entry.get("dataset_index", -1)) == int(current_background_index)
+                and int(entry.get("dataset_index", -1)) == int(background_runtime_state.current_background_index)
             ]
         overlay_records = build_geometry_fit_overlay_records(
             current_dataset["initial_pairs_display"],
@@ -15496,10 +15407,9 @@ def toggle_1d_plots():
 
 
 def toggle_caked_2d():
-    global caked_limits_user_override
     show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
     if show_caked_2d_var is None or not show_caked_2d_var.get():
-        caked_limits_user_override = False
+        simulation_runtime_state.caked_limits_user_override = False
     else:
         # Entering caked view should start from auto-scaled simulation limits.
         display_controls_state.simulation_limits_user_override = False
@@ -15549,7 +15459,7 @@ def save_1d_snapshot():
     
     # Grab the currently displayed simulated image. ``global_image_buffer`` holds
     # the scaled image that is shown in the GUI so copying it ensures we save
-    # exactly what the user sees.  ``last_1d_integration_data`` may be empty if
+    # exactly what the user sees.  ``simulation_runtime_state.last_1d_integration_data`` may be empty if
     # the simulation hasn't run yet so rely directly on the buffer instead of
     # that cache.
     sim_img = np.asarray(global_image_buffer, dtype=np.float64).copy()
@@ -15598,17 +15508,17 @@ def save_q_space_representation():
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
     
     mosaic_params = {
-        "beam_x_array": profile_cache.get("beam_x_array", []),
-        "beam_y_array": profile_cache.get("beam_y_array", []),
-        "theta_array":  profile_cache.get("theta_array", []),
-        "phi_array":    profile_cache.get("phi_array", []),
-        "wavelength_array": profile_cache.get("wavelength_array", []),
-        "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
-        "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
-        "eta": profile_cache.get("eta", 0.0),
-        "solve_q_steps": profile_cache.get("solve_q_steps", _current_solve_q_steps()),
-        "solve_q_rel_tol": profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
-        "solve_q_mode": profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
+        "beam_x_array": simulation_runtime_state.profile_cache.get("beam_x_array", []),
+        "beam_y_array": simulation_runtime_state.profile_cache.get("beam_y_array", []),
+        "theta_array":  simulation_runtime_state.profile_cache.get("theta_array", []),
+        "phi_array":    simulation_runtime_state.profile_cache.get("phi_array", []),
+        "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
+        "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
+        "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
+        "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
+        "solve_q_steps": simulation_runtime_state.profile_cache.get("solve_q_steps", _current_solve_q_steps()),
+        "solve_q_rel_tol": simulation_runtime_state.profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
+        "solve_q_mode": simulation_runtime_state.profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
     }
 
     image_result, hit_tables, q_data, q_count, _, _ = process_peaks_parallel(
@@ -15691,17 +15601,17 @@ def run_debug_simulation():
     cy_val    = float(center_y_var.get())
 
     mosaic_params = {
-        "beam_x_array": profile_cache.get("beam_x_array", []),
-        "beam_y_array": profile_cache.get("beam_y_array", []),
-        "theta_array":  profile_cache.get("theta_array", []),
-        "phi_array":    profile_cache.get("phi_array", []),
-        "wavelength_array": profile_cache.get("wavelength_array", []),
-        "sigma_mosaic_deg": profile_cache.get("sigma_mosaic_deg", 0.0),
-        "gamma_mosaic_deg": profile_cache.get("gamma_mosaic_deg", 0.0),
-        "eta": profile_cache.get("eta", 0.0),
-        "solve_q_steps": profile_cache.get("solve_q_steps", _current_solve_q_steps()),
-        "solve_q_rel_tol": profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
-        "solve_q_mode": profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
+        "beam_x_array": simulation_runtime_state.profile_cache.get("beam_x_array", []),
+        "beam_y_array": simulation_runtime_state.profile_cache.get("beam_y_array", []),
+        "theta_array":  simulation_runtime_state.profile_cache.get("theta_array", []),
+        "phi_array":    simulation_runtime_state.profile_cache.get("phi_array", []),
+        "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
+        "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
+        "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
+        "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
+        "solve_q_steps": simulation_runtime_state.profile_cache.get("solve_q_steps", _current_solve_q_steps()),
+        "solve_q_rel_tol": simulation_runtime_state.profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
+        "solve_q_mode": simulation_runtime_state.profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
     }
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
@@ -15789,7 +15699,7 @@ def _parse_sample_count(raw_value, fallback):
 
 
 def _current_custom_sample_count(default=None):
-    fallback = int(max(1, default if default is not None else num_samples))
+    fallback = int(max(1, default if default is not None else simulation_runtime_state.num_samples))
     custom_var = sampling_optics_controls_view_state.custom_samples_var
     raw_value = custom_var.get() if custom_var is not None else fallback
     return _parse_sample_count(raw_value, fallback)
@@ -15815,11 +15725,11 @@ def _refresh_resolution_display():
         custom_value=(
             sampling_optics_controls_view_state.custom_samples_var.get()
             if sampling_optics_controls_view_state.custom_samples_var is not None
-            else max(1, num_samples)
+            else max(1, simulation_runtime_state.num_samples)
         ),
         preset_counts=resolution_sample_counts,
         fallback_resolution=defaults.get('sampling_resolution', 'Low'),
-        fallback_count=max(1, num_samples),
+        fallback_count=max(1, simulation_runtime_state.num_samples),
     )
     gui_views.set_sampling_resolution_summary_text(
         sampling_optics_controls_view_state,
@@ -15828,27 +15738,26 @@ def _refresh_resolution_display():
 
 
 def _apply_resolution_selection(trigger_update=True):
-    global num_samples
 
     resolution_var = sampling_optics_controls_view_state.resolution_var
     custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
     if resolution_var is None:
         return
-    previous_num_samples = int(num_samples)
+    previous_num_samples = int(simulation_runtime_state.num_samples)
     selected_count = gui_controllers.resolve_sampling_count(
         resolution_var.get(),
         custom_option=CUSTOM_SAMPLING_OPTION,
-        custom_value=custom_samples_var.get() if custom_samples_var is not None else num_samples,
+        custom_value=custom_samples_var.get() if custom_samples_var is not None else simulation_runtime_state.num_samples,
         preset_counts=resolution_sample_counts,
         fallback_resolution=defaults.get('sampling_resolution', 'Low'),
-        fallback_count=max(1, num_samples),
+        fallback_count=max(1, simulation_runtime_state.num_samples),
     )
     if resolution_var.get() == CUSTOM_SAMPLING_OPTION and custom_samples_var is not None:
         custom_samples_var.set(str(selected_count))
 
-    num_samples = selected_count
+    simulation_runtime_state.num_samples = selected_count
     _refresh_resolution_display()
-    if trigger_update and num_samples != previous_num_samples:
+    if trigger_update and simulation_runtime_state.num_samples != previous_num_samples:
         update_mosaic_cache()
         schedule_update()
 
@@ -15856,7 +15765,7 @@ def _apply_resolution_selection(trigger_update=True):
 def _apply_custom_sample_count(_event=None):
     resolution_var = sampling_optics_controls_view_state.resolution_var
     custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
-    parsed_value = _current_custom_sample_count(default=max(1, num_samples))
+    parsed_value = _current_custom_sample_count(default=max(1, simulation_runtime_state.num_samples))
     if custom_samples_var is not None:
         custom_samples_var.set(str(parsed_value))
     if resolution_var is not None and resolution_var.get() != CUSTOM_SAMPLING_OPTION:
@@ -15891,7 +15800,7 @@ if initial_resolution != CUSTOM_SAMPLING_OPTION:
         )
     )
 else:
-    initial_custom_samples_text = str(int(max(1, num_samples)))
+    initial_custom_samples_text = str(int(max(1, simulation_runtime_state.num_samples)))
 
 gui_views.create_sampling_optics_controls(
     parent=mosaic_frame.frame,
@@ -15917,8 +15826,7 @@ resolution_var.trace_add('write', on_resolution_option_change)
 
 
 def on_optics_mode_change(*_):
-    global last_simulation_signature
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
 
@@ -15926,7 +15834,6 @@ optics_mode_var.trace_add('write', on_optics_mode_change)
 
 
 def on_sf_prune_bias_change(*_):
-    global last_simulation_signature
 
     try:
         raw_value = float(sf_prune_bias_var.get())
@@ -15939,12 +15846,11 @@ def on_sf_prune_bias_change(*_):
         return
 
     _apply_bragg_qr_filters(trigger_update=False)
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
 
 def on_solve_q_steps_change(*_):
-    global last_simulation_signature
 
     try:
         raw_value = float(solve_q_steps_var.get())
@@ -15956,12 +15862,11 @@ def on_solve_q_steps_change(*_):
         solve_q_steps_var.set(float(clipped_value))
         return
 
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
 
 def on_solve_q_rel_tol_change(*_):
-    global last_simulation_signature
 
     try:
         raw_value = float(solve_q_rel_tol_var.get())
@@ -15973,7 +15878,7 @@ def on_solve_q_rel_tol_change(*_):
         solve_q_rel_tol_var.set(float(clipped_value))
         return
 
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
 
@@ -15989,7 +15894,6 @@ def _set_solve_q_control_states():
 
 
 def on_solve_q_mode_change(*_):
-    global last_simulation_signature
 
     normalized = _normalize_solve_q_mode_label(solve_q_mode_var.get())
     if normalized != solve_q_mode_var.get():
@@ -15997,7 +15901,7 @@ def on_solve_q_mode_change(*_):
         return
 
     _set_solve_q_control_states()
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
 
@@ -16476,9 +16380,6 @@ def _rebuild_diffraction_inputs(
 
     global miller, intensities, degeneracy, details
     global df_summary, df_details
-    global last_simulation_signature
-    global SIM_MILLER1, SIM_INTENS1, SIM_MILLER2, SIM_INTENS2, SIM_PRIMARY_QR
-    global SIM_MILLER1_ALL, SIM_INTENS1_ALL, SIM_MILLER2_ALL, SIM_INTENS2_ALL, SIM_PRIMARY_QR_ALL
     global ht_curves_cache, ht_cache_multi, _last_occ_for_ht, _last_p_triplet, _last_weights
     global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
     global _last_phi_l_divisor, _last_phase_delta_expression
@@ -16508,7 +16409,7 @@ def _rebuild_diffraction_inputs(
         and (not finite_flag or _last_stack_layers == layers)
         and atom_site_signature == _last_atom_site_fractional_signature
     ):
-        last_simulation_signature = None
+        simulation_runtime_state.last_simulation_signature = None
         if trigger_update:
             schedule_update()
         return
@@ -16611,11 +16512,11 @@ def _rebuild_diffraction_inputs(
             weight2=weight2_var.get(),
         )
 
-        SIM_MILLER1_ALL = np.asarray(m1, dtype=np.float64)
-        SIM_INTENS1_ALL = np.asarray(i1, dtype=np.float64)
-        SIM_PRIMARY_QR_ALL = combined_qr_local
-        SIM_MILLER2_ALL = np.asarray(m2, dtype=np.float64)
-        SIM_INTENS2_ALL = np.asarray(i2, dtype=np.float64)
+        simulation_runtime_state.sim_miller1_all = np.asarray(m1, dtype=np.float64)
+        simulation_runtime_state.sim_intens1_all = np.asarray(i1, dtype=np.float64)
+        simulation_runtime_state.sim_primary_qr_all = combined_qr_local
+        simulation_runtime_state.sim_miller2_all = np.asarray(m2, dtype=np.float64)
+        simulation_runtime_state.sim_intens2_all = np.asarray(i2, dtype=np.float64)
 
         degeneracy = np.array(
             [deg_dict1.get(tuple(h), 0) + deg_dict2.get(tuple(h), 0) for h in miller],
@@ -16633,11 +16534,11 @@ def _rebuild_diffraction_inputs(
         degeneracy = d1
         details = det1
 
-        SIM_MILLER1_ALL = np.asarray(m1, dtype=np.float64)
-        SIM_INTENS1_ALL = np.asarray(i1, dtype=np.float64)
-        SIM_PRIMARY_QR_ALL = combined_qr_local
-        SIM_MILLER2_ALL = np.empty((0, 3), dtype=np.float64)
-        SIM_INTENS2_ALL = np.empty((0,), dtype=np.float64)
+        simulation_runtime_state.sim_miller1_all = np.asarray(m1, dtype=np.float64)
+        simulation_runtime_state.sim_intens1_all = np.asarray(i1, dtype=np.float64)
+        simulation_runtime_state.sim_primary_qr_all = combined_qr_local
+        simulation_runtime_state.sim_miller2_all = np.empty((0, 3), dtype=np.float64)
+        simulation_runtime_state.sim_intens2_all = np.empty((0,), dtype=np.float64)
 
     _apply_bragg_qr_filters(trigger_update=False)
 
@@ -16645,7 +16546,7 @@ def _rebuild_diffraction_inputs(
         miller, intensities, degeneracy, details
     )
 
-    last_simulation_signature = None
+    simulation_runtime_state.last_simulation_signature = None
     if trigger_update:
         schedule_update()
 
@@ -16928,7 +16829,7 @@ def _apply_primary_cif_path(raw_path):
     global occupancy_site_expanded_map
     global atom_site_fractional_metadata, atom_site_fract_vars
     global occ, occ_vars
-    global ht_cache_multi, last_simulation_signature
+    global ht_cache_multi
     global defaults, av, cv, av2, cv2
     global _last_atom_site_fractional_signature
 
@@ -17064,7 +16965,7 @@ def _apply_primary_cif_path(raw_path):
                 cv2 = cv
         a_var.set(av)
         c_var.set(cv)
-        last_simulation_signature = None
+        simulation_runtime_state.last_simulation_signature = None
         progress_label.config(text=f"Loaded CIF: {Path(cif_file).name}")
     except Exception as exc:
         cif_file = old_cif_file
@@ -17364,7 +17265,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         ensure_valid_resolution_choice()
 
     sample_mode = resolution_var.get()
-    sample_count = int(max(1, num_samples))
+    sample_count = int(max(1, simulation_runtime_state.num_samples))
     cif_summary = Path(cif_file).name
     if cif_file2:
         cif_summary = f"{cif_summary}, {Path(cif_file2).name}"

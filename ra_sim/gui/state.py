@@ -473,6 +473,8 @@ class BraggQrManagerState:
     qr_index_keys: list[tuple[str, int]] = field(default_factory=list)
     l_index_keys: list[int] = field(default_factory=list)
     selected_group_key: tuple[str, int] | None = None
+    disabled_groups: set[tuple[str, int]] = field(default_factory=set)
+    disabled_l_values: set[tuple[str, int, int]] = field(default_factory=set)
 
 
 @dataclass
@@ -492,6 +494,7 @@ class HbnGeometryDebugViewState:
 
     window: Any = None
     text_widget: Any = None
+    report_text: str = ""
 
 
 @dataclass
@@ -544,6 +547,7 @@ class StatusPanelViewState:
 class BackgroundRuntimeState:
     """Long-lived background-image cache and display-orientation state."""
 
+    osc_files: list[str] = field(default_factory=list)
     background_images: list[np.ndarray] = field(default_factory=list)
     background_images_native: list[np.ndarray] = field(default_factory=list)
     background_images_display: list[np.ndarray] = field(default_factory=list)
@@ -566,6 +570,154 @@ class PeakSelectionState:
 
 
 @dataclass
+class AtomSiteOverrideState:
+    """Cache bookkeeping for temporary atom-site override CIF files."""
+
+    temp_path: str | None = None
+    source_path: str | None = None
+    signature: object = None
+
+
+@dataclass
+class GeometryRuntimeState:
+    """Long-lived geometry interaction and overlay-artist runtime state."""
+
+    manual_pick_armed: bool = False
+    manual_pick_cache_signature: object = None
+    manual_pick_cache_data: dict[str, object] = field(default_factory=dict)
+    pick_artists: list[Any] = field(default_factory=list)
+    preview_artists: list[Any] = field(default_factory=list)
+    manual_preview_artists: list[Any] = field(default_factory=list)
+    qr_cylinder_overlay_artists: list[Any] = field(default_factory=list)
+    qr_cylinder_overlay_cache: dict[str, object] = field(
+        default_factory=lambda: {
+            "signature": None,
+            "paths": [],
+        }
+    )
+
+
+@dataclass
+class SimulationRuntimeState:
+    """Long-lived simulation/update caches that used to live in runtime globals."""
+
+    num_samples: int = 1
+    caked_limits_user_override: bool = False
+    profile_cache: dict[object, object] = field(default_factory=dict)
+    update_pending: Any = None
+    integration_update_pending: Any = None
+    update_running: bool = False
+    unscaled_image: np.ndarray | None = None
+    last_1d_integration_data: dict[str, object] = field(
+        default_factory=lambda: {
+            "radials_sim": None,
+            "intensities_2theta_sim": None,
+            "azimuths_sim": None,
+            "intensities_azimuth_sim": None,
+            "radials_bg": None,
+            "intensities_2theta_bg": None,
+            "azimuths_bg": None,
+            "intensities_azimuth_bg": None,
+            "simulated_2d_image": None,
+        }
+    )
+    last_caked_image_unscaled: np.ndarray | None = None
+    last_caked_extent: Any = None
+    last_caked_background_image_unscaled: np.ndarray | None = None
+    last_caked_radial_values: np.ndarray | None = None
+    last_caked_azimuth_values: np.ndarray | None = None
+    last_res2_background: Any = None
+    last_res2_sim: Any = None
+    ai_cache: dict[str, object] = field(default_factory=dict)
+    peak_positions: list[tuple[float, float]] = field(default_factory=list)
+    peak_millers: list[tuple[int, int, int]] = field(default_factory=list)
+    peak_intensities: list[float] = field(default_factory=list)
+    peak_records: list[dict[str, object]] = field(default_factory=list)
+    selected_peak_record: dict[str, object] | None = None
+    prev_background_visible: bool = True
+    last_bg_signature: object = None
+    last_sim_signature: object = None
+    last_simulation_signature: object = None
+    stored_max_positions_local: Any = None
+    stored_sim_image: np.ndarray | None = None
+    stored_peak_table_lattice: Any = None
+    stored_primary_sim_image: np.ndarray | None = None
+    stored_secondary_sim_image: np.ndarray | None = None
+    stored_primary_max_positions: Any = None
+    stored_secondary_max_positions: Any = None
+    stored_primary_peak_table_lattice: Any = None
+    stored_secondary_peak_table_lattice: Any = None
+    last_unscaled_image_signature: object = None
+    normalization_scale_cache: dict[str, object] = field(
+        default_factory=lambda: {
+            "sig": None,
+            "value": 1.0,
+        }
+    )
+    peak_overlay_cache: dict[str, object] = field(
+        default_factory=lambda: {
+            "sig": None,
+            "positions": [],
+            "millers": [],
+            "intensities": [],
+            "records": [],
+        }
+    )
+    caking_cache: dict[str, object] = field(
+        default_factory=lambda: {
+            "sim_sig": None,
+            "sim_res2": None,
+            "bg_sig": None,
+            "bg_res2": None,
+        }
+    )
+    chi_square_update_token: int = 0
+    chi_square_state: dict[str, object] = field(
+        default_factory=lambda: {
+            "last_ts": 0.0,
+            "last_token": -1,
+            "last_text": "Chi-Squared: N/A",
+        }
+    )
+    sim_miller1_all: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
+    )
+    sim_intens1_all: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float64)
+    )
+    sim_miller2_all: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
+    )
+    sim_intens2_all: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float64)
+    )
+    sim_primary_qr_all: dict[object, object] = field(default_factory=dict)
+    sim_miller1: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
+    )
+    sim_intens1: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float64)
+    )
+    sim_miller2: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 3), dtype=np.float64)
+    )
+    sim_intens2: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float64)
+    )
+    sim_primary_qr: dict[object, object] = field(default_factory=dict)
+    sf_prune_stats: dict[str, int] = field(
+        default_factory=lambda: {
+            "qr_total": 0,
+            "qr_kept": 0,
+            "hkl_primary_total": 0,
+            "hkl_primary_kept": 0,
+            "hkl_secondary_total": 0,
+            "hkl_secondary_kept": 0,
+        }
+    )
+
+
+@dataclass
 class AppState:
     """Minimal mutable state container for GUI controller/view coordination."""
 
@@ -576,6 +728,13 @@ class AppState:
         default_factory=BackgroundRuntimeState
     )
     peak_selection: PeakSelectionState = field(default_factory=PeakSelectionState)
+    atom_site_override: AtomSiteOverrideState = field(
+        default_factory=AtomSiteOverrideState
+    )
+    geometry_runtime: GeometryRuntimeState = field(default_factory=GeometryRuntimeState)
+    simulation_runtime: SimulationRuntimeState = field(
+        default_factory=SimulationRuntimeState
+    )
     manual_geometry: ManualGeometryState = field(default_factory=ManualGeometryState)
     geometry_fit_history: GeometryFitHistoryState = field(
         default_factory=GeometryFitHistoryState

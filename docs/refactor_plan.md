@@ -15,8 +15,9 @@ high-level migration summary; this file is the working plan.
 ## Current Position
 
 As of 2026-03-25, the refactor has made real progress. The legacy root-script
-problem is largely solved, and the main remaining cleanup target is now the
-packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
+problem is largely solved, the last broad GUI runtime-state extraction pass has
+landed, and the main remaining cleanup target is now the workflow/orchestration
+logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
 `mosaic_profiles.py`.
 
 ### What Is Already Done
@@ -231,6 +232,15 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - Background-cache/orientation state and HKL image-pick interaction state now
     also have explicit runtime-state containers in `ra_sim.gui.state` and are
     synchronized into that shared app state.
+- Remaining GUI runtime-state extraction has landed.
+  - `ra_sim.gui.state` now also owns explicit runtime-state containers for
+    background file/current-orientation state, geometry interaction/cache
+    state, simulation/update/caking/peak cache state, atom-site override cache
+    state, Bragg-Qr disabled-toggle state, hBN debug-report text, sampling
+    count state, and the caked-view override flag.
+  - The remaining `global` lines in `ra_sim.gui.runtime` are now limited to
+    structure-model / diffuse-HT rebuild state plus the legacy `write_excel`
+    flag.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -245,7 +255,7 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
 
 ### 1. GUI Runtime Decomposition
 
-Status: In progress
+Status: Completed
 
 What is done:
 
@@ -371,23 +381,30 @@ What is done:
   no longer only loose runtime globals.
   - `ra_sim.gui.state` now has explicit runtime-state containers for those
     slices, and `runtime.py` synchronizes them through the shared app state.
+- Long-lived GUI runtime state is no longer scattered across `runtime.py`.
+  - `ra_sim.gui.state` now owns explicit runtime-state containers for
+    background file/current-orientation state, geometry interaction/cache
+    state, simulation/update/caking/peak cache state, atom-site override cache
+    state, Bragg-Qr disabled-toggle state, hBN debug-report text, sampling
+    count state, and the caked-view override flag.
+  - The remaining runtime `global` lines are limited to structure-model /
+    diffuse-HT rebuild state plus the legacy `write_excel` flag.
 
 What is left:
 
-- `ra_sim/gui/runtime.py` is still very large and still owns too much mutable
-  GUI state.
-- The runtime still coordinates too many cross-feature workflow transitions and
-  Tk widgets inline.
-- The main remaining runtime-decomposition work is now cross-feature workflow
-  glue and long-lived mutable state ownership rather than isolated widget
-  construction.
+- No further GUI runtime-state extraction blockers remain.
+- `ra_sim/gui/runtime.py` is still very large and still coordinates too many
+  cross-feature workflow transitions and Tk widgets inline.
+- The follow-on runtime cleanup is now workflow glue and simulation /
+  structure-model orchestration that still live inline in `runtime.py`, not
+  another round of GUI runtime-state extraction.
 
 Why it matters:
 
-- The codebase still has one oversized integration module that is hard to test,
-  reason about, and safely change.
-- The remaining state ownership is the main reason the scaffolding modules have
-  not become real boundaries yet.
+- The highest-risk runtime-state ownership gap is now closed.
+- The codebase still has one oversized integration module, but the remaining
+  work can now focus on application boundaries and workflow orchestration
+  instead of more GUI-global cleanup.
 
 Definition of done:
 
@@ -509,8 +526,8 @@ What is left:
 - The new controller/state boundary is now real for a larger share of the GUI,
   but it is not yet the dominant app structure across the rest of the runtime.
 - The next practical boundary targets are the remaining cross-feature
-  runtime-owned helpers and workflow/state transitions that still live inline
-  in `runtime.py`.
+  runtime-owned helpers plus the simulation/structure-model workflow
+  transitions that still live inline in `runtime.py`.
 
 Why it matters:
 
@@ -685,6 +702,11 @@ Why first:
 - It unlocks the scaffold modules and reduces the risk of further extraction
   work.
 
+Current status:
+
+- Completed. The remaining GUI work has moved on to workflow/controller/view
+  boundaries rather than long-lived runtime-state extraction.
+
 ### Phase B: Turn Scaffolding Into Real Modules
 
 Goal:
@@ -772,17 +794,16 @@ Why last:
 
 The next best step is:
 
-- build on the new app-shell/status-panel extraction by moving the remaining
-  cross-feature runtime-owned workflow/state glue into explicit state +
-  controller + view boundaries
-- focus next on the remaining long-lived mutable state ownership and
-  cross-feature helper orchestration that still lives inline in
-  `ra_sim/gui/runtime.py`
-- keep shrinking the remaining cross-feature globals that prevent the extracted
-  scaffolding modules from becoming the dominant app structure
+- build on the completed runtime-state extraction by moving the remaining
+  cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
+- focus next on controller-owned user-action flows plus the
+  simulation/structure-model rebuild orchestration that still lives inline in
+  `runtime.py`
+- keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
+  application boundary rather than leaving them as helper scaffolding
 
-That is the point where the migration stops being "more helper extraction" and
-starts becoming a real architectural finish.
+That is the point where the refactor stops being "runtime state cleanup" and
+starts becoming a real application-structure finish.
 
 ## Tracking Notes
 

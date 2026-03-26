@@ -11,6 +11,9 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert isinstance(app_state.geometry_fit_history, state.GeometryFitHistoryState)
     assert isinstance(app_state.background_runtime, state.BackgroundRuntimeState)
     assert isinstance(app_state.peak_selection, state.PeakSelectionState)
+    assert isinstance(app_state.atom_site_override, state.AtomSiteOverrideState)
+    assert isinstance(app_state.geometry_runtime, state.GeometryRuntimeState)
+    assert isinstance(app_state.simulation_runtime, state.SimulationRuntimeState)
     assert isinstance(
         app_state.geometry_fit_parameter_controls_view,
         state.GeometryFitParameterControlsViewState,
@@ -107,6 +110,9 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
     assert app_state.background_runtime is not other_state.background_runtime
     assert app_state.peak_selection is not other_state.peak_selection
+    assert app_state.atom_site_override is not other_state.atom_site_override
+    assert app_state.geometry_runtime is not other_state.geometry_runtime
+    assert app_state.simulation_runtime is not other_state.simulation_runtime
     assert (
         app_state.geometry_fit_parameter_controls_view
         is not other_state.geometry_fit_parameter_controls_view
@@ -175,6 +181,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     app_state.background_runtime.backend_flip_x = True
     app_state.peak_selection.selected_hkl_target = (1, 2, 3)
     app_state.peak_selection.hkl_pick_armed = True
+    app_state.atom_site_override.source_path = "example.cif"
+    app_state.geometry_runtime.manual_pick_armed = True
+    app_state.simulation_runtime.last_simulation_signature = ("sig", 1)
+    app_state.simulation_runtime.sf_prune_stats["qr_kept"] = 12
     app_state.manual_geometry.pick_session["group_key"] = ("q_group", "primary", 1, 0)
     app_state.geometry_preview.skip_once = True
     app_state.geometry_preview.overlay.pairs.append({"x": 1.0})
@@ -185,6 +195,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert other_state.background_runtime.backend_flip_x is False
     assert other_state.peak_selection.selected_hkl_target is None
     assert other_state.peak_selection.hkl_pick_armed is False
+    assert other_state.atom_site_override.source_path is None
+    assert other_state.geometry_runtime.manual_pick_armed is False
+    assert other_state.simulation_runtime.last_simulation_signature is None
+    assert other_state.simulation_runtime.sf_prune_stats["qr_kept"] == 0
     assert other_state.manual_geometry.pick_session == {}
     assert other_state.geometry_preview.skip_once is False
     assert other_state.geometry_preview.overlay.pairs == []
