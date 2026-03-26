@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -153,6 +154,54 @@ def format_finite_stack_phi_l_divisor(value: object) -> str:
 
     normalized = normalize_finite_stack_phi_l_divisor(value, fallback=1.0)
     return f"{normalized:.6g}"
+
+
+def ensure_display_intensity_range(
+    min_value: object,
+    max_value: object,
+) -> tuple[float, float]:
+    """Return a finite ascending display-intensity range."""
+
+    try:
+        min_val = float(min_value)
+    except (TypeError, ValueError):
+        min_val = 0.0
+    try:
+        max_val = float(max_value)
+    except (TypeError, ValueError):
+        max_val = max(min_val + 1.0, 1.0)
+
+    if not math.isfinite(min_val):
+        min_val = 0.0
+    if not math.isfinite(max_val):
+        max_val = max(min_val + 1.0, 1.0)
+    if max_val <= min_val:
+        max_val = min_val + max(abs(min_val) * 1e-3, 1.0)
+    return min_val, max_val
+
+
+def normalize_display_scale_factor(
+    value: object,
+    *,
+    fallback: object,
+) -> float:
+    """Normalize one display scale-factor input to a finite non-negative float."""
+
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        try:
+            normalized = float(fallback)
+        except (TypeError, ValueError):
+            normalized = 1.0
+    if not math.isfinite(normalized):
+        try:
+            normalized = float(fallback)
+        except (TypeError, ValueError):
+            normalized = 1.0
+        if not math.isfinite(normalized):
+            normalized = 1.0
+    return max(0.0, float(normalized))
 
 
 def build_initial_state() -> AppState:

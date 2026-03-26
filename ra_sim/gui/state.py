@@ -84,6 +84,40 @@ class BackgroundBackendDebugViewState:
 
 
 @dataclass
+class DisplayControlsState:
+    """Mutable state for display-control override and callback bookkeeping."""
+
+    background_limits_user_override: bool = False
+    simulation_limits_user_override: bool = False
+    scale_factor_user_override: bool = False
+    suppress_background_limit_callback: bool = False
+    suppress_simulation_limit_callback: bool = False
+    suppress_scale_factor_callback: bool = False
+
+
+@dataclass
+class DisplayControlsViewState:
+    """Widget references and vars for background/simulation display controls."""
+
+    frame: Any = None
+    background_controls_frame: Any = None
+    simulation_controls_frame: Any = None
+    background_min_var: Any = None
+    background_max_var: Any = None
+    background_transparency_var: Any = None
+    background_min_slider: Any = None
+    background_max_slider: Any = None
+    background_transparency_slider: Any = None
+    simulation_min_var: Any = None
+    simulation_max_var: Any = None
+    simulation_scale_factor_var: Any = None
+    simulation_min_slider: Any = None
+    simulation_max_slider: Any = None
+    scale_factor_slider: Any = None
+    scale_factor_entry: Any = None
+
+
+@dataclass
 class SamplingOpticsControlsViewState:
     """Widget references and vars for sampling-resolution / optics controls."""
 
@@ -297,6 +331,12 @@ class AppState:
     )
     background_backend_debug_view: BackgroundBackendDebugViewState = field(
         default_factory=BackgroundBackendDebugViewState
+    )
+    display_controls_state: DisplayControlsState = field(
+        default_factory=DisplayControlsState
+    )
+    display_controls_view: DisplayControlsViewState = field(
+        default_factory=DisplayControlsViewState
     )
     sampling_optics_controls_view: SamplingOpticsControlsViewState = field(
         default_factory=SamplingOpticsControlsViewState

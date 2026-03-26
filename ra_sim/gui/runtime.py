@@ -2753,9 +2753,6 @@ root.protocol("WM_DELETE_WINDOW", _shutdown_gui)
 canvas_frame = ttk.Frame(fig_frame)
 canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-display_controls_frame = ttk.Frame(fig_frame)
-display_controls_frame.pack(side=tk.BOTTOM, fill=tk.X)
-
 fig, ax = plt.subplots(figsize=(8, 8))
 ax.set_aspect("auto")
 canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(fig, master=canvas_frame)
@@ -5634,6 +5631,8 @@ hbn_geometry_debug_view_state = gui_state.HbnGeometryDebugViewState()
 geometry_overlay_actions_view_state = gui_state.GeometryOverlayActionsViewState()
 analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
 analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
+display_controls_state = gui_state.DisplayControlsState()
+display_controls_view_state = gui_state.DisplayControlsViewState()
 sampling_optics_controls_view_state = gui_state.SamplingOpticsControlsViewState()
 finite_stack_controls_view_state = gui_state.FiniteStackControlsViewState()
 
@@ -7677,19 +7676,6 @@ canvas.mpl_connect('button_release_event', on_canvas_release)
 # ---------------------------------------------------------------------------
 # Display controls for background and simulation intensity scaling
 # ---------------------------------------------------------------------------
-background_limits_user_override = False
-simulation_limits_user_override = False
-scale_factor_user_override = False
-
-suppress_background_limit_callback = False
-suppress_simulation_limit_callback = False
-suppress_scale_factor_callback = False
-
-background_min_var = None
-background_max_var = None
-background_transparency_var = None
-simulation_min_var = None
-simulation_max_var = None
 
 
 def _finite_percentile(array, percentile, fallback):
@@ -7703,16 +7689,11 @@ def _finite_percentile(array, percentile, fallback):
 
 
 def _ensure_valid_range(min_val, max_val):
-    if not np.isfinite(min_val):
-        min_val = 0.0
-    if not np.isfinite(max_val):
-        max_val = max(min_val + 1.0, 1.0)
-    if max_val <= min_val:
-        max_val = min_val + max(abs(min_val) * 1e-3, 1.0)
-    return min_val, max_val
+    return gui_controllers.ensure_display_intensity_range(min_val, max_val)
 
 
 def _apply_background_transparency():
+    background_transparency_var = display_controls_view_state.background_transparency_var
     if background_transparency_var is None:
         return
     transparency = max(0.0, min(1.0, background_transparency_var.get()))
@@ -7720,44 +7701,39 @@ def _apply_background_transparency():
 
 
 def _apply_background_limits():
-    global background_limits_user_override, suppress_background_limit_callback
+    background_min_var = display_controls_view_state.background_min_var
+    background_max_var = display_controls_view_state.background_max_var
     if background_min_var is None or background_max_var is None:
         return
     min_val = background_min_var.get()
     max_val = background_max_var.get()
     if min_val >= max_val:
         adjustment = max(abs(max_val) * 1e-6, 1e-6)
-        suppress_background_limit_callback = True
+        display_controls_state.suppress_background_limit_callback = True
         background_min_var.set(max_val - adjustment)
-        suppress_background_limit_callback = False
+        display_controls_state.suppress_background_limit_callback = False
         return
-    background_limits_user_override = True
+    display_controls_state.background_limits_user_override = True
     background_display.set_clim(min_val, max_val)
     _apply_background_transparency()
     canvas.draw_idle()
 
 
 def _apply_simulation_limits():
-    global simulation_limits_user_override, suppress_simulation_limit_callback
+    simulation_min_var = display_controls_view_state.simulation_min_var
+    simulation_max_var = display_controls_view_state.simulation_max_var
     if simulation_min_var is None or simulation_max_var is None:
         return
     min_val = simulation_min_var.get()
     max_val = simulation_max_var.get()
     if min_val >= max_val:
         adjustment = max(abs(max_val) * 1e-6, 1e-6)
-        suppress_simulation_limit_callback = True
+        display_controls_state.suppress_simulation_limit_callback = True
         simulation_min_var.set(max_val - adjustment)
-        suppress_simulation_limit_callback = False
+        display_controls_state.suppress_simulation_limit_callback = False
         return
-    simulation_limits_user_override = True
+    display_controls_state.simulation_limits_user_override = True
     apply_scale_factor_to_existing_results()
-
-
-background_controls = ttk.LabelFrame(display_controls_frame, text="Background Display")
-background_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-simulation_controls = ttk.LabelFrame(display_controls_frame, text="Simulation Display")
-simulation_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
 
 background_min_candidate = _finite_percentile(current_background_display, 1, 0.0)
@@ -7771,39 +7747,6 @@ background_slider_min = min(background_min_candidate, 0.0)
 background_slider_max = max(background_vmax_default * 5.0, background_slider_min + 1.0)
 background_slider_step = max((background_slider_max - background_slider_min) / 500.0, 0.01)
 
-background_min_var, background_min_slider = create_slider(
-    "Background Min Intensity",
-    background_slider_min,
-    background_slider_max,
-    background_vmin_default,
-    background_slider_step,
-    parent=background_controls,
-    update_callback=_apply_background_limits,
-)
-
-background_max_var, background_max_slider = create_slider(
-    "Background Max Intensity",
-    background_slider_min,
-    background_slider_max,
-    background_vmax_default,
-    background_slider_step,
-    parent=background_controls,
-    update_callback=_apply_background_limits,
-)
-
-background_transparency_var, _ = create_slider(
-    "Background Transparency",
-    0.0,
-    1.0,
-    0.0,
-    0.01,
-    parent=background_controls,
-    update_callback=_apply_background_limits,
-)
-
-background_display.set_clim(background_vmin_default, background_vmax_default)
-_apply_background_transparency()
-
 
 simulation_slider_min = 0.0
 simulation_slider_max = max(background_slider_max, defaults['vmax'] * 5.0)
@@ -7813,65 +7756,64 @@ simulation_slider_step = min(
     1e-4,
 )
 
-simulation_min_var, simulation_min_slider = create_slider(
-    "Simulation Min Intensity",
-    simulation_slider_min,
-    simulation_slider_max,
-    0.0,
-    simulation_slider_step,
-    parent=simulation_controls,
-    update_callback=_apply_simulation_limits,
-)
-
-simulation_max_var, simulation_max_slider = create_slider(
-    "Simulation Max Intensity",
-    simulation_slider_min,
-    simulation_slider_max,
-    background_vmax_default,
-    simulation_slider_step,
-    parent=simulation_controls,
-    update_callback=_apply_simulation_limits,
-)
-
 scale_factor_slider_min = 0.0
 scale_factor_slider_max = 2.0
 scale_factor_step = 0.0001
 
-simulation_scale_factor_var, scale_factor_slider = create_slider(
-    "Simulation Scale Factor",
-    scale_factor_slider_min,
-    scale_factor_slider_max,
-    1.0,
-    scale_factor_step,
-    parent=simulation_controls,
+gui_views.create_display_controls(
+    parent=fig_frame,
+    view_state=display_controls_view_state,
+    background_range=(background_slider_min, background_slider_max),
+    background_defaults=(background_vmin_default, background_vmax_default),
+    background_step=background_slider_step,
+    background_transparency=0.0,
+    simulation_range=(simulation_slider_min, simulation_slider_max),
+    simulation_defaults=(0.0, background_vmax_default),
+    simulation_step=simulation_slider_step,
+    scale_factor_range=(scale_factor_slider_min, scale_factor_slider_max),
+    scale_factor_value=1.0,
+    scale_factor_step=scale_factor_step,
+    on_apply_background_limits=_apply_background_limits,
+    on_apply_simulation_limits=_apply_simulation_limits,
 )
+
+background_display.set_clim(background_vmin_default, background_vmax_default)
+_apply_background_transparency()
 
 
 def _get_scale_factor_value(default=1.0):
+    simulation_scale_factor_var = display_controls_view_state.simulation_scale_factor_var
+    if simulation_scale_factor_var is None:
+        return default
     try:
         scale = float(simulation_scale_factor_var.get())
     except (tk.TclError, ValueError):
         return default
     if not np.isfinite(scale):
         return default
-    return scale
+    return gui_controllers.normalize_display_scale_factor(scale, fallback=1.0)
 
 
 def _on_scale_factor_change(*args):
-    global scale_factor_user_override
-    if suppress_scale_factor_callback:
+    if display_controls_state.suppress_scale_factor_callback:
         return
     if _get_scale_factor_value(default=None) is None:
         return
-    scale_factor_user_override = True
+    display_controls_state.scale_factor_user_override = True
     apply_scale_factor_to_existing_results()
 
 
-simulation_scale_factor_var.trace_add("write", _on_scale_factor_change)
+if display_controls_view_state.simulation_scale_factor_var is not None:
+    display_controls_view_state.simulation_scale_factor_var.trace_add(
+        "write", _on_scale_factor_change
+    )
 
 
 def _update_background_slider_defaults(image, reset_override=False):
-    global suppress_background_limit_callback, background_limits_user_override
+    background_max_var = display_controls_view_state.background_max_var
+    background_min_var = display_controls_view_state.background_min_var
+    background_min_slider = display_controls_view_state.background_min_slider
+    background_max_slider = display_controls_view_state.background_max_slider
     if image is None:
         return
     min_candidate = _finite_percentile(image, 1, 0.0)
@@ -7881,8 +7823,8 @@ def _update_background_slider_defaults(image, reset_override=False):
     slider_to = max(float(background_min_slider.cget("to")), max_candidate, 1.0)
     background_min_slider.configure(from_=slider_from, to=slider_to)
     background_max_slider.configure(from_=slider_from, to=slider_to)
-    suppress_background_limit_callback = True
-    if reset_override or not background_limits_user_override:
+    display_controls_state.suppress_background_limit_callback = True
+    if reset_override or not display_controls_state.background_limits_user_override:
         min_value = 0.0
         max_value = max_candidate
     else:
@@ -7893,14 +7835,17 @@ def _update_background_slider_defaults(image, reset_override=False):
     min_value, max_value = _ensure_valid_range(min_value, max_value)
     background_min_var.set(min_value)
     background_max_var.set(max_value)
-    suppress_background_limit_callback = False
+    display_controls_state.suppress_background_limit_callback = False
     background_display.set_clim(min_value, max_value)
     if reset_override:
-        background_limits_user_override = False
+        display_controls_state.background_limits_user_override = False
 
 
 def _update_simulation_sliders_from_image(image, reset_override=False):
-    global suppress_simulation_limit_callback, simulation_limits_user_override
+    simulation_min_var = display_controls_view_state.simulation_min_var
+    simulation_max_var = display_controls_view_state.simulation_max_var
+    simulation_min_slider = display_controls_view_state.simulation_min_slider
+    simulation_max_slider = display_controls_view_state.simulation_max_slider
     if image is None or image.size == 0:
         return
     finite_pixels = np.asarray(image, dtype=float)
@@ -7917,8 +7862,8 @@ def _update_simulation_sliders_from_image(image, reset_override=False):
     simulation_min_slider.configure(from_=lower_bound, to=slider_to)
     simulation_max_slider.configure(from_=lower_bound, to=slider_to)
     slider_from = lower_bound
-    suppress_simulation_limit_callback = True
-    if reset_override or not simulation_limits_user_override:
+    display_controls_state.suppress_simulation_limit_callback = True
+    if reset_override or not display_controls_state.simulation_limits_user_override:
         min_value = 0.0
         max_value = upper_bound
     else:
@@ -7929,23 +7874,17 @@ def _update_simulation_sliders_from_image(image, reset_override=False):
     min_value, max_value = _ensure_valid_range(min_value, max_value)
     simulation_min_var.set(min_value)
     simulation_max_var.set(max_value)
-    suppress_simulation_limit_callback = False
+    display_controls_state.suppress_simulation_limit_callback = False
     if reset_override:
-        simulation_limits_user_override = False
+        display_controls_state.simulation_limits_user_override = False
 
 
 def _set_scale_factor_value(value, adjust_range=True, reset_override=False):
-    global suppress_scale_factor_callback, scale_factor_user_override
-    if value is None:
-        value = 1.0
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        value = 1.0
-    if not np.isfinite(value):
-        value = 1.0
-    if value < 0.0:
-        value = 0.0
+    simulation_scale_factor_var = display_controls_view_state.simulation_scale_factor_var
+    scale_factor_slider = display_controls_view_state.scale_factor_slider
+    if simulation_scale_factor_var is None or scale_factor_slider is None:
+        return
+    value = gui_controllers.normalize_display_scale_factor(value, fallback=1.0)
 
     slider_min = float(scale_factor_slider.cget("from"))
     slider_max = float(scale_factor_slider.cget("to"))
@@ -7961,21 +7900,17 @@ def _set_scale_factor_value(value, adjust_range=True, reset_override=False):
     else:
         value = min(max(value, slider_min), slider_max)
 
-    suppress_scale_factor_callback = True
+    display_controls_state.suppress_scale_factor_callback = True
     simulation_scale_factor_var.set(value)
-    suppress_scale_factor_callback = False
+    display_controls_state.suppress_scale_factor_callback = False
     if reset_override:
-        scale_factor_user_override = False
+        display_controls_state.scale_factor_user_override = False
     else:
-        scale_factor_user_override = True
+        display_controls_state.scale_factor_user_override = True
 
 
 def _install_scale_factor_entry_bindings():
-    scale_entry = None
-    for child in scale_factor_slider.master.winfo_children():
-        if isinstance(child, ttk.Entry):
-            scale_entry = child
-            break
+    scale_entry = display_controls_view_state.scale_factor_entry
     if scale_entry is None:
         return
 
@@ -8200,6 +8135,8 @@ def apply_scale_factor_to_existing_results(update_limits=False):
         },
     )
     if unscaled_image_global is None:
+        background_min_var = display_controls_view_state.background_min_var
+        background_max_var = display_controls_view_state.background_max_var
         chi_square_sig = (
             None,
             bool(background_visible),
@@ -8257,21 +8194,21 @@ def apply_scale_factor_to_existing_results(update_limits=False):
         image_display.set_extent([0, image_size, image_size, 0])
         image_display.set_data(global_image_buffer)
         image_display.set_clim(
-            simulation_min_var.get(),
-            simulation_max_var.get(),
+            display_controls_view_state.simulation_min_var.get(),
+            display_controls_view_state.simulation_max_var.get(),
         )
         colorbar_main.update_normal(image_display)
     elif last_caked_image_unscaled is not None and last_caked_extent is not None:
         _set_image_origin(image_display, 'lower')
         scaled_caked = last_caked_image_unscaled * scale
-        if not simulation_limits_user_override:
+        if not display_controls_state.simulation_limits_user_override:
             _update_simulation_sliders_from_image(scaled_caked, reset_override=True)
         image_display.set_data(scaled_caked)
         image_display.set_extent(last_caked_extent)
 
     if analysis_view_controls_view_state.show_caked_2d_var.get():
-        caked_min = float(simulation_min_var.get())
-        caked_max = float(simulation_max_var.get())
+        caked_min = float(display_controls_view_state.simulation_min_var.get())
+        caked_max = float(display_controls_view_state.simulation_max_var.get())
         caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
         image_display.set_clim(caked_min, caked_max)
         if not caked_limits_user_override:
@@ -8303,8 +8240,8 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             canvas_1d.draw_idle()
 
     background_display.set_clim(
-        background_min_var.get(),
-        background_max_var.get(),
+        display_controls_view_state.background_min_var.get(),
+        display_controls_view_state.background_max_var.get(),
     )
 
     if not analysis_view_controls_view_state.show_caked_2d_var.get():
@@ -9783,7 +9720,7 @@ def do_update():
     last_1d_integration_data["simulated_2d_image"] = unscaled_image_global
 
     if unscaled_image_global is not None:
-        if scale_factor_user_override:
+        if display_controls_state.scale_factor_user_override:
             _set_scale_factor_value(
                 _get_scale_factor_value(default=1.0),
                 adjust_range=False,
@@ -9880,7 +9817,7 @@ def do_update():
         scaled_caked_for_limits = caked_img * current_scale
         auto_vmin, auto_vmax = _auto_caked_limits(scaled_caked_for_limits)
 
-        if not simulation_limits_user_override:
+        if not display_controls_state.simulation_limits_user_override:
             _update_simulation_sliders_from_image(
                 scaled_caked_for_limits, reset_override=True
             )
@@ -9889,8 +9826,8 @@ def do_update():
             vmin_caked_var.set(auto_vmin)
             vmax_caked_var.set(auto_vmax)
 
-        vmin_val = float(simulation_min_var.get())
-        vmax_val = float(simulation_max_var.get())
+        vmin_val = float(display_controls_view_state.simulation_min_var.get())
+        vmax_val = float(display_controls_view_state.simulation_max_var.get())
         global_sim_max = vmax_val
 
         if not math.isfinite(vmin_val):
@@ -10020,8 +9957,8 @@ def do_update():
         if background_visible and current_background_display is not None:
             background_display.set_data(current_background_display)
             background_display.set_clim(
-                background_min_var.get(),
-                background_max_var.get(),
+                display_controls_view_state.background_min_var.get(),
+                display_controls_view_state.background_max_var.get(),
             )
             background_display.set_visible(True)
         else:
@@ -10267,8 +10204,6 @@ def switch_background():
 
 def reset_to_defaults():
     global caked_limits_user_override
-    global simulation_limits_user_override, background_limits_user_override
-    global scale_factor_user_override, suppress_simulation_limit_callback
     _clear_geometry_fit_undo_stack()
     theta_initial_var.set(defaults['theta_initial'])
     if geometry_theta_offset_var is not None:
@@ -10326,16 +10261,16 @@ def reset_to_defaults():
     vmax_caked_var.set(2000.0)
     caked_limits_user_override = False
 
-    background_limits_user_override = False
-    simulation_limits_user_override = False
-    scale_factor_user_override = False
+    display_controls_state.background_limits_user_override = False
+    display_controls_state.simulation_limits_user_override = False
+    display_controls_state.scale_factor_user_override = False
 
     _update_background_slider_defaults(current_background_display, reset_override=True)
 
-    suppress_simulation_limit_callback = True
-    simulation_min_var.set(0.0)
-    simulation_max_var.set(background_vmax_default)
-    suppress_simulation_limit_callback = False
+    display_controls_state.suppress_simulation_limit_callback = True
+    display_controls_view_state.simulation_min_var.set(0.0)
+    display_controls_view_state.simulation_max_var.set(background_vmax_default)
+    display_controls_state.suppress_simulation_limit_callback = False
 
     _set_scale_factor_value(1.0, adjust_range=False, reset_override=True)
 
@@ -10785,9 +10720,30 @@ def import_hbn_tilt_from_bundle():
     )
 
 
+def _gui_state_variable_items() -> dict[str, object]:
+    """Return Tk variables that participate in full GUI-state snapshots."""
+
+    items = dict(globals())
+    items.update(
+        {
+            "background_min_var": display_controls_view_state.background_min_var,
+            "background_max_var": display_controls_view_state.background_max_var,
+            "background_transparency_var": (
+                display_controls_view_state.background_transparency_var
+            ),
+            "simulation_min_var": display_controls_view_state.simulation_min_var,
+            "simulation_max_var": display_controls_view_state.simulation_max_var,
+            "simulation_scale_factor_var": (
+                display_controls_view_state.simulation_scale_factor_var
+            ),
+        }
+    )
+    return items
+
+
 def _collect_full_gui_state_snapshot() -> dict[str, object]:
     return gui_state_io.collect_full_gui_state_snapshot(
-        global_items=globals(),
+        global_items=_gui_state_variable_items(),
         tk_variable_type=tk.Variable,
         occ_vars=globals().get("occ_vars", []),
         atom_site_fract_vars=globals().get("atom_site_fract_vars", []),
@@ -10802,17 +10758,20 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
         background_backend_rotation_k=background_backend_rotation_k,
         background_backend_flip_x=background_backend_flip_x,
         background_backend_flip_y=background_backend_flip_y,
-        background_limits_user_override=background_limits_user_override,
-        simulation_limits_user_override=simulation_limits_user_override,
-        scale_factor_user_override=scale_factor_user_override,
+        background_limits_user_override=(
+            display_controls_state.background_limits_user_override
+        ),
+        simulation_limits_user_override=(
+            display_controls_state.simulation_limits_user_override
+        ),
+        scale_factor_user_override=display_controls_state.scale_factor_user_override,
     )
 
 
 def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     global background_visible
     global background_backend_rotation_k, background_backend_flip_x, background_backend_flip_y
-    global background_limits_user_override, simulation_limits_user_override
-    global scale_factor_user_override, selected_hkl_target
+    global selected_hkl_target
 
     if not isinstance(snapshot, dict):
         snapshot = {}
@@ -10836,7 +10795,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     warnings.extend(
         gui_state_io.apply_gui_state_variables(
             variables,
-            global_items=globals(),
+            global_items=_gui_state_variable_items(),
             tk_variable_type=tk.Variable,
         )
     )
@@ -10865,9 +10824,15 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             "background_backend_rotation_k": background_backend_rotation_k,
             "background_backend_flip_x": background_backend_flip_x,
             "background_backend_flip_y": background_backend_flip_y,
-            "background_limits_user_override": background_limits_user_override,
-            "simulation_limits_user_override": simulation_limits_user_override,
-            "scale_factor_user_override": scale_factor_user_override,
+            "background_limits_user_override": (
+                display_controls_state.background_limits_user_override
+            ),
+            "simulation_limits_user_override": (
+                display_controls_state.simulation_limits_user_override
+            ),
+            "scale_factor_user_override": (
+                display_controls_state.scale_factor_user_override
+            ),
         },
         toggle_background=toggle_background,
     )
@@ -10875,9 +10840,15 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     background_backend_rotation_k = int(flag_state["background_backend_rotation_k"])
     background_backend_flip_x = bool(flag_state["background_backend_flip_x"])
     background_backend_flip_y = bool(flag_state["background_backend_flip_y"])
-    background_limits_user_override = bool(flag_state["background_limits_user_override"])
-    simulation_limits_user_override = bool(flag_state["simulation_limits_user_override"])
-    scale_factor_user_override = bool(flag_state["scale_factor_user_override"])
+    display_controls_state.background_limits_user_override = bool(
+        flag_state["background_limits_user_override"]
+    )
+    display_controls_state.simulation_limits_user_override = bool(
+        flag_state["simulation_limits_user_override"]
+    )
+    display_controls_state.scale_factor_user_override = bool(
+        flag_state["scale_factor_user_override"]
+    )
 
     geometry_state = gui_state_io.apply_gui_state_geometry(
         snapshot.get("geometry", {}),
@@ -15758,13 +15729,13 @@ def toggle_1d_plots():
 
 
 def toggle_caked_2d():
-    global caked_limits_user_override, simulation_limits_user_override
+    global caked_limits_user_override
     show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
     if show_caked_2d_var is None or not show_caked_2d_var.get():
         caked_limits_user_override = False
     else:
         # Entering caked view should start from auto-scaled simulation limits.
-        simulation_limits_user_override = False
+        display_controls_state.simulation_limits_user_override = False
         _set_hkl_pick_mode(False)
     _drag_select_state["active"] = False
     _drag_select_state["mode"] = None

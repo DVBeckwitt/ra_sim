@@ -151,6 +151,16 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.controllers` now owns the finite-stack layer-count and
     Hendricks-Teller input normalization / formatting helpers.
   - Direct controller/view tests now cover the extracted finite-stack helpers.
+- Display-control panel migration has landed.
+  - Shared widget references plus display-limit override/callback bookkeeping
+    for the background/simulation intensity controls now live in
+    `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns the display-control panel construction and
+    slider/entry reference capture.
+  - `ra_sim.gui.controllers` now owns the shared display-intensity range and
+    scale-factor normalization helpers used by that control surface.
+  - Direct controller/view tests now cover the extracted display-control
+    helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -242,6 +252,14 @@ What is done:
     layer-widget enable/disable, scale-range, and entry-text helpers.
   - `ra_sim.gui.controllers` now owns the finite-stack layer-count and
     Hendricks-Teller input normalization / formatting helpers.
+- The background/simulation display controls are no longer assembled directly
+  in `runtime.py`.
+  - `ra_sim.gui.state` now owns their widget refs plus display-limit
+    override/callback state.
+  - `ra_sim.gui.views` now owns the display-control panel construction and
+    scale-factor entry lookup.
+  - `ra_sim.gui.controllers` now owns the shared display-intensity range and
+    scale-factor normalization helpers.
 
 What is left:
 
@@ -249,7 +267,8 @@ What is left:
   GUI state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
 - The next bounded GUI slices are still assembled inline in `runtime.py`,
-  especially the display-control panels.
+  especially the structure-factor pruning / arc-integration controls and other
+  Tk-heavy parameter panels.
 
 Why it matters:
 
@@ -328,6 +347,12 @@ What is done:
   updates for the layer widgets and entry text.
 - `controllers.py` now also owns the finite-stack layer-count and
   Hendricks-Teller input normalization / formatting helpers.
+- `state.py` now also owns display-control panel view state and the associated
+  display-limit override/callback state container.
+- `views.py` now also owns the background/simulation display-control
+  construction and scale-factor entry discovery.
+- `controllers.py` now also owns shared display-intensity range validation and
+  display scale-factor normalization helpers.
 
 What is left:
 
@@ -336,8 +361,8 @@ What is left:
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
 - Other Tk-heavy surfaces still need to move behind `views.py` helpers.
-- The next practical view-state target is the remaining inline display-control
-  cluster.
+- The next practical view-state target is the remaining structure-factor
+  pruning / arc-integration cluster.
 
 Why it matters:
 
@@ -500,8 +525,8 @@ Tasks:
 
 - Group more runtime globals into explicit state containers.
 - Move the next remaining inline control clusters
-  (display controls and similar surfaces) into `views.py` helpers and shared
-  view state.
+  (structure-factor pruning / arc-integration controls and similar surfaces)
+  into `views.py` helpers and shared view state.
 - Reduce direct feature coordination in `runtime.py` where controller logic or
   shared state can own it instead.
 - Keep moving Tk-owned widget references out of runtime and into `views.py`
@@ -600,12 +625,12 @@ Why last:
 
 The next best step is:
 
-- build on the newer geometry-tool / HKL-lookup / overlay-action /
-  analysis-view / analysis-export slices by moving the next runtime-owned GUI
-  control clusters into explicit state + controller + view boundaries
-- focus next on the display-control panels in `runtime.py`, then on the
-  remaining cross-feature runtime-owned state/helpers that are still similarly
-  isolated
+- build on the newer display-control extraction by moving the next
+  runtime-owned GUI control clusters into explicit state + controller + view
+  boundaries
+- focus next on the structure-factor pruning / arc-integration controls in
+  `runtime.py`, then on the remaining cross-feature runtime-owned state/helpers
+  that are still similarly isolated
 - keep shrinking the remaining cross-feature globals and inline Tk-heavy
   helpers that prevent the extracted scaffolding modules from becoming the
   dominant app structure

@@ -148,12 +148,19 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     `ra_sim.gui.views`
   - finite-stack layer-count and Hendricks-Teller input normalization /
     formatting now flow through `ra_sim.gui.controllers`
+- Display-control panel migration has also landed:
+  - shared widget references plus display-limit override/callback bookkeeping
+    for the background/simulation intensity controls now use shared GUI state
+  - display-control panel construction and scale-factor entry discovery now
+    flow through `ra_sim.gui.views`
+  - shared display-intensity range validation and display scale-factor
+    normalization now flow through `ra_sim.gui.controllers`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
     coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
     background-theta/background-debug/geometry-tool-action/HKL-lookup/
-    overlay-action/analysis-view/analysis-export/sampling-optics/finite-stack
-    view helper coverage
+    overlay-action/analysis-view/analysis-export/sampling-optics/finite-stack/
+    display-controls view helper coverage
 
 ## Remaining Migration Focus
 
@@ -162,8 +169,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   surfaces still need the same treatment, especially the remaining widget-heavy
   runtime-owned helpers and cross-feature workflow glue that still assemble
   long-lived Tk references or own mutable GUI state inline.
-- The next bounded GUI target is the display-control panel cluster that is
-  still built directly in `ra_sim.gui.runtime`.
+- The next bounded GUI target is the structure-factor pruning /
+  arc-integration control cluster that is still built directly in
+  `ra_sim.gui.runtime`.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

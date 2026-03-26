@@ -8,12 +8,14 @@ import tkinter as tk
 from tkinter import ttk
 
 from .collapsible import CollapsibleFrame
+from .sliders import create_slider
 from .state import (
     AnalysisViewControlsViewState,
     AnalysisExportControlsViewState,
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
+    DisplayControlsViewState,
     FiniteStackControlsViewState,
     GeometryOverlayActionsViewState,
     GeometryToolActionsViewState,
@@ -109,6 +111,122 @@ def create_background_file_controls(
 
     view_state.background_file_status_var = background_file_status_var
     view_state.background_file_status_label = background_file_status_label
+
+
+def _find_slider_entry(slider: object | None) -> object | None:
+    """Return the entry widget paired with one slider row when discoverable."""
+
+    master = getattr(slider, "master", None)
+    children = getattr(master, "winfo_children", None)
+    if not callable(children):
+        return None
+    for child in children():
+        if child is slider:
+            continue
+        if callable(getattr(child, "bind", None)):
+            return child
+    return None
+
+
+def create_display_controls(
+    *,
+    parent: tk.Misc,
+    view_state: DisplayControlsViewState,
+    background_range: tuple[float, float],
+    background_defaults: tuple[float, float],
+    background_step: float,
+    background_transparency: float,
+    simulation_range: tuple[float, float],
+    simulation_defaults: tuple[float, float],
+    simulation_step: float,
+    scale_factor_range: tuple[float, float],
+    scale_factor_value: float,
+    scale_factor_step: float,
+    on_apply_background_limits: Callable[[], None],
+    on_apply_simulation_limits: Callable[[], None],
+) -> None:
+    """Create the background/simulation display-control panels."""
+
+    frame = ttk.Frame(parent)
+    frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+    background_controls = ttk.LabelFrame(frame, text="Background Display")
+    background_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    simulation_controls = ttk.LabelFrame(frame, text="Simulation Display")
+    simulation_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    background_min_var, background_min_slider = create_slider(
+        "Background Min Intensity",
+        float(background_range[0]),
+        float(background_range[1]),
+        float(background_defaults[0]),
+        float(background_step),
+        parent=background_controls,
+        update_callback=on_apply_background_limits,
+    )
+    background_max_var, background_max_slider = create_slider(
+        "Background Max Intensity",
+        float(background_range[0]),
+        float(background_range[1]),
+        float(background_defaults[1]),
+        float(background_step),
+        parent=background_controls,
+        update_callback=on_apply_background_limits,
+    )
+    background_transparency_var, background_transparency_slider = create_slider(
+        "Background Transparency",
+        0.0,
+        1.0,
+        float(background_transparency),
+        0.01,
+        parent=background_controls,
+        update_callback=on_apply_background_limits,
+    )
+
+    simulation_min_var, simulation_min_slider = create_slider(
+        "Simulation Min Intensity",
+        float(simulation_range[0]),
+        float(simulation_range[1]),
+        float(simulation_defaults[0]),
+        float(simulation_step),
+        parent=simulation_controls,
+        update_callback=on_apply_simulation_limits,
+    )
+    simulation_max_var, simulation_max_slider = create_slider(
+        "Simulation Max Intensity",
+        float(simulation_range[0]),
+        float(simulation_range[1]),
+        float(simulation_defaults[1]),
+        float(simulation_step),
+        parent=simulation_controls,
+        update_callback=on_apply_simulation_limits,
+    )
+    simulation_scale_factor_var, scale_factor_slider = create_slider(
+        "Simulation Scale Factor",
+        float(scale_factor_range[0]),
+        float(scale_factor_range[1]),
+        float(scale_factor_value),
+        float(scale_factor_step),
+        parent=simulation_controls,
+    )
+
+    view_state.frame = frame
+    view_state.background_controls_frame = background_controls
+    view_state.simulation_controls_frame = simulation_controls
+    view_state.background_min_var = background_min_var
+    view_state.background_max_var = background_max_var
+    view_state.background_transparency_var = background_transparency_var
+    view_state.background_min_slider = background_min_slider
+    view_state.background_max_slider = background_max_slider
+    view_state.background_transparency_slider = background_transparency_slider
+    view_state.simulation_min_var = simulation_min_var
+    view_state.simulation_max_var = simulation_max_var
+    view_state.simulation_scale_factor_var = simulation_scale_factor_var
+    view_state.simulation_min_slider = simulation_min_slider
+    view_state.simulation_max_slider = simulation_max_slider
+    view_state.scale_factor_slider = scale_factor_slider
+    view_state.scale_factor_entry = _find_slider_entry(scale_factor_slider)
 
 
 def create_sampling_optics_controls(

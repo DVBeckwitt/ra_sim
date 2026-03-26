@@ -17,6 +17,14 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         state.BackgroundBackendDebugViewState,
     )
     assert isinstance(
+        app_state.display_controls_state,
+        state.DisplayControlsState,
+    )
+    assert isinstance(
+        app_state.display_controls_view,
+        state.DisplayControlsViewState,
+    )
+    assert isinstance(
         app_state.sampling_optics_controls_view,
         state.SamplingOpticsControlsViewState,
     )
@@ -58,6 +66,8 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.background_theta_controls_view is not other_state.background_theta_controls_view
     assert app_state.workspace_panels_view is not other_state.workspace_panels_view
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
+    assert app_state.display_controls_state is not other_state.display_controls_state
+    assert app_state.display_controls_view is not other_state.display_controls_view
     assert (
         app_state.sampling_optics_controls_view
         is not other_state.sampling_optics_controls_view
@@ -97,6 +107,14 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert other_state.geometry_preview.overlay.pairs == []
     assert other_state.geometry_q_groups.refresh_requested is False
     assert other_state.bragg_qr_manager.selected_group_key is None
+
+
+def test_display_control_controller_helpers_normalize_scale_and_ranges() -> None:
+    assert controllers.ensure_display_intensity_range(float("nan"), 5.0) == (0.0, 5.0)
+    assert controllers.ensure_display_intensity_range(5.0, 4.0) == (5.0, 6.0)
+    assert controllers.normalize_display_scale_factor("2.5", fallback=1.0) == 2.5
+    assert controllers.normalize_display_scale_factor("-3", fallback=1.0) == 0.0
+    assert controllers.normalize_display_scale_factor("bad", fallback="4.5") == 4.5
 
 
 def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> None:

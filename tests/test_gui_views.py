@@ -301,6 +301,7 @@ class _FakeEntry:
         self.textvariable = kwargs.get("textvariable")
         self.bindings = {}
         self.state = kwargs.get("state")
+        self.value = ""
 
     def pack(self, **_kwargs) -> None:
         pass
@@ -311,11 +312,29 @@ class _FakeEntry:
     def bind(self, event: str, callback) -> None:
         self.bindings[event] = callback
 
+    def unbind(self, event: str) -> None:
+        self.bindings.pop(event, None)
+
     def configure(self, **kwargs) -> None:
         self.state = kwargs.get("state", self.state)
 
     def config(self, **kwargs) -> None:
         self.configure(**kwargs)
+
+    def get(self) -> str:
+        if self.textvariable is not None:
+            return str(self.textvariable.get())
+        return str(self.value)
+
+    def delete(self, _start, _end=None) -> None:
+        self.value = ""
+        if self.textvariable is not None:
+            self.textvariable.set("")
+
+    def insert(self, _index, value) -> None:
+        self.value = str(value)
+        if self.textvariable is not None:
+            self.textvariable.set(self.value)
 
 
 class _FakeButton:
@@ -684,6 +703,106 @@ def test_background_file_controls_store_status_var_and_update_text(monkeypatch) 
 
     _FakeButton.created[0].command()
     assert loaded == [True]
+
+
+def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
+    class _FakeSliderRow:
+        def __init__(self) -> None:
+            self.children = []
+
+        def winfo_children(self):
+            return list(self.children)
+
+    class _FakeSliderWidget:
+        def __init__(self, entry, min_val, max_val) -> None:
+            self.master = _FakeSliderRow()
+            self.master.children = [self, entry]
+            self.bounds = {"from": min_val, "to": max_val}
+
+        def configure(self, **kwargs) -> None:
+            if "from_" in kwargs:
+                self.bounds["from"] = kwargs["from_"]
+            if "to" in kwargs:
+                self.bounds["to"] = kwargs["to"]
+
+        def cget(self, key: str):
+            return self.bounds[key]
+
+    created = []
+
+    def _fake_create_slider(
+        label,
+        min_val,
+        max_val,
+        initial_val,
+        step_size,
+        parent,
+        update_callback=None,
+        **_kwargs,
+    ):
+        var = _FakeVar(initial_val)
+        entry = _FakeEntry(parent)
+        slider = _FakeSliderWidget(entry, min_val, max_val)
+        created.append(
+            {
+                "label": label,
+                "var": var,
+                "slider": slider,
+                "step": step_size,
+                "parent": parent,
+                "update_callback": update_callback,
+                "entry": entry,
+            }
+        )
+        return var, slider
+
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views, "create_slider", _fake_create_slider)
+
+    view_state = state.DisplayControlsViewState()
+
+    views.create_display_controls(
+        parent=object(),
+        view_state=view_state,
+        background_range=(-1.0, 10.0),
+        background_defaults=(0.0, 5.0),
+        background_step=0.1,
+        background_transparency=0.25,
+        simulation_range=(0.0, 20.0),
+        simulation_defaults=(0.0, 7.5),
+        simulation_step=0.01,
+        scale_factor_range=(0.0, 2.0),
+        scale_factor_value=1.25,
+        scale_factor_step=0.0001,
+        on_apply_background_limits=lambda: None,
+        on_apply_simulation_limits=lambda: None,
+    )
+
+    assert isinstance(view_state.frame, _FakeFrame)
+    assert isinstance(view_state.background_controls_frame, _FakeFrame)
+    assert isinstance(view_state.simulation_controls_frame, _FakeFrame)
+    assert view_state.background_min_var.get() == 0.0
+    assert view_state.background_max_var.get() == 5.0
+    assert view_state.background_transparency_var.get() == 0.25
+    assert view_state.simulation_min_var.get() == 0.0
+    assert view_state.simulation_max_var.get() == 7.5
+    assert view_state.simulation_scale_factor_var.get() == 1.25
+    assert view_state.background_min_slider is created[0]["slider"]
+    assert view_state.background_max_slider is created[1]["slider"]
+    assert view_state.background_transparency_slider is created[2]["slider"]
+    assert view_state.simulation_min_slider is created[3]["slider"]
+    assert view_state.simulation_max_slider is created[4]["slider"]
+    assert view_state.scale_factor_slider is created[5]["slider"]
+    assert view_state.scale_factor_entry is created[5]["entry"]
+    assert [item["label"] for item in created] == [
+        "Background Min Intensity",
+        "Background Max Intensity",
+        "Background Transparency",
+        "Simulation Min Intensity",
+        "Simulation Max Intensity",
+        "Simulation Scale Factor",
+    ]
 
 
 def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
