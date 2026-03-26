@@ -24,6 +24,7 @@ from .state import (
     HklLookupViewState,
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
+    PrimaryCifControlsViewState,
     SamplingOpticsControlsViewState,
     StackingParameterControlsViewState,
     StructureFactorPruningControlsViewState,
@@ -114,6 +115,68 @@ def create_background_file_controls(
 
     view_state.background_file_status_var = background_file_status_var
     view_state.background_file_status_label = background_file_status_label
+
+
+def create_primary_cif_controls(
+    *,
+    parent: tk.Misc,
+    view_state: PrimaryCifControlsViewState,
+    cif_path_text: str,
+    on_apply_from_entry: Callable[[object | None], None],
+    on_browse_primary_cif: Callable[[], None],
+    on_open_diffuse_ht: Callable[[], None],
+    on_export_diffuse_ht: Callable[[], None],
+) -> None:
+    """Create the primary-CIF path and diffuse-HT action controls."""
+
+    cif_frame = CollapsibleFrame(parent, text="Primary CIF")
+    cif_frame.pack(fill=tk.X, padx=5, pady=5)
+    ttk.Label(cif_frame.frame, text="Path").pack(anchor=tk.W, padx=5, pady=(2, 0))
+
+    cif_file_var = tk.StringVar(value=str(cif_path_text))
+    cif_entry = ttk.Entry(cif_frame.frame, textvariable=cif_file_var)
+    cif_entry.pack(fill=tk.X, padx=5, pady=(2, 5))
+    cif_entry.bind("<Return>", on_apply_from_entry)
+
+    cif_actions_frame = ttk.Frame(cif_frame.frame)
+    cif_actions_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+    browse_button = ttk.Button(
+        cif_actions_frame,
+        text="Browse...",
+        command=on_browse_primary_cif,
+    )
+    browse_button.pack(side=tk.LEFT, padx=(0, 5))
+
+    apply_button = ttk.Button(
+        cif_actions_frame,
+        text="Apply",
+        command=lambda: on_apply_from_entry(None),
+    )
+    apply_button.pack(side=tk.LEFT)
+
+    diffuse_ht_button = ttk.Button(
+        cif_actions_frame,
+        text="Diffuse HT...",
+        command=on_open_diffuse_ht,
+    )
+    diffuse_ht_button.pack(side=tk.LEFT, padx=(5, 0))
+
+    export_diffuse_ht_button = ttk.Button(
+        cif_actions_frame,
+        text="Export HT .txt...",
+        command=on_export_diffuse_ht,
+    )
+    export_diffuse_ht_button.pack(side=tk.LEFT, padx=(5, 0))
+
+    view_state.cif_frame = cif_frame
+    view_state.cif_file_var = cif_file_var
+    view_state.cif_entry = cif_entry
+    view_state.cif_actions_frame = cif_actions_frame
+    view_state.browse_button = browse_button
+    view_state.apply_button = apply_button
+    view_state.diffuse_ht_button = diffuse_ht_button
+    view_state.export_diffuse_ht_button = export_diffuse_ht_button
 
 
 def _find_slider_entry(slider: object | None) -> object | None:

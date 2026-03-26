@@ -5638,6 +5638,7 @@ analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
 analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
 display_controls_state = gui_state.DisplayControlsState()
 display_controls_view_state = gui_state.DisplayControlsViewState()
+primary_cif_controls_view_state = gui_state.PrimaryCifControlsViewState()
 structure_factor_pruning_controls_view_state = (
     gui_state.StructureFactorPruningControlsViewState()
 )
@@ -17480,27 +17481,18 @@ def _export_diffuse_ht_txt():
 _rebuild_occupancy_controls()
 _rebuild_atom_site_fractional_controls()
 
-cif_file_var = tk.StringVar(value=str(cif_file))
-cif_frame = CollapsibleFrame(right_col, text='Primary CIF')
-cif_frame.pack(fill=tk.X, padx=5, pady=5)
-ttk.Label(cif_frame.frame, text="Path").pack(anchor=tk.W, padx=5, pady=(2, 0))
-cif_entry = ttk.Entry(cif_frame.frame, textvariable=cif_file_var)
-cif_entry.pack(fill=tk.X, padx=5, pady=(2, 5))
-cif_entry.bind("<Return>", _apply_primary_cif_from_entry)
-cif_actions = ttk.Frame(cif_frame.frame)
-cif_actions.pack(fill=tk.X, padx=5, pady=(0, 5))
-ttk.Button(cif_actions, text="Browse...", command=_browse_primary_cif).pack(
-    side=tk.LEFT, padx=(0, 5)
+gui_views.create_primary_cif_controls(
+    parent=right_col,
+    view_state=primary_cif_controls_view_state,
+    cif_path_text=str(cif_file),
+    on_apply_from_entry=_apply_primary_cif_from_entry,
+    on_browse_primary_cif=_browse_primary_cif,
+    on_open_diffuse_ht=_open_diffuse_cif_toggle,
+    on_export_diffuse_ht=_export_diffuse_ht_txt,
 )
-ttk.Button(cif_actions, text="Apply", command=_apply_primary_cif_from_entry).pack(
-    side=tk.LEFT
-)
-ttk.Button(cif_actions, text="Diffuse HT...", command=_open_diffuse_cif_toggle).pack(
-    side=tk.LEFT, padx=(5, 0)
-)
-ttk.Button(cif_actions, text="Export HT .txt...", command=_export_diffuse_ht_txt).pack(
-    side=tk.LEFT, padx=(5, 0)
-)
+cif_file_var = primary_cif_controls_view_state.cif_file_var
+if cif_file_var is None:
+    raise RuntimeError("Primary CIF controls did not create the path variable.")
 
 
 def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):

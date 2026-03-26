@@ -190,6 +190,12 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
     weight-normalization helpers used by that control family.
   - Direct controller/view tests now cover the extracted stacking / occupancy /
     atom-site helpers.
+- Primary-CIF / diffuse-HT control migration has landed.
+  - Shared widget references and `StringVar` state for the primary CIF path
+    entry and diffuse-HT action buttons now live in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns that control-cluster construction and the
+    corresponding entry/button bindings.
+  - Direct view tests now cover the extracted primary-CIF control helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -316,9 +322,9 @@ What is left:
 - `ra_sim/gui/runtime.py` is still very large and still owns too much mutable
   GUI state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
-- The next bounded GUI slices are still assembled inline in `runtime.py`,
-  especially the primary-CIF / diffuse-HT parameter panels and other Tk-heavy
-  parameter surfaces.
+- Other bounded GUI slices are still assembled inline in `runtime.py`,
+  especially the remaining Tk-heavy parameter surfaces and cross-feature
+  workflow glue.
 
 Why it matters:
 
@@ -419,6 +425,9 @@ What is done:
   occupancy / atom-site rebuild helpers.
 - `controllers.py` now also owns the occupancy clamp and stacking
   weight-normalization helpers.
+- `state.py` now also owns the primary-CIF / diffuse-HT control view state.
+- `views.py` now also owns the primary-CIF path / diffuse-HT control
+  construction and entry/button bindings.
 
 What is left:
 
@@ -427,8 +436,8 @@ What is left:
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
 - Other Tk-heavy surfaces still need to move behind `views.py` helpers.
-- The next practical view-state target is the primary-CIF / diffuse-HT control
-  cluster.
+- The next practical view-state targets are the remaining structure-adjacent
+  parameter surfaces and cross-feature runtime-owned helpers.
 
 Why it matters:
 
@@ -591,7 +600,7 @@ Tasks:
 
 - Group more runtime globals into explicit state containers.
 - Move the next remaining inline control clusters
-  (primary-CIF / diffuse-HT controls and similar surfaces) into `views.py`
+  (remaining Tk-heavy parameter surfaces and similar controls) into `views.py`
   helpers and shared view state.
 - Reduce direct feature coordination in `runtime.py` where controller logic or
   shared state can own it instead.
@@ -692,12 +701,11 @@ Why last:
 The next best step is:
 
 - build on the newer display-control, pruning-control, beam/mosaic-slider, and
-  stacking/occupancy/atom-site extractions by moving the next
+  stacking/occupancy/atom-site, and primary-CIF control extractions by moving the next
   runtime-owned GUI control clusters into explicit state + controller + view
   boundaries
-- focus next on the primary-CIF / diffuse-HT parameter panels in `runtime.py`,
-  then on the remaining cross-feature runtime-owned state/helpers that are
-  still similarly isolated
+- focus next on the remaining cross-feature runtime-owned state/helpers and
+  similarly isolated Tk-heavy parameter surfaces in `runtime.py`
 - keep shrinking the remaining cross-feature globals and inline Tk-heavy
   helpers that prevent the extracted scaffolding modules from becoming the
   dominant app structure

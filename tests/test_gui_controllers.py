@@ -17,6 +17,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         state.BackgroundBackendDebugViewState,
     )
     assert isinstance(
+        app_state.primary_cif_controls_view,
+        state.PrimaryCifControlsViewState,
+    )
+    assert isinstance(
         app_state.display_controls_state,
         state.DisplayControlsState,
     )
@@ -78,6 +82,7 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.background_theta_controls_view is not other_state.background_theta_controls_view
     assert app_state.workspace_panels_view is not other_state.workspace_panels_view
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
+    assert app_state.primary_cif_controls_view is not other_state.primary_cif_controls_view
     assert app_state.display_controls_state is not other_state.display_controls_state
     assert app_state.display_controls_view is not other_state.display_controls_view
     assert (

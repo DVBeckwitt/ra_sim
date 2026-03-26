@@ -84,6 +84,20 @@ class BackgroundBackendDebugViewState:
 
 
 @dataclass
+class PrimaryCifControlsViewState:
+    """Widget references and vars for the primary-CIF / diffuse-HT controls."""
+
+    cif_frame: Any = None
+    cif_file_var: Any = None
+    cif_entry: Any = None
+    cif_actions_frame: Any = None
+    browse_button: Any = None
+    apply_button: Any = None
+    diffuse_ht_button: Any = None
+    export_diffuse_ht_button: Any = None
+
+
+@dataclass
 class DisplayControlsState:
     """Mutable state for display-control override and callback bookkeeping."""
 
@@ -423,6 +437,9 @@ class AppState:
     )
     background_backend_debug_view: BackgroundBackendDebugViewState = field(
         default_factory=BackgroundBackendDebugViewState
+    )
+    primary_cif_controls_view: PrimaryCifControlsViewState = field(
+        default_factory=PrimaryCifControlsViewState
     )
     display_controls_state: DisplayControlsState = field(
         default_factory=DisplayControlsState

@@ -705,6 +705,57 @@ def test_background_file_controls_store_status_var_and_update_text(monkeypatch) 
     assert loaded == [True]
 
 
+def test_primary_cif_controls_store_vars_and_bind_actions(monkeypatch) -> None:
+    _FakeButton.created = []
+    _FakeLabel.created = []
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.PrimaryCifControlsViewState()
+    calls = []
+
+    def _apply(event=None) -> None:
+        calls.append(("apply", event))
+
+    views.create_primary_cif_controls(
+        parent=object(),
+        view_state=view_state,
+        cif_path_text="example.cif",
+        on_apply_from_entry=_apply,
+        on_browse_primary_cif=lambda: calls.append("browse"),
+        on_open_diffuse_ht=lambda: calls.append("diffuse"),
+        on_export_diffuse_ht=lambda: calls.append("export"),
+    )
+
+    assert isinstance(view_state.cif_frame, _FakeCollapsibleFrame)
+    assert view_state.cif_file_var.get() == "example.cif"
+    assert view_state.cif_entry.textvariable is view_state.cif_file_var
+    assert isinstance(view_state.cif_actions_frame, _FakeFrame)
+    assert view_state.browse_button is _FakeButton.created[0]
+    assert view_state.apply_button is _FakeButton.created[1]
+    assert view_state.diffuse_ht_button is _FakeButton.created[2]
+    assert view_state.export_diffuse_ht_button is _FakeButton.created[3]
+    assert _FakeLabel.created[0].text == "Path"
+
+    view_state.cif_entry.bindings["<Return>"]("event")
+    view_state.browse_button.command()
+    view_state.apply_button.command()
+    view_state.diffuse_ht_button.command()
+    view_state.export_diffuse_ht_button.command()
+
+    assert calls == [
+        ("apply", "event"),
+        "browse",
+        ("apply", None),
+        "diffuse",
+        "export",
+    ]
+
+
 def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
     class _FakeSliderRow:
         def __init__(self) -> None:
