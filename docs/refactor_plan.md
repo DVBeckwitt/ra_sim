@@ -249,6 +249,9 @@ not `main.py` or `mosaic_profiles.py`.
     weighted intensity recompute used by the live GUI.
   - `ra_sim.gui.runtime` now delegates the initial structure-model boot path
     and the occupancy / stacking rebuild flow through that extracted module.
+  - `ra_sim.gui.runtime` no longer keeps separate inline copies of the
+    primary-CIF occupancy/atom-site helper logic; those thin wrappers now also
+    delegate to `ra_sim.gui.structure_model`.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 

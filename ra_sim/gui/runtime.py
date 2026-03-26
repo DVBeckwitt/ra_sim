@@ -16,10 +16,7 @@ import math
 import json
 import copy
 import re
-import io
-import tempfile
 from collections import defaultdict, namedtuple
-from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -34,7 +31,6 @@ from matplotlib.colors import ListedColormap
 from matplotlib.patches import Rectangle
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from OSC_Reader import read_osc
-import Dans_Diffraction as dif
 import CifFile
 
 from ra_sim.utils.stacking_fault import (
@@ -472,64 +468,13 @@ blk   = cf[list(cf.keys())[0]]
 
 
 def _normalize_occupancy_label(raw_label, fallback_idx):
-    text = str(raw_label).strip().strip("'\"")
-    if text:
-        return text
-    return f"site_{fallback_idx + 1}"
+    return gui_structure_model.normalize_occupancy_label(raw_label, fallback_idx)
 
 
 def _extract_occupancy_site_metadata(cif_block, cif_path):
     """Return (unique labels, expanded-site -> unique-label index mapping)."""
 
-    # Preferred path: use symmetry-expanded structure labels from Dans_Diffraction.
-    # This gives a reliable mapping from user-facing unique sites to the expanded
-    # per-site occupancy array consumed in stacking_fault.ht_Iinf_dict.
-    try:
-        xtl = dif.Crystal(str(cif_path))
-        xtl.Symmetry.generate_matrices()
-        xtl.generate_structure()
-        st = xtl.Structure
-        n_sites = len(st.u)
-
-        labels_src = getattr(st, "label", None)
-        if labels_src is None or len(labels_src) != n_sites:
-            labels_src = getattr(st, "type", None)
-        if labels_src is None or len(labels_src) != n_sites:
-            labels_src = [f"site_{idx + 1}" for idx in range(n_sites)]
-
-        unique_labels = []
-        label_to_idx = {}
-        expanded_to_unique = []
-
-        for idx in range(n_sites):
-            label = _normalize_occupancy_label(labels_src[idx], idx)
-            mapped = label_to_idx.get(label)
-            if mapped is None:
-                mapped = len(unique_labels)
-                unique_labels.append(label)
-                label_to_idx[label] = mapped
-            expanded_to_unique.append(mapped)
-
-        if unique_labels:
-            return unique_labels, expanded_to_unique
-    except Exception:
-        pass
-
-    # Fallback: use raw CIF labels and expose one control per unique label.
-    raw_labels = cif_block.get("_atom_site_label")
-    if raw_labels is None:
-        raw_labels = cif_block.get("_atom_site_type_symbol")
-    if raw_labels is None:
-        return [], []
-    if isinstance(raw_labels, str):
-        raw_labels = [raw_labels]
-
-    unique_labels = []
-    for idx, raw in enumerate(raw_labels):
-        label = _normalize_occupancy_label(raw, idx)
-        if label not in unique_labels:
-            unique_labels.append(label)
-    return unique_labels, []
+    return gui_structure_model.extract_occupancy_site_metadata(cif_block, cif_path)
 
 
 occupancy_site_labels, occupancy_site_expanded_map = _extract_occupancy_site_metadata(blk, cif_file)
@@ -553,129 +498,17 @@ occ = [min(1.0, max(0.0, float(v))) for v in occ]
 def _expand_occupancy_values_for_generated_sites(occ_values):
     """Map unique-site occupancies to generated per-site occupancies for HT."""
 
-    target_len = len(occupancy_site_labels)
-    if target_len <= 0:
-        if isinstance(occ_values, (list, tuple, np.ndarray)):
-            target_len = max(1, len(occ_values))
-        else:
-            target_len = 1
-    normalized = _ensure_numeric_vector(occ_values, [1.0], target_len)
-    normalized = [min(1.0, max(0.0, float(v))) for v in normalized]
-
-    if not occupancy_site_expanded_map:
-        return normalized
-
-    fallback = normalized[-1] if normalized else 1.0
-    expanded = []
-    for raw_idx in occupancy_site_expanded_map:
-        idx = int(raw_idx)
-        if 0 <= idx < len(normalized):
-            expanded.append(float(normalized[idx]))
-        else:
-            expanded.append(float(fallback))
-    return expanded
-
-
-def _as_cif_list(raw_value):
-    """Return a CIF loop field as a mutable Python list."""
-
-    if raw_value is None:
-        return []
-    if isinstance(raw_value, str):
-        return [raw_value]
-    if isinstance(raw_value, list):
-        return raw_value
-    if isinstance(raw_value, tuple):
-        return list(raw_value)
-    if isinstance(raw_value, np.ndarray):
-        return raw_value.tolist()
-    try:
-        return list(raw_value)
-    except TypeError:
-        return [raw_value]
-
-
-def _parse_cif_float_or_default(raw_value, default=0.0):
-    """Parse CIF numeric values with uncertainty suffix support."""
-
-    try:
-        return float(raw_value)
-    except (TypeError, ValueError):
-        text = str(raw_value).strip().strip("'\"")
-        if not text:
-            return float(default)
-
-        frac_match = re.fullmatch(
-            r"([-+]?\d+(?:\.\d+)?)\s*/\s*([-+]?\d+(?:\.\d+)?)",
-            text,
-        )
-        if frac_match:
-            try:
-                numer = float(frac_match.group(1))
-                denom = float(frac_match.group(2))
-                if denom != 0.0:
-                    return float(numer / denom)
-            except (TypeError, ValueError, ZeroDivisionError):
-                pass
-
-        m = re.match(r"[-+0-9\.Ee]+", text)
-        if not m:
-            return float(default)
-        try:
-            return float(m.group(0))
-        except (TypeError, ValueError):
-            return float(default)
+    return gui_structure_model.expand_occupancy_values_for_generated_sites(
+        occ_values,
+        occupancy_site_labels=occupancy_site_labels,
+        occupancy_site_expanded_map=occupancy_site_expanded_map,
+    )
 
 
 def _extract_atom_site_fractional_metadata(cif_block):
     """Return atom-site fractional coordinates from raw CIF loop rows."""
 
-    x_vals = _as_cif_list(cif_block.get("_atom_site_fract_x"))
-    y_vals = _as_cif_list(cif_block.get("_atom_site_fract_y"))
-    z_vals = _as_cif_list(cif_block.get("_atom_site_fract_z"))
-    if not x_vals or not y_vals or not z_vals:
-        return []
-
-    labels = _as_cif_list(cif_block.get("_atom_site_label"))
-    if not labels:
-        labels = _as_cif_list(cif_block.get("_atom_site_type_symbol"))
-
-    n_sites = max(len(x_vals), len(y_vals), len(z_vals))
-    base_labels = []
-    for idx in range(n_sites):
-        if idx < len(labels):
-            label = _normalize_occupancy_label(labels[idx], idx)
-        else:
-            label = f"site_{idx + 1}"
-        base_labels.append(label)
-
-    totals = {}
-    for label in base_labels:
-        totals[label] = totals.get(label, 0) + 1
-
-    seen = {}
-    rows = []
-    for idx, base_label in enumerate(base_labels):
-        seen[base_label] = seen.get(base_label, 0) + 1
-        if totals[base_label] > 1:
-            display = f"{base_label} #{seen[base_label]}"
-        else:
-            display = base_label
-
-        x_val = _parse_cif_float_or_default(x_vals[idx] if idx < len(x_vals) else 0.0)
-        y_val = _parse_cif_float_or_default(y_vals[idx] if idx < len(y_vals) else 0.0)
-        z_val = _parse_cif_float_or_default(z_vals[idx] if idx < len(z_vals) else 0.0)
-        rows.append(
-            {
-                "row_index": int(idx),
-                "label": str(display),
-                "x": float(x_val),
-                "y": float(y_val),
-                "z": float(z_val),
-            }
-        )
-
-    return rows
+    return gui_structure_model.extract_atom_site_fractional_metadata(cif_block)
 
 
 atom_site_fractional_metadata = _extract_atom_site_fractional_metadata(blk)
@@ -683,55 +516,22 @@ atom_site_fract_vars = []
 
 
 def _atom_site_fractional_default_values():
-    return [
-        (float(row["x"]), float(row["y"]), float(row["z"]))
-        for row in atom_site_fractional_metadata
-    ]
+    return gui_structure_model.atom_site_fractional_default_values(
+        structure_model_state
+    )
 
 
 def _current_atom_site_fractional_values():
     """Return current atom-site fractional coordinates from GUI state."""
 
-    defaults_xyz = _atom_site_fractional_default_values()
-    if not atom_site_fract_vars:
-        return defaults_xyz
-
-    values = []
-    for idx, axis_vars in enumerate(atom_site_fract_vars):
-        fallback = defaults_xyz[idx] if idx < len(defaults_xyz) else (0.0, 0.0, 0.0)
-        try:
-            x_val = float(axis_vars["x"].get())
-        except (tk.TclError, ValueError, TypeError, KeyError):
-            x_val = float(fallback[0])
-        if not np.isfinite(x_val):
-            x_val = float(fallback[0])
-        try:
-            y_val = float(axis_vars["y"].get())
-        except (tk.TclError, ValueError, TypeError, KeyError):
-            y_val = float(fallback[1])
-        if not np.isfinite(y_val):
-            y_val = float(fallback[1])
-        try:
-            z_val = float(axis_vars["z"].get())
-        except (tk.TclError, ValueError, TypeError, KeyError):
-            z_val = float(fallback[2])
-        if not np.isfinite(z_val):
-            z_val = float(fallback[2])
-        values.append((x_val, y_val, z_val))
-    return values
+    return gui_structure_model.current_atom_site_fractional_values(
+        structure_model_state,
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _atom_site_fractional_signature(values):
-    flat = []
-    for x_val, y_val, z_val in values:
-        flat.extend(
-            [
-                round(float(x_val), 12),
-                round(float(y_val), 12),
-                round(float(z_val), 12),
-            ]
-        )
-    return tuple(flat)
+    return gui_structure_model.atom_site_fractional_signature(values)
 
 
 def _atom_site_fractional_defaults_signature():
@@ -739,104 +539,25 @@ def _atom_site_fractional_defaults_signature():
 
 
 def _atom_site_fractional_values_are_default(values):
-    defaults_xyz = _atom_site_fractional_default_values()
-    if len(values) != len(defaults_xyz):
-        return False
-    for (x_cur, y_cur, z_cur), (x_def, y_def, z_def) in zip(values, defaults_xyz):
-        if not math.isclose(float(x_cur), float(x_def), rel_tol=1e-9, abs_tol=1e-9):
-            return False
-        if not math.isclose(float(y_cur), float(y_def), rel_tol=1e-9, abs_tol=1e-9):
-            return False
-        if not math.isclose(float(z_cur), float(z_def), rel_tol=1e-9, abs_tol=1e-9):
-            return False
-    return True
+    return gui_structure_model.atom_site_fractional_values_are_default(
+        structure_model_state,
+        values,
+    )
 
 
 def _active_primary_cif_path(atom_site_values=None):
     """Return primary CIF path with optional atom-site coordinate overrides."""
 
-    source_path = str(cif_file)
-    if not atom_site_fractional_metadata:
-        return source_path
-
-    current_values = (
-        _current_atom_site_fractional_values()
-        if atom_site_values is None
-        else list(atom_site_values)
+    return gui_structure_model.active_primary_cif_path(
+        structure_model_state,
+        atom_site_override_state,
+        atom_site_values=atom_site_values,
+        tcl_error_types=(tk.TclError,),
     )
-    if _atom_site_fractional_values_are_default(current_values):
-        return source_path
-
-    signature = _atom_site_fractional_signature(current_values)
-    abs_source = os.path.abspath(source_path)
-    if (
-        atom_site_override_state.temp_path
-        and atom_site_override_state.source_path == abs_source
-        and atom_site_override_state.signature == signature
-        and Path(atom_site_override_state.temp_path).is_file()
-    ):
-        return atom_site_override_state.temp_path
-
-    with redirect_stdout(io.StringIO()):
-        cf_local = CifFile.ReadCif(abs_source)
-    keys = list(cf_local.keys())
-    if not keys:
-        return source_path
-    block = cf_local[keys[0]]
-
-    x_vals = _as_cif_list(block.get("_atom_site_fract_x"))
-    y_vals = _as_cif_list(block.get("_atom_site_fract_y"))
-    z_vals = _as_cif_list(block.get("_atom_site_fract_z"))
-    if not x_vals or not y_vals or not z_vals:
-        return source_path
-
-    n_rows = max(len(x_vals), len(y_vals), len(z_vals))
-    if len(x_vals) < n_rows:
-        fill = str(x_vals[-1]) if x_vals else "0.0"
-        x_vals.extend([fill] * (n_rows - len(x_vals)))
-    if len(y_vals) < n_rows:
-        fill = str(y_vals[-1]) if y_vals else "0.0"
-        y_vals.extend([fill] * (n_rows - len(y_vals)))
-    if len(z_vals) < n_rows:
-        fill = str(z_vals[-1]) if z_vals else "0.0"
-        z_vals.extend([fill] * (n_rows - len(z_vals)))
-
-    for row_data, (x_val, y_val, z_val) in zip(atom_site_fractional_metadata, current_values):
-        row_idx = int(row_data.get("row_index", -1))
-        if row_idx < 0 or row_idx >= n_rows:
-            continue
-        x_vals[row_idx] = f"{float(x_val):.12g}"
-        y_vals[row_idx] = f"{float(y_val):.12g}"
-        z_vals[row_idx] = f"{float(z_val):.12g}"
-
-    block["_atom_site_fract_x"] = x_vals
-    block["_atom_site_fract_y"] = y_vals
-    block["_atom_site_fract_z"] = z_vals
-
-    if (
-        atom_site_override_state.temp_path is None
-        or atom_site_override_state.source_path != abs_source
-    ):
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".cif")
-        tmp.close()
-        atom_site_override_state.temp_path = tmp.name
-
-    try:
-        with redirect_stdout(io.StringIO()):
-            CifFile.WriteCif(cf_local, atom_site_override_state.temp_path)
-    except AttributeError:
-        with open(atom_site_override_state.temp_path, "w", encoding="utf-8") as fh:
-            with redirect_stdout(io.StringIO()):
-                fh.write(cf_local.WriteOut())
-
-    atom_site_override_state.source_path = abs_source
-    atom_site_override_state.signature = signature
-    return atom_site_override_state.temp_path
 
 
 def _reset_atom_site_override_cache():
-    atom_site_override_state.source_path = None
-    atom_site_override_state.signature = None
+    gui_structure_model.reset_atom_site_override_cache(atom_site_override_state)
 
 # pull the raw text
 a_text = blk.get("_cell_length_a")
@@ -845,15 +566,7 @@ c_text = blk.get("_cell_length_c")
 
 # strip the '(uncertainty)' and cast
 def parse_cif_num(txt):
-    # match leading numeric part, e.g. '4.14070' out of '4.14070(3)'
-    if txt is None:
-        raise ValueError("Missing CIF numeric value")
-    if isinstance(txt, (int, float)):
-        return float(txt)
-    m = re.match(r"[-+0-9\.Ee]+", str(txt).strip())
-    if not m:
-        raise ValueError(f"Can't parse '{txt}' as a number")
-    return float(m.group(0))
+    return gui_structure_model.parse_cif_num(txt)
 
 if a_text is None or b_text is None or c_text is None:
     raise ValueError("CIF is missing one or more required cell-length fields (_a/_b/_c).")

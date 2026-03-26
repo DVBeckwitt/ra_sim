@@ -229,6 +229,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     `ra_sim.gui.structure_model`
   - `ra_sim.gui.runtime` now delegates the initial structure-model boot path
     and live occupancy / stacking rebuild flow through that module
+  - the remaining primary-CIF occupancy / atom-site helper wrappers in
+    `ra_sim.gui.runtime` now also defer to `ra_sim.gui.structure_model`
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
