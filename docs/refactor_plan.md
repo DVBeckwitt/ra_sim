@@ -283,11 +283,12 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     delegate wrappers plus the live filter-apply callbacks.
 - Geometry-fit Qr/Qz selector workflow extraction has advanced.
   - `ra_sim.gui.geometry_q_group_manager` now owns the selector line/status
-    formatting, window refresh, bulk include/exclude actions, and save/load
-    payload translation used by the live GUI.
+    formatting, window refresh, checkbox/bulk include-exclude side effects,
+    update-listed-peaks request flow, and save/load dialog workflow used by
+    the live GUI.
   - `ra_sim.gui.runtime` now delegates that selector workflow through the
-    extracted module and keeps only the file-dialog and live-preview/status
-    side effects inline.
+    extracted module and keeps only thin delegate wrappers plus window
+    lifecycle wiring inline.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -466,8 +467,8 @@ What is left:
 - The remaining Bragg-Qr manager runtime code is now mostly thin delegate
   wrappers plus the live filter-apply callback wiring around the extracted
   manager helpers.
-- The remaining geometry-fit Qr/Qz selector runtime code is now mostly
-  file-dialog plumbing and live-preview/status callbacks around the extracted
+- The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
+  delegate wrappers and window lifecycle wiring around the extracted
   manager/view helpers.
 - The remaining background runtime code is now mostly file-dialog plumbing and
   progress/error text around the extracted background manager.

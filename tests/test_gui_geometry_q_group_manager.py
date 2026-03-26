@@ -1,3 +1,4 @@
+from datetime import datetime
 from ra_sim.gui import geometry_q_group_manager, state
 
 
@@ -216,3 +217,198 @@ def test_geometry_q_group_manager_load_helpers_report_validation_errors() -> Non
     )
     assert summary is None
     assert error == "Loaded Qr/Qz peak list does not contain any valid rows."
+
+
+def test_geometry_q_group_manager_checkbox_side_effects_update_status() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    preview_state = state.GeometryPreviewState()
+    events = []
+
+    changed = (
+        geometry_q_group_manager.apply_geometry_q_group_checkbox_change_with_side_effects(
+            preview_state=preview_state,
+            group_key=key1,
+            row_var=_FakeVar(False),
+            invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+            update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+            update_geometry_q_group_window_status=lambda: events.append("status"),
+            live_geometry_preview_enabled=lambda: False,
+            refresh_live_geometry_preview=lambda: events.append("refresh_live"),
+            set_status_text=lambda text: events.append(text),
+        )
+    )
+
+    assert changed is True
+    assert preview_state.excluded_q_groups == {key1}
+    assert events == [
+        "invalidate",
+        "label",
+        "status",
+        "Excluded one Qr/Qz group for geometry fitting.",
+    ]
+
+
+def test_geometry_q_group_manager_bulk_enable_side_effects_cover_empty_and_live_refresh() -> None:
+    preview_state = state.GeometryPreviewState()
+    empty_state = state.GeometryQGroupState()
+    empty_messages = []
+
+    changed = (
+        geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
+            preview_state=preview_state,
+            q_group_state=empty_state,
+            enabled=False,
+            invalidate_geometry_manual_pick_cache=lambda: empty_messages.append(
+                "invalidate"
+            ),
+            update_geometry_preview_exclude_button_label=lambda: empty_messages.append(
+                "label"
+            ),
+            refresh_geometry_q_group_window=lambda: empty_messages.append("refresh"),
+            live_geometry_preview_enabled=lambda: False,
+            refresh_live_geometry_preview=lambda: empty_messages.append("live"),
+            set_status_text=lambda text: empty_messages.append(text),
+        )
+    )
+
+    assert changed is False
+    assert empty_messages == [
+        'No listed Qr/Qz groups are available. Press "Update Listed Peaks" first.'
+    ]
+
+    key1 = ("q_group", "primary", 1, 0)
+    key2 = ("q_group", "secondary", 2, 1)
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[
+            _entry(key1, peak_count=2, total_intensity=10.0),
+            _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
+        ]
+    )
+    events = []
+
+    changed = (
+        geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
+            preview_state=preview_state,
+            q_group_state=q_group_state,
+            enabled=False,
+            invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+            update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+            refresh_geometry_q_group_window=lambda: events.append("refresh"),
+            live_geometry_preview_enabled=lambda: True,
+            refresh_live_geometry_preview=lambda: events.append("live"),
+            set_status_text=lambda text: events.append(text),
+        )
+    )
+
+    assert changed is True
+    assert preview_state.excluded_q_groups == {key1, key2}
+    assert events == ["invalidate", "label", "refresh", "live"]
+
+
+def test_geometry_q_group_manager_request_update_side_effects_marks_refresh() -> None:
+    q_group_state = state.GeometryQGroupState()
+    events = []
+
+    geometry_q_group_manager.request_geometry_q_group_window_update_with_side_effects(
+        q_group_state=q_group_state,
+        clear_last_simulation_signature=lambda: events.append("clear_signature"),
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        set_status_text=lambda text: events.append(text),
+        schedule_update=lambda: events.append("schedule"),
+    )
+
+    assert q_group_state.refresh_requested is True
+    assert events == [
+        "clear_signature",
+        "invalidate",
+        "Updating listed Qr/Qz peaks from the current simulation...",
+        "schedule",
+    ]
+
+
+def test_geometry_q_group_manager_save_dialog_workflow_writes_payload_and_reports_status() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    key2 = ("q_group", "secondary", 2, 1)
+    preview_state = state.GeometryPreviewState(excluded_q_groups={key2})
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[
+            _entry(key1, peak_count=2, total_intensity=10.0),
+            _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
+        ]
+    )
+    captured = {}
+    messages = []
+
+    def _asksaveasfilename(**kwargs):
+        captured["dialog"] = kwargs
+        return "C:/tmp/groups.json"
+
+    saved = geometry_q_group_manager.save_geometry_q_group_selection_with_dialog(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        file_dialog_dir="C:/dialogs",
+        asksaveasfilename=_asksaveasfilename,
+        set_status_text=lambda text: messages.append(text),
+        save_payload=lambda path, payload: captured.update(
+            {"path": path, "payload": payload}
+        ),
+        now=lambda: datetime(2026, 3, 26, 12, 34, 56),
+    )
+
+    assert saved is True
+    assert captured["dialog"]["initialdir"] == "C:/dialogs"
+    assert captured["dialog"]["initialfile"] == "geometry_q_groups_20260326_123456.json"
+    assert captured["path"] == "C:/tmp/groups.json"
+    assert captured["payload"]["saved_at"] == "2026-03-26T12:34:56"
+    assert captured["payload"]["included_count"] == 1
+    assert messages == ["Saved 2 Qr/Qz groups to C:/tmp/groups.json"]
+
+
+def test_geometry_q_group_manager_load_dialog_workflow_applies_state_and_refreshes() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    key2 = ("q_group", "secondary", 2, 1)
+    key3 = ("q_group", "primary", 3, 2)
+    preview_state = state.GeometryPreviewState()
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[
+            _entry(key1, peak_count=2, total_intensity=10.0),
+            _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
+            _entry(key3, peak_count=1, total_intensity=5.0),
+        ]
+    )
+    events = []
+    payload = geometry_q_group_manager.build_geometry_q_group_save_payload(
+        [
+            {"key": ["q_group", "primary", 1, 0], "included": True},
+            {"key": ["q_group", "secondary", 2, 1], "included": False},
+        ],
+        saved_at="2026-03-26T12:00:00",
+    )
+
+    def _askopenfilename(**kwargs):
+        events.append(("dialog", kwargs))
+        return "C:/tmp/selector.json"
+
+    loaded = geometry_q_group_manager.load_geometry_q_group_selection_with_dialog(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        file_dialog_dir="C:/dialogs",
+        askopenfilename=_askopenfilename,
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        refresh_geometry_q_group_window=lambda: events.append("refresh"),
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: events.append("live"),
+        set_status_text=lambda text: events.append(text),
+        load_payload=lambda path: events.append(("load", path)) or payload,
+    )
+
+    assert loaded is True
+    assert preview_state.excluded_q_groups == {key2, key3}
+    assert events[0][0] == "dialog"
+    assert events[0][1]["initialdir"] == "C:/dialogs"
+    assert events[1] == ("load", "C:/tmp/selector.json")
+    assert events[2:5] == ["label", "refresh", "live"]
+    assert (
+        events[5]
+        == "Loaded Qr/Qz peak list from selector.json: matched 2, enabled 1, current-only excluded 1, saved-only missing 0."
+    )

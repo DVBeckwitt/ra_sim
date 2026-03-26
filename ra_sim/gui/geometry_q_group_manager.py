@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -475,3 +478,237 @@ def apply_loaded_geometry_q_group_saved_state(
         "current_only": int(sum(1 for key in current_keys if key not in saved_state)),
         "saved_only": int(sum(1 for key in saved_state if key not in current_key_set)),
     }, None
+
+
+def _set_status_text(set_status_text: Callable[[str], None] | None, text: str) -> None:
+    if callable(set_status_text):
+        set_status_text(str(text))
+
+
+def _save_json_payload(file_path: str, payload: Mapping[str, object]) -> None:
+    with open(file_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def _load_json_payload(file_path: str) -> object:
+    with open(file_path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def apply_geometry_q_group_checkbox_change_with_side_effects(
+    *,
+    preview_state,
+    group_key: tuple[object, ...] | None,
+    row_var: object,
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    update_geometry_preview_exclude_button_label: Callable[[], None],
+    update_geometry_q_group_window_status: Callable[[], None],
+    live_geometry_preview_enabled: Callable[[], bool],
+    refresh_live_geometry_preview: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+) -> bool:
+    """Apply one checkbox toggle and the dependent live-preview/status effects."""
+
+    action = apply_geometry_q_group_checkbox_change(
+        preview_state,
+        group_key,
+        row_var,
+    )
+    if action is None:
+        return False
+
+    invalidate_geometry_manual_pick_cache()
+    update_geometry_preview_exclude_button_label()
+    update_geometry_q_group_window_status()
+
+    if live_geometry_preview_enabled():
+        refresh_live_geometry_preview()
+    else:
+        _set_status_text(
+            set_status_text,
+            f"{action} one Qr/Qz group for geometry fitting.",
+        )
+    return True
+
+
+def set_all_geometry_q_groups_enabled_with_side_effects(
+    *,
+    preview_state,
+    q_group_state,
+    enabled: bool,
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    update_geometry_preview_exclude_button_label: Callable[[], None],
+    refresh_geometry_q_group_window: Callable[[], None],
+    live_geometry_preview_enabled: Callable[[], bool],
+    refresh_live_geometry_preview: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+) -> bool:
+    """Apply a bulk include/exclude action and the dependent side effects."""
+
+    action, count = set_all_geometry_q_groups_enabled(
+        preview_state,
+        q_group_state,
+        enabled=enabled,
+    )
+    if count <= 0:
+        _set_status_text(
+            set_status_text,
+            'No listed Qr/Qz groups are available. Press "Update Listed Peaks" first.',
+        )
+        return False
+
+    invalidate_geometry_manual_pick_cache()
+    update_geometry_preview_exclude_button_label()
+    refresh_geometry_q_group_window()
+
+    if live_geometry_preview_enabled():
+        refresh_live_geometry_preview()
+    else:
+        _set_status_text(
+            set_status_text,
+            f"{action} {count} Qr/Qz groups for geometry fitting.",
+        )
+    return True
+
+
+def request_geometry_q_group_window_update_with_side_effects(
+    *,
+    q_group_state,
+    clear_last_simulation_signature: Callable[[], None],
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+    schedule_update: Callable[[], None],
+) -> None:
+    """Request a listed-peak refresh and trigger the dependent runtime effects."""
+
+    request_geometry_q_group_window_update(q_group_state)
+    clear_last_simulation_signature()
+    invalidate_geometry_manual_pick_cache()
+    _set_status_text(
+        set_status_text,
+        "Updating listed Qr/Qz peaks from the current simulation...",
+    )
+    schedule_update()
+
+
+def save_geometry_q_group_selection_with_dialog(
+    *,
+    preview_state,
+    q_group_state,
+    file_dialog_dir: object,
+    asksaveasfilename: Callable[..., object],
+    set_status_text: Callable[[str], None] | None = None,
+    save_payload: Callable[[str, Mapping[str, object]], None] | None = None,
+    now: Callable[[], datetime] | None = None,
+) -> bool:
+    """Export the current selector rows through a save-file dialog."""
+
+    export_rows = build_geometry_q_group_export_rows(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+    )
+    if not export_rows:
+        _set_status_text(
+            set_status_text,
+            "No listed Qr/Qz groups are available to save. Press Update Listed Peaks first.",
+        )
+        return False
+
+    now_value = now() if callable(now) else datetime.now()
+    file_path = asksaveasfilename(
+        title="Save Geometry Fit Qr/Qz Peak List",
+        initialdir=str(file_dialog_dir),
+        defaultextension=".json",
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        initialfile=(
+            f"geometry_q_groups_{now_value.strftime('%Y%m%d_%H%M%S')}.json"
+        ),
+    )
+    if not file_path:
+        _set_status_text(set_status_text, "Save Qr/Qz peak list canceled.")
+        return False
+
+    payload = build_geometry_q_group_save_payload(
+        export_rows,
+        saved_at=now_value.isoformat(timespec="seconds"),
+    )
+    writer = save_payload or _save_json_payload
+    try:
+        writer(str(file_path), payload)
+    except Exception as exc:
+        _set_status_text(
+            set_status_text,
+            f"Failed to save Qr/Qz peak list: {exc}",
+        )
+        return False
+
+    _set_status_text(
+        set_status_text,
+        f"Saved {len(export_rows)} Qr/Qz groups to {file_path}",
+    )
+    return True
+
+
+def load_geometry_q_group_selection_with_dialog(
+    *,
+    preview_state,
+    q_group_state,
+    file_dialog_dir: object,
+    askopenfilename: Callable[..., object],
+    update_geometry_preview_exclude_button_label: Callable[[], None],
+    refresh_geometry_q_group_window: Callable[[], None],
+    live_geometry_preview_enabled: Callable[[], bool],
+    refresh_live_geometry_preview: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+    load_payload: Callable[[str], object] | None = None,
+) -> bool:
+    """Import selector rows through an open-file dialog and apply them."""
+
+    file_path = askopenfilename(
+        title="Load Geometry Fit Qr/Qz Peak List",
+        initialdir=str(file_dialog_dir),
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+    )
+    if not file_path:
+        _set_status_text(set_status_text, "Load Qr/Qz peak list canceled.")
+        return False
+
+    reader = load_payload or _load_json_payload
+    try:
+        payload = reader(str(file_path))
+    except Exception as exc:
+        _set_status_text(
+            set_status_text,
+            f"Failed to load Qr/Qz peak list: {exc}",
+        )
+        return False
+
+    saved_state, error = load_geometry_q_group_saved_state(payload)
+    if error is not None:
+        _set_status_text(set_status_text, error)
+        return False
+
+    summary, error = apply_loaded_geometry_q_group_saved_state(
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        saved_state=saved_state,
+    )
+    if error is not None:
+        _set_status_text(set_status_text, error)
+        return False
+
+    update_geometry_preview_exclude_button_label()
+    refresh_geometry_q_group_window()
+    if live_geometry_preview_enabled():
+        refresh_live_geometry_preview()
+
+    _set_status_text(
+        set_status_text,
+        (
+            f"Loaded Qr/Qz peak list from {Path(str(file_path)).name}: "
+            f"matched {summary['matched_total']}, enabled {summary['included_total']}, "
+            f"current-only excluded {summary['current_only']}, "
+            f"saved-only missing {summary['saved_only']}."
+        ),
+    )
+    return True

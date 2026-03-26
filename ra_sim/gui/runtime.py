@@ -4381,19 +4381,9 @@ def _capture_geometry_q_group_entries_snapshot() -> list[dict[str, object]]:
     return entries
 
 
-def _geometry_q_group_key_to_jsonable(group_key: object) -> list[object] | None:
-    """Convert one stable Qr/Qz group key into a JSON-safe list."""
-    return gui_geometry_q_group_manager.geometry_q_group_key_to_jsonable(group_key)
-
-
 def _geometry_q_group_key_from_jsonable(value: object) -> tuple[object, ...] | None:
     """Rebuild one stable Qr/Qz group key from JSON-loaded data."""
     return gui_geometry_q_group_manager.geometry_q_group_key_from_jsonable(value)
-
-
-def _geometry_q_group_float_for_json(value: object) -> float | None:
-    """Return a finite float for JSON export, or ``None`` when unavailable."""
-    return gui_geometry_q_group_manager.geometry_q_group_float_for_json(value)
 
 
 def _geometry_q_group_export_rows(
@@ -4409,92 +4399,29 @@ def _geometry_q_group_export_rows(
 
 def _save_geometry_q_group_selection() -> None:
     """Export the currently listed Qr/Qz rows and checkbox state to JSON."""
-
-    entries = _listed_geometry_q_group_entries()
-    export_rows = _geometry_q_group_export_rows(entries)
-    if not export_rows:
-        progress_label_geometry.config(
-            text="No listed Qr/Qz groups are available to save. Press Update Listed Peaks first."
-        )
-        return
-
-    file_path = filedialog.asksaveasfilename(
-        title="Save Geometry Fit Qr/Qz Peak List",
-        initialdir=str(get_dir("file_dialog_dir")),
-        defaultextension=".json",
-        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-        initialfile=f"geometry_q_groups_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-    )
-    if not file_path:
-        progress_label_geometry.config(text="Save Qr/Qz peak list canceled.")
-        return
-
-    payload = gui_geometry_q_group_manager.build_geometry_q_group_save_payload(
-        export_rows,
-        saved_at=datetime.now().isoformat(timespec="seconds"),
-    )
-    try:
-        with open(file_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-    except Exception as exc:
-        progress_label_geometry.config(text=f"Failed to save Qr/Qz peak list: {exc}")
-        return
-
-    progress_label_geometry.config(
-        text=f"Saved {len(export_rows)} Qr/Qz groups to {file_path}"
+    gui_geometry_q_group_manager.save_geometry_q_group_selection_with_dialog(
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        file_dialog_dir=get_dir("file_dialog_dir"),
+        asksaveasfilename=filedialog.asksaveasfilename,
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
     )
 
 
 def _load_geometry_q_group_selection() -> None:
     """Import a saved Qr/Qz selector list and apply it to the current rows."""
-
-    file_path = filedialog.askopenfilename(
-        title="Load Geometry Fit Qr/Qz Peak List",
-        initialdir=str(get_dir("file_dialog_dir")),
-        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-    )
-    if not file_path:
-        progress_label_geometry.config(text="Load Qr/Qz peak list canceled.")
-        return
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except Exception as exc:
-        progress_label_geometry.config(text=f"Failed to load Qr/Qz peak list: {exc}")
-        return
-
-    saved_state, error = gui_geometry_q_group_manager.load_geometry_q_group_saved_state(
-        payload
-    )
-    if error is not None:
-        progress_label_geometry.config(text=error)
-        return
-
-    summary, error = (
-        gui_geometry_q_group_manager.apply_loaded_geometry_q_group_saved_state(
-            preview_state=geometry_preview_state,
-            q_group_state=geometry_q_group_state,
-            saved_state=saved_state,
-        )
-    )
-    if error is not None:
-        progress_label_geometry.config(text=error)
-        return
-
-    _update_geometry_preview_exclude_button_label()
-    _refresh_geometry_q_group_window()
-
-    if _live_geometry_preview_enabled():
-        _refresh_live_geometry_preview(update_status=False)
-
-    progress_label_geometry.config(
-        text=(
-            f"Loaded Qr/Qz peak list from {Path(file_path).name}: "
-            f"matched {summary['matched_total']}, enabled {summary['included_total']}, "
-            f"current-only excluded {summary['current_only']}, "
-            f"saved-only missing {summary['saved_only']}."
-        )
+    gui_geometry_q_group_manager.load_geometry_q_group_selection_with_dialog(
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        file_dialog_dir=get_dir("file_dialog_dir"),
+        askopenfilename=filedialog.askopenfilename,
+        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
+        refresh_geometry_q_group_window=_refresh_geometry_q_group_window,
+        live_geometry_preview_enabled=_live_geometry_preview_enabled,
+        refresh_live_geometry_preview=(
+            lambda: _refresh_live_geometry_preview(update_status=False)
+        ),
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
     )
 
 
@@ -4646,58 +4573,53 @@ def _on_geometry_q_group_checkbox_changed(
     row_var: tk.BooleanVar,
 ) -> None:
     """Apply one Qr/Qz include/exclude toggle from the selector window."""
-    action = gui_geometry_q_group_manager.apply_geometry_q_group_checkbox_change(
-        geometry_preview_state,
-        group_key,
-        row_var,
+    gui_geometry_q_group_manager.apply_geometry_q_group_checkbox_change_with_side_effects(
+        preview_state=geometry_preview_state,
+        group_key=group_key,
+        row_var=row_var,
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
+        update_geometry_q_group_window_status=_update_geometry_q_group_window_status,
+        live_geometry_preview_enabled=_live_geometry_preview_enabled,
+        refresh_live_geometry_preview=(
+            lambda: _refresh_live_geometry_preview(update_status=True)
+        ),
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
     )
-    if action is None:
-        return
-
-    _invalidate_geometry_manual_pick_cache()
-    _update_geometry_preview_exclude_button_label()
-    _update_geometry_q_group_window_status()
-
-    if _live_geometry_preview_enabled():
-        _refresh_live_geometry_preview(update_status=True)
-    else:
-        progress_label_geometry.config(text=f"{action} one Qr/Qz group for geometry fitting.")
 
 
 def _set_all_geometry_q_groups_enabled(enabled: bool) -> None:
     """Enable or disable every currently listed Qr/Qz group."""
-    action, count = gui_geometry_q_group_manager.set_all_geometry_q_groups_enabled(
-        geometry_preview_state,
-        geometry_q_group_state,
+    gui_geometry_q_group_manager.set_all_geometry_q_groups_enabled_with_side_effects(
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
         enabled=enabled,
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
+        refresh_geometry_q_group_window=_refresh_geometry_q_group_window,
+        live_geometry_preview_enabled=_live_geometry_preview_enabled,
+        refresh_live_geometry_preview=(
+            lambda: _refresh_live_geometry_preview(update_status=True)
+        ),
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
     )
-    if count <= 0:
-        progress_label_geometry.config(
-            text='No listed Qr/Qz groups are available. Press "Update Listed Peaks" first.'
-        )
-        return
-
-    _invalidate_geometry_manual_pick_cache()
-    _update_geometry_preview_exclude_button_label()
-    _refresh_geometry_q_group_window()
-
-    if _live_geometry_preview_enabled():
-        _refresh_live_geometry_preview(update_status=True)
-    else:
-        progress_label_geometry.config(
-            text=f"{action} {count} Qr/Qz groups for geometry fitting."
-        )
 
 
 def _request_geometry_q_group_window_update() -> None:
     """Rebuild the listed Qr/Qz rows from the current simulation on demand."""
-    gui_geometry_q_group_manager.request_geometry_q_group_window_update(
-        geometry_q_group_state
+    gui_geometry_q_group_manager.request_geometry_q_group_window_update_with_side_effects(
+        q_group_state=geometry_q_group_state,
+        clear_last_simulation_signature=(
+            lambda: setattr(
+                simulation_runtime_state,
+                "last_simulation_signature",
+                None,
+            )
+        ),
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
+        schedule_update=schedule_update,
     )
-    simulation_runtime_state.last_simulation_signature = None
-    _invalidate_geometry_manual_pick_cache()
-    progress_label_geometry.config(text="Updating listed Qr/Qz peaks from the current simulation...")
-    schedule_update()
 
 
 def _close_geometry_q_group_window() -> None:
