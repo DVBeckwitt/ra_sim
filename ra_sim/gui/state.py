@@ -570,6 +570,22 @@ class PeakSelectionState:
 
 
 @dataclass
+class IntegrationRangeDragState:
+    """Live drag-selection state for 1D integration-range picking."""
+
+    active: bool = False
+    mode: str | None = None
+    x0: float | None = None
+    y0: float | None = None
+    x1: float | None = None
+    y1: float | None = None
+    tth0: float | None = None
+    phi0: float | None = None
+    tth1: float | None = None
+    phi1: float | None = None
+
+
+@dataclass
 class AtomSiteOverrideState:
     """Cache bookkeeping for temporary atom-site override CIF files."""
 
@@ -728,6 +744,9 @@ class AppState:
         default_factory=BackgroundRuntimeState
     )
     peak_selection: PeakSelectionState = field(default_factory=PeakSelectionState)
+    integration_range_drag: IntegrationRangeDragState = field(
+        default_factory=IntegrationRangeDragState
+    )
     atom_site_override: AtomSiteOverrideState = field(
         default_factory=AtomSiteOverrideState
     )

@@ -109,6 +109,7 @@ from ra_sim.gui import background_theta as gui_background_theta
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
+from ra_sim.gui import integration_range_drag as gui_integration_range_drag
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import structure_model as gui_structure_model
@@ -229,6 +230,7 @@ def _ensure_numeric_vector(values, fallback, length):
 app_state = gui_controllers.build_initial_state()
 background_runtime_state = app_state.background_runtime
 peak_selection_state = app_state.peak_selection
+integration_range_drag_state = app_state.integration_range_drag
 atom_site_override_state = app_state.atom_site_override
 geometry_runtime_state = app_state.geometry_runtime
 simulation_runtime_state = app_state.simulation_runtime
@@ -4906,137 +4908,67 @@ drag_select_rect = Rectangle(
 drag_select_rect.set_visible(False)
 ax.add_patch(drag_select_rect)
 
-_drag_select_state = {
-    "active": False,
-    "mode": None,
-    "x0": None,
-    "y0": None,
-    "x1": None,
-    "y1": None,
-    "tth0": None,
-    "phi0": None,
-    "tth1": None,
-    "phi1": None,
-}
-
-
-def _clamp_to_axis_view(x, y):
-    x_lo, x_hi = sorted(ax.get_xlim())
-    y_lo, y_hi = sorted(ax.get_ylim())
-    clamped_x = min(max(float(x), x_lo), x_hi)
-    clamped_y = min(max(float(y), y_lo), y_hi)
-    return clamped_x, clamped_y
-
-
-def _update_drag_rect(x0, y0, x1, y1):
-    x_min, x_max = sorted((float(x0), float(x1)))
-    y_min, y_max = sorted((float(y0), float(y1)))
-    drag_select_rect.set_xy((x_min, y_min))
-    drag_select_rect.set_width(x_max - x_min)
-    drag_select_rect.set_height(y_max - y_min)
-    drag_select_rect.set_visible(True)
-    canvas.draw_idle()
-
-
-def _display_to_detector_angles(col: float, row: float, ai):
-    two_theta, phi_vals = _get_detector_angular_maps(ai)
-    if two_theta is None or phi_vals is None:
-        return None
-
-    height, width = two_theta.shape[:2]
-    if height <= 0 or width <= 0:
-        return None
-
-    col_idx = min(max(int(round(float(col))), 0), width - 1)
-    row_idx = min(max(int(round(float(row))), 0), height - 1)
-
-    tth = float(two_theta[row_idx, col_idx])
-    phi = float(phi_vals[row_idx, col_idx])
-    if not (np.isfinite(tth) and np.isfinite(phi)):
-        return None
-    return tth, phi
-
-
-def _update_raw_drag_preview(ai):
-    tth0 = _drag_select_state["tth0"]
-    phi0 = _drag_select_state["phi0"]
-    tth1 = _drag_select_state["tth1"]
-    phi1 = _drag_select_state["phi1"]
-    if None in (tth0, phi0, tth1, phi1):
-        return
-
-    two_theta, phi_vals = _get_detector_angular_maps(ai)
-    if two_theta is None or phi_vals is None:
-        return
-
-    tth_min, tth_max = sorted((float(tth0), float(tth1)))
-    phi_min, phi_max = sorted((float(phi0), float(phi1)))
-    mask = (
-        (two_theta >= tth_min)
-        & (two_theta <= tth_max)
-        & (phi_vals >= phi_min)
-        & (phi_vals <= phi_max)
+integration_range_drag_runtime_bindings_factory = (
+    gui_integration_range_drag.make_runtime_integration_range_drag_bindings_factory(
+        drag_state=integration_range_drag_state,
+        peak_selection_state=peak_selection_state,
+        range_view_state_factory=lambda: globals().get(
+            "integration_range_controls_view_state"
+        ),
+        ax=ax,
+        drag_select_rect=drag_select_rect,
+        integration_region_overlay=integration_region_overlay,
+        integration_region_rect=integration_region_rect,
+        image_display=image_display,
+        get_detector_angular_maps=_get_detector_angular_maps,
+        caked_view_enabled_factory=lambda: (
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+            if analysis_view_controls_view_state.show_caked_2d_var is not None
+            else False
+        ),
+        unscaled_image_present_factory=lambda: (
+            simulation_runtime_state.unscaled_image is not None
+        ),
+        ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
+        sync_peak_selection_state=_sync_peak_selection_state,
+        schedule_range_update_factory=lambda: (
+            globals().get("schedule_range_update")
+            if callable(globals().get("schedule_range_update"))
+            else None
+        ),
+        update_integration_region_visuals_factory=lambda: (
+            globals().get("update_integration_region_visuals")
+            if callable(globals().get("update_integration_region_visuals"))
+            else None
+        ),
+        last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
+        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+        set_status_text_factory=lambda: (
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
     )
-
-    drag_select_rect.set_visible(False)
-    integration_region_rect.set_visible(False)
-    if np.any(mask):
-        integration_region_overlay.set_data(mask.astype(float))
-        integration_region_overlay.set_extent(image_display.get_extent())
-        integration_region_overlay.set_visible(True)
-    else:
-        integration_region_overlay.set_visible(False)
-    canvas.draw_idle()
-
-
-def _set_range_from_drag(x0, y0, x1, y1):
-    tth_min, tth_max = sorted((float(x0), float(x1)))
-    phi_min, phi_max = sorted((float(y0), float(y1)))
-
-    tth_lo = float(tth_min_slider.cget("from"))
-    tth_hi = float(tth_min_slider.cget("to"))
-    phi_lo = float(phi_min_slider.cget("from"))
-    phi_hi = float(phi_min_slider.cget("to"))
-    tth_min = min(max(tth_min, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
-    tth_max = min(max(tth_max, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
-    phi_min = min(max(phi_min, min(phi_lo, phi_hi)), max(phi_lo, phi_hi))
-    phi_max = min(max(phi_max, min(phi_lo, phi_hi)), max(phi_lo, phi_hi))
-
-    if tth_max <= tth_min:
-        eps = max(abs(tth_min) * 1e-6, 1e-3)
-        tth_max = min(tth_min + eps, max(tth_lo, tth_hi))
-    if phi_max <= phi_min:
-        eps = max(abs(phi_min) * 1e-6, 1e-3)
-        phi_max = min(phi_min + eps, max(phi_lo, phi_hi))
-
-    tth_min_var.set(tth_min)
-    tth_max_var.set(tth_max)
-    phi_min_var.set(phi_min)
-    phi_max_var.set(phi_max)
-
-    schedule_range_update()
-    progress_label_positions.config(
-        text=(
-            "Integration region set: "
-            f"2θ=[{tth_min:.2f}, {tth_max:.2f}]°, "
-            f"φ=[{phi_min:.2f}, {phi_max:.2f}]°"
-        )
+)
+integration_range_drag_runtime_callbacks = (
+    gui_integration_range_drag.make_runtime_integration_range_drag_callbacks(
+        integration_range_drag_runtime_bindings_factory
     )
+)
 
 
 def on_canvas_press(event):
 
-    if peak_selection_state.suppress_drag_press_once:
-        peak_selection_state.suppress_drag_press_once = False
-        _sync_peak_selection_state()
-        return
-
-    if event.button != 1:
-        return
-    if event.inaxes is not ax or event.xdata is None or event.ydata is None:
-        return
     if geometry_runtime_state.manual_pick_armed and _geometry_manual_pick_session_active():
-        x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
+        if event.button != 1:
+            return
+        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
+            return
+        x0, y0 = gui_integration_range_drag.clamp_to_axis_view(
+            ax,
+            event.xdata,
+            event.ydata,
+        )
         anchor_fraction_x = 0.5
         anchor_fraction_y = 0.5
         try:
@@ -5073,49 +5005,7 @@ def on_canvas_press(event):
         )
         _update_geometry_manual_pick_preview(x0, y0, force=True)
         return
-    if simulation_runtime_state.unscaled_image is None:
-        progress_label_positions.config(text="Run a simulation first.")
-        return
-
-    if analysis_view_controls_view_state.show_caked_2d_var.get():
-        x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
-        _drag_select_state["active"] = True
-        _drag_select_state["mode"] = "caked"
-        _drag_select_state["x0"] = x0
-        _drag_select_state["y0"] = y0
-        _drag_select_state["x1"] = x0
-        _drag_select_state["y1"] = y0
-        _drag_select_state["tth0"] = None
-        _drag_select_state["phi0"] = None
-        _drag_select_state["tth1"] = None
-        _drag_select_state["phi1"] = None
-        _update_drag_rect(x0, y0, x0, y0)
-        return
-
-    if peak_selection_state.hkl_pick_armed:
-        return
-
-    ai = simulation_runtime_state.ai_cache.get("ai")
-    if ai is None:
-        return
-
-    x0, y0 = _clamp_to_axis_view(event.xdata, event.ydata)
-    angles = _display_to_detector_angles(x0, y0, ai)
-    if angles is None:
-        return
-    tth0, phi0 = angles
-
-    _drag_select_state["active"] = True
-    _drag_select_state["mode"] = "raw"
-    _drag_select_state["x0"] = x0
-    _drag_select_state["y0"] = y0
-    _drag_select_state["x1"] = x0
-    _drag_select_state["y1"] = y0
-    _drag_select_state["tth0"] = tth0
-    _drag_select_state["phi0"] = phi0
-    _drag_select_state["tth1"] = tth0
-    _drag_select_state["phi1"] = phi0
-    _update_raw_drag_preview(ai)
+    integration_range_drag_runtime_callbacks.on_press(event)
 
 
 def on_canvas_motion(event):
@@ -5125,54 +5015,14 @@ def on_canvas_motion(event):
         and bool(geometry_manual_state.pick_session.get("zoom_active", False))
     ):
         if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-            x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
+            x1, y1 = gui_integration_range_drag.clamp_to_axis_view(
+                ax,
+                event.xdata,
+                event.ydata,
+            )
             _update_geometry_manual_pick_preview(x1, y1)
         return
-
-    if not _drag_select_state["active"]:
-        return
-
-    mode = _drag_select_state["mode"]
-    if mode == "caked":
-        if not analysis_view_controls_view_state.show_caked_2d_var.get():
-            return
-
-        if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-            x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
-            _drag_select_state["x1"] = x1
-            _drag_select_state["y1"] = y1
-        else:
-            x1 = _drag_select_state["x1"]
-            y1 = _drag_select_state["y1"]
-            if x1 is None or y1 is None:
-                return
-
-        _update_drag_rect(
-            _drag_select_state["x0"],
-            _drag_select_state["y0"],
-            _drag_select_state["x1"],
-            _drag_select_state["y1"],
-        )
-        return
-
-    if mode != "raw" or analysis_view_controls_view_state.show_caked_2d_var.get():
-        return
-
-    ai = simulation_runtime_state.ai_cache.get("ai")
-    if ai is None:
-        return
-
-    if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-        x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
-        angles = _display_to_detector_angles(x1, y1, ai)
-        if angles is not None:
-            tth1, phi1 = angles
-            _drag_select_state["x1"] = x1
-            _drag_select_state["y1"] = y1
-            _drag_select_state["tth1"] = tth1
-            _drag_select_state["phi1"] = phi1
-
-    _update_raw_drag_preview(ai)
+    integration_range_drag_runtime_callbacks.on_motion(event)
 
 
 def on_canvas_release(event):
@@ -5184,7 +5034,11 @@ def on_canvas_release(event):
         and bool(geometry_manual_state.pick_session.get("zoom_active", False))
     ):
         if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-            x_sel, y_sel = _clamp_to_axis_view(event.xdata, event.ydata)
+            x_sel, y_sel = gui_integration_range_drag.clamp_to_axis_view(
+                ax,
+                event.xdata,
+                event.ydata,
+            )
             _place_geometry_manual_selection_at(float(x_sel), float(y_sel))
         else:
             _clear_geometry_manual_preview_artists(redraw=False)
@@ -5193,60 +5047,7 @@ def on_canvas_release(event):
             progress_label_geometry.config(text="Manual point placement canceled: release inside the image.")
             canvas.draw_idle()
         return
-    if not _drag_select_state["active"]:
-        return
-
-    mode = _drag_select_state["mode"]
-    _drag_select_state["active"] = False
-
-    if mode == "caked":
-        if analysis_view_controls_view_state.show_caked_2d_var.get() and event.inaxes is ax and event.xdata is not None and event.ydata is not None:
-            x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
-            _drag_select_state["x1"] = x1
-            _drag_select_state["y1"] = y1
-
-        x0 = _drag_select_state["x0"]
-        y0 = _drag_select_state["y0"]
-        x1 = _drag_select_state["x1"]
-        y1 = _drag_select_state["y1"]
-        if None not in (x0, y0, x1, y1):
-            _set_range_from_drag(x0, y0, x1, y1)
-        _drag_select_state["mode"] = None
-        drag_select_rect.set_visible(False)
-        canvas.draw_idle()
-        return
-
-    if mode == "raw":
-        ai = simulation_runtime_state.ai_cache.get("ai")
-        if (
-            not analysis_view_controls_view_state.show_caked_2d_var.get()
-            and ai is not None
-            and event.inaxes is ax
-            and event.xdata is not None
-            and event.ydata is not None
-        ):
-            x1, y1 = _clamp_to_axis_view(event.xdata, event.ydata)
-            angles = _display_to_detector_angles(x1, y1, ai)
-            if angles is not None:
-                tth1, phi1 = angles
-                _drag_select_state["x1"] = x1
-                _drag_select_state["y1"] = y1
-                _drag_select_state["tth1"] = tth1
-                _drag_select_state["phi1"] = phi1
-
-        tth0 = _drag_select_state["tth0"]
-        phi0 = _drag_select_state["phi0"]
-        tth1 = _drag_select_state["tth1"]
-        phi1 = _drag_select_state["phi1"]
-        if None not in (tth0, phi0, tth1, phi1):
-            _set_range_from_drag(tth0, phi0, tth1, phi1)
-        else:
-            update_integration_region_visuals(ai, simulation_runtime_state.last_res2_sim)
-            canvas.draw_idle()
-
-    _drag_select_state["mode"] = None
-    drag_select_rect.set_visible(False)
-    canvas.draw_idle()
+    integration_range_drag_runtime_callbacks.on_release(event)
 
 # -----------------------------------------------------------
 # 3)  Bind the handler
@@ -13003,10 +12804,7 @@ def toggle_caked_2d():
         # Entering caked view should start from auto-scaled simulation limits.
         display_controls_state.simulation_limits_user_override = False
         peak_selection_runtime_callbacks.set_hkl_pick_mode(False)
-    _drag_select_state["active"] = False
-    _drag_select_state["mode"] = None
-    drag_select_rect.set_visible(False)
-    canvas.draw_idle()
+    integration_range_drag_runtime_callbacks.reset()
     schedule_update()
 
 

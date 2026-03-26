@@ -323,6 +323,15 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     switch actions.
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
     plus the remaining call sites around that workflow.
+- Integration-range drag workflow extraction has advanced.
+  - `ra_sim.gui.state` now also owns explicit live drag-selection state for
+    1D integration-range picking.
+  - `ra_sim.gui.integration_range_drag` now owns the canvas clamp helpers,
+    detector-angle lookup, raw preview mask rendering, range-apply logic, and
+    the runtime binding/callback bundle for raw/caked integration-range
+    dragging.
+  - `ra_sim.gui.runtime` now keeps only the manual-geometry-specific canvas
+    branches plus top-level event dispatch around that workflow.
 - HKL lookup / selected-peak workflow extraction has advanced.
   - `ra_sim.gui.peak_selection` now owns HKL lookup parsing, selected-peak
     summary text, degenerate-HKL lookup, selection-by-index/HKL,
@@ -509,8 +518,10 @@ What is left:
 - The remaining background runtime code is now mostly one bound callback
   bundle plus a few call sites around the extracted background manager.
 - The remaining selected-peak runtime code is now mostly cross-feature
-  event-dispatch and drag/click-mode arbitration around the extracted
-  peak-selection callbacks.
+  click-mode arbitration at the top-level canvas dispatcher.
+- The remaining integration-range drag runtime code is now mostly the same
+  top-level canvas event routing plus the manual-geometry-specific canvas
+  branches around the extracted drag callbacks.
 
 Why it matters:
 

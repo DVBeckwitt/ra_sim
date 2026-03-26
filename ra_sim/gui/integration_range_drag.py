@@ -1,0 +1,521 @@
+"""Workflow helpers for canvas drag-selection of 1D integration ranges."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+
+@dataclass
+class IntegrationRangeDragBindings:
+    """Runtime callbacks and shared state used by integration-range dragging."""
+
+    drag_state: Any
+    peak_selection_state: Any
+    range_view_state: Any
+    ax: Any
+    drag_select_rect: Any
+    integration_region_overlay: Any
+    integration_region_rect: Any
+    image_display: Any
+    get_detector_angular_maps: Callable[[Any], tuple[object, object]]
+    caked_view_enabled_factory: object
+    unscaled_image_present_factory: object
+    ai_factory: object
+    sync_peak_selection_state: Callable[[], None] | None = None
+    schedule_range_update: Callable[[], None] | None = None
+    update_integration_region_visuals: Callable[[object, object], None] | None = None
+    last_sim_res2_factory: object = None
+    draw_idle: Callable[[], None] | None = None
+    set_status_text: Callable[[str], None] | None = None
+
+
+@dataclass(frozen=True)
+class IntegrationRangeDragCallbacks:
+    """Bound callbacks for runtime integration-range dragging."""
+
+    on_press: Callable[[Any], bool]
+    on_motion: Callable[[Any], bool]
+    on_release: Callable[[Any], bool]
+    reset: Callable[[], None]
+
+
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
+
+
+def _draw_idle(bindings: IntegrationRangeDragBindings) -> None:
+    if callable(bindings.draw_idle):
+        bindings.draw_idle()
+
+
+def _set_status_text(
+    bindings: IntegrationRangeDragBindings,
+    text: str,
+) -> None:
+    if callable(bindings.set_status_text):
+        bindings.set_status_text(str(text))
+
+
+def _sync_peak_selection_state(bindings: IntegrationRangeDragBindings) -> None:
+    if callable(bindings.sync_peak_selection_state):
+        bindings.sync_peak_selection_state()
+
+
+def _runtime_caked_view_enabled(bindings: IntegrationRangeDragBindings) -> bool:
+    return bool(_resolve_runtime_value(bindings.caked_view_enabled_factory))
+
+
+def _runtime_unscaled_image_present(bindings: IntegrationRangeDragBindings) -> bool:
+    return bool(_resolve_runtime_value(bindings.unscaled_image_present_factory))
+
+
+def _runtime_ai(bindings: IntegrationRangeDragBindings):
+    return _resolve_runtime_value(bindings.ai_factory)
+
+
+def _runtime_last_sim_res2(bindings: IntegrationRangeDragBindings):
+    return _resolve_runtime_value(bindings.last_sim_res2_factory)
+
+
+def _clear_drag_coordinates(drag_state) -> None:
+    drag_state.active = False
+    drag_state.mode = None
+    drag_state.x0 = None
+    drag_state.y0 = None
+    drag_state.x1 = None
+    drag_state.y1 = None
+    drag_state.tth0 = None
+    drag_state.phi0 = None
+    drag_state.tth1 = None
+    drag_state.phi1 = None
+
+
+def clamp_to_axis_view(ax: object, x: float, y: float) -> tuple[float, float]:
+    """Clamp one display-space point to the current axes limits."""
+
+    x_lo, x_hi = sorted(ax.get_xlim())
+    y_lo, y_hi = sorted(ax.get_ylim())
+    clamped_x = min(max(float(x), float(x_lo)), float(x_hi))
+    clamped_y = min(max(float(y), float(y_lo)), float(y_hi))
+    return float(clamped_x), float(clamped_y)
+
+
+def update_runtime_drag_rectangle(
+    bindings: IntegrationRangeDragBindings,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> None:
+    """Refresh the visible drag rectangle for one caked-view drag."""
+
+    x_min, x_max = sorted((float(x0), float(x1)))
+    y_min, y_max = sorted((float(y0), float(y1)))
+    bindings.drag_select_rect.set_xy((x_min, y_min))
+    bindings.drag_select_rect.set_width(x_max - x_min)
+    bindings.drag_select_rect.set_height(y_max - y_min)
+    bindings.drag_select_rect.set_visible(True)
+    _draw_idle(bindings)
+
+
+def display_to_detector_angles(
+    bindings: IntegrationRangeDragBindings,
+    col: float,
+    row: float,
+    ai: object,
+) -> tuple[float, float] | None:
+    """Resolve display coordinates to detector angles using the current maps."""
+
+    two_theta, phi_vals = bindings.get_detector_angular_maps(ai)
+    if two_theta is None or phi_vals is None:
+        return None
+
+    height, width = two_theta.shape[:2]
+    if int(height) <= 0 or int(width) <= 0:
+        return None
+
+    col_idx = min(max(int(round(float(col))), 0), int(width) - 1)
+    row_idx = min(max(int(round(float(row))), 0), int(height) - 1)
+    tth = float(two_theta[row_idx, col_idx])
+    phi = float(phi_vals[row_idx, col_idx])
+    if not (np.isfinite(tth) and np.isfinite(phi)):
+        return None
+    return (tth, phi)
+
+
+def update_runtime_raw_drag_preview(
+    bindings: IntegrationRangeDragBindings,
+    ai: object,
+) -> bool:
+    """Refresh the raw-detector integration overlay for the current drag."""
+
+    drag_state = bindings.drag_state
+    if None in (drag_state.tth0, drag_state.phi0, drag_state.tth1, drag_state.phi1):
+        return False
+
+    two_theta, phi_vals = bindings.get_detector_angular_maps(ai)
+    if two_theta is None or phi_vals is None:
+        return False
+
+    tth_min, tth_max = sorted((float(drag_state.tth0), float(drag_state.tth1)))
+    phi_min, phi_max = sorted((float(drag_state.phi0), float(drag_state.phi1)))
+    mask = (
+        (two_theta >= tth_min)
+        & (two_theta <= tth_max)
+        & (phi_vals >= phi_min)
+        & (phi_vals <= phi_max)
+    )
+
+    bindings.drag_select_rect.set_visible(False)
+    bindings.integration_region_rect.set_visible(False)
+    if np.any(mask):
+        bindings.integration_region_overlay.set_data(mask.astype(float))
+        bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
+        bindings.integration_region_overlay.set_visible(True)
+    else:
+        bindings.integration_region_overlay.set_visible(False)
+    _draw_idle(bindings)
+    return True
+
+
+def set_runtime_integration_range_from_drag(
+    bindings: IntegrationRangeDragBindings,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> bool:
+    """Apply one completed drag to the integration-range controls."""
+
+    view_state = bindings.range_view_state
+    if view_state is None:
+        return False
+
+    tth_min, tth_max = sorted((float(x0), float(x1)))
+    phi_min, phi_max = sorted((float(y0), float(y1)))
+
+    tth_lo = float(view_state.tth_min_slider.cget("from"))
+    tth_hi = float(view_state.tth_min_slider.cget("to"))
+    phi_lo = float(view_state.phi_min_slider.cget("from"))
+    phi_hi = float(view_state.phi_min_slider.cget("to"))
+    tth_min = min(max(tth_min, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
+    tth_max = min(max(tth_max, min(tth_lo, tth_hi)), max(tth_lo, tth_hi))
+    phi_min = min(max(phi_min, min(phi_lo, phi_hi)), max(phi_lo, phi_hi))
+    phi_max = min(max(phi_max, min(phi_lo, phi_hi)), max(phi_lo, phi_hi))
+
+    if tth_max <= tth_min:
+        eps = max(abs(tth_min) * 1e-6, 1e-3)
+        tth_max = min(tth_min + eps, max(tth_lo, tth_hi))
+    if phi_max <= phi_min:
+        eps = max(abs(phi_min) * 1e-6, 1e-3)
+        phi_max = min(phi_min + eps, max(phi_lo, phi_hi))
+
+    view_state.tth_min_var.set(tth_min)
+    view_state.tth_max_var.set(tth_max)
+    view_state.phi_min_var.set(phi_min)
+    view_state.phi_max_var.set(phi_max)
+
+    if callable(bindings.schedule_range_update):
+        bindings.schedule_range_update()
+    _set_status_text(
+        bindings,
+        (
+            "Integration region set: "
+            f"2θ=[{tth_min:.2f}, {tth_max:.2f}]°, "
+            f"φ=[{phi_min:.2f}, {phi_max:.2f}]°"
+        ),
+    )
+    return True
+
+
+def reset_runtime_integration_drag(
+    bindings: IntegrationRangeDragBindings,
+    *,
+    redraw: bool = True,
+) -> None:
+    """Clear the current drag-selection state and hide the drag rectangle."""
+
+    _clear_drag_coordinates(bindings.drag_state)
+    bindings.drag_select_rect.set_visible(False)
+    if redraw:
+        _draw_idle(bindings)
+
+
+def handle_runtime_integration_drag_press(
+    bindings: IntegrationRangeDragBindings,
+    event: Any,
+) -> bool:
+    """Handle one canvas button-press for integration-range dragging."""
+
+    if bool(bindings.peak_selection_state.suppress_drag_press_once):
+        bindings.peak_selection_state.suppress_drag_press_once = False
+        _sync_peak_selection_state(bindings)
+        return True
+
+    if getattr(event, "button", None) != 1:
+        return False
+    if (
+        getattr(event, "inaxes", None) is not bindings.ax
+        or getattr(event, "xdata", None) is None
+        or getattr(event, "ydata", None) is None
+    ):
+        return False
+    if not _runtime_unscaled_image_present(bindings):
+        _set_status_text(bindings, "Run a simulation first.")
+        return False
+
+    drag_state = bindings.drag_state
+    x0, y0 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+    if _runtime_caked_view_enabled(bindings):
+        drag_state.active = True
+        drag_state.mode = "caked"
+        drag_state.x0 = x0
+        drag_state.y0 = y0
+        drag_state.x1 = x0
+        drag_state.y1 = y0
+        drag_state.tth0 = None
+        drag_state.phi0 = None
+        drag_state.tth1 = None
+        drag_state.phi1 = None
+        update_runtime_drag_rectangle(bindings, x0, y0, x0, y0)
+        return True
+
+    if bool(bindings.peak_selection_state.hkl_pick_armed):
+        return False
+
+    ai = _runtime_ai(bindings)
+    if ai is None:
+        return False
+
+    angles = display_to_detector_angles(bindings, x0, y0, ai)
+    if angles is None:
+        return False
+    tth0, phi0 = angles
+    drag_state.active = True
+    drag_state.mode = "raw"
+    drag_state.x0 = x0
+    drag_state.y0 = y0
+    drag_state.x1 = x0
+    drag_state.y1 = y0
+    drag_state.tth0 = tth0
+    drag_state.phi0 = phi0
+    drag_state.tth1 = tth0
+    drag_state.phi1 = phi0
+    update_runtime_raw_drag_preview(bindings, ai)
+    return True
+
+
+def handle_runtime_integration_drag_motion(
+    bindings: IntegrationRangeDragBindings,
+    event: Any,
+) -> bool:
+    """Handle one canvas motion event for integration-range dragging."""
+
+    drag_state = bindings.drag_state
+    if not bool(drag_state.active):
+        return False
+
+    mode = drag_state.mode
+    if mode == "caked":
+        if not _runtime_caked_view_enabled(bindings):
+            return False
+
+        if (
+            getattr(event, "inaxes", None) is bindings.ax
+            and getattr(event, "xdata", None) is not None
+            and getattr(event, "ydata", None) is not None
+        ):
+            x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+            drag_state.x1 = x1
+            drag_state.y1 = y1
+        elif drag_state.x1 is None or drag_state.y1 is None:
+            return False
+
+        update_runtime_drag_rectangle(
+            bindings,
+            drag_state.x0,
+            drag_state.y0,
+            drag_state.x1,
+            drag_state.y1,
+        )
+        return True
+
+    if mode != "raw" or _runtime_caked_view_enabled(bindings):
+        return False
+
+    ai = _runtime_ai(bindings)
+    if ai is None:
+        return False
+
+    if (
+        getattr(event, "inaxes", None) is bindings.ax
+        and getattr(event, "xdata", None) is not None
+        and getattr(event, "ydata", None) is not None
+    ):
+        x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+        angles = display_to_detector_angles(bindings, x1, y1, ai)
+        if angles is not None:
+            tth1, phi1 = angles
+            drag_state.x1 = x1
+            drag_state.y1 = y1
+            drag_state.tth1 = tth1
+            drag_state.phi1 = phi1
+
+    update_runtime_raw_drag_preview(bindings, ai)
+    return True
+
+
+def handle_runtime_integration_drag_release(
+    bindings: IntegrationRangeDragBindings,
+    event: Any,
+) -> bool:
+    """Handle one canvas button-release for integration-range dragging."""
+
+    if getattr(event, "button", None) != 1:
+        return False
+
+    drag_state = bindings.drag_state
+    if not bool(drag_state.active):
+        return False
+
+    mode = drag_state.mode
+    drag_state.active = False
+
+    if mode == "caked":
+        if (
+            _runtime_caked_view_enabled(bindings)
+            and getattr(event, "inaxes", None) is bindings.ax
+            and getattr(event, "xdata", None) is not None
+            and getattr(event, "ydata", None) is not None
+        ):
+            x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+            drag_state.x1 = x1
+            drag_state.y1 = y1
+
+        if None not in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1):
+            set_runtime_integration_range_from_drag(
+                bindings,
+                drag_state.x0,
+                drag_state.y0,
+                drag_state.x1,
+                drag_state.y1,
+            )
+        reset_runtime_integration_drag(bindings)
+        return True
+
+    if mode == "raw":
+        ai = _runtime_ai(bindings)
+        if (
+            not _runtime_caked_view_enabled(bindings)
+            and ai is not None
+            and getattr(event, "inaxes", None) is bindings.ax
+            and getattr(event, "xdata", None) is not None
+            and getattr(event, "ydata", None) is not None
+        ):
+            x1, y1 = clamp_to_axis_view(bindings.ax, event.xdata, event.ydata)
+            angles = display_to_detector_angles(bindings, x1, y1, ai)
+            if angles is not None:
+                tth1, phi1 = angles
+                drag_state.x1 = x1
+                drag_state.y1 = y1
+                drag_state.tth1 = tth1
+                drag_state.phi1 = phi1
+
+        if None not in (drag_state.tth0, drag_state.phi0, drag_state.tth1, drag_state.phi1):
+            set_runtime_integration_range_from_drag(
+                bindings,
+                drag_state.tth0,
+                drag_state.phi0,
+                drag_state.tth1,
+                drag_state.phi1,
+            )
+        elif ai is not None and callable(bindings.update_integration_region_visuals):
+            bindings.update_integration_region_visuals(ai, _runtime_last_sim_res2(bindings))
+            _draw_idle(bindings)
+
+        reset_runtime_integration_drag(bindings)
+        return True
+
+    reset_runtime_integration_drag(bindings)
+    return False
+
+
+def make_runtime_integration_range_drag_bindings_factory(
+    *,
+    drag_state,
+    peak_selection_state,
+    range_view_state_factory: object,
+    ax: object,
+    drag_select_rect: object,
+    integration_region_overlay: object,
+    integration_region_rect: object,
+    image_display: object,
+    get_detector_angular_maps: Callable[[Any], tuple[object, object]],
+    caked_view_enabled_factory: object,
+    unscaled_image_present_factory: object,
+    ai_factory: object,
+    sync_peak_selection_state: Callable[[], None] | None = None,
+    schedule_range_update_factory: object = None,
+    update_integration_region_visuals_factory: object = None,
+    last_sim_res2_factory: object = None,
+    draw_idle_factory: object = None,
+    set_status_text_factory: object = None,
+):
+    """Build a factory that resolves the live integration-range drag bindings."""
+
+    def _build() -> IntegrationRangeDragBindings:
+        return IntegrationRangeDragBindings(
+            drag_state=drag_state,
+            peak_selection_state=peak_selection_state,
+            range_view_state=_resolve_runtime_value(range_view_state_factory),
+            ax=ax,
+            drag_select_rect=drag_select_rect,
+            integration_region_overlay=integration_region_overlay,
+            integration_region_rect=integration_region_rect,
+            image_display=image_display,
+            get_detector_angular_maps=get_detector_angular_maps,
+            caked_view_enabled_factory=caked_view_enabled_factory,
+            unscaled_image_present_factory=unscaled_image_present_factory,
+            ai_factory=ai_factory,
+            sync_peak_selection_state=sync_peak_selection_state,
+            schedule_range_update=_resolve_runtime_value(schedule_range_update_factory),
+            update_integration_region_visuals=_resolve_runtime_value(
+                update_integration_region_visuals_factory
+            ),
+            last_sim_res2_factory=last_sim_res2_factory,
+            draw_idle=_resolve_runtime_value(draw_idle_factory),
+            set_status_text=_resolve_runtime_value(set_status_text_factory),
+        )
+
+    return _build
+
+
+def make_runtime_integration_range_drag_callbacks(
+    bindings_factory: Callable[[], IntegrationRangeDragBindings],
+) -> IntegrationRangeDragCallbacks:
+    """Build bound callbacks for runtime integration-range dragging."""
+
+    return IntegrationRangeDragCallbacks(
+        on_press=lambda event: handle_runtime_integration_drag_press(
+            bindings_factory(),
+            event,
+        ),
+        on_motion=lambda event: handle_runtime_integration_drag_motion(
+            bindings_factory(),
+            event,
+        ),
+        on_release=lambda event: handle_runtime_integration_drag_release(
+            bindings_factory(),
+            event,
+        ),
+        reset=lambda: reset_runtime_integration_drag(bindings_factory()),
+    )
