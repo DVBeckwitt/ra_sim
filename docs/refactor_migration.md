@@ -85,6 +85,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - preview exclusion toggles and overlay snapshot replacement now flow
     through `ra_sim.gui.controllers`
   - dead preview-selector scaffolding was removed from `ra_sim.gui.runtime`
+- Live geometry preview / Qr/Qz workflow extraction has also advanced:
+  - preview auto-match config normalization, cached overlay-state payload
+    helpers, live-preview status rendering, and preview exclusion clear/toggle
+    helpers now also live in `ra_sim.gui.geometry_q_group_manager`
+  - `ra_sim.gui.runtime` now delegates those paths through thin wrappers
 - Bragg Qr manager migration has also started:
   - Bragg-Qr selection/index bookkeeping now uses shared GUI state
   - Bragg-Qr selection mapping and group/L-value toggle mutations now flow
@@ -306,13 +311,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - cached-entry snapshot replacement/capture plus the preview-exclusion
     open/status helper used by the live update cycle and geometry tool
     controls now also live in `ra_sim.gui.geometry_q_group_manager`
+  - live-preview auto-match config normalization, cached overlay-state
+    payload helpers, status rendering, and preview exclusion clear/toggle
+    helpers now also live in `ra_sim.gui.geometry_q_group_manager`
   - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions
   - `ra_sim.gui.runtime` now keeps only one bound geometry-selector factory/
-    callback bundle plus preview-exclusion/live-preview orchestration, thin
-    fit-preview/cached-hit value sources, a narrowed update-cycle refresh
-    call site, and toolbar wiring around that workflow
+    callback bundle plus thin fit-preview/cached-hit value sources, live-
+    preview availability/fallback simulation orchestration, a narrowed
+    update-cycle refresh call site, and toolbar wiring around that workflow
 - Background-file workflow extraction has also advanced:
   - background-file state transition, file-dialog initial-dir selection,
     background status refresh, and the post-load/post-switch redraw/reset
@@ -391,8 +399,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   value plus thin active-entry/render-config value sources and a few
   manager/overlay call sites around the extracted controller/view modules.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
-  bound factory/callback bundle plus preview-exclusion/live-preview
-  rendering orchestration, thin fit-preview/cached-hit value sources,
+  bound factory/callback bundle plus thin fit-preview/cached-hit value
+  sources, live-preview availability/fallback simulation orchestration,
   image-shape/display-coordinate value plumbing, and a couple of delegated
   call sites around the extracted manager/view helpers.
 - The remaining Bragg-Qr manager runtime code is now mostly the bound

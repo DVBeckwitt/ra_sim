@@ -661,6 +661,31 @@ def current_geometry_auto_match_min_matches(
     return max(1, int(min_matches))
 
 
+def build_live_geometry_preview_auto_match_config(
+    fit_config: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Return the normalized auto-match config used for live preview refreshes."""
+
+    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(
+        fit_config,
+        Mapping,
+    ) else {}
+    if not isinstance(geometry_refine_cfg, Mapping):
+        geometry_refine_cfg = {}
+    auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
+    if not isinstance(auto_match_cfg, Mapping):
+        auto_match_cfg = {}
+
+    preview_auto_match_cfg = dict(auto_match_cfg)
+    preview_auto_match_cfg["relax_on_low_matches"] = False
+    search_radius = _coerce_float(auto_match_cfg.get("search_radius_px", 24.0), 24.0)
+    preview_auto_match_cfg.setdefault(
+        "context_margin_px",
+        max(192.0, 8.0 * float(search_radius)),
+    )
+    return preview_auto_match_cfg
+
+
 def geometry_q_group_excluded_count(
     preview_state,
     q_group_state,
@@ -675,6 +700,25 @@ def geometry_q_group_excluded_count(
         preview_state,
         keys,
     )
+
+
+def build_geometry_preview_exclude_button_label(
+    *,
+    preview_state,
+    q_group_state,
+    entries: Sequence[dict[str, object]] | None = None,
+) -> str:
+    """Return the toolbar label for the Qr/Qz preview-selector action."""
+
+    label = "Select Qr/Qz Peaks"
+    excluded_count = geometry_q_group_excluded_count(
+        preview_state,
+        q_group_state,
+        entries,
+    )
+    if excluded_count > 0:
+        label += f" ({excluded_count} off)"
+    return label
 
 
 def build_geometry_q_group_window_status_text(
@@ -1071,6 +1115,369 @@ def apply_loaded_geometry_q_group_saved_state(
 def _set_status_text(set_status_text: Callable[[str], None] | None, text: str) -> None:
     if callable(set_status_text):
         set_status_text(str(text))
+
+
+def build_empty_live_geometry_preview_overlay_state(
+    *,
+    signature: object,
+    min_matches: int,
+    max_display_markers: int,
+    q_group_total: int,
+    q_group_excluded: int,
+    excluded_q_peaks: int,
+    collapsed_degenerate_peaks: int = 0,
+) -> dict[str, object]:
+    """Return one empty cached live-preview overlay-state payload."""
+
+    return {
+        "signature": signature,
+        "pairs": [],
+        "simulated_count": 0,
+        "min_matches": int(min_matches),
+        "best_radius": float("nan"),
+        "mean_dist": float("nan"),
+        "p90_dist": float("nan"),
+        "quality_fail": False,
+        "max_display_markers": int(max_display_markers),
+        "auto_match_attempts": [],
+        "q_group_total": int(q_group_total),
+        "q_group_excluded": int(q_group_excluded),
+        "excluded_q_peaks": int(excluded_q_peaks),
+        "collapsed_degenerate_peaks": int(collapsed_degenerate_peaks),
+    }
+
+
+def build_live_geometry_preview_overlay_state(
+    *,
+    signature: object,
+    matched_pairs: Sequence[Mapping[str, object]] | None,
+    match_stats: Mapping[str, object] | None,
+    preview_auto_match_cfg: Mapping[str, object] | None,
+    auto_match_attempts: Sequence[Mapping[str, object]] | None,
+    min_matches: int,
+    q_group_total: int,
+    q_group_excluded: int,
+    excluded_q_peaks: int,
+    collapsed_degenerate_peaks: int = 0,
+) -> dict[str, object]:
+    """Return one cached live-preview overlay-state payload from match results."""
+
+    match_stats_local = (
+        match_stats if isinstance(match_stats, Mapping) else {}
+    )
+    preview_cfg = (
+        preview_auto_match_cfg if isinstance(preview_auto_match_cfg, Mapping) else {}
+    )
+    matched_pairs_local = [dict(entry) for entry in matched_pairs or ()]
+    attempts_local = [dict(entry) for entry in auto_match_attempts or ()]
+
+    simulated_count = _coerce_int(
+        match_stats_local.get("simulated_count", len(matched_pairs_local)),
+        len(matched_pairs_local),
+    )
+    best_radius = _coerce_float(
+        match_stats_local.get("search_radius_px", np.nan),
+        float("nan"),
+    )
+    p90_dist = _coerce_float(
+        match_stats_local.get("p90_match_distance_px", np.nan),
+        float("nan"),
+    )
+    mean_dist = _coerce_float(
+        match_stats_local.get("mean_match_distance_px", np.nan),
+        float("nan"),
+    )
+    max_auto_p90 = _coerce_float(
+        preview_cfg.get("max_p90_distance_px", 35.0),
+        35.0,
+    )
+    max_auto_mean = _coerce_float(
+        preview_cfg.get("max_mean_distance_px", 22.0),
+        22.0,
+    )
+    quality_fail = bool(
+        (np.isfinite(max_auto_p90) and np.isfinite(p90_dist) and p90_dist > max_auto_p90)
+        or (
+            np.isfinite(max_auto_mean)
+            and np.isfinite(mean_dist)
+            and mean_dist > max_auto_mean
+        )
+    )
+
+    return {
+        "signature": signature,
+        "pairs": matched_pairs_local,
+        "simulated_count": int(simulated_count),
+        "min_matches": int(min_matches),
+        "best_radius": float(best_radius),
+        "mean_dist": float(mean_dist),
+        "p90_dist": float(p90_dist),
+        "quality_fail": bool(quality_fail),
+        "max_display_markers": _coerce_int(
+            preview_cfg.get("max_display_markers", 120),
+            120,
+        ),
+        "auto_match_attempts": attempts_local,
+        "q_group_total": int(q_group_total),
+        "q_group_excluded": int(q_group_excluded),
+        "excluded_q_peaks": int(excluded_q_peaks),
+        "collapsed_degenerate_peaks": int(collapsed_degenerate_peaks),
+    }
+
+
+def build_live_geometry_preview_status_text(
+    preview_overlay_state: object,
+    *,
+    active_pair_count: int,
+    excluded_count: int,
+) -> str:
+    """Build the status line shown after one live-preview redraw."""
+
+    pairs = list(getattr(preview_overlay_state, "pairs", []) or [])
+    simulated_count = _coerce_int(
+        getattr(preview_overlay_state, "simulated_count", 0),
+        0,
+    )
+    min_matches = _coerce_int(
+        getattr(preview_overlay_state, "min_matches", 0),
+        0,
+    )
+    best_radius = _coerce_float(
+        getattr(preview_overlay_state, "best_radius", np.nan),
+        float("nan"),
+    )
+    mean_dist = _coerce_float(
+        getattr(preview_overlay_state, "mean_dist", np.nan),
+        float("nan"),
+    )
+    p90_dist = _coerce_float(
+        getattr(preview_overlay_state, "p90_dist", np.nan),
+        float("nan"),
+    )
+    quality_fail = bool(getattr(preview_overlay_state, "quality_fail", False))
+    q_group_total = _coerce_int(
+        getattr(preview_overlay_state, "q_group_total", 0),
+        0,
+    )
+    q_group_excluded = _coerce_int(
+        getattr(preview_overlay_state, "q_group_excluded", 0),
+        0,
+    )
+    collapsed_deg = _coerce_int(
+        getattr(preview_overlay_state, "collapsed_degenerate_peaks", 0),
+        0,
+    )
+    max_display_markers = max(
+        1,
+        _coerce_int(getattr(preview_overlay_state, "max_display_markers", 120), 120),
+    )
+    shown_count = min(len(pairs), max_display_markers)
+
+    summary = (
+        "Live auto-match preview: "
+        f"{int(active_pair_count)}/{simulated_count} active peaks "
+        f"(need {min_matches}, local-peak match"
+    )
+    if np.isfinite(best_radius):
+        summary += f", limit={best_radius:.1f}px"
+    if np.isfinite(mean_dist):
+        summary += f", mean={mean_dist:.1f}px"
+    if np.isfinite(p90_dist):
+        summary += f", p90={p90_dist:.1f}px"
+    summary += ")."
+    if int(excluded_count) > 0:
+        summary += f" Excluded={int(excluded_count)}."
+    if q_group_total > 0:
+        summary += (
+            f" Qr/Qz groups on={max(0, q_group_total - q_group_excluded)}/{q_group_total}."
+        )
+    if collapsed_deg > 0:
+        summary += f" Degenerate collapsed={collapsed_deg}."
+    if int(active_pair_count) < min_matches:
+        summary += " Geometry fit would stop on the minimum-match gate."
+    elif quality_fail:
+        summary += " Geometry fit would stop on the quality gate."
+    else:
+        summary += " Geometry fit gates pass."
+    if shown_count < len(pairs):
+        summary += f" Showing {shown_count}/{len(pairs)} overlays."
+    return summary
+
+
+def render_live_geometry_preview_overlay_state(
+    *,
+    preview_state,
+    draw_live_geometry_preview_overlay: Callable[..., None],
+    filter_live_preview_matches: Callable[[Sequence[dict[str, object]]], tuple[Sequence[dict[str, object]], int]],
+    set_status_text: Callable[[str], None] | None = None,
+    update_status: bool = True,
+) -> bool:
+    """Redraw the cached live-preview overlay and optionally refresh its status."""
+
+    preview_overlay_state = getattr(preview_state, "overlay", None)
+    pairs = list(getattr(preview_overlay_state, "pairs", []) or [])
+    max_display_markers = _coerce_int(
+        getattr(preview_overlay_state, "max_display_markers", 120),
+        120,
+    )
+    draw_live_geometry_preview_overlay(
+        pairs,
+        max_display_markers=max_display_markers,
+    )
+    if not update_status:
+        return bool(pairs)
+
+    active_pairs, excluded_count = filter_live_preview_matches(pairs)
+    _set_status_text(
+        set_status_text,
+        build_live_geometry_preview_status_text(
+            preview_overlay_state,
+            active_pair_count=len(list(active_pairs)),
+            excluded_count=int(excluded_count),
+        ),
+    )
+    return bool(list(active_pairs))
+
+
+def distance_point_to_segment_sq(
+    px: float,
+    py: float,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+) -> float:
+    """Return squared distance from one display-space point to one segment."""
+
+    dx = float(x1) - float(x0)
+    dy = float(y1) - float(y0)
+    if abs(dx) <= 1e-12 and abs(dy) <= 1e-12:
+        return (float(px) - float(x0)) ** 2 + (float(py) - float(y0)) ** 2
+
+    t = (
+        ((float(px) - float(x0)) * dx + (float(py) - float(y0)) * dy)
+        / (dx * dx + dy * dy)
+    )
+    t = min(1.0, max(0.0, float(t)))
+    cx = float(x0) + t * dx
+    cy = float(y0) + t * dy
+    return (float(px) - cx) ** 2 + (float(py) - cy) ** 2
+
+
+def clear_live_geometry_preview_exclusions_with_side_effects(
+    *,
+    preview_state,
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    update_geometry_preview_exclude_button_label: Callable[[], None],
+    refresh_geometry_q_group_window: Callable[[], None],
+    live_geometry_preview_enabled: Callable[[], bool],
+    refresh_live_geometry_preview: Callable[[], None],
+    set_status_text: Callable[[str], None] | None = None,
+) -> None:
+    """Clear preview exclusions and apply the dependent runtime side effects."""
+
+    gui_controllers.clear_geometry_preview_excluded_keys(preview_state)
+    gui_controllers.clear_geometry_preview_excluded_q_groups(preview_state)
+    invalidate_geometry_manual_pick_cache()
+    update_geometry_preview_exclude_button_label()
+    refresh_geometry_q_group_window()
+    if live_geometry_preview_enabled():
+        refresh_live_geometry_preview()
+    else:
+        _set_status_text(
+            set_status_text,
+            "Reset all Qr/Qz geometry-fit selections.",
+        )
+
+
+def toggle_live_geometry_preview_exclusion_at(
+    *,
+    preview_state,
+    col: float,
+    row: float,
+    live_preview_match_key: Callable[[dict[str, object] | None], tuple[object, ...] | None],
+    live_preview_match_hkl: Callable[[dict[str, object] | None], tuple[int, int, int] | None],
+    render_live_geometry_preview_state: Callable[[], None],
+    max_distance_px: float,
+    set_status_text: Callable[[str], None] | None = None,
+) -> bool:
+    """Toggle the nearest live-preview pair in or out of geometry fitting."""
+
+    preview_overlay_state = getattr(preview_state, "overlay", None)
+    pairs = list(getattr(preview_overlay_state, "pairs", []) or [])
+    if not pairs:
+        _set_status_text(
+            set_status_text,
+            "No live preview pairs are available to exclude.",
+        )
+        return False
+
+    best_entry: dict[str, object] | None = None
+    best_d2 = float("inf")
+    for raw_entry in pairs:
+        if not isinstance(raw_entry, dict):
+            continue
+        try:
+            sim_col = float(raw_entry["sim_x"])
+            sim_row = float(raw_entry["sim_y"])
+            bg_col = float(raw_entry["x"])
+            bg_row = float(raw_entry["y"])
+        except Exception:
+            continue
+        d2 = min(
+            (float(col) - sim_col) ** 2 + (float(row) - sim_row) ** 2,
+            (float(col) - bg_col) ** 2 + (float(row) - bg_row) ** 2,
+            distance_point_to_segment_sq(
+                float(col),
+                float(row),
+                sim_col,
+                sim_row,
+                bg_col,
+                bg_row,
+            ),
+        )
+        if d2 < best_d2:
+            best_d2 = d2
+            best_entry = raw_entry
+
+    if best_entry is None or best_d2 > float(max_distance_px) ** 2:
+        _set_status_text(
+            set_status_text,
+            f"No preview pair within {float(max_distance_px):.0f}px to toggle.",
+        )
+        return False
+
+    key = live_preview_match_key(best_entry)
+    hkl_key = live_preview_match_hkl(best_entry)
+    if key is None or hkl_key is None:
+        _set_status_text(
+            set_status_text,
+            "The selected preview pair cannot be excluded.",
+        )
+        return False
+
+    excluded_keys = getattr(preview_state, "excluded_keys", set())
+    if key in excluded_keys:
+        gui_controllers.set_geometry_preview_match_included(
+            preview_state,
+            key,
+            included=True,
+        )
+        action = "Included"
+    else:
+        gui_controllers.set_geometry_preview_match_included(
+            preview_state,
+            key,
+            included=False,
+        )
+        action = "Excluded"
+
+    render_live_geometry_preview_state()
+    _set_status_text(
+        set_status_text,
+        f"{action} live preview peak HKL={hkl_key} from geometry fit.",
+    )
+    return True
 
 
 def make_runtime_geometry_q_group_bindings_factory(

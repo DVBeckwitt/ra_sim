@@ -301,10 +301,117 @@ def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None
         )
         == 1
     )
+    assert (
+        geometry_q_group_manager.build_geometry_preview_exclude_button_label(
+            preview_state=preview_state,
+            q_group_state=q_group_state,
+        )
+        == "Select Qr/Qz Peaks (1 off)"
+    )
     assert "Included Qr/Qz groups: 1/2" in status
     assert "Selected peaks: 2/5" in status
     assert "Need >= 4  short 2" in status
     assert "Intensity=10.000/30.000" in status
+
+
+def test_geometry_q_group_manager_live_preview_config_overlay_and_render_helpers() -> None:
+    preview_cfg = geometry_q_group_manager.build_live_geometry_preview_auto_match_config(
+        {
+            "geometry": {
+                "auto_match": {
+                    "search_radius_px": 20.0,
+                    "max_display_markers": 1,
+                    "max_p90_distance_px": 30.0,
+                    "max_mean_distance_px": 10.0,
+                }
+            }
+        }
+    )
+    empty_overlay = geometry_q_group_manager.build_empty_live_geometry_preview_overlay_state(
+        signature="empty-sig",
+        min_matches=3,
+        max_display_markers=5,
+        q_group_total=4,
+        q_group_excluded=1,
+        excluded_q_peaks=2,
+    )
+    overlay_state = geometry_q_group_manager.build_live_geometry_preview_overlay_state(
+        signature="sig",
+        matched_pairs=[
+            {"sim_x": 1.0, "sim_y": 2.0, "x": 11.0, "y": 12.0},
+            {"sim_x": 3.0, "sim_y": 4.0, "x": 13.0, "y": 14.0},
+        ],
+        match_stats={
+            "simulated_count": 4,
+            "search_radius_px": 18.0,
+            "p90_match_distance_px": 35.0,
+            "mean_match_distance_px": 11.0,
+        },
+        preview_auto_match_cfg=preview_cfg,
+        auto_match_attempts=[{"radius": 18.0}],
+        min_matches=2,
+        q_group_total=3,
+        q_group_excluded=1,
+        excluded_q_peaks=2,
+        collapsed_degenerate_peaks=1,
+    )
+
+    assert preview_cfg["relax_on_low_matches"] is False
+    assert preview_cfg["context_margin_px"] == 192.0
+    assert empty_overlay["pairs"] == []
+    assert empty_overlay["q_group_total"] == 4
+    assert overlay_state["quality_fail"] is True
+    assert overlay_state["max_display_markers"] == 1
+    assert overlay_state["collapsed_degenerate_peaks"] == 1
+    assert overlay_state["auto_match_attempts"] == [{"radius": 18.0}]
+
+    preview_state = state.GeometryPreviewState()
+    preview_state.overlay.pairs = list(overlay_state["pairs"])
+    preview_state.overlay.simulated_count = int(overlay_state["simulated_count"])
+    preview_state.overlay.min_matches = int(overlay_state["min_matches"])
+    preview_state.overlay.best_radius = float(overlay_state["best_radius"])
+    preview_state.overlay.mean_dist = float(overlay_state["mean_dist"])
+    preview_state.overlay.p90_dist = float(overlay_state["p90_dist"])
+    preview_state.overlay.quality_fail = bool(overlay_state["quality_fail"])
+    preview_state.overlay.max_display_markers = int(overlay_state["max_display_markers"])
+    preview_state.overlay.q_group_total = int(overlay_state["q_group_total"])
+    preview_state.overlay.q_group_excluded = int(overlay_state["q_group_excluded"])
+    preview_state.overlay.collapsed_degenerate_peaks = int(
+        overlay_state["collapsed_degenerate_peaks"]
+    )
+
+    draw_calls = []
+    status_messages = []
+    rendered = geometry_q_group_manager.render_live_geometry_preview_overlay_state(
+        preview_state=preview_state,
+        draw_live_geometry_preview_overlay=lambda pairs, *, max_display_markers: draw_calls.append(
+            (list(pairs), max_display_markers)
+        ),
+        filter_live_preview_matches=lambda pairs: (list(pairs), 1),
+        set_status_text=lambda text: status_messages.append(text),
+        update_status=True,
+    )
+    quiet_render = geometry_q_group_manager.render_live_geometry_preview_overlay_state(
+        preview_state=preview_state,
+        draw_live_geometry_preview_overlay=lambda pairs, *, max_display_markers: draw_calls.append(
+            ("quiet", list(pairs), max_display_markers)
+        ),
+        filter_live_preview_matches=lambda pairs: ([], 0),
+        set_status_text=lambda text: status_messages.append(f"quiet:{text}"),
+        update_status=False,
+    )
+
+    assert rendered is True
+    assert quiet_render is True
+    assert draw_calls[0][1] == 1
+    assert draw_calls[1][0] == "quiet"
+    assert "Live auto-match preview: 2/4 active peaks" in status_messages[0]
+    assert "Excluded=1." in status_messages[0]
+    assert "Qr/Qz groups on=2/3." in status_messages[0]
+    assert "Degenerate collapsed=1." in status_messages[0]
+    assert "Geometry fit would stop on the quality gate." in status_messages[0]
+    assert "Showing 1/2 overlays." in status_messages[0]
+    assert len(status_messages) == 1
 
 
 def test_refresh_geometry_q_group_window_uses_cached_entries_and_view_helpers(
@@ -593,6 +700,90 @@ def test_geometry_q_group_manager_snapshot_replace_side_effects_trim_exclusions(
     assert q_group_state.cached_entries == entries
     assert preview_state.excluded_q_groups == {key1}
     assert events == ["invalidate", "label"]
+
+
+def test_geometry_q_group_manager_preview_exclusion_toggle_and_clear_helpers() -> None:
+    key1 = ("pair", 1)
+    q_group_key = ("q_group", "primary", 1, 0)
+    preview_state = state.GeometryPreviewState(
+        excluded_q_groups={q_group_key},
+    )
+    preview_state.overlay.pairs = [
+        {
+            "id": 1,
+            "sim_x": 10.0,
+            "sim_y": 10.0,
+            "x": 20.0,
+            "y": 10.0,
+        }
+    ]
+    toggle_events = []
+
+    changed = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=lambda entry: ("pair", int(entry["id"])),
+        live_preview_match_hkl=lambda _entry: (1, 0, 0),
+        render_live_geometry_preview_state=lambda: toggle_events.append("render"),
+        max_distance_px=5.0,
+        set_status_text=lambda text: toggle_events.append(text),
+    )
+    changed_again = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=10.5,
+        row=10.0,
+        live_preview_match_key=lambda entry: ("pair", int(entry["id"])),
+        live_preview_match_hkl=lambda _entry: (1, 0, 0),
+        render_live_geometry_preview_state=lambda: toggle_events.append("render"),
+        max_distance_px=5.0,
+        set_status_text=lambda text: toggle_events.append(text),
+    )
+    missed = geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=preview_state,
+        col=100.0,
+        row=100.0,
+        live_preview_match_key=lambda entry: ("pair", int(entry["id"])),
+        live_preview_match_hkl=lambda _entry: (1, 0, 0),
+        render_live_geometry_preview_state=lambda: toggle_events.append("unexpected"),
+        max_distance_px=5.0,
+        set_status_text=lambda text: toggle_events.append(text),
+    )
+
+    assert changed is True
+    assert changed_again is True
+    assert missed is False
+    assert key1 not in preview_state.excluded_keys
+    assert toggle_events == [
+        "render",
+        "Excluded live preview peak HKL=(1, 0, 0) from geometry fit.",
+        "render",
+        "Included live preview peak HKL=(1, 0, 0) from geometry fit.",
+        "No preview pair within 5px to toggle.",
+    ]
+
+    clear_events = []
+    preview_state.excluded_keys = {key1}
+    geometry_q_group_manager.clear_live_geometry_preview_exclusions_with_side_effects(
+        preview_state=preview_state,
+        invalidate_geometry_manual_pick_cache=lambda: clear_events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: clear_events.append(
+            "label"
+        ),
+        refresh_geometry_q_group_window=lambda: clear_events.append("refresh"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: clear_events.append("live"),
+        set_status_text=lambda text: clear_events.append(text),
+    )
+
+    assert preview_state.excluded_keys == set()
+    assert preview_state.excluded_q_groups == set()
+    assert clear_events == [
+        "invalidate",
+        "label",
+        "refresh",
+        "Reset all Qr/Qz geometry-fit selections.",
+    ]
 
 
 def test_geometry_q_group_manager_runtime_snapshot_capture_refreshes_open_window(

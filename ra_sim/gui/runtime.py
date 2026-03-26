@@ -3902,10 +3902,10 @@ def _build_geometry_q_group_window_status_text(
 
 
 def _update_geometry_preview_exclude_button_label():
-    label = "Select Qr/Qz Peaks"
-    excluded_count = _geometry_q_group_excluded_count()
-    if excluded_count > 0:
-        label += f" ({excluded_count} off)"
+    label = gui_geometry_q_group_manager.build_geometry_preview_exclude_button_label(
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+    )
     gui_views.set_geometry_tool_action_texts(
         geometry_tool_actions_view_state,
         preview_exclude_text=label,
@@ -3923,122 +3923,38 @@ def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = N
     _update_geometry_preview_exclude_button_label()
     if message:
         progress_label_geometry.config(text=message)
-def _distance_point_to_segment_sq(
-    px: float,
-    py: float,
-    x0: float,
-    y0: float,
-    x1: float,
-    y1: float,
-) -> float:
-    """Return squared distance from point P to segment AB in display pixels."""
-
-    dx = float(x1) - float(x0)
-    dy = float(y1) - float(y0)
-    if abs(dx) <= 1e-12 and abs(dy) <= 1e-12:
-        return (float(px) - float(x0)) ** 2 + (float(py) - float(y0)) ** 2
-
-    t = (
-        ((float(px) - float(x0)) * dx + (float(py) - float(y0)) * dy)
-        / (dx * dx + dy * dy)
-    )
-    t = min(1.0, max(0.0, float(t)))
-    cx = float(x0) + t * dx
-    cy = float(y0) + t * dy
-    return (float(px) - cx) ** 2 + (float(py) - cy) ** 2
-
 
 def _clear_live_geometry_preview_exclusions():
     """Clear all user-excluded live preview peaks and redraw the preview."""
 
-    gui_controllers.clear_geometry_preview_excluded_keys(geometry_preview_state)
-    gui_controllers.clear_geometry_preview_excluded_q_groups(
-        geometry_preview_state,
+    gui_geometry_q_group_manager.clear_live_geometry_preview_exclusions_with_side_effects(
+        preview_state=geometry_preview_state,
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
+        refresh_geometry_q_group_window=geometry_q_group_runtime_callbacks.refresh_window,
+        live_geometry_preview_enabled=_live_geometry_preview_enabled,
+        refresh_live_geometry_preview=lambda: _refresh_live_geometry_preview(
+            update_status=True
+        ),
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
     )
-    _invalidate_geometry_manual_pick_cache()
-    _update_geometry_preview_exclude_button_label()
-    geometry_q_group_runtime_callbacks.refresh_window()
-    if _live_geometry_preview_enabled():
-        _refresh_live_geometry_preview(update_status=True)
-    else:
-        progress_label_geometry.config(text="Reset all Qr/Qz geometry-fit selections.")
 
 
 def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
     """Toggle exclusion for the nearest live preview pair near the click point."""
 
-    pairs = geometry_preview_state.overlay.pairs
-    if not pairs:
-        progress_label_geometry.config(
-            text="No live preview pairs are available to exclude."
-        )
-        return False
-
-    best_entry: dict[str, object] | None = None
-    best_d2 = float("inf")
-    for raw_entry in pairs:
-        if not isinstance(raw_entry, dict):
-            continue
-        try:
-            sim_col = float(raw_entry["sim_x"])
-            sim_row = float(raw_entry["sim_y"])
-            bg_col = float(raw_entry["x"])
-            bg_row = float(raw_entry["y"])
-        except Exception:
-            continue
-        d2 = min(
-            (float(col) - sim_col) ** 2 + (float(row) - sim_row) ** 2,
-            (float(col) - bg_col) ** 2 + (float(row) - bg_row) ** 2,
-            _distance_point_to_segment_sq(
-                float(col),
-                float(row),
-                sim_col,
-                sim_row,
-                bg_col,
-                bg_row,
-            ),
-        )
-        if d2 < best_d2:
-            best_d2 = d2
-            best_entry = raw_entry
-
-    if best_entry is None or best_d2 > float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX) ** 2:
-        progress_label_geometry.config(
-            text=(
-                f"No preview pair within {GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX:.0f}px "
-                "to toggle."
-            )
-        )
-        return False
-
-    key = _live_preview_match_key(best_entry)
-    hkl_key = _live_preview_match_hkl(best_entry)
-    if key is None or hkl_key is None:
-        progress_label_geometry.config(
-            text="The selected preview pair cannot be excluded."
-        )
-        return False
-
-    if key in geometry_preview_state.excluded_keys:
-        gui_controllers.set_geometry_preview_match_included(
-            geometry_preview_state,
-            key,
-            included=True,
-        )
-        action = "Included"
-    else:
-        gui_controllers.set_geometry_preview_match_included(
-            geometry_preview_state,
-            key,
-            included=False,
-        )
-        action = "Excluded"
-
-    _render_live_geometry_preview_state(update_status=True)
-    progress_label_geometry.config(
-        text=f"{action} live preview peak HKL={hkl_key} from geometry fit."
+    return gui_geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
+        preview_state=geometry_preview_state,
+        col=col,
+        row=row,
+        live_preview_match_key=_live_preview_match_key,
+        live_preview_match_hkl=_live_preview_match_hkl,
+        render_live_geometry_preview_state=lambda: _render_live_geometry_preview_state(
+            update_status=True
+        ),
+        max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
     )
-    return True
 
 
 bragg_qr_runtime_bindings_factory = gui_bragg_qr_manager.make_runtime_bragg_qr_bindings_factory(
@@ -8167,56 +8083,13 @@ def _draw_live_geometry_preview_overlay(
 def _render_live_geometry_preview_state(*, update_status: bool = True) -> bool:
     """Redraw the live preview from cached state, applying exclusions."""
 
-    preview_overlay_state = geometry_preview_state.overlay
-    pairs = preview_overlay_state.pairs
-    max_display_markers = int(preview_overlay_state.max_display_markers)
-    _draw_live_geometry_preview_overlay(
-        pairs,
-        max_display_markers=max_display_markers,
+    return gui_geometry_q_group_manager.render_live_geometry_preview_overlay_state(
+        preview_state=geometry_preview_state,
+        draw_live_geometry_preview_overlay=_draw_live_geometry_preview_overlay,
+        filter_live_preview_matches=_filter_live_preview_matches,
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
+        update_status=update_status,
     )
-
-    if not update_status:
-        return bool(pairs)
-
-    simulated_count = int(preview_overlay_state.simulated_count)
-    min_matches = int(preview_overlay_state.min_matches)
-    best_radius = float(preview_overlay_state.best_radius)
-    mean_dist = float(preview_overlay_state.mean_dist)
-    p90_dist = float(preview_overlay_state.p90_dist)
-    quality_fail = bool(preview_overlay_state.quality_fail)
-    q_group_total = int(preview_overlay_state.q_group_total)
-    q_group_excluded = int(preview_overlay_state.q_group_excluded)
-    collapsed_deg = int(preview_overlay_state.collapsed_degenerate_peaks)
-    active_pairs, excluded_count = _filter_live_preview_matches(pairs)
-    shown_count = min(len(pairs), max(1, int(max_display_markers)))
-    summary = (
-        "Live auto-match preview: "
-        f"{len(active_pairs)}/{simulated_count} active peaks "
-        f"(need {min_matches}, local-peak match"
-    )
-    if np.isfinite(best_radius):
-        summary += f", limit={best_radius:.1f}px"
-    if np.isfinite(mean_dist):
-        summary += f", mean={mean_dist:.1f}px"
-    if np.isfinite(p90_dist):
-        summary += f", p90={p90_dist:.1f}px"
-    summary += ")."
-    if excluded_count > 0:
-        summary += f" Excluded={excluded_count}."
-    if q_group_total > 0:
-        summary += f" Qr/Qz groups on={max(0, q_group_total - q_group_excluded)}/{q_group_total}."
-    if collapsed_deg > 0:
-        summary += f" Degenerate collapsed={collapsed_deg}."
-    if len(active_pairs) < min_matches:
-        summary += " Geometry fit would stop on the minimum-match gate."
-    elif quality_fail:
-        summary += " Geometry fit would stop on the quality gate."
-    else:
-        summary += " Geometry fit gates pass."
-    if shown_count < len(pairs):
-        summary += f" Showing {shown_count}/{len(pairs)} overlays."
-    progress_label_geometry.config(text=summary)
-    return bool(active_pairs)
 
 
 def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
@@ -8243,23 +8116,17 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             )
         return False
 
-    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
-    if not isinstance(geometry_refine_cfg, dict):
-        geometry_refine_cfg = {}
-    auto_match_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
-    if not isinstance(auto_match_cfg, dict):
-        auto_match_cfg = {}
-    preview_auto_match_cfg = dict(auto_match_cfg)
-    preview_auto_match_cfg["relax_on_low_matches"] = False
-    preview_auto_match_cfg.setdefault(
-        "context_margin_px",
-        max(192.0, 8.0 * float(auto_match_cfg.get("search_radius_px", 24.0))),
+    preview_auto_match_cfg = (
+        gui_geometry_q_group_manager.build_live_geometry_preview_auto_match_config(
+            fit_config
+        )
     )
 
     var_names = _current_geometry_fit_var_names()
-    default_min_matches = max(6, len(var_names) + 2)
-    min_matches = int(auto_match_cfg.get("min_matches", default_min_matches))
-    min_matches = max(1, min_matches)
+    min_matches = gui_geometry_q_group_manager.current_geometry_auto_match_min_matches(
+        fit_config,
+        var_names,
+    )
 
     simulated_peaks = _build_live_preview_simulated_peaks_from_cache()
 
@@ -8298,22 +8165,16 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             )
         gui_controllers.replace_geometry_preview_overlay_state(
             geometry_preview_state,
-            {
-                "signature": _live_geometry_preview_signature(),
-                "pairs": [],
-                "simulated_count": 0,
-                "min_matches": int(min_matches),
-                "best_radius": float("nan"),
-                "mean_dist": float("nan"),
-                "p90_dist": float("nan"),
-                "quality_fail": False,
-                "max_display_markers": int(preview_auto_match_cfg.get("max_display_markers", 120)),
-                "auto_match_attempts": [],
-                "q_group_total": int(q_group_total),
-                "q_group_excluded": int(_geometry_q_group_excluded_count()),
-                "excluded_q_peaks": int(excluded_q_peaks),
-                "collapsed_degenerate_peaks": 0,
-            },
+            gui_geometry_q_group_manager.build_empty_live_geometry_preview_overlay_state(
+                signature=_live_geometry_preview_signature(),
+                min_matches=int(min_matches),
+                max_display_markers=int(
+                    preview_auto_match_cfg.get("max_display_markers", 120)
+                ),
+                q_group_total=int(q_group_total),
+                q_group_excluded=int(_geometry_q_group_excluded_count()),
+                excluded_q_peaks=int(excluded_q_peaks),
+            ),
         )
         return False
     simulated_peaks, collapsed_deg_preview = _collapse_geometry_fit_simulated_peaks(
@@ -8336,7 +8197,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             )
         return False
 
-    matched_pairs, match_stats, effective_auto_match_cfg, auto_match_attempts = (
+    matched_pairs, match_stats, _effective_auto_match_cfg, auto_match_attempts = (
         _auto_match_background_peaks_with_relaxation(
             simulated_peaks,
             display_background,
@@ -8344,37 +8205,20 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             min_matches=min_matches,
         )
     )
-
-    max_display_markers = int(preview_auto_match_cfg.get("max_display_markers", 120))
-
-    simulated_count = int(match_stats.get("simulated_count", len(simulated_peaks)))
-    best_radius = float(match_stats.get("search_radius_px", np.nan))
-    max_auto_p90 = float(preview_auto_match_cfg.get("max_p90_distance_px", 35.0))
-    max_auto_mean = float(preview_auto_match_cfg.get("max_mean_distance_px", 22.0))
-    p90_dist = float(match_stats.get("p90_match_distance_px", np.nan))
-    mean_dist = float(match_stats.get("mean_match_distance_px", np.nan))
-    quality_fail = (
-        (np.isfinite(max_auto_p90) and np.isfinite(p90_dist) and p90_dist > max_auto_p90)
-        or (np.isfinite(max_auto_mean) and np.isfinite(mean_dist) and mean_dist > max_auto_mean)
-    )
     gui_controllers.replace_geometry_preview_overlay_state(
         geometry_preview_state,
-        {
-            "signature": _live_geometry_preview_signature(),
-            "pairs": [dict(entry) for entry in matched_pairs],
-            "simulated_count": int(simulated_count),
-            "min_matches": int(min_matches),
-            "best_radius": float(best_radius),
-            "mean_dist": float(mean_dist),
-            "p90_dist": float(p90_dist),
-            "quality_fail": bool(quality_fail),
-            "max_display_markers": int(max_display_markers),
-            "auto_match_attempts": list(auto_match_attempts),
-            "q_group_total": int(q_group_total),
-            "q_group_excluded": int(_geometry_q_group_excluded_count()),
-            "excluded_q_peaks": int(excluded_q_peaks),
-            "collapsed_degenerate_peaks": int(collapsed_deg_preview),
-        },
+        gui_geometry_q_group_manager.build_live_geometry_preview_overlay_state(
+            signature=_live_geometry_preview_signature(),
+            matched_pairs=matched_pairs,
+            match_stats=match_stats,
+            preview_auto_match_cfg=preview_auto_match_cfg,
+            auto_match_attempts=auto_match_attempts,
+            min_matches=int(min_matches),
+            q_group_total=int(q_group_total),
+            q_group_excluded=int(_geometry_q_group_excluded_count()),
+            excluded_q_peaks=int(excluded_q_peaks),
+            collapsed_degenerate_peaks=int(collapsed_deg_preview),
+        ),
     )
 
     return _render_live_geometry_preview_state(update_status=update_status)

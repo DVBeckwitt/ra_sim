@@ -18,10 +18,11 @@ As of 2026-03-26, the refactor has made real progress. The legacy root-script
 problem is largely solved, the last broad GUI runtime-state extraction pass has
 landed, the structure-model / diffuse-HT rebuild workflow plus the primary-CIF
 reload state transition have moved into an extracted helper module, the shared
-canvas click/drag arbitration now also lives in an extracted helper module, and
-the main remaining cleanup target is now the residual workflow/orchestration
-logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
-`mosaic_profiles.py`.
+canvas click/drag arbitration now also lives in an extracted helper module, the
+live-preview overlay status/config plus preview-exclusion clear/toggle workflow
+now also lives in the extracted geometry Q-group manager module, and the main
+remaining cleanup target is now the residual workflow/orchestration logic still
+inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
 
 ### What Is Already Done
 
@@ -75,6 +76,11 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
   - Controller helpers now own preview exclusion toggles and preview overlay
     snapshot replacement.
   - Dead preview-selector scaffolding was removed from `runtime.py`.
+- Live geometry preview / Qr-Qz workflow extraction advanced further.
+  - Preview auto-match config normalization, cached overlay-state payload
+    helpers, live-preview status rendering, and preview exclusion clear/toggle
+    helpers now live in `ra_sim.gui.geometry_q_group_manager`.
+  - `runtime.py` now delegates those paths through thin wrappers.
 - Bragg Qr manager migration has started.
   - Bragg-Qr selection/index bookkeeping now lives in `ra_sim.gui.state`.
   - Controller helpers now own Bragg-Qr selection mapping and group/L-value
@@ -330,13 +336,17 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.geometry_q_group_manager` now also owns cached-entry
     snapshot replacement/capture plus the preview-exclusion open/status
     helper used by the live update cycle and geometry tool controls.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns live-preview
+    auto-match config normalization, cached overlay-state payload helpers,
+    status rendering, and preview exclusion clear/toggle helpers used by the
+    live preview workflow.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions.
   - `ra_sim.gui.runtime` now keeps only one bound geometry-selector factory/
-    callback bundle plus preview-exclusion/live-preview orchestration, thin
-    fit-preview/cached-hit value sources, a narrowed update-cycle refresh
-    call site, and toolbar wiring around that workflow.
+    callback bundle plus thin fit-preview/cached-hit value sources, live-
+    preview availability/fallback simulation orchestration, a narrowed
+    update-cycle refresh call site, and toolbar wiring around that workflow.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -555,8 +565,8 @@ What is left:
   factory wiring used by the live filter pipeline and HKL lookup controls
   around the extracted manager helpers.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
-  bound factory/callback bundle plus preview-exclusion/live-preview
-  rendering orchestration, thin fit-preview/cached-hit value sources,
+  bound factory/callback bundle plus thin fit-preview/cached-hit value
+  sources, live-preview availability/fallback simulation orchestration,
   image-shape/display-coordinate value plumbing, and a couple of delegated
   call sites around the extracted manager/view helpers.
 - The remaining background runtime code is now mostly one bound callback
