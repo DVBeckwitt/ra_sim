@@ -262,3 +262,191 @@ def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> No
     assert runtime_state.last_simulation_signature is None
     assert np.array_equal(runtime_state.sim_miller1_all, np.array([[1.0, 0.0, 1.0]]))
     assert calls == [("filters", {"trigger_update": False}), ("schedule", None)]
+
+
+def test_primary_cif_reload_helpers_apply_and_restore(monkeypatch, tmp_path) -> None:
+    cif_path = tmp_path / "updated.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_updated",
+                "_cell_length_a 3.5",
+                "_cell_length_c 7.5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    state = structure_model.StructureModelState(
+        cif_file="original.cif",
+        cf="old_cf",
+        blk={"old": True},
+        cf2="secondary_cf",
+        blk2={"_cell_length_a": None, "_cell_length_c": None},
+        occupancy_site_labels=["old_site"],
+        occupancy_site_expanded_map=[0],
+        occ=[0.8],
+        occ_vars=["old_occ_var"],
+        atom_site_fractional_metadata=[
+            {"row_index": 0, "label": "old_site", "x": 0.1, "y": 0.2, "z": 0.3}
+        ],
+        atom_site_fract_vars=[{"x": "old_x", "y": "old_y", "z": "old_z"}],
+        av=3.0,
+        cv=9.0,
+        av2=4.0,
+        cv2=12.0,
+        defaults={"a": 3.0, "c": 9.0, "iodine_z": 0.15},
+        ht_cache_multi={"p0": {"cached": True}},
+    )
+    snapshot = structure_model.capture_primary_cif_reload_snapshot(
+        state,
+        current_occ_values=[0.7],
+        current_atom_site_values=[(0.11, 0.22, 0.33)],
+    )
+
+    monkeypatch.setattr(
+        structure_model,
+        "extract_occupancy_site_metadata",
+        lambda *_args, **_kwargs: (["I1", "Nb1"], [0, 1, 0]),
+    )
+    monkeypatch.setattr(
+        structure_model,
+        "extract_atom_site_fractional_metadata",
+        lambda *_args, **_kwargs: [
+            {"row_index": 0, "label": "I1", "x": 0.4, "y": 0.5, "z": 0.6}
+        ],
+    )
+    monkeypatch.setattr(
+        structure_model,
+        "_infer_iodine_z_like_diffuse",
+        lambda *_args, **_kwargs: 0.35,
+    )
+
+    plan = structure_model.prepare_primary_cif_reload_plan(
+        state,
+        str(cif_path),
+        current_occ_values=snapshot.current_occ_values,
+        clamp_site_occupancy_values=lambda values: [
+            min(1.0, max(0.0, float(value))) for value in values
+        ],
+    )
+
+    assert plan.candidate_path == str(cif_path)
+    assert plan.occupancy_site_count == 2
+    assert plan.occ == [0.7, 0.7]
+    assert plan.atom_site_values == [(0.4, 0.5, 0.6)]
+    assert plan.iodine_z == 0.35
+
+    structure_model.apply_primary_cif_reload_plan(
+        state,
+        plan,
+        occ_vars=["new_occ_1", "new_occ_2"],
+        atom_site_fract_vars=[{"x": "new_x", "y": "new_y", "z": "new_z"}],
+        has_second_cif=True,
+    )
+
+    assert state.cif_file == str(cif_path)
+    assert state.occupancy_site_labels == ["I1", "Nb1"]
+    assert state.occupancy_site_expanded_map == [0, 1, 0]
+    assert state.occupancy_site_count == 2
+    assert state.occ == [0.7, 0.7]
+    assert state.atom_site_fractional_metadata == [
+        {"row_index": 0, "label": "I1", "x": 0.4, "y": 0.5, "z": 0.6}
+    ]
+    assert state.av == 3.5
+    assert state.cv == 7.5
+    assert state.av2 == 3.5
+    assert state.cv2 == 7.5
+    assert state.defaults["iodine_z"] == 0.35
+    assert state.ht_cache_multi == {}
+
+    structure_model.restore_primary_cif_reload_snapshot(
+        state,
+        snapshot,
+        occ_vars=["restored_occ"],
+        atom_site_fract_vars=[{"x": "restored_x", "y": "restored_y", "z": "restored_z"}],
+    )
+
+    assert state.cif_file == "original.cif"
+    assert state.cf == "old_cf"
+    assert state.blk == {"old": True}
+    assert state.cf2 == "secondary_cf"
+    assert state.blk2 == {"_cell_length_a": None, "_cell_length_c": None}
+    assert state.occupancy_site_labels == ["old_site"]
+    assert state.occupancy_site_expanded_map == [0]
+    assert state.occupancy_site_count == 1
+    assert state.occ == [0.8]
+    assert state.atom_site_fractional_metadata == [
+        {"row_index": 0, "label": "old_site", "x": 0.1, "y": 0.2, "z": 0.3}
+    ]
+    assert state.av == 3.0
+    assert state.cv == 9.0
+    assert state.av2 == 4.0
+    assert state.cv2 == 12.0
+    assert state.defaults["a"] == 3.0
+    assert state.defaults["c"] == 9.0
+    assert state.defaults["iodine_z"] == 0.15
+    assert state.ht_cache_multi == {"p0": {"cached": True}}
+
+
+def test_build_diffuse_ht_request_packages_runtime_inputs(monkeypatch, tmp_path) -> None:
+    cif_path = tmp_path / "primary.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_primary",
+                "_cell_length_a 1",
+                "_cell_length_c 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    state = structure_model.StructureModelState(
+        cif_file=str(cif_path),
+        cf=None,
+        blk=None,
+        occupancy_site_labels=["I1", "Nb1"],
+        occupancy_site_expanded_map=[0, 1, 0],
+        occ=[0.8, 0.6],
+        occ_vars=[_Var(0.75), _Var(0.25)],
+        defaults={"iodine_z": 0.1},
+    )
+    override_state = SimpleNamespace(temp_path=None, source_path=None, signature=None)
+
+    monkeypatch.setattr(
+        structure_model,
+        "_infer_iodine_z_like_diffuse",
+        lambda *_args, **_kwargs: 0.42,
+    )
+
+    request = structure_model.build_diffuse_ht_request(
+        state,
+        override_state,
+        p_values=[0.1, 0.2, 0.3],
+        w_values=[50.0, 30.0, 20.0],
+        a_lattice=3.0,
+        c_lattice=9.0,
+        lambda_angstrom=1.54,
+        mx=8,
+        two_theta_range=(0.0, 25.0),
+        finite_stack=True,
+        stack_layers=5,
+        phase_delta_expression="0",
+        phi_l_divisor=2.0,
+    )
+
+    assert request.source_cif == str(cif_path)
+    assert request.active_cif == str(cif_path)
+    assert request.occ == [0.75, 0.25, 0.75]
+    assert request.p_values == [0.1, 0.2, 0.3]
+    assert request.w_values == [50.0, 30.0, 20.0]
+    assert request.a_lattice == 3.0
+    assert request.c_lattice == 9.0
+    assert request.lambda_angstrom == 1.54
+    assert request.mx == 8
+    assert request.two_theta_max == 25.0
+    assert request.finite_stack is True
+    assert request.stack_layers == 5
+    assert request.iodine_z == 0.42
+    assert request.phase_delta_expression == "0"
+    assert request.phi_l_divisor == 2.0

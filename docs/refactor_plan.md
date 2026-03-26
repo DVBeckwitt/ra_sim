@@ -14,12 +14,12 @@ high-level migration summary; this file is the working plan.
 
 ## Current Position
 
-As of 2026-03-25, the refactor has made real progress. The legacy root-script
+As of 2026-03-26, the refactor has made real progress. The legacy root-script
 problem is largely solved, the last broad GUI runtime-state extraction pass has
-landed, the structure-model / diffuse-HT rebuild workflow has moved into an
-extracted helper module, and the main remaining cleanup target is now the
-residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
-not `main.py` or `mosaic_profiles.py`.
+landed, the structure-model / diffuse-HT rebuild workflow plus the primary-CIF
+reload state transition have moved into an extracted helper module, and the
+main remaining cleanup target is now the residual workflow/orchestration logic
+still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
 
 ### What Is Already Done
 
@@ -252,6 +252,10 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.runtime` no longer keeps separate inline copies of the
     primary-CIF occupancy/atom-site helper logic; those thin wrappers now also
     delegate to `ra_sim.gui.structure_model`.
+  - The primary-CIF reload state transition now also flows through
+    `ra_sim.gui.structure_model`, including snapshot/restore helpers for the
+    structure-model state slice and diffuse-HT request packaging reused by the
+    open/export actions.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -409,6 +413,8 @@ What is left:
 - The follow-on runtime cleanup is now the remaining controller/view workflow
   glue still inline in `runtime.py`, not another round of GUI runtime-state
   extraction or the structure-model / diffuse-HT rebuild path.
+- The remaining structure-model runtime code is now mostly Tk-facing wiring:
+  file dialogs, progress-label updates, and control-var rebuild callbacks.
 
 Why it matters:
 

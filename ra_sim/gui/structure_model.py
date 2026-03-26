@@ -17,7 +17,12 @@ import CifFile
 import Dans_Diffraction as dif
 import numpy as np
 
-from ra_sim.utils.stacking_fault import ht_Iinf_dict, ht_dict_to_arrays, ht_dict_to_qr_dict
+from ra_sim.utils.stacking_fault import (
+    _infer_iodine_z_like_diffuse,
+    ht_Iinf_dict,
+    ht_dict_to_arrays,
+    ht_dict_to_qr_dict,
+)
 
 
 def _ensure_numeric_vector(values, fallback, length):
@@ -306,6 +311,91 @@ class StructureModelState:
     inject_fractional_reflections: Callable[..., tuple[object, object]] | None = None
 
 
+@dataclass
+class PrimaryCifReloadSnapshot:
+    cif_file: str
+    cf: Any
+    blk: Any
+    cf2: Any = None
+    blk2: Any = None
+    occupancy_site_labels: list[str] = field(default_factory=list)
+    occupancy_site_expanded_map: list[int] = field(default_factory=list)
+    occ: list[float] = field(default_factory=list)
+    current_occ_values: list[float] = field(default_factory=list)
+    atom_site_fractional_metadata: list[dict[str, object]] = field(default_factory=list)
+    current_atom_site_values: list[tuple[float, float, float]] = field(default_factory=list)
+    av: float = 0.0
+    cv: float = 0.0
+    av2: float | None = None
+    cv2: float | None = None
+    default_a: float = 0.0
+    default_c: float = 0.0
+    default_iodine_z: float = 0.0
+    ht_cache_multi: dict[str, dict[str, object]] = field(default_factory=dict)
+
+
+@dataclass
+class PrimaryCifReloadPlan:
+    candidate_path: str
+    cf: Any
+    blk: Any
+    occupancy_site_labels: list[str] = field(default_factory=list)
+    occupancy_site_expanded_map: list[int] = field(default_factory=list)
+    occupancy_site_count: int = 0
+    occ: list[float] = field(default_factory=list)
+    atom_site_fractional_metadata: list[dict[str, object]] = field(default_factory=list)
+    atom_site_values: list[tuple[float, float, float]] = field(default_factory=list)
+    av: float = 0.0
+    cv: float = 0.0
+    iodine_z: float = 0.0
+
+
+@dataclass
+class DiffuseHTRequest:
+    source_cif: str
+    active_cif: str
+    occ: list[float] = field(default_factory=list)
+    p_values: list[float] = field(default_factory=list)
+    w_values: list[float] = field(default_factory=list)
+    a_lattice: float = 0.0
+    c_lattice: float = 0.0
+    lambda_angstrom: float = 1.0
+    mx: int = 0
+    two_theta_max: float | None = None
+    finite_stack: bool = False
+    stack_layers: int = 1
+    iodine_z: float = 0.0
+    phase_delta_expression: str = ""
+    phi_l_divisor: float = 1.0
+
+
+def _coerce_iodine_z(value, fallback):
+    try:
+        fallback_value = float(fallback)
+    except (TypeError, ValueError):
+        fallback_value = 0.0
+    if not np.isfinite(fallback_value):
+        fallback_value = 0.0
+
+    if value is None:
+        value = fallback_value
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = fallback_value
+    if not np.isfinite(numeric):
+        numeric = fallback_value
+    return float(np.clip(numeric, 0.0, 1.0))
+
+
+def _infer_iodine_z_or_default(cif_path, *, fallback):
+    try:
+        value = _infer_iodine_z_like_diffuse(str(cif_path))
+    except Exception:
+        value = None
+    return _coerce_iodine_z(value, fallback)
+
+
 def atom_site_fractional_default_values(state: StructureModelState):
     return [
         (float(row["x"]), float(row["y"]), float(row["z"]))
@@ -393,6 +483,208 @@ def current_occupancy_values(
             value = float(fallback)
         values.append(min(1.0, max(0.0, value)))
     return values
+
+
+def capture_primary_cif_reload_snapshot(
+    state: StructureModelState,
+    *,
+    current_occ_values,
+    current_atom_site_values,
+):
+    return PrimaryCifReloadSnapshot(
+        cif_file=str(state.cif_file),
+        cf=state.cf,
+        blk=state.blk,
+        cf2=state.cf2,
+        blk2=state.blk2,
+        occupancy_site_labels=list(state.occupancy_site_labels),
+        occupancy_site_expanded_map=list(state.occupancy_site_expanded_map),
+        occ=list(state.occ),
+        current_occ_values=[float(value) for value in current_occ_values],
+        atom_site_fractional_metadata=[
+            dict(row) for row in state.atom_site_fractional_metadata
+        ],
+        current_atom_site_values=[
+            (float(x_val), float(y_val), float(z_val))
+            for (x_val, y_val, z_val) in current_atom_site_values
+        ],
+        av=float(state.av),
+        cv=float(state.cv),
+        av2=state.av2,
+        cv2=state.cv2,
+        default_a=float(state.defaults.get("a", state.av)),
+        default_c=float(state.defaults.get("c", state.cv)),
+        default_iodine_z=_coerce_iodine_z(
+            state.defaults.get("iodine_z", 0.0),
+            0.0,
+        ),
+        ht_cache_multi=dict(state.ht_cache_multi),
+    )
+
+
+def prepare_primary_cif_reload_plan(
+    state: StructureModelState,
+    raw_path,
+    *,
+    current_occ_values,
+    clamp_site_occupancy_values: Callable[..., list[float]],
+):
+    text_path = str(raw_path).strip().strip("'\"")
+    if not text_path:
+        raise ValueError("No CIF file path provided.")
+
+    candidate = Path(text_path).expanduser()
+    if not candidate.is_file():
+        raise FileNotFoundError(f"CIF file not found: {candidate}")
+
+    new_cf = CifFile.ReadCif(str(candidate))
+    keys = list(new_cf.keys())
+    if not keys:
+        raise ValueError("No CIF data blocks found.")
+    new_blk = new_cf[keys[0]]
+
+    new_a_text = new_blk.get("_cell_length_a")
+    new_c_text = new_blk.get("_cell_length_c")
+    if new_a_text is None or new_c_text is None:
+        raise ValueError("CIF is missing _cell_length_a/_cell_length_c fields.")
+
+    new_av = float(parse_cif_num(new_a_text))
+    new_cv = float(parse_cif_num(new_c_text))
+    new_iodine_z = _infer_iodine_z_or_default(
+        str(candidate),
+        fallback=state.defaults.get("iodine_z", 0.0),
+    )
+
+    new_labels, new_expanded_map = extract_occupancy_site_metadata(
+        new_blk,
+        str(candidate),
+    )
+    site_count = len(new_labels) if new_labels else max(1, len(current_occ_values))
+    new_occ_values = clamp_site_occupancy_values(
+        _ensure_numeric_vector(current_occ_values, [1.0], site_count),
+    )
+
+    new_atom_site_metadata = extract_atom_site_fractional_metadata(new_blk)
+    new_atom_site_values = [
+        (float(row["x"]), float(row["y"]), float(row["z"]))
+        for row in new_atom_site_metadata
+    ]
+
+    return PrimaryCifReloadPlan(
+        candidate_path=str(candidate),
+        cf=new_cf,
+        blk=new_blk,
+        occupancy_site_labels=list(new_labels),
+        occupancy_site_expanded_map=list(new_expanded_map),
+        occupancy_site_count=int(site_count),
+        occ=list(new_occ_values),
+        atom_site_fractional_metadata=[dict(row) for row in new_atom_site_metadata],
+        atom_site_values=list(new_atom_site_values),
+        av=float(new_av),
+        cv=float(new_cv),
+        iodine_z=float(new_iodine_z),
+    )
+
+
+def apply_primary_cif_reload_plan(
+    state: StructureModelState,
+    plan: PrimaryCifReloadPlan,
+    *,
+    occ_vars=None,
+    atom_site_fract_vars=None,
+    has_second_cif=False,
+):
+    state.cif_file = str(plan.candidate_path)
+    state.cf = plan.cf
+    state.blk = plan.blk
+    state.occupancy_site_labels = list(plan.occupancy_site_labels)
+    state.occupancy_site_expanded_map = list(plan.occupancy_site_expanded_map)
+    state.occupancy_site_count = int(plan.occupancy_site_count)
+    state.occ = list(plan.occ)
+    state.atom_site_fractional_metadata = [
+        dict(row) for row in plan.atom_site_fractional_metadata
+    ]
+    if occ_vars is not None:
+        state.occ_vars = list(occ_vars)
+    if atom_site_fract_vars is not None:
+        state.atom_site_fract_vars = list(atom_site_fract_vars)
+    state.av = float(plan.av)
+    state.cv = float(plan.cv)
+    state.defaults["a"] = float(plan.av)
+    state.defaults["c"] = float(plan.cv)
+    state.defaults["iodine_z"] = float(plan.iodine_z)
+    state.ht_cache_multi = {}
+    if has_second_cif and state.blk2 is not None:
+        if state.blk2.get("_cell_length_a") is None:
+            state.av2 = float(plan.av)
+        if state.blk2.get("_cell_length_c") is None:
+            state.cv2 = float(plan.cv)
+
+
+def restore_primary_cif_reload_snapshot(
+    state: StructureModelState,
+    snapshot: PrimaryCifReloadSnapshot,
+    *,
+    occ_vars=None,
+    atom_site_fract_vars=None,
+):
+    state.cif_file = snapshot.cif_file
+    state.cf = snapshot.cf
+    state.blk = snapshot.blk
+    state.cf2 = snapshot.cf2
+    state.blk2 = snapshot.blk2
+    state.occupancy_site_labels = list(snapshot.occupancy_site_labels)
+    state.occupancy_site_expanded_map = list(snapshot.occupancy_site_expanded_map)
+    state.occupancy_site_count = (
+        len(snapshot.occupancy_site_labels)
+        if snapshot.occupancy_site_labels
+        else max(1, len(snapshot.current_occ_values))
+    )
+    state.occ = (
+        list(snapshot.occ)
+        if snapshot.occ
+        else list(snapshot.current_occ_values)
+    )
+    state.atom_site_fractional_metadata = [
+        dict(row) for row in snapshot.atom_site_fractional_metadata
+    ]
+    if occ_vars is not None:
+        state.occ_vars = list(occ_vars)
+    if atom_site_fract_vars is not None:
+        state.atom_site_fract_vars = list(atom_site_fract_vars)
+    state.av = float(snapshot.av)
+    state.cv = float(snapshot.cv)
+    state.av2 = snapshot.av2
+    state.cv2 = snapshot.cv2
+    state.defaults["a"] = float(snapshot.default_a)
+    state.defaults["c"] = float(snapshot.default_c)
+    state.defaults["iodine_z"] = float(snapshot.default_iodine_z)
+    state.ht_cache_multi = dict(snapshot.ht_cache_multi)
+
+
+def current_iodine_z(
+    state: StructureModelState,
+    atom_site_override_state,
+    *,
+    active_cif_path=None,
+    atom_site_values=None,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+):
+    fallback = _coerce_iodine_z(state.defaults.get("iodine_z", 0.0), 0.0)
+
+    cif_path = str(active_cif_path).strip() if active_cif_path is not None else ""
+    if not cif_path:
+        try:
+            cif_path = active_primary_cif_path(
+                state,
+                atom_site_override_state,
+                atom_site_values=atom_site_values,
+                tcl_error_types=tcl_error_types,
+            )
+        except Exception:
+            cif_path = str(state.cif_file)
+
+    return _infer_iodine_z_or_default(cif_path, fallback=fallback)
 
 
 def active_primary_cif_path(
@@ -484,6 +776,76 @@ def active_primary_cif_path(
 def reset_atom_site_override_cache(atom_site_override_state):
     atom_site_override_state.source_path = None
     atom_site_override_state.signature = None
+
+
+def build_diffuse_ht_request(
+    state: StructureModelState,
+    atom_site_override_state,
+    *,
+    p_values,
+    w_values,
+    a_lattice,
+    c_lattice,
+    lambda_angstrom,
+    mx,
+    two_theta_range,
+    finite_stack,
+    stack_layers,
+    phase_delta_expression,
+    phi_l_divisor,
+    occupancy_values=None,
+    atom_site_values=None,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+):
+    active_cif = active_primary_cif_path(
+        state,
+        atom_site_override_state,
+        atom_site_values=atom_site_values,
+        tcl_error_types=tcl_error_types,
+    )
+    source_cif = str(state.cif_file)
+    if not Path(active_cif).is_file():
+        raise FileNotFoundError(f"CIF file not found: {source_cif}")
+
+    current_occ = (
+        current_occupancy_values(state, tcl_error_types=tcl_error_types)
+        if occupancy_values is None
+        else [float(value) for value in occupancy_values]
+    )
+    occ_vals = expand_occupancy_values_for_generated_sites(
+        current_occ,
+        occupancy_site_labels=state.occupancy_site_labels,
+        occupancy_site_expanded_map=state.occupancy_site_expanded_map,
+    )
+
+    try:
+        two_theta_max = float(two_theta_range[1])
+    except Exception:
+        two_theta_max = None
+
+    return DiffuseHTRequest(
+        source_cif=source_cif,
+        active_cif=str(active_cif),
+        occ=list(occ_vals),
+        p_values=[float(value) for value in p_values],
+        w_values=[float(value) for value in w_values],
+        a_lattice=float(a_lattice),
+        c_lattice=float(c_lattice),
+        lambda_angstrom=float(lambda_angstrom),
+        mx=int(mx),
+        two_theta_max=two_theta_max,
+        finite_stack=bool(finite_stack),
+        stack_layers=int(max(1, stack_layers)),
+        iodine_z=current_iodine_z(
+            state,
+            atom_site_override_state,
+            active_cif_path=active_cif,
+            atom_site_values=atom_site_values,
+            tcl_error_types=tcl_error_types,
+        ),
+        phase_delta_expression=str(phase_delta_expression),
+        phi_l_divisor=float(phi_l_divisor),
+    )
 
 
 def build_ht_cache(

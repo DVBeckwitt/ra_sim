@@ -8422,31 +8422,12 @@ def _current_phi_l_divisor() -> float:
 def _current_iodine_z(active_cif_path=None) -> float:
     """Return iodine z inferred from the active CIF (clamped to [0, 1])."""
 
-    fallback = float(defaults.get("iodine_z", 0.0))
-    if not np.isfinite(fallback):
-        fallback = 0.0
-
-    cif_path = str(active_cif_path) if active_cif_path is not None else None
-    if not cif_path:
-        try:
-            cif_path = _active_primary_cif_path()
-        except Exception:
-            cif_path = str(cif_file)
-
-    value = None
-    try:
-        value = _infer_iodine_z_like_diffuse(cif_path)
-    except Exception:
-        value = None
-    if value is None:
-        value = fallback
-    try:
-        value = float(value)
-    except Exception:
-        value = fallback
-    if not np.isfinite(value):
-        value = fallback
-    return float(np.clip(value, 0.0, 1.0))
+    return gui_structure_model.current_iodine_z(
+        structure_model_state,
+        atom_site_override_state,
+        active_cif_path=active_cif_path,
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 line_rmin, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
@@ -16271,16 +16252,36 @@ def _rebuild_atom_site_fractional_controls():
     )
 
 
+def _reset_structure_model_control_vars(
+    occupancy_values,
+    atom_site_values,
+):
+    """Replace occupancy and atom-site Tk variables for the active structure model."""
+
+    global occ_vars, atom_site_fract_vars
+
+    if len(occ_vars) != len(occupancy_values):
+        occ_vars = [tk.DoubleVar(value=float(value)) for value in occupancy_values]
+    else:
+        for occ_var, value in zip(occ_vars, occupancy_values):
+            occ_var.set(float(value))
+
+    atom_site_fract_vars = [
+        {
+            "x": tk.DoubleVar(value=float(x_val)),
+            "y": tk.DoubleVar(value=float(y_val)),
+            "z": tk.DoubleVar(value=float(z_val)),
+        }
+        for (x_val, y_val, z_val) in atom_site_values
+    ]
+    _rebuild_occupancy_controls()
+    _rebuild_atom_site_fractional_controls()
+
+
 def _apply_primary_cif_path(raw_path):
     """Load a new primary CIF file and rebuild diffraction inputs."""
 
-    global cif_file, cf, blk, occupancy_site_labels, occupancy_site_count
-    global occupancy_site_expanded_map
-    global atom_site_fractional_metadata, atom_site_fract_vars
-    global occ, occ_vars
-    global ht_cache_multi
-    global defaults, av, cv, av2, cv2
-    global _last_atom_site_fractional_signature
+    global occ_vars, atom_site_fract_vars
 
     text_path = str(raw_path).strip().strip('"').strip("'")
     if not text_path:
@@ -16292,130 +16293,58 @@ def _apply_primary_cif_path(raw_path):
         progress_label.config(text=f"CIF file not found: {candidate}")
         return
 
-    old_cif_file = cif_file
-    old_cf = cf
-    old_blk = blk
-    old_cf2 = cf2
-    old_blk2 = blk2
-    old_labels = list(occupancy_site_labels)
-    old_expanded_map = list(occupancy_site_expanded_map)
-    old_occ = list(occ)
-    old_occ_values = _current_occupancy_values()
-    old_atom_site_metadata = [dict(row) for row in atom_site_fractional_metadata]
-    old_atom_site_values = _current_atom_site_fractional_values()
-    old_av = float(av)
-    old_cv = float(cv)
-    old_av2 = av2
-    old_cv2 = cv2
-    old_ht_cache_multi = dict(ht_cache_multi)
-    old_default_a = float(defaults.get("a", old_av))
-    old_default_c = float(defaults.get("c", old_cv))
-    old_default_iodine = float(defaults.get("iodine_z", 0.0))
+    snapshot = gui_structure_model.capture_primary_cif_reload_snapshot(
+        structure_model_state,
+        current_occ_values=_current_occupancy_values(),
+        current_atom_site_values=_current_atom_site_fractional_values(),
+    )
     try:
         old_slider_a = float(a_var.get())
     except Exception:
-        old_slider_a = old_default_a
+        old_slider_a = snapshot.default_a
     try:
         old_slider_c = float(c_var.get())
     except Exception:
-        old_slider_c = old_default_c
+        old_slider_c = snapshot.default_c
     try:
-        new_cf = CifFile.ReadCif(str(candidate))
-        keys = list(new_cf.keys())
-        if not keys:
-            raise ValueError("No CIF data blocks found.")
-        new_blk = new_cf[keys[0]]
-        new_a_text = new_blk.get("_cell_length_a")
-        new_c_text = new_blk.get("_cell_length_c")
-        if new_a_text is None or new_c_text is None:
-            raise ValueError("CIF is missing _cell_length_a/_cell_length_c fields.")
-        new_av = float(parse_cif_num(new_a_text))
-        new_cv = float(parse_cif_num(new_c_text))
-        try:
-            new_iodine_z = _infer_iodine_z_like_diffuse(str(candidate))
-        except Exception:
-            new_iodine_z = None
-        if new_iodine_z is None or not np.isfinite(float(new_iodine_z)):
-            new_iodine_z = old_default_iodine
-        new_iodine_z = float(np.clip(float(new_iodine_z), 0.0, 1.0))
-
-        new_labels, new_expanded_map = _extract_occupancy_site_metadata(new_blk, str(candidate))
-        site_count = len(new_labels) if new_labels else max(1, len(old_occ_values))
-        new_occ_values = gui_controllers.clamp_site_occupancy_values(
-            _ensure_numeric_vector(old_occ_values, [1.0], site_count),
+        reload_plan = gui_structure_model.prepare_primary_cif_reload_plan(
+            structure_model_state,
+            str(candidate),
+            current_occ_values=snapshot.current_occ_values,
+            clamp_site_occupancy_values=gui_controllers.clamp_site_occupancy_values,
         )
-        new_atom_site_metadata = _extract_atom_site_fractional_metadata(new_blk)
-        if new_atom_site_metadata:
-            new_atom_site_values = [
-                (float(row["x"]), float(row["y"]), float(row["z"]))
-                for row in new_atom_site_metadata
-            ]
-        else:
-            new_atom_site_values = []
 
         try:
             p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
         except (tk.TclError, ValueError):
-            p_vals = [float(defaults['p0']), float(defaults['p1']), float(defaults['p2'])]
+            p_vals = [float(defaults["p0"]), float(defaults["p1"]), float(defaults["p2"])]
         try:
             w_raw = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
         except (tk.TclError, ValueError):
-            w_raw = [float(defaults['w0']), float(defaults['w1']), float(defaults['w2'])]
+            w_raw = [float(defaults["w0"]), float(defaults["w1"]), float(defaults["w2"])]
         weights = gui_controllers.normalize_stacking_weight_values(w_raw)
 
-        c_axis = float(new_cv)
-
-        if len(occ_vars) != site_count:
-            occ_vars = [tk.DoubleVar(value=float(v)) for v in new_occ_values]
-        else:
-            for occ_var, value in zip(occ_vars, new_occ_values):
-                occ_var.set(float(value))
-        atom_site_fract_vars = [
-            {
-                "x": tk.DoubleVar(value=float(x_val)),
-                "y": tk.DoubleVar(value=float(y_val)),
-                "z": tk.DoubleVar(value=float(z_val)),
-            }
-            for (x_val, y_val, z_val) in new_atom_site_values
-        ]
-        _rebuild_occupancy_controls()
-        _rebuild_atom_site_fractional_controls()
-
-        structure_model_state.cif_file = str(candidate)
-        structure_model_state.cf = new_cf
-        structure_model_state.blk = new_blk
-        structure_model_state.occupancy_site_labels = list(new_labels)
-        structure_model_state.occupancy_site_expanded_map = list(new_expanded_map)
-        structure_model_state.occupancy_site_count = int(site_count)
-        structure_model_state.occ = list(new_occ_values)
-        structure_model_state.atom_site_fractional_metadata = [
-            dict(row) for row in new_atom_site_metadata
-        ]
-        structure_model_state.occ_vars = list(occ_vars)
-        structure_model_state.atom_site_fract_vars = list(atom_site_fract_vars)
-        structure_model_state.av = float(new_av)
-        structure_model_state.cv = float(new_cv)
-        structure_model_state.defaults["a"] = float(new_av)
-        structure_model_state.defaults["c"] = float(new_cv)
-        structure_model_state.defaults["iodine_z"] = float(new_iodine_z)
-        structure_model_state.ht_cache_multi = {}
-        if has_second_cif:
-            structure_model_state.cf2 = old_cf2
-            structure_model_state.blk2 = old_blk2
-            if blk2.get("_cell_length_a") is None:
-                structure_model_state.av2 = float(new_av)
-            if blk2.get("_cell_length_c") is None:
-                structure_model_state.cv2 = float(new_cv)
+        _reset_structure_model_control_vars(
+            reload_plan.occ,
+            reload_plan.atom_site_values,
+        )
+        gui_structure_model.apply_primary_cif_reload_plan(
+            structure_model_state,
+            reload_plan,
+            occ_vars=occ_vars,
+            atom_site_fract_vars=atom_site_fract_vars,
+            has_second_cif=has_second_cif,
+        )
         _sync_structure_model_aliases()
 
         cif_file_var.set(cif_file)
         _reset_atom_site_override_cache()
         _rebuild_diffraction_inputs(
-            new_occ_values,
+            reload_plan.occ,
             p_vals,
             weights,
-            new_av,
-            c_axis,
+            reload_plan.av,
+            reload_plan.cv,
             force=True,
             trigger_update=True,
         )
@@ -16424,51 +16353,22 @@ def _apply_primary_cif_path(raw_path):
         simulation_runtime_state.last_simulation_signature = None
         progress_label.config(text=f"Loaded CIF: {Path(cif_file).name}")
     except Exception as exc:
-        if len(occ_vars) != len(old_occ_values):
-            occ_vars = [tk.DoubleVar(value=float(v)) for v in old_occ_values]
-        else:
-            for occ_var, value in zip(occ_vars, old_occ_values):
-                occ_var.set(float(value))
-        atom_site_fract_vars = [
-            {
-                "x": tk.DoubleVar(value=float(x_val)),
-                "y": tk.DoubleVar(value=float(y_val)),
-                "z": tk.DoubleVar(value=float(z_val)),
-            }
-            for (x_val, y_val, z_val) in old_atom_site_values
-        ]
-        _rebuild_occupancy_controls()
-        _rebuild_atom_site_fractional_controls()
-        structure_model_state.cif_file = old_cif_file
-        structure_model_state.cf = old_cf
-        structure_model_state.blk = old_blk
-        structure_model_state.cf2 = old_cf2
-        structure_model_state.blk2 = old_blk2
-        structure_model_state.occupancy_site_labels = list(old_labels)
-        structure_model_state.occupancy_site_expanded_map = list(old_expanded_map)
-        structure_model_state.occupancy_site_count = (
-            len(old_labels) if old_labels else max(1, len(old_occ_values))
+        _reset_structure_model_control_vars(
+            snapshot.current_occ_values,
+            snapshot.current_atom_site_values,
         )
-        structure_model_state.occ = old_occ if old_occ else list(old_occ_values)
-        structure_model_state.atom_site_fractional_metadata = [
-            dict(row) for row in old_atom_site_metadata
-        ]
-        structure_model_state.occ_vars = list(occ_vars)
-        structure_model_state.atom_site_fract_vars = list(atom_site_fract_vars)
-        structure_model_state.av = old_av
-        structure_model_state.cv = old_cv
-        structure_model_state.av2 = old_av2
-        structure_model_state.cv2 = old_cv2
-        structure_model_state.defaults["a"] = old_default_a
-        structure_model_state.defaults["c"] = old_default_c
-        structure_model_state.defaults["iodine_z"] = old_default_iodine
-        structure_model_state.ht_cache_multi = dict(old_ht_cache_multi)
+        gui_structure_model.restore_primary_cif_reload_snapshot(
+            structure_model_state,
+            snapshot,
+            occ_vars=occ_vars,
+            atom_site_fract_vars=atom_site_fract_vars,
+        )
         _reset_atom_site_override_cache()
         _sync_structure_model_aliases()
         a_var.set(float(old_slider_a))
         c_var.set(float(old_slider_c))
 
-        cif_file_var.set(old_cif_file)
+        cif_file_var.set(snapshot.cif_file)
         progress_label.config(text=f"Failed to load CIF: {exc}")
 
 
@@ -16497,50 +16397,59 @@ def _apply_primary_cif_from_entry(_event=None):
     _apply_primary_cif_path(cif_file_var.get())
 
 
+def _build_diffuse_ht_request():
+    """Collect the active algebraic HT request from GUI state."""
+
+    return gui_structure_model.build_diffuse_ht_request(
+        structure_model_state,
+        atom_site_override_state,
+        p_values=[float(p0_var.get()), float(p1_var.get()), float(p2_var.get())],
+        w_values=[float(w0_var.get()), float(w1_var.get()), float(w2_var.get())],
+        a_lattice=float(a_var.get()),
+        c_lattice=float(c_var.get()),
+        lambda_angstrom=float(lambda_),
+        mx=int(mx),
+        two_theta_range=two_theta_range,
+        finite_stack=bool(finite_stack_var.get()),
+        stack_layers=int(max(1, stack_layers_var.get())),
+        phase_delta_expression=_current_phase_delta_expression(),
+        phi_l_divisor=_current_phi_l_divisor(),
+        tcl_error_types=(tk.TclError,),
+    )
+
+
 def _open_diffuse_cif_toggle():
     """Open algebraic HT diffuse viewer using the active simulation inputs."""
 
-    source_cif = str(cif_file)
-    active_cif = _active_primary_cif_path()
-    if not Path(active_cif).is_file():
-        progress_label.config(text=f"CIF file not found: {source_cif}")
-        return
-
     try:
-        occ_vals = _expand_occupancy_values_for_generated_sites(_current_occupancy_values())
-        p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
-        w_vals = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
-        c_axis = float(c_var.get())
-        finite_flag = bool(finite_stack_var.get())
-        layer_count = int(max(1, stack_layers_var.get()))
+        request = _build_diffuse_ht_request()
+    except FileNotFoundError as exc:
+        progress_label.config(text=str(exc))
+        return
     except (tk.TclError, ValueError) as exc:
         progress_label.config(text=f"Failed to read diffuse HT inputs: {exc}")
         return
 
-    two_theta_max = None
-    try:
-        two_theta_max = float(two_theta_range[1])
-    except Exception:
-        two_theta_max = None
-
     try:
         open_diffuse_cif_toggle_algebraic(
-            cif_path=active_cif,
-            occ=occ_vals,
-            p_values=p_vals,
-            w_values=w_vals,
-            a_lattice=float(a_var.get()),
-            c_lattice=c_axis,
-            lambda_angstrom=float(lambda_),
-            mx=int(mx),
-            two_theta_max=two_theta_max,
-            finite_stack=finite_flag,
-            stack_layers=layer_count,
-            iodine_z=_current_iodine_z(active_cif),
-            phase_delta_expression=_current_phase_delta_expression(),
-            phi_l_divisor=_current_phi_l_divisor(),
+            cif_path=request.active_cif,
+            occ=request.occ,
+            p_values=request.p_values,
+            w_values=request.w_values,
+            a_lattice=request.a_lattice,
+            c_lattice=request.c_lattice,
+            lambda_angstrom=request.lambda_angstrom,
+            mx=request.mx,
+            two_theta_max=request.two_theta_max,
+            finite_stack=request.finite_stack,
+            stack_layers=request.stack_layers,
+            iodine_z=request.iodine_z,
+            phase_delta_expression=request.phase_delta_expression,
+            phi_l_divisor=request.phi_l_divisor,
         )
-        progress_label.config(text=f"Opened diffuse HT viewer: {Path(source_cif).name}")
+        progress_label.config(
+            text=f"Opened diffuse HT viewer: {Path(request.source_cif).name}"
+        )
     except Exception as exc:
         progress_label.config(text=f"Failed to open diffuse HT viewer: {exc}")
 
@@ -16548,34 +16457,20 @@ def _open_diffuse_cif_toggle():
 def _export_diffuse_ht_txt():
     """Export algebraic HT values to a fixed-width text table."""
 
-    source_cif = str(cif_file)
-    active_cif = _active_primary_cif_path()
-    if not Path(active_cif).is_file():
-        progress_label.config(text=f"CIF file not found: {source_cif}")
-        return
-
     try:
-        occ_vals = _expand_occupancy_values_for_generated_sites(_current_occupancy_values())
-        p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
-        w_vals = [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
-        a_axis = float(a_var.get())
-        c_axis = float(c_var.get())
-        finite_flag = bool(finite_stack_var.get())
-        layer_count = int(max(1, stack_layers_var.get()))
+        request = _build_diffuse_ht_request()
+    except FileNotFoundError as exc:
+        progress_label.config(text=str(exc))
+        return
     except (tk.TclError, ValueError) as exc:
         progress_label.config(text=f"Failed to read algebraic HT export inputs: {exc}")
         return
 
-    try:
-        two_theta_max = float(two_theta_range[1])
-    except Exception:
-        two_theta_max = None
-
-    default_name = f"{Path(source_cif).stem}_algebraic_ht.txt"
+    default_name = f"{Path(request.source_cif).stem}_algebraic_ht.txt"
     try:
         initial_dir = str(get_dir("downloads"))
     except Exception:
-        initial_dir = str(Path(source_cif).expanduser().parent)
+        initial_dir = str(Path(request.source_cif).expanduser().parent)
 
     save_path = filedialog.asksaveasfilename(
         title="Export Algebraic HT Table",
@@ -16590,20 +16485,20 @@ def _export_diffuse_ht_txt():
     try:
         row_count = export_algebraic_ht_txt(
             output_path=save_path,
-            cif_path=active_cif,
-            occ=occ_vals,
-            p_values=p_vals,
-            w_values=w_vals,
-            a_lattice=a_axis,
-            c_lattice=c_axis,
-            lambda_angstrom=float(lambda_),
-            mx=int(mx),
-            two_theta_max=two_theta_max,
-            finite_stack=finite_flag,
-            stack_layers=layer_count,
-            iodine_z=_current_iodine_z(active_cif),
-            phase_delta_expression=_current_phase_delta_expression(),
-            phi_l_divisor=_current_phi_l_divisor(),
+            cif_path=request.active_cif,
+            occ=request.occ,
+            p_values=request.p_values,
+            w_values=request.w_values,
+            a_lattice=request.a_lattice,
+            c_lattice=request.c_lattice,
+            lambda_angstrom=request.lambda_angstrom,
+            mx=request.mx,
+            two_theta_max=request.two_theta_max,
+            finite_stack=request.finite_stack,
+            stack_layers=request.stack_layers,
+            iodine_z=request.iodine_z,
+            phase_delta_expression=request.phase_delta_expression,
+            phi_l_divisor=request.phi_l_divisor,
         )
         progress_label.config(
             text=(

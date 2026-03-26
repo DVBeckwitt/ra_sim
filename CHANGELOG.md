@@ -39,6 +39,7 @@
   - Reduced the remaining `runtime.py` module globals to structure-model / diffuse-HT rebuild state and the legacy `write_excel` flag.
   - Moved the structure-model / diffuse-HT bootstrap and rebuild workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/structure_model.py`, including initial HT cache setup, weighted intensity recompute, and the live occupancy/stacking rebuild path.
   - Replaced the remaining inline primary-CIF / atom-site helper implementations in `ra_sim/gui/runtime.py` with thin delegates to `ra_sim/gui/structure_model.py` for occupancy metadata, atom-site override CIF generation, and CIF numeric parsing.
+  - Moved the primary-CIF reload state transition and diffuse-HT request packaging out of `ra_sim/gui/runtime.py` into `ra_sim/gui/structure_model.py`, leaving the runtime path as Tk control rebuild/file-dialog/status wiring.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
@@ -52,6 +53,7 @@
 - **Tests**
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.
+  - Extended `tests/test_gui_structure_model.py` with primary-CIF reload snapshot/restore coverage and diffuse-HT request packaging coverage.
   - Added `tests/test_hbn_geometry_mapping.py` for geometry mapping math, metadata validation, sign handling, and startup/import consistency.
   - Added regression coverage for blank background-theta selections preserving the active live theta value.
   - Added regression coverage for manual-geometry overlay redraws requesting hit tables only when the overlay is visible.

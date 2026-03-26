@@ -231,6 +231,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     and live occupancy / stacking rebuild flow through that module
   - the remaining primary-CIF occupancy / atom-site helper wrappers in
     `ra_sim.gui.runtime` now also defer to `ra_sim.gui.structure_model`
+  - the primary-CIF reload state transition and diffuse-HT request packaging
+    now also defer to `ra_sim.gui.structure_model`, leaving runtime with the
+    Tk-facing control rebuild, file-dialog, and status-label work
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -238,7 +241,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   overlay-action/analysis-view/analysis-export/sampling-optics/finite-stack/
   display-controls/pruning-controls/beam-mosaic-slider/stacking-parameter/
   primary-CIF/CIF-weight/fit-checklist/integration-range/app-shell/status
-  helper coverage
+  helper coverage plus direct structure-model coverage for primary-CIF reload
+  snapshot/restore and diffuse-HT request assembly
 
 ## Remaining Migration Focus
 
