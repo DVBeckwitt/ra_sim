@@ -57,6 +57,35 @@ class SelectedPeakCanvasPickConfig:
     image_shape: tuple[int, ...] | None = None
 
 
+@dataclass(frozen=True)
+class SelectedPeakIdealCenterProbeConfig:
+    """Inputs needed to simulate one idealized selected-peak center."""
+
+    image_size: int
+    lattice_a: float
+    lattice_c: float
+    wavelength: float
+    distance_cor_to_detector: float
+    gamma_deg: float
+    Gamma_deg: float
+    chi_deg: float
+    psi_deg: float
+    psi_z_deg: float
+    zs: float
+    zb: float
+    debye_x: float
+    debye_y: float
+    detector_center: tuple[float, float]
+    theta_initial_deg: float
+    cor_angle_deg: float
+    optics_mode: int
+    solve_q_steps: int
+    solve_q_rel_tol: float
+    solve_q_mode: int
+    unit_x: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    n_detector: tuple[float, float, float] = (0.0, 1.0, 0.0)
+
+
 @dataclass
 class SelectedPeakRuntimeBindings:
     """Runtime callbacks and shared state used by selected-peak workflows."""
@@ -143,6 +172,139 @@ def _runtime_intersection_config(
     if isinstance(config, SelectedPeakIntersectionConfig):
         return config
     return None
+
+
+def build_selected_peak_canvas_pick_config(
+    *,
+    image_size: int,
+    primary_a: float,
+    primary_c: float,
+    max_distance_px: float,
+    min_separation_px: float,
+    image_shape: tuple[int, ...] | None = None,
+) -> SelectedPeakCanvasPickConfig:
+    """Build one validated selected-peak canvas-pick config."""
+
+    normalized_shape = (
+        tuple(int(v) for v in image_shape)
+        if image_shape is not None
+        else None
+    )
+    return SelectedPeakCanvasPickConfig(
+        image_size=int(image_size),
+        primary_a=float(primary_a),
+        primary_c=float(primary_c),
+        max_distance_px=float(max_distance_px),
+        min_separation_px=float(min_separation_px),
+        image_shape=normalized_shape,
+    )
+
+
+def build_selected_peak_intersection_config(
+    *,
+    image_size: int,
+    center_col: float,
+    center_row: float,
+    distance_cor_to_detector: float,
+    gamma_deg: float,
+    Gamma_deg: float,
+    chi_deg: float,
+    psi_deg: float,
+    psi_z_deg: float,
+    zs: float,
+    zb: float,
+    theta_initial_deg: float,
+    cor_angle_deg: float,
+    sigma_mosaic_deg: float,
+    gamma_mosaic_deg: float,
+    eta: float,
+    solve_q_steps: int,
+    solve_q_rel_tol: float,
+    solve_q_mode: int,
+    pixel_size_m: float = 100e-6,
+) -> SelectedPeakIntersectionConfig:
+    """Build one validated selected-peak intersection config."""
+
+    return SelectedPeakIntersectionConfig(
+        image_size=int(image_size),
+        center_col=float(center_col),
+        center_row=float(center_row),
+        distance_cor_to_detector=float(distance_cor_to_detector),
+        gamma_deg=float(gamma_deg),
+        Gamma_deg=float(Gamma_deg),
+        chi_deg=float(chi_deg),
+        psi_deg=float(psi_deg),
+        psi_z_deg=float(psi_z_deg),
+        zs=float(zs),
+        zb=float(zb),
+        theta_initial_deg=float(theta_initial_deg),
+        cor_angle_deg=float(cor_angle_deg),
+        sigma_mosaic_deg=float(sigma_mosaic_deg),
+        gamma_mosaic_deg=float(gamma_mosaic_deg),
+        eta=float(eta),
+        solve_q_steps=int(solve_q_steps),
+        solve_q_rel_tol=float(solve_q_rel_tol),
+        solve_q_mode=int(solve_q_mode),
+        pixel_size_m=float(pixel_size_m),
+    )
+
+
+def build_selected_peak_ideal_center_probe_config(
+    *,
+    image_size: int,
+    lattice_a: float,
+    lattice_c: float,
+    wavelength: float,
+    distance_cor_to_detector: float,
+    gamma_deg: float,
+    Gamma_deg: float,
+    chi_deg: float,
+    psi_deg: float,
+    psi_z_deg: float,
+    zs: float,
+    zb: float,
+    debye_x: float,
+    debye_y: float,
+    detector_center: tuple[float, float],
+    theta_initial_deg: float,
+    cor_angle_deg: float,
+    optics_mode: int,
+    solve_q_steps: int,
+    solve_q_rel_tol: float,
+    solve_q_mode: int,
+    unit_x: tuple[float, float, float] = (1.0, 0.0, 0.0),
+    n_detector: tuple[float, float, float] = (0.0, 1.0, 0.0),
+) -> SelectedPeakIdealCenterProbeConfig:
+    """Build one validated ideal-center probe config."""
+
+    return SelectedPeakIdealCenterProbeConfig(
+        image_size=int(image_size),
+        lattice_a=float(lattice_a),
+        lattice_c=float(lattice_c),
+        wavelength=float(wavelength),
+        distance_cor_to_detector=float(distance_cor_to_detector),
+        gamma_deg=float(gamma_deg),
+        Gamma_deg=float(Gamma_deg),
+        chi_deg=float(chi_deg),
+        psi_deg=float(psi_deg),
+        psi_z_deg=float(psi_z_deg),
+        zs=float(zs),
+        zb=float(zb),
+        debye_x=float(debye_x),
+        debye_y=float(debye_y),
+        detector_center=(
+            float(detector_center[0]),
+            float(detector_center[1]),
+        ),
+        theta_initial_deg=float(theta_initial_deg),
+        cor_angle_deg=float(cor_angle_deg),
+        optics_mode=int(optics_mode),
+        solve_q_steps=int(solve_q_steps),
+        solve_q_rel_tol=float(solve_q_rel_tol),
+        solve_q_mode=int(solve_q_mode),
+        unit_x=tuple(float(v) for v in unit_x),
+        n_detector=tuple(float(v) for v in n_detector),
+    )
 
 
 def hkl_pick_button_text(armed: bool) -> str:
@@ -311,6 +473,166 @@ def build_selected_peak_status_text(
         f"{prefix}: HKL=({int(h)} {int(k)} {int(l)})  "
         f"pixel=({float(display_col):.1f},{float(display_row):.1f})  "
         f"I={float(intensity):.2g}{qr_text}  HKLs@same Qr,L: {deg_text}"
+    )
+
+
+def brightest_hit_native_from_table(
+    hit_table: object,
+) -> tuple[float, float] | None:
+    """Return the native detector center for the strongest valid hit row."""
+
+    try:
+        arr = np.asarray(hit_table, dtype=float)
+    except Exception:
+        return None
+
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 3:
+        return None
+
+    finite_mask = (
+        np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
+    )
+    if not np.any(finite_mask):
+        return None
+
+    valid = arr[finite_mask]
+    best_idx = int(np.argmax(valid[:, 0]))
+    return float(valid[best_idx, 1]), float(valid[best_idx, 2])
+
+
+def simulate_ideal_hkl_native_center(
+    simulation_runtime_state,
+    h: float,
+    k: float,
+    l: float,
+    *,
+    config: SelectedPeakIdealCenterProbeConfig,
+    n2: Any,
+    process_peaks_parallel: Any,
+) -> tuple[float, float] | None:
+    """Simulate one idealized HKL and return its native detector center."""
+
+    def _run_single(
+        beam_x: np.ndarray,
+        beam_y: np.ndarray,
+        theta_arr: np.ndarray,
+        phi_arr: np.ndarray,
+        wavelength_arr: np.ndarray,
+        *,
+        forced_sample_indices: np.ndarray | None = None,
+    ) -> tuple[float, float] | None:
+        image_buf = np.zeros(
+            (int(config.image_size), int(config.image_size)),
+            dtype=np.float64,
+        )
+        miller_arr = np.array([[float(h), float(k), float(l)]], dtype=np.float64)
+        intens_arr = np.array([1.0], dtype=np.float64)
+        try:
+            _image, hit_tables, *_ = process_peaks_parallel(
+                miller_arr,
+                intens_arr,
+                int(config.image_size),
+                float(config.lattice_a),
+                float(config.lattice_c),
+                float(config.wavelength),
+                image_buf,
+                float(config.distance_cor_to_detector),
+                float(config.gamma_deg),
+                float(config.Gamma_deg),
+                float(config.chi_deg),
+                float(config.psi_deg),
+                float(config.psi_z_deg),
+                float(config.zs),
+                float(config.zb),
+                n2,
+                beam_x,
+                beam_y,
+                theta_arr,
+                phi_arr,
+                1e-6,
+                1e-6,
+                0.0,
+                wavelength_arr,
+                float(config.debye_x),
+                float(config.debye_y),
+                [
+                    float(config.detector_center[0]),
+                    float(config.detector_center[1]),
+                ],
+                float(config.theta_initial_deg),
+                float(config.cor_angle_deg),
+                np.asarray(config.unit_x, dtype=np.float64),
+                np.asarray(config.n_detector, dtype=np.float64),
+                save_flag=0,
+                record_status=False,
+                optics_mode=int(config.optics_mode),
+                solve_q_steps=int(config.solve_q_steps),
+                solve_q_rel_tol=float(config.solve_q_rel_tol),
+                solve_q_mode=int(config.solve_q_mode),
+                single_sample_indices=forced_sample_indices,
+            )
+        except Exception:
+            return None
+
+        if hit_tables is None or len(hit_tables) == 0:
+            return None
+        return brightest_hit_native_from_table(hit_tables[0])
+
+    strict_center = _run_single(
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([float(config.wavelength)], dtype=np.float64),
+    )
+    if strict_center is not None:
+        return strict_center
+
+    beam_x = np.asarray(
+        simulation_runtime_state.profile_cache.get("beam_x_array", []),
+        dtype=np.float64,
+    ).ravel()
+    beam_y = np.asarray(
+        simulation_runtime_state.profile_cache.get("beam_y_array", []),
+        dtype=np.float64,
+    ).ravel()
+    theta_arr = np.asarray(
+        simulation_runtime_state.profile_cache.get("theta_array", []),
+        dtype=np.float64,
+    ).ravel()
+    phi_arr = np.asarray(
+        simulation_runtime_state.profile_cache.get("phi_array", []),
+        dtype=np.float64,
+    ).ravel()
+    wavelength_arr = np.asarray(
+        simulation_runtime_state.profile_cache.get("wavelength_array", []),
+        dtype=np.float64,
+    ).ravel()
+
+    n_samp = beam_x.size
+    if (
+        n_samp == 0
+        or beam_y.size != n_samp
+        or theta_arr.size != n_samp
+        or phi_arr.size != n_samp
+        or wavelength_arr.size != n_samp
+    ):
+        return None
+
+    metric = theta_arr * theta_arr + phi_arr * phi_arr
+    valid_metric = np.where(np.isfinite(metric), metric, np.inf)
+    best_idx = int(np.argmin(valid_metric))
+    if not np.isfinite(valid_metric[best_idx]):
+        return None
+
+    forced = np.array([best_idx], dtype=np.int64)
+    return _run_single(
+        beam_x,
+        beam_y,
+        theta_arr,
+        phi_arr,
+        wavelength_arr,
+        forced_sample_indices=forced,
     )
 
 

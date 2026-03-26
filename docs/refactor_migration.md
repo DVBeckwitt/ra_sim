@@ -318,12 +318,15 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     toggle / raw-image click selection workflow, and selected-peak
     Bragg/Ewald intersection analysis now live in
     `ra_sim.gui.peak_selection`
+  - the selected-peak config builders and the ideal-center probe helper used
+    by raw-image HKL picking now also live in `ra_sim.gui.peak_selection`
   - `ra_sim.gui.peak_selection` now also owns the runtime binding/callback
     bundle for HKL-pick button labels, mode toggles, selected-peak refresh,
     HKL-control selection, raw-image click selection, and the selected-peak
     Bragg/Ewald action
-  - `ra_sim.gui.runtime` now keeps only cross-feature click-mode dispatch
-    plus the live config-factory wiring around that workflow
+  - `ra_sim.gui.runtime` now keeps only cross-feature click-mode dispatch,
+    live GUI scalar getters, and the bound peak-selection runtime wiring
+    around that workflow
 - Canvas interaction workflow extraction has also advanced:
   - top-level raw-image canvas click/drag arbitration between
     manual-geometry placement, preview exclusion, HKL picking, and
@@ -368,8 +371,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   around the extracted manager helpers.
 - The remaining background runtime code is now mostly one bound callback
   bundle plus a few call sites around the extracted background manager.
-- The remaining selected-peak runtime code is now mostly live config-factory
-  wiring plus a few call sites around the extracted peak-selection and
+- The remaining selected-peak runtime code is now mostly live GUI value
+  getters plus a few call sites around the extracted peak-selection and
   canvas-interaction modules.
 - The remaining integration-range drag runtime code is now mostly the
   drag-rectangle construction plus the bound canvas callback wiring around the

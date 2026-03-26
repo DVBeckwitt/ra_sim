@@ -4630,146 +4630,6 @@ bragg_qr_runtime_bindings_factory = gui_bragg_qr_manager.make_runtime_bragg_qr_b
 )
 
 
-def _brightest_hit_native_from_table(hit_table) -> tuple[float, float] | None:
-    """Return (native_col, native_row) for the strongest valid hit row."""
-
-    try:
-        arr = np.asarray(hit_table, dtype=float)
-    except Exception:
-        return None
-
-    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 3:
-        return None
-
-    finite_mask = (
-        np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1]) & np.isfinite(arr[:, 2])
-    )
-    if not np.any(finite_mask):
-        return None
-
-    valid = arr[finite_mask]
-    best_idx = int(np.argmax(valid[:, 0]))
-    return float(valid[best_idx, 1]), float(valid[best_idx, 2])
-
-
-def _simulate_ideal_hkl_native_center(
-    h: float,
-    k: float,
-    l: float,
-    av: float,
-    cv: float,
-) -> tuple[float, float] | None:
-    """Simulate a single HKL (integer or fractional) and return its ideal center."""
-
-    optics_mode_flag = _current_optics_mode_flag()
-
-    def _run_single(
-        beam_x: np.ndarray,
-        beam_y: np.ndarray,
-        theta_arr: np.ndarray,
-        phi_arr: np.ndarray,
-        wavelength_arr: np.ndarray,
-        *,
-        forced_sample_indices: np.ndarray | None = None,
-    ) -> tuple[float, float] | None:
-        image_buf = np.zeros((int(image_size), int(image_size)), dtype=np.float64)
-        miller_arr = np.array([[float(h), float(k), float(l)]], dtype=np.float64)
-        intens_arr = np.array([1.0], dtype=np.float64)
-        try:
-            _image, hit_tables, *_ = process_peaks_parallel(
-                miller_arr,
-                intens_arr,
-                int(image_size),
-                float(av),
-                float(cv),
-                float(lambda_),
-                image_buf,
-                float(corto_detector_var.get()),
-                float(gamma_var.get()),
-                float(Gamma_var.get()),
-                float(chi_var.get()),
-                float(psi),
-                float(psi_z_var.get()),
-                float(zs_var.get()),
-                float(zb_var.get()),
-                n2,
-                beam_x,
-                beam_y,
-                theta_arr,
-                phi_arr,
-                1e-6,  # near-zero mosaic spread (avoid singular zero width)
-                1e-6,  # near-zero mosaic spread (avoid singular zero width)
-                0.0,  # pure Gaussian in the zero-width limit
-                wavelength_arr,
-                float(debye_x_var.get()),
-                float(debye_y_var.get()),
-                [float(center_x_var.get()), float(center_y_var.get())],
-                float(theta_initial_var.get()),
-                float(cor_angle_var.get()),
-                np.array([1.0, 0.0, 0.0]),
-                np.array([0.0, 1.0, 0.0]),
-                save_flag=0,
-                record_status=False,
-                optics_mode=optics_mode_flag,
-                solve_q_steps=_current_solve_q_steps(),
-                solve_q_rel_tol=_current_solve_q_rel_tol(),
-                solve_q_mode=_current_solve_q_mode_flag(),
-                single_sample_indices=forced_sample_indices,
-            )
-        except Exception:
-            return None
-
-        if hit_tables is None or len(hit_tables) == 0:
-            return None
-        return _brightest_hit_native_from_table(hit_tables[0])
-
-    # First try the strict no-divergence/no-offset beam sample.
-    strict_center = _run_single(
-        np.array([0.0], dtype=np.float64),
-        np.array([0.0], dtype=np.float64),
-        np.array([0.0], dtype=np.float64),
-        np.array([0.0], dtype=np.float64),
-        np.array([float(lambda_)], dtype=np.float64),
-    )
-    if strict_center is not None:
-        return strict_center
-
-    # Fallback: force the least-divergent sampled beam state from the profile.
-    beam_x = np.asarray(simulation_runtime_state.profile_cache.get("beam_x_array", []), dtype=np.float64).ravel()
-    beam_y = np.asarray(simulation_runtime_state.profile_cache.get("beam_y_array", []), dtype=np.float64).ravel()
-    theta_arr = np.asarray(simulation_runtime_state.profile_cache.get("theta_array", []), dtype=np.float64).ravel()
-    phi_arr = np.asarray(simulation_runtime_state.profile_cache.get("phi_array", []), dtype=np.float64).ravel()
-    wavelength_arr = np.asarray(
-        simulation_runtime_state.profile_cache.get("wavelength_array", []), dtype=np.float64
-    ).ravel()
-
-    n_samp = beam_x.size
-    if (
-        n_samp == 0
-        or beam_y.size != n_samp
-        or theta_arr.size != n_samp
-        or phi_arr.size != n_samp
-        or wavelength_arr.size != n_samp
-    ):
-        return None
-
-    metric = theta_arr * theta_arr + phi_arr * phi_arr
-    valid_metric = np.where(np.isfinite(metric), metric, np.inf)
-    best_idx = int(np.argmin(valid_metric))
-    if not np.isfinite(valid_metric[best_idx]):
-        return None
-
-    forced = np.array([best_idx], dtype=np.int64)
-    return _run_single(
-        beam_x,
-        beam_y,
-        theta_arr,
-        phi_arr,
-        wavelength_arr,
-        forced_sample_indices=forced,
-    )
-
-
 peak_selection_runtime_bindings_factory = (
     gui_peak_selection.make_runtime_peak_selection_bindings_factory(
         simulation_runtime_state=simulation_runtime_state,
@@ -4783,7 +4643,7 @@ peak_selection_runtime_bindings_factory = (
             else False
         ),
         current_canvas_pick_config_factory=lambda: (
-            gui_peak_selection.SelectedPeakCanvasPickConfig(
+            gui_peak_selection.build_selected_peak_canvas_pick_config(
                 image_size=int(image_size),
                 primary_a=float(av),
                 primary_c=float(cv),
@@ -4797,7 +4657,7 @@ peak_selection_runtime_bindings_factory = (
             )
         ),
         current_intersection_config_factory=lambda: (
-            gui_peak_selection.SelectedPeakIntersectionConfig(
+            gui_peak_selection.build_selected_peak_intersection_config(
                 image_size=int(image_size),
                 center_col=float(center_y_var.get()),
                 center_row=float(center_x_var.get()),
@@ -4834,7 +4694,42 @@ peak_selection_runtime_bindings_factory = (
         draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
         display_to_native_sim_coords=_display_to_native_sim_coords,
         native_sim_to_display_coords=_native_sim_to_display_coords,
-        simulate_ideal_hkl_native_center=_simulate_ideal_hkl_native_center,
+        simulate_ideal_hkl_native_center=lambda h, k, l, av_local, cv_local: (
+            gui_peak_selection.simulate_ideal_hkl_native_center(
+                simulation_runtime_state,
+                h,
+                k,
+                l,
+                config=gui_peak_selection.build_selected_peak_ideal_center_probe_config(
+                    image_size=int(image_size),
+                    lattice_a=float(av_local),
+                    lattice_c=float(cv_local),
+                    wavelength=float(lambda_),
+                    distance_cor_to_detector=float(corto_detector_var.get()),
+                    gamma_deg=float(gamma_var.get()),
+                    Gamma_deg=float(Gamma_var.get()),
+                    chi_deg=float(chi_var.get()),
+                    psi_deg=float(psi),
+                    psi_z_deg=float(psi_z_var.get()),
+                    zs=float(zs_var.get()),
+                    zb=float(zb_var.get()),
+                    debye_x=float(debye_x_var.get()),
+                    debye_y=float(debye_y_var.get()),
+                    detector_center=(
+                        float(center_x_var.get()),
+                        float(center_y_var.get()),
+                    ),
+                    theta_initial_deg=float(theta_initial_var.get()),
+                    cor_angle_deg=float(cor_angle_var.get()),
+                    optics_mode=_current_optics_mode_flag(),
+                    solve_q_steps=_current_solve_q_steps(),
+                    solve_q_rel_tol=_current_solve_q_rel_tol(),
+                    solve_q_mode=_current_solve_q_mode_flag(),
+                ),
+                n2=n2,
+                process_peaks_parallel=process_peaks_parallel,
+            )
+        ),
         deactivate_conflicting_modes_factory=lambda: (
             lambda: _set_geometry_preview_exclude_mode(False)
         ),

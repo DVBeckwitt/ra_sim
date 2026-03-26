@@ -53,7 +53,7 @@ class _FakeFigure:
 
 
 def _intersection_config() -> peak_selection.SelectedPeakIntersectionConfig:
-    return peak_selection.SelectedPeakIntersectionConfig(
+    return peak_selection.build_selected_peak_intersection_config(
         image_size=512,
         center_col=255.5,
         center_row=256.5,
@@ -80,7 +80,7 @@ def _canvas_pick_config(
     *,
     image_shape: tuple[int, ...] | None = (64, 64),
 ) -> peak_selection.SelectedPeakCanvasPickConfig:
-    return peak_selection.SelectedPeakCanvasPickConfig(
+    return peak_selection.build_selected_peak_canvas_pick_config(
         image_size=64,
         primary_a=5.0,
         primary_c=7.0,
@@ -88,6 +88,189 @@ def _canvas_pick_config(
         min_separation_px=2.0,
         image_shape=image_shape,
     )
+
+
+def _ideal_center_probe_config(
+    *,
+    lattice_a: float = 5.0,
+    lattice_c: float = 7.0,
+) -> peak_selection.SelectedPeakIdealCenterProbeConfig:
+    return peak_selection.build_selected_peak_ideal_center_probe_config(
+        image_size=64,
+        lattice_a=lattice_a,
+        lattice_c=lattice_c,
+        wavelength=1.54,
+        distance_cor_to_detector=123.0,
+        gamma_deg=1.5,
+        Gamma_deg=2.5,
+        chi_deg=3.5,
+        psi_deg=4.5,
+        psi_z_deg=5.5,
+        zs=6.5,
+        zb=7.5,
+        debye_x=0.1,
+        debye_y=0.2,
+        detector_center=(255.5, 256.5),
+        theta_initial_deg=8.5,
+        cor_angle_deg=9.5,
+        optics_mode=2,
+        solve_q_steps=321,
+        solve_q_rel_tol=1.0e-4,
+        solve_q_mode=1,
+    )
+
+
+def test_peak_selection_config_builders_normalize_values() -> None:
+    canvas_cfg = peak_selection.build_selected_peak_canvas_pick_config(
+        image_size="64",
+        primary_a="5.0",
+        primary_c=7,
+        max_distance_px="12.5",
+        min_separation_px=2,
+        image_shape=[80, 96],
+    )
+    assert isinstance(canvas_cfg, peak_selection.SelectedPeakCanvasPickConfig)
+    assert canvas_cfg.image_size == 64
+    assert canvas_cfg.primary_a == 5.0
+    assert canvas_cfg.primary_c == 7.0
+    assert canvas_cfg.max_distance_px == 12.5
+    assert canvas_cfg.min_separation_px == 2.0
+    assert canvas_cfg.image_shape == (80, 96)
+
+    intersection_cfg = peak_selection.build_selected_peak_intersection_config(
+        image_size="512",
+        center_col="255.5",
+        center_row=256.5,
+        distance_cor_to_detector="123.0",
+        gamma_deg=1.5,
+        Gamma_deg="2.5",
+        chi_deg=3.5,
+        psi_deg=4.5,
+        psi_z_deg=5.5,
+        zs=6.5,
+        zb=7.5,
+        theta_initial_deg=8.5,
+        cor_angle_deg=9.5,
+        sigma_mosaic_deg="0.25",
+        gamma_mosaic_deg=0.5,
+        eta="0.75",
+        solve_q_steps="321",
+        solve_q_rel_tol="1.0e-4",
+        solve_q_mode="2",
+    )
+    assert isinstance(intersection_cfg, peak_selection.SelectedPeakIntersectionConfig)
+    assert intersection_cfg.image_size == 512
+    assert intersection_cfg.center_col == 255.5
+    assert intersection_cfg.solve_q_steps == 321
+    assert intersection_cfg.solve_q_rel_tol == 1.0e-4
+    assert intersection_cfg.solve_q_mode == 2
+
+    probe_cfg = peak_selection.build_selected_peak_ideal_center_probe_config(
+        image_size="64",
+        lattice_a="5.0",
+        lattice_c=7,
+        wavelength="1.54",
+        distance_cor_to_detector=123,
+        gamma_deg="1.5",
+        Gamma_deg=2.5,
+        chi_deg=3.5,
+        psi_deg=4.5,
+        psi_z_deg=5.5,
+        zs=6.5,
+        zb=7.5,
+        debye_x="0.1",
+        debye_y=0.2,
+        detector_center=("255.5", 256.5),
+        theta_initial_deg=8.5,
+        cor_angle_deg=9.5,
+        optics_mode="2",
+        solve_q_steps="321",
+        solve_q_rel_tol="1.0e-4",
+        solve_q_mode="1",
+        unit_x=[1, 0, 0],
+        n_detector=[0, 1, 0],
+    )
+    assert isinstance(probe_cfg, peak_selection.SelectedPeakIdealCenterProbeConfig)
+    assert probe_cfg.image_size == 64
+    assert probe_cfg.lattice_a == 5.0
+    assert probe_cfg.lattice_c == 7.0
+    assert probe_cfg.detector_center == (255.5, 256.5)
+    assert probe_cfg.unit_x == (1.0, 0.0, 0.0)
+    assert probe_cfg.n_detector == (0.0, 1.0, 0.0)
+
+
+def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallback() -> None:
+    assert peak_selection.brightest_hit_native_from_table([]) is None
+    assert peak_selection.brightest_hit_native_from_table([[1.0, 5.0, 6.0]]) == (
+        5.0,
+        6.0,
+    )
+    assert peak_selection.brightest_hit_native_from_table(
+        [[1.0, 5.0, 6.0], [3.0, 8.0, 9.0], [2.0, 7.0, 4.0]]
+    ) == (8.0, 9.0)
+
+    runtime_state = state.SimulationRuntimeState()
+    strict_calls = []
+
+    def fake_process_strict(*args, **kwargs):
+        strict_calls.append(
+            {
+                "lattice_a": args[3],
+                "lattice_c": args[4],
+                "optics_mode": kwargs["optics_mode"],
+                "single_sample_indices": kwargs["single_sample_indices"],
+            }
+        )
+        return None, [np.array([[5.0, 12.5, 23.5]], dtype=float)]
+
+    strict_center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(lattice_a=4.5, lattice_c=6.5),
+        n2="n2",
+        process_peaks_parallel=fake_process_strict,
+    )
+    assert strict_center == (12.5, 23.5)
+    assert strict_calls == [
+        {
+            "lattice_a": 4.5,
+            "lattice_c": 6.5,
+            "optics_mode": 2,
+            "single_sample_indices": None,
+        }
+    ]
+
+    runtime_state.profile_cache = {
+        "beam_x_array": [0.3, 0.1],
+        "beam_y_array": [0.4, 0.2],
+        "theta_array": [0.8, 0.2],
+        "phi_array": [0.7, 0.1],
+        "wavelength_array": [1.55, 1.56],
+    }
+    fallback_calls = []
+
+    def fake_process_fallback(*args, **kwargs):
+        forced = kwargs["single_sample_indices"]
+        fallback_calls.append(
+            None if forced is None else tuple(int(v) for v in forced.tolist())
+        )
+        if forced is None:
+            return None, []
+        return None, [np.array([[1.0, 44.0, 55.0]], dtype=float)]
+
+    fallback_center = peak_selection.simulate_ideal_hkl_native_center(
+        runtime_state,
+        1.0,
+        0.0,
+        2.0,
+        config=_ideal_center_probe_config(),
+        n2="n2",
+        process_peaks_parallel=fake_process_fallback,
+    )
+    assert fallback_center == (44.0, 55.0)
+    assert fallback_calls == [None, (1,)]
 
 
 def test_peak_selection_degenerate_hkls_and_qr_helpers_use_source_tables() -> None:
