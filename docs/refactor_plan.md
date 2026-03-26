@@ -307,11 +307,12 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
 - HKL lookup / selected-peak workflow extraction has advanced.
   - `ra_sim.gui.peak_selection` now owns HKL lookup parsing, selected-peak
     summary text, degenerate-HKL lookup, selection-by-index/HKL,
-    clear-selection state transitions, and selected-peak Bragg/Ewald
-    intersection analysis used by the live GUI.
+    clear-selection state transitions, HKL-pick toggle / raw-image click
+    selection workflow, and selected-peak Bragg/Ewald intersection analysis
+    used by the live GUI.
   - `ra_sim.gui.runtime` now delegates that workflow through the extracted
-    module and keeps only the canvas-click plumbing plus current control-value
-    delegation inline.
+    module and keeps only cross-feature click-mode dispatch plus current
+    control-value delegation inline.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -481,8 +482,9 @@ What is left:
   manager/view helpers.
 - The remaining background runtime code is now mostly file-dialog plumbing and
   progress/error text around the extracted background manager.
-- The remaining selected-peak runtime code is now mostly canvas-click
-  plumbing around the extracted peak-selection helpers.
+- The remaining selected-peak runtime code is now mostly cross-feature
+  event-dispatch and click-mode arbitration around the extracted peak-
+  selection helpers.
 
 Why it matters:
 

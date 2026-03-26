@@ -4815,34 +4815,14 @@ def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
 
 
 def _toggle_hkl_pick_mode():
-    if peak_selection_state.hkl_pick_armed:
-        _set_hkl_pick_mode(False, message="HKL image-pick canceled.")
-        return
-
-    if analysis_view_controls_view_state.show_caked_2d_var.get():
-        progress_label_positions.config(
-            text="Switch off 2D caked view before picking HKL in the image."
-        )
-        return
-
-    if simulation_runtime_state.unscaled_image is None:
-        progress_label_positions.config(text="Run a simulation first.")
-        return
-
-    if not _ensure_peak_overlay_data(force=False) or not simulation_runtime_state.peak_positions:
-        _set_hkl_pick_mode(
-            True,
-            message=(
-                "Preparing simulated peak map for HKL picking... "
-                "wait for the next update."
-            ),
-        )
-        schedule_update()
-        return
-
-    _set_hkl_pick_mode(
-        True,
-        message="HKL image-pick armed: click near a Bragg peak in raw camera view.",
+    gui_peak_selection.toggle_hkl_pick_mode(
+        simulation_runtime_state,
+        peak_selection_state,
+        caked_view_enabled=analysis_view_controls_view_state.show_caked_2d_var.get(),
+        ensure_peak_overlay_data=_ensure_peak_overlay_data,
+        schedule_update=schedule_update,
+        set_pick_mode=_set_hkl_pick_mode,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
     )
 
 
@@ -5256,109 +5236,33 @@ def on_canvas_click(event):
         return
     if event.inaxes is not ax or event.xdata is None or event.ydata is None:
         return                               # click was outside the image
-    _ensure_peak_overlay_data(force=False)
-    if not simulation_runtime_state.peak_positions:                   # no simulation yet
-        schedule_update()
-        progress_label_positions.config(
-            text="Preparing simulated peak map... click again after update."
-        )
-        return
-
-    click_col = float(event.xdata)
-    click_row = float(event.ydata)
-
-    # Find nearest stored peak
-    best_i, best_d2 = -1, float("inf")
-    best_i_val = float("-inf")
-    for i, (px, py) in enumerate(simulation_runtime_state.peak_positions):
-        if px < 0:              # invalid entries kept as (-1,-1)
-            continue
-        d2 = (px - click_col) ** 2 + (py - click_row) ** 2
-        val = simulation_runtime_state.peak_intensities[i]
-        score_val = float(val) if np.isfinite(val) else float("-inf")
-        if d2 < best_d2 - 1e-9 or (abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val):
-            best_i, best_d2 = i, d2
-            best_i_val = score_val
-
-    if best_i == -1:
-        progress_label_positions.config(text="No peaks on screen.")
-        return
-    if best_d2 > float(HKL_PICK_MAX_DISTANCE_PX) ** 2:
-        progress_label_positions.config(
-            text=(
-                f"No simulated peak within {HKL_PICK_MAX_DISTANCE_PX:.0f}px "
-                f"(nearest is {best_d2**0.5:.1f}px away)."
-            )
-        )
-        return
-
-    cx, cy = int(round(click_col)), int(round(click_row))
-    sim_shape = global_image_buffer.shape if global_image_buffer.size else (image_size, image_size)
-    clicked_native_col, clicked_native_row = _display_to_native_sim_coords(cx, cy, sim_shape)
-    selected_display = None
-    selected_native = None
-
-    if best_i < len(simulation_runtime_state.peak_records) and isinstance(simulation_runtime_state.peak_records[best_i], dict):
-        peak_record = simulation_runtime_state.peak_records[best_i]
-        try:
-            raw_hkl = peak_record.get("hkl_raw")
-            if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
-                rec_h = float(raw_hkl[0])
-                rec_k = float(raw_hkl[1])
-                rec_l = float(raw_hkl[2])
-            else:
-                rec_h, rec_k, rec_l = tuple(float(v) for v in simulation_runtime_state.peak_millers[best_i])
-            rec_av = float(peak_record.get("av", float(a_var.get())))
-            rec_cv = float(peak_record.get("cv", float(c_var.get())))
-            ideal_native = _simulate_ideal_hkl_native_center(
-                rec_h, rec_k, rec_l, rec_av, rec_cv
-            )
-            if ideal_native is not None:
-                ideal_display = _native_sim_to_display_coords(
-                    ideal_native[0],
-                    ideal_native[1],
-                    sim_shape,
-                )
-                base_display = simulation_runtime_state.peak_positions[best_i]
-                snap_delta = math.hypot(
-                    float(ideal_display[0]) - float(base_display[0]),
-                    float(ideal_display[1]) - float(base_display[1]),
-                )
-                snap_limit = max(4.0, float(HKL_PICK_MIN_SEPARATION_PX) * 2.0)
-                if snap_delta <= snap_limit:
-                    selected_native = ideal_native
-                    selected_display = ideal_display
-        except Exception:
-            selected_display = None
-            selected_native = None
-
-    if selected_native is None and best_i < len(simulation_runtime_state.peak_records) and isinstance(simulation_runtime_state.peak_records[best_i], dict):
-        selected_native = (
-            float(simulation_runtime_state.peak_records[best_i].get("native_col", clicked_native_col)),
-            float(simulation_runtime_state.peak_records[best_i].get("native_row", clicked_native_row)),
-        )
-
-    prefix = f"Nearest peak (Δ={best_d2**0.5:.1f}px)"
-    if selected_display is not None:
-        snapped_dist = math.hypot(
-            float(selected_display[0]) - click_col,
-            float(selected_display[1]) - click_row,
-        )
-        prefix = f"Ideal HKL center (click Δ={snapped_dist:.1f}px)"
-
-    picked = _select_peak_by_index(
-        best_i,
-        prefix=prefix,
-        sync_hkl_vars=True,
-        clicked_display=(click_col, click_row),
-        clicked_native=(float(clicked_native_col), float(clicked_native_row)),
-        selected_display=selected_display,
-        selected_native=selected_native,
+    gui_peak_selection.select_peak_from_canvas_click(
+        simulation_runtime_state,
+        peak_selection_state,
+        float(event.xdata),
+        float(event.ydata),
+        config=gui_peak_selection.SelectedPeakCanvasPickConfig(
+            image_size=int(image_size),
+            primary_a=float(av),
+            primary_c=float(cv),
+            max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
+            min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
+            image_shape=(
+                tuple(int(v) for v in global_image_buffer.shape)
+                if global_image_buffer.size
+                else (int(image_size), int(image_size))
+            ),
+        ),
+        ensure_peak_overlay_data=_ensure_peak_overlay_data,
+        schedule_update=schedule_update,
+        display_to_native_sim_coords=_display_to_native_sim_coords,
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        simulate_ideal_hkl_native_center=_simulate_ideal_hkl_native_center,
+        select_peak_by_index=_select_peak_by_index,
+        set_pick_mode=_set_hkl_pick_mode,
+        sync_peak_selection_state=_sync_peak_selection_state,
+        set_status_text=lambda text: progress_label_positions.config(text=text),
     )
-    if picked:
-        _set_hkl_pick_mode(False)
-        peak_selection_state.suppress_drag_press_once = True
-        _sync_peak_selection_state()
 
 
 drag_select_rect = Rectangle(

@@ -282,12 +282,13 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     module and keeps only the file-dialog plus progress/error text inline
 - HKL lookup / selected-peak workflow extraction has also advanced:
   - HKL lookup parsing, selected-peak summary text, degenerate-HKL lookup,
-    selection-by-index/HKL, clear-selection state transitions, and
-    selected-peak Bragg/Ewald intersection analysis now live in
+    selection-by-index/HKL, clear-selection state transitions, HKL-pick
+    toggle / raw-image click selection workflow, and selected-peak
+    Bragg/Ewald intersection analysis now live in
     `ra_sim.gui.peak_selection`
   - `ra_sim.gui.runtime` now delegates that workflow through the extracted
-    module and keeps only the canvas-click plumbing plus current control-value
-    delegation inline
+    module and keeps only cross-feature click-mode dispatch plus current
+    control-value delegation inline
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -299,8 +300,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   snapshot/restore, diffuse-HT request assembly, Bragg-Qr / SF-pruning filter
   application, Bragg-Qr manager list-model assembly, Bragg-Qr manager
   selection/refresh/action workflow, geometry-fit Qr/Qz selector workflow,
-  background-file workflow, HKL lookup / selected-peak workflow, and
-  selected-peak Bragg/Ewald intersection workflow
+  background-file workflow, HKL lookup / selected-peak workflow,
+  selected-peak HKL-pick click workflow, and selected-peak Bragg/Ewald
+  intersection workflow
 
 ## Remaining Migration Focus
 
@@ -319,8 +321,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   around the extracted manager helpers.
 - The remaining background runtime code is now mostly file-dialog plumbing and
   progress/error text around the extracted background manager.
-- The remaining selected-peak runtime code is now mostly canvas-click
-  plumbing around the extracted peak selection helpers.
+- The remaining selected-peak runtime code is now mostly cross-feature
+  event-dispatch and click-mode arbitration around the extracted peak
+  selection helpers.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

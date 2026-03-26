@@ -45,6 +45,18 @@ class SelectedPeakIntersectionConfig:
     pixel_size_m: float = 100e-6
 
 
+@dataclass(frozen=True)
+class SelectedPeakCanvasPickConfig:
+    """Inputs needed to resolve one HKL image-pick click."""
+
+    image_size: int
+    primary_a: float
+    primary_c: float
+    max_distance_px: float
+    min_separation_px: float
+    image_shape: tuple[int, ...] | None = None
+
+
 def hkl_pick_button_text(armed: bool) -> str:
     """Return the current HKL image-pick button label."""
 
@@ -523,6 +535,247 @@ def clear_selected_peak(
     selected_peak_marker.set_visible(False)
     set_status_text("Peak selection cleared.")
     draw_idle()
+
+
+def toggle_hkl_pick_mode(
+    simulation_runtime_state,
+    peak_selection_state,
+    *,
+    caked_view_enabled: bool,
+    ensure_peak_overlay_data: Any,
+    schedule_update: Any,
+    set_pick_mode: Any,
+    set_status_text: Any,
+) -> None:
+    """Arm or disarm HKL image-pick mode based on current GUI state."""
+
+    if peak_selection_state.hkl_pick_armed:
+        set_pick_mode(False, message="HKL image-pick canceled.")
+        return
+
+    if bool(caked_view_enabled):
+        set_status_text("Switch off 2D caked view before picking HKL in the image.")
+        return
+
+    if simulation_runtime_state.unscaled_image is None:
+        set_status_text("Run a simulation first.")
+        return
+
+    if (
+        not ensure_peak_overlay_data(force=False)
+        or not simulation_runtime_state.peak_positions
+    ):
+        set_pick_mode(
+            True,
+            message=(
+                "Preparing simulated peak map for HKL picking... "
+                "wait for the next update."
+            ),
+        )
+        schedule_update()
+        return
+
+    set_pick_mode(
+        True,
+        message="HKL image-pick armed: click near a Bragg peak in raw camera view.",
+    )
+
+
+def _nearest_peak_index_for_click(
+    simulation_runtime_state,
+    click_col: float,
+    click_row: float,
+) -> tuple[int, float]:
+    best_i = -1
+    best_d2 = float("inf")
+    best_i_val = float("-inf")
+    for i, (px, py) in enumerate(simulation_runtime_state.peak_positions):
+        if float(px) < 0.0:
+            continue
+        d2 = (float(px) - float(click_col)) ** 2 + (float(py) - float(click_row)) ** 2
+        val = simulation_runtime_state.peak_intensities[i]
+        score_val = float(val) if np.isfinite(val) else float("-inf")
+        if d2 < best_d2 - 1e-9 or (
+            abs(d2 - best_d2) <= 1e-9 and score_val > best_i_val
+        ):
+            best_i = int(i)
+            best_d2 = float(d2)
+            best_i_val = float(score_val)
+    return best_i, best_d2
+
+
+def _resolve_selected_peak_click_coordinates(
+    simulation_runtime_state,
+    idx: int,
+    *,
+    click_col: float,
+    click_row: float,
+    clicked_native_col: float,
+    clicked_native_row: float,
+    config: SelectedPeakCanvasPickConfig,
+    native_sim_to_display_coords: Any,
+    simulate_ideal_hkl_native_center: Any,
+) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
+    selected_display = None
+    selected_native = None
+
+    if idx >= len(simulation_runtime_state.peak_records):
+        return selected_display, selected_native
+
+    peak_record = simulation_runtime_state.peak_records[idx]
+    if not isinstance(peak_record, Mapping):
+        return selected_display, selected_native
+
+    image_shape = (
+        tuple(int(v) for v in config.image_shape)
+        if config.image_shape is not None
+        else (int(config.image_size), int(config.image_size))
+    )
+    try:
+        raw_hkl = peak_record.get("hkl_raw")
+        if isinstance(raw_hkl, (list, tuple, np.ndarray)) and len(raw_hkl) >= 3:
+            rec_h = float(raw_hkl[0])
+            rec_k = float(raw_hkl[1])
+            rec_l = float(raw_hkl[2])
+        else:
+            rec_h, rec_k, rec_l = tuple(
+                float(v) for v in simulation_runtime_state.peak_millers[idx]
+            )
+        rec_av = float(peak_record.get("av", float(config.primary_a)))
+        rec_cv = float(peak_record.get("cv", float(config.primary_c)))
+        ideal_native = simulate_ideal_hkl_native_center(
+            rec_h,
+            rec_k,
+            rec_l,
+            rec_av,
+            rec_cv,
+        )
+        if ideal_native is not None:
+            ideal_display = native_sim_to_display_coords(
+                ideal_native[0],
+                ideal_native[1],
+                image_shape,
+            )
+            base_display = simulation_runtime_state.peak_positions[idx]
+            snap_delta = float(
+                np.hypot(
+                    float(ideal_display[0]) - float(base_display[0]),
+                    float(ideal_display[1]) - float(base_display[1]),
+                )
+            )
+            snap_limit = max(4.0, float(config.min_separation_px) * 2.0)
+            if snap_delta <= snap_limit:
+                selected_native = (
+                    float(ideal_native[0]),
+                    float(ideal_native[1]),
+                )
+                selected_display = (
+                    float(ideal_display[0]),
+                    float(ideal_display[1]),
+                )
+    except Exception:
+        selected_display = None
+        selected_native = None
+
+    if selected_native is None:
+        selected_native = (
+            float(peak_record.get("native_col", clicked_native_col)),
+            float(peak_record.get("native_row", clicked_native_row)),
+        )
+
+    return selected_display, selected_native
+
+
+def select_peak_from_canvas_click(
+    simulation_runtime_state,
+    peak_selection_state,
+    click_col: float,
+    click_row: float,
+    *,
+    config: SelectedPeakCanvasPickConfig,
+    ensure_peak_overlay_data: Any,
+    schedule_update: Any,
+    display_to_native_sim_coords: Any,
+    native_sim_to_display_coords: Any,
+    simulate_ideal_hkl_native_center: Any,
+    select_peak_by_index: Any,
+    set_pick_mode: Any,
+    sync_peak_selection_state: Any,
+    set_status_text: Any,
+) -> bool:
+    """Select the nearest visible peak from one raw-image click."""
+
+    ensure_peak_overlay_data(force=False)
+    if not simulation_runtime_state.peak_positions:
+        schedule_update()
+        set_status_text("Preparing simulated peak map... click again after update.")
+        return False
+
+    best_i, best_d2 = _nearest_peak_index_for_click(
+        simulation_runtime_state,
+        float(click_col),
+        float(click_row),
+    )
+    if best_i == -1:
+        set_status_text("No peaks on screen.")
+        return False
+    if best_d2 > float(config.max_distance_px) ** 2:
+        set_status_text(
+            f"No simulated peak within {float(config.max_distance_px):.0f}px "
+            f"(nearest is {best_d2**0.5:.1f}px away)."
+        )
+        return False
+
+    cx = int(round(float(click_col)))
+    cy = int(round(float(click_row)))
+    image_shape = (
+        tuple(int(v) for v in config.image_shape)
+        if config.image_shape is not None
+        else (int(config.image_size), int(config.image_size))
+    )
+    clicked_native_col, clicked_native_row = display_to_native_sim_coords(
+        cx,
+        cy,
+        image_shape,
+    )
+    selected_display, selected_native = _resolve_selected_peak_click_coordinates(
+        simulation_runtime_state,
+        best_i,
+        click_col=float(click_col),
+        click_row=float(click_row),
+        clicked_native_col=float(clicked_native_col),
+        clicked_native_row=float(clicked_native_row),
+        config=config,
+        native_sim_to_display_coords=native_sim_to_display_coords,
+        simulate_ideal_hkl_native_center=simulate_ideal_hkl_native_center,
+    )
+
+    prefix = f"Nearest peak (Δ={best_d2**0.5:.1f}px)"
+    if selected_display is not None:
+        snapped_dist = float(
+            np.hypot(
+                float(selected_display[0]) - float(click_col),
+                float(selected_display[1]) - float(click_row),
+            )
+        )
+        prefix = f"Ideal HKL center (click Δ={snapped_dist:.1f}px)"
+
+    picked = bool(
+        select_peak_by_index(
+            best_i,
+            prefix=prefix,
+            sync_hkl_vars=True,
+            clicked_display=(float(click_col), float(click_row)),
+            clicked_native=(float(clicked_native_col), float(clicked_native_row)),
+            selected_display=selected_display,
+            selected_native=selected_native,
+        )
+    )
+    if picked:
+        set_pick_mode(False)
+        peak_selection_state.suppress_drag_press_once = True
+        sync_peak_selection_state()
+    return picked
 
 
 def open_selected_peak_intersection_figure(

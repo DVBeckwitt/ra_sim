@@ -76,6 +76,20 @@ def _intersection_config() -> peak_selection.SelectedPeakIntersectionConfig:
     )
 
 
+def _canvas_pick_config(
+    *,
+    image_shape: tuple[int, ...] | None = (64, 64),
+) -> peak_selection.SelectedPeakCanvasPickConfig:
+    return peak_selection.SelectedPeakCanvasPickConfig(
+        image_size=64,
+        primary_a=5.0,
+        primary_c=7.0,
+        max_distance_px=12.0,
+        min_separation_px=2.0,
+        image_shape=image_shape,
+    )
+
+
 def test_peak_selection_degenerate_hkls_and_qr_helpers_use_source_tables() -> None:
     runtime_state = state.SimulationRuntimeState(
         sim_miller1=np.asarray(
@@ -433,3 +447,184 @@ def test_open_selected_peak_intersection_figure_reports_failures() -> None:
 
     assert ok is False
     assert status_messages[-1] == "Intersection analysis failed for selected peak: boom"
+
+
+def test_toggle_hkl_pick_mode_handles_ready_and_unready_paths() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        unscaled_image=np.ones((4, 4), dtype=float),
+    )
+    peak_state = state.PeakSelectionState()
+    status_messages = []
+    scheduled = []
+    pick_mode_calls = []
+
+    peak_selection.toggle_hkl_pick_mode(
+        runtime_state,
+        peak_state,
+        caked_view_enabled=True,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: scheduled.append(True),
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        set_status_text=status_messages.append,
+    )
+
+    assert pick_mode_calls == []
+    assert status_messages[-1] == (
+        "Switch off 2D caked view before picking HKL in the image."
+    )
+
+    peak_selection.toggle_hkl_pick_mode(
+        runtime_state,
+        peak_state,
+        caked_view_enabled=False,
+        ensure_peak_overlay_data=lambda **_kwargs: False,
+        schedule_update=lambda: scheduled.append(True),
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        set_status_text=status_messages.append,
+    )
+
+    assert scheduled == [True]
+    assert pick_mode_calls[-1] == (
+        True,
+        "Preparing simulated peak map for HKL picking... wait for the next update.",
+    )
+
+    runtime_state.peak_positions = [(1.0, 2.0)]
+    peak_selection.toggle_hkl_pick_mode(
+        runtime_state,
+        peak_state,
+        caked_view_enabled=False,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: scheduled.append(True),
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        set_status_text=status_messages.append,
+    )
+
+    assert pick_mode_calls[-1] == (
+        True,
+        "HKL image-pick armed: click near a Bragg peak in raw camera view.",
+    )
+
+    peak_state.hkl_pick_armed = True
+    peak_selection.toggle_hkl_pick_mode(
+        runtime_state,
+        peak_state,
+        caked_view_enabled=False,
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: scheduled.append(True),
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        set_status_text=status_messages.append,
+    )
+
+    assert pick_mode_calls[-1] == (False, "HKL image-pick canceled.")
+
+
+def test_select_peak_from_canvas_click_prepares_update_when_peak_map_missing() -> None:
+    runtime_state = state.SimulationRuntimeState()
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    status_messages = []
+    scheduled = []
+    ensured = []
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        9.3,
+        11.7,
+        config=_canvas_pick_config(),
+        ensure_peak_overlay_data=lambda **kwargs: ensured.append(kwargs) or True,
+        schedule_update=lambda: scheduled.append(True),
+        display_to_native_sim_coords=lambda col, row, image_shape: (col, row),
+        native_sim_to_display_coords=lambda col, row, image_shape: (col, row),
+        simulate_ideal_hkl_native_center=lambda *_args: None,
+        select_peak_by_index=lambda *_args, **_kwargs: True,
+        set_pick_mode=lambda enabled, message=None: None,
+        sync_peak_selection_state=lambda: None,
+        set_status_text=status_messages.append,
+    )
+
+    assert ok is False
+    assert ensured == [{"force": False}]
+    assert scheduled == [True]
+    assert status_messages[-1] == "Preparing simulated peak map... click again after update."
+
+
+def test_select_peak_from_canvas_click_selects_nearest_peak_and_snaps_to_ideal_center() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(10.0, 12.0), (30.0, 40.0)],
+        peak_millers=[(1, 0, 2), (2, 0, 1)],
+        peak_intensities=[5.0, 8.0],
+        peak_records=[
+            {
+                "hkl_raw": (1.1, -0.1, 2.0),
+                "av": 4.5,
+                "cv": 6.5,
+                "native_col": 100.0,
+                "native_row": 101.0,
+            },
+            {
+                "hkl_raw": (2.0, 0.0, 1.0),
+                "av": 4.5,
+                "cv": 6.5,
+                "native_col": 200.0,
+                "native_row": 201.0,
+            },
+        ],
+    )
+    peak_state = state.PeakSelectionState(hkl_pick_armed=True)
+    status_messages = []
+    sync_calls = []
+    pick_mode_calls = []
+    select_calls = []
+
+    def fake_select_peak_by_index(idx, **kwargs):
+        select_calls.append((idx, kwargs))
+        return True
+
+    ok = peak_selection.select_peak_from_canvas_click(
+        runtime_state,
+        peak_state,
+        9.8,
+        12.4,
+        config=_canvas_pick_config(image_shape=(80, 80)),
+        ensure_peak_overlay_data=lambda **_kwargs: True,
+        schedule_update=lambda: None,
+        display_to_native_sim_coords=lambda col, row, image_shape: (
+            float(col) + 0.25,
+            float(row) + 0.75,
+        ),
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            float(col) - 90.0,
+            float(row) - 89.0,
+        ),
+        simulate_ideal_hkl_native_center=lambda h, k, l, av, cv: (100.5, 101.5),
+        select_peak_by_index=fake_select_peak_by_index,
+        set_pick_mode=lambda enabled, message=None: pick_mode_calls.append(
+            (bool(enabled), message)
+        ),
+        sync_peak_selection_state=lambda: sync_calls.append(True),
+        set_status_text=status_messages.append,
+    )
+
+    assert ok is True
+    assert len(select_calls) == 1
+    idx, kwargs = select_calls[0]
+    assert idx == 0
+    assert kwargs["prefix"].startswith("Ideal HKL center (click")
+    assert kwargs["clicked_display"] == (9.8, 12.4)
+    assert kwargs["clicked_native"] == (10.25, 12.75)
+    assert kwargs["selected_display"] == (10.5, 12.5)
+    assert kwargs["selected_native"] == (100.5, 101.5)
+    assert kwargs["sync_hkl_vars"] is True
+    assert pick_mode_calls == [(False, None)]
+    assert peak_state.suppress_drag_press_once is True
+    assert sync_calls == [True]
+    assert status_messages == []
