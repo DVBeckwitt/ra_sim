@@ -7,6 +7,8 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import numpy as np
+
 from ra_sim.path_config import get_instrument_config
 from ra_sim.utils.stacking_fault import (
     normalize_phi_l_divisor,
@@ -201,6 +203,37 @@ def normalize_stacking_weight_values(values: Sequence[object]) -> list[float]:
 
     weight_sum = float(sum(normalized)) or 1.0
     return [float(weight) / weight_sum for weight in normalized]
+
+
+def combine_cif_weighted_intensities(
+    primary_intensities: Sequence[object],
+    secondary_intensities: Sequence[object],
+    *,
+    weight1: object,
+    weight2: object,
+) -> np.ndarray:
+    """Combine two CIF intensity arrays with raw slider weights and renormalize."""
+
+    try:
+        w1 = float(weight1)
+    except (TypeError, ValueError):
+        w1 = 1.0
+    try:
+        w2 = float(weight2)
+    except (TypeError, ValueError):
+        w2 = 0.0
+    if not math.isfinite(w1):
+        w1 = 1.0
+    if not math.isfinite(w2):
+        w2 = 0.0
+
+    primary = np.asarray(primary_intensities, dtype=np.float64)
+    secondary = np.asarray(secondary_intensities, dtype=np.float64)
+    combined = w1 * primary + w2 * secondary
+    max_intensity = float(np.max(combined)) if combined.size else 0.0
+    if max_intensity > 0.0:
+        combined = combined * (100.0 / max_intensity)
+    return combined
 
 
 def ensure_display_intensity_range(

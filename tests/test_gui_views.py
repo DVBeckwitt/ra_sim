@@ -756,6 +756,79 @@ def test_primary_cif_controls_store_vars_and_bind_actions(monkeypatch) -> None:
     ]
 
 
+def test_cif_weight_controls_store_slider_refs_when_secondary_cif_is_present(
+    monkeypatch,
+) -> None:
+    created = []
+
+    def _fake_create_slider(
+        label,
+        min_val,
+        max_val,
+        initial_val,
+        step_size,
+        parent,
+        update_callback=None,
+        **_kwargs,
+    ):
+        var = _FakeVar(initial_val)
+        slider = _FakeScale(parent, to=max_val)
+        created.append(
+            {
+                "label": label,
+                "var": var,
+                "slider": slider,
+                "step": step_size,
+                "parent": parent,
+                "update_callback": update_callback,
+                "min": min_val,
+                "max": max_val,
+            }
+        )
+        return var, slider
+
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views, "create_slider", _fake_create_slider)
+    monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
+
+    view_state = state.CifWeightControlsViewState()
+
+    views.create_cif_weight_controls(
+        parent=object(),
+        view_state=view_state,
+        has_second_cif=True,
+        weight1=0.6,
+        weight2=0.4,
+    )
+
+    assert isinstance(view_state.frame, _FakeCollapsibleFrame)
+    assert view_state.weight1_var.get() == 0.6
+    assert view_state.weight2_var.get() == 0.4
+    assert view_state.weight1_scale is created[0]["slider"]
+    assert view_state.weight2_scale is created[1]["slider"]
+    assert [item["label"] for item in created] == ["CIF1 Weight", "CIF2 Weight"]
+
+
+def test_cif_weight_controls_create_only_vars_without_secondary_cif(monkeypatch) -> None:
+    monkeypatch.setattr(views.tk, "DoubleVar", _FakeVar)
+
+    view_state = state.CifWeightControlsViewState()
+
+    views.create_cif_weight_controls(
+        parent=object(),
+        view_state=view_state,
+        has_second_cif=False,
+        weight1=1.0,
+        weight2=0.0,
+    )
+
+    assert view_state.frame is None
+    assert view_state.weight1_var.get() == 1.0
+    assert view_state.weight2_var.get() == 0.0
+    assert view_state.weight1_scale is None
+    assert view_state.weight2_scale is None
+
+
 def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
     class _FakeSliderRow:
         def __init__(self) -> None:

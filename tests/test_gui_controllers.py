@@ -1,3 +1,5 @@
+import numpy as np
+
 from ra_sim.gui import controllers, state
 
 
@@ -19,6 +21,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert isinstance(
         app_state.primary_cif_controls_view,
         state.PrimaryCifControlsViewState,
+    )
+    assert isinstance(
+        app_state.cif_weight_controls_view,
+        state.CifWeightControlsViewState,
     )
     assert isinstance(
         app_state.display_controls_state,
@@ -83,6 +89,7 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.workspace_panels_view is not other_state.workspace_panels_view
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
     assert app_state.primary_cif_controls_view is not other_state.primary_cif_controls_view
+    assert app_state.cif_weight_controls_view is not other_state.cif_weight_controls_view
     assert app_state.display_controls_state is not other_state.display_controls_state
     assert app_state.display_controls_view is not other_state.display_controls_view
     assert (
@@ -249,6 +256,24 @@ def test_stacking_parameter_controller_helpers_clamp_and_normalize() -> None:
         0.0,
         0.0,
     ]
+
+
+def test_cif_weight_controller_helper_combines_and_renormalizes() -> None:
+    combined = controllers.combine_cif_weighted_intensities(
+        np.array([2.0, 4.0], dtype=np.float64),
+        np.array([3.0, 1.0], dtype=np.float64),
+        weight1=0.5,
+        weight2=0.25,
+    )
+    np.testing.assert_allclose(combined, [77.77777778, 100.0], rtol=1e-8, atol=1e-8)
+
+    fallback = controllers.combine_cif_weighted_intensities(
+        np.array([1.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0], dtype=np.float64),
+        weight1="bad",
+        weight2=float("nan"),
+    )
+    np.testing.assert_allclose(fallback, [100.0, 0.0], rtol=1e-8, atol=1e-8)
 
 
 def test_replace_manual_geometry_state_updates_in_place() -> None:

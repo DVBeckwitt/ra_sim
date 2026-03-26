@@ -98,6 +98,17 @@ class PrimaryCifControlsViewState:
 
 
 @dataclass
+class CifWeightControlsViewState:
+    """Widget references and vars for the optional secondary-CIF weight controls."""
+
+    frame: Any = None
+    weight1_var: Any = None
+    weight1_scale: Any = None
+    weight2_var: Any = None
+    weight2_scale: Any = None
+
+
+@dataclass
 class DisplayControlsState:
     """Mutable state for display-control override and callback bookkeeping."""
 
@@ -440,6 +451,9 @@ class AppState:
     )
     primary_cif_controls_view: PrimaryCifControlsViewState = field(
         default_factory=PrimaryCifControlsViewState
+    )
+    cif_weight_controls_view: CifWeightControlsViewState = field(
+        default_factory=CifWeightControlsViewState
     )
     display_controls_state: DisplayControlsState = field(
         default_factory=DisplayControlsState

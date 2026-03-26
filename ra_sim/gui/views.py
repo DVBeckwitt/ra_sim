@@ -16,6 +16,7 @@ from .state import (
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
+    CifWeightControlsViewState,
     DisplayControlsViewState,
     FiniteStackControlsViewState,
     GeometryOverlayActionsViewState,
@@ -177,6 +178,49 @@ def create_primary_cif_controls(
     view_state.apply_button = apply_button
     view_state.diffuse_ht_button = diffuse_ht_button
     view_state.export_diffuse_ht_button = export_diffuse_ht_button
+
+
+def create_cif_weight_controls(
+    *,
+    parent: tk.Misc,
+    view_state: CifWeightControlsViewState,
+    has_second_cif: bool,
+    weight1: float,
+    weight2: float,
+) -> None:
+    """Create the optional CIF-weight sliders and store their refs/vars."""
+
+    weight1_var = tk.DoubleVar(value=float(weight1))
+    weight2_var = tk.DoubleVar(value=float(weight2))
+    weight1_scale = None
+    weight2_scale = None
+    frame = None
+
+    if has_second_cif:
+        frame = CollapsibleFrame(parent, text="CIF Weights")
+        frame.pack(fill=tk.X, padx=5, pady=5)
+        weight1_var, weight1_scale = create_slider(
+            "CIF1 Weight",
+            0.0,
+            1.0,
+            float(weight1),
+            0.01,
+            frame.frame,
+        )
+        weight2_var, weight2_scale = create_slider(
+            "CIF2 Weight",
+            0.0,
+            1.0,
+            float(weight2),
+            0.01,
+            frame.frame,
+        )
+
+    view_state.frame = frame
+    view_state.weight1_var = weight1_var
+    view_state.weight1_scale = weight1_scale
+    view_state.weight2_var = weight2_var
+    view_state.weight2_scale = weight2_scale
 
 
 def _find_slider_entry(slider: object | None) -> object | None:

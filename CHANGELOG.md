@@ -30,6 +30,7 @@
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.
   - Moved the primary-CIF / diffuse-HT control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
+  - Moved the optional CIF-weight control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers and reused a controller helper for weighted intensity recompute.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.

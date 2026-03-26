@@ -5639,6 +5639,7 @@ analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState(
 display_controls_state = gui_state.DisplayControlsState()
 display_controls_view_state = gui_state.DisplayControlsViewState()
 primary_cif_controls_view_state = gui_state.PrimaryCifControlsViewState()
+cif_weight_controls_view_state = gui_state.CifWeightControlsViewState()
 structure_factor_pruning_controls_view_state = (
     gui_state.StructureFactorPruningControlsViewState()
 )
@@ -16633,34 +16634,35 @@ _refresh_geometry_fit_theta_checkbox_label()
 
 # Slider controlling contribution of the first CIF file, only if a second CIF
 # was provided.
+gui_views.create_cif_weight_controls(
+    parent=right_col,
+    view_state=cif_weight_controls_view_state,
+    has_second_cif=bool(has_second_cif),
+    weight1=float(weight1),
+    weight2=float(weight2),
+)
+weight1_var = cif_weight_controls_view_state.weight1_var
+weight2_var = cif_weight_controls_view_state.weight2_var
+if weight1_var is None or weight2_var is None:
+    raise RuntimeError("CIF weight controls did not create slider variables.")
+
+
+def update_weights(*args):
+    """Recompute intensities using the current CIF weights."""
+    global intensities, df_summary
+    intensities = gui_controllers.combine_cif_weighted_intensities(
+        intensities_cif1,
+        intensities_cif2,
+        weight1=weight1_var.get(),
+        weight2=weight2_var.get(),
+    )
+    df_summary['Intensity'] = intensities
+    schedule_update()
+
+
 if has_second_cif:
-    weights_frame = CollapsibleFrame(right_col, text='CIF Weights')
-    weights_frame.pack(fill=tk.X, padx=5, pady=5)
-    weight1_var, _ = make_slider(
-        'CIF1 Weight', 0.0, 1.0, weight1, 0.01, weights_frame.frame
-    )
-    weight2_var, _ = make_slider(
-        'CIF2 Weight', 0.0, 1.0, weight2, 0.01, weights_frame.frame
-    )
-
-    def update_weights(*args):
-        """Recompute intensities using the current CIF weights."""
-        global intensities, df_summary
-        w1 = weight1_var.get()
-        w2 = weight2_var.get()
-        intensities = w1 * intensities_cif1 + w2 * intensities_cif2
-        max_I = intensities.max() if intensities.size else 0.0
-        if max_I > 0:
-            intensities = intensities * (100.0 / max_I)
-
-        df_summary['Intensity'] = intensities
-        schedule_update()
-
     weight1_var.trace_add('write', update_weights)
     weight2_var.trace_add('write', update_weights)
-else:
-    weight1_var = tk.DoubleVar(value=1.0)
-    weight2_var = tk.DoubleVar(value=0.0)
 # ---------------------------------------------------------------------------
 #  OCCUPANCY CONTROLS: one control per structure site in the loaded CIF.
 # ---------------------------------------------------------------------------
@@ -16830,12 +16832,12 @@ def _rebuild_diffraction_inputs(
         int2 = {tuple(h): v for h, v in zip(m2, i2)}
         intensities_cif1 = np.array([int1.get(tuple(h), 0.0) for h in miller])
         intensities_cif2 = np.array([int2.get(tuple(h), 0.0) for h in miller])
-        w1 = weight1_var.get()
-        w2 = weight2_var.get()
-        intensities = w1 * intensities_cif1 + w2 * intensities_cif2
-        max_I = intensities.max() if intensities.size else 0.0
-        if max_I > 0:
-            intensities = intensities * (100.0 / max_I)
+        intensities = gui_controllers.combine_cif_weighted_intensities(
+            intensities_cif1,
+            intensities_cif2,
+            weight1=weight1_var.get(),
+            weight2=weight2_var.get(),
+        )
 
         SIM_MILLER1_ALL = np.asarray(m1, dtype=np.float64)
         SIM_INTENS1_ALL = np.asarray(i1, dtype=np.float64)
