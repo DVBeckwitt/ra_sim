@@ -3,12 +3,71 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from . import background as gui_background
 from . import views as gui_views
+
+
+@dataclass
+class BackgroundRuntimeBindings:
+    """Runtime callbacks and shared state used by background-file workflows."""
+
+    view_state: object
+    background_state: object
+    image_size: int
+    display_rotate_k: int
+    read_osc: Callable[[str], object]
+    current_background_theta_values: Callable[[], Sequence[object]]
+    background_theta_for_index: Callable[[int], object]
+    geometry_fit_uses_shared_theta_offset: Callable[[], bool]
+    geometry_manual_pairs_for_index: Callable[[int], Sequence[object]]
+    geometry_manual_pair_group_count: Callable[[int], int]
+    current_geometry_fit_background_indices: Callable[[], Sequence[object]]
+    sync_background_runtime_state: Callable[[], None]
+    replace_geometry_manual_pairs_by_background: Callable[[dict], None]
+    invalidate_geometry_manual_pick_cache: Callable[[], None]
+    clear_geometry_manual_undo_stack: Callable[[], None]
+    clear_geometry_fit_undo_stack: Callable[[], None]
+    set_geometry_manual_pick_mode: Callable[[bool], None]
+    set_background_display_data: Callable[[object], None]
+    update_background_slider_defaults: Callable[[object], None]
+    sync_background_theta_controls: Callable[[], None]
+    sync_geometry_fit_background_selection: Callable[[], None]
+    clear_geometry_pick_artists: Callable[[], None]
+    sync_theta_initial_to_background: Callable[[int], None] | None = None
+    render_current_geometry_manual_pairs: Callable[[], None] | None = None
+    schedule_update: Callable[[], None] | None = None
+    set_status_text: Callable[[str], None] | None = None
+    file_dialog_dir: object | None = None
+    askopenfilenames: Callable[..., object] | None = None
+
+
+@dataclass(frozen=True)
+class BackgroundRuntimeCallbacks:
+    """Bound callbacks for runtime background-file workflows."""
+
+    refresh_status: Callable[[], str]
+    load_files: Callable[[Sequence[object], int], dict[str, object]]
+    browse_files: Callable[[], bool]
+    switch_background: Callable[[], bool]
+
+
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
+
+
+def _set_status_text(set_status_text: Callable[[str], None] | None, text: str) -> None:
+    if callable(set_status_text):
+        set_status_text(str(text))
 
 
 def _replace_list(target: list, values: Sequence[object] | None) -> list:
@@ -258,6 +317,91 @@ def set_background_file_status_from_state(
     return status_text
 
 
+def make_runtime_background_bindings_factory(
+    *,
+    view_state,
+    background_state,
+    image_size: int,
+    display_rotate_k: int,
+    read_osc: Callable[[str], object],
+    current_background_theta_values: Callable[[], Sequence[object]],
+    background_theta_for_index: Callable[[int], object],
+    geometry_fit_uses_shared_theta_offset: Callable[[], bool],
+    geometry_manual_pairs_for_index: Callable[[int], Sequence[object]],
+    geometry_manual_pair_group_count: Callable[[int], int],
+    current_geometry_fit_background_indices: Callable[[], Sequence[object]],
+    sync_background_runtime_state: Callable[[], None],
+    replace_geometry_manual_pairs_by_background: Callable[[dict], None],
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    clear_geometry_manual_undo_stack: Callable[[], None],
+    clear_geometry_fit_undo_stack: Callable[[], None],
+    set_geometry_manual_pick_mode: Callable[[bool], None],
+    set_background_display_data: Callable[[object], None],
+    update_background_slider_defaults: Callable[[object], None],
+    sync_background_theta_controls: Callable[[], None],
+    sync_geometry_fit_background_selection: Callable[[], None],
+    clear_geometry_pick_artists: Callable[[], None],
+    sync_theta_initial_to_background: Callable[[int], None] | None = None,
+    render_current_geometry_manual_pairs: Callable[[], None] | None = None,
+    schedule_update_factory: object | None = None,
+    set_status_text_factory: object | None = None,
+    file_dialog_dir_factory: object | None = None,
+    askopenfilenames: Callable[..., object] | None = None,
+) -> Callable[[], BackgroundRuntimeBindings]:
+    """Return a zero-arg factory for live background runtime bindings."""
+
+    def _build_bindings() -> BackgroundRuntimeBindings:
+        return BackgroundRuntimeBindings(
+            view_state=view_state,
+            background_state=background_state,
+            image_size=int(image_size),
+            display_rotate_k=int(display_rotate_k),
+            read_osc=read_osc,
+            current_background_theta_values=current_background_theta_values,
+            background_theta_for_index=background_theta_for_index,
+            geometry_fit_uses_shared_theta_offset=geometry_fit_uses_shared_theta_offset,
+            geometry_manual_pairs_for_index=geometry_manual_pairs_for_index,
+            geometry_manual_pair_group_count=geometry_manual_pair_group_count,
+            current_geometry_fit_background_indices=current_geometry_fit_background_indices,
+            sync_background_runtime_state=sync_background_runtime_state,
+            replace_geometry_manual_pairs_by_background=replace_geometry_manual_pairs_by_background,
+            invalidate_geometry_manual_pick_cache=invalidate_geometry_manual_pick_cache,
+            clear_geometry_manual_undo_stack=clear_geometry_manual_undo_stack,
+            clear_geometry_fit_undo_stack=clear_geometry_fit_undo_stack,
+            set_geometry_manual_pick_mode=set_geometry_manual_pick_mode,
+            set_background_display_data=set_background_display_data,
+            update_background_slider_defaults=update_background_slider_defaults,
+            sync_background_theta_controls=sync_background_theta_controls,
+            sync_geometry_fit_background_selection=sync_geometry_fit_background_selection,
+            clear_geometry_pick_artists=clear_geometry_pick_artists,
+            sync_theta_initial_to_background=sync_theta_initial_to_background,
+            render_current_geometry_manual_pairs=render_current_geometry_manual_pairs,
+            schedule_update=_resolve_runtime_value(schedule_update_factory),
+            set_status_text=_resolve_runtime_value(set_status_text_factory),
+            file_dialog_dir=_resolve_runtime_value(file_dialog_dir_factory),
+            askopenfilenames=askopenfilenames,
+        )
+
+    return _build_bindings
+
+
+def refresh_runtime_background_file_status(
+    bindings: BackgroundRuntimeBindings,
+) -> str:
+    """Refresh the runtime background-file status line from live bindings."""
+
+    return set_background_file_status_from_state(
+        view_state=bindings.view_state,
+        background_state=bindings.background_state,
+        current_background_theta_values=bindings.current_background_theta_values,
+        background_theta_for_index=bindings.background_theta_for_index,
+        geometry_fit_uses_shared_theta_offset=bindings.geometry_fit_uses_shared_theta_offset,
+        geometry_manual_pairs_for_index=bindings.geometry_manual_pairs_for_index,
+        geometry_manual_pair_group_count=bindings.geometry_manual_pair_group_count,
+        current_geometry_fit_background_indices=bindings.current_geometry_fit_background_indices,
+    )
+
+
 def load_background_files_with_side_effects(
     background_state,
     file_paths: Sequence[object],
@@ -308,6 +452,39 @@ def load_background_files_with_side_effects(
     return updated
 
 
+def load_runtime_background_files(
+    bindings: BackgroundRuntimeBindings,
+    file_paths: Sequence[object],
+    *,
+    select_index: int = 0,
+) -> dict[str, object]:
+    """Load runtime background files and apply the configured side effects."""
+
+    return load_background_files_with_side_effects(
+        bindings.background_state,
+        file_paths,
+        image_size=int(bindings.image_size),
+        display_rotate_k=int(bindings.display_rotate_k),
+        read_osc=bindings.read_osc,
+        sync_background_runtime_state=bindings.sync_background_runtime_state,
+        replace_geometry_manual_pairs_by_background=bindings.replace_geometry_manual_pairs_by_background,
+        invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
+        clear_geometry_manual_undo_stack=bindings.clear_geometry_manual_undo_stack,
+        clear_geometry_fit_undo_stack=bindings.clear_geometry_fit_undo_stack,
+        set_geometry_manual_pick_mode=bindings.set_geometry_manual_pick_mode,
+        set_background_display_data=bindings.set_background_display_data,
+        update_background_slider_defaults=bindings.update_background_slider_defaults,
+        sync_background_theta_controls=bindings.sync_background_theta_controls,
+        sync_geometry_fit_background_selection=bindings.sync_geometry_fit_background_selection,
+        clear_geometry_pick_artists=bindings.clear_geometry_pick_artists,
+        refresh_background_file_status=lambda: refresh_runtime_background_file_status(
+            bindings
+        ),
+        schedule_update=bindings.schedule_update or (lambda: None),
+        select_index=int(select_index),
+    )
+
+
 def switch_background_with_side_effects(
     background_state,
     *,
@@ -345,3 +522,97 @@ def switch_background_with_side_effects(
     render_current_geometry_manual_pairs()
     schedule_update()
     return updated
+
+
+def switch_runtime_background(
+    bindings: BackgroundRuntimeBindings,
+) -> bool:
+    """Advance the runtime background image and report status text on failure."""
+
+    if not bindings.background_state.osc_files:
+        _set_status_text(bindings.set_status_text, "No background images loaded.")
+        return False
+
+    try:
+        switch_background_with_side_effects(
+            bindings.background_state,
+            display_rotate_k=int(bindings.display_rotate_k),
+            read_osc=bindings.read_osc,
+            sync_background_runtime_state=bindings.sync_background_runtime_state,
+            invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
+            clear_geometry_manual_undo_stack=bindings.clear_geometry_manual_undo_stack,
+            clear_geometry_fit_undo_stack=bindings.clear_geometry_fit_undo_stack,
+            sync_theta_initial_to_background=bindings.sync_theta_initial_to_background,
+            set_background_display_data=bindings.set_background_display_data,
+            update_background_slider_defaults=bindings.update_background_slider_defaults,
+            refresh_background_file_status=lambda: refresh_runtime_background_file_status(
+                bindings
+            ),
+            render_current_geometry_manual_pairs=(
+                bindings.render_current_geometry_manual_pairs or (lambda: None)
+            ),
+            schedule_update=bindings.schedule_update or (lambda: None),
+        )
+    except Exception as exc:
+        _set_status_text(
+            bindings.set_status_text,
+            f"Failed to switch background: {exc}",
+        )
+        return False
+    return True
+
+
+def browse_runtime_background_files(
+    bindings: BackgroundRuntimeBindings,
+) -> bool:
+    """Open the runtime background-file picker and load the chosen files."""
+
+    if not callable(bindings.askopenfilenames):
+        _set_status_text(bindings.set_status_text, "Background file picker unavailable.")
+        return False
+
+    initial_dir = background_file_dialog_initial_dir(
+        bindings.background_state.osc_files,
+        bindings.background_state.current_background_index,
+        bindings.file_dialog_dir or Path.cwd(),
+    )
+    selected = bindings.askopenfilenames(
+        title="Select Background OSC Files",
+        initialdir=initial_dir,
+        filetypes=[("OSC files", "*.osc *.OSC"), ("All files", "*.*")],
+    )
+    if not selected:
+        return False
+
+    try:
+        load_runtime_background_files(bindings, selected, select_index=0)
+        _set_status_text(
+            bindings.set_status_text,
+            f"Loaded {len(bindings.background_state.osc_files)} background file(s).",
+        )
+    except Exception as exc:
+        _set_status_text(
+            bindings.set_status_text,
+            f"Failed to load background files: {exc}",
+        )
+        return False
+    return True
+
+
+def make_runtime_background_callbacks(
+    bindings_factory: Callable[[], BackgroundRuntimeBindings],
+) -> BackgroundRuntimeCallbacks:
+    """Return bound callbacks for the runtime background-file workflow."""
+
+    return BackgroundRuntimeCallbacks(
+        refresh_status=lambda: refresh_runtime_background_file_status(
+            bindings_factory()
+        ),
+        load_files=lambda file_paths, select_index=0: load_runtime_background_files(
+            bindings_factory(),
+            file_paths,
+            select_index=int(select_index),
+        ),
+        browse_files=lambda: browse_runtime_background_files(bindings_factory()),
+        switch_background=lambda: switch_runtime_background(bindings_factory()),
+    )

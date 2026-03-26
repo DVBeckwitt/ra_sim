@@ -318,8 +318,11 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     transition, file-dialog initial-dir selection, background status refresh,
     and the post-load/post-switch redraw/reset sequencing used by the live
     GUI.
-  - `ra_sim.gui.runtime` now delegates that workflow through the extracted
-    module and keeps only the file-dialog plus progress/error text inline.
+  - `ra_sim.gui.background_manager` now also owns the zero-arg runtime
+    binding/callback bundle for background status refresh plus browse/load/
+    switch actions.
+  - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
+    plus the remaining call sites around that workflow.
 - HKL lookup / selected-peak workflow extraction has advanced.
   - `ra_sim.gui.peak_selection` now owns HKL lookup parsing, selected-peak
     summary text, degenerate-HKL lookup, selection-by-index/HKL,
@@ -500,8 +503,8 @@ What is left:
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
   bound factory/callback bundle plus a few call sites around the extracted
   manager/view helpers.
-- The remaining background runtime code is now mostly file-dialog plumbing and
-  progress/error text around the extracted background manager.
+- The remaining background runtime code is now mostly one bound callback
+  bundle plus a few call sites around the extracted background manager.
 - The remaining selected-peak runtime code is now mostly cross-feature
   event-dispatch and click-mode arbitration around the extracted peak-
   selection helpers.

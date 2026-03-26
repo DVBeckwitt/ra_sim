@@ -1151,7 +1151,7 @@ def _sync_background_theta_controls(
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
         theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=_set_background_file_status_text,
+        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
         schedule_update=schedule_update,
         preserve_existing=preserve_existing,
         trigger_update=trigger_update,
@@ -1175,7 +1175,7 @@ def _apply_background_theta_metadata(
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
         theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=_set_background_file_status_text,
+        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
         schedule_update=schedule_update,
         progress_label=globals().get("progress_label"),
         trigger_update=trigger_update,
@@ -1200,7 +1200,7 @@ def _apply_geometry_fit_background_selection(
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
         theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=_set_background_file_status_text,
+        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
         schedule_update=schedule_update,
         progress_label_geometry=globals().get("progress_label_geometry"),
         trigger_update=trigger_update,
@@ -1221,7 +1221,7 @@ def _sync_geometry_fit_background_selection(*, preserve_existing: bool = True) -
         geometry_fit_background_selection_var=geometry_fit_background_selection_var,
         fit_theta_checkbutton=fit_theta_checkbutton,
         theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=_set_background_file_status_text,
+        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
         schedule_update=schedule_update,
         progress_label_geometry=globals().get("progress_label_geometry"),
         preserve_existing=preserve_existing,
@@ -1616,7 +1616,7 @@ def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> boo
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
         draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
         update_button_label_fn=_update_geometry_manual_pick_button_label,
-        set_background_file_status_text_fn=_set_background_file_status_text,
+        set_background_file_status_text_fn=lambda: background_runtime_callbacks.refresh_status(),
         pair_group_count=_geometry_manual_pair_group_count,
         set_status_text=lambda text: progress_label_geometry.config(text=text),
         update_status=update_status,
@@ -2083,7 +2083,7 @@ def _undo_last_geometry_manual_placement() -> None:
     _clear_geometry_manual_preview_artists(redraw=False)
     _render_current_geometry_manual_pairs(update_status=True)
     _update_geometry_manual_pick_button_label()
-    _set_background_file_status_text()
+    background_runtime_callbacks.refresh_status()
     progress_label_geometry.config(text="Undid the last manual placement change.")
 
 
@@ -2266,7 +2266,7 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
             max_display_markers=max_display_markers,
         )
 
-    _set_background_file_status_text()
+    background_runtime_callbacks.refresh_status()
     _update_geometry_manual_pick_button_label()
 
 
@@ -2499,7 +2499,7 @@ def _apply_geometry_manual_pairs_rows(
     _clear_geometry_fit_undo_stack()
     _render_current_geometry_manual_pairs(update_status=False)
     _update_geometry_manual_pick_button_label()
-    _set_background_file_status_text()
+    background_runtime_callbacks.refresh_status()
     return int(len(matched_backgrounds)), int(pair_count), warnings
 
 
@@ -2541,9 +2541,9 @@ def _apply_geometry_manual_pairs_snapshot(
                 ]
                 if not missing_paths:
                     try:
-                        _load_background_files(
+                        background_runtime_callbacks.load_files(
                             background_paths,
-                            select_index=int(snapshot.get("current_background_index", 0)),
+                            int(snapshot.get("current_background_index", 0)),
                         )
                     except Exception as exc:
                         warnings.append(f"background reload: {exc}")
@@ -3114,7 +3114,7 @@ def _clear_current_geometry_manual_pairs() -> None:
     _set_geometry_manual_pairs_for_index(background_runtime_state.current_background_index, [])
     _clear_geometry_pick_artists()
     _update_geometry_manual_pick_button_label()
-    _set_background_file_status_text()
+    background_runtime_callbacks.refresh_status()
     progress_label_geometry.config(text="Cleared saved geometry pairs for the current background image.")
 
 
@@ -7617,11 +7617,13 @@ def toggle_background():
     schedule_update()
 
 
-def _set_background_file_status_text():
-    """Refresh the background-file status line shown in the GUI."""
-    gui_background_manager.set_background_file_status_from_state(
+background_runtime_bindings_factory = (
+    gui_background_manager.make_runtime_background_bindings_factory(
         view_state=workspace_panels_view_state,
         background_state=background_runtime_state,
+        image_size=image_size,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        read_osc=read_osc,
         current_background_theta_values=(
             lambda: _current_background_theta_values(strict_count=False)
         ),
@@ -7634,17 +7636,6 @@ def _set_background_file_status_text():
         current_geometry_fit_background_indices=(
             lambda: _current_geometry_fit_background_indices(strict=False)
         ),
-    )
-
-
-def _load_background_files(file_paths, *, select_index=0):
-    """Replace background images from selected OSC file paths."""
-    gui_background_manager.load_background_files_with_side_effects(
-        background_runtime_state,
-        file_paths,
-        image_size=image_size,
-        display_rotate_k=DISPLAY_ROTATE_K,
-        read_osc=read_osc,
         sync_background_runtime_state=_sync_background_runtime_state,
         replace_geometry_manual_pairs_by_background=_replace_geometry_manual_pairs_by_background,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
@@ -7670,78 +7661,34 @@ def _load_background_files(file_paths, *, select_index=0):
             )
         ),
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
-        refresh_background_file_status=_set_background_file_status_text,
-        schedule_update=schedule_update,
-        select_index=select_index,
-    )
-
-
-def _browse_background_files():
-    """Choose one or more OSC backgrounds and load them into the GUI."""
-
-    initial_dir = gui_background_manager.background_file_dialog_initial_dir(
-        background_runtime_state.osc_files,
-        background_runtime_state.current_background_index,
-        get_dir("file_dialog_dir"),
-    )
-
-    selected = filedialog.askopenfilenames(
-        title="Select Background OSC Files",
-        initialdir=initial_dir,
-        filetypes=[("OSC files", "*.osc *.OSC"), ("All files", "*.*")],
-    )
-    if not selected:
-        return
-
-    try:
-        _load_background_files(selected, select_index=0)
-        progress_label.config(text=f"Loaded {len(background_runtime_state.osc_files)} background file(s).")
-    except Exception as exc:
-        progress_label.config(text=f"Failed to load background files: {exc}")
-
-
-def switch_background():
-    if not background_runtime_state.osc_files:
-        progress_label.config(text="No background images loaded.")
-        return
-
-    try:
-        gui_background_manager.switch_background_with_side_effects(
-            background_runtime_state,
-            display_rotate_k=DISPLAY_ROTATE_K,
-            read_osc=read_osc,
-            sync_background_runtime_state=_sync_background_runtime_state,
-            invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-            clear_geometry_manual_undo_stack=_clear_geometry_manual_undo_stack,
-            clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
-            sync_theta_initial_to_background=(
-                (
-                    lambda idx: theta_initial_var.set(
-                        _background_theta_for_index(
-                            idx,
-                            strict_count=False,
-                        )
+        sync_theta_initial_to_background=(
+            (
+                lambda idx: theta_initial_var.set(
+                    _background_theta_for_index(
+                        idx,
+                        strict_count=False,
                     )
                 )
-                if "theta_initial_var" in globals() and theta_initial_var is not None
-                else None
-            ),
-            set_background_display_data=background_display.set_data,
-            update_background_slider_defaults=(
-                lambda image: _update_background_slider_defaults(
-                    image,
-                    reset_override=True,
-                )
-            ),
-            refresh_background_file_status=_set_background_file_status_text,
-            render_current_geometry_manual_pairs=(
-                lambda: _render_current_geometry_manual_pairs(update_status=False)
-            ),
-            schedule_update=schedule_update,
-        )
-    except Exception as exc:
-        progress_label.config(text=f"Failed to switch background: {exc}")
-        return
+            )
+            if "theta_initial_var" in globals() and theta_initial_var is not None
+            else None
+        ),
+        render_current_geometry_manual_pairs=(
+            lambda: _render_current_geometry_manual_pairs(update_status=False)
+        ),
+        schedule_update_factory=schedule_update,
+        set_status_text_factory=lambda: (
+            (lambda text: progress_label.config(text=text))
+            if "progress_label" in globals()
+            else None
+        ),
+        file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
+        askopenfilenames=filedialog.askopenfilenames,
+    )
+)
+background_runtime_callbacks = gui_background_manager.make_runtime_background_callbacks(
+    background_runtime_bindings_factory
+)
 
 def reset_to_defaults():
     _clear_geometry_fit_undo_stack()
@@ -7856,17 +7803,17 @@ gui_views.populate_stacked_button_group(
     workspace_panels_view_state.workspace_actions_frame,
     [
         ("Toggle Background", toggle_background),
-        ("Switch Background", switch_background),
+        ("Switch Background", background_runtime_callbacks.switch_background),
     ],
 )
 
 gui_views.create_background_file_controls(
     parent=workspace_panels_view_state.workspace_backgrounds_frame,
     view_state=workspace_panels_view_state,
-    on_load_backgrounds=_browse_background_files,
+    on_load_backgrounds=background_runtime_callbacks.browse_files,
     status_text="",
 )
-_set_background_file_status_text()
+background_runtime_callbacks.refresh_status()
 
 gui_views.create_background_theta_controls(
     parent=workspace_panels_view_state.workspace_backgrounds_frame,
@@ -8248,9 +8195,9 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             snapshot.get("files", {}),
             apply_primary_cif_path=_apply_primary_cif_path,
             load_background_files=(
-                lambda file_paths, select_index: _load_background_files(
+                lambda file_paths, select_index: background_runtime_callbacks.load_files(
                     file_paths,
-                    select_index=select_index,
+                    select_index,
                 )
             ),
         )
@@ -8341,7 +8288,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         )
     _sync_finite_controls()
     _apply_geometry_fit_background_selection(trigger_update=False)
-    _set_background_file_status_text()
+    background_runtime_callbacks.refresh_status()
     _update_geometry_preview_exclude_button_label()
     geometry_q_group_runtime_callbacks.refresh_window()
     _update_hkl_pick_button_label()
@@ -11038,7 +10985,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             theta_initial_var.set(
                 _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
             )
-            _set_background_file_status_text()
+            background_runtime_callbacks.refresh_status()
 
         simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
         simulation_runtime_state.profile_cache.update(mosaic_params)
@@ -11940,7 +11887,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     theta_initial_var.set(
                         _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
                     )
-                    _set_background_file_status_text()
+                    background_runtime_callbacks.refresh_status()
 
                 # Keep the cached profile in sync with the fitted geometry so the
                 # next simulation uses the updated parameters even when diagnostics
@@ -12869,7 +12816,7 @@ def on_fit_geometry_click():
             theta_initial_var.set(
                 _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
             )
-        _set_background_file_status_text()
+        background_runtime_callbacks.refresh_status()
         _update_geometry_manual_pick_button_label()
 
         simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
