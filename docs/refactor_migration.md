@@ -267,11 +267,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     extracted module and keeps only the file-dialog and live-preview/status
     side effects inline
 - Background-file workflow extraction has also advanced:
-  - background-file state transition, file-dialog initial-dir selection, and
-    status-text assembly now live in `ra_sim.gui.background_manager`
+  - background-file state transition, file-dialog initial-dir selection,
+    background status refresh, and the post-load/post-switch redraw/reset
+    sequencing now live in `ra_sim.gui.background_manager`
   - `ra_sim.gui.runtime` now delegates that workflow through the extracted
-    module and keeps only the file-dialog, redraw/reset, and other
-    cross-feature side effects inline
+    module and keeps only the file-dialog plus progress/error text inline
 - HKL lookup / selected-peak workflow extraction has also advanced:
   - HKL lookup parsing, selected-peak summary text, degenerate-HKL lookup,
     selection-by-index/HKL, and clear-selection state transitions now live in
@@ -305,8 +305,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining Bragg-Qr manager runtime code is now mostly thin delegate
   wrappers plus the live filter-apply callbacks around the extracted manager
   helpers.
-- The remaining background runtime code is now mostly redraw/reset work and
-  other cross-feature side effects around the extracted background manager.
+- The remaining background runtime code is now mostly file-dialog plumbing and
+  progress/error text around the extracted background manager.
 - The remaining selected-peak runtime code is now mostly canvas-click
   plumbing and Bragg/Ewald intersection plotting around the extracted peak
   selection helpers.

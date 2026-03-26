@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
 
 from . import background as gui_background
+from . import views as gui_views
 
 
 def _replace_list(target: list, values: Sequence[object] | None) -> list:
@@ -176,3 +177,171 @@ def build_background_file_status_text(
             status_text += f" | fit=bg {normalized_fit_indices[0] + 1}"
 
     return status_text
+
+
+def set_background_file_status_from_state(
+    *,
+    view_state,
+    background_state,
+    current_background_theta_values: Callable[[], Sequence[object]],
+    background_theta_for_index: Callable[[int], object],
+    geometry_fit_uses_shared_theta_offset: Callable[[], bool],
+    geometry_manual_pairs_for_index: Callable[[int], Sequence[object]],
+    geometry_manual_pair_group_count: Callable[[int], int],
+    current_geometry_fit_background_indices: Callable[[], Sequence[object]],
+) -> str:
+    """Refresh the GUI background-file status line from shared runtime state."""
+
+    if getattr(view_state, "background_file_status_var", None) is None:
+        return ""
+
+    theta_base = None
+    theta_effective = None
+    use_shared_theta_offset = False
+    try:
+        theta_values = list(current_background_theta_values())
+        if theta_values:
+            idx = int(background_state.current_background_index) % max(
+                1,
+                len(background_state.osc_files),
+            )
+            theta_base = float(theta_values[idx])
+            theta_effective = float(background_theta_for_index(idx))
+            use_shared_theta_offset = bool(geometry_fit_uses_shared_theta_offset())
+    except Exception:
+        pass
+
+    pair_count = 0
+    group_count = 0
+    sigma_values: list[float] = []
+    try:
+        idx = int(background_state.current_background_index) % max(
+            1,
+            len(background_state.osc_files),
+        )
+        pair_rows = list(geometry_manual_pairs_for_index(idx) or ())
+        pair_count = len(pair_rows)
+        group_count = int(geometry_manual_pair_group_count(idx))
+        for entry in pair_rows:
+            if not isinstance(entry, Mapping):
+                continue
+            try:
+                sigma_value = float(entry.get("sigma_px", np.nan))
+            except Exception:
+                continue
+            if np.isfinite(sigma_value):
+                sigma_values.append(sigma_value)
+    except Exception:
+        pass
+
+    fit_indices: list[int] = []
+    try:
+        fit_indices = [
+            int(raw_idx)
+            for raw_idx in current_geometry_fit_background_indices() or ()
+        ]
+    except Exception:
+        fit_indices = []
+
+    status_text = build_background_file_status_text(
+        osc_files=background_state.osc_files,
+        current_background_index=background_state.current_background_index,
+        theta_base=theta_base,
+        theta_effective=theta_effective,
+        use_shared_theta_offset=use_shared_theta_offset,
+        pair_count=pair_count,
+        group_count=group_count,
+        sigma_values=sigma_values,
+        fit_indices=fit_indices,
+    )
+    gui_views.set_background_file_status_text(view_state, status_text)
+    return status_text
+
+
+def load_background_files_with_side_effects(
+    background_state,
+    file_paths: Sequence[object],
+    *,
+    image_size: int,
+    display_rotate_k: int,
+    read_osc: Callable[[str], object],
+    sync_background_runtime_state: Callable[[], None],
+    replace_geometry_manual_pairs_by_background: Callable[[dict], None],
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    clear_geometry_manual_undo_stack: Callable[[], None],
+    clear_geometry_fit_undo_stack: Callable[[], None],
+    set_geometry_manual_pick_mode: Callable[[bool], None],
+    set_background_display_data: Callable[[object], None],
+    update_background_slider_defaults: Callable[[object], None],
+    sync_background_theta_controls: Callable[[], None],
+    sync_geometry_fit_background_selection: Callable[[], None],
+    clear_geometry_pick_artists: Callable[[], None],
+    refresh_background_file_status: Callable[[], None],
+    schedule_update: Callable[[], None],
+    select_index: int = 0,
+) -> dict[str, object]:
+    """Load background files and apply the dependent GUI side effects."""
+
+    updated = load_background_files(
+        background_state,
+        file_paths,
+        image_size=image_size,
+        display_rotate_k=display_rotate_k,
+        read_osc=read_osc,
+        select_index=select_index,
+    )
+    sync_background_runtime_state()
+    replace_geometry_manual_pairs_by_background({})
+    invalidate_geometry_manual_pick_cache()
+    clear_geometry_manual_undo_stack()
+    clear_geometry_fit_undo_stack()
+    set_geometry_manual_pick_mode(False)
+
+    current_display = background_state.current_background_display
+    set_background_display_data(current_display)
+    update_background_slider_defaults(current_display)
+    sync_background_theta_controls()
+    sync_geometry_fit_background_selection()
+    clear_geometry_pick_artists()
+    refresh_background_file_status()
+    schedule_update()
+    return updated
+
+
+def switch_background_with_side_effects(
+    background_state,
+    *,
+    display_rotate_k: int,
+    read_osc: Callable[[str], object],
+    sync_background_runtime_state: Callable[[], None],
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    clear_geometry_manual_undo_stack: Callable[[], None],
+    clear_geometry_fit_undo_stack: Callable[[], None],
+    sync_theta_initial_to_background: Callable[[int], None] | None,
+    set_background_display_data: Callable[[object], None],
+    update_background_slider_defaults: Callable[[object], None],
+    refresh_background_file_status: Callable[[], None],
+    render_current_geometry_manual_pairs: Callable[[], None],
+    schedule_update: Callable[[], None],
+) -> dict[str, object]:
+    """Switch backgrounds and apply the dependent GUI side effects."""
+
+    updated = switch_background(
+        background_state,
+        display_rotate_k=display_rotate_k,
+        read_osc=read_osc,
+    )
+    sync_background_runtime_state()
+    invalidate_geometry_manual_pick_cache()
+    clear_geometry_manual_undo_stack()
+    clear_geometry_fit_undo_stack()
+    if sync_theta_initial_to_background is not None:
+        sync_theta_initial_to_background(int(background_state.current_background_index))
+
+    current_display = background_state.current_background_display
+    set_background_display_data(current_display)
+    update_background_slider_defaults(current_display)
+    refresh_background_file_status()
+    render_current_geometry_manual_pairs()
+    schedule_update()
+    return updated

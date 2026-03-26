@@ -8284,93 +8284,61 @@ def toggle_background():
 
 def _set_background_file_status_text():
     """Refresh the background-file status line shown in the GUI."""
-
-    if workspace_panels_view_state.background_file_status_var is None:
-        return
-    theta_base = None
-    theta_effective = None
-    use_shared_theta_offset = False
-    try:
-        theta_values = _current_background_theta_values(strict_count=False)
-        if theta_values:
-            idx = int(background_runtime_state.current_background_index) % max(
-                1,
-                len(background_runtime_state.osc_files),
-            )
-            theta_base = float(theta_values[idx])
-            theta_effective = float(
-                _background_theta_for_index(idx, strict_count=False)
-            )
-            use_shared_theta_offset = _geometry_fit_uses_shared_theta_offset()
-    except Exception:
-        pass
-
-    pair_count = 0
-    group_count = 0
-    sigma_values: list[float] = []
-    try:
-        idx = int(background_runtime_state.current_background_index) % max(
-            1,
-            len(background_runtime_state.osc_files),
-        )
-        pair_rows = _geometry_manual_pairs_for_index(idx)
-        pair_count = len(pair_rows)
-        group_count = _geometry_manual_pair_group_count(idx)
-        sigma_values = [
-            float(entry.get("sigma_px", np.nan))
-            for entry in pair_rows
-            if np.isfinite(float(entry.get("sigma_px", np.nan)))
-        ]
-    except Exception:
-        pass
-
-    fit_indices: list[int] = []
-    try:
-        fit_indices = _current_geometry_fit_background_indices(strict=False)
-    except Exception:
-        pass
-
-    gui_views.set_background_file_status_text(
-        workspace_panels_view_state,
-        gui_background_manager.build_background_file_status_text(
-            osc_files=background_runtime_state.osc_files,
-            current_background_index=background_runtime_state.current_background_index,
-            theta_base=theta_base,
-            theta_effective=theta_effective,
-            use_shared_theta_offset=use_shared_theta_offset,
-            pair_count=pair_count,
-            group_count=group_count,
-            sigma_values=sigma_values,
-            fit_indices=fit_indices,
+    gui_background_manager.set_background_file_status_from_state(
+        view_state=workspace_panels_view_state,
+        background_state=background_runtime_state,
+        current_background_theta_values=(
+            lambda: _current_background_theta_values(strict_count=False)
+        ),
+        background_theta_for_index=(
+            lambda idx: _background_theta_for_index(idx, strict_count=False)
+        ),
+        geometry_fit_uses_shared_theta_offset=_geometry_fit_uses_shared_theta_offset,
+        geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
+        geometry_manual_pair_group_count=_geometry_manual_pair_group_count,
+        current_geometry_fit_background_indices=(
+            lambda: _current_geometry_fit_background_indices(strict=False)
         ),
     )
 
 
 def _load_background_files(file_paths, *, select_index=0):
     """Replace background images from selected OSC file paths."""
-
-    gui_background_manager.load_background_files(
+    gui_background_manager.load_background_files_with_side_effects(
         background_runtime_state,
         file_paths,
         image_size=image_size,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
+        sync_background_runtime_state=_sync_background_runtime_state,
+        replace_geometry_manual_pairs_by_background=_replace_geometry_manual_pairs_by_background,
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        clear_geometry_manual_undo_stack=_clear_geometry_manual_undo_stack,
+        clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
+        set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
+        set_background_display_data=background_display.set_data,
+        update_background_slider_defaults=(
+            lambda image: _update_background_slider_defaults(
+                image,
+                reset_override=True,
+            )
+        ),
+        sync_background_theta_controls=(
+            lambda: _sync_background_theta_controls(
+                preserve_existing=True,
+                trigger_update=False,
+            )
+        ),
+        sync_geometry_fit_background_selection=(
+            lambda: _sync_geometry_fit_background_selection(
+                preserve_existing=True,
+            )
+        ),
+        clear_geometry_pick_artists=_clear_geometry_pick_artists,
+        refresh_background_file_status=_set_background_file_status_text,
+        schedule_update=schedule_update,
         select_index=select_index,
     )
-    _sync_background_runtime_state()
-    _replace_geometry_manual_pairs_by_background({})
-    _invalidate_geometry_manual_pick_cache()
-    _clear_geometry_manual_undo_stack()
-    _clear_geometry_fit_undo_stack()
-    _set_geometry_manual_pick_mode(False)
-
-    background_display.set_data(background_runtime_state.current_background_display)
-    _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
-    _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
-    _sync_geometry_fit_background_selection(preserve_existing=True)
-    _clear_geometry_pick_artists()
-    _set_background_file_status_text()
-    schedule_update()
 
 
 def _browse_background_files():
@@ -8403,31 +8371,42 @@ def switch_background():
         return
 
     try:
-        gui_background_manager.switch_background(
+        gui_background_manager.switch_background_with_side_effects(
             background_runtime_state,
             display_rotate_k=DISPLAY_ROTATE_K,
             read_osc=read_osc,
+            sync_background_runtime_state=_sync_background_runtime_state,
+            invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+            clear_geometry_manual_undo_stack=_clear_geometry_manual_undo_stack,
+            clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
+            sync_theta_initial_to_background=(
+                (
+                    lambda idx: theta_initial_var.set(
+                        _background_theta_for_index(
+                            idx,
+                            strict_count=False,
+                        )
+                    )
+                )
+                if "theta_initial_var" in globals() and theta_initial_var is not None
+                else None
+            ),
+            set_background_display_data=background_display.set_data,
+            update_background_slider_defaults=(
+                lambda image: _update_background_slider_defaults(
+                    image,
+                    reset_override=True,
+                )
+            ),
+            refresh_background_file_status=_set_background_file_status_text,
+            render_current_geometry_manual_pairs=(
+                lambda: _render_current_geometry_manual_pairs(update_status=False)
+            ),
+            schedule_update=schedule_update,
         )
     except Exception as exc:
         progress_label.config(text=f"Failed to switch background: {exc}")
         return
-
-    _sync_background_runtime_state()
-    _invalidate_geometry_manual_pick_cache()
-    _clear_geometry_manual_undo_stack()
-    _clear_geometry_fit_undo_stack()
-    if "theta_initial_var" in globals() and theta_initial_var is not None:
-        try:
-            theta_initial_var.set(
-                _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
-            )
-        except Exception:
-            pass
-    background_display.set_data(background_runtime_state.current_background_display)
-    _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
-    _set_background_file_status_text()
-    _render_current_geometry_manual_pairs(update_status=False)
-    schedule_update()
 
 def reset_to_defaults():
     _clear_geometry_fit_undo_stack()
