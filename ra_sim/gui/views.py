@@ -12,6 +12,7 @@ from .sliders import create_slider
 from .state import (
     AnalysisViewControlsViewState,
     AnalysisExportControlsViewState,
+    BeamMosaicParameterSlidersViewState,
     BackgroundThetaControlsViewState,
     BackgroundBackendDebugViewState,
     BraggQrManagerViewState,
@@ -127,6 +128,35 @@ def _find_slider_entry(slider: object | None) -> object | None:
         if callable(getattr(child, "bind", None)):
             return child
     return None
+
+
+def _create_stored_slider(
+    *,
+    view_state: object,
+    attr_prefix: str,
+    label: str,
+    min_val: float,
+    max_val: float,
+    initial_val: float,
+    step_size: float,
+    parent: tk.Misc,
+    update_callback: Callable[[], None] | None,
+    **slider_kwargs,
+) -> None:
+    """Create one slider and store its var/scale refs on ``view_state``."""
+
+    slider_var, slider = create_slider(
+        label,
+        min_val,
+        max_val,
+        initial_val,
+        step_size,
+        parent,
+        update_callback,
+        **slider_kwargs,
+    )
+    setattr(view_state, f"{attr_prefix}_var", slider_var)
+    setattr(view_state, f"{attr_prefix}_scale", slider)
 
 
 def create_display_controls(
@@ -355,6 +385,231 @@ def set_structure_factor_pruning_rel_tol_enabled(
 
     state_value = "normal" if enabled else "disabled"
     _configure_widget_state(view_state.solve_q_rel_tol_scale, state_value)
+
+
+def create_beam_mosaic_parameter_sliders(
+    *,
+    geometry_parent: tk.Misc,
+    debye_parent: tk.Misc,
+    detector_parent: tk.Misc,
+    lattice_parent: tk.Misc,
+    mosaic_parent: tk.Misc,
+    beam_parent: tk.Misc,
+    view_state: BeamMosaicParameterSlidersViewState,
+    image_size: float,
+    values: dict[str, float],
+    on_standard_update: Callable[[], None],
+    on_mosaic_update: Callable[[], None],
+) -> None:
+    """Create the main beam/geometry/mosaic parameter sliders."""
+
+    def _standard(attr_prefix: str, label: str, min_val: float, max_val: float, initial_val: float, step_size: float, parent: tk.Misc, **slider_kwargs) -> None:
+        _create_stored_slider(
+            view_state=view_state,
+            attr_prefix=attr_prefix,
+            label=label,
+            min_val=min_val,
+            max_val=max_val,
+            initial_val=initial_val,
+            step_size=step_size,
+            parent=parent,
+            update_callback=on_standard_update,
+            **slider_kwargs,
+        )
+
+    def _mosaic(attr_prefix: str, label: str, min_val: float, max_val: float, initial_val: float, step_size: float, parent: tk.Misc, **slider_kwargs) -> None:
+        _create_stored_slider(
+            view_state=view_state,
+            attr_prefix=attr_prefix,
+            label=label,
+            min_val=min_val,
+            max_val=max_val,
+            initial_val=initial_val,
+            step_size=step_size,
+            parent=parent,
+            update_callback=on_mosaic_update,
+            **slider_kwargs,
+        )
+
+    _standard(
+        "theta_initial",
+        "θ sample tilt",
+        0.5,
+        30.0,
+        float(values["theta_initial"]),
+        0.01,
+        geometry_parent,
+    )
+    _standard(
+        "cor_angle",
+        "Goniometer Axis Pitch (about y)",
+        -5.0,
+        5.0,
+        float(values["cor_angle"]),
+        0.01,
+        geometry_parent,
+    )
+    _standard(
+        "gamma",
+        "γ detector pitch",
+        -4.0,
+        4.0,
+        float(values["gamma"]),
+        0.001,
+        geometry_parent,
+        allow_range_expand=True,
+    )
+    _standard(
+        "Gamma",
+        "Γ detector yaw",
+        -4.0,
+        4.0,
+        float(values["Gamma"]),
+        0.001,
+        geometry_parent,
+        allow_range_expand=True,
+    )
+    _standard(
+        "chi",
+        "χ sample pitch",
+        -1.0,
+        1.0,
+        float(values["chi"]),
+        0.001,
+        geometry_parent,
+    )
+    _standard(
+        "psi_z",
+        "Goniometer Axis Yaw (about z)",
+        -5.0,
+        5.0,
+        float(values["psi_z"]),
+        0.01,
+        geometry_parent,
+    )
+    _standard(
+        "zs",
+        "z_s sample offset",
+        -2.0e-3,
+        2.0e-3,
+        float(values["zs"]),
+        0.0001,
+        geometry_parent,
+    )
+    _standard(
+        "zb",
+        "z_b beam offset",
+        -2.0e-3,
+        2.0e-3,
+        float(values["zb"]),
+        0.0001,
+        geometry_parent,
+    )
+    _standard(
+        "debye_x",
+        "Debye Qz",
+        0.0,
+        1.0,
+        float(values["debye_x"]),
+        0.001,
+        debye_parent,
+    )
+    _standard(
+        "debye_y",
+        "Debye Qr",
+        0.0,
+        1.0,
+        float(values["debye_y"]),
+        0.001,
+        debye_parent,
+    )
+    _standard(
+        "corto_detector",
+        "δ detector distance",
+        0.0,
+        100e-3,
+        float(values["corto_detector"]),
+        0.1e-3,
+        detector_parent,
+    )
+    _standard(
+        "a",
+        "a (Å)",
+        3.5,
+        8.0,
+        float(values["a"]),
+        0.01,
+        lattice_parent,
+        allow_range_expand=True,
+        range_expand_pad=0.1,
+    )
+    _standard(
+        "c",
+        "c (Å)",
+        20.0,
+        40.0,
+        float(values["c"]),
+        0.01,
+        lattice_parent,
+        allow_range_expand=True,
+        range_expand_pad=0.5,
+    )
+    _mosaic(
+        "sigma_mosaic",
+        "σ Mosaic (deg)",
+        0.0,
+        5.0,
+        float(values["sigma_mosaic_deg"]),
+        0.01,
+        mosaic_parent,
+    )
+    _mosaic(
+        "gamma_mosaic",
+        "γ Mosaic (deg)",
+        0.0,
+        5.0,
+        float(values["gamma_mosaic_deg"]),
+        0.01,
+        mosaic_parent,
+    )
+    _mosaic(
+        "eta",
+        "η (fraction)",
+        0.0,
+        1.0,
+        float(values["eta"]),
+        0.001,
+        mosaic_parent,
+    )
+
+    beam_center_slider_max = max(3000.0, float(image_size))
+    _standard(
+        "center_x",
+        "Beam Center Row",
+        0.0,
+        beam_center_slider_max,
+        float(values["center_x"]),
+        1.0,
+        beam_parent,
+    )
+    _mosaic(
+        "bandwidth_percent",
+        "Bandwidth (%)",
+        0.0,
+        5.0,
+        float(values["bandwidth_percent"]),
+        0.01,
+        beam_parent,
+    )
+    _standard(
+        "center_y",
+        "Beam Center Col",
+        0.0,
+        beam_center_slider_max,
+        float(values["center_y"]),
+        1.0,
+        beam_parent,
+    )
 
 
 def create_sampling_optics_controls(

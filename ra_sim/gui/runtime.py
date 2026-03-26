@@ -5639,6 +5639,9 @@ display_controls_view_state = gui_state.DisplayControlsViewState()
 structure_factor_pruning_controls_view_state = (
     gui_state.StructureFactorPruningControlsViewState()
 )
+beam_mosaic_parameter_sliders_view_state = (
+    gui_state.BeamMosaicParameterSlidersViewState()
+)
 sampling_optics_controls_view_state = gui_state.SamplingOpticsControlsViewState()
 finite_stack_controls_view_state = gui_state.FiniteStackControlsViewState()
 
@@ -16258,68 +16261,79 @@ _set_solve_q_control_states()
 center_frame = CollapsibleFrame(right_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
-def make_slider(
-    label_str,
-    min_val,
-    max_val,
-    init_val,
-    step,
-    parent,
-    mosaic=False,
-    **slider_kwargs,
-):
-    var, scale = create_slider(
-        label_str,
-        min_val,
-        max_val,
-        init_val,
-        step,
-        parent,
-        on_mosaic_slider_change if mosaic else schedule_update,
-        **slider_kwargs,
-    )
-    return var, scale
-
-theta_initial_var, theta_initial_scale = make_slider(
-    'θ sample tilt', 0.5, 30.0, defaults['theta_initial'], 0.01, geo_frame.frame
+gui_views.create_beam_mosaic_parameter_sliders(
+    geometry_parent=geo_frame.frame,
+    debye_parent=debye_frame.frame,
+    detector_parent=detector_frame.frame,
+    lattice_parent=lattice_frame.frame,
+    mosaic_parent=mosaic_frame.frame,
+    beam_parent=center_frame.frame,
+    view_state=beam_mosaic_parameter_sliders_view_state,
+    image_size=float(image_size),
+    values={
+        "theta_initial": defaults["theta_initial"],
+        "cor_angle": defaults["cor_angle"],
+        "gamma": defaults["gamma"],
+        "Gamma": defaults["Gamma"],
+        "chi": defaults["chi"],
+        "psi_z": defaults["psi_z"],
+        "zs": defaults["zs"],
+        "zb": defaults["zb"],
+        "debye_x": defaults["debye_x"],
+        "debye_y": defaults["debye_y"],
+        "corto_detector": defaults["corto_detector"],
+        "a": defaults["a"],
+        "c": defaults["c"],
+        "sigma_mosaic_deg": defaults["sigma_mosaic_deg"],
+        "gamma_mosaic_deg": defaults["gamma_mosaic_deg"],
+        "eta": defaults["eta"],
+        "center_x": defaults["center_x"],
+        "center_y": defaults["center_y"],
+        "bandwidth_percent": _clip_bandwidth_percent(
+            defaults.get("bandwidth_percent", bandwidth * 100.0)
+        ),
+    },
+    on_standard_update=schedule_update,
+    on_mosaic_update=on_mosaic_slider_change,
 )
-cor_angle_var, cor_angle_scale = make_slider(
-    'Goniometer Axis Pitch (about y)',
-    -5.0,
-    5.0,
-    defaults['cor_angle'],
-    0.01,
-    geo_frame.frame,
-)
-gamma_var, gamma_scale = make_slider(
-    'γ detector pitch',
-    -4,
-    4,
-    defaults['gamma'],
-    0.001,
-    geo_frame.frame,
-    allow_range_expand=True,
-)
-Gamma_var, Gamma_scale = make_slider(
-    'Γ detector yaw',
-    -4,
-    4,
-    defaults['Gamma'],
-    0.001,
-    geo_frame.frame,
-    allow_range_expand=True,
-)
-chi_var, chi_scale = make_slider(
-    'χ sample pitch', -1, 1, defaults['chi'], 0.001, geo_frame.frame
-)
-psi_z_var, psi_z_scale = make_slider(
-    'Goniometer Axis Yaw (about z)',
-    -5.0,
-    5.0,
-    defaults['psi_z'],
-    0.01,
-    geo_frame.frame,
-)
+theta_initial_var = beam_mosaic_parameter_sliders_view_state.theta_initial_var
+theta_initial_scale = beam_mosaic_parameter_sliders_view_state.theta_initial_scale
+cor_angle_var = beam_mosaic_parameter_sliders_view_state.cor_angle_var
+cor_angle_scale = beam_mosaic_parameter_sliders_view_state.cor_angle_scale
+gamma_var = beam_mosaic_parameter_sliders_view_state.gamma_var
+gamma_scale = beam_mosaic_parameter_sliders_view_state.gamma_scale
+Gamma_var = beam_mosaic_parameter_sliders_view_state.Gamma_var
+Gamma_scale = beam_mosaic_parameter_sliders_view_state.Gamma_scale
+chi_var = beam_mosaic_parameter_sliders_view_state.chi_var
+chi_scale = beam_mosaic_parameter_sliders_view_state.chi_scale
+psi_z_var = beam_mosaic_parameter_sliders_view_state.psi_z_var
+psi_z_scale = beam_mosaic_parameter_sliders_view_state.psi_z_scale
+zs_var = beam_mosaic_parameter_sliders_view_state.zs_var
+zs_scale = beam_mosaic_parameter_sliders_view_state.zs_scale
+zb_var = beam_mosaic_parameter_sliders_view_state.zb_var
+zb_scale = beam_mosaic_parameter_sliders_view_state.zb_scale
+debye_x_var = beam_mosaic_parameter_sliders_view_state.debye_x_var
+debye_x_scale = beam_mosaic_parameter_sliders_view_state.debye_x_scale
+debye_y_var = beam_mosaic_parameter_sliders_view_state.debye_y_var
+debye_y_scale = beam_mosaic_parameter_sliders_view_state.debye_y_scale
+corto_detector_var = beam_mosaic_parameter_sliders_view_state.corto_detector_var
+corto_detector_scale = beam_mosaic_parameter_sliders_view_state.corto_detector_scale
+a_var = beam_mosaic_parameter_sliders_view_state.a_var
+a_scale = beam_mosaic_parameter_sliders_view_state.a_scale
+c_var = beam_mosaic_parameter_sliders_view_state.c_var
+c_scale = beam_mosaic_parameter_sliders_view_state.c_scale
+sigma_mosaic_var = beam_mosaic_parameter_sliders_view_state.sigma_mosaic_var
+sigma_mosaic_scale = beam_mosaic_parameter_sliders_view_state.sigma_mosaic_scale
+gamma_mosaic_var = beam_mosaic_parameter_sliders_view_state.gamma_mosaic_var
+gamma_mosaic_scale = beam_mosaic_parameter_sliders_view_state.gamma_mosaic_scale
+eta_var = beam_mosaic_parameter_sliders_view_state.eta_var
+eta_scale = beam_mosaic_parameter_sliders_view_state.eta_scale
+center_x_var = beam_mosaic_parameter_sliders_view_state.center_x_var
+center_x_scale = beam_mosaic_parameter_sliders_view_state.center_x_scale
+bandwidth_percent_var = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_var
+bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_scale
+center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
+center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
 
 
 def _clamp_psi_z_var(*_):
@@ -16329,86 +16343,18 @@ def _clamp_psi_z_var(*_):
         hi = float(psi_z_scale.cget("to"))
     except Exception:
         return
-    if hi < lo:
-        lo, hi = hi, lo
-    clipped = min(max(value, lo), hi)
+    clipped = gui_controllers.clamp_slider_value_to_bounds(
+        value,
+        lower_bound=lo,
+        upper_bound=hi,
+        fallback=defaults.get("psi_z", 0.0),
+    )
     if not math.isclose(value, clipped, rel_tol=0.0, abs_tol=1e-12):
         psi_z_var.set(clipped)
 
 
 psi_z_var.trace_add("write", _clamp_psi_z_var)
 _clamp_psi_z_var()
-
-zs_var, zs_scale = make_slider(
-    'z_s sample offset', -2.0e-3, 2e-3, defaults['zs'], 0.0001, geo_frame.frame
-)
-zb_var, zb_scale = make_slider(
-    'z_b beam offset', -2.0e-3, 2e-3, defaults['zb'], 0.0001, geo_frame.frame
-)
-debye_x_var, debye_x_scale = make_slider(
-    'Debye Qz', 0.0, 1.0, defaults['debye_x'], 0.001, debye_frame.frame
-)
-debye_y_var, debye_y_scale = make_slider(
-    'Debye Qr', 0.0, 1.0, defaults['debye_y'], 0.001, debye_frame.frame
-)
-corto_detector_var, corto_detector_scale = make_slider(
-    'δ detector distance', 0.0, 100e-3, defaults['corto_detector'], 0.1e-3, detector_frame.frame
-)
-a_var, a_scale = make_slider(
-    'a (Å)',
-    3.5,
-    8.0,
-    defaults['a'],
-    0.01,
-    lattice_frame.frame,
-    allow_range_expand=True,
-    range_expand_pad=0.1,
-)
-c_var, c_scale = make_slider(
-    'c (Å)',
-    20.0,
-    40.0,
-    defaults['c'],
-    0.01,
-    lattice_frame.frame,
-    allow_range_expand=True,
-    range_expand_pad=0.5,
-)
-sigma_mosaic_var, sigma_mosaic_scale = make_slider(
-    'σ Mosaic (deg)', 0.0, 5.0, defaults['sigma_mosaic_deg'], 0.01, mosaic_frame.frame, mosaic=True
-)
-gamma_mosaic_var, gamma_mosaic_scale = make_slider(
-    'γ Mosaic (deg)', 0.0, 5.0, defaults['gamma_mosaic_deg'], 0.01, mosaic_frame.frame, mosaic=True
-)
-eta_var, eta_scale = make_slider(
-    'η (fraction)', 0.0, 1.0, defaults['eta'], 0.001, mosaic_frame.frame, mosaic=True
-)
-beam_center_slider_max = max(3000.0, float(image_size))
-center_x_var, center_x_scale = make_slider(
-    'Beam Center Row',
-    0.0,
-    beam_center_slider_max,
-    defaults['center_x'],
-    1.0,
-    center_frame.frame
-)
-bandwidth_percent_var, bandwidth_percent_scale = make_slider(
-    'Bandwidth (%)',
-    0.0,
-    5.0,
-    _clip_bandwidth_percent(defaults.get('bandwidth_percent', bandwidth * 100.0)),
-    0.01,
-    center_frame.frame,
-    mosaic=True,
-)
-center_y_var, center_y_scale = make_slider(
-    'Beam Center Col',
-    0.0,
-    beam_center_slider_max,
-    defaults['center_y'],
-    1.0,
-    center_frame.frame
-)
 geometry_fit_parameter_specs = {
     "zb": {
         "label": "Beam Offset",

@@ -137,6 +137,50 @@ class StructureFactorPruningControlsViewState:
 
 
 @dataclass
+class BeamMosaicParameterSlidersViewState:
+    """Widget references and vars for beam/geometry/mosaic parameter sliders."""
+
+    theta_initial_var: Any = None
+    theta_initial_scale: Any = None
+    cor_angle_var: Any = None
+    cor_angle_scale: Any = None
+    gamma_var: Any = None
+    gamma_scale: Any = None
+    Gamma_var: Any = None
+    Gamma_scale: Any = None
+    chi_var: Any = None
+    chi_scale: Any = None
+    psi_z_var: Any = None
+    psi_z_scale: Any = None
+    zs_var: Any = None
+    zs_scale: Any = None
+    zb_var: Any = None
+    zb_scale: Any = None
+    debye_x_var: Any = None
+    debye_x_scale: Any = None
+    debye_y_var: Any = None
+    debye_y_scale: Any = None
+    corto_detector_var: Any = None
+    corto_detector_scale: Any = None
+    a_var: Any = None
+    a_scale: Any = None
+    c_var: Any = None
+    c_scale: Any = None
+    sigma_mosaic_var: Any = None
+    sigma_mosaic_scale: Any = None
+    gamma_mosaic_var: Any = None
+    gamma_mosaic_scale: Any = None
+    eta_var: Any = None
+    eta_scale: Any = None
+    center_x_var: Any = None
+    center_x_scale: Any = None
+    bandwidth_percent_var: Any = None
+    bandwidth_percent_scale: Any = None
+    center_y_var: Any = None
+    center_y_scale: Any = None
+
+
+@dataclass
 class SamplingOpticsControlsViewState:
     """Widget references and vars for sampling-resolution / optics controls."""
 
@@ -359,6 +403,9 @@ class AppState:
     )
     structure_factor_pruning_controls_view: StructureFactorPruningControlsViewState = field(
         default_factory=StructureFactorPruningControlsViewState
+    )
+    beam_mosaic_parameter_sliders_view: BeamMosaicParameterSlidersViewState = field(
+        default_factory=BeamMosaicParameterSlidersViewState
     )
     sampling_optics_controls_view: SamplingOpticsControlsViewState = field(
         default_factory=SamplingOpticsControlsViewState

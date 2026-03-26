@@ -299,6 +299,41 @@ def solve_q_mode_flag_from_label(
     )
 
 
+def clamp_slider_value_to_bounds(
+    value: object,
+    *,
+    lower_bound: object,
+    upper_bound: object,
+    fallback: object,
+) -> float:
+    """Clamp one slider value to finite ordered bounds."""
+
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = float(fallback)
+    if not math.isfinite(normalized):
+        normalized = 0.0
+
+    try:
+        lower = float(lower_bound)
+    except (TypeError, ValueError):
+        lower = normalized
+    try:
+        upper = float(upper_bound)
+    except (TypeError, ValueError):
+        upper = normalized
+    if not math.isfinite(lower):
+        lower = normalized
+    if not math.isfinite(upper):
+        upper = normalized
+    if upper < lower:
+        lower, upper = upper, lower
+    return float(min(max(float(normalized), lower), upper))
+
+
 def build_initial_state() -> AppState:
     """Build the initial GUI state snapshot from current configuration."""
 

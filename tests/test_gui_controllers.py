@@ -29,6 +29,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         state.StructureFactorPruningControlsViewState,
     )
     assert isinstance(
+        app_state.beam_mosaic_parameter_sliders_view,
+        state.BeamMosaicParameterSlidersViewState,
+    )
+    assert isinstance(
         app_state.sampling_optics_controls_view,
         state.SamplingOpticsControlsViewState,
     )
@@ -75,6 +79,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert (
         app_state.structure_factor_pruning_controls_view
         is not other_state.structure_factor_pruning_controls_view
+    )
+    assert (
+        app_state.beam_mosaic_parameter_sliders_view
+        is not other_state.beam_mosaic_parameter_sliders_view
     )
     assert (
         app_state.sampling_optics_controls_view
@@ -136,6 +144,13 @@ def test_structure_factor_pruning_controller_helpers_clip_and_normalize_inputs()
     assert controllers.normalize_solve_q_mode_label("robust") == "adaptive"
     assert controllers.solve_q_mode_flag_from_label("uniform", uniform_flag=7, adaptive_flag=9) == 7
     assert controllers.solve_q_mode_flag_from_label("adaptive", uniform_flag=7, adaptive_flag=9) == 9
+
+
+def test_beam_mosaic_slider_controller_helper_clamps_to_bounds() -> None:
+    assert controllers.clamp_slider_value_to_bounds(2.5, lower_bound=0.0, upper_bound=2.0, fallback=1.0) == 2.0
+    assert controllers.clamp_slider_value_to_bounds(-1.0, lower_bound=0.0, upper_bound=2.0, fallback=1.0) == 0.0
+    assert controllers.clamp_slider_value_to_bounds("bad", lower_bound=0.0, upper_bound=2.0, fallback=1.25) == 1.25
+    assert controllers.clamp_slider_value_to_bounds(1.0, lower_bound=3.0, upper_bound=2.0, fallback=1.0) == 2.0
 
 
 def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> None:

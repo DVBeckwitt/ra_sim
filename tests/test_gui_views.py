@@ -888,6 +888,100 @@ def test_structure_factor_pruning_controls_store_refs_and_support_helpers(
     assert view_state.solve_q_rel_tol_scale.state == "normal"
 
 
+def test_beam_mosaic_parameter_sliders_store_refs_and_callbacks(monkeypatch) -> None:
+    created = []
+
+    def _fake_create_slider(
+        label,
+        min_val,
+        max_val,
+        initial_val,
+        step_size,
+        parent,
+        update_callback=None,
+        **kwargs,
+    ):
+        var = _FakeVar(initial_val)
+        slider = _FakeScale(parent, to=max_val)
+        created.append(
+            {
+                "label": label,
+                "var": var,
+                "slider": slider,
+                "step": step_size,
+                "parent": parent,
+                "update_callback": update_callback,
+                "kwargs": kwargs,
+                "min": min_val,
+                "max": max_val,
+            }
+        )
+        return var, slider
+
+    monkeypatch.setattr(views, "create_slider", _fake_create_slider)
+
+    view_state = state.BeamMosaicParameterSlidersViewState()
+    standard_calls = []
+    mosaic_calls = []
+
+    views.create_beam_mosaic_parameter_sliders(
+        geometry_parent="geometry",
+        debye_parent="debye",
+        detector_parent="detector",
+        lattice_parent="lattice",
+        mosaic_parent="mosaic",
+        beam_parent="beam",
+        view_state=view_state,
+        image_size=2048.0,
+        values={
+            "theta_initial": 5.0,
+            "cor_angle": 0.5,
+            "gamma": 1.0,
+            "Gamma": -1.0,
+            "chi": 0.2,
+            "psi_z": 0.3,
+            "zs": 1.0e-4,
+            "zb": -1.0e-4,
+            "debye_x": 0.1,
+            "debye_y": 0.2,
+            "corto_detector": 0.03,
+            "a": 4.2,
+            "c": 25.0,
+            "sigma_mosaic_deg": 0.4,
+            "gamma_mosaic_deg": 0.5,
+            "eta": 0.6,
+            "center_x": 1200.0,
+            "center_y": 900.0,
+            "bandwidth_percent": 0.75,
+        },
+        on_standard_update=lambda: standard_calls.append("standard"),
+        on_mosaic_update=lambda: mosaic_calls.append("mosaic"),
+    )
+
+    assert view_state.theta_initial_var.get() == 5.0
+    assert view_state.gamma_var.get() == 1.0
+    assert view_state.a_var.get() == 4.2
+    assert view_state.sigma_mosaic_var.get() == 0.4
+    assert view_state.center_x_var.get() == 1200.0
+    assert view_state.bandwidth_percent_var.get() == 0.75
+    assert view_state.center_y_var.get() == 900.0
+    assert len(created) == 19
+    assert created[0]["label"] == "θ sample tilt"
+    assert created[-1]["label"] == "Beam Center Col"
+    assert created[2]["kwargs"]["allow_range_expand"] is True
+    assert created[11]["kwargs"]["allow_range_expand"] is True
+    assert created[11]["kwargs"]["range_expand_pad"] == 0.1
+    assert created[12]["kwargs"]["range_expand_pad"] == 0.5
+    assert created[16]["max"] == 3000.0
+    assert created[18]["max"] == 3000.0
+    assert created[0]["update_callback"] is not None
+    assert created[13]["update_callback"] is not None
+    created[0]["update_callback"]()
+    created[13]["update_callback"]()
+    assert standard_calls == ["standard"]
+    assert mosaic_calls == ["mosaic"]
+
+
 def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     monkeypatch,
 ) -> None:
