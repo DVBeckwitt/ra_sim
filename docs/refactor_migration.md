@@ -37,6 +37,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.bootstrap`
   - `ra_sim.gui.background`
   - `ra_sim.gui.background_theta`
+  - `ra_sim.gui.bragg_qr_manager`
   - `ra_sim.gui.geometry_fit`
   - `ra_sim.gui.geometry_overlay`
   - `ra_sim.gui.manual_geometry`
@@ -87,6 +88,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     helpers now also flow through `ra_sim.gui.controllers`
   - the Bragg-Qr group-entry listing, L-value mapping, and manager list-model
     formatting now also flow through `ra_sim.gui.controllers`
+  - the Bragg-Qr manager selection and list-refresh workflow now also flows
+    through `ra_sim.gui.bragg_qr_manager`
 - hBN geometry debug viewer migration has also landed:
   - shared widget references for the debug viewer now use shared GUI state
   - the hBN geometry debug window lifecycle and report-text rendering now flow
@@ -248,6 +251,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the Bragg-Qr manager list-building workflow now also delegates through
     those helpers, leaving runtime with listbox selection reads and the
     enable/disable action callbacks
+  - the Bragg-Qr manager selection/list-refresh flow now also delegates
+    through `ra_sim.gui.bragg_qr_manager`, leaving runtime with the manager
+    window lifecycle and enable/disable action callbacks
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -257,7 +263,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   primary-CIF/CIF-weight/fit-checklist/integration-range/app-shell/status
   helper coverage plus direct structure-model coverage for primary-CIF reload
   snapshot/restore, diffuse-HT request assembly, Bragg-Qr / SF-pruning filter
-  application, and Bragg-Qr manager list-model assembly
+  application, Bragg-Qr manager list-model assembly, and Bragg-Qr manager
+  selection/refresh workflow
 
 ## Remaining Migration Focus
 

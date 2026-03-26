@@ -109,6 +109,7 @@ from ra_sim.simulation.diffraction_debug import (
 from ra_sim.simulation.simulation import simulate_diffraction
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_theta as gui_background_theta
+from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import views as gui_views
@@ -5495,42 +5496,25 @@ def _build_bragg_qr_entries() -> list[dict[str, object]]:
 
 
 def _selected_bragg_qr_window_keys() -> list[tuple[str, int]]:
-    if bragg_qr_manager_view_state.qr_listbox is None:
-        return []
-    try:
-        selected_indices = list(bragg_qr_manager_view_state.qr_listbox.curselection())
-    except tk.TclError:
-        return []
-    return gui_controllers.selected_bragg_qr_keys(
+    return gui_bragg_qr_manager.selected_bragg_qr_window_keys(
         bragg_qr_manager_state,
-        selected_indices,
+        bragg_qr_manager_view_state.qr_listbox,
+        tcl_error_types=(tk.TclError,),
     )
 
 
 def _selected_primary_bragg_qr_window_key() -> tuple[str, int] | None:
-    selected = _selected_bragg_qr_window_keys()
-    if selected:
-        source_label, m_idx = selected[0]
-        return (_normalize_bragg_qr_source_label(source_label), int(m_idx))
-
-    if bragg_qr_manager_state.selected_group_key is None:
-        return None
-    return (
-        _normalize_bragg_qr_source_label(bragg_qr_manager_state.selected_group_key[0]),
-        int(bragg_qr_manager_state.selected_group_key[1]),
+    return gui_bragg_qr_manager.selected_primary_bragg_qr_window_key(
+        bragg_qr_manager_state,
+        selected_keys=_selected_bragg_qr_window_keys(),
     )
 
 
 def _selected_bragg_qr_l_window_keys() -> list[int]:
-    if bragg_qr_manager_view_state.l_listbox is None:
-        return []
-    try:
-        selected_indices = list(bragg_qr_manager_view_state.l_listbox.curselection())
-    except tk.TclError:
-        return []
-    return gui_controllers.selected_bragg_qr_l_keys(
+    return gui_bragg_qr_manager.selected_bragg_qr_l_window_keys(
         bragg_qr_manager_state,
-        selected_indices,
+        bragg_qr_manager_view_state.l_listbox,
+        tcl_error_types=(tk.TclError,),
     )
 
 
@@ -5543,84 +5527,36 @@ def _l_value_map_for_qr(source_label: str, m_idx: int) -> dict[int, float]:
 
 
 def _refresh_bragg_qr_l_toggle_listbox() -> None:
-    if not gui_views.bragg_qr_manager_window_open(bragg_qr_manager_view_state):
-        return
-    if bragg_qr_manager_view_state.l_listbox is None:
-        return
-
-    selected_l_keys = set(_selected_bragg_qr_l_window_keys())
-
-    selected_group = _selected_primary_bragg_qr_window_key()
-    l_model = gui_controllers.build_bragg_qr_l_list_model(
-        bragg_qr_manager_state,
-        group_key=selected_group,
-        l_value_map=(
-            _l_value_map_for_qr(selected_group[0], int(selected_group[1]))
-            if selected_group is not None
-            else None
-        ),
-        selected_l_keys=list(selected_l_keys),
-    )
-    gui_controllers.set_bragg_qr_selected_group_key(
-        bragg_qr_manager_state,
-        l_model["selected_group_key"],
-    )
-    gui_controllers.replace_bragg_qr_l_index_keys(
-        bragg_qr_manager_state,
-        l_model["index_keys"],
-    )
-    gui_views.refresh_bragg_qr_manager_l_list(
+    gui_bragg_qr_manager.refresh_bragg_qr_l_toggle_listbox(
         view_state=bragg_qr_manager_view_state,
-        lines=l_model["lines"],
-        selected_indices=l_model["selected_indices"],
-        status_text=l_model["status_text"],
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        l_listbox=bragg_qr_manager_view_state.l_listbox,
+        build_l_value_map=_l_value_map_for_qr,
+        tcl_error_types=(tk.TclError,),
     )
 
 
 def _on_bragg_qr_selection_changed(_event=None) -> None:
-    selected = _selected_bragg_qr_window_keys()
-    if selected:
-        source_label, m_idx = selected[0]
-        gui_controllers.set_bragg_qr_selected_group_key(
+    gui_controllers.set_bragg_qr_selected_group_key(
+        bragg_qr_manager_state,
+        gui_bragg_qr_manager.selected_primary_bragg_qr_window_key(
             bragg_qr_manager_state,
-            (
-                _normalize_bragg_qr_source_label(source_label),
-                int(m_idx),
-            ),
-        )
-    else:
-        gui_controllers.set_bragg_qr_selected_group_key(
-            bragg_qr_manager_state,
-            None,
-        )
+            selected_keys=_selected_bragg_qr_window_keys(),
+        ),
+    )
     _refresh_bragg_qr_l_toggle_listbox()
 
 
 def _refresh_bragg_qr_toggle_window() -> None:
-    if not gui_views.bragg_qr_manager_window_open(bragg_qr_manager_view_state):
-        return
-    if bragg_qr_manager_view_state.qr_listbox is None:
-        return
-
-    qr_model = gui_controllers.build_bragg_qr_qr_list_model(
-        bragg_qr_manager_state,
-        _build_bragg_qr_entries(),
-        selected_keys=_selected_bragg_qr_window_keys(),
-    )
-    gui_controllers.replace_bragg_qr_index_keys(
-        bragg_qr_manager_state,
-        qr_model["index_keys"],
-    )
-
-    gui_views.refresh_bragg_qr_manager_qr_list(
+    if gui_bragg_qr_manager.refresh_bragg_qr_toggle_window(
         view_state=bragg_qr_manager_view_state,
-        lines=qr_model["lines"],
-        selected_indices=qr_model["selected_indices"],
-        status_text=qr_model["status_text"],
-        see_index=qr_model["see_index"],
-    )
-
-    _on_bragg_qr_selection_changed()
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        entries=_build_bragg_qr_entries(),
+        tcl_error_types=(tk.TclError,),
+    ):
+        _on_bragg_qr_selection_changed()
 
 
 def _set_bragg_qr_groups_enabled(

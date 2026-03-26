@@ -35,6 +35,7 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.bootstrap`
   - `ra_sim.gui.background`
   - `ra_sim.gui.background_theta`
+  - `ra_sim.gui.bragg_qr_manager`
   - `ra_sim.gui.geometry_fit`
   - `ra_sim.gui.geometry_overlay`
   - `ra_sim.gui.manual_geometry`
@@ -79,6 +80,8 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     pipeline now also live in `ra_sim.gui.controllers`.
   - The Bragg-Qr group-entry listing, L-value mapping, and list-model/status
     formatting for that manager now also live in `ra_sim.gui.controllers`.
+  - The Bragg-Qr manager selection and list-refresh workflow now also lives in
+    `ra_sim.gui.bragg_qr_manager`.
 - hBN geometry debug viewer migration has landed.
   - Shared widget references for the debug viewer now live in
     `ra_sim.gui.state`.
@@ -270,6 +273,9 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - The Bragg-Qr manager list-building workflow now also delegates through
     controller helpers, leaving runtime with listbox selection reads and the
     enable/disable action callbacks.
+  - The Bragg-Qr manager selection/list-refresh flow now also delegates
+    through `ra_sim.gui.bragg_qr_manager`, leaving runtime with the manager
+    window lifecycle and enable/disable action callbacks.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
