@@ -326,6 +326,121 @@ def test_geometry_q_group_manager_request_update_side_effects_marks_refresh() ->
     ]
 
 
+def test_geometry_q_group_manager_snapshot_replace_side_effects_trim_exclusions() -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    key2 = ("q_group", "secondary", 2, 1)
+    stale_key = ("q_group", "stale", 9, 9)
+    preview_state = state.GeometryPreviewState(excluded_q_groups={key1, stale_key})
+    q_group_state = state.GeometryQGroupState()
+    events = []
+
+    entries = (
+        geometry_q_group_manager.replace_geometry_q_group_entries_snapshot_with_side_effects(
+            preview_state=preview_state,
+            q_group_state=q_group_state,
+            entries=[
+                _entry(key1, peak_count=2, total_intensity=10.0),
+                _entry(key2, peak_count=3, total_intensity=20.0, source="secondary"),
+            ],
+            invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+            update_geometry_preview_exclude_button_label=lambda: events.append(
+                "label"
+            ),
+        )
+    )
+
+    assert [entry["key"] for entry in entries] == [key1, key2]
+    assert q_group_state.cached_entries == entries
+    assert preview_state.excluded_q_groups == {key1}
+    assert events == ["invalidate", "label"]
+
+
+def test_geometry_q_group_manager_runtime_snapshot_capture_refreshes_open_window(
+    monkeypatch,
+) -> None:
+    key1 = ("q_group", "primary", 1, 0)
+    stale_key = ("q_group", "stale", 9, 9)
+    preview_state = state.GeometryPreviewState(excluded_q_groups={key1, stale_key})
+    q_group_state = state.GeometryQGroupState()
+    events = []
+
+    monkeypatch.setattr(
+        geometry_q_group_manager.gui_views,
+        "geometry_q_group_window_open",
+        lambda view_state: True,
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "refresh_runtime_geometry_q_group_window",
+        lambda bindings: events.append("refresh") or True,
+    )
+
+    bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(window=object()),
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: events.append("live"),
+        build_entries_snapshot=lambda: [
+            _entry(key1, peak_count=2, total_intensity=10.0),
+        ],
+    )
+
+    entries = geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
+        bindings
+    )
+
+    assert [entry["key"] for entry in entries] == [key1]
+    assert q_group_state.cached_entries == entries
+    assert preview_state.excluded_q_groups == {key1}
+    assert events == ["invalidate", "label", "refresh"]
+
+
+def test_geometry_q_group_manager_preview_exclusion_open_reports_status(
+    monkeypatch,
+) -> None:
+    events = []
+
+    def _open_window(*, root, bindings_factory):
+        events.append(("open", root, bindings_factory()))
+        return False
+
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "open_runtime_geometry_q_group_window",
+        _open_window,
+    )
+
+    bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: None,
+        set_status_text=lambda text: events.append(("status", text)),
+    )
+
+    opened = geometry_q_group_manager.open_runtime_geometry_q_group_preview_exclusion_window(
+        root="root-window",
+        bindings_factory=lambda: bindings,
+    )
+
+    assert opened is False
+    assert events[0] == ("open", "root-window", bindings)
+    assert events[1] == (
+        "status",
+        "Opened the Qr/Qz selector for manual geometry picking. Unchecked rows are unavailable when selecting Qr sets on the image.",
+    )
+
+
 def test_geometry_q_group_manager_save_dialog_workflow_writes_payload_and_reports_status() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)
@@ -446,6 +561,7 @@ def test_geometry_q_group_runtime_binding_factory_builds_live_bindings(
         q_group_state="q-group-state",
         fit_config={"geometry": {}},
         current_geometry_fit_var_names_factory=lambda: ["gamma"],
+        build_entries_snapshot=lambda: [{"key": ("q_group", "primary", 1, 0)}],
         invalidate_geometry_manual_pick_cache=lambda: None,
         update_geometry_preview_exclude_button_label=lambda: None,
         live_geometry_preview_enabled=lambda: False,
@@ -466,6 +582,8 @@ def test_geometry_q_group_runtime_binding_factory_builds_live_bindings(
     assert calls[0]["fit_config"] == {"geometry": {}}
     assert callable(calls[0]["set_status_text"])
     assert callable(calls[0]["schedule_update"])
+    assert callable(calls[0]["build_entries_snapshot"])
+    assert calls[0]["build_entries_snapshot"]() == [{"key": ("q_group", "primary", 1, 0)}]
     assert calls[0]["file_dialog_dir"] == "C:/dialogs/1"
     assert calls[1]["file_dialog_dir"] == "C:/dialogs/2"
     assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]

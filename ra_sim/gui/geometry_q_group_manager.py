@@ -29,6 +29,7 @@ class GeometryQGroupRuntimeBindings:
     update_geometry_preview_exclude_button_label: Callable[[], None]
     live_geometry_preview_enabled: Callable[[], bool]
     refresh_live_geometry_preview: Callable[[], None]
+    build_entries_snapshot: Callable[[], Sequence[dict[str, object]] | None] | None = None
     refresh_live_geometry_preview_quiet: Callable[[], None] | None = None
     clear_last_simulation_signature: Callable[[], None] | None = None
     schedule_update: Callable[[], None] | None = None
@@ -330,6 +331,29 @@ def request_geometry_q_group_window_update(q_group_state) -> None:
     gui_controllers.request_geometry_q_group_refresh(q_group_state)
 
 
+def replace_geometry_q_group_entries_snapshot_with_side_effects(
+    *,
+    preview_state,
+    q_group_state,
+    entries: Sequence[dict[str, object]] | None,
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    update_geometry_preview_exclude_button_label: Callable[[], None],
+) -> list[dict[str, object]]:
+    """Replace the stored Qr/Qz snapshot and keep dependent state in sync."""
+
+    gui_controllers.replace_geometry_q_group_cached_entries(
+        q_group_state,
+        entries,
+    )
+    gui_controllers.retain_geometry_preview_excluded_q_groups(
+        preview_state,
+        gui_controllers.listed_geometry_q_group_keys(q_group_state),
+    )
+    invalidate_geometry_manual_pick_cache()
+    update_geometry_preview_exclude_button_label()
+    return gui_controllers.listed_geometry_q_group_entries(q_group_state)
+
+
 def close_geometry_q_group_window(view_state, q_group_state) -> None:
     """Destroy the Qr/Qz selector window and clear its row-var map."""
 
@@ -554,6 +578,7 @@ def make_runtime_geometry_q_group_bindings_factory(
     q_group_state,
     fit_config: Mapping[str, object] | None,
     current_geometry_fit_var_names_factory: object,
+    build_entries_snapshot: Callable[[], Sequence[dict[str, object]] | None] | None = None,
     invalidate_geometry_manual_pick_cache: Callable[[], None],
     update_geometry_preview_exclude_button_label: Callable[[], None],
     live_geometry_preview_enabled: Callable[[], bool],
@@ -575,6 +600,7 @@ def make_runtime_geometry_q_group_bindings_factory(
             q_group_state=q_group_state,
             fit_config=fit_config,
             current_geometry_fit_var_names_factory=current_geometry_fit_var_names_factory,
+            build_entries_snapshot=build_entries_snapshot,
             invalidate_geometry_manual_pick_cache=invalidate_geometry_manual_pick_cache,
             update_geometry_preview_exclude_button_label=update_geometry_preview_exclude_button_label,
             live_geometry_preview_enabled=live_geometry_preview_enabled,
@@ -686,6 +712,27 @@ def request_runtime_geometry_q_group_window_update(
     )
 
 
+def capture_runtime_geometry_q_group_entries_snapshot(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> list[dict[str, object]]:
+    """Rebuild and store the runtime Qr/Qz selector snapshot from live data."""
+
+    build_entries_snapshot = bindings.build_entries_snapshot
+    if not callable(build_entries_snapshot):
+        return gui_controllers.listed_geometry_q_group_entries(bindings.q_group_state)
+
+    entries = replace_geometry_q_group_entries_snapshot_with_side_effects(
+        preview_state=bindings.preview_state,
+        q_group_state=bindings.q_group_state,
+        entries=build_entries_snapshot(),
+        invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
+    )
+    if gui_views.geometry_q_group_window_open(bindings.view_state):
+        refresh_runtime_geometry_q_group_window(bindings)
+    return entries
+
+
 def save_geometry_q_group_selection_runtime(
     bindings: GeometryQGroupRuntimeBindings,
 ) -> bool:
@@ -772,6 +819,27 @@ def open_runtime_geometry_q_group_window(
         on_load=lambda: load_geometry_q_group_selection_runtime(bindings_factory()),
         on_close=lambda: close_runtime_geometry_q_group_window(bindings_factory()),
     )
+
+
+def open_runtime_geometry_q_group_preview_exclusion_window(
+    *,
+    root,
+    bindings_factory: Callable[[], GeometryQGroupRuntimeBindings],
+) -> bool:
+    """Open the runtime selector in preview-exclusion mode and report status."""
+
+    opened = open_runtime_geometry_q_group_window(
+        root=root,
+        bindings_factory=bindings_factory,
+    )
+    _set_status_text(
+        bindings_factory().set_status_text,
+        (
+            "Opened the Qr/Qz selector for manual geometry picking. "
+            "Unchecked rows are unavailable when selecting Qr sets on the image."
+        ),
+    )
+    return opened
 
 
 def make_runtime_geometry_q_group_callbacks(

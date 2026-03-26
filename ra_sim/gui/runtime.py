@@ -3689,14 +3689,6 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
         progress_label_positions.config(
             text=f"Showing analytic Qr-cylinder traces for {len(entries)} active Qr groups."
         )
-
-
-def _geometry_q_group_window_open() -> bool:
-    """Return whether the Qr/Qz geometry-fit selector window is open."""
-
-    return gui_views.geometry_q_group_window_open(geometry_q_group_view_state)
-
-
 def _clear_all_geometry_overlay_artists():
     """Clear fitted markers and live preview overlays together."""
 
@@ -4303,35 +4295,6 @@ def _listed_geometry_q_group_keys(
         geometry_q_group_state,
         entries,
     )
-
-
-def _set_geometry_q_group_entries_snapshot(
-    entries: Sequence[dict[str, object]] | None,
-) -> list[dict[str, object]]:
-    """Replace the listed Qr/Qz snapshot with the provided entries."""
-    gui_controllers.replace_geometry_q_group_cached_entries(
-        geometry_q_group_state,
-        entries,
-    )
-    listed_keys = _listed_geometry_q_group_keys()
-    gui_controllers.retain_geometry_preview_excluded_q_groups(
-        geometry_preview_state,
-        listed_keys,
-    )
-    _invalidate_geometry_manual_pick_cache()
-    _update_geometry_preview_exclude_button_label()
-    return _listed_geometry_q_group_entries()
-
-
-def _capture_geometry_q_group_entries_snapshot() -> list[dict[str, object]]:
-    """Rebuild and store the manual Qr/Qz selector snapshot from the current simulation."""
-
-    entries = _set_geometry_q_group_entries_snapshot(_build_geometry_q_group_entries())
-    if _geometry_q_group_window_open():
-        geometry_q_group_runtime_callbacks.refresh_window()
-    return entries
-
-
 def _geometry_q_group_key_from_jsonable(value: object) -> tuple[object, ...] | None:
     """Rebuild one stable Qr/Qz group key from JSON-loaded data."""
     return gui_geometry_q_group_manager.geometry_q_group_key_from_jsonable(value)
@@ -4488,18 +4451,6 @@ def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = N
     _update_geometry_preview_exclude_button_label()
     if message:
         progress_label_geometry.config(text=message)
-
-
-def _toggle_geometry_preview_exclude_mode():
-    geometry_q_group_runtime_callbacks.open_window()
-    progress_label_geometry.config(
-        text=(
-            "Opened the Qr/Qz selector for manual geometry picking. "
-            "Unchecked rows are unavailable when selecting Qr sets on the image."
-        )
-    )
-
-
 def _distance_point_to_segment_sq(
     px: float,
     py: float,
@@ -6633,7 +6584,11 @@ def do_update():
         ]
 
     if gui_controllers.consume_geometry_q_group_refresh_request(geometry_q_group_state):
-        listed_entries = _capture_geometry_q_group_entries_snapshot()
+        listed_entries = (
+            gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
+                geometry_q_group_runtime_bindings_factory()
+            )
+        )
         progress_label_geometry.config(
             text=(
                 f"Updated listed Qr/Qz peaks: {len(listed_entries)} groups, "
@@ -9067,6 +9022,7 @@ geometry_q_group_runtime_bindings_factory = (
         q_group_state=geometry_q_group_state,
         fit_config=fit_config,
         current_geometry_fit_var_names_factory=_current_geometry_fit_var_names,
+        build_entries_snapshot=_build_geometry_q_group_entries,
         invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
         update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
         live_geometry_preview_enabled=_live_geometry_preview_enabled,
@@ -12516,7 +12472,12 @@ gui_views.create_geometry_tool_action_controls(
     on_undo_manual_placement=_undo_last_geometry_manual_placement,
     on_export_manual_pairs=_export_geometry_manual_pairs,
     on_import_manual_pairs=_import_geometry_manual_pairs,
-    on_toggle_preview_exclude=_toggle_geometry_preview_exclude_mode,
+    on_toggle_preview_exclude=lambda: (
+        gui_geometry_q_group_manager.open_runtime_geometry_q_group_preview_exclusion_window(
+            root=root,
+            bindings_factory=geometry_q_group_runtime_bindings_factory,
+        )
+    ),
     on_clear_manual_pairs=_clear_current_geometry_manual_pairs,
 )
 _update_geometry_fit_undo_button_state()
