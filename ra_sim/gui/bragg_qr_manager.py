@@ -198,6 +198,41 @@ def build_runtime_bragg_qr_bindings(
     )
 
 
+def make_runtime_bragg_qr_bindings_factory(
+    *,
+    view_state,
+    manager_state,
+    simulation_runtime_state,
+    primary_candidate: object,
+    primary_fallback: object,
+    secondary_candidate: object | None = None,
+    apply_filters: Callable[[], None],
+    set_progress_text_factory: Callable[[], Callable[[str], None] | None] | None = None,
+    invalid_key: int = 0,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+) -> Callable[[], BraggQrRuntimeBindings]:
+    """Return a zero-arg factory for live Bragg-Qr runtime bindings."""
+
+    def _build_bindings() -> BraggQrRuntimeBindings:
+        set_progress_text = (
+            set_progress_text_factory() if callable(set_progress_text_factory) else None
+        )
+        return build_runtime_bragg_qr_bindings(
+            view_state=view_state,
+            manager_state=manager_state,
+            simulation_runtime_state=simulation_runtime_state,
+            primary_candidate=primary_candidate,
+            primary_fallback=primary_fallback,
+            secondary_candidate=secondary_candidate,
+            apply_filters=apply_filters,
+            set_progress_text=set_progress_text,
+            invalid_key=invalid_key,
+            tcl_error_types=tcl_error_types,
+        )
+
+    return _build_bindings
+
+
 def make_runtime_bragg_qr_refresh_callback(
     bindings_factory: Callable[[], BraggQrRuntimeBindings],
 ) -> Callable[[], bool]:

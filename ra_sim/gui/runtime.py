@@ -861,9 +861,9 @@ def _structure_factor_pruning_runtime_bindings(
         ),
         refresh_window=(
             gui_bragg_qr_manager.make_runtime_bragg_qr_refresh_callback(
-                globals().get("_bragg_qr_runtime_bindings")
+                globals().get("bragg_qr_runtime_bindings_factory")
             )
-            if callable(globals().get("_bragg_qr_runtime_bindings"))
+            if callable(globals().get("bragg_qr_runtime_bindings_factory"))
             else None
         ),
     )
@@ -4916,23 +4916,22 @@ def _open_selected_peak_intersection_figure():
     )
 
 
-def _bragg_qr_runtime_bindings() -> gui_bragg_qr_manager.BraggQrRuntimeBindings:
-    return gui_bragg_qr_manager.build_runtime_bragg_qr_bindings(
-        view_state=bragg_qr_manager_view_state,
-        manager_state=bragg_qr_manager_state,
-        simulation_runtime_state=simulation_runtime_state,
-        primary_candidate=(lambda: a_var.get()),
-        primary_fallback=float(av),
-        secondary_candidate=(lambda: av2),
-        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
-        set_progress_text=(
-            (lambda text: progress_label_positions.config(text=text))
-            if "progress_label_positions" in globals()
-            else None
-        ),
-        invalid_key=BRAGG_QR_L_INVALID_KEY,
-        tcl_error_types=(tk.TclError,),
-    )
+bragg_qr_runtime_bindings_factory = gui_bragg_qr_manager.make_runtime_bragg_qr_bindings_factory(
+    view_state=bragg_qr_manager_view_state,
+    manager_state=bragg_qr_manager_state,
+    simulation_runtime_state=simulation_runtime_state,
+    primary_candidate=(lambda: a_var.get()),
+    primary_fallback=float(av),
+    secondary_candidate=(lambda: av2),
+    apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+    set_progress_text_factory=lambda: (
+        (lambda text: progress_label_positions.config(text=text))
+        if "progress_label_positions" in globals()
+        else None
+    ),
+    invalid_key=BRAGG_QR_L_INVALID_KEY,
+    tcl_error_types=(tk.TclError,),
+)
 
 
 def _brightest_hit_native_from_table(hit_table) -> tuple[float, float] | None:
@@ -13234,7 +13233,7 @@ gui_views.create_hkl_lookup_controls(
     on_show_bragg_ewald=_open_selected_peak_intersection_figure,
     on_open_bragg_qr_groups=gui_bragg_qr_manager.make_runtime_bragg_qr_open_callback(
         root=root,
-        bindings_factory=_bragg_qr_runtime_bindings,
+        bindings_factory=bragg_qr_runtime_bindings_factory,
     ),
 )
 _update_hkl_pick_button_label()

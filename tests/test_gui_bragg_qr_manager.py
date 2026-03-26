@@ -423,6 +423,44 @@ def test_bragg_qr_runtime_binding_builder_reads_live_lattice_values(monkeypatch)
     assert bindings.invalid_key == -999
 
 
+def test_bragg_qr_runtime_binding_factory_builds_live_bindings(monkeypatch) -> None:
+    calls = []
+    progress_callbacks = []
+
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "build_runtime_bragg_qr_bindings",
+        lambda **kwargs: calls.append(kwargs) or f"bindings-{len(calls)}",
+    )
+
+    factory = bragg_qr_manager.make_runtime_bragg_qr_bindings_factory(
+        view_state="view-state",
+        manager_state="manager-state",
+        simulation_runtime_state="simulation-state",
+        primary_candidate=lambda: "5.0",
+        primary_fallback=4.0,
+        secondary_candidate=lambda: "6.0",
+        apply_filters=lambda: None,
+        set_progress_text_factory=lambda: progress_callbacks.append("progress") or (
+            lambda text: None
+        ),
+        invalid_key=-999,
+        tcl_error_types=(_FakeTclError,),
+    )
+
+    assert factory() == "bindings-1"
+    assert factory() == "bindings-2"
+    assert progress_callbacks == ["progress", "progress"]
+    assert calls[0]["view_state"] == "view-state"
+    assert calls[0]["manager_state"] == "manager-state"
+    assert calls[0]["simulation_runtime_state"] == "simulation-state"
+    assert calls[0]["invalid_key"] == -999
+    assert calls[0]["tcl_error_types"] == (_FakeTclError,)
+    assert callable(calls[0]["set_progress_text"])
+    assert callable(calls[1]["set_progress_text"])
+    assert calls[0]["set_progress_text"] is not calls[1]["set_progress_text"]
+
+
 def test_bragg_qr_runtime_callback_factories_build_zero_arg_delegates(
     monkeypatch,
 ) -> None:

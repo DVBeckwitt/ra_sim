@@ -276,8 +276,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.bragg_qr_manager` now also owns the zero-arg runtime
     refresh/open callback helpers used by the live filter pipeline and HKL
     lookup controls
-  - `ra_sim.gui.runtime` now keeps only the shared runtime-binding factory
-    plus thin manager/overlay call sites for that workflow
+  - `ra_sim.gui.bragg_qr_manager` now also owns the zero-arg runtime
+    binding-factory helper used by the live filter pipeline, HKL lookup
+    controls, and manager callbacks
+  - `ra_sim.gui.runtime` now keeps only one bound Bragg-Qr runtime factory
+    value plus thin manager/overlay call sites for that workflow
 - Geometry-fit Qr/Qz selector workflow extraction has also advanced:
   - selector line/status formatting, window refresh, checkbox/bulk include-
     exclude side effects, update-listed-peaks request flow, and save/load
@@ -325,15 +328,15 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   extracted structure-model rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining Bragg-Qr runtime code is now mostly the shared runtime-binding
-  factory plus thin manager/overlay call sites around the extracted
+- The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
+  value plus thin manager/overlay call sites around the extracted
   controller/view modules.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   delegate wrappers and window lifecycle wiring around the extracted
   manager/view helpers.
-- The remaining Bragg-Qr manager runtime code is now mostly the shared
-  binding-factory wiring used by the live filter pipeline and HKL lookup
-  controls around the extracted manager helpers.
+- The remaining Bragg-Qr manager runtime code is now mostly the bound
+  factory wiring used by the live filter pipeline and HKL lookup controls
+  around the extracted manager helpers.
 - The remaining background runtime code is now mostly file-dialog plumbing and
   progress/error text around the extracted background manager.
 - The remaining selected-peak runtime code is now mostly cross-feature

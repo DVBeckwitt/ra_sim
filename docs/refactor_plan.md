@@ -296,8 +296,11 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.bragg_qr_manager` now also owns the zero-arg runtime
     refresh/open callback helpers used by the live filter pipeline and HKL
     lookup controls.
-  - `ra_sim.gui.runtime` now keeps only the shared runtime-binding factory
-    plus thin manager/overlay call sites for that workflow.
+  - `ra_sim.gui.bragg_qr_manager` now also owns the zero-arg runtime
+    binding-factory helper used by the live filter pipeline, HKL lookup
+    controls, and manager callbacks.
+  - `ra_sim.gui.runtime` now keeps only one bound Bragg-Qr runtime factory
+    value plus thin manager/overlay call sites for that workflow.
 - Geometry-fit Qr/Qz selector workflow extraction has advanced.
   - `ra_sim.gui.geometry_q_group_manager` now owns the selector line/status
     formatting, window refresh, checkbox/bulk include-exclude side effects,
@@ -481,12 +484,12 @@ What is left:
   extraction or the structure-model / diffuse-HT rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining Bragg-Qr runtime code is now mostly the shared runtime-binding
-  factory plus thin manager/overlay call sites around the extracted
+- The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
+  value plus thin manager/overlay call sites around the extracted
   controller/view modules.
-- The remaining Bragg-Qr manager runtime code is now mostly the shared
-  binding-factory wiring used by the live filter pipeline and HKL lookup
-  controls around the extracted manager helpers.
+- The remaining Bragg-Qr manager runtime code is now mostly the bound
+  factory wiring used by the live filter pipeline and HKL lookup controls
+  around the extracted manager helpers.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   delegate wrappers and window lifecycle wiring around the extracted
   manager/view helpers.
