@@ -4551,41 +4551,39 @@ peak_selection_runtime_bindings_factory = (
             if analysis_view_controls_view_state.show_caked_2d_var is not None
             else False
         ),
-        current_canvas_pick_config_factory=lambda: (
-            gui_peak_selection.build_selected_peak_canvas_pick_config(
+        current_canvas_pick_config_factory=(
+            gui_peak_selection.make_runtime_selected_peak_canvas_pick_config_factory(
                 image_size=int(image_size),
-                primary_a=float(av),
-                primary_c=float(cv),
+                primary_a_factory=lambda: float(av),
+                primary_c_factory=lambda: float(cv),
                 max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
                 min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
-                image_shape=(
+                image_shape_factory=lambda: (
                     tuple(int(v) for v in global_image_buffer.shape)
                     if global_image_buffer.size
-                    else (int(image_size), int(image_size))
+                    else None
                 ),
             )
         ),
-        current_intersection_config_factory=lambda: (
-            gui_peak_selection.build_selected_peak_intersection_config(
+        current_intersection_config_factory=(
+            gui_peak_selection.make_runtime_selected_peak_intersection_config_factory(
                 image_size=int(image_size),
-                center_col=float(center_y_var.get()),
-                center_row=float(center_x_var.get()),
-                distance_cor_to_detector=float(corto_detector_var.get()),
-                gamma_deg=float(gamma_var.get()),
-                Gamma_deg=float(Gamma_var.get()),
-                chi_deg=float(chi_var.get()),
-                psi_deg=float(psi),
-                psi_z_deg=float(psi_z_var.get()),
-                zs=float(zs_var.get()),
-                zb=float(zb_var.get()),
-                theta_initial_deg=float(theta_initial_var.get()),
-                cor_angle_deg=float(cor_angle_var.get()),
-                sigma_mosaic_deg=float(sigma_mosaic_var.get()),
-                gamma_mosaic_deg=float(gamma_mosaic_var.get()),
-                eta=float(eta_var.get()),
-                solve_q_steps=current_solve_q_values().steps,
-                solve_q_rel_tol=current_solve_q_values().rel_tol,
-                solve_q_mode=current_solve_q_values().mode_flag,
+                center_col_factory=lambda: float(center_y_var.get()),
+                center_row_factory=lambda: float(center_x_var.get()),
+                distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
+                gamma_deg_factory=lambda: float(gamma_var.get()),
+                Gamma_deg_factory=lambda: float(Gamma_var.get()),
+                chi_deg_factory=lambda: float(chi_var.get()),
+                psi_deg_factory=lambda: float(psi),
+                psi_z_deg_factory=lambda: float(psi_z_var.get()),
+                zs_factory=lambda: float(zs_var.get()),
+                zb_factory=lambda: float(zb_var.get()),
+                theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
+                cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
+                sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
+                gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
+                eta_factory=lambda: float(eta_var.get()),
+                solve_q_values_factory=current_solve_q_values,
             )
         ),
         ensure_peak_overlay_data=lambda **kwargs: _ensure_peak_overlay_data(**kwargs),
@@ -4603,38 +4601,29 @@ peak_selection_runtime_bindings_factory = (
         draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
         display_to_native_sim_coords=_display_to_native_sim_coords,
         native_sim_to_display_coords=_native_sim_to_display_coords,
-        simulate_ideal_hkl_native_center=lambda h, k, l, av_local, cv_local: (
-            gui_peak_selection.simulate_ideal_hkl_native_center(
-                simulation_runtime_state,
-                h,
-                k,
-                l,
-                config=gui_peak_selection.build_selected_peak_ideal_center_probe_config(
-                    image_size=int(image_size),
-                    lattice_a=float(av_local),
-                    lattice_c=float(cv_local),
-                    wavelength=float(lambda_),
-                    distance_cor_to_detector=float(corto_detector_var.get()),
-                    gamma_deg=float(gamma_var.get()),
-                    Gamma_deg=float(Gamma_var.get()),
-                    chi_deg=float(chi_var.get()),
-                    psi_deg=float(psi),
-                    psi_z_deg=float(psi_z_var.get()),
-                    zs=float(zs_var.get()),
-                    zb=float(zb_var.get()),
-                    debye_x=float(debye_x_var.get()),
-                    debye_y=float(debye_y_var.get()),
-                    detector_center=(
-                        float(center_x_var.get()),
-                        float(center_y_var.get()),
-                    ),
-                    theta_initial_deg=float(theta_initial_var.get()),
-                    cor_angle_deg=float(cor_angle_var.get()),
-                    optics_mode=_current_optics_mode_flag(),
-                    solve_q_steps=current_solve_q_values().steps,
-                    solve_q_rel_tol=current_solve_q_values().rel_tol,
-                    solve_q_mode=current_solve_q_values().mode_flag,
+        simulate_ideal_hkl_native_center=(
+            gui_peak_selection.make_runtime_selected_peak_ideal_center_factory(
+                simulation_runtime_state=simulation_runtime_state,
+                image_size=int(image_size),
+                wavelength_factory=lambda: float(lambda_),
+                distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
+                gamma_deg_factory=lambda: float(gamma_var.get()),
+                Gamma_deg_factory=lambda: float(Gamma_var.get()),
+                chi_deg_factory=lambda: float(chi_var.get()),
+                psi_deg_factory=lambda: float(psi),
+                psi_z_deg_factory=lambda: float(psi_z_var.get()),
+                zs_factory=lambda: float(zs_var.get()),
+                zb_factory=lambda: float(zb_var.get()),
+                debye_x_factory=lambda: float(debye_x_var.get()),
+                debye_y_factory=lambda: float(debye_y_var.get()),
+                detector_center_factory=lambda: (
+                    float(center_x_var.get()),
+                    float(center_y_var.get()),
                 ),
+                theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
+                cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
+                optics_mode_factory=_current_optics_mode_flag,
+                solve_q_values_factory=current_solve_q_values,
                 n2=n2,
                 process_peaks_parallel=process_peaks_parallel,
             )

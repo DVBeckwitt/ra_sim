@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -305,6 +305,329 @@ def build_selected_peak_ideal_center_probe_config(
         unit_x=tuple(float(v) for v in unit_x),
         n_detector=tuple(float(v) for v in n_detector),
     )
+
+
+def _runtime_float(value_or_callable: object, default: float = 0.0) -> float:
+    try:
+        return float(_resolve_runtime_value(value_or_callable))
+    except Exception:
+        return float(default)
+
+
+def _runtime_int(value_or_callable: object, default: int = 0) -> int:
+    try:
+        return int(_resolve_runtime_value(value_or_callable))
+    except Exception:
+        return int(default)
+
+
+def _runtime_sequence(value_or_callable: object) -> Sequence[object] | None:
+    raw_value = _resolve_runtime_value(value_or_callable)
+    if raw_value is None:
+        return None
+    if hasattr(raw_value, "shape") and not isinstance(raw_value, (str, bytes)):
+        try:
+            raw_value = tuple(int(v) for v in raw_value.shape)
+        except Exception:
+            raw_value = getattr(raw_value, "shape", raw_value)
+    if isinstance(raw_value, np.ndarray):
+        return tuple(raw_value.tolist())
+    if isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)):
+        return raw_value
+    return None
+
+
+def _runtime_float_pair(
+    value_or_callable: object,
+    *,
+    default: tuple[float, float] = (0.0, 0.0),
+) -> tuple[float, float]:
+    raw_value = _runtime_sequence(value_or_callable)
+    if raw_value is None or len(raw_value) < 2:
+        return (float(default[0]), float(default[1]))
+    try:
+        return (float(raw_value[0]), float(raw_value[1]))
+    except Exception:
+        return (float(default[0]), float(default[1]))
+
+
+def _runtime_selected_peak_solve_q_fields(
+    value_or_callable: object,
+) -> tuple[int, float, int]:
+    raw_value = _resolve_runtime_value(value_or_callable)
+    if isinstance(raw_value, Mapping):
+        return (
+            _runtime_int(raw_value.get("steps"), 0),
+            _runtime_float(raw_value.get("rel_tol"), 0.0),
+            _runtime_int(
+                raw_value.get("mode_flag", raw_value.get("mode", 0)),
+                0,
+            ),
+        )
+    return (
+        _runtime_int(getattr(raw_value, "steps", 0), 0),
+        _runtime_float(getattr(raw_value, "rel_tol", 0.0), 0.0),
+        _runtime_int(getattr(raw_value, "mode_flag", 0), 0),
+    )
+
+
+def build_runtime_selected_peak_canvas_pick_config(
+    *,
+    image_size: int,
+    primary_a: object,
+    primary_c: object,
+    max_distance_px: object,
+    min_separation_px: object,
+    image_shape: object = None,
+) -> SelectedPeakCanvasPickConfig:
+    """Build one live canvas-pick config from runtime scalar sources."""
+
+    normalized_shape = _runtime_sequence(image_shape)
+    if normalized_shape is None or len(normalized_shape) == 0:
+        normalized_shape = (int(image_size), int(image_size))
+    return build_selected_peak_canvas_pick_config(
+        image_size=int(image_size),
+        primary_a=_runtime_float(primary_a, float("nan")),
+        primary_c=_runtime_float(primary_c, float("nan")),
+        max_distance_px=_runtime_float(max_distance_px, 0.0),
+        min_separation_px=_runtime_float(min_separation_px, 0.0),
+        image_shape=tuple(int(v) for v in normalized_shape),
+    )
+
+
+def build_runtime_selected_peak_intersection_config(
+    *,
+    image_size: int,
+    center_col: object,
+    center_row: object,
+    distance_cor_to_detector: object,
+    gamma_deg: object,
+    Gamma_deg: object,
+    chi_deg: object,
+    psi_deg: object,
+    psi_z_deg: object,
+    zs: object,
+    zb: object,
+    theta_initial_deg: object,
+    cor_angle_deg: object,
+    sigma_mosaic_deg: object,
+    gamma_mosaic_deg: object,
+    eta: object,
+    solve_q_values: object,
+) -> SelectedPeakIntersectionConfig:
+    """Build one live selected-peak intersection config from runtime sources."""
+
+    solve_q_steps, solve_q_rel_tol, solve_q_mode = _runtime_selected_peak_solve_q_fields(
+        solve_q_values
+    )
+    return build_selected_peak_intersection_config(
+        image_size=int(image_size),
+        center_col=_runtime_float(center_col, float("nan")),
+        center_row=_runtime_float(center_row, float("nan")),
+        distance_cor_to_detector=_runtime_float(
+            distance_cor_to_detector,
+            float("nan"),
+        ),
+        gamma_deg=_runtime_float(gamma_deg, float("nan")),
+        Gamma_deg=_runtime_float(Gamma_deg, float("nan")),
+        chi_deg=_runtime_float(chi_deg, float("nan")),
+        psi_deg=_runtime_float(psi_deg, float("nan")),
+        psi_z_deg=_runtime_float(psi_z_deg, float("nan")),
+        zs=_runtime_float(zs, float("nan")),
+        zb=_runtime_float(zb, float("nan")),
+        theta_initial_deg=_runtime_float(theta_initial_deg, float("nan")),
+        cor_angle_deg=_runtime_float(cor_angle_deg, float("nan")),
+        sigma_mosaic_deg=_runtime_float(sigma_mosaic_deg, float("nan")),
+        gamma_mosaic_deg=_runtime_float(gamma_mosaic_deg, float("nan")),
+        eta=_runtime_float(eta, float("nan")),
+        solve_q_steps=solve_q_steps,
+        solve_q_rel_tol=solve_q_rel_tol,
+        solve_q_mode=solve_q_mode,
+    )
+
+
+def build_runtime_selected_peak_ideal_center_probe_config(
+    *,
+    image_size: int,
+    lattice_a: object,
+    lattice_c: object,
+    wavelength: object,
+    distance_cor_to_detector: object,
+    gamma_deg: object,
+    Gamma_deg: object,
+    chi_deg: object,
+    psi_deg: object,
+    psi_z_deg: object,
+    zs: object,
+    zb: object,
+    debye_x: object,
+    debye_y: object,
+    detector_center: object,
+    theta_initial_deg: object,
+    cor_angle_deg: object,
+    optics_mode: object,
+    solve_q_values: object,
+) -> SelectedPeakIdealCenterProbeConfig:
+    """Build one live ideal-center probe config from runtime scalar sources."""
+
+    solve_q_steps, solve_q_rel_tol, solve_q_mode = _runtime_selected_peak_solve_q_fields(
+        solve_q_values
+    )
+    return build_selected_peak_ideal_center_probe_config(
+        image_size=int(image_size),
+        lattice_a=_runtime_float(lattice_a, float("nan")),
+        lattice_c=_runtime_float(lattice_c, float("nan")),
+        wavelength=_runtime_float(wavelength, float("nan")),
+        distance_cor_to_detector=_runtime_float(
+            distance_cor_to_detector,
+            float("nan"),
+        ),
+        gamma_deg=_runtime_float(gamma_deg, float("nan")),
+        Gamma_deg=_runtime_float(Gamma_deg, float("nan")),
+        chi_deg=_runtime_float(chi_deg, float("nan")),
+        psi_deg=_runtime_float(psi_deg, float("nan")),
+        psi_z_deg=_runtime_float(psi_z_deg, float("nan")),
+        zs=_runtime_float(zs, float("nan")),
+        zb=_runtime_float(zb, float("nan")),
+        debye_x=_runtime_float(debye_x, float("nan")),
+        debye_y=_runtime_float(debye_y, float("nan")),
+        detector_center=_runtime_float_pair(detector_center),
+        theta_initial_deg=_runtime_float(theta_initial_deg, float("nan")),
+        cor_angle_deg=_runtime_float(cor_angle_deg, float("nan")),
+        optics_mode=_runtime_int(optics_mode, 0),
+        solve_q_steps=solve_q_steps,
+        solve_q_rel_tol=solve_q_rel_tol,
+        solve_q_mode=solve_q_mode,
+    )
+
+
+def make_runtime_selected_peak_canvas_pick_config_factory(
+    *,
+    image_size: int,
+    primary_a_factory: object,
+    primary_c_factory: object,
+    max_distance_px: object,
+    min_separation_px: object,
+    image_shape_factory: object = None,
+) -> Callable[[], SelectedPeakCanvasPickConfig]:
+    """Return a zero-arg factory for the live canvas-pick config."""
+
+    return lambda: build_runtime_selected_peak_canvas_pick_config(
+        image_size=int(image_size),
+        primary_a=primary_a_factory,
+        primary_c=primary_c_factory,
+        max_distance_px=max_distance_px,
+        min_separation_px=min_separation_px,
+        image_shape=image_shape_factory,
+    )
+
+
+def make_runtime_selected_peak_intersection_config_factory(
+    *,
+    image_size: int,
+    center_col_factory: object,
+    center_row_factory: object,
+    distance_cor_to_detector_factory: object,
+    gamma_deg_factory: object,
+    Gamma_deg_factory: object,
+    chi_deg_factory: object,
+    psi_deg_factory: object,
+    psi_z_deg_factory: object,
+    zs_factory: object,
+    zb_factory: object,
+    theta_initial_deg_factory: object,
+    cor_angle_deg_factory: object,
+    sigma_mosaic_deg_factory: object,
+    gamma_mosaic_deg_factory: object,
+    eta_factory: object,
+    solve_q_values_factory: object,
+) -> Callable[[], SelectedPeakIntersectionConfig]:
+    """Return a zero-arg factory for the live intersection-analysis config."""
+
+    return lambda: build_runtime_selected_peak_intersection_config(
+        image_size=int(image_size),
+        center_col=center_col_factory,
+        center_row=center_row_factory,
+        distance_cor_to_detector=distance_cor_to_detector_factory,
+        gamma_deg=gamma_deg_factory,
+        Gamma_deg=Gamma_deg_factory,
+        chi_deg=chi_deg_factory,
+        psi_deg=psi_deg_factory,
+        psi_z_deg=psi_z_deg_factory,
+        zs=zs_factory,
+        zb=zb_factory,
+        theta_initial_deg=theta_initial_deg_factory,
+        cor_angle_deg=cor_angle_deg_factory,
+        sigma_mosaic_deg=sigma_mosaic_deg_factory,
+        gamma_mosaic_deg=gamma_mosaic_deg_factory,
+        eta=eta_factory,
+        solve_q_values=solve_q_values_factory,
+    )
+
+
+def make_runtime_selected_peak_ideal_center_factory(
+    *,
+    simulation_runtime_state,
+    image_size: int,
+    wavelength_factory: object,
+    distance_cor_to_detector_factory: object,
+    gamma_deg_factory: object,
+    Gamma_deg_factory: object,
+    chi_deg_factory: object,
+    psi_deg_factory: object,
+    psi_z_deg_factory: object,
+    zs_factory: object,
+    zb_factory: object,
+    debye_x_factory: object,
+    debye_y_factory: object,
+    detector_center_factory: object,
+    theta_initial_deg_factory: object,
+    cor_angle_deg_factory: object,
+    optics_mode_factory: object,
+    solve_q_values_factory: object,
+    n2: Any,
+    process_peaks_parallel: Callable[..., object],
+) -> Callable[[float, float, float, float, float], tuple[float, float] | None]:
+    """Return the live ideal-center probe callback used by canvas HKL picking."""
+
+    def _simulate(
+        h: float,
+        k: float,
+        l: float,
+        lattice_a: float,
+        lattice_c: float,
+    ) -> tuple[float, float] | None:
+        return simulate_ideal_hkl_native_center(
+            simulation_runtime_state,
+            h,
+            k,
+            l,
+            config=build_runtime_selected_peak_ideal_center_probe_config(
+                image_size=int(image_size),
+                lattice_a=lattice_a,
+                lattice_c=lattice_c,
+                wavelength=wavelength_factory,
+                distance_cor_to_detector=distance_cor_to_detector_factory,
+                gamma_deg=gamma_deg_factory,
+                Gamma_deg=Gamma_deg_factory,
+                chi_deg=chi_deg_factory,
+                psi_deg=psi_deg_factory,
+                psi_z_deg=psi_z_deg_factory,
+                zs=zs_factory,
+                zb=zb_factory,
+                debye_x=debye_x_factory,
+                debye_y=debye_y_factory,
+                detector_center=detector_center_factory,
+                theta_initial_deg=theta_initial_deg_factory,
+                cor_angle_deg=cor_angle_deg_factory,
+                optics_mode=optics_mode_factory,
+                solve_q_values=solve_q_values_factory,
+            ),
+            n2=n2,
+            process_peaks_parallel=process_peaks_parallel,
+        )
+
+    return _simulate
 
 
 def hkl_pick_button_text(armed: bool) -> str:

@@ -1,4 +1,5 @@
 import numpy as np
+from types import SimpleNamespace
 
 from ra_sim.gui import peak_selection, state
 
@@ -197,6 +198,165 @@ def test_peak_selection_config_builders_normalize_values() -> None:
     assert probe_cfg.detector_center == (255.5, 256.5)
     assert probe_cfg.unit_x == (1.0, 0.0, 0.0)
     assert probe_cfg.n_detector == (0.0, 1.0, 0.0)
+
+
+def test_peak_selection_runtime_config_factories_read_live_values() -> None:
+    live = {
+        "primary_a": 5.0,
+        "primary_c": 7.0,
+        "image_shape": None,
+        "center_col": 255.5,
+        "center_row": 256.5,
+        "distance": 123.0,
+        "gamma": 1.5,
+        "Gamma": 2.5,
+        "chi": 3.5,
+        "psi": 4.5,
+        "psi_z": 5.5,
+        "zs": 6.5,
+        "zb": 7.5,
+        "theta_initial": 8.5,
+        "cor_angle": 9.5,
+        "sigma_mosaic": 0.25,
+        "gamma_mosaic": 0.5,
+        "eta": 0.75,
+        "solve_q": SimpleNamespace(steps=321, rel_tol=1.0e-4, mode_flag=2),
+    }
+
+    canvas_factory = peak_selection.make_runtime_selected_peak_canvas_pick_config_factory(
+        image_size=64,
+        primary_a_factory=lambda: live["primary_a"],
+        primary_c_factory=lambda: live["primary_c"],
+        max_distance_px=12.0,
+        min_separation_px=2.0,
+        image_shape_factory=lambda: live["image_shape"],
+    )
+    intersection_factory = (
+        peak_selection.make_runtime_selected_peak_intersection_config_factory(
+            image_size=512,
+            center_col_factory=lambda: live["center_col"],
+            center_row_factory=lambda: live["center_row"],
+            distance_cor_to_detector_factory=lambda: live["distance"],
+            gamma_deg_factory=lambda: live["gamma"],
+            Gamma_deg_factory=lambda: live["Gamma"],
+            chi_deg_factory=lambda: live["chi"],
+            psi_deg_factory=lambda: live["psi"],
+            psi_z_deg_factory=lambda: live["psi_z"],
+            zs_factory=lambda: live["zs"],
+            zb_factory=lambda: live["zb"],
+            theta_initial_deg_factory=lambda: live["theta_initial"],
+            cor_angle_deg_factory=lambda: live["cor_angle"],
+            sigma_mosaic_deg_factory=lambda: live["sigma_mosaic"],
+            gamma_mosaic_deg_factory=lambda: live["gamma_mosaic"],
+            eta_factory=lambda: live["eta"],
+            solve_q_values_factory=lambda: live["solve_q"],
+        )
+    )
+
+    canvas_cfg = canvas_factory()
+    intersection_cfg = intersection_factory()
+
+    assert canvas_cfg.image_shape == (64, 64)
+    assert canvas_cfg.primary_a == 5.0
+    assert canvas_cfg.primary_c == 7.0
+    assert intersection_cfg.center_col == 255.5
+    assert intersection_cfg.center_row == 256.5
+    assert intersection_cfg.solve_q_steps == 321
+    assert intersection_cfg.solve_q_rel_tol == 1.0e-4
+    assert intersection_cfg.solve_q_mode == 2
+
+    live["primary_a"] = 6.0
+    live["image_shape"] = (80, 96)
+    live["solve_q"] = SimpleNamespace(steps=123, rel_tol=2.5e-4, mode_flag=1)
+
+    canvas_cfg = canvas_factory()
+    intersection_cfg = intersection_factory()
+
+    assert canvas_cfg.primary_a == 6.0
+    assert canvas_cfg.image_shape == (80, 96)
+    assert intersection_cfg.solve_q_steps == 123
+    assert intersection_cfg.solve_q_rel_tol == 2.5e-4
+    assert intersection_cfg.solve_q_mode == 1
+
+
+def test_peak_selection_runtime_ideal_center_factory_builds_live_probe_config(
+    monkeypatch,
+) -> None:
+    live = {
+        "wavelength": 1.54,
+        "distance": 123.0,
+        "gamma": 1.5,
+        "Gamma": 2.5,
+        "chi": 3.5,
+        "psi": 4.5,
+        "psi_z": 5.5,
+        "zs": 6.5,
+        "zb": 7.5,
+        "debye_x": 0.1,
+        "debye_y": 0.2,
+        "detector_center": (255.5, 256.5),
+        "theta_initial": 8.5,
+        "cor_angle": 9.5,
+        "optics_mode": 2,
+        "solve_q": SimpleNamespace(steps=321, rel_tol=1.0e-4, mode_flag=1),
+    }
+    process_peaks = lambda *args, **kwargs: None
+    captured = {}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "simulate_ideal_hkl_native_center",
+        lambda runtime_state, h, k, l, *, config, n2, process_peaks_parallel: (
+            captured.update(
+                {
+                    "runtime_state": runtime_state,
+                    "hkl": (h, k, l),
+                    "config": config,
+                    "n2": n2,
+                    "process_peaks_parallel": process_peaks_parallel,
+                }
+            ),
+            (12.0, 34.0),
+        )[-1],
+    )
+
+    factory = peak_selection.make_runtime_selected_peak_ideal_center_factory(
+        simulation_runtime_state="runtime-state",
+        image_size=64,
+        wavelength_factory=lambda: live["wavelength"],
+        distance_cor_to_detector_factory=lambda: live["distance"],
+        gamma_deg_factory=lambda: live["gamma"],
+        Gamma_deg_factory=lambda: live["Gamma"],
+        chi_deg_factory=lambda: live["chi"],
+        psi_deg_factory=lambda: live["psi"],
+        psi_z_deg_factory=lambda: live["psi_z"],
+        zs_factory=lambda: live["zs"],
+        zb_factory=lambda: live["zb"],
+        debye_x_factory=lambda: live["debye_x"],
+        debye_y_factory=lambda: live["debye_y"],
+        detector_center_factory=lambda: live["detector_center"],
+        theta_initial_deg_factory=lambda: live["theta_initial"],
+        cor_angle_deg_factory=lambda: live["cor_angle"],
+        optics_mode_factory=lambda: live["optics_mode"],
+        solve_q_values_factory=lambda: live["solve_q"],
+        n2="n2",
+        process_peaks_parallel=process_peaks,
+    )
+
+    result = factory(1.0, 0.0, 2.0, 4.5, 6.5)
+
+    assert result == (12.0, 34.0)
+    assert captured["runtime_state"] == "runtime-state"
+    assert captured["hkl"] == (1.0, 0.0, 2.0)
+    assert captured["n2"] == "n2"
+    assert captured["process_peaks_parallel"] is process_peaks
+    assert isinstance(captured["config"], peak_selection.SelectedPeakIdealCenterProbeConfig)
+    assert captured["config"].lattice_a == 4.5
+    assert captured["config"].lattice_c == 6.5
+    assert captured["config"].detector_center == (255.5, 256.5)
+    assert captured["config"].solve_q_steps == 321
+    assert captured["config"].solve_q_rel_tol == 1.0e-4
+    assert captured["config"].solve_q_mode == 1
 
 
 def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallback() -> None:
