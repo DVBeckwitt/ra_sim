@@ -828,24 +828,16 @@ def _clip_sf_prune_bias(value) -> float:
 
 
 def _current_sf_prune_bias() -> float:
-    view_state = globals().get("structure_factor_pruning_controls_view_state")
-    var = getattr(view_state, "sf_prune_bias_var", None)
-    if var is None:
-        return _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0))
-    try:
-        return _clip_sf_prune_bias(var.get())
-    except Exception:
-        return _clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0))
+    return gui_structure_factor_pruning.current_runtime_sf_prune_bias(
+        structure_factor_pruning_runtime_bindings_factory()
+    )
 
 
-def _sf_prune_profile_from_bias(bias: float) -> tuple[float, float, int, int]:
-    return gui_controllers.structure_factor_prune_profile_from_bias(bias)
-
-
-def _structure_factor_pruning_runtime_bindings(
-) -> gui_structure_factor_pruning.StructureFactorPruningRuntimeBindings:
-    return gui_structure_factor_pruning.StructureFactorPruningRuntimeBindings(
-        view_state=globals().get("structure_factor_pruning_controls_view_state"),
+structure_factor_pruning_runtime_bindings_factory = (
+    gui_structure_factor_pruning.make_runtime_structure_factor_pruning_bindings_factory(
+        view_state_factory=lambda: globals().get(
+            "structure_factor_pruning_controls_view_state"
+        ),
         simulation_runtime_state=simulation_runtime_state,
         bragg_qr_manager_state=bragg_qr_manager_state,
         clip_prune_bias=_clip_sf_prune_bias,
@@ -854,12 +846,12 @@ def _structure_factor_pruning_runtime_bindings(
         normalize_solve_q_mode_label=lambda value: _normalize_solve_q_mode_label(
             value
         ),
-        schedule_update=(
+        schedule_update_factory=lambda: (
             globals().get("schedule_update")
             if callable(globals().get("schedule_update"))
             else None
         ),
-        refresh_window=(
+        refresh_window_factory=lambda: (
             gui_bragg_qr_manager.make_runtime_bragg_qr_refresh_callback(
                 globals().get("bragg_qr_runtime_bindings_factory")
             )
@@ -867,26 +859,48 @@ def _structure_factor_pruning_runtime_bindings(
             else None
         ),
     )
+)
 
-
-def _update_sf_prune_status_label() -> None:
-    gui_structure_factor_pruning.update_runtime_structure_factor_pruning_status(
-        _structure_factor_pruning_runtime_bindings()
+update_sf_prune_status_label = (
+    gui_structure_factor_pruning.make_runtime_structure_factor_pruning_status_callback(
+        structure_factor_pruning_runtime_bindings_factory
     )
+)
+apply_bragg_qr_filters = gui_structure_factor_pruning.make_runtime_bragg_qr_filter_callback(
+    structure_factor_pruning_runtime_bindings_factory
+)
+on_sf_prune_bias_change = (
+    gui_structure_factor_pruning.make_runtime_sf_prune_bias_change_callback(
+        structure_factor_pruning_runtime_bindings_factory
+    )
+)
+on_solve_q_steps_change = (
+    gui_structure_factor_pruning.make_runtime_solve_q_steps_change_callback(
+        structure_factor_pruning_runtime_bindings_factory
+    )
+)
+on_solve_q_rel_tol_change = (
+    gui_structure_factor_pruning.make_runtime_solve_q_rel_tol_change_callback(
+        structure_factor_pruning_runtime_bindings_factory
+    )
+)
+set_solve_q_control_states = (
+    gui_structure_factor_pruning.make_runtime_solve_q_control_states_callback(
+        structure_factor_pruning_runtime_bindings_factory
+    )
+)
+on_solve_q_mode_change = (
+    gui_structure_factor_pruning.make_runtime_solve_q_mode_change_callback(
+        structure_factor_pruning_runtime_bindings_factory
+    )
+)
 
 
 def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
     return gui_controllers.normalize_bragg_qr_source_label(source_label)
 
 
-def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
-    gui_structure_factor_pruning.apply_runtime_bragg_qr_filters(
-        _structure_factor_pruning_runtime_bindings(),
-        trigger_update=trigger_update,
-    )
-
-
-_apply_bragg_qr_filters(trigger_update=False)
+apply_bragg_qr_filters(trigger_update=False)
 
 # Build summary and details dataframes using the helper.
 df_summary, df_details = build_intensity_dataframes(
@@ -4923,7 +4937,7 @@ bragg_qr_runtime_bindings_factory = gui_bragg_qr_manager.make_runtime_bragg_qr_b
     primary_candidate=(lambda: a_var.get()),
     primary_fallback=float(av),
     secondary_candidate=(lambda: av2),
-    apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+    apply_filters=lambda: apply_bragg_qr_filters(trigger_update=True),
     set_progress_text_factory=lambda: (
         (lambda text: progress_label_positions.config(text=text))
         if "progress_label_positions" in globals()
@@ -6567,7 +6581,7 @@ def _clip_solve_q_steps(value) -> int:
 
 def _current_solve_q_steps() -> int:
     return gui_structure_factor_pruning.current_runtime_solve_q_steps(
-        _structure_factor_pruning_runtime_bindings()
+        structure_factor_pruning_runtime_bindings_factory()
     )
 
 
@@ -6582,7 +6596,7 @@ def _clip_solve_q_rel_tol(value) -> float:
 
 def _current_solve_q_rel_tol() -> float:
     return gui_structure_factor_pruning.current_runtime_solve_q_rel_tol(
-        _structure_factor_pruning_runtime_bindings()
+        structure_factor_pruning_runtime_bindings_factory()
     )
 
 
@@ -6601,7 +6615,7 @@ def _solve_q_mode_flag_from_label(label: str) -> int:
 def _current_solve_q_mode_flag() -> int:
     return _solve_q_mode_flag_from_label(
         gui_structure_factor_pruning.current_runtime_solve_q_mode_label(
-            _structure_factor_pruning_runtime_bindings()
+            structure_factor_pruning_runtime_bindings_factory()
         )
     )
 
@@ -13687,37 +13701,6 @@ def on_optics_mode_change(*_):
 
 optics_mode_var.trace_add('write', on_optics_mode_change)
 
-
-def on_sf_prune_bias_change(*_):
-    gui_structure_factor_pruning.on_runtime_sf_prune_bias_change(
-        _structure_factor_pruning_runtime_bindings()
-    )
-
-
-def on_solve_q_steps_change(*_):
-    gui_structure_factor_pruning.on_runtime_solve_q_steps_change(
-        _structure_factor_pruning_runtime_bindings()
-    )
-
-
-def on_solve_q_rel_tol_change(*_):
-    gui_structure_factor_pruning.on_runtime_solve_q_rel_tol_change(
-        _structure_factor_pruning_runtime_bindings()
-    )
-
-
-def _set_solve_q_control_states():
-    gui_structure_factor_pruning.set_runtime_solve_q_control_states(
-        _structure_factor_pruning_runtime_bindings()
-    )
-
-
-def on_solve_q_mode_change(*_):
-    gui_structure_factor_pruning.on_runtime_solve_q_mode_change(
-        _structure_factor_pruning_runtime_bindings()
-    )
-
-
 gui_views.create_structure_factor_pruning_controls(
     parent=mosaic_frame.frame,
     view_state=structure_factor_pruning_controls_view_state,
@@ -13750,11 +13733,11 @@ solve_q_rel_tol_scale = (
     structure_factor_pruning_controls_view_state.solve_q_rel_tol_scale
 )
 sf_prune_bias_var.trace_add('write', on_sf_prune_bias_change)
-_update_sf_prune_status_label()
+update_sf_prune_status_label()
 solve_q_steps_var.trace_add('write', on_solve_q_steps_change)
 solve_q_rel_tol_var.trace_add('write', on_solve_q_rel_tol_change)
 solve_q_mode_var.trace_add('write', on_solve_q_mode_change)
-_set_solve_q_control_states()
+set_solve_q_control_states()
 
 center_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -14210,7 +14193,7 @@ def _rebuild_diffraction_inputs(
         simulation_runtime_state=simulation_runtime_state,
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
         build_intensity_dataframes=build_intensity_dataframes,
-        apply_bragg_qr_filters=_apply_bragg_qr_filters,
+        apply_bragg_qr_filters=apply_bragg_qr_filters,
         schedule_update=schedule_update,
         weight1=weight1_var.get(),
         weight2=weight2_var.get(),

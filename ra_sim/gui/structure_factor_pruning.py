@@ -28,6 +28,121 @@ class StructureFactorPruningRuntimeBindings:
     refresh_window: Callable[[], None] | None = None
 
 
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
+
+
+def make_runtime_structure_factor_pruning_bindings_factory(
+    *,
+    view_state_factory: object,
+    simulation_runtime_state,
+    bragg_qr_manager_state,
+    clip_prune_bias: Callable[[object], float],
+    clip_solve_q_steps: Callable[[object], int],
+    clip_solve_q_rel_tol: Callable[[object], float],
+    normalize_solve_q_mode_label: Callable[[object], str],
+    apply_filters: Callable[..., Mapping[str, object]] = gui_controllers.apply_bragg_qr_filters,
+    schedule_update_factory: object | None = None,
+    refresh_window_factory: object | None = None,
+) -> Callable[[], StructureFactorPruningRuntimeBindings]:
+    """Return a zero-arg factory for live pruning / solve-q runtime bindings."""
+
+    def _build_bindings() -> StructureFactorPruningRuntimeBindings:
+        return StructureFactorPruningRuntimeBindings(
+            view_state=_resolve_runtime_value(view_state_factory),
+            simulation_runtime_state=simulation_runtime_state,
+            bragg_qr_manager_state=bragg_qr_manager_state,
+            clip_prune_bias=clip_prune_bias,
+            clip_solve_q_steps=clip_solve_q_steps,
+            clip_solve_q_rel_tol=clip_solve_q_rel_tol,
+            normalize_solve_q_mode_label=normalize_solve_q_mode_label,
+            apply_filters=apply_filters,
+            schedule_update=_resolve_runtime_value(schedule_update_factory),
+            refresh_window=_resolve_runtime_value(refresh_window_factory),
+        )
+
+    return _build_bindings
+
+
+def make_runtime_structure_factor_pruning_status_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[[], str]:
+    """Return a zero-arg callback that refreshes pruning status from live bindings."""
+
+    return lambda: update_runtime_structure_factor_pruning_status(bindings_factory())
+
+
+def make_runtime_bragg_qr_filter_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[..., Mapping[str, object]]:
+    """Return a callback that applies Bragg-Qr filters from live bindings."""
+
+    def _apply_filters(*, trigger_update: bool = True) -> Mapping[str, object]:
+        return apply_runtime_bragg_qr_filters(
+            bindings_factory(),
+            trigger_update=trigger_update,
+        )
+
+    return _apply_filters
+
+
+def make_runtime_sf_prune_bias_change_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[..., bool]:
+    """Return a trace callback for runtime SF-pruning bias updates."""
+
+    def _on_change(*_args) -> bool:
+        return on_runtime_sf_prune_bias_change(bindings_factory())
+
+    return _on_change
+
+
+def make_runtime_solve_q_steps_change_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[..., bool]:
+    """Return a trace callback for runtime solve-q interval updates."""
+
+    def _on_change(*_args) -> bool:
+        return on_runtime_solve_q_steps_change(bindings_factory())
+
+    return _on_change
+
+
+def make_runtime_solve_q_rel_tol_change_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[..., bool]:
+    """Return a trace callback for runtime solve-q tolerance updates."""
+
+    def _on_change(*_args) -> bool:
+        return on_runtime_solve_q_rel_tol_change(bindings_factory())
+
+    return _on_change
+
+
+def make_runtime_solve_q_control_states_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[[], str]:
+    """Return a zero-arg callback that syncs runtime solve-q control state."""
+
+    return lambda: set_runtime_solve_q_control_states(bindings_factory())
+
+
+def make_runtime_solve_q_mode_change_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[..., bool]:
+    """Return a trace callback for runtime solve-q mode updates."""
+
+    def _on_change(*_args) -> bool:
+        return on_runtime_solve_q_mode_change(bindings_factory())
+
+    return _on_change
+
+
 def _safe_var_get(var: object) -> object:
     getter = getattr(var, "get", None)
     if not callable(getter):

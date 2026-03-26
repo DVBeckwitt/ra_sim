@@ -277,9 +277,11 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     structure-factor pruning / solve-q control callback workflow, pruning-
     status refresh, Bragg-Qr filter side effects, and adaptive-control sync
     used by the live GUI.
-  - `ra_sim.gui.runtime` now delegates the Bragg-Qr / SF-pruning control
-    workflow through that module and keeps only thin delegate wrappers plus
-    current-value helpers inline.
+  - `ra_sim.gui.structure_factor_pruning` now also owns the zero-arg runtime
+    binding/callback factories used by pruning-status refresh, Bragg-Qr
+    filter application, and solve-q control traces.
+  - `ra_sim.gui.runtime` now keeps only bound structure-factor-pruning
+    factory values plus current-value helpers inline.
   - The Bragg-Qr manager list-building workflow now also delegates through
     controller helpers, leaving runtime with listbox selection reads and the
     enable/disable action callbacks.
@@ -484,6 +486,9 @@ What is left:
   extraction or the structure-model / diffuse-HT rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
+- The remaining structure-factor-pruning runtime code is now mostly bound
+  factory values plus current-value helpers around the extracted pruning
+  module.
 - The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
   value plus thin manager/overlay call sites around the extracted
   controller/view modules.
