@@ -1,3 +1,5 @@
+import numpy as np
+
 from ra_sim.gui import bragg_qr_manager, controllers, state
 
 
@@ -332,6 +334,93 @@ def test_bragg_qr_manager_open_and_close_helpers_wrap_view_and_state(monkeypatch
     assert manager_state.qr_index_keys == []
     assert manager_state.l_index_keys == []
     assert manager_state.selected_group_key is None
+
+
+def test_bragg_qr_runtime_value_helpers_build_live_entries_and_overlay_data() -> None:
+    simulation_runtime_state = state.SimulationRuntimeState(
+        sim_primary_qr={"1": {"L": [0.0]}},
+    )
+
+    primary_a, secondary_a = bragg_qr_manager.current_runtime_bragg_qr_lattice_values(
+        primary_candidate=lambda: "5.5",
+        primary_fallback=4.0,
+        secondary_candidate=lambda: "bad",
+    )
+    assert primary_a == 5.5
+    assert secondary_a == 5.5
+
+    primary_a, secondary_a = bragg_qr_manager.current_runtime_bragg_qr_lattice_values(
+        primary_candidate=lambda: "5.5",
+        primary_fallback=4.0,
+        secondary_candidate=lambda: "6.5",
+    )
+    assert primary_a == 5.5
+    assert secondary_a == 6.5
+
+    entries = bragg_qr_manager.build_active_qr_cylinder_overlay_entries(
+        simulation_runtime_state,
+        primary_candidate=lambda: "5.0",
+        primary_fallback=4.0,
+        secondary_candidate=lambda: "6.0",
+        primary_miller_all=np.asarray([[1.0, 0.0, 0.0], [np.nan, 0.0, 0.0]]),
+        secondary_miller_all=np.asarray([[0.0, 1.0, 0.0]], dtype=float),
+    )
+
+    assert entries == [
+        {
+            "key": ("primary", 1),
+            "source": "primary",
+            "m": 1,
+            "qr": controllers.qr_value_for_m(1, 5.0),
+        },
+        {
+            "key": ("secondary", 1),
+            "source": "secondary",
+            "m": 1,
+            "qr": controllers.qr_value_for_m(1, 6.0),
+        },
+    ]
+
+
+def test_bragg_qr_runtime_binding_builder_reads_live_lattice_values(monkeypatch) -> None:
+    simulation_runtime_state = state.SimulationRuntimeState()
+    lattice_values = {"primary": "5.0", "secondary": "6.0"}
+    calls = []
+
+    monkeypatch.setattr(
+        bragg_qr_manager.gui_controllers,
+        "build_bragg_qr_entries",
+        lambda simulation_state, *, primary_a, secondary_a: (
+            calls.append(("entries", simulation_state, primary_a, secondary_a)),
+            [{"key": ("primary", 1)}],
+        )[-1],
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager.gui_controllers,
+        "build_bragg_qr_l_value_map",
+        lambda simulation_state, source_label, m_idx: (
+            calls.append(("l_map", simulation_state, source_label, m_idx)),
+            {1: 0.25},
+        )[-1],
+    )
+
+    bindings = bragg_qr_manager.build_runtime_bragg_qr_bindings(
+        view_state=state.BraggQrManagerViewState(),
+        manager_state=state.BraggQrManagerState(),
+        simulation_runtime_state=simulation_runtime_state,
+        primary_candidate=lambda: lattice_values["primary"],
+        primary_fallback=4.0,
+        secondary_candidate=lambda: lattice_values["secondary"],
+        apply_filters=lambda: None,
+        invalid_key=-999,
+    )
+
+    lattice_values["primary"] = "7.0"
+    assert bindings.get_entries() == [{"key": ("primary", 1)}]
+    assert calls[0] == ("entries", simulation_runtime_state, 7.0, 6.0)
+    assert bindings.build_l_value_map("primary", 3) == {1: 0.25}
+    assert calls[1] == ("l_map", simulation_runtime_state, "primary", 3)
+    assert bindings.invalid_key == -999
 
 
 def test_bragg_qr_manager_runtime_refresh_uses_shared_bindings(monkeypatch) -> None:

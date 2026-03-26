@@ -877,32 +877,6 @@ def _normalize_bragg_qr_source_label(source_label: str | None) -> str:
     return gui_controllers.normalize_bragg_qr_source_label(source_label)
 
 
-def _l_value_to_key(l_value: float) -> int:
-    return gui_controllers.bragg_qr_l_value_to_key(l_value)
-
-
-def _l_key_to_value(l_key: int) -> float:
-    return gui_controllers.bragg_qr_l_key_to_value(l_key)
-
-
-def _l_keys_from_l_array(l_vals: np.ndarray) -> np.ndarray:
-    return gui_controllers.bragg_qr_l_keys_from_l_array(l_vals)
-
-
-def _source_all_miller_for_label(source_label: str | None) -> np.ndarray:
-    label = _normalize_bragg_qr_source_label(source_label)
-    if label == "secondary":
-        return np.asarray(simulation_runtime_state.sim_miller2_all, dtype=np.float64)
-    return np.asarray(simulation_runtime_state.sim_miller1_all, dtype=np.float64)
-
-
-def _m_indices_from_miller_array(miller_arr: np.ndarray, *, unique: bool = False) -> np.ndarray:
-    return gui_controllers.bragg_qr_m_indices_from_miller_array(
-        miller_arr,
-        unique=unique,
-    )
-
-
 def _apply_bragg_qr_filters(*, trigger_update: bool = True) -> None:
     gui_structure_factor_pruning.apply_runtime_bragg_qr_filters(
         _structure_factor_pruning_runtime_bindings(),
@@ -3526,61 +3500,14 @@ def _clear_qr_cylinder_overlay_artists(*, redraw: bool = True):
 def _active_qr_cylinder_overlay_entries() -> list[dict[str, object]]:
     """Return active Qr groups from the current simulation state."""
 
-    def _m_values(arr_like: object) -> set[int]:
-        arr = np.asarray(arr_like, dtype=np.float64)
-        if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
-            return set()
-        finite = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1])
-        if not np.any(finite):
-            return set()
-        rows = arr[finite, :2]
-        h_vals = np.rint(rows[:, 0]).astype(np.int64, copy=False)
-        k_vals = np.rint(rows[:, 1]).astype(np.int64, copy=False)
-        return {int(v) for v in (h_vals * h_vals + h_vals * k_vals + k_vals * k_vals)}
-
-    try:
-        primary_a = float(a_var.get())
-    except Exception:
-        primary_a = float(av)
-
-    secondary_a = primary_a
-    try:
-        if av2 is not None:
-            secondary_candidate = float(av2)
-            if np.isfinite(secondary_candidate) and secondary_candidate > 0.0:
-                secondary_a = secondary_candidate
-    except Exception:
-        secondary_a = primary_a
-
-    primary_m = set()
-    if isinstance(simulation_runtime_state.sim_primary_qr, dict):
-        for m_raw in simulation_runtime_state.sim_primary_qr.keys():
-            try:
-                primary_m.add(int(m_raw))
-            except (TypeError, ValueError):
-                continue
-    primary_m.update(_m_values(globals().get("SIM_MILLER1")))
-
-    secondary_m = _m_values(globals().get("SIM_MILLER2"))
-
-    entries: list[dict[str, object]] = []
-    for source_label, lattice_a, m_values in (
-        ("primary", primary_a, primary_m),
-        ("secondary", secondary_a, secondary_m),
-    ):
-        for m_idx in sorted(m_values):
-            qr_val = _qr_value_for_m(int(m_idx), lattice_a)
-            if not np.isfinite(qr_val) or qr_val < 0.0:
-                continue
-            entries.append(
-                {
-                    "key": (str(source_label), int(m_idx)),
-                    "source": str(source_label),
-                    "m": int(m_idx),
-                    "qr": float(qr_val),
-                }
-            )
-    return entries
+    return gui_bragg_qr_manager.build_active_qr_cylinder_overlay_entries(
+        simulation_runtime_state,
+        primary_candidate=(lambda: a_var.get()),
+        primary_fallback=float(av),
+        secondary_candidate=(lambda: av2),
+        primary_miller_all=(lambda: globals().get("SIM_MILLER1")),
+        secondary_miller_all=(lambda: globals().get("SIM_MILLER2")),
+    )
 
 
 def _qr_cylinder_overlay_signature(
@@ -4987,52 +4914,14 @@ def _open_selected_peak_intersection_figure():
     )
 
 
-def _qr_value_for_m(m_idx: int, lattice_a: float) -> float:
-    return gui_controllers.qr_value_for_m(m_idx, lattice_a)
-
-
-def _hk_pairs_grouped_by_m(source_label: str) -> dict[int, list[tuple[int, int]]]:
-    return gui_controllers.hk_pairs_grouped_by_m(
-        _source_all_miller_for_label(source_label)
-    )
-
-
-def _build_bragg_qr_entries() -> list[dict[str, object]]:
-    try:
-        primary_a = float(a_var.get())
-    except Exception:
-        primary_a = float(av)
-
-    secondary_a = primary_a
-    try:
-        if av2 is not None:
-            secondary_candidate = float(av2)
-            if np.isfinite(secondary_candidate) and secondary_candidate > 0.0:
-                secondary_a = secondary_candidate
-    except Exception:
-        secondary_a = primary_a
-
-    return gui_controllers.build_bragg_qr_entries(
-        simulation_runtime_state,
-        primary_a=primary_a,
-        secondary_a=secondary_a,
-    )
-
-
-def _l_value_map_for_qr(source_label: str, m_idx: int) -> dict[int, float]:
-    return gui_controllers.build_bragg_qr_l_value_map(
-        simulation_runtime_state,
-        source_label,
-        int(m_idx),
-    )
-
-
 def _bragg_qr_runtime_bindings() -> gui_bragg_qr_manager.BraggQrRuntimeBindings:
-    return gui_bragg_qr_manager.BraggQrRuntimeBindings(
+    return gui_bragg_qr_manager.build_runtime_bragg_qr_bindings(
         view_state=bragg_qr_manager_view_state,
         manager_state=bragg_qr_manager_state,
-        get_entries=_build_bragg_qr_entries,
-        build_l_value_map=_l_value_map_for_qr,
+        simulation_runtime_state=simulation_runtime_state,
+        primary_candidate=(lambda: a_var.get()),
+        primary_fallback=float(av),
+        secondary_candidate=(lambda: av2),
         apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
         set_progress_text=(
             (lambda text: progress_label_positions.config(text=text))

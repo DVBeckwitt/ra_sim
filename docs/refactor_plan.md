@@ -290,9 +290,11 @@ still inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     also lives in `ra_sim.gui.bragg_qr_manager`, and the runtime-side callback
     wiring for that manager now also flows through one shared runtime-binding
     context in that module.
-  - `ra_sim.gui.runtime` now keeps only the Bragg-Qr entry/L-value builders,
-    current-value helpers, the refresh wrapper used by the filter pipeline,
-    and the manager window entrypoint for that workflow.
+  - `ra_sim.gui.bragg_qr_manager` now also owns the live lattice-value
+    normalization, Bragg-Qr entry/L-value construction, and active
+    Qr-cylinder overlay entry derivation used by the runtime workflow.
+  - `ra_sim.gui.runtime` now keeps only the filter-triggered refresh wrapper
+    plus thin manager/overlay delegates for that workflow.
 - Geometry-fit Qr/Qz selector workflow extraction has advanced.
   - `ra_sim.gui.geometry_q_group_manager` now owns the selector line/status
     formatting, window refresh, checkbox/bulk include-exclude side effects,
@@ -476,8 +478,8 @@ What is left:
   extraction or the structure-model / diffuse-HT rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining Bragg-Qr runtime code is now mostly current-value helpers,
-  refresh wiring, and manager entrypoint glue around the extracted
+- The remaining Bragg-Qr runtime code is now mostly the filter-triggered
+  refresh wrapper plus thin manager/overlay delegates around the extracted
   controller/view modules.
 - The remaining Bragg-Qr manager runtime code is now mostly the refresh
   wrapper used by the live filter pipeline plus the manager window entrypoint

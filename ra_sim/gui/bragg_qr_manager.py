@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+
 from . import controllers as gui_controllers
 from . import views as gui_views
 
@@ -22,6 +24,178 @@ class BraggQrRuntimeBindings:
     set_progress_text: Callable[[str], None] | None = None
     invalid_key: int = 0
     tcl_error_types: tuple[type[BaseException], ...] = ()
+
+
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
+
+
+def current_runtime_bragg_qr_lattice_values(
+    *,
+    primary_candidate: object,
+    primary_fallback: object,
+    secondary_candidate: object | None = None,
+) -> tuple[float, float]:
+    """Return the current primary/secondary lattice constants for Bragg-Qr helpers."""
+
+    try:
+        primary_a = float(_resolve_runtime_value(primary_candidate))
+    except Exception:
+        primary_a = float(_resolve_runtime_value(primary_fallback))
+
+    secondary_a = float(primary_a)
+    try:
+        secondary_value = _resolve_runtime_value(secondary_candidate)
+        if secondary_value is not None:
+            secondary_candidate_value = float(secondary_value)
+            if (
+                np.isfinite(secondary_candidate_value)
+                and secondary_candidate_value > 0.0
+            ):
+                secondary_a = float(secondary_candidate_value)
+    except Exception:
+        secondary_a = float(primary_a)
+
+    return float(primary_a), float(secondary_a)
+
+
+def build_runtime_bragg_qr_entries(
+    simulation_runtime_state,
+    *,
+    primary_candidate: object,
+    primary_fallback: object,
+    secondary_candidate: object | None = None,
+) -> list[dict[str, object]]:
+    """Build Bragg-Qr manager entries from the current runtime lattice values."""
+
+    primary_a, secondary_a = current_runtime_bragg_qr_lattice_values(
+        primary_candidate=primary_candidate,
+        primary_fallback=primary_fallback,
+        secondary_candidate=secondary_candidate,
+    )
+    return gui_controllers.build_bragg_qr_entries(
+        simulation_runtime_state,
+        primary_a=primary_a,
+        secondary_a=secondary_a,
+    )
+
+
+def build_runtime_bragg_qr_l_value_map(
+    simulation_runtime_state,
+    source_label: str,
+    m_idx: int,
+) -> dict[int, float]:
+    """Build one Bragg-Qr L-value map from the runtime simulation state."""
+
+    return gui_controllers.build_bragg_qr_l_value_map(
+        simulation_runtime_state,
+        source_label,
+        int(m_idx),
+    )
+
+
+def _m_values_from_miller_array(arr_like: object) -> set[int]:
+    arr = np.asarray(_resolve_runtime_value(arr_like), dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
+        return set()
+    finite = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1])
+    if not np.any(finite):
+        return set()
+    rows = arr[finite, :2]
+    h_vals = np.rint(rows[:, 0]).astype(np.int64, copy=False)
+    k_vals = np.rint(rows[:, 1]).astype(np.int64, copy=False)
+    return {
+        int(v) for v in (h_vals * h_vals + h_vals * k_vals + k_vals * k_vals)
+    }
+
+
+def build_active_qr_cylinder_overlay_entries(
+    simulation_runtime_state,
+    *,
+    primary_candidate: object,
+    primary_fallback: object,
+    secondary_candidate: object | None = None,
+    primary_miller_all: object = None,
+    secondary_miller_all: object = None,
+) -> list[dict[str, object]]:
+    """Return active Bragg-Qr groups used by the analytic Qr-cylinder overlay."""
+
+    primary_a, secondary_a = current_runtime_bragg_qr_lattice_values(
+        primary_candidate=primary_candidate,
+        primary_fallback=primary_fallback,
+        secondary_candidate=secondary_candidate,
+    )
+
+    primary_m: set[int] = set()
+    if isinstance(simulation_runtime_state.sim_primary_qr, Mapping):
+        for m_raw in simulation_runtime_state.sim_primary_qr.keys():
+            try:
+                primary_m.add(int(m_raw))
+            except (TypeError, ValueError):
+                continue
+    primary_m.update(_m_values_from_miller_array(primary_miller_all))
+
+    secondary_m = _m_values_from_miller_array(secondary_miller_all)
+
+    entries: list[dict[str, object]] = []
+    for source_label, lattice_a, m_values in (
+        ("primary", primary_a, primary_m),
+        ("secondary", secondary_a, secondary_m),
+    ):
+        for m_idx in sorted(m_values):
+            qr_val = gui_controllers.qr_value_for_m(int(m_idx), lattice_a)
+            if not np.isfinite(qr_val) or qr_val < 0.0:
+                continue
+            entries.append(
+                {
+                    "key": (str(source_label), int(m_idx)),
+                    "source": str(source_label),
+                    "m": int(m_idx),
+                    "qr": float(qr_val),
+                }
+            )
+    return entries
+
+
+def build_runtime_bragg_qr_bindings(
+    *,
+    view_state,
+    manager_state,
+    simulation_runtime_state,
+    primary_candidate: object,
+    primary_fallback: object,
+    secondary_candidate: object | None = None,
+    apply_filters: Callable[[], None],
+    set_progress_text: Callable[[str], None] | None = None,
+    invalid_key: int = 0,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+) -> BraggQrRuntimeBindings:
+    """Build shared runtime bindings for the Bragg-Qr manager from live values."""
+
+    return BraggQrRuntimeBindings(
+        view_state=view_state,
+        manager_state=manager_state,
+        get_entries=lambda: build_runtime_bragg_qr_entries(
+            simulation_runtime_state,
+            primary_candidate=primary_candidate,
+            primary_fallback=primary_fallback,
+            secondary_candidate=secondary_candidate,
+        ),
+        build_l_value_map=lambda source_label, m_idx: build_runtime_bragg_qr_l_value_map(
+            simulation_runtime_state,
+            source_label,
+            int(m_idx),
+        ),
+        apply_filters=apply_filters,
+        set_progress_text=set_progress_text,
+        invalid_key=int(invalid_key),
+        tcl_error_types=tcl_error_types,
+    )
 
 
 def _safe_listbox_curselection(

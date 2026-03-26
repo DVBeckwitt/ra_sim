@@ -270,9 +270,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     also delegates through `ra_sim.gui.bragg_qr_manager`, and the runtime-side
     callback wiring for that manager now also flows through one shared
     runtime-binding context in that module
-  - `ra_sim.gui.runtime` now keeps only the Bragg-Qr entry/L-value builders,
-    current-value helpers, the refresh wrapper used by the filter pipeline,
-    and the manager window entrypoint for that workflow
+  - `ra_sim.gui.bragg_qr_manager` now also owns the live lattice-value
+    normalization, Bragg-Qr entry/L-value construction, and active
+    Qr-cylinder overlay entry derivation used by that workflow
+  - `ra_sim.gui.runtime` now keeps only the filter-triggered refresh wrapper
+    plus thin manager/overlay delegates for that workflow
 - Geometry-fit Qr/Qz selector workflow extraction has also advanced:
   - selector line/status formatting, window refresh, checkbox/bulk include-
     exclude side effects, update-listed-peaks request flow, and save/load
@@ -320,6 +322,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   extracted structure-model rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
+- The remaining Bragg-Qr runtime code is now mostly the filter-triggered
+  refresh wrapper plus thin manager/overlay delegates around the extracted
+  controller/view modules.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   delegate wrappers and window lifecycle wiring around the extracted
   manager/view helpers.
