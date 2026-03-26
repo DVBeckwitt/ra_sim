@@ -4309,54 +4309,6 @@ def _geometry_q_group_export_rows(
         q_group_state=geometry_q_group_state,
         entries=entries,
     )
-
-def _background_backend_status() -> str:
-    return (
-        f"k={int(background_runtime_state.backend_rotation_k) % 4} "
-        f"flip_x={bool(background_runtime_state.backend_flip_x)} "
-        f"flip_y={bool(background_runtime_state.backend_flip_y)}"
-    )
-
-
-def _update_background_backend_status():
-    gui_views.set_background_backend_status_text(
-        background_backend_debug_view_state,
-        _background_backend_status(),
-    )
-
-
-def _rotate_background_backend(delta_k: int):
-    background_runtime_state.backend_rotation_k = (int(background_runtime_state.backend_rotation_k) + int(delta_k)) % 4
-    _sync_background_runtime_state()
-    _update_background_backend_status()
-    _mark_chi_square_dirty()
-    _update_chi_square_display(force=True)
-    schedule_update()
-
-
-def _toggle_background_backend_flip(axis: str):
-    axis = (axis or "").lower()
-    if axis == "x":
-        background_runtime_state.backend_flip_x = not background_runtime_state.backend_flip_x
-    elif axis == "y":
-        background_runtime_state.backend_flip_y = not background_runtime_state.backend_flip_y
-    _sync_background_runtime_state()
-    _update_background_backend_status()
-    _mark_chi_square_dirty()
-    _update_chi_square_display(force=True)
-    schedule_update()
-
-
-def _reset_background_backend_orientation():
-    background_runtime_state.backend_rotation_k = 0
-    background_runtime_state.backend_flip_x = False
-    background_runtime_state.backend_flip_y = False
-    _sync_background_runtime_state()
-    _update_background_backend_status()
-    _mark_chi_square_dirty()
-    _update_chi_square_display(force=True)
-    schedule_update()
-
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
@@ -7042,6 +6994,9 @@ background_runtime_bindings_factory = (
         render_current_geometry_manual_pairs=(
             lambda: _render_current_geometry_manual_pairs(update_status=False)
         ),
+        background_backend_debug_view_state=background_backend_debug_view_state,
+        mark_chi_square_dirty=_mark_chi_square_dirty,
+        refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
         schedule_update_factory=schedule_update,
         set_status_text_factory=lambda: (
             (lambda text: progress_label.config(text=text))
@@ -7682,7 +7637,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     toggle_caked_2d()
     toggle_log_radial()
     toggle_log_azimuth()
-    _update_background_backend_status()
+    background_runtime_callbacks.refresh_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
     _refresh_qr_cylinder_overlay(redraw=True, update_status=False)
@@ -7945,12 +7900,14 @@ if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     gui_views.create_background_backend_debug_controls(
         parent=app_shell_view_state.fit_body,
         view_state=background_backend_debug_view_state,
-        status_text=_background_backend_status(),
-        on_rotate_minus_90=lambda: _rotate_background_backend(-1),
-        on_rotate_plus_90=lambda: _rotate_background_backend(1),
-        on_flip_x=lambda: _toggle_background_backend_flip("x"),
-        on_flip_y=lambda: _toggle_background_backend_flip("y"),
-        on_reset=_reset_background_backend_orientation,
+        status_text=gui_background_manager.background_backend_status_text(
+            background_runtime_state
+        ),
+        on_rotate_minus_90=background_runtime_callbacks.rotate_backend_minus_90,
+        on_rotate_plus_90=background_runtime_callbacks.rotate_backend_plus_90,
+        on_flip_x=background_runtime_callbacks.flip_backend_x,
+        on_flip_y=background_runtime_callbacks.flip_backend_y,
+        on_reset=background_runtime_callbacks.reset_backend_orientation,
     )
 
 if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:

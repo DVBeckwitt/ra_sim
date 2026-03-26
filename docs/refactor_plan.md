@@ -326,11 +326,16 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
     transition, file-dialog initial-dir selection, background status refresh,
     and the post-load/post-switch redraw/reset sequencing used by the live
     GUI.
+  - `ra_sim.gui.background_manager` now also owns the backend-orientation
+    debug status plus the rotate/flip/reset runtime helpers used by the live
+    debug controls.
   - `ra_sim.gui.background_manager` now also owns the zero-arg runtime
-    binding/callback bundle for background status refresh plus browse/load/
-    switch actions.
+    binding/callback bundle for background status refresh, backend debug
+    status, browse/load/switch actions, and backend rotate/flip/reset
+    actions.
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
-    plus the remaining call sites around that workflow.
+    plus thin status-refresh and control-wiring call sites around that
+    workflow.
 - Integration-range drag workflow extraction has advanced.
   - `ra_sim.gui.state` now also owns explicit live drag-selection state for
     1D integration-range picking.
@@ -533,7 +538,8 @@ What is left:
   bound factory/callback bundle plus a couple of delegated call sites around
   the extracted manager/view helpers.
 - The remaining background runtime code is now mostly one bound callback
-  bundle plus a few call sites around the extracted background manager.
+  bundle plus thin status-refresh and control-wiring call sites around the
+  extracted background manager.
 - The remaining selected-peak runtime code is now mostly live GUI value
   getters plus a few call sites around the extracted peak-selection and
   canvas-interaction helpers.

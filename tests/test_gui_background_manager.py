@@ -131,6 +131,38 @@ def test_background_manager_status_refresh_reads_runtime_state(monkeypatch) -> N
     assert "fit=bg 2" in text
 
 
+def test_background_manager_backend_status_refresh_reads_runtime_state(
+    monkeypatch,
+) -> None:
+    captured = {}
+    view_state = state.BackgroundBackendDebugViewState()
+    background_state = state.BackgroundRuntimeState(
+        backend_rotation_k=5,
+        backend_flip_x=True,
+        backend_flip_y=False,
+    )
+
+    monkeypatch.setattr(
+        background_manager.gui_views,
+        "set_background_backend_status_text",
+        lambda view_state_arg, text: captured.update(
+            {"view_state": view_state_arg, "text": text}
+        ),
+    )
+
+    text = background_manager.set_background_backend_status_from_state(
+        view_state=view_state,
+        background_state=background_state,
+    )
+
+    assert text == "k=1 flip_x=True flip_y=False"
+    assert background_manager.background_backend_status_text(background_state) == text
+    assert captured == {
+        "view_state": view_state,
+        "text": text,
+    }
+
+
 def test_background_manager_load_workflow_runs_follow_on_side_effects(
     monkeypatch,
 ) -> None:
@@ -273,6 +305,81 @@ def test_background_manager_switch_workflow_runs_follow_on_side_effects(
     ]
 
 
+def test_background_manager_backend_orientation_side_effects_update_status_and_redraw() -> None:
+    background_state = state.BackgroundRuntimeState(
+        backend_rotation_k=3,
+        backend_flip_x=False,
+        backend_flip_y=False,
+    )
+    events = []
+
+    rotated = background_manager.rotate_background_backend_with_side_effects(
+        background_state,
+        delta_k=-1,
+        sync_background_runtime_state=lambda: events.append(("sync",)),
+        refresh_background_backend_status=lambda: events.append(("refresh",))
+        or background_manager.background_backend_status_text(background_state),
+        mark_chi_square_dirty=lambda: events.append(("dirty",)),
+        refresh_chi_square_display=lambda: events.append(("redraw",)),
+        schedule_update=lambda: events.append(("schedule",)),
+    )
+
+    assert rotated == "k=2 flip_x=False flip_y=False"
+    assert background_state.backend_rotation_k == 2
+    assert events == [
+        ("sync",),
+        ("refresh",),
+        ("dirty",),
+        ("redraw",),
+        ("schedule",),
+    ]
+
+    events.clear()
+    flipped = background_manager.toggle_background_backend_flip_with_side_effects(
+        background_state,
+        axis="x",
+        sync_background_runtime_state=lambda: events.append(("sync",)),
+        refresh_background_backend_status=lambda: events.append(("refresh",))
+        or background_manager.background_backend_status_text(background_state),
+        mark_chi_square_dirty=lambda: events.append(("dirty",)),
+        refresh_chi_square_display=lambda: events.append(("redraw",)),
+        schedule_update=lambda: events.append(("schedule",)),
+    )
+
+    assert flipped == "k=2 flip_x=True flip_y=False"
+    assert background_state.backend_flip_x is True
+    assert events == [
+        ("sync",),
+        ("refresh",),
+        ("dirty",),
+        ("redraw",),
+        ("schedule",),
+    ]
+
+    events.clear()
+    reset = background_manager.reset_background_backend_orientation_with_side_effects(
+        background_state,
+        sync_background_runtime_state=lambda: events.append(("sync",)),
+        refresh_background_backend_status=lambda: events.append(("refresh",))
+        or background_manager.background_backend_status_text(background_state),
+        mark_chi_square_dirty=lambda: events.append(("dirty",)),
+        refresh_chi_square_display=lambda: events.append(("redraw",)),
+        schedule_update=lambda: events.append(("schedule",)),
+    )
+
+    assert reset == "k=0 flip_x=False flip_y=False"
+    assert background_state.backend_rotation_k == 0
+    assert background_state.backend_flip_x is False
+    assert background_state.backend_flip_y is False
+    assert events == [
+        ("sync",),
+        ("refresh",),
+        ("dirty",),
+        ("redraw",),
+        ("schedule",),
+    ]
+
+
 def test_background_manager_chooses_background_dialog_initial_dir(tmp_path) -> None:
     current_path = tmp_path / "nested" / "a.osc"
     current_path.parent.mkdir()
@@ -343,6 +450,9 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
         clear_geometry_pick_artists=lambda: None,
         sync_theta_initial_to_background=lambda idx: None,
         render_current_geometry_manual_pairs=lambda: None,
+        background_backend_debug_view_state="backend-view-state",
+        mark_chi_square_dirty=lambda: None,
+        refresh_chi_square_display=lambda: None,
         schedule_update_factory=build_schedule,
         set_status_text_factory=build_status,
         file_dialog_dir_factory=build_dialog_dir,
@@ -356,6 +466,9 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
     assert calls[0]["display_rotate_k"] == -1
     assert calls[0]["file_dialog_dir"] == "C:/dialogs/1"
     assert calls[1]["file_dialog_dir"] == "C:/dialogs/2"
+    assert calls[0]["background_backend_debug_view_state"] == "backend-view-state"
+    assert callable(calls[0]["mark_chi_square_dirty"])
+    assert callable(calls[0]["refresh_chi_square_display"])
     assert callable(calls[0]["set_status_text"])
     assert callable(calls[0]["schedule_update"])
     assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]
@@ -375,6 +488,11 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
         background_manager,
         "set_background_file_status_from_state",
         lambda **kwargs: calls.append(("status", kwargs)) or "status-text",
+    )
+    monkeypatch.setattr(
+        background_manager,
+        "set_background_backend_status_from_state",
+        lambda **kwargs: calls.append(("backend_status", kwargs)) or "backend-status",
     )
     monkeypatch.setattr(
         background_manager,
@@ -419,6 +537,9 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
         clear_geometry_pick_artists=lambda: None,
         sync_theta_initial_to_background=lambda idx: None,
         render_current_geometry_manual_pairs=lambda: None,
+        background_backend_debug_view_state="backend-view",
+        mark_chi_square_dirty=lambda: None,
+        refresh_chi_square_display=lambda: None,
         schedule_update=lambda: None,
         set_status_text=lambda text: messages.append(text),
         file_dialog_dir="C:/dialogs",
@@ -429,6 +550,10 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
     assert (
         background_manager.refresh_runtime_background_file_status(bindings)
         == "status-text"
+    )
+    assert (
+        background_manager.refresh_runtime_background_backend_status(bindings)
+        == "backend-status"
     )
     assert (
         background_manager.load_runtime_background_files(
@@ -468,6 +593,33 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
     )
     monkeypatch.setattr(
         background_manager,
+        "refresh_runtime_background_backend_status",
+        lambda bindings_arg: calls.append(("backend_refresh_cb", bindings_arg))
+        or "backend-refreshed",
+    )
+    monkeypatch.setattr(
+        background_manager,
+        "rotate_runtime_background_backend",
+        lambda bindings_arg, *, delta_k: (
+            calls.append(("rotate_cb", bindings_arg, delta_k)),
+            f"rotated-{delta_k}",
+        )[-1],
+    )
+    monkeypatch.setattr(
+        background_manager,
+        "toggle_runtime_background_backend_flip",
+        lambda bindings_arg, *, axis: (
+            calls.append(("flip_cb", bindings_arg, axis)),
+            f"flip-{axis}",
+        )[-1],
+    )
+    monkeypatch.setattr(
+        background_manager,
+        "reset_runtime_background_backend_orientation",
+        lambda bindings_arg: calls.append(("reset_cb", bindings_arg)) or "reset",
+    )
+    monkeypatch.setattr(
+        background_manager,
         "switch_runtime_background",
         lambda bindings_arg: calls.append(("switch_cb", bindings_arg)) or True,
     )
@@ -477,10 +629,22 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
     assert callbacks.refresh_status() == "refreshed"
     assert callbacks.load_files(["x.osc"], 3) == {"loaded_cb": True}
     assert callbacks.browse_files() is False
+    assert callbacks.refresh_backend_status() == "backend-refreshed"
+    assert callbacks.rotate_backend_minus_90() == "rotated--1"
+    assert callbacks.rotate_backend_plus_90() == "rotated-1"
+    assert callbacks.flip_backend_x() == "flip-x"
+    assert callbacks.flip_backend_y() == "flip-y"
+    assert callbacks.reset_backend_orientation() == "reset"
     assert callbacks.switch_background() is True
-    assert calls[-4:] == [
+    assert calls[-10:] == [
         ("refresh_cb", "bindings-1"),
         ("load_cb", "bindings-2", ("x.osc",), 3),
         ("browse_cb", "bindings-3"),
-        ("switch_cb", "bindings-4"),
+        ("backend_refresh_cb", "bindings-4"),
+        ("rotate_cb", "bindings-5", -1),
+        ("rotate_cb", "bindings-6", 1),
+        ("flip_cb", "bindings-7", "x"),
+        ("flip_cb", "bindings-8", "y"),
+        ("reset_cb", "bindings-9"),
+        ("switch_cb", "bindings-10"),
     ]

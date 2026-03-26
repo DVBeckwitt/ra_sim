@@ -303,11 +303,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - background-file state transition, file-dialog initial-dir selection,
     background status refresh, and the post-load/post-switch redraw/reset
     sequencing now live in `ra_sim.gui.background_manager`
+  - backend-orientation debug status plus the rotate/flip/reset runtime
+    helpers used by the live debug controls now also live in
+    `ra_sim.gui.background_manager`
   - `ra_sim.gui.background_manager` now also owns the zero-arg runtime
-    binding/callback bundle for background status refresh plus browse/load/
-    switch actions
+    binding/callback bundle for background status refresh, backend debug
+    status, browse/load/switch actions, and backend rotate/flip/reset
+    actions
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
-    plus the remaining call sites around that workflow
+    plus thin status-refresh and control-wiring call sites around that
+    workflow
 - Integration-range drag workflow extraction has also advanced:
   - explicit live drag-selection state for 1D integration-range picking now
     lives in `ra_sim.gui.state`
@@ -375,7 +380,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   factory wiring used by the live filter pipeline and HKL lookup controls
   around the extracted manager helpers.
 - The remaining background runtime code is now mostly one bound callback
-  bundle plus a few call sites around the extracted background manager.
+  bundle plus thin status-refresh and control-wiring call sites around the
+  extracted background manager.
 - The remaining selected-peak runtime code is now mostly live GUI value
   getters plus a few call sites around the extracted peak-selection and
   canvas-interaction modules.

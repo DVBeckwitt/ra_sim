@@ -40,6 +40,9 @@ class BackgroundRuntimeBindings:
     clear_geometry_pick_artists: Callable[[], None]
     sync_theta_initial_to_background: Callable[[int], None] | None = None
     render_current_geometry_manual_pairs: Callable[[], None] | None = None
+    background_backend_debug_view_state: object | None = None
+    mark_chi_square_dirty: Callable[[], None] | None = None
+    refresh_chi_square_display: Callable[[], None] | None = None
     schedule_update: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
     file_dialog_dir: object | None = None
@@ -48,12 +51,18 @@ class BackgroundRuntimeBindings:
 
 @dataclass(frozen=True)
 class BackgroundRuntimeCallbacks:
-    """Bound callbacks for runtime background-file workflows."""
+    """Bound callbacks for runtime background-file and backend debug workflows."""
 
     refresh_status: Callable[[], str]
     load_files: Callable[[Sequence[object], int], dict[str, object]]
     browse_files: Callable[[], bool]
     switch_background: Callable[[], bool]
+    refresh_backend_status: Callable[[], str]
+    rotate_backend_minus_90: Callable[[], str]
+    rotate_backend_plus_90: Callable[[], str]
+    flip_backend_x: Callable[[], str]
+    flip_backend_y: Callable[[], str]
+    reset_backend_orientation: Callable[[], str]
 
 
 def _resolve_runtime_value(value_or_callable: object) -> object:
@@ -238,6 +247,28 @@ def build_background_file_status_text(
     return status_text
 
 
+def background_backend_status_text(background_state) -> str:
+    """Build the backend-background debug status string from shared state."""
+
+    return (
+        f"k={int(getattr(background_state, 'backend_rotation_k', 0)) % 4} "
+        f"flip_x={bool(getattr(background_state, 'backend_flip_x', False))} "
+        f"flip_y={bool(getattr(background_state, 'backend_flip_y', False))}"
+    )
+
+
+def set_background_backend_status_from_state(
+    *,
+    view_state,
+    background_state,
+) -> str:
+    """Refresh the backend-background debug status label from shared state."""
+
+    status_text = background_backend_status_text(background_state)
+    gui_views.set_background_backend_status_text(view_state, status_text)
+    return status_text
+
+
 def set_background_file_status_from_state(
     *,
     view_state,
@@ -343,6 +374,9 @@ def make_runtime_background_bindings_factory(
     clear_geometry_pick_artists: Callable[[], None],
     sync_theta_initial_to_background: Callable[[int], None] | None = None,
     render_current_geometry_manual_pairs: Callable[[], None] | None = None,
+    background_backend_debug_view_state: object | None = None,
+    mark_chi_square_dirty: Callable[[], None] | None = None,
+    refresh_chi_square_display: Callable[[], None] | None = None,
     schedule_update_factory: object | None = None,
     set_status_text_factory: object | None = None,
     file_dialog_dir_factory: object | None = None,
@@ -376,6 +410,9 @@ def make_runtime_background_bindings_factory(
             clear_geometry_pick_artists=clear_geometry_pick_artists,
             sync_theta_initial_to_background=sync_theta_initial_to_background,
             render_current_geometry_manual_pairs=render_current_geometry_manual_pairs,
+            background_backend_debug_view_state=background_backend_debug_view_state,
+            mark_chi_square_dirty=mark_chi_square_dirty,
+            refresh_chi_square_display=refresh_chi_square_display,
             schedule_update=_resolve_runtime_value(schedule_update_factory),
             set_status_text=_resolve_runtime_value(set_status_text_factory),
             file_dialog_dir=_resolve_runtime_value(file_dialog_dir_factory),
@@ -399,6 +436,19 @@ def refresh_runtime_background_file_status(
         geometry_manual_pairs_for_index=bindings.geometry_manual_pairs_for_index,
         geometry_manual_pair_group_count=bindings.geometry_manual_pair_group_count,
         current_geometry_fit_background_indices=bindings.current_geometry_fit_background_indices,
+    )
+
+
+def refresh_runtime_background_backend_status(
+    bindings: BackgroundRuntimeBindings,
+) -> str:
+    """Refresh the runtime backend-background debug status from live bindings."""
+
+    if bindings.background_backend_debug_view_state is None:
+        return background_backend_status_text(bindings.background_state)
+    return set_background_backend_status_from_state(
+        view_state=bindings.background_backend_debug_view_state,
+        background_state=bindings.background_state,
     )
 
 
@@ -450,6 +500,80 @@ def load_background_files_with_side_effects(
     refresh_background_file_status()
     schedule_update()
     return updated
+
+
+def rotate_background_backend_with_side_effects(
+    background_state,
+    *,
+    delta_k: int,
+    sync_background_runtime_state: Callable[[], None],
+    refresh_background_backend_status: Callable[[], str],
+    mark_chi_square_dirty: Callable[[], None],
+    refresh_chi_square_display: Callable[[], None],
+    schedule_update: Callable[[], None],
+) -> str:
+    """Rotate the backend background orientation and apply dependent side effects."""
+
+    background_state.backend_rotation_k = (
+        int(getattr(background_state, "backend_rotation_k", 0)) + int(delta_k)
+    ) % 4
+    sync_background_runtime_state()
+    status_text = refresh_background_backend_status()
+    mark_chi_square_dirty()
+    refresh_chi_square_display()
+    schedule_update()
+    return status_text
+
+
+def toggle_background_backend_flip_with_side_effects(
+    background_state,
+    *,
+    axis: str,
+    sync_background_runtime_state: Callable[[], None],
+    refresh_background_backend_status: Callable[[], str],
+    mark_chi_square_dirty: Callable[[], None],
+    refresh_chi_square_display: Callable[[], None],
+    schedule_update: Callable[[], None],
+) -> str:
+    """Flip one backend background axis and apply dependent side effects."""
+
+    normalized_axis = str(axis or "").lower()
+    if normalized_axis == "x":
+        background_state.backend_flip_x = not bool(
+            getattr(background_state, "backend_flip_x", False)
+        )
+    elif normalized_axis == "y":
+        background_state.backend_flip_y = not bool(
+            getattr(background_state, "backend_flip_y", False)
+        )
+    sync_background_runtime_state()
+    status_text = refresh_background_backend_status()
+    mark_chi_square_dirty()
+    refresh_chi_square_display()
+    schedule_update()
+    return status_text
+
+
+def reset_background_backend_orientation_with_side_effects(
+    background_state,
+    *,
+    sync_background_runtime_state: Callable[[], None],
+    refresh_background_backend_status: Callable[[], str],
+    mark_chi_square_dirty: Callable[[], None],
+    refresh_chi_square_display: Callable[[], None],
+    schedule_update: Callable[[], None],
+) -> str:
+    """Reset backend background orientation state and apply dependent side effects."""
+
+    background_state.backend_rotation_k = 0
+    background_state.backend_flip_x = False
+    background_state.backend_flip_y = False
+    sync_background_runtime_state()
+    status_text = refresh_background_backend_status()
+    mark_chi_square_dirty()
+    refresh_chi_square_display()
+    schedule_update()
+    return status_text
 
 
 def load_runtime_background_files(
@@ -562,6 +686,63 @@ def switch_runtime_background(
     return True
 
 
+def rotate_runtime_background_backend(
+    bindings: BackgroundRuntimeBindings,
+    *,
+    delta_k: int,
+) -> str:
+    """Rotate the runtime backend background orientation from live bindings."""
+
+    return rotate_background_backend_with_side_effects(
+        bindings.background_state,
+        delta_k=int(delta_k),
+        sync_background_runtime_state=bindings.sync_background_runtime_state,
+        refresh_background_backend_status=lambda: refresh_runtime_background_backend_status(
+            bindings
+        ),
+        mark_chi_square_dirty=bindings.mark_chi_square_dirty or (lambda: None),
+        refresh_chi_square_display=bindings.refresh_chi_square_display or (lambda: None),
+        schedule_update=bindings.schedule_update or (lambda: None),
+    )
+
+
+def toggle_runtime_background_backend_flip(
+    bindings: BackgroundRuntimeBindings,
+    *,
+    axis: str,
+) -> str:
+    """Flip one runtime backend background axis from live bindings."""
+
+    return toggle_background_backend_flip_with_side_effects(
+        bindings.background_state,
+        axis=axis,
+        sync_background_runtime_state=bindings.sync_background_runtime_state,
+        refresh_background_backend_status=lambda: refresh_runtime_background_backend_status(
+            bindings
+        ),
+        mark_chi_square_dirty=bindings.mark_chi_square_dirty or (lambda: None),
+        refresh_chi_square_display=bindings.refresh_chi_square_display or (lambda: None),
+        schedule_update=bindings.schedule_update or (lambda: None),
+    )
+
+
+def reset_runtime_background_backend_orientation(
+    bindings: BackgroundRuntimeBindings,
+) -> str:
+    """Reset the runtime backend background orientation from live bindings."""
+
+    return reset_background_backend_orientation_with_side_effects(
+        bindings.background_state,
+        sync_background_runtime_state=bindings.sync_background_runtime_state,
+        refresh_background_backend_status=lambda: refresh_runtime_background_backend_status(
+            bindings
+        ),
+        mark_chi_square_dirty=bindings.mark_chi_square_dirty or (lambda: None),
+        refresh_chi_square_display=bindings.refresh_chi_square_display or (lambda: None),
+        schedule_update=bindings.schedule_update or (lambda: None),
+    )
+
+
 def browse_runtime_background_files(
     bindings: BackgroundRuntimeBindings,
 ) -> bool:
@@ -602,7 +783,7 @@ def browse_runtime_background_files(
 def make_runtime_background_callbacks(
     bindings_factory: Callable[[], BackgroundRuntimeBindings],
 ) -> BackgroundRuntimeCallbacks:
-    """Return bound callbacks for the runtime background-file workflow."""
+    """Return bound callbacks for the runtime background and backend debug workflow."""
 
     return BackgroundRuntimeCallbacks(
         refresh_status=lambda: refresh_runtime_background_file_status(
@@ -615,4 +796,26 @@ def make_runtime_background_callbacks(
         ),
         browse_files=lambda: browse_runtime_background_files(bindings_factory()),
         switch_background=lambda: switch_runtime_background(bindings_factory()),
+        refresh_backend_status=lambda: refresh_runtime_background_backend_status(
+            bindings_factory()
+        ),
+        rotate_backend_minus_90=lambda: rotate_runtime_background_backend(
+            bindings_factory(),
+            delta_k=-1,
+        ),
+        rotate_backend_plus_90=lambda: rotate_runtime_background_backend(
+            bindings_factory(),
+            delta_k=1,
+        ),
+        flip_backend_x=lambda: toggle_runtime_background_backend_flip(
+            bindings_factory(),
+            axis="x",
+        ),
+        flip_backend_y=lambda: toggle_runtime_background_backend_flip(
+            bindings_factory(),
+            axis="y",
+        ),
+        reset_backend_orientation=lambda: reset_runtime_background_backend_orientation(
+            bindings_factory()
+        ),
     )
