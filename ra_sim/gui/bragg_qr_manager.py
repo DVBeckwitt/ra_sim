@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from . import controllers as gui_controllers
 from . import views as gui_views
+
+
+@dataclass
+class BraggQrRuntimeBindings:
+    """Runtime callbacks and shared state used by the Bragg-Qr manager GUI."""
+
+    view_state: Any
+    manager_state: Any
+    get_entries: Callable[[], Sequence[Mapping[str, object]]]
+    build_l_value_map: Callable[[str, int], Mapping[int, object]]
+    apply_filters: Callable[[], None]
+    set_progress_text: Callable[[str], None] | None = None
+    invalid_key: int = 0
+    tcl_error_types: tuple[type[BaseException], ...] = ()
 
 
 def _safe_listbox_curselection(
@@ -698,3 +713,216 @@ def open_bragg_qr_toggle_window(
     )
     on_refresh()
     return opened
+
+
+def refresh_runtime_bragg_qr_toggle_window(bindings: BraggQrRuntimeBindings) -> bool:
+    """Refresh the runtime Bragg-Qr window using the shared runtime bindings."""
+
+    refreshed = refresh_bragg_qr_toggle_window(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        entries=list(bindings.get_entries() or ()),
+        tcl_error_types=bindings.tcl_error_types,
+    )
+    if not refreshed:
+        return False
+    on_bragg_qr_selection_changed(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        l_listbox=getattr(bindings.view_state, "l_listbox", None),
+        build_l_value_map=bindings.build_l_value_map,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+    return True
+
+
+def on_runtime_bragg_qr_selection_changed(bindings: BraggQrRuntimeBindings) -> bool:
+    """Apply one runtime Bragg-Qr selection-change callback."""
+
+    return on_bragg_qr_selection_changed(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        l_listbox=getattr(bindings.view_state, "l_listbox", None),
+        build_l_value_map=bindings.build_l_value_map,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def _runtime_refresh_window(bindings: BraggQrRuntimeBindings) -> None:
+    refresh_runtime_bragg_qr_toggle_window(bindings)
+
+
+def disable_selected_bragg_qr_groups_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Disable the selected Bragg-Qr groups through the shared runtime bindings."""
+
+    return disable_selected_bragg_qr_groups(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def enable_selected_bragg_qr_groups_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Enable the selected Bragg-Qr groups through the shared runtime bindings."""
+
+    return enable_selected_bragg_qr_groups(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def toggle_selected_bragg_qr_groups_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Toggle the selected Bragg-Qr groups through the shared runtime bindings."""
+
+    return toggle_selected_bragg_qr_groups(
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        apply_filters=bindings.apply_filters,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def disable_selected_bragg_qr_l_values_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Disable selected Bragg-Qr L values through the shared runtime bindings."""
+
+    return disable_selected_bragg_qr_l_values(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        l_listbox=getattr(bindings.view_state, "l_listbox", None),
+        invalid_key=int(bindings.invalid_key),
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def enable_selected_bragg_qr_l_values_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Enable selected Bragg-Qr L values through the shared runtime bindings."""
+
+    return enable_selected_bragg_qr_l_values(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        l_listbox=getattr(bindings.view_state, "l_listbox", None),
+        invalid_key=int(bindings.invalid_key),
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def toggle_selected_bragg_qr_l_values_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Toggle selected Bragg-Qr L values through the shared runtime bindings."""
+
+    return toggle_selected_bragg_qr_l_values(
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        l_listbox=getattr(bindings.view_state, "l_listbox", None),
+        invalid_key=int(bindings.invalid_key),
+        apply_filters=bindings.apply_filters,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def disable_all_bragg_qr_groups_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Disable all listed Bragg-Qr groups through the shared runtime bindings."""
+
+    return disable_all_bragg_qr_groups(
+        manager_state=bindings.manager_state,
+        entries=list(bindings.get_entries() or ()),
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+    )
+
+
+def enable_all_bragg_qr_groups_runtime(bindings: BraggQrRuntimeBindings) -> bool:
+    """Enable all Bragg-Qr groups through the shared runtime bindings."""
+
+    return enable_all_bragg_qr_groups(
+        manager_state=bindings.manager_state,
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+    )
+
+
+def disable_all_bragg_qr_l_values_for_selected_qr_runtime(
+    bindings: BraggQrRuntimeBindings,
+) -> bool:
+    """Disable all L values for the selected Bragg-Qr group using runtime bindings."""
+
+    return disable_all_bragg_qr_l_values_for_selected_qr(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        build_l_value_map=bindings.build_l_value_map,
+        invalid_key=int(bindings.invalid_key),
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def enable_all_bragg_qr_l_values_for_selected_qr_runtime(
+    bindings: BraggQrRuntimeBindings,
+) -> bool:
+    """Enable all L values for the selected Bragg-Qr group using runtime bindings."""
+
+    return enable_all_bragg_qr_l_values_for_selected_qr(
+        view_state=bindings.view_state,
+        manager_state=bindings.manager_state,
+        qr_listbox=getattr(bindings.view_state, "qr_listbox", None),
+        refresh_window=lambda: _runtime_refresh_window(bindings),
+        apply_filters=bindings.apply_filters,
+        set_progress_text=bindings.set_progress_text,
+        tcl_error_types=bindings.tcl_error_types,
+    )
+
+
+def close_runtime_bragg_qr_toggle_window(bindings: BraggQrRuntimeBindings) -> None:
+    """Close the runtime Bragg-Qr window using the shared runtime bindings."""
+
+    close_bragg_qr_toggle_window(bindings.view_state, bindings.manager_state)
+
+
+def open_runtime_bragg_qr_toggle_window(
+    *,
+    root,
+    bindings: BraggQrRuntimeBindings,
+) -> bool:
+    """Open the Bragg-Qr runtime window and wire callbacks from one context."""
+
+    return open_bragg_qr_toggle_window(
+        root=root,
+        view_state=bindings.view_state,
+        on_qr_selection_changed=lambda _event=None: on_runtime_bragg_qr_selection_changed(bindings),
+        on_toggle_qr=lambda _event=None: toggle_selected_bragg_qr_groups_runtime(bindings),
+        on_toggle_l=lambda _event=None: toggle_selected_bragg_qr_l_values_runtime(bindings),
+        on_enable_selected_qr=lambda: enable_selected_bragg_qr_groups_runtime(bindings),
+        on_disable_selected_qr=lambda: disable_selected_bragg_qr_groups_runtime(bindings),
+        on_enable_all_qr=lambda: enable_all_bragg_qr_groups_runtime(bindings),
+        on_disable_all_qr=lambda: disable_all_bragg_qr_groups_runtime(bindings),
+        on_enable_selected_l=lambda: enable_selected_bragg_qr_l_values_runtime(bindings),
+        on_disable_selected_l=lambda: disable_selected_bragg_qr_l_values_runtime(bindings),
+        on_enable_all_l=lambda: enable_all_bragg_qr_l_values_for_selected_qr_runtime(bindings),
+        on_disable_all_l=lambda: disable_all_bragg_qr_l_values_for_selected_qr_runtime(bindings),
+        on_refresh=lambda: refresh_runtime_bragg_qr_toggle_window(bindings),
+        on_close=lambda: close_runtime_bragg_qr_toggle_window(bindings),
+    )

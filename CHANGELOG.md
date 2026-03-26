@@ -42,7 +42,7 @@
   - Expanded `ra_sim/gui/structure_model.py` to own the primary-CIF browse dialog plus the diffuse-HT open/export dialog workflow and status handling, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus control rebuild callbacks.
   - Moved the Bragg-Qr / structure-factor pruning filter pipeline out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including Bragg-Qr source/L-key normalization, disabled-filter pruning, and filtered rod/HKL rebuild helpers.
   - Moved the remaining Bragg-Qr manager list-building workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including group entry formatting, L-value mapping, and list-model/status construction for the manager window.
-  - Expanded `ra_sim/gui/bragg_qr_manager.py` to own the remaining Bragg-Qr manager selection, refresh, and enable/disable/toggle action workflow, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus the live filter-apply callbacks.
+  - Expanded `ra_sim/gui/bragg_qr_manager.py` with a shared runtime-binding context for the remaining Bragg-Qr manager action wiring, leaving `ra_sim/gui/runtime.py` with the Bragg-Qr entry/L-value builders, the filter-triggered refresh wrapper, and the manager window entrypoint.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` to own the remaining geometry-fit Qr/Qz selector checkbox/bulk-toggle side effects, update-listed-peaks request flow, and save/load dialog workflow, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus window lifecycle wiring.
   - Added `ra_sim/gui/background_manager.py` and moved the background-file state transition, dialog initial-dir selection, background status refresh, and post-load/post-switch side-effect workflow out of `ra_sim/gui/runtime.py`, leaving runtime with file-dialog plus progress/error text.
   - Added `ra_sim/gui/peak_selection.py` and moved the HKL lookup / selected-peak summary, degenerate-HKL lookup, selection-by-index/HKL, and clear-selection workflow out of `ra_sim/gui/runtime.py`, leaving runtime with canvas-click plumbing and Bragg/Ewald intersection plotting.
@@ -62,7 +62,7 @@
   - Extended `tests/test_gui_structure_model.py` with primary-CIF dialog workflow plus diffuse-HT open/export dialog workflow coverage in addition to the existing reload snapshot/restore and request-packaging tests.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr / structure-factor pruning filter pipeline coverage.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr manager entry/L-value/list-model coverage.
-  - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr manager action and window-lifecycle helpers.
+  - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr manager runtime-binding, action, and window-lifecycle helpers.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted geometry-fit Qr/Qz selector side-effect and dialog workflow helpers.
   - Extended `tests/test_gui_background_manager.py` with direct coverage for extracted background status refresh and post-load/post-switch workflow helpers.
   - Added `tests/test_gui_peak_selection.py` for the extracted HKL lookup and selected-peak workflow helpers.

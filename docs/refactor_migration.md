@@ -260,8 +260,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     through `ra_sim.gui.bragg_qr_manager`, leaving runtime with the manager
     window lifecycle and enable/disable action callbacks
   - the remaining Bragg-Qr manager enable/disable/toggle action workflow now
-    also delegates through `ra_sim.gui.bragg_qr_manager`, leaving runtime
-    with thin wrappers plus the live filter-apply callbacks
+    also delegates through `ra_sim.gui.bragg_qr_manager`, and the runtime-side
+    callback wiring for that manager now also flows through one shared
+    runtime-binding context in that module
+  - `ra_sim.gui.runtime` now keeps only the Bragg-Qr entry/L-value builders,
+    the refresh wrapper used by the filter pipeline, and the manager window
+    entrypoint for that workflow
 - Geometry-fit Qr/Qz selector workflow extraction has also advanced:
   - selector line/status formatting, window refresh, checkbox/bulk include-
     exclude side effects, update-listed-peaks request flow, and save/load
@@ -308,9 +312,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   delegate wrappers and window lifecycle wiring around the extracted
   manager/view helpers.
-- The remaining Bragg-Qr manager runtime code is now mostly thin delegate
-  wrappers plus the live filter-apply callbacks around the extracted manager
-  helpers.
+- The remaining Bragg-Qr manager runtime code is now mostly the refresh
+  wrapper used by the live filter pipeline plus the manager window entrypoint
+  around the extracted manager helpers.
 - The remaining background runtime code is now mostly file-dialog plumbing and
   progress/error text around the extracted background manager.
 - The remaining selected-peak runtime code is now mostly canvas-click

@@ -332,3 +332,221 @@ def test_bragg_qr_manager_open_and_close_helpers_wrap_view_and_state(monkeypatch
     assert manager_state.qr_index_keys == []
     assert manager_state.l_index_keys == []
     assert manager_state.selected_group_key is None
+
+
+def test_bragg_qr_manager_runtime_refresh_uses_shared_bindings(monkeypatch) -> None:
+    view_state = state.BraggQrManagerViewState(
+        qr_listbox=_FakeListbox([0]),
+        l_listbox=_FakeListbox([0]),
+    )
+    manager_state = state.BraggQrManagerState()
+    calls = []
+    bindings = bragg_qr_manager.BraggQrRuntimeBindings(
+        view_state=view_state,
+        manager_state=manager_state,
+        get_entries=lambda: [{"key": ("primary", 1)}],
+        build_l_value_map=lambda source, m_idx: {1: 0.25},
+        apply_filters=lambda: calls.append(("filters", None)),
+        set_progress_text=lambda text: calls.append(("progress", text)),
+        invalid_key=-999,
+        tcl_error_types=(_FakeTclError,),
+    )
+
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "refresh_bragg_qr_toggle_window",
+        lambda **kwargs: calls.append(("refresh", kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "on_bragg_qr_selection_changed",
+        lambda **kwargs: calls.append(("selection", kwargs)) or True,
+    )
+
+    ok = bragg_qr_manager.refresh_runtime_bragg_qr_toggle_window(bindings)
+
+    assert ok is True
+    assert calls[0][0] == "refresh"
+    assert calls[0][1]["entries"] == [{"key": ("primary", 1)}]
+    assert calls[0][1]["tcl_error_types"] == (_FakeTclError,)
+    assert calls[1][0] == "selection"
+    assert calls[1][1]["build_l_value_map"]("primary", 1) == {1: 0.25}
+
+
+def test_bragg_qr_manager_runtime_actions_delegate_with_shared_refresh(monkeypatch) -> None:
+    view_state = state.BraggQrManagerViewState(
+        qr_listbox=_FakeListbox([0]),
+        l_listbox=_FakeListbox([0]),
+    )
+    manager_state = state.BraggQrManagerState()
+    calls = []
+    bindings = bragg_qr_manager.BraggQrRuntimeBindings(
+        view_state=view_state,
+        manager_state=manager_state,
+        get_entries=lambda: [{"key": ("primary", 1)}],
+        build_l_value_map=lambda source, m_idx: {1: 0.25},
+        apply_filters=lambda: calls.append(("filters", None)),
+        set_progress_text=lambda text: calls.append(("progress", text)),
+        invalid_key=-999,
+        tcl_error_types=(_FakeTclError,),
+    )
+
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "refresh_runtime_bragg_qr_toggle_window",
+        lambda bindings_arg: calls.append(("refresh_runtime", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "disable_selected_bragg_qr_groups",
+        lambda **kwargs: (
+            calls.append(("disable_groups", kwargs)),
+            kwargs["refresh_window"](),
+            True,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "disable_all_bragg_qr_l_values_for_selected_qr",
+        lambda **kwargs: (
+            calls.append(("disable_all_l", kwargs)),
+            kwargs["refresh_window"](),
+            True,
+        )[-1],
+    )
+
+    ok_groups = bragg_qr_manager.disable_selected_bragg_qr_groups_runtime(bindings)
+    ok_l = bragg_qr_manager.disable_all_bragg_qr_l_values_for_selected_qr_runtime(
+        bindings
+    )
+
+    assert ok_groups is True
+    assert ok_l is True
+    assert calls[0][0] == "disable_groups"
+    assert calls[0][1]["qr_listbox"] is view_state.qr_listbox
+    assert calls[0][1]["set_progress_text"] is bindings.set_progress_text
+    assert calls[1] == ("refresh_runtime", bindings)
+    assert calls[2][0] == "disable_all_l"
+    assert calls[2][1]["build_l_value_map"]("primary", 1) == {1: 0.25}
+    assert calls[3] == ("refresh_runtime", bindings)
+
+
+def test_bragg_qr_manager_open_runtime_helper_wires_callbacks_from_bindings(
+    monkeypatch,
+) -> None:
+    bindings = bragg_qr_manager.BraggQrRuntimeBindings(
+        view_state=state.BraggQrManagerViewState(),
+        manager_state=state.BraggQrManagerState(),
+        get_entries=lambda: [],
+        build_l_value_map=lambda _source, _m_idx: {},
+        apply_filters=lambda: None,
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "open_bragg_qr_toggle_window",
+        lambda **kwargs: calls.append(("open", kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "on_runtime_bragg_qr_selection_changed",
+        lambda bindings_arg: calls.append(("selection", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "toggle_selected_bragg_qr_groups_runtime",
+        lambda bindings_arg: calls.append(("toggle_qr", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "toggle_selected_bragg_qr_l_values_runtime",
+        lambda bindings_arg: calls.append(("toggle_l", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "enable_selected_bragg_qr_groups_runtime",
+        lambda bindings_arg: calls.append(("enable_qr", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "disable_selected_bragg_qr_groups_runtime",
+        lambda bindings_arg: calls.append(("disable_qr", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "enable_all_bragg_qr_groups_runtime",
+        lambda bindings_arg: calls.append(("enable_all_qr", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "disable_all_bragg_qr_groups_runtime",
+        lambda bindings_arg: calls.append(("disable_all_qr", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "enable_selected_bragg_qr_l_values_runtime",
+        lambda bindings_arg: calls.append(("enable_l", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "disable_selected_bragg_qr_l_values_runtime",
+        lambda bindings_arg: calls.append(("disable_l", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "enable_all_bragg_qr_l_values_for_selected_qr_runtime",
+        lambda bindings_arg: calls.append(("enable_all_l", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "disable_all_bragg_qr_l_values_for_selected_qr_runtime",
+        lambda bindings_arg: calls.append(("disable_all_l", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "refresh_runtime_bragg_qr_toggle_window",
+        lambda bindings_arg: calls.append(("refresh", bindings_arg)) or True,
+    )
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "close_runtime_bragg_qr_toggle_window",
+        lambda bindings_arg: calls.append(("close", bindings_arg)),
+    )
+
+    opened = bragg_qr_manager.open_runtime_bragg_qr_toggle_window(
+        root=object(),
+        bindings=bindings,
+    )
+
+    assert opened is True
+    open_kwargs = calls[0][1]
+    open_kwargs["on_qr_selection_changed"]()
+    open_kwargs["on_toggle_qr"]()
+    open_kwargs["on_toggle_l"]()
+    open_kwargs["on_enable_selected_qr"]()
+    open_kwargs["on_disable_selected_qr"]()
+    open_kwargs["on_enable_all_qr"]()
+    open_kwargs["on_disable_all_qr"]()
+    open_kwargs["on_enable_selected_l"]()
+    open_kwargs["on_disable_selected_l"]()
+    open_kwargs["on_enable_all_l"]()
+    open_kwargs["on_disable_all_l"]()
+    open_kwargs["on_refresh"]()
+    open_kwargs["on_close"]()
+
+    assert calls[1:] == [
+        ("selection", bindings),
+        ("toggle_qr", bindings),
+        ("toggle_l", bindings),
+        ("enable_qr", bindings),
+        ("disable_qr", bindings),
+        ("enable_all_qr", bindings),
+        ("disable_all_qr", bindings),
+        ("enable_l", bindings),
+        ("disable_l", bindings),
+        ("enable_all_l", bindings),
+        ("disable_all_l", bindings),
+        ("refresh", bindings),
+        ("close", bindings),
+    ]
