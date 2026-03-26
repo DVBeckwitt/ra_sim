@@ -5326,29 +5326,6 @@ def _build_bragg_qr_entries() -> list[dict[str, object]]:
     )
 
 
-def _selected_bragg_qr_window_keys() -> list[tuple[str, int]]:
-    return gui_bragg_qr_manager.selected_bragg_qr_window_keys(
-        bragg_qr_manager_state,
-        bragg_qr_manager_view_state.qr_listbox,
-        tcl_error_types=(tk.TclError,),
-    )
-
-
-def _selected_primary_bragg_qr_window_key() -> tuple[str, int] | None:
-    return gui_bragg_qr_manager.selected_primary_bragg_qr_window_key(
-        bragg_qr_manager_state,
-        selected_keys=_selected_bragg_qr_window_keys(),
-    )
-
-
-def _selected_bragg_qr_l_window_keys() -> list[int]:
-    return gui_bragg_qr_manager.selected_bragg_qr_l_window_keys(
-        bragg_qr_manager_state,
-        bragg_qr_manager_view_state.l_listbox,
-        tcl_error_types=(tk.TclError,),
-    )
-
-
 def _l_value_map_for_qr(source_label: str, m_idx: int) -> dict[int, float]:
     return gui_controllers.build_bragg_qr_l_value_map(
         simulation_runtime_state,
@@ -5357,8 +5334,8 @@ def _l_value_map_for_qr(source_label: str, m_idx: int) -> dict[int, float]:
     )
 
 
-def _refresh_bragg_qr_l_toggle_listbox() -> None:
-    gui_bragg_qr_manager.refresh_bragg_qr_l_toggle_listbox(
+def _on_bragg_qr_selection_changed(_event=None) -> None:
+    gui_bragg_qr_manager.on_bragg_qr_selection_changed(
         view_state=bragg_qr_manager_view_state,
         manager_state=bragg_qr_manager_state,
         qr_listbox=bragg_qr_manager_view_state.qr_listbox,
@@ -5366,17 +5343,6 @@ def _refresh_bragg_qr_l_toggle_listbox() -> None:
         build_l_value_map=_l_value_map_for_qr,
         tcl_error_types=(tk.TclError,),
     )
-
-
-def _on_bragg_qr_selection_changed(_event=None) -> None:
-    gui_controllers.set_bragg_qr_selected_group_key(
-        bragg_qr_manager_state,
-        gui_bragg_qr_manager.selected_primary_bragg_qr_window_key(
-            bragg_qr_manager_state,
-            selected_keys=_selected_bragg_qr_window_keys(),
-        ),
-    )
-    _refresh_bragg_qr_l_toggle_listbox()
 
 
 def _refresh_bragg_qr_toggle_window() -> None:
@@ -5390,231 +5356,164 @@ def _refresh_bragg_qr_toggle_window() -> None:
         _on_bragg_qr_selection_changed()
 
 
-def _set_bragg_qr_groups_enabled(
-    group_keys: list[tuple[str, int]],
-    enabled: bool,
-) -> None:
-
-    normalized_keys: list[tuple[str, int]] = []
-    for source_label, m_idx in group_keys:
-        normalized_keys.append(
-            (
-                _normalize_bragg_qr_source_label(source_label),
-                int(m_idx),
-            )
-        )
-    if not normalized_keys:
-        return
-
-    changed_count = gui_controllers.set_bragg_qr_groups_enabled(
-        bragg_qr_manager_state.disabled_groups,
-        normalized_keys,
-        enabled=enabled,
-    )
-
-    if changed_count <= 0:
-        _refresh_bragg_qr_toggle_window()
-        return
-
-    _apply_bragg_qr_filters(trigger_update=True)
-    if "progress_label_positions" in globals():
-        action = "Enabled" if enabled else "Disabled"
-        progress_label_positions.config(
-            text=f"{action} {len(normalized_keys)} Bragg Qr group(s)."
-        )
-
-
-def _set_bragg_qr_l_values_enabled(
-    group_key: tuple[str, int] | None,
-    l_keys: list[int],
-    enabled: bool,
-) -> None:
-
-    if group_key is None:
-        gui_views.set_bragg_qr_manager_status_text(
-            bragg_qr_manager_view_state,
-            l_text="Select a Qr group first.",
-        )
-        return
-    if not l_keys:
-        gui_views.set_bragg_qr_manager_status_text(
-            bragg_qr_manager_view_state,
-            l_text="Select one or more L values.",
-        )
-        return
-
-    source_label = _normalize_bragg_qr_source_label(group_key[0])
-    m_idx = int(group_key[1])
-
-    changed_count = gui_controllers.set_bragg_qr_l_values_enabled(
-        bragg_qr_manager_state.disabled_l_values,
-        (source_label, m_idx),
-        l_keys,
-        enabled=enabled,
-        invalid_key=BRAGG_QR_L_INVALID_KEY,
-    )
-
-    if changed_count <= 0:
-        _refresh_bragg_qr_toggle_window()
-        return
-
-    _apply_bragg_qr_filters(trigger_update=True)
-    if "progress_label_positions" in globals():
-        action = "Enabled" if enabled else "Disabled"
-        progress_label_positions.config(
-            text=(
-                f"{action} {len(l_keys)} L value(s) for "
-                f"{source_label} m={m_idx}."
-            )
-        )
-
-
 def _disable_selected_bragg_qr_groups() -> None:
-    keys = _selected_bragg_qr_window_keys()
-    if not keys:
-        gui_views.set_bragg_qr_manager_status_text(
-            bragg_qr_manager_view_state,
-            qr_text="Select one or more Qr groups.",
-        )
-        return
-    _set_bragg_qr_groups_enabled(keys, enabled=False)
+    gui_bragg_qr_manager.disable_selected_bragg_qr_groups(
+        view_state=bragg_qr_manager_view_state,
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _enable_selected_bragg_qr_groups() -> None:
-    keys = _selected_bragg_qr_window_keys()
-    if not keys:
-        gui_views.set_bragg_qr_manager_status_text(
-            bragg_qr_manager_view_state,
-            qr_text="Select one or more Qr groups.",
-        )
-        return
-    _set_bragg_qr_groups_enabled(keys, enabled=True)
+    gui_bragg_qr_manager.enable_selected_bragg_qr_groups(
+        view_state=bragg_qr_manager_view_state,
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _toggle_selected_bragg_qr_groups(_event=None) -> None:
-
-    keys = _selected_bragg_qr_window_keys()
-    if not keys:
-        return
-
-    changed_count = gui_controllers.toggle_bragg_qr_groups(
-        bragg_qr_manager_state.disabled_groups,
-        [
-            (_normalize_bragg_qr_source_label(source_label), int(m_idx))
-            for source_label, m_idx in keys
-        ],
+    gui_bragg_qr_manager.toggle_selected_bragg_qr_groups(
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        tcl_error_types=(tk.TclError,),
     )
-
-    if changed_count > 0:
-        _apply_bragg_qr_filters(trigger_update=True)
 
 
 def _disable_selected_bragg_qr_l_values() -> None:
-    group_key = _selected_primary_bragg_qr_window_key()
-    l_keys = _selected_bragg_qr_l_window_keys()
-    _set_bragg_qr_l_values_enabled(group_key, l_keys, enabled=False)
+    gui_bragg_qr_manager.disable_selected_bragg_qr_l_values(
+        view_state=bragg_qr_manager_view_state,
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        l_listbox=bragg_qr_manager_view_state.l_listbox,
+        invalid_key=BRAGG_QR_L_INVALID_KEY,
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _enable_selected_bragg_qr_l_values() -> None:
-    group_key = _selected_primary_bragg_qr_window_key()
-    l_keys = _selected_bragg_qr_l_window_keys()
-    _set_bragg_qr_l_values_enabled(group_key, l_keys, enabled=True)
+    gui_bragg_qr_manager.enable_selected_bragg_qr_l_values(
+        view_state=bragg_qr_manager_view_state,
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        l_listbox=bragg_qr_manager_view_state.l_listbox,
+        invalid_key=BRAGG_QR_L_INVALID_KEY,
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _toggle_selected_bragg_qr_l_values(_event=None) -> None:
-    group_key = _selected_primary_bragg_qr_window_key()
-    if group_key is None:
-        return
-    l_keys = _selected_bragg_qr_l_window_keys()
-    if not l_keys:
-        return
-
-    source_label = _normalize_bragg_qr_source_label(group_key[0])
-    m_idx = int(group_key[1])
-    changed_count = gui_controllers.toggle_bragg_qr_l_values(
-        bragg_qr_manager_state.disabled_l_values,
-        (source_label, m_idx),
-        l_keys,
+    gui_bragg_qr_manager.toggle_selected_bragg_qr_l_values(
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        l_listbox=bragg_qr_manager_view_state.l_listbox,
         invalid_key=BRAGG_QR_L_INVALID_KEY,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        tcl_error_types=(tk.TclError,),
     )
-
-    if changed_count > 0:
-        _apply_bragg_qr_filters(trigger_update=True)
 
 
 def _disable_all_bragg_qr_groups() -> None:
-    keys = [entry["key"] for entry in _build_bragg_qr_entries()]
-    if not keys:
-        return
-    _set_bragg_qr_groups_enabled(keys, enabled=False)
+    gui_bragg_qr_manager.disable_all_bragg_qr_groups(
+        manager_state=bragg_qr_manager_state,
+        entries=_build_bragg_qr_entries(),
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+    )
 
 
 def _enable_all_bragg_qr_groups() -> None:
-
-    if not bragg_qr_manager_state.disabled_groups:
-        _refresh_bragg_qr_toggle_window()
-        return
-
-    bragg_qr_manager_state.disabled_groups.clear()
-    _apply_bragg_qr_filters(trigger_update=True)
-    if "progress_label_positions" in globals():
-        progress_label_positions.config(text="Enabled all Bragg Qr groups.")
+    gui_bragg_qr_manager.enable_all_bragg_qr_groups(
+        manager_state=bragg_qr_manager_state,
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+    )
 
 
 def _disable_all_bragg_qr_l_values_for_selected_qr() -> None:
-    group_key = _selected_primary_bragg_qr_window_key()
-    if group_key is None:
-        gui_views.set_bragg_qr_manager_status_text(
-            bragg_qr_manager_view_state,
-            l_text="Select a Qr group first.",
-        )
-        return
-
-    l_value_map = _l_value_map_for_qr(group_key[0], int(group_key[1]))
-    l_keys = [int(key) for key in l_value_map.keys()]
-    if not l_keys:
-        gui_views.set_bragg_qr_manager_status_text(
-            bragg_qr_manager_view_state,
-            l_text="No L values available.",
-        )
-        return
-    _set_bragg_qr_l_values_enabled(group_key, l_keys, enabled=False)
+    gui_bragg_qr_manager.disable_all_bragg_qr_l_values_for_selected_qr(
+        view_state=bragg_qr_manager_view_state,
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        build_l_value_map=_l_value_map_for_qr,
+        invalid_key=BRAGG_QR_L_INVALID_KEY,
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        tcl_error_types=(tk.TclError,),
+    )
 
 
 def _enable_all_bragg_qr_l_values_for_selected_qr() -> None:
-
-    group_key = _selected_primary_bragg_qr_window_key()
-    if group_key is None:
-        gui_views.set_bragg_qr_manager_status_text(
-            bragg_qr_manager_view_state,
-            l_text="Select a Qr group first.",
-        )
-        return
-
-    source_label = _normalize_bragg_qr_source_label(group_key[0])
-    m_idx = int(group_key[1])
-    changed = gui_controllers.clear_bragg_qr_l_values_for_group(
-        bragg_qr_manager_state.disabled_l_values,
-        (source_label, m_idx),
+    gui_bragg_qr_manager.enable_all_bragg_qr_l_values_for_selected_qr(
+        view_state=bragg_qr_manager_view_state,
+        manager_state=bragg_qr_manager_state,
+        qr_listbox=bragg_qr_manager_view_state.qr_listbox,
+        refresh_window=_refresh_bragg_qr_toggle_window,
+        apply_filters=lambda: _apply_bragg_qr_filters(trigger_update=True),
+        set_progress_text=(
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        tcl_error_types=(tk.TclError,),
     )
-    if not changed:
-        _refresh_bragg_qr_toggle_window()
-        return
-
-    _apply_bragg_qr_filters(trigger_update=True)
-    if "progress_label_positions" in globals():
-        progress_label_positions.config(
-            text=f"Enabled all L values for {source_label} m={m_idx}."
-        )
 
 
 def _close_bragg_qr_toggle_window() -> None:
-    gui_views.close_bragg_qr_manager_window(bragg_qr_manager_view_state)
-    gui_controllers.clear_bragg_qr_manager_state(bragg_qr_manager_state)
+    gui_bragg_qr_manager.close_bragg_qr_toggle_window(
+        bragg_qr_manager_view_state,
+        bragg_qr_manager_state,
+    )
 
 
 def _open_bragg_qr_toggle_window() -> None:
-    gui_views.open_bragg_qr_manager_window(
+    gui_bragg_qr_manager.open_bragg_qr_toggle_window(
         root=root,
         view_state=bragg_qr_manager_view_state,
         on_qr_selection_changed=_on_bragg_qr_selection_changed,
@@ -5631,7 +5530,6 @@ def _open_bragg_qr_toggle_window() -> None:
         on_refresh=_refresh_bragg_qr_toggle_window,
         on_close=_close_bragg_qr_toggle_window,
     )
-    _refresh_bragg_qr_toggle_window()
 
 
 def _brightest_hit_native_from_table(hit_table) -> tuple[float, float] | None:

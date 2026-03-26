@@ -256,6 +256,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the Bragg-Qr manager selection/list-refresh flow now also delegates
     through `ra_sim.gui.bragg_qr_manager`, leaving runtime with the manager
     window lifecycle and enable/disable action callbacks
+  - the remaining Bragg-Qr manager enable/disable/toggle action workflow now
+    also delegates through `ra_sim.gui.bragg_qr_manager`, leaving runtime
+    with thin wrappers plus the live filter-apply callbacks
 - Geometry-fit Qr/Qz selector workflow extraction has also advanced:
   - selector line/status formatting, window refresh, bulk include/exclude
     actions, and save/load payload translation now live in
@@ -273,7 +276,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   helper coverage plus direct structure-model coverage for primary-CIF reload
   snapshot/restore, diffuse-HT request assembly, Bragg-Qr / SF-pruning filter
   application, Bragg-Qr manager list-model assembly, Bragg-Qr manager
-  selection/refresh workflow, and geometry-fit Qr/Qz selector workflow
+  selection/refresh/action workflow, and geometry-fit Qr/Qz selector workflow
 
 ## Remaining Migration Focus
 
@@ -285,6 +288,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly
   file-dialog plumbing and live-preview/status callbacks around the extracted
   manager/view helpers.
+- The remaining Bragg-Qr manager runtime code is now mostly thin delegate
+  wrappers plus the live filter-apply callbacks around the extracted manager
+  helpers.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

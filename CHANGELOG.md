@@ -42,7 +42,7 @@
   - Moved the primary-CIF reload state transition and diffuse-HT request packaging out of `ra_sim/gui/runtime.py` into `ra_sim/gui/structure_model.py`, leaving the runtime path as Tk control rebuild/file-dialog/status wiring.
   - Moved the Bragg-Qr / structure-factor pruning filter pipeline out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including Bragg-Qr source/L-key normalization, disabled-filter pruning, and filtered rod/HKL rebuild helpers.
   - Moved the remaining Bragg-Qr manager list-building workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/controllers.py`, including group entry formatting, L-value mapping, and list-model/status construction for the manager window.
-  - Added `ra_sim/gui/bragg_qr_manager.py` and moved the remaining Bragg-Qr manager selection/refresh workflow out of `ra_sim/gui/runtime.py`, leaving runtime with window lifecycle and enable/disable action wiring.
+  - Expanded `ra_sim/gui/bragg_qr_manager.py` to own the remaining Bragg-Qr manager selection, refresh, and enable/disable/toggle action workflow, leaving `ra_sim/gui/runtime.py` with thin delegate wrappers plus the live filter-apply callbacks.
   - Added `ra_sim/gui/geometry_q_group_manager.py` and moved the geometry-fit Qr/Qz selector formatting, status, refresh, bulk include/exclude, and save/load payload workflow out of `ra_sim/gui/runtime.py`, leaving runtime with file-dialog and live-preview/status side effects.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
@@ -60,7 +60,7 @@
   - Extended `tests/test_gui_structure_model.py` with primary-CIF reload snapshot/restore coverage and diffuse-HT request packaging coverage.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr / structure-factor pruning filter pipeline coverage.
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr manager entry/L-value/list-model coverage.
-  - Added `tests/test_gui_bragg_qr_manager.py` for the extracted Bragg-Qr manager selection and refresh helpers.
+  - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr manager action and window-lifecycle helpers.
   - Added `tests/test_gui_geometry_q_group_manager.py` for the extracted geometry-fit Qr/Qz selector helpers and save/load workflow.
   - Added `tests/test_hbn_geometry_mapping.py` for geometry mapping math, metadata validation, sign handling, and startup/import consistency.
   - Added regression coverage for blank background-theta selections preserving the active live theta value.
