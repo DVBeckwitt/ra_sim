@@ -84,6 +84,25 @@ class BackgroundBackendDebugViewState:
 
 
 @dataclass
+class SamplingOpticsControlsViewState:
+    """Widget references and vars for sampling-resolution / optics controls."""
+
+    resolution_selector_frame: Any = None
+    resolution_var: Any = None
+    resolution_menu: Any = None
+    resolution_count_var: Any = None
+    resolution_count_label: Any = None
+    custom_samples_var: Any = None
+    custom_samples_row: Any = None
+    custom_samples_entry: Any = None
+    custom_samples_apply_button: Any = None
+    optics_mode_frame: Any = None
+    optics_mode_var: Any = None
+    fast_optics_button: Any = None
+    exact_optics_button: Any = None
+
+
+@dataclass
 class GeometryToolActionsViewState:
     """Widget references and vars for fit-history/manual-geometry action controls."""
 
@@ -258,6 +277,9 @@ class AppState:
     )
     background_backend_debug_view: BackgroundBackendDebugViewState = field(
         default_factory=BackgroundBackendDebugViewState
+    )
+    sampling_optics_controls_view: SamplingOpticsControlsViewState = field(
+        default_factory=SamplingOpticsControlsViewState
     )
     geometry_tool_actions_view: GeometryToolActionsViewState = field(
         default_factory=GeometryToolActionsViewState

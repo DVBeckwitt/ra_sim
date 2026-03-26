@@ -20,6 +20,7 @@ from .state import (
     HklLookupViewState,
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
+    SamplingOpticsControlsViewState,
     WorkspacePanelsViewState,
 )
 
@@ -107,6 +108,130 @@ def create_background_file_controls(
 
     view_state.background_file_status_var = background_file_status_var
     view_state.background_file_status_label = background_file_status_label
+
+
+def create_sampling_optics_controls(
+    *,
+    parent: tk.Misc,
+    view_state: SamplingOpticsControlsViewState,
+    resolution_options: Sequence[object],
+    initial_resolution: str,
+    custom_samples_text: str,
+    resolution_count_text: str,
+    optics_mode_text: str,
+    on_apply_custom_samples: Callable[[], None],
+) -> None:
+    """Create the sampling-resolution / optics controls and store their refs."""
+
+    resolution_selector_frame = ttk.Frame(parent)
+    resolution_selector_frame.pack(fill=tk.X, pady=5)
+    ttk.Label(resolution_selector_frame, text="Sampling Resolution").pack(
+        anchor=tk.W,
+        padx=5,
+    )
+
+    resolution_var = tk.StringVar(value=str(initial_resolution))
+    resolution_menu = ttk.OptionMenu(
+        resolution_selector_frame,
+        resolution_var,
+        resolution_var.get(),
+        *[str(option) for option in resolution_options],
+    )
+    resolution_menu.pack(fill=tk.X, padx=5, pady=(2, 0))
+
+    custom_samples_row = ttk.Frame(resolution_selector_frame)
+    custom_samples_row.pack(fill=tk.X, padx=5, pady=(2, 0))
+    ttk.Label(custom_samples_row, text="Custom Samples").pack(side=tk.LEFT)
+
+    custom_samples_var = tk.StringVar(value=str(custom_samples_text))
+    custom_samples_entry = ttk.Entry(
+        custom_samples_row,
+        textvariable=custom_samples_var,
+        width=10,
+        justify="right",
+    )
+    custom_samples_entry.pack(side=tk.LEFT, padx=(6, 4))
+    custom_samples_entry.bind("<Return>", lambda _event: on_apply_custom_samples())
+
+    custom_samples_apply_button = ttk.Button(
+        custom_samples_row,
+        text="Apply",
+        command=on_apply_custom_samples,
+    )
+    custom_samples_apply_button.pack(side=tk.LEFT)
+
+    resolution_count_var = tk.StringVar(value=str(resolution_count_text))
+    resolution_count_label = ttk.Label(
+        resolution_selector_frame,
+        textvariable=resolution_count_var,
+    )
+    resolution_count_label.pack(anchor=tk.W, padx=5, pady=(2, 0))
+
+    optics_mode_frame = ttk.Frame(parent)
+    optics_mode_frame.pack(fill=tk.X, pady=(6, 2))
+    ttk.Label(optics_mode_frame, text="Optics Transport").pack(anchor=tk.W, padx=5)
+
+    optics_mode_var = tk.StringVar(value=str(optics_mode_text))
+    fast_optics_button = ttk.Radiobutton(
+        optics_mode_frame,
+        text="Original Fast Approx (Fresnel + Beer-Lambert)",
+        variable=optics_mode_var,
+        value="fast",
+    )
+    fast_optics_button.pack(anchor=tk.W, padx=12)
+
+    exact_optics_button = ttk.Radiobutton(
+        optics_mode_frame,
+        text="Complex-k DWBA slab optics (Precise)",
+        variable=optics_mode_var,
+        value="exact",
+    )
+    exact_optics_button.pack(anchor=tk.W, padx=12)
+
+    view_state.resolution_selector_frame = resolution_selector_frame
+    view_state.resolution_var = resolution_var
+    view_state.resolution_menu = resolution_menu
+    view_state.resolution_count_var = resolution_count_var
+    view_state.resolution_count_label = resolution_count_label
+    view_state.custom_samples_var = custom_samples_var
+    view_state.custom_samples_row = custom_samples_row
+    view_state.custom_samples_entry = custom_samples_entry
+    view_state.custom_samples_apply_button = custom_samples_apply_button
+    view_state.optics_mode_frame = optics_mode_frame
+    view_state.optics_mode_var = optics_mode_var
+    view_state.fast_optics_button = fast_optics_button
+    view_state.exact_optics_button = exact_optics_button
+
+
+def set_sampling_resolution_summary_text(
+    view_state: SamplingOpticsControlsViewState,
+    text: str,
+) -> None:
+    """Update the sampling-resolution summary label."""
+
+    setter = getattr(view_state.resolution_count_var, "set", None)
+    if callable(setter):
+        setter(str(text))
+
+
+def _configure_widget_state(widget: object | None, state: str) -> None:
+    configure = getattr(widget, "configure", None)
+    if configure is None:
+        configure = getattr(widget, "config", None)
+    if callable(configure):
+        configure(state=state)
+
+
+def set_sampling_custom_controls_enabled(
+    view_state: SamplingOpticsControlsViewState,
+    *,
+    enabled: bool,
+) -> None:
+    """Enable or disable the custom-sample entry and apply button."""
+
+    state_value = tk.NORMAL if enabled else tk.DISABLED
+    _configure_widget_state(view_state.custom_samples_entry, state_value)
+    _configure_widget_state(view_state.custom_samples_apply_button, state_value)
 
 
 def create_geometry_tool_action_controls(

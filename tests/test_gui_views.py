@@ -300,6 +300,7 @@ class _FakeEntry:
         self.kwargs = kwargs
         self.textvariable = kwargs.get("textvariable")
         self.bindings = {}
+        self.state = kwargs.get("state")
 
     def pack(self, **_kwargs) -> None:
         pass
@@ -309,6 +310,12 @@ class _FakeEntry:
 
     def bind(self, event: str, callback) -> None:
         self.bindings[event] = callback
+
+    def configure(self, **kwargs) -> None:
+        self.state = kwargs.get("state", self.state)
+
+    def config(self, **kwargs) -> None:
+        self.configure(**kwargs)
 
 
 class _FakeButton:
@@ -329,6 +336,24 @@ class _FakeButton:
 
     def config(self, **kwargs) -> None:
         self.state = kwargs.get("state", self.state)
+
+    def configure(self, **kwargs) -> None:
+        self.config(**kwargs)
+
+
+class _FakeRadiobutton:
+    created = []
+
+    def __init__(self, parent, **kwargs) -> None:
+        self.parent = parent
+        self.kwargs = kwargs
+        self.command = kwargs.get("command")
+        self.variable = kwargs.get("variable")
+        self.value = kwargs.get("value")
+        _FakeRadiobutton.created.append(self)
+
+    def pack(self, **_kwargs) -> None:
+        pass
 
 
 class _FakeSpinbox:
@@ -631,6 +656,63 @@ def test_background_file_controls_store_status_var_and_update_text(monkeypatch) 
 
     _FakeButton.created[0].command()
     assert loaded == [True]
+
+
+def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
+    monkeypatch,
+) -> None:
+    _FakeButton.created = []
+    _FakeLabel.created = []
+    _FakeRadiobutton.created = []
+    _FakeOptionMenu.created = []
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
+    monkeypatch.setattr(views.ttk, "OptionMenu", _FakeOptionMenu)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.SamplingOpticsControlsViewState()
+    applied = []
+
+    views.create_sampling_optics_controls(
+        parent=object(),
+        view_state=view_state,
+        resolution_options=["Low", "High", "Custom"],
+        initial_resolution="High",
+        custom_samples_text="2500",
+        resolution_count_text="2,500 samples",
+        optics_mode_text="exact",
+        on_apply_custom_samples=lambda: applied.append("apply"),
+    )
+
+    assert isinstance(view_state.resolution_selector_frame, _FakeFrame)
+    assert view_state.resolution_var.get() == "High"
+    assert view_state.custom_samples_var.get() == "2500"
+    assert view_state.resolution_count_var.get() == "2,500 samples"
+    assert view_state.optics_mode_var.get() == "exact"
+    assert view_state.custom_samples_entry.textvariable is view_state.custom_samples_var
+    assert view_state.custom_samples_apply_button is _FakeButton.created[0]
+    assert _FakeOptionMenu.created[0].variable is view_state.resolution_var
+    assert _FakeOptionMenu.created[0].default == "High"
+    assert _FakeOptionMenu.created[0].values == ("Low", "High", "Custom")
+    assert [radio.value for radio in _FakeRadiobutton.created] == ["fast", "exact"]
+
+    views.set_sampling_resolution_summary_text(view_state, "3,600 samples (custom)")
+    assert view_state.resolution_count_var.get() == "3,600 samples (custom)"
+
+    views.set_sampling_custom_controls_enabled(view_state, enabled=False)
+    assert view_state.custom_samples_entry.state == tk.DISABLED
+    assert view_state.custom_samples_apply_button.state == tk.DISABLED
+
+    views.set_sampling_custom_controls_enabled(view_state, enabled=True)
+    assert view_state.custom_samples_entry.state == tk.NORMAL
+    assert view_state.custom_samples_apply_button.state == tk.NORMAL
+
+    view_state.custom_samples_entry.bindings["<Return>"](None)
+    _FakeButton.created[0].command()
+    assert applied == ["apply", "apply"]
 
 
 def test_geometry_tool_action_controls_store_refs_and_support_updates(

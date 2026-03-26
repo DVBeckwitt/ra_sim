@@ -20,6 +20,93 @@ from .state import (
 )
 
 
+def parse_sampling_count(
+    raw_value: object,
+    fallback: object,
+    *,
+    minimum: int = 1,
+) -> int:
+    """Coerce one sampling-count value to a positive integer."""
+
+    try:
+        parsed = int(round(float(str(raw_value).strip().replace(",", ""))))
+    except (TypeError, ValueError):
+        try:
+            parsed = int(round(float(str(fallback).strip().replace(",", ""))))
+        except (TypeError, ValueError):
+            parsed = int(minimum)
+    return max(int(minimum), parsed)
+
+
+def normalize_sampling_resolution_choice(
+    resolution_value: object,
+    *,
+    allowed_options: Sequence[object],
+    fallback: object,
+) -> str:
+    """Normalize one sampling-resolution choice against the allowed labels."""
+
+    allowed = [str(option) for option in allowed_options]
+    value_text = str(resolution_value) if resolution_value is not None else ""
+    if value_text in allowed:
+        return value_text
+
+    fallback_text = str(fallback)
+    if fallback_text in allowed:
+        return fallback_text
+    if allowed:
+        return allowed[0]
+    return ""
+
+
+def resolve_sampling_count(
+    resolution_value: object,
+    *,
+    custom_option: object,
+    custom_value: object,
+    preset_counts: Mapping[object, object],
+    fallback_resolution: object,
+    fallback_count: object,
+) -> int:
+    """Return the effective sample count for one resolution selection."""
+
+    normalized = str(resolution_value) if resolution_value is not None else ""
+    custom_label = str(custom_option)
+    if normalized == custom_label:
+        return parse_sampling_count(custom_value, fallback_count)
+
+    fallback_label = str(fallback_resolution)
+    preset_value = preset_counts.get(normalized)
+    if preset_value is None:
+        preset_value = preset_counts.get(fallback_label, fallback_count)
+    return parse_sampling_count(preset_value, fallback_count)
+
+
+def format_sampling_resolution_summary(
+    resolution_value: object,
+    *,
+    custom_option: object,
+    custom_value: object,
+    preset_counts: Mapping[object, object],
+    fallback_resolution: object,
+    fallback_count: object,
+) -> str:
+    """Format the GUI sampling summary label for the current selection."""
+
+    custom_label = str(custom_option)
+    normalized = str(resolution_value) if resolution_value is not None else ""
+    count = resolve_sampling_count(
+        normalized,
+        custom_option=custom_label,
+        custom_value=custom_value,
+        preset_counts=preset_counts,
+        fallback_resolution=fallback_resolution,
+        fallback_count=fallback_count,
+    )
+    suffix = " (custom)" if normalized == custom_label else ""
+    return f"{count:,} samples{suffix}" if count >= 1000 else f"{count} samples{suffix}"
+
+
 def build_initial_state() -> AppState:
     """Build the initial GUI state snapshot from current configuration."""
 

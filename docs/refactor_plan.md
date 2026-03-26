@@ -133,6 +133,15 @@ packaged GUI monolith in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.views` now owns construction of the snapshot/Q-space/grid
     export control cluster.
   - Direct view tests now cover the extracted analysis export helpers.
+- Sampling-resolution / optics-mode control migration has landed.
+  - Shared widget references and `StringVar` state for those controls now live
+    in `ra_sim.gui.state`.
+  - `ra_sim.gui.views` now owns construction of that control cluster plus the
+    custom-sample enable/disable and summary-label helper updates.
+  - `ra_sim.gui.controllers` now owns the sampling-count parsing,
+    resolution-choice normalization, and summary formatting helpers.
+  - Direct controller/view tests now cover the extracted sampling/optics
+    helpers.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -211,12 +220,21 @@ What is done:
     corresponding `BooleanVar` view state.
 - The analysis export buttons are no longer assembled directly in `runtime.py`.
   - `ra_sim.gui.views` now owns that export-control construction.
+- The sampling-resolution / optics-mode controls are no longer assembled
+  directly in `runtime.py`.
+  - `ra_sim.gui.state` now owns their shared widget/`StringVar` view state.
+  - `ra_sim.gui.views` now owns that control-cluster construction and the
+    custom-sample widget-state / summary-label helpers.
+  - `ra_sim.gui.controllers` now owns the sampling-count parsing,
+    resolution-choice normalization, and summary formatting helpers.
 
 What is left:
 
 - `ra_sim/gui/runtime.py` is still very large and still owns too much mutable
   GUI state.
 - The runtime still coordinates too many cross-feature globals and Tk widgets.
+- The next bounded GUI slices are still assembled inline in `runtime.py`,
+  especially the finite-stack and display-control panels.
 
 Why it matters:
 
@@ -284,6 +302,12 @@ What is done:
   constructors.
 - `state.py` now also owns analysis export control view state.
 - `views.py` now also owns the analysis export control constructor.
+- `state.py` now also owns sampling-resolution / optics-mode control view
+  state.
+- `views.py` now also owns the sampling/optics control construction and helper
+  updates for the custom-sample widgets and summary label.
+- `controllers.py` now also owns the sampling-count parsing,
+  resolution-choice normalization, and summary formatting helpers.
 
 What is left:
 
@@ -292,6 +316,8 @@ What is left:
 - The new controller/state boundary is real for manual geometry, but it is not
   yet the dominant app structure across the rest of the runtime.
 - Other Tk-heavy surfaces still need to move behind `views.py` helpers.
+- The next practical view-state targets are the remaining inline finite-stack
+  and display-control clusters.
 
 Why it matters:
 
@@ -452,10 +478,12 @@ Goal:
 
 Tasks:
 
-- Finish removing runtime-owned aliases around manual-geometry state.
 - Group more runtime globals into explicit state containers.
-- Reduce direct feature coordination in `runtime.py` where controller logic can
-  own it instead.
+- Move the next remaining inline control clusters
+  (finite-stack, display controls, and similar surfaces) into `views.py`
+  helpers and shared view state.
+- Reduce direct feature coordination in `runtime.py` where controller logic or
+  shared state can own it instead.
 - Keep moving Tk-owned widget references out of runtime and into `views.py`
   state/helpers.
 
@@ -552,15 +580,14 @@ Why last:
 
 The next best step is:
 
-- build on the new manual-geometry / geometry-fit-history / preview /
-  Q-group / Bragg-Qr / hBN-debug / geometry-fit-constraints /
-  background-theta-control / workspace-panel / background-debug slices by
-  moving the next runtime-owned GUI
-  workflows into explicit state + controller + view boundaries
-- focus next on the remaining runtime-owned workflow/state coordination in
-  `runtime.py`, especially the scattered cross-feature globals and other
-  still-inline Tk-heavy helpers that prevent the extracted scaffolding modules
-  from becoming the dominant app structure
+- build on the newer geometry-tool / HKL-lookup / overlay-action /
+  analysis-view / analysis-export slices by moving the next runtime-owned GUI
+  control clusters into explicit state + controller + view boundaries
+- focus next on the finite-stack controls in `runtime.py`, then on the
+  display-control panels if they remain similarly isolated
+- keep shrinking the remaining cross-feature globals and inline Tk-heavy
+  helpers that prevent the extracted scaffolding modules from becoming the
+  dominant app structure
 
 That is the point where the migration stops being “more helper extraction” and
 starts becoming a real architectural finish.

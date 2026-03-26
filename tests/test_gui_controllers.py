@@ -17,6 +17,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
         state.BackgroundBackendDebugViewState,
     )
     assert isinstance(
+        app_state.sampling_optics_controls_view,
+        state.SamplingOpticsControlsViewState,
+    )
+    assert isinstance(
         app_state.geometry_tool_actions_view,
         state.GeometryToolActionsViewState,
     )
@@ -50,6 +54,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert app_state.background_theta_controls_view is not other_state.background_theta_controls_view
     assert app_state.workspace_panels_view is not other_state.workspace_panels_view
     assert app_state.background_backend_debug_view is not other_state.background_backend_debug_view
+    assert (
+        app_state.sampling_optics_controls_view
+        is not other_state.sampling_optics_controls_view
+    )
     assert app_state.geometry_tool_actions_view is not other_state.geometry_tool_actions_view
     assert app_state.hkl_lookup_view is not other_state.hkl_lookup_view
     assert (
@@ -81,6 +89,56 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert other_state.geometry_preview.overlay.pairs == []
     assert other_state.geometry_q_groups.refresh_requested is False
     assert other_state.bragg_qr_manager.selected_group_key is None
+
+
+def test_sampling_resolution_controller_helpers_normalize_parse_and_format() -> None:
+    assert controllers.parse_sampling_count("1,250", 10) == 1250
+    assert controllers.parse_sampling_count("bad", 10) == 10
+
+    assert controllers.normalize_sampling_resolution_choice(
+        "Custom",
+        allowed_options=["Low", "High", "Custom"],
+        fallback="Low",
+    ) == "Custom"
+    assert controllers.normalize_sampling_resolution_choice(
+        "unexpected",
+        allowed_options=["Low", "High", "Custom"],
+        fallback="High",
+    ) == "High"
+
+    assert controllers.resolve_sampling_count(
+        "Custom",
+        custom_option="Custom",
+        custom_value="3,600",
+        preset_counts={"Low": 32, "High": 128},
+        fallback_resolution="Low",
+        fallback_count=16,
+    ) == 3600
+    assert controllers.resolve_sampling_count(
+        "High",
+        custom_option="Custom",
+        custom_value="3,600",
+        preset_counts={"Low": 32, "High": 128},
+        fallback_resolution="Low",
+        fallback_count=16,
+    ) == 128
+
+    assert controllers.format_sampling_resolution_summary(
+        "Custom",
+        custom_option="Custom",
+        custom_value="3,600",
+        preset_counts={"Low": 32, "High": 128},
+        fallback_resolution="Low",
+        fallback_count=16,
+    ) == "3,600 samples (custom)"
+    assert controllers.format_sampling_resolution_summary(
+        "Low",
+        custom_option="Custom",
+        custom_value="999",
+        preset_counts={"Low": 32, "High": 128},
+        fallback_resolution="Low",
+        fallback_count=16,
+    ) == "32 samples"
 
 
 def test_replace_manual_geometry_state_updates_in_place() -> None:

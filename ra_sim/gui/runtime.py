@@ -5634,6 +5634,7 @@ hbn_geometry_debug_view_state = gui_state.HbnGeometryDebugViewState()
 geometry_overlay_actions_view_state = gui_state.GeometryOverlayActionsViewState()
 analysis_view_controls_view_state = gui_state.AnalysisViewControlsViewState()
 analysis_export_controls_view_state = gui_state.AnalysisExportControlsViewState()
+sampling_optics_controls_view_state = gui_state.SamplingOpticsControlsViewState()
 
 
 def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
@@ -16013,61 +16014,67 @@ resolution_options = [*resolution_sample_counts.keys(), CUSTOM_SAMPLING_OPTION]
 if initial_resolution not in resolution_options:
     initial_resolution = 'Low'
 
-resolution_var = tk.StringVar(value=initial_resolution)
-resolution_count_var = tk.StringVar()
-custom_samples_var = tk.StringVar(value=str(int(max(1, num_samples))))
-custom_samples_entry_widget = None
-custom_samples_apply_button = None
-
-
 def _parse_sample_count(raw_value, fallback):
-    try:
-        parsed = int(round(float(str(raw_value).strip().replace(",", ""))))
-    except (TypeError, ValueError, tk.TclError):
-        parsed = int(fallback)
-    return max(1, parsed)
+    return gui_controllers.parse_sampling_count(raw_value, fallback)
 
 
 def _current_custom_sample_count(default=None):
     fallback = int(max(1, default if default is not None else num_samples))
-    return _parse_sample_count(custom_samples_var.get(), fallback)
+    custom_var = sampling_optics_controls_view_state.custom_samples_var
+    raw_value = custom_var.get() if custom_var is not None else fallback
+    return _parse_sample_count(raw_value, fallback)
 
 
 def _set_custom_sample_controls_state():
-    state = tk.NORMAL if resolution_var.get() == CUSTOM_SAMPLING_OPTION else tk.DISABLED
-    if custom_samples_entry_widget is not None:
-        custom_samples_entry_widget.configure(state=state)
-    if custom_samples_apply_button is not None:
-        custom_samples_apply_button.configure(state=state)
+    resolution_var = sampling_optics_controls_view_state.resolution_var
+    enabled = bool(
+        resolution_var is not None and resolution_var.get() == CUSTOM_SAMPLING_OPTION
+    )
+    gui_views.set_sampling_custom_controls_enabled(
+        sampling_optics_controls_view_state,
+        enabled=enabled,
+    )
 
 def _refresh_resolution_display():
-    if resolution_var.get() == CUSTOM_SAMPLING_OPTION:
-        count = _current_custom_sample_count(default=max(1, num_samples))
-        resolution_count_var.set(
-            f"{count:,} samples (custom)" if count >= 1000 else f"{count} samples (custom)"
-        )
+    resolution_var = sampling_optics_controls_view_state.resolution_var
+    if resolution_var is None:
         return
-
-    count = resolution_sample_counts.get(resolution_var.get(), resolution_sample_counts['Low'])
-    resolution_count_var.set(f"{count:,} samples" if count >= 1000 else f"{count} samples")
+    summary_text = gui_controllers.format_sampling_resolution_summary(
+        resolution_var.get(),
+        custom_option=CUSTOM_SAMPLING_OPTION,
+        custom_value=(
+            sampling_optics_controls_view_state.custom_samples_var.get()
+            if sampling_optics_controls_view_state.custom_samples_var is not None
+            else max(1, num_samples)
+        ),
+        preset_counts=resolution_sample_counts,
+        fallback_resolution=defaults.get('sampling_resolution', 'Low'),
+        fallback_count=max(1, num_samples),
+    )
+    gui_views.set_sampling_resolution_summary_text(
+        sampling_optics_controls_view_state,
+        summary_text,
+    )
 
 
 def _apply_resolution_selection(trigger_update=True):
     global num_samples
 
+    resolution_var = sampling_optics_controls_view_state.resolution_var
+    custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
+    if resolution_var is None:
+        return
     previous_num_samples = int(num_samples)
-    if resolution_var.get() == CUSTOM_SAMPLING_OPTION:
-        selected_count = _current_custom_sample_count(default=max(1, num_samples))
+    selected_count = gui_controllers.resolve_sampling_count(
+        resolution_var.get(),
+        custom_option=CUSTOM_SAMPLING_OPTION,
+        custom_value=custom_samples_var.get() if custom_samples_var is not None else num_samples,
+        preset_counts=resolution_sample_counts,
+        fallback_resolution=defaults.get('sampling_resolution', 'Low'),
+        fallback_count=max(1, num_samples),
+    )
+    if resolution_var.get() == CUSTOM_SAMPLING_OPTION and custom_samples_var is not None:
         custom_samples_var.set(str(selected_count))
-    else:
-        selected_count = int(
-            max(
-                1,
-                resolution_sample_counts.get(
-                    resolution_var.get(), resolution_sample_counts['Low']
-                ),
-            )
-        )
 
     num_samples = selected_count
     _refresh_resolution_display()
@@ -16077,66 +16084,58 @@ def _apply_resolution_selection(trigger_update=True):
 
 
 def _apply_custom_sample_count(_event=None):
+    resolution_var = sampling_optics_controls_view_state.resolution_var
+    custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
     parsed_value = _current_custom_sample_count(default=max(1, num_samples))
-    custom_samples_var.set(str(parsed_value))
-    if resolution_var.get() != CUSTOM_SAMPLING_OPTION:
+    if custom_samples_var is not None:
+        custom_samples_var.set(str(parsed_value))
+    if resolution_var is not None and resolution_var.get() != CUSTOM_SAMPLING_OPTION:
         resolution_var.set(CUSTOM_SAMPLING_OPTION)
         return
     _apply_resolution_selection(trigger_update=True)
 
 
 def ensure_valid_resolution_choice():
-    if resolution_var.get() not in resolution_options:
-        fallback = defaults.get('sampling_resolution', 'Low')
-        resolution_var.set(fallback if fallback in resolution_options else 'Low')
+    resolution_var = sampling_optics_controls_view_state.resolution_var
+    if resolution_var is None:
+        return
+    normalized = gui_controllers.normalize_sampling_resolution_choice(
+        resolution_var.get(),
+        allowed_options=resolution_options,
+        fallback=defaults.get('sampling_resolution', 'Low'),
+    )
+    if resolution_var.get() != normalized:
+        resolution_var.set(normalized)
     _set_custom_sample_controls_state()
     _apply_resolution_selection(trigger_update=False)
 
 if initial_resolution != CUSTOM_SAMPLING_OPTION:
-    custom_samples_var.set(
-        str(
-            int(
-                max(
-                    1,
-                    resolution_sample_counts.get(
-                        initial_resolution, resolution_sample_counts['Low']
-                    ),
-                )
+    initial_custom_samples_text = str(
+        int(
+            max(
+                1,
+                resolution_sample_counts.get(
+                    initial_resolution, resolution_sample_counts['Low']
+                ),
             )
         )
     )
+else:
+    initial_custom_samples_text = str(int(max(1, num_samples)))
 
-resolution_selector_frame = ttk.Frame(mosaic_frame.frame)
-resolution_selector_frame.pack(fill=tk.X, pady=5)
-ttk.Label(resolution_selector_frame, text='Sampling Resolution').pack(anchor=tk.W, padx=5)
-resolution_menu = ttk.OptionMenu(
-    resolution_selector_frame,
-    resolution_var,
-    resolution_var.get(),
-    *resolution_options,
+gui_views.create_sampling_optics_controls(
+    parent=mosaic_frame.frame,
+    view_state=sampling_optics_controls_view_state,
+    resolution_options=resolution_options,
+    initial_resolution=initial_resolution,
+    custom_samples_text=initial_custom_samples_text,
+    resolution_count_text="",
+    optics_mode_text=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')),
+    on_apply_custom_samples=_apply_custom_sample_count,
 )
-resolution_menu.pack(fill=tk.X, padx=5, pady=(2, 0))
-custom_samples_row = ttk.Frame(resolution_selector_frame)
-custom_samples_row.pack(fill=tk.X, padx=5, pady=(2, 0))
-ttk.Label(custom_samples_row, text='Custom Samples').pack(side=tk.LEFT)
-custom_samples_entry_widget = ttk.Entry(
-    custom_samples_row,
-    textvariable=custom_samples_var,
-    width=10,
-    justify='right',
-)
-custom_samples_entry_widget.pack(side=tk.LEFT, padx=(6, 4))
-custom_samples_entry_widget.bind('<Return>', _apply_custom_sample_count)
-custom_samples_apply_button = ttk.Button(
-    custom_samples_row,
-    text='Apply',
-    command=_apply_custom_sample_count,
-)
-custom_samples_apply_button.pack(side=tk.LEFT)
-ttk.Label(
-    resolution_selector_frame,
-    textvariable=resolution_count_var,
-).pack(anchor=tk.W, padx=5, pady=(2, 0))
+resolution_var = sampling_optics_controls_view_state.resolution_var
+custom_samples_var = sampling_optics_controls_view_state.custom_samples_var
+optics_mode_var = sampling_optics_controls_view_state.optics_mode_var
 
 def on_resolution_option_change(*_):
     _set_custom_sample_controls_state()
@@ -16145,23 +16144,6 @@ def on_resolution_option_change(*_):
 _set_custom_sample_controls_state()
 _apply_resolution_selection(trigger_update=False)
 resolution_var.trace_add('write', on_resolution_option_change)
-
-optics_mode_var = tk.StringVar(value=_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
-optics_mode_frame = ttk.Frame(mosaic_frame.frame)
-optics_mode_frame.pack(fill=tk.X, pady=(6, 2))
-ttk.Label(optics_mode_frame, text='Optics Transport').pack(anchor=tk.W, padx=5)
-ttk.Radiobutton(
-    optics_mode_frame,
-    text='Original Fast Approx (Fresnel + Beer-Lambert)',
-    variable=optics_mode_var,
-    value='fast',
-).pack(anchor=tk.W, padx=12)
-ttk.Radiobutton(
-    optics_mode_frame,
-    text='Complex-k DWBA slab optics (Precise)',
-    variable=optics_mode_var,
-    value='exact',
-).pack(anchor=tk.W, padx=12)
 
 
 def on_optics_mode_change(*_):
