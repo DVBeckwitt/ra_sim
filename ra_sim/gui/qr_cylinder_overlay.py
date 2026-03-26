@@ -1,8 +1,248 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+
+from ra_sim.simulation.intersection_analysis import (
+    IntersectionGeometry,
+    project_qr_cylinder_to_detector,
+)
+
+
+@dataclass(frozen=True)
+class QrCylinderOverlayRenderConfig:
+    """Normalized runtime inputs needed to render analytic Qr-cylinder traces."""
+
+    render_in_caked_space: bool
+    image_size: int
+    display_rotate_k: int
+    center_col: float
+    center_row: float
+    distance_cor_to_detector: float
+    gamma_deg: float
+    Gamma_deg: float
+    chi_deg: float
+    psi_deg: float
+    psi_z_deg: float
+    zs: float
+    zb: float
+    theta_initial_deg: float
+    cor_angle_deg: float
+    pixel_size_m: float
+    wavelength: float
+    n2: complex
+    phi_samples: int = 721
+    two_theta_limits: tuple[float, float] = (0.0, 90.0)
+
+
+def build_qr_cylinder_overlay_render_config(
+    *,
+    render_in_caked_space: object,
+    image_size: object,
+    display_rotate_k: object,
+    center_col: object,
+    center_row: object,
+    distance_cor_to_detector: object,
+    gamma_deg: object,
+    Gamma_deg: object,
+    chi_deg: object,
+    psi_deg: object,
+    psi_z_deg: object,
+    zs: object,
+    zb: object,
+    theta_initial_deg: object,
+    cor_angle_deg: object,
+    pixel_size_m: object,
+    wavelength: object,
+    n2: object,
+    phi_samples: object = 721,
+    two_theta_limits: tuple[float, float] = (0.0, 90.0),
+) -> QrCylinderOverlayRenderConfig:
+    """Build one validated overlay render config from runtime scalar values."""
+
+    return QrCylinderOverlayRenderConfig(
+        render_in_caked_space=bool(render_in_caked_space),
+        image_size=int(image_size),
+        display_rotate_k=int(display_rotate_k),
+        center_col=float(center_col),
+        center_row=float(center_row),
+        distance_cor_to_detector=float(distance_cor_to_detector),
+        gamma_deg=float(gamma_deg),
+        Gamma_deg=float(Gamma_deg),
+        chi_deg=float(chi_deg),
+        psi_deg=float(psi_deg),
+        psi_z_deg=float(psi_z_deg),
+        zs=float(zs),
+        zb=float(zb),
+        theta_initial_deg=float(theta_initial_deg),
+        cor_angle_deg=float(cor_angle_deg),
+        pixel_size_m=float(pixel_size_m),
+        wavelength=float(wavelength),
+        n2=complex(n2),
+        phi_samples=int(phi_samples),
+        two_theta_limits=(
+            float(two_theta_limits[0]),
+            float(two_theta_limits[1]),
+        ),
+    )
+
+
+def build_qr_cylinder_overlay_signature(
+    entries: Sequence[dict[str, object]],
+    *,
+    config: QrCylinderOverlayRenderConfig,
+) -> tuple[object, ...]:
+    """Return a cache signature for analytic detector-trace overlay inputs."""
+
+    qr_keys = tuple(
+        (str(entry["source"]), int(entry["m"]), round(float(entry["qr"]), 10))
+        for entry in entries
+    )
+    return (
+        tuple(qr_keys),
+        bool(config.render_in_caked_space),
+        int(config.image_size),
+        int(config.display_rotate_k),
+        float(config.center_col),
+        float(config.center_row),
+        float(config.distance_cor_to_detector),
+        float(config.gamma_deg),
+        float(config.Gamma_deg),
+        float(config.chi_deg),
+        float(config.psi_deg),
+        float(config.psi_z_deg),
+        float(config.zs),
+        float(config.zb),
+        float(config.theta_initial_deg),
+        float(config.cor_angle_deg),
+        float(config.pixel_size_m),
+        float(config.wavelength),
+        round(float(np.real(config.n2)), 12),
+        round(float(np.imag(config.n2)), 12),
+    )
+
+
+def _trace_geometry(
+    config: QrCylinderOverlayRenderConfig,
+) -> IntersectionGeometry:
+    return IntersectionGeometry(
+        image_size=int(config.image_size),
+        center_col=float(config.center_col),
+        center_row=float(config.center_row),
+        distance_cor_to_detector=float(config.distance_cor_to_detector),
+        gamma_deg=float(config.gamma_deg),
+        Gamma_deg=float(config.Gamma_deg),
+        chi_deg=float(config.chi_deg),
+        psi_deg=float(config.psi_deg),
+        psi_z_deg=float(config.psi_z_deg),
+        zs=float(config.zs),
+        zb=float(config.zb),
+        theta_initial_deg=float(config.theta_initial_deg),
+        cor_angle_deg=float(config.cor_angle_deg),
+        n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        pixel_size_m=float(config.pixel_size_m),
+    )
+
+
+def _display_trace_from_detector_trace(
+    trace: Any,
+    *,
+    config: QrCylinderOverlayRenderConfig,
+    two_theta_map: np.ndarray | None,
+    phi_map_deg: np.ndarray | None,
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+) -> tuple[np.ndarray, np.ndarray]:
+    detector_cols = np.asarray(trace.detector_col, dtype=np.float64)
+    detector_rows = np.asarray(trace.detector_row, dtype=np.float64)
+    valid_mask = np.asarray(trace.valid_mask, dtype=bool)
+
+    if config.render_in_caked_space:
+        if two_theta_map is None or phi_map_deg is None:
+            nan_vals = np.full(detector_cols.shape, np.nan, dtype=np.float64)
+            return nan_vals.copy(), nan_vals
+        return interpolate_trace_to_caked_coords(
+            detector_cols=detector_cols,
+            detector_rows=detector_rows,
+            valid_mask=valid_mask,
+            two_theta_map=two_theta_map,
+            phi_map_deg=phi_map_deg,
+            two_theta_limits=config.two_theta_limits,
+        )
+
+    native_shape = (int(config.image_size), int(config.image_size))
+    display_cols = np.full(detector_cols.shape, np.nan, dtype=np.float64)
+    display_rows = np.full(detector_rows.shape, np.nan, dtype=np.float64)
+    for idx in np.nonzero(valid_mask)[0]:
+        try:
+            dcol, drow = native_sim_to_display_coords(
+                float(detector_cols[idx]),
+                float(detector_rows[idx]),
+                native_shape,
+            )
+        except Exception:
+            continue
+        display_cols[idx] = float(dcol)
+        display_rows[idx] = float(drow)
+    return display_cols, display_rows
+
+
+def build_qr_cylinder_overlay_paths(
+    entries: Sequence[dict[str, object]],
+    *,
+    config: QrCylinderOverlayRenderConfig,
+    two_theta_map: np.ndarray | None,
+    phi_map_deg: np.ndarray | None,
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+    project_traces: Callable[..., Sequence[Any]] = project_qr_cylinder_to_detector,
+) -> list[dict[str, object]]:
+    """Build visible detector or caked overlay paths for the active Qr groups."""
+
+    geometry = _trace_geometry(config)
+    paths: list[dict[str, object]] = []
+
+    for entry in entries:
+        try:
+            traces = project_traces(
+                qr_value=float(entry["qr"]),
+                geometry=geometry,
+                wavelength=float(config.wavelength),
+                n2=config.n2,
+                phi_samples=int(config.phi_samples),
+            )
+        except Exception:
+            continue
+        for trace in traces:
+            display_cols, display_rows = _display_trace_from_detector_trace(
+                trace,
+                config=config,
+                two_theta_map=two_theta_map,
+                phi_map_deg=phi_map_deg,
+                native_sim_to_display_coords=native_sim_to_display_coords,
+            )
+            visible = np.isfinite(display_cols) & np.isfinite(display_rows)
+            if int(np.count_nonzero(visible)) < 2:
+                continue
+            paths.append(
+                {
+                    "source": str(entry.get("source", "primary")),
+                    "qr": float(entry["qr"]),
+                    "cols": display_cols,
+                    "rows": display_rows,
+                }
+            )
+
+    return paths
 
 
 def wrap_caked_phi_degrees(phi_values: np.ndarray | float) -> np.ndarray:

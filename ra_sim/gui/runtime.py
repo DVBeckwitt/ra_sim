@@ -93,10 +93,6 @@ from ra_sim.simulation.diffraction import (
     process_peaks_parallel,
     process_qr_rods_parallel,
 )
-from ra_sim.simulation.intersection_analysis import (
-    IntersectionGeometry,
-    project_qr_cylinder_to_detector,
-)
 from ra_sim.simulation.diffraction_debug import (
     process_peaks_parallel_debug,
     process_qr_rods_parallel_debug,
@@ -120,12 +116,12 @@ from ra_sim.gui.geometry_overlay import (
 )
 from ra_sim.gui import overlays as gui_overlays
 from ra_sim.gui import peak_selection as gui_peak_selection
+from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import state as gui_state
 from ra_sim.gui import state_io as gui_state_io
 from ra_sim.gui import structure_factor_pruning as gui_structure_factor_pruning
-from ra_sim.gui.qr_cylinder_overlay import interpolate_trace_to_caked_coords
 from ra_sim.gui.sliders import create_slider
 from ra_sim.gui.diffuse_cif_toggle import (
     open_diffuse_cif_toggle_algebraic,
@@ -3535,40 +3531,6 @@ def _active_qr_cylinder_overlay_entries() -> list[dict[str, object]]:
         secondary_miller_all=(lambda: globals().get("SIM_MILLER2")),
     )
 
-
-def _qr_cylinder_overlay_signature(
-    entries: Sequence[dict[str, object]],
-) -> tuple[object, ...]:
-    """Return a cache signature for the analytic detector-trace overlay."""
-
-    qr_keys = tuple(
-        (str(entry["source"]), int(entry["m"]), round(float(entry["qr"]), 10))
-        for entry in entries
-    )
-    return (
-        tuple(qr_keys),
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
-        int(image_size),
-        int(SIM_DISPLAY_ROTATE_K),
-        float(center_x_var.get()),
-        float(center_y_var.get()),
-        float(corto_detector_var.get()),
-        float(gamma_var.get()),
-        float(Gamma_var.get()),
-        float(chi_var.get()),
-        float(psi),
-        float(psi_z_var.get()),
-        float(zs_var.get()),
-        float(zb_var.get()),
-        float(theta_initial_var.get()),
-        float(cor_angle_var.get()),
-        float(pixel_size_m),
-        float(lambda_),
-        round(float(np.real(n2)), 12),
-        round(float(np.imag(n2)), 12),
-    )
-
-
 def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = False):
     """Draw analytic Ewald/constant-Qr traces in the current detector or caked view."""
 
@@ -3588,83 +3550,47 @@ def _refresh_qr_cylinder_overlay(*, redraw: bool = True, update_status: bool = F
             )
         return
 
-    signature = _qr_cylinder_overlay_signature(entries)
+    render_config = gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
+        render_in_caked_space=bool(
+            analysis_view_controls_view_state.show_caked_2d_var.get()
+        ),
+        image_size=int(image_size),
+        display_rotate_k=int(SIM_DISPLAY_ROTATE_K),
+        center_col=float(center_y_var.get()),
+        center_row=float(center_x_var.get()),
+        distance_cor_to_detector=float(corto_detector_var.get()),
+        gamma_deg=float(gamma_var.get()),
+        Gamma_deg=float(Gamma_var.get()),
+        chi_deg=float(chi_var.get()),
+        psi_deg=float(psi),
+        psi_z_deg=float(psi_z_var.get()),
+        zs=float(zs_var.get()),
+        zb=float(zb_var.get()),
+        theta_initial_deg=float(theta_initial_var.get()),
+        cor_angle_deg=float(cor_angle_var.get()),
+        pixel_size_m=float(pixel_size_m),
+        wavelength=float(lambda_),
+        n2=n2,
+    )
+    signature = gui_qr_cylinder_overlay.build_qr_cylinder_overlay_signature(
+        entries,
+        config=render_config,
+    )
     cached_sig = geometry_runtime_state.qr_cylinder_overlay_cache.get("signature")
     if cached_sig != signature:
-        render_in_caked_space = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        render_in_caked_space = bool(render_config.render_in_caked_space)
         ai = simulation_runtime_state.ai_cache.get("ai")
         two_theta_map = None
         phi_map = None
         if render_in_caked_space:
             two_theta_map, phi_map = _get_detector_angular_maps(ai)
-        geometry = IntersectionGeometry(
-            image_size=int(image_size),
-            center_col=float(center_y_var.get()),
-            center_row=float(center_x_var.get()),
-            distance_cor_to_detector=float(corto_detector_var.get()),
-            gamma_deg=float(gamma_var.get()),
-            Gamma_deg=float(Gamma_var.get()),
-            chi_deg=float(chi_var.get()),
-            psi_deg=float(psi),
-            psi_z_deg=float(psi_z_var.get()),
-            zs=float(zs_var.get()),
-            zb=float(zb_var.get()),
-            theta_initial_deg=float(theta_initial_var.get()),
-            cor_angle_deg=float(cor_angle_var.get()),
-            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
-            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
-            pixel_size_m=float(pixel_size_m),
+        paths = gui_qr_cylinder_overlay.build_qr_cylinder_overlay_paths(
+            entries,
+            config=render_config,
+            two_theta_map=two_theta_map,
+            phi_map_deg=phi_map,
+            native_sim_to_display_coords=_native_sim_to_display_coords,
         )
-        native_shape = (int(image_size), int(image_size))
-        paths: list[dict[str, object]] = []
-        for entry in entries:
-            try:
-                traces = project_qr_cylinder_to_detector(
-                    qr_value=float(entry["qr"]),
-                    geometry=geometry,
-                    wavelength=float(lambda_),
-                    n2=n2,
-                    phi_samples=721,
-                )
-            except Exception:
-                continue
-            for trace in traces:
-                if render_in_caked_space:
-                    if two_theta_map is None or phi_map is None:
-                        continue
-                    display_cols, display_rows = interpolate_trace_to_caked_coords(
-                        detector_cols=trace.detector_col,
-                        detector_rows=trace.detector_row,
-                        valid_mask=trace.valid_mask,
-                        two_theta_map=two_theta_map,
-                        phi_map_deg=phi_map,
-                        two_theta_limits=(0.0, 90.0),
-                    )
-                else:
-                    display_cols = np.full_like(trace.detector_col, np.nan, dtype=np.float64)
-                    display_rows = np.full_like(trace.detector_row, np.nan, dtype=np.float64)
-                    valid_idx = np.nonzero(trace.valid_mask)[0]
-                    for idx in valid_idx:
-                        dcol, drow = _native_sim_to_display_coords(
-                            float(trace.detector_col[idx]),
-                            float(trace.detector_row[idx]),
-                            native_shape,
-                        )
-                        display_cols[idx] = dcol
-                        display_rows[idx] = drow
-                valid_count = int(
-                    np.count_nonzero(np.isfinite(display_cols) & np.isfinite(display_rows))
-                )
-                if valid_count < 2:
-                    continue
-                paths.append(
-                    {
-                        "source": str(entry["source"]),
-                        "qr": float(entry["qr"]),
-                        "cols": display_cols,
-                        "rows": display_rows,
-                    }
-                )
         geometry_runtime_state.qr_cylinder_overlay_cache = {"signature": signature, "paths": paths}
 
     paths = geometry_runtime_state.qr_cylinder_overlay_cache.get("paths", [])

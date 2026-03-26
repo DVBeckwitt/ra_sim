@@ -283,8 +283,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.bragg_qr_manager` now also owns the zero-arg runtime
     binding-factory helper used by the live filter pipeline, HKL lookup
     controls, and manager callbacks
+  - `ra_sim.gui.qr_cylinder_overlay` now also owns the analytic Qr-cylinder
+    overlay render config, cache-signature, and path-construction helpers
+    used by the live detector/caked overlay workflow
   - `ra_sim.gui.runtime` now keeps only one bound Bragg-Qr runtime factory
-    value plus thin manager/overlay call sites for that workflow
+    value plus thin manager wiring and overlay cache/status call sites for
+    that workflow
 - Geometry-fit Qr/Qz selector workflow extraction has also advanced:
   - selector line/status formatting, window refresh, checkbox/bulk include-
     exclude side effects, update-listed-peaks request flow, and save/load
@@ -372,8 +376,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   callback values plus a few live call sites around the extracted pruning
   module.
 - The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
-  value plus thin manager/overlay call sites around the extracted
-  controller/view modules.
+  value plus thin manager wiring and overlay cache/status call sites around
+  the extracted controller/view modules.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
   bound factory/callback bundle plus a couple of delegated call sites around
   the extracted manager/view helpers.
