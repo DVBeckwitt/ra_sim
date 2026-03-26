@@ -28,7 +28,6 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-from matplotlib.patches import Rectangle
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from OSC_Reader import read_osc
 import CifFile
@@ -1807,18 +1806,9 @@ integration_region_overlay = ax.imshow(
 )
 integration_region_overlay.set_visible(False)
 
-integration_region_rect = Rectangle(
-    (0.0, 0.0),
-    0.0,
-    0.0,
-    linewidth=2.0,
-    edgecolor='cyan',
-    facecolor='none',
-    linestyle='--',
-    zorder=5,
+integration_region_rect = (
+    gui_integration_range_drag.create_integration_region_rectangle(ax)
 )
-integration_region_rect.set_visible(False)
-ax.add_patch(integration_region_rect)
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
@@ -4566,18 +4556,7 @@ peak_selection_runtime_callbacks = gui_peak_selection.make_runtime_peak_selectio
 )
 
 
-drag_select_rect = Rectangle(
-    (0.0, 0.0),
-    0.0,
-    0.0,
-    linewidth=1.8,
-    edgecolor='yellow',
-    facecolor='none',
-    linestyle='-',
-    zorder=6,
-)
-drag_select_rect.set_visible(False)
-ax.add_patch(drag_select_rect)
+drag_select_rect = gui_integration_range_drag.create_drag_select_rectangle(ax)
 
 integration_range_drag_runtime_bindings_factory = (
     gui_integration_range_drag.make_runtime_integration_range_drag_bindings_factory(
@@ -4592,6 +4571,11 @@ integration_range_drag_runtime_bindings_factory = (
         integration_region_rect=integration_region_rect,
         image_display=image_display,
         get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
+        range_visible_factory=lambda: (
+            bool(analysis_view_controls_view_state.show_1d_var.get())
+            if analysis_view_controls_view_state.show_1d_var is not None
+            else False
+        ),
         caked_view_enabled_factory=lambda: (
             bool(analysis_view_controls_view_state.show_caked_2d_var.get())
             if analysis_view_controls_view_state.show_caked_2d_var is not None
@@ -4605,11 +4589,6 @@ integration_range_drag_runtime_bindings_factory = (
         schedule_range_update_factory=lambda: (
             globals().get("schedule_range_update")
             if callable(globals().get("schedule_range_update"))
-            else None
-        ),
-        update_integration_region_visuals_factory=lambda: (
-            globals().get("update_integration_region_visuals")
-            if callable(globals().get("update_integration_region_visuals"))
             else None
         ),
         last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
@@ -5533,51 +5512,11 @@ def _get_detector_angular_maps(ai):
 
 
 def update_integration_region_visuals(ai, sim_res2):
-    show_region = analysis_view_controls_view_state.show_1d_var.get() and simulation_runtime_state.unscaled_image is not None
-
-    if not show_region:
-        integration_region_overlay.set_visible(False)
-        integration_region_rect.set_visible(False)
-        return
-
-    tth_values = sorted((tth_min_var.get(), tth_max_var.get()))
-    phi_values = sorted((phi_min_var.get(), phi_max_var.get()))
-    tth_min, tth_max = tth_values
-    phi_min, phi_max = phi_values
-
-    if analysis_view_controls_view_state.show_caked_2d_var.get() and sim_res2 is not None:
-        integration_region_overlay.set_visible(False)
-        integration_region_rect.set_xy((tth_min, phi_min))
-        integration_region_rect.set_width(tth_max - tth_min)
-        integration_region_rect.set_height(phi_max - phi_min)
-        integration_region_rect.set_visible(True)
-        return
-
-    integration_region_rect.set_visible(False)
-
-    if ai is None:
-        integration_region_overlay.set_visible(False)
-        return
-
-    two_theta, phi_vals = _get_detector_angular_maps(ai)
-    if two_theta is None or phi_vals is None:
-        integration_region_overlay.set_visible(False)
-        return
-
-    mask = (
-        (two_theta >= tth_min)
-        & (two_theta <= tth_max)
-        & (phi_vals >= phi_min)
-        & (phi_vals <= phi_max)
+    gui_integration_range_drag.update_runtime_integration_region_visuals(
+        integration_range_drag_runtime_bindings_factory(),
+        ai,
+        sim_res2,
     )
-
-    if not np.any(mask):
-        integration_region_overlay.set_visible(False)
-        return
-
-    integration_region_overlay.set_data(mask.astype(float))
-    integration_region_overlay.set_extent(image_display.get_extent())
-    integration_region_overlay.set_visible(True)
 
 
 simulation_runtime_state.profile_cache = {}

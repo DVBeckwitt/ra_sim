@@ -344,11 +344,13 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.state` now also owns explicit live drag-selection state for
     1D integration-range picking.
   - `ra_sim.gui.integration_range_drag` now owns the canvas clamp helpers,
-    detector-angle lookup, raw preview mask rendering, range-apply logic, and
-    the runtime binding/callback bundle for raw/caked integration-range
-    dragging.
+    detector-angle lookup, raw preview mask rendering, current
+    integration-region visual refresh, drag/region rectangle construction,
+    range-apply logic, and the runtime binding/callback bundle for raw/caked
+    integration-range dragging.
   - `ra_sim.gui.runtime` now keeps only the manual-geometry-specific canvas
-    branches plus top-level event dispatch around that workflow.
+    branches, top-level event dispatch, and thin live call sites around that
+    workflow.
 - HKL lookup / selected-peak workflow extraction has advanced.
   - `ra_sim.gui.peak_selection` now owns HKL lookup parsing, selected-peak
     summary text, degenerate-HKL lookup, selection-by-index/HKL,
@@ -370,8 +372,8 @@ logic still inline in `ra_sim/gui/runtime.py`, not `main.py` or
   - `ra_sim.gui.canvas_interactions` now owns the top-level raw-image canvas
     click/drag arbitration between manual-geometry placement, preview
     exclusion, HKL picking, and integration-range dragging.
-  - `ra_sim.gui.runtime` now keeps only the drag-rectangle construction plus
-    one bound canvas callback bundle around that workflow.
+  - `ra_sim.gui.runtime` now keeps only one bound canvas callback bundle plus
+    thin event-hook wiring around that workflow.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -550,8 +552,8 @@ What is left:
   wiring plus a few call sites around the extracted peak-selection and
   canvas-interaction helpers.
 - The remaining integration-range drag runtime code is now mostly the
-  drag-rectangle construction plus the bound canvas callback wiring around the
-  extracted drag and canvas-interaction helpers.
+  bound runtime-factory/canvas wiring plus thin integration-region visual
+  call sites around the extracted drag and canvas-interaction helpers.
 
 Why it matters:
 

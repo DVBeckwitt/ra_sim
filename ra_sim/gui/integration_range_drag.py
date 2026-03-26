@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from matplotlib.patches import Rectangle
 
 
 @dataclass
@@ -22,12 +23,12 @@ class IntegrationRangeDragBindings:
     integration_region_rect: Any
     image_display: Any
     get_detector_angular_maps: Callable[[Any], tuple[object, object]]
+    range_visible_factory: object
     caked_view_enabled_factory: object
     unscaled_image_present_factory: object
     ai_factory: object
     sync_peak_selection_state: Callable[[], None] | None = None
     schedule_range_update: Callable[[], None] | None = None
-    update_integration_region_visuals: Callable[[object, object], None] | None = None
     last_sim_res2_factory: object = None
     draw_idle: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
@@ -74,6 +75,10 @@ def _runtime_caked_view_enabled(bindings: IntegrationRangeDragBindings) -> bool:
     return bool(_resolve_runtime_value(bindings.caked_view_enabled_factory))
 
 
+def _runtime_range_visible(bindings: IntegrationRangeDragBindings) -> bool:
+    return bool(_resolve_runtime_value(bindings.range_visible_factory))
+
+
 def _runtime_unscaled_image_present(bindings: IntegrationRangeDragBindings) -> bool:
     return bool(_resolve_runtime_value(bindings.unscaled_image_present_factory))
 
@@ -107,6 +112,54 @@ def clamp_to_axis_view(ax: object, x: float, y: float) -> tuple[float, float]:
     clamped_x = min(max(float(x), float(x_lo)), float(x_hi))
     clamped_y = min(max(float(y), float(y_lo)), float(y_hi))
     return float(clamped_x), float(clamped_y)
+
+
+def create_drag_select_rectangle(
+    ax: object,
+    *,
+    rectangle_cls: Callable[..., Any] = Rectangle,
+) -> Any:
+    """Create and attach the visible caked-view drag rectangle."""
+
+    rect = rectangle_cls(
+        (0.0, 0.0),
+        0.0,
+        0.0,
+        linewidth=1.8,
+        edgecolor="yellow",
+        facecolor="none",
+        linestyle="-",
+        zorder=6,
+    )
+    rect.set_visible(False)
+    add_patch = getattr(ax, "add_patch", None)
+    if callable(add_patch):
+        add_patch(rect)
+    return rect
+
+
+def create_integration_region_rectangle(
+    ax: object,
+    *,
+    rectangle_cls: Callable[..., Any] = Rectangle,
+) -> Any:
+    """Create and attach the caked-view 1D integration selection rectangle."""
+
+    rect = rectangle_cls(
+        (0.0, 0.0),
+        0.0,
+        0.0,
+        linewidth=2.0,
+        edgecolor="cyan",
+        facecolor="none",
+        linestyle="--",
+        zorder=5,
+    )
+    rect.set_visible(False)
+    add_patch = getattr(ax, "add_patch", None)
+    if callable(add_patch):
+        add_patch(rect)
+    return rect
 
 
 def update_runtime_drag_rectangle(
@@ -235,6 +288,67 @@ def set_runtime_integration_range_from_drag(
         ),
     )
     return True
+
+
+def update_runtime_integration_region_visuals(
+    bindings: IntegrationRangeDragBindings,
+    ai: object,
+    sim_res2: object,
+) -> None:
+    """Refresh the current raw/caked integration-region visuals from live bindings."""
+
+    show_region = _runtime_range_visible(bindings) and _runtime_unscaled_image_present(
+        bindings
+    )
+    if not show_region:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        return
+
+    view_state = bindings.range_view_state
+    if view_state is None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_visible(False)
+        return
+
+    tth_min, tth_max = sorted(
+        (float(view_state.tth_min_var.get()), float(view_state.tth_max_var.get()))
+    )
+    phi_min, phi_max = sorted(
+        (float(view_state.phi_min_var.get()), float(view_state.phi_max_var.get()))
+    )
+
+    if _runtime_caked_view_enabled(bindings) and sim_res2 is not None:
+        bindings.integration_region_overlay.set_visible(False)
+        bindings.integration_region_rect.set_xy((tth_min, phi_min))
+        bindings.integration_region_rect.set_width(tth_max - tth_min)
+        bindings.integration_region_rect.set_height(phi_max - phi_min)
+        bindings.integration_region_rect.set_visible(True)
+        return
+
+    bindings.integration_region_rect.set_visible(False)
+    if ai is None:
+        bindings.integration_region_overlay.set_visible(False)
+        return
+
+    two_theta, phi_vals = bindings.get_detector_angular_maps(ai)
+    if two_theta is None or phi_vals is None:
+        bindings.integration_region_overlay.set_visible(False)
+        return
+
+    mask = (
+        (two_theta >= tth_min)
+        & (two_theta <= tth_max)
+        & (phi_vals >= phi_min)
+        & (phi_vals <= phi_max)
+    )
+    if not np.any(mask):
+        bindings.integration_region_overlay.set_visible(False)
+        return
+
+    bindings.integration_region_overlay.set_data(mask.astype(float))
+    bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
+    bindings.integration_region_overlay.set_visible(True)
 
 
 def reset_runtime_integration_drag(
@@ -438,8 +552,12 @@ def handle_runtime_integration_drag_release(
                 drag_state.tth1,
                 drag_state.phi1,
             )
-        elif ai is not None and callable(bindings.update_integration_region_visuals):
-            bindings.update_integration_region_visuals(ai, _runtime_last_sim_res2(bindings))
+        elif ai is not None:
+            update_runtime_integration_region_visuals(
+                bindings,
+                ai,
+                _runtime_last_sim_res2(bindings),
+            )
             _draw_idle(bindings)
 
         reset_runtime_integration_drag(bindings)
@@ -460,12 +578,12 @@ def make_runtime_integration_range_drag_bindings_factory(
     integration_region_rect: object,
     image_display: object,
     get_detector_angular_maps: Callable[[Any], tuple[object, object]],
+    range_visible_factory: object,
     caked_view_enabled_factory: object,
     unscaled_image_present_factory: object,
     ai_factory: object,
     sync_peak_selection_state: Callable[[], None] | None = None,
     schedule_range_update_factory: object = None,
-    update_integration_region_visuals_factory: object = None,
     last_sim_res2_factory: object = None,
     draw_idle_factory: object = None,
     set_status_text_factory: object = None,
@@ -483,14 +601,12 @@ def make_runtime_integration_range_drag_bindings_factory(
             integration_region_rect=integration_region_rect,
             image_display=image_display,
             get_detector_angular_maps=get_detector_angular_maps,
+            range_visible_factory=range_visible_factory,
             caked_view_enabled_factory=caked_view_enabled_factory,
             unscaled_image_present_factory=unscaled_image_present_factory,
             ai_factory=ai_factory,
             sync_peak_selection_state=sync_peak_selection_state,
             schedule_range_update=_resolve_runtime_value(schedule_range_update_factory),
-            update_integration_region_visuals=_resolve_runtime_value(
-                update_integration_region_visuals_factory
-            ),
             last_sim_res2_factory=last_sim_res2_factory,
             draw_idle=_resolve_runtime_value(draw_idle_factory),
             set_status_text=_resolve_runtime_value(set_status_text_factory),
