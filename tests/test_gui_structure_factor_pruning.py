@@ -99,6 +99,107 @@ def test_structure_factor_pruning_runtime_current_value_helpers_and_status_text(
     assert text == "SF pruning keeps 12/20 rod points (60.0%), bias=+0.25"
     assert view_state.sf_prune_status_var.get() == text
 
+    solve_q_values = structure_factor_pruning.current_runtime_solve_q_values(
+        bindings,
+        uniform_flag=7,
+        adaptive_flag=9,
+    )
+    assert solve_q_values == structure_factor_pruning.RuntimeSolveQValues(
+        steps=13,
+        rel_tol=1.0e-4,
+        mode_label="adaptive",
+        mode_flag=9,
+    )
+
+
+def test_structure_factor_pruning_helper_builders_normalize_defaults() -> None:
+    assert (
+        structure_factor_pruning.clip_runtime_sf_prune_bias(
+            "9.0",
+            fallback=0.0,
+            minimum=-1.0,
+            maximum=1.0,
+        )
+        == 1.0
+    )
+    assert (
+        structure_factor_pruning.clip_runtime_solve_q_steps(
+            "12.6",
+            fallback=8,
+            minimum=4,
+            maximum=20,
+        )
+        == 13
+    )
+    assert (
+        structure_factor_pruning.clip_runtime_solve_q_rel_tol(
+            "1e-4",
+            fallback=1.0e-3,
+            minimum=1.0e-6,
+            maximum=1.0e-2,
+        )
+        == 1.0e-4
+    )
+    assert (
+        structure_factor_pruning.normalize_runtime_solve_q_mode_label("robust")
+        == "adaptive"
+    )
+    assert (
+        structure_factor_pruning.runtime_solve_q_mode_flag_from_label(
+            "adaptive",
+            uniform_flag=7,
+            adaptive_flag=9,
+        )
+        == 9
+    )
+
+    solve_q_defaults = structure_factor_pruning.build_runtime_solve_q_values(
+        "12.6",
+        "1e-4",
+        "robust",
+        steps_fallback=8,
+        steps_minimum=4,
+        steps_maximum=20,
+        rel_tol_fallback=1.0e-3,
+        rel_tol_minimum=1.0e-6,
+        rel_tol_maximum=1.0e-2,
+        uniform_flag=7,
+        adaptive_flag=9,
+    )
+    assert solve_q_defaults == structure_factor_pruning.RuntimeSolveQValues(
+        steps=13,
+        rel_tol=1.0e-4,
+        mode_label="adaptive",
+        mode_flag=9,
+    )
+
+    defaults = structure_factor_pruning.build_runtime_structure_factor_pruning_defaults(
+        "9.0",
+        "12.6",
+        "1e-4",
+        "robust",
+        prune_bias_fallback=0.0,
+        prune_bias_minimum=-1.0,
+        prune_bias_maximum=1.0,
+        steps_fallback=8,
+        steps_minimum=4,
+        steps_maximum=20,
+        rel_tol_fallback=1.0e-3,
+        rel_tol_minimum=1.0e-6,
+        rel_tol_maximum=1.0e-2,
+        uniform_flag=7,
+        adaptive_flag=9,
+    )
+    assert defaults == structure_factor_pruning.StructureFactorPruningControlDefaults(
+        prune_bias=1.0,
+        solve_q=structure_factor_pruning.RuntimeSolveQValues(
+            steps=13,
+            rel_tol=1.0e-4,
+            mode_label="adaptive",
+            mode_flag=9,
+        ),
+    )
+
 
 def test_structure_factor_pruning_runtime_helpers_tolerate_missing_view_state(
     monkeypatch,
@@ -306,6 +407,24 @@ def test_structure_factor_pruning_runtime_callback_factories_delegate_live_bindi
         "on_runtime_solve_q_mode_change",
         lambda bindings: calls.append(("mode", bindings)) or False,
     )
+    monkeypatch.setattr(
+        structure_factor_pruning,
+        "current_runtime_sf_prune_bias",
+        lambda bindings: calls.append(("current_bias", bindings)) or 0.25,
+    )
+    monkeypatch.setattr(
+        structure_factor_pruning,
+        "current_runtime_solve_q_values",
+        lambda bindings, *, uniform_flag, adaptive_flag: calls.append(
+            ("current_solve_q", bindings, uniform_flag, adaptive_flag)
+        )
+        or structure_factor_pruning.RuntimeSolveQValues(
+            steps=11,
+            rel_tol=2.5e-4,
+            mode_label="adaptive",
+            mode_flag=adaptive_flag,
+        ),
+    )
 
     def build_bindings():
         versions["count"] += 1
@@ -339,6 +458,18 @@ def test_structure_factor_pruning_runtime_callback_factories_delegate_live_bindi
             build_bindings
         )
     )
+    current_bias_callback = (
+        structure_factor_pruning.make_runtime_current_sf_prune_bias_callback(
+            build_bindings
+        )
+    )
+    current_solve_q_callback = (
+        structure_factor_pruning.make_runtime_current_solve_q_values_callback(
+            build_bindings,
+            uniform_flag=7,
+            adaptive_flag=9,
+        )
+    )
     mode_callback = (
         structure_factor_pruning.make_runtime_solve_q_mode_change_callback(
             build_bindings
@@ -351,6 +482,13 @@ def test_structure_factor_pruning_runtime_callback_factories_delegate_live_bindi
     assert steps_callback("name", "index", "write") is False
     assert rel_tol_callback("name", "index", "write") is True
     assert controls_callback() == "adaptive"
+    assert current_bias_callback() == 0.25
+    assert current_solve_q_callback() == structure_factor_pruning.RuntimeSolveQValues(
+        steps=11,
+        rel_tol=2.5e-4,
+        mode_label="adaptive",
+        mode_flag=9,
+    )
     assert mode_callback("name", "index", "write") is False
     assert calls == [
         ("status", "bindings-1"),
@@ -359,7 +497,9 @@ def test_structure_factor_pruning_runtime_callback_factories_delegate_live_bindi
         ("steps", "bindings-4"),
         ("rel_tol", "bindings-5"),
         ("controls", "bindings-6"),
-        ("mode", "bindings-7"),
+        ("current_bias", "bindings-7"),
+        ("current_solve_q", "bindings-8", 7, 9),
+        ("mode", "bindings-9"),
     ]
 
 

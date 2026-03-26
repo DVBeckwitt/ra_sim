@@ -28,6 +28,24 @@ class StructureFactorPruningRuntimeBindings:
     refresh_window: Callable[[], None] | None = None
 
 
+@dataclass(frozen=True)
+class RuntimeSolveQValues:
+    """Normalized solve-q values derived from runtime GUI state or defaults."""
+
+    steps: int
+    rel_tol: float
+    mode_label: str
+    mode_flag: int
+
+
+@dataclass(frozen=True)
+class StructureFactorPruningControlDefaults:
+    """Normalized pruning / solve-q defaults for GUI control setup."""
+
+    prune_bias: float
+    solve_q: RuntimeSolveQValues
+
+
 def _resolve_runtime_value(value_or_callable: object) -> object:
     if callable(value_or_callable):
         try:
@@ -159,6 +177,168 @@ def _safe_var_set(var: object, value: object) -> None:
         setter(value)
 
 
+def clip_runtime_sf_prune_bias(
+    value: object,
+    *,
+    fallback: object,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Clip one SF-pruning bias using the shared controller helper."""
+
+    return float(
+        gui_controllers.clip_structure_factor_prune_bias(
+            value,
+            fallback=fallback,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    )
+
+
+def clip_runtime_solve_q_steps(
+    value: object,
+    *,
+    fallback: object,
+    minimum: int,
+    maximum: int,
+) -> int:
+    """Clip one solve-q step count using the shared controller helper."""
+
+    return int(
+        gui_controllers.clip_solve_q_steps(
+            value,
+            fallback=fallback,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    )
+
+
+def clip_runtime_solve_q_rel_tol(
+    value: object,
+    *,
+    fallback: object,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Clip one solve-q relative tolerance using the shared controller helper."""
+
+    return float(
+        gui_controllers.clip_solve_q_rel_tol(
+            value,
+            fallback=fallback,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    )
+
+
+def normalize_runtime_solve_q_mode_label(value: object) -> str:
+    """Normalize one solve-q mode label using the shared controller helper."""
+
+    return str(gui_controllers.normalize_solve_q_mode_label(value))
+
+
+def runtime_solve_q_mode_flag_from_label(
+    label: str,
+    *,
+    uniform_flag: int,
+    adaptive_flag: int,
+) -> int:
+    """Map one normalized solve-q label to the configured mode flag."""
+
+    return int(
+        gui_controllers.solve_q_mode_flag_from_label(
+            label,
+            uniform_flag=uniform_flag,
+            adaptive_flag=adaptive_flag,
+        )
+    )
+
+
+def build_runtime_solve_q_values(
+    raw_steps: object,
+    raw_rel_tol: object,
+    raw_mode: object,
+    *,
+    steps_fallback: object,
+    steps_minimum: int,
+    steps_maximum: int,
+    rel_tol_fallback: object,
+    rel_tol_minimum: float,
+    rel_tol_maximum: float,
+    uniform_flag: int,
+    adaptive_flag: int,
+) -> RuntimeSolveQValues:
+    """Normalize one solve-q value set from raw defaults or runtime state."""
+
+    mode_label = normalize_runtime_solve_q_mode_label(raw_mode)
+    return RuntimeSolveQValues(
+        steps=clip_runtime_solve_q_steps(
+            raw_steps,
+            fallback=steps_fallback,
+            minimum=steps_minimum,
+            maximum=steps_maximum,
+        ),
+        rel_tol=clip_runtime_solve_q_rel_tol(
+            raw_rel_tol,
+            fallback=rel_tol_fallback,
+            minimum=rel_tol_minimum,
+            maximum=rel_tol_maximum,
+        ),
+        mode_label=mode_label,
+        mode_flag=runtime_solve_q_mode_flag_from_label(
+            mode_label,
+            uniform_flag=uniform_flag,
+            adaptive_flag=adaptive_flag,
+        ),
+    )
+
+
+def build_runtime_structure_factor_pruning_defaults(
+    raw_prune_bias: object,
+    raw_solve_q_steps: object,
+    raw_solve_q_rel_tol: object,
+    raw_solve_q_mode: object,
+    *,
+    prune_bias_fallback: object,
+    prune_bias_minimum: float,
+    prune_bias_maximum: float,
+    steps_fallback: object,
+    steps_minimum: int,
+    steps_maximum: int,
+    rel_tol_fallback: object,
+    rel_tol_minimum: float,
+    rel_tol_maximum: float,
+    uniform_flag: int,
+    adaptive_flag: int,
+) -> StructureFactorPruningControlDefaults:
+    """Normalize pruning / solve-q defaults for GUI control setup."""
+
+    return StructureFactorPruningControlDefaults(
+        prune_bias=clip_runtime_sf_prune_bias(
+            raw_prune_bias,
+            fallback=prune_bias_fallback,
+            minimum=prune_bias_minimum,
+            maximum=prune_bias_maximum,
+        ),
+        solve_q=build_runtime_solve_q_values(
+            raw_solve_q_steps,
+            raw_solve_q_rel_tol,
+            raw_solve_q_mode,
+            steps_fallback=steps_fallback,
+            steps_minimum=steps_minimum,
+            steps_maximum=steps_maximum,
+            rel_tol_fallback=rel_tol_fallback,
+            rel_tol_minimum=rel_tol_minimum,
+            rel_tol_maximum=rel_tol_maximum,
+            uniform_flag=uniform_flag,
+            adaptive_flag=adaptive_flag,
+        ),
+    )
+
+
 def current_runtime_sf_prune_bias(
     bindings: StructureFactorPruningRuntimeBindings,
 ) -> float:
@@ -204,6 +384,50 @@ def current_runtime_solve_q_mode_label(
         bindings.normalize_solve_q_mode_label(
             _safe_var_get(getattr(bindings.view_state, "solve_q_mode_var", None))
         )
+    )
+
+
+def current_runtime_solve_q_values(
+    bindings: StructureFactorPruningRuntimeBindings,
+    *,
+    uniform_flag: int,
+    adaptive_flag: int,
+) -> RuntimeSolveQValues:
+    """Return the normalized solve-q values from the bound runtime state."""
+
+    mode_label = current_runtime_solve_q_mode_label(bindings)
+    return RuntimeSolveQValues(
+        steps=current_runtime_solve_q_steps(bindings),
+        rel_tol=current_runtime_solve_q_rel_tol(bindings),
+        mode_label=mode_label,
+        mode_flag=runtime_solve_q_mode_flag_from_label(
+            mode_label,
+            uniform_flag=uniform_flag,
+            adaptive_flag=adaptive_flag,
+        ),
+    )
+
+
+def make_runtime_current_sf_prune_bias_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+) -> Callable[[], float]:
+    """Return a zero-arg callback that reads the current pruning bias."""
+
+    return lambda: current_runtime_sf_prune_bias(bindings_factory())
+
+
+def make_runtime_current_solve_q_values_callback(
+    bindings_factory: Callable[[], StructureFactorPruningRuntimeBindings],
+    *,
+    uniform_flag: int,
+    adaptive_flag: int,
+) -> Callable[[], RuntimeSolveQValues]:
+    """Return a zero-arg callback that reads the current solve-q values."""
+
+    return lambda: current_runtime_solve_q_values(
+        bindings_factory(),
+        uniform_flag=uniform_flag,
+        adaptive_flag=adaptive_flag,
     )
 
 

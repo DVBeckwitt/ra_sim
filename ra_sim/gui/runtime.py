@@ -420,40 +420,29 @@ occupancy_default_values = occupancy_config.get("default", [1.0, 1.0, 1.0])
 # When enabled, additional fractional reflections ("rods")
 # are injected between integer L values.
 include_rods_flag = hendricks_config.get("include_rods", False)
-sf_prune_bias_default = float(
-    np.clip(hendricks_config.get("sf_prune_bias", 0.0), -1.0, 1.0)
-)
-try:
-    solve_q_steps_default = int(
-        round(float(beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)))
+instrument_pruning_control_defaults = (
+    gui_structure_factor_pruning.build_runtime_structure_factor_pruning_defaults(
+        hendricks_config.get("sf_prune_bias", 0.0),
+        beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        beam_config.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+        beam_config.get("solve_q_mode", "uniform"),
+        prune_bias_fallback=0.0,
+        prune_bias_minimum=SF_PRUNE_BIAS_MIN,
+        prune_bias_maximum=SF_PRUNE_BIAS_MAX,
+        steps_fallback=DEFAULT_SOLVE_Q_STEPS,
+        steps_minimum=MIN_SOLVE_Q_STEPS,
+        steps_maximum=MAX_SOLVE_Q_STEPS,
+        rel_tol_fallback=DEFAULT_SOLVE_Q_REL_TOL,
+        rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
+        rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
+        uniform_flag=SOLVE_Q_MODE_UNIFORM,
+        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
     )
-except (TypeError, ValueError):
-    solve_q_steps_default = int(DEFAULT_SOLVE_Q_STEPS)
-solve_q_steps_default = int(
-    np.clip(solve_q_steps_default, MIN_SOLVE_Q_STEPS, MAX_SOLVE_Q_STEPS)
 )
-try:
-    solve_q_rel_tol_default = float(
-        beam_config.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)
-    )
-except (TypeError, ValueError):
-    solve_q_rel_tol_default = float(DEFAULT_SOLVE_Q_REL_TOL)
-solve_q_rel_tol_default = float(
-    np.clip(solve_q_rel_tol_default, MIN_SOLVE_Q_REL_TOL, MAX_SOLVE_Q_REL_TOL)
-)
-solve_q_mode_raw = beam_config.get("solve_q_mode", "uniform")
-if isinstance(solve_q_mode_raw, (int, np.integer, float, np.floating)):
-    solve_q_mode_default = (
-        SOLVE_Q_MODE_UNIFORM
-        if int(round(float(solve_q_mode_raw))) == SOLVE_Q_MODE_UNIFORM
-        else SOLVE_Q_MODE_ADAPTIVE
-    )
-else:
-    solve_q_mode_text = str(solve_q_mode_raw).strip().lower()
-    if solve_q_mode_text in {"uniform", "fast", "0"}:
-        solve_q_mode_default = SOLVE_Q_MODE_UNIFORM
-    else:
-        solve_q_mode_default = SOLVE_Q_MODE_UNIFORM
+sf_prune_bias_default = float(instrument_pruning_control_defaults.prune_bias)
+solve_q_steps_default = int(instrument_pruning_control_defaults.solve_q.steps)
+solve_q_rel_tol_default = float(instrument_pruning_control_defaults.solve_q.rel_tol)
+solve_q_mode_default = int(instrument_pruning_control_defaults.solve_q.mode_flag)
 
 lambda_override = beam_config.get("wavelength_angstrom")
 lambda_ = lambda_override if lambda_override is not None else lambda_from_poni
@@ -819,23 +808,6 @@ simulation_runtime_state.sf_prune_stats = {
     "hkl_secondary_total": 0,
     "hkl_secondary_kept": 0,
 }
-
-
-def _clip_sf_prune_bias(value) -> float:
-    return gui_controllers.clip_structure_factor_prune_bias(
-        value,
-        fallback=defaults.get("sf_prune_bias", 0.0),
-        minimum=SF_PRUNE_BIAS_MIN,
-        maximum=SF_PRUNE_BIAS_MAX,
-    )
-
-
-def _current_sf_prune_bias() -> float:
-    return gui_structure_factor_pruning.current_runtime_sf_prune_bias(
-        structure_factor_pruning_runtime_bindings_factory()
-    )
-
-
 structure_factor_pruning_runtime_bindings_factory = (
     gui_structure_factor_pruning.make_runtime_structure_factor_pruning_bindings_factory(
         view_state_factory=lambda: globals().get(
@@ -843,11 +815,32 @@ structure_factor_pruning_runtime_bindings_factory = (
         ),
         simulation_runtime_state=simulation_runtime_state,
         bragg_qr_manager_state=bragg_qr_manager_state,
-        clip_prune_bias=_clip_sf_prune_bias,
-        clip_solve_q_steps=lambda value: _clip_solve_q_steps(value),
-        clip_solve_q_rel_tol=lambda value: _clip_solve_q_rel_tol(value),
-        normalize_solve_q_mode_label=lambda value: _normalize_solve_q_mode_label(
-            value
+        clip_prune_bias=lambda value: (
+            gui_structure_factor_pruning.clip_runtime_sf_prune_bias(
+                value,
+                fallback=defaults.get("sf_prune_bias", 0.0),
+                minimum=SF_PRUNE_BIAS_MIN,
+                maximum=SF_PRUNE_BIAS_MAX,
+            )
+        ),
+        clip_solve_q_steps=lambda value: (
+            gui_structure_factor_pruning.clip_runtime_solve_q_steps(
+                value,
+                fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+                minimum=MIN_SOLVE_Q_STEPS,
+                maximum=MAX_SOLVE_Q_STEPS,
+            )
+        ),
+        clip_solve_q_rel_tol=lambda value: (
+            gui_structure_factor_pruning.clip_runtime_solve_q_rel_tol(
+                value,
+                fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+                minimum=MIN_SOLVE_Q_REL_TOL,
+                maximum=MAX_SOLVE_Q_REL_TOL,
+            )
+        ),
+        normalize_solve_q_mode_label=(
+            gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label
         ),
         schedule_update_factory=lambda: (
             globals().get("schedule_update")
@@ -861,6 +854,18 @@ structure_factor_pruning_runtime_bindings_factory = (
             if callable(globals().get("bragg_qr_runtime_bindings_factory"))
             else None
         ),
+    )
+)
+current_sf_prune_bias = (
+    gui_structure_factor_pruning.make_runtime_current_sf_prune_bias_callback(
+        structure_factor_pruning_runtime_bindings_factory
+    )
+)
+current_solve_q_values = (
+    gui_structure_factor_pruning.make_runtime_current_solve_q_values_callback(
+        structure_factor_pruning_runtime_bindings_factory,
+        uniform_flag=SOLVE_Q_MODE_UNIFORM,
+        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
     )
 )
 
@@ -1823,6 +1828,7 @@ ax.add_patch(integration_region_rect)
 # ---------------------------------------------------------------------------
 def build_mosaic_params():
     update_mosaic_cache()
+    solve_q = current_solve_q_values()
     return {
         "beam_x_array":       simulation_runtime_state.profile_cache["beam_x_array"],
         "beam_y_array":       simulation_runtime_state.profile_cache["beam_y_array"],
@@ -1832,9 +1838,9 @@ def build_mosaic_params():
         "sigma_mosaic_deg":   sigma_mosaic_var.get(),
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
         "eta":                eta_var.get(),
-        "solve_q_steps":      _current_solve_q_steps(),
-        "solve_q_rel_tol":    _current_solve_q_rel_tol(),
-        "solve_q_mode":       _current_solve_q_mode_flag(),
+        "solve_q_steps":      solve_q.steps,
+        "solve_q_rel_tol":    solve_q.rel_tol,
+        "solve_q_mode":       solve_q.mode_flag,
     }
 
 
@@ -4674,9 +4680,9 @@ peak_selection_runtime_bindings_factory = (
                 sigma_mosaic_deg=float(sigma_mosaic_var.get()),
                 gamma_mosaic_deg=float(gamma_mosaic_var.get()),
                 eta=float(eta_var.get()),
-                solve_q_steps=_current_solve_q_steps(),
-                solve_q_rel_tol=_current_solve_q_rel_tol(),
-                solve_q_mode=_current_solve_q_mode_flag(),
+                solve_q_steps=current_solve_q_values().steps,
+                solve_q_rel_tol=current_solve_q_values().rel_tol,
+                solve_q_mode=current_solve_q_values().mode_flag,
             )
         ),
         ensure_peak_overlay_data=lambda **kwargs: _ensure_peak_overlay_data(**kwargs),
@@ -4722,9 +4728,9 @@ peak_selection_runtime_bindings_factory = (
                     theta_initial_deg=float(theta_initial_var.get()),
                     cor_angle_deg=float(cor_angle_var.get()),
                     optics_mode=_current_optics_mode_flag(),
-                    solve_q_steps=_current_solve_q_steps(),
-                    solve_q_rel_tol=_current_solve_q_rel_tol(),
-                    solve_q_mode=_current_solve_q_mode_flag(),
+                    solve_q_steps=current_solve_q_values().steps,
+                    solve_q_rel_tol=current_solve_q_values().rel_tol,
+                    solve_q_mode=current_solve_q_values().mode_flag,
                 ),
                 n2=n2,
                 process_peaks_parallel=process_peaks_parallel,
@@ -5897,58 +5903,6 @@ def _current_bandwidth_fraction() -> float:
     except Exception:
         bw_percent = defaults.get("bandwidth_percent", bandwidth * 100.0)
     return _clip_bandwidth_percent(bw_percent) / 100.0
-
-
-def _clip_solve_q_steps(value) -> int:
-    return gui_controllers.clip_solve_q_steps(
-        value,
-        fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-        minimum=MIN_SOLVE_Q_STEPS,
-        maximum=MAX_SOLVE_Q_STEPS,
-    )
-
-
-def _current_solve_q_steps() -> int:
-    return gui_structure_factor_pruning.current_runtime_solve_q_steps(
-        structure_factor_pruning_runtime_bindings_factory()
-    )
-
-
-def _clip_solve_q_rel_tol(value) -> float:
-    return gui_controllers.clip_solve_q_rel_tol(
-        value,
-        fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-        minimum=MIN_SOLVE_Q_REL_TOL,
-        maximum=MAX_SOLVE_Q_REL_TOL,
-    )
-
-
-def _current_solve_q_rel_tol() -> float:
-    return gui_structure_factor_pruning.current_runtime_solve_q_rel_tol(
-        structure_factor_pruning_runtime_bindings_factory()
-    )
-
-
-def _normalize_solve_q_mode_label(value) -> str:
-    return gui_controllers.normalize_solve_q_mode_label(value)
-
-
-def _solve_q_mode_flag_from_label(label: str) -> int:
-    return gui_controllers.solve_q_mode_flag_from_label(
-        label,
-        uniform_flag=SOLVE_Q_MODE_UNIFORM,
-        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
-    )
-
-
-def _current_solve_q_mode_flag() -> int:
-    return _solve_q_mode_flag_from_label(
-        gui_structure_factor_pruning.current_runtime_solve_q_mode_label(
-            structure_factor_pruning_runtime_bindings_factory()
-        )
-    )
-
-
 def update_mosaic_cache():
     """
     Keep the current random beam/mosaic samples unless sampling inputs changed.
@@ -6018,9 +5972,9 @@ def update_mosaic_cache():
             "sigma_mosaic_deg": sigma_mosaic_var.get(),
             "gamma_mosaic_deg": gamma_mosaic_var.get(),
             "eta": eta_var.get(),
-            "solve_q_steps": _current_solve_q_steps(),
-            "solve_q_rel_tol": _current_solve_q_rel_tol(),
-            "solve_q_mode": _current_solve_q_mode_flag(),
+            "solve_q_steps": current_solve_q_values().steps,
+            "solve_q_rel_tol": current_solve_q_values().rel_tol,
+            "solve_q_mode": current_solve_q_values().mode_flag,
             "bandwidth_percent": active_bandwidth * 100.0,
         }
     )
@@ -6439,7 +6393,7 @@ def do_update():
             round(float(mosaic_params["solve_q_rel_tol"]), 8),
             int(mosaic_params["solve_q_mode"]),
             round(_current_bandwidth_fraction(), 8),
-            round(_current_sf_prune_bias(), 3),
+            round(current_sf_prune_bias(), 3),
             int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0)),
             int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0)),
             int(optics_mode_flag),
@@ -7182,12 +7136,31 @@ def reset_to_defaults():
             )
         )
     )
+    pruning_defaults = (
+        gui_structure_factor_pruning.build_runtime_structure_factor_pruning_defaults(
+            defaults.get("sf_prune_bias", 0.0),
+            defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+            defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+            defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
+            prune_bias_fallback=defaults.get("sf_prune_bias", 0.0),
+            prune_bias_minimum=SF_PRUNE_BIAS_MIN,
+            prune_bias_maximum=SF_PRUNE_BIAS_MAX,
+            steps_fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+            steps_minimum=MIN_SOLVE_Q_STEPS,
+            steps_maximum=MAX_SOLVE_Q_STEPS,
+            rel_tol_fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+            rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
+            rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
+            uniform_flag=SOLVE_Q_MODE_UNIFORM,
+            adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
+        )
+    )
     optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
-    sf_prune_bias_var.set(_clip_sf_prune_bias(defaults.get('sf_prune_bias', 0.0)))
-    solve_q_mode_var.set(_normalize_solve_q_mode_label(defaults.get('solve_q_mode', SOLVE_Q_MODE_UNIFORM)))
-    solve_q_steps_var.set(float(_clip_solve_q_steps(defaults.get('solve_q_steps', DEFAULT_SOLVE_Q_STEPS))))
+    sf_prune_bias_var.set(pruning_defaults.prune_bias)
+    solve_q_mode_var.set(pruning_defaults.solve_q.mode_label)
+    solve_q_steps_var.set(float(pruning_defaults.solve_q.steps))
     solve_q_rel_tol_var.set(
-        float(_clip_solve_q_rel_tol(defaults.get('solve_q_rel_tol', DEFAULT_SOLVE_Q_REL_TOL)))
+        float(pruning_defaults.solve_q.rel_tol)
     )
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
@@ -7332,9 +7305,9 @@ gui_views.populate_stacked_button_group(
                     eta_var=eta_var,
                     bandwidth=_current_bandwidth_fraction(),
                     optics_mode=_current_optics_mode_flag(),
-                    solve_q_steps=_current_solve_q_steps(),
-                    solve_q_rel_tol=_current_solve_q_rel_tol(),
-                    solve_q_mode=_current_solve_q_mode_flag(),
+                    solve_q_steps=current_solve_q_values().steps,
+                    solve_q_rel_tol=current_solve_q_values().rel_tol,
+                    solve_q_mode=current_solve_q_values().mode_flag,
                 ),
                 [center_x_var.get(), center_y_var.get()],
                 {
@@ -12676,9 +12649,9 @@ def save_q_space_representation():
         "sigma_mosaic_deg": sigma_mosaic_var.get(),
         "gamma_mosaic_deg": gamma_mosaic_var.get(),
         "eta": eta_var.get(),
-        "solve_q_steps": _current_solve_q_steps(),
-        "solve_q_rel_tol": _current_solve_q_rel_tol(),
-        "solve_q_mode": _current_solve_q_mode_flag(),
+        "solve_q_steps": current_solve_q_values().steps,
+        "solve_q_rel_tol": current_solve_q_values().rel_tol,
+        "solve_q_mode": current_solve_q_values().mode_flag,
         "a": a_var.get(),
         "c": c_var.get(),
         "center_x": center_x_var.get(),
@@ -12696,9 +12669,18 @@ def save_q_space_representation():
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
-        "solve_q_steps": simulation_runtime_state.profile_cache.get("solve_q_steps", _current_solve_q_steps()),
-        "solve_q_rel_tol": simulation_runtime_state.profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
-        "solve_q_mode": simulation_runtime_state.profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
+        "solve_q_steps": simulation_runtime_state.profile_cache.get(
+            "solve_q_steps",
+            current_solve_q_values().steps,
+        ),
+        "solve_q_rel_tol": simulation_runtime_state.profile_cache.get(
+            "solve_q_rel_tol",
+            current_solve_q_values().rel_tol,
+        ),
+        "solve_q_mode": simulation_runtime_state.profile_cache.get(
+            "solve_q_mode",
+            current_solve_q_values().mode_flag,
+        ),
     }
 
     image_result, hit_tables, q_data, q_count, _, _ = process_peaks_parallel(
@@ -12789,9 +12771,18 @@ def run_debug_simulation():
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
-        "solve_q_steps": simulation_runtime_state.profile_cache.get("solve_q_steps", _current_solve_q_steps()),
-        "solve_q_rel_tol": simulation_runtime_state.profile_cache.get("solve_q_rel_tol", _current_solve_q_rel_tol()),
-        "solve_q_mode": simulation_runtime_state.profile_cache.get("solve_q_mode", _current_solve_q_mode_flag()),
+        "solve_q_steps": simulation_runtime_state.profile_cache.get(
+            "solve_q_steps",
+            current_solve_q_values().steps,
+        ),
+        "solve_q_rel_tol": simulation_runtime_state.profile_cache.get(
+            "solve_q_rel_tol",
+            current_solve_q_values().rel_tol,
+        ),
+        "solve_q_mode": simulation_runtime_state.profile_cache.get(
+            "solve_q_mode",
+            current_solve_q_values().mode_flag,
+        ),
     }
 
     sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
@@ -13012,25 +13003,38 @@ def on_optics_mode_change(*_):
 
 optics_mode_var.trace_add('write', on_optics_mode_change)
 
+structure_factor_pruning_defaults = (
+    gui_structure_factor_pruning.build_runtime_structure_factor_pruning_defaults(
+        defaults.get("sf_prune_bias", 0.0),
+        defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+        defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
+        prune_bias_fallback=defaults.get("sf_prune_bias", 0.0),
+        prune_bias_minimum=SF_PRUNE_BIAS_MIN,
+        prune_bias_maximum=SF_PRUNE_BIAS_MAX,
+        steps_fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        steps_minimum=MIN_SOLVE_Q_STEPS,
+        steps_maximum=MAX_SOLVE_Q_STEPS,
+        rel_tol_fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+        rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
+        rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
+        uniform_flag=SOLVE_Q_MODE_UNIFORM,
+        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
+    )
+)
 gui_views.create_structure_factor_pruning_controls(
     parent=mosaic_frame.frame,
     view_state=structure_factor_pruning_controls_view_state,
     sf_prune_bias_range=(SF_PRUNE_BIAS_MIN, SF_PRUNE_BIAS_MAX),
-    sf_prune_bias_value=_clip_sf_prune_bias(defaults.get("sf_prune_bias", 0.0)),
-    solve_q_mode=_normalize_solve_q_mode_label(
-        defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM)
-    ),
+    sf_prune_bias_value=structure_factor_pruning_defaults.prune_bias,
+    solve_q_mode=structure_factor_pruning_defaults.solve_q.mode_label,
     solve_q_steps_range=(float(MIN_SOLVE_Q_STEPS), float(MAX_SOLVE_Q_STEPS)),
-    solve_q_steps_value=float(
-        _clip_solve_q_steps(defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
-    ),
+    solve_q_steps_value=float(structure_factor_pruning_defaults.solve_q.steps),
     solve_q_rel_tol_range=(
         float(MIN_SOLVE_Q_REL_TOL),
         float(MAX_SOLVE_Q_REL_TOL),
     ),
-    solve_q_rel_tol_value=float(
-        _clip_solve_q_rel_tol(defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
-    ),
+    solve_q_rel_tol_value=float(structure_factor_pruning_defaults.solve_q.rel_tol),
     status_text="",
 )
 sf_prune_bias_var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
@@ -14116,10 +14120,10 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         "Startup ready: "
         f"profile={'loaded' if profile_loaded else 'defaults'}; "
         f"sampling={sample_mode} ({sample_count} samples); "
-        f"sf_prune={_current_sf_prune_bias():+.2f}; "
-        f"q_mode={_normalize_solve_q_mode_label(solve_q_mode_var.get())}; "
-        f"q_steps={_current_solve_q_steps()}; "
-        f"q_tol={_current_solve_q_rel_tol():.2e}; "
+        f"sf_prune={current_sf_prune_bias():+.2f}; "
+        f"q_mode={gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label(solve_q_mode_var.get())}; "
+        f"q_steps={current_solve_q_values().steps}; "
+        f"q_tol={current_solve_q_values().rel_tol:.2e}; "
         f"optics={_normalize_optics_mode_label(optics_mode_var.get())}; "
         f"cif={cif_summary}"
     )
