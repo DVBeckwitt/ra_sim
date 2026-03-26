@@ -80,6 +80,8 @@ inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - Preview auto-match config normalization, cached overlay-state payload
     helpers, live-preview status rendering, and preview exclusion clear/toggle
     helpers now live in `ra_sim.gui.geometry_q_group_manager`.
+  - The live-preview enable/disable action flow now also lives in
+    `ra_sim.gui.geometry_q_group_manager`.
   - `runtime.py` now delegates those paths through thin wrappers.
 - Bragg Qr manager migration has started.
   - Bragg-Qr selection/index bookkeeping now lives in `ra_sim.gui.state`.
@@ -340,13 +342,16 @@ inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     auto-match config normalization, cached overlay-state payload helpers,
     status rendering, and preview exclusion clear/toggle helpers used by the
     live preview workflow.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the live-preview
+    enable/disable action flow used by the geometry tool controls.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions.
   - `ra_sim.gui.runtime` now keeps only one bound geometry-selector factory/
     callback bundle plus thin fit-preview/cached-hit value sources, live-
     preview availability/fallback simulation orchestration, a narrowed
-    update-cycle refresh call site, and toolbar wiring around that workflow.
+    update-cycle refresh call site, and thin toolbar wiring around that
+    workflow.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,

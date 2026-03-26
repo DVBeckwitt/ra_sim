@@ -8270,20 +8270,19 @@ geometry_q_group_runtime_callbacks = (
 def _on_live_geometry_preview_toggle():
     """Enable or disable the live geometry auto-match preview."""
 
-    if not _live_geometry_preview_enabled():
-        _set_geometry_preview_exclude_mode(False)
-        _clear_geometry_preview_artists()
-        progress_label_geometry.config(text="Live auto-match preview disabled.")
-        return
-
-    geometry_q_group_runtime_callbacks.open_window()
-
-    if simulation_runtime_state.update_running or simulation_runtime_state.stored_max_positions_local is None:
-        schedule_update()
-        return
-
-    if not _refresh_live_geometry_preview(update_status=True):
-        schedule_update()
+    gui_geometry_q_group_manager.toggle_live_geometry_preview_with_side_effects(
+        enabled=_live_geometry_preview_enabled(),
+        disable_preview_exclude_mode=lambda: _set_geometry_preview_exclude_mode(False),
+        clear_geometry_preview_artists=_clear_geometry_preview_artists,
+        open_geometry_q_group_window=geometry_q_group_runtime_callbacks.open_window,
+        update_running=bool(simulation_runtime_state.update_running),
+        has_cached_hit_tables=simulation_runtime_state.stored_max_positions_local is not None,
+        schedule_update=schedule_update,
+        refresh_live_geometry_preview=lambda: _refresh_live_geometry_preview(
+            update_status=True
+        ),
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
+    )
 
 
 def _legacy_auto_match_on_fit_geometry_click():

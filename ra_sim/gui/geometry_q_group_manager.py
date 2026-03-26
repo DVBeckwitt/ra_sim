@@ -1751,6 +1751,40 @@ def open_runtime_geometry_q_group_preview_exclusion_window(
     return opened
 
 
+def toggle_live_geometry_preview_with_side_effects(
+    *,
+    enabled: bool,
+    disable_preview_exclude_mode: Callable[[], None],
+    clear_geometry_preview_artists: Callable[[], None],
+    open_geometry_q_group_window: Callable[[], object],
+    update_running: bool,
+    has_cached_hit_tables: bool,
+    schedule_update: Callable[[], None],
+    refresh_live_geometry_preview: Callable[[], bool],
+    set_status_text: Callable[[str], None] | None = None,
+) -> bool:
+    """Apply the live-preview checkbox action and its follow-on workflow."""
+
+    if not enabled:
+        disable_preview_exclude_mode()
+        clear_geometry_preview_artists()
+        _set_status_text(
+            set_status_text,
+            "Live auto-match preview disabled.",
+        )
+        return False
+
+    open_geometry_q_group_window()
+    if bool(update_running) or not bool(has_cached_hit_tables):
+        schedule_update()
+        return True
+
+    refreshed = bool(refresh_live_geometry_preview())
+    if not refreshed:
+        schedule_update()
+    return refreshed
+
+
 def make_runtime_geometry_q_group_callbacks(
     *,
     root,

@@ -872,6 +872,78 @@ def test_geometry_q_group_manager_preview_exclusion_open_reports_status(
     )
 
 
+def test_geometry_q_group_manager_live_preview_toggle_helper_covers_disabled_scheduled_and_refreshed_paths() -> None:
+    disabled_events = []
+
+    refreshed = geometry_q_group_manager.toggle_live_geometry_preview_with_side_effects(
+        enabled=False,
+        disable_preview_exclude_mode=lambda: disabled_events.append("disable"),
+        clear_geometry_preview_artists=lambda: disabled_events.append("clear"),
+        open_geometry_q_group_window=lambda: disabled_events.append("open"),
+        update_running=False,
+        has_cached_hit_tables=True,
+        schedule_update=lambda: disabled_events.append("schedule"),
+        refresh_live_geometry_preview=lambda: disabled_events.append("refresh") or True,
+        set_status_text=lambda text: disabled_events.append(text),
+    )
+
+    assert refreshed is False
+    assert disabled_events == [
+        "disable",
+        "clear",
+        "Live auto-match preview disabled.",
+    ]
+
+    scheduled_events = []
+    refreshed = geometry_q_group_manager.toggle_live_geometry_preview_with_side_effects(
+        enabled=True,
+        disable_preview_exclude_mode=lambda: scheduled_events.append("disable"),
+        clear_geometry_preview_artists=lambda: scheduled_events.append("clear"),
+        open_geometry_q_group_window=lambda: scheduled_events.append("open"),
+        update_running=True,
+        has_cached_hit_tables=False,
+        schedule_update=lambda: scheduled_events.append("schedule"),
+        refresh_live_geometry_preview=lambda: scheduled_events.append("refresh") or True,
+        set_status_text=lambda text: scheduled_events.append(text),
+    )
+
+    assert refreshed is True
+    assert scheduled_events == ["open", "schedule"]
+
+    failed_refresh_events = []
+    refreshed = geometry_q_group_manager.toggle_live_geometry_preview_with_side_effects(
+        enabled=True,
+        disable_preview_exclude_mode=lambda: failed_refresh_events.append("disable"),
+        clear_geometry_preview_artists=lambda: failed_refresh_events.append("clear"),
+        open_geometry_q_group_window=lambda: failed_refresh_events.append("open"),
+        update_running=False,
+        has_cached_hit_tables=True,
+        schedule_update=lambda: failed_refresh_events.append("schedule"),
+        refresh_live_geometry_preview=lambda: failed_refresh_events.append("refresh")
+        or False,
+        set_status_text=lambda text: failed_refresh_events.append(text),
+    )
+
+    assert refreshed is False
+    assert failed_refresh_events == ["open", "refresh", "schedule"]
+
+    success_events = []
+    refreshed = geometry_q_group_manager.toggle_live_geometry_preview_with_side_effects(
+        enabled=True,
+        disable_preview_exclude_mode=lambda: success_events.append("disable"),
+        clear_geometry_preview_artists=lambda: success_events.append("clear"),
+        open_geometry_q_group_window=lambda: success_events.append("open"),
+        update_running=False,
+        has_cached_hit_tables=True,
+        schedule_update=lambda: success_events.append("schedule"),
+        refresh_live_geometry_preview=lambda: success_events.append("refresh") or True,
+        set_status_text=lambda text: success_events.append(text),
+    )
+
+    assert refreshed is True
+    assert success_events == ["open", "refresh"]
+
+
 def test_geometry_q_group_manager_save_dialog_workflow_writes_payload_and_reports_status() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "secondary", 2, 1)
