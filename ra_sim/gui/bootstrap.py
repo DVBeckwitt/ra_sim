@@ -22,6 +22,13 @@ class RuntimeBindingsCallbacksBootstrap:
 
 
 @dataclass(frozen=True)
+class RuntimeCallbacksBootstrap:
+    """One bound runtime callback bundle built through a shared helper."""
+
+    callbacks: Any
+
+
+@dataclass(frozen=True)
 class RuntimeBindingsRefreshToggleBootstrap:
     """Zero-arg runtime bindings factory plus refresh/toggle callbacks."""
 
@@ -731,6 +738,34 @@ def build_runtime_peak_selection_bootstrap(
         callbacks=peak_selection_module.make_runtime_peak_selection_callbacks(
             bindings_factory
         ),
+    )
+
+
+def build_runtime_geometry_manual_bootstrap(
+    *,
+    manual_geometry_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeCallbacksBootstrap:
+    """Build the live manual-geometry callback bundle through shared helpers."""
+
+    return RuntimeCallbacksBootstrap(
+        callbacks=manual_geometry_module.make_runtime_geometry_manual_callbacks(
+            **bindings_kwargs
+        )
+    )
+
+
+def build_runtime_geometry_tool_action_callbacks_bootstrap(
+    *,
+    geometry_fit_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeCallbacksBootstrap:
+    """Build the live geometry-tool action callback bundle through shared helpers."""
+
+    return RuntimeCallbacksBootstrap(
+        callbacks=geometry_fit_module.make_runtime_geometry_tool_action_callbacks(
+            **bindings_kwargs
+        )
     )
 
 

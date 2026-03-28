@@ -724,6 +724,58 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     ]
 
 
+def test_build_runtime_geometry_manual_bootstrap_wraps_callback_bundle() -> None:
+    calls: list[tuple[object, ...]] = []
+
+    bundle = bootstrap.build_runtime_geometry_manual_bootstrap(
+        manual_geometry_module=SimpleNamespace(
+            make_runtime_geometry_manual_callbacks=(
+                lambda **kwargs: calls.append(("manual", kwargs))
+                or "manual-callbacks"
+            )
+        ),
+        background_visible="visible",
+        current_background_index="background-index",
+    )
+
+    assert bundle.callbacks == "manual-callbacks"
+    assert calls == [
+        (
+            "manual",
+            {
+                "background_visible": "visible",
+                "current_background_index": "background-index",
+            },
+        )
+    ]
+
+
+def test_build_runtime_geometry_tool_action_callbacks_bootstrap_wraps_bundle() -> None:
+    calls: list[tuple[object, ...]] = []
+
+    bundle = bootstrap.build_runtime_geometry_tool_action_callbacks_bootstrap(
+        geometry_fit_module=SimpleNamespace(
+            make_runtime_geometry_tool_action_callbacks=(
+                lambda **kwargs: calls.append(("tool-actions", kwargs))
+                or "tool-action-callbacks"
+            )
+        ),
+        geometry_fit_history_state="history-state",
+        manual_pick_armed="armed",
+    )
+
+    assert bundle.callbacks == "tool-action-callbacks"
+    assert calls == [
+        (
+            "tool-actions",
+            {
+                "geometry_fit_history_state": "history-state",
+                "manual_pick_armed": "armed",
+            },
+        )
+    ]
+
+
 def test_build_runtime_hkl_lookup_controls_bootstrap_wires_peak_and_bragg_callbacks() -> None:
     view_calls: list[dict[str, object]] = []
     callback_calls: list[tuple[object, ...]] = []

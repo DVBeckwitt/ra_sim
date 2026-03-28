@@ -478,6 +478,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
     plus two late-bound status-refresh helpers that are reused by the
     remaining geometry-fit/manual-geometry/background-theta call sites
+- Geometry-fit manual-pair preview/action cleanup has also advanced:
+  - the manual-geometry runtime callback bundle now also boots through one
+    shared helper in `ra_sim.gui.bootstrap`
+  - the geometry-tool action callback bundle used by the manual-pair tools
+    now also boots through one shared helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` no longer constructs those manual-geometry /
+    geometry-tool callback bundles directly inline; it now keeps bound
+    bootstrap results that are threaded through canvas interaction,
+    geometry-tool actions, background refresh, and GUI-state restore call
+    sites
 - Integration-range drag workflow extraction has also advanced:
   - explicit live drag-selection state for 1D integration-range picking now
     lives in `ra_sim.gui.state`
@@ -582,9 +592,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   value-source wiring around the extracted peak-selection modules and shared
   bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining value-source wiring and callback-bundle construction around the
-  extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
-  helper surfaces.
+  remaining live value-source helpers and cache/fit-preview wiring around the
+  extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
+  shared bootstrap helper surfaces.
 - The remaining integration-range runtime code is now mostly thin live
   value-source wiring around the extracted drag/update helpers and shared
   bootstrap surfaces.

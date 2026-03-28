@@ -3164,7 +3164,8 @@ hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bo
     peak_selection_callbacks=peak_selection_runtime_callbacks,
     open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
 )
-geometry_manual_runtime_callbacks = gui_manual_geometry.make_runtime_geometry_manual_callbacks(
+geometry_manual_runtime = gui_bootstrap.build_runtime_geometry_manual_bootstrap(
+    manual_geometry_module=gui_manual_geometry,
     background_visible=lambda: bool(background_runtime_state.visible),
     current_background_index=(lambda: int(background_runtime_state.current_background_index)),
     current_background_image=_current_geometry_manual_pick_background_image,
@@ -3213,8 +3214,10 @@ geometry_manual_runtime_callbacks = gui_manual_geometry.make_runtime_geometry_ma
     ),
     show_preview=_show_geometry_manual_preview,
 )
-geometry_tool_action_runtime_callbacks = (
-    gui_geometry_fit.make_runtime_geometry_tool_action_callbacks(
+geometry_manual_runtime_callbacks = geometry_manual_runtime.callbacks
+geometry_tool_action_runtime = (
+    gui_bootstrap.build_runtime_geometry_tool_action_callbacks_bootstrap(
+        geometry_fit_module=gui_geometry_fit,
         geometry_fit_history_state=geometry_fit_history_state,
         manual_pick_armed=lambda: bool(geometry_runtime_state.manual_pick_armed),
         set_manual_pick_armed=(
@@ -3267,6 +3270,7 @@ geometry_tool_action_runtime_callbacks = (
         set_progress_text=lambda text: progress_label_geometry.config(text=text),
     )
 )
+geometry_tool_action_runtime_callbacks = geometry_tool_action_runtime.callbacks
 _update_geometry_fit_undo_button_state = (
     geometry_tool_action_runtime_callbacks.update_fit_history_button_state
 )

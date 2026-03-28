@@ -374,6 +374,7 @@ def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
 
     has_helper_call = False
+    direct_bootstrap_calls = 0
     direct_helper_calls = {
         "render_current_geometry_manual_pairs": 0,
         "geometry_manual_toggle_selection_at": 0,
@@ -388,8 +389,10 @@ def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
         func = node.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr == "make_runtime_geometry_manual_callbacks":
+        if func.attr == "build_runtime_geometry_manual_bootstrap":
             has_helper_call = True
+        if func.attr == "make_runtime_geometry_manual_callbacks":
+            direct_bootstrap_calls += 1
         if (
             isinstance(func.value, ast.Name)
             and func.value.id == "gui_manual_geometry"
@@ -405,6 +408,33 @@ def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
         "geometry_manual_pick_preview_state": 0,
         "cancel_geometry_manual_pick_session": 0,
     }
+    assert direct_bootstrap_calls == 0
+
+
+def test_runtime_geometry_tool_action_callbacks_use_shared_bootstrap() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    bootstrap_calls = 0
+    direct_helper_calls = 0
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "build_runtime_geometry_tool_action_callbacks_bootstrap":
+            bootstrap_calls += 1
+        if (
+            isinstance(func.value, ast.Name)
+            and func.value.id == "gui_geometry_fit"
+            and func.attr == "make_runtime_geometry_tool_action_callbacks"
+        ):
+            direct_helper_calls += 1
+
+    assert bootstrap_calls == 1
+    assert direct_helper_calls == 0
 
 
 def test_runtime_hkl_lookup_controls_are_bootstrapped() -> None:
