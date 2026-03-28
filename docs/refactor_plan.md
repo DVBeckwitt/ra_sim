@@ -160,6 +160,14 @@ reduction.
     `ra_sim.gui.geometry_fit`.
   - `runtime.py` no longer wires that control cluster directly or keeps
     standalone inline implementations for those callback surfaces.
+- Geometry-interaction runtime/bootstrap cleanup has advanced further.
+  - The selected-peak / HKL lookup / manual-geometry / geometry-tool action
+    runtime assembly now also flows through the import-safe helper module
+    `ra_sim.gui.runtime_geometry_interaction`.
+  - `runtime_impl.py` no longer calls those geometry-interaction bootstrap
+    helpers directly.
+  - Direct helper tests now cover that assembly instead of AST assertions
+    against the internal runtime implementation.
 - Integration-range drag bootstrap cleanup has advanced further.
   - The drag-selection rectangle, integration-region rectangle, live
     integration-region refresh callback, and runtime drag callback bundle now
@@ -1031,6 +1039,10 @@ What is done:
 - The background runtime/bootstrap assembly now flows through an import-safe
   helper module, and the matching background runtime-shape checks now use
   direct helper tests instead of AST assertions against `runtime_impl.py`.
+- The selected-peak / HKL lookup / manual-geometry / geometry-tool action
+  runtime/bootstrap assembly now also flows through an import-safe helper
+  module, and the matching regression coverage now uses direct helper tests
+  instead of AST assertions against `runtime_impl.py`.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.
@@ -1039,6 +1051,10 @@ What is left:
 
 - Some implementation-shape tests still target the internal runtime module
   directly because they were written around the old import-heavy layout.
+- The remaining internal-runtime AST checks are now concentrated in narrower
+  constant-order and late-binding assertions around pruning defaults, canvas
+  preview hooks, geometry Q-group scheduling, integration-range wiring, and
+  geometry-fit bootstrap ordering.
 - A few other narrow structural tests still use AST assertions where behavior
   is harder to probe directly.
 

@@ -108,6 +108,7 @@ from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import integration_range_drag as gui_integration_range_drag
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import runtime_background as gui_runtime_background
+from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
@@ -2484,8 +2485,9 @@ def _refine_caked_peak_center(
     )
 
 
-geometry_manual_projection_runtime = (
-    gui_bootstrap.build_runtime_geometry_manual_projection_bootstrap(
+geometry_manual_projection_workflow = (
+    gui_runtime_geometry_interaction.build_runtime_geometry_manual_projection_workflow(
+        bootstrap_module=gui_bootstrap,
         manual_geometry_module=gui_manual_geometry,
         caked_view_enabled=lambda: (
             bool(analysis_view_controls_view_state.show_caked_2d_var.get())
@@ -2539,96 +2541,99 @@ geometry_manual_projection_runtime = (
         ),
     )
 )
+geometry_manual_projection_runtime = geometry_manual_projection_workflow.runtime
 geometry_manual_projection_runtime_callbacks = (
-    geometry_manual_projection_runtime.callbacks
+    geometry_manual_projection_workflow.callbacks
 )
 _geometry_manual_pick_uses_caked_space = (
-    geometry_manual_projection_runtime_callbacks.pick_uses_caked_space
+    geometry_manual_projection_workflow.pick_uses_caked_space
 )
 _current_geometry_manual_pick_background_image = (
-    geometry_manual_projection_runtime_callbacks.current_background_image
+    geometry_manual_projection_workflow.current_background_image
 )
 _geometry_manual_entry_display_coords = (
-    geometry_manual_projection_runtime_callbacks.entry_display_coords
+    geometry_manual_projection_workflow.entry_display_coords
 )
 _caked_angles_to_background_display_coords = (
-    geometry_manual_projection_runtime_callbacks.caked_angles_to_background_display_coords
+    geometry_manual_projection_workflow.caked_angles_to_background_display_coords
 )
 _native_detector_coords_to_caked_display_coords = (
-    geometry_manual_projection_runtime_callbacks.native_detector_coords_to_caked_display_coords
+    geometry_manual_projection_workflow.native_detector_coords_to_caked_display_coords
 )
 _project_geometry_manual_peaks_to_current_view = (
-    geometry_manual_projection_runtime_callbacks.project_peaks_to_current_view
+    geometry_manual_projection_workflow.project_peaks_to_current_view
 )
 _geometry_manual_simulated_peaks_for_params = (
-    geometry_manual_projection_runtime_callbacks.simulated_peaks_for_params
+    geometry_manual_projection_workflow.simulated_peaks_for_params
 )
-_geometry_manual_pick_candidates = (
-    geometry_manual_projection_runtime_callbacks.pick_candidates
-)
+_geometry_manual_pick_candidates = geometry_manual_projection_workflow.pick_candidates
 _geometry_manual_simulated_lookup = (
-    geometry_manual_projection_runtime_callbacks.simulated_lookup
+    geometry_manual_projection_workflow.simulated_lookup
 )
 
 
-geometry_manual_cache_runtime = gui_bootstrap.build_runtime_geometry_manual_cache_bootstrap(
-    manual_geometry_module=gui_manual_geometry,
-    fit_config=fit_config,
-    last_simulation_signature=(
-        lambda: simulation_runtime_state.last_simulation_signature
-    ),
-    current_background_index=(
-        lambda: int(background_runtime_state.current_background_index)
-    ),
-    current_background_image=_current_geometry_manual_pick_background_image,
-    use_caked_space=_geometry_manual_pick_uses_caked_space,
-    geometry_preview_excluded_q_groups=(
-        lambda: geometry_preview_state.excluded_q_groups
-    ),
-    geometry_q_group_cached_entries=(lambda: geometry_q_group_state.cached_entries),
-    stored_max_positions_local=(
-        lambda: simulation_runtime_state.stored_max_positions_local
-    ),
-    stored_peak_table_lattice=(
-        lambda: simulation_runtime_state.stored_peak_table_lattice
-    ),
-    current_cache_signature=(
-        lambda: geometry_runtime_state.manual_pick_cache_signature
-    ),
-    current_cache_data=(lambda: geometry_runtime_state.manual_pick_cache_data),
-    replace_cache_state=(
-        lambda signature, cache_data: (
-            setattr(geometry_runtime_state, "manual_pick_cache_signature", signature),
-            setattr(
-                geometry_runtime_state,
-                "manual_pick_cache_data",
-                dict(cache_data) if isinstance(cache_data, dict) else {},
-            ),
-        )
-    ),
-    current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
-    pairs_for_index=_geometry_manual_pairs_for_index,
-    simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
-    build_grouped_candidates=_geometry_manual_pick_candidates,
-    build_simulated_lookup=_geometry_manual_simulated_lookup,
-    entry_display_coords=_geometry_manual_entry_display_coords,
-    auto_match_background_context=(
-        lambda *args, **kwargs: globals()["_auto_match_background_context"](
-            *args,
-            **kwargs,
-        )
-    ),
+geometry_manual_cache_workflow = (
+    gui_runtime_geometry_interaction.build_runtime_geometry_manual_cache_workflow(
+        bootstrap_module=gui_bootstrap,
+        manual_geometry_module=gui_manual_geometry,
+        fit_config=fit_config,
+        last_simulation_signature=(
+            lambda: simulation_runtime_state.last_simulation_signature
+        ),
+        current_background_index=(
+            lambda: int(background_runtime_state.current_background_index)
+        ),
+        current_background_image=_current_geometry_manual_pick_background_image,
+        use_caked_space=_geometry_manual_pick_uses_caked_space,
+        geometry_preview_excluded_q_groups=(
+            lambda: geometry_preview_state.excluded_q_groups
+        ),
+        geometry_q_group_cached_entries=(lambda: geometry_q_group_state.cached_entries),
+        stored_max_positions_local=(
+            lambda: simulation_runtime_state.stored_max_positions_local
+        ),
+        stored_peak_table_lattice=(
+            lambda: simulation_runtime_state.stored_peak_table_lattice
+        ),
+        current_cache_signature=(
+            lambda: geometry_runtime_state.manual_pick_cache_signature
+        ),
+        current_cache_data=(lambda: geometry_runtime_state.manual_pick_cache_data),
+        replace_cache_state=(
+            lambda signature, cache_data: (
+                setattr(geometry_runtime_state, "manual_pick_cache_signature", signature),
+                setattr(
+                    geometry_runtime_state,
+                    "manual_pick_cache_data",
+                    dict(cache_data) if isinstance(cache_data, dict) else {},
+                ),
+            )
+        ),
+        current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
+        pairs_for_index=_geometry_manual_pairs_for_index,
+        simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
+        build_grouped_candidates=_geometry_manual_pick_candidates,
+        build_simulated_lookup=_geometry_manual_simulated_lookup,
+        entry_display_coords=_geometry_manual_entry_display_coords,
+        auto_match_background_context=(
+            lambda *args, **kwargs: globals()["_auto_match_background_context"](
+                *args,
+                **kwargs,
+            )
+        ),
+    )
 )
-geometry_manual_cache_runtime_callbacks = geometry_manual_cache_runtime.callbacks
+geometry_manual_cache_runtime = geometry_manual_cache_workflow.runtime
+geometry_manual_cache_runtime_callbacks = geometry_manual_cache_workflow.callbacks
 _current_geometry_manual_match_config = (
-    geometry_manual_cache_runtime_callbacks.current_match_config
+    geometry_manual_cache_workflow.current_match_config
 )
 _geometry_manual_pick_cache_signature = (
-    geometry_manual_cache_runtime_callbacks.pick_cache_signature
+    geometry_manual_cache_workflow.pick_cache_signature
 )
-_get_geometry_manual_pick_cache = geometry_manual_cache_runtime_callbacks.get_pick_cache
+_get_geometry_manual_pick_cache = geometry_manual_cache_workflow.get_pick_cache
 _build_geometry_manual_initial_pairs_display = (
-    geometry_manual_cache_runtime_callbacks.build_initial_pairs_display
+    geometry_manual_cache_workflow.build_initial_pairs_display
 )
 
 
@@ -2887,152 +2892,161 @@ structure_factor_pruning_controls_runtime = (
 )
 
 
-peak_selection_runtime = gui_bootstrap.build_runtime_selected_peak_bootstrap(
-    peak_selection_module=gui_peak_selection,
-    simulation_runtime_state=simulation_runtime_state,
-    peak_selection_state=peak_selection_state,
-    image_size=int(image_size),
-    hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
-    selected_peak_marker_factory=lambda: selected_peak_marker,
-    current_primary_a_factory=lambda: float(av),
-    caked_view_enabled_factory=lambda: (
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        if analysis_view_controls_view_state.show_caked_2d_var is not None
-        else False
-    ),
-    primary_a_factory=lambda: float(av),
-    primary_c_factory=lambda: float(cv),
-    max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
-    min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
-    image_shape_factory=lambda: (
-        tuple(int(v) for v in global_image_buffer.shape)
-        if global_image_buffer.size
-        else None
-    ),
-    center_col_factory=lambda: float(center_y_var.get()),
-    center_row_factory=lambda: float(center_x_var.get()),
-    distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
-    gamma_deg_factory=lambda: float(gamma_var.get()),
-    Gamma_deg_factory=lambda: float(Gamma_var.get()),
-    chi_deg_factory=lambda: float(chi_var.get()),
-    psi_deg_factory=lambda: float(psi),
-    psi_z_deg_factory=lambda: float(psi_z_var.get()),
-    zs_factory=lambda: float(zs_var.get()),
-    zb_factory=lambda: float(zb_var.get()),
-    theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
-    cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
-    sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
-    gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
-    eta_factory=lambda: float(eta_var.get()),
-    wavelength_factory=lambda: float(lambda_),
-    debye_x_factory=lambda: float(debye_x_var.get()),
-    debye_y_factory=lambda: float(debye_y_var.get()),
-    detector_center_factory=lambda: (
-        float(center_x_var.get()),
-        float(center_y_var.get()),
-    ),
-    optics_mode_factory=_current_optics_mode_flag,
-    solve_q_values_factory=current_solve_q_values,
-    overlay_primary_a_factory=lambda: (
-        float(a_var.get()) if "a_var" in globals() else float(av)
-    ),
-    overlay_primary_c_factory=lambda: (
-        float(c_var.get()) if "c_var" in globals() else float(cv)
-    ),
-    native_sim_to_display_coords=_native_sim_to_display_coords,
-    reflection_q_group_metadata=(
-        gui_geometry_q_group_manager.reflection_q_group_metadata
-    ),
-    max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
-    sync_peak_selection_state=_sync_peak_selection_state,
-    schedule_update_factory=lambda: (
-        globals().get("schedule_update")
-        if callable(globals().get("schedule_update"))
-        else None
-    ),
-    set_status_text_factory=lambda: (
-        (lambda text: progress_label_positions.config(text=text))
-        if "progress_label_positions" in globals()
-        else None
-    ),
-    draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
-    display_to_native_sim_coords=_display_to_native_sim_coords,
-    deactivate_conflicting_modes_factory=lambda: (
-        lambda: _set_geometry_preview_exclude_mode(False)
-    ),
-    n2=n2,
-    process_peaks_parallel=process_peaks_parallel,
-    tcl_error_types=(tk.TclError,),
+peak_selection_workflow = (
+    gui_runtime_geometry_interaction.build_runtime_peak_selection_workflow(
+        bootstrap_module=gui_bootstrap,
+        peak_selection_module=gui_peak_selection,
+        views_module=gui_views,
+        hkl_lookup_view_state=hkl_lookup_view_state,
+        open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
+        simulation_runtime_state=simulation_runtime_state,
+        peak_selection_state=peak_selection_state,
+        image_size=int(image_size),
+        hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
+        selected_peak_marker_factory=lambda: selected_peak_marker,
+        current_primary_a_factory=lambda: float(av),
+        caked_view_enabled_factory=lambda: (
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+            if analysis_view_controls_view_state.show_caked_2d_var is not None
+            else False
+        ),
+        primary_a_factory=lambda: float(av),
+        primary_c_factory=lambda: float(cv),
+        max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
+        min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
+        image_shape_factory=lambda: (
+            tuple(int(v) for v in global_image_buffer.shape)
+            if global_image_buffer.size
+            else None
+        ),
+        center_col_factory=lambda: float(center_y_var.get()),
+        center_row_factory=lambda: float(center_x_var.get()),
+        distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
+        gamma_deg_factory=lambda: float(gamma_var.get()),
+        Gamma_deg_factory=lambda: float(Gamma_var.get()),
+        chi_deg_factory=lambda: float(chi_var.get()),
+        psi_deg_factory=lambda: float(psi),
+        psi_z_deg_factory=lambda: float(psi_z_var.get()),
+        zs_factory=lambda: float(zs_var.get()),
+        zb_factory=lambda: float(zb_var.get()),
+        theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
+        cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
+        sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
+        gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
+        eta_factory=lambda: float(eta_var.get()),
+        wavelength_factory=lambda: float(lambda_),
+        debye_x_factory=lambda: float(debye_x_var.get()),
+        debye_y_factory=lambda: float(debye_y_var.get()),
+        detector_center_factory=lambda: (
+            float(center_x_var.get()),
+            float(center_y_var.get()),
+        ),
+        optics_mode_factory=_current_optics_mode_flag,
+        solve_q_values_factory=current_solve_q_values,
+        overlay_primary_a_factory=lambda: (
+            float(a_var.get()) if "a_var" in globals() else float(av)
+        ),
+        overlay_primary_c_factory=lambda: (
+            float(c_var.get()) if "c_var" in globals() else float(cv)
+        ),
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        reflection_q_group_metadata=(
+            gui_geometry_q_group_manager.reflection_q_group_metadata
+        ),
+        max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
+        sync_peak_selection_state=_sync_peak_selection_state,
+        schedule_update_factory=lambda: (
+            globals().get("schedule_update")
+            if callable(globals().get("schedule_update"))
+            else None
+        ),
+        set_status_text_factory=lambda: (
+            (lambda text: progress_label_positions.config(text=text))
+            if "progress_label_positions" in globals()
+            else None
+        ),
+        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+        display_to_native_sim_coords=_display_to_native_sim_coords,
+        deactivate_conflicting_modes_factory=lambda: (
+            lambda: _set_geometry_preview_exclude_mode(False)
+        ),
+        n2=n2,
+        process_peaks_parallel=process_peaks_parallel,
+        tcl_error_types=(tk.TclError,),
+    )
 )
-ensure_peak_overlay_data = peak_selection_runtime.ensure_peak_overlay_data
-peak_selection_runtime_callbacks = peak_selection_runtime.callbacks
-peak_selection_runtime_maintenance = peak_selection_runtime.maintenance_callbacks
-hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bootstrap(
-    views_module=gui_views,
-    view_state=hkl_lookup_view_state,
-    peak_selection_callbacks=peak_selection_runtime_callbacks,
-    open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
-)
-geometry_manual_runtime = gui_bootstrap.build_runtime_geometry_manual_bootstrap(
-    manual_geometry_module=gui_manual_geometry,
-    background_visible=lambda: bool(background_runtime_state.visible),
-    current_background_index=(lambda: int(background_runtime_state.current_background_index)),
-    current_background_image=_current_geometry_manual_pick_background_image,
-    pick_session=lambda: geometry_manual_state.pick_session,
-    build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
-    session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
-    clear_geometry_pick_artists=_clear_geometry_pick_artists,
-    draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
-    update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
-    set_background_file_status_text=_refresh_background_status,
-    pair_group_count=_geometry_manual_pair_group_count,
-    set_status_text=lambda text: progress_label_geometry.config(text=text),
-    get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
-        param_set=_current_geometry_fit_params(),
-        prefer_cache=True,
-        **kwargs,
-    ),
-    set_pairs_for_index=_set_geometry_manual_pairs_for_index,
-    pairs_for_index=_geometry_manual_pairs_for_index,
-    set_pick_session=_set_geometry_manual_pick_session,
-    restore_view=_restore_geometry_manual_pick_view,
-    clear_preview_artists=_clear_geometry_manual_preview_artists,
-    push_undo_state=_push_geometry_manual_undo_state,
-    listed_q_group_entries=(
-        lambda: globals()["_listed_geometry_q_group_entries"]()
-    ),
-    format_q_group_line=(
-        lambda *args, **kwargs: globals()["_format_geometry_q_group_line"](
-            *args,
+peak_selection_runtime = peak_selection_workflow.runtime
+ensure_peak_overlay_data = peak_selection_workflow.ensure_peak_overlay_data
+peak_selection_runtime_callbacks = peak_selection_workflow.callbacks
+peak_selection_runtime_maintenance = peak_selection_workflow.maintenance_callbacks
+hkl_lookup_controls_runtime = peak_selection_workflow.hkl_lookup_controls_runtime
+geometry_manual_workflow = (
+    gui_runtime_geometry_interaction.build_runtime_geometry_manual_workflow(
+        bootstrap_module=gui_bootstrap,
+        manual_geometry_module=gui_manual_geometry,
+        background_visible=lambda: bool(background_runtime_state.visible),
+        current_background_index=(
+            lambda: int(background_runtime_state.current_background_index)
+        ),
+        current_background_image=_current_geometry_manual_pick_background_image,
+        pick_session=lambda: geometry_manual_state.pick_session,
+        build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
+        session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
+        clear_geometry_pick_artists=_clear_geometry_pick_artists,
+        draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
+        update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
+        set_background_file_status_text=_refresh_background_status,
+        pair_group_count=_geometry_manual_pair_group_count,
+        set_status_text=lambda text: progress_label_geometry.config(text=text),
+        get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
+            param_set=_current_geometry_fit_params(),
+            prefer_cache=True,
             **kwargs,
-        )
-    ),
-    use_caked_space=_geometry_manual_pick_uses_caked_space,
-    pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
-    caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
-    caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
-    set_suppress_drag_press_once=(
-        lambda enabled: setattr(
-            peak_selection_state,
-            "suppress_drag_press_once",
-            bool(enabled),
-        )
-    ),
-    sync_peak_selection_state=_sync_peak_selection_state,
-    refine_preview_point=_geometry_manual_refine_preview_point,
-    remaining_candidates=_geometry_manual_unassigned_group_candidates,
-    preview_due=_geometry_manual_preview_due,
-    nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
-    position_error_px=_geometry_manual_position_error_px,
-    position_sigma_px=_geometry_manual_position_sigma_px,
-    caked_angles_to_background_display_coords=(
-        _caked_angles_to_background_display_coords
-    ),
-    show_preview=_show_geometry_manual_preview,
+        ),
+        set_pairs_for_index=_set_geometry_manual_pairs_for_index,
+        pairs_for_index=_geometry_manual_pairs_for_index,
+        set_pick_session=_set_geometry_manual_pick_session,
+        restore_view=_restore_geometry_manual_pick_view,
+        clear_preview_artists=_clear_geometry_manual_preview_artists,
+        push_undo_state=_push_geometry_manual_undo_state,
+        listed_q_group_entries=(
+            lambda: globals()["_listed_geometry_q_group_entries"]()
+        ),
+        format_q_group_line=(
+            lambda *args, **kwargs: globals()["_format_geometry_q_group_line"](
+                *args,
+                **kwargs,
+            )
+        ),
+        use_caked_space=_geometry_manual_pick_uses_caked_space,
+        pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
+        caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
+        caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
+        set_suppress_drag_press_once=(
+            lambda enabled: setattr(
+                peak_selection_state,
+                "suppress_drag_press_once",
+                bool(enabled),
+            )
+        ),
+        sync_peak_selection_state=_sync_peak_selection_state,
+        refine_preview_point=_geometry_manual_refine_preview_point,
+        remaining_candidates=_geometry_manual_unassigned_group_candidates,
+        preview_due=_geometry_manual_preview_due,
+        nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
+        position_error_px=_geometry_manual_position_error_px,
+        position_sigma_px=_geometry_manual_position_sigma_px,
+        caked_angles_to_background_display_coords=(
+            _caked_angles_to_background_display_coords
+        ),
+        show_preview=_show_geometry_manual_preview,
+    )
 )
-geometry_manual_runtime_callbacks = geometry_manual_runtime.callbacks
-geometry_tool_action_runtime = (
-    gui_bootstrap.build_runtime_geometry_tool_action_callbacks_bootstrap(
+geometry_manual_runtime = geometry_manual_workflow.runtime
+geometry_manual_runtime_callbacks = geometry_manual_workflow.callbacks
+geometry_tool_action_workflow = (
+    gui_runtime_geometry_interaction.build_runtime_geometry_tool_action_workflow(
+        bootstrap_module=gui_bootstrap,
         geometry_fit_module=gui_geometry_fit,
         geometry_fit_history_state=geometry_fit_history_state,
         manual_pick_armed=lambda: bool(geometry_runtime_state.manual_pick_armed),
@@ -3075,7 +3089,7 @@ geometry_tool_action_runtime = (
                 message=message,
             )
         ),
-        cancel_manual_pick_session=geometry_manual_runtime_callbacks.cancel_pick_session,
+        cancel_manual_pick_session=geometry_manual_workflow.cancel_pick_session,
         canvas_widget=lambda: canvas.get_tk_widget(),
         push_manual_undo_state=_push_geometry_manual_undo_state,
         clear_pairs_for_current_background=(
@@ -3086,37 +3100,28 @@ geometry_tool_action_runtime = (
         set_progress_text=lambda text: progress_label_geometry.config(text=text),
     )
 )
-geometry_tool_action_runtime_callbacks = geometry_tool_action_runtime.callbacks
+geometry_tool_action_runtime = geometry_tool_action_workflow.runtime
+geometry_tool_action_runtime_callbacks = geometry_tool_action_workflow.callbacks
 _update_geometry_fit_undo_button_state = (
-    geometry_tool_action_runtime_callbacks.update_fit_history_button_state
+    geometry_tool_action_workflow.update_fit_history_button_state
 )
 _update_geometry_manual_pick_button_label = (
-    geometry_tool_action_runtime_callbacks.update_manual_pick_button_label
+    geometry_tool_action_workflow.update_manual_pick_button_label
 )
-_set_geometry_manual_pick_mode = (
-    geometry_tool_action_runtime_callbacks.set_manual_pick_mode
-)
+_set_geometry_manual_pick_mode = geometry_tool_action_workflow.set_manual_pick_mode
 _toggle_geometry_manual_pick_mode = (
-    geometry_tool_action_runtime_callbacks.toggle_manual_pick_mode
+    geometry_tool_action_workflow.toggle_manual_pick_mode
 )
 _clear_current_geometry_manual_pairs = (
-    geometry_tool_action_runtime_callbacks.clear_current_manual_pairs
+    geometry_tool_action_workflow.clear_current_manual_pairs
 )
-_render_current_geometry_manual_pairs = (
-    geometry_manual_runtime_callbacks.render_current_pairs
-)
-_toggle_geometry_manual_selection_at = (
-    geometry_manual_runtime_callbacks.toggle_selection_at
-)
-_place_geometry_manual_selection_at = (
-    geometry_manual_runtime_callbacks.place_selection_at
-)
+_render_current_geometry_manual_pairs = geometry_manual_workflow.render_current_pairs
+_toggle_geometry_manual_selection_at = geometry_manual_workflow.toggle_selection_at
+_place_geometry_manual_selection_at = geometry_manual_workflow.place_selection_at
 _update_geometry_manual_pick_preview = (
-    geometry_manual_runtime_callbacks.update_pick_preview
+    geometry_manual_workflow.update_pick_preview
 )
-_cancel_geometry_manual_pick_session = (
-    geometry_manual_runtime_callbacks.cancel_pick_session
-)
+_cancel_geometry_manual_pick_session = geometry_manual_workflow.cancel_pick_session
 
 integration_range_update_runtime = (
     gui_bootstrap.build_runtime_integration_range_update_bootstrap(
@@ -9572,7 +9577,8 @@ fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_cl
 
 live_geometry_preview_var = tk.BooleanVar(value=False)
 geometry_tool_actions_runtime = (
-    gui_bootstrap.build_runtime_geometry_tool_action_controls_bootstrap(
+    gui_runtime_geometry_interaction.build_runtime_geometry_tool_action_controls_runtime(
+        bootstrap_module=gui_bootstrap,
         views_module=gui_views,
         view_state=geometry_tool_actions_view_state,
         on_undo_fit=_undo_last_geometry_fit,
@@ -9587,15 +9593,13 @@ geometry_tool_actions_runtime = (
         on_clear_manual_pairs=_clear_current_geometry_manual_pairs,
     )
 )
-geometry_tool_actions_runtime.create_controls(
-    parent=app_shell_view_state.fit_actions_frame
-)
-_update_geometry_fit_undo_button_state()
-_update_geometry_manual_pick_button_label()
-_update_geometry_preview_exclude_button_label()
-
-hkl_lookup_controls_runtime.create_controls(
-    parent=app_shell_view_state.fit_actions_frame
+gui_runtime_geometry_interaction.initialize_runtime_geometry_interaction_controls(
+    fit_actions_parent=app_shell_view_state.fit_actions_frame,
+    geometry_tool_actions_runtime=geometry_tool_actions_runtime,
+    hkl_lookup_controls_runtime=hkl_lookup_controls_runtime,
+    update_fit_history_button_state=_update_geometry_fit_undo_button_state,
+    update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
+    update_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
 )
 
 gui_views.create_geometry_overlay_action_controls(
