@@ -65,6 +65,14 @@ class PeakSelectionRuntimeBootstrap:
 
 
 @dataclass(frozen=True)
+class GeometryFitActionRuntimeBootstrap:
+    """Geometry-fit action bindings plus the shared fit-button callback."""
+
+    bindings_factory: Callable[[], Any]
+    callback: Callable[..., Any]
+
+
+@dataclass(frozen=True)
 class HklLookupControlsRuntimeBootstrap:
     """HKL lookup control wiring plus shared refresh/pick-mode callbacks."""
 
@@ -791,6 +799,28 @@ def build_runtime_hkl_lookup_controls_bootstrap(
         create_controls=_create_controls,
         refresh_controls=_refresh_controls,
         set_hkl_pick_mode=_set_hkl_pick_mode,
+    )
+
+
+def build_runtime_geometry_fit_action_bootstrap(
+    *,
+    geometry_fit_module: Any,
+    before_run: Callable[[], None] | None = None,
+    **bindings_kwargs: Any,
+) -> GeometryFitActionRuntimeBootstrap:
+    """Build the live geometry-fit action bindings and fit-button callback."""
+
+    bindings_factory = (
+        geometry_fit_module.make_runtime_geometry_fit_action_bindings_factory(
+            **bindings_kwargs
+        )
+    )
+    return GeometryFitActionRuntimeBootstrap(
+        bindings_factory=bindings_factory,
+        callback=geometry_fit_module.make_runtime_geometry_fit_action_callback(
+            bindings_factory=bindings_factory,
+            before_run=before_run,
+        ),
     )
 
 

@@ -71,6 +71,7 @@
   - Expanded `ra_sim/gui/peak_selection.py` with the simulated peak-overlay cache builder and zero-arg runtime callback helper, leaving `ra_sim/gui/runtime.py` with a bound peak-overlay callback plus the remaining selected-peak call sites.
   - Added `ra_sim/gui/canvas_interactions.py` to own the top-level raw-image canvas event arbitration between manual-geometry placement, preview exclusion, HKL picking, and integration-range dragging, leaving `ra_sim/gui/runtime.py` with one bound canvas callback bundle plus thin event-hook wiring.
   - Moved the runtime binding/callback bootstrap assembly for structure-factor pruning, Bragg-Qr manager workflow, Qr-cylinder overlay, selected-peak workflow, integration-range dragging, canvas interactions, background workflow, and geometry Q-group workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/bootstrap.py`, leaving `runtime.py` with local value-source/config builders plus the bound bundle variables used by the live call sites.
+  - Moved the geometry-fit action binding/callback bootstrap out of `ra_sim/gui/runtime.py` into `ra_sim/gui/bootstrap.py`, leaving `runtime.py` with one bound geometry-fit action runtime bootstrap value plus the live fit-button config call site.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.

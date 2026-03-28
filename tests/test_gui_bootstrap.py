@@ -206,6 +206,39 @@ def test_build_runtime_bragg_qr_bootstrap_delegates_callbacks() -> None:
     ]
 
 
+def test_build_runtime_geometry_fit_action_bootstrap_delegates_callbacks() -> None:
+    calls: list[tuple[object, object]] = []
+
+    before_run = lambda: None
+    module = SimpleNamespace(
+        make_runtime_geometry_fit_action_bindings_factory=(
+            lambda **kwargs: calls.append(("bindings", kwargs)) or "fit-bindings"
+        ),
+        make_runtime_geometry_fit_action_callback=(
+            lambda **kwargs: calls.append(("callback", kwargs)) or "fit-callback"
+        ),
+    )
+
+    bundle = bootstrap.build_runtime_geometry_fit_action_bootstrap(
+        geometry_fit_module=module,
+        before_run=before_run,
+        live_values="value-callbacks",
+    )
+
+    assert bundle.bindings_factory == "fit-bindings"
+    assert bundle.callback == "fit-callback"
+    assert calls == [
+        ("bindings", {"live_values": "value-callbacks"}),
+        (
+            "callback",
+            {
+                "bindings_factory": "fit-bindings",
+                "before_run": before_run,
+            },
+        ),
+    ]
+
+
 def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> None:
     peak_calls: list[tuple[object, ...]] = []
     peak_module = SimpleNamespace(

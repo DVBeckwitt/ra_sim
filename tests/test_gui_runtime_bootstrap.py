@@ -194,6 +194,7 @@ def test_runtime_geometry_fit_action_uses_factory_helpers() -> None:
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
 
     helper_calls: dict[str, int] = {
+        "build_runtime_geometry_fit_action_bootstrap": 0,
         "make_runtime_geometry_fit_action_bindings_factory": 0,
         "make_runtime_geometry_fit_action_callback": 0,
         "build_runtime_geometry_fit_action_bindings": 0,
@@ -209,7 +210,41 @@ def test_runtime_geometry_fit_action_uses_factory_helpers() -> None:
         if func.attr in helper_calls:
             helper_calls[func.attr] += 1
 
-    assert helper_calls["make_runtime_geometry_fit_action_bindings_factory"] == 1
-    assert helper_calls["make_runtime_geometry_fit_action_callback"] == 1
+    assert helper_calls["build_runtime_geometry_fit_action_bootstrap"] == 1
+    assert helper_calls["make_runtime_geometry_fit_action_bindings_factory"] == 0
+    assert helper_calls["make_runtime_geometry_fit_action_callback"] == 0
     assert helper_calls["build_runtime_geometry_fit_action_bindings"] == 0
     assert helper_calls["run_runtime_geometry_fit_action"] == 0
+
+
+def test_runtime_geometry_fit_action_bootstrap_is_built_after_live_value_setup() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    assignment_lines: dict[str, int] = {}
+    bootstrap_use_line = 0
+
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in {
+                "theta_initial_var",
+                "_geometry_fit_runtime_value_callbacks",
+                "_geometry_fit_var_map",
+            }:
+                assignment_lines[target.id] = int(node.lineno)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "build_runtime_geometry_fit_action_bootstrap":
+            bootstrap_use_line = int(node.lineno)
+
+    assert bootstrap_use_line > 0
+    assert assignment_lines["theta_initial_var"] < bootstrap_use_line
+    assert assignment_lines["_geometry_fit_runtime_value_callbacks"] < bootstrap_use_line
+    assert assignment_lines["_geometry_fit_var_map"] < bootstrap_use_line

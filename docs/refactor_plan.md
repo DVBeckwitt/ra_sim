@@ -32,7 +32,10 @@ geometry-fit manual-pair action binding assembly now also delegates through
 `ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, the
 top-level geometry-fit action callback now also resolves through a shared live
 bindings factory and zero-arg helper in `ra_sim.gui.geometry_fit` instead of
-being rebuilt inline in `runtime.py`, the
+being rebuilt inline in `runtime.py`, the runtime assembly of that geometry-fit
+action bootstrap now also flows through one shared helper in
+`ra_sim.gui.bootstrap` instead of being manually staged inline in
+`runtime.py`, the
 HKL lookup control surface plus its shared Bragg-Qr open action now also boot
 through one shared helper in `ra_sim.gui.bootstrap` instead of being wired
 directly in `runtime.py`, and the main remaining
@@ -110,6 +113,11 @@ not `main.py` or `mosaic_profiles.py`.
     helper in `ra_sim.gui.bootstrap`.
   - `runtime.py` no longer wires that control cluster directly or keeps a
     standalone Bragg-Qr open-control alias.
+- Geometry-fit action bootstrap cleanup has advanced further.
+  - The live geometry-fit action binding factory and fit-button callback now
+    assemble through one shared helper in `ra_sim.gui.bootstrap`.
+  - `runtime.py` no longer assembles that live geometry-fit action bootstrap
+    inline.
 - Integration-range drag bootstrap cleanup has advanced further.
   - The drag-selection rectangle, integration-region rectangle, live
     integration-region refresh callback, and runtime drag callback bundle now

@@ -429,8 +429,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     failure/status path
   - `ra_sim.gui.geometry_fit` now also owns the live action-bindings factory
     and zero-arg action callback helper used by the runtime fit button
-  - `ra_sim.gui.runtime` now keeps only the remaining Tk-side control wiring
-    around the extracted helper
+  - the geometry-fit action binding/callback bootstrap used by the live fit
+    button now also flows through one shared helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` now keeps one bound geometry-fit action bootstrap
+    value plus the remaining Tk-side control wiring around the extracted
+    helper
 - Background-file workflow extraction has also advanced:
   - background-file state transition, file-dialog initial-dir selection,
     background status refresh, and the post-load/post-switch redraw/reset
@@ -485,8 +488,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - Runtime callback/bootstrap extraction has also advanced:
   - assembly of the runtime binding/callback bundles for structure-factor
     pruning, Bragg-Qr manager workflow, Qr-cylinder overlay, selected-peak
-    workflow, integration-range dragging, canvas interactions, background
-    workflow, and the geometry Q-group workflow now lives in
+    workflow, geometry-fit action workflow, integration-range dragging,
+    canvas interactions, background workflow, and the geometry Q-group
+    workflow now lives in
     `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` now keeps the live value-source/config factories for
     those workflows plus the bound bundle variables consumed by the remaining
