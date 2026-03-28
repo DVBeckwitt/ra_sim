@@ -95,6 +95,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     exclude-mode toggling, preview-exclusion point toggling, exclusion
     clearing, and the live-preview checkbox action now also lives in
     `ra_sim.gui.geometry_q_group_manager`
+  - the runtime live-preview enabled/render helpers now also live in
+    `ra_sim.gui.geometry_q_group_manager`
   - `ra_sim.gui.runtime` now delegates those paths through bound callbacks and
     thin wrappers
 - Bragg Qr manager migration has also started:

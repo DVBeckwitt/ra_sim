@@ -364,6 +364,9 @@ not `main.py` or `mosaic_profiles.py`.
     bundle entries for preview-exclusion window open, preview-exclude-mode
     toggling, preview-exclusion point toggling, exclusion clearing, and the
     live-preview checkbox action flow.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the runtime live-
+    preview enabled/render helpers plus the callback-bundle entries that
+    expose those bound redraw/status paths.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions.

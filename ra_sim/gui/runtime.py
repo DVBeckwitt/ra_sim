@@ -7348,46 +7348,6 @@ def _build_geometry_fit_runtime_config(
         parameter_domains,
     )
 
-
-def _live_geometry_preview_enabled() -> bool:
-    """Return whether live auto-match preview is enabled."""
-
-    try:
-        return bool(live_geometry_preview_var.get())
-    except Exception:
-        return False
-
-
-def _draw_live_geometry_preview_overlay(
-    matched_pairs: Sequence[dict[str, object]] | None,
-    *,
-    max_display_markers: int = 120,
-) -> None:
-    """Draw the current live auto-match preview without disturbing fit markers."""
-    gui_overlays.draw_live_geometry_preview_overlay(
-        ax,
-        matched_pairs,
-        geometry_preview_artists=geometry_runtime_state.preview_artists,
-        clear_geometry_preview_artists=_clear_geometry_preview_artists,
-        draw_idle=canvas.draw_idle,
-        normalize_hkl_key=_normalize_hkl_key,
-        live_preview_match_is_excluded=_live_preview_match_is_excluded,
-        max_display_markers=max_display_markers,
-    )
-
-
-def _render_live_geometry_preview_state(*, update_status: bool = True) -> bool:
-    """Redraw the live preview from cached state, applying exclusions."""
-
-    return gui_geometry_q_group_manager.render_live_geometry_preview_overlay_state(
-        preview_state=geometry_preview_state,
-        draw_live_geometry_preview_overlay=_draw_live_geometry_preview_overlay,
-        filter_live_preview_matches=_filter_live_preview_matches,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        update_status=update_status,
-    )
-
-
 def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     """Recompute and redraw the live auto-match overlay from the current state."""
 
@@ -7588,7 +7548,11 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     build_entries_snapshot=_build_geometry_q_group_entries,
     invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
     update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
-    live_geometry_preview_enabled=_live_geometry_preview_enabled,
+    live_geometry_preview_enabled=lambda: (
+        bool(live_geometry_preview_var.get())
+        if "live_geometry_preview_var" in globals()
+        else False
+    ),
     refresh_live_geometry_preview=(
         lambda: _refresh_live_geometry_preview(update_status=True)
     ),
@@ -7596,7 +7560,10 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     live_preview_match_key=_live_preview_match_key,
     live_preview_match_hkl=_live_preview_match_hkl,
     render_live_geometry_preview_state=(
-        lambda: _render_live_geometry_preview_state(update_status=True)
+        lambda: gui_geometry_q_group_manager.render_runtime_live_geometry_preview_state(
+            geometry_q_group_runtime_bindings_factory(),
+            update_status=True,
+        )
     ),
     clear_geometry_preview_artists=_clear_geometry_preview_artists,
     preview_toggle_max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
@@ -7604,6 +7571,12 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     has_cached_hit_tables_factory=lambda: (
         simulation_runtime_state.stored_max_positions_local is not None
     ),
+    axis=ax,
+    geometry_preview_artists=geometry_runtime_state.preview_artists,
+    draw_idle_factory=lambda: canvas.draw_idle,
+    normalize_hkl_key=_normalize_hkl_key,
+    live_preview_match_is_excluded=_live_preview_match_is_excluded,
+    filter_live_preview_matches=_filter_live_preview_matches,
     refresh_live_geometry_preview_quiet=(
         lambda: _refresh_live_geometry_preview(update_status=False)
     ),
@@ -7628,6 +7601,10 @@ geometry_q_group_runtime_bindings_factory = (
     geometry_q_group_runtime.bindings_factory
 )
 geometry_q_group_runtime_callbacks = geometry_q_group_runtime.callbacks
+_live_geometry_preview_enabled = geometry_q_group_runtime_callbacks.live_preview_enabled
+_render_live_geometry_preview_state = (
+    geometry_q_group_runtime_callbacks.render_live_preview_state
+)
 _set_geometry_preview_exclude_mode = (
     geometry_q_group_runtime_callbacks.set_preview_exclude_mode
 )

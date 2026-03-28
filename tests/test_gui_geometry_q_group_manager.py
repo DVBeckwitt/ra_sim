@@ -1013,6 +1013,64 @@ def test_geometry_q_group_manager_live_preview_config_overlay_and_render_helpers
     assert len(status_messages) == 1
 
 
+def test_geometry_q_group_manager_runtime_live_preview_render_helpers(
+    monkeypatch,
+) -> None:
+    draw_calls = []
+    status_messages = []
+    preview_state = state.GeometryPreviewState()
+    preview_state.overlay.pairs = [{"hkl": (1, 0, 0), "x": 1.0, "y": 2.0}]
+    preview_state.overlay.simulated_count = 1
+    preview_state.overlay.min_matches = 1
+    preview_state.overlay.max_display_markers = 7
+
+    monkeypatch.setattr(
+        geometry_q_group_manager.gui_overlays,
+        "draw_live_geometry_preview_overlay",
+        lambda axis, pairs, **kwargs: draw_calls.append((axis, list(pairs), kwargs)),
+    )
+
+    bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=preview_state,
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        axis="axis",
+        geometry_preview_artists=[],
+        draw_idle=lambda: None,
+        normalize_hkl_key=lambda value: tuple(value) if isinstance(value, tuple) else None,
+        live_preview_match_is_excluded=lambda _entry: False,
+        filter_live_preview_matches=lambda pairs: (list(pairs), 0),
+        set_status_text=lambda text: status_messages.append(text),
+    )
+
+    assert geometry_q_group_manager.runtime_live_geometry_preview_enabled(bindings) is True
+    geometry_q_group_manager.draw_runtime_live_geometry_preview_overlay(
+        bindings,
+        [{"hkl": (2, 0, 0), "x": 3.0, "y": 4.0}],
+        max_display_markers=9,
+    )
+    assert (
+        geometry_q_group_manager.render_runtime_live_geometry_preview_state(
+            bindings,
+            update_status=True,
+        )
+        is True
+    )
+
+    assert draw_calls[0][0] == "axis"
+    assert draw_calls[0][1] == [{"hkl": (2, 0, 0), "x": 3.0, "y": 4.0}]
+    assert draw_calls[0][2]["max_display_markers"] == 9
+    assert draw_calls[1][1] == preview_state.overlay.pairs
+    assert draw_calls[1][2]["max_display_markers"] == 7
+    assert "Live auto-match preview: 1/1 active peaks" in status_messages[0]
+
+
 def test_refresh_geometry_q_group_window_uses_cached_entries_and_view_helpers(
     monkeypatch,
 ) -> None:
@@ -1832,6 +1890,19 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
             True,
         )[-1],
     )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "runtime_live_geometry_preview_enabled",
+        lambda bindings: calls.append(("preview-enabled", bindings)) or False,
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "render_runtime_live_geometry_preview_state",
+        lambda bindings, *, update_status=True: (
+            calls.append(("render-preview", bindings, update_status)),
+            True,
+        )[-1],
+    )
 
     def build_bindings():
         versions["count"] += 1
@@ -1861,6 +1932,8 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
     callbacks.clear_preview_exclusions()
     assert callbacks.toggle_preview_exclusion_at(1.5, 2.5) is False
     assert callbacks.toggle_live_preview() is True
+    assert callbacks.live_preview_enabled() is False
+    assert callbacks.render_live_preview_state(update_status=False) is True
 
     assert calls == [
         ("status", "bindings-1", entries),
@@ -1878,4 +1951,6 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
         ("clear-preview", "bindings-13"),
         ("toggle-preview", "bindings-14", 1.5, 2.5),
         ("live-toggle", "bindings-15", "root-window"),
+        ("preview-enabled", "bindings-16"),
+        ("render-preview", "bindings-17", False),
     ]

@@ -15,6 +15,7 @@ import numpy as np
 from . import controllers as gui_controllers
 from . import manual_geometry as gui_manual_geometry
 from . import geometry_overlay as gui_geometry_overlay
+from . import overlays as gui_overlays
 from . import views as gui_views
 
 
@@ -43,6 +44,17 @@ class GeometryQGroupRuntimeBindings:
     preview_toggle_max_distance_px: float = 20.0
     update_running: object | None = None
     has_cached_hit_tables: object | None = None
+    axis: object | None = None
+    geometry_preview_artists: list[object] | None = None
+    draw_idle: Callable[[], None] | None = None
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] | None = None
+    live_preview_match_is_excluded: (
+        Callable[[dict[str, object] | None], bool] | None
+    ) = None
+    filter_live_preview_matches: (
+        Callable[[Sequence[dict[str, object]] | None], tuple[list[dict[str, object]], int]]
+        | None
+    ) = None
     build_entries_snapshot: Callable[[], Sequence[dict[str, object]] | None] | None = None
     refresh_live_geometry_preview_quiet: Callable[[], None] | None = None
     clear_last_simulation_signature: Callable[[], None] | None = None
@@ -72,6 +84,8 @@ class GeometryQGroupRuntimeCallbacks:
     clear_preview_exclusions: Callable[[], None]
     toggle_preview_exclusion_at: Callable[[float, float], bool]
     toggle_live_preview: Callable[[], bool]
+    live_preview_enabled: Callable[[], bool]
+    render_live_preview_state: Callable[..., bool]
 
 
 @dataclass(frozen=True)
@@ -2097,6 +2111,74 @@ def render_live_geometry_preview_overlay_state(
     return bool(list(active_pairs))
 
 
+def runtime_live_geometry_preview_enabled(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> bool:
+    """Return whether the runtime live-preview checkbox is currently enabled."""
+
+    try:
+        return bool(bindings.live_geometry_preview_enabled())
+    except Exception:
+        return False
+
+
+def draw_runtime_live_geometry_preview_overlay(
+    bindings: GeometryQGroupRuntimeBindings,
+    matched_pairs: Sequence[dict[str, object]] | None,
+    *,
+    max_display_markers: int = 120,
+) -> None:
+    """Draw the runtime live-preview overlay using the bound axis/artists."""
+
+    if bindings.axis is None:
+        return
+    clear_geometry_preview_artists = (
+        bindings.clear_geometry_preview_artists or (lambda: None)
+    )
+    draw_idle = bindings.draw_idle or (lambda: None)
+    normalize_hkl_key = bindings.normalize_hkl_key or (lambda _value: None)
+    live_preview_match_is_excluded = (
+        bindings.live_preview_match_is_excluded or (lambda _entry: False)
+    )
+    gui_overlays.draw_live_geometry_preview_overlay(
+        bindings.axis,
+        matched_pairs,
+        geometry_preview_artists=(
+            bindings.geometry_preview_artists
+            if bindings.geometry_preview_artists is not None
+            else []
+        ),
+        clear_geometry_preview_artists=clear_geometry_preview_artists,
+        draw_idle=draw_idle,
+        normalize_hkl_key=normalize_hkl_key,
+        live_preview_match_is_excluded=live_preview_match_is_excluded,
+        max_display_markers=max_display_markers,
+    )
+
+
+def render_runtime_live_geometry_preview_state(
+    bindings: GeometryQGroupRuntimeBindings,
+    *,
+    update_status: bool = True,
+) -> bool:
+    """Redraw the cached runtime live-preview overlay from bound state."""
+
+    filter_live_preview_matches = (
+        bindings.filter_live_preview_matches or (lambda pairs: (list(pairs or []), 0))
+    )
+    return render_live_geometry_preview_overlay_state(
+        preview_state=bindings.preview_state,
+        draw_live_geometry_preview_overlay=lambda pairs, *, max_display_markers: draw_runtime_live_geometry_preview_overlay(
+            bindings,
+            pairs,
+            max_display_markers=max_display_markers,
+        ),
+        filter_live_preview_matches=filter_live_preview_matches,
+        set_status_text=bindings.set_status_text,
+        update_status=update_status,
+    )
+
+
 def distance_point_to_segment_sq(
     px: float,
     py: float,
@@ -2262,6 +2344,17 @@ def make_runtime_geometry_q_group_bindings_factory(
     preview_toggle_max_distance_px: float = 20.0,
     update_running_factory: object | None = None,
     has_cached_hit_tables_factory: object | None = None,
+    axis: object | None = None,
+    geometry_preview_artists: list[object] | None = None,
+    draw_idle_factory: object | None = None,
+    normalize_hkl_key: Callable[[object], tuple[int, int, int] | None] | None = None,
+    live_preview_match_is_excluded: (
+        Callable[[dict[str, object] | None], bool] | None
+    ) = None,
+    filter_live_preview_matches: (
+        Callable[[Sequence[dict[str, object]] | None], tuple[list[dict[str, object]], int]]
+        | None
+    ) = None,
     refresh_live_geometry_preview_quiet: Callable[[], None] | None = None,
     clear_last_simulation_signature: Callable[[], None] | None = None,
     schedule_update_factory: object | None = None,
@@ -2295,6 +2388,12 @@ def make_runtime_geometry_q_group_bindings_factory(
             ),
             update_running=_resolve_runtime_value(update_running_factory),
             has_cached_hit_tables=_resolve_runtime_value(has_cached_hit_tables_factory),
+            axis=axis,
+            geometry_preview_artists=geometry_preview_artists,
+            draw_idle=_resolve_runtime_value(draw_idle_factory),
+            normalize_hkl_key=normalize_hkl_key,
+            live_preview_match_is_excluded=live_preview_match_is_excluded,
+            filter_live_preview_matches=filter_live_preview_matches,
             refresh_live_geometry_preview_quiet=refresh_live_geometry_preview_quiet,
             clear_last_simulation_signature=clear_last_simulation_signature,
             schedule_update=_resolve_runtime_value(schedule_update_factory),
@@ -2727,6 +2826,13 @@ def make_runtime_geometry_q_group_callbacks(
             bindings_factory(),
             root=root,
             bindings_factory=bindings_factory,
+        ),
+        live_preview_enabled=lambda: runtime_live_geometry_preview_enabled(
+            bindings_factory()
+        ),
+        render_live_preview_state=lambda update_status=True: render_runtime_live_geometry_preview_state(
+            bindings_factory(),
+            update_status=update_status,
         ),
     )
 
