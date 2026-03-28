@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import os
+from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -2514,3 +2517,388 @@ def geometry_manual_pair_entry_from_jsonable(
         normalize_hkl_key=normalize_hkl_key,
         sigma_floor_px=sigma_floor_px,
     )
+
+
+def normalized_background_path_for_compare(raw_path: object) -> str | None:
+    """Return a normalized path string suitable for background matching."""
+
+    try:
+        candidate = Path(str(raw_path)).expanduser()
+    except Exception:
+        return None
+    if not str(candidate):
+        return None
+    return os.path.normcase(os.path.normpath(str(candidate)))
+
+
+def geometry_manual_pairs_export_rows(
+    *,
+    pairs_by_background: Mapping[object, Sequence[dict[str, object]]] | None,
+    osc_files: Sequence[object],
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    pair_entry_to_jsonable: Callable[
+        [dict[str, object] | None],
+        dict[str, object] | None,
+    ] = geometry_manual_pair_entry_to_jsonable,
+) -> list[dict[str, object]]:
+    """Return saved manual placements as portable per-background rows."""
+
+    background_indices: set[int] = set()
+    raw_keys = (
+        pairs_by_background.keys()
+        if isinstance(pairs_by_background, Mapping)
+        else ()
+    )
+    for raw_idx in raw_keys:
+        try:
+            background_indices.add(int(raw_idx))
+        except Exception:
+            continue
+
+    rows: list[dict[str, object]] = []
+    for background_idx in sorted(background_indices):
+        entries = [
+            serialized
+            for serialized in (
+                pair_entry_to_jsonable(entry)
+                for entry in pairs_for_index(int(background_idx))
+            )
+            if serialized is not None
+        ]
+        if not entries:
+            continue
+
+        if 0 <= int(background_idx) < len(osc_files):
+            background_path = str(Path(str(osc_files[background_idx])).expanduser())
+            background_name = Path(str(osc_files[background_idx])).name
+        else:
+            background_path = None
+            background_name = f"background_{int(background_idx) + 1}"
+
+        rows.append(
+            {
+                "background_index": int(background_idx),
+                "background_path": background_path,
+                "background_name": background_name,
+                "entries": entries,
+            }
+        )
+    return rows
+
+
+def collect_geometry_manual_pairs_snapshot(
+    *,
+    osc_files: Sequence[object],
+    current_background_index: object,
+    manual_pair_rows: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    """Return a portable snapshot of saved manual geometry placements."""
+
+    try:
+        background_index = int(current_background_index)
+    except Exception:
+        background_index = 0
+
+    return {
+        "background_files": [
+            str(Path(str(path)).expanduser())
+            for path in osc_files
+        ],
+        "current_background_index": int(background_index),
+        "manual_pairs": list(manual_pair_rows),
+    }
+
+
+def apply_geometry_manual_pairs_rows(
+    rows: Sequence[object] | None,
+    *,
+    osc_files: Sequence[object],
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    pair_entry_from_jsonable: Callable[
+        [dict[str, object] | None],
+        dict[str, object] | None,
+    ] = geometry_manual_pair_entry_from_jsonable,
+    replace_pairs_by_background: Callable[[dict[int, list[dict[str, object]]]], object],
+    clear_preview_artists: Callable[..., None],
+    cancel_pick_session: Callable[..., None],
+    invalidate_pick_cache: Callable[[], None],
+    clear_manual_undo_stack: Callable[[], None],
+    clear_geometry_fit_undo_stack: Callable[[], None],
+    render_current_pairs: Callable[..., None],
+    update_button_label: Callable[[], None],
+    refresh_status: Callable[[], None],
+    replace_existing: bool = True,
+) -> tuple[int, int, list[str]]:
+    """Import saved manual geometry pairs onto the currently loaded backgrounds."""
+
+    exact_path_lookup: dict[str, int] = {}
+    name_lookup: defaultdict[str, list[int]] = defaultdict(list)
+    for idx, raw_path in enumerate(osc_files):
+        normalized_path = normalized_background_path_for_compare(raw_path)
+        if normalized_path is not None:
+            exact_path_lookup[normalized_path] = int(idx)
+        name_lookup[Path(str(raw_path)).name].append(int(idx))
+
+    imported_map: dict[int, list[dict[str, object]]]
+    if replace_existing:
+        imported_map = {}
+    else:
+        imported_map = {
+            int(idx): list(pairs_for_index(int(idx)))
+            for idx in range(len(osc_files))
+            if pairs_for_index(int(idx))
+        }
+
+    warnings: list[str] = []
+    matched_backgrounds: set[int] = set()
+    pair_count = 0
+    for raw_row in rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+
+        target_index = None
+        normalized_path = normalized_background_path_for_compare(
+            raw_row.get("background_path")
+        )
+        if normalized_path is not None:
+            target_index = exact_path_lookup.get(normalized_path)
+        if target_index is None:
+            background_name = raw_row.get("background_name")
+            if background_name is not None:
+                matches = name_lookup.get(Path(str(background_name)).name, [])
+                if len(matches) == 1:
+                    target_index = int(matches[0])
+        if target_index is None:
+            try:
+                fallback_index = int(raw_row.get("background_index"))
+            except Exception:
+                fallback_index = None
+            if (
+                fallback_index is not None
+                and 0 <= fallback_index < len(osc_files)
+            ):
+                target_index = int(fallback_index)
+
+        if target_index is None:
+            warnings.append(
+                f"Skipped placements for '{raw_row.get('background_name', 'unknown background')}'."
+            )
+            continue
+
+        imported_entries = [
+            restored
+            for restored in (
+                pair_entry_from_jsonable(entry)
+                for entry in raw_row.get("entries", [])
+            )
+            if restored is not None
+        ]
+        imported_map[int(target_index)] = imported_entries
+        if imported_entries:
+            matched_backgrounds.add(int(target_index))
+            pair_count += len(imported_entries)
+
+    replace_pairs_by_background(
+        {
+            int(idx): list(entries)
+            for idx, entries in imported_map.items()
+            if entries
+        }
+    )
+    clear_preview_artists(redraw=False)
+    cancel_pick_session(restore_view=True, redraw=False)
+    invalidate_pick_cache()
+    clear_manual_undo_stack()
+    clear_geometry_fit_undo_stack()
+    render_current_pairs(update_status=False)
+    update_button_label()
+    refresh_status()
+    return int(len(matched_backgrounds)), int(pair_count), warnings
+
+
+def apply_geometry_manual_pairs_snapshot(
+    snapshot: Mapping[str, object] | dict[str, object],
+    *,
+    allow_background_reload: bool = True,
+    osc_files: Sequence[object],
+    load_background_files: Callable[[Sequence[str], int], None] | None = None,
+    apply_pairs_rows: Callable[..., tuple[int, int, list[str]]],
+    schedule_update: Callable[[], None] | None = None,
+) -> str:
+    """Restore saved manual geometry placements from a snapshot dictionary."""
+
+    warnings: list[str] = []
+
+    if allow_background_reload:
+        raw_background_paths = snapshot.get("background_files", [])
+        background_paths: list[str] = []
+        if isinstance(raw_background_paths, list):
+            for raw_path in raw_background_paths:
+                if raw_path is None:
+                    continue
+                background_paths.append(str(Path(str(raw_path)).expanduser()))
+
+        if background_paths:
+            saved_paths_norm = [
+                path_norm
+                for path_norm in (
+                    normalized_background_path_for_compare(path)
+                    for path in background_paths
+                )
+                if path_norm is not None
+            ]
+            current_paths_norm = [
+                path_norm
+                for path_norm in (
+                    normalized_background_path_for_compare(path)
+                    for path in osc_files
+                )
+                if path_norm is not None
+            ]
+            if saved_paths_norm != current_paths_norm:
+                missing_paths = [
+                    path for path in background_paths if not Path(path).is_file()
+                ]
+                if not missing_paths:
+                    try:
+                        if callable(load_background_files):
+                            load_background_files(
+                                background_paths,
+                                int(snapshot.get("current_background_index", 0)),
+                            )
+                    except Exception as exc:
+                        warnings.append(f"background reload: {exc}")
+                else:
+                    warnings.append(
+                        "saved background files are missing; placements were mapped onto the "
+                        "currently loaded backgrounds where possible"
+                    )
+
+    imported_backgrounds, imported_pairs, import_warnings = apply_pairs_rows(
+        snapshot.get("manual_pairs", []),
+        replace_existing=True,
+    )
+    warnings.extend(import_warnings)
+    if callable(schedule_update):
+        schedule_update()
+
+    message = (
+        f"Imported {imported_pairs} manual placement(s) across {imported_backgrounds} background(s)."
+    )
+    if warnings:
+        message += " Warnings: " + "; ".join(warnings[:4])
+        if len(warnings) > 4:
+            message += f"; +{len(warnings) - 4} more"
+    return message
+
+
+def export_geometry_manual_pairs(
+    *,
+    osc_files: Sequence[object],
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    collect_snapshot: Callable[[], Mapping[str, object] | dict[str, object]],
+    initial_dir: str | Path | None,
+    asksaveasfilename: Callable[..., object],
+    save_file: Callable[..., None],
+    set_status_text: Callable[[str], None] | None = None,
+    stamp_factory: Callable[[], str] | None = None,
+    entrypoint: str = "main.py",
+) -> str | None:
+    """Run the manual-placement export dialog workflow."""
+
+    if not any(pairs_for_index(idx) for idx in range(len(osc_files))):
+        if callable(set_status_text):
+            set_status_text("No saved manual placements are available to export.")
+        return None
+
+    initial_dir_value = (
+        str(Path(initial_dir).expanduser())
+        if initial_dir is not None
+        else str(Path.cwd())
+    )
+    stamp = (
+        str(stamp_factory()).strip()
+        if callable(stamp_factory)
+        else ""
+    )
+    initial_file = "ra_sim_geometry_placements.json"
+    if stamp:
+        initial_file = f"ra_sim_geometry_placements_{stamp}.json"
+
+    file_path = asksaveasfilename(
+        title="Export Geometry Placements",
+        initialdir=initial_dir_value,
+        defaultextension=".json",
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        initialfile=initial_file,
+    )
+    if not file_path:
+        if callable(set_status_text):
+            set_status_text("Geometry placement export canceled.")
+        return None
+
+    try:
+        save_file(
+            file_path,
+            collect_snapshot(),
+            metadata={"entrypoint": str(entrypoint)},
+        )
+    except Exception as exc:
+        if callable(set_status_text):
+            set_status_text(f"Failed to export geometry placements: {exc}")
+        return None
+
+    if callable(set_status_text):
+        set_status_text(f"Saved manual geometry placements to {file_path}")
+    return str(file_path)
+
+
+def import_geometry_manual_pairs(
+    *,
+    initial_dir: str | Path | None,
+    askopenfilename: Callable[..., object],
+    load_file: Callable[[str | Path], Mapping[str, object] | dict[str, object]],
+    apply_snapshot: Callable[..., str],
+    ensure_geometry_fit_caked_view: Callable[[], None] | None = None,
+    set_status_text: Callable[[str], None] | None = None,
+) -> str | None:
+    """Run the manual-placement import dialog workflow."""
+
+    initial_dir_value = (
+        str(Path(initial_dir).expanduser())
+        if initial_dir is not None
+        else str(Path.cwd())
+    )
+    file_path = askopenfilename(
+        title="Import Geometry Placements",
+        initialdir=initial_dir_value,
+        filetypes=[("RA-SIM geometry placements", "*.json"), ("All files", "*.*")],
+    )
+    if not file_path:
+        if callable(set_status_text):
+            set_status_text("Geometry placement import canceled.")
+        return None
+
+    try:
+        payload = load_file(file_path)
+        message = apply_snapshot(
+            payload.get("state", {}),
+            allow_background_reload=True,
+        )
+    except Exception as exc:
+        if callable(set_status_text):
+            set_status_text(f"Failed to import geometry placements: {exc}")
+        return None
+
+    if callable(ensure_geometry_fit_caked_view):
+        try:
+            ensure_geometry_fit_caked_view()
+        except Exception as exc:
+            message += (
+                " Warning: imported placements but could not switch to 2D caked view "
+                f"({exc})."
+            )
+
+    if callable(set_status_text):
+        set_status_text(message)
+    return message

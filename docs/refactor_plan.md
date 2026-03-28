@@ -67,8 +67,9 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.state_io`
 - Manual geometry migration advanced substantially.
   - Selection helpers, caked-coordinate helpers, serialization helpers,
+    placement snapshot/apply helpers, placement export/import dialog workflow,
     preview/session flow, and the remaining manual-pick/Q-group orchestration
-    have been moved into `ra_sim.gui.manual_geometry`.
+    now live in `ra_sim.gui.manual_geometry`.
   - `runtime.py` now delegates those paths through thin wrappers.
 - Manual-geometry state migration has started.
   - Shared manual-geometry state now lives in `ra_sim.gui.state`.
@@ -719,8 +720,9 @@ What is left:
   call sites around the extracted peak-selection helpers and shared bootstrap
   helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining fit-history/manual-pick and preview-action control wiring around
-  the extracted `ra_sim.gui.geometry_fit` helper surface.
+  remaining fit-history/manual-pick mode-clear and preview-action control
+  wiring around the extracted `ra_sim.gui.geometry_fit` and
+  `ra_sim.gui.manual_geometry` helper surfaces.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction helpers.

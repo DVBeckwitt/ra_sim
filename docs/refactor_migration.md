@@ -61,7 +61,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - `ra_sim.gui.app` is now an import-safe entrypoint that lazy-loads
   `ra_sim.gui.runtime`.
 - Manual geometry was split out of the runtime monolith in stages:
-  - pure helpers and serialization moved into `ra_sim.gui.manual_geometry`
+  - pure helpers, serialization, placement snapshot/apply helpers, and the
+    placement export/import dialog workflow moved into
+    `ra_sim.gui.manual_geometry`
   - session/preview/manual-pick orchestration moved into
     `ra_sim.gui.manual_geometry`
   - backing manual-geometry state and undo/session mutations now flow through
@@ -539,8 +541,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   call sites around the extracted peak-selection modules and shared bootstrap
   helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining fit-history/manual-pick and preview-action control wiring around
-  the extracted `ra_sim.gui.geometry_fit` helper surface.
+  remaining fit-history/manual-pick mode-clear and preview-action control
+  wiring around the extracted `ra_sim.gui.geometry_fit` and
+  `ra_sim.gui.manual_geometry` helper surfaces.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction modules.

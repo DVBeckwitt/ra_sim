@@ -488,6 +488,189 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
     assert restored["sigma_px"] == 1.46
 
 
+def test_geometry_manual_pairs_export_rows_include_background_metadata() -> None:
+    rows = mg.geometry_manual_pairs_export_rows(
+        pairs_by_background={1: [{"label": "1,0,0", "x": 2.0, "y": 3.0}]},
+        osc_files=["bg_0.osc", "bg_1.osc"],
+        pairs_for_index=lambda idx: (
+            [{"label": "1,0,0", "x": 2.0, "y": 3.0}]
+            if int(idx) == 1
+            else []
+        ),
+    )
+
+    assert rows == [
+        {
+            "background_index": 1,
+            "background_path": "bg_1.osc",
+            "background_name": "bg_1.osc",
+            "entries": [{"x": 2.0, "y": 3.0, "label": "1,0,0", "hkl": [1, 0, 0]}],
+        }
+    ]
+
+
+def test_collect_geometry_manual_pairs_snapshot_records_loaded_backgrounds() -> None:
+    snapshot = mg.collect_geometry_manual_pairs_snapshot(
+        osc_files=["bg_0.osc", "bg_1.osc"],
+        current_background_index=1,
+        manual_pair_rows=[{"background_index": 1, "entries": []}],
+    )
+
+    assert snapshot == {
+        "background_files": ["bg_0.osc", "bg_1.osc"],
+        "current_background_index": 1,
+        "manual_pairs": [{"background_index": 1, "entries": []}],
+    }
+
+
+def test_apply_geometry_manual_pairs_rows_replaces_state_and_refreshes_callbacks() -> None:
+    calls: list[tuple[str, object]] = []
+    replaced: dict[int, list[dict[str, object]]] = {}
+
+    imported_backgrounds, imported_pairs, warnings = mg.apply_geometry_manual_pairs_rows(
+        [
+            {
+                "background_path": "bg_1.osc",
+                "background_name": "bg_1.osc",
+                "entries": [{"label": "1,0,0", "x": 2.0, "y": 3.0}],
+            }
+        ],
+        osc_files=["bg_0.osc", "bg_1.osc"],
+        pairs_for_index=lambda idx: (
+            [{"label": "keep", "x": 9.0, "y": 10.0}]
+            if int(idx) == 0
+            else []
+        ),
+        replace_pairs_by_background=lambda mapping: replaced.update(mapping),
+        clear_preview_artists=lambda **kwargs: calls.append(("clear", kwargs)),
+        cancel_pick_session=lambda **kwargs: calls.append(("cancel", kwargs)),
+        invalidate_pick_cache=lambda: calls.append(("invalidate", None)),
+        clear_manual_undo_stack=lambda: calls.append(("clear_manual", None)),
+        clear_geometry_fit_undo_stack=lambda: calls.append(("clear_fit", None)),
+        render_current_pairs=lambda **kwargs: calls.append(("render", kwargs)),
+        update_button_label=lambda: calls.append(("button", None)),
+        refresh_status=lambda: calls.append(("refresh", None)),
+    )
+
+    assert (imported_backgrounds, imported_pairs, warnings) == (1, 1, [])
+    assert replaced == {1: [{"label": "1,0,0", "hkl": (1, 0, 0), "x": 2.0, "y": 3.0}]}
+    assert ("clear", {"redraw": False}) in calls
+    assert ("cancel", {"restore_view": True, "redraw": False}) in calls
+    assert ("invalidate", None) in calls
+    assert ("clear_manual", None) in calls
+    assert ("clear_fit", None) in calls
+    assert ("render", {"update_status": False}) in calls
+    assert ("button", None) in calls
+    assert ("refresh", None) in calls
+
+
+def test_apply_geometry_manual_pairs_snapshot_reloads_backgrounds_before_apply(
+    tmp_path,
+) -> None:
+    saved_backgrounds = [tmp_path / "bg_0.osc", tmp_path / "bg_1.osc"]
+    for path in saved_backgrounds:
+        path.write_text("", encoding="utf-8")
+
+    calls: list[tuple[str, object]] = []
+    message = mg.apply_geometry_manual_pairs_snapshot(
+        {
+            "background_files": [str(path) for path in saved_backgrounds],
+            "current_background_index": 1,
+            "manual_pairs": [{"background_index": 1, "entries": []}],
+        },
+        osc_files=["current_0.osc", "current_1.osc"],
+        load_background_files=(
+            lambda paths, index: calls.append(("load", (list(paths), index)))
+        ),
+        apply_pairs_rows=(
+            lambda rows, replace_existing=True: (
+                calls.append(("apply", (list(rows), replace_existing))) or (1, 2, [])
+            )
+        ),
+        schedule_update=lambda: calls.append(("schedule", None)),
+    )
+
+    assert calls[0] == (
+        "load",
+        ([str(path) for path in saved_backgrounds], 1),
+    )
+    assert calls[1] == (
+        "apply",
+        ([{"background_index": 1, "entries": []}], True),
+    )
+    assert calls[2] == ("schedule", None)
+    assert message == "Imported 2 manual placement(s) across 1 background(s)."
+
+
+def test_export_geometry_manual_pairs_runs_dialog_and_save_callback(tmp_path) -> None:
+    statuses: list[str] = []
+    calls: list[tuple[str, object]] = []
+    save_path = tmp_path / "placements.json"
+
+    result = mg.export_geometry_manual_pairs(
+        osc_files=["bg_0.osc"],
+        pairs_for_index=lambda idx: (
+            [{"label": "1,0,0", "x": 1.0, "y": 2.0}]
+            if int(idx) == 0
+            else []
+        ),
+        collect_snapshot=lambda: {"manual_pairs": [{"background_index": 0}]},
+        initial_dir=tmp_path,
+        asksaveasfilename=(
+            lambda **kwargs: calls.append(("dialog", kwargs)) or str(save_path)
+        ),
+        save_file=(
+            lambda path, payload, metadata=None: calls.append(
+                ("save", (path, payload, metadata))
+            )
+        ),
+        set_status_text=statuses.append,
+        stamp_factory=lambda: "20260328_140000",
+    )
+
+    assert result == str(save_path)
+    assert calls[0][0] == "dialog"
+    assert calls[0][1]["initialfile"] == "ra_sim_geometry_placements_20260328_140000.json"
+    assert calls[1] == (
+        "save",
+        (
+            str(save_path),
+            {"manual_pairs": [{"background_index": 0}]},
+            {"entrypoint": "main.py"},
+        ),
+    )
+    assert statuses[-1] == f"Saved manual geometry placements to {save_path}"
+
+
+def test_import_geometry_manual_pairs_loads_snapshot_and_reports_caked_view_warning(
+    tmp_path,
+) -> None:
+    statuses: list[str] = []
+    apply_calls: list[tuple[dict[str, object], bool]] = []
+    open_path = tmp_path / "placements.json"
+
+    result = mg.import_geometry_manual_pairs(
+        initial_dir=tmp_path,
+        askopenfilename=lambda **_kwargs: str(open_path),
+        load_file=lambda _path: {"state": {"manual_pairs": [{"background_index": 0}]}},
+        apply_snapshot=(
+            lambda snapshot, allow_background_reload=True: (
+                apply_calls.append((dict(snapshot), bool(allow_background_reload)))
+                or "Imported placements."
+            )
+        ),
+        ensure_geometry_fit_caked_view=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        set_status_text=statuses.append,
+    )
+
+    assert apply_calls == [({"manual_pairs": [{"background_index": 0}]}, True)]
+    assert result == (
+        "Imported placements. Warning: imported placements but could not switch "
+        "to 2D caked view (boom)."
+    )
+    assert statuses[-1] == result
+
+
 def test_geometry_manual_unassigned_candidates_and_current_pending_candidate() -> None:
     session = {
         "group_key": ("q_group", "primary", 1, 0),
