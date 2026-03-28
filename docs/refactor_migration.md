@@ -375,6 +375,14 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     integration-range dragging now lives in `ra_sim.gui.canvas_interactions`
   - `ra_sim.gui.runtime` now keeps only one bound canvas callback bundle plus
     thin event-hook wiring around that workflow
+- Runtime callback/bootstrap extraction has also advanced:
+  - assembly of the runtime binding/callback bundles for structure-factor
+    pruning, Qr-cylinder overlay, selected-peak workflow, integration-range
+    dragging, canvas interactions, background workflow, and the geometry
+    Q-group workflow now lives in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` now keeps the live value-source/config factories for
+    those workflows plus the bound bundle variables consumed by the remaining
+    call sites
 - Direct tests were added for extracted controller/state behavior.
   - this now includes preview-state controller coverage, Bragg-Qr controller
   coverage, and direct Qr/Qz/workspace/Bragg/hBN/constraints/
@@ -399,29 +407,29 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   extracted structure-model rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining structure-factor-pruning runtime code is now mostly bound
-  callback values plus a few live call sites around the extracted pruning
-  module.
+- The remaining structure-factor-pruning runtime code is now mostly live call
+  sites plus a few local value-source helpers around the extracted pruning
+  module and shared bootstrap wiring.
 - The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
   value plus thin active-entry/render-config value sources and a few
   manager/overlay call sites around the extracted controller/view modules.
-- The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
-  bound factory/callback bundle plus thin fit-preview/cached-hit value
-  sources, live-preview availability/fallback simulation orchestration,
-  image-shape/display-coordinate value plumbing, and a couple of delegated
-  call sites around the extracted manager/view helpers.
+- The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
+  fit-preview/cached-hit value sources, live-preview availability/fallback
+  simulation orchestration, image-shape/display-coordinate value plumbing,
+  and a couple of delegated call sites around the extracted manager/view
+  helpers and shared bootstrap wiring.
 - The remaining Bragg-Qr manager runtime code is now mostly the bound
   factory wiring used by the live filter pipeline and HKL lookup controls
   around the extracted manager helpers.
 - The remaining background runtime code is now mostly one bound callback
-  bundle plus thin status-refresh and control-wiring call sites around the
-  extracted background manager.
+  surface plus thin status-refresh and control-wiring call sites around the
+  extracted background manager and shared bootstrap helpers.
 - The remaining selected-peak runtime code is now mostly thin value-source
   wiring plus a few call sites around the extracted peak-selection and
   canvas-interaction modules.
-- The remaining integration-range drag runtime code is now mostly the
-  bound runtime-factory/canvas wiring plus thin integration-region visual
-  call sites around the extracted drag and canvas-interaction modules.
+- The remaining integration-range drag runtime code is now mostly thin
+  integration-region visual call sites plus the remaining cross-feature event
+  wiring around the extracted drag and canvas-interaction modules.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

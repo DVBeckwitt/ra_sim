@@ -6,10 +6,44 @@ import argparse
 import os
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 
 LAUNCHER_COMMANDS = {"gui", "calibrant"}
+
+
+@dataclass(frozen=True)
+class RuntimeBindingsCallbacksBootstrap:
+    """Zero-arg runtime bindings factory plus one bound callback bundle."""
+
+    bindings_factory: Callable[[], Any]
+    callbacks: Any
+
+
+@dataclass(frozen=True)
+class RuntimeBindingsRefreshToggleBootstrap:
+    """Zero-arg runtime bindings factory plus refresh/toggle callbacks."""
+
+    bindings_factory: Callable[[], Any]
+    refresh: Callable[..., Any]
+    toggle: Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class StructureFactorPruningRuntimeBootstrap:
+    """Runtime pruning bindings plus the derived callback helpers."""
+
+    bindings_factory: Callable[[], Any]
+    current_sf_prune_bias: Callable[[], Any]
+    current_solve_q_values: Callable[[], Any]
+    update_status_label: Callable[[], Any]
+    apply_filters: Callable[..., Any]
+    on_sf_prune_bias_change: Callable[..., Any]
+    on_solve_q_steps_change: Callable[..., Any]
+    on_solve_q_rel_tol_change: Callable[..., Any]
+    set_solve_q_control_states: Callable[[], Any]
+    on_solve_q_mode_change: Callable[..., Any]
 
 
 def extract_bundle_arg(argv: Sequence[str]) -> str | None:
@@ -324,6 +358,191 @@ def resolve_startup_mode(
     if early_mode in {"simulation", "calibrant"}:
         return early_mode
     return "prompt"
+
+
+def build_runtime_structure_factor_pruning_bootstrap(
+    *,
+    structure_factor_pruning_module: Any,
+    uniform_flag: int,
+    adaptive_flag: int,
+    **bindings_kwargs: Any,
+) -> StructureFactorPruningRuntimeBootstrap:
+    """Build the live pruning/solve-q runtime callback surface."""
+
+    bindings_factory = (
+        structure_factor_pruning_module.make_runtime_structure_factor_pruning_bindings_factory(
+            **bindings_kwargs
+        )
+    )
+    return StructureFactorPruningRuntimeBootstrap(
+        bindings_factory=bindings_factory,
+        current_sf_prune_bias=(
+            structure_factor_pruning_module.make_runtime_current_sf_prune_bias_callback(
+                bindings_factory
+            )
+        ),
+        current_solve_q_values=(
+            structure_factor_pruning_module.make_runtime_current_solve_q_values_callback(
+                bindings_factory,
+                uniform_flag=uniform_flag,
+                adaptive_flag=adaptive_flag,
+            )
+        ),
+        update_status_label=(
+            structure_factor_pruning_module.make_runtime_structure_factor_pruning_status_callback(
+                bindings_factory
+            )
+        ),
+        apply_filters=structure_factor_pruning_module.make_runtime_bragg_qr_filter_callback(
+            bindings_factory
+        ),
+        on_sf_prune_bias_change=(
+            structure_factor_pruning_module.make_runtime_sf_prune_bias_change_callback(
+                bindings_factory
+            )
+        ),
+        on_solve_q_steps_change=(
+            structure_factor_pruning_module.make_runtime_solve_q_steps_change_callback(
+                bindings_factory
+            )
+        ),
+        on_solve_q_rel_tol_change=(
+            structure_factor_pruning_module.make_runtime_solve_q_rel_tol_change_callback(
+                bindings_factory
+            )
+        ),
+        set_solve_q_control_states=(
+            structure_factor_pruning_module.make_runtime_solve_q_control_states_callback(
+                bindings_factory
+            )
+        ),
+        on_solve_q_mode_change=(
+            structure_factor_pruning_module.make_runtime_solve_q_mode_change_callback(
+                bindings_factory
+            )
+        ),
+    )
+
+
+def build_runtime_qr_cylinder_overlay_bootstrap(
+    *,
+    qr_cylinder_overlay_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeBindingsRefreshToggleBootstrap:
+    """Build the live Qr-cylinder overlay runtime callback surface."""
+
+    bindings_factory = (
+        qr_cylinder_overlay_module.make_runtime_qr_cylinder_overlay_bindings_factory(
+            **bindings_kwargs
+        )
+    )
+    return RuntimeBindingsRefreshToggleBootstrap(
+        bindings_factory=bindings_factory,
+        refresh=qr_cylinder_overlay_module.make_runtime_qr_cylinder_overlay_refresh_callback(
+            bindings_factory
+        ),
+        toggle=qr_cylinder_overlay_module.make_runtime_qr_cylinder_overlay_toggle_callback(
+            bindings_factory
+        ),
+    )
+
+
+def build_runtime_peak_selection_bootstrap(
+    *,
+    peak_selection_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeBindingsCallbacksBootstrap:
+    """Build the live selected-peak runtime binding/callback bundle."""
+
+    bindings_factory = peak_selection_module.make_runtime_peak_selection_bindings_factory(
+        **bindings_kwargs
+    )
+    return RuntimeBindingsCallbacksBootstrap(
+        bindings_factory=bindings_factory,
+        callbacks=peak_selection_module.make_runtime_peak_selection_callbacks(
+            bindings_factory
+        ),
+    )
+
+
+def build_runtime_integration_range_drag_bootstrap(
+    *,
+    integration_range_drag_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeBindingsCallbacksBootstrap:
+    """Build the live integration-range drag binding/callback bundle."""
+
+    bindings_factory = (
+        integration_range_drag_module.make_runtime_integration_range_drag_bindings_factory(
+            **bindings_kwargs
+        )
+    )
+    return RuntimeBindingsCallbacksBootstrap(
+        bindings_factory=bindings_factory,
+        callbacks=integration_range_drag_module.make_runtime_integration_range_drag_callbacks(
+            bindings_factory
+        ),
+    )
+
+
+def build_runtime_canvas_interaction_bootstrap(
+    *,
+    canvas_interactions_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeBindingsCallbacksBootstrap:
+    """Build the live canvas-interaction binding/callback bundle."""
+
+    bindings_factory = (
+        canvas_interactions_module.make_runtime_canvas_interaction_bindings_factory(
+            **bindings_kwargs
+        )
+    )
+    return RuntimeBindingsCallbacksBootstrap(
+        bindings_factory=bindings_factory,
+        callbacks=canvas_interactions_module.make_runtime_canvas_interaction_callbacks(
+            bindings_factory
+        ),
+    )
+
+
+def build_runtime_background_bootstrap(
+    *,
+    background_manager_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeBindingsCallbacksBootstrap:
+    """Build the live background-manager binding/callback bundle."""
+
+    bindings_factory = background_manager_module.make_runtime_background_bindings_factory(
+        **bindings_kwargs
+    )
+    return RuntimeBindingsCallbacksBootstrap(
+        bindings_factory=bindings_factory,
+        callbacks=background_manager_module.make_runtime_background_callbacks(
+            bindings_factory
+        ),
+    )
+
+
+def build_runtime_geometry_q_group_bootstrap(
+    *,
+    geometry_q_group_manager_module: Any,
+    root: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeBindingsCallbacksBootstrap:
+    """Build the live geometry Q-group binding/callback bundle."""
+
+    bindings_factory = (
+        geometry_q_group_manager_module.make_runtime_geometry_q_group_bindings_factory(
+            **bindings_kwargs
+        )
+    )
+    return RuntimeBindingsCallbacksBootstrap(
+        bindings_factory=bindings_factory,
+        callbacks=geometry_q_group_manager_module.make_runtime_geometry_q_group_callbacks(
+            root=root,
+            bindings_factory=bindings_factory,
+        ),
+    )
 
 
 def early_main_bootstrap(

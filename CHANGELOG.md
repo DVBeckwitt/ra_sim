@@ -59,6 +59,7 @@
   - Expanded `ra_sim/gui/peak_selection.py` to own the selected-peak HKL-pick toggle and raw-image click workflow, the Bragg/Ewald intersection analysis path, the ideal-center probe helper, the selected-peak config builders, and the runtime binding/callback bundle for HKL-pick labels, mode toggles, selected-peak refresh, HKL-control selection, and canvas-click selection, leaving `ra_sim/gui/runtime.py` with live GUI scalar getters plus the bound peak-selection wiring.
   - Expanded `ra_sim/gui/peak_selection.py` with runtime config-factory helpers for canvas-pick, Bragg/Ewald intersection, and ideal-center probe setup, leaving `ra_sim/gui/runtime.py` with thin selected-peak value-source wiring around the bound runtime callbacks.
   - Added `ra_sim/gui/canvas_interactions.py` to own the top-level raw-image canvas event arbitration between manual-geometry placement, preview exclusion, HKL picking, and integration-range dragging, leaving `ra_sim/gui/runtime.py` with one bound canvas callback bundle plus thin event-hook wiring.
+  - Moved the runtime binding/callback bootstrap assembly for structure-factor pruning, Qr-cylinder overlay, selected-peak workflow, integration-range dragging, canvas interactions, background workflow, and geometry Q-group workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/bootstrap.py`, leaving `runtime.py` with local value-source/config builders plus the bound bundle variables used by the live call sites.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
@@ -78,6 +79,8 @@
   - Extended `tests/test_gui_controllers.py` with Bragg-Qr manager entry/L-value/list-model coverage.
   - Extended `tests/test_gui_bragg_qr_manager.py` with direct coverage for the extracted Bragg-Qr runtime value helpers, overlay-entry derivation, zero-arg binding/callback factories, runtime-binding, action, and window-lifecycle helpers.
   - Added `tests/test_gui_qr_cylinder_overlay.py` for the extracted analytic Qr-cylinder overlay config, signature, detector/caked path-construction helpers, and the live runtime overlay refresh/toggle workflow.
+  - Extended `tests/test_gui_bootstrap.py` with direct coverage for the extracted runtime callback/bootstrap helper surfaces.
+  - Added `tests/test_gui_runtime_bootstrap.py` to guard import-time ordering of the pruning and HKL-pick bootstrap constants used by `ra_sim/gui/runtime.py`.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted geometry-fit Qr/Qz selector runtime binding/callback bundle, propagated-hit/group-metadata/entry-aggregation/simulated-peak helpers, and the snapshot replacement/capture and preview-exclusion runtime helpers in addition to the side-effect and dialog workflow helpers.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted live-preview auto-match config, cached overlay-state/status rendering, and preview-exclusion clear/toggle helpers.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted live-preview enable/disable action helper.

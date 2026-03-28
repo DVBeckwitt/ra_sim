@@ -14,15 +14,17 @@ high-level migration summary; this file is the working plan.
 
 ## Current Position
 
-As of 2026-03-26, the refactor has made real progress. The legacy root-script
+As of 2026-03-27, the refactor has made real progress. The legacy root-script
 problem is largely solved, the last broad GUI runtime-state extraction pass has
 landed, the structure-model / diffuse-HT rebuild workflow plus the primary-CIF
 reload state transition have moved into an extracted helper module, the shared
 canvas click/drag arbitration now also lives in an extracted helper module, the
 live-preview overlay status/config plus preview-exclusion clear/toggle workflow
-now also lives in the extracted geometry Q-group manager module, and the main
-remaining cleanup target is now the residual workflow/orchestration logic still
-inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
+now also lives in the extracted geometry Q-group manager module, the runtime
+binding/callback bootstrap for the extracted GUI workflows now also lives in
+`ra_sim.gui.bootstrap`, and the main remaining cleanup target is now the
+residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
+not `main.py` or `mosaic_profiles.py`.
 
 ### What Is Already Done
 
@@ -403,6 +405,14 @@ inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
     exclusion, HKL picking, and integration-range dragging.
   - `ra_sim.gui.runtime` now keeps only one bound canvas callback bundle plus
     thin event-hook wiring around that workflow.
+- Runtime callback/bootstrap extraction has advanced.
+  - `ra_sim.gui.bootstrap` now owns the assembly of the runtime binding/
+    callback bundles for structure-factor pruning, Qr-cylinder overlay,
+    selected-peak workflow, integration-range dragging, canvas interactions,
+    background workflow, and the geometry Q-group workflow.
+  - `ra_sim.gui.runtime` now keeps the live value-source/config factories for
+    those workflows plus the bound bundle variables consumed by the remaining
+    call sites.
 - Several tests were moved off monolith-coupled runtime behavior and onto
   extracted modules.
 
@@ -562,29 +572,29 @@ What is left:
   extraction or the structure-model / diffuse-HT rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining structure-factor-pruning runtime code is now mostly bound
-  callback values plus a few live call sites around the extracted pruning
-  module.
+- The remaining structure-factor-pruning runtime code is now mostly live call
+  sites plus a few local value-source helpers around the extracted pruning
+  module and shared bootstrap wiring.
 - The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
   value plus thin active-entry/render-config value sources and a few
   manager/overlay call sites around the extracted controller/view modules.
 - The remaining Bragg-Qr manager runtime code is now mostly the bound
   factory wiring used by the live filter pipeline and HKL lookup controls
   around the extracted manager helpers.
-- The remaining geometry-fit Qr/Qz selector runtime code is now mostly one
-  bound factory/callback bundle plus thin fit-preview/cached-hit value
-  sources, live-preview availability/fallback simulation orchestration,
-  image-shape/display-coordinate value plumbing, and a couple of delegated
-  call sites around the extracted manager/view helpers.
+- The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
+  fit-preview/cached-hit value sources, live-preview availability/fallback
+  simulation orchestration, image-shape/display-coordinate value plumbing, and
+  a couple of delegated call sites around the extracted manager/view helpers
+  and shared bootstrap wiring.
 - The remaining background runtime code is now mostly one bound callback
-  bundle plus thin status-refresh and control-wiring call sites around the
-  extracted background manager.
+  surface plus thin status-refresh and control-wiring call sites around the
+  extracted background manager and shared bootstrap helpers.
 - The remaining selected-peak runtime code is now mostly thin value-source
   wiring plus a few call sites around the extracted peak-selection and
   canvas-interaction helpers.
-- The remaining integration-range drag runtime code is now mostly the
-  bound runtime-factory/canvas wiring plus thin integration-region visual
-  call sites around the extracted drag and canvas-interaction helpers.
+- The remaining integration-range drag runtime code is now mostly thin
+  integration-region visual call sites plus the remaining cross-feature event
+  wiring around the extracted drag and canvas-interaction helpers.
 
 Why it matters:
 
