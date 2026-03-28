@@ -2021,22 +2021,6 @@ def _current_geometry_fit_ui_params() -> dict[str, object]:
     return _geometry_fit_runtime_values().current_ui_params()
 
 
-def _update_geometry_fit_undo_button_state() -> None:
-    """Enable fit history buttons only when the relevant history exists."""
-
-    gui_geometry_fit.set_runtime_geometry_fit_history_button_state(
-        can_undo=bool(geometry_fit_history_state.undo_stack),
-        can_redo=bool(geometry_fit_history_state.redo_stack),
-        set_button_state=(
-            lambda can_undo, can_redo: gui_views.set_geometry_fit_history_button_state(
-                geometry_tool_actions_view_state,
-                can_undo=can_undo,
-                can_redo=can_redo,
-            )
-        ),
-    )
-
-
 def _clear_geometry_fit_undo_stack() -> None:
     """Discard the geometry-fit undo/redo history."""
 
@@ -2739,42 +2723,6 @@ def _match_geometry_manual_group_to_background(
     )
 
 
-def _update_geometry_manual_pick_button_label() -> None:
-    label = gui_manual_geometry.geometry_manual_pick_button_label(
-        armed=geometry_runtime_state.manual_pick_armed,
-        current_background_index=background_runtime_state.current_background_index,
-        pick_session=geometry_manual_state.pick_session,
-        pairs_for_index=_geometry_manual_pairs_for_index,
-        pair_group_count=_geometry_manual_pair_group_count,
-    )
-    gui_views.set_geometry_tool_action_texts(
-        geometry_tool_actions_view_state,
-        manual_pick_text=label,
-    )
-
-
-def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None) -> None:
-    """Arm or disarm manual Qr-set selection on the detector image."""
-
-
-    geometry_runtime_state.manual_pick_armed = bool(enabled)
-    if geometry_runtime_state.manual_pick_armed:
-        if not bool(analysis_view_controls_view_state.show_caked_2d_var.get()):
-            analysis_view_controls_view_state.show_caked_2d_var.set(True)
-            toggle_caked_2d()
-        hkl_lookup_controls_runtime.set_hkl_pick_mode(False)
-        _set_geometry_preview_exclude_mode(False)
-    else:
-        _cancel_geometry_manual_pick_session(restore_view=True, redraw=True)
-    _update_geometry_manual_pick_button_label()
-    try:
-        canvas.get_tk_widget().configure(cursor="crosshair" if geometry_runtime_state.manual_pick_armed else "")
-    except Exception:
-        pass
-    if message:
-        progress_label_geometry.config(text=message)
-
-
 def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
     """Switch geometry fitting/import into the 2D caked integration view now."""
 
@@ -2792,36 +2740,6 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
             force_refresh=force_refresh,
         )
     )
-
-
-def _toggle_geometry_manual_pick_mode() -> None:
-    """Toggle manual geometry Qr-set selection on the image."""
-
-    _set_geometry_manual_pick_mode(
-        not geometry_runtime_state.manual_pick_armed,
-        message=(
-            (
-                "Manual geometry picking armed in 2D caked phi-vs-2theta view. "
-                "Click a Qr/Qz set once, then click the matching background peaks "
-                "for each simulated member of that set."
-            )
-            if not geometry_runtime_state.manual_pick_armed
-            else "Manual geometry picking disabled."
-        ),
-    )
-
-
-def _clear_current_geometry_manual_pairs() -> None:
-    """Clear saved manual geometry pairs for the current background image."""
-
-    if _geometry_manual_pairs_for_index(background_runtime_state.current_background_index) or _geometry_manual_pick_session_active():
-        _push_geometry_manual_undo_state()
-    _cancel_geometry_manual_pick_session(restore_view=True, redraw=False)
-    _set_geometry_manual_pairs_for_index(background_runtime_state.current_background_index, [])
-    _clear_geometry_pick_artists()
-    _update_geometry_manual_pick_button_label()
-    background_runtime_callbacks.refresh_status()
-    progress_label_geometry.config(text="Cleared saved geometry pairs for the current background image.")
 
 
 def _peak_maximum_near_in_image(
@@ -3491,6 +3409,75 @@ hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bo
     view_state=hkl_lookup_view_state,
     peak_selection_callbacks=peak_selection_runtime_callbacks,
     open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
+)
+geometry_tool_action_runtime_callbacks = (
+    gui_geometry_fit.make_runtime_geometry_tool_action_callbacks(
+        geometry_fit_history_state=geometry_fit_history_state,
+        manual_pick_armed=lambda: bool(geometry_runtime_state.manual_pick_armed),
+        set_manual_pick_armed=(
+            lambda enabled: setattr(
+                geometry_runtime_state,
+                "manual_pick_armed",
+                bool(enabled),
+            )
+        ),
+        current_background_index=(
+            lambda: int(background_runtime_state.current_background_index)
+        ),
+        current_pick_session=lambda: geometry_manual_state.pick_session,
+        manual_pick_session_active=_geometry_manual_pick_session_active,
+        build_manual_pick_button_label=(
+            gui_manual_geometry.geometry_manual_pick_button_label
+        ),
+        pairs_for_index=_geometry_manual_pairs_for_index,
+        pair_group_count=_geometry_manual_pair_group_count,
+        set_manual_pick_text=(
+            lambda text: gui_views.set_geometry_tool_action_texts(
+                geometry_tool_actions_view_state,
+                manual_pick_text=text,
+            )
+        ),
+        set_history_button_state=(
+            lambda can_undo, can_redo: gui_views.set_geometry_fit_history_button_state(
+                geometry_tool_actions_view_state,
+                can_undo=can_undo,
+                can_redo=can_redo,
+            )
+        ),
+        show_caked_2d_var=lambda: analysis_view_controls_view_state.show_caked_2d_var,
+        toggle_caked_2d=lambda: toggle_caked_2d(),
+        set_hkl_pick_mode=hkl_lookup_controls_runtime.set_hkl_pick_mode,
+        set_geometry_preview_exclude_mode=(
+            lambda enabled, message=None: _set_geometry_preview_exclude_mode(
+                enabled,
+                message=message,
+            )
+        ),
+        cancel_manual_pick_session=_cancel_geometry_manual_pick_session,
+        canvas_widget=lambda: canvas.get_tk_widget(),
+        push_manual_undo_state=_push_geometry_manual_undo_state,
+        clear_pairs_for_current_background=(
+            lambda index: _set_geometry_manual_pairs_for_index(index, [])
+        ),
+        clear_geometry_pick_artists=_clear_geometry_pick_artists,
+        refresh_status=lambda: background_runtime_callbacks.refresh_status(),
+        set_progress_text=lambda text: progress_label_geometry.config(text=text),
+    )
+)
+_update_geometry_fit_undo_button_state = (
+    geometry_tool_action_runtime_callbacks.update_fit_history_button_state
+)
+_update_geometry_manual_pick_button_label = (
+    geometry_tool_action_runtime_callbacks.update_manual_pick_button_label
+)
+_set_geometry_manual_pick_mode = (
+    geometry_tool_action_runtime_callbacks.set_manual_pick_mode
+)
+_toggle_geometry_manual_pick_mode = (
+    geometry_tool_action_runtime_callbacks.toggle_manual_pick_mode
+)
+_clear_current_geometry_manual_pairs = (
+    geometry_tool_action_runtime_callbacks.clear_current_manual_pairs
 )
 
 
@@ -10001,19 +9988,24 @@ fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
 
 live_geometry_preview_var = tk.BooleanVar(value=False)
-gui_views.create_geometry_tool_action_controls(
-    parent=app_shell_view_state.fit_actions_frame,
-    view_state=geometry_tool_actions_view_state,
-    on_undo_fit=_undo_last_geometry_fit,
-    on_redo_fit=_redo_last_geometry_fit,
-    on_toggle_manual_pick=_toggle_geometry_manual_pick_mode,
-    on_undo_manual_placement=_undo_last_geometry_manual_placement,
-    on_export_manual_pairs=_export_geometry_manual_pairs,
-    on_import_manual_pairs=_import_geometry_manual_pairs,
-    on_toggle_preview_exclude=(
-        geometry_q_group_runtime_callbacks.open_preview_exclusion_window
-    ),
-    on_clear_manual_pairs=_clear_current_geometry_manual_pairs,
+geometry_tool_actions_runtime = (
+    gui_bootstrap.build_runtime_geometry_tool_action_controls_bootstrap(
+        views_module=gui_views,
+        view_state=geometry_tool_actions_view_state,
+        on_undo_fit=_undo_last_geometry_fit,
+        on_redo_fit=_redo_last_geometry_fit,
+        on_toggle_manual_pick=_toggle_geometry_manual_pick_mode,
+        on_undo_manual_placement=_undo_last_geometry_manual_placement,
+        on_export_manual_pairs=_export_geometry_manual_pairs,
+        on_import_manual_pairs=_import_geometry_manual_pairs,
+        on_toggle_preview_exclude=(
+            geometry_q_group_runtime_callbacks.open_preview_exclusion_window
+        ),
+        on_clear_manual_pairs=_clear_current_geometry_manual_pairs,
+    )
+)
+geometry_tool_actions_runtime.create_controls(
+    parent=app_shell_view_state.fit_actions_frame
 )
 _update_geometry_fit_undo_button_state()
 _update_geometry_manual_pick_button_label()

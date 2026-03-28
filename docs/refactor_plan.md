@@ -38,7 +38,11 @@ action bootstrap now also flows through one shared helper in
 `runtime.py`, the
 HKL lookup control surface plus its shared Bragg-Qr open action now also boot
 through one shared helper in `ra_sim.gui.bootstrap` instead of being wired
-directly in `runtime.py`, and the main remaining
+directly in `runtime.py`, the geometry-tool action control cluster now also
+boots through one shared helper in `ra_sim.gui.bootstrap`, the remaining
+fit-history button-state plus manual-pick label/mode/clear runtime callbacks
+now also assemble through one shared helper in `ra_sim.gui.geometry_fit`
+instead of being wired inline in `runtime.py`, and the main remaining
 cleanup target is now the
 residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
 not `main.py` or `mosaic_profiles.py`.
@@ -121,6 +125,14 @@ not `main.py` or `mosaic_profiles.py`.
     assemble through one shared helper in `ra_sim.gui.bootstrap`.
   - `runtime.py` no longer assembles that live geometry-fit action bootstrap
     inline.
+- Geometry-fit fit-history / manual-pick control cleanup has advanced further.
+  - The geometry-tool action control cluster now assembles through one shared
+    helper in `ra_sim.gui.bootstrap`.
+  - The remaining fit-history button-state and manual-pick label/mode/clear
+    runtime callbacks now also assemble through one shared helper in
+    `ra_sim.gui.geometry_fit`.
+  - `runtime.py` no longer wires that control cluster directly or keeps
+    standalone inline implementations for those callback surfaces.
 - Integration-range drag bootstrap cleanup has advanced further.
   - The drag-selection rectangle, integration-region rectangle, live
     integration-region refresh callback, and runtime drag callback bundle now
@@ -722,9 +734,8 @@ What is left:
   call sites around the extracted peak-selection helpers and shared bootstrap
   helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining manual-pick mode-clear and preview-action control wiring around
-  the extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
-  helper surfaces.
+  remaining preview-action call sites around the extracted
+  `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry` helper surfaces.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction helpers.
@@ -1128,14 +1139,17 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
+- start with the remaining selected-peak refresh / action call sites now that
+  the geometry-fit fit-history / manual-pick control slice is extracted
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the HKL lookup / Bragg-Qr open-control cleanup:
+Immediate checklist after the geometry-fit fit-history / manual-pick control
+cleanup:
 
-- trim the remaining geometry-fit fit-history/manual-pick control wiring
-- then trim the remaining selected-peak refresh / action call sites
+- trim the remaining selected-peak refresh / action call sites
 - then take the remaining Bragg-Qr manager refresh / action call sites
+- then trim the remaining geometry-fit manual-pair preview / action call sites
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving
 

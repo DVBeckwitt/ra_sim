@@ -336,6 +336,17 @@ class GeometryFitRuntimeExecutionResult:
     error_text: str | None = None
 
 
+@dataclass(frozen=True)
+class GeometryToolActionRuntimeCallbacks:
+    """Bound runtime callbacks for the geometry tool action control cluster."""
+
+    update_fit_history_button_state: Callable[[], None]
+    update_manual_pick_button_label: Callable[[], None]
+    set_manual_pick_mode: Callable[[bool, str | None], None]
+    toggle_manual_pick_mode: Callable[[], None]
+    clear_current_manual_pairs: Callable[[], None]
+
+
 def make_runtime_geometry_fit_action_prepare_bindings_factory(
     *,
     fit_config: Mapping[str, object] | None,
@@ -1332,6 +1343,150 @@ def redo_runtime_geometry_fit(
         empty_text="No geometry fit history available to redo.",
         failure_prefix="Failed to redo geometry fit",
         success_text="Reapplied the next geometry-fit state.",
+    )
+
+
+def make_runtime_geometry_tool_action_callbacks(
+    *,
+    geometry_fit_history_state: Any,
+    manual_pick_armed: Callable[[], bool] | bool,
+    set_manual_pick_armed: Callable[[bool], None],
+    current_background_index: Callable[[], object] | object,
+    current_pick_session: Callable[[], object] | object,
+    manual_pick_session_active: Callable[[], bool] | bool,
+    build_manual_pick_button_label: Callable[..., str],
+    pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]],
+    pair_group_count: Callable[[int], int],
+    set_manual_pick_text: Callable[[str], None] | None = None,
+    set_history_button_state: Callable[[bool, bool], None] | None = None,
+    show_caked_2d_var: Any = None,
+    toggle_caked_2d: Callable[[], None] | None = None,
+    set_hkl_pick_mode: Callable[..., None] | None = None,
+    set_geometry_preview_exclude_mode: Callable[..., None] | None = None,
+    cancel_manual_pick_session: Callable[..., None] | None = None,
+    canvas_widget: Callable[[], Any] | Any = None,
+    push_manual_undo_state: Callable[[], None] | None = None,
+    clear_pairs_for_current_background: Callable[[int], None] | None = None,
+    clear_geometry_pick_artists: Callable[[], None] | None = None,
+    refresh_status: Callable[[], None] | None = None,
+    set_progress_text: Callable[[str], None] | None = None,
+) -> GeometryToolActionRuntimeCallbacks:
+    """Build the live geometry tool action callbacks around shared helpers."""
+
+    def _current_background() -> int:
+        return int(_resolve_runtime_value(current_background_index))
+
+    def _manual_pick_armed() -> bool:
+        return bool(_resolve_runtime_value(manual_pick_armed))
+
+    def _manual_pick_session_is_active() -> bool:
+        active = (
+            manual_pick_session_active()
+            if callable(manual_pick_session_active)
+            else manual_pick_session_active
+        )
+        return bool(active)
+
+    def _update_fit_history_button_state() -> None:
+        set_runtime_geometry_fit_history_button_state(
+            can_undo=bool(getattr(geometry_fit_history_state, "undo_stack", [])),
+            can_redo=bool(getattr(geometry_fit_history_state, "redo_stack", [])),
+            set_button_state=set_history_button_state,
+        )
+
+    def _update_manual_pick_button_label() -> None:
+        label = build_manual_pick_button_label(
+            armed=_manual_pick_armed(),
+            current_background_index=_current_background(),
+            pick_session=_resolve_runtime_value(current_pick_session),
+            pairs_for_index=pairs_for_index,
+            pair_group_count=pair_group_count,
+        )
+        if callable(set_manual_pick_text):
+            set_manual_pick_text(str(label))
+
+    def _set_manual_pick_mode(enabled: bool, message: str | None = None) -> None:
+        armed = bool(enabled)
+        set_manual_pick_armed(armed)
+
+        if armed:
+            show_caked_2d_var_local = _resolve_runtime_value(show_caked_2d_var)
+            show_caked_2d = False
+            getter = getattr(show_caked_2d_var_local, "get", None)
+            if callable(getter):
+                try:
+                    show_caked_2d = bool(getter())
+                except Exception:
+                    show_caked_2d = False
+            if not show_caked_2d:
+                setter = getattr(show_caked_2d_var_local, "set", None)
+                if callable(setter):
+                    try:
+                        setter(True)
+                    except Exception:
+                        pass
+                if callable(toggle_caked_2d):
+                    toggle_caked_2d()
+            if callable(set_hkl_pick_mode):
+                set_hkl_pick_mode(False)
+            if callable(set_geometry_preview_exclude_mode):
+                set_geometry_preview_exclude_mode(False)
+        elif callable(cancel_manual_pick_session):
+            cancel_manual_pick_session(restore_view=True, redraw=True)
+
+        _update_manual_pick_button_label()
+
+        widget = _resolve_runtime_value(canvas_widget)
+        configure = getattr(widget, "configure", None)
+        if callable(configure):
+            try:
+                configure(cursor="crosshair" if armed else "")
+            except Exception:
+                pass
+
+        if message and callable(set_progress_text):
+            set_progress_text(message)
+
+    def _toggle_manual_pick_mode() -> None:
+        armed = _manual_pick_armed()
+        _set_manual_pick_mode(
+            not armed,
+            message=(
+                (
+                    "Manual geometry picking armed in 2D caked phi-vs-2theta view. "
+                    "Click a Qr/Qz set once, then click the matching background peaks "
+                    "for each simulated member of that set."
+                )
+                if not armed
+                else "Manual geometry picking disabled."
+            ),
+        )
+
+    def _clear_current_manual_pairs() -> None:
+        background_index = _current_background()
+        if pairs_for_index(background_index) or _manual_pick_session_is_active():
+            if callable(push_manual_undo_state):
+                push_manual_undo_state()
+        if callable(cancel_manual_pick_session):
+            cancel_manual_pick_session(restore_view=True, redraw=False)
+        if callable(clear_pairs_for_current_background):
+            clear_pairs_for_current_background(background_index)
+        if callable(clear_geometry_pick_artists):
+            clear_geometry_pick_artists()
+        _update_manual_pick_button_label()
+        if callable(refresh_status):
+            refresh_status()
+        if callable(set_progress_text):
+            set_progress_text(
+                "Cleared saved geometry pairs for the current background image."
+            )
+
+    return GeometryToolActionRuntimeCallbacks(
+        update_fit_history_button_state=_update_fit_history_button_state,
+        update_manual_pick_button_label=_update_manual_pick_button_label,
+        set_manual_pick_mode=_set_manual_pick_mode,
+        toggle_manual_pick_mode=_toggle_manual_pick_mode,
+        clear_current_manual_pairs=_clear_current_manual_pairs,
     )
 
 

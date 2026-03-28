@@ -82,6 +82,13 @@ class HklLookupControlsRuntimeBootstrap:
 
 
 @dataclass(frozen=True)
+class GeometryToolActionsRuntimeBootstrap:
+    """Geometry tool action control wiring extracted from the runtime."""
+
+    create_controls: Callable[[Any], None]
+
+
+@dataclass(frozen=True)
 class IntegrationRangeDragRuntimeBootstrap:
     """Integration-range callbacks plus the shared visual-refresh callback."""
 
@@ -800,6 +807,38 @@ def build_runtime_hkl_lookup_controls_bootstrap(
         refresh_controls=_refresh_controls,
         set_hkl_pick_mode=_set_hkl_pick_mode,
     )
+
+
+def build_runtime_geometry_tool_action_controls_bootstrap(
+    *,
+    views_module: Any,
+    view_state: Any,
+    on_undo_fit: Callable[[], None],
+    on_redo_fit: Callable[[], None],
+    on_toggle_manual_pick: Callable[[], None],
+    on_undo_manual_placement: Callable[[], None],
+    on_export_manual_pairs: Callable[[], None],
+    on_import_manual_pairs: Callable[[], None],
+    on_toggle_preview_exclude: Callable[[], None],
+    on_clear_manual_pairs: Callable[[], None],
+) -> GeometryToolActionsRuntimeBootstrap:
+    """Build the geometry tool action control wiring through shared views."""
+
+    def _create_controls(parent: Any) -> None:
+        views_module.create_geometry_tool_action_controls(
+            parent=parent,
+            view_state=view_state,
+            on_undo_fit=on_undo_fit,
+            on_redo_fit=on_redo_fit,
+            on_toggle_manual_pick=on_toggle_manual_pick,
+            on_undo_manual_placement=on_undo_manual_placement,
+            on_export_manual_pairs=on_export_manual_pairs,
+            on_import_manual_pairs=on_import_manual_pairs,
+            on_toggle_preview_exclude=on_toggle_preview_exclude,
+            on_clear_manual_pairs=on_clear_manual_pairs,
+        )
+
+    return GeometryToolActionsRuntimeBootstrap(create_controls=_create_controls)
 
 
 def build_runtime_geometry_fit_action_bootstrap(

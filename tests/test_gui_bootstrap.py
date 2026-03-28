@@ -570,6 +570,66 @@ def test_build_runtime_hkl_lookup_controls_bootstrap_wires_peak_and_bragg_callba
     ]
 
 
+def test_build_runtime_geometry_tool_action_controls_bootstrap_wires_callbacks() -> None:
+    view_calls: list[dict[str, object]] = []
+    events: list[str] = []
+
+    bundle = bootstrap.build_runtime_geometry_tool_action_controls_bootstrap(
+        views_module=SimpleNamespace(
+            create_geometry_tool_action_controls=lambda **kwargs: view_calls.append(kwargs)
+        ),
+        view_state="geometry-view",
+        on_undo_fit=lambda: events.append("undo-fit"),
+        on_redo_fit=lambda: events.append("redo-fit"),
+        on_toggle_manual_pick=lambda: events.append("toggle-pick"),
+        on_undo_manual_placement=lambda: events.append("undo-placement"),
+        on_export_manual_pairs=lambda: events.append("export"),
+        on_import_manual_pairs=lambda: events.append("import"),
+        on_toggle_preview_exclude=lambda: events.append("preview"),
+        on_clear_manual_pairs=lambda: events.append("clear"),
+    )
+
+    bundle.create_controls(parent="parent-frame")
+
+    assert view_calls == [
+        {
+            "parent": "parent-frame",
+            "view_state": "geometry-view",
+            "on_undo_fit": view_calls[0]["on_undo_fit"],
+            "on_redo_fit": view_calls[0]["on_redo_fit"],
+            "on_toggle_manual_pick": view_calls[0]["on_toggle_manual_pick"],
+            "on_undo_manual_placement": view_calls[0]["on_undo_manual_placement"],
+            "on_export_manual_pairs": view_calls[0]["on_export_manual_pairs"],
+            "on_import_manual_pairs": view_calls[0]["on_import_manual_pairs"],
+            "on_toggle_preview_exclude": view_calls[0]["on_toggle_preview_exclude"],
+            "on_clear_manual_pairs": view_calls[0]["on_clear_manual_pairs"],
+        }
+    ]
+
+    for key in (
+        "on_undo_fit",
+        "on_redo_fit",
+        "on_toggle_manual_pick",
+        "on_undo_manual_placement",
+        "on_export_manual_pairs",
+        "on_import_manual_pairs",
+        "on_toggle_preview_exclude",
+        "on_clear_manual_pairs",
+    ):
+        view_calls[0][key]()
+
+    assert events == [
+        "undo-fit",
+        "redo-fit",
+        "toggle-pick",
+        "undo-placement",
+        "export",
+        "import",
+        "preview",
+        "clear",
+    ]
+
+
 def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
     monkeypatch,
 ) -> None:

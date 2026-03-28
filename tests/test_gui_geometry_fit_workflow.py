@@ -1551,6 +1551,134 @@ def test_redo_runtime_geometry_fit_reports_restore_failure() -> None:
     assert events == [("progress", "Failed to redo geometry fit: bad state")]
 
 
+def test_make_runtime_geometry_tool_action_callbacks_refreshes_button_state_and_label() -> None:
+    events: list[object] = []
+    label_calls: list[dict[str, object]] = []
+
+    callbacks = geometry_fit.make_runtime_geometry_tool_action_callbacks(
+        geometry_fit_history_state=SimpleNamespace(undo_stack=[{"undo": True}], redo_stack=[]),
+        manual_pick_armed=lambda: False,
+        set_manual_pick_armed=lambda enabled: events.append(("armed", enabled)),
+        current_background_index=lambda: 3,
+        current_pick_session=lambda: {"step": 2},
+        manual_pick_session_active=lambda: False,
+        build_manual_pick_button_label=lambda **kwargs: (
+            label_calls.append(dict(kwargs)) or "Pick Label"
+        ),
+        pairs_for_index=lambda index: [{"index": index}],
+        pair_group_count=lambda index: int(index) + 1,
+        set_manual_pick_text=lambda text: events.append(("label", text)),
+        set_history_button_state=lambda can_undo, can_redo: events.append(
+            ("history", can_undo, can_redo)
+        ),
+    )
+
+    callbacks.update_fit_history_button_state()
+    callbacks.update_manual_pick_button_label()
+
+    assert events == [
+        ("history", True, False),
+        ("label", "Pick Label"),
+    ]
+    assert len(label_calls) == 1
+    assert label_calls[0]["armed"] is False
+    assert label_calls[0]["current_background_index"] == 3
+    assert label_calls[0]["pick_session"] == {"step": 2}
+    assert callable(label_calls[0]["pairs_for_index"])
+    assert callable(label_calls[0]["pair_group_count"])
+
+
+def test_make_runtime_geometry_tool_action_callbacks_sets_manual_pick_mode() -> None:
+    events: list[object] = []
+    armed = {"value": False}
+
+    class _Widget:
+        def __init__(self):
+            self.cursor = None
+
+        def configure(self, **kwargs):
+            self.cursor = kwargs.get("cursor")
+
+    widget = _Widget()
+    show_caked_2d_var = _DummyVar(False)
+
+    callbacks = geometry_fit.make_runtime_geometry_tool_action_callbacks(
+        geometry_fit_history_state=SimpleNamespace(undo_stack=[], redo_stack=[]),
+        manual_pick_armed=lambda: armed["value"],
+        set_manual_pick_armed=lambda enabled: armed.__setitem__("value", bool(enabled)),
+        current_background_index=lambda: 0,
+        current_pick_session=lambda: None,
+        manual_pick_session_active=lambda: False,
+        build_manual_pick_button_label=lambda **kwargs: "Manual Pick Armed",
+        pairs_for_index=lambda index: [],
+        pair_group_count=lambda index: 0,
+        set_manual_pick_text=lambda text: events.append(("label", text)),
+        show_caked_2d_var=show_caked_2d_var,
+        toggle_caked_2d=lambda: events.append("toggle-caked"),
+        set_hkl_pick_mode=lambda enabled, message=None: events.append(
+            ("hkl-pick", enabled, message)
+        ),
+        set_geometry_preview_exclude_mode=lambda enabled, message=None: events.append(
+            ("preview-exclude", enabled, message)
+        ),
+        cancel_manual_pick_session=lambda **kwargs: events.append(("cancel", kwargs)),
+        canvas_widget=lambda: widget,
+        set_progress_text=lambda text: events.append(("progress", text)),
+    )
+
+    callbacks.set_manual_pick_mode(True, "armed")
+    callbacks.set_manual_pick_mode(False, "disarmed")
+
+    assert armed["value"] is False
+    assert show_caked_2d_var.get() is True
+    assert widget.cursor == ""
+    assert events == [
+        "toggle-caked",
+        ("hkl-pick", False, None),
+        ("preview-exclude", False, None),
+        ("label", "Manual Pick Armed"),
+        ("progress", "armed"),
+        ("cancel", {"restore_view": True, "redraw": True}),
+        ("label", "Manual Pick Armed"),
+        ("progress", "disarmed"),
+    ]
+
+
+def test_make_runtime_geometry_tool_action_callbacks_clears_current_pairs() -> None:
+    events: list[object] = []
+
+    callbacks = geometry_fit.make_runtime_geometry_tool_action_callbacks(
+        geometry_fit_history_state=SimpleNamespace(undo_stack=[], redo_stack=[]),
+        manual_pick_armed=lambda: False,
+        set_manual_pick_armed=lambda enabled: events.append(("armed", enabled)),
+        current_background_index=lambda: 2,
+        current_pick_session=lambda: None,
+        manual_pick_session_active=lambda: False,
+        build_manual_pick_button_label=lambda **kwargs: "Cleared Label",
+        pairs_for_index=lambda index: [{"index": index}],
+        pair_group_count=lambda index: 1,
+        set_manual_pick_text=lambda text: events.append(("label", text)),
+        cancel_manual_pick_session=lambda **kwargs: events.append(("cancel", kwargs)),
+        push_manual_undo_state=lambda: events.append("push-undo"),
+        clear_pairs_for_current_background=lambda index: events.append(("clear-pairs", index)),
+        clear_geometry_pick_artists=lambda: events.append("clear-artists"),
+        refresh_status=lambda: events.append("refresh"),
+        set_progress_text=lambda text: events.append(("progress", text)),
+    )
+
+    callbacks.clear_current_manual_pairs()
+
+    assert events == [
+        "push-undo",
+        ("cancel", {"restore_view": True, "redraw": False}),
+        ("clear-pairs", 2),
+        "clear-artists",
+        ("label", "Cleared Label"),
+        "refresh",
+        ("progress", "Cleared saved geometry pairs for the current background image."),
+    ]
+
+
 def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callbacks(
     tmp_path,
 ) -> None:
