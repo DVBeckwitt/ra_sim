@@ -128,11 +128,11 @@ def test_runtime_canvas_preview_callbacks_are_late_bound() -> None:
     assert lambda_keywords.get("toggle_live_geometry_preview_exclusion_at") is True
 
 
-def test_runtime_schedule_update_factories_are_late_bound() -> None:
+def test_runtime_geometry_q_group_schedule_update_factory_is_late_bound() -> None:
     source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
-    lambda_keywords: dict[tuple[str, str], bool] = {}
+    has_late_bound_schedule_update = False
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -140,33 +140,13 @@ def test_runtime_schedule_update_factories_are_late_bound() -> None:
         func = node.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr not in {
-            "build_runtime_background_bootstrap",
-            "build_runtime_geometry_q_group_bootstrap",
-        }:
+        if func.attr != "build_runtime_geometry_q_group_bootstrap":
             continue
         for keyword in node.keywords:
             if keyword.arg == "schedule_update_factory":
-                lambda_keywords[(func.attr, keyword.arg)] = isinstance(
-                    keyword.value,
-                    ast.Lambda,
-                )
+                has_late_bound_schedule_update = isinstance(keyword.value, ast.Lambda)
 
-    assert (
-        lambda_keywords.get(
-            ("build_runtime_background_bootstrap", "schedule_update_factory")
-        )
-        is True
-    )
-    assert (
-        lambda_keywords.get(
-            (
-                "build_runtime_geometry_q_group_bootstrap",
-                "schedule_update_factory",
-            )
-        )
-        is True
-    )
+    assert has_late_bound_schedule_update is True
 
 
 def test_runtime_structure_factor_pruning_controls_are_bootstrapped() -> None:
@@ -243,132 +223,6 @@ def test_runtime_integration_range_controls_are_bootstrapped() -> None:
         "toggle_log_radial": 0,
         "toggle_log_azimuth": 0,
     }
-
-
-def test_runtime_background_controls_are_bootstrapped() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    has_bootstrap_call = False
-    direct_view_calls = {
-        "create_background_file_controls": 0,
-        "create_background_backend_debug_controls": 0,
-    }
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr == "build_runtime_background_controls_bootstrap":
-            has_bootstrap_call = True
-        if func.attr in direct_view_calls:
-            direct_view_calls[func.attr] += 1
-
-    assert has_bootstrap_call is True
-    assert direct_view_calls == {
-        "create_background_file_controls": 0,
-        "create_background_backend_debug_controls": 0,
-    }
-
-
-def test_runtime_background_theta_callbacks_use_shared_bundle() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    has_bootstrap_call = False
-    inline_defs = {
-        "_current_geometry_fit_background_indices": 0,
-        "_geometry_fit_uses_shared_theta_offset": 0,
-        "_current_geometry_theta_offset": 0,
-        "_current_background_theta_values": 0,
-        "_background_theta_for_index": 0,
-        "_sync_background_theta_controls": 0,
-        "_apply_background_theta_metadata": 0,
-        "_apply_geometry_fit_background_selection": 0,
-        "_sync_geometry_fit_background_selection": 0,
-    }
-    direct_helper_calls = {
-        "current_geometry_fit_background_indices": 0,
-        "geometry_fit_uses_shared_theta_offset": 0,
-        "current_geometry_theta_offset": 0,
-        "current_background_theta_values": 0,
-        "background_theta_for_index": 0,
-        "sync_background_theta_controls": 0,
-        "apply_background_theta_metadata": 0,
-        "apply_geometry_fit_background_selection": 0,
-        "sync_geometry_fit_background_selection": 0,
-    }
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Attribute):
-                if func.attr == "build_runtime_background_theta_bootstrap":
-                    has_bootstrap_call = True
-                if (
-                    isinstance(func.value, ast.Name)
-                    and func.value.id == "gui_background_theta"
-                    and func.attr in direct_helper_calls
-                ):
-                    direct_helper_calls[func.attr] += 1
-        if isinstance(node, ast.FunctionDef) and node.name in inline_defs:
-            inline_defs[node.name] += 1
-
-    assert has_bootstrap_call is True
-    assert inline_defs == {
-        "_current_geometry_fit_background_indices": 0,
-        "_geometry_fit_uses_shared_theta_offset": 0,
-        "_current_geometry_theta_offset": 0,
-        "_current_background_theta_values": 0,
-        "_background_theta_for_index": 0,
-        "_sync_background_theta_controls": 0,
-        "_apply_background_theta_metadata": 0,
-        "_apply_geometry_fit_background_selection": 0,
-        "_sync_geometry_fit_background_selection": 0,
-    }
-    assert direct_helper_calls == {
-        "current_geometry_fit_background_indices": 0,
-        "geometry_fit_uses_shared_theta_offset": 0,
-        "current_geometry_theta_offset": 0,
-        "current_background_theta_values": 0,
-        "background_theta_for_index": 0,
-        "sync_background_theta_controls": 0,
-        "apply_background_theta_metadata": 0,
-        "apply_geometry_fit_background_selection": 0,
-        "sync_geometry_fit_background_selection": 0,
-    }
-
-
-def test_runtime_background_status_refreshes_use_shared_helpers() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    helper_defs = {
-        "_refresh_background_status": 0,
-        "_refresh_background_backend_status": 0,
-    }
-    direct_runtime_status_refs: list[tuple[str, str, int]] = []
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in helper_defs:
-            helper_defs[node.name] += 1
-        if (
-            isinstance(node, ast.Attribute)
-            and node.attr in {"refresh_status", "refresh_backend_status"}
-            and isinstance(node.value, ast.Name)
-            and node.value.id in {"background_runtime_callbacks", "background_controls_runtime"}
-        ):
-            direct_runtime_status_refs.append(
-                (node.value.id, node.attr, int(node.lineno))
-            )
-
-    assert helper_defs == {
-        "_refresh_background_status": 1,
-        "_refresh_background_backend_status": 1,
-    }
-    assert direct_runtime_status_refs == []
 
 
 def test_runtime_manual_geometry_cache_callbacks_use_shared_bootstrap() -> None:

@@ -1028,6 +1028,9 @@ What is done:
 - The hBN fitter bundle-export test now imports `hbn_fitter.fitter` directly
   and exercises a shared bundle-payload helper instead of extracting
   `save_bundle()` from source text.
+- The background runtime/bootstrap assembly now flows through an import-safe
+  helper module, and the matching background runtime-shape checks now use
+  direct helper tests instead of AST assertions against `runtime_impl.py`.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.

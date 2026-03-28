@@ -31,6 +31,7 @@
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.
   - Made `ra_sim/gui/runtime.py` import-safe by turning it into a lazy compatibility wrapper around the heavy GUI implementation in `ra_sim/gui/_runtime/runtime_impl.py`.
+  - Extracted runtime background/bootstrap assembly into `ra_sim/gui/runtime_background.py`, leaving the internal runtime implementation with thinner background workflow wiring.
   - Moved the primary-CIF / diffuse-HT control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
   - Moved the optional CIF-weight control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers and reused a controller helper for weighted intensity recompute.
   - Moved the fit-geometry parameter checklist out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
@@ -92,6 +93,7 @@
   - Added `tests/test_gui_runtime_import_safe.py` and removed the import-smoke skip for `ra_sim.gui.runtime`.
   - Replaced the `ra_sim.gui.app` AST/source-extraction helper tests with direct behavioral imports.
   - Replaced the hBN fitter bundle-export AST/source-extraction regression with direct helper and save-path coverage.
+  - Replaced the background portion of the internal runtime bootstrap AST checks with direct helper-module coverage.
   - Extended `tests/test_gui_geometry_fit_workflow.py` with direct coverage for the extracted geometry-fit history snapshot/restore and undo/redo runtime helpers in `ra_sim.gui.geometry_fit`.
   - Extended `tests/test_manual_geometry_selection_helpers.py` with direct coverage for placement export-row/snapshot apply helpers and the export/import dialog workflow in `ra_sim.gui.manual_geometry`.
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.

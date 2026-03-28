@@ -69,6 +69,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The hBN fitter bundle-export regression test now imports
   `hbn_fitter.fitter` directly, and the NPZ payload assembly used by
   `save_bundle()` now flows through one shared helper there.
+- The background runtime/bootstrap assembly now also flows through a dedicated
+  import-safe helper module, and the matching regression coverage now uses
+  direct helper tests instead of AST assertions against the internal runtime
+  implementation.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into

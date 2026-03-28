@@ -107,6 +107,7 @@ from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import integration_range_drag as gui_integration_range_drag
 from ra_sim.gui import manual_geometry as gui_manual_geometry
+from ra_sim.gui import runtime_background as gui_runtime_background
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
@@ -176,35 +177,12 @@ SF_PRUNE_BIAS_MAX = gui_controllers.SF_PRUNE_BIAS_MAX
 HKL_PICK_MIN_SEPARATION_PX = 2.0
 HKL_PICK_MAX_DISTANCE_PX = 12.0
 
-
-def _refresh_background_status() -> str:
-    """Refresh the live background status label through whichever bundle is ready."""
-
-    runtime = globals().get("background_controls_runtime")
-    refresh = getattr(runtime, "refresh_status", None)
-    if callable(refresh):
-        return str(refresh())
-
-    callbacks = globals().get("background_runtime_callbacks")
-    refresh = getattr(callbacks, "refresh_status", None)
-    if callable(refresh):
-        return str(refresh())
-    return ""
-
-
-def _refresh_background_backend_status() -> str:
-    """Refresh the live backend-debug status label through whichever bundle is ready."""
-
-    runtime = globals().get("background_controls_runtime")
-    refresh = getattr(runtime, "refresh_backend_status", None)
-    if callable(refresh):
-        return str(refresh())
-
-    callbacks = globals().get("background_runtime_callbacks")
-    refresh = getattr(callbacks, "refresh_backend_status", None)
-    if callable(refresh):
-        return str(refresh())
-    return ""
+background_status_refreshers = gui_runtime_background.build_runtime_background_status_refreshers(
+    background_controls_runtime_factory=lambda: globals().get("background_controls_runtime"),
+    background_runtime_callbacks_factory=lambda: globals().get("background_runtime_callbacks"),
+)
+_refresh_background_status = background_status_refreshers.refresh_status
+_refresh_background_backend_status = background_status_refreshers.refresh_backend_status
 
 
 def _ensure_triplet(values, fallback):
@@ -5143,7 +5121,8 @@ def do_update():
     # mark update completion so future updates can run
     simulation_runtime_state.update_running = False
 
-background_theta_runtime = gui_bootstrap.build_runtime_background_theta_bootstrap(
+background_theta_workflow = gui_runtime_background.build_runtime_background_theta_workflow(
+    bootstrap_module=gui_bootstrap,
     background_theta_module=gui_background_theta,
     osc_files_factory=lambda: tuple(background_runtime_state.osc_files),
     current_background_index_factory=(
@@ -5168,36 +5147,34 @@ background_theta_runtime = gui_bootstrap.build_runtime_background_theta_bootstra
     progress_label_factory=lambda: globals().get("progress_label"),
     progress_label_geometry_factory=lambda: globals().get("progress_label_geometry"),
 )
-background_theta_runtime_callbacks = background_theta_runtime.callbacks
+background_theta_runtime = background_theta_workflow.runtime
+background_theta_runtime_callbacks = background_theta_workflow.callbacks
 _current_geometry_fit_background_indices = (
-    background_theta_runtime_callbacks.current_geometry_fit_background_indices
+    background_theta_workflow.current_geometry_fit_background_indices
 )
 _geometry_fit_uses_shared_theta_offset = (
-    background_theta_runtime_callbacks.geometry_fit_uses_shared_theta_offset
+    background_theta_workflow.geometry_fit_uses_shared_theta_offset
 )
-_current_geometry_theta_offset = (
-    background_theta_runtime_callbacks.current_geometry_theta_offset
-)
+_current_geometry_theta_offset = background_theta_workflow.current_geometry_theta_offset
 _current_background_theta_values = (
-    background_theta_runtime_callbacks.current_background_theta_values
+    background_theta_workflow.current_background_theta_values
 )
-_background_theta_for_index = background_theta_runtime_callbacks.background_theta_for_index
-_sync_background_theta_controls = (
-    background_theta_runtime_callbacks.sync_background_theta_controls
-)
-_apply_background_theta_metadata = (
-    background_theta_runtime_callbacks.apply_background_theta_metadata
-)
+_background_theta_for_index = background_theta_workflow.background_theta_for_index
+_sync_background_theta_controls = background_theta_workflow.sync_background_theta_controls
+_apply_background_theta_metadata = background_theta_workflow.apply_background_theta_metadata
 _apply_geometry_fit_background_selection = (
-    background_theta_runtime_callbacks.apply_geometry_fit_background_selection
+    background_theta_workflow.apply_geometry_fit_background_selection
 )
 _sync_geometry_fit_background_selection = (
-    background_theta_runtime_callbacks.sync_geometry_fit_background_selection
+    background_theta_workflow.sync_geometry_fit_background_selection
 )
 
-background_runtime = gui_bootstrap.build_runtime_background_bootstrap(
+background_workflow = gui_runtime_background.build_runtime_background_workflow(
+    bootstrap_module=gui_bootstrap,
     background_manager_module=gui_background_manager,
-    view_state=workspace_panels_view_state,
+    views_module=gui_views,
+    workspace_view_state=workspace_panels_view_state,
+    background_backend_debug_view_state=background_backend_debug_view_state,
     background_state=background_runtime_state,
     image_size=image_size,
     display_rotate_k=DISPLAY_ROTATE_K,
@@ -5267,15 +5244,11 @@ background_runtime = gui_bootstrap.build_runtime_background_bootstrap(
     file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
     askopenfilenames=filedialog.askopenfilenames,
 )
-background_runtime_bindings_factory = background_runtime.bindings_factory
-background_runtime_callbacks = background_runtime.callbacks
-background_controls_runtime = gui_bootstrap.build_runtime_background_controls_bootstrap(
-    views_module=gui_views,
-    workspace_view_state=workspace_panels_view_state,
-    background_backend_debug_view_state=background_backend_debug_view_state,
-    background_callbacks=background_runtime_callbacks,
-)
-toggle_background = background_controls_runtime.toggle_visibility
+background_runtime = background_workflow.runtime
+background_runtime_bindings_factory = background_workflow.bindings_factory
+background_runtime_callbacks = background_workflow.callbacks
+background_controls_runtime = background_workflow.controls_runtime
+toggle_background = background_workflow.toggle_visibility
 
 def reset_to_defaults():
     _clear_geometry_fit_undo_stack()
