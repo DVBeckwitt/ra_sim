@@ -318,6 +318,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the runtime value callback bundle for cached preview peaks, listed-
     Q-group state, export rows, selector status text, and live Qr/Qz entry
     snapshot helpers now also lives in `ra_sim.gui.geometry_q_group_manager`
+  - the live-preview exclusion key/HKL/filter helpers plus the runtime value
+    callbacks that apply those exclusions to cached preview matches now also
+    live in `ra_sim.gui.geometry_q_group_manager`
   - shared geometry-fit seed filtering and degenerate-collapse helpers used
     by the live preview, geometry fit, and manual-pick grouping workflows
     now also live in `ra_sim.gui.geometry_q_group_manager`

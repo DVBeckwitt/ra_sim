@@ -52,6 +52,7 @@
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with geometry-fit hit-table simulation, max-position center aggregation, and preview-style simulated peak helpers, leaving `ra_sim/gui/runtime.py` with thinner geometry-fit parameter/lattice/display wiring around those call sites.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with a runtime callback bundle for the geometry-fit hit-table and simulated-peak helpers, leaving `ra_sim/gui/runtime.py` with a bound geometry-fit simulation surface instead of local wrapper functions.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with a runtime value callback bundle for cached preview peaks, listed-Q-group state, export rows, selector status text, and Qr/Qz entry snapshots, leaving `ra_sim/gui/runtime.py` with bound geometry Q-group value surfaces instead of local wrapper functions.
+  - Expanded `ra_sim/gui/geometry_q_group_manager.py` with live-preview exclusion key/HKL/filter helpers plus runtime value callbacks for applying preview exclusions, leaving `ra_sim/gui/runtime.py` without local live-preview exclusion wrapper functions.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with shared geometry-fit seed filtering and degenerate-collapse helpers, leaving `ra_sim/gui/runtime.py` with preview-exclusion/live-preview orchestration plus thin geometry selector value plumbing.
   - Expanded `ra_sim/gui/background_manager.py` with a zero-arg runtime binding/callback bundle for background status refresh plus browse/load/switch actions, leaving `ra_sim/gui/runtime.py` with one bound background callback bundle plus the remaining call sites.
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with live-preview auto-match config normalization, cached overlay-state/status helpers, and preview-exclusion clear/toggle workflow helpers, leaving `ra_sim/gui/runtime.py` with thin preview delegate wrappers plus the remaining preview availability/fallback simulation call sites.
@@ -91,6 +92,7 @@
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted geometry-fit hit-table simulation, max-position center aggregation, and preview-style simulated peak helpers.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted geometry-fit runtime simulation callback bundle.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted geometry Q-group runtime value callback bundle.
+  - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted live-preview exclusion key/HKL/filter helpers and their runtime value callbacks.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted live-preview auto-match config, cached overlay-state/status rendering, and preview-exclusion clear/toggle helpers.
   - Extended `tests/test_gui_geometry_q_group_manager.py` with direct coverage for the extracted live-preview enable/disable action helper.
   - Extended `tests/test_gui_background_manager.py` with direct coverage for the extracted background visibility toggle helper and callback-bundle wiring.

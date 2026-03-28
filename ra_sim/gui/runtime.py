@@ -3553,151 +3553,6 @@ def _live_geometry_preview_signature() -> tuple[object, ...]:
     )
 
 
-def _live_preview_match_key(entry: dict[str, object] | None) -> tuple[object, ...] | None:
-    """Build a stable exclusion key for a preview match entry."""
-
-    if not isinstance(entry, dict):
-        return None
-    hkl_key = _normalize_hkl_key(entry.get("hkl", entry.get("label")))
-    source_label = entry.get("source_label")
-    source_table_index = entry.get("source_table_index")
-    source_row_index = entry.get("source_row_index")
-    if (
-        hkl_key is not None
-        and source_label is not None
-        and source_table_index is not None
-        and source_row_index is not None
-    ):
-        try:
-            return (
-                "peak",
-                str(source_label),
-                int(source_table_index),
-                int(source_row_index),
-                int(hkl_key[0]),
-                int(hkl_key[1]),
-                int(hkl_key[2]),
-            )
-        except Exception:
-            pass
-
-    source_peak_index = entry.get("source_peak_index")
-    if hkl_key is not None and source_peak_index is not None:
-        try:
-            return (
-                "peak_index",
-                int(source_peak_index),
-                int(hkl_key[0]),
-                int(hkl_key[1]),
-                int(hkl_key[2]),
-            )
-        except Exception:
-            pass
-
-    if hkl_key is None:
-        return None
-    try:
-        sim_col = float(entry.get("sim_x", np.nan))
-        sim_row = float(entry.get("sim_y", np.nan))
-    except Exception:
-        sim_col = float("nan")
-        sim_row = float("nan")
-    return (
-        "hkl_coord",
-        int(hkl_key[0]),
-        int(hkl_key[1]),
-        int(hkl_key[2]),
-        round(sim_col, 1),
-        round(sim_row, 1),
-    )
-
-
-def _live_preview_match_hkl(entry: dict[str, object] | None) -> tuple[int, int, int] | None:
-    """Return the normalized HKL for a preview match entry."""
-
-    if not isinstance(entry, dict):
-        return None
-    return _normalize_hkl_key(entry.get("hkl", entry.get("label")))
-
-
-def _live_preview_match_is_excluded(entry: dict[str, object] | None) -> bool:
-    """Return whether a preview match entry is currently excluded."""
-
-    key = _live_preview_match_key(entry)
-    return key in geometry_preview_state.excluded_keys if key is not None else False
-
-
-def _filter_live_preview_matches(
-    matched_pairs: Sequence[dict[str, object]] | None,
-) -> tuple[list[dict[str, object]], int]:
-    """Return auto-match pairs after applying user exclusions."""
-
-    filtered: list[dict[str, object]] = []
-    excluded_count = 0
-    excluded_hkls: set[tuple[int, int, int]] = set()
-    for entry in geometry_preview_state.overlay.pairs:
-        if not isinstance(entry, dict):
-            continue
-        if not _live_preview_match_is_excluded(entry):
-            continue
-        if _live_preview_match_key(entry) is not None:
-            continue
-        hkl_key = _live_preview_match_hkl(entry)
-        if hkl_key is not None:
-            excluded_hkls.add(hkl_key)
-
-    for raw_entry in matched_pairs or []:
-        if not isinstance(raw_entry, dict):
-            continue
-        entry = dict(raw_entry)
-        key = _live_preview_match_key(entry)
-        excluded = key in geometry_preview_state.excluded_keys if key is not None else False
-        if not excluded:
-            hkl_key = _live_preview_match_hkl(entry)
-            if hkl_key is not None and hkl_key in excluded_hkls:
-                excluded = True
-        if excluded:
-            excluded_count += 1
-            continue
-        filtered.append(entry)
-    return filtered, excluded_count
-
-
-def _apply_live_preview_match_exclusions(
-    matched_pairs: Sequence[dict[str, object]] | None,
-    match_stats: dict[str, object] | None,
-) -> tuple[list[dict[str, object]], dict[str, object], int]:
-    """Apply preview exclusions and refresh fit-facing summary metrics."""
-
-    filtered_pairs, excluded_count = _filter_live_preview_matches(matched_pairs)
-    stats = dict(match_stats) if isinstance(match_stats, dict) else {}
-    stats["excluded_count"] = int(excluded_count)
-    stats["matched_count"] = int(len(filtered_pairs))
-    stats["matched_after_exclusions"] = int(len(filtered_pairs))
-
-    match_dists = np.asarray(
-        [float(entry.get("distance_px", np.nan)) for entry in filtered_pairs],
-        dtype=float,
-    )
-    match_dists = match_dists[np.isfinite(match_dists)]
-    match_conf = np.asarray(
-        [float(entry.get("confidence", np.nan)) for entry in filtered_pairs],
-        dtype=float,
-    )
-    match_conf = match_conf[np.isfinite(match_conf)]
-
-    stats["mean_match_distance_px"] = (
-        float(np.mean(match_dists)) if match_dists.size else float("nan")
-    )
-    stats["p90_match_distance_px"] = (
-        float(np.percentile(match_dists, 90.0)) if match_dists.size else float("nan")
-    )
-    stats["median_match_confidence"] = (
-        float(np.median(match_conf)) if match_conf.size else float("nan")
-    )
-    return filtered_pairs, stats, int(excluded_count)
-
-
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
@@ -7753,6 +7608,17 @@ _current_geometry_auto_match_min_matches = (
 _geometry_q_group_excluded_count = geometry_q_group_runtime_value_callbacks.excluded_count
 _build_geometry_q_group_window_status_text = (
     geometry_q_group_runtime_value_callbacks.build_window_status
+)
+_live_preview_match_key = geometry_q_group_runtime_value_callbacks.live_preview_match_key
+_live_preview_match_hkl = geometry_q_group_runtime_value_callbacks.live_preview_match_hkl
+_live_preview_match_is_excluded = (
+    geometry_q_group_runtime_value_callbacks.live_preview_match_is_excluded
+)
+_filter_live_preview_matches = (
+    geometry_q_group_runtime_value_callbacks.filter_live_preview_matches
+)
+_apply_live_preview_match_exclusions = (
+    geometry_q_group_runtime_value_callbacks.apply_live_preview_match_exclusions
 )
 
 

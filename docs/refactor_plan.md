@@ -345,6 +345,9 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the runtime value
     callback bundle for cached preview peaks, listed-Q-group state, export
     rows, selector status text, and the live Qr/Qz entry snapshot helpers.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the live-preview
+    exclusion key/HKL/filter helpers plus the runtime value callbacks that
+    apply those exclusions to cached preview matches.
   - `ra_sim.gui.geometry_q_group_manager` now also owns shared geometry-fit
     seed filtering and degenerate-collapse helpers used by the live preview,
     geometry fit, and manual-pick grouping workflows.

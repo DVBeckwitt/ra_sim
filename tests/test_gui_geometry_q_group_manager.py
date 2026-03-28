@@ -574,6 +574,39 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert bundle.excluded_count() == 1
     assert bundle.build_window_status() == "status-text"
     assert bundle.build_preview_exclude_button_label() == "button-label"
+    preview_entry = {
+        "hkl": (1, 0, 0),
+        "source_label": "primary",
+        "source_table_index": 0,
+        "source_row_index": 1,
+    }
+    preview_state.excluded_keys = {
+        ("peak", "primary", 0, 1, 1, 0, 0)
+    }
+    assert bundle.live_preview_match_key(preview_entry) == (
+        "peak",
+        "primary",
+        0,
+        1,
+        1,
+        0,
+        0,
+    )
+    assert bundle.live_preview_match_hkl(preview_entry) == (1, 0, 0)
+    assert bundle.live_preview_match_is_excluded(preview_entry) is True
+    assert bundle.filter_live_preview_matches([preview_entry, {"hkl": (2, 0, 0)}]) == (
+        [{"hkl": (2, 0, 0)}],
+        1,
+    )
+    filtered_pairs, preview_stats, excluded_total = (
+        bundle.apply_live_preview_match_exclusions(
+            [preview_entry, {"hkl": (2, 0, 0), "distance_px": 3.0}],
+            {"search_radius_px": 18.0},
+        )
+    )
+    assert filtered_pairs == [{"hkl": (2, 0, 0), "distance_px": 3.0}]
+    assert preview_stats["excluded_count"] == 1
+    assert excluded_total == 1
 
     assert calls[0] == (
         "build_peaks",
@@ -664,6 +697,89 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "round_pixel_centers": True,
         },
     )
+
+
+def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
+    excluded_entry = {
+        "hkl": (1, 0, 0),
+        "source_label": "primary",
+        "source_table_index": 2,
+        "source_row_index": 3,
+        "distance_px": 9.0,
+        "confidence": 0.1,
+    }
+    indexed_entry = {
+        "hkl": (2, 0, 1),
+        "source_peak_index": 5,
+        "distance_px": 2.0,
+        "confidence": 0.8,
+    }
+    coord_entry = {
+        "hkl": (3, 0, 2),
+        "sim_x": 11.24,
+        "sim_y": 8.66,
+        "distance_px": 4.0,
+        "confidence": 0.4,
+    }
+    excluded_key = geometry_q_group_manager.live_geometry_preview_match_key(
+        excluded_entry
+    )
+    preview_state = state.GeometryPreviewState(excluded_keys={excluded_key})
+    preview_state.overlay.pairs = [dict(excluded_entry)]
+
+    assert excluded_key == ("peak", "primary", 2, 3, 1, 0, 0)
+    assert geometry_q_group_manager.live_geometry_preview_match_key(indexed_entry) == (
+        "peak_index",
+        5,
+        2,
+        0,
+        1,
+    )
+    assert geometry_q_group_manager.live_geometry_preview_match_key(coord_entry) == (
+        "hkl_coord",
+        3,
+        0,
+        2,
+        11.2,
+        8.7,
+    )
+    assert geometry_q_group_manager.live_geometry_preview_match_hkl(coord_entry) == (
+        3,
+        0,
+        2,
+    )
+    assert (
+        geometry_q_group_manager.live_geometry_preview_match_is_excluded(
+            preview_state,
+            excluded_entry,
+        )
+        is True
+    )
+
+    filtered, excluded_count = (
+        geometry_q_group_manager.filter_live_geometry_preview_matches(
+            preview_state,
+            [excluded_entry, indexed_entry, coord_entry, "bad"],
+        )
+    )
+    assert filtered == [indexed_entry, coord_entry]
+    assert excluded_count == 1
+
+    filtered_pairs, stats, excluded_total = (
+        geometry_q_group_manager.apply_live_geometry_preview_match_exclusions(
+            preview_state,
+            [excluded_entry, indexed_entry, coord_entry],
+            {"search_radius_px": 18.0},
+        )
+    )
+    assert filtered_pairs == [indexed_entry, coord_entry]
+    assert excluded_total == 1
+    assert stats["excluded_count"] == 1
+    assert stats["matched_count"] == 2
+    assert stats["matched_after_exclusions"] == 2
+    assert np.isclose(stats["mean_match_distance_px"], 3.0)
+    assert np.isclose(stats["p90_match_distance_px"], 3.8)
+    assert np.isclose(stats["median_match_confidence"], 0.6)
 
 
 def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
