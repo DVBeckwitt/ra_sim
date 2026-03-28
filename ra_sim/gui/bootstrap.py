@@ -56,6 +56,13 @@ class StructureFactorPruningRuntimeBootstrap:
 
 
 @dataclass(frozen=True)
+class StructureFactorPruningControlsRuntimeBootstrap:
+    """Pruning control-cluster creation plus live trace hookup."""
+
+    create_controls: Callable[[Any], None]
+
+
+@dataclass(frozen=True)
 class PeakSelectionRuntimeBootstrap:
     """Selected-peak runtime callbacks plus the shared overlay-data callback."""
 
@@ -516,6 +523,80 @@ def build_runtime_bragg_qr_bootstrap(
             root=root,
             bindings_factory=bindings_factory,
         ),
+    )
+
+
+def build_runtime_structure_factor_pruning_controls_bootstrap(
+    *,
+    views_module: Any,
+    structure_factor_pruning_module: Any,
+    view_state: Any,
+    raw_prune_bias: object,
+    raw_solve_q_steps: object,
+    raw_solve_q_rel_tol: object,
+    raw_solve_q_mode: object,
+    prune_bias_fallback: object,
+    prune_bias_minimum: float,
+    prune_bias_maximum: float,
+    steps_fallback: object,
+    steps_minimum: int,
+    steps_maximum: int,
+    rel_tol_fallback: object,
+    rel_tol_minimum: float,
+    rel_tol_maximum: float,
+    uniform_flag: int,
+    adaptive_flag: int,
+    on_sf_prune_bias_change: Callable[..., Any],
+    update_status_label: Callable[[], Any],
+    on_solve_q_steps_change: Callable[..., Any],
+    on_solve_q_rel_tol_change: Callable[..., Any],
+    on_solve_q_mode_change: Callable[..., Any],
+    set_solve_q_control_states: Callable[[], Any],
+) -> StructureFactorPruningControlsRuntimeBootstrap:
+    """Build the pruning control cluster and wire its live runtime callbacks."""
+
+    def _create_controls(parent: Any) -> None:
+        defaults = structure_factor_pruning_module.build_runtime_structure_factor_pruning_defaults(
+            raw_prune_bias,
+            raw_solve_q_steps,
+            raw_solve_q_rel_tol,
+            raw_solve_q_mode,
+            prune_bias_fallback=prune_bias_fallback,
+            prune_bias_minimum=prune_bias_minimum,
+            prune_bias_maximum=prune_bias_maximum,
+            steps_fallback=steps_fallback,
+            steps_minimum=steps_minimum,
+            steps_maximum=steps_maximum,
+            rel_tol_fallback=rel_tol_fallback,
+            rel_tol_minimum=rel_tol_minimum,
+            rel_tol_maximum=rel_tol_maximum,
+            uniform_flag=uniform_flag,
+            adaptive_flag=adaptive_flag,
+        )
+        views_module.create_structure_factor_pruning_controls(
+            parent=parent,
+            view_state=view_state,
+            sf_prune_bias_range=(prune_bias_minimum, prune_bias_maximum),
+            sf_prune_bias_value=defaults.prune_bias,
+            solve_q_mode=defaults.solve_q.mode_label,
+            solve_q_steps_range=(float(steps_minimum), float(steps_maximum)),
+            solve_q_steps_value=float(defaults.solve_q.steps),
+            solve_q_rel_tol_range=(float(rel_tol_minimum), float(rel_tol_maximum)),
+            solve_q_rel_tol_value=float(defaults.solve_q.rel_tol),
+            status_text="",
+        )
+        structure_factor_pruning_module.initialize_runtime_structure_factor_pruning_controls(
+            view_state,
+            on_sf_prune_bias_change=on_sf_prune_bias_change,
+            update_status_label=update_status_label,
+            on_solve_q_steps_change=on_solve_q_steps_change,
+            on_solve_q_rel_tol_change=on_solve_q_rel_tol_change,
+            on_solve_q_mode_change=on_solve_q_mode_change,
+            set_solve_q_control_states=set_solve_q_control_states,
+        )
+
+    return StructureFactorPruningControlsRuntimeBootstrap(
+        create_controls=_create_controls
     )
 
 

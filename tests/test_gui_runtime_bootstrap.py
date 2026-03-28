@@ -167,6 +167,42 @@ def test_runtime_schedule_update_factories_are_late_bound() -> None:
     )
 
 
+def test_runtime_structure_factor_pruning_controls_are_bootstrapped() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    has_bootstrap_call = False
+    direct_view_calls = 0
+    direct_trace_calls = 0
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "build_runtime_structure_factor_pruning_controls_bootstrap":
+            has_bootstrap_call = True
+        if func.attr == "create_structure_factor_pruning_controls":
+            direct_view_calls += 1
+        if (
+            func.attr == "trace_add"
+            and isinstance(func.value, ast.Name)
+            and func.value.id
+            in {
+                "sf_prune_bias_var",
+                "solve_q_steps_var",
+                "solve_q_rel_tol_var",
+                "solve_q_mode_var",
+            }
+        ):
+            direct_trace_calls += 1
+
+    assert has_bootstrap_call is True
+    assert direct_view_calls == 0
+    assert direct_trace_calls == 0
+
+
 def test_runtime_hkl_lookup_controls_are_bootstrapped() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")

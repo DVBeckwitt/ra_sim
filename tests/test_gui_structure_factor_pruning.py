@@ -201,6 +201,81 @@ def test_structure_factor_pruning_helper_builders_normalize_defaults() -> None:
     )
 
 
+def test_structure_factor_pruning_control_helpers_apply_defaults_and_bind_callbacks() -> None:
+    class _TraceVar(_FakeVar):
+        def __init__(self, value=None):
+            super().__init__(value)
+            self.traces = []
+
+        def trace_add(self, mode, callback):
+            self.traces.append((mode, callback))
+
+    bias_var = _TraceVar()
+    steps_var = _TraceVar()
+    rel_tol_var = _TraceVar()
+    mode_var = _TraceVar()
+    view_state = state.StructureFactorPruningControlsViewState(
+        sf_prune_bias_var=bias_var,
+        solve_q_steps_var=steps_var,
+        solve_q_rel_tol_var=rel_tol_var,
+        solve_q_mode_var=mode_var,
+    )
+    defaults = structure_factor_pruning.StructureFactorPruningControlDefaults(
+        prune_bias=0.25,
+        solve_q=structure_factor_pruning.RuntimeSolveQValues(
+            steps=21,
+            rel_tol=5.0e-4,
+            mode_label="adaptive",
+            mode_flag=9,
+        ),
+    )
+    calls = []
+
+    def _bias_change(*_args):
+        calls.append("bias")
+
+    def _update_status():
+        calls.append("status")
+
+    def _steps_change(*_args):
+        calls.append("steps")
+
+    def _rel_tol_change(*_args):
+        calls.append("rel_tol")
+
+    def _mode_change(*_args):
+        calls.append("mode")
+
+    def _set_control_states():
+        calls.append("control_states")
+
+    structure_factor_pruning.apply_runtime_structure_factor_pruning_defaults(
+        view_state,
+        defaults,
+    )
+
+    assert bias_var.get() == 0.25
+    assert steps_var.get() == 21.0
+    assert rel_tol_var.get() == 5.0e-4
+    assert mode_var.get() == "adaptive"
+
+    structure_factor_pruning.initialize_runtime_structure_factor_pruning_controls(
+        view_state,
+        on_sf_prune_bias_change=_bias_change,
+        update_status_label=_update_status,
+        on_solve_q_steps_change=_steps_change,
+        on_solve_q_rel_tol_change=_rel_tol_change,
+        on_solve_q_mode_change=_mode_change,
+        set_solve_q_control_states=_set_control_states,
+    )
+
+    assert bias_var.traces == [("write", _bias_change)]
+    assert steps_var.traces == [("write", _steps_change)]
+    assert rel_tol_var.traces == [("write", _rel_tol_change)]
+    assert mode_var.traces == [("write", _mode_change)]
+    assert calls == ["status", "control_states"]
+
+
 def test_structure_factor_pruning_runtime_helpers_tolerate_missing_view_state(
     monkeypatch,
 ) -> None:

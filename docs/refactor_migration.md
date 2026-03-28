@@ -135,6 +135,13 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.runtime` no longer manually threads the live Bragg-Qr manager
     refresh callback into the pruning workflow or re-wires the manager
     apply-filters callback inline
+  - the pruning control-cluster default normalization, control construction,
+    and live solve-q / prune-bias trace hookup now also assemble through one
+    shared helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.structure_factor_pruning` now also owns the helper that
+    reapplies normalized pruning / solve-q defaults back to the live GUI vars
+  - `ra_sim.gui.runtime` no longer builds that pruning control cluster or
+    binds those trace callbacks inline
 - Geometry-fit manual-pair action-binding cleanup has also advanced:
   - the shared prepare-bundle factory, execution-bundle builder, and top-level
     action-binding builder for the live manual-pair geometry fit now live in
@@ -323,7 +330,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     filter application, and solve-q control traces, plus the normalized
     pruning / solve-q default and current-value helpers used by the runtime
   - `ra_sim.gui.runtime` now keeps only bound structure-factor-pruning
-    callback values plus a few live call sites around that workflow
+    callback values plus a few live value-source and default-reset call sites
+    around that workflow
   - the Bragg-Qr manager list-building workflow now also delegates through
     those helpers, leaving runtime with listbox selection reads and the
     enable/disable action callbacks
@@ -528,8 +536,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   extracted structure-model rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining structure-factor-pruning runtime code is now mostly control
-  trace hookups plus a few value-source call sites around the extracted
+- The remaining structure-factor-pruning runtime code is now mostly
+  value-source and normalized default-reset call sites around the extracted
   pruning module and shared bootstrap wiring.
 - The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
   sites around the extracted controller/view modules and shared bootstrap/

@@ -170,6 +170,119 @@ def test_build_runtime_qr_cylinder_overlay_bootstrap_delegates_callbacks() -> No
     ]
 
 
+def test_build_runtime_structure_factor_pruning_controls_bootstrap_wires_creation() -> None:
+    calls: list[tuple[object, object]] = []
+    view_state = SimpleNamespace()
+
+    def _create_controls(**kwargs):
+        calls.append(("create", kwargs))
+        view_state.sf_prune_bias_var = "bias-var"
+        view_state.solve_q_steps_var = "steps-var"
+        view_state.solve_q_rel_tol_var = "rel-tol-var"
+        view_state.solve_q_mode_var = "mode-var"
+
+    module = SimpleNamespace(
+        build_runtime_structure_factor_pruning_defaults=(
+            lambda *args, **kwargs: (
+                calls.append(("defaults", (args, kwargs)))
+                or SimpleNamespace(
+                    prune_bias=0.25,
+                    solve_q=SimpleNamespace(
+                        mode_label="adaptive",
+                        steps=21,
+                        rel_tol=5.0e-4,
+                    ),
+                )
+            )
+        ),
+        initialize_runtime_structure_factor_pruning_controls=(
+            lambda view_state_arg, **kwargs: (
+                calls.append(("initialize", (view_state_arg, kwargs))) or None
+            )
+        ),
+    )
+
+    bundle = bootstrap.build_runtime_structure_factor_pruning_controls_bootstrap(
+        views_module=SimpleNamespace(create_structure_factor_pruning_controls=_create_controls),
+        structure_factor_pruning_module=module,
+        view_state=view_state,
+        raw_prune_bias="0.25",
+        raw_solve_q_steps="20.6",
+        raw_solve_q_rel_tol="5e-4",
+        raw_solve_q_mode="robust",
+        prune_bias_fallback=0.0,
+        prune_bias_minimum=-2.0,
+        prune_bias_maximum=2.0,
+        steps_fallback=16,
+        steps_minimum=4,
+        steps_maximum=64,
+        rel_tol_fallback=1.0e-3,
+        rel_tol_minimum=1.0e-6,
+        rel_tol_maximum=1.0e-2,
+        uniform_flag=1,
+        adaptive_flag=2,
+        on_sf_prune_bias_change="bias-change",
+        update_status_label="update-status",
+        on_solve_q_steps_change="steps-change",
+        on_solve_q_rel_tol_change="rel-tol-change",
+        on_solve_q_mode_change="mode-change",
+        set_solve_q_control_states="set-controls",
+    )
+
+    bundle.create_controls(parent="parent-frame")
+
+    assert calls == [
+        (
+            "defaults",
+            (
+                ("0.25", "20.6", "5e-4", "robust"),
+                {
+                    "prune_bias_fallback": 0.0,
+                    "prune_bias_minimum": -2.0,
+                    "prune_bias_maximum": 2.0,
+                    "steps_fallback": 16,
+                    "steps_minimum": 4,
+                    "steps_maximum": 64,
+                    "rel_tol_fallback": 1.0e-3,
+                    "rel_tol_minimum": 1.0e-6,
+                    "rel_tol_maximum": 1.0e-2,
+                    "uniform_flag": 1,
+                    "adaptive_flag": 2,
+                },
+            ),
+        ),
+        (
+            "create",
+            {
+                "parent": "parent-frame",
+                "view_state": view_state,
+                "sf_prune_bias_range": (-2.0, 2.0),
+                "sf_prune_bias_value": 0.25,
+                "solve_q_mode": "adaptive",
+                "solve_q_steps_range": (4.0, 64.0),
+                "solve_q_steps_value": 21.0,
+                "solve_q_rel_tol_range": (1.0e-6, 1.0e-2),
+                "solve_q_rel_tol_value": 5.0e-4,
+                "status_text": "",
+            },
+        ),
+        (
+            "initialize",
+            (
+                view_state,
+                {
+                    "on_sf_prune_bias_change": "bias-change",
+                    "update_status_label": "update-status",
+                    "on_solve_q_steps_change": "steps-change",
+                    "on_solve_q_rel_tol_change": "rel-tol-change",
+                    "on_solve_q_mode_change": "mode-change",
+                    "set_solve_q_control_states": "set-controls",
+                },
+            ),
+        ),
+    ]
+
+
 def test_build_runtime_bragg_qr_bootstrap_delegates_callbacks() -> None:
     calls: list[tuple[object, ...]] = []
 

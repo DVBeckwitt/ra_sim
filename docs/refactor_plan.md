@@ -158,6 +158,13 @@ not `main.py` or `mosaic_profiles.py`.
   - `runtime.py` no longer manually threads the live Bragg-Qr manager refresh
     callback into the pruning workflow or re-wires the manager apply-filters
     callback inline.
+  - The pruning control-cluster default normalization, control construction,
+    and live solve-q / prune-bias trace hookup now also assemble through one
+    shared helper in `ra_sim.gui.bootstrap`.
+  - `ra_sim.gui.structure_factor_pruning` now also owns the helper that
+    reapplies normalized pruning / solve-q defaults back to the live GUI vars.
+  - `runtime.py` no longer builds that pruning control cluster or binds those
+    trace callbacks inline.
 - Bragg Qr manager migration has started.
   - Bragg-Qr selection/index bookkeeping now lives in `ra_sim.gui.state`.
   - Controller helpers now own Bragg-Qr selection mapping and group/L-value
@@ -368,7 +375,8 @@ not `main.py` or `mosaic_profiles.py`.
     filter application, and solve-q control traces, plus the normalized
     pruning / solve-q default and current-value helpers used by the runtime.
   - `ra_sim.gui.runtime` now keeps only bound structure-factor-pruning
-    callback values plus a few live call sites around that workflow.
+    callback values plus a few live value-source and default-reset call sites
+    around that workflow.
   - The Bragg-Qr manager list-building workflow now also delegates through
     controller helpers, leaving runtime with listbox selection reads and the
     enable/disable action callbacks.
@@ -727,7 +735,7 @@ What is left:
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
 - The remaining structure-factor-pruning runtime code is now mostly control
-  trace hookups plus a few value-source call sites around the extracted
+  value-source and normalized default-reset call sites around the extracted
   pruning module and shared bootstrap wiring.
 - The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
   sites around the extracted controller/view modules and shared bootstrap/
@@ -1151,15 +1159,15 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining Bragg-Qr manager refresh / action call sites now
-  that the selected-peak refresh / restore slice is extracted
+- start with the remaining geometry-fit manual-pair preview / action call
+  sites now that the Bragg-Qr manager and pruning-control wiring are extracted
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the selected-peak refresh / restore cleanup:
+Immediate checklist after the Bragg-Qr / pruning control cleanup:
 
-- trim the remaining Bragg-Qr manager refresh / action call sites
-- then trim the remaining geometry-fit manual-pair preview / action call sites
+- trim the remaining geometry-fit manual-pair preview / action call sites
+- then trim the remaining integration-range drag cross-feature handoff
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving
 

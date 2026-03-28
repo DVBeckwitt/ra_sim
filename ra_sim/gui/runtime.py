@@ -3323,6 +3323,40 @@ on_solve_q_rel_tol_change = bragg_qr_workflow_runtime.on_solve_q_rel_tol_change
 set_solve_q_control_states = bragg_qr_workflow_runtime.set_solve_q_control_states
 on_solve_q_mode_change = bragg_qr_workflow_runtime.on_solve_q_mode_change
 apply_bragg_qr_filters(trigger_update=False)
+structure_factor_pruning_controls_runtime = (
+    gui_bootstrap.build_runtime_structure_factor_pruning_controls_bootstrap(
+        views_module=gui_views,
+        structure_factor_pruning_module=gui_structure_factor_pruning,
+        view_state=structure_factor_pruning_controls_view_state,
+        raw_prune_bias=defaults.get("sf_prune_bias", 0.0),
+        raw_solve_q_steps=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        raw_solve_q_rel_tol=defaults.get(
+            "solve_q_rel_tol",
+            DEFAULT_SOLVE_Q_REL_TOL,
+        ),
+        raw_solve_q_mode=defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
+        prune_bias_fallback=defaults.get("sf_prune_bias", 0.0),
+        prune_bias_minimum=SF_PRUNE_BIAS_MIN,
+        prune_bias_maximum=SF_PRUNE_BIAS_MAX,
+        steps_fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        steps_minimum=MIN_SOLVE_Q_STEPS,
+        steps_maximum=MAX_SOLVE_Q_STEPS,
+        rel_tol_fallback=defaults.get(
+            "solve_q_rel_tol",
+            DEFAULT_SOLVE_Q_REL_TOL,
+        ),
+        rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
+        rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
+        uniform_flag=SOLVE_Q_MODE_UNIFORM,
+        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
+        on_sf_prune_bias_change=on_sf_prune_bias_change,
+        update_status_label=update_sf_prune_status_label,
+        on_solve_q_steps_change=on_solve_q_steps_change,
+        on_solve_q_rel_tol_change=on_solve_q_rel_tol_change,
+        on_solve_q_mode_change=on_solve_q_mode_change,
+        set_solve_q_control_states=set_solve_q_control_states,
+    )
+)
 
 
 peak_selection_runtime = gui_bootstrap.build_runtime_selected_peak_bootstrap(
@@ -5685,11 +5719,9 @@ def reset_to_defaults():
         )
     )
     optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
-    sf_prune_bias_var.set(pruning_defaults.prune_bias)
-    solve_q_mode_var.set(pruning_defaults.solve_q.mode_label)
-    solve_q_steps_var.set(float(pruning_defaults.solve_q.steps))
-    solve_q_rel_tol_var.set(
-        float(pruning_defaults.solve_q.rel_tol)
+    gui_structure_factor_pruning.apply_runtime_structure_factor_pruning_defaults(
+        structure_factor_pruning_controls_view_state,
+        pruning_defaults,
     )
     center_x_var.set(defaults['center_x'])
     center_y_var.set(defaults['center_y'])
@@ -10457,40 +10489,7 @@ def on_optics_mode_change(*_):
 
 optics_mode_var.trace_add('write', on_optics_mode_change)
 
-structure_factor_pruning_defaults = (
-    gui_structure_factor_pruning.build_runtime_structure_factor_pruning_defaults(
-        defaults.get("sf_prune_bias", 0.0),
-        defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-        defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-        defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
-        prune_bias_fallback=defaults.get("sf_prune_bias", 0.0),
-        prune_bias_minimum=SF_PRUNE_BIAS_MIN,
-        prune_bias_maximum=SF_PRUNE_BIAS_MAX,
-        steps_fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-        steps_minimum=MIN_SOLVE_Q_STEPS,
-        steps_maximum=MAX_SOLVE_Q_STEPS,
-        rel_tol_fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-        rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
-        rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
-        uniform_flag=SOLVE_Q_MODE_UNIFORM,
-        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
-    )
-)
-gui_views.create_structure_factor_pruning_controls(
-    parent=mosaic_frame.frame,
-    view_state=structure_factor_pruning_controls_view_state,
-    sf_prune_bias_range=(SF_PRUNE_BIAS_MIN, SF_PRUNE_BIAS_MAX),
-    sf_prune_bias_value=structure_factor_pruning_defaults.prune_bias,
-    solve_q_mode=structure_factor_pruning_defaults.solve_q.mode_label,
-    solve_q_steps_range=(float(MIN_SOLVE_Q_STEPS), float(MAX_SOLVE_Q_STEPS)),
-    solve_q_steps_value=float(structure_factor_pruning_defaults.solve_q.steps),
-    solve_q_rel_tol_range=(
-        float(MIN_SOLVE_Q_REL_TOL),
-        float(MAX_SOLVE_Q_REL_TOL),
-    ),
-    solve_q_rel_tol_value=float(structure_factor_pruning_defaults.solve_q.rel_tol),
-    status_text="",
-)
+structure_factor_pruning_controls_runtime.create_controls(parent=mosaic_frame.frame)
 sf_prune_bias_var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
 sf_prune_bias_scale = structure_factor_pruning_controls_view_state.sf_prune_bias_scale
 sf_prune_status_var = structure_factor_pruning_controls_view_state.sf_prune_status_var
@@ -10501,12 +10500,6 @@ solve_q_rel_tol_var = structure_factor_pruning_controls_view_state.solve_q_rel_t
 solve_q_rel_tol_scale = (
     structure_factor_pruning_controls_view_state.solve_q_rel_tol_scale
 )
-sf_prune_bias_var.trace_add('write', on_sf_prune_bias_change)
-update_sf_prune_status_label()
-solve_q_steps_var.trace_add('write', on_solve_q_steps_change)
-solve_q_rel_tol_var.trace_add('write', on_solve_q_rel_tol_change)
-solve_q_mode_var.trace_add('write', on_solve_q_mode_change)
-set_solve_q_control_states()
 
 center_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)

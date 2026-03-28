@@ -177,6 +177,12 @@ def _safe_var_set(var: object, value: object) -> None:
         setter(value)
 
 
+def _safe_var_trace_add(var: object, callback: Callable[..., object]) -> None:
+    trace_add = getattr(var, "trace_add", None)
+    if callable(trace_add):
+        trace_add("write", callback)
+
+
 def clip_runtime_sf_prune_bias(
     value: object,
     *,
@@ -337,6 +343,63 @@ def build_runtime_structure_factor_pruning_defaults(
             adaptive_flag=adaptive_flag,
         ),
     )
+
+
+def apply_runtime_structure_factor_pruning_defaults(
+    view_state: Any,
+    defaults: StructureFactorPruningControlDefaults,
+) -> None:
+    """Apply normalized pruning / solve-q defaults to one control view state."""
+
+    if view_state is None:
+        return
+    _safe_var_set(getattr(view_state, "sf_prune_bias_var", None), defaults.prune_bias)
+    _safe_var_set(
+        getattr(view_state, "solve_q_mode_var", None),
+        defaults.solve_q.mode_label,
+    )
+    _safe_var_set(
+        getattr(view_state, "solve_q_steps_var", None),
+        float(defaults.solve_q.steps),
+    )
+    _safe_var_set(
+        getattr(view_state, "solve_q_rel_tol_var", None),
+        float(defaults.solve_q.rel_tol),
+    )
+
+
+def initialize_runtime_structure_factor_pruning_controls(
+    view_state: Any,
+    *,
+    on_sf_prune_bias_change: Callable[..., object],
+    update_status_label: Callable[[], object],
+    on_solve_q_steps_change: Callable[..., object],
+    on_solve_q_rel_tol_change: Callable[..., object],
+    on_solve_q_mode_change: Callable[..., object],
+    set_solve_q_control_states: Callable[[], object],
+) -> None:
+    """Attach trace callbacks and sync one pruning control cluster."""
+
+    if view_state is None:
+        return
+    _safe_var_trace_add(
+        getattr(view_state, "sf_prune_bias_var", None),
+        on_sf_prune_bias_change,
+    )
+    _safe_var_trace_add(
+        getattr(view_state, "solve_q_steps_var", None),
+        on_solve_q_steps_change,
+    )
+    _safe_var_trace_add(
+        getattr(view_state, "solve_q_rel_tol_var", None),
+        on_solve_q_rel_tol_change,
+    )
+    _safe_var_trace_add(
+        getattr(view_state, "solve_q_mode_var", None),
+        on_solve_q_mode_change,
+    )
+    update_status_label()
+    set_solve_q_control_states()
 
 
 def current_runtime_sf_prune_bias(
