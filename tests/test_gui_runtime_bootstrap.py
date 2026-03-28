@@ -211,6 +211,40 @@ def test_runtime_geometry_tool_action_controls_are_bootstrapped() -> None:
     assert direct_view_calls == 0
 
 
+def test_runtime_selected_peak_refresh_calls_use_maintenance_bundle() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    refresh_after_update_calls = 0
+    apply_restored_target_calls = 0
+    direct_reselect_calls = 0
+    direct_hkl_refresh_calls = 0
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "refresh_after_simulation_update":
+            refresh_after_update_calls += 1
+        if func.attr == "apply_restored_selected_hkl_target":
+            apply_restored_target_calls += 1
+        if func.attr == "reselect_current_peak":
+            direct_reselect_calls += 1
+        if (
+            func.attr == "refresh_controls"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "hkl_lookup_controls_runtime"
+        ):
+            direct_hkl_refresh_calls += 1
+
+    assert refresh_after_update_calls == 1
+    assert apply_restored_target_calls == 1
+    assert direct_reselect_calls == 0
+    assert direct_hkl_refresh_calls == 0
+
+
 def test_runtime_geometry_fit_action_uses_factory_helpers() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")

@@ -62,6 +62,7 @@ class PeakSelectionRuntimeBootstrap:
     bindings_factory: Callable[[], Any]
     callbacks: Any
     ensure_peak_overlay_data: Callable[..., object]
+    maintenance_callbacks: Any
 
 
 @dataclass(frozen=True)
@@ -759,6 +760,11 @@ def build_runtime_selected_peak_bootstrap(
         bindings_factory=runtime_bootstrap.bindings_factory,
         callbacks=runtime_bootstrap.callbacks,
         ensure_peak_overlay_data=ensure_peak_overlay_data,
+        maintenance_callbacks=(
+            peak_selection_module.make_runtime_peak_selection_maintenance_callbacks(
+                runtime_bootstrap.bindings_factory
+            )
+        ),
     )
 
 

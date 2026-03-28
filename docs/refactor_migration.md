@@ -480,6 +480,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     bundle for HKL-pick button labels, mode toggles, selected-peak refresh,
     HKL-control selection, raw-image click selection, and the selected-peak
     Bragg/Ewald action
+  - `ra_sim.gui.peak_selection` now also owns the remaining selected-peak
+    update-cycle refresh and restored-target application callbacks used by the
+    live runtime
+  - the selected-peak bootstrap bundle now also carries that maintenance
+    callback surface
   - `ra_sim.gui.runtime` now keeps only cross-feature click-mode dispatch,
     thin live value-source wiring, and the bound peak-selection runtime
     wiring around that workflow
@@ -539,13 +544,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly a few refresh/action
-  call sites around the extracted peak-selection modules and shared bootstrap
-  helpers.
+- The remaining selected-peak runtime code is now mostly thin live
+  value-source wiring around the extracted peak-selection modules and shared
+  bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining manual-pick mode-clear and preview-action control wiring around
-  the extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
-  helper surfaces.
+  remaining preview-action call sites around the extracted
+  `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry` helper surfaces.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction modules.

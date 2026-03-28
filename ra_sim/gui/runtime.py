@@ -3404,6 +3404,7 @@ peak_selection_runtime = gui_bootstrap.build_runtime_selected_peak_bootstrap(
 )
 ensure_peak_overlay_data = peak_selection_runtime.ensure_peak_overlay_data
 peak_selection_runtime_callbacks = peak_selection_runtime.callbacks
+peak_selection_runtime_maintenance = peak_selection_runtime.maintenance_callbacks
 hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bootstrap(
     views_module=gui_views,
     view_state=hkl_lookup_view_state,
@@ -5191,22 +5192,9 @@ def do_update():
 
     redraw_update_start_time = perf_counter()
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
-    need_peak_overlay = bool(
-        peak_selection_state.hkl_pick_armed
-        or peak_selection_state.selected_hkl_target is not None
-        or simulation_runtime_state.selected_peak_record is not None
-        or _live_geometry_preview_enabled()
+    peak_selection_runtime_maintenance.refresh_after_simulation_update(
+        _live_geometry_preview_enabled()
     )
-    if need_peak_overlay:
-        ensure_peak_overlay_data(force=False)
-    else:
-        simulation_runtime_state.peak_positions.clear()
-        simulation_runtime_state.peak_millers.clear()
-        simulation_runtime_state.peak_intensities.clear()
-        simulation_runtime_state.peak_records.clear()
-
-    if peak_selection_state.selected_hkl_target is not None:
-        peak_selection_runtime_callbacks.reselect_current_peak()
     normalization_scale = 1.0
     native_background = _get_current_background_backend()
     if native_background is not None and display_image is not None:
@@ -6243,8 +6231,9 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         current_background_index=background_runtime_state.current_background_index,
         selected_hkl_target=peak_selection_state.selected_hkl_target,
     )
-    peak_selection_state.selected_hkl_target = geometry_state["selected_hkl_target"]
-    _sync_peak_selection_state()
+    peak_selection_runtime_maintenance.apply_restored_selected_hkl_target(
+        geometry_state["selected_hkl_target"]
+    )
     warnings.extend(list(geometry_state["warnings"]))
 
     if finite_stack_controls_view_state.phase_delta_entry_var is not None:
@@ -6262,7 +6251,6 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     background_runtime_callbacks.refresh_status()
     _update_geometry_preview_exclude_button_label()
     geometry_q_group_runtime_callbacks.refresh_window()
-    hkl_lookup_controls_runtime.refresh_controls()
     ensure_valid_resolution_choice()
     toggle_1d_plots()
     toggle_caked_2d()

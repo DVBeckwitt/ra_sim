@@ -352,6 +352,12 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
         make_runtime_peak_overlay_data_callback=(
             lambda **kwargs: calls.append(("overlay", kwargs)) or "overlay-callback"
         ),
+        make_runtime_peak_selection_maintenance_callbacks=(
+            lambda bindings_factory: (
+                calls.append(("maintenance", bindings_factory))
+                or "maintenance-callbacks"
+            )
+        ),
     )
 
     monkeypatch.setattr(
@@ -418,6 +424,7 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     assert bundle.bindings_factory == "bindings-factory"
     assert bundle.callbacks == "callbacks"
     assert bundle.ensure_peak_overlay_data == "overlay-callback"
+    assert bundle.maintenance_callbacks == "maintenance-callbacks"
     assert calls == [
         (
             "config",
@@ -491,6 +498,7 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
                 "tcl_error_types": (RuntimeError,),
             },
         ),
+        ("maintenance", "bindings-factory"),
     ]
 
 

@@ -126,6 +126,14 @@ class SelectedPeakRuntimeCallbacks:
 
 
 @dataclass(frozen=True)
+class SelectedPeakRuntimeMaintenanceCallbacks:
+    """Bound maintenance callbacks around runtime selected-peak refresh flows."""
+
+    refresh_after_simulation_update: Callable[[bool], bool]
+    apply_restored_selected_hkl_target: Callable[[object], tuple[int, int, int] | None]
+
+
+@dataclass(frozen=True)
 class SelectedPeakRuntimeConfigFactories:
     """Live config factories used by the selected-peak runtime workflow."""
 
@@ -1932,6 +1940,75 @@ def update_runtime_hkl_pick_button_label(
     )
 
 
+def runtime_selected_peak_overlay_needed(
+    peak_selection_state,
+    simulation_runtime_state,
+    *,
+    live_geometry_preview_enabled: bool,
+) -> bool:
+    """Return whether the current runtime state still needs peak overlay data."""
+
+    return bool(
+        getattr(peak_selection_state, "hkl_pick_armed", False)
+        or getattr(peak_selection_state, "selected_hkl_target", None) is not None
+        or getattr(simulation_runtime_state, "selected_peak_record", None) is not None
+        or bool(live_geometry_preview_enabled)
+    )
+
+
+def refresh_runtime_selected_peak_after_simulation_update(
+    bindings: SelectedPeakRuntimeBindings,
+    *,
+    live_geometry_preview_enabled: bool,
+) -> bool:
+    """Refresh runtime peak-overlay/selection state after one simulation update."""
+
+    need_peak_overlay = runtime_selected_peak_overlay_needed(
+        bindings.peak_selection_state,
+        bindings.simulation_runtime_state,
+        live_geometry_preview_enabled=bool(live_geometry_preview_enabled),
+    )
+    if need_peak_overlay:
+        overlay_ready = bool(bindings.ensure_peak_overlay_data(force=False))
+    else:
+        _clear_peak_overlay_lists(bindings.simulation_runtime_state)
+        overlay_ready = False
+
+    if getattr(bindings.peak_selection_state, "selected_hkl_target", None) is not None:
+        reselect_runtime_selected_peak(bindings)
+    return overlay_ready
+
+
+def normalize_runtime_selected_hkl_target(
+    selected_hkl_target: object,
+) -> tuple[int, int, int] | None:
+    """Normalize one restored selected-HKL target from saved/runtime state."""
+
+    if not isinstance(selected_hkl_target, (list, tuple)) or len(selected_hkl_target) < 3:
+        return None
+    try:
+        return (
+            int(selected_hkl_target[0]),
+            int(selected_hkl_target[1]),
+            int(selected_hkl_target[2]),
+        )
+    except Exception:
+        return None
+
+
+def apply_runtime_restored_selected_hkl_target(
+    bindings: SelectedPeakRuntimeBindings,
+    selected_hkl_target: object,
+) -> tuple[int, int, int] | None:
+    """Apply one restored selected-HKL target back onto the live runtime state."""
+
+    normalized_target = normalize_runtime_selected_hkl_target(selected_hkl_target)
+    bindings.peak_selection_state.selected_hkl_target = normalized_target
+    _sync_runtime_peak_selection_state(bindings)
+    update_runtime_hkl_pick_button_label(bindings)
+    return normalized_target
+
+
 def set_runtime_hkl_pick_mode(
     bindings: SelectedPeakRuntimeBindings,
     enabled: bool,
@@ -2213,6 +2290,27 @@ def make_runtime_peak_selection_callbacks(
                 bindings_factory(),
                 float(click_col),
                 float(click_row),
+            )
+        ),
+    )
+
+
+def make_runtime_peak_selection_maintenance_callbacks(
+    bindings_factory: Callable[[], SelectedPeakRuntimeBindings],
+) -> SelectedPeakRuntimeMaintenanceCallbacks:
+    """Build bound refresh/restore callbacks for runtime selected-peak upkeep."""
+
+    return SelectedPeakRuntimeMaintenanceCallbacks(
+        refresh_after_simulation_update=lambda live_geometry_preview_enabled: (
+            refresh_runtime_selected_peak_after_simulation_update(
+                bindings_factory(),
+                live_geometry_preview_enabled=bool(live_geometry_preview_enabled),
+            )
+        ),
+        apply_restored_selected_hkl_target=lambda selected_hkl_target: (
+            apply_runtime_restored_selected_hkl_target(
+                bindings_factory(),
+                selected_hkl_target,
             )
         ),
     )

@@ -24,6 +24,10 @@ now also lives in the extracted geometry Q-group manager module, the runtime
 binding/callback bootstrap for the extracted GUI workflows now also lives in
 `ra_sim.gui.bootstrap`, the selected-peak / HKL-pick runtime setup now also
 boots through one shared helper there instead of being assembled inline, the
+remaining selected-peak update-cycle refresh plus restored-target application
+callbacks now also assemble through one shared helper in
+`ra_sim.gui.peak_selection` and flow through that bootstrap bundle instead of
+being wired inline in `runtime.py`, the
 integration-range drag rectangle setup plus live region-refresh callback now
 also boot there instead of being assembled inline, the live structure-factor-
 pruning and Bragg-Qr manager workflow now also boots there through one shared
@@ -114,6 +118,14 @@ not `main.py` or `mosaic_profiles.py`.
     overlay callback wiring, and selected-peak runtime callback bundle now
     assemble through one shared helper in `ra_sim.gui.bootstrap`.
   - `runtime.py` no longer wires that selected-peak setup inline.
+- Selected-peak refresh / restore cleanup has advanced further.
+  - The remaining selected-peak update-cycle refresh and restored-target
+    application callbacks now also assemble through one shared helper in
+    `ra_sim.gui.peak_selection`.
+  - The selected-peak bootstrap bundle now also carries that maintenance
+    callback surface.
+  - `runtime.py` no longer keeps inline selected-peak overlay refresh or
+    restored-target/HKL-control refresh call sites for that workflow.
 - HKL lookup / Bragg-Qr open-control cleanup has advanced further.
   - The HKL lookup control cluster, its initial HKL-pick button refresh, and
     the shared Bragg-Qr manager open action now assemble through one shared
@@ -730,9 +742,9 @@ What is left:
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly a few refresh/action
-  call sites around the extracted peak-selection helpers and shared bootstrap
-  helpers.
+- The remaining selected-peak runtime code is now mostly thin live
+  value-source wiring around the extracted peak-selection helpers and shared
+  bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
   remaining preview-action call sites around the extracted
   `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry` helper surfaces.
@@ -1139,16 +1151,14 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining selected-peak refresh / action call sites now that
-  the geometry-fit fit-history / manual-pick control slice is extracted
+- start with the remaining Bragg-Qr manager refresh / action call sites now
+  that the selected-peak refresh / restore slice is extracted
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the geometry-fit fit-history / manual-pick control
-cleanup:
+Immediate checklist after the selected-peak refresh / restore cleanup:
 
-- trim the remaining selected-peak refresh / action call sites
-- then take the remaining Bragg-Qr manager refresh / action call sites
+- trim the remaining Bragg-Qr manager refresh / action call sites
 - then trim the remaining geometry-fit manual-pair preview / action call sites
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving

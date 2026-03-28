@@ -1539,3 +1539,133 @@ def test_peak_selection_runtime_helpers_and_callback_bundle_delegate_live_bindin
         ("open_cb", "bindings-7"),
         ("click_cb", "bindings-8", 3.0, 4.0),
     ]
+
+
+def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_state() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(1.0, 2.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[3.0],
+        peak_records=[{"hkl": (1, 0, 2)}],
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=(1, 0, 2))
+    events: list[object] = []
+
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=None,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=lambda *, force=False: events.append(("ensure", force)) or True,
+    )
+
+    handled = peak_selection.refresh_runtime_selected_peak_after_simulation_update(
+        bindings,
+        live_geometry_preview_enabled=False,
+    )
+
+    assert handled is True
+    assert events == [("ensure", False)]
+
+    events.clear()
+    peak_state.selected_hkl_target = None
+    runtime_state.selected_peak_record = None
+
+    handled = peak_selection.refresh_runtime_selected_peak_after_simulation_update(
+        bindings,
+        live_geometry_preview_enabled=False,
+    )
+
+    assert handled is False
+    assert events == []
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_millers == []
+    assert runtime_state.peak_intensities == []
+    assert runtime_state.peak_records == []
+
+
+def test_apply_runtime_restored_selected_hkl_target_normalizes_and_refreshes_label(
+    monkeypatch,
+) -> None:
+    events: list[object] = []
+    runtime_state = state.SimulationRuntimeState()
+    peak_state = state.PeakSelectionState()
+
+    monkeypatch.setattr(
+        peak_selection,
+        "update_runtime_hkl_pick_button_label",
+        lambda bindings: events.append(("label", bindings)),
+    )
+
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=None,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=lambda *, force=False: True,
+        sync_peak_selection_state=lambda: events.append("sync"),
+    )
+
+    result = peak_selection.apply_runtime_restored_selected_hkl_target(
+        bindings,
+        [2, -1, 4],
+    )
+    assert result == (2, -1, 4)
+    assert peak_state.selected_hkl_target == (2, -1, 4)
+    assert events == ["sync", ("label", bindings)]
+
+    events.clear()
+    result = peak_selection.apply_runtime_restored_selected_hkl_target(
+        bindings,
+        "bad-target",
+    )
+    assert result is None
+    assert peak_state.selected_hkl_target is None
+    assert events == ["sync", ("label", bindings)]
+
+
+def test_make_runtime_peak_selection_maintenance_callbacks_uses_fresh_bindings(
+    monkeypatch,
+) -> None:
+    callback_calls: list[object] = []
+    versions = {"count": 0}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "refresh_runtime_selected_peak_after_simulation_update",
+        lambda bindings, *, live_geometry_preview_enabled: (
+            callback_calls.append(("refresh", bindings, live_geometry_preview_enabled))
+            or True
+        ),
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "apply_runtime_restored_selected_hkl_target",
+        lambda bindings, selected_hkl_target: (
+            callback_calls.append(("restore", bindings, selected_hkl_target))
+            or (1, 2, 3)
+        ),
+    )
+
+    def build_bindings():
+        versions["count"] += 1
+        return f"bindings-{versions['count']}"
+
+    callbacks = peak_selection.make_runtime_peak_selection_maintenance_callbacks(
+        build_bindings
+    )
+
+    assert callbacks.refresh_after_simulation_update(True) is True
+    assert callbacks.apply_restored_selected_hkl_target([1, 2, 3]) == (1, 2, 3)
+    assert callback_calls == [
+        ("refresh", "bindings-1", True),
+        ("restore", "bindings-2", [1, 2, 3]),
+    ]
