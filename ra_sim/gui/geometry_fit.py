@@ -1120,6 +1120,221 @@ def apply_geometry_fit_undo_state(
     }
 
 
+def set_runtime_geometry_fit_history_button_state(
+    *,
+    can_undo: bool,
+    can_redo: bool,
+    set_button_state: Callable[[bool, bool], None] | None = None,
+) -> None:
+    """Apply the current geometry-fit undo/redo availability to the UI."""
+
+    if callable(set_button_state):
+        set_button_state(bool(can_undo), bool(can_redo))
+
+
+def _resolve_runtime_value(value_or_factory):
+    """Return one runtime value, calling it first when it is a factory."""
+
+    if callable(value_or_factory):
+        return value_or_factory()
+    return value_or_factory
+
+
+def capture_runtime_geometry_fit_undo_state(
+    *,
+    current_ui_params: Callable[[], Mapping[str, object]] | Mapping[str, object],
+    current_profile_cache: Callable[[], object] | object,
+    copy_state_value: Callable[[object], object],
+    last_overlay_state: Callable[[], Mapping[str, object] | None] | Mapping[str, object] | None,
+    build_initial_pairs_display: Callable[..., tuple[Sequence[dict[str, object]], Sequence[dict[str, object]]]],
+    current_background_index: Callable[[], object] | object,
+    current_fit_params: Callable[[], Mapping[str, object]] | Mapping[str, object],
+    pending_pairs_display: Callable[[], Sequence[dict[str, object]]] | Sequence[dict[str, object]],
+) -> dict[str, object]:
+    """Capture the current geometry-fit UI/profile/overlay state for undo."""
+
+    overlay_state = copy_state_value(_resolve_runtime_value(last_overlay_state))
+    if not (
+        isinstance(overlay_state, dict)
+        and (
+            overlay_state.get("overlay_records")
+            or overlay_state.get("initial_pairs_display")
+        )
+    ):
+        try:
+            _, initial_pairs_display = build_initial_pairs_display(
+                int(_resolve_runtime_value(current_background_index)),
+                param_set=_resolve_runtime_value(current_fit_params),
+                prefer_cache=True,
+            )
+            pending_display = _resolve_runtime_value(pending_pairs_display)
+            combined_pairs_display = list(initial_pairs_display) + list(pending_display)
+            if combined_pairs_display:
+                overlay_state = {
+                    "overlay_records": [],
+                    "initial_pairs_display": copy_state_value(combined_pairs_display),
+                    "max_display_markers": max(1, len(combined_pairs_display)),
+                }
+        except Exception:
+            pass
+
+    return {
+        "ui_params": copy_state_value(_resolve_runtime_value(current_ui_params)),
+        "profile_cache": copy_state_value(_resolve_runtime_value(current_profile_cache)),
+        "overlay_state": overlay_state,
+    }
+
+
+def restore_runtime_geometry_fit_undo_state(
+    state: dict[str, object],
+    *,
+    var_map: Mapping[str, object],
+    geometry_theta_offset_var=None,
+    replace_profile_cache: Callable[[dict[str, object]], None],
+    set_last_overlay_state: Callable[[dict[str, object] | None], object],
+    mark_last_simulation_dirty: Callable[[], None] | None = None,
+    cancel_pending_update: Callable[[], None] | None = None,
+    run_update: Callable[[], None] | None = None,
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None] | None = None,
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None] | None = None,
+    refresh_status: Callable[[], None] | None = None,
+    update_manual_pick_button_label: Callable[[], None] | None = None,
+    apply_undo_state: Callable[..., Mapping[str, object]] = apply_geometry_fit_undo_state,
+) -> Mapping[str, object]:
+    """Apply one saved geometry-fit history state back onto the live runtime."""
+
+    restored = apply_undo_state(
+        state,
+        var_map=var_map,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+    )
+    replace_profile_cache(dict(restored.get("profile_cache", {}) or {}))
+    overlay_state = restored.get("overlay_state")
+    set_last_overlay_state(
+        dict(overlay_state) if isinstance(overlay_state, dict) else None
+    )
+
+    if callable(mark_last_simulation_dirty):
+        mark_last_simulation_dirty()
+    if callable(cancel_pending_update):
+        cancel_pending_update()
+    if callable(run_update):
+        run_update()
+
+    overlay_payload = overlay_state if isinstance(overlay_state, dict) else {}
+    overlay_records = overlay_payload.get("overlay_records", []) or []
+    initial_pairs_display = overlay_payload.get("initial_pairs_display", []) or []
+    max_display_markers = int(overlay_payload.get("max_display_markers", 120))
+    max_display_markers = max(1, max_display_markers)
+    if overlay_records and callable(draw_overlay_records):
+        draw_overlay_records(overlay_records, int(max_display_markers))
+    elif initial_pairs_display and callable(draw_initial_pairs_overlay):
+        draw_initial_pairs_overlay(initial_pairs_display, int(max_display_markers))
+
+    if callable(refresh_status):
+        refresh_status()
+    if callable(update_manual_pick_button_label):
+        update_manual_pick_button_label()
+    return restored
+
+
+def _run_runtime_geometry_fit_history_transition(
+    *,
+    has_history: Callable[[], bool] | bool,
+    capture_current_state: Callable[[], dict[str, object]],
+    read_state: Callable[[], dict[str, object] | None],
+    restore_state: Callable[[dict[str, object]], object],
+    commit_transition: Callable[[dict[str, object]], None],
+    update_button_state: Callable[[], None] | None = None,
+    set_progress_text: Callable[[str], None] | None = None,
+    empty_text: str,
+    failure_prefix: str,
+    success_text: str,
+) -> bool:
+    """Run one geometry-fit history transition against the live runtime."""
+
+    history_available = (
+        bool(has_history()) if callable(has_history) else bool(has_history)
+    )
+    if not history_available:
+        if callable(set_progress_text):
+            set_progress_text(empty_text)
+        return False
+
+    current_state = capture_current_state()
+    state = read_state()
+    if not isinstance(state, dict):
+        if callable(set_progress_text):
+            set_progress_text(empty_text)
+        return False
+
+    try:
+        restore_state(state)
+    except Exception as exc:
+        if callable(set_progress_text):
+            set_progress_text(f"{failure_prefix}: {exc}")
+        return False
+
+    commit_transition(current_state)
+    if callable(update_button_state):
+        update_button_state()
+    if callable(set_progress_text):
+        set_progress_text(success_text)
+    return True
+
+
+def undo_runtime_geometry_fit(
+    *,
+    has_history: Callable[[], bool] | bool,
+    capture_current_state: Callable[[], dict[str, object]],
+    read_undo_state: Callable[[], dict[str, object] | None],
+    restore_state: Callable[[dict[str, object]], object],
+    commit_undo: Callable[[dict[str, object]], None],
+    update_button_state: Callable[[], None] | None = None,
+    set_progress_text: Callable[[str], None] | None = None,
+) -> bool:
+    """Restore the previous geometry-fit history state."""
+
+    return _run_runtime_geometry_fit_history_transition(
+        has_history=has_history,
+        capture_current_state=capture_current_state,
+        read_state=read_undo_state,
+        restore_state=restore_state,
+        commit_transition=commit_undo,
+        update_button_state=update_button_state,
+        set_progress_text=set_progress_text,
+        empty_text="No geometry fit history available to undo.",
+        failure_prefix="Failed to undo geometry fit",
+        success_text="Restored the previous geometry-fit state.",
+    )
+
+
+def redo_runtime_geometry_fit(
+    *,
+    has_history: Callable[[], bool] | bool,
+    capture_current_state: Callable[[], dict[str, object]],
+    read_redo_state: Callable[[], dict[str, object] | None],
+    restore_state: Callable[[dict[str, object]], object],
+    commit_redo: Callable[[dict[str, object]], None],
+    update_button_state: Callable[[], None] | None = None,
+    set_progress_text: Callable[[str], None] | None = None,
+) -> bool:
+    """Reapply the next geometry-fit history state."""
+
+    return _run_runtime_geometry_fit_history_transition(
+        has_history=has_history,
+        capture_current_state=capture_current_state,
+        read_state=read_redo_state,
+        restore_state=restore_state,
+        commit_transition=commit_redo,
+        update_button_state=update_button_state,
+        set_progress_text=set_progress_text,
+        empty_text="No geometry fit history available to redo.",
+        failure_prefix="Failed to redo geometry fit",
+        success_text="Reapplied the next geometry-fit state.",
+    )
+
+
 def build_geometry_manual_fit_dataset(
     background_index: int,
     *,

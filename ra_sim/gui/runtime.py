@@ -2024,10 +2024,16 @@ def _current_geometry_fit_ui_params() -> dict[str, object]:
 def _update_geometry_fit_undo_button_state() -> None:
     """Enable fit history buttons only when the relevant history exists."""
 
-    gui_views.set_geometry_fit_history_button_state(
-        geometry_tool_actions_view_state,
+    gui_geometry_fit.set_runtime_geometry_fit_history_button_state(
         can_undo=bool(geometry_fit_history_state.undo_stack),
         can_redo=bool(geometry_fit_history_state.redo_stack),
+        set_button_state=(
+            lambda can_undo, can_redo: gui_views.set_geometry_fit_history_button_state(
+                geometry_tool_actions_view_state,
+                can_undo=can_undo,
+                can_redo=can_redo,
+            )
+        ),
     )
 
 
@@ -2041,38 +2047,16 @@ def _clear_geometry_fit_undo_stack() -> None:
 def _capture_geometry_fit_undo_state() -> dict[str, object]:
     """Capture the current geometry-fit state for undo."""
 
-    overlay_state = _copy_geometry_fit_state_value(_geometry_fit_last_overlay_state())
-    if not (
-        isinstance(overlay_state, dict)
-        and (
-            overlay_state.get("overlay_records")
-            or overlay_state.get("initial_pairs_display")
-        )
-    ):
-        try:
-            _, initial_pairs_display = _build_geometry_manual_initial_pairs_display(
-                int(background_runtime_state.current_background_index),
-                param_set=_current_geometry_fit_params(),
-                prefer_cache=True,
-            )
-            pending_pairs_display = _geometry_manual_session_initial_pairs_display()
-            combined_pairs_display = list(initial_pairs_display) + list(pending_pairs_display)
-            if combined_pairs_display:
-                overlay_state = {
-                    "overlay_records": [],
-                    "initial_pairs_display": _copy_geometry_fit_state_value(
-                        combined_pairs_display
-                    ),
-                    "max_display_markers": max(1, len(combined_pairs_display)),
-                }
-        except Exception:
-            pass
-
-    return {
-        "ui_params": _copy_geometry_fit_state_value(_current_geometry_fit_ui_params()),
-        "profile_cache": _copy_geometry_fit_state_value(simulation_runtime_state.profile_cache),
-        "overlay_state": overlay_state,
-    }
+    return gui_geometry_fit.capture_runtime_geometry_fit_undo_state(
+        current_ui_params=_current_geometry_fit_ui_params,
+        current_profile_cache=lambda: simulation_runtime_state.profile_cache,
+        copy_state_value=_copy_geometry_fit_state_value,
+        last_overlay_state=_geometry_fit_last_overlay_state,
+        build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
+        current_background_index=lambda: int(background_runtime_state.current_background_index),
+        current_fit_params=_current_geometry_fit_params,
+        pending_pairs_display=_geometry_manual_session_initial_pairs_display,
+    )
 
 
 def _push_geometry_fit_undo_state(state: dict[str, object] | None) -> None:
@@ -2100,108 +2084,105 @@ def _push_geometry_fit_redo_state(state: dict[str, object] | None) -> None:
 def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
     """Restore a previously captured geometry-fit state."""
 
-
     if not isinstance(state, dict):
         return
 
-    restored = gui_geometry_fit.apply_geometry_fit_undo_state(
+    def _cancel_pending_update() -> None:
+        if simulation_runtime_state.update_pending is not None:
+            try:
+                root.after_cancel(simulation_runtime_state.update_pending)
+            except Exception:
+                pass
+            simulation_runtime_state.update_pending = None
+
+    gui_geometry_fit.restore_runtime_geometry_fit_undo_state(
         state,
         var_map=_geometry_fit_var_map,
         geometry_theta_offset_var=geometry_theta_offset_var,
+        replace_profile_cache=(
+            lambda profile_cache: setattr(
+                simulation_runtime_state,
+                "profile_cache",
+                dict(profile_cache),
+            )
+        ),
+        set_last_overlay_state=_set_geometry_fit_last_overlay_state,
+        mark_last_simulation_dirty=(
+            lambda: setattr(
+                simulation_runtime_state,
+                "last_simulation_signature",
+                None,
+            )
+        ),
+        cancel_pending_update=_cancel_pending_update,
+        run_update=do_update,
+        draw_overlay_records=(
+            lambda overlay_records, marker_limit: _draw_geometry_fit_overlay(
+                overlay_records,
+                max_display_markers=marker_limit,
+            )
+        ),
+        draw_initial_pairs_overlay=(
+            lambda initial_pairs_display, marker_limit: _draw_initial_geometry_pairs_overlay(
+                initial_pairs_display,
+                max_display_markers=marker_limit,
+            )
+        ),
+        refresh_status=background_runtime_callbacks.refresh_status,
+        update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
     )
-    simulation_runtime_state.profile_cache = restored["profile_cache"]
-    _set_geometry_fit_last_overlay_state(restored["overlay_state"])
-    simulation_runtime_state.last_simulation_signature = None
-
-    if simulation_runtime_state.update_pending is not None:
-        try:
-            root.after_cancel(simulation_runtime_state.update_pending)
-        except Exception:
-            pass
-        simulation_runtime_state.update_pending = None
-
-    do_update()
-
-    overlay_state = _geometry_fit_last_overlay_state() or {}
-    overlay_records = overlay_state.get("overlay_records", []) or []
-    initial_pairs_display = overlay_state.get("initial_pairs_display", []) or []
-    max_display_markers = int(overlay_state.get("max_display_markers", 120))
-    max_display_markers = max(1, max_display_markers)
-    if overlay_records:
-        _draw_geometry_fit_overlay(
-            overlay_records,
-            max_display_markers=max_display_markers,
-        )
-    elif initial_pairs_display:
-        _draw_initial_geometry_pairs_overlay(
-            initial_pairs_display,
-            max_display_markers=max_display_markers,
-        )
-
-    background_runtime_callbacks.refresh_status()
-    _update_geometry_manual_pick_button_label()
 
 
 def _undo_last_geometry_fit() -> None:
     """Restore the most recent geometry-fit state."""
 
-    if not geometry_fit_history_state.undo_stack:
-        progress_label_geometry.config(text="No geometry fit history available to undo.")
-        return
-
-    current_state = _capture_geometry_fit_undo_state()
-    state = gui_controllers.peek_last_geometry_fit_undo_state(
-        geometry_fit_history_state,
-        copy_state_value=_copy_geometry_fit_state_value,
+    gui_geometry_fit.undo_runtime_geometry_fit(
+        has_history=lambda: bool(geometry_fit_history_state.undo_stack),
+        capture_current_state=_capture_geometry_fit_undo_state,
+        read_undo_state=(
+            lambda: gui_controllers.peek_last_geometry_fit_undo_state(
+                geometry_fit_history_state,
+                copy_state_value=_copy_geometry_fit_state_value,
+            )
+        ),
+        restore_state=_restore_geometry_fit_undo_state,
+        commit_undo=(
+            lambda current_state: gui_controllers.commit_geometry_fit_undo(
+                geometry_fit_history_state,
+                current_state,
+                copy_state_value=_copy_geometry_fit_state_value,
+                limit=int(GEOMETRY_FIT_UNDO_LIMIT),
+            )
+        ),
+        update_button_state=_update_geometry_fit_undo_button_state,
+        set_progress_text=lambda text: progress_label_geometry.config(text=text),
     )
-    if not isinstance(state, dict):
-        progress_label_geometry.config(text="No geometry fit history available to undo.")
-        return
-    try:
-        _restore_geometry_fit_undo_state(state)
-    except Exception as exc:
-        progress_label_geometry.config(text=f"Failed to undo geometry fit: {exc}")
-        return
-
-    gui_controllers.commit_geometry_fit_undo(
-        geometry_fit_history_state,
-        current_state,
-        copy_state_value=_copy_geometry_fit_state_value,
-        limit=int(GEOMETRY_FIT_UNDO_LIMIT),
-    )
-    _update_geometry_fit_undo_button_state()
-    progress_label_geometry.config(text="Restored the previous geometry-fit state.")
 
 
 def _redo_last_geometry_fit() -> None:
     """Reapply the most recently undone geometry-fit state."""
 
-    if not geometry_fit_history_state.redo_stack:
-        progress_label_geometry.config(text="No geometry fit history available to redo.")
-        return
-
-    current_state = _capture_geometry_fit_undo_state()
-    state = gui_controllers.peek_last_geometry_fit_redo_state(
-        geometry_fit_history_state,
-        copy_state_value=_copy_geometry_fit_state_value,
+    gui_geometry_fit.redo_runtime_geometry_fit(
+        has_history=lambda: bool(geometry_fit_history_state.redo_stack),
+        capture_current_state=_capture_geometry_fit_undo_state,
+        read_redo_state=(
+            lambda: gui_controllers.peek_last_geometry_fit_redo_state(
+                geometry_fit_history_state,
+                copy_state_value=_copy_geometry_fit_state_value,
+            )
+        ),
+        restore_state=_restore_geometry_fit_undo_state,
+        commit_redo=(
+            lambda current_state: gui_controllers.commit_geometry_fit_redo(
+                geometry_fit_history_state,
+                current_state,
+                copy_state_value=_copy_geometry_fit_state_value,
+                limit=int(GEOMETRY_FIT_UNDO_LIMIT),
+            )
+        ),
+        update_button_state=_update_geometry_fit_undo_button_state,
+        set_progress_text=lambda text: progress_label_geometry.config(text=text),
     )
-    if not isinstance(state, dict):
-        progress_label_geometry.config(text="No geometry fit history available to redo.")
-        return
-    try:
-        _restore_geometry_fit_undo_state(state)
-    except Exception as exc:
-        progress_label_geometry.config(text=f"Failed to redo geometry fit: {exc}")
-        return
-
-    gui_controllers.commit_geometry_fit_redo(
-        geometry_fit_history_state,
-        current_state,
-        copy_state_value=_copy_geometry_fit_state_value,
-        limit=int(GEOMETRY_FIT_UNDO_LIMIT),
-    )
-    _update_geometry_fit_undo_button_state()
-    progress_label_geometry.config(text="Reapplied the next geometry-fit state.")
 
 
 def _geometry_manual_pair_entry_to_jsonable(

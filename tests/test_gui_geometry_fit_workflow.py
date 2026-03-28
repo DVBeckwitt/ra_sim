@@ -1410,6 +1410,147 @@ def test_build_runtime_geometry_fit_result_bindings_uses_current_ui_snapshot() -
     }
 
 
+def test_capture_runtime_geometry_fit_undo_state_builds_overlay_fallback_from_manual_pairs() -> None:
+    calls: list[tuple[str, object]] = []
+
+    snapshot = geometry_fit.capture_runtime_geometry_fit_undo_state(
+        current_ui_params=lambda: {"gamma": 1.25},
+        current_profile_cache=lambda: {"profile": 1},
+        copy_state_value=geometry_fit.copy_geometry_fit_state_value,
+        last_overlay_state=lambda: None,
+        build_initial_pairs_display=(
+            lambda background_index, *, param_set, prefer_cache: (
+                calls.append(
+                    (
+                        "build",
+                        {
+                            "background_index": background_index,
+                            "param_set": dict(param_set),
+                            "prefer_cache": prefer_cache,
+                        },
+                    )
+                )
+                or ([], [{"pair": "saved"}])
+            )
+        ),
+        current_background_index=lambda: 2,
+        current_fit_params=lambda: {"a": 4.2},
+        pending_pairs_display=lambda: [{"pair": "pending"}],
+    )
+
+    assert calls == [
+        (
+            "build",
+            {
+                "background_index": 2,
+                "param_set": {"a": 4.2},
+                "prefer_cache": True,
+            },
+        )
+    ]
+    assert snapshot == {
+        "ui_params": {"gamma": 1.25},
+        "profile_cache": {"profile": 1},
+        "overlay_state": {
+            "overlay_records": [],
+            "initial_pairs_display": [{"pair": "saved"}, {"pair": "pending"}],
+            "max_display_markers": 2,
+        },
+    }
+
+
+def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overlay() -> None:
+    gamma_var = _DummyVar(0.0)
+    a_var = _DummyVar(0.0)
+    theta_offset_var = _DummyVar("")
+    stored_profile_cache: dict[str, object] = {}
+    stored_overlay_state: dict[str, object] | None = None
+    events: list[object] = []
+
+    restored = geometry_fit.restore_runtime_geometry_fit_undo_state(
+        {
+            "ui_params": {"gamma": 1.5, "a": 4.4, "theta_offset": 0.25},
+            "profile_cache": {"profile": 2},
+            "overlay_state": {
+                "overlay_records": [{"overlay": True}],
+                "max_display_markers": 5,
+            },
+        },
+        var_map={"gamma": gamma_var, "a": a_var},
+        geometry_theta_offset_var=theta_offset_var,
+        replace_profile_cache=lambda profile_cache: stored_profile_cache.update(profile_cache),
+        set_last_overlay_state=lambda overlay_state: events.append(("overlay_state", overlay_state)),
+        mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
+        cancel_pending_update=lambda: events.append("cancel_pending"),
+        run_update=lambda: events.append("run_update"),
+        draw_overlay_records=lambda records, marker_limit: events.append(
+            ("draw_overlay", list(records), marker_limit)
+        ),
+        draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+            ("draw_initial", list(pairs), marker_limit)
+        ),
+        refresh_status=lambda: events.append("refresh"),
+        update_manual_pick_button_label=lambda: events.append("button"),
+    )
+
+    assert gamma_var.get() == 1.5
+    assert a_var.get() == 4.4
+    assert theta_offset_var.get() == "0.25"
+    assert stored_profile_cache == {"profile": 2}
+    assert restored["overlay_state"] == {
+        "overlay_records": [{"overlay": True}],
+        "max_display_markers": 5,
+    }
+    assert events == [
+        ("overlay_state", {"overlay_records": [{"overlay": True}], "max_display_markers": 5}),
+        "mark_dirty",
+        "cancel_pending",
+        "run_update",
+        ("draw_overlay", [{"overlay": True}], 5),
+        "refresh",
+        "button",
+    ]
+
+
+def test_undo_runtime_geometry_fit_restores_and_commits_history() -> None:
+    events: list[object] = []
+
+    handled = geometry_fit.undo_runtime_geometry_fit(
+        has_history=lambda: True,
+        capture_current_state=lambda: {"current": True},
+        read_undo_state=lambda: {"saved": True},
+        restore_state=lambda state: events.append(("restore", dict(state))),
+        commit_undo=lambda state: events.append(("commit", dict(state))),
+        update_button_state=lambda: events.append("update_buttons"),
+        set_progress_text=lambda text: events.append(("progress", text)),
+    )
+
+    assert handled is True
+    assert events == [
+        ("restore", {"saved": True}),
+        ("commit", {"current": True}),
+        "update_buttons",
+        ("progress", "Restored the previous geometry-fit state."),
+    ]
+
+
+def test_redo_runtime_geometry_fit_reports_restore_failure() -> None:
+    events: list[object] = []
+
+    handled = geometry_fit.redo_runtime_geometry_fit(
+        has_history=lambda: True,
+        capture_current_state=lambda: {"current": True},
+        read_redo_state=lambda: {"saved": True},
+        restore_state=lambda _state: (_ for _ in ()).throw(RuntimeError("bad state")),
+        commit_redo=lambda state: events.append(("commit", dict(state))),
+        update_button_state=lambda: events.append("update_buttons"),
+        set_progress_text=lambda text: events.append(("progress", text)),
+    )
+
+    assert handled is False
+    assert events == [("progress", "Failed to redo geometry fit: bad state")]
+
+
 def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callbacks(
     tmp_path,
 ) -> None:

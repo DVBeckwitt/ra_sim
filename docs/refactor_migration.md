@@ -71,6 +71,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - Geometry-fit history and Qr/Qz selector state have also started moving out of
   runtime-owned globals:
   - geometry-fit undo/redo history now uses shared GUI state
+  - geometry-fit undo snapshot capture, runtime restore/redraw, and undo/redo
+    transition helpers now also live in `ra_sim.gui.geometry_fit`
   - Qr/Qz selector cached-entry and refresh mutations now flow through
     `ra_sim.gui.controllers`
   - selector formatting/status/save-load workflow now also flows through
@@ -541,9 +543,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   call sites around the extracted peak-selection modules and shared bootstrap
   helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining fit-history/manual-pick mode-clear and preview-action control
-  wiring around the extracted `ra_sim.gui.geometry_fit` and
-  `ra_sim.gui.manual_geometry` helper surfaces.
+  remaining manual-pick mode-clear and preview-action control wiring around
+  the extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
+  helper surfaces.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction modules.

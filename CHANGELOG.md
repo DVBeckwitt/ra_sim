@@ -66,6 +66,7 @@
   - Expanded `ra_sim/gui/background_manager.py` with the background visibility toggle workflow used by the workspace action controls and wired it into the runtime callback bundle, leaving `ra_sim/gui/runtime.py` without a standalone background-toggle helper.
   - Expanded `ra_sim/gui/background_manager.py` with backend-orientation debug status plus rotate/flip/reset runtime helpers and callback wiring, leaving `ra_sim/gui/runtime.py` with thin background debug status-refresh and control-wiring call sites.
   - Expanded `ra_sim/gui/manual_geometry.py` with background-path matching, placement export-row/snapshot assembly, placement snapshot apply, and placement export/import dialog workflow helpers, leaving `ra_sim/gui/runtime.py` with thin delegates plus file-dialog dir and caked-view callback wiring.
+  - Expanded `ra_sim/gui/geometry_fit.py` with runtime fit-history button-state, undo snapshot capture, runtime restore/redraw, and undo/redo transition helpers, leaving `ra_sim/gui/runtime.py` with thin delegates plus live state/controller/view callback wiring for that workflow.
   - Added `ra_sim/gui/integration_range_drag.py` plus explicit `IntegrationRangeDragState` in `ra_sim/gui/state.py` for raw/caked canvas drag-selection of 1D integration ranges, and expanded that module with the drag/region rectangle helpers plus current integration-region visual refresh used by the live GUI, leaving `ra_sim/gui/runtime.py` with manual-geometry canvas branches, top-level event dispatch, and thin live call sites.
   - Expanded `ra_sim/gui/peak_selection.py` to own the selected-peak HKL-pick toggle and raw-image click workflow, the Bragg/Ewald intersection analysis path, the ideal-center probe helper, the selected-peak config builders, and the runtime binding/callback bundle for HKL-pick labels, mode toggles, selected-peak refresh, HKL-control selection, and canvas-click selection, leaving `ra_sim/gui/runtime.py` with live GUI scalar getters plus the bound peak-selection wiring.
   - Expanded `ra_sim/gui/peak_selection.py` with runtime config-factory helpers for canvas-pick, Bragg/Ewald intersection, and ideal-center probe setup plus the shared selected-peak runtime config-factory bundle helper, leaving `ra_sim/gui/runtime.py` with thinner selected-peak value-source wiring around the bound runtime callbacks.
@@ -85,6 +86,7 @@
 
 - **Tests**
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
+  - Extended `tests/test_gui_geometry_fit_workflow.py` with direct coverage for the extracted geometry-fit history snapshot/restore and undo/redo runtime helpers in `ra_sim.gui.geometry_fit`.
   - Extended `tests/test_manual_geometry_selection_helpers.py` with direct coverage for placement export-row/snapshot apply helpers and the export/import dialog workflow in `ra_sim.gui.manual_geometry`.
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.
   - Extended `tests/test_gui_structure_model.py` with primary-CIF dialog workflow plus diffuse-HT open/export dialog workflow coverage in addition to the existing reload snapshot/restore and request-packaging tests.

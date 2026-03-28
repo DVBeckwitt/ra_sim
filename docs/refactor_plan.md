@@ -78,6 +78,8 @@ not `main.py` or `mosaic_profiles.py`.
   - Direct controller tests cover in-place state replacement and undo restore.
 - Geometry-fit history and Q-group selector state migration has started.
   - Geometry-fit undo/redo history now has shared state in `ra_sim.gui.state`.
+  - Geometry-fit undo snapshot capture, runtime restore/redraw, and undo/redo
+    transition helpers now also live in `ra_sim.gui.geometry_fit`.
   - Q-group selector cached rows and refresh state now have shared state in
     `ra_sim.gui.state`.
   - Controller helpers now own the corresponding stack/list/refresh mutations.
@@ -720,9 +722,9 @@ What is left:
   call sites around the extracted peak-selection helpers and shared bootstrap
   helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining fit-history/manual-pick mode-clear and preview-action control
-  wiring around the extracted `ra_sim.gui.geometry_fit` and
-  `ra_sim.gui.manual_geometry` helper surfaces.
+  remaining manual-pick mode-clear and preview-action control wiring around
+  the extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
+  helper surfaces.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction helpers.
