@@ -467,6 +467,102 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     )
 
 
+def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() -> None:
+    shared_theta = {"value": True}
+    background_state = {"index": 1}
+    theta_offset_state = {"value": 0.125}
+    optics_mode = {"value": "exact"}
+
+    callbacks = geometry_fit.build_runtime_geometry_fit_value_callbacks(
+        geometry_fit.GeometryFitRuntimeValueBindings(
+            fit_zb_var=_DummyVar(False),
+            fit_zs_var=_DummyVar(False),
+            fit_theta_var=_DummyVar(True),
+            fit_psi_z_var=_DummyVar(False),
+            fit_chi_var=_DummyVar(False),
+            fit_cor_var=_DummyVar(False),
+            fit_gamma_var=_DummyVar(True),
+            fit_Gamma_var=_DummyVar(False),
+            fit_dist_var=_DummyVar(False),
+            fit_a_var=_DummyVar(True),
+            fit_c_var=_DummyVar(False),
+            fit_center_x_var=_DummyVar(True),
+            fit_center_y_var=_DummyVar(False),
+            zb_var=_DummyVar(0.1),
+            zs_var=_DummyVar(0.2),
+            theta_initial_var=_DummyVar(9.5),
+            psi_z_var=_DummyVar(0.7),
+            chi_var=_DummyVar(0.5),
+            cor_angle_var=_DummyVar(0.6),
+            gamma_var=_DummyVar(0.8),
+            Gamma_var=_DummyVar(0.9),
+            corto_detector_var=_DummyVar(1.0),
+            a_var=_DummyVar(4.2),
+            c_var=_DummyVar(32.1),
+            center_x_var=_DummyVar(100.0),
+            center_y_var=_DummyVar(200.0),
+            debye_x_var=_DummyVar(3.0),
+            debye_y_var=_DummyVar(4.0),
+            geometry_theta_offset_var=_DummyVar("0.125"),
+            current_background_index=lambda: background_state["index"],
+            geometry_fit_uses_shared_theta_offset=lambda: shared_theta["value"],
+            current_geometry_theta_offset=lambda strict=False: theta_offset_state[
+                "value"
+            ],
+            background_theta_for_index=(
+                lambda index, strict_count=False: {0: 2.75, 1: 4.25}[int(index)]
+            ),
+            build_mosaic_params=lambda: {"sigma_mosaic_deg": 0.2},
+            current_optics_mode_flag=lambda: optics_mode["value"],
+            lambda_value=1.54,
+            psi=12.0,
+            n2=1.7,
+        )
+    )
+
+    assert callbacks.current_var_names() == ["theta_offset", "gamma", "a", "center_x"]
+
+    params = callbacks.current_params()
+    assert params["theta_initial"] == 4.25
+    assert params["theta_offset"] == 0.125
+    assert params["mosaic_params"] == {"sigma_mosaic_deg": 0.2}
+    assert params["center"] == [100.0, 200.0]
+    assert params["optics_mode"] == "exact"
+    assert np.array_equal(params["uv1"], np.array([1.0, 0.0, 0.0]))
+    assert np.array_equal(params["uv2"], np.array([0.0, 1.0, 0.0]))
+
+    ui_params = callbacks.current_ui_params()
+    assert ui_params == {
+        "zb": 0.1,
+        "zs": 0.2,
+        "theta_initial": 9.5,
+        "psi_z": 0.7,
+        "chi": 0.5,
+        "cor_angle": 0.6,
+        "gamma": 0.8,
+        "Gamma": 0.9,
+        "corto_detector": 1.0,
+        "a": 4.2,
+        "c": 32.1,
+        "center_x": 100.0,
+        "center_y": 200.0,
+        "center": [100.0, 200.0],
+        "theta_offset": 0.125,
+    }
+    assert callbacks.var_map["theta_initial"].get() == 9.5
+    assert callbacks.var_map["center_x"].get() == 100.0
+
+    shared_theta["value"] = False
+    theta_offset_state["value"] = 0.333333
+    callbacks.var_map["theta_initial"].set(8.75)
+
+    assert callbacks.current_var_names() == ["theta_initial", "gamma", "a", "center_x"]
+    params = callbacks.current_params()
+    assert params["theta_initial"] == 8.75
+    assert params["theta_offset"] == 0.0
+    assert params["center_x"] == 100.0
+
+
 def test_apply_geometry_fit_result_values_updates_named_vars_and_offset_text() -> None:
     gamma_var = _DummyVar(0.0)
     a_var = _DummyVar(0.0)

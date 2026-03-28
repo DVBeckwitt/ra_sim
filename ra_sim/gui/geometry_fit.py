@@ -80,6 +80,50 @@ class GeometryFitRuntimePreparationBindings:
 
 
 @dataclass(frozen=True)
+class GeometryFitRuntimeValueBindings:
+    """Live Tk/runtime value sources used by geometry-fit runtime helpers."""
+
+    fit_zb_var: object
+    fit_zs_var: object
+    fit_theta_var: object
+    fit_psi_z_var: object
+    fit_chi_var: object
+    fit_cor_var: object
+    fit_gamma_var: object
+    fit_Gamma_var: object
+    fit_dist_var: object
+    fit_a_var: object
+    fit_c_var: object
+    fit_center_x_var: object
+    fit_center_y_var: object
+    zb_var: object
+    zs_var: object
+    theta_initial_var: object
+    psi_z_var: object
+    chi_var: object
+    cor_angle_var: object
+    gamma_var: object
+    Gamma_var: object
+    corto_detector_var: object
+    a_var: object
+    c_var: object
+    center_x_var: object
+    center_y_var: object
+    debye_x_var: object
+    debye_y_var: object
+    geometry_theta_offset_var: object | None
+    current_background_index: object
+    geometry_fit_uses_shared_theta_offset: Callable[..., bool]
+    current_geometry_theta_offset: Callable[..., float]
+    background_theta_for_index: Callable[..., object]
+    build_mosaic_params: Callable[[], Mapping[str, object] | None]
+    current_optics_mode_flag: Callable[[], object]
+    lambda_value: object
+    psi: object
+    n2: object
+
+
+@dataclass(frozen=True)
 class GeometryFitRuntimeSolverInputs:
     """Simulation inputs needed to invoke the live geometry-fit solver."""
 
@@ -204,6 +248,16 @@ class GeometryFitRuntimeExecutionSetup:
 
     ui_bindings: GeometryFitRuntimeUiBindings
     postprocess_config: GeometryFitRuntimePostprocessConfig
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimeValueCallbacks:
+    """Bound callbacks that expose live geometry-fit values from runtime."""
+
+    current_var_names: Callable[[], list[str]]
+    current_params: Callable[[], dict[str, object]]
+    current_ui_params: Callable[[], dict[str, object]]
+    var_map: Mapping[str, object]
 
 
 @dataclass(frozen=True)
@@ -332,6 +386,124 @@ def current_geometry_fit_var_names(
     if fit_center_y:
         var_names.append("center_y")
     return var_names
+
+
+def build_runtime_geometry_fit_value_callbacks(
+    bindings: GeometryFitRuntimeValueBindings,
+) -> GeometryFitRuntimeValueCallbacks:
+    """Build bound live geometry-fit value readers for the runtime."""
+
+    var_map = {
+        "zb": bindings.zb_var,
+        "zs": bindings.zs_var,
+        "theta_initial": bindings.theta_initial_var,
+        "psi_z": bindings.psi_z_var,
+        "chi": bindings.chi_var,
+        "cor_angle": bindings.cor_angle_var,
+        "gamma": bindings.gamma_var,
+        "Gamma": bindings.Gamma_var,
+        "corto_detector": bindings.corto_detector_var,
+        "a": bindings.a_var,
+        "c": bindings.c_var,
+        "center_x": bindings.center_x_var,
+        "center_y": bindings.center_y_var,
+    }
+
+    def _current_var_names() -> list[str]:
+        return current_geometry_fit_var_names(
+            fit_zb=bool(bindings.fit_zb_var.get()),
+            fit_zs=bool(bindings.fit_zs_var.get()),
+            fit_theta=bool(bindings.fit_theta_var.get()),
+            fit_psi_z=bool(bindings.fit_psi_z_var.get()),
+            fit_chi=bool(bindings.fit_chi_var.get()),
+            fit_cor=bool(bindings.fit_cor_var.get()),
+            fit_gamma=bool(bindings.fit_gamma_var.get()),
+            fit_Gamma=bool(bindings.fit_Gamma_var.get()),
+            fit_dist=bool(bindings.fit_dist_var.get()),
+            fit_a=bool(bindings.fit_a_var.get()),
+            fit_c=bool(bindings.fit_c_var.get()),
+            fit_center_x=bool(bindings.fit_center_x_var.get()),
+            fit_center_y=bool(bindings.fit_center_y_var.get()),
+            use_shared_theta_offset=bool(
+                bindings.geometry_fit_uses_shared_theta_offset()
+            ),
+        )
+
+    def _current_params() -> dict[str, object]:
+        use_theta_offset = bool(bindings.geometry_fit_uses_shared_theta_offset())
+        theta_offset_current = (
+            float(bindings.current_geometry_theta_offset(strict=False))
+            if use_theta_offset
+            else 0.0
+        )
+        current_background_index_value = (
+            bindings.current_background_index()
+            if callable(bindings.current_background_index)
+            else bindings.current_background_index
+        )
+        current_background_index = int(current_background_index_value)
+        theta_current = (
+            bindings.background_theta_for_index(
+                current_background_index,
+                strict_count=False,
+            )
+            if use_theta_offset
+            else bindings.theta_initial_var.get()
+        )
+        return {
+            "a": bindings.a_var.get(),
+            "c": bindings.c_var.get(),
+            "lambda": bindings.lambda_value,
+            "psi": bindings.psi,
+            "psi_z": bindings.psi_z_var.get(),
+            "zs": bindings.zs_var.get(),
+            "zb": bindings.zb_var.get(),
+            "chi": bindings.chi_var.get(),
+            "n2": bindings.n2,
+            "mosaic_params": dict(bindings.build_mosaic_params() or {}),
+            "debye_x": bindings.debye_x_var.get(),
+            "debye_y": bindings.debye_y_var.get(),
+            "center": [bindings.center_x_var.get(), bindings.center_y_var.get()],
+            "center_x": bindings.center_x_var.get(),
+            "center_y": bindings.center_y_var.get(),
+            "theta_initial": theta_current,
+            "theta_offset": theta_offset_current,
+            "uv1": np.array([1.0, 0.0, 0.0]),
+            "uv2": np.array([0.0, 1.0, 0.0]),
+            "corto_detector": bindings.corto_detector_var.get(),
+            "gamma": bindings.gamma_var.get(),
+            "Gamma": bindings.Gamma_var.get(),
+            "cor_angle": bindings.cor_angle_var.get(),
+            "optics_mode": bindings.current_optics_mode_flag(),
+        }
+
+    def _current_ui_params() -> dict[str, object]:
+        theta_offset = None
+        if bindings.geometry_theta_offset_var is not None:
+            theta_offset = float(bindings.current_geometry_theta_offset(strict=False))
+        return current_geometry_fit_ui_params(
+            zb=float(bindings.zb_var.get()),
+            zs=float(bindings.zs_var.get()),
+            theta_initial=float(bindings.theta_initial_var.get()),
+            psi_z=float(bindings.psi_z_var.get()),
+            chi=float(bindings.chi_var.get()),
+            cor_angle=float(bindings.cor_angle_var.get()),
+            gamma=float(bindings.gamma_var.get()),
+            Gamma=float(bindings.Gamma_var.get()),
+            corto_detector=float(bindings.corto_detector_var.get()),
+            a=float(bindings.a_var.get()),
+            c=float(bindings.c_var.get()),
+            center_x=float(bindings.center_x_var.get()),
+            center_y=float(bindings.center_y_var.get()),
+            theta_offset=theta_offset,
+        )
+
+    return GeometryFitRuntimeValueCallbacks(
+        current_var_names=_current_var_names,
+        current_params=_current_params,
+        current_ui_params=_current_ui_params,
+        var_map=var_map,
+    )
 
 
 def build_geometry_fit_runtime_config(
