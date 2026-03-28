@@ -7418,23 +7418,19 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
             min_matches=min_matches,
         )
     )
-    gui_controllers.replace_geometry_preview_overlay_state(
-        geometry_preview_state,
-        gui_geometry_q_group_manager.build_live_geometry_preview_overlay_state(
-            signature=preview_signature,
-            matched_pairs=matched_pairs,
-            match_stats=match_stats,
-            preview_auto_match_cfg=preview_auto_match_cfg,
-            auto_match_attempts=auto_match_attempts,
-            min_matches=int(min_matches),
-            q_group_total=int(q_group_total),
-            q_group_excluded=int(_geometry_q_group_excluded_count()),
-            excluded_q_peaks=int(excluded_q_peaks),
-            collapsed_degenerate_peaks=int(collapsed_deg_preview),
-        ),
+    return gui_geometry_q_group_manager.apply_runtime_live_geometry_preview_match_results(
+        geometry_q_group_runtime_bindings_factory(),
+        signature=preview_signature,
+        matched_pairs=matched_pairs,
+        match_stats=match_stats,
+        preview_auto_match_cfg=preview_auto_match_cfg,
+        auto_match_attempts=auto_match_attempts,
+        min_matches=int(min_matches),
+        q_group_total=int(q_group_total),
+        excluded_q_peaks=int(excluded_q_peaks),
+        collapsed_deg_preview=int(collapsed_deg_preview),
+        update_status=update_status,
     )
-
-    return _render_live_geometry_preview_state(update_status=update_status)
 
 
 geometry_q_group_runtime_value_callbacks = (

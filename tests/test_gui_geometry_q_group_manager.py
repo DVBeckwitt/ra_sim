@@ -1286,6 +1286,74 @@ def test_geometry_q_group_manager_runtime_live_preview_seed_state_resolution() -
     assert success_events == [("collapse", 4.5)]
 
 
+def test_geometry_q_group_manager_runtime_live_preview_match_result_application(
+    monkeypatch,
+) -> None:
+    events = []
+    preview_state = state.GeometryPreviewState()
+
+    monkeypatch.setattr(
+        geometry_q_group_manager.gui_controllers,
+        "replace_geometry_preview_overlay_state",
+        lambda preview_state_value, overlay_state: events.append(
+            ("replace", preview_state_value, overlay_state)
+        ),
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "render_runtime_live_geometry_preview_state",
+        lambda bindings, *, update_status=True: (
+            events.append(("render", bindings, update_status)),
+            True,
+        )[-1],
+    )
+
+    bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=preview_state,
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        excluded_q_group_count=lambda: 2,
+    )
+
+    applied = (
+        geometry_q_group_manager.apply_runtime_live_geometry_preview_match_results(
+            bindings,
+            signature=("sig", 4),
+            matched_pairs=[{"x": 1.0, "y": 2.0, "sim_x": 0.5, "sim_y": 1.5}],
+            match_stats={
+                "simulated_count": 4,
+                "search_radius_px": 18.0,
+                "mean_match_distance_px": 6.0,
+                "p90_match_distance_px": 9.0,
+            },
+            preview_auto_match_cfg={"max_display_markers": 6},
+            auto_match_attempts=[{"radius": 18.0}],
+            min_matches=3,
+            q_group_total=5,
+            excluded_q_peaks=1,
+            collapsed_deg_preview=2,
+            update_status=False,
+        )
+    )
+
+    assert applied is True
+    assert events[0][0] == "replace"
+    assert events[0][1] is preview_state
+    assert events[0][2]["signature"] == ("sig", 4)
+    assert events[0][2]["q_group_total"] == 5
+    assert events[0][2]["q_group_excluded"] == 2
+    assert events[0][2]["excluded_q_peaks"] == 1
+    assert events[0][2]["collapsed_degenerate_peaks"] == 2
+    assert events[0][2]["auto_match_attempts"] == [{"radius": 18.0}]
+    assert events[1] == ("render", bindings, False)
+
+
 def test_refresh_geometry_q_group_window_uses_cached_entries_and_view_helpers(
     monkeypatch,
 ) -> None:

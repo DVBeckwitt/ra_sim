@@ -2351,6 +2351,48 @@ def resolve_runtime_live_geometry_preview_seed_state(
     )
 
 
+def apply_runtime_live_geometry_preview_match_results(
+    bindings: GeometryQGroupRuntimeBindings,
+    *,
+    signature: object,
+    matched_pairs: Sequence[Mapping[str, object]] | None,
+    match_stats: Mapping[str, object] | None,
+    preview_auto_match_cfg: Mapping[str, object] | None,
+    auto_match_attempts: Sequence[Mapping[str, object]] | None,
+    min_matches: int,
+    q_group_total: int,
+    excluded_q_peaks: int,
+    collapsed_deg_preview: int = 0,
+    update_status: bool = True,
+) -> bool:
+    """Store runtime live-preview match results and redraw the cached overlay."""
+
+    q_group_excluded = (
+        _coerce_int(bindings.excluded_q_group_count(), 0)
+        if callable(bindings.excluded_q_group_count)
+        else 0
+    )
+    gui_controllers.replace_geometry_preview_overlay_state(
+        bindings.preview_state,
+        build_live_geometry_preview_overlay_state(
+            signature=signature,
+            matched_pairs=matched_pairs,
+            match_stats=match_stats,
+            preview_auto_match_cfg=preview_auto_match_cfg,
+            auto_match_attempts=auto_match_attempts,
+            min_matches=int(min_matches),
+            q_group_total=int(q_group_total),
+            q_group_excluded=int(q_group_excluded),
+            excluded_q_peaks=int(excluded_q_peaks),
+            collapsed_degenerate_peaks=int(collapsed_deg_preview),
+        ),
+    )
+    return render_runtime_live_geometry_preview_state(
+        bindings,
+        update_status=update_status,
+    )
+
+
 def distance_point_to_segment_sq(
     px: float,
     py: float,
