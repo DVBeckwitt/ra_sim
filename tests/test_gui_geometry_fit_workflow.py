@@ -516,3 +516,211 @@ def test_geometry_fit_result_rms_falls_back_to_residual_vector() -> None:
         geometry_fit.geometry_fit_result_rms(_Result()),
         5.0 / np.sqrt(2.0),
     )
+
+
+def test_build_geometry_fit_profile_cache_merges_mosaic_and_current_fit_values() -> None:
+    profile_cache = geometry_fit.build_geometry_fit_profile_cache(
+        {"existing": 1, "gamma": -1.0},
+        {"sigma_mosaic_deg": 0.2},
+        theta_initial=3.0,
+        theta_offset=0.4,
+        cor_angle=0.6,
+        chi=0.5,
+        zs=0.2,
+        zb=0.1,
+        gamma=0.8,
+        Gamma=0.9,
+        corto_detector=1.0,
+        a=4.2,
+        c=32.1,
+        center_x=100.0,
+        center_y=200.0,
+    )
+
+    assert profile_cache == {
+        "existing": 1,
+        "gamma": 0.8,
+        "sigma_mosaic_deg": 0.2,
+        "theta_initial": 3.0,
+        "theta_offset": 0.4,
+        "cor_angle": 0.6,
+        "chi": 0.5,
+        "zs": 0.2,
+        "zb": 0.1,
+        "Gamma": 0.9,
+        "corto_detector": 1.0,
+        "a": 4.2,
+        "c": 32.1,
+        "center_x": 100.0,
+        "center_y": 200.0,
+    }
+
+
+def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloads(
+    tmp_path,
+) -> None:
+    class _Result:
+        point_match_summary = {"claimed": 4, "qualified": 3}
+        point_match_diagnostics = [
+            {"dataset_index": 0, "name": "drop"},
+            {"dataset_index": 1, "name": "keep"},
+        ]
+
+    calls: dict[str, object] = {}
+
+    def _simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        fitted_params,
+        measured_for_fit,
+        *,
+        pixel_tol,
+    ):
+        calls["simulate"] = {
+            "miller": miller,
+            "intensities": intensities,
+            "image_size": image_size,
+            "fitted_params": dict(fitted_params),
+            "measured_for_fit": measured_for_fit,
+            "pixel_tol": pixel_tol,
+        }
+        return (
+            None,
+            [(10.0, 20.0)],
+            [(11.5, 19.0)],
+            [(1, 1, 0)],
+            [(1, 1, 0)],
+        )
+
+    def _aggregate_match_centers(sim_coords, meas_coords, sim_millers, meas_millers):
+        calls["aggregate"] = (
+            list(sim_coords),
+            list(meas_coords),
+            list(sim_millers),
+            list(meas_millers),
+        )
+        return sim_coords, meas_coords, sim_millers
+
+    def _build_overlay_records(
+        initial_pairs_display,
+        overlay_point_match_diagnostics,
+        *,
+        native_shape,
+        orientation_choice,
+        sim_display_rotate_k,
+        background_display_rotate_k,
+    ):
+        calls["overlay"] = {
+            "initial_pairs_display": list(initial_pairs_display),
+            "overlay_point_match_diagnostics": overlay_point_match_diagnostics,
+            "native_shape": native_shape,
+            "orientation_choice": dict(orientation_choice),
+            "sim_display_rotate_k": sim_display_rotate_k,
+            "background_display_rotate_k": background_display_rotate_k,
+        }
+        return [{"overlay": True}]
+
+    def _compute_frame_diagnostics(records):
+        calls["frame_diag"] = list(records)
+        return (
+            {
+                "paired_records": 1,
+                "sim_display_med_px": 1.2,
+                "bg_display_med_px": 2.3,
+                "sim_display_p90_px": 3.4,
+                "bg_display_p90_px": 4.5,
+            },
+            "frame warning",
+        )
+
+    postprocess = geometry_fit.postprocess_geometry_fit_result(
+        fitted_params={"theta_initial": 3.0, "a": 4.2},
+        result=_Result(),
+        current_dataset={
+            "measured_for_fit": [{"x": 1.0, "y": 2.0}],
+            "initial_pairs_display": [{"pair": 1}],
+            "native_background": np.zeros((4, 5)),
+            "orientation_choice": {"label": "rotate"},
+            "pair_count": 3,
+            "group_count": 2,
+        },
+        joint_background_mode=True,
+        current_background_index=1,
+        dataset_count=2,
+        var_names=["gamma", "a"],
+        values=[1.5, 2.5],
+        rms=0.75,
+        miller="miller-data",
+        intensities="intensity-data",
+        image_size=512,
+        max_display_markers=120,
+        downloads_dir=tmp_path,
+        stamp="20260328_120000",
+        log_path=tmp_path / "geometry_fit_log.txt",
+        sim_display_rotate_k=1,
+        background_display_rotate_k=3,
+        simulate_and_compare_hkl=_simulate_and_compare_hkl,
+        aggregate_match_centers=_aggregate_match_centers,
+        build_overlay_records=_build_overlay_records,
+        compute_frame_diagnostics=_compute_frame_diagnostics,
+    )
+
+    assert calls["simulate"] == {
+        "miller": "miller-data",
+        "intensities": "intensity-data",
+        "image_size": 512,
+        "fitted_params": {"theta_initial": 3.0, "a": 4.2},
+        "measured_for_fit": [{"x": 1.0, "y": 2.0}],
+        "pixel_tol": float("inf"),
+    }
+    assert calls["overlay"]["overlay_point_match_diagnostics"] == [
+        {"dataset_index": 1, "name": "keep"}
+    ]
+    assert postprocess.point_match_summary_lines == ["claimed=4", "qualified=3"]
+    assert postprocess.pixel_offsets == [((1, 1, 0), -1.5, 1.0, np.hypot(-1.5, 1.0))]
+    assert postprocess.overlay_records == [{"overlay": True}]
+    assert postprocess.overlay_state == {
+        "overlay_records": [{"overlay": True}],
+        "initial_pairs_display": [{"pair": 1}],
+        "max_display_markers": 120,
+    }
+    assert postprocess.overlay_diagnostic_lines == [
+        "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
+        "overlay_records=1",
+        "paired_records=1",
+        "sim_display_med_px=1.200",
+        "bg_display_med_px=2.300",
+        "sim_display_p90_px=3.400",
+        "bg_display_p90_px=4.500",
+    ]
+    assert postprocess.export_records == [
+        {
+            "source": "sim",
+            "hkl": (1, 1, 0),
+            "x": 10,
+            "y": 20,
+            "dist_px": np.hypot(-1.5, 1.0),
+        },
+        {
+            "source": "meas",
+            "hkl": (1, 1, 0),
+            "x": 11,
+            "y": 19,
+            "dist_px": np.hypot(-1.5, 1.0),
+        },
+    ]
+    assert postprocess.save_path == tmp_path / "matched_peaks_20260328_120000.npy"
+    assert postprocess.fit_summary_lines == [
+        "manual_groups=2",
+        "manual_points=3",
+        "overlay_records=1",
+        "orientation=rotate",
+        "gamma = 1.500000",
+        "a = 2.500000",
+        "RMS residual = 0.750000 px",
+        f"Matched peaks saved to: {postprocess.save_path}",
+    ]
+    assert "frame warning" in postprocess.progress_text
+    assert "joint backgrounds=2" in postprocess.progress_text
+    assert f"Saved 2 peak records → {postprocess.save_path}" in postprocess.progress_text

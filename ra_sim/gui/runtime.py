@@ -10501,24 +10501,24 @@ def on_fit_geometry_click():
         background_runtime_callbacks.refresh_status()
         _update_geometry_manual_pick_button_label()
 
-        simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
-        simulation_runtime_state.profile_cache.update(mosaic_params)
-        simulation_runtime_state.profile_cache.update(
-            {
-                "theta_initial": theta_initial_var.get(),
-                "theta_offset": _current_geometry_theta_offset(strict=False),
-                "cor_angle": cor_angle_var.get(),
-                "chi": chi_var.get(),
-                "zs": zs_var.get(),
-                "zb": zb_var.get(),
-                "gamma": gamma_var.get(),
-                "Gamma": Gamma_var.get(),
-                "corto_detector": corto_detector_var.get(),
-                "a": a_var.get(),
-                "c": c_var.get(),
-                "center_x": center_x_var.get(),
-                "center_y": center_y_var.get(),
-            }
+        simulation_runtime_state.profile_cache = (
+            gui_geometry_fit.build_geometry_fit_profile_cache(
+                simulation_runtime_state.profile_cache,
+                mosaic_params,
+                theta_initial=theta_initial_var.get(),
+                theta_offset=_current_geometry_theta_offset(strict=False),
+                cor_angle=cor_angle_var.get(),
+                chi=chi_var.get(),
+                zs=zs_var.get(),
+                zb=zb_var.get(),
+                gamma=gamma_var.get(),
+                Gamma=Gamma_var.get(),
+                corto_detector=corto_detector_var.get(),
+                a=a_var.get(),
+                c=c_var.get(),
+                center_x=center_x_var.get(),
+                center_y=center_y_var.get(),
+            )
         )
         _push_geometry_fit_undo_state(undo_state)
 
@@ -10554,78 +10554,45 @@ def on_fit_geometry_click():
             center_y=center_y_var.get(),
         )
 
-        point_match_summary = getattr(result, "point_match_summary", None)
-        point_match_summary_lines = (
-            gui_geometry_fit.build_geometry_fit_point_match_summary_lines(
-                point_match_summary
-            )
-        )
-        if point_match_summary_lines:
-            _log_section(
-                "Point-match summary:",
-                point_match_summary_lines,
-            )
-
-        (
-            _,
-            sim_coords,
-            meas_coords,
-            sim_millers,
-            meas_millers,
-        ) = simulate_and_compare_hkl(
-            miller,
-            intensities,
-            image_size,
-            fitted_params,
-            current_dataset["measured_for_fit"],
-            pixel_tol=float("inf"),
-        )
-        (
-            agg_sim_coords,
-            agg_meas_coords,
-            agg_millers,
-        ) = _aggregate_match_centers(
-            sim_coords,
-            meas_coords,
-            sim_millers,
-            meas_millers,
-        )
-
-        pixel_offsets = gui_geometry_fit.build_geometry_fit_pixel_offsets(
-            agg_millers,
-            agg_sim_coords,
-            agg_meas_coords,
-        )
-
-        overlay_point_match_diagnostics = (
-            gui_geometry_fit.filter_geometry_fit_overlay_point_match_diagnostics(
-                getattr(result, "point_match_diagnostics", None),
-                joint_background_mode=joint_background_mode,
-                current_background_index=int(
-                    background_runtime_state.current_background_index
-                ),
-            )
-        )
-        overlay_records = build_geometry_fit_overlay_records(
-            current_dataset["initial_pairs_display"],
-            overlay_point_match_diagnostics,
-            native_shape=tuple(int(v) for v in current_dataset["native_background"].shape[:2]),
-            orientation_choice=current_dataset["orientation_choice"],
+        postprocess = gui_geometry_fit.postprocess_geometry_fit_result(
+            fitted_params=fitted_params,
+            result=result,
+            current_dataset=current_dataset,
+            joint_background_mode=joint_background_mode,
+            current_background_index=int(background_runtime_state.current_background_index),
+            dataset_count=len(dataset_infos),
+            var_names=var_names,
+            values=getattr(result, "x", []),
+            rms=rms,
+            miller=miller,
+            intensities=intensities,
+            image_size=image_size,
+            max_display_markers=max_display_markers,
+            downloads_dir=get_dir("downloads"),
+            stamp=stamp,
+            log_path=log_path,
             sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
             background_display_rotate_k=DISPLAY_ROTATE_K,
-        )
-        frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(overlay_records)
-        _log_section(
-            "Overlay frame diagnostics:",
-            gui_geometry_fit.build_geometry_fit_overlay_diagnostic_lines(
-                frame_diag,
-                overlay_record_count=len(overlay_records),
-            ),
+            simulate_and_compare_hkl=simulate_and_compare_hkl,
+            aggregate_match_centers=_aggregate_match_centers,
+            build_overlay_records=build_geometry_fit_overlay_records,
+            compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
         )
 
-        if overlay_records:
+        if postprocess.point_match_summary_lines:
+            _log_section(
+                "Point-match summary:",
+                postprocess.point_match_summary_lines,
+            )
+
+        _log_section(
+            "Overlay frame diagnostics:",
+            postprocess.overlay_diagnostic_lines,
+        )
+
+        if postprocess.overlay_records:
             _draw_geometry_fit_overlay(
-                overlay_records,
+                postprocess.overlay_records,
                 max_display_markers=max_display_markers,
             )
         else:
@@ -10633,54 +10600,26 @@ def on_fit_geometry_click():
                 current_dataset["initial_pairs_display"],
                 max_display_markers=max_display_markers,
             )
-        _set_geometry_fit_last_overlay_state({
-            "overlay_records": _copy_geometry_fit_state_value(overlay_records),
-            "initial_pairs_display": _copy_geometry_fit_state_value(
-                current_dataset["initial_pairs_display"]
-            ),
-            "max_display_markers": int(max_display_markers),
-        })
+        _set_geometry_fit_last_overlay_state(postprocess.overlay_state)
 
-        export_recs = gui_geometry_fit.build_geometry_fit_export_records(
-            agg_millers,
-            agg_sim_coords,
-            agg_meas_coords,
-            pixel_offsets,
+        np.save(
+            postprocess.save_path,
+            np.array(postprocess.export_records, dtype=object),
+            allow_pickle=True,
         )
-        save_path = get_dir("downloads") / f"matched_peaks_{stamp}.npy"
-        np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
 
         _log_section(
             "Pixel offsets (native frame):",
-            gui_geometry_fit.build_geometry_fit_pixel_offset_lines(pixel_offsets),
+            gui_geometry_fit.build_geometry_fit_pixel_offset_lines(
+                postprocess.pixel_offsets
+            ),
         )
         _log_section(
             "Fit summary:",
-            gui_geometry_fit.build_geometry_fit_summary_lines(
-                current_dataset=current_dataset,
-                overlay_record_count=len(overlay_records),
-                var_names=var_names,
-                values=getattr(result, "x", []),
-                rms=rms,
-                save_path=save_path,
-            ),
+            postprocess.fit_summary_lines,
         )
 
-        progress_label_geometry.config(
-            text=gui_geometry_fit.build_geometry_fit_progress_text(
-                current_dataset=current_dataset,
-                dataset_count=len(dataset_infos),
-                joint_background_mode=joint_background_mode,
-                var_names=var_names,
-                values=getattr(result, "x", []),
-                rms=rms,
-                pixel_offsets=pixel_offsets,
-                export_record_count=len(export_recs),
-                save_path=save_path,
-                log_path=log_path,
-                frame_warning=frame_warning,
-            )
-        )
+        progress_label_geometry.config(text=postprocess.progress_text)
         _cmd_line(
             "done: "
             f"datasets={len(dataset_infos)} "

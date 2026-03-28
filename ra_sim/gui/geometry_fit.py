@@ -50,6 +50,23 @@ class GeometryFitPreparationResult:
     error_text: str | None = None
 
 
+@dataclass(frozen=True)
+class GeometryFitPostprocessResult:
+    """Pure post-solver geometry-fit analysis results."""
+
+    fitted_params: dict[str, object]
+    point_match_summary_lines: list[str]
+    pixel_offsets: list[tuple[tuple[int, int, int], float, float, float]]
+    overlay_records: list[dict[str, object]]
+    overlay_state: dict[str, object]
+    overlay_diagnostic_lines: list[str]
+    frame_warning: str | None
+    export_records: list[dict[str, object]]
+    save_path: Path
+    fit_summary_lines: list[str]
+    progress_text: str
+
+
 def copy_geometry_fit_state_value(value):
     """Deep-copy simple geometry-fit GUI state."""
 
@@ -830,6 +847,48 @@ def build_geometry_fit_fitted_params(
     return fitted
 
 
+def build_geometry_fit_profile_cache(
+    base_cache: Mapping[str, object] | None,
+    mosaic_params: Mapping[str, object] | None,
+    *,
+    theta_initial: object,
+    theta_offset: object,
+    cor_angle: object,
+    chi: object,
+    zs: object,
+    zb: object,
+    gamma: object,
+    Gamma: object,
+    corto_detector: object,
+    a: object,
+    c: object,
+    center_x: object,
+    center_y: object,
+) -> dict[str, object]:
+    """Build the geometry-fit profile-cache payload after one successful fit."""
+
+    profile_cache = dict(base_cache or {})
+    profile_cache.update(dict(mosaic_params or {}))
+    profile_cache.update(
+        {
+            "theta_initial": theta_initial,
+            "theta_offset": theta_offset,
+            "cor_angle": cor_angle,
+            "chi": chi,
+            "zs": zs,
+            "zb": zb,
+            "gamma": gamma,
+            "Gamma": Gamma,
+            "corto_detector": corto_detector,
+            "a": a,
+            "c": c,
+            "center_x": center_x,
+            "center_y": center_y,
+        }
+    )
+    return profile_cache
+
+
 def build_geometry_fit_pixel_offsets(
     agg_millers: Sequence[Sequence[object]],
     agg_sim_coords: Sequence[Sequence[object]],
@@ -1018,4 +1077,129 @@ def build_geometry_fit_progress_text(
         + f"\nSaved {int(export_record_count)} peak records → {save_path}"
         + f"\nPixel offsets:\n{dist_report}"
         + f"\nFit log → {log_path}"
+    )
+
+
+def postprocess_geometry_fit_result(
+    *,
+    fitted_params: Mapping[str, object],
+    result: object,
+    current_dataset: Mapping[str, object],
+    joint_background_mode: bool,
+    current_background_index: int,
+    dataset_count: int,
+    var_names: Sequence[object],
+    values: Sequence[object],
+    rms: float,
+    miller: object,
+    intensities: object,
+    image_size: int,
+    max_display_markers: int,
+    downloads_dir: Path | str,
+    stamp: str,
+    log_path: Path | str,
+    sim_display_rotate_k: int,
+    background_display_rotate_k: int,
+    simulate_and_compare_hkl: Callable[..., Any],
+    aggregate_match_centers: Callable[..., tuple[object, object, object]],
+    build_overlay_records: Callable[..., list[dict[str, object]]],
+    compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]],
+) -> GeometryFitPostprocessResult:
+    """Build the post-fit analysis artifacts used by the live GUI."""
+
+    (
+        _,
+        sim_coords,
+        meas_coords,
+        sim_millers,
+        meas_millers,
+    ) = simulate_and_compare_hkl(
+        miller,
+        intensities,
+        int(image_size),
+        dict(fitted_params),
+        current_dataset["measured_for_fit"],
+        pixel_tol=float("inf"),
+    )
+    agg_sim_coords, agg_meas_coords, agg_millers = aggregate_match_centers(
+        sim_coords,
+        meas_coords,
+        sim_millers,
+        meas_millers,
+    )
+    pixel_offsets = build_geometry_fit_pixel_offsets(
+        agg_millers,
+        agg_sim_coords,
+        agg_meas_coords,
+    )
+
+    overlay_point_match_diagnostics = filter_geometry_fit_overlay_point_match_diagnostics(
+        getattr(result, "point_match_diagnostics", None),
+        joint_background_mode=joint_background_mode,
+        current_background_index=int(current_background_index),
+    )
+    overlay_records = build_overlay_records(
+        current_dataset["initial_pairs_display"],
+        overlay_point_match_diagnostics,
+        native_shape=tuple(int(v) for v in current_dataset["native_background"].shape[:2]),
+        orientation_choice=current_dataset["orientation_choice"],
+        sim_display_rotate_k=int(sim_display_rotate_k),
+        background_display_rotate_k=int(background_display_rotate_k),
+    )
+    frame_diag, frame_warning = compute_frame_diagnostics(overlay_records)
+    overlay_diagnostic_lines = build_geometry_fit_overlay_diagnostic_lines(
+        frame_diag,
+        overlay_record_count=len(overlay_records),
+    )
+
+    export_records = build_geometry_fit_export_records(
+        agg_millers,
+        agg_sim_coords,
+        agg_meas_coords,
+        pixel_offsets,
+    )
+    save_path = Path(downloads_dir) / f"matched_peaks_{stamp}.npy"
+    fit_summary_lines = build_geometry_fit_summary_lines(
+        current_dataset=current_dataset,
+        overlay_record_count=len(overlay_records),
+        var_names=var_names,
+        values=values,
+        rms=rms,
+        save_path=save_path,
+    )
+    progress_text = build_geometry_fit_progress_text(
+        current_dataset=current_dataset,
+        dataset_count=int(dataset_count),
+        joint_background_mode=joint_background_mode,
+        var_names=var_names,
+        values=values,
+        rms=rms,
+        pixel_offsets=pixel_offsets,
+        export_record_count=len(export_records),
+        save_path=save_path,
+        log_path=log_path,
+        frame_warning=frame_warning,
+    )
+    overlay_state = {
+        "overlay_records": copy_geometry_fit_state_value(overlay_records),
+        "initial_pairs_display": copy_geometry_fit_state_value(
+            current_dataset["initial_pairs_display"]
+        ),
+        "max_display_markers": int(max_display_markers),
+    }
+
+    return GeometryFitPostprocessResult(
+        fitted_params=fitted_params,
+        point_match_summary_lines=build_geometry_fit_point_match_summary_lines(
+            getattr(result, "point_match_summary", None)
+        ),
+        pixel_offsets=pixel_offsets,
+        overlay_records=overlay_records,
+        overlay_state=overlay_state,
+        overlay_diagnostic_lines=overlay_diagnostic_lines,
+        frame_warning=frame_warning,
+        export_records=export_records,
+        save_path=save_path,
+        fit_summary_lines=fit_summary_lines,
+        progress_text=progress_text,
     )
