@@ -1192,6 +1192,24 @@ def build_runtime_background_bootstrap(
     )
 
 
+def build_runtime_background_theta_bootstrap(
+    *,
+    background_theta_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeBindingsCallbacksBootstrap:
+    """Build the live background-theta binding/callback bundle."""
+
+    bindings_factory = background_theta_module.make_runtime_background_theta_bindings_factory(
+        **bindings_kwargs
+    )
+    return RuntimeBindingsCallbacksBootstrap(
+        bindings_factory=bindings_factory,
+        callbacks=background_theta_module.make_runtime_background_theta_callbacks(
+            bindings_factory
+        ),
+    )
+
+
 def build_runtime_geometry_q_group_bootstrap(
     *,
     geometry_q_group_manager_module: Any,

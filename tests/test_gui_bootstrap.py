@@ -531,6 +531,32 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
         ("refresh-backend-status",),
     ]
 
+    background_theta_calls: list[tuple[object, ...]] = []
+    background_theta_module = SimpleNamespace(
+        make_runtime_background_theta_bindings_factory=(
+            lambda **kwargs: (
+                background_theta_calls.append(("bindings", kwargs))
+                or "background-theta-bindings"
+            )
+        ),
+        make_runtime_background_theta_callbacks=(
+            lambda bindings_factory: (
+                background_theta_calls.append(("callbacks", bindings_factory))
+                or "background-theta-callbacks"
+            )
+        ),
+    )
+    background_theta_bundle = bootstrap.build_runtime_background_theta_bootstrap(
+        background_theta_module=background_theta_module,
+        defaults={"theta_initial": 6.0},
+    )
+    assert background_theta_bundle.bindings_factory == "background-theta-bindings"
+    assert background_theta_bundle.callbacks == "background-theta-callbacks"
+    assert background_theta_calls == [
+        ("bindings", {"defaults": {"theta_initial": 6.0}}),
+        ("callbacks", "background-theta-bindings"),
+    ]
+
 
 def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     monkeypatch,

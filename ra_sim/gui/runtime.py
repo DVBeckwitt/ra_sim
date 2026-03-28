@@ -978,168 +978,12 @@ def _parse_geometry_fit_background_indices(
     )
 
 
-def _current_geometry_fit_background_indices(*, strict: bool = False) -> list[int]:
-    """Return the background indices currently selected for geometry fitting."""
-    return gui_background_theta.current_geometry_fit_background_indices(
-        osc_files=background_runtime_state.osc_files,
-        current_background_index=background_runtime_state.current_background_index,
-        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-        strict=strict,
-    )
-
-
-def _geometry_fit_uses_shared_theta_offset(
-    selected_indices: Sequence[int] | None = None,
-) -> bool:
-    """Return whether geometry fitting should use a shared theta offset."""
-    return gui_background_theta.geometry_fit_uses_shared_theta_offset(
-        selected_indices,
-        osc_files=background_runtime_state.osc_files,
-        current_background_index=background_runtime_state.current_background_index,
-        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-    )
-
-
-def _current_geometry_theta_offset(*, strict: bool = False) -> float:
-    """Return the shared theta offset used by multi-background fitting."""
-    return gui_background_theta.current_geometry_theta_offset(
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        strict=strict,
-    )
-
-
-def _current_background_theta_values(*, strict_count: bool = False) -> list[float]:
-    """Return one configured theta value per loaded background image."""
-    return gui_background_theta.current_background_theta_values(
-        osc_files=background_runtime_state.osc_files,
-        theta_initial_var=globals().get("theta_initial_var"),
-        defaults=defaults,
-        theta_initial=theta_initial,
-        background_theta_list_var=background_theta_list_var,
-        strict_count=strict_count,
-    )
-
-
-def _background_theta_for_index(
-    index: int,
-    *,
-    strict_count: bool = False,
-) -> float:
-    """Return the effective theta used for one background index."""
-    return gui_background_theta.background_theta_for_index(
-        index,
-        osc_files=background_runtime_state.osc_files,
-        theta_initial_var=globals().get("theta_initial_var"),
-        defaults=defaults,
-        theta_initial=theta_initial,
-        background_theta_list_var=background_theta_list_var,
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-        current_background_index=background_runtime_state.current_background_index,
-        strict_count=strict_count,
-    )
-
-
 def _refresh_geometry_fit_theta_checkbox_label() -> None:
     """Update the theta fit toggle label for single vs multi-background mode."""
     gui_background_theta.refresh_geometry_fit_theta_checkbox_label(
         fit_theta_checkbutton=fit_theta_checkbutton,
         theta_controls=geometry_fit_constraints_view_state.controls,
         shared_theta=_geometry_fit_uses_shared_theta_offset(),
-    )
-
-
-def _sync_background_theta_controls(
-    *,
-    preserve_existing: bool = True,
-    trigger_update: bool = False,
-) -> None:
-    """Keep the theta list entry aligned with the currently loaded backgrounds."""
-    gui_background_theta.sync_background_theta_controls(
-        osc_files=background_runtime_state.osc_files,
-        current_background_index=background_runtime_state.current_background_index,
-        theta_initial_var=globals().get("theta_initial_var"),
-        defaults=defaults,
-        theta_initial=theta_initial,
-        background_theta_list_var=background_theta_list_var,
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-        fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
-        schedule_update=schedule_update,
-        preserve_existing=preserve_existing,
-        trigger_update=trigger_update,
-    )
-
-
-def _apply_background_theta_metadata(
-    *,
-    trigger_update: bool = True,
-    sync_live_theta: bool = True,
-) -> bool:
-    """Validate the theta list/offset entries and optionally refresh the display."""
-    return gui_background_theta.apply_background_theta_metadata(
-        osc_files=background_runtime_state.osc_files,
-        current_background_index=background_runtime_state.current_background_index,
-        theta_initial_var=globals().get("theta_initial_var"),
-        defaults=defaults,
-        theta_initial=theta_initial,
-        background_theta_list_var=background_theta_list_var,
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-        fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
-        schedule_update=schedule_update,
-        progress_label=globals().get("progress_label"),
-        trigger_update=trigger_update,
-        sync_live_theta=sync_live_theta,
-    )
-
-
-def _apply_geometry_fit_background_selection(
-    *,
-    trigger_update: bool = False,
-    sync_live_theta: bool = True,
-) -> bool:
-    """Validate the geometry-fit background selection entry."""
-    return gui_background_theta.apply_geometry_fit_background_selection(
-        osc_files=background_runtime_state.osc_files,
-        current_background_index=background_runtime_state.current_background_index,
-        theta_initial_var=globals().get("theta_initial_var"),
-        defaults=defaults,
-        theta_initial=theta_initial,
-        background_theta_list_var=background_theta_list_var,
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-        fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
-        schedule_update=schedule_update,
-        progress_label_geometry=globals().get("progress_label_geometry"),
-        trigger_update=trigger_update,
-        sync_live_theta=sync_live_theta,
-    )
-
-
-def _sync_geometry_fit_background_selection(*, preserve_existing: bool = True) -> None:
-    """Keep the fit-background selector valid when the background list changes."""
-    gui_background_theta.sync_geometry_fit_background_selection(
-        osc_files=background_runtime_state.osc_files,
-        current_background_index=background_runtime_state.current_background_index,
-        theta_initial_var=globals().get("theta_initial_var"),
-        defaults=defaults,
-        theta_initial=theta_initial,
-        background_theta_list_var=background_theta_list_var,
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-        fit_theta_checkbutton=fit_theta_checkbutton,
-        theta_controls=geometry_fit_constraints_view_state.controls,
-        set_background_file_status_text=lambda: background_runtime_callbacks.refresh_status(),
-        schedule_update=schedule_update,
-        progress_label_geometry=globals().get("progress_label_geometry"),
-        preserve_existing=preserve_existing,
     )
 
 
@@ -5428,6 +5272,68 @@ def do_update():
 
     # mark update completion so future updates can run
     simulation_runtime_state.update_running = False
+
+background_theta_runtime = gui_bootstrap.build_runtime_background_theta_bootstrap(
+    background_theta_module=gui_background_theta,
+    osc_files_factory=lambda: tuple(background_runtime_state.osc_files),
+    current_background_index_factory=(
+        lambda: int(background_runtime_state.current_background_index)
+    ),
+    theta_initial_var_factory=lambda: globals().get("theta_initial_var"),
+    defaults=defaults,
+    theta_initial=theta_initial,
+    background_theta_list_var_factory=lambda: background_theta_list_var,
+    geometry_theta_offset_var_factory=lambda: geometry_theta_offset_var,
+    geometry_fit_background_selection_var_factory=(
+        lambda: geometry_fit_background_selection_var
+    ),
+    fit_theta_checkbutton_factory=lambda: fit_theta_checkbutton,
+    theta_controls_factory=lambda: geometry_fit_constraints_view_state.controls,
+    set_background_file_status_text_factory=lambda: (
+        (
+            background_controls_runtime.refresh_status
+            if "background_controls_runtime" in globals()
+            else (
+                background_runtime_callbacks.refresh_status
+                if "background_runtime_callbacks" in globals()
+                else None
+            )
+        )
+    ),
+    schedule_update_factory=lambda: (
+        globals().get("schedule_update")
+        if callable(globals().get("schedule_update"))
+        else None
+    ),
+    progress_label_factory=lambda: globals().get("progress_label"),
+    progress_label_geometry_factory=lambda: globals().get("progress_label_geometry"),
+)
+background_theta_runtime_callbacks = background_theta_runtime.callbacks
+_current_geometry_fit_background_indices = (
+    background_theta_runtime_callbacks.current_geometry_fit_background_indices
+)
+_geometry_fit_uses_shared_theta_offset = (
+    background_theta_runtime_callbacks.geometry_fit_uses_shared_theta_offset
+)
+_current_geometry_theta_offset = (
+    background_theta_runtime_callbacks.current_geometry_theta_offset
+)
+_current_background_theta_values = (
+    background_theta_runtime_callbacks.current_background_theta_values
+)
+_background_theta_for_index = background_theta_runtime_callbacks.background_theta_for_index
+_sync_background_theta_controls = (
+    background_theta_runtime_callbacks.sync_background_theta_controls
+)
+_apply_background_theta_metadata = (
+    background_theta_runtime_callbacks.apply_background_theta_metadata
+)
+_apply_geometry_fit_background_selection = (
+    background_theta_runtime_callbacks.apply_geometry_fit_background_selection
+)
+_sync_geometry_fit_background_selection = (
+    background_theta_runtime_callbacks.sync_geometry_fit_background_selection
+)
 
 background_runtime = gui_bootstrap.build_runtime_background_bootstrap(
     background_manager_module=gui_background_manager,

@@ -186,6 +186,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     shared GUI state
   - the background-theta panel construction and event bindings now flow
     through `ra_sim.gui.views`
+  - the live runtime value readers plus sync/apply callback bundle for theta
+    metadata and fit-background selection now also live in
+    `ra_sim.gui.background_theta`
+  - the runtime assembly of that background-theta workflow now also boots
+    through one shared helper in `ra_sim.gui.bootstrap`
 - Workspace panel / background-backend debug control migration has also landed:
   - shared widget references for the workspace action/background/session
     panels and the background backend/orientation debug controls now use
@@ -569,8 +574,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   refresh/action call sites around the extracted manager helpers and shared
   bootstrap wiring.
 - The remaining background runtime code is now mostly thin cross-feature
-  status-refresh call sites around the extracted background manager and shared
-  bootstrap helpers.
+  status-refresh call sites in geometry-fit/manual-geometry flows around the
+  extracted background manager/background-theta helpers and shared bootstrap
+  helpers.
 - The remaining selected-peak runtime code is now mostly thin live
   value-source wiring around the extracted peak-selection modules and shared
   bootstrap helpers.

@@ -271,6 +271,74 @@ def test_runtime_background_controls_are_bootstrapped() -> None:
     }
 
 
+def test_runtime_background_theta_callbacks_use_shared_bundle() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    has_bootstrap_call = False
+    inline_defs = {
+        "_current_geometry_fit_background_indices": 0,
+        "_geometry_fit_uses_shared_theta_offset": 0,
+        "_current_geometry_theta_offset": 0,
+        "_current_background_theta_values": 0,
+        "_background_theta_for_index": 0,
+        "_sync_background_theta_controls": 0,
+        "_apply_background_theta_metadata": 0,
+        "_apply_geometry_fit_background_selection": 0,
+        "_sync_geometry_fit_background_selection": 0,
+    }
+    direct_helper_calls = {
+        "current_geometry_fit_background_indices": 0,
+        "geometry_fit_uses_shared_theta_offset": 0,
+        "current_geometry_theta_offset": 0,
+        "current_background_theta_values": 0,
+        "background_theta_for_index": 0,
+        "sync_background_theta_controls": 0,
+        "apply_background_theta_metadata": 0,
+        "apply_geometry_fit_background_selection": 0,
+        "sync_geometry_fit_background_selection": 0,
+    }
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                if func.attr == "build_runtime_background_theta_bootstrap":
+                    has_bootstrap_call = True
+                if (
+                    isinstance(func.value, ast.Name)
+                    and func.value.id == "gui_background_theta"
+                    and func.attr in direct_helper_calls
+                ):
+                    direct_helper_calls[func.attr] += 1
+        if isinstance(node, ast.FunctionDef) and node.name in inline_defs:
+            inline_defs[node.name] += 1
+
+    assert has_bootstrap_call is True
+    assert inline_defs == {
+        "_current_geometry_fit_background_indices": 0,
+        "_geometry_fit_uses_shared_theta_offset": 0,
+        "_current_geometry_theta_offset": 0,
+        "_current_background_theta_values": 0,
+        "_background_theta_for_index": 0,
+        "_sync_background_theta_controls": 0,
+        "_apply_background_theta_metadata": 0,
+        "_apply_geometry_fit_background_selection": 0,
+        "_sync_geometry_fit_background_selection": 0,
+    }
+    assert direct_helper_calls == {
+        "current_geometry_fit_background_indices": 0,
+        "geometry_fit_uses_shared_theta_offset": 0,
+        "current_geometry_theta_offset": 0,
+        "current_background_theta_values": 0,
+        "background_theta_for_index": 0,
+        "sync_background_theta_controls": 0,
+        "apply_background_theta_metadata": 0,
+        "apply_geometry_fit_background_selection": 0,
+        "sync_geometry_fit_background_selection": 0,
+    }
+
+
 def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")

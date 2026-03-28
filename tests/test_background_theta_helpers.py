@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ra_sim.gui import background_theta, state_io
 
 
@@ -326,3 +328,202 @@ def test_apply_gui_state_background_theta_compatibility_preserves_saved_metadata
     assert background_theta_list_var.get() == "4, 7.5"
     assert geometry_theta_offset_var.get() == "0.25"
     assert geometry_fit_background_selection_var.get() == "current"
+
+
+def test_background_theta_runtime_binding_factory_builds_live_bindings(
+    monkeypatch,
+) -> None:
+    calls = []
+    counters = {
+        "osc_files": 0,
+        "index": 0,
+        "theta_var": 0,
+        "theta_list": 0,
+        "theta_offset": 0,
+        "selection": 0,
+        "checkbutton": 0,
+        "controls": 0,
+        "status": 0,
+        "schedule": 0,
+        "progress": 0,
+        "progress_geometry": 0,
+    }
+
+    monkeypatch.setattr(
+        background_theta,
+        "BackgroundThetaRuntimeBindings",
+        lambda **kwargs: calls.append(kwargs) or kwargs,
+    )
+
+    def _bump(key: str, prefix: str):
+        counters[key] += 1
+        return f"{prefix}-{counters[key]}"
+
+    factory = background_theta.make_runtime_background_theta_bindings_factory(
+        osc_files_factory=lambda: [f"bg-{_bump('osc_files', 'file')}.osc"],
+        current_background_index_factory=lambda: counters.__setitem__(
+            "index",
+            counters["index"] + 1,
+        )
+        or counters["index"],
+        theta_initial_var_factory=lambda: _bump("theta_var", "theta-var"),
+        defaults={"theta_initial": 6.0},
+        theta_initial=7.0,
+        background_theta_list_var_factory=lambda: _bump("theta_list", "theta-list"),
+        geometry_theta_offset_var_factory=lambda: _bump(
+            "theta_offset",
+            "theta-offset",
+        ),
+        geometry_fit_background_selection_var_factory=lambda: _bump(
+            "selection",
+            "selection",
+        ),
+        fit_theta_checkbutton_factory=lambda: _bump("checkbutton", "checkbutton"),
+        theta_controls_factory=lambda: _bump("controls", "controls"),
+        set_background_file_status_text_factory=lambda: _bump("status", "status"),
+        schedule_update_factory=lambda: _bump("schedule", "schedule"),
+        progress_label_factory=lambda: _bump("progress", "progress"),
+        progress_label_geometry_factory=lambda: _bump(
+            "progress_geometry",
+            "progress-geometry",
+        ),
+    )
+
+    first = factory()
+    second = factory()
+
+    assert first["osc_files"] == ("bg-file-1.osc",)
+    assert second["osc_files"] == ("bg-file-2.osc",)
+    assert first["current_background_index"] == 1
+    assert second["current_background_index"] == 2
+    assert first["defaults"] == {"theta_initial": 6.0}
+    assert first["theta_initial"] == 7.0
+    assert first["theta_initial_var"] == "theta-var-1"
+    assert second["geometry_fit_background_selection_var"] == "selection-2"
+    assert first["fit_theta_checkbutton"] == "checkbutton-1"
+    assert second["theta_controls"] == "controls-2"
+    assert first["set_background_file_status_text"] == "status-1"
+    assert second["schedule_update"] == "schedule-2"
+    assert first["progress_label"] == "progress-1"
+    assert second["progress_label_geometry"] == "progress-geometry-2"
+
+
+def test_background_theta_runtime_callbacks_delegate_to_live_helpers(
+    monkeypatch,
+) -> None:
+    calls = []
+    versions = {"count": 0}
+
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_current_geometry_fit_background_indices",
+        lambda bindings, *, strict=False: calls.append(
+            ("indices", bindings, strict)
+        )
+        or ["indices"],
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_geometry_fit_uses_shared_theta_offset",
+        lambda bindings, selected_indices=None: calls.append(
+            ("shared", bindings, selected_indices)
+        )
+        or True,
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_current_geometry_theta_offset",
+        lambda bindings, *, strict=False: calls.append(
+            ("offset", bindings, strict)
+        )
+        or 1.25,
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_current_background_theta_values",
+        lambda bindings, *, strict_count=False: calls.append(
+            ("values", bindings, strict_count)
+        )
+        or [3.0, 4.0],
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_background_theta_for_index",
+        lambda bindings, index, *, strict_count=False: calls.append(
+            ("theta-for-index", bindings, index, strict_count)
+        )
+        or 7.5,
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_sync_background_theta_controls",
+        lambda bindings, *, preserve_existing=True, trigger_update=False: calls.append(
+            ("sync-controls", bindings, preserve_existing, trigger_update)
+        ),
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_apply_background_theta_metadata",
+        lambda bindings, *, trigger_update=True, sync_live_theta=True: calls.append(
+            ("apply-metadata", bindings, trigger_update, sync_live_theta)
+        )
+        or False,
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_apply_geometry_fit_background_selection",
+        lambda bindings, *, trigger_update=False, sync_live_theta=True: calls.append(
+            ("apply-selection", bindings, trigger_update, sync_live_theta)
+        )
+        or True,
+    )
+    monkeypatch.setattr(
+        background_theta,
+        "runtime_sync_geometry_fit_background_selection",
+        lambda bindings, *, preserve_existing=True: calls.append(
+            ("sync-selection", bindings, preserve_existing)
+        ),
+    )
+
+    def _bindings():
+        versions["count"] += 1
+        return f"bindings-{versions['count']}"
+
+    callbacks = background_theta.make_runtime_background_theta_callbacks(_bindings)
+
+    assert callbacks.current_geometry_fit_background_indices(strict=True) == ["indices"]
+    assert callbacks.geometry_fit_uses_shared_theta_offset([0, 1]) is True
+    assert callbacks.current_geometry_theta_offset(strict=True) == 1.25
+    assert callbacks.current_background_theta_values(strict_count=True) == [3.0, 4.0]
+    assert callbacks.background_theta_for_index(2, strict_count=True) == 7.5
+    callbacks.sync_background_theta_controls(
+        preserve_existing=False,
+        trigger_update=True,
+    )
+    assert (
+        callbacks.apply_background_theta_metadata(
+            trigger_update=False,
+            sync_live_theta=False,
+        )
+        is False
+    )
+    assert (
+        callbacks.apply_geometry_fit_background_selection(
+            trigger_update=True,
+            sync_live_theta=False,
+        )
+        is True
+    )
+    callbacks.sync_geometry_fit_background_selection(preserve_existing=False)
+
+    assert calls == [
+        ("indices", "bindings-1", True),
+        ("shared", "bindings-2", [0, 1]),
+        ("offset", "bindings-3", True),
+        ("values", "bindings-4", True),
+        ("theta-for-index", "bindings-5", 2, True),
+        ("sync-controls", "bindings-6", False, True),
+        ("apply-metadata", "bindings-7", False, False),
+        ("apply-selection", "bindings-8", True, False),
+        ("sync-selection", "bindings-9", False),
+    ]

@@ -37,7 +37,10 @@ shared helper instead of being wired inline in `runtime.py`, the debounced
 range-update scheduler plus analysis-toggle callbacks now also live in
 `ra_sim.gui.integration_range_drag`, the workspace background action/file
 controls plus backend-debug control wiring now also boot through one shared
-helper in `ra_sim.gui.bootstrap`, the
+helper in `ra_sim.gui.bootstrap`, the background-theta / fit-background-
+selection runtime surface now also boots there through one shared helper and
+the remaining live theta/background-selection callbacks now also live in
+`ra_sim.gui.background_theta`, the
 geometry-fit manual-pair action binding assembly now also delegates through
 `ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, the
 top-level geometry-fit action callback now also resolves through a shared live
@@ -200,6 +203,11 @@ not `main.py` or `mosaic_profiles.py`.
     now live in `ra_sim.gui.state`.
   - `ra_sim.gui.views` now owns the panel construction and event binding for
     those background-theta controls.
+  - `ra_sim.gui.background_theta` now also owns the live runtime value readers
+    plus sync/apply callback bundle for theta metadata and fit-background
+    selection.
+  - `ra_sim.gui.bootstrap` now also assembles that runtime bundle instead of
+    leaving `runtime.py` to wire those callbacks inline.
   - Direct view tests now cover the extracted background-theta control helpers.
 - Workspace panel / background-backend debug control migration has landed.
   - Shared widget references for the workspace action/background/session
@@ -767,8 +775,9 @@ What is left:
   around the extracted manager/view helpers, the bound geometry-fit
   simulation/value callback bundles, and shared bootstrap wiring.
 - The remaining background runtime code is now mostly thin cross-feature
-  status-refresh call sites around the extracted background manager and shared
-  bootstrap helpers.
+  status-refresh call sites in geometry-fit/manual-geometry flows around the
+  extracted background manager/background-theta helpers and shared bootstrap
+  helpers.
 - The remaining selected-peak runtime code is now mostly thin live
   value-source wiring around the extracted peak-selection helpers and shared
   bootstrap helpers.
@@ -1179,14 +1188,16 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining cross-feature background status-refresh call sites
-  now that the background control/status wiring is extracted
+- start with the remaining geometry-fit/manual-geometry background status-
+  refresh call sites now that the background-theta selection workflow is
+  extracted
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the background control/status wiring cleanup:
+Immediate checklist after the background-theta runtime callback cleanup:
 
-- trim the remaining cross-feature background status-refresh call sites
+- trim the remaining geometry-fit/manual-geometry background status-refresh
+  call sites
 - then trim the next cross-feature runtime workflow call sites that still
   bypass the extracted helper modules
 - defer config unification, compatibility cleanup, and repo-root cleanup until
