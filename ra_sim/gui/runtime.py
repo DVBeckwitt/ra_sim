@@ -7102,86 +7102,6 @@ if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
     )
 
 
-def _center_from_maxpos_entry(entry: Sequence[float]) -> tuple[float, float] | None:
-    """Return the strongest finite max position stored in ``entry``."""
-
-    if entry is None or len(entry) < 6:
-        return None
-    i0, x0, y0, i1, x1, y1 = entry
-    primary_valid = np.isfinite(x0) and np.isfinite(y0)
-    secondary_valid = np.isfinite(x1) and np.isfinite(y1)
-
-    if primary_valid and (not secondary_valid or not np.isfinite(i1) or float(i0) >= float(i1)):
-        return float(x0), float(y0)
-    if secondary_valid:
-        return float(x1), float(y1)
-    if primary_valid:
-        return float(x0), float(y0)
-    return None
-
-
-def _aggregate_simulated_peaks_from_max_positions(
-    max_positions: Sequence[Sequence[float]],
-    miller_array: np.ndarray,
-    intensity_array: np.ndarray,
-) -> list[dict[str, object]]:
-    """Aggregate one simulated peak center per integer HKL from cached maxima."""
-
-    miller_arr = np.asarray(miller_array, dtype=float)
-    intensity_arr = np.asarray(intensity_array, dtype=float).reshape(-1)
-    if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
-        return []
-
-    row_count = min(len(max_positions), miller_arr.shape[0], intensity_arr.shape[0])
-    if row_count <= 0:
-        return []
-
-    centers_by_hkl: dict[tuple[int, int, int], list[tuple[float, float]]] = {}
-    weights_by_hkl: dict[tuple[int, int, int], float] = {}
-    for idx in range(row_count):
-        H, K, L = miller_arr[idx, :3]
-        key = (int(round(H)), int(round(K)), int(round(L)))
-        center = _center_from_maxpos_entry(max_positions[idx])
-        if center is None:
-            continue
-        centers_by_hkl.setdefault(key, []).append(center)
-        weights_by_hkl[key] = weights_by_hkl.get(key, 0.0) + float(
-            abs(intensity_arr[idx])
-        )
-
-    simulated_peaks: list[dict[str, object]] = []
-    for key, center_list in centers_by_hkl.items():
-        arr = np.asarray(center_list, dtype=float)
-        simulated_peaks.append(
-            {
-                "hkl": key,
-                "label": f"{key[0]},{key[1]},{key[2]}",
-                "sim_col": float(arr[:, 0].mean()),
-                "sim_row": float(arr[:, 1].mean()),
-                "weight": float(weights_by_hkl.get(key, 0.0)),
-            }
-        )
-    return simulated_peaks
-
-
-def _build_simulated_peaks_from_hit_tables(
-    hit_tables: Sequence[object],
-    image_shape: tuple[int, int],
-    peak_table_lattice: Sequence[Sequence[object]] | None = None,
-) -> list[dict[str, object]]:
-    """Build simulated peaks from all detector solutions of the selected beam sample."""
-    return gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
-        hit_tables,
-        image_shape=image_shape,
-        native_sim_to_display_coords=_native_sim_to_display_coords,
-        peak_table_lattice=peak_table_lattice,
-        primary_a=float(a_var.get()),
-        primary_c=float(c_var.get()),
-        default_source_label=None,
-        round_pixel_centers=False,
-    )
-
-
 def _simulate_hit_tables_for_fit(
     miller_array: np.ndarray,
     intensity_array: np.ndarray,
@@ -7189,60 +7109,19 @@ def _simulate_hit_tables_for_fit(
     param_set: dict[str, object],
 ) -> list[object]:
     """Simulate once and return raw hit tables for geometry fitting."""
-
-    params_local = dict(param_set)
-    params_local["mosaic_params"] = build_geometry_fit_central_mosaic_params(params_local)
-    mosaic = dict(params_local.get("mosaic_params", {}))
-    wavelength_array = mosaic.get("wavelength_array")
-    if wavelength_array is None:
-        wavelength_array = mosaic.get("wavelength_i_array")
-    if wavelength_array is None:
-        wavelength_array = np.full(
-            int(np.size(mosaic.get("beam_x_array", []))),
-            float(params_local.get("lambda", 1.0)),
-            dtype=np.float64,
-        )
-
-    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-    _, hit_tables, *_ = process_peaks_parallel(
+    return gui_geometry_q_group_manager.simulate_geometry_fit_hit_tables(
         miller_array,
         intensity_array,
         image_size,
-        float(params_local["a"]),
-        float(params_local["c"]),
-        wavelength_array,
-        sim_buffer,
-        float(params_local["corto_detector"]),
-        float(params_local["gamma"]),
-        float(params_local["Gamma"]),
-        float(params_local["chi"]),
-        float(params_local.get("psi", 0.0)),
-        float(params_local.get("psi_z", 0.0)),
-        float(params_local["zs"]),
-        float(params_local["zb"]),
-        params_local["n2"],
-        np.asarray(mosaic["beam_x_array"], dtype=np.float64),
-        np.asarray(mosaic["beam_y_array"], dtype=np.float64),
-        np.asarray(mosaic["theta_array"], dtype=np.float64),
-        np.asarray(mosaic["phi_array"], dtype=np.float64),
-        float(mosaic["sigma_mosaic_deg"]),
-        float(mosaic["gamma_mosaic_deg"]),
-        float(mosaic["eta"]),
-        np.asarray(wavelength_array, dtype=np.float64),
-        float(params_local["debye_x"]),
-        float(params_local["debye_y"]),
-        [float(params_local["center"][0]), float(params_local["center"][1])],
-        float(params_local["theta_initial"]),
-        float(params_local.get("cor_angle", 0.0)),
-        np.array([1.0, 0.0, 0.0]),
-        np.array([0.0, 1.0, 0.0]),
-        save_flag=0,
-        optics_mode=int(params_local.get("optics_mode", 0)),
-        solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
-        solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
-        solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
+        param_set,
+        build_geometry_fit_central_mosaic_params=(
+            build_geometry_fit_central_mosaic_params
+        ),
+        process_peaks_parallel=process_peaks_parallel,
+        default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+        default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+        default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     )
-    return hit_tables
 
 
 def _simulate_hkl_peak_centers_for_fit(
@@ -7252,19 +7131,19 @@ def _simulate_hkl_peak_centers_for_fit(
     param_set: dict[str, object],
 ) -> list[dict[str, object]]:
     """Simulate once and return one aggregated peak center per integer HKL."""
-
-    hit_tables = _simulate_hit_tables_for_fit(
+    return gui_geometry_q_group_manager.simulate_geometry_fit_peak_centers(
         miller_array,
         intensity_array,
         image_size,
         param_set,
-    )
-    maxpos = hit_tables_to_max_positions(hit_tables)
-
-    return _aggregate_simulated_peaks_from_max_positions(
-        maxpos,
-        miller_array,
-        intensity_array,
+        build_geometry_fit_central_mosaic_params=(
+            build_geometry_fit_central_mosaic_params
+        ),
+        process_peaks_parallel=process_peaks_parallel,
+        hit_tables_to_max_positions=hit_tables_to_max_positions,
+        default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+        default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+        default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     )
 
 
@@ -7275,20 +7154,29 @@ def _simulate_preview_style_peaks_for_fit(
     param_set: dict[str, object],
 ) -> list[dict[str, object]]:
     """Simulate per-hit peaks using the same representation as the live preview."""
-
-    hit_tables = _simulate_hit_tables_for_fit(
+    peak_table_lattice = (
+        simulation_runtime_state.stored_peak_table_lattice
+        if isinstance(simulation_runtime_state.stored_peak_table_lattice, list)
+        else None
+    )
+    return gui_geometry_q_group_manager.simulate_geometry_fit_preview_style_peaks(
         miller_array,
         intensity_array,
         image_size,
         param_set,
-    )
-    peak_table_lattice = (
-        simulation_runtime_state.stored_peak_table_lattice if isinstance(simulation_runtime_state.stored_peak_table_lattice, list) else None
-    )
-    return _build_simulated_peaks_from_hit_tables(
-        hit_tables,
-        (int(image_size), int(image_size)),
+        build_geometry_fit_central_mosaic_params=(
+            build_geometry_fit_central_mosaic_params
+        ),
+        process_peaks_parallel=process_peaks_parallel,
+        native_sim_to_display_coords=_native_sim_to_display_coords,
         peak_table_lattice=peak_table_lattice,
+        primary_a=float(a_var.get()),
+        primary_c=float(c_var.get()),
+        default_source_label=None,
+        round_pixel_centers=False,
+        default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+        default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+        default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     )
 
 

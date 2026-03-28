@@ -335,6 +335,10 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.geometry_q_group_manager` now also owns simulated-peak
     assembly from cached hit tables and geometry-fit hit-table exports used
     by the live preview and fit workflows.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the geometry-fit
+    hit-table simulation, max-position center aggregation, and preview-style
+    simulated-peak helper bundle used by the live preview, geometry fit, and
+    manual-pick workflows.
   - `ra_sim.gui.geometry_q_group_manager` now also owns shared geometry-fit
     seed filtering and degenerate-collapse helpers used by the live preview,
     geometry fit, and manual-pick grouping workflows.
@@ -585,10 +589,9 @@ What is left:
   pipeline/HKL lookup call sites around the extracted manager helpers and
   shared bootstrap wiring.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
-  fit-preview/cached-hit value sources, live-preview availability/fallback
-  simulation orchestration, image-shape/display-coordinate value plumbing, and
-  a couple of delegated call sites around the extracted manager/view helpers
-  and shared bootstrap wiring.
+  fit-preview parameter/lattice/display value sources plus a couple of
+  delegated call sites around the extracted manager/view helpers and shared
+  bootstrap wiring.
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.

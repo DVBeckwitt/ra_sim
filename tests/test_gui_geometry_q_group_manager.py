@@ -183,6 +183,174 @@ def test_geometry_q_group_manager_builds_simulated_peaks_from_hit_tables() -> No
     assert fallback_peaks[0]["q_group_key"] == ("q_group", "primary", 3, 0)
 
 
+def test_geometry_q_group_manager_aggregates_peak_centers_from_max_positions() -> None:
+    assert geometry_q_group_manager.geometry_fit_peak_center_from_max_position(
+        [9.0, 1.0, 2.0, 4.0, 8.0, 9.0]
+    ) == (1.0, 2.0)
+    assert geometry_q_group_manager.geometry_fit_peak_center_from_max_position(
+        [3.0, 1.0, 2.0, 7.0, 5.0, 6.0]
+    ) == (5.0, 6.0)
+
+    peaks = geometry_q_group_manager.aggregate_geometry_fit_peak_centers_from_max_positions(
+        [
+            [9.0, 1.0, 2.0, 4.0, 8.0, 9.0],
+            [3.0, 1.0, 2.0, 7.0, 5.0, 6.0],
+            [6.0, np.nan, np.nan, 2.0, 10.0, 12.0],
+        ],
+        np.asarray(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, 1.0],
+            ],
+            dtype=float,
+        ),
+        np.asarray([4.0, -6.0, 7.0], dtype=float),
+    )
+
+    assert peaks == [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "weight": 10.0,
+        },
+        {
+            "hkl": (2, 0, 1),
+            "label": "2,0,1",
+            "sim_col": 10.0,
+            "sim_row": 12.0,
+            "weight": 7.0,
+        },
+    ]
+
+
+def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
+    captured = {}
+
+    def _build_mosaic(params):
+        captured["params"] = dict(params)
+        return {
+            "beam_x_array": np.asarray([1.0, 2.0], dtype=float),
+            "beam_y_array": np.asarray([3.0, 4.0], dtype=float),
+            "theta_array": np.asarray([5.0, 6.0], dtype=float),
+            "phi_array": np.asarray([7.0, 8.0], dtype=float),
+            "sigma_mosaic_deg": 0.1,
+            "gamma_mosaic_deg": 0.2,
+            "eta": 0.3,
+        }
+
+    def _process_peaks_parallel(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return (
+            np.zeros((32, 32), dtype=float),
+            [
+                np.asarray(
+                    [
+                        [10.0, 1.2, 2.8, 0.0, 1.0, 0.0, 0.0],
+                    ],
+                    dtype=float,
+                )
+            ],
+        )
+
+    param_set = {
+        "a": 3.0,
+        "c": 5.0,
+        "lambda": 1.54,
+        "corto_detector": 100.0,
+        "gamma": 1.0,
+        "Gamma": 2.0,
+        "chi": 3.0,
+        "psi": 4.0,
+        "psi_z": 5.0,
+        "zs": 6.0,
+        "zb": 7.0,
+        "n2": "n2",
+        "debye_x": 0.1,
+        "debye_y": 0.2,
+        "center": (11.0, 12.0),
+        "theta_initial": 8.0,
+        "cor_angle": 9.0,
+        "optics_mode": 2,
+    }
+    miller_array = np.asarray([[1.0, 0.0, 0.0]], dtype=float)
+    intensity_array = np.asarray([5.0], dtype=float)
+
+    hit_tables = geometry_q_group_manager.simulate_geometry_fit_hit_tables(
+        miller_array,
+        intensity_array,
+        32,
+        param_set,
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    assert len(hit_tables) == 1
+    np.testing.assert_allclose(captured["args"][5], [1.54, 1.54])
+    np.testing.assert_allclose(captured["args"][16], [1.0, 2.0])
+    np.testing.assert_allclose(captured["args"][23], [1.54, 1.54])
+    assert captured["args"][15] == "n2"
+    assert captured["kwargs"]["optics_mode"] == 2
+    assert captured["kwargs"]["solve_q_steps"] == 123
+    assert captured["kwargs"]["solve_q_mode"] == 1
+
+    centers = geometry_q_group_manager.simulate_geometry_fit_peak_centers(
+        miller_array,
+        intensity_array,
+        32,
+        param_set,
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        hit_tables_to_max_positions=lambda _tables: [
+            [9.0, 1.0, 2.0, 4.0, 6.0, 7.0]
+        ],
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+    assert centers == [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "sim_col": 1.0,
+            "sim_row": 2.0,
+            "weight": 5.0,
+        }
+    ]
+
+    preview_peaks = geometry_q_group_manager.simulate_geometry_fit_preview_style_peaks(
+        miller_array,
+        intensity_array,
+        32,
+        param_set,
+        build_geometry_fit_central_mosaic_params=_build_mosaic,
+        process_peaks_parallel=_process_peaks_parallel,
+        native_sim_to_display_coords=lambda col, row, shape: (
+            col + float(shape[1]),
+            row + float(shape[0]),
+        ),
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        primary_a=7.0,
+        primary_c=9.0,
+        default_source_label=None,
+        round_pixel_centers=False,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    assert preview_peaks[0]["sim_col"] == 33.2
+    assert preview_peaks[0]["sim_row"] == 34.8
+    assert preview_peaks[0]["source_label"] == "primary"
+    assert preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
+
+
 def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "primary", 1, 1)

@@ -308,6 +308,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     now also live in `ra_sim.gui.geometry_q_group_manager`
   - simulated-peak assembly from cached hit tables and geometry-fit hit-
     table exports now also lives in `ra_sim.gui.geometry_q_group_manager`
+  - geometry-fit hit-table simulation, max-position center aggregation, and
+    preview-style simulated-peak helpers used by the live preview, geometry
+    fit, and manual-pick workflows now also live in
+    `ra_sim.gui.geometry_q_group_manager`
   - shared geometry-fit seed filtering and degenerate-collapse helpers used
     by the live preview, geometry fit, and manual-pick grouping workflows
     now also live in `ra_sim.gui.geometry_q_group_manager`
@@ -418,10 +422,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   sites around the extracted controller/view modules and shared bootstrap/
   config helpers.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
-  fit-preview/cached-hit value sources, live-preview availability/fallback
-  simulation orchestration, image-shape/display-coordinate value plumbing,
-  and a couple of delegated call sites around the extracted manager/view
-  helpers and shared bootstrap wiring.
+  fit-preview parameter/lattice/display value sources plus a couple of
+  delegated call sites around the extracted manager/view helpers and shared
+  bootstrap wiring.
 - The remaining Bragg-Qr manager runtime code is now mostly the live filter
   pipeline/HKL lookup call sites around the extracted manager helpers and
   shared bootstrap wiring.
