@@ -307,8 +307,9 @@ not `main.py` or `mosaic_profiles.py`.
     wiring for that manager now also flows through one shared runtime-binding
     context in that module.
   - `ra_sim.gui.bragg_qr_manager` now also owns the live lattice-value
-    normalization, Bragg-Qr entry/L-value construction, and active
-    Qr-cylinder overlay entry derivation used by the runtime workflow.
+    normalization, Bragg-Qr entry/L-value construction, active
+    Qr-cylinder overlay entry derivation, and the zero-arg overlay-entry
+    factory used by the runtime workflow.
   - `ra_sim.gui.bragg_qr_manager` now also owns the zero-arg runtime
     refresh/open callback helpers used by the live filter pipeline and HKL
     lookup controls.
@@ -316,12 +317,12 @@ not `main.py` or `mosaic_profiles.py`.
     binding-factory helper used by the live filter pipeline, HKL lookup
     controls, and manager callbacks.
   - `ra_sim.gui.qr_cylinder_overlay` now also owns the analytic Qr-cylinder
-    overlay render config, cache-signature, path-construction helpers, and
-    the runtime binding/refresh/toggle helpers used by the live detector/
-    caked overlay workflow.
+    overlay render config, zero-arg render-config factory, cache-signature,
+    path-construction helpers, and the runtime binding/refresh/toggle helpers
+    used by the live detector/caked overlay workflow.
   - `ra_sim.gui.runtime` now keeps only one bound Bragg-Qr runtime factory
-    value, thin active-entry/render-config value sources, and the remaining
-    live manager/overlay call sites for that workflow.
+    value plus the remaining live manager/overlay call sites for that
+    workflow.
 - Geometry-fit Qr/Qz selector workflow extraction has advanced.
   - `ra_sim.gui.geometry_q_group_manager` now owns the selector line/status
     formatting, window refresh, checkbox/bulk include-exclude side effects,
@@ -576,10 +577,9 @@ What is left:
 - The remaining structure-factor-pruning runtime code is now mostly live call
   sites plus a few local value-source helpers around the extracted pruning
   module and shared bootstrap wiring.
-- The remaining Bragg-Qr runtime code is now mostly thin
-  active-entry/render-config value sources and a few manager/overlay call
-  sites around the extracted controller/view modules and shared bootstrap
-  helpers.
+- The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
+  sites around the extracted controller/view modules and shared bootstrap/
+  config helpers.
 - The remaining Bragg-Qr manager runtime code is now mostly the live filter
   pipeline/HKL lookup call sites around the extracted manager helpers and
   shared bootstrap wiring.

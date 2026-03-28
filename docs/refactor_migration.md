@@ -282,8 +282,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     callback wiring for that manager now also flows through one shared
     runtime-binding context in that module
   - `ra_sim.gui.bragg_qr_manager` now also owns the live lattice-value
-    normalization, Bragg-Qr entry/L-value construction, and active
-    Qr-cylinder overlay entry derivation used by that workflow
+    normalization, Bragg-Qr entry/L-value construction, active
+    Qr-cylinder overlay entry derivation, and the zero-arg overlay-entry
+    factory used by that workflow
   - `ra_sim.gui.bragg_qr_manager` now also owns the zero-arg runtime
     refresh/open callback helpers used by the live filter pipeline and HKL
     lookup controls
@@ -291,12 +292,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     binding-factory helper used by the live filter pipeline, HKL lookup
     controls, and manager callbacks
   - `ra_sim.gui.qr_cylinder_overlay` now also owns the analytic Qr-cylinder
-    overlay render config, cache-signature, path-construction helpers, and
-    the runtime binding/refresh/toggle helpers used by the live detector/
-    caked overlay workflow
+    overlay render config, zero-arg render-config factory, cache-signature,
+    path-construction helpers, and the runtime binding/refresh/toggle helpers
+    used by the live detector/caked overlay workflow
   - `ra_sim.gui.runtime` now keeps only one bound Bragg-Qr runtime factory
-    value, thin active-entry/render-config value sources, and the remaining
-    live manager/overlay call sites for that workflow
+    value plus the remaining live manager/overlay call sites for that
+    workflow
 - Geometry-fit Qr/Qz selector workflow extraction has also advanced:
   - selector line/status formatting, window refresh, checkbox/bulk include-
     exclude side effects, update-listed-peaks request flow, and save/load
@@ -411,10 +412,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining structure-factor-pruning runtime code is now mostly live call
   sites plus a few local value-source helpers around the extracted pruning
   module and shared bootstrap wiring.
-- The remaining Bragg-Qr runtime code is now mostly thin
-  active-entry/render-config value sources and a few manager/overlay call
-  sites around the extracted controller/view modules and shared bootstrap
-  helpers.
+- The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
+  sites around the extracted controller/view modules and shared bootstrap/
+  config helpers.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   fit-preview/cached-hit value sources, live-preview availability/fallback
   simulation orchestration, image-shape/display-coordinate value plumbing,

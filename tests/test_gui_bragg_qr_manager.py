@@ -461,6 +461,48 @@ def test_bragg_qr_runtime_binding_factory_builds_live_bindings(monkeypatch) -> N
     assert calls[0]["set_progress_text"] is not calls[1]["set_progress_text"]
 
 
+def test_active_qr_cylinder_overlay_entries_factory_builds_live_entries(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    monkeypatch.setattr(
+        bragg_qr_manager,
+        "build_active_qr_cylinder_overlay_entries",
+        lambda simulation_runtime_state, **kwargs: (
+            calls.append((simulation_runtime_state, kwargs)),
+            [{"key": ("primary", 1)}],
+        )[-1],
+    )
+
+    factory = bragg_qr_manager.make_runtime_active_qr_cylinder_overlay_entries_factory(
+        simulation_runtime_state="simulation-state",
+        primary_candidate=lambda: "5.0",
+        primary_fallback=4.0,
+        secondary_candidate=lambda: "6.0",
+        primary_miller_all=lambda: "primary-miller",
+        secondary_miller_all=lambda: "secondary-miller",
+    )
+
+    assert factory() == [{"key": ("primary", 1)}]
+    assert calls == [
+        (
+            "simulation-state",
+            {
+                "primary_candidate": calls[0][1]["primary_candidate"],
+                "primary_fallback": 4.0,
+                "secondary_candidate": calls[0][1]["secondary_candidate"],
+                "primary_miller_all": calls[0][1]["primary_miller_all"],
+                "secondary_miller_all": calls[0][1]["secondary_miller_all"],
+            },
+        )
+    ]
+    assert callable(calls[0][1]["primary_candidate"])
+    assert callable(calls[0][1]["secondary_candidate"])
+    assert callable(calls[0][1]["primary_miller_all"])
+    assert callable(calls[0][1]["secondary_miller_all"])
+
+
 def test_bragg_qr_runtime_callback_factories_build_zero_arg_delegates(
     monkeypatch,
 ) -> None:

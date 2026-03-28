@@ -74,6 +74,48 @@ def test_qr_cylinder_overlay_config_and_signature_normalize_values() -> None:
     assert signature[-2:] == (1.2, 0.3)
 
 
+def test_qr_cylinder_overlay_render_config_factory_reads_live_values() -> None:
+    values = {
+        "render_in_caked_space": False,
+        "center_col": 10.0,
+        "center_row": 11.0,
+    }
+
+    factory = qr_cylinder_overlay.make_runtime_qr_cylinder_overlay_render_config_factory(
+        render_in_caked_space_factory=lambda: values["render_in_caked_space"],
+        image_size="64",
+        display_rotate_k="-1",
+        center_col_factory=lambda: values["center_col"],
+        center_row_factory=lambda: values["center_row"],
+        distance_cor_to_detector_factory=lambda: "123.0",
+        gamma_deg_factory=lambda: "1.5",
+        Gamma_deg_factory=lambda: 2.5,
+        chi_deg_factory=lambda: 3.5,
+        psi_deg_factory=lambda: 4.5,
+        psi_z_deg_factory=lambda: 5.5,
+        zs_factory=lambda: 6.5,
+        zb_factory=lambda: 7.5,
+        theta_initial_deg_factory=lambda: 8.5,
+        cor_angle_deg_factory=lambda: 9.5,
+        pixel_size_m="0.0001",
+        wavelength="1.54",
+        n2=1.1 + 0.0j,
+        phi_samples="361",
+    )
+
+    values["render_in_caked_space"] = True
+    values["center_col"] = 21.0
+    values["center_row"] = 22.0
+    config = factory()
+
+    assert config.render_in_caked_space is True
+    assert config.image_size == 64
+    assert config.display_rotate_k == -1
+    assert config.center_col == 21.0
+    assert config.center_row == 22.0
+    assert config.phi_samples == 361
+
+
 def test_qr_cylinder_overlay_path_builder_projects_detector_space_paths() -> None:
     calls = []
     config = qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(

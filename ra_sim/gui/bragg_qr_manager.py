@@ -162,6 +162,27 @@ def build_active_qr_cylinder_overlay_entries(
     return entries
 
 
+def make_runtime_active_qr_cylinder_overlay_entries_factory(
+    *,
+    simulation_runtime_state,
+    primary_candidate: object,
+    primary_fallback: object,
+    secondary_candidate: object | None = None,
+    primary_miller_all: object = None,
+    secondary_miller_all: object = None,
+) -> Callable[[], list[dict[str, object]]]:
+    """Return a zero-arg factory for the live Qr-cylinder overlay entries."""
+
+    return lambda: build_active_qr_cylinder_overlay_entries(
+        simulation_runtime_state,
+        primary_candidate=primary_candidate,
+        primary_fallback=primary_fallback,
+        secondary_candidate=secondary_candidate,
+        primary_miller_all=primary_miller_all,
+        secondary_miller_all=secondary_miller_all,
+    )
+
+
 def build_runtime_bragg_qr_bindings(
     *,
     view_state,

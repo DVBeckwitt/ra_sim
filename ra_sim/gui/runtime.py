@@ -3463,43 +3463,40 @@ def _clear_geometry_preview_artists(*, redraw: bool = True):
         redraw=redraw,
     )
 
-def _active_qr_cylinder_overlay_entries() -> list[dict[str, object]]:
-    """Return active Qr groups from the current simulation state."""
-
-    return gui_bragg_qr_manager.build_active_qr_cylinder_overlay_entries(
-        simulation_runtime_state,
+active_qr_cylinder_overlay_entries_factory = (
+    gui_bragg_qr_manager.make_runtime_active_qr_cylinder_overlay_entries_factory(
+        simulation_runtime_state=simulation_runtime_state,
         primary_candidate=(lambda: a_var.get()),
         primary_fallback=float(av),
         secondary_candidate=(lambda: av2),
         primary_miller_all=(lambda: globals().get("SIM_MILLER1")),
         secondary_miller_all=(lambda: globals().get("SIM_MILLER2")),
     )
-
-def _current_qr_cylinder_overlay_render_config():
-    return gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
-        render_in_caked_space=bool(
-            analysis_view_controls_view_state.show_caked_2d_var.get()
+)
+qr_cylinder_overlay_render_config_factory = (
+    gui_qr_cylinder_overlay.make_runtime_qr_cylinder_overlay_render_config_factory(
+        render_in_caked_space_factory=lambda: (
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
         ),
         image_size=int(image_size),
         display_rotate_k=int(SIM_DISPLAY_ROTATE_K),
-        center_col=float(center_y_var.get()),
-        center_row=float(center_x_var.get()),
-        distance_cor_to_detector=float(corto_detector_var.get()),
-        gamma_deg=float(gamma_var.get()),
-        Gamma_deg=float(Gamma_var.get()),
-        chi_deg=float(chi_var.get()),
-        psi_deg=float(psi),
-        psi_z_deg=float(psi_z_var.get()),
-        zs=float(zs_var.get()),
-        zb=float(zb_var.get()),
-        theta_initial_deg=float(theta_initial_var.get()),
-        cor_angle_deg=float(cor_angle_var.get()),
+        center_col_factory=lambda: float(center_y_var.get()),
+        center_row_factory=lambda: float(center_x_var.get()),
+        distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
+        gamma_deg_factory=lambda: float(gamma_var.get()),
+        Gamma_deg_factory=lambda: float(Gamma_var.get()),
+        chi_deg_factory=lambda: float(chi_var.get()),
+        psi_deg_factory=lambda: float(psi),
+        psi_z_deg_factory=lambda: float(psi_z_var.get()),
+        zs_factory=lambda: float(zs_var.get()),
+        zb_factory=lambda: float(zb_var.get()),
+        theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
+        cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
         pixel_size_m=float(pixel_size_m),
         wavelength=float(lambda_),
         n2=n2,
     )
-
-
+)
 qr_cylinder_overlay_runtime = gui_bootstrap.build_runtime_qr_cylinder_overlay_bootstrap(
     qr_cylinder_overlay_module=gui_qr_cylinder_overlay,
     ax=ax,
@@ -3510,8 +3507,8 @@ qr_cylinder_overlay_runtime = gui_bootstrap.build_runtime_qr_cylinder_overlay_bo
         if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is not None
         else False
     ),
-    get_active_entries=_active_qr_cylinder_overlay_entries,
-    render_config_factory=_current_qr_cylinder_overlay_render_config,
+    get_active_entries=active_qr_cylinder_overlay_entries_factory,
+    render_config_factory=qr_cylinder_overlay_render_config_factory,
     ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
     get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
     native_sim_to_display_coords=_native_sim_to_display_coords,

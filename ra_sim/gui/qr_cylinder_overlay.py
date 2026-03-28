@@ -146,6 +146,57 @@ def build_qr_cylinder_overlay_render_config(
     )
 
 
+def make_runtime_qr_cylinder_overlay_render_config_factory(
+    *,
+    render_in_caked_space_factory: object,
+    image_size: object,
+    display_rotate_k: object,
+    center_col_factory: object,
+    center_row_factory: object,
+    distance_cor_to_detector_factory: object,
+    gamma_deg_factory: object,
+    Gamma_deg_factory: object,
+    chi_deg_factory: object,
+    psi_deg_factory: object,
+    psi_z_deg_factory: object,
+    zs_factory: object,
+    zb_factory: object,
+    theta_initial_deg_factory: object,
+    cor_angle_deg_factory: object,
+    pixel_size_m: object,
+    wavelength: object,
+    n2: object,
+    phi_samples: object = 721,
+    two_theta_limits: tuple[float, float] = (0.0, 90.0),
+) -> Callable[[], QrCylinderOverlayRenderConfig]:
+    """Return a zero-arg factory for the live analytic overlay config."""
+
+    return lambda: build_qr_cylinder_overlay_render_config(
+        render_in_caked_space=_resolve_runtime_value(render_in_caked_space_factory),
+        image_size=_resolve_runtime_value(image_size),
+        display_rotate_k=_resolve_runtime_value(display_rotate_k),
+        center_col=_resolve_runtime_value(center_col_factory),
+        center_row=_resolve_runtime_value(center_row_factory),
+        distance_cor_to_detector=_resolve_runtime_value(
+            distance_cor_to_detector_factory
+        ),
+        gamma_deg=_resolve_runtime_value(gamma_deg_factory),
+        Gamma_deg=_resolve_runtime_value(Gamma_deg_factory),
+        chi_deg=_resolve_runtime_value(chi_deg_factory),
+        psi_deg=_resolve_runtime_value(psi_deg_factory),
+        psi_z_deg=_resolve_runtime_value(psi_z_deg_factory),
+        zs=_resolve_runtime_value(zs_factory),
+        zb=_resolve_runtime_value(zb_factory),
+        theta_initial_deg=_resolve_runtime_value(theta_initial_deg_factory),
+        cor_angle_deg=_resolve_runtime_value(cor_angle_deg_factory),
+        pixel_size_m=_resolve_runtime_value(pixel_size_m),
+        wavelength=_resolve_runtime_value(wavelength),
+        n2=_resolve_runtime_value(n2),
+        phi_samples=_resolve_runtime_value(phi_samples),
+        two_theta_limits=two_theta_limits,
+    )
+
+
 def build_qr_cylinder_overlay_signature(
     entries: Sequence[dict[str, object]],
     *,
