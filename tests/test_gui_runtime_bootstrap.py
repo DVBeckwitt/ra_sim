@@ -203,6 +203,44 @@ def test_runtime_structure_factor_pruning_controls_are_bootstrapped() -> None:
     assert direct_trace_calls == 0
 
 
+def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    has_helper_call = False
+    direct_helper_calls = {
+        "render_current_geometry_manual_pairs": 0,
+        "geometry_manual_toggle_selection_at": 0,
+        "geometry_manual_place_selection_at": 0,
+        "geometry_manual_pick_preview_state": 0,
+        "cancel_geometry_manual_pick_session": 0,
+    }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "make_runtime_geometry_manual_callbacks":
+            has_helper_call = True
+        if (
+            isinstance(func.value, ast.Name)
+            and func.value.id == "gui_manual_geometry"
+            and func.attr in direct_helper_calls
+        ):
+            direct_helper_calls[func.attr] += 1
+
+    assert has_helper_call is True
+    assert direct_helper_calls == {
+        "render_current_geometry_manual_pairs": 0,
+        "geometry_manual_toggle_selection_at": 0,
+        "geometry_manual_place_selection_at": 0,
+        "geometry_manual_pick_preview_state": 0,
+        "cancel_geometry_manual_pick_session": 0,
+    }
+
+
 def test_runtime_hkl_lookup_controls_are_bootstrapped() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")

@@ -304,6 +304,190 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> N
     assert entry["raw_caked_y"] == -7.0
 
 
+def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_state() -> None:
+    events: list[tuple[object, ...]] = []
+    status_texts: list[str] = []
+
+    callbacks = mg.make_runtime_geometry_manual_callbacks(
+        background_visible=lambda: True,
+        current_background_index=lambda: 2,
+        current_background_image=lambda: np.ones((4, 4), dtype=float),
+        pick_session=lambda: None,
+        build_initial_pairs_display=lambda index, *, prefer_cache: (
+            [{"measured": int(index)}],
+            [{"saved": int(index)}],
+        ),
+        session_initial_pairs_display=lambda: [{"pending": True}],
+        clear_geometry_pick_artists=lambda *args, **kwargs: events.append(
+            ("clear", args, kwargs)
+        ),
+        draw_initial_geometry_pairs_overlay=lambda pairs, *, max_display_markers: (
+            events.append(("draw", list(pairs), int(max_display_markers)))
+        ),
+        update_button_label=lambda: events.append(("button",)),
+        set_background_file_status_text=lambda: events.append(("background-status",)),
+        pair_group_count=lambda index: 1,
+        set_status_text=lambda text: status_texts.append(str(text)),
+        get_cache_data=lambda **kwargs: {},
+        set_pairs_for_index=lambda index, entries: list(entries or []),
+        pairs_for_index=lambda index: [{"pair": int(index)}],
+        set_pick_session=lambda session: events.append(("set-session", dict(session))),
+        restore_view=lambda **kwargs: events.append(("restore", kwargs)),
+        clear_preview_artists=lambda **kwargs: events.append(("clear-preview", kwargs)),
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+        refine_preview_point=lambda *args, **kwargs: (0.0, 0.0),
+        remaining_candidates=lambda: [],
+        preview_due=lambda col, row: True,
+        show_preview=lambda *args: events.append(("show-preview", args)),
+    )
+
+    assert callbacks.render_current_pairs(update_status=True) is True
+    assert events == [
+        ("draw", [{"saved": 2}, {"pending": True}], 2),
+        ("button",),
+        ("background-status",),
+    ]
+    assert status_texts == [
+        "Current background has 1 saved manual points across 1 Qr/Qz groups."
+    ]
+
+
+def test_make_runtime_geometry_manual_callbacks_delegate_toggle_preview_and_cancel(
+    monkeypatch,
+) -> None:
+    events: list[tuple[object, ...]] = []
+    status_texts: list[str] = []
+    pick_session_state: dict[str, object] = {"value": {"mode": "start"}}
+
+    def _set_pick_session(session: dict[str, object]) -> None:
+        pick_session_state["value"] = dict(session)
+        events.append(("set-session", dict(session)))
+
+    def _fake_toggle(col: float, row: float, **kwargs):
+        events.append(
+            (
+                "toggle",
+                float(col),
+                float(row),
+                kwargs["current_background_index"],
+                kwargs["use_caked_space"],
+                dict(kwargs["pick_session"]),
+            )
+        )
+        kwargs["set_pick_session_fn"]({"mode": "toggle"})
+        return True, {"ignored": True}, True
+
+    def _fake_place(col: float, row: float, **kwargs):
+        events.append(
+            (
+                "place",
+                float(col),
+                float(row),
+                kwargs["current_background_index"],
+                kwargs["use_caked_space"],
+                dict(kwargs["pick_session"]),
+            )
+        )
+        kwargs["set_pick_session_fn"]({"mode": "place"})
+        return True, {"ignored": True}
+
+    def _fake_preview_state(col: float, row: float, **kwargs):
+        events.append(
+            (
+                "preview-state",
+                float(col),
+                float(row),
+                kwargs["current_background_index"],
+                kwargs["force"],
+                list(kwargs["remaining_candidates"]),
+                kwargs["use_caked_space"],
+            )
+        )
+        return {
+            "raw_col": 5.0,
+            "raw_row": 6.0,
+            "refined_col": 7.5,
+            "refined_row": 8.5,
+            "message": "preview ready",
+        }
+
+    def _fake_cancel(pick_session, **kwargs):
+        events.append(
+            (
+                "cancel",
+                dict(pick_session),
+                kwargs["current_background_index"],
+                kwargs["restore_view"],
+                kwargs["redraw"],
+                kwargs["message"],
+            )
+        )
+        return {"mode": "cancel"}
+
+    monkeypatch.setattr(mg, "geometry_manual_toggle_selection_at", _fake_toggle)
+    monkeypatch.setattr(mg, "geometry_manual_place_selection_at", _fake_place)
+    monkeypatch.setattr(mg, "geometry_manual_pick_preview_state", _fake_preview_state)
+    monkeypatch.setattr(mg, "cancel_geometry_manual_pick_session", _fake_cancel)
+
+    callbacks = mg.make_runtime_geometry_manual_callbacks(
+        background_visible=lambda: True,
+        current_background_index=lambda: 2,
+        current_background_image=lambda: "bg-image",
+        pick_session=lambda: pick_session_state["value"],
+        build_initial_pairs_display=lambda index, *, prefer_cache: ([], []),
+        session_initial_pairs_display=lambda: [],
+        clear_geometry_pick_artists=lambda *args, **kwargs: None,
+        draw_initial_geometry_pairs_overlay=lambda pairs, *, max_display_markers: None,
+        update_button_label=lambda: events.append(("button",)),
+        set_background_file_status_text=lambda: events.append(("background-status",)),
+        pair_group_count=lambda index: 0,
+        set_status_text=lambda text: status_texts.append(str(text)),
+        get_cache_data=lambda **kwargs: {"cache": True},
+        set_pairs_for_index=lambda index, entries: list(entries or []),
+        pairs_for_index=lambda index: [],
+        set_pick_session=_set_pick_session,
+        restore_view=lambda **kwargs: events.append(("restore-view", kwargs)),
+        clear_preview_artists=lambda **kwargs: events.append(("clear-preview", kwargs)),
+        push_undo_state=lambda: events.append(("push-undo",)),
+        listed_q_group_entries=lambda: [{"key": ("q", 1)}],
+        format_q_group_line=lambda entry: "Q1",
+        use_caked_space=lambda: True,
+        pick_search_window_px=25.0,
+        set_suppress_drag_press_once=lambda enabled: events.append(("suppress", enabled)),
+        sync_peak_selection_state=lambda: events.append(("sync",)),
+        refine_preview_point=lambda *args, **kwargs: (11.0, 12.0),
+        remaining_candidates=lambda: [{"label": "cand"}],
+        preview_due=lambda col, row: True,
+        nearest_candidate_to_point=lambda col, row, candidates: (
+            {"label": "cand"},
+            1.5,
+        ),
+        caked_angles_to_background_display_coords=lambda col, row: (col + 100.0, row + 200.0),
+        show_preview=lambda *args: events.append(("show-preview", args)),
+    )
+
+    assert callbacks.toggle_selection_at(10.0, 20.0) is True
+    assert callbacks.place_selection_at(30.0, 40.0) is True
+    callbacks.update_pick_preview(5.0, 6.0, force=True)
+    callbacks.cancel_pick_session(restore_view=False, redraw=False, message="bye")
+
+    assert pick_session_state["value"] == {"mode": "cancel"}
+    assert status_texts == ["preview ready"]
+    assert events == [
+        ("toggle", 10.0, 20.0, 2, True, {"mode": "start"}),
+        ("set-session", {"mode": "toggle"}),
+        ("suppress", True),
+        ("sync",),
+        ("place", 30.0, 40.0, 2, True, {"mode": "toggle"}),
+        ("set-session", {"mode": "place"}),
+        ("preview-state", 5.0, 6.0, 2, True, [{"label": "cand"}], True),
+        ("show-preview", (5.0, 6.0, 7.5, 8.5)),
+        ("cancel", {"mode": "place"}, 2, False, False, "bye"),
+        ("set-session", {"mode": "cancel"}),
+    ]
+
+
 def test_ensure_geometry_fit_caked_view_switches_and_refreshes_immediately() -> None:
     calls: list[str] = []
 

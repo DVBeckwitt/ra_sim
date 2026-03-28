@@ -514,6 +514,14 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.runtime` no longer rebuilds that geometry-fit action bindings
     bundle inline on each click; it now keeps only the remaining Tk-side
     control wiring around the extracted helper.
+- Geometry-fit manual-pair preview/action cleanup has advanced.
+  - `ra_sim.gui.manual_geometry` now also owns the bound runtime callback
+    bundle for current-pair rendering, Qr/Qz group toggle selection, manual
+    point placement, preview refresh, and pick-session cancelation.
+  - `ra_sim.gui.runtime` no longer calls those manual-geometry helper surfaces
+    directly inline; it now keeps one bound callback bundle that is threaded
+    through canvas interaction, geometry-tool actions, background refresh, and
+    GUI-state restore call sites.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -754,8 +762,9 @@ What is left:
   value-source wiring around the extracted peak-selection helpers and shared
   bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining preview-action call sites around the extracted
-  `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry` helper surfaces.
+  remaining value-source wiring and callback-bundle construction around the
+  extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
+  helper surfaces.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction helpers.
@@ -1159,15 +1168,15 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining geometry-fit manual-pair preview / action call
-  sites now that the Bragg-Qr manager and pruning-control wiring are extracted
+- start with the remaining integration-range drag cross-feature handoff now
+  that the geometry-fit manual-pair preview/action callbacks are extracted
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the Bragg-Qr / pruning control cleanup:
+Immediate checklist after the geometry manual-preview callback cleanup:
 
-- trim the remaining geometry-fit manual-pair preview / action call sites
-- then trim the remaining integration-range drag cross-feature handoff
+- trim the remaining integration-range drag cross-feature handoff
+- then trim the remaining background/status refresh call-site glue
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving
 

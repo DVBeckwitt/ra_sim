@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -20,6 +21,26 @@ DEFAULT_CAKED_SEARCH_TTH_DEG = 1.5
 DEFAULT_CAKED_SEARCH_PHI_DEG = 10.0
 DEFAULT_PREVIEW_MIN_INTERVAL_S = 0.03
 DEFAULT_PREVIEW_MIN_MOVE_PX = 0.8
+
+
+@dataclass(frozen=True)
+class GeometryManualRuntimeCallbacks:
+    """Bound runtime callbacks for manual geometry preview and pick actions."""
+
+    render_current_pairs: Callable[..., bool]
+    toggle_selection_at: Callable[[float, float], bool]
+    place_selection_at: Callable[[float, float], bool]
+    update_pick_preview: Callable[..., None]
+    cancel_pick_session: Callable[..., None]
+
+
+def _resolve_runtime_value(value_or_callable: object) -> object:
+    if callable(value_or_callable):
+        try:
+            return value_or_callable()
+        except Exception:
+            return None
+    return value_or_callable
 
 
 def geometry_manual_position_error_px(
@@ -1624,6 +1645,215 @@ def render_current_geometry_manual_pairs(
                 f"{pair_group_count(int(current_background_index))} Qr/Qz groups."
             )
     return True
+
+
+def make_runtime_geometry_manual_callbacks(
+    *,
+    background_visible: Callable[[], object] | object,
+    current_background_index: Callable[[], object] | object,
+    current_background_image: Callable[[], object | None] | object | None,
+    pick_session: Callable[[], dict[str, object] | None] | dict[str, object] | None,
+    build_initial_pairs_display: Callable[
+        ...,
+        tuple[list[dict[str, object]], list[dict[str, object]]],
+    ],
+    session_initial_pairs_display: Callable[[], Sequence[dict[str, object]]],
+    clear_geometry_pick_artists: Callable[..., None],
+    draw_initial_geometry_pairs_overlay: Callable[..., None],
+    update_button_label: Callable[[], None],
+    set_background_file_status_text: Callable[[], None],
+    pair_group_count: Callable[[int], int],
+    set_status_text: Callable[[str], None] | None,
+    get_cache_data: Callable[..., dict[str, object]],
+    set_pairs_for_index: Callable[
+        [int, Sequence[dict[str, object]] | None],
+        Sequence[dict[str, object]],
+    ],
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    set_pick_session: Callable[[dict[str, object]], None],
+    restore_view: Callable[..., None],
+    clear_preview_artists: Callable[..., None],
+    push_undo_state: Callable[[], None] | None = None,
+    listed_q_group_entries: Callable[[], Sequence[dict[str, object]]] | Sequence[dict[str, object]] = (),
+    format_q_group_line: Callable[[dict[str, object]], str] | None = None,
+    use_caked_space: Callable[[], object] | object = False,
+    pick_search_window_px: float,
+    caked_search_tth_deg: float = DEFAULT_CAKED_SEARCH_TTH_DEG,
+    caked_search_phi_deg: float = DEFAULT_CAKED_SEARCH_PHI_DEG,
+    set_suppress_drag_press_once: Callable[[bool], None] | None = None,
+    sync_peak_selection_state: Callable[[], None] | None = None,
+    refine_preview_point: Callable[..., tuple[float, float]] | None = None,
+    remaining_candidates: Callable[[], Sequence[dict[str, object]]] | None = None,
+    preview_due: Callable[[float, float], bool] | None = None,
+    nearest_candidate_to_point: Callable[
+        [float, float, Sequence[dict[str, object]] | None],
+        tuple[dict[str, object] | None, float],
+    ] = geometry_manual_nearest_candidate_to_point,
+    position_error_px: Callable[
+        [float, float, float, float],
+        float,
+    ] = geometry_manual_position_error_px,
+    position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
+    caked_angles_to_background_display_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
+    show_preview: Callable[[float, float, float | None, float | None], None] | None = None,
+) -> GeometryManualRuntimeCallbacks:
+    """Build live manual-geometry callbacks around the shared helper surface."""
+
+    restore_view_callback = restore_view
+
+    def _background_index() -> int:
+        return int(_resolve_runtime_value(current_background_index))
+
+    def _background_image() -> object | None:
+        return _resolve_runtime_value(current_background_image)
+
+    def _pick_session() -> dict[str, object] | None:
+        session = _resolve_runtime_value(pick_session)
+        return session if isinstance(session, dict) else None
+
+    def _use_caked_space() -> bool:
+        return bool(_resolve_runtime_value(use_caked_space))
+
+    def _render_current_pairs(*, update_status: bool = False) -> bool:
+        return render_current_geometry_manual_pairs(
+            background_visible=bool(_resolve_runtime_value(background_visible)),
+            current_background_index=_background_index(),
+            current_background_image=_background_image(),
+            pick_session=_pick_session(),
+            build_initial_pairs_display=build_initial_pairs_display,
+            session_initial_pairs_display=session_initial_pairs_display,
+            clear_geometry_pick_artists=clear_geometry_pick_artists,
+            draw_initial_geometry_pairs_overlay=draw_initial_geometry_pairs_overlay,
+            update_button_label_fn=update_button_label,
+            set_background_file_status_text_fn=set_background_file_status_text,
+            pair_group_count=pair_group_count,
+            set_status_text=set_status_text,
+            update_status=update_status,
+        )
+
+    def _toggle_selection_at(col: float, row: float) -> bool:
+        handled, _next_session, suppress_drag = geometry_manual_toggle_selection_at(
+            float(col),
+            float(row),
+            pick_session=_pick_session(),
+            current_background_index=_background_index(),
+            display_background=_background_image(),
+            get_cache_data=get_cache_data,
+            pairs_for_index=pairs_for_index,
+            set_pairs_for_index_fn=set_pairs_for_index,
+            set_pick_session_fn=set_pick_session,
+            restore_view_fn=restore_view,
+            clear_preview_artists_fn=clear_preview_artists,
+            render_current_pairs_fn=_render_current_pairs,
+            update_button_label_fn=update_button_label,
+            set_status_text=set_status_text,
+            push_undo_state_fn=push_undo_state,
+            listed_q_group_entries=listed_q_group_entries,
+            format_q_group_line=format_q_group_line,
+            use_caked_space=_use_caked_space(),
+            pick_search_window_px=float(pick_search_window_px),
+            caked_search_tth_deg=float(caked_search_tth_deg),
+            caked_search_phi_deg=float(caked_search_phi_deg),
+        )
+        if callable(set_suppress_drag_press_once):
+            set_suppress_drag_press_once(bool(suppress_drag))
+        if callable(sync_peak_selection_state):
+            sync_peak_selection_state()
+        return bool(handled)
+
+    def _place_selection_at(col: float, row: float) -> bool:
+        handled, _next_session = geometry_manual_place_selection_at(
+            float(col),
+            float(row),
+            pick_session=_pick_session(),
+            current_background_index=_background_index(),
+            display_background=_background_image(),
+            get_cache_data=get_cache_data,
+            refine_preview_point=refine_preview_point,
+            set_pairs_for_index_fn=set_pairs_for_index,
+            set_pick_session_fn=set_pick_session,
+            clear_preview_artists_fn=clear_preview_artists,
+            restore_view_fn=restore_view,
+            render_current_pairs_fn=_render_current_pairs,
+            update_button_label_fn=update_button_label,
+            set_status_text=set_status_text,
+            push_undo_state_fn=push_undo_state,
+            use_caked_space=_use_caked_space(),
+            caked_angles_to_background_display_coords=(
+                caked_angles_to_background_display_coords
+            ),
+            nearest_candidate_to_point_fn=nearest_candidate_to_point,
+            position_error_px=position_error_px,
+            position_sigma_px=position_sigma_px,
+        )
+        return bool(handled)
+
+    def _update_pick_preview(raw_col: float, raw_row: float, *, force: bool = False) -> None:
+        preview_state = geometry_manual_pick_preview_state(
+            float(raw_col),
+            float(raw_row),
+            pick_session=_pick_session(),
+            current_background_index=_background_index(),
+            force=bool(force),
+            remaining_candidates=(
+                list(remaining_candidates()) if callable(remaining_candidates) else []
+            ),
+            display_background=_background_image(),
+            build_cache_data=(get_cache_data if callable(get_cache_data) else None),
+            refine_preview_point=refine_preview_point,
+            preview_due=preview_due,
+            nearest_candidate_to_point=nearest_candidate_to_point,
+            position_error_px=position_error_px,
+            position_sigma_px=position_sigma_px,
+            use_caked_space=_use_caked_space(),
+            caked_angles_to_background_display_coords=(
+                caked_angles_to_background_display_coords
+            ),
+        )
+        if preview_state is None:
+            return
+        if callable(show_preview):
+            show_preview(
+                float(preview_state["raw_col"]),
+                float(preview_state["raw_row"]),
+                float(preview_state["refined_col"]),
+                float(preview_state["refined_row"]),
+            )
+        if callable(set_status_text):
+            set_status_text(str(preview_state["message"]))
+
+    def _cancel_pick_session(
+        *,
+        restore_view: bool = True,
+        redraw: bool = True,
+        message: str | None = None,
+    ) -> None:
+        set_pick_session(
+            cancel_geometry_manual_pick_session(
+                _pick_session(),
+                current_background_index=_background_index(),
+                restore_view_fn=restore_view_callback,
+                clear_preview_artists_fn=clear_preview_artists,
+                render_current_pairs_fn=_render_current_pairs,
+                update_button_label_fn=update_button_label,
+                set_status_text=set_status_text,
+                restore_view=restore_view,
+                redraw=redraw,
+                message=message,
+            )
+        )
+
+    return GeometryManualRuntimeCallbacks(
+        render_current_pairs=_render_current_pairs,
+        toggle_selection_at=_toggle_selection_at,
+        place_selection_at=_place_selection_at,
+        update_pick_preview=_update_pick_preview,
+        cancel_pick_session=_cancel_pick_session,
+    )
 
 
 def geometry_manual_pick_button_label(

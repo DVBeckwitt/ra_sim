@@ -1519,98 +1519,6 @@ def _build_geometry_manual_initial_pairs_display(
     )
 
 
-def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> bool:
-    """Redraw the saved manual geometry-pair overlay for the current background."""
-    return gui_manual_geometry.render_current_geometry_manual_pairs(
-        background_visible=background_runtime_state.visible,
-        current_background_index=int(background_runtime_state.current_background_index),
-        current_background_image=_current_geometry_manual_pick_background_image(),
-        pick_session=geometry_manual_state.pick_session,
-        build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
-        session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
-        clear_geometry_pick_artists=_clear_geometry_pick_artists,
-        draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
-        update_button_label_fn=_update_geometry_manual_pick_button_label,
-        set_background_file_status_text_fn=lambda: background_runtime_callbacks.refresh_status(),
-        pair_group_count=_geometry_manual_pair_group_count,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        update_status=update_status,
-    )
-
-
-def _toggle_geometry_manual_selection_at(col: float, row: float) -> bool:
-    """Select one manual Qr/Qz group and arm background-point placement."""
-
-
-    def _set_pick_session(session: dict[str, object]) -> None:
-        _set_geometry_manual_pick_session(session)
-
-    handled, next_session, suppress_drag = gui_manual_geometry.geometry_manual_toggle_selection_at(
-        float(col),
-        float(row),
-        pick_session=geometry_manual_state.pick_session,
-        current_background_index=int(background_runtime_state.current_background_index),
-        display_background=_current_geometry_manual_pick_background_image(),
-        get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
-            param_set=_current_geometry_fit_params(),
-            prefer_cache=True,
-            **kwargs,
-        ),
-        pairs_for_index=_geometry_manual_pairs_for_index,
-        set_pairs_for_index_fn=_set_geometry_manual_pairs_for_index,
-        set_pick_session_fn=_set_pick_session,
-        restore_view_fn=_restore_geometry_manual_pick_view,
-        clear_preview_artists_fn=_clear_geometry_manual_preview_artists,
-        render_current_pairs_fn=_render_current_geometry_manual_pairs,
-        update_button_label_fn=_update_geometry_manual_pick_button_label,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        push_undo_state_fn=_push_geometry_manual_undo_state,
-        listed_q_group_entries=_listed_geometry_q_group_entries,
-        format_q_group_line=_format_geometry_q_group_line,
-        use_caked_space=_geometry_manual_pick_uses_caked_space(),
-        pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
-        caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
-        caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
-    )
-    _set_geometry_manual_pick_session(next_session)
-    peak_selection_state.suppress_drag_press_once = bool(suppress_drag)
-    _sync_peak_selection_state()
-    return bool(handled)
-
-
-def _place_geometry_manual_selection_at(col: float, row: float) -> bool:
-    """Record the next manual background point for the active Qr/Qz pick session."""
-
-    def _set_pick_session(session: dict[str, object]) -> None:
-        _set_geometry_manual_pick_session(session)
-
-    handled, next_session = gui_manual_geometry.geometry_manual_place_selection_at(
-        float(col),
-        float(row),
-        pick_session=geometry_manual_state.pick_session,
-        current_background_index=background_runtime_state.current_background_index,
-        display_background=_current_geometry_manual_pick_background_image(),
-        get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
-            param_set=_current_geometry_fit_params(),
-            prefer_cache=True,
-            **kwargs,
-        ),
-        refine_preview_point=_geometry_manual_refine_preview_point,
-        set_pairs_for_index_fn=_set_geometry_manual_pairs_for_index,
-        set_pick_session_fn=_set_pick_session,
-        clear_preview_artists_fn=_clear_geometry_manual_preview_artists,
-        restore_view_fn=_restore_geometry_manual_pick_view,
-        render_current_pairs_fn=_render_current_geometry_manual_pairs,
-        update_button_label_fn=_update_geometry_manual_pick_button_label,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        push_undo_state_fn=_push_geometry_manual_undo_state,
-        use_caked_space=_geometry_manual_pick_uses_caked_space(),
-        caked_angles_to_background_display_coords=_caked_angles_to_background_display_coords,
-    )
-    _set_geometry_manual_pick_session(next_session)
-    return bool(handled)
-
-
 def _geometry_overlay_frame_diagnostics(
     overlay_records: Sequence[dict[str, object]] | None,
 ) -> tuple[dict[str, float], str]:
@@ -2626,46 +2534,6 @@ def _apply_geometry_manual_pick_zoom(
     )
 
 
-def _update_geometry_manual_pick_preview(
-    raw_col: float,
-    raw_row: float,
-    *,
-    force: bool = False,
-) -> None:
-    """Refresh the manual raw/refined placement preview at one cursor position."""
-    display_background = _current_geometry_manual_pick_background_image()
-    preview_state = gui_manual_geometry.geometry_manual_pick_preview_state(
-        float(raw_col),
-        float(raw_row),
-        pick_session=geometry_manual_state.pick_session,
-        current_background_index=background_runtime_state.current_background_index,
-        force=force,
-        remaining_candidates=_geometry_manual_unassigned_group_candidates(),
-        display_background=display_background,
-        build_cache_data=lambda: _get_geometry_manual_pick_cache(
-            param_set=_current_geometry_fit_params(),
-            prefer_cache=True,
-            background_image=display_background,
-        ),
-        refine_preview_point=_geometry_manual_refine_preview_point,
-        preview_due=_geometry_manual_preview_due,
-        nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
-        position_error_px=_geometry_manual_position_error_px,
-        position_sigma_px=_geometry_manual_position_sigma_px,
-        use_caked_space=_geometry_manual_pick_uses_caked_space(),
-        caked_angles_to_background_display_coords=_caked_angles_to_background_display_coords,
-    )
-    if preview_state is None:
-        return
-    _show_geometry_manual_preview(
-        float(preview_state["raw_col"]),
-        float(preview_state["raw_row"]),
-        float(preview_state["refined_col"]),
-        float(preview_state["refined_row"]),
-    )
-    progress_label_geometry.config(text=str(preview_state["message"]))
-
-
 def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
     """Return overlay-ready display entries for the in-progress manual pick session."""
     return gui_manual_geometry.geometry_manual_session_initial_pairs_display(
@@ -2673,29 +2541,6 @@ def _geometry_manual_session_initial_pairs_display() -> list[dict[str, object]]:
         current_background_index=background_runtime_state.current_background_index,
         candidate_source_key=_geometry_manual_candidate_source_key,
         entry_display_coords=_geometry_manual_entry_display_coords,
-    )
-
-
-def _cancel_geometry_manual_pick_session(
-    *,
-    restore_view: bool = True,
-    redraw: bool = True,
-    message: str | None = None,
-) -> None:
-    """Discard any in-progress manual Qr/Qz placement state."""
-    _set_geometry_manual_pick_session(
-        gui_manual_geometry.cancel_geometry_manual_pick_session(
-        geometry_manual_state.pick_session,
-        current_background_index=background_runtime_state.current_background_index,
-        restore_view_fn=_restore_geometry_manual_pick_view,
-        clear_preview_artists_fn=_clear_geometry_manual_preview_artists,
-        render_current_pairs_fn=_render_current_geometry_manual_pairs,
-        update_button_label_fn=_update_geometry_manual_pick_button_label,
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-        restore_view=restore_view,
-        redraw=redraw,
-        message=message,
-        )
     )
 
 
@@ -3445,6 +3290,57 @@ hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bo
     peak_selection_callbacks=peak_selection_runtime_callbacks,
     open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
 )
+geometry_manual_runtime_callbacks = gui_manual_geometry.make_runtime_geometry_manual_callbacks(
+    background_visible=lambda: bool(background_runtime_state.visible),
+    current_background_index=(lambda: int(background_runtime_state.current_background_index)),
+    current_background_image=_current_geometry_manual_pick_background_image,
+    pick_session=lambda: geometry_manual_state.pick_session,
+    build_initial_pairs_display=_build_geometry_manual_initial_pairs_display,
+    session_initial_pairs_display=_geometry_manual_session_initial_pairs_display,
+    clear_geometry_pick_artists=_clear_geometry_pick_artists,
+    draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
+    update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
+    set_background_file_status_text=(
+        lambda: background_runtime_callbacks.refresh_status()
+    ),
+    pair_group_count=_geometry_manual_pair_group_count,
+    set_status_text=lambda text: progress_label_geometry.config(text=text),
+    get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
+        param_set=_current_geometry_fit_params(),
+        prefer_cache=True,
+        **kwargs,
+    ),
+    set_pairs_for_index=_set_geometry_manual_pairs_for_index,
+    pairs_for_index=_geometry_manual_pairs_for_index,
+    set_pick_session=_set_geometry_manual_pick_session,
+    restore_view=_restore_geometry_manual_pick_view,
+    clear_preview_artists=_clear_geometry_manual_preview_artists,
+    push_undo_state=_push_geometry_manual_undo_state,
+    listed_q_group_entries=_listed_geometry_q_group_entries,
+    format_q_group_line=_format_geometry_q_group_line,
+    use_caked_space=_geometry_manual_pick_uses_caked_space,
+    pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
+    caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
+    caked_search_phi_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_PHI_DEG),
+    set_suppress_drag_press_once=(
+        lambda enabled: setattr(
+            peak_selection_state,
+            "suppress_drag_press_once",
+            bool(enabled),
+        )
+    ),
+    sync_peak_selection_state=_sync_peak_selection_state,
+    refine_preview_point=_geometry_manual_refine_preview_point,
+    remaining_candidates=_geometry_manual_unassigned_group_candidates,
+    preview_due=_geometry_manual_preview_due,
+    nearest_candidate_to_point=_geometry_manual_nearest_candidate_to_point,
+    position_error_px=_geometry_manual_position_error_px,
+    position_sigma_px=_geometry_manual_position_sigma_px,
+    caked_angles_to_background_display_coords=(
+        _caked_angles_to_background_display_coords
+    ),
+    show_preview=_show_geometry_manual_preview,
+)
 geometry_tool_action_runtime_callbacks = (
     gui_geometry_fit.make_runtime_geometry_tool_action_callbacks(
         geometry_fit_history_state=geometry_fit_history_state,
@@ -3488,7 +3384,7 @@ geometry_tool_action_runtime_callbacks = (
                 message=message,
             )
         ),
-        cancel_manual_pick_session=_cancel_geometry_manual_pick_session,
+        cancel_manual_pick_session=geometry_manual_runtime_callbacks.cancel_pick_session,
         canvas_widget=lambda: canvas.get_tk_widget(),
         push_manual_undo_state=_push_geometry_manual_undo_state,
         clear_pairs_for_current_background=(
@@ -3513,6 +3409,21 @@ _toggle_geometry_manual_pick_mode = (
 )
 _clear_current_geometry_manual_pairs = (
     geometry_tool_action_runtime_callbacks.clear_current_manual_pairs
+)
+_render_current_geometry_manual_pairs = (
+    geometry_manual_runtime_callbacks.render_current_pairs
+)
+_toggle_geometry_manual_selection_at = (
+    geometry_manual_runtime_callbacks.toggle_selection_at
+)
+_place_geometry_manual_selection_at = (
+    geometry_manual_runtime_callbacks.place_selection_at
+)
+_update_geometry_manual_pick_preview = (
+    geometry_manual_runtime_callbacks.update_pick_preview
+)
+_cancel_geometry_manual_pick_session = (
+    geometry_manual_runtime_callbacks.cancel_pick_session
 )
 
 
