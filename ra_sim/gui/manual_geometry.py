@@ -47,6 +47,39 @@ class GeometryManualRuntimeCacheCallbacks:
     ]
 
 
+@dataclass(frozen=True)
+class GeometryManualRuntimeProjectionCallbacks:
+    """Bound runtime callbacks for manual-geometry view/projection helpers."""
+
+    pick_uses_caked_space: Callable[[], bool]
+    current_background_image: Callable[[], object | None]
+    entry_display_coords: Callable[
+        [dict[str, object] | None],
+        tuple[float, float] | None,
+    ]
+    caked_angles_to_background_display_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ]
+    native_detector_coords_to_caked_display_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    project_peaks_to_current_view: Callable[
+        [Sequence[dict[str, object]] | None],
+        list[dict[str, object]],
+    ]
+    simulated_peaks_for_params: Callable[..., list[dict[str, object]]]
+    pick_candidates: Callable[
+        [Sequence[dict[str, object]] | None],
+        dict[tuple[object, ...], list[dict[str, object]]],
+    ]
+    simulated_lookup: Callable[
+        [Sequence[dict[str, object]] | None],
+        dict[tuple[int, int], dict[str, object]],
+    ]
+
+
 def _resolve_runtime_value(value_or_callable: object) -> object:
     if callable(value_or_callable):
         try:
@@ -1719,6 +1752,351 @@ def make_runtime_geometry_manual_cache_callbacks(
         pick_cache_signature=_pick_cache_signature,
         get_pick_cache=_get_pick_cache,
         build_initial_pairs_display=_build_initial_pairs_display,
+    )
+
+
+def make_runtime_geometry_manual_projection_callbacks(
+    *,
+    caked_view_enabled: Callable[[], object] | object,
+    last_caked_background_image_unscaled: Callable[[], object] | object,
+    last_caked_radial_values: Callable[[], object] | object,
+    last_caked_azimuth_values: Callable[[], object] | object,
+    current_background_display: Callable[[], object] | object,
+    current_background_native: Callable[[], object] | object,
+    ai: Callable[[], object] | object = None,
+    center: Callable[[], Sequence[float] | None] | Sequence[float] | None = None,
+    detector_distance: Callable[[], object] | object = 0.0,
+    pixel_size: Callable[[], object] | object = 0.0,
+    wrap_phi_range: Callable[[object], object] = lambda value: value,
+    rotate_point_for_display: Callable[[float, float, tuple[int, ...], int], tuple[float, float]] = _default_rotate_point,
+    display_rotate_k: int = 0,
+    current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
+    simulate_preview_style_peaks_for_fit: Callable[..., Sequence[dict[str, object]]] | None = None,
+    miller: Callable[[], object] | object = None,
+    intensities: Callable[[], object] | object = None,
+    image_size: Callable[[], object] | object = 0,
+    display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None,
+    get_detector_angular_maps: Callable[[object], tuple[object, object]] = lambda _ai: (None, None),
+    detector_pixel_to_scattering_angles: Callable[
+        [float, float, Sequence[float] | None, float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
+    filter_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object, object]] | None = None,
+    collapse_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object]] | None = None,
+    merge_radius_px: float = 6.0,
+) -> GeometryManualRuntimeProjectionCallbacks:
+    """Build live manual-geometry projection callbacks around shared helpers."""
+
+    def _pick_uses_caked_space() -> bool:
+        if not bool(_resolve_runtime_value(caked_view_enabled)):
+            return False
+        background_image = _resolve_runtime_value(last_caked_background_image_unscaled)
+        return (
+            isinstance(background_image, np.ndarray)
+            and background_image.ndim == 2
+            and background_image.size > 0
+            and np.asarray(
+                _resolve_runtime_value(last_caked_radial_values),
+                dtype=float,
+            ).size
+            > 1
+            and np.asarray(
+                _resolve_runtime_value(last_caked_azimuth_values),
+                dtype=float,
+            ).size
+            > 1
+        )
+
+    def _current_background_image() -> object | None:
+        if _pick_uses_caked_space():
+            return _resolve_runtime_value(last_caked_background_image_unscaled)
+        return _resolve_runtime_value(current_background_display)
+
+    def _detector_center() -> Sequence[float] | None:
+        value = _resolve_runtime_value(center)
+        if value is None:
+            return None
+        try:
+            return [float(value[0]), float(value[1])]
+        except Exception:
+            return None
+
+    def _native_to_caked_display_coords(
+        col: float,
+        row: float,
+    ) -> tuple[float, float] | None:
+        if detector_pixel_to_scattering_angles is None:
+            return None
+        return native_detector_coords_to_caked_display_coords(
+            col,
+            row,
+            ai=_resolve_runtime_value(ai),
+            get_detector_angular_maps=get_detector_angular_maps,
+            detector_pixel_to_scattering_angles=detector_pixel_to_scattering_angles,
+            center=_detector_center(),
+            detector_distance=float(_resolve_runtime_value(detector_distance) or 0.0),
+            pixel_size=float(_resolve_runtime_value(pixel_size) or 0.0),
+            wrap_phi_range=wrap_phi_range,
+        )
+
+    def _caked_angles_to_background_display(
+        two_theta_deg: float,
+        phi_deg: float,
+    ) -> tuple[float | None, float | None]:
+        return caked_angles_to_background_display_coords(
+            two_theta_deg,
+            phi_deg,
+            ai=_resolve_runtime_value(ai),
+            native_background=_resolve_runtime_value(current_background_native),
+            get_detector_angular_maps=get_detector_angular_maps,
+            scattering_angles_to_detector_pixel=detector_pixel_to_scattering_angles,
+            center=_detector_center(),
+            detector_distance=float(_resolve_runtime_value(detector_distance) or 0.0),
+            pixel_size=float(_resolve_runtime_value(pixel_size) or 0.0),
+            rotate_point_for_display=rotate_point_for_display,
+            display_rotate_k=int(display_rotate_k),
+        )
+
+    def _background_display_to_caked_display(
+        col: float,
+        row: float,
+    ) -> tuple[float, float] | None:
+        native_background = _resolve_runtime_value(current_background_native)
+        if native_background is None:
+            return None
+        try:
+            shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+            native_col, native_row = rotate_point_for_display(
+                float(col),
+                float(row),
+                shape,
+                -int(display_rotate_k),
+            )
+        except Exception:
+            return None
+        return _native_to_caked_display_coords(float(native_col), float(native_row))
+
+    def _entry_display_coords(
+        entry: dict[str, object] | None,
+    ) -> tuple[float, float] | None:
+        if not isinstance(entry, dict):
+            return None
+        use_caked = _pick_uses_caked_space()
+        key_x = "caked_x" if use_caked else "x"
+        key_y = "caked_y" if use_caked else "y"
+        try:
+            col = float(entry.get(key_x, np.nan))
+            row = float(entry.get(key_y, np.nan))
+        except Exception:
+            col = float("nan")
+            row = float("nan")
+        if use_caked and not (np.isfinite(col) and np.isfinite(row)):
+            try:
+                raw_col = float(entry.get("x", np.nan))
+                raw_row = float(entry.get("y", np.nan))
+            except Exception:
+                raw_col = float("nan")
+                raw_row = float("nan")
+            converted = _background_display_to_caked_display(raw_col, raw_row)
+            if converted is not None:
+                col = float(converted[0])
+                row = float(converted[1])
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    def _project_peaks_to_current_view(
+        simulated_peaks: Sequence[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        projected: list[dict[str, object]] = []
+        use_caked = _pick_uses_caked_space()
+        radial_axis = (
+            np.asarray(_resolve_runtime_value(last_caked_radial_values), dtype=float)
+            if use_caked
+            else np.array([])
+        )
+        azimuth_axis = (
+            np.asarray(_resolve_runtime_value(last_caked_azimuth_values), dtype=float)
+            if use_caked
+            else np.array([])
+        )
+        try:
+            sim_shape = (int(_resolve_runtime_value(image_size)), int(_resolve_runtime_value(image_size)))
+        except Exception:
+            sim_shape = (0, 0)
+
+        for raw_entry in simulated_peaks or []:
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = dict(raw_entry)
+            try:
+                raw_col = float(entry.get("sim_col", np.nan))
+                raw_row = float(entry.get("sim_row", np.nan))
+            except Exception:
+                raw_col = float("nan")
+                raw_row = float("nan")
+            entry["sim_col_raw"] = float(raw_col)
+            entry["sim_row_raw"] = float(raw_row)
+
+            if np.isfinite(raw_col) and np.isfinite(raw_row):
+                native_point = None
+                if callable(display_to_native_sim_coords):
+                    try:
+                        native_point = display_to_native_sim_coords(
+                            float(raw_col),
+                            float(raw_row),
+                            sim_shape,
+                        )
+                    except Exception:
+                        native_point = None
+                if (
+                    isinstance(native_point, tuple)
+                    and len(native_point) >= 2
+                    and np.isfinite(float(native_point[0]))
+                    and np.isfinite(float(native_point[1]))
+                ):
+                    caked_coords = _native_to_caked_display_coords(
+                        float(native_point[0]),
+                        float(native_point[1]),
+                    )
+                    if caked_coords is not None:
+                        entry["caked_x"] = float(caked_coords[0])
+                        entry["caked_y"] = float(caked_coords[1])
+
+            if use_caked:
+                try:
+                    caked_col = float(entry.get("caked_x", np.nan))
+                    caked_row = float(entry.get("caked_y", np.nan))
+                except Exception:
+                    caked_col = float("nan")
+                    caked_row = float("nan")
+                if np.isfinite(caked_col) and np.isfinite(caked_row):
+                    entry["sim_col"] = float(caked_col)
+                    entry["sim_row"] = float(caked_row)
+                    entry["sim_col_global"] = float(caked_col)
+                    entry["sim_row_global"] = float(caked_row)
+                    entry["sim_col_local"] = float(
+                        caked_axis_to_image_index(caked_col, radial_axis)
+                    )
+                    entry["sim_row_local"] = float(
+                        caked_axis_to_image_index(caked_row, azimuth_axis)
+                    )
+
+            projected.append(entry)
+        return projected
+
+    def _simulated_peaks_for_params(
+        param_set: dict[str, object] | None = None,
+        *,
+        prefer_cache: bool = True,
+    ) -> list[dict[str, object]]:
+        del prefer_cache
+        if not callable(simulate_preview_style_peaks_for_fit):
+            return []
+        try:
+            params_local = (
+                dict(param_set)
+                if isinstance(param_set, dict)
+                else (
+                    dict(current_geometry_fit_params())
+                    if callable(current_geometry_fit_params)
+                    else {}
+                )
+            )
+            miller_array = np.asarray(_resolve_runtime_value(miller), dtype=np.float64)
+            intensity_array = np.asarray(
+                _resolve_runtime_value(intensities),
+                dtype=np.float64,
+            )
+            image_size_value = int(_resolve_runtime_value(image_size))
+            if (
+                miller_array.ndim != 2
+                or miller_array.shape[1] != 3
+                or miller_array.size == 0
+            ):
+                return []
+            if intensity_array.shape[0] != miller_array.shape[0]:
+                return []
+            raw_peaks = simulate_preview_style_peaks_for_fit(
+                miller_array,
+                intensity_array,
+                image_size_value,
+                params_local,
+            )
+            return _project_peaks_to_current_view(raw_peaks)
+        except Exception:
+            return []
+
+    def _pick_candidates(
+        simulated_peaks: Sequence[dict[str, object]] | None,
+    ) -> dict[tuple[object, ...], list[dict[str, object]]]:
+        filtered_entries = list(simulated_peaks or [])
+        if callable(filter_simulated_peaks):
+            filtered_result = filter_simulated_peaks(simulated_peaks)
+            if isinstance(filtered_result, tuple) and filtered_result:
+                filtered_entries = list(filtered_result[0] or [])
+        collapsed_entries = list(filtered_entries)
+        if callable(collapse_simulated_peaks):
+            collapsed_result = collapse_simulated_peaks(
+                filtered_entries,
+                merge_radius_px=float(merge_radius_px),
+            )
+            if isinstance(collapsed_result, tuple) and collapsed_result:
+                collapsed_entries = list(collapsed_result[0] or [])
+
+        grouped: dict[tuple[object, ...], list[dict[str, object]]] = defaultdict(list)
+        for raw_entry in collapsed_entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            group_key = raw_entry.get("q_group_key")
+            if not isinstance(group_key, tuple):
+                continue
+            grouped[group_key].append(dict(raw_entry))
+        for entry_list in grouped.values():
+            entry_list.sort(
+                key=lambda entry: (
+                    float(entry.get("sim_col", np.nan))
+                    if np.isfinite(float(entry.get("sim_col", np.nan)))
+                    else float("inf"),
+                    float(entry.get("sim_row", np.nan))
+                    if np.isfinite(float(entry.get("sim_row", np.nan)))
+                    else float("inf"),
+                )
+            )
+        return dict(grouped)
+
+    def _simulated_lookup(
+        simulated_peaks: Sequence[dict[str, object]] | None,
+    ) -> dict[tuple[int, int], dict[str, object]]:
+        lookup: dict[tuple[int, int], dict[str, object]] = {}
+        for raw_entry in simulated_peaks or []:
+            if not isinstance(raw_entry, dict):
+                continue
+            try:
+                key = (
+                    int(raw_entry.get("source_table_index")),
+                    int(raw_entry.get("source_row_index")),
+                )
+            except Exception:
+                continue
+            lookup[key] = dict(raw_entry)
+        return lookup
+
+    return GeometryManualRuntimeProjectionCallbacks(
+        pick_uses_caked_space=_pick_uses_caked_space,
+        current_background_image=_current_background_image,
+        entry_display_coords=_entry_display_coords,
+        caked_angles_to_background_display_coords=(
+            _caked_angles_to_background_display
+        ),
+        native_detector_coords_to_caked_display_coords=(
+            _native_to_caked_display_coords
+        ),
+        project_peaks_to_current_view=_project_peaks_to_current_view,
+        simulated_peaks_for_params=_simulated_peaks_for_params,
+        pick_candidates=_pick_candidates,
+        simulated_lookup=_simulated_lookup,
     )
 
 

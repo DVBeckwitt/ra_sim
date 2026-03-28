@@ -395,6 +395,32 @@ def test_runtime_manual_geometry_cache_callbacks_use_shared_bootstrap() -> None:
     assert direct_helper_calls == 0
 
 
+def test_runtime_manual_geometry_projection_callbacks_use_shared_bootstrap() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    bootstrap_calls = 0
+    direct_helper_calls = 0
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "build_runtime_geometry_manual_projection_bootstrap":
+            bootstrap_calls += 1
+        if (
+            isinstance(func.value, ast.Name)
+            and func.value.id == "gui_manual_geometry"
+            and func.attr == "make_runtime_geometry_manual_projection_callbacks"
+        ):
+            direct_helper_calls += 1
+
+    assert bootstrap_calls == 1
+    assert direct_helper_calls == 0
+
+
 def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")

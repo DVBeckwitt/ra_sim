@@ -776,6 +776,32 @@ def test_build_runtime_geometry_manual_cache_bootstrap_wraps_callback_bundle() -
     ]
 
 
+def test_build_runtime_geometry_manual_projection_bootstrap_wraps_callback_bundle() -> None:
+    calls: list[tuple[object, ...]] = []
+
+    bundle = bootstrap.build_runtime_geometry_manual_projection_bootstrap(
+        manual_geometry_module=SimpleNamespace(
+            make_runtime_geometry_manual_projection_callbacks=(
+                lambda **kwargs: calls.append(("manual-projection", kwargs))
+                or "manual-projection-callbacks"
+            )
+        ),
+        caked_view_enabled="caked-view",
+        current_background_display="background-display",
+    )
+
+    assert bundle.callbacks == "manual-projection-callbacks"
+    assert calls == [
+        (
+            "manual-projection",
+            {
+                "caked_view_enabled": "caked-view",
+                "current_background_display": "background-display",
+            },
+        )
+    ]
+
+
 def test_build_runtime_geometry_tool_action_callbacks_bootstrap_wraps_bundle() -> None:
     calls: list[tuple[object, ...]] = []
 

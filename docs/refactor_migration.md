@@ -482,7 +482,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the manual-geometry runtime cache/display callback bundle now also owns
     the manual-pick cache-signature assembly, cache reuse, and initial-pair
     overlay display assembly used by the live GUI
+  - the manual-geometry runtime projection callback bundle now also owns the
+    caked/raw view selection, manual-pair entry projection, simulated-peak
+    projection, candidate grouping, and lookup assembly used by the live GUI
   - the manual-geometry runtime cache/display callback bundle now also boots
+    through one shared helper in `ra_sim.gui.bootstrap`
+  - the manual-geometry runtime projection callback bundle now also boots
     through one shared helper in `ra_sim.gui.bootstrap`
   - the manual-geometry runtime callback bundle now also boots through one
     shared helper in `ra_sim.gui.bootstrap`
@@ -490,6 +495,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     now also boots through one shared helper in `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` no longer constructs the manual-pair cache-signature,
     cache-reuse, and initial-pair overlay helpers directly inline
+  - `ra_sim.gui.runtime` no longer constructs the manual-pair live
+    view/projection helpers directly inline
   - `ra_sim.gui.runtime` no longer constructs those manual-geometry /
     geometry-tool callback bundles directly inline; it now keeps bound
     bootstrap results that are threaded through canvas interaction,
@@ -599,7 +606,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   value-source wiring around the extracted peak-selection modules and shared
   bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining live view/projection helpers and fit-preview wiring around the
+  remaining fit-preview/live value-source wiring around the
   extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
   shared bootstrap helper surfaces.
 - The remaining integration-range runtime code is now mostly thin live

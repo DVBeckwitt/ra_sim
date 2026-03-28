@@ -1240,6 +1240,78 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
     ]
 
 
+def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view() -> None:
+    caked_image = np.zeros((6, 6), dtype=float)
+    native_background = np.ones((6, 6), dtype=float)
+    radial_axis = np.linspace(10.0, 15.0, 6)
+    azimuth_axis = np.linspace(-2.0, 3.0, 6)
+    two_theta_map = np.tile(radial_axis, (6, 1))
+    phi_map = np.tile(azimuth_axis.reshape(-1, 1), (1, 6))
+    simulated_param_sets: list[dict[str, object]] = []
+
+    def _simulate_preview_style_peaks_for_fit(
+        _miller: np.ndarray,
+        _intensities: np.ndarray,
+        _image_size: int,
+        params: dict[str, object],
+    ) -> list[dict[str, object]]:
+        simulated_param_sets.append(dict(params))
+        return [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 3.0,
+                "sim_row": 4.0,
+            }
+        ]
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: caked_image,
+        last_caked_radial_values=lambda: radial_axis,
+        last_caked_azimuth_values=lambda: azimuth_axis,
+        current_background_display=lambda: np.full((6, 6), 9.0, dtype=float),
+        current_background_native=lambda: native_background,
+        ai=lambda: object(),
+        center=lambda: (0.0, 0.0),
+        detector_distance=lambda: 1.0,
+        pixel_size=lambda: 1.0,
+        wrap_phi_range=lambda value: value,
+        current_geometry_fit_params=lambda: {"gamma": 1.5},
+        simulate_preview_style_peaks_for_fit=_simulate_preview_style_peaks_for_fit,
+        miller=lambda: np.array([[1.0, 0.0, 0.0]], dtype=float),
+        intensities=lambda: np.array([2.0], dtype=float),
+        image_size=lambda: 6,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (two_theta_map, phi_map),
+        detector_pixel_to_scattering_angles=lambda *_args: (None, None),
+    )
+
+    assert callbacks.pick_uses_caked_space() is True
+    assert callbacks.current_background_image() is caked_image
+    assert callbacks.entry_display_coords({"x": 2.0, "y": 3.0}) == (12.0, 1.0)
+    assert callbacks.caked_angles_to_background_display_coords(13.0, 2.0) == (3.0, 4.0)
+
+    projected = callbacks.simulated_peaks_for_params()
+
+    assert simulated_param_sets == [{"gamma": 1.5}]
+    assert projected[0]["caked_x"] == 13.0
+    assert projected[0]["caked_y"] == 2.0
+    assert projected[0]["sim_col"] == 13.0
+    assert projected[0]["sim_row"] == 2.0
+    assert projected[0]["sim_col_local"] == 3.0
+    assert projected[0]["sim_row_local"] == 4.0
+
+    grouped = callbacks.pick_candidates(projected)
+    assert list(grouped) == [("q_group", "primary", 1, 0)]
+    assert grouped[("q_group", "primary", 1, 0)][0]["sim_col"] == 13.0
+
+    lookup = callbacks.simulated_lookup(projected)
+    assert lookup[(1, 2)]["sim_row"] == 2.0
+
+
 def test_render_current_geometry_manual_pairs_updates_active_session_status() -> None:
     calls: list[tuple[str, object]] = []
     status_messages: list[str] = []
