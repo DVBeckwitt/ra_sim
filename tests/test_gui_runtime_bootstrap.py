@@ -187,3 +187,29 @@ def test_runtime_hkl_lookup_controls_are_bootstrapped() -> None:
 
     assert has_bootstrap_call is True
     assert direct_view_calls == 0
+
+
+def test_runtime_geometry_fit_action_uses_factory_helpers() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    helper_calls: dict[str, int] = {
+        "make_runtime_geometry_fit_action_bindings_factory": 0,
+        "make_runtime_geometry_fit_action_callback": 0,
+        "build_runtime_geometry_fit_action_bindings": 0,
+        "run_runtime_geometry_fit_action": 0,
+    }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr in helper_calls:
+            helper_calls[func.attr] += 1
+
+    assert helper_calls["make_runtime_geometry_fit_action_bindings_factory"] == 1
+    assert helper_calls["make_runtime_geometry_fit_action_callback"] == 1
+    assert helper_calls["build_runtime_geometry_fit_action_bindings"] == 0
+    assert helper_calls["run_runtime_geometry_fit_action"] == 0

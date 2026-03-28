@@ -850,6 +850,126 @@ def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
     ]
 
 
+def test_make_runtime_geometry_fit_action_bindings_factory_reads_live_values(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    runtime_state = {"background_index": 1, "theta_initial": 9.5}
+    solver_inputs = {
+        "value": geometry_fit.GeometryFitRuntimeSolverInputs(
+            miller="miller-1",
+            intensities="intensity-1",
+            image_size=512,
+        )
+    }
+    callback_counter = {"count": 0}
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_runtime_geometry_fit_action_bindings",
+        lambda **kwargs: calls.append(kwargs) or f"bindings-{len(calls)}",
+    )
+
+    def _value_callbacks():
+        callback_counter["count"] += 1
+        return f"value-callbacks-{callback_counter['count']}"
+
+    factory = geometry_fit.make_runtime_geometry_fit_action_bindings_factory(
+        value_callbacks_factory=_value_callbacks,
+        fit_config={"geometry": {"mode": "test"}},
+        osc_files_factory=lambda: ["bg0.osc", "bg1.osc"],
+        current_background_index_factory=lambda: runtime_state["background_index"],
+        theta_initial_factory=lambda: runtime_state["theta_initial"],
+        image_size=256,
+        display_rotate_k=3,
+        apply_geometry_fit_background_selection="apply-selection",
+        current_geometry_fit_background_indices="current-bg-indices",
+        geometry_fit_uses_shared_theta_offset="uses-shared-theta",
+        apply_background_theta_metadata="apply-theta-meta",
+        current_background_theta_values="current-theta-values",
+        current_geometry_theta_offset="current-theta-offset",
+        geometry_manual_pairs_for_index="manual-pairs",
+        ensure_geometry_fit_caked_view="ensure-caked",
+        load_background_by_index="load-background",
+        apply_background_backend_orientation="apply-orientation",
+        geometry_manual_simulated_peaks_for_params="manual-sim-peaks",
+        geometry_manual_simulated_lookup="manual-sim-lookup",
+        geometry_manual_entry_display_coords="manual-entry-coords",
+        unrotate_display_peaks="unrotate",
+        display_to_native_sim_coords="display-to-native",
+        select_fit_orientation="select-orientation",
+        apply_orientation_to_entries="apply-entries",
+        orient_image_for_fit="orient-image",
+        build_runtime_config_factory="build-runtime-config",
+        downloads_dir="downloads-dir",
+        simulation_runtime_state="sim-state",
+        background_runtime_state="bg-state",
+        theta_initial_var="theta-var",
+        geometry_theta_offset_var="theta-offset-var",
+        current_ui_params="current-ui-params",
+        var_map={"gamma": "gamma-var"},
+        background_theta_for_index="bg-theta-for-index",
+        refresh_status="refresh-status",
+        update_manual_pick_button_label="update-manual-pick",
+        capture_undo_state="capture-undo",
+        push_undo_state="push-undo",
+        request_preview_skip_once="request-skip",
+        schedule_update="schedule-update",
+        draw_overlay_records="draw-overlay",
+        draw_initial_pairs_overlay="draw-initial",
+        set_last_overlay_state="set-overlay-state",
+        set_progress_text="set-progress",
+        cmd_line="cmd-line",
+        solver_inputs_factory=lambda: solver_inputs["value"],
+        sim_display_rotate_k=1,
+        background_display_rotate_k=3,
+        simulate_and_compare_hkl="simulate-and-compare",
+        aggregate_match_centers="aggregate-centers",
+        build_overlay_records="build-overlay-records",
+        compute_frame_diagnostics="frame-diagnostics",
+        solve_fit="solve-fit",
+        stamp_factory="stamp-factory",
+        flush_ui="flush-ui",
+    )
+
+    assert factory() == "bindings-1"
+
+    runtime_state["background_index"] = 4
+    runtime_state["theta_initial"] = 12.25
+    solver_inputs["value"] = geometry_fit.GeometryFitRuntimeSolverInputs(
+        miller="miller-2",
+        intensities="intensity-2",
+        image_size=1024,
+    )
+
+    assert factory() == "bindings-2"
+    assert calls[0]["value_callbacks"] == "value-callbacks-1"
+    assert calls[1]["value_callbacks"] == "value-callbacks-2"
+    assert calls[0]["current_background_index"] == 1
+    assert calls[1]["current_background_index"] == 4
+    assert calls[0]["theta_initial"] == 9.5
+    assert calls[1]["theta_initial"] == 12.25
+    assert calls[0]["solver_inputs"].miller == "miller-1"
+    assert calls[1]["solver_inputs"].miller == "miller-2"
+
+
+def test_make_runtime_geometry_fit_action_callback_runs_before_action() -> None:
+    events: list[object] = []
+
+    callback = geometry_fit.make_runtime_geometry_fit_action_callback(
+        bindings_factory=lambda: events.append("bindings") or "live-bindings",
+        before_run=lambda: events.append("before"),
+        run_action=lambda **kwargs: events.append(("run", kwargs)) or "result",
+    )
+
+    assert callback() == "result"
+    assert events == [
+        "before",
+        "bindings",
+        ("run", {"bindings": "live-bindings"}),
+    ]
+
+
 def test_apply_geometry_fit_result_values_updates_named_vars_and_offset_text() -> None:
     gamma_var = _DummyVar(0.0)
     a_var = _DummyVar(0.0)

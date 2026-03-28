@@ -30,6 +30,9 @@ pruning and Bragg-Qr manager workflow now also boots there through one shared
 helper instead of being manually threaded together in `runtime.py`, the
 geometry-fit manual-pair action binding assembly now also delegates through
 `ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, the
+top-level geometry-fit action callback now also resolves through a shared live
+bindings factory and zero-arg helper in `ra_sim.gui.geometry_fit` instead of
+being rebuilt inline in `runtime.py`, the
 HKL lookup control surface plus its shared Bragg-Qr open action now also boot
 through one shared helper in `ra_sim.gui.bootstrap` instead of being wired
 directly in `runtime.py`, and the main remaining
@@ -463,8 +466,11 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.geometry_fit` now also owns the shared prepare-bundle factory,
     execution-bundle builder, and top-level action-binding builder used by the
     live geometry-fit action callback.
-  - `ra_sim.gui.runtime` now keeps the geometry-fit action callback shell plus
-    the remaining Tk-side control wiring around the extracted helper.
+  - `ra_sim.gui.geometry_fit` now also owns the live action-bindings factory
+    and zero-arg action callback helper used by the runtime fit button.
+  - `ra_sim.gui.runtime` no longer rebuilds that geometry-fit action bindings
+    bundle inline on each click; it now keeps only the remaining Tk-side
+    control wiring around the extracted helper.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -705,8 +711,8 @@ What is left:
   call sites around the extracted peak-selection helpers and shared bootstrap
   helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  top-level action callback shell plus the remaining Tk-side control wiring
-  around the extracted `ra_sim.gui.geometry_fit` helper surface.
+  remaining fit-history/manual-pick and preview-action control wiring around
+  the extracted `ra_sim.gui.geometry_fit` helper surface.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction helpers.
@@ -1115,7 +1121,7 @@ The next best step is:
 
 Immediate checklist after the HKL lookup / Bragg-Qr open-control cleanup:
 
-- trim the remaining geometry-fit action callback shell / control wiring
+- trim the remaining geometry-fit fit-history/manual-pick control wiring
 - then trim the remaining selected-peak refresh / action call sites
 - then take the remaining Bragg-Qr manager refresh / action call sites
 - defer config unification, compatibility cleanup, and repo-root cleanup until

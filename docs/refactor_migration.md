@@ -137,6 +137,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     `ra_sim.gui.geometry_fit`
   - `ra_sim.gui.runtime` no longer nests that geometry-fit action binding
     assembly inline
+  - `ra_sim.gui.geometry_fit` now also owns the live action-bindings factory
+    and zero-arg action callback helper used by the runtime fit button
+  - `ra_sim.gui.runtime` no longer rebuilds that geometry-fit action bindings
+    bundle inline on each click
 - Bragg Qr manager migration has also started:
   - Bragg-Qr selection/index bookkeeping now uses shared GUI state
   - Bragg-Qr selection mapping and group/L-value toggle mutations now flow
@@ -423,9 +427,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     that drives one live geometry fit from current values through prepare,
     execution-setup packaging, solver execution, and the top-level preflight
     failure/status path
-  - `ra_sim.gui.runtime` now keeps the geometry-fit action callback shell and a
-    smaller amount of Tk-side action-bundle assembly around the extracted
-    helper
+  - `ra_sim.gui.geometry_fit` now also owns the live action-bindings factory
+    and zero-arg action callback helper used by the runtime fit button
+  - `ra_sim.gui.runtime` now keeps only the remaining Tk-side control wiring
+    around the extracted helper
 - Background-file workflow extraction has also advanced:
   - background-file state transition, file-dialog initial-dir selection,
     background status refresh, and the post-load/post-switch redraw/reset
@@ -530,8 +535,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   call sites around the extracted peak-selection modules and shared bootstrap
   helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  top-level action callback shell plus the remaining Tk-side control wiring
-  around the extracted `ra_sim.gui.geometry_fit` helper surface.
+  remaining fit-history/manual-pick and preview-action control wiring around
+  the extracted `ra_sim.gui.geometry_fit` helper surface.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction modules.
