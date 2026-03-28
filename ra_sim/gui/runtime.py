@@ -10390,187 +10390,114 @@ def on_fit_geometry_click():
         return
 
     prepared_run = prepare_result.prepared_run
-    params = prepared_run.fit_params
-    joint_background_mode = prepared_run.joint_background_mode
-    current_dataset = prepared_run.current_dataset
-    dataset_infos = prepared_run.dataset_infos
-    dataset_specs = prepared_run.dataset_specs
-    max_display_markers = prepared_run.max_display_markers
-    geometry_runtime_cfg = prepared_run.geometry_runtime_cfg
-
+    downloads_dir = get_dir("downloads")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = get_dir("downloads") / f"geometry_fit_log_{stamp}.txt"
-    log_file = None
-
-    def _log_line(text: str = "") -> None:
-        if log_file is None:
-            return
-        try:
-            log_file.write(text + "\n")
-            log_file.flush()
-        except Exception:
-            pass
-
-    def _log_section(title: str, lines: Sequence[str]) -> None:
-        _log_line(title)
-        for line in lines:
-            _log_line(f"  {line}")
-        _log_line()
-
-    try:
-        log_file = log_path.open("w", encoding="utf-8")
-
-        gui_geometry_fit.write_geometry_fit_run_start_log(
-            stamp=stamp,
-            prepared_run=prepared_run,
-            cmd_line=_cmd_line,
-            log_line=_log_line,
-            log_section=_log_section,
-        )
-
-        progress_label_geometry.config(text="Running geometry fit from saved manual Qr/Qz pairs…")
-        root.update_idletasks()
-
-        result = fit_geometry_parameters(
-            miller,
-            intensities,
-            image_size,
-            params,
-            current_dataset["measured_for_fit"],
-            var_names,
-            pixel_tol=float("inf"),
-            experimental_image=current_dataset["experimental_image_for_fit"],
-            dataset_specs=dataset_specs if joint_background_mode else None,
-            refinement_config=geometry_runtime_cfg,
-        )
-
-        gui_geometry_fit.apply_runtime_geometry_fit_result(
-            result=result,
-            var_names=var_names,
-            current_dataset=current_dataset,
-            dataset_count=len(dataset_infos),
-            joint_background_mode=joint_background_mode,
-            preserve_live_theta=preserve_live_theta,
-            max_display_markers=max_display_markers,
-            bindings=gui_geometry_fit.build_runtime_geometry_fit_result_bindings(
-                fit_params=params,
-                base_profile_cache=simulation_runtime_state.profile_cache,
-                mosaic_params=mosaic_params,
-                current_ui_params=_current_geometry_fit_ui_params,
-                var_map={
-                    "zb": zb_var,
-                    "zs": zs_var,
-                    "theta_initial": theta_initial_var,
-                    "psi_z": psi_z_var,
-                    "chi": chi_var,
-                    "cor_angle": cor_angle_var,
-                    "gamma": gamma_var,
-                    "Gamma": Gamma_var,
-                    "corto_detector": corto_detector_var,
-                    "a": a_var,
-                    "c": c_var,
-                    "center_x": center_x_var,
-                    "center_y": center_y_var,
-                },
-                geometry_theta_offset_var=geometry_theta_offset_var,
-                log_section=_log_section,
-                capture_undo_state=_capture_geometry_fit_undo_state,
-                sync_joint_background_theta=(
-                    lambda: theta_initial_var.set(
-                        _background_theta_for_index(
-                            background_runtime_state.current_background_index,
-                            strict_count=False,
-                        )
+    execution_result = gui_geometry_fit.execute_runtime_geometry_fit(
+        prepared_run=prepared_run,
+        var_names=var_names,
+        preserve_live_theta=preserve_live_theta,
+        solve_fit=fit_geometry_parameters,
+        ui_bindings=gui_geometry_fit.GeometryFitRuntimeUiBindings(
+            fit_params=prepared_run.fit_params,
+            base_profile_cache=simulation_runtime_state.profile_cache,
+            mosaic_params=mosaic_params,
+            current_ui_params=_current_geometry_fit_ui_params,
+            var_map={
+                "zb": zb_var,
+                "zs": zs_var,
+                "theta_initial": theta_initial_var,
+                "psi_z": psi_z_var,
+                "chi": chi_var,
+                "cor_angle": cor_angle_var,
+                "gamma": gamma_var,
+                "Gamma": Gamma_var,
+                "corto_detector": corto_detector_var,
+                "a": a_var,
+                "c": c_var,
+                "center_x": center_x_var,
+                "center_y": center_y_var,
+            },
+            geometry_theta_offset_var=geometry_theta_offset_var,
+            capture_undo_state=_capture_geometry_fit_undo_state,
+            sync_joint_background_theta=(
+                lambda: theta_initial_var.set(
+                    _background_theta_for_index(
+                        background_runtime_state.current_background_index,
+                        strict_count=False,
                     )
-                ),
-                refresh_status=background_runtime_callbacks.refresh_status,
-                update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
-                replace_profile_cache=(
-                    lambda profile_cache: setattr(
-                        simulation_runtime_state,
-                        "profile_cache",
-                        dict(profile_cache),
-                    )
-                ),
-                push_undo_state=_push_geometry_fit_undo_state,
-                request_preview_skip_once=(
-                    lambda: gui_controllers.request_geometry_preview_skip_once(
-                        geometry_preview_state
-                    )
-                ),
-                mark_last_simulation_dirty=(
-                    lambda: setattr(
-                        simulation_runtime_state,
-                        "last_simulation_signature",
-                        None,
-                    )
-                ),
-                schedule_update=schedule_update,
-                postprocess_result=(
-                    lambda fitted_params, rms: gui_geometry_fit.postprocess_geometry_fit_result(
-                        fitted_params=fitted_params,
-                        result=result,
-                        current_dataset=current_dataset,
-                        joint_background_mode=joint_background_mode,
-                        current_background_index=int(
-                            background_runtime_state.current_background_index
-                        ),
-                        dataset_count=len(dataset_infos),
-                        var_names=var_names,
-                        values=getattr(result, "x", []),
-                        rms=rms,
-                        miller=miller,
-                        intensities=intensities,
-                        image_size=image_size,
-                        max_display_markers=max_display_markers,
-                        downloads_dir=get_dir("downloads"),
-                        stamp=stamp,
-                        log_path=log_path,
-                        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-                        background_display_rotate_k=DISPLAY_ROTATE_K,
-                        simulate_and_compare_hkl=simulate_and_compare_hkl,
-                        aggregate_match_centers=_aggregate_match_centers,
-                        build_overlay_records=build_geometry_fit_overlay_records,
-                        compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
-                    )
-                ),
-                draw_overlay_records=(
-                    lambda records, marker_limit: _draw_geometry_fit_overlay(
-                        records,
-                        max_display_markers=marker_limit,
-                    )
-                ),
-                draw_initial_pairs_overlay=(
-                    lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
-                        pairs,
-                        max_display_markers=marker_limit,
-                    )
-                ),
-                set_last_overlay_state=_set_geometry_fit_last_overlay_state,
-                save_export_records=(
-                    lambda save_path, export_records: np.save(
-                        save_path,
-                        np.array(export_records, dtype=object),
-                        allow_pickle=True,
-                    )
-                ),
-                set_progress_text=(
-                    lambda text: progress_label_geometry.config(text=text)
-                ),
-                cmd_line=_cmd_line,
+                )
             ),
-        )
-    except Exception as exc:
-        _cmd_line(f"failed: {exc}")
-        _log_line(f"Geometry fit failed: {exc}")
-        progress_label_geometry.config(text=f"Geometry fit failed: {exc}")
+            refresh_status=background_runtime_callbacks.refresh_status,
+            update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
+            replace_profile_cache=(
+                lambda profile_cache: setattr(
+                    simulation_runtime_state,
+                    "profile_cache",
+                    dict(profile_cache),
+                )
+            ),
+            push_undo_state=_push_geometry_fit_undo_state,
+            request_preview_skip_once=(
+                lambda: gui_controllers.request_geometry_preview_skip_once(
+                    geometry_preview_state
+                )
+            ),
+            mark_last_simulation_dirty=(
+                lambda: setattr(
+                    simulation_runtime_state,
+                    "last_simulation_signature",
+                    None,
+                )
+            ),
+            schedule_update=schedule_update,
+            draw_overlay_records=(
+                lambda records, marker_limit: _draw_geometry_fit_overlay(
+                    records,
+                    max_display_markers=marker_limit,
+                )
+            ),
+            draw_initial_pairs_overlay=(
+                lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
+                    pairs,
+                    max_display_markers=marker_limit,
+                )
+            ),
+            set_last_overlay_state=_set_geometry_fit_last_overlay_state,
+            save_export_records=(
+                lambda save_path, export_records: np.save(
+                    save_path,
+                    np.array(export_records, dtype=object),
+                    allow_pickle=True,
+                )
+            ),
+            set_progress_text=(
+                lambda text: progress_label_geometry.config(text=text)
+            ),
+            cmd_line=_cmd_line,
+        ),
+        postprocess_config=gui_geometry_fit.GeometryFitRuntimePostprocessConfig(
+            current_background_index=int(
+                background_runtime_state.current_background_index
+            ),
+            downloads_dir=downloads_dir,
+            stamp=stamp,
+            log_path=downloads_dir / f"geometry_fit_log_{stamp}.txt",
+            solver_inputs=gui_geometry_fit.GeometryFitRuntimeSolverInputs(
+                miller=miller,
+                intensities=intensities,
+                image_size=image_size,
+            ),
+            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+            background_display_rotate_k=DISPLAY_ROTATE_K,
+            simulate_and_compare_hkl=simulate_and_compare_hkl,
+            aggregate_match_centers=_aggregate_match_centers,
+            build_overlay_records=build_geometry_fit_overlay_records,
+            compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
+        ),
+        flush_ui=root.update_idletasks,
+    )
+    if execution_result.error_text:
         return
-    finally:
-        try:
-            if log_file is not None:
-                log_file.close()
-        except Exception:
-            pass
 
 
 fit_button_geometry = ttk.Button(

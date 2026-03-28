@@ -14,6 +14,72 @@ class _DummyVar:
         self._value = value
 
 
+def _make_prepared_run(
+    *,
+    joint_background_mode: bool,
+    tmp_path=None,
+    stamp: str = "20260328_120000",
+):
+    downloads_dir = tmp_path if tmp_path is not None else "C:/tmp"
+    return geometry_fit.GeometryFitPreparedRun(
+        fit_params={"theta_initial": 3.0, "theta_offset": 0.0},
+        selected_background_indices=[0, 1] if joint_background_mode else [0],
+        background_theta_values=[3.0, 4.0] if joint_background_mode else [3.0],
+        joint_background_mode=joint_background_mode,
+        current_dataset={
+            "dataset_index": 0,
+            "measured_for_fit": [{"x": 1.0, "y": 2.0}],
+            "experimental_image_for_fit": "fit-image",
+            "initial_pairs_display": [{"pair": 1}],
+            "native_background": np.zeros((4, 5)),
+            "orientation_choice": {"label": "rotate"},
+            "pair_count": 3,
+            "group_count": 2,
+        },
+        dataset_infos=[
+            {"dataset_index": 0, "summary_line": "bg[0]"},
+            {"dataset_index": 1, "summary_line": "bg[1]"},
+        ]
+        if joint_background_mode
+        else [{"dataset_index": 0, "summary_line": "bg[0]"}],
+        dataset_specs=[
+            {"dataset_index": 0, "theta_initial": 3.0},
+            {"dataset_index": 1, "theta_initial": 4.0},
+        ]
+        if joint_background_mode
+        else [{"dataset_index": 0, "theta_initial": 3.0}],
+        start_cmd_line=(
+            "start: vars=gamma,a "
+            f"datasets={2 if joint_background_mode else 1} "
+            "current_groups=2 current_points=3"
+        ),
+        start_log_sections=[
+            ("Fitting variables (start values):", ["gamma=0.200000", "a=4.100000"]),
+            ("Manual geometry datasets:", ["bg[0]"]),
+        ],
+        max_display_markers=120,
+        geometry_runtime_cfg={"bounds": {"gamma": [0.0, 1.0]}},
+    ), geometry_fit.GeometryFitRuntimePostprocessConfig(
+        current_background_index=0,
+        downloads_dir=downloads_dir,
+        stamp=stamp,
+        log_path=(tmp_path / f"geometry_fit_log_{stamp}.txt")
+        if tmp_path is not None
+        else f"C:/tmp/geometry_fit_log_{stamp}.txt",
+        solver_inputs=geometry_fit.GeometryFitRuntimeSolverInputs(
+            miller="miller-data",
+            intensities="intensity-data",
+            image_size=512,
+        ),
+        sim_display_rotate_k=1,
+        background_display_rotate_k=3,
+        simulate_and_compare_hkl=None,
+        aggregate_match_centers=None,
+        build_overlay_records=None,
+        compute_frame_diagnostics=None,
+    )
+
+
 def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_first() -> None:
     calls: dict[str, object] = {
         "selection": [],
@@ -369,6 +435,29 @@ def test_write_geometry_fit_run_start_log_emits_prepared_prelude() -> None:
         ("section", ("Section A:", ["one", "two"])),
         ("section", ("Section B:", ["three"])),
     ]
+
+
+def test_build_geometry_fit_solver_request_uses_prepared_run_payloads() -> None:
+    prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=True)
+
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["gamma", "a"],
+        solver_inputs=postprocess_config.solver_inputs,
+    )
+
+    assert request.miller == "miller-data"
+    assert request.intensities == "intensity-data"
+    assert request.image_size == 512
+    assert request.params == {"theta_initial": 3.0, "theta_offset": 0.0}
+    assert request.measured_peaks == [{"x": 1.0, "y": 2.0}]
+    assert request.var_names == ["gamma", "a"]
+    assert request.experimental_image == "fit-image"
+    assert request.dataset_specs == [
+        {"dataset_index": 0, "theta_initial": 3.0},
+        {"dataset_index": 1, "theta_initial": 4.0},
+    ]
+    assert request.refinement_config == {"bounds": {"gamma": [0.0, 1.0]}}
 
 
 def test_build_geometry_fit_export_records_pairs_simulated_and_measured_rows() -> None:
@@ -1035,3 +1124,299 @@ def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(
         ("Fit summary:", ["summary=ok"]),
         ("cmd", "done: datasets=4 groups=2 points=3 rms=0.7500px"),
     ]
+
+
+def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
+    tmp_path,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+    )
+    gamma_var = _DummyVar(0.2)
+    a_var = _DummyVar(4.1)
+    theta_initial_var = _DummyVar(3.0)
+    theta_offset_var = _DummyVar("0.0")
+    events: list[object] = []
+    progress_texts: list[str] = []
+    saved_exports: list[tuple[object, object]] = []
+    stored_profile_cache: dict[str, object] = {}
+    stored_overlay_state: dict[str, object] = {}
+    solver_calls: list[dict[str, object]] = []
+
+    class _Result:
+        x = [1.5, 2.5]
+        rms_px = 0.75
+        success = True
+        status = 2
+        message = "ok"
+        nfev = 5
+        cost = 1.0
+        robust_cost = 1.0
+        solver_loss = "soft_l1"
+        solver_f_scale = 1.0
+        optimality = 0.1
+        active_mask = [0]
+        restart_history = []
+        point_match_summary = {"claimed": 4, "qualified": 3}
+        point_match_diagnostics = [{"dataset_index": 0, "name": "keep"}]
+
+    def _solve_fit(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks,
+        var_names,
+        *,
+        pixel_tol,
+        experimental_image,
+        dataset_specs,
+        refinement_config,
+    ):
+        solver_calls.append(
+            {
+                "miller": miller,
+                "intensities": intensities,
+                "image_size": image_size,
+                "params": dict(params),
+                "measured_peaks": list(measured_peaks),
+                "var_names": list(var_names),
+                "pixel_tol": pixel_tol,
+                "experimental_image": experimental_image,
+                "dataset_specs": dataset_specs,
+                "refinement_config": dict(refinement_config),
+            }
+        )
+        return _Result()
+
+    def _simulate_and_compare_hkl(
+        miller,
+        intensities,
+        image_size,
+        fitted_params,
+        measured_for_fit,
+        *,
+        pixel_tol,
+    ):
+        events.append(
+            (
+                "simulate",
+                miller,
+                intensities,
+                image_size,
+                dict(fitted_params),
+                list(measured_for_fit),
+                pixel_tol,
+            )
+        )
+        return (
+            None,
+            [(10.0, 20.0)],
+            [(11.5, 19.0)],
+            [(1, 1, 0)],
+            [(1, 1, 0)],
+        )
+
+    postprocess_config = geometry_fit.GeometryFitRuntimePostprocessConfig(
+        current_background_index=postprocess_config.current_background_index,
+        downloads_dir=postprocess_config.downloads_dir,
+        stamp=postprocess_config.stamp,
+        log_path=postprocess_config.log_path,
+        solver_inputs=postprocess_config.solver_inputs,
+        sim_display_rotate_k=postprocess_config.sim_display_rotate_k,
+        background_display_rotate_k=postprocess_config.background_display_rotate_k,
+        simulate_and_compare_hkl=_simulate_and_compare_hkl,
+        aggregate_match_centers=(
+            lambda sim_coords, meas_coords, sim_millers, meas_millers: (
+                sim_coords,
+                meas_coords,
+                sim_millers,
+            )
+        ),
+        build_overlay_records=(
+            lambda initial_pairs_display, overlay_point_match_diagnostics, **_kwargs: [
+                {
+                    "initial_pairs_display": list(initial_pairs_display),
+                    "diagnostics": list(overlay_point_match_diagnostics),
+                }
+            ]
+        ),
+        compute_frame_diagnostics=(
+            lambda _records: (
+                {
+                    "paired_records": 1,
+                    "sim_display_med_px": 1.2,
+                    "bg_display_med_px": 2.3,
+                    "sim_display_p90_px": 3.4,
+                    "bg_display_p90_px": 4.5,
+                },
+                "frame warning",
+            )
+        ),
+    )
+
+    execution = geometry_fit.execute_runtime_geometry_fit(
+        prepared_run=prepared_run,
+        var_names=["gamma", "a"],
+        preserve_live_theta=True,
+        solve_fit=_solve_fit,
+        ui_bindings=geometry_fit.GeometryFitRuntimeUiBindings(
+            fit_params=prepared_run.fit_params,
+            base_profile_cache={"existing": 1},
+            mosaic_params={"sigma_mosaic_deg": 0.2},
+            current_ui_params=lambda: {
+                "zb": 0.1,
+                "zs": 0.2,
+                "theta_initial": theta_initial_var.get(),
+                "theta_offset": float(theta_offset_var.get() or 0.0),
+                "chi": 0.5,
+                "cor_angle": 0.6,
+                "psi_z": 0.7,
+                "gamma": gamma_var.get(),
+                "Gamma": 0.9,
+                "corto_detector": 1.0,
+                "a": a_var.get(),
+                "c": 32.1,
+                "center_x": 100.0,
+                "center_y": 200.0,
+            },
+            var_map={"gamma": gamma_var, "a": a_var},
+            geometry_theta_offset_var=theta_offset_var,
+            capture_undo_state=lambda: {"undo": True},
+            sync_joint_background_theta=None,
+            refresh_status=lambda: events.append("refresh_status"),
+            update_manual_pick_button_label=lambda: events.append("update_button"),
+            replace_profile_cache=lambda cache: stored_profile_cache.update(cache),
+            push_undo_state=lambda state: events.append(("push_undo", dict(state))),
+            request_preview_skip_once=lambda: events.append("skip_once"),
+            mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
+            schedule_update=lambda: events.append("schedule_update"),
+            draw_overlay_records=lambda records, marker_limit: events.append(
+                ("draw_overlay", list(records), marker_limit)
+            ),
+            draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+                ("draw_initial", list(pairs), marker_limit)
+            ),
+            set_last_overlay_state=lambda state: stored_overlay_state.update(state),
+            save_export_records=lambda save_path, export_records: saved_exports.append(
+                (save_path, list(export_records))
+            ),
+            set_progress_text=lambda text: progress_texts.append(text),
+            cmd_line=lambda text: events.append(("cmd", text)),
+        ),
+        postprocess_config=postprocess_config,
+        flush_ui=lambda: events.append("flush_ui"),
+    )
+
+    assert execution.error_text is None
+    assert execution.solver_request is not None
+    assert execution.solver_result is not None
+    assert execution.apply_result is not None
+    assert solver_calls == [
+        {
+            "miller": "miller-data",
+            "intensities": "intensity-data",
+            "image_size": 512,
+            "params": {"theta_initial": 3.0, "theta_offset": 0.0},
+            "measured_peaks": [{"x": 1.0, "y": 2.0}],
+            "var_names": ["gamma", "a"],
+            "pixel_tol": float("inf"),
+            "experimental_image": "fit-image",
+            "dataset_specs": None,
+            "refinement_config": {"bounds": {"gamma": [0.0, 1.0]}},
+        }
+    ]
+    assert progress_texts[0] == "Running geometry fit from saved manual Qr/Qz pairs…"
+    assert "Manual geometry fit complete:" in progress_texts[-1]
+    assert stored_profile_cache["existing"] == 1
+    assert stored_profile_cache["gamma"] == 1.5
+    assert stored_profile_cache["a"] == 2.5
+    assert stored_overlay_state["max_display_markers"] == 120
+    assert saved_exports == [
+        (
+            tmp_path / "matched_peaks_20260328_120000.npy",
+            [
+                {
+                    "source": "sim",
+                    "hkl": (1, 1, 0),
+                    "x": 10,
+                    "y": 20,
+                    "dist_px": np.hypot(-1.5, 1.0),
+                },
+                {
+                    "source": "meas",
+                    "hkl": (1, 1, 0),
+                    "x": 11,
+                    "y": 19,
+                    "dist_px": np.hypot(-1.5, 1.0),
+                },
+            ],
+        )
+    ]
+    assert ("cmd", "start: vars=gamma,a datasets=1 current_groups=2 current_points=3") in events
+    assert ("cmd", "done: datasets=1 groups=2 points=3 rms=0.7500px") in events
+    assert (
+        "draw_overlay",
+        [{"initial_pairs_display": [{"pair": 1}], "diagnostics": [{"dataset_index": 0, "name": "keep"}]}],
+        120,
+    ) in events
+    assert "flush_ui" in events
+    log_text = execution.log_path.read_text(encoding="utf-8")
+    assert "Geometry fit started: 20260328_120000" in log_text
+    assert "Optimizer diagnostics:" in log_text
+    assert "Fit summary:" in log_text
+
+
+def test_execute_runtime_geometry_fit_reports_solver_failure_and_closes_log(
+    tmp_path,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+        stamp="20260328_120001",
+    )
+    progress_texts: list[str] = []
+    events: list[object] = []
+
+    execution = geometry_fit.execute_runtime_geometry_fit(
+        prepared_run=prepared_run,
+        var_names=["gamma", "a"],
+        preserve_live_theta=True,
+        solve_fit=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        ui_bindings=geometry_fit.GeometryFitRuntimeUiBindings(
+            fit_params=prepared_run.fit_params,
+            base_profile_cache={},
+            mosaic_params={},
+            current_ui_params=lambda: {},
+            var_map={},
+            geometry_theta_offset_var=None,
+            capture_undo_state=lambda: {},
+            sync_joint_background_theta=None,
+            refresh_status=lambda: None,
+            update_manual_pick_button_label=lambda: None,
+            replace_profile_cache=lambda _cache: None,
+            push_undo_state=lambda _state: None,
+            request_preview_skip_once=lambda: None,
+            mark_last_simulation_dirty=lambda: None,
+            schedule_update=lambda: None,
+            draw_overlay_records=lambda *_args, **_kwargs: None,
+            draw_initial_pairs_overlay=lambda *_args, **_kwargs: None,
+            set_last_overlay_state=lambda _state: None,
+            save_export_records=lambda *_args, **_kwargs: None,
+            set_progress_text=lambda text: progress_texts.append(text),
+            cmd_line=lambda text: events.append(text),
+        ),
+        postprocess_config=postprocess_config,
+    )
+
+    assert execution.error_text == "Geometry fit failed: boom"
+    assert progress_texts == [
+        "Running geometry fit from saved manual Qr/Qz pairs…",
+        "Geometry fit failed: boom",
+    ]
+    assert events == [
+        "start: vars=gamma,a datasets=1 current_groups=2 current_points=3",
+        "failed: boom",
+    ]
+    assert "Geometry fit failed: boom" in execution.log_path.read_text(encoding="utf-8")

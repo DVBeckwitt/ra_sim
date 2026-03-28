@@ -46,6 +46,30 @@ class GeometryFitPreparedRun:
 
 
 @dataclass(frozen=True)
+class GeometryFitRuntimeSolverInputs:
+    """Simulation inputs needed to invoke the live geometry-fit solver."""
+
+    miller: object
+    intensities: object
+    image_size: int
+
+
+@dataclass(frozen=True)
+class GeometryFitSolverRequest:
+    """One concrete geometry-fit solver request."""
+
+    miller: object
+    intensities: object
+    image_size: int
+    params: dict[str, object]
+    measured_peaks: object
+    var_names: list[str]
+    experimental_image: object
+    dataset_specs: list[dict[str, object]] | None
+    refinement_config: dict[str, object]
+
+
+@dataclass(frozen=True)
 class GeometryFitPreparationResult:
     """One geometry-fit preflight result."""
 
@@ -97,12 +121,67 @@ class GeometryFitRuntimeResultBindings:
 
 
 @dataclass(frozen=True)
+class GeometryFitRuntimeUiBindings:
+    """Runtime callbacks and UI state sources used during one geometry fit."""
+
+    fit_params: Mapping[str, object] | None
+    base_profile_cache: Mapping[str, object] | None
+    mosaic_params: Mapping[str, object] | None
+    current_ui_params: Callable[[], Mapping[str, object]]
+    var_map: Mapping[str, object]
+    geometry_theta_offset_var: object | None
+    capture_undo_state: Callable[[], dict[str, object]]
+    sync_joint_background_theta: Callable[[], None] | None
+    refresh_status: Callable[[], None]
+    update_manual_pick_button_label: Callable[[], None]
+    replace_profile_cache: Callable[[dict[str, object]], None]
+    push_undo_state: Callable[[dict[str, object] | None], None]
+    request_preview_skip_once: Callable[[], None]
+    mark_last_simulation_dirty: Callable[[], None]
+    schedule_update: Callable[[], None]
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None]
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None]
+    set_last_overlay_state: Callable[[dict[str, object]], None]
+    save_export_records: Callable[[Path, Sequence[dict[str, object]]], None]
+    set_progress_text: Callable[[str], None]
+    cmd_line: Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimePostprocessConfig:
+    """Post-solver inputs needed to analyze and persist one geometry fit."""
+
+    current_background_index: int
+    downloads_dir: Path | str
+    stamp: str
+    log_path: Path | str
+    solver_inputs: GeometryFitRuntimeSolverInputs
+    sim_display_rotate_k: int
+    background_display_rotate_k: int
+    simulate_and_compare_hkl: Callable[..., Any]
+    aggregate_match_centers: Callable[..., tuple[object, object, object]]
+    build_overlay_records: Callable[..., list[dict[str, object]]]
+    compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]]
+
+
+@dataclass(frozen=True)
 class GeometryFitRuntimeApplyResult:
     """Result metadata returned after applying one successful geometry fit."""
 
     rms: float
     fitted_params: dict[str, object]
     postprocess: GeometryFitPostprocessResult
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimeExecutionResult:
+    """Result metadata for one full runtime geometry-fit execution."""
+
+    log_path: Path
+    solver_request: GeometryFitSolverRequest | None = None
+    solver_result: object | None = None
+    apply_result: GeometryFitRuntimeApplyResult | None = None
+    error_text: str | None = None
 
 
 def copy_geometry_fit_state_value(value):
@@ -815,6 +894,52 @@ def write_geometry_fit_run_start_log(
     log_line("")
     for title, lines in prepared_run.start_log_sections:
         log_section(title, list(lines))
+
+
+def build_geometry_fit_solver_request(
+    *,
+    prepared_run: GeometryFitPreparedRun,
+    var_names: Sequence[object],
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+) -> GeometryFitSolverRequest:
+    """Build one concrete solver request from a prepared geometry-fit run."""
+
+    return GeometryFitSolverRequest(
+        miller=solver_inputs.miller,
+        intensities=solver_inputs.intensities,
+        image_size=int(solver_inputs.image_size),
+        params=dict(prepared_run.fit_params),
+        measured_peaks=prepared_run.current_dataset["measured_for_fit"],
+        var_names=[str(name) for name in var_names],
+        experimental_image=prepared_run.current_dataset["experimental_image_for_fit"],
+        dataset_specs=(
+            list(prepared_run.dataset_specs)
+            if prepared_run.joint_background_mode
+            else None
+        ),
+        refinement_config=dict(prepared_run.geometry_runtime_cfg),
+    )
+
+
+def solve_geometry_fit_request(
+    request: GeometryFitSolverRequest,
+    *,
+    solve_fit: Callable[..., object],
+) -> object:
+    """Invoke the live geometry-fit solver for one prepared request."""
+
+    return solve_fit(
+        request.miller,
+        request.intensities,
+        request.image_size,
+        request.params,
+        request.measured_peaks,
+        request.var_names,
+        pixel_tol=float("inf"),
+        experimental_image=request.experimental_image,
+        dataset_specs=request.dataset_specs,
+        refinement_config=request.refinement_config,
+    )
 
 
 def apply_geometry_fit_result_values(
@@ -1578,3 +1703,163 @@ def build_runtime_geometry_fit_result_bindings(
         set_progress_text=set_progress_text,
         cmd_line=cmd_line,
     )
+
+
+def build_runtime_geometry_fit_execution_result_bindings(
+    *,
+    result: object,
+    prepared_run: GeometryFitPreparedRun,
+    var_names: Sequence[object],
+    ui_bindings: GeometryFitRuntimeUiBindings,
+    postprocess_config: GeometryFitRuntimePostprocessConfig,
+    log_section: Callable[[str, Sequence[str]], None],
+) -> GeometryFitRuntimeResultBindings:
+    """Build the runtime apply-bindings for one executed geometry-fit result."""
+
+    solver_inputs = postprocess_config.solver_inputs
+    return build_runtime_geometry_fit_result_bindings(
+        fit_params=ui_bindings.fit_params,
+        base_profile_cache=ui_bindings.base_profile_cache,
+        mosaic_params=ui_bindings.mosaic_params,
+        current_ui_params=ui_bindings.current_ui_params,
+        var_map=ui_bindings.var_map,
+        geometry_theta_offset_var=ui_bindings.geometry_theta_offset_var,
+        log_section=log_section,
+        capture_undo_state=ui_bindings.capture_undo_state,
+        sync_joint_background_theta=ui_bindings.sync_joint_background_theta,
+        refresh_status=ui_bindings.refresh_status,
+        update_manual_pick_button_label=ui_bindings.update_manual_pick_button_label,
+        replace_profile_cache=ui_bindings.replace_profile_cache,
+        push_undo_state=ui_bindings.push_undo_state,
+        request_preview_skip_once=ui_bindings.request_preview_skip_once,
+        mark_last_simulation_dirty=ui_bindings.mark_last_simulation_dirty,
+        schedule_update=ui_bindings.schedule_update,
+        postprocess_result=(
+            lambda fitted_params, rms: postprocess_geometry_fit_result(
+                fitted_params=fitted_params,
+                result=result,
+                current_dataset=prepared_run.current_dataset,
+                joint_background_mode=prepared_run.joint_background_mode,
+                current_background_index=int(postprocess_config.current_background_index),
+                dataset_count=len(prepared_run.dataset_infos),
+                var_names=var_names,
+                values=getattr(result, "x", []),
+                rms=rms,
+                miller=solver_inputs.miller,
+                intensities=solver_inputs.intensities,
+                image_size=int(solver_inputs.image_size),
+                max_display_markers=int(prepared_run.max_display_markers),
+                downloads_dir=postprocess_config.downloads_dir,
+                stamp=postprocess_config.stamp,
+                log_path=postprocess_config.log_path,
+                sim_display_rotate_k=int(postprocess_config.sim_display_rotate_k),
+                background_display_rotate_k=int(
+                    postprocess_config.background_display_rotate_k
+                ),
+                simulate_and_compare_hkl=postprocess_config.simulate_and_compare_hkl,
+                aggregate_match_centers=postprocess_config.aggregate_match_centers,
+                build_overlay_records=postprocess_config.build_overlay_records,
+                compute_frame_diagnostics=postprocess_config.compute_frame_diagnostics,
+            )
+        ),
+        draw_overlay_records=ui_bindings.draw_overlay_records,
+        draw_initial_pairs_overlay=ui_bindings.draw_initial_pairs_overlay,
+        set_last_overlay_state=ui_bindings.set_last_overlay_state,
+        save_export_records=ui_bindings.save_export_records,
+        set_progress_text=ui_bindings.set_progress_text,
+        cmd_line=ui_bindings.cmd_line,
+    )
+
+
+def execute_runtime_geometry_fit(
+    *,
+    prepared_run: GeometryFitPreparedRun,
+    var_names: Sequence[object],
+    preserve_live_theta: bool,
+    solve_fit: Callable[..., object],
+    ui_bindings: GeometryFitRuntimeUiBindings,
+    postprocess_config: GeometryFitRuntimePostprocessConfig,
+    start_progress_text: str = "Running geometry fit from saved manual Qr/Qz pairs…",
+    flush_ui: Callable[[], None] | None = None,
+) -> GeometryFitRuntimeExecutionResult:
+    """Run one prepared geometry fit through the live solver and callbacks."""
+
+    log_path = Path(postprocess_config.log_path)
+    log_file = None
+
+    def _log_line(text: str = "") -> None:
+        if log_file is None:
+            return
+        try:
+            log_file.write(text + "\n")
+            log_file.flush()
+        except Exception:
+            pass
+
+    def _log_section(title: str, lines: Sequence[str]) -> None:
+        _log_line(title)
+        for line in lines:
+            _log_line(f"  {line}")
+        _log_line()
+
+    try:
+        log_file = log_path.open("w", encoding="utf-8")
+        write_geometry_fit_run_start_log(
+            stamp=str(postprocess_config.stamp),
+            prepared_run=prepared_run,
+            cmd_line=ui_bindings.cmd_line,
+            log_line=_log_line,
+            log_section=_log_section,
+        )
+
+        ui_bindings.set_progress_text(str(start_progress_text))
+        if callable(flush_ui):
+            flush_ui()
+
+        solver_request = build_geometry_fit_solver_request(
+            prepared_run=prepared_run,
+            var_names=var_names,
+            solver_inputs=postprocess_config.solver_inputs,
+        )
+        result = solve_geometry_fit_request(
+            solver_request,
+            solve_fit=solve_fit,
+        )
+        apply_result = apply_runtime_geometry_fit_result(
+            result=result,
+            var_names=var_names,
+            current_dataset=prepared_run.current_dataset,
+            dataset_count=len(prepared_run.dataset_infos),
+            joint_background_mode=prepared_run.joint_background_mode,
+            preserve_live_theta=preserve_live_theta,
+            max_display_markers=prepared_run.max_display_markers,
+            bindings=build_runtime_geometry_fit_execution_result_bindings(
+                result=result,
+                prepared_run=prepared_run,
+                var_names=var_names,
+                ui_bindings=ui_bindings,
+                postprocess_config=postprocess_config,
+                log_section=_log_section,
+            ),
+        )
+        return GeometryFitRuntimeExecutionResult(
+            log_path=log_path,
+            solver_request=solver_request,
+            solver_result=result,
+            apply_result=apply_result,
+        )
+    except Exception as exc:
+        error_text = f"Geometry fit failed: {exc}"
+        ui_bindings.cmd_line(f"failed: {exc}")
+        _log_line(error_text)
+        ui_bindings.set_progress_text(error_text)
+        return GeometryFitRuntimeExecutionResult(
+            log_path=log_path,
+            error_text=error_text,
+        )
+    finally:
+        try:
+            if log_file is not None:
+                log_file.close()
+        except Exception:
+            pass
