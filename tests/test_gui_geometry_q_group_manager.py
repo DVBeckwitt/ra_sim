@@ -1071,6 +1071,111 @@ def test_geometry_q_group_manager_runtime_live_preview_render_helpers(
     assert "Live auto-match preview: 1/1 active peaks" in status_messages[0]
 
 
+def test_geometry_q_group_manager_runtime_live_preview_simulated_peak_resolution() -> None:
+    success_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        has_cached_hit_tables=True,
+        build_live_preview_simulated_peaks_from_cache=lambda: [],
+        simulate_preview_style_peaks=lambda miller, intensities, image_size, params: [
+            {
+                "size": int(image_size),
+                "miller_shape": tuple(miller.shape),
+                "intensity_shape": tuple(intensities.shape),
+                "params": dict(params),
+            }
+        ],
+        miller=[[1.0, 0.0, 0.0]],
+        intensities=[2.0],
+        image_size=128,
+        current_geometry_fit_params_factory=lambda: {"omega": 1.5},
+    )
+
+    simulated = geometry_q_group_manager.resolve_runtime_live_geometry_preview_simulated_peaks(
+        success_bindings,
+        update_status=True,
+    )
+
+    assert simulated == [
+        {
+            "size": 128,
+            "miller_shape": (1, 3),
+            "intensity_shape": (1,),
+            "params": {"omega": 1.5},
+        }
+    ]
+
+    failure_events = []
+    failure_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        has_cached_hit_tables=True,
+        build_live_preview_simulated_peaks_from_cache=lambda: [],
+        simulate_preview_style_peaks=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("boom")
+        ),
+        miller=[[1.0, 0.0, 0.0]],
+        intensities=[2.0],
+        image_size=64,
+        current_geometry_fit_params_factory=lambda: {"omega": 2.0},
+        clear_geometry_preview_artists=lambda: failure_events.append("clear"),
+        set_status_text=lambda text: failure_events.append(text),
+    )
+
+    failed = geometry_q_group_manager.resolve_runtime_live_geometry_preview_simulated_peaks(
+        failure_bindings,
+        update_status=True,
+    )
+
+    assert failed is None
+    assert failure_events == [
+        "clear",
+        "Live auto-match preview unavailable: failed to simulate peaks (boom).",
+    ]
+
+    empty_events = []
+    empty_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        has_cached_hit_tables=False,
+        build_live_preview_simulated_peaks_from_cache=lambda: [],
+        clear_geometry_preview_artists=lambda: empty_events.append("clear"),
+        set_status_text=lambda text: empty_events.append(text),
+    )
+
+    empty = geometry_q_group_manager.resolve_runtime_live_geometry_preview_simulated_peaks(
+        empty_bindings,
+        update_status=True,
+    )
+
+    assert empty is None
+    assert empty_events == [
+        "clear",
+        "Live auto-match preview unavailable: no simulated peaks are available.",
+    ]
+
+
 def test_refresh_geometry_q_group_window_uses_cached_entries_and_view_helpers(
     monkeypatch,
 ) -> None:

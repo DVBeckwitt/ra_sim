@@ -44,6 +44,12 @@ class GeometryQGroupRuntimeBindings:
     preview_toggle_max_distance_px: float = 20.0
     update_running: object | None = None
     has_cached_hit_tables: object | None = None
+    build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None
+    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None
+    miller: object | None = None
+    intensities: object | None = None
+    image_size: object | None = None
+    current_geometry_fit_params_factory: Callable[[], Mapping[str, object]] | None = None
     axis: object | None = None
     geometry_preview_artists: list[object] | None = None
     draw_idle: Callable[[], None] | None = None
@@ -2179,6 +2185,67 @@ def render_runtime_live_geometry_preview_state(
     )
 
 
+def resolve_runtime_live_geometry_preview_simulated_peaks(
+    bindings: GeometryQGroupRuntimeBindings,
+    *,
+    update_status: bool = True,
+) -> list[dict[str, object]] | None:
+    """Return runtime live-preview peaks from cache or fallback simulation."""
+
+    build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
+    simulated_peaks = (
+        list(build_cached_peaks() or [])
+        if callable(build_cached_peaks)
+        else []
+    )
+    if simulated_peaks:
+        return simulated_peaks
+
+    if bool(_resolve_runtime_value(bindings.has_cached_hit_tables)) and callable(
+        bindings.simulate_preview_style_peaks
+    ):
+        try:
+            simulated_peaks = list(
+                bindings.simulate_preview_style_peaks(
+                    np.asarray(_resolve_runtime_value(bindings.miller), dtype=np.float64),
+                    np.asarray(
+                        _resolve_runtime_value(bindings.intensities),
+                        dtype=np.float64,
+                    ),
+                    _coerce_int(_resolve_runtime_value(bindings.image_size), 0),
+                    (
+                        dict(bindings.current_geometry_fit_params_factory() or {})
+                        if callable(bindings.current_geometry_fit_params_factory)
+                        else {}
+                    ),
+                )
+                or []
+            )
+        except Exception as exc:
+            if callable(bindings.clear_geometry_preview_artists):
+                bindings.clear_geometry_preview_artists()
+            if update_status:
+                _set_status_text(
+                    bindings.set_status_text,
+                    (
+                        "Live auto-match preview unavailable: failed to simulate "
+                        f"peaks ({exc})."
+                    ),
+                )
+            return None
+        if simulated_peaks:
+            return simulated_peaks
+
+    if callable(bindings.clear_geometry_preview_artists):
+        bindings.clear_geometry_preview_artists()
+    if update_status:
+        _set_status_text(
+            bindings.set_status_text,
+            "Live auto-match preview unavailable: no simulated peaks are available.",
+        )
+    return None
+
+
 def distance_point_to_segment_sq(
     px: float,
     py: float,
@@ -2344,6 +2411,12 @@ def make_runtime_geometry_q_group_bindings_factory(
     preview_toggle_max_distance_px: float = 20.0,
     update_running_factory: object | None = None,
     has_cached_hit_tables_factory: object | None = None,
+    build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]] | None = None,
+    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]] | None = None,
+    miller_factory: object | None = None,
+    intensities_factory: object | None = None,
+    image_size_value_factory: object | None = None,
+    current_geometry_fit_params_factory: Callable[[], Mapping[str, object]] | None = None,
     axis: object | None = None,
     geometry_preview_artists: list[object] | None = None,
     draw_idle_factory: object | None = None,
@@ -2388,6 +2461,14 @@ def make_runtime_geometry_q_group_bindings_factory(
             ),
             update_running=_resolve_runtime_value(update_running_factory),
             has_cached_hit_tables=_resolve_runtime_value(has_cached_hit_tables_factory),
+            build_live_preview_simulated_peaks_from_cache=(
+                build_live_preview_simulated_peaks_from_cache
+            ),
+            simulate_preview_style_peaks=simulate_preview_style_peaks,
+            miller=_resolve_runtime_value(miller_factory),
+            intensities=_resolve_runtime_value(intensities_factory),
+            image_size=_resolve_runtime_value(image_size_value_factory),
+            current_geometry_fit_params_factory=current_geometry_fit_params_factory,
             axis=axis,
             geometry_preview_artists=geometry_preview_artists,
             draw_idle=_resolve_runtime_value(draw_idle_factory),

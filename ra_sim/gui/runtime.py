@@ -7384,31 +7384,14 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
         var_names,
     )
 
-    simulated_peaks = _build_live_preview_simulated_peaks_from_cache()
-
-    if not simulated_peaks and simulation_runtime_state.stored_max_positions_local:
-        try:
-            simulated_peaks = _simulate_preview_style_peaks_for_fit(
-                np.asarray(miller, dtype=np.float64),
-                np.asarray(intensities, dtype=np.float64),
-                image_size,
-                _current_geometry_fit_params(),
-            )
-        except Exception as exc:
-            _clear_geometry_preview_artists()
-            if update_status:
-                progress_label_geometry.config(
-                    text=f"Live auto-match preview unavailable: failed to simulate peaks ({exc})."
-                )
-            return False
-
+    simulated_peaks = (
+        gui_geometry_q_group_manager.resolve_runtime_live_geometry_preview_simulated_peaks(
+            geometry_q_group_runtime_bindings_factory(),
+            update_status=update_status,
+        )
+    )
     if not simulated_peaks:
-        _clear_geometry_preview_artists()
-        if update_status:
-            progress_label_geometry.config(
-                text="Live auto-match preview unavailable: no simulated peaks are available."
-            )
-            return False
+        return False
 
     simulated_peaks, excluded_q_peaks, q_group_total = _filter_geometry_fit_simulated_peaks(
         simulated_peaks
@@ -7571,6 +7554,21 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     has_cached_hit_tables_factory=lambda: (
         simulation_runtime_state.stored_max_positions_local is not None
     ),
+    build_live_preview_simulated_peaks_from_cache=(
+        _build_live_preview_simulated_peaks_from_cache
+    ),
+    simulate_preview_style_peaks=lambda miller_values, intensity_values, image_size_value, params: (
+        _simulate_preview_style_peaks_for_fit(
+            miller_values,
+            intensity_values,
+            image_size_value,
+            params,
+        )
+    ),
+    miller_factory=lambda: miller,
+    intensities_factory=lambda: intensities,
+    image_size_value_factory=lambda: image_size,
+    current_geometry_fit_params_factory=_current_geometry_fit_params,
     axis=ax,
     geometry_preview_artists=geometry_runtime_state.preview_artists,
     draw_idle_factory=lambda: canvas.draw_idle,

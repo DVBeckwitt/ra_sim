@@ -367,6 +367,9 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the runtime live-
     preview enabled/render helpers plus the callback-bundle entries that
     expose those bound redraw/status paths.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the runtime live-
+    preview simulated-peak acquisition/fallback helper used before the
+    remaining preview filter/collapse/auto-match orchestration.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions.
