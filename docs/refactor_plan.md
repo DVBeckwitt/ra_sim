@@ -421,9 +421,12 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.geometry_fit` now also owns the shared live geometry-fit
     value-source bundle for selected fit variables, current parameter reads, UI
     snapshots, and the runtime var-map reused by undo/execute flows.
-  - `ra_sim.gui.runtime` now keeps the top-level preflight/action wrapper and a
-    smaller amount of Tk-side wiring around the extracted geometry-fit
-    prepare/execute helpers.
+  - `ra_sim.gui.geometry_fit` now also owns the top-level runtime action helper
+    that drives one live geometry fit from current values through prepare,
+    execution-setup packaging, solver execution, and the top-level preflight
+    failure/status path.
+  - `ra_sim.gui.runtime` now keeps the geometry-fit action callback shell and
+    the remaining Tk-side action-bundle assembly around the extracted helper.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -664,9 +667,8 @@ What is left:
   sites plus thin value-source wiring around the extracted peak-selection and
   canvas-interaction helpers and shared config/bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the live
-  fit-action shell plus a few delegated call sites around the extracted
-  `ra_sim.gui.geometry_fit` prepare/execute helpers and shared runtime value
-  bundle.
+  action-bundle assembly around the extracted `ra_sim.gui.geometry_fit`
+  runtime action helper and shared runtime value bundle.
 - The remaining integration-range drag runtime code is now mostly thin
   integration-region visual call sites plus the remaining cross-feature event
   wiring around the extracted drag and canvas-interaction helpers.

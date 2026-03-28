@@ -261,6 +261,62 @@ class GeometryFitRuntimeValueCallbacks:
 
 
 @dataclass(frozen=True)
+class GeometryFitRuntimeActionExecutionBindings:
+    """Live runtime sources needed to build and run one geometry-fit action."""
+
+    downloads_dir: Path | str
+    simulation_runtime_state: Any
+    background_runtime_state: Any
+    theta_initial_var: Any
+    geometry_theta_offset_var: Any | None
+    current_ui_params: Callable[[], Mapping[str, object]]
+    var_map: Mapping[str, object]
+    background_theta_for_index: Callable[..., object]
+    refresh_status: Callable[[], None]
+    update_manual_pick_button_label: Callable[[], None]
+    capture_undo_state: Callable[[], dict[str, object]]
+    push_undo_state: Callable[[dict[str, object] | None], None]
+    request_preview_skip_once: Callable[[], None]
+    schedule_update: Callable[[], None]
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None]
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None]
+    set_last_overlay_state: Callable[[dict[str, object]], None]
+    set_progress_text: Callable[[str], None]
+    cmd_line: Callable[[str], None]
+    solver_inputs: GeometryFitRuntimeSolverInputs
+    sim_display_rotate_k: int
+    background_display_rotate_k: int
+    simulate_and_compare_hkl: Callable[..., Any]
+    aggregate_match_centers: Callable[..., tuple[object, object, object]]
+    build_overlay_records: Callable[..., list[dict[str, object]]]
+    compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]]
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimeActionBindings:
+    """Bound runtime callbacks that drive one top-level geometry-fit action."""
+
+    value_callbacks: GeometryFitRuntimeValueCallbacks
+    prepare_bindings_factory: Callable[[Sequence[str]], GeometryFitRuntimePreparationBindings]
+    execution_bindings: GeometryFitRuntimeActionExecutionBindings
+    solve_fit: Callable[..., object]
+    stamp_factory: Callable[[], str]
+    flush_ui: Callable[[], None] | None = None
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimeActionResult:
+    """Result metadata for one top-level geometry-fit action invocation."""
+
+    params: Mapping[str, object]
+    var_names: list[str]
+    preserve_live_theta: bool
+    prepare_result: GeometryFitPreparationResult | None = None
+    execution_result: GeometryFitRuntimeExecutionResult | None = None
+    error_text: str | None = None
+
+
+@dataclass(frozen=True)
 class GeometryFitRuntimeApplyResult:
     """Result metadata returned after applying one successful geometry fit."""
 
@@ -2167,6 +2223,125 @@ def build_runtime_geometry_fit_execution_setup(
     return GeometryFitRuntimeExecutionSetup(
         ui_bindings=ui_bindings,
         postprocess_config=postprocess_config,
+    )
+
+
+def build_runtime_geometry_fit_execution_setup_from_bindings(
+    *,
+    prepared_run: GeometryFitPreparedRun,
+    mosaic_params: Mapping[str, object] | None,
+    stamp: str,
+    bindings: GeometryFitRuntimeActionExecutionBindings,
+) -> GeometryFitRuntimeExecutionSetup:
+    """Build one runtime execution setup from a bound action bundle."""
+
+    return build_runtime_geometry_fit_execution_setup(
+        prepared_run=prepared_run,
+        mosaic_params=mosaic_params,
+        stamp=stamp,
+        downloads_dir=bindings.downloads_dir,
+        simulation_runtime_state=bindings.simulation_runtime_state,
+        background_runtime_state=bindings.background_runtime_state,
+        theta_initial_var=bindings.theta_initial_var,
+        geometry_theta_offset_var=bindings.geometry_theta_offset_var,
+        current_ui_params=bindings.current_ui_params,
+        var_map=bindings.var_map,
+        background_theta_for_index=bindings.background_theta_for_index,
+        refresh_status=bindings.refresh_status,
+        update_manual_pick_button_label=bindings.update_manual_pick_button_label,
+        capture_undo_state=bindings.capture_undo_state,
+        push_undo_state=bindings.push_undo_state,
+        request_preview_skip_once=bindings.request_preview_skip_once,
+        schedule_update=bindings.schedule_update,
+        draw_overlay_records=bindings.draw_overlay_records,
+        draw_initial_pairs_overlay=bindings.draw_initial_pairs_overlay,
+        set_last_overlay_state=bindings.set_last_overlay_state,
+        set_progress_text=bindings.set_progress_text,
+        cmd_line=bindings.cmd_line,
+        solver_inputs=bindings.solver_inputs,
+        sim_display_rotate_k=bindings.sim_display_rotate_k,
+        background_display_rotate_k=bindings.background_display_rotate_k,
+        simulate_and_compare_hkl=bindings.simulate_and_compare_hkl,
+        aggregate_match_centers=bindings.aggregate_match_centers,
+        build_overlay_records=bindings.build_overlay_records,
+        compute_frame_diagnostics=bindings.compute_frame_diagnostics,
+    )
+
+
+def run_runtime_geometry_fit_action(
+    *,
+    bindings: GeometryFitRuntimeActionBindings,
+    prepare_run: Callable[..., GeometryFitPreparationResult] | None = None,
+    build_execution_setup: Callable[..., GeometryFitRuntimeExecutionSetup] | None = None,
+    execute_run: Callable[..., GeometryFitRuntimeExecutionResult] | None = None,
+) -> GeometryFitRuntimeActionResult:
+    """Run the full top-level geometry-fit action from live runtime bindings."""
+
+    if prepare_run is None:
+        prepare_run = prepare_runtime_geometry_fit_run
+    if build_execution_setup is None:
+        build_execution_setup = build_runtime_geometry_fit_execution_setup_from_bindings
+    if execute_run is None:
+        execute_run = execute_runtime_geometry_fit
+
+    params = bindings.value_callbacks.current_params()
+    mosaic_params = dict(params.get("mosaic_params", {}))
+    var_names = list(bindings.value_callbacks.current_var_names())
+    preserve_live_theta = (
+        "theta_initial" not in var_names and "theta_offset" not in var_names
+    )
+    prepare_bindings = bindings.prepare_bindings_factory(var_names)
+
+    try:
+        prepare_result = prepare_run(
+            params=params,
+            var_names=var_names,
+            preserve_live_theta=preserve_live_theta,
+            bindings=prepare_bindings,
+        )
+    except Exception as exc:
+        error_text = f"Geometry fit failed: {exc}"
+        bindings.execution_bindings.cmd_line(f"failed: {exc}")
+        bindings.execution_bindings.set_progress_text(error_text)
+        return GeometryFitRuntimeActionResult(
+            params=params,
+            var_names=var_names,
+            preserve_live_theta=preserve_live_theta,
+            error_text=error_text,
+        )
+
+    if prepare_result.prepared_run is None:
+        if prepare_result.error_text:
+            bindings.execution_bindings.set_progress_text(str(prepare_result.error_text))
+        return GeometryFitRuntimeActionResult(
+            params=params,
+            var_names=var_names,
+            preserve_live_theta=preserve_live_theta,
+            prepare_result=prepare_result,
+            error_text=prepare_result.error_text,
+        )
+
+    execution_setup = build_execution_setup(
+        prepared_run=prepare_result.prepared_run,
+        mosaic_params=mosaic_params,
+        stamp=str(bindings.stamp_factory()),
+        bindings=bindings.execution_bindings,
+    )
+    execution_result = execute_run(
+        prepared_run=prepare_result.prepared_run,
+        var_names=var_names,
+        preserve_live_theta=preserve_live_theta,
+        solve_fit=bindings.solve_fit,
+        setup=execution_setup,
+        flush_ui=bindings.flush_ui,
+    )
+    return GeometryFitRuntimeActionResult(
+        params=params,
+        var_names=var_names,
+        preserve_live_theta=preserve_live_theta,
+        prepare_result=prepare_result,
+        execution_result=execution_result,
+        error_text=execution_result.error_text,
     )
 
 

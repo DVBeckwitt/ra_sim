@@ -80,6 +80,83 @@ def _make_prepared_run(
     )
 
 
+def _make_runtime_action_prepare_bindings():
+    return geometry_fit.GeometryFitRuntimePreparationBindings(
+        fit_config={},
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        theta_initial=9.0,
+        image_size=100,
+        display_rotate_k=3,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [9.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        load_background_by_index=lambda idx: (
+            np.zeros((2, 2), dtype=np.float64),
+            np.zeros((2, 2), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda *args, **kwargs: [],
+        geometry_manual_simulated_lookup=lambda _peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: None,
+        unrotate_display_peaks=lambda entries, shape, *, k: [],
+        display_to_native_sim_coords=lambda col, row, shape: (col, row),
+        select_fit_orientation=lambda *args, **kwargs: ({}, {}),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [],
+        orient_image_for_fit=lambda image, **kwargs: image,
+        build_runtime_config=lambda fit_params: dict(fit_params),
+    )
+
+
+def _make_runtime_action_execution_bindings(tmp_path, progress_texts, cmd_events):
+    class _SimulationState:
+        def __init__(self):
+            self.profile_cache = {}
+            self.last_simulation_signature = "sig"
+
+    class _BackgroundState:
+        def __init__(self):
+            self.current_background_index = 0
+
+    return geometry_fit.GeometryFitRuntimeActionExecutionBindings(
+        downloads_dir=tmp_path,
+        simulation_runtime_state=_SimulationState(),
+        background_runtime_state=_BackgroundState(),
+        theta_initial_var=_DummyVar(3.0),
+        geometry_theta_offset_var=None,
+        current_ui_params=lambda: {},
+        var_map={},
+        background_theta_for_index=lambda idx, strict_count=False: 7.5,
+        refresh_status=lambda: None,
+        update_manual_pick_button_label=lambda: None,
+        capture_undo_state=lambda: {},
+        push_undo_state=lambda state: None,
+        request_preview_skip_once=lambda: None,
+        schedule_update=lambda: None,
+        draw_overlay_records=lambda records, marker_limit: None,
+        draw_initial_pairs_overlay=lambda pairs, marker_limit: None,
+        set_last_overlay_state=lambda state: None,
+        set_progress_text=lambda text: progress_texts.append(text),
+        cmd_line=lambda text: cmd_events.append(text),
+        solver_inputs=geometry_fit.GeometryFitRuntimeSolverInputs(
+            miller="miller-data",
+            intensities="intensity-data",
+            image_size=512,
+        ),
+        sim_display_rotate_k=1,
+        background_display_rotate_k=3,
+        simulate_and_compare_hkl=lambda *args, **kwargs: None,
+        aggregate_match_centers=lambda *args, **kwargs: ([], [], []),
+        build_overlay_records=lambda *args, **kwargs: [],
+        compute_frame_diagnostics=lambda records: ({}, None),
+    )
+
+
 def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_first() -> None:
     calls: dict[str, object] = {
         "selection": [],
@@ -1075,6 +1152,204 @@ def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callb
     save_path = tmp_path / "export.npy"
     setup.ui_bindings.save_export_records(save_path, [{"source": "sim"}])
     assert np.load(save_path, allow_pickle=True).tolist() == [{"source": "sim"}]
+
+
+def test_run_runtime_geometry_fit_action_prepares_builds_setup_and_executes(
+    tmp_path,
+) -> None:
+    prepared_run, _ = _make_prepared_run(
+        joint_background_mode=False,
+        tmp_path=tmp_path,
+        stamp="20260328_130000",
+    )
+    progress_texts: list[str] = []
+    cmd_events: list[str] = []
+    calls: dict[str, object] = {}
+    execution_bindings = _make_runtime_action_execution_bindings(
+        tmp_path,
+        progress_texts,
+        cmd_events,
+    )
+
+    def _prepare_bindings_factory(var_names):
+        calls["prepare_factory_var_names"] = list(var_names)
+        return _make_runtime_action_prepare_bindings()
+
+    def _prepare_run(*, params, var_names, preserve_live_theta, bindings):
+        calls["prepare_run"] = {
+            "params": dict(params),
+            "var_names": list(var_names),
+            "preserve_live_theta": preserve_live_theta,
+            "bindings": bindings,
+        }
+        return geometry_fit.GeometryFitPreparationResult(prepared_run=prepared_run)
+
+    def _build_execution_setup(*, prepared_run, mosaic_params, stamp, bindings):
+        calls["build_execution_setup"] = {
+            "prepared_run": prepared_run,
+            "mosaic_params": dict(mosaic_params),
+            "stamp": stamp,
+            "bindings": bindings,
+        }
+        return "setup-token"
+
+    def _execute_run(
+        *,
+        prepared_run,
+        var_names,
+        preserve_live_theta,
+        solve_fit,
+        setup,
+        flush_ui=None,
+    ):
+        calls["execute_run"] = {
+            "prepared_run": prepared_run,
+            "var_names": list(var_names),
+            "preserve_live_theta": preserve_live_theta,
+            "solve_fit": solve_fit,
+            "setup": setup,
+            "flush_ui": flush_ui,
+        }
+        return geometry_fit.GeometryFitRuntimeExecutionResult(
+            log_path=tmp_path / "geometry_fit_log_20260328_130000.txt"
+        )
+
+    solve_fit = lambda *_args, **_kwargs: None
+    flush_ui = lambda: None
+    action = geometry_fit.run_runtime_geometry_fit_action(
+        bindings=geometry_fit.GeometryFitRuntimeActionBindings(
+            value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+                current_var_names=lambda: ["gamma", "a"],
+                current_params=lambda: {
+                    "theta_initial": 3.0,
+                    "gamma": 0.2,
+                    "a": 4.1,
+                    "mosaic_params": {"sigma_mosaic_deg": 0.2},
+                },
+                current_ui_params=lambda: {},
+                var_map={},
+            ),
+            prepare_bindings_factory=_prepare_bindings_factory,
+            execution_bindings=execution_bindings,
+            solve_fit=solve_fit,
+            stamp_factory=lambda: "20260328_130000",
+            flush_ui=flush_ui,
+        ),
+        prepare_run=_prepare_run,
+        build_execution_setup=_build_execution_setup,
+        execute_run=_execute_run,
+    )
+
+    assert action.error_text is None
+    assert action.var_names == ["gamma", "a"]
+    assert action.preserve_live_theta is True
+    assert action.prepare_result is not None
+    assert action.prepare_result.prepared_run is prepared_run
+    assert action.execution_result is not None
+    assert calls["prepare_factory_var_names"] == ["gamma", "a"]
+    assert calls["prepare_run"]["params"] == {
+        "theta_initial": 3.0,
+        "gamma": 0.2,
+        "a": 4.1,
+        "mosaic_params": {"sigma_mosaic_deg": 0.2},
+    }
+    assert calls["prepare_run"]["var_names"] == ["gamma", "a"]
+    assert calls["prepare_run"]["preserve_live_theta"] is True
+    assert calls["build_execution_setup"] == {
+        "prepared_run": prepared_run,
+        "mosaic_params": {"sigma_mosaic_deg": 0.2},
+        "stamp": "20260328_130000",
+        "bindings": execution_bindings,
+    }
+    assert calls["execute_run"] == {
+        "prepared_run": prepared_run,
+        "var_names": ["gamma", "a"],
+        "preserve_live_theta": True,
+        "solve_fit": solve_fit,
+        "setup": "setup-token",
+        "flush_ui": flush_ui,
+    }
+    assert progress_texts == []
+    assert cmd_events == []
+
+
+def test_run_runtime_geometry_fit_action_reports_prepare_exception(tmp_path) -> None:
+    progress_texts: list[str] = []
+    cmd_events: list[str] = []
+
+    action = geometry_fit.run_runtime_geometry_fit_action(
+        bindings=geometry_fit.GeometryFitRuntimeActionBindings(
+            value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+                current_var_names=lambda: ["gamma"],
+                current_params=lambda: {"theta_initial": 3.0, "mosaic_params": {}},
+                current_ui_params=lambda: {},
+                var_map={},
+            ),
+            prepare_bindings_factory=lambda _var_names: (
+                _make_runtime_action_prepare_bindings()
+            ),
+            execution_bindings=_make_runtime_action_execution_bindings(
+                tmp_path,
+                progress_texts,
+                cmd_events,
+            ),
+            solve_fit=lambda *_args, **_kwargs: None,
+            stamp_factory=lambda: "20260328_130001",
+        ),
+        prepare_run=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        build_execution_setup=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("build_execution_setup should not be called")
+        ),
+        execute_run=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("execute_run should not be called")
+        ),
+    )
+
+    assert action.execution_result is None
+    assert action.error_text == "Geometry fit failed: boom"
+    assert progress_texts == ["Geometry fit failed: boom"]
+    assert cmd_events == ["failed: boom"]
+
+
+def test_run_runtime_geometry_fit_action_surfaces_preflight_error_text(tmp_path) -> None:
+    progress_texts: list[str] = []
+    cmd_events: list[str] = []
+
+    action = geometry_fit.run_runtime_geometry_fit_action(
+        bindings=geometry_fit.GeometryFitRuntimeActionBindings(
+            value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+                current_var_names=lambda: ["theta_initial", "gamma"],
+                current_params=lambda: {"theta_initial": 3.0, "mosaic_params": {}},
+                current_ui_params=lambda: {},
+                var_map={},
+            ),
+            prepare_bindings_factory=lambda _var_names: (
+                _make_runtime_action_prepare_bindings()
+            ),
+            execution_bindings=_make_runtime_action_execution_bindings(
+                tmp_path,
+                progress_texts,
+                cmd_events,
+            ),
+            solve_fit=lambda *_args, **_kwargs: None,
+            stamp_factory=lambda: "20260328_130002",
+        ),
+        prepare_run=lambda **kwargs: geometry_fit.GeometryFitPreparationResult(
+            error_text="Geometry fit unavailable"
+        ),
+        build_execution_setup=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("build_execution_setup should not be called")
+        ),
+        execute_run=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("execute_run should not be called")
+        ),
+    )
+
+    assert action.execution_result is None
+    assert action.error_text == "Geometry fit unavailable"
+    assert action.preserve_live_theta is False
+    assert progress_texts == ["Geometry fit unavailable"]
+    assert cmd_events == []
 
 
 def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloads(
