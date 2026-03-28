@@ -177,6 +177,36 @@ HKL_PICK_MIN_SEPARATION_PX = 2.0
 HKL_PICK_MAX_DISTANCE_PX = 12.0
 
 
+def _refresh_background_status() -> str:
+    """Refresh the live background status label through whichever bundle is ready."""
+
+    runtime = globals().get("background_controls_runtime")
+    refresh = getattr(runtime, "refresh_status", None)
+    if callable(refresh):
+        return str(refresh())
+
+    callbacks = globals().get("background_runtime_callbacks")
+    refresh = getattr(callbacks, "refresh_status", None)
+    if callable(refresh):
+        return str(refresh())
+    return ""
+
+
+def _refresh_background_backend_status() -> str:
+    """Refresh the live backend-debug status label through whichever bundle is ready."""
+
+    runtime = globals().get("background_controls_runtime")
+    refresh = getattr(runtime, "refresh_backend_status", None)
+    if callable(refresh):
+        return str(refresh())
+
+    callbacks = globals().get("background_runtime_callbacks")
+    refresh = getattr(callbacks, "refresh_backend_status", None)
+    if callable(refresh):
+        return str(refresh())
+    return ""
+
+
 def _ensure_triplet(values, fallback):
     """Return a 3-element list combining *values* with *fallback*."""
 
@@ -1739,7 +1769,7 @@ def _undo_last_geometry_manual_placement() -> None:
     _clear_geometry_manual_preview_artists(redraw=False)
     _render_current_geometry_manual_pairs(update_status=True)
     _update_geometry_manual_pick_button_label()
-    background_runtime_callbacks.refresh_status()
+    _refresh_background_status()
     progress_label_geometry.config(text="Undid the last manual placement change.")
 
 
@@ -1864,7 +1894,7 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
                 max_display_markers=marker_limit,
             )
         ),
-        refresh_status=background_runtime_callbacks.refresh_status,
+        refresh_status=_refresh_background_status,
         update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
     )
 
@@ -1990,7 +2020,7 @@ def _apply_geometry_manual_pairs_rows(
         clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
         render_current_pairs=_render_current_geometry_manual_pairs,
         update_button_label=_update_geometry_manual_pick_button_label,
-        refresh_status=background_runtime_callbacks.refresh_status,
+        refresh_status=_refresh_background_status,
         replace_existing=replace_existing,
     )
 
@@ -3144,9 +3174,7 @@ geometry_manual_runtime_callbacks = gui_manual_geometry.make_runtime_geometry_ma
     clear_geometry_pick_artists=_clear_geometry_pick_artists,
     draw_initial_geometry_pairs_overlay=_draw_initial_geometry_pairs_overlay,
     update_button_label=(lambda: _update_geometry_manual_pick_button_label()),
-    set_background_file_status_text=(
-        lambda: background_runtime_callbacks.refresh_status()
-    ),
+    set_background_file_status_text=_refresh_background_status,
     pair_group_count=_geometry_manual_pair_group_count,
     set_status_text=lambda text: progress_label_geometry.config(text=text),
     get_cache_data=lambda **kwargs: _get_geometry_manual_pick_cache(
@@ -3235,7 +3263,7 @@ geometry_tool_action_runtime_callbacks = (
             lambda index: _set_geometry_manual_pairs_for_index(index, [])
         ),
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
-        refresh_status=lambda: background_runtime_callbacks.refresh_status(),
+        refresh_status=_refresh_background_status,
         set_progress_text=lambda text: progress_label_geometry.config(text=text),
     )
 )
@@ -5289,17 +5317,7 @@ background_theta_runtime = gui_bootstrap.build_runtime_background_theta_bootstra
     ),
     fit_theta_checkbutton_factory=lambda: fit_theta_checkbutton,
     theta_controls_factory=lambda: geometry_fit_constraints_view_state.controls,
-    set_background_file_status_text_factory=lambda: (
-        (
-            background_controls_runtime.refresh_status
-            if "background_controls_runtime" in globals()
-            else (
-                background_runtime_callbacks.refresh_status
-                if "background_runtime_callbacks" in globals()
-                else None
-            )
-        )
-    ),
+    set_background_file_status_text_factory=lambda: _refresh_background_status,
     schedule_update_factory=lambda: (
         globals().get("schedule_update")
         if callable(globals().get("schedule_update"))
@@ -6019,7 +6037,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         )
     _sync_finite_controls()
     _apply_geometry_fit_background_selection(trigger_update=False)
-    background_runtime_callbacks.refresh_status()
+    _refresh_background_status()
     _update_geometry_preview_exclude_button_label()
     geometry_q_group_runtime_callbacks.refresh_window()
     ensure_valid_resolution_choice()
@@ -6027,7 +6045,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     toggle_caked_2d()
     toggle_log_radial()
     toggle_log_azimuth()
-    background_runtime_callbacks.refresh_backend_status()
+    _refresh_background_backend_status()
     _mark_chi_square_dirty()
     _update_chi_square_display(force=True)
     qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
@@ -8353,7 +8371,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             theta_initial_var.set(
                 _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
             )
-            background_runtime_callbacks.refresh_status()
+            _refresh_background_status()
 
         simulation_runtime_state.profile_cache = dict(simulation_runtime_state.profile_cache)
         simulation_runtime_state.profile_cache.update(mosaic_params)
@@ -9255,7 +9273,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     theta_initial_var.set(
                         _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
                     )
-                    background_runtime_callbacks.refresh_status()
+                    _refresh_background_status()
 
                 # Keep the cached profile in sync with the fitted geometry so the
                 # next simulation uses the updated parameters even when diagnostics
@@ -10383,7 +10401,7 @@ geometry_fit_action_runtime = gui_bootstrap.build_runtime_geometry_fit_action_bo
     current_ui_params=_current_geometry_fit_ui_params,
     var_map=_geometry_fit_var_map,
     background_theta_for_index=_background_theta_for_index,
-    refresh_status=background_runtime_callbacks.refresh_status,
+    refresh_status=_refresh_background_status,
     update_manual_pick_button_label=(
         _update_geometry_manual_pick_button_label
     ),

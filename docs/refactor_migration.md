@@ -476,7 +476,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     control cluster now also boot through one shared helper in
     `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
-    plus thin cross-feature status-refresh call sites around that workflow
+    plus two late-bound status-refresh helpers that are reused by the
+    remaining geometry-fit/manual-geometry/background-theta call sites
 - Integration-range drag workflow extraction has also advanced:
   - explicit live drag-selection state for 1D integration-range picking now
     lives in `ra_sim.gui.state`
@@ -574,9 +575,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   refresh/action call sites around the extracted manager helpers and shared
   bootstrap wiring.
 - The remaining background runtime code is now mostly thin cross-feature
-  status-refresh call sites in geometry-fit/manual-geometry flows around the
-  extracted background manager/background-theta helpers and shared bootstrap
-  helpers.
+  status-refresh helper aliases plus the late-bound value-source wiring around
+  the extracted background manager/background-theta helpers and shared
+  bootstrap helpers.
 - The remaining selected-peak runtime code is now mostly thin live
   value-source wiring around the extracted peak-selection modules and shared
   bootstrap helpers.

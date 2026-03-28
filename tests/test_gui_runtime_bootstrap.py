@@ -339,6 +339,36 @@ def test_runtime_background_theta_callbacks_use_shared_bundle() -> None:
     }
 
 
+def test_runtime_background_status_refreshes_use_shared_helpers() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    helper_defs = {
+        "_refresh_background_status": 0,
+        "_refresh_background_backend_status": 0,
+    }
+    direct_runtime_status_refs: list[tuple[str, str, int]] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in helper_defs:
+            helper_defs[node.name] += 1
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in {"refresh_status", "refresh_backend_status"}
+            and isinstance(node.value, ast.Name)
+            and node.value.id in {"background_runtime_callbacks", "background_controls_runtime"}
+        ):
+            direct_runtime_status_refs.append(
+                (node.value.id, node.attr, int(node.lineno))
+            )
+
+    assert helper_defs == {
+        "_refresh_background_status": 1,
+        "_refresh_background_backend_status": 1,
+    }
+    assert direct_runtime_status_refs == []
+
+
 def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")

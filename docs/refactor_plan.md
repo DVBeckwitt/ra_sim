@@ -554,7 +554,8 @@ not `main.py` or `mosaic_profiles.py`.
     control cluster now also boot through one shared helper in
     `ra_sim.gui.bootstrap`.
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
-    plus thin cross-feature status-refresh call sites around that workflow.
+    plus two late-bound status-refresh helpers that are reused by the
+    remaining geometry-fit/manual-geometry/background-theta call sites.
 - Integration-range drag workflow extraction has advanced.
   - `ra_sim.gui.state` now also owns explicit live drag-selection state for
     1D integration-range picking.
@@ -775,9 +776,9 @@ What is left:
   around the extracted manager/view helpers, the bound geometry-fit
   simulation/value callback bundles, and shared bootstrap wiring.
 - The remaining background runtime code is now mostly thin cross-feature
-  status-refresh call sites in geometry-fit/manual-geometry flows around the
-  extracted background manager/background-theta helpers and shared bootstrap
-  helpers.
+  status-refresh helper aliases plus the late-bound value-source wiring around
+  the extracted background manager/background-theta helpers and shared
+  bootstrap helpers.
 - The remaining selected-peak runtime code is now mostly thin live
   value-source wiring around the extracted peak-selection helpers and shared
   bootstrap helpers.
@@ -1188,16 +1189,16 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining geometry-fit/manual-geometry background status-
-  refresh call sites now that the background-theta selection workflow is
-  extracted
+- start with the remaining geometry-fit manual-pair value-source wiring and
+  callback-bundle assembly now that the background status-refresh glue is
+  collapsed behind shared late-bound helpers
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the background-theta runtime callback cleanup:
+Immediate checklist after the background status-refresh cleanup:
 
-- trim the remaining geometry-fit/manual-geometry background status-refresh
-  call sites
+- trim the remaining geometry-fit manual-pair runtime value-source wiring and
+  callback-bundle assembly
 - then trim the next cross-feature runtime workflow call sites that still
   bypass the extracted helper modules
 - defer config unification, compatibility cleanup, and repo-root cleanup until
