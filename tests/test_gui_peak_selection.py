@@ -359,6 +359,83 @@ def test_peak_selection_runtime_ideal_center_factory_builds_live_probe_config(
     assert captured["config"].solve_q_mode == 1
 
 
+def test_peak_selection_runtime_config_factory_bundle_delegates_to_helper_factories(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    monkeypatch.setattr(
+        peak_selection,
+        "make_runtime_selected_peak_canvas_pick_config_factory",
+        lambda **kwargs: calls.append(("canvas", kwargs)) or "canvas-factory",
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "make_runtime_selected_peak_intersection_config_factory",
+        lambda **kwargs: calls.append(("intersection", kwargs))
+        or "intersection-factory",
+    )
+    monkeypatch.setattr(
+        peak_selection,
+        "make_runtime_selected_peak_ideal_center_factory",
+        lambda **kwargs: calls.append(("ideal_center", kwargs))
+        or "ideal-center-factory",
+    )
+
+    bundle = peak_selection.make_runtime_selected_peak_config_factories(
+        simulation_runtime_state="runtime-state",
+        image_size=64,
+        primary_a_factory="primary-a",
+        primary_c_factory="primary-c",
+        max_distance_px=12.0,
+        min_separation_px=2.0,
+        image_shape_factory="image-shape",
+        center_col_factory="center-col",
+        center_row_factory="center-row",
+        distance_cor_to_detector_factory="distance",
+        gamma_deg_factory="gamma",
+        Gamma_deg_factory="Gamma",
+        chi_deg_factory="chi",
+        psi_deg_factory="psi",
+        psi_z_deg_factory="psi-z",
+        zs_factory="zs",
+        zb_factory="zb",
+        theta_initial_deg_factory="theta-initial",
+        cor_angle_deg_factory="cor-angle",
+        sigma_mosaic_deg_factory="sigma-mosaic",
+        gamma_mosaic_deg_factory="gamma-mosaic",
+        eta_factory="eta",
+        wavelength_factory="wavelength",
+        debye_x_factory="debye-x",
+        debye_y_factory="debye-y",
+        detector_center_factory="detector-center",
+        optics_mode_factory="optics-mode",
+        solve_q_values_factory="solve-q",
+        n2="n2",
+        process_peaks_parallel="process-peaks",
+    )
+
+    assert bundle.canvas_pick == "canvas-factory"
+    assert bundle.intersection == "intersection-factory"
+    assert bundle.ideal_center == "ideal-center-factory"
+    assert calls[0] == (
+        "canvas",
+        {
+            "image_size": 64,
+            "primary_a_factory": "primary-a",
+            "primary_c_factory": "primary-c",
+            "max_distance_px": 12.0,
+            "min_separation_px": 2.0,
+            "image_shape_factory": "image-shape",
+        },
+    )
+    assert calls[1][0] == "intersection"
+    assert calls[1][1]["solve_q_values_factory"] == "solve-q"
+    assert calls[2][0] == "ideal_center"
+    assert calls[2][1]["simulation_runtime_state"] == "runtime-state"
+    assert calls[2][1]["process_peaks_parallel"] == "process-peaks"
+
+
 def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallback() -> None:
     assert peak_selection.brightest_hit_native_from_table([]) is None
     assert peak_selection.brightest_hit_native_from_table([[1.0, 5.0, 6.0]]) == (

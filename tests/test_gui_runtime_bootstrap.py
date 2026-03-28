@@ -79,7 +79,7 @@ def test_runtime_hkl_pick_constants_are_defined_before_binding_factory_use() -> 
         func = node.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr != "make_runtime_selected_peak_canvas_pick_config_factory":
+        if func.attr != "make_runtime_selected_peak_config_factories":
             continue
         for keyword in node.keywords:
             name_id = _name_id(keyword.value)

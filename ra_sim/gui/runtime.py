@@ -3942,8 +3942,9 @@ bragg_qr_runtime_refresh = bragg_qr_runtime.refresh_window
 bragg_qr_runtime_open = bragg_qr_runtime.open_window
 
 
-selected_peak_canvas_pick_config_factory = (
-    gui_peak_selection.make_runtime_selected_peak_canvas_pick_config_factory(
+selected_peak_runtime_config_factories = (
+    gui_peak_selection.make_runtime_selected_peak_config_factories(
+        simulation_runtime_state=simulation_runtime_state,
         image_size=int(image_size),
         primary_a_factory=lambda: float(av),
         primary_c_factory=lambda: float(cv),
@@ -3954,11 +3955,6 @@ selected_peak_canvas_pick_config_factory = (
             if global_image_buffer.size
             else None
         ),
-    )
-)
-selected_peak_intersection_config_factory = (
-    gui_peak_selection.make_runtime_selected_peak_intersection_config_factory(
-        image_size=int(image_size),
         center_col_factory=lambda: float(center_y_var.get()),
         center_row_factory=lambda: float(center_x_var.get()),
         distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
@@ -3974,30 +3970,13 @@ selected_peak_intersection_config_factory = (
         sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
         gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
         eta_factory=lambda: float(eta_var.get()),
-        solve_q_values_factory=current_solve_q_values,
-    )
-)
-selected_peak_ideal_center_factory = (
-    gui_peak_selection.make_runtime_selected_peak_ideal_center_factory(
-        simulation_runtime_state=simulation_runtime_state,
-        image_size=int(image_size),
         wavelength_factory=lambda: float(lambda_),
-        distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
-        gamma_deg_factory=lambda: float(gamma_var.get()),
-        Gamma_deg_factory=lambda: float(Gamma_var.get()),
-        chi_deg_factory=lambda: float(chi_var.get()),
-        psi_deg_factory=lambda: float(psi),
-        psi_z_deg_factory=lambda: float(psi_z_var.get()),
-        zs_factory=lambda: float(zs_var.get()),
-        zb_factory=lambda: float(zb_var.get()),
         debye_x_factory=lambda: float(debye_x_var.get()),
         debye_y_factory=lambda: float(debye_y_var.get()),
         detector_center_factory=lambda: (
             float(center_x_var.get()),
             float(center_y_var.get()),
         ),
-        theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
-        cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
         optics_mode_factory=_current_optics_mode_flag,
         solve_q_values_factory=current_solve_q_values,
         n2=n2,
@@ -4016,8 +3995,8 @@ peak_selection_runtime = gui_bootstrap.build_runtime_peak_selection_bootstrap(
         if analysis_view_controls_view_state.show_caked_2d_var is not None
         else False
     ),
-    current_canvas_pick_config_factory=selected_peak_canvas_pick_config_factory,
-    current_intersection_config_factory=selected_peak_intersection_config_factory,
+    current_canvas_pick_config_factory=selected_peak_runtime_config_factories.canvas_pick,
+    current_intersection_config_factory=selected_peak_runtime_config_factories.intersection,
     ensure_peak_overlay_data=lambda **kwargs: _ensure_peak_overlay_data(**kwargs),
     sync_peak_selection_state=_sync_peak_selection_state,
     schedule_update_factory=lambda: (
@@ -4033,7 +4012,7 @@ peak_selection_runtime = gui_bootstrap.build_runtime_peak_selection_bootstrap(
     draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
     display_to_native_sim_coords=_display_to_native_sim_coords,
     native_sim_to_display_coords=_native_sim_to_display_coords,
-    simulate_ideal_hkl_native_center=selected_peak_ideal_center_factory,
+    simulate_ideal_hkl_native_center=selected_peak_runtime_config_factories.ideal_center,
     deactivate_conflicting_modes_factory=lambda: (
         lambda: _set_geometry_preview_exclude_mode(False)
     ),

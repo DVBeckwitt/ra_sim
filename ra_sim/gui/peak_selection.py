@@ -125,6 +125,15 @@ class SelectedPeakRuntimeCallbacks:
     select_peak_from_canvas_click: Callable[[float, float], bool]
 
 
+@dataclass(frozen=True)
+class SelectedPeakRuntimeConfigFactories:
+    """Live config factories used by the selected-peak runtime workflow."""
+
+    canvas_pick: Callable[[], SelectedPeakCanvasPickConfig]
+    intersection: Callable[[], SelectedPeakIntersectionConfig]
+    ideal_center: Callable[[float, float, float, float, float], tuple[float, float] | None]
+
+
 def _resolve_runtime_value(value_or_callable: object) -> object:
     if callable(value_or_callable):
         try:
@@ -628,6 +637,94 @@ def make_runtime_selected_peak_ideal_center_factory(
         )
 
     return _simulate
+
+
+def make_runtime_selected_peak_config_factories(
+    *,
+    simulation_runtime_state,
+    image_size: int,
+    primary_a_factory: object,
+    primary_c_factory: object,
+    max_distance_px: object,
+    min_separation_px: object,
+    image_shape_factory: object,
+    center_col_factory: object,
+    center_row_factory: object,
+    distance_cor_to_detector_factory: object,
+    gamma_deg_factory: object,
+    Gamma_deg_factory: object,
+    chi_deg_factory: object,
+    psi_deg_factory: object,
+    psi_z_deg_factory: object,
+    zs_factory: object,
+    zb_factory: object,
+    theta_initial_deg_factory: object,
+    cor_angle_deg_factory: object,
+    sigma_mosaic_deg_factory: object,
+    gamma_mosaic_deg_factory: object,
+    eta_factory: object,
+    wavelength_factory: object,
+    debye_x_factory: object,
+    debye_y_factory: object,
+    detector_center_factory: object,
+    optics_mode_factory: object,
+    solve_q_values_factory: object,
+    n2: Any,
+    process_peaks_parallel: Callable[..., object],
+) -> SelectedPeakRuntimeConfigFactories:
+    """Return the shared selected-peak runtime config factory bundle."""
+
+    return SelectedPeakRuntimeConfigFactories(
+        canvas_pick=make_runtime_selected_peak_canvas_pick_config_factory(
+            image_size=int(image_size),
+            primary_a_factory=primary_a_factory,
+            primary_c_factory=primary_c_factory,
+            max_distance_px=max_distance_px,
+            min_separation_px=min_separation_px,
+            image_shape_factory=image_shape_factory,
+        ),
+        intersection=make_runtime_selected_peak_intersection_config_factory(
+            image_size=int(image_size),
+            center_col_factory=center_col_factory,
+            center_row_factory=center_row_factory,
+            distance_cor_to_detector_factory=distance_cor_to_detector_factory,
+            gamma_deg_factory=gamma_deg_factory,
+            Gamma_deg_factory=Gamma_deg_factory,
+            chi_deg_factory=chi_deg_factory,
+            psi_deg_factory=psi_deg_factory,
+            psi_z_deg_factory=psi_z_deg_factory,
+            zs_factory=zs_factory,
+            zb_factory=zb_factory,
+            theta_initial_deg_factory=theta_initial_deg_factory,
+            cor_angle_deg_factory=cor_angle_deg_factory,
+            sigma_mosaic_deg_factory=sigma_mosaic_deg_factory,
+            gamma_mosaic_deg_factory=gamma_mosaic_deg_factory,
+            eta_factory=eta_factory,
+            solve_q_values_factory=solve_q_values_factory,
+        ),
+        ideal_center=make_runtime_selected_peak_ideal_center_factory(
+            simulation_runtime_state=simulation_runtime_state,
+            image_size=int(image_size),
+            wavelength_factory=wavelength_factory,
+            distance_cor_to_detector_factory=distance_cor_to_detector_factory,
+            gamma_deg_factory=gamma_deg_factory,
+            Gamma_deg_factory=Gamma_deg_factory,
+            chi_deg_factory=chi_deg_factory,
+            psi_deg_factory=psi_deg_factory,
+            psi_z_deg_factory=psi_z_deg_factory,
+            zs_factory=zs_factory,
+            zb_factory=zb_factory,
+            debye_x_factory=debye_x_factory,
+            debye_y_factory=debye_y_factory,
+            detector_center_factory=detector_center_factory,
+            theta_initial_deg_factory=theta_initial_deg_factory,
+            cor_angle_deg_factory=cor_angle_deg_factory,
+            optics_mode_factory=optics_mode_factory,
+            solve_q_values_factory=solve_q_values_factory,
+            n2=n2,
+            process_peaks_parallel=process_peaks_parallel,
+        ),
+    )
 
 
 def hkl_pick_button_text(armed: bool) -> str:
