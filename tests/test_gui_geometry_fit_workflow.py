@@ -724,3 +724,141 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
     assert "frame warning" in postprocess.progress_text
     assert "joint backgrounds=2" in postprocess.progress_text
     assert f"Saved 2 peak records → {postprocess.save_path}" in postprocess.progress_text
+
+
+def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(
+    tmp_path,
+) -> None:
+    events: list[object] = []
+
+    postprocess = geometry_fit.GeometryFitPostprocessResult(
+        fitted_params={"theta_initial": 3.0},
+        point_match_summary_lines=["claimed=4"],
+        pixel_offsets=[((1, 1, 0), 1.5, 1.0, np.hypot(1.5, 1.0))],
+        overlay_records=[{"overlay": True}],
+        overlay_state={"overlay_records": [{"overlay": True}]},
+        overlay_diagnostic_lines=["overlay=ok"],
+        frame_warning="warn",
+        export_records=[{"source": "sim"}],
+        save_path=tmp_path / "matched.npy",
+        fit_summary_lines=["summary=ok"],
+        progress_text="fit complete",
+    )
+
+    class _Result:
+        x = [1.5, 2.5]
+        rms_px = 0.75
+        success = True
+        status = 2
+        message = "ok"
+        nfev = 5
+        cost = 1.0
+        robust_cost = 1.0
+        solver_loss = "soft_l1"
+        solver_f_scale = 1.0
+        optimality = 0.1
+        active_mask = [0]
+        restart_history = []
+
+    applied_values: list[tuple[list[object], list[object]]] = []
+    stored_profile_cache: dict[str, object] = {}
+    stored_overlay_state: dict[str, object] = {}
+    stored_progress_text: list[str] = []
+    saved_exports: list[tuple[object, object]] = []
+
+    outcome = geometry_fit.apply_runtime_geometry_fit_result(
+        result=_Result(),
+        var_names=["gamma", "a"],
+        current_dataset={
+            "initial_pairs_display": [{"pair": 1}],
+            "group_count": 2,
+            "pair_count": 3,
+        },
+        dataset_count=4,
+        joint_background_mode=True,
+        preserve_live_theta=False,
+        max_display_markers=120,
+        bindings=geometry_fit.GeometryFitRuntimeResultBindings(
+            log_section=lambda title, lines: events.append((title, list(lines))),
+            capture_undo_state=lambda: {"undo": True},
+            apply_result_values=lambda names, values: applied_values.append(
+                (list(names), list(values))
+            ),
+            sync_joint_background_theta=lambda: events.append("sync_theta"),
+            refresh_status=lambda: events.append("refresh_status"),
+            update_manual_pick_button_label=lambda: events.append("update_button"),
+            build_profile_cache=lambda: {"profile": 1},
+            replace_profile_cache=lambda cache: stored_profile_cache.update(cache),
+            push_undo_state=lambda state: events.append(("push_undo", dict(state))),
+            request_preview_skip_once=lambda: events.append("skip_once"),
+            mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
+            schedule_update=lambda: events.append("schedule_update"),
+            build_fitted_params=lambda: {"theta_initial": 3.0, "gamma": 1.5},
+            postprocess_result=lambda fitted_params, rms: (
+                events.append(("postprocess", dict(fitted_params), rms)) or postprocess
+            ),
+            draw_overlay_records=lambda records, marker_limit: events.append(
+                ("draw_overlay", list(records), marker_limit)
+            ),
+            draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+                ("draw_initial", list(pairs), marker_limit)
+            ),
+            set_last_overlay_state=lambda state: stored_overlay_state.update(state),
+            save_export_records=lambda save_path, export_records: saved_exports.append(
+                (save_path, list(export_records))
+            ),
+            set_progress_text=lambda text: stored_progress_text.append(text),
+            cmd_line=lambda text: events.append(("cmd", text)),
+        ),
+    )
+
+    assert applied_values == [(["gamma", "a"], [1.5, 2.5])]
+    assert stored_profile_cache == {"profile": 1}
+    assert stored_overlay_state == {"overlay_records": [{"overlay": True}]}
+    assert stored_progress_text == ["fit complete"]
+    assert saved_exports == [(tmp_path / "matched.npy", [{"source": "sim"}])]
+    assert outcome.rms == 0.75
+    assert outcome.fitted_params == {"theta_initial": 3.0, "gamma": 1.5}
+    assert outcome.postprocess is postprocess
+    assert events == [
+        (
+            "Optimizer diagnostics:",
+            [
+                "success=True",
+                "status=2",
+                "message=ok",
+                "nfev=5",
+                "cost=1.000000",
+                "robust_cost=1.000000",
+                "solver_loss=soft_l1",
+                "solver_f_scale=1.000000",
+                "optimality=0.100000",
+                "active_mask=[0]",
+            ],
+        ),
+        "sync_theta",
+        "refresh_status",
+        "update_button",
+        ("push_undo", {"undo": True}),
+        "skip_once",
+        "mark_dirty",
+        "schedule_update",
+        (
+            "Optimization result:",
+            [
+                "gamma = 1.500000",
+                "a = 2.500000",
+                "RMS residual = 0.750000 px",
+            ],
+        ),
+        ("postprocess", {"theta_initial": 3.0, "gamma": 1.5}, 0.75),
+        ("Point-match summary:", ["claimed=4"]),
+        ("Overlay frame diagnostics:", ["overlay=ok"]),
+        ("draw_overlay", [{"overlay": True}], 120),
+        (
+            "Pixel offsets (native frame):",
+            ["HKL=(1, 1, 0): dx=1.5000, dy=1.0000, |Δ|=1.8028 px"],
+        ),
+        ("Fit summary:", ["summary=ok"]),
+        ("cmd", "done: datasets=4 groups=2 points=3 rms=0.7500px"),
+    ]

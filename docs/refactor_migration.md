@@ -369,9 +369,14 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     and packages the matched-peak export/save payload used by the live GUI
   - `ra_sim.gui.geometry_fit` now also owns the geometry-fit profile-cache
     merge helper used after one successful fit
-  - `ra_sim.gui.runtime` now keeps the live optimizer call, the actual file
-    writes / overlay drawing side effects, and the remaining Tk status/callback
-    wiring around that workflow
+  - `ra_sim.gui.geometry_fit` now also owns the runtime result-application
+    helper that orchestrates optimizer-diagnostic logging, undo/profile-cache
+    updates, preview-refresh scheduling, postprocess application, overlay-state
+    persistence, export-save callbacks, and final success-status reporting
+    through one callback bundle
+  - `ra_sim.gui.runtime` now keeps the preflight wrapper, log-file lifecycle,
+    live optimizer call, and the remaining Tk callback bundle wiring around
+    that workflow
 - Background-file workflow extraction has also advanced:
   - background-file state transition, file-dialog initial-dir selection,
     background status refresh, and the post-load/post-switch redraw/reset
@@ -476,9 +481,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   sites plus thin value-source wiring around the extracted peak-selection and
   canvas-interaction modules and shared config/bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the live
-  solver call plus the actual log-file writes, overlay drawing, and a few
-  Tk/runtime state updates around the extracted `ra_sim.gui.geometry_fit`
-  helpers.
+  preflight wrapper, log-file lifecycle, live solver call, and callback-bundle
+  wiring around the extracted `ra_sim.gui.geometry_fit` helpers.
 - The remaining integration-range drag runtime code is now mostly thin
   integration-region visual call sites plus the remaining cross-feature event
   wiring around the extracted drag and canvas-interaction modules.

@@ -10467,165 +10467,161 @@ def on_fit_geometry_click():
             refinement_config=geometry_runtime_cfg,
         )
 
-        _log_section(
-            "Optimizer diagnostics:",
-            gui_geometry_fit.build_geometry_fit_optimizer_diagnostics_lines(result),
-        )
-
-        undo_state = _capture_geometry_fit_undo_state()
-        gui_geometry_fit.apply_geometry_fit_result_values(
-            var_names,
-            getattr(result, "x", []),
-            var_map={
-                "zb": zb_var,
-                "zs": zs_var,
-                "theta_initial": theta_initial_var,
-                "psi_z": psi_z_var,
-                "chi": chi_var,
-                "cor_angle": cor_angle_var,
-                "gamma": gamma_var,
-                "Gamma": Gamma_var,
-                "corto_detector": corto_detector_var,
-                "a": a_var,
-                "c": c_var,
-                "center_x": center_x_var,
-                "center_y": center_y_var,
-            },
-            geometry_theta_offset_var=geometry_theta_offset_var,
-        )
-
-        if joint_background_mode and not preserve_live_theta:
-            theta_initial_var.set(
-                _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
-            )
-        background_runtime_callbacks.refresh_status()
-        _update_geometry_manual_pick_button_label()
-
-        simulation_runtime_state.profile_cache = (
-            gui_geometry_fit.build_geometry_fit_profile_cache(
-                simulation_runtime_state.profile_cache,
-                mosaic_params,
-                theta_initial=theta_initial_var.get(),
-                theta_offset=_current_geometry_theta_offset(strict=False),
-                cor_angle=cor_angle_var.get(),
-                chi=chi_var.get(),
-                zs=zs_var.get(),
-                zb=zb_var.get(),
-                gamma=gamma_var.get(),
-                Gamma=Gamma_var.get(),
-                corto_detector=corto_detector_var.get(),
-                a=a_var.get(),
-                c=c_var.get(),
-                center_x=center_x_var.get(),
-                center_y=center_y_var.get(),
-            )
-        )
-        _push_geometry_fit_undo_state(undo_state)
-
-        gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
-        simulation_runtime_state.last_simulation_signature = None
-        schedule_update()
-
-        rms = gui_geometry_fit.geometry_fit_result_rms(result)
-        _log_section(
-            "Optimization result:",
-            gui_geometry_fit.build_geometry_fit_result_lines(
-                var_names,
-                getattr(result, "x", []),
-                rms=rms,
-            ),
-        )
-
-        fitted_params = gui_geometry_fit.build_geometry_fit_fitted_params(
-            params,
-            zb=zb_var.get(),
-            zs=zs_var.get(),
-            theta_initial=theta_initial_var.get(),
-            theta_offset=_current_geometry_theta_offset(strict=False),
-            chi=chi_var.get(),
-            cor_angle=cor_angle_var.get(),
-            psi_z=psi_z_var.get(),
-            gamma=gamma_var.get(),
-            Gamma=Gamma_var.get(),
-            corto_detector=corto_detector_var.get(),
-            a=a_var.get(),
-            c=c_var.get(),
-            center_x=center_x_var.get(),
-            center_y=center_y_var.get(),
-        )
-
-        postprocess = gui_geometry_fit.postprocess_geometry_fit_result(
-            fitted_params=fitted_params,
+        gui_geometry_fit.apply_runtime_geometry_fit_result(
             result=result,
-            current_dataset=current_dataset,
-            joint_background_mode=joint_background_mode,
-            current_background_index=int(background_runtime_state.current_background_index),
-            dataset_count=len(dataset_infos),
             var_names=var_names,
-            values=getattr(result, "x", []),
-            rms=rms,
-            miller=miller,
-            intensities=intensities,
-            image_size=image_size,
+            current_dataset=current_dataset,
+            dataset_count=len(dataset_infos),
+            joint_background_mode=joint_background_mode,
+            preserve_live_theta=preserve_live_theta,
             max_display_markers=max_display_markers,
-            downloads_dir=get_dir("downloads"),
-            stamp=stamp,
-            log_path=log_path,
-            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-            background_display_rotate_k=DISPLAY_ROTATE_K,
-            simulate_and_compare_hkl=simulate_and_compare_hkl,
-            aggregate_match_centers=_aggregate_match_centers,
-            build_overlay_records=build_geometry_fit_overlay_records,
-            compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
-        )
-
-        if postprocess.point_match_summary_lines:
-            _log_section(
-                "Point-match summary:",
-                postprocess.point_match_summary_lines,
-            )
-
-        _log_section(
-            "Overlay frame diagnostics:",
-            postprocess.overlay_diagnostic_lines,
-        )
-
-        if postprocess.overlay_records:
-            _draw_geometry_fit_overlay(
-                postprocess.overlay_records,
-                max_display_markers=max_display_markers,
-            )
-        else:
-            _draw_initial_geometry_pairs_overlay(
-                current_dataset["initial_pairs_display"],
-                max_display_markers=max_display_markers,
-            )
-        _set_geometry_fit_last_overlay_state(postprocess.overlay_state)
-
-        np.save(
-            postprocess.save_path,
-            np.array(postprocess.export_records, dtype=object),
-            allow_pickle=True,
-        )
-
-        _log_section(
-            "Pixel offsets (native frame):",
-            gui_geometry_fit.build_geometry_fit_pixel_offset_lines(
-                postprocess.pixel_offsets
+            bindings=gui_geometry_fit.GeometryFitRuntimeResultBindings(
+                log_section=_log_section,
+                capture_undo_state=_capture_geometry_fit_undo_state,
+                apply_result_values=(
+                    lambda names, values: gui_geometry_fit.apply_geometry_fit_result_values(
+                        names,
+                        values,
+                        var_map={
+                            "zb": zb_var,
+                            "zs": zs_var,
+                            "theta_initial": theta_initial_var,
+                            "psi_z": psi_z_var,
+                            "chi": chi_var,
+                            "cor_angle": cor_angle_var,
+                            "gamma": gamma_var,
+                            "Gamma": Gamma_var,
+                            "corto_detector": corto_detector_var,
+                            "a": a_var,
+                            "c": c_var,
+                            "center_x": center_x_var,
+                            "center_y": center_y_var,
+                        },
+                        geometry_theta_offset_var=geometry_theta_offset_var,
+                    )
+                ),
+                sync_joint_background_theta=(
+                    lambda: theta_initial_var.set(
+                        _background_theta_for_index(
+                            background_runtime_state.current_background_index,
+                            strict_count=False,
+                        )
+                    )
+                ),
+                refresh_status=background_runtime_callbacks.refresh_status,
+                update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
+                build_profile_cache=(
+                    lambda: gui_geometry_fit.build_geometry_fit_profile_cache(
+                        simulation_runtime_state.profile_cache,
+                        mosaic_params,
+                        theta_initial=theta_initial_var.get(),
+                        theta_offset=_current_geometry_theta_offset(strict=False),
+                        cor_angle=cor_angle_var.get(),
+                        chi=chi_var.get(),
+                        zs=zs_var.get(),
+                        zb=zb_var.get(),
+                        gamma=gamma_var.get(),
+                        Gamma=Gamma_var.get(),
+                        corto_detector=corto_detector_var.get(),
+                        a=a_var.get(),
+                        c=c_var.get(),
+                        center_x=center_x_var.get(),
+                        center_y=center_y_var.get(),
+                    )
+                ),
+                replace_profile_cache=(
+                    lambda profile_cache: setattr(
+                        simulation_runtime_state,
+                        "profile_cache",
+                        dict(profile_cache),
+                    )
+                ),
+                push_undo_state=_push_geometry_fit_undo_state,
+                request_preview_skip_once=(
+                    lambda: gui_controllers.request_geometry_preview_skip_once(
+                        geometry_preview_state
+                    )
+                ),
+                mark_last_simulation_dirty=(
+                    lambda: setattr(
+                        simulation_runtime_state,
+                        "last_simulation_signature",
+                        None,
+                    )
+                ),
+                schedule_update=schedule_update,
+                build_fitted_params=(
+                    lambda: gui_geometry_fit.build_geometry_fit_fitted_params(
+                        params,
+                        zb=zb_var.get(),
+                        zs=zs_var.get(),
+                        theta_initial=theta_initial_var.get(),
+                        theta_offset=_current_geometry_theta_offset(strict=False),
+                        chi=chi_var.get(),
+                        cor_angle=cor_angle_var.get(),
+                        psi_z=psi_z_var.get(),
+                        gamma=gamma_var.get(),
+                        Gamma=Gamma_var.get(),
+                        corto_detector=corto_detector_var.get(),
+                        a=a_var.get(),
+                        c=c_var.get(),
+                        center_x=center_x_var.get(),
+                        center_y=center_y_var.get(),
+                    )
+                ),
+                postprocess_result=(
+                    lambda fitted_params, rms: gui_geometry_fit.postprocess_geometry_fit_result(
+                        fitted_params=fitted_params,
+                        result=result,
+                        current_dataset=current_dataset,
+                        joint_background_mode=joint_background_mode,
+                        current_background_index=int(
+                            background_runtime_state.current_background_index
+                        ),
+                        dataset_count=len(dataset_infos),
+                        var_names=var_names,
+                        values=getattr(result, "x", []),
+                        rms=rms,
+                        miller=miller,
+                        intensities=intensities,
+                        image_size=image_size,
+                        max_display_markers=max_display_markers,
+                        downloads_dir=get_dir("downloads"),
+                        stamp=stamp,
+                        log_path=log_path,
+                        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                        background_display_rotate_k=DISPLAY_ROTATE_K,
+                        simulate_and_compare_hkl=simulate_and_compare_hkl,
+                        aggregate_match_centers=_aggregate_match_centers,
+                        build_overlay_records=build_geometry_fit_overlay_records,
+                        compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
+                    )
+                ),
+                draw_overlay_records=(
+                    lambda records, marker_limit: _draw_geometry_fit_overlay(
+                        records,
+                        max_display_markers=marker_limit,
+                    )
+                ),
+                draw_initial_pairs_overlay=(
+                    lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
+                        pairs,
+                        max_display_markers=marker_limit,
+                    )
+                ),
+                set_last_overlay_state=_set_geometry_fit_last_overlay_state,
+                save_export_records=(
+                    lambda save_path, export_records: np.save(
+                        save_path,
+                        np.array(export_records, dtype=object),
+                        allow_pickle=True,
+                    )
+                ),
+                set_progress_text=(
+                    lambda text: progress_label_geometry.config(text=text)
+                ),
+                cmd_line=_cmd_line,
             ),
-        )
-        _log_section(
-            "Fit summary:",
-            postprocess.fit_summary_lines,
-        )
-
-        progress_label_geometry.config(text=postprocess.progress_text)
-        _cmd_line(
-            "done: "
-            f"datasets={len(dataset_infos)} "
-            f"groups={current_dataset['group_count']} "
-            f"points={current_dataset['pair_count']} "
-            f"rms={float(rms):.4f}px"
         )
     except Exception as exc:
         _cmd_line(f"failed: {exc}")

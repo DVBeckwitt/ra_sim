@@ -67,6 +67,41 @@ class GeometryFitPostprocessResult:
     progress_text: str
 
 
+@dataclass(frozen=True)
+class GeometryFitRuntimeResultBindings:
+    """Runtime callback bundle for applying one successful geometry fit."""
+
+    log_section: Callable[[str, Sequence[str]], None]
+    capture_undo_state: Callable[[], dict[str, object]]
+    apply_result_values: Callable[[Sequence[object], Sequence[object]], None]
+    sync_joint_background_theta: Callable[[], None] | None
+    refresh_status: Callable[[], None]
+    update_manual_pick_button_label: Callable[[], None]
+    build_profile_cache: Callable[[], dict[str, object]]
+    replace_profile_cache: Callable[[dict[str, object]], None]
+    push_undo_state: Callable[[dict[str, object] | None], None]
+    request_preview_skip_once: Callable[[], None]
+    mark_last_simulation_dirty: Callable[[], None]
+    schedule_update: Callable[[], None]
+    build_fitted_params: Callable[[], dict[str, object]]
+    postprocess_result: Callable[[dict[str, object], float], GeometryFitPostprocessResult]
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None]
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None]
+    set_last_overlay_state: Callable[[dict[str, object]], None]
+    save_export_records: Callable[[Path, Sequence[dict[str, object]]], None]
+    set_progress_text: Callable[[str], None]
+    cmd_line: Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimeApplyResult:
+    """Result metadata returned after applying one successful geometry fit."""
+
+    rms: float
+    fitted_params: dict[str, object]
+    postprocess: GeometryFitPostprocessResult
+
+
 def copy_geometry_fit_state_value(value):
     """Deep-copy simple geometry-fit GUI state."""
 
@@ -1202,4 +1237,100 @@ def postprocess_geometry_fit_result(
         save_path=save_path,
         fit_summary_lines=fit_summary_lines,
         progress_text=progress_text,
+    )
+
+
+def apply_runtime_geometry_fit_result(
+    *,
+    result: object,
+    var_names: Sequence[object],
+    current_dataset: Mapping[str, object],
+    dataset_count: int,
+    joint_background_mode: bool,
+    preserve_live_theta: bool,
+    max_display_markers: int,
+    bindings: GeometryFitRuntimeResultBindings,
+) -> GeometryFitRuntimeApplyResult:
+    """Apply one successful geometry-fit result through runtime callbacks."""
+
+    bindings.log_section(
+        "Optimizer diagnostics:",
+        build_geometry_fit_optimizer_diagnostics_lines(result),
+    )
+
+    undo_state = bindings.capture_undo_state()
+    result_values = list(getattr(result, "x", []) or [])
+    bindings.apply_result_values(var_names, result_values)
+
+    if joint_background_mode and not preserve_live_theta:
+        sync_theta = bindings.sync_joint_background_theta
+        if sync_theta is not None:
+            sync_theta()
+
+    bindings.refresh_status()
+    bindings.update_manual_pick_button_label()
+    bindings.replace_profile_cache(bindings.build_profile_cache())
+    bindings.push_undo_state(undo_state)
+    bindings.request_preview_skip_once()
+    bindings.mark_last_simulation_dirty()
+    bindings.schedule_update()
+
+    rms = geometry_fit_result_rms(result)
+    bindings.log_section(
+        "Optimization result:",
+        build_geometry_fit_result_lines(
+            var_names,
+            result_values,
+            rms=rms,
+        ),
+    )
+
+    fitted_params = bindings.build_fitted_params()
+    postprocess = bindings.postprocess_result(fitted_params, rms)
+
+    if postprocess.point_match_summary_lines:
+        bindings.log_section(
+            "Point-match summary:",
+            postprocess.point_match_summary_lines,
+        )
+
+    bindings.log_section(
+        "Overlay frame diagnostics:",
+        postprocess.overlay_diagnostic_lines,
+    )
+
+    if postprocess.overlay_records:
+        bindings.draw_overlay_records(
+            postprocess.overlay_records,
+            int(max_display_markers),
+        )
+    else:
+        bindings.draw_initial_pairs_overlay(
+            current_dataset["initial_pairs_display"],
+            int(max_display_markers),
+        )
+
+    bindings.set_last_overlay_state(postprocess.overlay_state)
+    bindings.save_export_records(postprocess.save_path, postprocess.export_records)
+    bindings.log_section(
+        "Pixel offsets (native frame):",
+        build_geometry_fit_pixel_offset_lines(postprocess.pixel_offsets),
+    )
+    bindings.log_section(
+        "Fit summary:",
+        postprocess.fit_summary_lines,
+    )
+    bindings.set_progress_text(postprocess.progress_text)
+    bindings.cmd_line(
+        "done: "
+        f"datasets={int(dataset_count)} "
+        f"groups={int(current_dataset.get('group_count', 0) or 0)} "
+        f"points={int(current_dataset.get('pair_count', 0) or 0)} "
+        f"rms={float(rms):.4f}px"
+    )
+
+    return GeometryFitRuntimeApplyResult(
+        rms=float(rms),
+        fitted_params=fitted_params,
+        postprocess=postprocess,
     )
