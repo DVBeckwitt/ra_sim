@@ -532,14 +532,21 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.manual_geometry` now also owns the bound runtime callback
     bundle for current-pair rendering, Qr/Qz group toggle selection, manual
     point placement, preview refresh, and pick-session cancelation.
+  - `ra_sim.gui.manual_geometry` now also owns the bound runtime cache/display
+    callback bundle for manual-pick cache-signature assembly, cache reuse,
+    and initial-pair overlay display assembly.
   - the manual-geometry runtime callback bundle and the geometry-tool action
     callback bundle now also boot through shared helpers in
     `ra_sim.gui.bootstrap`.
+  - the manual-geometry cache/display callback bundle now also boots through
+    one shared helper in `ra_sim.gui.bootstrap`.
+  - `ra_sim.gui.runtime` no longer constructs the manual-pair cache-signature,
+    cache-reuse, and initial-pair overlay helpers directly inline.
   - `ra_sim.gui.runtime` no longer constructs those manual-geometry /
     geometry-tool callback bundles directly inline; it now keeps bound
     bootstrap results that are threaded through canvas interaction,
-    geometry-tool actions, background refresh, and GUI-state restore call
-    sites.
+    geometry-tool actions, background refresh, GUI-state restore, and the
+    geometry-fit manual-pair workflow.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -787,7 +794,7 @@ What is left:
   value-source wiring around the extracted peak-selection helpers and shared
   bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining live value-source helpers and cache/fit-preview wiring around the
+  remaining live view/projection helpers and fit-preview wiring around the
   extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
   shared bootstrap helper surfaces.
 - The remaining integration-range runtime code is now mostly thin live
@@ -1193,16 +1200,16 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining geometry-fit manual-pair live value-source helpers
-  and cache/fit-preview wiring now that the callback-bundle assembly also
-  boots through shared helpers
+- start with the remaining geometry-fit manual-pair live view/projection
+  helpers and fit-preview wiring now that the cache/display and action
+  callback bundles also boot through shared helpers
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the background status-refresh cleanup:
+Immediate checklist after the manual-pair cache/display cleanup:
 
-- trim the remaining geometry-fit manual-pair live value-source helpers and
-  cache/fit-preview wiring
+- trim the remaining geometry-fit manual-pair live view/projection helpers and
+  fit-preview wiring
 - then trim the next cross-feature runtime workflow call sites that still
   bypass the extracted helper modules
 - defer config unification, compatibility cleanup, and repo-root cleanup until

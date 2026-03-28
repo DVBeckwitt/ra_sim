@@ -755,6 +755,20 @@ def build_runtime_geometry_manual_bootstrap(
     )
 
 
+def build_runtime_geometry_manual_cache_bootstrap(
+    *,
+    manual_geometry_module: Any,
+    **bindings_kwargs: Any,
+) -> RuntimeCallbacksBootstrap:
+    """Build the live manual-geometry cache/display callbacks through shared helpers."""
+
+    return RuntimeCallbacksBootstrap(
+        callbacks=manual_geometry_module.make_runtime_geometry_manual_cache_callbacks(
+            **bindings_kwargs
+        )
+    )
+
+
 def build_runtime_geometry_tool_action_callbacks_bootstrap(
     *,
     geometry_fit_module: Any,

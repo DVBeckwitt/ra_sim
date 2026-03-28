@@ -34,6 +34,19 @@ class GeometryManualRuntimeCallbacks:
     cancel_pick_session: Callable[..., None]
 
 
+@dataclass(frozen=True)
+class GeometryManualRuntimeCacheCallbacks:
+    """Bound runtime callbacks for manual-geometry cache and overlay state."""
+
+    current_match_config: Callable[[], dict[str, object]]
+    pick_cache_signature: Callable[..., tuple[object, ...]]
+    get_pick_cache: Callable[..., dict[str, object]]
+    build_initial_pairs_display: Callable[
+        ...,
+        tuple[list[dict[str, object]], list[dict[str, object]]],
+    ]
+
+
 def _resolve_runtime_value(value_or_callable: object) -> object:
     if callable(value_or_callable):
         try:
@@ -1563,6 +1576,150 @@ def build_geometry_manual_initial_pairs_display(
         initial_pairs_display.append(initial_entry)
 
     return measured_display, initial_pairs_display
+
+
+def make_runtime_geometry_manual_cache_callbacks(
+    *,
+    fit_config: Mapping[str, object] | None,
+    last_simulation_signature: Callable[[], object] | object,
+    current_background_index: Callable[[], object] | object,
+    current_background_image: Callable[[], object | None] | object | None,
+    use_caked_space: Callable[[], object] | object,
+    replace_cache_state: Callable[[object, dict[str, object]], None],
+    current_geometry_fit_params: Callable[[], dict[str, object]] | None,
+    pairs_for_index: Callable[[int], Sequence[dict[str, object]]],
+    simulated_peaks_for_params: Callable[..., Sequence[dict[str, object]]],
+    build_grouped_candidates: Callable[
+        [Sequence[dict[str, object]] | None],
+        dict[tuple[object, ...], list[dict[str, object]]],
+    ],
+    build_simulated_lookup: Callable[
+        [Sequence[dict[str, object]] | None],
+        dict[tuple[object, ...], dict[str, object]],
+    ],
+    entry_display_coords: Callable[
+        [dict[str, object] | None],
+        tuple[float, float] | None,
+    ],
+    geometry_preview_excluded_q_groups: Callable[[], object] | object = (),
+    geometry_q_group_cached_entries: Callable[[], object] | object = (),
+    stored_max_positions_local: Callable[[], object] | object = (),
+    stored_peak_table_lattice: Callable[[], object] | object = (),
+    current_cache_signature: Callable[[], object] | object = None,
+    current_cache_data: Callable[[], dict[str, object] | None] | dict[str, object] | None = None,
+    auto_match_background_context: Callable[
+        [object, dict[str, object]],
+        tuple[dict[str, object], object],
+    ]
+    | None = None,
+) -> GeometryManualRuntimeCacheCallbacks:
+    """Build live manual-geometry cache/display callbacks around shared helpers."""
+
+    def _background_index() -> int:
+        return int(_resolve_runtime_value(current_background_index))
+
+    def _background_image() -> object | None:
+        return _resolve_runtime_value(current_background_image)
+
+    def _manual_pick_uses_caked_space() -> bool:
+        return bool(_resolve_runtime_value(use_caked_space))
+
+    def _current_match_config() -> dict[str, object]:
+        return current_geometry_manual_match_config(fit_config)
+
+    def _pick_cache_signature(
+        *,
+        background_index: int | None = None,
+        background_image: object | None = None,
+    ) -> tuple[object, ...]:
+        return geometry_manual_pick_cache_signature(
+            last_simulation_signature=_resolve_runtime_value(
+                last_simulation_signature
+            ),
+            background_index=(
+                _background_index()
+                if background_index is None
+                else int(background_index)
+            ),
+            background_image=(
+                _background_image()
+                if background_image is None
+                else background_image
+            ),
+            use_caked_space=_manual_pick_uses_caked_space(),
+            geometry_preview_excluded_q_groups=_resolve_runtime_value(
+                geometry_preview_excluded_q_groups
+            ),
+            geometry_q_group_cached_entries=_resolve_runtime_value(
+                geometry_q_group_cached_entries
+            ),
+            stored_max_positions_local=_resolve_runtime_value(
+                stored_max_positions_local
+            ),
+            stored_peak_table_lattice=_resolve_runtime_value(
+                stored_peak_table_lattice
+            ),
+        )
+
+    def _get_pick_cache(
+        *,
+        param_set: dict[str, object] | None = None,
+        prefer_cache: bool = True,
+        background_index: int | None = None,
+        background_image: object | None = None,
+    ) -> dict[str, object]:
+        bg_index = _background_index() if background_index is None else int(
+            background_index
+        )
+        background_local = (
+            _background_image() if background_image is None else background_image
+        )
+        cache_data, next_signature, next_cache_data = build_geometry_manual_pick_cache(
+            param_set=param_set,
+            prefer_cache=prefer_cache,
+            background_index=bg_index,
+            current_background_index=_background_index(),
+            background_image=background_local,
+            existing_cache_signature=_resolve_runtime_value(current_cache_signature),
+            existing_cache_data=_resolve_runtime_value(current_cache_data),
+            cache_signature_fn=_pick_cache_signature,
+            simulated_peaks_for_params=simulated_peaks_for_params,
+            build_grouped_candidates=build_grouped_candidates,
+            build_simulated_lookup=build_simulated_lookup,
+            current_match_config=_current_match_config,
+            auto_match_background_context=auto_match_background_context,
+        )
+        replace_cache_state(
+            next_signature,
+            dict(next_cache_data) if isinstance(next_cache_data, dict) else {},
+        )
+        return cache_data
+
+    def _build_initial_pairs_display(
+        background_index: int,
+        *,
+        param_set: dict[str, object] | None = None,
+        prefer_cache: bool = False,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        return build_geometry_manual_initial_pairs_display(
+            background_index,
+            param_set=param_set,
+            current_background_index=_background_index(),
+            prefer_cache=prefer_cache,
+            pairs_for_index=pairs_for_index,
+            current_geometry_fit_params=current_geometry_fit_params,
+            get_cache_data=_get_pick_cache,
+            simulated_peaks_for_params=simulated_peaks_for_params,
+            build_simulated_lookup=build_simulated_lookup,
+            entry_display_coords=entry_display_coords,
+        )
+
+    return GeometryManualRuntimeCacheCallbacks(
+        current_match_config=_current_match_config,
+        pick_cache_signature=_pick_cache_signature,
+        get_pick_cache=_get_pick_cache,
+        build_initial_pairs_display=_build_initial_pairs_display,
+    )
 
 
 def render_current_geometry_manual_pairs(

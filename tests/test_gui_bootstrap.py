@@ -750,6 +750,32 @@ def test_build_runtime_geometry_manual_bootstrap_wraps_callback_bundle() -> None
     ]
 
 
+def test_build_runtime_geometry_manual_cache_bootstrap_wraps_callback_bundle() -> None:
+    calls: list[tuple[object, ...]] = []
+
+    bundle = bootstrap.build_runtime_geometry_manual_cache_bootstrap(
+        manual_geometry_module=SimpleNamespace(
+            make_runtime_geometry_manual_cache_callbacks=(
+                lambda **kwargs: calls.append(("manual-cache", kwargs))
+                or "manual-cache-callbacks"
+            )
+        ),
+        fit_config={"geometry": {}},
+        current_background_index="background-index",
+    )
+
+    assert bundle.callbacks == "manual-cache-callbacks"
+    assert calls == [
+        (
+            "manual-cache",
+            {
+                "fit_config": {"geometry": {}},
+                "current_background_index": "background-index",
+            },
+        )
+    ]
+
+
 def test_build_runtime_geometry_tool_action_callbacks_bootstrap_wraps_bundle() -> None:
     calls: list[tuple[object, ...]] = []
 

@@ -1149,6 +1149,97 @@ def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None
     ]
 
 
+def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_build_pairs() -> None:
+    cache_state = {"signature": None, "data": {}}
+    simulated_param_sets: list[dict[str, object]] = []
+
+    def _replace_cache_state(signature, data) -> None:
+        cache_state["signature"] = signature
+        cache_state["data"] = dict(data)
+
+    callbacks = mg.make_runtime_geometry_manual_cache_callbacks(
+        fit_config={"geometry": {"auto_match": {"search_radius_px": 18.0}}},
+        last_simulation_signature=lambda: ("sim", 3),
+        current_background_index=lambda: 0,
+        current_background_image=lambda: np.zeros((4, 4), dtype=float),
+        use_caked_space=lambda: False,
+        geometry_preview_excluded_q_groups=lambda: [("q_group", "primary", 1, 0)],
+        geometry_q_group_cached_entries=lambda: [{"key": ("q_group", "primary", 1, 0)}],
+        stored_max_positions_local=lambda: [{"x": 1.0}],
+        stored_peak_table_lattice=lambda: [{"hkl": (1, 0, 0)}],
+        current_cache_signature=lambda: cache_state["signature"],
+        current_cache_data=lambda: cache_state["data"],
+        replace_cache_state=_replace_cache_state,
+        current_geometry_fit_params=lambda: {"gamma": 1.25},
+        pairs_for_index=lambda idx: (
+            [
+                {
+                    "label": "1,0,2",
+                    "hkl": (1, 0, 2),
+                    "x": 9.0,
+                    "y": 11.0,
+                    "source_table_index": 4,
+                    "source_row_index": 7,
+                }
+            ]
+            if int(idx) == 1
+            else []
+        ),
+        simulated_peaks_for_params=lambda params, prefer_cache=True: (
+            simulated_param_sets.append(dict(params or {}))
+            or [
+                {
+                    "source_table_index": 4,
+                    "source_row_index": 7,
+                    "sim_col": 13.5,
+                    "sim_row": 15.5,
+                }
+            ]
+        ),
+        build_grouped_candidates=lambda entries: {
+            ("q_group", "primary", 1, 0): [dict(entry) for entry in entries or ()]
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        entry_display_coords=lambda entry: (
+            float(entry["x"]),
+            float(entry["y"]),
+        )
+        if isinstance(entry, dict)
+        else None,
+        auto_match_background_context=lambda image, cfg: (
+            {**dict(cfg), "search_radius_px": 22.0},
+            {"image_shape": np.asarray(image).shape},
+        ),
+    )
+
+    cache_data = callbacks.get_pick_cache(param_set={"a": 2.0}, prefer_cache=False)
+    measured_display, initial_pairs_display = callbacks.build_initial_pairs_display(
+        1,
+        prefer_cache=False,
+    )
+
+    assert callbacks.current_match_config()["search_radius_px"] == 18.0
+    assert cache_data["match_config"]["search_radius_px"] == 22.0
+    assert cache_state["signature"] == cache_data["signature"]
+    assert cache_state["data"] == cache_data
+    assert simulated_param_sets == [{"a": 2.0}, {"gamma": 1.25}]
+    assert measured_display[0]["overlay_match_index"] == 0
+    assert initial_pairs_display == [
+        {
+            "overlay_match_index": 0,
+            "hkl": (1, 0, 2),
+            "bg_display": (9.0, 11.0),
+            "sim_display": (13.5, 15.5),
+        }
+    ]
+
+
 def test_render_current_geometry_manual_pairs_updates_active_session_status() -> None:
     calls: list[tuple[str, object]] = []
     status_messages: list[str] = []

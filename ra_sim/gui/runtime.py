@@ -1372,27 +1372,6 @@ def _draw_initial_geometry_pairs_overlay(
     )
 
 
-def _build_geometry_manual_initial_pairs_display(
-    background_index: int,
-    *,
-    param_set: dict[str, object] | None = None,
-    prefer_cache: bool = False,
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Build overlay-ready manual geometry pairs for one background image."""
-    return gui_manual_geometry.build_geometry_manual_initial_pairs_display(
-        background_index,
-        param_set=param_set,
-        current_background_index=background_runtime_state.current_background_index,
-        prefer_cache=prefer_cache,
-        pairs_for_index=_geometry_manual_pairs_for_index,
-        current_geometry_fit_params=_current_geometry_fit_params,
-        get_cache_data=_get_geometry_manual_pick_cache,
-        simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
-        build_simulated_lookup=_geometry_manual_simulated_lookup,
-        entry_display_coords=_geometry_manual_entry_display_coords,
-    )
-
-
 def _geometry_overlay_frame_diagnostics(
     overlay_records: Sequence[dict[str, object]] | None,
 ) -> tuple[dict[str, float], str]:
@@ -2048,67 +2027,6 @@ def _invalidate_geometry_manual_pick_cache() -> None:
 
     geometry_runtime_state.manual_pick_cache_signature = None
     geometry_runtime_state.manual_pick_cache_data = {}
-
-
-def _current_geometry_manual_match_config() -> dict[str, object]:
-    """Return the refined background-peak matcher config for manual picking."""
-    return gui_manual_geometry.current_geometry_manual_match_config(fit_config)
-
-
-def _geometry_manual_pick_cache_signature(
-    *,
-    background_index: int | None = None,
-    background_image: object | None = None,
-) -> tuple[object, ...]:
-    """Return a cache signature for reusable manual-pick state."""
-    return gui_manual_geometry.geometry_manual_pick_cache_signature(
-        last_simulation_signature=simulation_runtime_state.last_simulation_signature,
-        background_index=int(background_runtime_state.current_background_index if background_index is None else background_index),
-        background_image=(
-            _current_geometry_manual_pick_background_image()
-            if background_image is None
-            else background_image
-        ),
-        use_caked_space=bool(_geometry_manual_pick_uses_caked_space()),
-        geometry_preview_excluded_q_groups=geometry_preview_state.excluded_q_groups,
-        geometry_q_group_cached_entries=geometry_q_group_state.cached_entries,
-        stored_max_positions_local=simulation_runtime_state.stored_max_positions_local,
-        stored_peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-    )
-
-
-def _get_geometry_manual_pick_cache(
-    *,
-    param_set: dict[str, object] | None = None,
-    prefer_cache: bool = True,
-    background_index: int | None = None,
-    background_image: object | None = None,
-) -> dict[str, object]:
-    """Build or reuse the current manual-pick simulation/background cache."""
-
-
-    bg_index = int(background_runtime_state.current_background_index if background_index is None else background_index)
-    background_local = (
-        _current_geometry_manual_pick_background_image() if background_image is None else background_image
-    )
-    cache_data, geometry_runtime_state.manual_pick_cache_signature, geometry_manual_pick_cache_data = (
-        gui_manual_geometry.build_geometry_manual_pick_cache(
-            param_set=param_set,
-            prefer_cache=prefer_cache,
-            background_index=bg_index,
-            current_background_index=int(background_runtime_state.current_background_index),
-            background_image=background_local,
-            existing_cache_signature=geometry_runtime_state.manual_pick_cache_signature,
-            existing_cache_data=geometry_runtime_state.manual_pick_cache_data,
-            cache_signature_fn=_geometry_manual_pick_cache_signature,
-            simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
-            build_grouped_candidates=_geometry_manual_pick_candidates,
-            build_simulated_lookup=_geometry_manual_simulated_lookup,
-            current_match_config=_current_geometry_manual_match_config,
-            auto_match_background_context=_auto_match_background_context,
-        )
-    )
-    return cache_data
 
 
 def _geometry_manual_candidate_source_key(
@@ -2821,6 +2739,62 @@ def _geometry_manual_simulated_lookup(
             continue
         lookup[key] = dict(raw_entry)
     return lookup
+
+
+geometry_manual_cache_runtime = gui_bootstrap.build_runtime_geometry_manual_cache_bootstrap(
+    manual_geometry_module=gui_manual_geometry,
+    fit_config=fit_config,
+    last_simulation_signature=(
+        lambda: simulation_runtime_state.last_simulation_signature
+    ),
+    current_background_index=(
+        lambda: int(background_runtime_state.current_background_index)
+    ),
+    current_background_image=_current_geometry_manual_pick_background_image,
+    use_caked_space=_geometry_manual_pick_uses_caked_space,
+    geometry_preview_excluded_q_groups=(
+        lambda: geometry_preview_state.excluded_q_groups
+    ),
+    geometry_q_group_cached_entries=(lambda: geometry_q_group_state.cached_entries),
+    stored_max_positions_local=(
+        lambda: simulation_runtime_state.stored_max_positions_local
+    ),
+    stored_peak_table_lattice=(
+        lambda: simulation_runtime_state.stored_peak_table_lattice
+    ),
+    current_cache_signature=(
+        lambda: geometry_runtime_state.manual_pick_cache_signature
+    ),
+    current_cache_data=(lambda: geometry_runtime_state.manual_pick_cache_data),
+    replace_cache_state=(
+        lambda signature, cache_data: (
+            setattr(geometry_runtime_state, "manual_pick_cache_signature", signature),
+            setattr(
+                geometry_runtime_state,
+                "manual_pick_cache_data",
+                dict(cache_data) if isinstance(cache_data, dict) else {},
+            ),
+        )
+    ),
+    current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
+    pairs_for_index=_geometry_manual_pairs_for_index,
+    simulated_peaks_for_params=_geometry_manual_simulated_peaks_for_params,
+    build_grouped_candidates=_geometry_manual_pick_candidates,
+    build_simulated_lookup=_geometry_manual_simulated_lookup,
+    entry_display_coords=_geometry_manual_entry_display_coords,
+    auto_match_background_context=_auto_match_background_context,
+)
+geometry_manual_cache_runtime_callbacks = geometry_manual_cache_runtime.callbacks
+_current_geometry_manual_match_config = (
+    geometry_manual_cache_runtime_callbacks.current_match_config
+)
+_geometry_manual_pick_cache_signature = (
+    geometry_manual_cache_runtime_callbacks.pick_cache_signature
+)
+_get_geometry_manual_pick_cache = geometry_manual_cache_runtime_callbacks.get_pick_cache
+_build_geometry_manual_initial_pairs_display = (
+    geometry_manual_cache_runtime_callbacks.build_initial_pairs_display
+)
 
 
 def _clear_geometry_pick_artists(*, redraw: bool = True):
