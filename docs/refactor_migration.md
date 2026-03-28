@@ -315,6 +315,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - the runtime callback bundle that binds those geometry-fit simulation
     helpers to live lattice/cached-peak/display sources now also lives in
     `ra_sim.gui.geometry_q_group_manager`
+  - the runtime value callback bundle for cached preview peaks, listed-
+    Q-group state, export rows, selector status text, and live Qr/Qz entry
+    snapshot helpers now also lives in `ra_sim.gui.geometry_q_group_manager`
   - shared geometry-fit seed filtering and degenerate-collapse helpers used
     by the live preview, geometry fit, and manual-pick grouping workflows
     now also live in `ra_sim.gui.geometry_q_group_manager`
@@ -427,7 +430,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   fit-preview parameter/value sources plus a couple of delegated call sites
   around the extracted manager/view helpers, the bound geometry-fit
-  simulation callback bundle, and shared bootstrap wiring.
+  simulation/value callback bundles, and shared bootstrap wiring.
 - The remaining Bragg-Qr manager runtime code is now mostly the live filter
   pipeline/HKL lookup call sites around the extracted manager helpers and
   shared bootstrap wiring.

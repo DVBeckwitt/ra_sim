@@ -469,6 +469,203 @@ def test_geometry_q_group_manager_runtime_simulation_callback_bundle_uses_live_v
     )
 
 
+def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values(
+    monkeypatch,
+) -> None:
+    calls = []
+    runtime_state = state.SimulationRuntimeState(
+        stored_max_positions_local=["maxpos"],
+        stored_sim_image=np.zeros((20, 30), dtype=float),
+        stored_peak_table_lattice=[(3.0, 5.0, "primary")],
+    )
+    preview_state = state.GeometryPreviewState(
+        excluded_q_groups={("q_group", "primary", 1, 0)}
+    )
+    q_group_state = state.GeometryQGroupState(
+        cached_entries=[_entry(("q_group", "primary", 1, 0), peak_count=2, total_intensity=10.0)]
+    )
+    live = {
+        "primary_a": 7.0,
+        "primary_c": 9.0,
+        "var_names": ["gamma"],
+        "image_size": 64,
+    }
+
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "build_geometry_fit_simulated_peaks",
+        lambda *args, **kwargs: calls.append(("build_peaks", args, kwargs))
+        or [{"sim_col": 1.0}],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "filter_geometry_fit_simulated_peaks",
+        lambda *args, **kwargs: calls.append(("filter_peaks", args, kwargs))
+        or ([{"filtered": True}], 1, 2),
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "collapse_geometry_fit_simulated_peaks",
+        lambda *args, **kwargs: calls.append(("collapse_peaks", args, kwargs))
+        or ([{"collapsed": True}], 3),
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "build_geometry_q_group_entries",
+        lambda *args, **kwargs: calls.append(("build_entries", args, kwargs))
+        or [{"entry": True}],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "build_geometry_q_group_export_rows",
+        lambda *args, **kwargs: calls.append(("export_rows", args, kwargs))
+        or [{"row": True}],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager.gui_controllers,
+        "clone_geometry_q_group_entries",
+        lambda entries: calls.append(("clone_entries", (entries,), {}))
+        or [{"cloned": True}],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "build_geometry_q_group_window_status_text",
+        lambda *args, **kwargs: calls.append(("window_status", args, kwargs))
+        or "status-text",
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "build_geometry_preview_exclude_button_label",
+        lambda *args, **kwargs: calls.append(("button_label", args, kwargs))
+        or "button-label",
+    )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=runtime_state,
+        preview_state=preview_state,
+        q_group_state=q_group_state,
+        fit_config={"geometry": {"auto_match": {"min_matches": 4}}},
+        current_geometry_fit_var_names_factory=lambda: live["var_names"],
+        primary_a_factory=lambda: live["primary_a"],
+        primary_c_factory=lambda: live["primary_c"],
+        image_size_factory=lambda: live["image_size"],
+        native_sim_to_display_coords="native-to-display",
+    )
+
+    assert bundle.build_live_preview_simulated_peaks_from_cache() == [{"sim_col": 1.0}]
+    assert bundle.filter_simulated_peaks([{"seed": True}]) == ([{"filtered": True}], 1, 2)
+    assert bundle.collapse_simulated_peaks(
+        [{"seed": True}],
+        merge_radius_px=4.5,
+    ) == ([{"collapsed": True}], 3)
+    assert bundle.build_entries_snapshot() == [{"entry": True}]
+    assert bundle.clone_entries([{"a": 1}]) == [{"cloned": True}]
+    assert bundle.listed_entries() == [{"cloned": True}]
+    assert bundle.listed_keys() == {("q_group", "primary", 1, 0)}
+    assert bundle.key_from_jsonable(["q_group", "primary", 1, 0]) == (
+        "q_group",
+        "primary",
+        1,
+        0,
+    )
+    assert bundle.export_rows() == [{"row": True}]
+    assert "primary" in bundle.format_line(q_group_state.cached_entries[0])
+    assert bundle.current_min_matches() == 4
+    assert bundle.excluded_count() == 1
+    assert bundle.build_window_status() == "status-text"
+    assert bundle.build_preview_exclude_button_label() == "button-label"
+
+    assert calls[0] == (
+        "build_peaks",
+        (["maxpos"],),
+        {
+            "image_shape": (20, 30),
+            "native_sim_to_display_coords": "native-to-display",
+            "peak_table_lattice": [(3.0, 5.0, "primary")],
+            "primary_a": 7.0,
+            "primary_c": 9.0,
+            "default_source_label": "primary",
+            "round_pixel_centers": True,
+        },
+    )
+    assert calls[1] == (
+        "filter_peaks",
+        ([{"seed": True}],),
+        {
+            "listed_keys": {("q_group", "primary", 1, 0)},
+            "excluded_q_groups": {("q_group", "primary", 1, 0)},
+        },
+    )
+    assert calls[2] == (
+        "collapse_peaks",
+        ([{"seed": True}],),
+        {"merge_radius_px": 4.5},
+    )
+    assert calls[3] == (
+        "build_entries",
+        (["maxpos"],),
+        {
+            "peak_table_lattice": [(3.0, 5.0, "primary")],
+            "primary_a": 7.0,
+            "primary_c": 9.0,
+        },
+    )
+    assert (
+        "clone_entries",
+        ([{"a": 1}],),
+        {},
+    ) in calls
+    assert (
+        "export_rows",
+        (),
+        {
+            "preview_state": preview_state,
+            "q_group_state": q_group_state,
+            "entries": None,
+        },
+    ) in calls
+    assert (
+        "window_status",
+        (),
+        {
+            "preview_state": preview_state,
+            "q_group_state": q_group_state,
+            "fit_config": {"geometry": {"auto_match": {"min_matches": 4}}},
+            "current_geometry_fit_var_names": ["gamma"],
+            "entries": None,
+        },
+    ) in calls
+    assert (
+        "button_label",
+        (),
+        {
+            "preview_state": preview_state,
+            "q_group_state": q_group_state,
+            "entries": None,
+        },
+    ) in calls
+
+    runtime_state.stored_sim_image = None
+    runtime_state.stored_peak_table_lattice = None
+    live["primary_a"] = 11.0
+    live["primary_c"] = 13.0
+    live["image_size"] = 48
+    bundle.build_live_preview_simulated_peaks_from_cache()
+    assert calls[-1] == (
+        "build_peaks",
+        (["maxpos"],),
+        {
+            "image_shape": (48, 48),
+            "native_sim_to_display_coords": "native-to-display",
+            "peak_table_lattice": None,
+            "primary_a": 11.0,
+            "primary_c": 13.0,
+            "default_source_label": "primary",
+            "round_pixel_centers": True,
+        },
+    )
+
+
 def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "primary", 1, 1)

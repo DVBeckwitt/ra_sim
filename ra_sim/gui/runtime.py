@@ -3698,99 +3698,6 @@ def _apply_live_preview_match_exclusions(
     return filtered_pairs, stats, int(excluded_count)
 
 
-def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
-    """Build simulated peaks from all detector solutions of the selected beam sample."""
-
-    max_positions_local = simulation_runtime_state.stored_max_positions_local
-    if max_positions_local is None:
-        return []
-
-    image_shape = (
-        tuple(int(v) for v in simulation_runtime_state.stored_sim_image.shape[:2])
-        if simulation_runtime_state.stored_sim_image is not None
-        else (int(image_size), int(image_size))
-    )
-    return gui_geometry_q_group_manager.build_geometry_fit_simulated_peaks(
-        max_positions_local,
-        image_shape=image_shape,
-        native_sim_to_display_coords=_native_sim_to_display_coords,
-        peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-        primary_a=float(a_var.get()),
-        primary_c=float(c_var.get()),
-        default_source_label="primary",
-        round_pixel_centers=True,
-    )
-
-
-def _filter_geometry_fit_simulated_peaks(
-    simulated_peaks: Sequence[dict[str, object]] | None,
-) -> tuple[list[dict[str, object]], int, int]:
-    """Apply the Qr/Qz selection state to simulated peaks."""
-
-    return gui_geometry_q_group_manager.filter_geometry_fit_simulated_peaks(
-        simulated_peaks,
-        listed_keys=_listed_geometry_q_group_keys(),
-        excluded_q_groups=geometry_preview_state.excluded_q_groups,
-    )
-
-
-def _collapse_geometry_fit_simulated_peaks(
-    simulated_peaks: Sequence[dict[str, object]] | None,
-    *,
-    merge_radius_px: float = 6.0,
-) -> tuple[list[dict[str, object]], int]:
-    """Collapse only overlapping degenerate seeds within each Qr/Qz group."""
-
-    return gui_geometry_q_group_manager.collapse_geometry_fit_simulated_peaks(
-        simulated_peaks,
-        merge_radius_px=merge_radius_px,
-    )
-
-
-def _build_geometry_q_group_entries() -> list[dict[str, object]]:
-    """Aggregate current simulated hit tables into unique Qr/Qz selector rows."""
-    return gui_geometry_q_group_manager.build_geometry_q_group_entries(
-        simulation_runtime_state.stored_max_positions_local,
-        peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-        primary_a=float(a_var.get()),
-        primary_c=float(c_var.get()),
-    )
-
-
-def _clone_geometry_q_group_entries(
-    entries: Sequence[dict[str, object]] | None,
-) -> list[dict[str, object]]:
-    """Return detached copies of Qr/Qz selector entries."""
-    return gui_controllers.clone_geometry_q_group_entries(entries)
-
-
-def _listed_geometry_q_group_entries() -> list[dict[str, object]]:
-    """Return the manually refreshed Qr/Qz rows currently shown in the selector."""
-    return gui_controllers.listed_geometry_q_group_entries(geometry_q_group_state)
-
-
-def _listed_geometry_q_group_keys(
-    entries: Sequence[dict[str, object]] | None = None,
-) -> set[tuple[object, ...]]:
-    """Return the stable keys for the currently listed Qr/Qz rows."""
-    return gui_controllers.listed_geometry_q_group_keys(
-        geometry_q_group_state,
-        entries,
-    )
-def _geometry_q_group_key_from_jsonable(value: object) -> tuple[object, ...] | None:
-    """Rebuild one stable Qr/Qz group key from JSON-loaded data."""
-    return gui_geometry_q_group_manager.geometry_q_group_key_from_jsonable(value)
-
-
-def _geometry_q_group_export_rows(
-    entries: Sequence[dict[str, object]] | None = None,
-) -> list[dict[str, object]]:
-    """Build JSON export rows for the current Qr/Qz selector listing."""
-    return gui_geometry_q_group_manager.build_geometry_q_group_export_rows(
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        entries=entries,
-    )
 # -----------------------------------------------------------
 # 2)  Mouse‑click handler
 # -----------------------------------------------------------
@@ -3826,48 +3733,8 @@ def _sync_peak_selection_state() -> None:
 _sync_peak_selection_state()
 
 
-def _format_geometry_q_group_line(entry: dict[str, object]) -> str:
-    """Return a compact label for one Qr/Qz selector row."""
-    return gui_geometry_q_group_manager.format_geometry_q_group_line(entry)
-
-
-def _current_geometry_auto_match_min_matches() -> int:
-    """Return the current minimum match count required by the geometry auto-match gate."""
-    return gui_geometry_q_group_manager.current_geometry_auto_match_min_matches(
-        fit_config,
-        _current_geometry_fit_var_names(),
-    )
-
-
-def _geometry_q_group_excluded_count(
-    entries: Sequence[dict[str, object]] | None = None,
-) -> int:
-    """Return how many listed Qr/Qz rows are currently excluded."""
-    return gui_geometry_q_group_manager.geometry_q_group_excluded_count(
-        geometry_preview_state,
-        geometry_q_group_state,
-        entries,
-    )
-
-
-def _build_geometry_q_group_window_status_text(
-    entries: Sequence[dict[str, object]] | None = None,
-) -> str:
-    """Build the summary text shown above the Qr/Qz selector rows."""
-    return gui_geometry_q_group_manager.build_geometry_q_group_window_status_text(
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-        fit_config=fit_config,
-        current_geometry_fit_var_names=_current_geometry_fit_var_names(),
-        entries=entries,
-    )
-
-
 def _update_geometry_preview_exclude_button_label():
-    label = gui_geometry_q_group_manager.build_geometry_preview_exclude_button_label(
-        preview_state=geometry_preview_state,
-        q_group_state=geometry_q_group_state,
-    )
+    label = geometry_q_group_runtime_value_callbacks.build_preview_exclude_button_label()
     gui_views.set_geometry_tool_action_texts(
         geometry_tool_actions_view_state,
         preview_exclude_text=label,
@@ -7841,6 +7708,52 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     )
 
     return _render_live_geometry_preview_state(update_status=update_status)
+
+
+geometry_q_group_runtime_value_callbacks = (
+    gui_geometry_q_group_manager.make_runtime_geometry_q_group_value_callbacks(
+        simulation_runtime_state=simulation_runtime_state,
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        fit_config=fit_config,
+        current_geometry_fit_var_names_factory=lambda: _current_geometry_fit_var_names(),
+        primary_a_factory=lambda: (
+            float(a_var.get()) if "a_var" in globals() else float(av)
+        ),
+        primary_c_factory=lambda: (
+            float(c_var.get()) if "c_var" in globals() else float(cv)
+        ),
+        image_size_factory=lambda: int(image_size),
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+    )
+)
+_build_live_preview_simulated_peaks_from_cache = (
+    geometry_q_group_runtime_value_callbacks.build_live_preview_simulated_peaks_from_cache
+)
+_filter_geometry_fit_simulated_peaks = (
+    geometry_q_group_runtime_value_callbacks.filter_simulated_peaks
+)
+_collapse_geometry_fit_simulated_peaks = (
+    geometry_q_group_runtime_value_callbacks.collapse_simulated_peaks
+)
+_build_geometry_q_group_entries = (
+    geometry_q_group_runtime_value_callbacks.build_entries_snapshot
+)
+_clone_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.clone_entries
+_listed_geometry_q_group_entries = geometry_q_group_runtime_value_callbacks.listed_entries
+_listed_geometry_q_group_keys = geometry_q_group_runtime_value_callbacks.listed_keys
+_geometry_q_group_key_from_jsonable = (
+    geometry_q_group_runtime_value_callbacks.key_from_jsonable
+)
+_geometry_q_group_export_rows = geometry_q_group_runtime_value_callbacks.export_rows
+_format_geometry_q_group_line = geometry_q_group_runtime_value_callbacks.format_line
+_current_geometry_auto_match_min_matches = (
+    geometry_q_group_runtime_value_callbacks.current_min_matches
+)
+_geometry_q_group_excluded_count = geometry_q_group_runtime_value_callbacks.excluded_count
+_build_geometry_q_group_window_status_text = (
+    geometry_q_group_runtime_value_callbacks.build_window_status
+)
 
 
 geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstrap(

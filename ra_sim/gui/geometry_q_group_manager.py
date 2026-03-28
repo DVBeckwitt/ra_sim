@@ -66,6 +66,32 @@ class GeometryFitSimulationRuntimeCallbacks:
     simulate_preview_style_peaks: Callable[..., list[dict[str, object]]]
 
 
+@dataclass(frozen=True)
+class GeometryQGroupRuntimeValueCallbacks:
+    """Bound callbacks for live Qr/Qz selector values and peak snapshots."""
+
+    build_live_preview_simulated_peaks_from_cache: Callable[[], list[dict[str, object]]]
+    filter_simulated_peaks: Callable[
+        [Sequence[dict[str, object]] | None],
+        tuple[list[dict[str, object]], int, int],
+    ]
+    collapse_simulated_peaks: Callable[..., tuple[list[dict[str, object]], int]]
+    build_entries_snapshot: Callable[[], list[dict[str, object]]]
+    clone_entries: Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]]
+    listed_entries: Callable[[], list[dict[str, object]]]
+    listed_keys: Callable[[Sequence[dict[str, object]] | None], set[tuple[object, ...]]]
+    key_from_jsonable: Callable[[object], tuple[object, ...] | None]
+    export_rows: Callable[[Sequence[dict[str, object]] | None], list[dict[str, object]]]
+    format_line: Callable[[dict[str, object]], str]
+    current_min_matches: Callable[[], int]
+    excluded_count: Callable[[Sequence[dict[str, object]] | None], int]
+    build_window_status: Callable[[Sequence[dict[str, object]] | None], str]
+    build_preview_exclude_button_label: Callable[
+        [Sequence[dict[str, object]] | None],
+        str,
+    ]
+
+
 def _resolve_runtime_value(value_or_callable: object) -> object:
     if callable(value_or_callable):
         try:
@@ -753,6 +779,165 @@ def make_runtime_geometry_fit_simulation_callbacks(
         simulate_hit_tables=_simulate_hit_tables,
         simulate_peak_centers=_simulate_peak_centers,
         simulate_preview_style_peaks=_simulate_preview_style_peaks,
+    )
+
+
+def make_runtime_geometry_q_group_value_callbacks(
+    *,
+    simulation_runtime_state,
+    preview_state,
+    q_group_state,
+    fit_config: Mapping[str, object] | None,
+    current_geometry_fit_var_names_factory: object,
+    primary_a_factory: object,
+    primary_c_factory: object,
+    image_size_factory: object,
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+) -> GeometryQGroupRuntimeValueCallbacks:
+    """Return live Qr/Qz selector value callbacks from runtime sources."""
+
+    def _current_geometry_fit_var_names() -> list[object]:
+        raw_value = _resolve_runtime_value(current_geometry_fit_var_names_factory)
+        if raw_value is None:
+            return []
+        if isinstance(raw_value, Sequence) and not isinstance(
+            raw_value,
+            (str, bytes),
+        ):
+            return list(raw_value)
+        try:
+            return list(raw_value)
+        except Exception:
+            return []
+
+    def _primary_a() -> float:
+        return _coerce_float(_resolve_runtime_value(primary_a_factory), float("nan"))
+
+    def _primary_c() -> float:
+        return _coerce_float(_resolve_runtime_value(primary_c_factory), float("nan"))
+
+    def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
+        max_positions_local = simulation_runtime_state.stored_max_positions_local
+        if max_positions_local is None:
+            return []
+
+        stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+        if stored_sim_image is not None:
+            image_shape = tuple(int(v) for v in stored_sim_image.shape[:2])
+        else:
+            image_size = max(0, _coerce_int(_resolve_runtime_value(image_size_factory), 0))
+            image_shape = (image_size, image_size)
+
+        return build_geometry_fit_simulated_peaks(
+            max_positions_local,
+            image_shape=image_shape,
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+            primary_a=_primary_a(),
+            primary_c=_primary_c(),
+            default_source_label="primary",
+            round_pixel_centers=True,
+        )
+
+    def _filter_simulated_peaks(
+        simulated_peaks: Sequence[dict[str, object]] | None,
+    ) -> tuple[list[dict[str, object]], int, int]:
+        return filter_geometry_fit_simulated_peaks(
+            simulated_peaks,
+            listed_keys=gui_controllers.listed_geometry_q_group_keys(q_group_state),
+            excluded_q_groups=getattr(preview_state, "excluded_q_groups", set()),
+        )
+
+    def _collapse_simulated_peaks(
+        simulated_peaks: Sequence[dict[str, object]] | None,
+        *,
+        merge_radius_px: float = 6.0,
+    ) -> tuple[list[dict[str, object]], int]:
+        return collapse_geometry_fit_simulated_peaks(
+            simulated_peaks,
+            merge_radius_px=merge_radius_px,
+        )
+
+    def _build_entries_snapshot() -> list[dict[str, object]]:
+        return build_geometry_q_group_entries(
+            simulation_runtime_state.stored_max_positions_local,
+            peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+            primary_a=_primary_a(),
+            primary_c=_primary_c(),
+        )
+
+    def _listed_entries() -> list[dict[str, object]]:
+        return gui_controllers.listed_geometry_q_group_entries(q_group_state)
+
+    def _listed_keys(
+        entries: Sequence[dict[str, object]] | None = None,
+    ) -> set[tuple[object, ...]]:
+        return gui_controllers.listed_geometry_q_group_keys(q_group_state, entries)
+
+    def _export_rows(
+        entries: Sequence[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        return build_geometry_q_group_export_rows(
+            preview_state=preview_state,
+            q_group_state=q_group_state,
+            entries=entries,
+        )
+
+    def _current_min_matches() -> int:
+        return current_geometry_auto_match_min_matches(
+            fit_config,
+            _current_geometry_fit_var_names(),
+        )
+
+    def _excluded_count(
+        entries: Sequence[dict[str, object]] | None = None,
+    ) -> int:
+        return geometry_q_group_excluded_count(
+            preview_state,
+            q_group_state,
+            entries,
+        )
+
+    def _build_window_status(
+        entries: Sequence[dict[str, object]] | None = None,
+    ) -> str:
+        return build_geometry_q_group_window_status_text(
+            preview_state=preview_state,
+            q_group_state=q_group_state,
+            fit_config=fit_config,
+            current_geometry_fit_var_names=_current_geometry_fit_var_names(),
+            entries=entries,
+        )
+
+    def _build_preview_exclude_button_label(
+        entries: Sequence[dict[str, object]] | None = None,
+    ) -> str:
+        return build_geometry_preview_exclude_button_label(
+            preview_state=preview_state,
+            q_group_state=q_group_state,
+            entries=entries,
+        )
+
+    return GeometryQGroupRuntimeValueCallbacks(
+        build_live_preview_simulated_peaks_from_cache=(
+            _build_live_preview_simulated_peaks_from_cache
+        ),
+        filter_simulated_peaks=_filter_simulated_peaks,
+        collapse_simulated_peaks=_collapse_simulated_peaks,
+        build_entries_snapshot=_build_entries_snapshot,
+        clone_entries=gui_controllers.clone_geometry_q_group_entries,
+        listed_entries=_listed_entries,
+        listed_keys=_listed_keys,
+        key_from_jsonable=geometry_q_group_key_from_jsonable,
+        export_rows=_export_rows,
+        format_line=format_geometry_q_group_line,
+        current_min_matches=_current_min_matches,
+        excluded_count=_excluded_count,
+        build_window_status=_build_window_status,
+        build_preview_exclude_button_label=_build_preview_exclude_button_label,
     )
 
 
