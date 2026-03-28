@@ -375,6 +375,7 @@ def test_runtime_manual_geometry_cache_callbacks_use_shared_bootstrap() -> None:
 
     bootstrap_calls = 0
     direct_helper_calls = 0
+    late_bound_keywords: set[str] = set()
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -384,6 +385,11 @@ def test_runtime_manual_geometry_cache_callbacks_use_shared_bootstrap() -> None:
             continue
         if func.attr == "build_runtime_geometry_manual_cache_bootstrap":
             bootstrap_calls += 1
+            late_bound_keywords.update(
+                keyword.arg
+                for keyword in node.keywords
+                if keyword.arg is not None and isinstance(keyword.value, ast.Lambda)
+            )
         if (
             isinstance(func.value, ast.Name)
             and func.value.id == "gui_manual_geometry"
@@ -393,6 +399,10 @@ def test_runtime_manual_geometry_cache_callbacks_use_shared_bootstrap() -> None:
 
     assert bootstrap_calls == 1
     assert direct_helper_calls == 0
+    assert {
+        "current_geometry_fit_params",
+        "auto_match_background_context",
+    } <= late_bound_keywords
 
 
 def test_runtime_manual_geometry_projection_callbacks_use_shared_bootstrap() -> None:
@@ -401,6 +411,7 @@ def test_runtime_manual_geometry_projection_callbacks_use_shared_bootstrap() -> 
 
     bootstrap_calls = 0
     direct_helper_calls = 0
+    late_bound_keywords: set[str] = set()
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -410,6 +421,11 @@ def test_runtime_manual_geometry_projection_callbacks_use_shared_bootstrap() -> 
             continue
         if func.attr == "build_runtime_geometry_manual_projection_bootstrap":
             bootstrap_calls += 1
+            late_bound_keywords.update(
+                keyword.arg
+                for keyword in node.keywords
+                if keyword.arg is not None and isinstance(keyword.value, ast.Lambda)
+            )
         if (
             isinstance(func.value, ast.Name)
             and func.value.id == "gui_manual_geometry"
@@ -419,6 +435,14 @@ def test_runtime_manual_geometry_projection_callbacks_use_shared_bootstrap() -> 
 
     assert bootstrap_calls == 1
     assert direct_helper_calls == 0
+    assert {
+        "wrap_phi_range",
+        "current_geometry_fit_params",
+        "simulate_preview_style_peaks_for_fit",
+        "get_detector_angular_maps",
+        "filter_simulated_peaks",
+        "collapse_simulated_peaks",
+    } <= late_bound_keywords
 
 
 def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
@@ -427,6 +451,7 @@ def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
 
     has_helper_call = False
     direct_bootstrap_calls = 0
+    late_bound_keywords: set[str] = set()
     direct_helper_calls = {
         "render_current_geometry_manual_pairs": 0,
         "geometry_manual_toggle_selection_at": 0,
@@ -443,6 +468,11 @@ def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
             continue
         if func.attr == "build_runtime_geometry_manual_bootstrap":
             has_helper_call = True
+            late_bound_keywords.update(
+                keyword.arg
+                for keyword in node.keywords
+                if keyword.arg is not None and isinstance(keyword.value, ast.Lambda)
+            )
         if func.attr == "make_runtime_geometry_manual_callbacks":
             direct_bootstrap_calls += 1
         if (
@@ -453,6 +483,10 @@ def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
             direct_helper_calls[func.attr] += 1
 
     assert has_helper_call is True
+    assert {
+        "listed_q_group_entries",
+        "format_q_group_line",
+    } <= late_bound_keywords
     assert direct_helper_calls == {
         "render_current_geometry_manual_pairs": 0,
         "geometry_manual_toggle_selection_at": 0,

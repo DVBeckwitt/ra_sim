@@ -2529,19 +2529,36 @@ geometry_manual_projection_runtime = (
         center=lambda: [float(center_x_var.get()), float(center_y_var.get())],
         detector_distance=lambda: float(corto_detector_var.get()),
         pixel_size=float(pixel_size_m),
-        wrap_phi_range=_wrap_phi_range,
+        wrap_phi_range=lambda value: globals()["_wrap_phi_range"](value),
         rotate_point_for_display=_rotate_point_for_display,
         display_rotate_k=DISPLAY_ROTATE_K,
         current_geometry_fit_params=lambda: globals()["_current_geometry_fit_params"](),
-        simulate_preview_style_peaks_for_fit=_simulate_preview_style_peaks_for_fit,
+        simulate_preview_style_peaks_for_fit=(
+            lambda *args, **kwargs: globals()["_simulate_preview_style_peaks_for_fit"](
+                *args,
+                **kwargs,
+            )
+        ),
         miller=lambda: miller,
         intensities=lambda: intensities,
         image_size=int(image_size),
         display_to_native_sim_coords=_display_to_native_sim_coords,
-        get_detector_angular_maps=_get_detector_angular_maps,
+        get_detector_angular_maps=(
+            lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
+        ),
         detector_pixel_to_scattering_angles=_detector_pixel_to_scattering_angles,
-        filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
-        collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
+        filter_simulated_peaks=(
+            lambda *args, **kwargs: globals()["_filter_geometry_fit_simulated_peaks"](
+                *args,
+                **kwargs,
+            )
+        ),
+        collapse_simulated_peaks=(
+            lambda *args, **kwargs: globals()["_collapse_geometry_fit_simulated_peaks"](
+                *args,
+                **kwargs,
+            )
+        ),
     )
 )
 geometry_manual_projection_runtime_callbacks = (
@@ -2617,7 +2634,12 @@ geometry_manual_cache_runtime = gui_bootstrap.build_runtime_geometry_manual_cach
     build_grouped_candidates=_geometry_manual_pick_candidates,
     build_simulated_lookup=_geometry_manual_simulated_lookup,
     entry_display_coords=_geometry_manual_entry_display_coords,
-    auto_match_background_context=_auto_match_background_context,
+    auto_match_background_context=(
+        lambda *args, **kwargs: globals()["_auto_match_background_context"](
+            *args,
+            **kwargs,
+        )
+    ),
 )
 geometry_manual_cache_runtime_callbacks = geometry_manual_cache_runtime.callbacks
 _current_geometry_manual_match_config = (
@@ -2998,8 +3020,15 @@ geometry_manual_runtime = gui_bootstrap.build_runtime_geometry_manual_bootstrap(
     restore_view=_restore_geometry_manual_pick_view,
     clear_preview_artists=_clear_geometry_manual_preview_artists,
     push_undo_state=_push_geometry_manual_undo_state,
-    listed_q_group_entries=_listed_geometry_q_group_entries,
-    format_q_group_line=_format_geometry_q_group_line,
+    listed_q_group_entries=(
+        lambda: globals()["_listed_geometry_q_group_entries"]()
+    ),
+    format_q_group_line=(
+        lambda *args, **kwargs: globals()["_format_geometry_q_group_line"](
+            *args,
+            **kwargs,
+        )
+    ),
     use_caked_space=_geometry_manual_pick_uses_caked_space,
     pick_search_window_px=float(GEOMETRY_MANUAL_PICK_SEARCH_WINDOW_PX),
     caked_search_tth_deg=float(GEOMETRY_MANUAL_CAKED_SEARCH_TTH_DEG),
