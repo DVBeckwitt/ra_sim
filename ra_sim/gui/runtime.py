@@ -7351,25 +7351,13 @@ def _build_geometry_fit_runtime_config(
 def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     """Recompute and redraw the live auto-match overlay from the current state."""
 
-    if not _live_geometry_preview_enabled():
-        _clear_geometry_preview_artists()
-        return False
-
-    if analysis_view_controls_view_state.show_caked_2d_var.get():
-        _clear_geometry_preview_artists()
-        if update_status:
-            progress_label_geometry.config(
-                text="Live auto-match preview unavailable in 2D caked view."
-            )
-        return False
-
-    display_background = _get_current_background_display()
-    if not background_runtime_state.visible or display_background is None:
-        _clear_geometry_preview_artists()
-        if update_status:
-            progress_label_geometry.config(
-                text="Live auto-match preview unavailable: background image is hidden."
-            )
+    display_background = (
+        gui_geometry_q_group_manager.resolve_runtime_live_geometry_preview_background(
+            geometry_q_group_runtime_bindings_factory(),
+            update_status=update_status,
+        )
+    )
+    if display_background is None:
         return False
 
     preview_auto_match_cfg = (
@@ -7542,6 +7530,13 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
     collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
     excluded_q_group_count=_geometry_q_group_excluded_count,
+    caked_view_enabled=lambda: (
+        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+        if analysis_view_controls_view_state.show_caked_2d_var is not None
+        else False
+    ),
+    background_visible_factory=lambda: bool(background_runtime_state.visible),
+    current_background_display_factory=_get_current_background_display,
     axis=ax,
     geometry_preview_artists=geometry_runtime_state.preview_artists,
     draw_idle_factory=lambda: canvas.draw_idle,

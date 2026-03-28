@@ -1176,6 +1176,113 @@ def test_geometry_q_group_manager_runtime_live_preview_simulated_peak_resolution
     ]
 
 
+def test_geometry_q_group_manager_runtime_live_preview_background_resolution() -> None:
+    disabled_events = []
+    disabled_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: None,
+        clear_geometry_preview_artists=lambda: disabled_events.append("clear"),
+        set_status_text=lambda text: disabled_events.append(text),
+    )
+
+    assert (
+        geometry_q_group_manager.resolve_runtime_live_geometry_preview_background(
+            disabled_bindings,
+            update_status=True,
+        )
+        is None
+    )
+    assert disabled_events == ["clear"]
+
+    caked_events = []
+    caked_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        caked_view_enabled=lambda: True,
+        clear_geometry_preview_artists=lambda: caked_events.append("clear"),
+        set_status_text=lambda text: caked_events.append(text),
+    )
+
+    assert (
+        geometry_q_group_manager.resolve_runtime_live_geometry_preview_background(
+            caked_bindings,
+            update_status=True,
+        )
+        is None
+    )
+    assert caked_events == [
+        "clear",
+        "Live auto-match preview unavailable in 2D caked view.",
+    ]
+
+    hidden_events = []
+    hidden_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        caked_view_enabled=lambda: False,
+        background_visible=False,
+        current_background_display_factory=lambda: None,
+        clear_geometry_preview_artists=lambda: hidden_events.append("clear"),
+        set_status_text=lambda text: hidden_events.append(text),
+    )
+
+    assert (
+        geometry_q_group_manager.resolve_runtime_live_geometry_preview_background(
+            hidden_bindings,
+            update_status=True,
+        )
+        is None
+    )
+    assert hidden_events == [
+        "clear",
+        "Live auto-match preview unavailable: background image is hidden.",
+    ]
+
+    success_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        caked_view_enabled=lambda: False,
+        background_visible=True,
+        current_background_display_factory=lambda: "background-image",
+    )
+
+    assert (
+        geometry_q_group_manager.resolve_runtime_live_geometry_preview_background(
+            success_bindings,
+            update_status=True,
+        )
+        == "background-image"
+    )
+
+
 def test_geometry_q_group_manager_runtime_live_preview_seed_state_resolution() -> None:
     preview_state = state.GeometryPreviewState()
     no_group_events = []

@@ -103,6 +103,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     exits now also live in `ra_sim.gui.geometry_q_group_manager`
   - the runtime live-preview match-result application helper now also lives
     in `ra_sim.gui.geometry_q_group_manager`
+  - the runtime live-preview availability/background gate now also lives in
+    `ra_sim.gui.geometry_q_group_manager`
   - `ra_sim.gui.runtime` now delegates those paths through bound callbacks and
     thin wrappers
 - Bragg Qr manager migration has also started:

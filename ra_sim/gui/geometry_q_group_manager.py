@@ -59,6 +59,9 @@ class GeometryQGroupRuntimeBindings:
     ) = None
     collapse_simulated_peaks: Callable[..., tuple[list[dict[str, object]], int]] | None = None
     excluded_q_group_count: Callable[[], int] | None = None
+    caked_view_enabled: Callable[[], bool] | None = None
+    background_visible: object | None = None
+    current_background_display_factory: Callable[[], object] | None = None
     axis: object | None = None
     geometry_preview_artists: list[object] | None = None
     draw_idle: Callable[[], None] | None = None
@@ -2255,6 +2258,51 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
     return None
 
 
+def resolve_runtime_live_geometry_preview_background(
+    bindings: GeometryQGroupRuntimeBindings,
+    *,
+    update_status: bool = True,
+) -> object | None:
+    """Return the display background when live preview is available."""
+
+    if not runtime_live_geometry_preview_enabled(bindings):
+        if callable(bindings.clear_geometry_preview_artists):
+            bindings.clear_geometry_preview_artists()
+        return None
+
+    try:
+        caked_view_enabled = bool(
+            bindings.caked_view_enabled() if callable(bindings.caked_view_enabled) else False
+        )
+    except Exception:
+        caked_view_enabled = False
+    if caked_view_enabled:
+        if callable(bindings.clear_geometry_preview_artists):
+            bindings.clear_geometry_preview_artists()
+        if update_status:
+            _set_status_text(
+                bindings.set_status_text,
+                "Live auto-match preview unavailable in 2D caked view.",
+            )
+        return None
+
+    display_background = (
+        bindings.current_background_display_factory()
+        if callable(bindings.current_background_display_factory)
+        else None
+    )
+    if not bool(_resolve_runtime_value(bindings.background_visible)) or display_background is None:
+        if callable(bindings.clear_geometry_preview_artists):
+            bindings.clear_geometry_preview_artists()
+        if update_status:
+            _set_status_text(
+                bindings.set_status_text,
+                "Live auto-match preview unavailable: background image is hidden.",
+            )
+        return None
+    return display_background
+
+
 def resolve_runtime_live_geometry_preview_seed_state(
     bindings: GeometryQGroupRuntimeBindings,
     simulated_peaks: Sequence[dict[str, object]] | None,
@@ -2573,6 +2621,9 @@ def make_runtime_geometry_q_group_bindings_factory(
     ) = None,
     collapse_simulated_peaks: Callable[..., tuple[list[dict[str, object]], int]] | None = None,
     excluded_q_group_count: Callable[[], int] | None = None,
+    caked_view_enabled: Callable[[], bool] | None = None,
+    background_visible_factory: object | None = None,
+    current_background_display_factory: Callable[[], object] | None = None,
     axis: object | None = None,
     geometry_preview_artists: list[object] | None = None,
     draw_idle_factory: object | None = None,
@@ -2628,6 +2679,9 @@ def make_runtime_geometry_q_group_bindings_factory(
             filter_simulated_peaks=filter_simulated_peaks,
             collapse_simulated_peaks=collapse_simulated_peaks,
             excluded_q_group_count=excluded_q_group_count,
+            caked_view_enabled=caked_view_enabled,
+            background_visible=_resolve_runtime_value(background_visible_factory),
+            current_background_display_factory=current_background_display_factory,
             axis=axis,
             geometry_preview_artists=geometry_preview_artists,
             draw_idle=_resolve_runtime_value(draw_idle_factory),

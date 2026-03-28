@@ -376,6 +376,9 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the runtime live-
     preview match-result application helper that stores overlay state and
     redraws the cached preview after the remaining auto-match call.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the runtime live-
+    preview availability/background gate used before preview config assembly,
+    including the disabled, caked-view, and hidden-background exits.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions.
