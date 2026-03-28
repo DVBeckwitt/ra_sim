@@ -10184,17 +10184,49 @@ _geometry_fit_runtime_value_callbacks = (
     )
 )
 _geometry_fit_var_map = _geometry_fit_runtime_value_callbacks.var_map
+geometry_fit_manual_dataset_bindings_factory = (
+    gui_geometry_fit.make_runtime_geometry_fit_manual_dataset_bindings_factory(
+        osc_files_factory=lambda: tuple(background_runtime_state.osc_files),
+        current_background_index_factory=(
+            lambda: int(background_runtime_state.current_background_index)
+        ),
+        image_size=image_size,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
+        load_background_by_index=_load_background_image_by_index,
+        apply_background_backend_orientation=(
+            _apply_background_backend_orientation
+        ),
+        geometry_manual_simulated_peaks_for_params=(
+            _geometry_manual_simulated_peaks_for_params
+        ),
+        geometry_manual_simulated_lookup=_geometry_manual_simulated_lookup,
+        geometry_manual_entry_display_coords=(
+            _geometry_manual_entry_display_coords
+        ),
+        unrotate_display_peaks=_unrotate_display_peaks,
+        display_to_native_sim_coords=_display_to_native_sim_coords,
+        select_fit_orientation=_select_fit_orientation,
+        apply_orientation_to_entries=_apply_orientation_to_entries,
+        orient_image_for_fit=_orient_image_for_fit,
+    )
+)
+geometry_fit_runtime_config_factory = (
+    gui_geometry_fit.build_runtime_geometry_fit_config_factory(
+        base_config=(
+            fit_config.get("geometry", {})
+            if isinstance(fit_config, dict)
+            else {}
+        ),
+        current_constraint_state=_current_geometry_fit_constraint_state,
+        current_parameter_domains=_current_geometry_fit_parameter_domains,
+    )
+)
 geometry_fit_action_runtime = gui_bootstrap.build_runtime_geometry_fit_action_bootstrap(
     geometry_fit_module=gui_geometry_fit,
     value_callbacks_factory=_geometry_fit_runtime_values,
     fit_config=fit_config,
-    osc_files_factory=lambda: tuple(background_runtime_state.osc_files),
-    current_background_index_factory=(
-        lambda: int(background_runtime_state.current_background_index)
-    ),
     theta_initial_factory=lambda: theta_initial_var.get(),
-    image_size=image_size,
-    display_rotate_k=DISPLAY_ROTATE_K,
     apply_geometry_fit_background_selection=(
         _apply_geometry_fit_background_selection
     ),
@@ -10207,34 +10239,11 @@ geometry_fit_action_runtime = gui_bootstrap.build_runtime_geometry_fit_action_bo
     apply_background_theta_metadata=_apply_background_theta_metadata,
     current_background_theta_values=_current_background_theta_values,
     current_geometry_theta_offset=_current_geometry_theta_offset,
-    geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
     ensure_geometry_fit_caked_view=_ensure_geometry_fit_caked_view,
-    load_background_by_index=_load_background_image_by_index,
-    apply_background_backend_orientation=(
-        _apply_background_backend_orientation
+    manual_dataset_bindings_factory=(
+        geometry_fit_manual_dataset_bindings_factory
     ),
-    geometry_manual_simulated_peaks_for_params=(
-        _geometry_manual_simulated_peaks_for_params
-    ),
-    geometry_manual_simulated_lookup=_geometry_manual_simulated_lookup,
-    geometry_manual_entry_display_coords=(
-        _geometry_manual_entry_display_coords
-    ),
-    unrotate_display_peaks=_unrotate_display_peaks,
-    display_to_native_sim_coords=_display_to_native_sim_coords,
-    select_fit_orientation=_select_fit_orientation,
-    apply_orientation_to_entries=_apply_orientation_to_entries,
-    orient_image_for_fit=_orient_image_for_fit,
-    build_runtime_config_factory=(
-        lambda var_names, fit_params: _build_geometry_fit_runtime_config(
-            fit_config.get("geometry", {})
-            if isinstance(fit_config, dict)
-            else {},
-            {name: fit_params.get(name) for name in var_names},
-            _current_geometry_fit_constraint_state(var_names),
-            _current_geometry_fit_parameter_domains(var_names),
-        )
-    ),
+    build_runtime_config_factory=geometry_fit_runtime_config_factory,
     downloads_dir=get_dir("downloads"),
     simulation_runtime_state=simulation_runtime_state,
     background_runtime_state=background_runtime_state,

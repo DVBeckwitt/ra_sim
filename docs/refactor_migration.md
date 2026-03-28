@@ -452,12 +452,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     that drives one live geometry fit from current values through prepare,
     execution-setup packaging, solver execution, and the top-level preflight
     failure/status path
+  - `ra_sim.gui.geometry_fit` now also owns the shared manual-pair dataset
+    bindings structure/factory plus the live runtime-config factory used
+    during geometry-fit preparation
   - `ra_sim.gui.geometry_fit` now also owns the live action-bindings factory
     and zero-arg action callback helper used by the runtime fit button
   - the geometry-fit action binding/callback bootstrap used by the live fit
     button now also flows through one shared helper in `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` now keeps one bound geometry-fit action bootstrap
-    value plus the remaining Tk-side control wiring around the extracted
+    value, one bound manual-dataset factory, one shared runtime-config
+    factory, and the remaining Tk-side control wiring around the extracted
     helper
 - Background-file workflow extraction has also advanced:
   - background-file state transition, file-dialog initial-dir selection,
@@ -606,8 +610,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   value-source wiring around the extracted peak-selection modules and shared
   bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining fit-preview/live value-source wiring around the
-  extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
+  smaller runtime-config/constraint readers plus Tk-side control wiring around
+  the extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
   shared bootstrap helper surfaces.
 - The remaining integration-range runtime code is now mostly thin live
   value-source wiring around the extracted drag/update helpers and shared

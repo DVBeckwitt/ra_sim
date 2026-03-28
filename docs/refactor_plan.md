@@ -48,7 +48,9 @@ bindings factory and zero-arg helper in `ra_sim.gui.geometry_fit` instead of
 being rebuilt inline in `runtime.py`, the runtime assembly of that geometry-fit
 action bootstrap now also flows through one shared helper in
 `ra_sim.gui.bootstrap` instead of being manually staged inline in
-`runtime.py`, the
+`runtime.py`, the remaining geometry-fit manual-pair dataset/value-source
+wiring now also assembles through shared manual-dataset/config factories in
+`ra_sim.gui.geometry_fit` instead of being threaded inline in `runtime.py`, the
 HKL lookup control surface plus its shared Bragg-Qr open action now also boot
 through one shared helper in `ra_sim.gui.bootstrap` instead of being wired
 directly in `runtime.py`, the geometry-tool action control cluster now also
@@ -523,11 +525,16 @@ not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.geometry_fit` now also owns the shared prepare-bundle factory,
     execution-bundle builder, and top-level action-binding builder used by the
     live geometry-fit action callback.
+  - `ra_sim.gui.geometry_fit` now also owns the shared manual-pair dataset
+    bindings structure/factory plus the live runtime-config factory used during
+    geometry-fit preparation.
   - `ra_sim.gui.geometry_fit` now also owns the live action-bindings factory
     and zero-arg action callback helper used by the runtime fit button.
   - `ra_sim.gui.runtime` no longer rebuilds that geometry-fit action bindings
-    bundle inline on each click; it now keeps only the remaining Tk-side
-    control wiring around the extracted helper.
+    bundle inline on each click or threads the manual-pair dataset/value-source
+    bundle inline; it now keeps one bound manual-dataset factory, one shared
+    runtime-config factory, and the remaining Tk-side control wiring around the
+    extracted helper.
 - Geometry-fit manual-pair preview/action cleanup has advanced.
   - `ra_sim.gui.manual_geometry` now also owns the bound runtime callback
     bundle for current-pair rendering, Qr/Qz group toggle selection, manual
@@ -802,8 +809,8 @@ What is left:
   value-source wiring around the extracted peak-selection helpers and shared
   bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
-  remaining fit-preview/live value-source wiring around the
-  extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
+  smaller runtime-config/constraint readers plus Tk-side control wiring around
+  the extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
   shared bootstrap helper surfaces.
 - The remaining integration-range runtime code is now mostly thin live
   value-source wiring around the extracted drag/update helpers and shared
@@ -1208,16 +1215,16 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining geometry-fit manual-pair fit-preview/live
-  value-source wiring now that the cache/display, action, and projection
-  callback bundles also boot through shared helpers
+- start with the remaining geometry-fit runtime-config/constraint readers and
+  the next cross-feature call sites that still bypass the extracted helper
+  modules now that the manual-pair dataset/value-source bundle also boots
+  through shared helpers
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
 Immediate checklist after the manual-pair cache/display cleanup:
 
-- trim the remaining geometry-fit manual-pair fit-preview/live value-source
-  wiring
+- trim the remaining geometry-fit runtime-config/constraint readers
 - then trim the next cross-feature runtime workflow call sites that still
   bypass the extracted helper modules
 - defer config unification, compatibility cleanup, and repo-root cleanup until

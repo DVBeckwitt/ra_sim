@@ -46,23 +46,14 @@ class GeometryFitPreparedRun:
 
 
 @dataclass(frozen=True)
-class GeometryFitRuntimePreparationBindings:
-    """Runtime values and callbacks used to prepare one geometry-fit run."""
+class GeometryFitRuntimeManualDatasetBindings:
+    """Live manual-pair dataset callbacks and values reused by geometry-fit prep."""
 
-    fit_config: Mapping[str, object] | None
     osc_files: Sequence[object]
     current_background_index: int
-    theta_initial: object
     image_size: int
     display_rotate_k: int
-    apply_geometry_fit_background_selection: Callable[..., bool]
-    current_geometry_fit_background_indices: Callable[..., list[int]]
-    geometry_fit_uses_shared_theta_offset: Callable[..., bool]
-    apply_background_theta_metadata: Callable[..., bool]
-    current_background_theta_values: Callable[..., list[float]]
-    current_geometry_theta_offset: Callable[..., float]
     geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]]
-    ensure_geometry_fit_caked_view: Callable[[], None]
     load_background_by_index: Callable[[int], tuple[np.ndarray, np.ndarray]]
     apply_background_backend_orientation: Callable[[np.ndarray], np.ndarray | None]
     geometry_manual_simulated_peaks_for_params: Callable[..., object]
@@ -76,6 +67,22 @@ class GeometryFitRuntimePreparationBindings:
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]]
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]]
     orient_image_for_fit: Callable[..., object]
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimePreparationBindings:
+    """Runtime values and callbacks used to prepare one geometry-fit run."""
+
+    fit_config: Mapping[str, object] | None
+    theta_initial: object
+    apply_geometry_fit_background_selection: Callable[..., bool]
+    current_geometry_fit_background_indices: Callable[..., list[int]]
+    geometry_fit_uses_shared_theta_offset: Callable[..., bool]
+    apply_background_theta_metadata: Callable[..., bool]
+    current_background_theta_values: Callable[..., list[float]]
+    current_geometry_theta_offset: Callable[..., float]
+    ensure_geometry_fit_caked_view: Callable[[], None]
+    manual_dataset_bindings: GeometryFitRuntimeManualDatasetBindings
     build_runtime_config: Callable[[Mapping[str, object]], dict[str, object]]
 
 
@@ -347,22 +354,13 @@ class GeometryToolActionRuntimeCallbacks:
     clear_current_manual_pairs: Callable[[], None]
 
 
-def make_runtime_geometry_fit_action_prepare_bindings_factory(
+def build_runtime_geometry_fit_manual_dataset_bindings(
     *,
-    fit_config: Mapping[str, object] | None,
     osc_files: Sequence[object],
     current_background_index: int,
-    theta_initial: object,
     image_size: int,
     display_rotate_k: int,
-    apply_geometry_fit_background_selection: Callable[..., bool],
-    current_geometry_fit_background_indices: Callable[..., list[int]],
-    geometry_fit_uses_shared_theta_offset: Callable[..., bool],
-    apply_background_theta_metadata: Callable[..., bool],
-    current_background_theta_values: Callable[..., list[float]],
-    current_geometry_theta_offset: Callable[..., float],
     geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]],
-    ensure_geometry_fit_caked_view: Callable[[], None],
     load_background_by_index: Callable[[int], tuple[np.ndarray, np.ndarray]],
     apply_background_backend_orientation: Callable[[np.ndarray], np.ndarray | None],
     geometry_manual_simulated_peaks_for_params: Callable[..., object],
@@ -376,37 +374,64 @@ def make_runtime_geometry_fit_action_prepare_bindings_factory(
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
-    build_runtime_config_factory: Callable[
-        [Sequence[str], Mapping[str, object]],
-        dict[str, object],
-    ],
-) -> Callable[[Sequence[str]], GeometryFitRuntimePreparationBindings]:
-    """Build the live prepare-bundle factory for one geometry-fit action."""
+) -> GeometryFitRuntimeManualDatasetBindings:
+    """Build the live manual-pair dataset bundle used during geometry-fit prep."""
 
-    def _build(var_names: Sequence[str]) -> GeometryFitRuntimePreparationBindings:
-        return GeometryFitRuntimePreparationBindings(
-            fit_config=fit_config,
-            osc_files=osc_files,
-            current_background_index=int(current_background_index),
-            theta_initial=theta_initial,
+    return GeometryFitRuntimeManualDatasetBindings(
+        osc_files=osc_files,
+        current_background_index=int(current_background_index),
+        image_size=int(image_size),
+        display_rotate_k=int(display_rotate_k),
+        geometry_manual_pairs_for_index=geometry_manual_pairs_for_index,
+        load_background_by_index=load_background_by_index,
+        apply_background_backend_orientation=apply_background_backend_orientation,
+        geometry_manual_simulated_peaks_for_params=(
+            geometry_manual_simulated_peaks_for_params
+        ),
+        geometry_manual_simulated_lookup=geometry_manual_simulated_lookup,
+        geometry_manual_entry_display_coords=geometry_manual_entry_display_coords,
+        unrotate_display_peaks=unrotate_display_peaks,
+        display_to_native_sim_coords=display_to_native_sim_coords,
+        select_fit_orientation=select_fit_orientation,
+        apply_orientation_to_entries=apply_orientation_to_entries,
+        orient_image_for_fit=orient_image_for_fit,
+    )
+
+
+def make_runtime_geometry_fit_manual_dataset_bindings_factory(
+    *,
+    osc_files_factory: Callable[[], Sequence[object]],
+    current_background_index_factory: Callable[[], object],
+    image_size: int,
+    display_rotate_k: int,
+    geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]],
+    load_background_by_index: Callable[[int], tuple[np.ndarray, np.ndarray]],
+    apply_background_backend_orientation: Callable[[np.ndarray], np.ndarray | None],
+    geometry_manual_simulated_peaks_for_params: Callable[..., object],
+    geometry_manual_simulated_lookup: Callable[[object], Mapping[object, object]],
+    geometry_manual_entry_display_coords: Callable[
+        [Mapping[str, object]],
+        Sequence[object] | None,
+    ],
+    unrotate_display_peaks: Callable[..., list[dict[str, object]]],
+    display_to_native_sim_coords: Callable[..., tuple[float, float]],
+    select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
+    apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
+    orient_image_for_fit: Callable[..., object],
+) -> Callable[[], GeometryFitRuntimeManualDatasetBindings]:
+    """Build a factory that resolves the live manual-pair dataset bundle on demand."""
+
+    def _build() -> GeometryFitRuntimeManualDatasetBindings:
+        return build_runtime_geometry_fit_manual_dataset_bindings(
+            osc_files=osc_files_factory(),
+            current_background_index=int(current_background_index_factory()),
             image_size=int(image_size),
             display_rotate_k=int(display_rotate_k),
-            apply_geometry_fit_background_selection=(
-                apply_geometry_fit_background_selection
-            ),
-            current_geometry_fit_background_indices=(
-                current_geometry_fit_background_indices
-            ),
-            geometry_fit_uses_shared_theta_offset=(
-                geometry_fit_uses_shared_theta_offset
-            ),
-            apply_background_theta_metadata=apply_background_theta_metadata,
-            current_background_theta_values=current_background_theta_values,
-            current_geometry_theta_offset=current_geometry_theta_offset,
             geometry_manual_pairs_for_index=geometry_manual_pairs_for_index,
-            ensure_geometry_fit_caked_view=ensure_geometry_fit_caked_view,
             load_background_by_index=load_background_by_index,
-            apply_background_backend_orientation=apply_background_backend_orientation,
+            apply_background_backend_orientation=(
+                apply_background_backend_orientation
+            ),
             geometry_manual_simulated_peaks_for_params=(
                 geometry_manual_simulated_peaks_for_params
             ),
@@ -419,6 +444,48 @@ def make_runtime_geometry_fit_action_prepare_bindings_factory(
             select_fit_orientation=select_fit_orientation,
             apply_orientation_to_entries=apply_orientation_to_entries,
             orient_image_for_fit=orient_image_for_fit,
+        )
+
+    return _build
+
+
+def make_runtime_geometry_fit_action_prepare_bindings_factory(
+    *,
+    fit_config: Mapping[str, object] | None,
+    theta_initial: object,
+    apply_geometry_fit_background_selection: Callable[..., bool],
+    current_geometry_fit_background_indices: Callable[..., list[int]],
+    geometry_fit_uses_shared_theta_offset: Callable[..., bool],
+    apply_background_theta_metadata: Callable[..., bool],
+    current_background_theta_values: Callable[..., list[float]],
+    current_geometry_theta_offset: Callable[..., float],
+    ensure_geometry_fit_caked_view: Callable[[], None],
+    manual_dataset_bindings: GeometryFitRuntimeManualDatasetBindings,
+    build_runtime_config_factory: Callable[
+        [Sequence[str], Mapping[str, object]],
+        dict[str, object],
+    ],
+) -> Callable[[Sequence[str]], GeometryFitRuntimePreparationBindings]:
+    """Build the live prepare-bundle factory for one geometry-fit action."""
+
+    def _build(var_names: Sequence[str]) -> GeometryFitRuntimePreparationBindings:
+        return GeometryFitRuntimePreparationBindings(
+            fit_config=fit_config,
+            theta_initial=theta_initial,
+            apply_geometry_fit_background_selection=(
+                apply_geometry_fit_background_selection
+            ),
+            current_geometry_fit_background_indices=(
+                current_geometry_fit_background_indices
+            ),
+            geometry_fit_uses_shared_theta_offset=(
+                geometry_fit_uses_shared_theta_offset
+            ),
+            apply_background_theta_metadata=apply_background_theta_metadata,
+            current_background_theta_values=current_background_theta_values,
+            current_geometry_theta_offset=current_geometry_theta_offset,
+            ensure_geometry_fit_caked_view=ensure_geometry_fit_caked_view,
+            manual_dataset_bindings=manual_dataset_bindings,
             build_runtime_config=(
                 lambda fit_params: build_runtime_config_factory(
                     list(var_names),
@@ -495,32 +562,15 @@ def build_runtime_geometry_fit_action_bindings(
     *,
     value_callbacks: GeometryFitRuntimeValueCallbacks,
     fit_config: Mapping[str, object] | None,
-    osc_files: Sequence[object],
-    current_background_index: int,
     theta_initial: object,
-    image_size: int,
-    display_rotate_k: int,
     apply_geometry_fit_background_selection: Callable[..., bool],
     current_geometry_fit_background_indices: Callable[..., list[int]],
     geometry_fit_uses_shared_theta_offset: Callable[..., bool],
     apply_background_theta_metadata: Callable[..., bool],
     current_background_theta_values: Callable[..., list[float]],
     current_geometry_theta_offset: Callable[..., float],
-    geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]],
     ensure_geometry_fit_caked_view: Callable[[], None],
-    load_background_by_index: Callable[[int], tuple[np.ndarray, np.ndarray]],
-    apply_background_backend_orientation: Callable[[np.ndarray], np.ndarray | None],
-    geometry_manual_simulated_peaks_for_params: Callable[..., object],
-    geometry_manual_simulated_lookup: Callable[[object], Mapping[object, object]],
-    geometry_manual_entry_display_coords: Callable[
-        [Mapping[str, object]],
-        Sequence[object] | None,
-    ],
-    unrotate_display_peaks: Callable[..., list[dict[str, object]]],
-    display_to_native_sim_coords: Callable[..., tuple[float, float]],
-    select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
-    apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
-    orient_image_for_fit: Callable[..., object],
+    manual_dataset_bindings: GeometryFitRuntimeManualDatasetBindings,
     build_runtime_config_factory: Callable[
         [Sequence[str], Mapping[str, object]],
         dict[str, object],
@@ -561,11 +611,7 @@ def build_runtime_geometry_fit_action_bindings(
         value_callbacks=value_callbacks,
         prepare_bindings_factory=make_runtime_geometry_fit_action_prepare_bindings_factory(
             fit_config=fit_config,
-            osc_files=osc_files,
-            current_background_index=int(current_background_index),
             theta_initial=theta_initial,
-            image_size=int(image_size),
-            display_rotate_k=int(display_rotate_k),
             apply_geometry_fit_background_selection=(
                 apply_geometry_fit_background_selection
             ),
@@ -578,22 +624,8 @@ def build_runtime_geometry_fit_action_bindings(
             apply_background_theta_metadata=apply_background_theta_metadata,
             current_background_theta_values=current_background_theta_values,
             current_geometry_theta_offset=current_geometry_theta_offset,
-            geometry_manual_pairs_for_index=geometry_manual_pairs_for_index,
             ensure_geometry_fit_caked_view=ensure_geometry_fit_caked_view,
-            load_background_by_index=load_background_by_index,
-            apply_background_backend_orientation=apply_background_backend_orientation,
-            geometry_manual_simulated_peaks_for_params=(
-                geometry_manual_simulated_peaks_for_params
-            ),
-            geometry_manual_simulated_lookup=geometry_manual_simulated_lookup,
-            geometry_manual_entry_display_coords=(
-                geometry_manual_entry_display_coords
-            ),
-            unrotate_display_peaks=unrotate_display_peaks,
-            display_to_native_sim_coords=display_to_native_sim_coords,
-            select_fit_orientation=select_fit_orientation,
-            apply_orientation_to_entries=apply_orientation_to_entries,
-            orient_image_for_fit=orient_image_for_fit,
+            manual_dataset_bindings=manual_dataset_bindings,
             build_runtime_config_factory=build_runtime_config_factory,
         ),
         execution_bindings=build_runtime_geometry_fit_action_execution_bindings(
@@ -634,32 +666,18 @@ def make_runtime_geometry_fit_action_bindings_factory(
     *,
     value_callbacks_factory: Callable[[], GeometryFitRuntimeValueCallbacks],
     fit_config: Mapping[str, object] | None,
-    osc_files_factory: Callable[[], Sequence[object]],
-    current_background_index_factory: Callable[[], object],
     theta_initial_factory: Callable[[], object],
-    image_size: int,
-    display_rotate_k: int,
     apply_geometry_fit_background_selection: Callable[..., bool],
     current_geometry_fit_background_indices: Callable[..., list[int]],
     geometry_fit_uses_shared_theta_offset: Callable[..., bool],
     apply_background_theta_metadata: Callable[..., bool],
     current_background_theta_values: Callable[..., list[float]],
     current_geometry_theta_offset: Callable[..., float],
-    geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]],
     ensure_geometry_fit_caked_view: Callable[[], None],
-    load_background_by_index: Callable[[int], tuple[np.ndarray, np.ndarray]],
-    apply_background_backend_orientation: Callable[[np.ndarray], np.ndarray | None],
-    geometry_manual_simulated_peaks_for_params: Callable[..., object],
-    geometry_manual_simulated_lookup: Callable[[object], Mapping[object, object]],
-    geometry_manual_entry_display_coords: Callable[
-        [Mapping[str, object]],
-        Sequence[object] | None,
+    manual_dataset_bindings_factory: Callable[
+        [],
+        GeometryFitRuntimeManualDatasetBindings,
     ],
-    unrotate_display_peaks: Callable[..., list[dict[str, object]]],
-    display_to_native_sim_coords: Callable[..., tuple[float, float]],
-    select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
-    apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
-    orient_image_for_fit: Callable[..., object],
     build_runtime_config_factory: Callable[
         [Sequence[str], Mapping[str, object]],
         dict[str, object],
@@ -700,11 +718,7 @@ def make_runtime_geometry_fit_action_bindings_factory(
         return build_runtime_geometry_fit_action_bindings(
             value_callbacks=value_callbacks_factory(),
             fit_config=fit_config,
-            osc_files=osc_files_factory(),
-            current_background_index=int(current_background_index_factory()),
             theta_initial=theta_initial_factory(),
-            image_size=int(image_size),
-            display_rotate_k=int(display_rotate_k),
             apply_geometry_fit_background_selection=(
                 apply_geometry_fit_background_selection
             ),
@@ -717,24 +731,8 @@ def make_runtime_geometry_fit_action_bindings_factory(
             apply_background_theta_metadata=apply_background_theta_metadata,
             current_background_theta_values=current_background_theta_values,
             current_geometry_theta_offset=current_geometry_theta_offset,
-            geometry_manual_pairs_for_index=geometry_manual_pairs_for_index,
             ensure_geometry_fit_caked_view=ensure_geometry_fit_caked_view,
-            load_background_by_index=load_background_by_index,
-            apply_background_backend_orientation=(
-                apply_background_backend_orientation
-            ),
-            geometry_manual_simulated_peaks_for_params=(
-                geometry_manual_simulated_peaks_for_params
-            ),
-            geometry_manual_simulated_lookup=geometry_manual_simulated_lookup,
-            geometry_manual_entry_display_coords=(
-                geometry_manual_entry_display_coords
-            ),
-            unrotate_display_peaks=unrotate_display_peaks,
-            display_to_native_sim_coords=display_to_native_sim_coords,
-            select_fit_orientation=select_fit_orientation,
-            apply_orientation_to_entries=apply_orientation_to_entries,
-            orient_image_for_fit=orient_image_for_fit,
+            manual_dataset_bindings=manual_dataset_bindings_factory(),
             build_runtime_config_factory=build_runtime_config_factory,
             downloads_dir=downloads_dir,
             simulation_runtime_state=simulation_runtime_state,
@@ -1011,6 +1009,33 @@ def build_runtime_geometry_fit_value_callbacks(
         current_ui_params=_current_ui_params,
         var_map=var_map,
     )
+
+
+def build_runtime_geometry_fit_config_factory(
+    *,
+    base_config: Mapping[str, object] | None,
+    current_constraint_state: Callable[[Sequence[str] | None], Mapping[str, object]],
+    current_parameter_domains: Callable[[Sequence[str] | None], Mapping[str, object]],
+) -> Callable[[Sequence[str], Mapping[str, object]], dict[str, object]]:
+    """Build the live geometry-fit refinement-config factory from runtime readers."""
+
+    def _build(
+        var_names: Sequence[str],
+        fit_params: Mapping[str, object],
+    ) -> dict[str, object]:
+        selected_names = [str(name) for name in var_names]
+        current_params = {
+            name: fit_params.get(name)
+            for name in selected_names
+        }
+        return build_geometry_fit_runtime_config(
+            base_config,
+            current_params,
+            current_constraint_state(selected_names),
+            current_parameter_domains(selected_names),
+        )
+
+    return _build
 
 
 def build_geometry_fit_runtime_config(
@@ -1495,48 +1520,43 @@ def build_geometry_manual_fit_dataset(
     *,
     theta_base: float,
     base_fit_params: Mapping[str, object] | None,
-    osc_files: Sequence[object],
-    current_background_index: int,
-    image_size: int,
-    display_rotate_k: int,
-    geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]],
-    load_background_by_index: Callable[[int], tuple[np.ndarray, np.ndarray]],
-    apply_background_backend_orientation: Callable[[np.ndarray], np.ndarray | None],
-    geometry_manual_simulated_peaks_for_params: Callable[..., object],
-    geometry_manual_simulated_lookup: Callable[[object], Mapping[object, object]],
-    geometry_manual_entry_display_coords: Callable[
-        [Mapping[str, object]],
-        Sequence[object] | None,
-    ],
-    unrotate_display_peaks: Callable[..., list[dict[str, object]]],
-    display_to_native_sim_coords: Callable[..., tuple[float, float]],
-    select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
-    apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
-    orient_image_for_fit: Callable[..., object],
+    manual_dataset_bindings: GeometryFitRuntimeManualDatasetBindings,
     orientation_cfg: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build one saved-manual-pair geometry dataset for the optimizer."""
 
     background_idx = int(background_index)
-    selected_entries = list(geometry_manual_pairs_for_index(background_idx) or ())
+    selected_entries = list(
+        manual_dataset_bindings.geometry_manual_pairs_for_index(background_idx) or ()
+    )
     if not selected_entries:
         raise RuntimeError(
             f"background {background_idx + 1} has no saved manual geometry pairs"
         )
 
-    native_background, display_background = load_background_by_index(background_idx)
-    backend_background = apply_background_backend_orientation(native_background)
+    native_background, display_background = (
+        manual_dataset_bindings.load_background_by_index(background_idx)
+    )
+    backend_background = (
+        manual_dataset_bindings.apply_background_backend_orientation(
+            native_background
+        )
+    )
     if backend_background is None:
         backend_background = native_background
 
     params_i = dict(base_fit_params or {})
     theta_offset = float(params_i.get("theta_offset", 0.0))
     params_i["theta_initial"] = float(theta_base + theta_offset)
-    simulated_peaks = geometry_manual_simulated_peaks_for_params(
+    simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
         params_i,
-        prefer_cache=(background_idx == int(current_background_index)),
+        prefer_cache=(
+            background_idx == int(manual_dataset_bindings.current_background_index)
+        ),
     )
-    simulated_lookup = geometry_manual_simulated_lookup(simulated_peaks)
+    simulated_lookup = manual_dataset_bindings.geometry_manual_simulated_lookup(
+        simulated_peaks
+    )
 
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
@@ -1549,7 +1569,7 @@ def build_geometry_manual_fit_dataset(
             "overlay_match_index": int(pair_idx),
             "hkl": entry.get("hkl", entry.get("label")),
         }
-        bg_coords = geometry_manual_entry_display_coords(entry)
+        bg_coords = manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
         if bg_coords is not None and len(bg_coords) >= 2:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
         try:
@@ -1572,15 +1592,18 @@ def build_geometry_manual_fit_dataset(
                     initial_entry["sim_display"] = (float(sim_col), float(sim_row))
         initial_pairs_display.append(initial_entry)
 
-    measured_native = unrotate_display_peaks(
+    measured_native = manual_dataset_bindings.unrotate_display_peaks(
         measured_display,
         display_background.shape,
-        k=display_rotate_k,
+        k=manual_dataset_bindings.display_rotate_k,
     )
 
     sim_orientation_points: list[tuple[float, float]] = []
     meas_orientation_points: list[tuple[float, float]] = []
-    sim_native_shape = (int(image_size), int(image_size))
+    sim_native_shape = (
+        int(manual_dataset_bindings.image_size),
+        int(manual_dataset_bindings.image_size),
+    )
     for initial_entry, measured_entry in zip(initial_pairs_display, measured_native):
         if not isinstance(measured_entry, Mapping):
             continue
@@ -1591,7 +1614,7 @@ def build_geometry_manual_fit_dataset(
         ):
             continue
         try:
-            sim_native = display_to_native_sim_coords(
+            sim_native = manual_dataset_bindings.display_to_native_sim_coords(
                 float(sim_display[0]),
                 float(sim_display[1]),
                 sim_native_shape,
@@ -1610,13 +1633,15 @@ def build_geometry_manual_fit_dataset(
         sim_orientation_points.append((float(sim_native[0]), float(sim_native[1])))
         meas_orientation_points.append((float(mx), float(my)))
 
-    orientation_choice, orientation_diag = select_fit_orientation(
-        sim_orientation_points,
-        meas_orientation_points,
-        tuple(int(v) for v in native_background.shape[:2]),
-        cfg=orientation_cfg or {},
+    orientation_choice, orientation_diag = (
+        manual_dataset_bindings.select_fit_orientation(
+            sim_orientation_points,
+            meas_orientation_points,
+            tuple(int(v) for v in native_background.shape[:2]),
+            cfg=orientation_cfg or {},
+        )
     )
-    measured_for_fit = apply_orientation_to_entries(
+    measured_for_fit = manual_dataset_bindings.apply_orientation_to_entries(
         measured_native,
         native_background.shape,
         indexing_mode=orientation_choice["indexing_mode"],
@@ -1625,7 +1650,7 @@ def build_geometry_manual_fit_dataset(
         flip_y=orientation_choice["flip_y"],
         flip_order=orientation_choice["flip_order"],
     )
-    experimental_image_for_fit = orient_image_for_fit(
+    experimental_image_for_fit = manual_dataset_bindings.orient_image_for_fit(
         backend_background,
         indexing_mode=orientation_choice["indexing_mode"],
         k=orientation_choice["k"],
@@ -1635,8 +1660,8 @@ def build_geometry_manual_fit_dataset(
     )
 
     label = (
-        Path(str(osc_files[background_idx])).name
-        if 0 <= background_idx < len(osc_files)
+        Path(str(manual_dataset_bindings.osc_files[background_idx])).name
+        if 0 <= background_idx < len(manual_dataset_bindings.osc_files)
         else f"background_{background_idx}"
     )
     group_count = len(
@@ -1888,13 +1913,14 @@ def prepare_runtime_geometry_fit_run(
     """Prepare one geometry fit from the live runtime value/callback sources."""
 
     fit_config = bindings.fit_config if isinstance(bindings.fit_config, Mapping) else {}
+    manual_dataset_bindings = bindings.manual_dataset_bindings
 
     return prepare_geometry_fit_run(
         params=params,
         var_names=var_names,
         fit_config=fit_config,
-        osc_files=bindings.osc_files,
-        current_background_index=int(bindings.current_background_index),
+        osc_files=manual_dataset_bindings.osc_files,
+        current_background_index=int(manual_dataset_bindings.current_background_index),
         theta_initial=bindings.theta_initial,
         preserve_live_theta=preserve_live_theta,
         apply_geometry_fit_background_selection=(
@@ -1909,7 +1935,9 @@ def prepare_runtime_geometry_fit_run(
         apply_background_theta_metadata=bindings.apply_background_theta_metadata,
         current_background_theta_values=bindings.current_background_theta_values,
         current_geometry_theta_offset=bindings.current_geometry_theta_offset,
-        geometry_manual_pairs_for_index=bindings.geometry_manual_pairs_for_index,
+        geometry_manual_pairs_for_index=(
+            manual_dataset_bindings.geometry_manual_pairs_for_index
+        ),
         ensure_geometry_fit_caked_view=bindings.ensure_geometry_fit_caked_view,
         build_dataset=(
             lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
@@ -1917,35 +1945,7 @@ def prepare_runtime_geometry_fit_run(
                     background_index,
                     theta_base=theta_base,
                     base_fit_params=base_fit_params,
-                    osc_files=bindings.osc_files,
-                    current_background_index=int(bindings.current_background_index),
-                    image_size=int(bindings.image_size),
-                    display_rotate_k=int(bindings.display_rotate_k),
-                    geometry_manual_pairs_for_index=(
-                        bindings.geometry_manual_pairs_for_index
-                    ),
-                    load_background_by_index=bindings.load_background_by_index,
-                    apply_background_backend_orientation=(
-                        bindings.apply_background_backend_orientation
-                    ),
-                    geometry_manual_simulated_peaks_for_params=(
-                        bindings.geometry_manual_simulated_peaks_for_params
-                    ),
-                    geometry_manual_simulated_lookup=(
-                        bindings.geometry_manual_simulated_lookup
-                    ),
-                    geometry_manual_entry_display_coords=(
-                        bindings.geometry_manual_entry_display_coords
-                    ),
-                    unrotate_display_peaks=bindings.unrotate_display_peaks,
-                    display_to_native_sim_coords=(
-                        bindings.display_to_native_sim_coords
-                    ),
-                    select_fit_orientation=bindings.select_fit_orientation,
-                    apply_orientation_to_entries=(
-                        bindings.apply_orientation_to_entries
-                    ),
-                    orient_image_for_fit=bindings.orient_image_for_fit,
+                    manual_dataset_bindings=manual_dataset_bindings,
                     orientation_cfg=orientation_cfg,
                 )
             )

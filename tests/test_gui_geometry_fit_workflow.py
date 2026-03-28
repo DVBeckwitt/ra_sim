@@ -82,21 +82,12 @@ def _make_prepared_run(
 
 
 def _make_runtime_action_prepare_bindings():
-    return geometry_fit.GeometryFitRuntimePreparationBindings(
-        fit_config={},
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
         current_background_index=0,
-        theta_initial=9.0,
         image_size=100,
         display_rotate_k=3,
-        apply_geometry_fit_background_selection=lambda **kwargs: True,
-        current_geometry_fit_background_indices=lambda **kwargs: [0],
-        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
-        apply_background_theta_metadata=lambda **kwargs: True,
-        current_background_theta_values=lambda **kwargs: [9.0],
-        current_geometry_theta_offset=lambda **kwargs: 0.0,
         geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
-        ensure_geometry_fit_caked_view=lambda: None,
         load_background_by_index=lambda idx: (
             np.zeros((2, 2), dtype=np.float64),
             np.zeros((2, 2), dtype=np.float64),
@@ -110,6 +101,18 @@ def _make_runtime_action_prepare_bindings():
         select_fit_orientation=lambda *args, **kwargs: ({}, {}),
         apply_orientation_to_entries=lambda entries, shape, **kwargs: [],
         orient_image_for_fit=lambda image, **kwargs: image,
+    )
+    return geometry_fit.GeometryFitRuntimePreparationBindings(
+        fit_config={},
+        theta_initial=9.0,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [9.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        ensure_geometry_fit_caked_view=lambda: None,
+        manual_dataset_bindings=manual_dataset_bindings,
         build_runtime_config=lambda fit_params: dict(fit_params),
     )
 
@@ -358,49 +361,55 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "auto_match": {"max_display_markers": 90},
                 }
             },
-            osc_files=["C:/tmp/bg0.osc"],
-            current_background_index=0,
             theta_initial=9.0,
-            image_size=100,
-            display_rotate_k=3,
             apply_geometry_fit_background_selection=lambda **kwargs: True,
             current_geometry_fit_background_indices=lambda **kwargs: [0],
             geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
             apply_background_theta_metadata=lambda **kwargs: True,
             current_background_theta_values=lambda **kwargs: [9.0],
             current_geometry_theta_offset=lambda **kwargs: 0.0,
-            geometry_manual_pairs_for_index=lambda idx: [
-                {
-                    "q_group_key": ("q", 1),
-                    "source_table_index": 1,
-                    "source_row_index": 2,
-                    "hkl": (1, 1, 0),
-                    "x": 30.0,
-                    "y": 40.0,
-                }
-            ],
             ensure_geometry_fit_caked_view=lambda: calls.__setitem__(
                 "ensure_caked", int(calls["ensure_caked"]) + 1
             ),
-            load_background_by_index=lambda idx: (native_background, display_background),
-            apply_background_backend_orientation=lambda image: None,
-            geometry_manual_simulated_peaks_for_params=(
-                lambda params, *, prefer_cache: [{"dummy": True}]
+            manual_dataset_bindings=geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+                osc_files=["C:/tmp/bg0.osc"],
+                current_background_index=0,
+                image_size=100,
+                display_rotate_k=3,
+                geometry_manual_pairs_for_index=lambda idx: [
+                    {
+                        "q_group_key": ("q", 1),
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                        "hkl": (1, 1, 0),
+                        "x": 30.0,
+                        "y": 40.0,
+                    }
+                ],
+                load_background_by_index=(
+                    lambda idx: (native_background, display_background)
+                ),
+                apply_background_backend_orientation=lambda image: None,
+                geometry_manual_simulated_peaks_for_params=(
+                    lambda params, *, prefer_cache: [{"dummy": True}]
+                ),
+                geometry_manual_simulated_lookup=lambda _peaks: {
+                    (1, 2): {"sim_col": 9.0, "sim_row": 8.0}
+                },
+                geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
+                unrotate_display_peaks=(
+                    lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}]
+                ),
+                display_to_native_sim_coords=lambda col, row, shape: (1.0, 2.0),
+                select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+                    orientation_choice,
+                    orientation_diag,
+                ),
+                apply_orientation_to_entries=lambda entries, shape, **kwargs: [
+                    {"x": 31.0, "y": 41.0}
+                ],
+                orient_image_for_fit=lambda image, **kwargs: "fit-image",
             ),
-            geometry_manual_simulated_lookup=lambda _peaks: {
-                (1, 2): {"sim_col": 9.0, "sim_row": 8.0}
-            },
-            geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
-            unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
-            display_to_native_sim_coords=lambda col, row, shape: (1.0, 2.0),
-            select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
-                orientation_choice,
-                orientation_diag,
-            ),
-            apply_orientation_to_entries=lambda entries, shape, **kwargs: [
-                {"x": 31.0, "y": 41.0}
-            ],
-            orient_image_for_fit=lambda image, **kwargs: "fit-image",
             build_runtime_config=lambda fit_params: {
                 "bounds": {"gamma": [0.0, 1.0]},
                 "seen_theta": float(fit_params["theta_initial"]),
@@ -471,10 +480,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         calls["orient_image"] = (image, dict(kwargs))
         return "fit-image"
 
-    dataset = geometry_fit.build_geometry_manual_fit_dataset(
-        0,
-        theta_base=1.5,
-        base_fit_params={"theta_offset": 0.25},
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
         current_background_index=0,
         image_size=100,
@@ -501,6 +507,13 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         select_fit_orientation=_select_fit_orientation,
         apply_orientation_to_entries=_apply_orientation_to_entries,
         orient_image_for_fit=_orient_image_for_fit,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.25},
+        manual_dataset_bindings=manual_dataset_bindings,
         orientation_cfg={"mode": "auto"},
     )
 
@@ -643,22 +656,12 @@ def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() 
 
 def test_make_runtime_geometry_fit_action_prepare_bindings_factory_builds_prepare_bundle() -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
-
-    factory = geometry_fit.make_runtime_geometry_fit_action_prepare_bindings_factory(
-        fit_config={"geometry": {"mode": "test"}},
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["bg0.osc", "bg1.osc"],
         current_background_index=1,
-        theta_initial=9.5,
         image_size=256,
         display_rotate_k=3,
-        apply_geometry_fit_background_selection=lambda **kwargs: True,
-        current_geometry_fit_background_indices=lambda **kwargs: [0, 1],
-        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
-        apply_background_theta_metadata=lambda **kwargs: True,
-        current_background_theta_values=lambda **kwargs: [9.5, 10.5],
-        current_geometry_theta_offset=lambda **kwargs: 0.25,
         geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
-        ensure_geometry_fit_caked_view=lambda: None,
         load_background_by_index=lambda idx: (
             np.zeros((2, 2), dtype=np.float64),
             np.zeros((2, 2), dtype=np.float64),
@@ -672,6 +675,19 @@ def test_make_runtime_geometry_fit_action_prepare_bindings_factory_builds_prepar
         select_fit_orientation=lambda *args, **kwargs: ({}, {}),
         apply_orientation_to_entries=lambda entries, shape, **kwargs: [],
         orient_image_for_fit=lambda image, **kwargs: image,
+    )
+
+    factory = geometry_fit.make_runtime_geometry_fit_action_prepare_bindings_factory(
+        fit_config={"geometry": {"mode": "test"}},
+        theta_initial=9.5,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [9.5, 10.5],
+        current_geometry_theta_offset=lambda **kwargs: 0.25,
+        ensure_geometry_fit_caked_view=lambda: None,
+        manual_dataset_bindings=manual_dataset_bindings,
         build_runtime_config_factory=lambda var_names, fit_params: (
             calls.append((list(var_names), dict(fit_params)))
             or {"vars": list(var_names), "fit_params": dict(fit_params)}
@@ -685,11 +701,12 @@ def test_make_runtime_geometry_fit_action_prepare_bindings_factory_builds_prepar
         geometry_fit.GeometryFitRuntimePreparationBindings,
     )
     assert bindings.fit_config == {"geometry": {"mode": "test"}}
-    assert list(bindings.osc_files) == ["bg0.osc", "bg1.osc"]
-    assert bindings.current_background_index == 1
+    assert bindings.manual_dataset_bindings is manual_dataset_bindings
+    assert list(bindings.manual_dataset_bindings.osc_files) == ["bg0.osc", "bg1.osc"]
+    assert bindings.manual_dataset_bindings.current_background_index == 1
     assert bindings.theta_initial == 9.5
-    assert bindings.image_size == 256
-    assert bindings.display_rotate_k == 3
+    assert bindings.manual_dataset_bindings.image_size == 256
+    assert bindings.manual_dataset_bindings.display_rotate_k == 3
     assert bindings.build_runtime_config({"gamma": 0.2, "a": 4.1}) == {
         "vars": ["gamma", "a"],
         "fit_params": {"gamma": 0.2, "a": 4.1},
@@ -697,10 +714,89 @@ def test_make_runtime_geometry_fit_action_prepare_bindings_factory_builds_prepar
     assert calls == [(["gamma", "a"], {"gamma": 0.2, "a": 4.1})]
 
 
+def test_make_runtime_geometry_fit_manual_dataset_bindings_factory_reads_live_values() -> None:
+    runtime_state = {"background_index": 1}
+
+    factory = geometry_fit.make_runtime_geometry_fit_manual_dataset_bindings_factory(
+        osc_files_factory=lambda: ["bg0.osc", "bg1.osc"],
+        current_background_index_factory=lambda: runtime_state["background_index"],
+        image_size=256,
+        display_rotate_k=3,
+        geometry_manual_pairs_for_index="manual-pairs",
+        load_background_by_index="load-background",
+        apply_background_backend_orientation="apply-orientation",
+        geometry_manual_simulated_peaks_for_params="manual-sim-peaks",
+        geometry_manual_simulated_lookup="manual-sim-lookup",
+        geometry_manual_entry_display_coords="manual-entry-coords",
+        unrotate_display_peaks="unrotate",
+        display_to_native_sim_coords="display-to-native",
+        select_fit_orientation="select-orientation",
+        apply_orientation_to_entries="apply-entries",
+        orient_image_for_fit="orient-image",
+    )
+
+    first = factory()
+    runtime_state["background_index"] = 4
+    second = factory()
+
+    assert isinstance(first, geometry_fit.GeometryFitRuntimeManualDatasetBindings)
+    assert list(first.osc_files) == ["bg0.osc", "bg1.osc"]
+    assert first.current_background_index == 1
+    assert first.image_size == 256
+    assert first.display_rotate_k == 3
+    assert first.geometry_manual_pairs_for_index == "manual-pairs"
+    assert second.current_background_index == 4
+    assert second.geometry_manual_simulated_lookup == "manual-sim-lookup"
+
+
+def test_build_runtime_geometry_fit_config_factory_reads_runtime_constraint_values() -> None:
+    calls: list[tuple[str, object]] = []
+    factory = geometry_fit.build_runtime_geometry_fit_config_factory(
+        base_config={"solver": {"loss": "soft_l1"}},
+        current_constraint_state=lambda names: (
+            calls.append(("constraints", list(names or [])))
+            or {"gamma": {"window": 0.25, "pull": 0.5}}
+        ),
+        current_parameter_domains=lambda names: (
+            calls.append(("domains", list(names or [])))
+            or {"gamma": (0.0, 1.0)}
+        ),
+    )
+
+    runtime_cfg = factory(["gamma"], {"gamma": 0.6, "a": 4.1})
+
+    assert runtime_cfg == {
+        "solver": {"loss": "soft_l1"},
+        "bounds": {"gamma": [0.35, 0.85]},
+        "priors": {"gamma": {"center": 0.6, "sigma": 0.13125}},
+    }
+    assert calls == [
+        ("constraints", ["gamma"]),
+        ("domains", ["gamma"]),
+    ]
+
+
 def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
     monkeypatch,
 ) -> None:
     calls: list[tuple[str, object]] = []
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["bg0.osc"],
+        current_background_index=0,
+        image_size=256,
+        display_rotate_k=3,
+        geometry_manual_pairs_for_index="manual-pairs",
+        load_background_by_index="load-background",
+        apply_background_backend_orientation="apply-orientation",
+        geometry_manual_simulated_peaks_for_params="manual-sim-peaks",
+        geometry_manual_simulated_lookup="manual-sim-lookup",
+        geometry_manual_entry_display_coords="manual-entry-coords",
+        unrotate_display_peaks="unrotate",
+        display_to_native_sim_coords="display-to-native",
+        select_fit_orientation="select-orientation",
+        apply_orientation_to_entries="apply-entries",
+        orient_image_for_fit="orient-image",
+    )
 
     monkeypatch.setattr(
         geometry_fit,
@@ -723,29 +819,15 @@ def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
     bindings = geometry_fit.build_runtime_geometry_fit_action_bindings(
         value_callbacks=value_callbacks,
         fit_config={"geometry": {}},
-        osc_files=["bg0.osc"],
-        current_background_index=0,
         theta_initial=9.5,
-        image_size=256,
-        display_rotate_k=3,
         apply_geometry_fit_background_selection="apply-selection",
         current_geometry_fit_background_indices="current-bg-indices",
         geometry_fit_uses_shared_theta_offset="uses-shared-theta",
         apply_background_theta_metadata="apply-theta-meta",
         current_background_theta_values="current-theta-values",
         current_geometry_theta_offset="current-theta-offset",
-        geometry_manual_pairs_for_index="manual-pairs",
         ensure_geometry_fit_caked_view="ensure-caked",
-        load_background_by_index="load-background",
-        apply_background_backend_orientation="apply-orientation",
-        geometry_manual_simulated_peaks_for_params="manual-sim-peaks",
-        geometry_manual_simulated_lookup="manual-sim-lookup",
-        geometry_manual_entry_display_coords="manual-entry-coords",
-        unrotate_display_peaks="unrotate",
-        display_to_native_sim_coords="display-to-native",
-        select_fit_orientation="select-orientation",
-        apply_orientation_to_entries="apply-entries",
-        orient_image_for_fit="orient-image",
+        manual_dataset_bindings=manual_dataset_bindings,
         build_runtime_config_factory="build-runtime-config",
         downloads_dir="downloads-dir",
         simulation_runtime_state="sim-state",
@@ -790,29 +872,15 @@ def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
             "prepare",
             {
                 "fit_config": {"geometry": {}},
-                "osc_files": ["bg0.osc"],
-                "current_background_index": 0,
                 "theta_initial": 9.5,
-                "image_size": 256,
-                "display_rotate_k": 3,
                 "apply_geometry_fit_background_selection": "apply-selection",
                 "current_geometry_fit_background_indices": "current-bg-indices",
                 "geometry_fit_uses_shared_theta_offset": "uses-shared-theta",
                 "apply_background_theta_metadata": "apply-theta-meta",
                 "current_background_theta_values": "current-theta-values",
                 "current_geometry_theta_offset": "current-theta-offset",
-                "geometry_manual_pairs_for_index": "manual-pairs",
                 "ensure_geometry_fit_caked_view": "ensure-caked",
-                "load_background_by_index": "load-background",
-                "apply_background_backend_orientation": "apply-orientation",
-                "geometry_manual_simulated_peaks_for_params": "manual-sim-peaks",
-                "geometry_manual_simulated_lookup": "manual-sim-lookup",
-                "geometry_manual_entry_display_coords": "manual-entry-coords",
-                "unrotate_display_peaks": "unrotate",
-                "display_to_native_sim_coords": "display-to-native",
-                "select_fit_orientation": "select-orientation",
-                "apply_orientation_to_entries": "apply-entries",
-                "orient_image_for_fit": "orient-image",
+                "manual_dataset_bindings": manual_dataset_bindings,
                 "build_runtime_config_factory": "build-runtime-config",
             },
         ),
@@ -874,32 +942,24 @@ def test_make_runtime_geometry_fit_action_bindings_factory_reads_live_values(
         callback_counter["count"] += 1
         return f"value-callbacks-{callback_counter['count']}"
 
+    manual_dataset_calls: list[object] = []
+    manual_dataset = {"value": "dataset-bindings-1"}
+
     factory = geometry_fit.make_runtime_geometry_fit_action_bindings_factory(
         value_callbacks_factory=_value_callbacks,
         fit_config={"geometry": {"mode": "test"}},
-        osc_files_factory=lambda: ["bg0.osc", "bg1.osc"],
-        current_background_index_factory=lambda: runtime_state["background_index"],
         theta_initial_factory=lambda: runtime_state["theta_initial"],
-        image_size=256,
-        display_rotate_k=3,
         apply_geometry_fit_background_selection="apply-selection",
         current_geometry_fit_background_indices="current-bg-indices",
         geometry_fit_uses_shared_theta_offset="uses-shared-theta",
         apply_background_theta_metadata="apply-theta-meta",
         current_background_theta_values="current-theta-values",
         current_geometry_theta_offset="current-theta-offset",
-        geometry_manual_pairs_for_index="manual-pairs",
         ensure_geometry_fit_caked_view="ensure-caked",
-        load_background_by_index="load-background",
-        apply_background_backend_orientation="apply-orientation",
-        geometry_manual_simulated_peaks_for_params="manual-sim-peaks",
-        geometry_manual_simulated_lookup="manual-sim-lookup",
-        geometry_manual_entry_display_coords="manual-entry-coords",
-        unrotate_display_peaks="unrotate",
-        display_to_native_sim_coords="display-to-native",
-        select_fit_orientation="select-orientation",
-        apply_orientation_to_entries="apply-entries",
-        orient_image_for_fit="orient-image",
+        manual_dataset_bindings_factory=lambda: (
+            manual_dataset_calls.append(runtime_state["background_index"])
+            or manual_dataset["value"]
+        ),
         build_runtime_config_factory="build-runtime-config",
         downloads_dir="downloads-dir",
         simulation_runtime_state="sim-state",
@@ -936,6 +996,7 @@ def test_make_runtime_geometry_fit_action_bindings_factory_reads_live_values(
 
     runtime_state["background_index"] = 4
     runtime_state["theta_initial"] = 12.25
+    manual_dataset["value"] = "dataset-bindings-2"
     solver_inputs["value"] = geometry_fit.GeometryFitRuntimeSolverInputs(
         miller="miller-2",
         intensities="intensity-2",
@@ -945,12 +1006,13 @@ def test_make_runtime_geometry_fit_action_bindings_factory_reads_live_values(
     assert factory() == "bindings-2"
     assert calls[0]["value_callbacks"] == "value-callbacks-1"
     assert calls[1]["value_callbacks"] == "value-callbacks-2"
-    assert calls[0]["current_background_index"] == 1
-    assert calls[1]["current_background_index"] == 4
+    assert calls[0]["manual_dataset_bindings"] == "dataset-bindings-1"
+    assert calls[1]["manual_dataset_bindings"] == "dataset-bindings-2"
     assert calls[0]["theta_initial"] == 9.5
     assert calls[1]["theta_initial"] == 12.25
     assert calls[0]["solver_inputs"].miller == "miller-1"
     assert calls[1]["solver_inputs"].miller == "miller-2"
+    assert manual_dataset_calls == [1, 4]
 
 
 def test_make_runtime_geometry_fit_action_callback_runs_before_action() -> None:

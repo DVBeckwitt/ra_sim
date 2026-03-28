@@ -74,6 +74,7 @@
   - Added `ra_sim/gui/canvas_interactions.py` to own the top-level raw-image canvas event arbitration between manual-geometry placement, preview exclusion, HKL picking, and integration-range dragging, leaving `ra_sim/gui/runtime.py` with one bound canvas callback bundle plus thin event-hook wiring.
   - Moved the runtime binding/callback bootstrap assembly for structure-factor pruning, Bragg-Qr manager workflow, Qr-cylinder overlay, selected-peak workflow, integration-range dragging, canvas interactions, background workflow, and geometry Q-group workflow out of `ra_sim/gui/runtime.py` into `ra_sim/gui/bootstrap.py`, leaving `runtime.py` with local value-source/config builders plus the bound bundle variables used by the live call sites.
   - Moved the geometry-fit action binding/callback bootstrap out of `ra_sim/gui/runtime.py` into `ra_sim/gui/bootstrap.py`, leaving `runtime.py` with one bound geometry-fit action runtime bootstrap value plus the live fit-button config call site.
+  - Expanded `ra_sim/gui/geometry_fit.py` with a shared manual-pair dataset bindings structure/factory plus a shared runtime-config factory for live geometry-fit preparation, leaving `ra_sim/gui/runtime.py` with one bound manual-dataset factory and one shared runtime-config factory instead of threading that geometry-fit prep wiring inline.
   - Preserved the live theta value when geometry-fit background selection is applied without per-background theta overrides.
   - Kept detector hit-table collection enabled when visible manual-geometry overlays need peak metadata for redraws.
   - Added primary CIF browse/apply workflow and dynamic occupancy control rebuild in `main.py`.
@@ -120,6 +121,7 @@
   - Added `tests/test_gui_integration_range_drag.py` for the extracted integration-range drag helpers, rectangle construction, integration-region visual refresh, runtime-binding factory, and callback bundle, and extended `tests/test_gui_controllers.py` to cover the new shared drag-state slice.
   - Extended `tests/test_gui_peak_selection.py` with direct coverage for the extracted HKL-pick toggle, raw-image click selection, config builders, ideal-center probe helper, runtime binding/callback bundle, and selected-peak Bragg/Ewald intersection workflow in addition to the existing HKL lookup and selected-peak state helpers.
   - Added `tests/test_gui_canvas_interactions.py` for the extracted cross-feature canvas click/drag runtime binding factory, callback bundle, and manual-pick/preview/HKL routing behavior.
+  - Extended `tests/test_gui_geometry_fit_workflow.py` with direct coverage for the extracted geometry-fit manual-dataset bindings factory, runtime-config factory, and narrowed preparation/action binding bundles.
   - Added `tests/test_hbn_geometry_mapping.py` for geometry mapping math, metadata validation, sign handling, and startup/import consistency.
   - Added regression coverage for blank background-theta selections preserving the active live theta value.
   - Added regression coverage for manual-geometry overlay redraws requesting hit tables only when the overlay is visible.
