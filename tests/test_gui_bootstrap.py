@@ -448,6 +448,89 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
         ("callbacks", "background-bindings"),
     ]
 
+    background_control_calls: list[tuple[str, object]] = []
+    background_callbacks = SimpleNamespace(
+        refresh_status=lambda: background_control_calls.append(("refresh-status",))
+        or "status",
+        refresh_backend_status=(
+            lambda: background_control_calls.append(("refresh-backend-status",))
+            or "backend-status"
+        ),
+        toggle_visibility=lambda: background_control_calls.append(("toggle",)) or True,
+        switch_background="switch-background",
+        browse_files="browse-files",
+        rotate_backend_minus_90="rotate--90",
+        rotate_backend_plus_90="rotate-90",
+        flip_backend_x="flip-x",
+        flip_backend_y="flip-y",
+        reset_backend_orientation="reset",
+    )
+    workspace_view_state = SimpleNamespace(
+        workspace_actions_frame="actions-frame",
+        workspace_backgrounds_frame="backgrounds-frame",
+    )
+    background_controls_bundle = bootstrap.build_runtime_background_controls_bootstrap(
+        views_module=SimpleNamespace(
+            populate_stacked_button_group=lambda parent, button_specs: (
+                background_control_calls.append(
+                    ("buttons", parent, list(button_specs))
+                )
+            ),
+            create_background_file_controls=lambda **kwargs: (
+                background_control_calls.append(("workspace-controls", kwargs))
+            ),
+            create_background_backend_debug_controls=lambda **kwargs: (
+                background_control_calls.append(("backend-controls", kwargs))
+            ),
+        ),
+        workspace_view_state=workspace_view_state,
+        background_backend_debug_view_state="backend-view",
+        background_callbacks=background_callbacks,
+    )
+
+    assert background_controls_bundle.toggle_visibility() is True
+    background_controls_bundle.create_workspace_controls()
+    background_controls_bundle.create_backend_debug_controls("fit-body")
+    assert background_controls_bundle.refresh_status() == "status"
+    assert background_controls_bundle.refresh_backend_status() == "backend-status"
+    assert background_control_calls == [
+        ("toggle",),
+        (
+            "buttons",
+            "actions-frame",
+            [
+                ("Toggle Background", background_controls_bundle.toggle_visibility),
+                ("Switch Background", "switch-background"),
+            ],
+        ),
+        (
+            "workspace-controls",
+            {
+                "parent": "backgrounds-frame",
+                "view_state": workspace_view_state,
+                "on_load_backgrounds": "browse-files",
+                "status_text": "",
+            },
+        ),
+        ("refresh-status",),
+        (
+            "backend-controls",
+            {
+                "parent": "fit-body",
+                "view_state": "backend-view",
+                "status_text": "",
+                "on_rotate_minus_90": "rotate--90",
+                "on_rotate_plus_90": "rotate-90",
+                "on_flip_x": "flip-x",
+                "on_flip_y": "flip-y",
+                "on_reset": "reset",
+            },
+        ),
+        ("refresh-backend-status",),
+        ("refresh-status",),
+        ("refresh-backend-status",),
+    ]
+
 
 def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     monkeypatch,

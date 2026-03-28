@@ -35,7 +35,9 @@ helper instead of being manually threaded together in `runtime.py`, the
 integration-range update/control workflow now also boots there through one
 shared helper instead of being wired inline in `runtime.py`, the debounced
 range-update scheduler plus analysis-toggle callbacks now also live in
-`ra_sim.gui.integration_range_drag`, the
+`ra_sim.gui.integration_range_drag`, the workspace background action/file
+controls plus backend-debug control wiring now also boot through one shared
+helper in `ra_sim.gui.bootstrap`, the
 geometry-fit manual-pair action binding assembly now also delegates through
 `ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, the
 top-level geometry-fit action callback now also resolves through a shared live
@@ -540,9 +542,11 @@ not `main.py` or `mosaic_profiles.py`.
     binding/callback bundle for background status refresh, backend debug
     status, visibility/browse/load/switch actions, and backend rotate/flip/
     reset actions.
+  - the workspace background action/file controls plus the backend-debug
+    control cluster now also boot through one shared helper in
+    `ra_sim.gui.bootstrap`.
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
-    plus thin status-refresh and control-wiring call sites around that
-    workflow.
+    plus thin cross-feature status-refresh call sites around that workflow.
 - Integration-range drag workflow extraction has advanced.
   - `ra_sim.gui.state` now also owns explicit live drag-selection state for
     1D integration-range picking.
@@ -762,9 +766,9 @@ What is left:
   fit-preview parameter/value sources plus a couple of delegated call sites
   around the extracted manager/view helpers, the bound geometry-fit
   simulation/value callback bundles, and shared bootstrap wiring.
-- The remaining background runtime code is now mostly one bound callback
-  surface plus thin status-refresh and control-wiring call sites around the
-  extracted background manager and shared bootstrap helpers.
+- The remaining background runtime code is now mostly thin cross-feature
+  status-refresh call sites around the extracted background manager and shared
+  bootstrap helpers.
 - The remaining selected-peak runtime code is now mostly thin live
   value-source wiring around the extracted peak-selection helpers and shared
   bootstrap helpers.
@@ -1175,14 +1179,14 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining background/status refresh call-site glue now that
-  the integration-range drag/update workflow handoff is extracted
+- start with the remaining cross-feature background status-refresh call sites
+  now that the background control/status wiring is extracted
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the integration-range update/control cleanup:
+Immediate checklist after the background control/status wiring cleanup:
 
-- trim the remaining background/status refresh call-site glue
+- trim the remaining cross-feature background status-refresh call sites
 - then trim the next cross-feature runtime workflow call sites that still
   bypass the extracted helper modules
 - defer config unification, compatibility cleanup, and repo-root cleanup until

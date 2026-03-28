@@ -467,9 +467,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     binding/callback bundle for background status refresh, backend debug
     status, visibility/browse/load/switch actions, and backend rotate/flip/
     reset actions
+  - the workspace background action/file controls plus the backend-debug
+    control cluster now also boot through one shared helper in
+    `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
-    plus thin status-refresh and control-wiring call sites around that
-    workflow
+    plus thin cross-feature status-refresh call sites around that workflow
 - Integration-range drag workflow extraction has also advanced:
   - explicit live drag-selection state for 1D integration-range picking now
     lives in `ra_sim.gui.state`
@@ -566,9 +568,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining Bragg-Qr manager runtime code is now mostly a few manager
   refresh/action call sites around the extracted manager helpers and shared
   bootstrap wiring.
-- The remaining background runtime code is now mostly one bound callback
-  surface plus thin status-refresh and control-wiring call sites around the
-  extracted background manager and shared bootstrap helpers.
+- The remaining background runtime code is now mostly thin cross-feature
+  status-refresh call sites around the extracted background manager and shared
+  bootstrap helpers.
 - The remaining selected-peak runtime code is now mostly thin live
   value-source wiring around the extracted peak-selection modules and shared
   bootstrap helpers.

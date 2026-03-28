@@ -90,6 +90,17 @@ class HklLookupControlsRuntimeBootstrap:
 
 
 @dataclass(frozen=True)
+class BackgroundControlsRuntimeBootstrap:
+    """Background control wiring extracted from the runtime."""
+
+    create_workspace_controls: Callable[[], None]
+    create_backend_debug_controls: Callable[[Any], None]
+    refresh_status: Callable[[], str]
+    refresh_backend_status: Callable[[], str]
+    toggle_visibility: Callable[[], bool]
+
+
+@dataclass(frozen=True)
 class GeometryToolActionsRuntimeBootstrap:
     """Geometry tool action control wiring extracted from the runtime."""
 
@@ -903,6 +914,74 @@ def build_runtime_hkl_lookup_controls_bootstrap(
         create_controls=_create_controls,
         refresh_controls=_refresh_controls,
         set_hkl_pick_mode=_set_hkl_pick_mode,
+    )
+
+
+def build_runtime_background_controls_bootstrap(
+    *,
+    views_module: Any,
+    workspace_view_state: Any,
+    background_backend_debug_view_state: Any,
+    background_callbacks: Any,
+) -> BackgroundControlsRuntimeBootstrap:
+    """Build the background control clusters through shared view helpers."""
+
+    def _refresh_status() -> str:
+        refresh = getattr(background_callbacks, "refresh_status", None)
+        if callable(refresh):
+            return str(refresh())
+        return ""
+
+    def _refresh_backend_status() -> str:
+        refresh = getattr(background_callbacks, "refresh_backend_status", None)
+        if callable(refresh):
+            return str(refresh())
+        return ""
+
+    def _toggle_visibility() -> bool:
+        toggle = getattr(background_callbacks, "toggle_visibility", None)
+        if callable(toggle):
+            return bool(toggle())
+        return False
+
+    def _create_workspace_controls() -> None:
+        views_module.populate_stacked_button_group(
+            workspace_view_state.workspace_actions_frame,
+            [
+                ("Toggle Background", _toggle_visibility),
+                (
+                    "Switch Background",
+                    background_callbacks.switch_background,
+                ),
+            ],
+        )
+        views_module.create_background_file_controls(
+            parent=workspace_view_state.workspace_backgrounds_frame,
+            view_state=workspace_view_state,
+            on_load_backgrounds=background_callbacks.browse_files,
+            status_text="",
+        )
+        _refresh_status()
+
+    def _create_backend_debug_controls(parent: Any) -> None:
+        views_module.create_background_backend_debug_controls(
+            parent=parent,
+            view_state=background_backend_debug_view_state,
+            status_text="",
+            on_rotate_minus_90=background_callbacks.rotate_backend_minus_90,
+            on_rotate_plus_90=background_callbacks.rotate_backend_plus_90,
+            on_flip_x=background_callbacks.flip_backend_x,
+            on_flip_y=background_callbacks.flip_backend_y,
+            on_reset=background_callbacks.reset_backend_orientation,
+        )
+        _refresh_backend_status()
+
+    return BackgroundControlsRuntimeBootstrap(
+        create_workspace_controls=_create_workspace_controls,
+        create_backend_debug_controls=_create_backend_debug_controls,
+        refresh_status=_refresh_status,
+        refresh_backend_status=_refresh_backend_status,
+        toggle_visibility=_toggle_visibility,
     )
 
 

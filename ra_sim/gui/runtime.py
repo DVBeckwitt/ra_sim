@@ -5503,6 +5503,13 @@ background_runtime = gui_bootstrap.build_runtime_background_bootstrap(
 )
 background_runtime_bindings_factory = background_runtime.bindings_factory
 background_runtime_callbacks = background_runtime.callbacks
+background_controls_runtime = gui_bootstrap.build_runtime_background_controls_bootstrap(
+    views_module=gui_views,
+    workspace_view_state=workspace_panels_view_state,
+    background_backend_debug_view_state=background_backend_debug_view_state,
+    background_callbacks=background_runtime_callbacks,
+)
+toggle_background = background_controls_runtime.toggle_visibility
 
 def reset_to_defaults():
     _clear_geometry_fit_undo_stack()
@@ -5630,21 +5637,7 @@ def reset_to_defaults():
     simulation_runtime_state.last_simulation_signature = None
     schedule_update()
 
-gui_views.populate_stacked_button_group(
-    workspace_panels_view_state.workspace_actions_frame,
-    [
-        ("Toggle Background", background_runtime_callbacks.toggle_visibility),
-        ("Switch Background", background_runtime_callbacks.switch_background),
-    ],
-)
-
-gui_views.create_background_file_controls(
-    parent=workspace_panels_view_state.workspace_backgrounds_frame,
-    view_state=workspace_panels_view_state,
-    on_load_backgrounds=background_runtime_callbacks.browse_files,
-    status_text="",
-)
-background_runtime_callbacks.refresh_status()
+background_controls_runtime.create_workspace_controls()
 
 gui_views.create_background_theta_controls(
     parent=workspace_panels_view_state.workspace_backgrounds_frame,
@@ -6361,17 +6354,8 @@ def _sync_geometry_fit_constraint_rows(*_args) -> None:
             control["_mapped"] = False
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
-    gui_views.create_background_backend_debug_controls(
+    background_controls_runtime.create_backend_debug_controls(
         parent=app_shell_view_state.fit_body,
-        view_state=background_backend_debug_view_state,
-        status_text=gui_background_manager.background_backend_status_text(
-            background_runtime_state
-        ),
-        on_rotate_minus_90=background_runtime_callbacks.rotate_backend_minus_90,
-        on_rotate_plus_90=background_runtime_callbacks.rotate_backend_plus_90,
-        on_flip_x=background_runtime_callbacks.flip_backend_x,
-        on_flip_y=background_runtime_callbacks.flip_backend_y,
-        on_reset=background_runtime_callbacks.reset_backend_orientation,
     )
 
 if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:

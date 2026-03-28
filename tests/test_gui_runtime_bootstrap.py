@@ -243,6 +243,34 @@ def test_runtime_integration_range_controls_are_bootstrapped() -> None:
     }
 
 
+def test_runtime_background_controls_are_bootstrapped() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    has_bootstrap_call = False
+    direct_view_calls = {
+        "create_background_file_controls": 0,
+        "create_background_backend_debug_controls": 0,
+    }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "build_runtime_background_controls_bootstrap":
+            has_bootstrap_call = True
+        if func.attr in direct_view_calls:
+            direct_view_calls[func.attr] += 1
+
+    assert has_bootstrap_call is True
+    assert direct_view_calls == {
+        "create_background_file_controls": 0,
+        "create_background_backend_debug_controls": 0,
+    }
+
+
 def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
