@@ -73,6 +73,25 @@ class IntegrationRangeDragRuntimeBootstrap:
     refresh_visuals: Callable[[], None]
 
 
+@dataclass(frozen=True)
+class BraggQrWorkflowRuntimeBootstrap:
+    """Live pruning and Bragg-Qr manager callbacks wired as one workflow."""
+
+    pruning_bindings_factory: Callable[[], Any]
+    manager_bindings_factory: Callable[[], Any]
+    current_sf_prune_bias: Callable[[], Any]
+    current_solve_q_values: Callable[[], Any]
+    update_status_label: Callable[[], Any]
+    apply_filters: Callable[..., Any]
+    on_sf_prune_bias_change: Callable[..., Any]
+    on_solve_q_steps_change: Callable[..., Any]
+    on_solve_q_rel_tol_change: Callable[..., Any]
+    set_solve_q_control_states: Callable[[], Any]
+    on_solve_q_mode_change: Callable[..., Any]
+    refresh_window: Callable[..., Any]
+    open_window: Callable[..., Any]
+
+
 def extract_bundle_arg(argv: Sequence[str]) -> str | None:
     """Extract an optional ``--bundle`` value from CLI args."""
 
@@ -472,6 +491,78 @@ def build_runtime_bragg_qr_bootstrap(
             root=root,
             bindings_factory=bindings_factory,
         ),
+    )
+
+
+def build_runtime_bragg_qr_workflow_bootstrap(
+    *,
+    structure_factor_pruning_module: Any,
+    bragg_qr_manager_module: Any,
+    root: Any,
+    uniform_flag: int,
+    adaptive_flag: int,
+    structure_factor_pruning_view_state_factory: object,
+    bragg_qr_view_state: Any,
+    simulation_runtime_state: Any,
+    bragg_qr_manager_state: Any,
+    clip_prune_bias: Callable[[object], float],
+    clip_solve_q_steps: Callable[[object], int],
+    clip_solve_q_rel_tol: Callable[[object], float],
+    normalize_solve_q_mode_label: Callable[[object], str],
+    schedule_update_factory: object | None = None,
+    primary_candidate: object = None,
+    primary_fallback: object = None,
+    secondary_candidate: object | None = None,
+    set_progress_text_factory: Callable[[], Callable[[str], None] | None] | None = None,
+    invalid_key: int = 0,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+) -> BraggQrWorkflowRuntimeBootstrap:
+    """Build the coupled pruning and Bragg-Qr manager workflow callbacks."""
+
+    manager_refresh_window: Callable[..., Any] | None = None
+    pruning_runtime = build_runtime_structure_factor_pruning_bootstrap(
+        structure_factor_pruning_module=structure_factor_pruning_module,
+        uniform_flag=uniform_flag,
+        adaptive_flag=adaptive_flag,
+        view_state_factory=structure_factor_pruning_view_state_factory,
+        simulation_runtime_state=simulation_runtime_state,
+        bragg_qr_manager_state=bragg_qr_manager_state,
+        clip_prune_bias=clip_prune_bias,
+        clip_solve_q_steps=clip_solve_q_steps,
+        clip_solve_q_rel_tol=clip_solve_q_rel_tol,
+        normalize_solve_q_mode_label=normalize_solve_q_mode_label,
+        schedule_update_factory=schedule_update_factory,
+        refresh_window_factory=lambda: manager_refresh_window,
+    )
+    bragg_qr_runtime = build_runtime_bragg_qr_bootstrap(
+        bragg_qr_manager_module=bragg_qr_manager_module,
+        root=root,
+        view_state=bragg_qr_view_state,
+        manager_state=bragg_qr_manager_state,
+        simulation_runtime_state=simulation_runtime_state,
+        primary_candidate=primary_candidate,
+        primary_fallback=primary_fallback,
+        secondary_candidate=secondary_candidate,
+        apply_filters=lambda: pruning_runtime.apply_filters(trigger_update=True),
+        set_progress_text_factory=set_progress_text_factory,
+        invalid_key=invalid_key,
+        tcl_error_types=tcl_error_types,
+    )
+    manager_refresh_window = bragg_qr_runtime.refresh_window
+    return BraggQrWorkflowRuntimeBootstrap(
+        pruning_bindings_factory=pruning_runtime.bindings_factory,
+        manager_bindings_factory=bragg_qr_runtime.bindings_factory,
+        current_sf_prune_bias=pruning_runtime.current_sf_prune_bias,
+        current_solve_q_values=pruning_runtime.current_solve_q_values,
+        update_status_label=pruning_runtime.update_status_label,
+        apply_filters=pruning_runtime.apply_filters,
+        on_sf_prune_bias_change=pruning_runtime.on_sf_prune_bias_change,
+        on_solve_q_steps_change=pruning_runtime.on_solve_q_steps_change,
+        on_solve_q_rel_tol_change=pruning_runtime.on_solve_q_rel_tol_change,
+        set_solve_q_control_states=pruning_runtime.set_solve_q_control_states,
+        on_solve_q_mode_change=pruning_runtime.on_solve_q_mode_change,
+        refresh_window=bragg_qr_runtime.refresh_window,
+        open_window=bragg_qr_runtime.open_window,
     )
 
 

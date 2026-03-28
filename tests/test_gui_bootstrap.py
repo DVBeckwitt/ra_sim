@@ -518,6 +518,124 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
         ("refresh", "bindings-factory"),
     ]
 
+
+def test_build_runtime_bragg_qr_workflow_bootstrap_composes_pruning_and_manager(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    filter_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        bootstrap,
+        "build_runtime_structure_factor_pruning_bootstrap",
+        lambda **kwargs: calls.append(("pruning", kwargs))
+        or SimpleNamespace(
+            bindings_factory="pruning-bindings",
+            current_sf_prune_bias="current-bias",
+            current_solve_q_values="current-solve-q",
+            update_status_label="update-status",
+            apply_filters=(
+                lambda *, trigger_update=True: (
+                    filter_calls.append(bool(trigger_update))
+                    or {"trigger_update": bool(trigger_update)}
+                )
+            ),
+            on_sf_prune_bias_change="on-bias",
+            on_solve_q_steps_change="on-steps",
+            on_solve_q_rel_tol_change="on-rel-tol",
+            set_solve_q_control_states="set-controls",
+            on_solve_q_mode_change="on-mode",
+        ),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "build_runtime_bragg_qr_bootstrap",
+        lambda **kwargs: calls.append(("manager", kwargs))
+        or SimpleNamespace(
+            bindings_factory="manager-bindings",
+            refresh_window="refresh-window",
+            open_window="open-window",
+        ),
+    )
+
+    bundle = bootstrap.build_runtime_bragg_qr_workflow_bootstrap(
+        structure_factor_pruning_module="pruning-module",
+        bragg_qr_manager_module="manager-module",
+        root="root-window",
+        uniform_flag=1,
+        adaptive_flag=2,
+        structure_factor_pruning_view_state_factory="pruning-view",
+        bragg_qr_view_state="manager-view",
+        simulation_runtime_state="runtime-state",
+        bragg_qr_manager_state="manager-state",
+        clip_prune_bias="clip-bias",
+        clip_solve_q_steps="clip-steps",
+        clip_solve_q_rel_tol="clip-rel-tol",
+        normalize_solve_q_mode_label="normalize-mode",
+        schedule_update_factory="schedule-update",
+        primary_candidate="primary-candidate",
+        primary_fallback="primary-fallback",
+        secondary_candidate="secondary-candidate",
+        set_progress_text_factory="progress-factory",
+        invalid_key=-99,
+        tcl_error_types=(RuntimeError,),
+    )
+
+    assert bundle.pruning_bindings_factory == "pruning-bindings"
+    assert bundle.manager_bindings_factory == "manager-bindings"
+    assert bundle.current_sf_prune_bias == "current-bias"
+    assert bundle.current_solve_q_values == "current-solve-q"
+    assert bundle.update_status_label == "update-status"
+    assert bundle.on_sf_prune_bias_change == "on-bias"
+    assert bundle.on_solve_q_steps_change == "on-steps"
+    assert bundle.on_solve_q_rel_tol_change == "on-rel-tol"
+    assert bundle.set_solve_q_control_states == "set-controls"
+    assert bundle.on_solve_q_mode_change == "on-mode"
+    assert bundle.refresh_window == "refresh-window"
+    assert bundle.open_window == "open-window"
+    assert bundle.apply_filters(trigger_update=False) == {"trigger_update": False}
+    assert filter_calls == [False]
+
+    pruning_call = calls[0]
+    manager_call = calls[1]
+    assert pruning_call == (
+        "pruning",
+        {
+            "structure_factor_pruning_module": "pruning-module",
+            "uniform_flag": 1,
+            "adaptive_flag": 2,
+            "view_state_factory": "pruning-view",
+            "simulation_runtime_state": "runtime-state",
+            "bragg_qr_manager_state": "manager-state",
+            "clip_prune_bias": "clip-bias",
+            "clip_solve_q_steps": "clip-steps",
+            "clip_solve_q_rel_tol": "clip-rel-tol",
+            "normalize_solve_q_mode_label": "normalize-mode",
+            "schedule_update_factory": "schedule-update",
+            "refresh_window_factory": pruning_call[1]["refresh_window_factory"],
+        },
+    )
+    assert manager_call == (
+        "manager",
+        {
+            "bragg_qr_manager_module": "manager-module",
+            "root": "root-window",
+            "view_state": "manager-view",
+            "manager_state": "manager-state",
+            "simulation_runtime_state": "runtime-state",
+            "primary_candidate": "primary-candidate",
+            "primary_fallback": "primary-fallback",
+            "secondary_candidate": "secondary-candidate",
+            "apply_filters": manager_call[1]["apply_filters"],
+            "set_progress_text_factory": "progress-factory",
+            "invalid_key": -99,
+            "tcl_error_types": (RuntimeError,),
+        },
+    )
+    assert pruning_call[1]["refresh_window_factory"]() == "refresh-window"
+    assert manager_call[1]["apply_filters"]() == {"trigger_update": True}
+    assert filter_calls == [False, True]
+
     geometry_calls: list[tuple[object, ...]] = []
     geometry_module = SimpleNamespace(
         make_runtime_geometry_q_group_bindings_factory=(

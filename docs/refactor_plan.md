@@ -25,7 +25,10 @@ binding/callback bootstrap for the extracted GUI workflows now also lives in
 `ra_sim.gui.bootstrap`, the selected-peak / HKL-pick runtime setup now also
 boots through one shared helper there instead of being assembled inline, the
 integration-range drag rectangle setup plus live region-refresh callback now
-also boot there instead of being assembled inline, and the main remaining
+also boot there instead of being assembled inline, the live structure-factor-
+pruning and Bragg-Qr manager workflow now also boots there through one shared
+helper instead of being manually threaded together in `runtime.py`, and the
+main remaining
 cleanup target is now the
 residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
 not `main.py` or `mosaic_profiles.py`.
@@ -100,6 +103,13 @@ not `main.py` or `mosaic_profiles.py`.
     assemble through one shared helper in `ra_sim.gui.bootstrap`.
   - `runtime.py` no longer creates those drag/region rectangles inline or owns
     the thin integration-region refresh wrapper around that workflow.
+- Bragg-Qr / structure-factor-pruning bootstrap cleanup has advanced further.
+  - The live pruning callback surface, Bragg-Qr manager callback surface, and
+    the refresh/apply-filters link between them now assemble through one
+    shared helper in `ra_sim.gui.bootstrap`.
+  - `runtime.py` no longer manually threads the live Bragg-Qr manager refresh
+    callback into the pruning workflow or re-wires the manager apply-filters
+    callback inline.
 - Bragg Qr manager migration has started.
   - Bragg-Qr selection/index bookkeeping now lives in `ra_sim.gui.state`.
   - Controller helpers now own Bragg-Qr selection mapping and group/L-value
@@ -662,15 +672,15 @@ What is left:
   extraction or the structure-model / diffuse-HT rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining structure-factor-pruning runtime code is now mostly live call
-  sites plus a few local value-source helpers around the extracted pruning
-  module and shared bootstrap wiring.
+- The remaining structure-factor-pruning runtime code is now mostly control
+  trace hookups plus a few value-source call sites around the extracted
+  pruning module and shared bootstrap wiring.
 - The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
   sites around the extracted controller/view modules and shared bootstrap/
   config helpers.
-- The remaining Bragg-Qr manager runtime code is now mostly the live filter
-  pipeline/HKL lookup call sites around the extracted manager helpers and
-  shared bootstrap wiring.
+- The remaining Bragg-Qr manager runtime code is now mostly open-control and
+  HKL lookup call sites around the extracted manager helpers and shared
+  bootstrap wiring.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   fit-preview parameter/value sources plus a couple of delegated call sites
   around the extracted manager/view helpers, the bound geometry-fit
@@ -1092,9 +1102,9 @@ The next best step is:
 
 Immediate checklist after the selected-peak and integration-range bootstrap cleanup:
 
-- take the Bragg-Qr manager live filter / HKL lookup call sites next
-- then collapse the remaining selected-peak control wiring / refresh call
+- collapse the remaining selected-peak control wiring / refresh call
   sites around the extracted helpers
+- then take the remaining Bragg-Qr manager open-control / HKL lookup call sites
 - then take the geometry-fit manual-pair action-bundle assembly
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving

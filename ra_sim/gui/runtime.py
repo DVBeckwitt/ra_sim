@@ -805,71 +805,6 @@ simulation_runtime_state.sf_prune_stats = {
     "hkl_secondary_total": 0,
     "hkl_secondary_kept": 0,
 }
-structure_factor_pruning_runtime = (
-    gui_bootstrap.build_runtime_structure_factor_pruning_bootstrap(
-        structure_factor_pruning_module=gui_structure_factor_pruning,
-        uniform_flag=SOLVE_Q_MODE_UNIFORM,
-        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
-        view_state_factory=lambda: globals().get(
-            "structure_factor_pruning_controls_view_state"
-        ),
-        simulation_runtime_state=simulation_runtime_state,
-        bragg_qr_manager_state=bragg_qr_manager_state,
-        clip_prune_bias=lambda value: (
-            gui_structure_factor_pruning.clip_runtime_sf_prune_bias(
-                value,
-                fallback=defaults.get("sf_prune_bias", 0.0),
-                minimum=SF_PRUNE_BIAS_MIN,
-                maximum=SF_PRUNE_BIAS_MAX,
-            )
-        ),
-        clip_solve_q_steps=lambda value: (
-            gui_structure_factor_pruning.clip_runtime_solve_q_steps(
-                value,
-                fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-                minimum=MIN_SOLVE_Q_STEPS,
-                maximum=MAX_SOLVE_Q_STEPS,
-            )
-        ),
-        clip_solve_q_rel_tol=lambda value: (
-            gui_structure_factor_pruning.clip_runtime_solve_q_rel_tol(
-                value,
-                fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-                minimum=MIN_SOLVE_Q_REL_TOL,
-                maximum=MAX_SOLVE_Q_REL_TOL,
-            )
-        ),
-        normalize_solve_q_mode_label=(
-            gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label
-        ),
-        schedule_update_factory=lambda: (
-            globals().get("schedule_update")
-            if callable(globals().get("schedule_update"))
-            else None
-        ),
-        refresh_window_factory=lambda: (
-            globals().get("bragg_qr_runtime_refresh")
-            if callable(globals().get("bragg_qr_runtime_refresh"))
-            else None
-        ),
-    )
-)
-structure_factor_pruning_runtime_bindings_factory = (
-    structure_factor_pruning_runtime.bindings_factory
-)
-current_sf_prune_bias = structure_factor_pruning_runtime.current_sf_prune_bias
-current_solve_q_values = structure_factor_pruning_runtime.current_solve_q_values
-update_sf_prune_status_label = structure_factor_pruning_runtime.update_status_label
-apply_bragg_qr_filters = structure_factor_pruning_runtime.apply_filters
-on_sf_prune_bias_change = structure_factor_pruning_runtime.on_sf_prune_bias_change
-on_solve_q_steps_change = structure_factor_pruning_runtime.on_solve_q_steps_change
-on_solve_q_rel_tol_change = structure_factor_pruning_runtime.on_solve_q_rel_tol_change
-set_solve_q_control_states = (
-    structure_factor_pruning_runtime.set_solve_q_control_states
-)
-on_solve_q_mode_change = structure_factor_pruning_runtime.on_solve_q_mode_change
-
-apply_bragg_qr_filters(trigger_update=False)
 
 # Build summary and details dataframes using the helper.
 df_summary, df_details = build_intensity_dataframes(
@@ -3571,16 +3506,53 @@ def _update_geometry_preview_exclude_button_label():
     )
 
 
-bragg_qr_runtime = gui_bootstrap.build_runtime_bragg_qr_bootstrap(
+bragg_qr_workflow_runtime = gui_bootstrap.build_runtime_bragg_qr_workflow_bootstrap(
+    structure_factor_pruning_module=gui_structure_factor_pruning,
     bragg_qr_manager_module=gui_bragg_qr_manager,
     root=root,
-    view_state=bragg_qr_manager_view_state,
-    manager_state=bragg_qr_manager_state,
+    uniform_flag=SOLVE_Q_MODE_UNIFORM,
+    adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
+    structure_factor_pruning_view_state_factory=lambda: globals().get(
+        "structure_factor_pruning_controls_view_state"
+    ),
+    bragg_qr_view_state=bragg_qr_manager_view_state,
     simulation_runtime_state=simulation_runtime_state,
+    bragg_qr_manager_state=bragg_qr_manager_state,
+    clip_prune_bias=lambda value: (
+        gui_structure_factor_pruning.clip_runtime_sf_prune_bias(
+            value,
+            fallback=defaults.get("sf_prune_bias", 0.0),
+            minimum=SF_PRUNE_BIAS_MIN,
+            maximum=SF_PRUNE_BIAS_MAX,
+        )
+    ),
+    clip_solve_q_steps=lambda value: (
+        gui_structure_factor_pruning.clip_runtime_solve_q_steps(
+            value,
+            fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+            minimum=MIN_SOLVE_Q_STEPS,
+            maximum=MAX_SOLVE_Q_STEPS,
+        )
+    ),
+    clip_solve_q_rel_tol=lambda value: (
+        gui_structure_factor_pruning.clip_runtime_solve_q_rel_tol(
+            value,
+            fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+            minimum=MIN_SOLVE_Q_REL_TOL,
+            maximum=MAX_SOLVE_Q_REL_TOL,
+        )
+    ),
+    normalize_solve_q_mode_label=(
+        gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label
+    ),
+    schedule_update_factory=lambda: (
+        globals().get("schedule_update")
+        if callable(globals().get("schedule_update"))
+        else None
+    ),
     primary_candidate=(lambda: a_var.get()),
     primary_fallback=float(av),
     secondary_candidate=(lambda: av2),
-    apply_filters=lambda: apply_bragg_qr_filters(trigger_update=True),
     set_progress_text_factory=lambda: (
         (lambda text: progress_label_positions.config(text=text))
         if "progress_label_positions" in globals()
@@ -3589,9 +3561,17 @@ bragg_qr_runtime = gui_bootstrap.build_runtime_bragg_qr_bootstrap(
     invalid_key=BRAGG_QR_L_INVALID_KEY,
     tcl_error_types=(tk.TclError,),
 )
-bragg_qr_runtime_bindings_factory = bragg_qr_runtime.bindings_factory
-bragg_qr_runtime_refresh = bragg_qr_runtime.refresh_window
-bragg_qr_runtime_open = bragg_qr_runtime.open_window
+current_sf_prune_bias = bragg_qr_workflow_runtime.current_sf_prune_bias
+current_solve_q_values = bragg_qr_workflow_runtime.current_solve_q_values
+update_sf_prune_status_label = bragg_qr_workflow_runtime.update_status_label
+apply_bragg_qr_filters = bragg_qr_workflow_runtime.apply_filters
+on_sf_prune_bias_change = bragg_qr_workflow_runtime.on_sf_prune_bias_change
+on_solve_q_steps_change = bragg_qr_workflow_runtime.on_solve_q_steps_change
+on_solve_q_rel_tol_change = bragg_qr_workflow_runtime.on_solve_q_rel_tol_change
+set_solve_q_control_states = bragg_qr_workflow_runtime.set_solve_q_control_states
+on_solve_q_mode_change = bragg_qr_workflow_runtime.on_solve_q_mode_change
+bragg_qr_runtime_open = bragg_qr_workflow_runtime.open_window
+apply_bragg_qr_filters(trigger_update=False)
 
 
 peak_selection_runtime = gui_bootstrap.build_runtime_selected_peak_bootstrap(

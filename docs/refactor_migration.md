@@ -118,6 +118,13 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     assemble through one shared helper in `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` no longer creates those drag/region rectangles
     inline or owns the thin integration-region refresh wrapper
+- Bragg-Qr / structure-factor-pruning bootstrap cleanup has also advanced:
+  - the live pruning callback surface, Bragg-Qr manager callback surface, and
+    the refresh/apply-filters link between them now assemble through one
+    shared helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` no longer manually threads the live Bragg-Qr manager
+    refresh callback into the pruning workflow or re-wires the manager
+    apply-filters callback inline
 - Bragg Qr manager migration has also started:
   - Bragg-Qr selection/index bookkeeping now uses shared GUI state
   - Bragg-Qr selection mapping and group/L-value toggle mutations now flow
@@ -491,9 +498,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   extracted structure-model rebuild path.
 - The remaining structure-model runtime code is now mostly thin delegate
   wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining structure-factor-pruning runtime code is now mostly live call
-  sites plus a few local value-source helpers around the extracted pruning
-  module and shared bootstrap wiring.
+- The remaining structure-factor-pruning runtime code is now mostly control
+  trace hookups plus a few value-source call sites around the extracted
+  pruning module and shared bootstrap wiring.
 - The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
   sites around the extracted controller/view modules and shared bootstrap/
   config helpers.
@@ -501,9 +508,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   fit-preview parameter/value sources plus a couple of delegated call sites
   around the extracted manager/view helpers, the bound geometry-fit
   simulation/value callback bundles, and shared bootstrap wiring.
-- The remaining Bragg-Qr manager runtime code is now mostly the live filter
-  pipeline/HKL lookup call sites around the extracted manager helpers and
-  shared bootstrap wiring.
+- The remaining Bragg-Qr manager runtime code is now mostly open-control and
+  HKL lookup call sites around the extracted manager helpers and shared
+  bootstrap wiring.
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
