@@ -57,10 +57,13 @@ directly in `runtime.py`, the geometry-tool action control cluster now also
 boots through one shared helper in `ra_sim.gui.bootstrap`, the remaining
 fit-history button-state plus manual-pick label/mode/clear runtime callbacks
 now also assemble through one shared helper in `ra_sim.gui.geometry_fit`
-instead of being wired inline in `runtime.py`, and the main remaining
-cleanup target is now the
-residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
-not `main.py` or `mosaic_profiles.py`.
+instead of being wired inline in `runtime.py`, the public
+`ra_sim.gui.runtime` module is now also an import-safe wrapper that lazy-loads
+the heavy GUI body from `ra_sim/gui/_runtime/runtime_impl.py`, and the project
+is now leaving open-ended runtime decomposition mode: the remaining inline code
+in that internal implementation module is mostly integration glue, so future
+refactors there should be driven by concrete wins rather than file-size
+reduction.
 
 ### What Is Already Done
 
@@ -70,8 +73,9 @@ not `main.py` or `mosaic_profiles.py`.
 - Package import safety improved.
   - `ra_sim.gui.app` is now an import-safe entrypoint that lazy-loads
     `ra_sim.gui.runtime`.
-  - `tests/test_import_smoke.py` is green except for the intentional skip of
-    `ra_sim.gui.runtime`, which still performs heavy GUI startup work on import.
+  - `ra_sim.gui.runtime` is now also an import-safe compatibility wrapper that
+    lazy-loads `ra_sim/gui/_runtime/runtime_impl.py`.
+  - `tests/test_import_smoke.py` now covers `ra_sim.gui.runtime` directly.
 - Large GUI feature slices have already been extracted from `runtime.py`.
   - `ra_sim.gui.bootstrap`
   - `ra_sim.gui.background`
@@ -632,15 +636,20 @@ not `main.py` or `mosaic_profiles.py`.
 ### What This Means
 
 - The original goal of turning `main.py` into a wrapper is effectively done.
-- The main unfinished work is the final stage of breaking down
-  `ra_sim/gui/runtime.py` and turning the GUI scaffolding modules into real
-  application structure.
+- The broad GUI runtime-state extraction phase is effectively done.
+- The public `ra_sim.gui.runtime` import/startup boundary is now also
+  stabilized.
+- The remaining runtime-implementation work is now lower-ROI integration glue
+  rather than another high-value extraction wave.
+- The strategy from here should be to cap open-ended runtime rewiring,
+  prioritize import/startup safety, test cleanup, and config unification, and
+  only keep refactoring runtime call sites when they buy a concrete win.
 
 ## Workstreams
 
 ### 1. GUI Runtime Decomposition
 
-Status: Completed
+Status: Completed (targeted follow-up only)
 
 What is done:
 
@@ -781,52 +790,40 @@ What is done:
 What is left:
 
 - No further GUI runtime-state extraction blockers remain.
-- `ra_sim/gui/runtime.py` is still very large and still coordinates too many
-  cross-feature workflow transitions and Tk widgets inline.
-- The follow-on runtime cleanup is now the remaining controller/view workflow
-  glue still inline in `runtime.py`, not another round of GUI runtime-state
-  extraction or the structure-model / diffuse-HT rebuild path.
-- The remaining structure-model runtime code is now mostly thin delegate
-  wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining structure-factor-pruning runtime code is now mostly control
-  value-source and normalized default-reset call sites around the extracted
-  pruning module and shared bootstrap wiring.
-- The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
-  sites around the extracted controller/view modules and shared bootstrap/
-  config helpers.
-- The remaining Bragg-Qr manager runtime code is now mostly a few manager
-  refresh/action call sites around the extracted manager helpers and shared
-  bootstrap wiring.
-- The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
-  fit-preview parameter/value sources plus a couple of delegated call sites
-  around the extracted manager/view helpers, the bound geometry-fit
-  simulation/value callback bundles, and shared bootstrap wiring.
-- The remaining background runtime code is now mostly thin cross-feature
-  status-refresh helper aliases plus the late-bound value-source wiring around
-  the extracted background manager/background-theta helpers and shared
-  bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly thin live
-  value-source wiring around the extracted peak-selection helpers and shared
-  bootstrap helpers.
-- The remaining geometry-fit manual-pair runtime code is now mostly the
-  smaller runtime-config/constraint readers plus Tk-side control wiring around
-  the extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
-  shared bootstrap helper surfaces.
-- The remaining integration-range runtime code is now mostly thin live
-  value-source wiring around the extracted drag/update helpers and shared
-  bootstrap surfaces.
+- `ra_sim.gui.runtime` is now a thin import-safe wrapper, while the remaining
+  large integration module lives in `ra_sim/gui/_runtime/runtime_impl.py`.
+- Most of the remaining inline code there is now integration glue rather than
+  high-value extractable feature logic.
+- The remaining structure-model, structure-factor-pruning, Bragg-Qr,
+  geometry-fit selector, background, selected-peak, manual-pair, and
+  integration-range runtime code is now mostly thin delegate wiring,
+  value-source readers, default-reset helpers, and Tk-side coordination around
+  the extracted modules.
+- Further runtime decomposition should now be opt-in, not the default next
+  task.
+- A runtime refactor should only be taken when it improves import/startup
+  safety, materially improves testability, removes duplicated behavior used by
+  multiple workflows, simplifies a bug-prone flow, or directly unblocks
+  feature work.
+- Thin value-source rewiring or callback extraction done only to shrink
+  the internal runtime implementation is now out of scope by default.
 
 Why it matters:
 
 - The highest-risk runtime-state ownership gap is now closed.
-- The codebase still has one oversized integration module, but the remaining
-  work can now focus on application boundaries and workflow orchestration
-  instead of more GUI-global cleanup.
+- The remaining runtime work has diminishing returns if it is pursued for
+  purity alone.
+- Treating `runtime.py` as an integration shell preserves the earlier
+  extraction wins without spending more days on low-payoff plumbing.
 
 Definition of done:
 
-- `runtime.py` becomes a composition/integration layer rather than the owner of
-  feature logic and long-lived feature state.
+- `ra_sim.gui.runtime` remains an import-safe public wrapper.
+- The internal runtime implementation is accepted as a
+  composition/integration layer rather than a target for open-ended
+  line-count reduction.
+- Remaining runtime edits are justified by concrete reliability,
+  maintainability, testability, or feature-delivery wins.
 - Feature state is grouped into explicit structures instead of scattered module
   globals.
 
@@ -941,17 +938,20 @@ What is left:
 - The GUI still does not flow broadly through an explicit
   state/controller/view boundary.
 - The new controller/state boundary is now real for a larger share of the GUI,
-  but it is not yet the dominant app structure across the rest of the runtime.
-- The next practical boundary targets are the remaining cross-feature
-  runtime-owned helpers plus the remaining controller/view workflow
-  transitions that still live inline in `runtime.py`.
+  but turning it into the dominant app structure should now be driven by
+  concrete workflow simplification, not by forcing every remaining callback
+  through the new modules.
+- The next practical boundary targets are the shared workflow transitions that
+  still carry duplicated logic, import/startup coupling, or test friction.
+- Thin one-off Tk adapters can remain in the internal runtime implementation
+  when moving them would be mostly mechanical.
 
 Why it matters:
 
-- Until these modules become real, extracted feature helpers are still anchored
-  to the runtime monolith instead of a maintainable app structure.
-- This is the clearest next step for finishing the migration rather than just
-  extracting more helpers.
+- These modules should become the default home for shared stateful behavior and
+  reusable workflow orchestration.
+- They do not need to absorb every last adapter function to provide a real,
+  maintainable app structure.
 
 Definition of done:
 
@@ -1020,6 +1020,9 @@ Status: Partially done
 
 What is done:
 
+- `ra_sim.gui.runtime` is now an import-safe public wrapper around the internal
+  GUI implementation module.
+- `tests/test_import_smoke.py` now covers `ra_sim.gui.runtime` directly.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.
@@ -1028,15 +1031,16 @@ What is left:
 
 - Some tests still use AST extraction against implementation files such as
   `ra_sim/gui/app.py`.
-- `ra_sim.gui.runtime` still cannot participate in normal import-smoke testing
-  because it performs heavy startup work on import.
+- Some implementation-shape tests still target the internal runtime module
+  directly because they were written around the old import-heavy layout.
 
 Why it matters:
 
 - AST-based tests are brittle and reward preserving file shape rather than
   preserving behavior.
-- Import-heavy runtime behavior still makes normal module testing harder than it
-  should be.
+- The public runtime import boundary is now fixed, so the remaining test work
+  can focus on reducing file-shape coupling instead of compensating for startup
+  side effects.
 
 Definition of done:
 
@@ -1097,68 +1101,52 @@ Definition of done:
 
 ## Recommended Order
 
-### Phase A: Finish Runtime State Extraction
+### Phase A: Stabilize Import / Startup Boundaries
 
 Goal:
 
-- Stop letting `ra_sim/gui/runtime.py` own major feature state directly.
+- Make GUI startup behavior easier to reason about and reduce import-time
+  coupling.
 
 Tasks:
 
-- Group more runtime globals into explicit state containers.
-- Move remaining long-lived runtime-owned widget/state coordination into shared
-  state containers and `views.py` helpers where it still exists.
-- Reduce direct feature coordination in `runtime.py` where controller logic or
-  shared state can own it instead.
-- Keep moving Tk-owned widget references out of runtime and into `views.py`
-  state/helpers.
+- Identify `ra_sim.gui.runtime` work that still happens on import instead of
+  at launch/call time.
+- Move launch-only initialization behind explicit call boundaries where
+  practical.
+- Make the public runtime module safe to import without launching the GUI.
 
 Why first:
 
-- This is the highest-value remaining cleanup item.
-- It unlocks the scaffold modules and reduces the risk of further extraction
-  work.
+- This yields concrete reliability and testability gains.
+- It is higher ROI than more line-count-driven runtime slicing.
 
 Current status:
 
-- Completed. The remaining GUI work has moved on to workflow/controller/view
-  boundaries rather than long-lived runtime-state extraction.
+- Landed for the public runtime boundary.
+- `ra_sim.gui.runtime` now lazy-loads the heavy GUI implementation from
+  `ra_sim/gui/_runtime/runtime_impl.py`.
 
-### Phase B: Turn Scaffolding Into Real Modules
+### Phase B: Finish Test Cleanup
 
 Goal:
 
-- Make `state.py`, `controllers.py`, and `views.py` real application
-  boundaries.
+- Make tests target imported modules and stable behavior.
 
 Tasks:
 
-- Define app-level state containers.
-- Move workflow orchestration into controllers.
-- Move Tk construction helpers and widget assembly into views.
+- Replace remaining AST-extraction tests where practical.
+- Add or extend direct module tests around GUI bootstrap and controller/view
+  behavior.
+- Keep import-smoke coverage moving once startup side effects are contained.
 
 Why second:
 
-- Once state ownership is clearer, controller/view boundaries become practical
-  rather than decorative.
+- Better tests are the main force multiplier for the next phase of feature
+  work.
+- This is now a better use of time than more mechanical callback extraction.
 
-### Phase C: Finish Compatibility Cleanup
-
-Goal:
-
-- Converge on a single documented GUI entrypoint.
-
-Tasks:
-
-- Decide whether `ra_sim.gui.main_app` stays as a permanent compatibility alias
-  or is removed later.
-- Update docs/tests to reflect the canonical entrypoint.
-
-Why third:
-
-- This is easiest to finalize after the runtime structure is stable.
-
-### Phase D: Unify Config Loading
+### Phase C: Unify Config Loading
 
 Goal:
 
@@ -1170,26 +1158,50 @@ Tasks:
 - Keep a compatibility shim only as long as needed.
 - Remove duplicated config responsibilities.
 
-Why fourth:
+Why third:
 
-- This is a repo-wide change and should happen after the GUI boundaries are less
-  volatile.
+- This is repo-wide technical debt with a clear duplication cost.
+- It no longer needs to wait on more GUI rewiring.
 
-### Phase E: Finish Test Cleanup
+### Phase D: Targeted Runtime / Boundary Cleanup Only Where It Pays Off
 
 Goal:
 
-- Make tests target imported modules and stable behavior.
+- Treat the internal runtime implementation as an integration shell and only
+  refactor the remaining inline glue when there is concrete payoff.
 
 Tasks:
 
-- Replace remaining AST-extraction tests where practical.
-- Reduce remaining reasons to skip import-smoke coverage.
+- Only move runtime-owned logic when it improves import/startup safety,
+  materially improves testability, removes duplicated behavior, simplifies a
+  bug-prone workflow, or directly unblocks feature work.
+- Prefer deleting duplicated cross-feature logic over relocating one-off
+  value-source plumbing.
+- Leave thin Tk wiring in the internal runtime implementation when extracting
+  it would be mostly mechanical.
+
+Why fourth:
+
+- The remaining runtime work is now lower-ROI glue.
+- This preserves momentum without abandoning useful cleanup opportunities.
+
+### Phase E: Finish Compatibility Cleanup
+
+Goal:
+
+- Converge on a single documented GUI entrypoint once the higher-leverage work
+  stabilizes.
+
+Tasks:
+
+- Decide whether `ra_sim.gui.main_app` stays as a permanent compatibility alias
+  or is removed later.
+- Update docs/tests to reflect the canonical entrypoint.
 
 Why fifth:
 
-- The best time to simplify tests is after the target module boundaries stop
-  moving.
+- This is easier to finalize after startup/testing/config boundaries are
+  clearer.
 
 ### Phase F: Clean the Repository Root
 
@@ -1207,31 +1219,35 @@ Why last:
 - This is important, but it is lower leverage than finishing the runtime and
   config migration.
 
+## Refactor Guardrails
+
+- Do not take open-ended internal-runtime shrink tasks just to reduce line
+  count or move one-off plumbing.
+- Prefer work that improves import safety, startup behavior, test coverage,
+  config coherence, or active feature delivery.
+- If a proposed runtime refactor does not remove duplicated logic, reduce bug
+  risk, improve testability, or unblock a concrete workflow, do not do it.
+- Treat `state.py`, `controllers.py`, and `views.py` as the place for shared
+  logic and reusable boundaries, not as a destination for every thin adapter.
+
 ## Suggested Next Concrete Step
 
 The next best step is:
 
-- build on the completed runtime-state extraction by moving the remaining
-  cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
-- focus next on controller-owned user-action flows plus the remaining
-  cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining geometry-fit runtime-config/constraint readers and
-  the next cross-feature call sites that still bypass the extracted helper
-  modules now that the manual-pair dataset/value-source bundle also boots
-  through shared helpers
-- keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
-  application boundary rather than leaving them as helper scaffolding
+- stop taking open-ended runtime-decomposition slices as the default next task
+- treat the public runtime import boundary as done for now and focus next on
+  replacing the remaining brittle AST-shape tests
+- after that, move on to config unification
+- only return to the internal runtime implementation for specific bug-prone or
+  duplicated workflows that still justify the move
 
-Immediate checklist after the manual-pair cache/display cleanup:
+Immediate checklist after the strategy pivot:
 
-- trim the remaining geometry-fit runtime-config/constraint readers
-- then trim the next cross-feature runtime workflow call sites that still
-  bypass the extracted helper modules
-- defer config unification, compatibility cleanup, and repo-root cleanup until
-  after those runtime workflow slices stop moving
-
-That is the point where the refactor stops being "runtime state cleanup" and
-starts becoming a real application-structure finish.
+- convert the remaining tests that were compensating for unstable imports
+- replace AST-only checks with direct behavioral coverage where practical
+- start config unification now that the public import/test boundary is stable
+- defer thin callback/value-source rewiring unless it directly advances one of
+  those items
 
 ## Tracking Notes
 
@@ -1240,4 +1256,6 @@ When updating this file:
 - move completed items from “what is left” into “what is done”
 - keep the “why it matters” sections intact unless the rationale changes
 - update the recommended order only when the dependency structure changes
+- do not add new runtime-only cleanup tasks unless they clear the refactor
+  guardrails above
 - keep GUI migration work separate from unrelated simulation-layer test debt

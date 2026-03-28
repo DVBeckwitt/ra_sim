@@ -29,6 +29,7 @@
   - Corrected center-axis mappings used in pyFAI/intersection geometry paths.
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.
+  - Made `ra_sim/gui/runtime.py` import-safe by turning it into a lazy compatibility wrapper around the heavy GUI implementation in `ra_sim/gui/_runtime/runtime_impl.py`.
   - Moved the primary-CIF / diffuse-HT control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
   - Moved the optional CIF-weight control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers and reused a controller helper for weighted intensity recompute.
   - Moved the fit-geometry parameter checklist out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
@@ -87,6 +88,7 @@
 
 - **Tests**
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
+  - Added `tests/test_gui_runtime_import_safe.py` and removed the import-smoke skip for `ra_sim.gui.runtime`.
   - Extended `tests/test_gui_geometry_fit_workflow.py` with direct coverage for the extracted geometry-fit history snapshot/restore and undo/redo runtime helpers in `ra_sim.gui.geometry_fit`.
   - Extended `tests/test_manual_geometry_selection_helpers.py` with direct coverage for placement export-row/snapshot apply helpers and the export/import dialog workflow in `ra_sim.gui.manual_geometry`.
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.

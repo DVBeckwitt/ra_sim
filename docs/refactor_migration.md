@@ -60,6 +60,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.cli` launches the GUI through package code.
 - `ra_sim.gui.app` is now an import-safe entrypoint that lazy-loads
   `ra_sim.gui.runtime`.
+- `ra_sim.gui.runtime` is now also an import-safe compatibility wrapper that
+  lazy-loads the heavy GUI implementation from
+  `ra_sim/gui/_runtime/runtime_impl.py`.
+- `tests/test_import_smoke.py` no longer skips `ra_sim.gui.runtime`.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into
@@ -582,42 +586,29 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 
 ## Remaining Migration Focus
 
-- `ra_sim.gui.runtime` is still the largest remaining integration monolith.
-- The remaining runtime work is now the cross-feature workflow glue and the
-  remaining controller/view orchestration that still live inline in
-  `ra_sim.gui.runtime`, not long-lived GUI runtime-state ownership or the
-  extracted structure-model rebuild path.
-- The remaining structure-model runtime code is now mostly thin delegate
-  wrappers, progress-label wiring, and control-var rebuild callbacks.
-- The remaining structure-factor-pruning runtime code is now mostly
-  value-source and normalized default-reset call sites around the extracted
-  pruning module and shared bootstrap wiring.
-- The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
-  sites around the extracted controller/view modules and shared bootstrap/
-  config helpers.
-- The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
-  fit-preview parameter/value sources plus a couple of delegated call sites
-  around the extracted manager/view helpers, the bound geometry-fit
-  simulation/value callback bundles, and shared bootstrap wiring.
-- The remaining Bragg-Qr manager runtime code is now mostly a few manager
-  refresh/action call sites around the extracted manager helpers and shared
-  bootstrap wiring.
-- The remaining background runtime code is now mostly thin cross-feature
-  status-refresh helper aliases plus the late-bound value-source wiring around
-  the extracted background manager/background-theta helpers and shared
-  bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly thin live
-  value-source wiring around the extracted peak-selection modules and shared
-  bootstrap helpers.
-- The remaining geometry-fit manual-pair runtime code is now mostly the
-  smaller runtime-config/constraint readers plus Tk-side control wiring around
-  the extracted `ra_sim.gui.geometry_fit`, `ra_sim.gui.manual_geometry`, and
-  shared bootstrap helper surfaces.
-- The remaining integration-range runtime code is now mostly thin live
-  value-source wiring around the extracted drag/update helpers and shared
-  bootstrap surfaces.
-- The next bounded GUI targets are the remaining cross-feature workflow/state
-  transitions that still bypass the newer state/controller/view modules.
+- As of 2026-03-28, the refactor is leaving open-ended `runtime.py`
+  decomposition mode.
+- `ra_sim.gui.runtime` is now an import-safe public wrapper.
+- The remaining large integration monolith now lives in
+  `ra_sim/gui/_runtime/runtime_impl.py`, and most of the remaining inline code
+  there is glue rather than high-value extractable feature logic.
+- Going forward, that internal runtime implementation should be treated as an
+  integration shell.
+- New runtime refactors should be driven by concrete wins in import/startup
+  safety, testability, duplicated-logic removal, bug-prone workflow
+  simplification, or direct feature delivery.
+- Thin value-source rewiring, one-off callback extraction, and line-count
+  reduction are no longer goals by themselves.
+- The public runtime import/startup boundary is now in much better shape.
+- The next high-ROI cleanup targets are test architecture cleanup and config
+  unification.
+- Targeted runtime cleanup can still happen in structure-model, pruning,
+  Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
+  workflows, but only when it materially supports those goals or unblocks
+  active work.
+- The newer `state` / `controllers` / `views` boundary should keep expanding
+  where it simplifies shared workflows, but it does not need to absorb every
+  thin adapter left in the internal runtime implementation.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
   eventual unification.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending

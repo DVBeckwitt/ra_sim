@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+RUNTIME_IMPL_PATH = Path("ra_sim/gui/_runtime/runtime_impl.py")
+
 
 def _name_id(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
@@ -17,8 +19,8 @@ def _name_id(node: ast.AST) -> str | None:
 
 
 def test_runtime_pruning_constants_are_defined_before_import_time_use() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     assignment_lines: dict[str, int] = {}
     bootstrap_use_lines: dict[str, int] = {}
@@ -57,8 +59,8 @@ def test_runtime_pruning_constants_are_defined_before_import_time_use() -> None:
 
 
 def test_runtime_hkl_pick_constants_are_defined_before_selected_peak_bootstrap() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     assignment_lines: dict[str, int] = {}
     binding_use_lines: dict[str, int] = {}
@@ -102,8 +104,8 @@ def test_runtime_hkl_pick_constants_are_defined_before_selected_peak_bootstrap()
 
 
 def test_runtime_canvas_preview_callbacks_are_late_bound() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     lambda_keywords: dict[str, bool] = {}
 
@@ -127,8 +129,8 @@ def test_runtime_canvas_preview_callbacks_are_late_bound() -> None:
 
 
 def test_runtime_schedule_update_factories_are_late_bound() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     lambda_keywords: dict[tuple[str, str], bool] = {}
 
@@ -168,8 +170,8 @@ def test_runtime_schedule_update_factories_are_late_bound() -> None:
 
 
 def test_runtime_structure_factor_pruning_controls_are_bootstrapped() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     has_bootstrap_call = False
     direct_view_calls = 0
@@ -204,8 +206,8 @@ def test_runtime_structure_factor_pruning_controls_are_bootstrapped() -> None:
 
 
 def test_runtime_integration_range_controls_are_bootstrapped() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     has_bootstrap_call = False
     direct_view_calls = {
@@ -244,8 +246,8 @@ def test_runtime_integration_range_controls_are_bootstrapped() -> None:
 
 
 def test_runtime_background_controls_are_bootstrapped() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     has_bootstrap_call = False
     direct_view_calls = {
@@ -272,8 +274,8 @@ def test_runtime_background_controls_are_bootstrapped() -> None:
 
 
 def test_runtime_background_theta_callbacks_use_shared_bundle() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     has_bootstrap_call = False
     inline_defs = {
@@ -340,8 +342,8 @@ def test_runtime_background_theta_callbacks_use_shared_bundle() -> None:
 
 
 def test_runtime_background_status_refreshes_use_shared_helpers() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     helper_defs = {
         "_refresh_background_status": 0,
@@ -370,8 +372,8 @@ def test_runtime_background_status_refreshes_use_shared_helpers() -> None:
 
 
 def test_runtime_manual_geometry_cache_callbacks_use_shared_bootstrap() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     bootstrap_calls = 0
     direct_helper_calls = 0
@@ -406,8 +408,8 @@ def test_runtime_manual_geometry_cache_callbacks_use_shared_bootstrap() -> None:
 
 
 def test_runtime_manual_geometry_projection_callbacks_use_shared_bootstrap() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     bootstrap_calls = 0
     direct_helper_calls = 0
@@ -446,8 +448,8 @@ def test_runtime_manual_geometry_projection_callbacks_use_shared_bootstrap() -> 
 
 
 def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     has_helper_call = False
     direct_bootstrap_calls = 0
@@ -498,8 +500,8 @@ def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
 
 
 def test_runtime_geometry_tool_action_callbacks_use_shared_bootstrap() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     bootstrap_calls = 0
     direct_helper_calls = 0
@@ -524,8 +526,8 @@ def test_runtime_geometry_tool_action_callbacks_use_shared_bootstrap() -> None:
 
 
 def test_runtime_hkl_lookup_controls_are_bootstrapped() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     has_bootstrap_call = False
     direct_view_calls = 0
@@ -546,8 +548,8 @@ def test_runtime_hkl_lookup_controls_are_bootstrapped() -> None:
 
 
 def test_runtime_geometry_tool_action_controls_are_bootstrapped() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     has_bootstrap_call = False
     direct_view_calls = 0
@@ -568,8 +570,8 @@ def test_runtime_geometry_tool_action_controls_are_bootstrapped() -> None:
 
 
 def test_runtime_selected_peak_refresh_calls_use_maintenance_bundle() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     refresh_after_update_calls = 0
     apply_restored_target_calls = 0
@@ -602,8 +604,8 @@ def test_runtime_selected_peak_refresh_calls_use_maintenance_bundle() -> None:
 
 
 def test_runtime_geometry_fit_action_uses_factory_helpers() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     helper_calls: dict[str, int] = {
         "build_runtime_geometry_fit_action_bootstrap": 0,
@@ -630,8 +632,8 @@ def test_runtime_geometry_fit_action_uses_factory_helpers() -> None:
 
 
 def test_runtime_geometry_fit_action_bootstrap_is_built_after_live_value_setup() -> None:
-    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
 
     assignment_lines: dict[str, int] = {}
     bootstrap_use_line = 0
@@ -660,3 +662,5 @@ def test_runtime_geometry_fit_action_bootstrap_is_built_after_live_value_setup()
     assert assignment_lines["theta_initial_var"] < bootstrap_use_line
     assert assignment_lines["_geometry_fit_runtime_value_callbacks"] < bootstrap_use_line
     assert assignment_lines["_geometry_fit_var_map"] < bootstrap_use_line
+
+
