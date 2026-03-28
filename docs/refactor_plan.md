@@ -407,9 +407,10 @@ not `main.py` or `mosaic_profiles.py`.
     thin event-hook wiring around that workflow.
 - Runtime callback/bootstrap extraction has advanced.
   - `ra_sim.gui.bootstrap` now owns the assembly of the runtime binding/
-    callback bundles for structure-factor pruning, Qr-cylinder overlay,
-    selected-peak workflow, integration-range dragging, canvas interactions,
-    background workflow, and the geometry Q-group workflow.
+    callback bundles for structure-factor pruning, Bragg-Qr manager workflow,
+    Qr-cylinder overlay, selected-peak workflow, integration-range dragging,
+    canvas interactions, background workflow, and the geometry Q-group
+    workflow.
   - `ra_sim.gui.runtime` now keeps the live value-source/config factories for
     those workflows plus the bound bundle variables consumed by the remaining
     call sites.
@@ -575,12 +576,13 @@ What is left:
 - The remaining structure-factor-pruning runtime code is now mostly live call
   sites plus a few local value-source helpers around the extracted pruning
   module and shared bootstrap wiring.
-- The remaining Bragg-Qr runtime code is now mostly one bound runtime-factory
-  value plus thin active-entry/render-config value sources and a few
-  manager/overlay call sites around the extracted controller/view modules.
-- The remaining Bragg-Qr manager runtime code is now mostly the bound
-  factory wiring used by the live filter pipeline and HKL lookup controls
-  around the extracted manager helpers.
+- The remaining Bragg-Qr runtime code is now mostly thin
+  active-entry/render-config value sources and a few manager/overlay call
+  sites around the extracted controller/view modules and shared bootstrap
+  helpers.
+- The remaining Bragg-Qr manager runtime code is now mostly the live filter
+  pipeline/HKL lookup call sites around the extracted manager helpers and
+  shared bootstrap wiring.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   fit-preview/cached-hit value sources, live-preview availability/fallback
   simulation orchestration, image-shape/display-coordinate value plumbing, and

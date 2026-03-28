@@ -31,6 +31,15 @@ class RuntimeBindingsRefreshToggleBootstrap:
 
 
 @dataclass(frozen=True)
+class BraggQrRuntimeBootstrap:
+    """Runtime Bragg-Qr bindings plus the shared window callbacks."""
+
+    bindings_factory: Callable[[], Any]
+    refresh_window: Callable[..., Any]
+    open_window: Callable[..., Any]
+
+
+@dataclass(frozen=True)
 class StructureFactorPruningRuntimeBootstrap:
     """Runtime pruning bindings plus the derived callback helpers."""
 
@@ -420,6 +429,30 @@ def build_runtime_structure_factor_pruning_bootstrap(
             structure_factor_pruning_module.make_runtime_solve_q_mode_change_callback(
                 bindings_factory
             )
+        ),
+    )
+
+
+def build_runtime_bragg_qr_bootstrap(
+    *,
+    bragg_qr_manager_module: Any,
+    root: Any,
+    **bindings_kwargs: Any,
+) -> BraggQrRuntimeBootstrap:
+    """Build the live Bragg-Qr manager binding and window callbacks."""
+
+    bindings_factory = bragg_qr_manager_module.make_runtime_bragg_qr_bindings_factory(
+        **bindings_kwargs
+    )
+    refresh_window = bragg_qr_manager_module.make_runtime_bragg_qr_refresh_callback(
+        bindings_factory
+    )
+    return BraggQrRuntimeBootstrap(
+        bindings_factory=bindings_factory,
+        refresh_window=refresh_window,
+        open_window=bragg_qr_manager_module.make_runtime_bragg_qr_open_callback(
+            root=root,
+            bindings_factory=bindings_factory,
         ),
     )
 

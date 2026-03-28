@@ -848,10 +848,8 @@ structure_factor_pruning_runtime = (
             else None
         ),
         refresh_window_factory=lambda: (
-            gui_bragg_qr_manager.make_runtime_bragg_qr_refresh_callback(
-                globals().get("bragg_qr_runtime_bindings_factory")
-            )
-            if callable(globals().get("bragg_qr_runtime_bindings_factory"))
+            globals().get("bragg_qr_runtime_refresh")
+            if callable(globals().get("bragg_qr_runtime_refresh"))
             else None
         ),
     )
@@ -3924,7 +3922,9 @@ def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
     )
 
 
-bragg_qr_runtime_bindings_factory = gui_bragg_qr_manager.make_runtime_bragg_qr_bindings_factory(
+bragg_qr_runtime = gui_bootstrap.build_runtime_bragg_qr_bootstrap(
+    bragg_qr_manager_module=gui_bragg_qr_manager,
+    root=root,
     view_state=bragg_qr_manager_view_state,
     manager_state=bragg_qr_manager_state,
     simulation_runtime_state=simulation_runtime_state,
@@ -3940,6 +3940,9 @@ bragg_qr_runtime_bindings_factory = gui_bragg_qr_manager.make_runtime_bragg_qr_b
     invalid_key=BRAGG_QR_L_INVALID_KEY,
     tcl_error_types=(tk.TclError,),
 )
+bragg_qr_runtime_bindings_factory = bragg_qr_runtime.bindings_factory
+bragg_qr_runtime_refresh = bragg_qr_runtime.refresh_window
+bragg_qr_runtime_open = bragg_qr_runtime.open_window
 
 
 selected_peak_canvas_pick_config_factory = (
@@ -11653,10 +11656,7 @@ gui_views.create_hkl_lookup_controls(
     on_show_bragg_ewald=(
         peak_selection_runtime_callbacks.open_selected_peak_intersection_figure
     ),
-    on_open_bragg_qr_groups=gui_bragg_qr_manager.make_runtime_bragg_qr_open_callback(
-        root=root,
-        bindings_factory=bragg_qr_runtime_bindings_factory,
-    ),
+    on_open_bragg_qr_groups=bragg_qr_runtime_open,
 )
 peak_selection_runtime_callbacks.update_hkl_pick_button_label()
 

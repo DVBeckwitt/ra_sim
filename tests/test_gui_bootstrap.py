@@ -170,6 +170,42 @@ def test_build_runtime_qr_cylinder_overlay_bootstrap_delegates_callbacks() -> No
     ]
 
 
+def test_build_runtime_bragg_qr_bootstrap_delegates_callbacks() -> None:
+    calls: list[tuple[object, ...]] = []
+
+    module = SimpleNamespace(
+        make_runtime_bragg_qr_bindings_factory=(
+            lambda **kwargs: calls.append(("bindings", kwargs)) or "bragg-bindings"
+        ),
+        make_runtime_bragg_qr_refresh_callback=(
+            lambda bindings_factory: (
+                calls.append(("refresh", bindings_factory)) or "bragg-refresh"
+            )
+        ),
+        make_runtime_bragg_qr_open_callback=(
+            lambda **kwargs: calls.append(("open", kwargs)) or "bragg-open"
+        ),
+    )
+
+    bundle = bootstrap.build_runtime_bragg_qr_bootstrap(
+        bragg_qr_manager_module=module,
+        root="root-window",
+        view_state="view-state",
+    )
+
+    assert bundle.bindings_factory == "bragg-bindings"
+    assert bundle.refresh_window == "bragg-refresh"
+    assert bundle.open_window == "bragg-open"
+    assert calls == [
+        ("bindings", {"view_state": "view-state"}),
+        ("refresh", "bragg-bindings"),
+        (
+            "open",
+            {"root": "root-window", "bindings_factory": "bragg-bindings"},
+        ),
+    ]
+
+
 def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> None:
     peak_calls: list[tuple[object, ...]] = []
     peak_module = SimpleNamespace(
