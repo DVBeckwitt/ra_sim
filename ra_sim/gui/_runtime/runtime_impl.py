@@ -110,6 +110,7 @@ from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import runtime_background as gui_runtime_background
 from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
+from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
@@ -3220,67 +3221,55 @@ integration_range_drag_runtime_bindings_factory = (
 )
 integration_range_drag_runtime_callbacks = integration_range_drag_runtime.callbacks
 refresh_integration_region_visuals = integration_range_drag_runtime.refresh_visuals
-canvas_interaction_runtime = gui_bootstrap.build_runtime_canvas_interaction_bootstrap(
-    canvas_interactions_module=gui_canvas_interactions,
-    axis=ax,
-    geometry_runtime_state=geometry_runtime_state,
-    geometry_preview_state=geometry_preview_state,
-    geometry_manual_state=geometry_manual_state,
-    peak_selection_state=peak_selection_state,
-    peak_selection_callbacks=peak_selection_runtime_callbacks,
-    integration_range_drag_callbacks=integration_range_drag_runtime_callbacks,
-    manual_pick_session_active=_geometry_manual_pick_session_active,
-    set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
-    set_geometry_preview_exclude_mode=(
-        lambda enabled, message=None: (
-            gui_geometry_q_group_manager.set_runtime_geometry_preview_exclude_mode(
-                geometry_q_group_runtime_bindings_factory(),
-                enabled,
-                message=message,
-            )
-        )
-    ),
-    toggle_geometry_manual_selection_at=_toggle_geometry_manual_selection_at,
-    toggle_live_geometry_preview_exclusion_at=(
-        lambda col, row: (
-            gui_geometry_q_group_manager.toggle_runtime_live_geometry_preview_exclusion_at(
-                geometry_q_group_runtime_bindings_factory(),
-                col,
-                row,
-            )
-        )
-    ),
-    clamp_to_axis_view=gui_integration_range_drag.clamp_to_axis_view,
-    apply_geometry_manual_pick_zoom=_apply_geometry_manual_pick_zoom,
-    update_geometry_manual_pick_preview=_update_geometry_manual_pick_preview,
-    place_geometry_manual_selection_at=_place_geometry_manual_selection_at,
-    clear_geometry_manual_preview_artists=_clear_geometry_manual_preview_artists,
-    restore_geometry_manual_pick_view=_restore_geometry_manual_pick_view,
-    render_current_geometry_manual_pairs=_render_current_geometry_manual_pairs,
-    caked_view_enabled_factory=lambda: (
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        if analysis_view_controls_view_state.show_caked_2d_var is not None
-        else False
-    ),
-    set_geometry_status_text_factory=lambda: (
-        (lambda text: progress_label_geometry.config(text=text))
-        if "progress_label_geometry" in globals()
-        else None
-    ),
-    draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+canvas_interaction_workflow = (
+    gui_runtime_geometry_preview.build_runtime_canvas_interaction_workflow(
+        bootstrap_module=gui_bootstrap,
+        canvas_interactions_module=gui_canvas_interactions,
+        geometry_q_group_manager_module=gui_geometry_q_group_manager,
+        geometry_q_group_runtime_bindings_factory_resolver=(
+            lambda: globals().get("geometry_q_group_runtime_bindings_factory")
+        ),
+        axis=ax,
+        geometry_runtime_state=geometry_runtime_state,
+        geometry_preview_state=geometry_preview_state,
+        geometry_manual_state=geometry_manual_state,
+        peak_selection_state=peak_selection_state,
+        peak_selection_callbacks=peak_selection_runtime_callbacks,
+        integration_range_drag_callbacks=integration_range_drag_runtime_callbacks,
+        manual_pick_session_active=_geometry_manual_pick_session_active,
+        set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
+        toggle_geometry_manual_selection_at=_toggle_geometry_manual_selection_at,
+        clamp_to_axis_view=gui_integration_range_drag.clamp_to_axis_view,
+        apply_geometry_manual_pick_zoom=_apply_geometry_manual_pick_zoom,
+        update_geometry_manual_pick_preview=_update_geometry_manual_pick_preview,
+        place_geometry_manual_selection_at=_place_geometry_manual_selection_at,
+        clear_geometry_manual_preview_artists=_clear_geometry_manual_preview_artists,
+        restore_geometry_manual_pick_view=_restore_geometry_manual_pick_view,
+        render_current_geometry_manual_pairs=_render_current_geometry_manual_pairs,
+        caked_view_enabled_factory=lambda: (
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+            if analysis_view_controls_view_state.show_caked_2d_var is not None
+            else False
+        ),
+        set_geometry_status_text_factory=lambda: (
+            (lambda text: progress_label_geometry.config(text=text))
+            if "progress_label_geometry" in globals()
+            else None
+        ),
+        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+    )
 )
-canvas_interaction_runtime_bindings_factory = (
-    canvas_interaction_runtime.bindings_factory
-)
-canvas_interaction_runtime_callbacks = canvas_interaction_runtime.callbacks
+canvas_interaction_runtime = canvas_interaction_workflow.runtime
+canvas_interaction_runtime_bindings_factory = canvas_interaction_workflow.bindings_factory
+canvas_interaction_runtime_callbacks = canvas_interaction_workflow.callbacks
 
 # -----------------------------------------------------------
 # 3)  Bind the handler
 # -----------------------------------------------------------
-canvas.mpl_connect('button_press_event', canvas_interaction_runtime_callbacks.on_click)
-canvas.mpl_connect('button_press_event', canvas_interaction_runtime_callbacks.on_press)
-canvas.mpl_connect('motion_notify_event', canvas_interaction_runtime_callbacks.on_motion)
-canvas.mpl_connect('button_release_event', canvas_interaction_runtime_callbacks.on_release)
+gui_runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
+    canvas=canvas,
+    callbacks=canvas_interaction_runtime_callbacks,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -6772,109 +6761,111 @@ _apply_live_preview_match_exclusions = (
 )
 
 
-geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstrap(
-    geometry_q_group_manager_module=gui_geometry_q_group_manager,
-    root=root,
-    view_state=geometry_q_group_view_state,
-    preview_state=geometry_preview_state,
-    q_group_state=geometry_q_group_state,
-    fit_config=fit_config,
-    current_geometry_fit_var_names_factory=_current_geometry_fit_var_names,
-    build_entries_snapshot=_build_geometry_q_group_entries,
-    invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-    update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
-    live_geometry_preview_enabled=lambda: (
-        bool(live_geometry_preview_var.get())
-        if "live_geometry_preview_var" in globals()
-        else False
-    ),
-    refresh_live_geometry_preview=(
-        lambda: _refresh_live_geometry_preview(update_status=True)
-    ),
-    set_hkl_pick_mode=hkl_lookup_controls_runtime.set_hkl_pick_mode,
-    live_preview_match_key=_live_preview_match_key,
-    live_preview_match_hkl=_live_preview_match_hkl,
-    render_live_geometry_preview_state=(
-        lambda: gui_geometry_q_group_manager.render_runtime_live_geometry_preview_state(
-            geometry_q_group_runtime_bindings_factory(),
-            update_status=True,
-        )
-    ),
-    clear_geometry_preview_artists=_clear_geometry_preview_artists,
-    preview_toggle_max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
-    update_running_factory=lambda: bool(simulation_runtime_state.update_running),
-    has_cached_hit_tables_factory=lambda: (
-        simulation_runtime_state.stored_max_positions_local is not None
-    ),
-    build_live_preview_simulated_peaks_from_cache=(
-        _build_live_preview_simulated_peaks_from_cache
-    ),
-    simulate_preview_style_peaks=lambda miller_values, intensity_values, image_size_value, params: (
-        _simulate_preview_style_peaks_for_fit(
-            miller_values,
-            intensity_values,
-            image_size_value,
-            params,
-        )
-    ),
-    miller_factory=lambda: miller,
-    intensities_factory=lambda: intensities,
-    image_size_value_factory=lambda: image_size,
-    current_geometry_fit_params_factory=_current_geometry_fit_params,
-    filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
-    collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
-    excluded_q_group_count=_geometry_q_group_excluded_count,
-    caked_view_enabled=lambda: (
-        bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        if analysis_view_controls_view_state.show_caked_2d_var is not None
-        else False
-    ),
-    background_visible_factory=lambda: bool(background_runtime_state.visible),
-    current_background_display_factory=_get_current_background_display,
-    axis=ax,
-    geometry_preview_artists=geometry_runtime_state.preview_artists,
-    draw_idle_factory=lambda: canvas.draw_idle,
-    normalize_hkl_key=_normalize_hkl_key,
-    live_preview_match_is_excluded=_live_preview_match_is_excluded,
-    filter_live_preview_matches=_filter_live_preview_matches,
-    refresh_live_geometry_preview_quiet=(
-        lambda: _refresh_live_geometry_preview(update_status=False)
-    ),
-    clear_last_simulation_signature=(
-        lambda: setattr(
-            simulation_runtime_state,
-            "last_simulation_signature",
-            None,
-        )
-    ),
-    schedule_update_factory=lambda: schedule_update,
-    set_status_text_factory=lambda: (
-        (lambda text: progress_label_geometry.config(text=text))
-        if "progress_label_geometry" in globals()
-        else None
-    ),
-    file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
-    asksaveasfilename=filedialog.asksaveasfilename,
-    askopenfilename=filedialog.askopenfilename,
+geometry_q_group_workflow = (
+    gui_runtime_geometry_preview.build_runtime_geometry_q_group_workflow(
+        bootstrap_module=gui_bootstrap,
+        geometry_q_group_manager_module=gui_geometry_q_group_manager,
+        root=root,
+        view_state=geometry_q_group_view_state,
+        preview_state=geometry_preview_state,
+        q_group_state=geometry_q_group_state,
+        fit_config=fit_config,
+        current_geometry_fit_var_names_factory=_current_geometry_fit_var_names,
+        build_entries_snapshot=_build_geometry_q_group_entries,
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
+        live_geometry_preview_enabled=lambda: (
+            bool(live_geometry_preview_var.get())
+            if "live_geometry_preview_var" in globals()
+            else False
+        ),
+        refresh_live_geometry_preview=(
+            lambda: _refresh_live_geometry_preview(update_status=True)
+        ),
+        set_hkl_pick_mode=hkl_lookup_controls_runtime.set_hkl_pick_mode,
+        live_preview_match_key=_live_preview_match_key,
+        live_preview_match_hkl=_live_preview_match_hkl,
+        render_live_geometry_preview_state=(
+            lambda: gui_geometry_q_group_manager.render_runtime_live_geometry_preview_state(
+                geometry_q_group_runtime_bindings_factory(),
+                update_status=True,
+            )
+        ),
+        clear_geometry_preview_artists=_clear_geometry_preview_artists,
+        preview_toggle_max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
+        update_running_factory=lambda: bool(simulation_runtime_state.update_running),
+        has_cached_hit_tables_factory=lambda: (
+            simulation_runtime_state.stored_max_positions_local is not None
+        ),
+        build_live_preview_simulated_peaks_from_cache=(
+            _build_live_preview_simulated_peaks_from_cache
+        ),
+        simulate_preview_style_peaks=lambda miller_values, intensity_values, image_size_value, params: (
+            _simulate_preview_style_peaks_for_fit(
+                miller_values,
+                intensity_values,
+                image_size_value,
+                params,
+            )
+        ),
+        miller_factory=lambda: miller,
+        intensities_factory=lambda: intensities,
+        image_size_value_factory=lambda: image_size,
+        current_geometry_fit_params_factory=_current_geometry_fit_params,
+        filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
+        collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
+        excluded_q_group_count=_geometry_q_group_excluded_count,
+        caked_view_enabled=lambda: (
+            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+            if analysis_view_controls_view_state.show_caked_2d_var is not None
+            else False
+        ),
+        background_visible_factory=lambda: bool(background_runtime_state.visible),
+        current_background_display_factory=_get_current_background_display,
+        axis=ax,
+        geometry_preview_artists=geometry_runtime_state.preview_artists,
+        draw_idle_factory=lambda: canvas.draw_idle,
+        normalize_hkl_key=_normalize_hkl_key,
+        live_preview_match_is_excluded=_live_preview_match_is_excluded,
+        filter_live_preview_matches=_filter_live_preview_matches,
+        refresh_live_geometry_preview_quiet=(
+            lambda: _refresh_live_geometry_preview(update_status=False)
+        ),
+        clear_last_simulation_signature=(
+            lambda: setattr(
+                simulation_runtime_state,
+                "last_simulation_signature",
+                None,
+            )
+        ),
+        schedule_update_resolver=(lambda: schedule_update),
+        set_status_text_factory=lambda: (
+            (lambda text: progress_label_geometry.config(text=text))
+            if "progress_label_geometry" in globals()
+            else None
+        ),
+        file_dialog_dir_factory=lambda: get_dir("file_dialog_dir"),
+        asksaveasfilename=filedialog.asksaveasfilename,
+        askopenfilename=filedialog.askopenfilename,
+    )
 )
-geometry_q_group_runtime_bindings_factory = (
-    geometry_q_group_runtime.bindings_factory
-)
-geometry_q_group_runtime_callbacks = geometry_q_group_runtime.callbacks
-_live_geometry_preview_enabled = geometry_q_group_runtime_callbacks.live_preview_enabled
+geometry_q_group_runtime = geometry_q_group_workflow.runtime
+geometry_q_group_runtime_bindings_factory = geometry_q_group_workflow.bindings_factory
+geometry_q_group_runtime_callbacks = geometry_q_group_workflow.callbacks
+_live_geometry_preview_enabled = geometry_q_group_workflow.live_preview_enabled
 _render_live_geometry_preview_state = (
-    geometry_q_group_runtime_callbacks.render_live_preview_state
+    geometry_q_group_workflow.render_live_preview_state
 )
 _set_geometry_preview_exclude_mode = (
-    geometry_q_group_runtime_callbacks.set_preview_exclude_mode
+    geometry_q_group_workflow.set_preview_exclude_mode
 )
 _clear_live_geometry_preview_exclusions = (
-    geometry_q_group_runtime_callbacks.clear_preview_exclusions
+    geometry_q_group_workflow.clear_preview_exclusions
 )
 _toggle_live_geometry_preview_exclusion_at = (
-    geometry_q_group_runtime_callbacks.toggle_preview_exclusion_at
+    geometry_q_group_workflow.toggle_preview_exclusion_at
 )
-_on_live_geometry_preview_toggle = geometry_q_group_runtime_callbacks.toggle_live_preview
+_on_live_geometry_preview_toggle = geometry_q_group_workflow.toggle_live_preview
 geometry_fit_simulation_runtime_callbacks = (
     gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
         build_geometry_fit_central_mosaic_params=(

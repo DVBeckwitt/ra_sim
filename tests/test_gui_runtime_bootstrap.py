@@ -58,52 +58,6 @@ def test_runtime_pruning_constants_are_defined_before_import_time_use() -> None:
         )
 
 
-def test_runtime_canvas_preview_callbacks_are_late_bound() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    lambda_keywords: dict[str, bool] = {}
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr != "build_runtime_canvas_interaction_bootstrap":
-            continue
-        for keyword in node.keywords:
-            if keyword.arg in {
-                "set_geometry_preview_exclude_mode",
-                "toggle_live_geometry_preview_exclusion_at",
-            }:
-                lambda_keywords[keyword.arg] = isinstance(keyword.value, ast.Lambda)
-
-    assert lambda_keywords.get("set_geometry_preview_exclude_mode") is True
-    assert lambda_keywords.get("toggle_live_geometry_preview_exclusion_at") is True
-
-
-def test_runtime_geometry_q_group_schedule_update_factory_is_late_bound() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    has_late_bound_schedule_update = False
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr != "build_runtime_geometry_q_group_bootstrap":
-            continue
-        for keyword in node.keywords:
-            if keyword.arg == "schedule_update_factory":
-                has_late_bound_schedule_update = isinstance(keyword.value, ast.Lambda)
-
-    assert has_late_bound_schedule_update is True
-
-
 def test_runtime_selected_peak_refresh_calls_use_maintenance_bundle() -> None:
     source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))

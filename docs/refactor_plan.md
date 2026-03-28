@@ -176,6 +176,14 @@ reduction.
     directly.
   - Direct helper tests now cover that assembly instead of AST assertions
     against the internal runtime implementation.
+- Geometry-preview runtime/bootstrap cleanup has advanced further.
+  - The geometry Q-group runtime assembly plus the cross-feature canvas
+    interaction runtime assembly now also flow through the import-safe helper
+    module `ra_sim.gui.runtime_geometry_preview`.
+  - `runtime_impl.py` no longer calls those geometry-preview bootstrap helpers
+    directly or wires the raw canvas event hooks inline.
+  - Direct helper tests now cover that assembly instead of AST assertions
+    against the internal runtime implementation.
 - Integration-range drag bootstrap cleanup has advanced further.
   - The drag-selection rectangle, integration-region rectangle, live
     integration-region refresh callback, and runtime drag callback bundle now
@@ -1055,6 +1063,10 @@ What is done:
   assembly, and geometry-fit action runtime assembly now also flow through an
   import-safe helper module, and the matching regression coverage now uses
   direct helper tests instead of AST assertions against `runtime_impl.py`.
+- The geometry Q-group runtime assembly plus the cross-feature canvas
+  interaction runtime assembly now also flow through an import-safe helper
+  module, and the matching regression coverage now uses direct helper tests
+  instead of AST assertions against `runtime_impl.py`.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.
@@ -1064,9 +1076,8 @@ What is left:
 - Some implementation-shape tests still target the internal runtime module
   directly because they were written around the old import-heavy layout.
 - The remaining internal-runtime AST checks are now concentrated in narrower
-  constant-order and late-binding assertions around pruning defaults, canvas
-  preview hooks, geometry Q-group scheduling, selected-peak maintenance
-  bundle use, and geometry-fit bootstrap ordering.
+  constant-order and ordering assertions around pruning defaults,
+  selected-peak maintenance bundle use, and geometry-fit bootstrap ordering.
 - A few other narrow structural tests still use AST assertions where behavior
   is harder to probe directly.
 
