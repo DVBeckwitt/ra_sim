@@ -414,9 +414,13 @@ not `main.py` or `mosaic_profiles.py`.
     log-file lifecycle, execution/failure reporting, and the runtime execution
     helper that runs one prepared geometry-fit through the solver and extracted
     postprocess/apply workflow.
-  - `ra_sim.gui.runtime` now keeps the preflight wrapper and the remaining Tk
-    callback/value wiring that feeds the extracted geometry-fit execution
-    helper.
+  - `ra_sim.gui.geometry_fit` now also owns the runtime preparation wrapper
+    that packages the live dataset-builder/runtime-config callbacks around the
+    extracted preflight helper, plus the runtime execution-setup builder that
+    packages live state/callback sources into the extracted execution helper.
+  - `ra_sim.gui.runtime` now keeps the top-level preflight wrapper, the live
+    geometry parameter/value reads, and the smaller Tk callback/value-source
+    assembly that feeds the extracted geometry-fit prepare/execute helpers.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -657,8 +661,9 @@ What is left:
   sites plus thin value-source wiring around the extracted peak-selection and
   canvas-interaction helpers and shared config/bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the live
-  preflight wrapper plus the remaining Tk callback/value wiring around the
-  extracted `ra_sim.gui.geometry_fit` execution helper.
+  preflight wrapper, current geometry parameter/value sources, and the
+  smaller Tk callback/value-source assembly around the extracted
+  `ra_sim.gui.geometry_fit` prepare/execute helpers.
 - The remaining integration-range drag runtime code is now mostly thin
   integration-region visual call sites plus the remaining cross-feature event
   wiring around the extracted drag and canvas-interaction helpers.

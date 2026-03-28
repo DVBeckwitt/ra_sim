@@ -46,6 +46,40 @@ class GeometryFitPreparedRun:
 
 
 @dataclass(frozen=True)
+class GeometryFitRuntimePreparationBindings:
+    """Runtime values and callbacks used to prepare one geometry-fit run."""
+
+    fit_config: Mapping[str, object] | None
+    osc_files: Sequence[object]
+    current_background_index: int
+    theta_initial: object
+    image_size: int
+    display_rotate_k: int
+    apply_geometry_fit_background_selection: Callable[..., bool]
+    current_geometry_fit_background_indices: Callable[..., list[int]]
+    geometry_fit_uses_shared_theta_offset: Callable[..., bool]
+    apply_background_theta_metadata: Callable[..., bool]
+    current_background_theta_values: Callable[..., list[float]]
+    current_geometry_theta_offset: Callable[..., float]
+    geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]]
+    ensure_geometry_fit_caked_view: Callable[[], None]
+    load_background_by_index: Callable[[int], tuple[np.ndarray, np.ndarray]]
+    apply_background_backend_orientation: Callable[[np.ndarray], np.ndarray | None]
+    geometry_manual_simulated_peaks_for_params: Callable[..., object]
+    geometry_manual_simulated_lookup: Callable[[object], Mapping[object, object]]
+    geometry_manual_entry_display_coords: Callable[
+        [Mapping[str, object]],
+        Sequence[object] | None,
+    ]
+    unrotate_display_peaks: Callable[..., list[dict[str, object]]]
+    display_to_native_sim_coords: Callable[..., tuple[float, float]]
+    select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]]
+    apply_orientation_to_entries: Callable[..., list[dict[str, object]]]
+    orient_image_for_fit: Callable[..., object]
+    build_runtime_config: Callable[[Mapping[str, object]], dict[str, object]]
+
+
+@dataclass(frozen=True)
 class GeometryFitRuntimeSolverInputs:
     """Simulation inputs needed to invoke the live geometry-fit solver."""
 
@@ -162,6 +196,14 @@ class GeometryFitRuntimePostprocessConfig:
     aggregate_match_centers: Callable[..., tuple[object, object, object]]
     build_overlay_records: Callable[..., list[dict[str, object]]]
     compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]]
+
+
+@dataclass(frozen=True)
+class GeometryFitRuntimeExecutionSetup:
+    """Prepared runtime execution inputs for one geometry-fit run."""
+
+    ui_bindings: GeometryFitRuntimeUiBindings
+    postprocess_config: GeometryFitRuntimePostprocessConfig
 
 
 @dataclass(frozen=True)
@@ -795,6 +837,86 @@ def prepare_geometry_fit_run(
             max_display_markers=int(max_display_markers),
             geometry_runtime_cfg=dict(build_runtime_config(fit_params) or {}),
         )
+    )
+
+
+def prepare_runtime_geometry_fit_run(
+    *,
+    params: Mapping[str, object] | None,
+    var_names: Sequence[object] | None,
+    preserve_live_theta: bool,
+    bindings: GeometryFitRuntimePreparationBindings,
+) -> GeometryFitPreparationResult:
+    """Prepare one geometry fit from the live runtime value/callback sources."""
+
+    fit_config = bindings.fit_config if isinstance(bindings.fit_config, Mapping) else {}
+
+    return prepare_geometry_fit_run(
+        params=params,
+        var_names=var_names,
+        fit_config=fit_config,
+        osc_files=bindings.osc_files,
+        current_background_index=int(bindings.current_background_index),
+        theta_initial=bindings.theta_initial,
+        preserve_live_theta=preserve_live_theta,
+        apply_geometry_fit_background_selection=(
+            bindings.apply_geometry_fit_background_selection
+        ),
+        current_geometry_fit_background_indices=(
+            bindings.current_geometry_fit_background_indices
+        ),
+        geometry_fit_uses_shared_theta_offset=(
+            bindings.geometry_fit_uses_shared_theta_offset
+        ),
+        apply_background_theta_metadata=bindings.apply_background_theta_metadata,
+        current_background_theta_values=bindings.current_background_theta_values,
+        current_geometry_theta_offset=bindings.current_geometry_theta_offset,
+        geometry_manual_pairs_for_index=bindings.geometry_manual_pairs_for_index,
+        ensure_geometry_fit_caked_view=bindings.ensure_geometry_fit_caked_view,
+        build_dataset=(
+            lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
+                build_geometry_manual_fit_dataset(
+                    background_index,
+                    theta_base=theta_base,
+                    base_fit_params=base_fit_params,
+                    osc_files=bindings.osc_files,
+                    current_background_index=int(bindings.current_background_index),
+                    image_size=int(bindings.image_size),
+                    display_rotate_k=int(bindings.display_rotate_k),
+                    geometry_manual_pairs_for_index=(
+                        bindings.geometry_manual_pairs_for_index
+                    ),
+                    load_background_by_index=bindings.load_background_by_index,
+                    apply_background_backend_orientation=(
+                        bindings.apply_background_backend_orientation
+                    ),
+                    geometry_manual_simulated_peaks_for_params=(
+                        bindings.geometry_manual_simulated_peaks_for_params
+                    ),
+                    geometry_manual_simulated_lookup=(
+                        bindings.geometry_manual_simulated_lookup
+                    ),
+                    geometry_manual_entry_display_coords=(
+                        bindings.geometry_manual_entry_display_coords
+                    ),
+                    unrotate_display_peaks=bindings.unrotate_display_peaks,
+                    display_to_native_sim_coords=(
+                        bindings.display_to_native_sim_coords
+                    ),
+                    select_fit_orientation=bindings.select_fit_orientation,
+                    apply_orientation_to_entries=(
+                        bindings.apply_orientation_to_entries
+                    ),
+                    orient_image_for_fit=bindings.orient_image_for_fit,
+                    orientation_cfg=orientation_cfg,
+                )
+            )
+        ),
+        build_runtime_config=(
+            lambda fit_params: bindings.build_runtime_config(
+                dict(fit_params or {})
+            )
+        ),
     )
 
 
@@ -1771,19 +1893,125 @@ def build_runtime_geometry_fit_execution_result_bindings(
     )
 
 
+def build_runtime_geometry_fit_execution_setup(
+    *,
+    prepared_run: GeometryFitPreparedRun,
+    mosaic_params: Mapping[str, object] | None,
+    stamp: str,
+    downloads_dir: Path | str,
+    simulation_runtime_state: Any,
+    background_runtime_state: Any,
+    theta_initial_var: Any,
+    geometry_theta_offset_var: Any | None,
+    current_ui_params: Callable[[], Mapping[str, object]],
+    var_map: Mapping[str, object],
+    background_theta_for_index: Callable[..., object],
+    refresh_status: Callable[[], None],
+    update_manual_pick_button_label: Callable[[], None],
+    capture_undo_state: Callable[[], dict[str, object]],
+    push_undo_state: Callable[[dict[str, object] | None], None],
+    request_preview_skip_once: Callable[[], None],
+    schedule_update: Callable[[], None],
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None],
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None],
+    set_last_overlay_state: Callable[[dict[str, object]], None],
+    set_progress_text: Callable[[str], None],
+    cmd_line: Callable[[str], None],
+    solver_inputs: GeometryFitRuntimeSolverInputs,
+    sim_display_rotate_k: int,
+    background_display_rotate_k: int,
+    simulate_and_compare_hkl: Callable[..., Any],
+    aggregate_match_centers: Callable[..., tuple[object, object, object]],
+    build_overlay_records: Callable[..., list[dict[str, object]]],
+    compute_frame_diagnostics: Callable[..., tuple[Mapping[str, object], str | None]],
+) -> GeometryFitRuntimeExecutionSetup:
+    """Build the runtime execution setup for one prepared geometry-fit run."""
+
+    ui_bindings = GeometryFitRuntimeUiBindings(
+        fit_params=prepared_run.fit_params,
+        base_profile_cache=getattr(simulation_runtime_state, "profile_cache", {}),
+        mosaic_params=mosaic_params,
+        current_ui_params=current_ui_params,
+        var_map=var_map,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+        capture_undo_state=capture_undo_state,
+        sync_joint_background_theta=(
+            lambda: theta_initial_var.set(
+                background_theta_for_index(
+                    getattr(background_runtime_state, "current_background_index", 0),
+                    strict_count=False,
+                )
+            )
+        ),
+        refresh_status=refresh_status,
+        update_manual_pick_button_label=update_manual_pick_button_label,
+        replace_profile_cache=(
+            lambda profile_cache: setattr(
+                simulation_runtime_state,
+                "profile_cache",
+                dict(profile_cache),
+            )
+        ),
+        push_undo_state=push_undo_state,
+        request_preview_skip_once=request_preview_skip_once,
+        mark_last_simulation_dirty=(
+            lambda: setattr(
+                simulation_runtime_state,
+                "last_simulation_signature",
+                None,
+            )
+        ),
+        schedule_update=schedule_update,
+        draw_overlay_records=draw_overlay_records,
+        draw_initial_pairs_overlay=draw_initial_pairs_overlay,
+        set_last_overlay_state=set_last_overlay_state,
+        save_export_records=(
+            lambda save_path, export_records: np.save(
+                save_path,
+                np.array(export_records, dtype=object),
+                allow_pickle=True,
+            )
+        ),
+        set_progress_text=set_progress_text,
+        cmd_line=cmd_line,
+    )
+
+    postprocess_config = GeometryFitRuntimePostprocessConfig(
+        current_background_index=int(
+            getattr(background_runtime_state, "current_background_index", 0)
+        ),
+        downloads_dir=downloads_dir,
+        stamp=stamp,
+        log_path=Path(downloads_dir) / f"geometry_fit_log_{stamp}.txt",
+        solver_inputs=solver_inputs,
+        sim_display_rotate_k=int(sim_display_rotate_k),
+        background_display_rotate_k=int(background_display_rotate_k),
+        simulate_and_compare_hkl=simulate_and_compare_hkl,
+        aggregate_match_centers=aggregate_match_centers,
+        build_overlay_records=build_overlay_records,
+        compute_frame_diagnostics=compute_frame_diagnostics,
+    )
+
+    return GeometryFitRuntimeExecutionSetup(
+        ui_bindings=ui_bindings,
+        postprocess_config=postprocess_config,
+    )
+
+
 def execute_runtime_geometry_fit(
     *,
     prepared_run: GeometryFitPreparedRun,
     var_names: Sequence[object],
     preserve_live_theta: bool,
     solve_fit: Callable[..., object],
-    ui_bindings: GeometryFitRuntimeUiBindings,
-    postprocess_config: GeometryFitRuntimePostprocessConfig,
+    setup: GeometryFitRuntimeExecutionSetup,
     start_progress_text: str = "Running geometry fit from saved manual Qr/Qz pairs…",
     flush_ui: Callable[[], None] | None = None,
 ) -> GeometryFitRuntimeExecutionResult:
     """Run one prepared geometry fit through the live solver and callbacks."""
 
+    ui_bindings = setup.ui_bindings
+    postprocess_config = setup.postprocess_config
     log_path = Path(postprocess_config.log_path)
     log_file = None
 

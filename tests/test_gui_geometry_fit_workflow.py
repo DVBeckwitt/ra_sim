@@ -255,6 +255,95 @@ def test_prepare_geometry_fit_run_reports_missing_manual_pairs_by_background_nam
     )
 
 
+def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindings() -> None:
+    calls = {"ensure_caked": 0}
+    native_background = np.arange(20, dtype=np.float64).reshape(4, 5)
+    display_background = np.arange(42, dtype=np.float64).reshape(6, 7)
+    orientation_choice = {
+        "indexing_mode": "yx",
+        "k": 1,
+        "flip_x": False,
+        "flip_y": True,
+        "flip_order": "xy",
+        "label": "rotate+flip",
+    }
+    orientation_diag = {"pairs": 1, "reason": "ok"}
+
+    result = geometry_fit.prepare_runtime_geometry_fit_run(
+        params={"theta_initial": 9.0, "theta_offset": 0.25},
+        var_names=["gamma"],
+        preserve_live_theta=False,
+        bindings=geometry_fit.GeometryFitRuntimePreparationBindings(
+            fit_config={
+                "geometry": {
+                    "orientation": {"mode": "auto"},
+                    "auto_match": {"max_display_markers": 90},
+                }
+            },
+            osc_files=["C:/tmp/bg0.osc"],
+            current_background_index=0,
+            theta_initial=9.0,
+            image_size=100,
+            display_rotate_k=3,
+            apply_geometry_fit_background_selection=lambda **kwargs: True,
+            current_geometry_fit_background_indices=lambda **kwargs: [0],
+            geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+            apply_background_theta_metadata=lambda **kwargs: True,
+            current_background_theta_values=lambda **kwargs: [9.0],
+            current_geometry_theta_offset=lambda **kwargs: 0.0,
+            geometry_manual_pairs_for_index=lambda idx: [
+                {
+                    "q_group_key": ("q", 1),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "hkl": (1, 1, 0),
+                    "x": 30.0,
+                    "y": 40.0,
+                }
+            ],
+            ensure_geometry_fit_caked_view=lambda: calls.__setitem__(
+                "ensure_caked", int(calls["ensure_caked"]) + 1
+            ),
+            load_background_by_index=lambda idx: (native_background, display_background),
+            apply_background_backend_orientation=lambda image: None,
+            geometry_manual_simulated_peaks_for_params=(
+                lambda params, *, prefer_cache: [{"dummy": True}]
+            ),
+            geometry_manual_simulated_lookup=lambda _peaks: {
+                (1, 2): {"sim_col": 9.0, "sim_row": 8.0}
+            },
+            geometry_manual_entry_display_coords=lambda entry: (50.0, 60.0),
+            unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+            display_to_native_sim_coords=lambda col, row, shape: (1.0, 2.0),
+            select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+                orientation_choice,
+                orientation_diag,
+            ),
+            apply_orientation_to_entries=lambda entries, shape, **kwargs: [
+                {"x": 31.0, "y": 41.0}
+            ],
+            orient_image_for_fit=lambda image, **kwargs: "fit-image",
+            build_runtime_config=lambda fit_params: {
+                "bounds": {"gamma": [0.0, 1.0]},
+                "seen_theta": float(fit_params["theta_initial"]),
+            },
+        ),
+    )
+
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    prepared = result.prepared_run
+    assert prepared.current_dataset["label"] == "bg0.osc"
+    assert prepared.current_dataset["experimental_image_for_fit"] == "fit-image"
+    assert prepared.dataset_specs == [{"dataset_index": 0, "label": "bg0.osc", "theta_initial": 9.0, "measured_peaks": [{"x": 31.0, "y": 41.0}], "experimental_image": "fit-image"}]
+    assert prepared.max_display_markers == 90
+    assert prepared.geometry_runtime_cfg == {
+        "bounds": {"gamma": [0.0, 1.0]},
+        "seen_theta": 9.0,
+    }
+    assert calls["ensure_caked"] == 1
+
+
 def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload() -> None:
     calls: dict[str, object] = {}
     native_background = np.arange(20, dtype=np.float64).reshape(4, 5)
@@ -818,6 +907,80 @@ def test_build_runtime_geometry_fit_result_bindings_uses_current_ui_snapshot() -
     }
 
 
+def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callbacks(
+    tmp_path,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(
+        joint_background_mode=True,
+        tmp_path=tmp_path,
+        stamp="20260328_123000",
+    )
+
+    class _SimulationState:
+        def __init__(self):
+            self.profile_cache = {"existing": 1}
+            self.last_simulation_signature = "sig"
+
+    class _BackgroundState:
+        def __init__(self):
+            self.current_background_index = 1
+
+    simulation_state = _SimulationState()
+    background_state = _BackgroundState()
+    theta_initial_var = _DummyVar(0.0)
+    progress_events: list[object] = []
+
+    setup = geometry_fit.build_runtime_geometry_fit_execution_setup(
+        prepared_run=prepared_run,
+        mosaic_params={"sigma_mosaic_deg": 0.2},
+        stamp="20260328_123000",
+        downloads_dir=tmp_path,
+        simulation_runtime_state=simulation_state,
+        background_runtime_state=background_state,
+        theta_initial_var=theta_initial_var,
+        geometry_theta_offset_var=None,
+        current_ui_params=lambda: {},
+        var_map={},
+        background_theta_for_index=lambda idx, strict_count=False: 7.5,
+        refresh_status=lambda: progress_events.append("refresh"),
+        update_manual_pick_button_label=lambda: progress_events.append("button"),
+        capture_undo_state=lambda: {"undo": True},
+        push_undo_state=lambda state: progress_events.append(("push", dict(state))),
+        request_preview_skip_once=lambda: progress_events.append("skip"),
+        schedule_update=lambda: progress_events.append("schedule"),
+        draw_overlay_records=lambda records, marker_limit: progress_events.append(
+            ("draw_overlay", marker_limit)
+        ),
+        draw_initial_pairs_overlay=lambda pairs, marker_limit: progress_events.append(
+            ("draw_initial", marker_limit)
+        ),
+        set_last_overlay_state=lambda state: progress_events.append(("overlay", state)),
+        set_progress_text=lambda text: progress_events.append(("progress", text)),
+        cmd_line=lambda text: progress_events.append(("cmd", text)),
+        solver_inputs=postprocess_config.solver_inputs,
+        sim_display_rotate_k=postprocess_config.sim_display_rotate_k,
+        background_display_rotate_k=postprocess_config.background_display_rotate_k,
+        simulate_and_compare_hkl=lambda *args, **kwargs: None,
+        aggregate_match_centers=lambda *args, **kwargs: None,
+        build_overlay_records=lambda *args, **kwargs: [],
+        compute_frame_diagnostics=lambda *args, **kwargs: ({}, None),
+    )
+
+    assert setup.postprocess_config.log_path == (
+        tmp_path / "geometry_fit_log_20260328_123000.txt"
+    )
+    assert setup.postprocess_config.current_background_index == 1
+    setup.ui_bindings.sync_joint_background_theta()
+    assert theta_initial_var.get() == 7.5
+    setup.ui_bindings.replace_profile_cache({"gamma": 1.25})
+    assert simulation_state.profile_cache == {"gamma": 1.25}
+    setup.ui_bindings.mark_last_simulation_dirty()
+    assert simulation_state.last_simulation_signature is None
+    save_path = tmp_path / "export.npy"
+    setup.ui_bindings.save_export_records(save_path, [{"source": "sim"}])
+    assert np.load(save_path, allow_pickle=True).tolist() == [{"source": "sim"}]
+
+
 def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloads(
     tmp_path,
 ) -> None:
@@ -1261,51 +1424,53 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         var_names=["gamma", "a"],
         preserve_live_theta=True,
         solve_fit=_solve_fit,
-        ui_bindings=geometry_fit.GeometryFitRuntimeUiBindings(
-            fit_params=prepared_run.fit_params,
-            base_profile_cache={"existing": 1},
-            mosaic_params={"sigma_mosaic_deg": 0.2},
-            current_ui_params=lambda: {
-                "zb": 0.1,
-                "zs": 0.2,
-                "theta_initial": theta_initial_var.get(),
-                "theta_offset": float(theta_offset_var.get() or 0.0),
-                "chi": 0.5,
-                "cor_angle": 0.6,
-                "psi_z": 0.7,
-                "gamma": gamma_var.get(),
-                "Gamma": 0.9,
-                "corto_detector": 1.0,
-                "a": a_var.get(),
-                "c": 32.1,
-                "center_x": 100.0,
-                "center_y": 200.0,
-            },
-            var_map={"gamma": gamma_var, "a": a_var},
-            geometry_theta_offset_var=theta_offset_var,
-            capture_undo_state=lambda: {"undo": True},
-            sync_joint_background_theta=None,
-            refresh_status=lambda: events.append("refresh_status"),
-            update_manual_pick_button_label=lambda: events.append("update_button"),
-            replace_profile_cache=lambda cache: stored_profile_cache.update(cache),
-            push_undo_state=lambda state: events.append(("push_undo", dict(state))),
-            request_preview_skip_once=lambda: events.append("skip_once"),
-            mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
-            schedule_update=lambda: events.append("schedule_update"),
-            draw_overlay_records=lambda records, marker_limit: events.append(
-                ("draw_overlay", list(records), marker_limit)
+        setup=geometry_fit.GeometryFitRuntimeExecutionSetup(
+            ui_bindings=geometry_fit.GeometryFitRuntimeUiBindings(
+                fit_params=prepared_run.fit_params,
+                base_profile_cache={"existing": 1},
+                mosaic_params={"sigma_mosaic_deg": 0.2},
+                current_ui_params=lambda: {
+                    "zb": 0.1,
+                    "zs": 0.2,
+                    "theta_initial": theta_initial_var.get(),
+                    "theta_offset": float(theta_offset_var.get() or 0.0),
+                    "chi": 0.5,
+                    "cor_angle": 0.6,
+                    "psi_z": 0.7,
+                    "gamma": gamma_var.get(),
+                    "Gamma": 0.9,
+                    "corto_detector": 1.0,
+                    "a": a_var.get(),
+                    "c": 32.1,
+                    "center_x": 100.0,
+                    "center_y": 200.0,
+                },
+                var_map={"gamma": gamma_var, "a": a_var},
+                geometry_theta_offset_var=theta_offset_var,
+                capture_undo_state=lambda: {"undo": True},
+                sync_joint_background_theta=None,
+                refresh_status=lambda: events.append("refresh_status"),
+                update_manual_pick_button_label=lambda: events.append("update_button"),
+                replace_profile_cache=lambda cache: stored_profile_cache.update(cache),
+                push_undo_state=lambda state: events.append(("push_undo", dict(state))),
+                request_preview_skip_once=lambda: events.append("skip_once"),
+                mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
+                schedule_update=lambda: events.append("schedule_update"),
+                draw_overlay_records=lambda records, marker_limit: events.append(
+                    ("draw_overlay", list(records), marker_limit)
+                ),
+                draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+                    ("draw_initial", list(pairs), marker_limit)
+                ),
+                set_last_overlay_state=lambda state: stored_overlay_state.update(state),
+                save_export_records=lambda save_path, export_records: saved_exports.append(
+                    (save_path, list(export_records))
+                ),
+                set_progress_text=lambda text: progress_texts.append(text),
+                cmd_line=lambda text: events.append(("cmd", text)),
             ),
-            draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
-                ("draw_initial", list(pairs), marker_limit)
-            ),
-            set_last_overlay_state=lambda state: stored_overlay_state.update(state),
-            save_export_records=lambda save_path, export_records: saved_exports.append(
-                (save_path, list(export_records))
-            ),
-            set_progress_text=lambda text: progress_texts.append(text),
-            cmd_line=lambda text: events.append(("cmd", text)),
+            postprocess_config=postprocess_config,
         ),
-        postprocess_config=postprocess_config,
         flush_ui=lambda: events.append("flush_ui"),
     )
 
@@ -1384,30 +1549,32 @@ def test_execute_runtime_geometry_fit_reports_solver_failure_and_closes_log(
         var_names=["gamma", "a"],
         preserve_live_theta=True,
         solve_fit=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-        ui_bindings=geometry_fit.GeometryFitRuntimeUiBindings(
-            fit_params=prepared_run.fit_params,
-            base_profile_cache={},
-            mosaic_params={},
-            current_ui_params=lambda: {},
-            var_map={},
-            geometry_theta_offset_var=None,
-            capture_undo_state=lambda: {},
-            sync_joint_background_theta=None,
-            refresh_status=lambda: None,
-            update_manual_pick_button_label=lambda: None,
-            replace_profile_cache=lambda _cache: None,
-            push_undo_state=lambda _state: None,
-            request_preview_skip_once=lambda: None,
-            mark_last_simulation_dirty=lambda: None,
-            schedule_update=lambda: None,
-            draw_overlay_records=lambda *_args, **_kwargs: None,
-            draw_initial_pairs_overlay=lambda *_args, **_kwargs: None,
-            set_last_overlay_state=lambda _state: None,
-            save_export_records=lambda *_args, **_kwargs: None,
-            set_progress_text=lambda text: progress_texts.append(text),
-            cmd_line=lambda text: events.append(text),
+        setup=geometry_fit.GeometryFitRuntimeExecutionSetup(
+            ui_bindings=geometry_fit.GeometryFitRuntimeUiBindings(
+                fit_params=prepared_run.fit_params,
+                base_profile_cache={},
+                mosaic_params={},
+                current_ui_params=lambda: {},
+                var_map={},
+                geometry_theta_offset_var=None,
+                capture_undo_state=lambda: {},
+                sync_joint_background_theta=None,
+                refresh_status=lambda: None,
+                update_manual_pick_button_label=lambda: None,
+                replace_profile_cache=lambda _cache: None,
+                push_undo_state=lambda _state: None,
+                request_preview_skip_once=lambda: None,
+                mark_last_simulation_dirty=lambda: None,
+                schedule_update=lambda: None,
+                draw_overlay_records=lambda *_args, **_kwargs: None,
+                draw_initial_pairs_overlay=lambda *_args, **_kwargs: None,
+                set_last_overlay_state=lambda _state: None,
+                save_export_records=lambda *_args, **_kwargs: None,
+                set_progress_text=lambda text: progress_texts.append(text),
+                cmd_line=lambda text: events.append(text),
+            ),
+            postprocess_config=postprocess_config,
         ),
-        postprocess_config=postprocess_config,
     )
 
     assert execution.error_text == "Geometry fit failed: boom"
