@@ -90,6 +90,37 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
     assert prepared.selected_background_indices == [0, 1, 2]
     assert prepared.background_theta_values == [1.0, 2.0, 3.0]
     assert prepared.joint_background_mode is True
+    assert prepared.dataset_specs == [
+        {"dataset_index": 1},
+        {"dataset_index": 0},
+        {"dataset_index": 2},
+    ]
+    assert prepared.start_cmd_line == (
+        "start: vars=gamma,theta_offset datasets=3 current_groups=1 current_points=2"
+    )
+    assert prepared.start_log_sections == [
+        (
+            "Fitting variables (start values):",
+            [
+                "gamma=nan",
+                "theta_offset=0.500000",
+            ],
+        ),
+        (
+            "Manual geometry datasets:",
+            ["bg[1]", "bg[0]", "bg[2]"],
+        ),
+        (
+            "Current orientation diagnostics:",
+            [
+                "pairs=2",
+                "chosen=identity",
+                "identity_rms_px=nan",
+                "best_rms_px=nan",
+                "reason=n/a",
+            ],
+        ),
+    ]
     assert prepared.max_display_markers == 150
     assert [entry["dataset_index"] for entry in prepared.dataset_infos] == [1, 0, 2]
     assert prepared.current_dataset["dataset_index"] == 1
@@ -299,6 +330,45 @@ def test_apply_geometry_fit_result_values_updates_named_vars_and_offset_text() -
     assert gamma_var.get() == 1.25
     assert a_var.get() == 4.5
     assert theta_offset_var.get() == "0.333333"
+
+
+def test_write_geometry_fit_run_start_log_emits_prepared_prelude() -> None:
+    events: list[tuple[str, object]] = []
+    prepared_run = geometry_fit.GeometryFitPreparedRun(
+        fit_params={"theta_initial": 2.5},
+        selected_background_indices=[1],
+        background_theta_values=[2.0],
+        joint_background_mode=False,
+        current_dataset={"dataset_index": 1},
+        dataset_infos=[{"dataset_index": 1}],
+        dataset_specs=[{"dataset_index": 1}],
+        start_cmd_line="start: vars=gamma datasets=1 current_groups=1 current_points=2",
+        start_log_sections=[
+            ("Section A:", ["one", "two"]),
+            ("Section B:", ["three"]),
+        ],
+        max_display_markers=120,
+        geometry_runtime_cfg={"bounds": {}},
+    )
+
+    geometry_fit.write_geometry_fit_run_start_log(
+        stamp="20260328_120000",
+        prepared_run=prepared_run,
+        cmd_line=lambda text: events.append(("cmd", text)),
+        log_line=lambda text="": events.append(("line", text)),
+        log_section=lambda title, lines: events.append(("section", (title, list(lines)))),
+    )
+
+    assert events == [
+        (
+            "cmd",
+            "start: vars=gamma datasets=1 current_groups=1 current_points=2",
+        ),
+        ("line", "Geometry fit started: 20260328_120000"),
+        ("line", ""),
+        ("section", ("Section A:", ["one", "two"])),
+        ("section", ("Section B:", ["three"])),
+    ]
 
 
 def test_build_geometry_fit_export_records_pairs_simulated_and_measured_rows() -> None:
@@ -553,6 +623,109 @@ def test_build_geometry_fit_profile_cache_merges_mosaic_and_current_fit_values()
         "c": 32.1,
         "center_x": 100.0,
         "center_y": 200.0,
+    }
+
+
+def test_build_runtime_geometry_fit_result_bindings_uses_current_ui_snapshot() -> None:
+    gamma_var = _DummyVar(0.0)
+    a_var = _DummyVar(0.0)
+    theta_offset_var = _DummyVar("")
+
+    bindings = geometry_fit.build_runtime_geometry_fit_result_bindings(
+        fit_params={"lambda": 1.54},
+        base_profile_cache={"existing": 1},
+        mosaic_params={"sigma_mosaic_deg": 0.2},
+        current_ui_params=lambda: {
+            "zb": 0.1,
+            "zs": 0.2,
+            "theta_initial": 3.0,
+            "theta_offset": float(theta_offset_var.get() or 0.0),
+            "chi": 0.5,
+            "cor_angle": 0.6,
+            "psi_z": 0.7,
+            "gamma": gamma_var.get(),
+            "Gamma": 0.9,
+            "corto_detector": 1.0,
+            "a": a_var.get(),
+            "c": 32.1,
+            "center_x": 100.0,
+            "center_y": 200.0,
+        },
+        var_map={
+            "gamma": gamma_var,
+            "a": a_var,
+        },
+        geometry_theta_offset_var=theta_offset_var,
+        log_section=lambda *_args, **_kwargs: None,
+        capture_undo_state=lambda: {"undo": True},
+        sync_joint_background_theta=lambda: None,
+        refresh_status=lambda: None,
+        update_manual_pick_button_label=lambda: None,
+        replace_profile_cache=lambda _cache: None,
+        push_undo_state=lambda _state: None,
+        request_preview_skip_once=lambda: None,
+        mark_last_simulation_dirty=lambda: None,
+        schedule_update=lambda: None,
+        postprocess_result=lambda fitted_params, rms: geometry_fit.GeometryFitPostprocessResult(
+            fitted_params=fitted_params,
+            point_match_summary_lines=[],
+            pixel_offsets=[],
+            overlay_records=[],
+            overlay_state={},
+            overlay_diagnostic_lines=[],
+            frame_warning=None,
+            export_records=[],
+            save_path="matched.npy",
+            fit_summary_lines=[],
+            progress_text=f"rms={rms}",
+        ),
+        draw_overlay_records=lambda *_args, **_kwargs: None,
+        draw_initial_pairs_overlay=lambda *_args, **_kwargs: None,
+        set_last_overlay_state=lambda _state: None,
+        save_export_records=lambda *_args, **_kwargs: None,
+        set_progress_text=lambda _text: None,
+        cmd_line=lambda _text: None,
+    )
+
+    bindings.apply_result_values(["gamma", "theta_offset", "a"], [1.25, 0.4, 4.5])
+
+    assert gamma_var.get() == 1.25
+    assert a_var.get() == 4.5
+    assert theta_offset_var.get() == "0.4"
+    assert bindings.build_profile_cache() == {
+        "existing": 1,
+        "sigma_mosaic_deg": 0.2,
+        "theta_initial": 3.0,
+        "theta_offset": 0.4,
+        "cor_angle": 0.6,
+        "chi": 0.5,
+        "zs": 0.2,
+        "zb": 0.1,
+        "gamma": 1.25,
+        "Gamma": 0.9,
+        "corto_detector": 1.0,
+        "a": 4.5,
+        "c": 32.1,
+        "center_x": 100.0,
+        "center_y": 200.0,
+    }
+    assert bindings.build_fitted_params() == {
+        "lambda": 1.54,
+        "zb": 0.1,
+        "zs": 0.2,
+        "theta_initial": 3.0,
+        "psi_z": 0.7,
+        "chi": 0.5,
+        "cor_angle": 0.6,
+        "gamma": 1.25,
+        "Gamma": 0.9,
+        "corto_detector": 1.0,
+        "a": 4.5,
+        "c": 32.1,
+        "center_x": 100.0,
+        "center_y": 200.0,
+        "center": [100.0, 200.0],
+        "theta_offset": 0.4,
     }
 
 

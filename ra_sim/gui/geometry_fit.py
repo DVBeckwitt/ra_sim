@@ -38,6 +38,9 @@ class GeometryFitPreparedRun:
     joint_background_mode: bool
     current_dataset: dict[str, object]
     dataset_infos: list[dict[str, object]]
+    dataset_specs: list[dict[str, object]]
+    start_cmd_line: str
+    start_log_sections: list[tuple[str, list[str]]]
     max_display_markers: int
     geometry_runtime_cfg: dict[str, object]
 
@@ -689,6 +692,7 @@ def prepare_geometry_fit_run(
                 )
             )
 
+    dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
     return GeometryFitPreparationResult(
         prepared_run=GeometryFitPreparedRun(
             fit_params=fit_params,
@@ -697,10 +701,120 @@ def prepare_geometry_fit_run(
             joint_background_mode=bool(joint_background_mode),
             current_dataset=current_dataset,
             dataset_infos=dataset_infos,
+            dataset_specs=dataset_specs,
+            start_cmd_line=build_geometry_fit_start_cmd_line(
+                var_names=selected_var_names,
+                dataset_infos=dataset_infos,
+                current_dataset=current_dataset,
+            ),
+            start_log_sections=build_geometry_fit_start_log_sections(
+                params=fit_params,
+                var_names=selected_var_names,
+                dataset_infos=dataset_infos,
+                current_dataset=current_dataset,
+            ),
             max_display_markers=int(max_display_markers),
             geometry_runtime_cfg=dict(build_runtime_config(fit_params) or {}),
         )
     )
+
+
+def build_geometry_fit_dataset_specs(
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Copy optimizer dataset specs from the prepared dataset metadata."""
+
+    dataset_specs: list[dict[str, object]] = []
+    for info in dataset_infos or ():
+        if not isinstance(info, Mapping):
+            continue
+        spec = info.get("spec")
+        if isinstance(spec, Mapping):
+            dataset_specs.append(dict(spec))
+    return dataset_specs
+
+
+def build_geometry_fit_start_cmd_line(
+    *,
+    var_names: Sequence[object],
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+    current_dataset: Mapping[str, object] | None,
+) -> str:
+    """Build the console start line for one geometry-fit run."""
+
+    dataset_list = list(dataset_infos or ())
+    dataset = current_dataset if isinstance(current_dataset, Mapping) else {}
+    return (
+        "start: "
+        f"vars={','.join(str(name) for name in var_names)} "
+        f"datasets={len(dataset_list)} "
+        f"current_groups={int(dataset.get('group_count', 0) or 0)} "
+        f"current_points={int(dataset.get('pair_count', 0) or 0)}"
+    )
+
+
+def build_geometry_fit_start_log_sections(
+    *,
+    params: Mapping[str, object] | None,
+    var_names: Sequence[object],
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+    current_dataset: Mapping[str, object] | None,
+) -> list[tuple[str, list[str]]]:
+    """Build the start-log sections for one geometry-fit run."""
+
+    fit_params = params if isinstance(params, Mapping) else {}
+    dataset = current_dataset if isinstance(current_dataset, Mapping) else {}
+    orientation_diag = dataset.get("orientation_diag") or {}
+    if not isinstance(orientation_diag, Mapping):
+        orientation_diag = {}
+    orientation_choice = dataset.get("orientation_choice") or {}
+    if not isinstance(orientation_choice, Mapping):
+        orientation_choice = {}
+    dataset_lines = [
+        str(info.get("summary_line", ""))
+        for info in (dataset_infos or ())
+        if isinstance(info, Mapping)
+    ] or ["<none>"]
+    return [
+        (
+            "Fitting variables (start values):",
+            [
+                f"{name}={float(fit_params.get(str(name), np.nan)):.6f}"
+                for name in var_names
+            ],
+        ),
+        (
+            "Manual geometry datasets:",
+            dataset_lines,
+        ),
+        (
+            "Current orientation diagnostics:",
+            [
+                f"pairs={orientation_diag.get('pairs', 0)}",
+                f"chosen={orientation_choice.get('label', 'identity')}",
+                f"identity_rms_px={float(orientation_diag.get('identity_rms_px', np.nan)):.4f}",
+                f"best_rms_px={float(orientation_diag.get('best_rms_px', np.nan)):.4f}",
+                f"reason={orientation_diag.get('reason', 'n/a')}",
+            ],
+        ),
+    ]
+
+
+def write_geometry_fit_run_start_log(
+    *,
+    stamp: str,
+    prepared_run: GeometryFitPreparedRun,
+    cmd_line: Callable[[str], None],
+    log_line: Callable[[str], None],
+    log_section: Callable[[str, Sequence[str]], None],
+) -> None:
+    """Emit the runtime console/log prelude for one prepared geometry-fit run."""
+
+    cmd_line(str(prepared_run.start_cmd_line))
+    log_line(f"Geometry fit started: {stamp}")
+    log_line("")
+    for title, lines in prepared_run.start_log_sections:
+        log_section(title, list(lines))
 
 
 def apply_geometry_fit_result_values(
@@ -882,6 +996,32 @@ def build_geometry_fit_fitted_params(
     return fitted
 
 
+def build_geometry_fit_fitted_params_from_ui(
+    base_params: Mapping[str, object] | None,
+    ui_params: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Build fitted simulation params from one current UI snapshot mapping."""
+
+    params = dict(ui_params or {})
+    return build_geometry_fit_fitted_params(
+        base_params,
+        zb=params.get("zb", np.nan),
+        zs=params.get("zs", np.nan),
+        theta_initial=params.get("theta_initial", np.nan),
+        theta_offset=params.get("theta_offset", 0.0),
+        chi=params.get("chi", np.nan),
+        cor_angle=params.get("cor_angle", np.nan),
+        psi_z=params.get("psi_z", np.nan),
+        gamma=params.get("gamma", np.nan),
+        Gamma=params.get("Gamma", np.nan),
+        corto_detector=params.get("corto_detector", np.nan),
+        a=params.get("a", np.nan),
+        c=params.get("c", np.nan),
+        center_x=params.get("center_x", np.nan),
+        center_y=params.get("center_y", np.nan),
+    )
+
+
 def build_geometry_fit_profile_cache(
     base_cache: Mapping[str, object] | None,
     mosaic_params: Mapping[str, object] | None,
@@ -922,6 +1062,33 @@ def build_geometry_fit_profile_cache(
         }
     )
     return profile_cache
+
+
+def build_geometry_fit_profile_cache_from_ui(
+    base_cache: Mapping[str, object] | None,
+    mosaic_params: Mapping[str, object] | None,
+    ui_params: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Build the post-fit profile-cache payload from one UI snapshot mapping."""
+
+    params = dict(ui_params or {})
+    return build_geometry_fit_profile_cache(
+        base_cache,
+        mosaic_params,
+        theta_initial=params.get("theta_initial", np.nan),
+        theta_offset=params.get("theta_offset", 0.0),
+        cor_angle=params.get("cor_angle", np.nan),
+        chi=params.get("chi", np.nan),
+        zs=params.get("zs", np.nan),
+        zb=params.get("zb", np.nan),
+        gamma=params.get("gamma", np.nan),
+        Gamma=params.get("Gamma", np.nan),
+        corto_detector=params.get("corto_detector", np.nan),
+        a=params.get("a", np.nan),
+        c=params.get("c", np.nan),
+        center_x=params.get("center_x", np.nan),
+        center_y=params.get("center_y", np.nan),
+    )
 
 
 def build_geometry_fit_pixel_offsets(
@@ -1333,4 +1500,81 @@ def apply_runtime_geometry_fit_result(
         rms=float(rms),
         fitted_params=fitted_params,
         postprocess=postprocess,
+    )
+
+
+def build_runtime_geometry_fit_result_bindings(
+    *,
+    fit_params: Mapping[str, object] | None,
+    base_profile_cache: Mapping[str, object] | None,
+    mosaic_params: Mapping[str, object] | None,
+    current_ui_params: Callable[[], Mapping[str, object]],
+    var_map: Mapping[str, object],
+    geometry_theta_offset_var=None,
+    log_section: Callable[[str, Sequence[str]], None],
+    capture_undo_state: Callable[[], dict[str, object]],
+    sync_joint_background_theta: Callable[[], None] | None,
+    refresh_status: Callable[[], None],
+    update_manual_pick_button_label: Callable[[], None],
+    replace_profile_cache: Callable[[dict[str, object]], None],
+    push_undo_state: Callable[[dict[str, object] | None], None],
+    request_preview_skip_once: Callable[[], None],
+    mark_last_simulation_dirty: Callable[[], None],
+    schedule_update: Callable[[], None],
+    postprocess_result: Callable[[dict[str, object], float], GeometryFitPostprocessResult],
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None],
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None],
+    set_last_overlay_state: Callable[[dict[str, object]], None],
+    save_export_records: Callable[[Path, Sequence[dict[str, object]]], None],
+    set_progress_text: Callable[[str], None],
+    cmd_line: Callable[[str], None],
+) -> GeometryFitRuntimeResultBindings:
+    """Build the runtime success-path callback bundle for one geometry fit."""
+
+    def _snapshot_ui_params() -> dict[str, object]:
+        try:
+            params = current_ui_params()
+        except Exception:
+            params = {}
+        return dict(params) if isinstance(params, Mapping) else {}
+
+    return GeometryFitRuntimeResultBindings(
+        log_section=log_section,
+        capture_undo_state=capture_undo_state,
+        apply_result_values=(
+            lambda names, values: apply_geometry_fit_result_values(
+                names,
+                values,
+                var_map=var_map,
+                geometry_theta_offset_var=geometry_theta_offset_var,
+            )
+        ),
+        sync_joint_background_theta=sync_joint_background_theta,
+        refresh_status=refresh_status,
+        update_manual_pick_button_label=update_manual_pick_button_label,
+        build_profile_cache=(
+            lambda: build_geometry_fit_profile_cache_from_ui(
+                base_profile_cache,
+                mosaic_params,
+                _snapshot_ui_params(),
+            )
+        ),
+        replace_profile_cache=replace_profile_cache,
+        push_undo_state=push_undo_state,
+        request_preview_skip_once=request_preview_skip_once,
+        mark_last_simulation_dirty=mark_last_simulation_dirty,
+        schedule_update=schedule_update,
+        build_fitted_params=(
+            lambda: build_geometry_fit_fitted_params_from_ui(
+                fit_params,
+                _snapshot_ui_params(),
+            )
+        ),
+        postprocess_result=postprocess_result,
+        draw_overlay_records=draw_overlay_records,
+        draw_initial_pairs_overlay=draw_initial_pairs_overlay,
+        set_last_overlay_state=set_last_overlay_state,
+        save_export_records=save_export_records,
+        set_progress_text=set_progress_text,
+        cmd_line=cmd_line,
     )

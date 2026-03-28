@@ -10394,6 +10394,7 @@ def on_fit_geometry_click():
     joint_background_mode = prepared_run.joint_background_mode
     current_dataset = prepared_run.current_dataset
     dataset_infos = prepared_run.dataset_infos
+    dataset_specs = prepared_run.dataset_specs
     max_display_markers = prepared_run.max_display_markers
     geometry_runtime_cfg = prepared_run.geometry_runtime_cfg
 
@@ -10419,41 +10420,17 @@ def on_fit_geometry_click():
     try:
         log_file = log_path.open("w", encoding="utf-8")
 
-        _cmd_line(
-            "start: "
-            f"vars={','.join(var_names)} "
-            f"datasets={len(dataset_infos)} "
-            f"current_groups={current_dataset['group_count']} "
-            f"current_points={current_dataset['pair_count']}"
-        )
-        _log_line(f"Geometry fit started: {stamp}")
-        _log_line()
-        _log_section(
-            "Fitting variables (start values):",
-            [
-                f"{name}={float(params.get(name, np.nan)):.6f}"
-                for name in var_names
-            ],
-        )
-        _log_section(
-            "Manual geometry datasets:",
-            [str(info.get("summary_line", "")) for info in dataset_infos] or ["<none>"],
-        )
-        _log_section(
-            "Current orientation diagnostics:",
-            [
-                f"pairs={current_dataset['orientation_diag'].get('pairs', 0)}",
-                f"chosen={current_dataset['orientation_choice'].get('label', 'identity')}",
-                f"identity_rms_px={float(current_dataset['orientation_diag'].get('identity_rms_px', np.nan)):.4f}",
-                f"best_rms_px={float(current_dataset['orientation_diag'].get('best_rms_px', np.nan)):.4f}",
-                f"reason={current_dataset['orientation_diag'].get('reason', 'n/a')}",
-            ],
+        gui_geometry_fit.write_geometry_fit_run_start_log(
+            stamp=stamp,
+            prepared_run=prepared_run,
+            cmd_line=_cmd_line,
+            log_line=_log_line,
+            log_section=_log_section,
         )
 
         progress_label_geometry.config(text="Running geometry fit from saved manual Qr/Qz pairs…")
         root.update_idletasks()
 
-        dataset_specs = [dict(info["spec"]) for info in dataset_infos]
         result = fit_geometry_parameters(
             miller,
             intensities,
@@ -10475,31 +10452,29 @@ def on_fit_geometry_click():
             joint_background_mode=joint_background_mode,
             preserve_live_theta=preserve_live_theta,
             max_display_markers=max_display_markers,
-            bindings=gui_geometry_fit.GeometryFitRuntimeResultBindings(
+            bindings=gui_geometry_fit.build_runtime_geometry_fit_result_bindings(
+                fit_params=params,
+                base_profile_cache=simulation_runtime_state.profile_cache,
+                mosaic_params=mosaic_params,
+                current_ui_params=_current_geometry_fit_ui_params,
+                var_map={
+                    "zb": zb_var,
+                    "zs": zs_var,
+                    "theta_initial": theta_initial_var,
+                    "psi_z": psi_z_var,
+                    "chi": chi_var,
+                    "cor_angle": cor_angle_var,
+                    "gamma": gamma_var,
+                    "Gamma": Gamma_var,
+                    "corto_detector": corto_detector_var,
+                    "a": a_var,
+                    "c": c_var,
+                    "center_x": center_x_var,
+                    "center_y": center_y_var,
+                },
+                geometry_theta_offset_var=geometry_theta_offset_var,
                 log_section=_log_section,
                 capture_undo_state=_capture_geometry_fit_undo_state,
-                apply_result_values=(
-                    lambda names, values: gui_geometry_fit.apply_geometry_fit_result_values(
-                        names,
-                        values,
-                        var_map={
-                            "zb": zb_var,
-                            "zs": zs_var,
-                            "theta_initial": theta_initial_var,
-                            "psi_z": psi_z_var,
-                            "chi": chi_var,
-                            "cor_angle": cor_angle_var,
-                            "gamma": gamma_var,
-                            "Gamma": Gamma_var,
-                            "corto_detector": corto_detector_var,
-                            "a": a_var,
-                            "c": c_var,
-                            "center_x": center_x_var,
-                            "center_y": center_y_var,
-                        },
-                        geometry_theta_offset_var=geometry_theta_offset_var,
-                    )
-                ),
                 sync_joint_background_theta=(
                     lambda: theta_initial_var.set(
                         _background_theta_for_index(
@@ -10510,25 +10485,6 @@ def on_fit_geometry_click():
                 ),
                 refresh_status=background_runtime_callbacks.refresh_status,
                 update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
-                build_profile_cache=(
-                    lambda: gui_geometry_fit.build_geometry_fit_profile_cache(
-                        simulation_runtime_state.profile_cache,
-                        mosaic_params,
-                        theta_initial=theta_initial_var.get(),
-                        theta_offset=_current_geometry_theta_offset(strict=False),
-                        cor_angle=cor_angle_var.get(),
-                        chi=chi_var.get(),
-                        zs=zs_var.get(),
-                        zb=zb_var.get(),
-                        gamma=gamma_var.get(),
-                        Gamma=Gamma_var.get(),
-                        corto_detector=corto_detector_var.get(),
-                        a=a_var.get(),
-                        c=c_var.get(),
-                        center_x=center_x_var.get(),
-                        center_y=center_y_var.get(),
-                    )
-                ),
                 replace_profile_cache=(
                     lambda profile_cache: setattr(
                         simulation_runtime_state,
@@ -10550,25 +10506,6 @@ def on_fit_geometry_click():
                     )
                 ),
                 schedule_update=schedule_update,
-                build_fitted_params=(
-                    lambda: gui_geometry_fit.build_geometry_fit_fitted_params(
-                        params,
-                        zb=zb_var.get(),
-                        zs=zs_var.get(),
-                        theta_initial=theta_initial_var.get(),
-                        theta_offset=_current_geometry_theta_offset(strict=False),
-                        chi=chi_var.get(),
-                        cor_angle=cor_angle_var.get(),
-                        psi_z=psi_z_var.get(),
-                        gamma=gamma_var.get(),
-                        Gamma=Gamma_var.get(),
-                        corto_detector=corto_detector_var.get(),
-                        a=a_var.get(),
-                        c=c_var.get(),
-                        center_x=center_x_var.get(),
-                        center_y=center_y_var.get(),
-                    )
-                ),
                 postprocess_result=(
                     lambda fitted_params, rms: gui_geometry_fit.postprocess_geometry_fit_result(
                         fitted_params=fitted_params,

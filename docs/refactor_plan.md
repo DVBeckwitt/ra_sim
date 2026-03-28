@@ -406,9 +406,13 @@ not `main.py` or `mosaic_profiles.py`.
     updates, preview-refresh scheduling, postprocess application, overlay-state
     persistence, export-save callbacks, and final success-status reporting
     through one callback bundle.
+  - `ra_sim.gui.geometry_fit` now also owns the prepared optimizer dataset-
+    spec packaging, the geometry-fit start-log/console prelude assembly, and
+    the runtime result-binding factory that snapshots current UI values into
+    fitted-parameter and profile-cache updates.
   - `ra_sim.gui.runtime` now keeps the preflight wrapper, log-file lifecycle,
-    live optimizer call, and the remaining Tk callback bundle wiring around
-    that workflow.
+    live optimizer call, and the smaller postprocess/overlay/save callback
+    slice that still surrounds that workflow.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -649,8 +653,9 @@ What is left:
   sites plus thin value-source wiring around the extracted peak-selection and
   canvas-interaction helpers and shared config/bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the live
-  preflight wrapper, log-file lifecycle, live solver call, and callback-bundle
-  wiring around the extracted `ra_sim.gui.geometry_fit` helpers.
+  preflight wrapper, log-file lifecycle, live solver call, and the remaining
+  postprocess/overlay/save callback wiring around the extracted
+  `ra_sim.gui.geometry_fit` helpers.
 - The remaining integration-range drag runtime code is now mostly thin
   integration-region visual call sites plus the remaining cross-feature event
   wiring around the extracted drag and canvas-interaction helpers.
