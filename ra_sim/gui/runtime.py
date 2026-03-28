@@ -3775,9 +3775,25 @@ canvas_interaction_runtime = gui_bootstrap.build_runtime_canvas_interaction_boot
     integration_range_drag_callbacks=integration_range_drag_runtime_callbacks,
     manual_pick_session_active=_geometry_manual_pick_session_active,
     set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
-    set_geometry_preview_exclude_mode=_set_geometry_preview_exclude_mode,
+    set_geometry_preview_exclude_mode=(
+        lambda enabled, message=None: (
+            gui_geometry_q_group_manager.set_runtime_geometry_preview_exclude_mode(
+                geometry_q_group_runtime_bindings_factory(),
+                enabled,
+                message=message,
+            )
+        )
+    ),
     toggle_geometry_manual_selection_at=_toggle_geometry_manual_selection_at,
-    toggle_live_geometry_preview_exclusion_at=_toggle_live_geometry_preview_exclusion_at,
+    toggle_live_geometry_preview_exclusion_at=(
+        lambda col, row: (
+            gui_geometry_q_group_manager.toggle_runtime_live_geometry_preview_exclusion_at(
+                geometry_q_group_runtime_bindings_factory(),
+                col,
+                row,
+            )
+        )
+    ),
     clamp_to_axis_view=gui_integration_range_drag.clamp_to_axis_view,
     apply_geometry_manual_pick_zoom=_apply_geometry_manual_pick_zoom,
     update_geometry_manual_pick_preview=_update_geometry_manual_pick_preview,
@@ -5861,7 +5877,7 @@ background_runtime = gui_bootstrap.build_runtime_background_bootstrap(
     background_backend_debug_view_state=background_backend_debug_view_state,
     mark_chi_square_dirty=_mark_chi_square_dirty,
     refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
-    schedule_update_factory=schedule_update,
+    schedule_update_factory=lambda: schedule_update,
     set_status_text_factory=lambda: (
         (lambda text: progress_label.config(text=text))
         if "progress_label" in globals()
@@ -7553,7 +7569,7 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
             None,
         )
     ),
-    schedule_update_factory=schedule_update,
+    schedule_update_factory=lambda: schedule_update,
     set_status_text_factory=lambda: (
         (lambda text: progress_label_geometry.config(text=text))
         if "progress_label_geometry" in globals()
@@ -10273,182 +10289,6 @@ def on_fit_mosaic_click():
     )
 
 
-def _build_geometry_manual_fit_dataset(
-    background_index: int,
-    *,
-    theta_base: float,
-    base_fit_params: dict[str, object],
-    orientation_cfg: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """Build one saved-manual-pair geometry dataset for the optimizer."""
-
-    background_idx = int(background_index)
-    selected_entries = _geometry_manual_pairs_for_index(background_idx)
-    if not selected_entries:
-        raise RuntimeError(
-            f"background {background_idx + 1} has no saved manual geometry pairs"
-        )
-
-    native_background, display_background = _load_background_image_by_index(background_idx)
-    backend_background = _apply_background_backend_orientation(native_background)
-    if backend_background is None:
-        backend_background = native_background
-
-    params_i = dict(base_fit_params)
-    theta_offset = float(base_fit_params.get("theta_offset", 0.0))
-    params_i["theta_initial"] = float(theta_base + theta_offset)
-    simulated_peaks = _geometry_manual_simulated_peaks_for_params(
-        params_i,
-        prefer_cache=(background_idx == int(background_runtime_state.current_background_index)),
-    )
-    simulated_lookup = _geometry_manual_simulated_lookup(simulated_peaks)
-
-    measured_display: list[dict[str, object]] = []
-    initial_pairs_display: list[dict[str, object]] = []
-    for pair_idx, entry in enumerate(selected_entries):
-        measured_entry = dict(entry)
-        measured_entry["overlay_match_index"] = int(pair_idx)
-        measured_display.append(measured_entry)
-
-        initial_entry: dict[str, object] = {
-            "overlay_match_index": int(pair_idx),
-            "hkl": entry.get("hkl", entry.get("label")),
-        }
-        bg_coords = _geometry_manual_entry_display_coords(entry)
-        if bg_coords is not None:
-            initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
-        try:
-            source_key = (
-                int(entry.get("source_table_index")),
-                int(entry.get("source_row_index")),
-            )
-        except Exception:
-            source_key = None
-        if source_key is not None:
-            sim_entry = simulated_lookup.get(source_key)
-            if isinstance(sim_entry, dict):
-                try:
-                    sim_col = float(sim_entry.get("sim_col"))
-                    sim_row = float(sim_entry.get("sim_row"))
-                except Exception:
-                    sim_col = float("nan")
-                    sim_row = float("nan")
-                if np.isfinite(sim_col) and np.isfinite(sim_row):
-                    initial_entry["sim_display"] = (float(sim_col), float(sim_row))
-        initial_pairs_display.append(initial_entry)
-
-    measured_native = _unrotate_display_peaks(
-        measured_display,
-        display_background.shape,
-        k=DISPLAY_ROTATE_K,
-    )
-
-    sim_orientation_points: list[tuple[float, float]] = []
-    meas_orientation_points: list[tuple[float, float]] = []
-    sim_native_shape = (int(image_size), int(image_size))
-    for initial_entry, measured_entry in zip(initial_pairs_display, measured_native):
-        if not isinstance(measured_entry, dict):
-            continue
-        sim_display = initial_entry.get("sim_display")
-        if (
-            not isinstance(sim_display, (list, tuple, np.ndarray))
-            or len(sim_display) < 2
-        ):
-            continue
-        try:
-            sim_native = _display_to_native_sim_coords(
-                float(sim_display[0]),
-                float(sim_display[1]),
-                sim_native_shape,
-            )
-            mx = float(measured_entry.get("x"))
-            my = float(measured_entry.get("y"))
-        except Exception:
-            continue
-        if not (
-            np.isfinite(sim_native[0])
-            and np.isfinite(sim_native[1])
-            and np.isfinite(mx)
-            and np.isfinite(my)
-        ):
-            continue
-        sim_orientation_points.append((float(sim_native[0]), float(sim_native[1])))
-        meas_orientation_points.append((float(mx), float(my)))
-
-    orientation_choice, orientation_diag = _select_fit_orientation(
-        sim_orientation_points,
-        meas_orientation_points,
-        tuple(int(v) for v in native_background.shape[:2]),
-        cfg=orientation_cfg or {},
-    )
-    measured_for_fit = _apply_orientation_to_entries(
-        measured_native,
-        native_background.shape,
-        indexing_mode=orientation_choice["indexing_mode"],
-        k=orientation_choice["k"],
-        flip_x=orientation_choice["flip_x"],
-        flip_y=orientation_choice["flip_y"],
-        flip_order=orientation_choice["flip_order"],
-    )
-    experimental_image_for_fit = _orient_image_for_fit(
-        backend_background,
-        indexing_mode=orientation_choice["indexing_mode"],
-        k=orientation_choice["k"],
-        flip_x=orientation_choice["flip_x"],
-        flip_y=orientation_choice["flip_y"],
-        flip_order=orientation_choice["flip_order"],
-    )
-
-    label = (
-        Path(str(background_runtime_state.osc_files[background_idx])).name
-        if 0 <= background_idx < len(background_runtime_state.osc_files)
-        else f"background_{background_idx}"
-    )
-    group_count = len(
-        {
-            entry.get("q_group_key")
-            for entry in selected_entries
-            if entry.get("q_group_key") is not None
-        }
-    )
-
-    return {
-        "dataset_index": int(background_idx),
-        "label": label,
-        "theta_base": float(theta_base),
-        "theta_effective": float(theta_base + theta_offset),
-        "group_count": int(group_count),
-        "pair_count": int(len(measured_display)),
-        "measured_display": measured_display,
-        "measured_native": measured_native,
-        "measured_for_fit": measured_for_fit,
-        "initial_pairs_display": initial_pairs_display,
-        "experimental_image_for_fit": experimental_image_for_fit,
-        "native_background": native_background,
-        "orientation_choice": orientation_choice,
-        "orientation_diag": orientation_diag,
-        "summary_line": (
-            "bg[{idx}] {name}: theta_i={theta_base:.6f} theta={theta_eff:.6f} "
-            "groups={groups} points={points} orientation={orientation}"
-        ).format(
-            idx=background_idx,
-            name=label,
-            theta_base=float(theta_base),
-            theta_eff=float(theta_base + theta_offset),
-            groups=int(group_count),
-            points=int(len(measured_display)),
-            orientation=orientation_choice.get("label", "identity"),
-        ),
-        "spec": {
-            "dataset_index": int(background_idx),
-            "label": label,
-            "theta_initial": float(theta_base),
-            "measured_peaks": measured_for_fit,
-            "experimental_image": experimental_image_for_fit,
-        },
-    }
-
-
 def on_fit_geometry_click():
     """Fit geometry from the saved manual Qr/Qz pair selections."""
 
@@ -10465,113 +10305,97 @@ def on_fit_geometry_click():
     params = _current_geometry_fit_params()
     mosaic_params = dict(params.get("mosaic_params", {}))
     var_names = _current_geometry_fit_var_names()
-    if not var_names:
-        progress_label_geometry.config(text="No geometry parameters are selected for fitting.")
-        return
     preserve_live_theta = (
         "theta_initial" not in var_names and "theta_offset" not in var_names
     )
-
-    geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
-    if not isinstance(geometry_refine_cfg, dict):
-        geometry_refine_cfg = {}
-    orientation_cfg = geometry_refine_cfg.get("orientation", {}) or {}
-    if not isinstance(orientation_cfg, dict):
-        orientation_cfg = {}
-    overlay_cfg = geometry_refine_cfg.get("auto_match", {}) or {}
-    if not isinstance(overlay_cfg, dict):
-        overlay_cfg = {}
-    max_display_markers = max(1, int(overlay_cfg.get("max_display_markers", 120)))
-
-    if not background_runtime_state.osc_files:
-        progress_label_geometry.config(text="Geometry fit unavailable: no background image is loaded.")
-        return
-
-    if not _apply_geometry_fit_background_selection(
-        trigger_update=False,
-        sync_live_theta=not preserve_live_theta,
-    ):
-        return
-
     try:
-        selected_background_indices = _current_geometry_fit_background_indices(strict=True)
+        prepare_result = gui_geometry_fit.prepare_geometry_fit_run(
+            params=params,
+            var_names=var_names,
+            fit_config=fit_config,
+            osc_files=background_runtime_state.osc_files,
+            current_background_index=int(background_runtime_state.current_background_index),
+            theta_initial=theta_initial_var.get(),
+            preserve_live_theta=preserve_live_theta,
+            apply_geometry_fit_background_selection=(
+                _apply_geometry_fit_background_selection
+            ),
+            current_geometry_fit_background_indices=(
+                _current_geometry_fit_background_indices
+            ),
+            geometry_fit_uses_shared_theta_offset=(
+                _geometry_fit_uses_shared_theta_offset
+            ),
+            apply_background_theta_metadata=_apply_background_theta_metadata,
+            current_background_theta_values=_current_background_theta_values,
+            current_geometry_theta_offset=_current_geometry_theta_offset,
+            geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
+            ensure_geometry_fit_caked_view=_ensure_geometry_fit_caked_view,
+            build_dataset=(
+                lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
+                    gui_geometry_fit.build_geometry_manual_fit_dataset(
+                        background_index,
+                        theta_base=theta_base,
+                        base_fit_params=base_fit_params,
+                        osc_files=background_runtime_state.osc_files,
+                        current_background_index=int(
+                            background_runtime_state.current_background_index
+                        ),
+                        image_size=image_size,
+                        display_rotate_k=DISPLAY_ROTATE_K,
+                        geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
+                        load_background_by_index=_load_background_image_by_index,
+                        apply_background_backend_orientation=(
+                            _apply_background_backend_orientation
+                        ),
+                        geometry_manual_simulated_peaks_for_params=(
+                            _geometry_manual_simulated_peaks_for_params
+                        ),
+                        geometry_manual_simulated_lookup=(
+                            _geometry_manual_simulated_lookup
+                        ),
+                        geometry_manual_entry_display_coords=(
+                            _geometry_manual_entry_display_coords
+                        ),
+                        unrotate_display_peaks=_unrotate_display_peaks,
+                        display_to_native_sim_coords=(
+                            _display_to_native_sim_coords
+                        ),
+                        select_fit_orientation=_select_fit_orientation,
+                        apply_orientation_to_entries=(
+                            _apply_orientation_to_entries
+                        ),
+                        orient_image_for_fit=_orient_image_for_fit,
+                        orientation_cfg=orientation_cfg,
+                    )
+                )
+            ),
+            build_runtime_config=(
+                lambda fit_params: _build_geometry_fit_runtime_config(
+                    fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {},
+                    {name: fit_params.get(name) for name in var_names},
+                    _current_geometry_fit_constraint_state(var_names),
+                    _current_geometry_fit_parameter_domains(var_names),
+                )
+            ),
+        )
     except Exception as exc:
-        progress_label_geometry.config(
-            text=f"Geometry fit unavailable: invalid fit background selection ({exc})."
-        )
-        return
-    if int(background_runtime_state.current_background_index) not in {
-        int(idx) for idx in selected_background_indices
-    }:
-        progress_label_geometry.config(
-            text=(
-                "Geometry fit unavailable: the active background must be part of the fit "
-                "selection so the overlay can be drawn on the current image."
-            )
-        )
+        _cmd_line(f"failed: {exc}")
+        progress_label_geometry.config(text=f"Geometry fit failed: {exc}")
         return
 
-    joint_background_mode = False
-    background_theta_values: list[float] = []
-    if _geometry_fit_uses_shared_theta_offset(selected_background_indices):
-        if not _apply_background_theta_metadata(
-            trigger_update=False,
-            sync_live_theta=not preserve_live_theta,
-        ):
-            progress_label_geometry.config(
-                text="Geometry fit unavailable: invalid background theta_i/shared offset settings."
-            )
-            return
-        try:
-            background_theta_values = _current_background_theta_values(strict_count=True)
-            params["theta_offset"] = float(_current_geometry_theta_offset(strict=True))
-        except Exception as exc:
-            progress_label_geometry.config(
-                text=f"Geometry fit unavailable: failed to parse background theta settings ({exc})."
-            )
-            return
-        joint_background_mode = len(selected_background_indices) > 1
-        if background_theta_values:
-            params["theta_initial"] = float(
-                background_theta_values[int(background_runtime_state.current_background_index)]
-                + float(params.get("theta_offset", 0.0))
-            )
-    else:
-        params["theta_offset"] = 0.0
-        background_theta_values = [float(params.get("theta_initial", theta_initial_var.get()))]
-
-    required_indices = (
-        list(selected_background_indices)
-        if joint_background_mode
-        else [int(background_runtime_state.current_background_index)]
-    )
-    missing_indices = [
-        idx
-        for idx in required_indices
-        if not _geometry_manual_pairs_for_index(idx)
-    ]
-    if missing_indices:
-        missing_names = [
-            Path(str(background_runtime_state.osc_files[idx])).name
-            for idx in missing_indices
-            if 0 <= idx < len(background_runtime_state.osc_files)
-        ]
-        progress_label_geometry.config(
-            text=(
-                "Geometry fit unavailable: save manual Qr/Qz pairs first for "
-                + ", ".join(missing_names or [f"background {idx + 1}" for idx in missing_indices])
-                + "."
-            )
-        )
+    if prepare_result.prepared_run is None:
+        if prepare_result.error_text:
+            progress_label_geometry.config(text=prepare_result.error_text)
         return
 
-    try:
-        _ensure_geometry_fit_caked_view()
-    except Exception as exc:
-        progress_label_geometry.config(
-            text=f"Geometry fit unavailable: failed to prepare the 2D caked view ({exc})."
-        )
-        return
+    prepared_run = prepare_result.prepared_run
+    params = prepared_run.fit_params
+    joint_background_mode = prepared_run.joint_background_mode
+    current_dataset = prepared_run.current_dataset
+    dataset_infos = prepared_run.dataset_infos
+    max_display_markers = prepared_run.max_display_markers
+    geometry_runtime_cfg = prepared_run.geometry_runtime_cfg
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = get_dir("downloads") / f"geometry_fit_log_{stamp}.txt"
@@ -10594,33 +10418,6 @@ def on_fit_geometry_click():
 
     try:
         log_file = log_path.open("w", encoding="utf-8")
-
-        dataset_infos: list[dict[str, object]] = []
-        current_theta_base = (
-            float(background_theta_values[int(background_runtime_state.current_background_index)])
-            if joint_background_mode
-            else float(params.get("theta_initial", theta_initial_var.get()))
-        )
-        current_dataset = _build_geometry_manual_fit_dataset(
-            int(background_runtime_state.current_background_index),
-            theta_base=float(current_theta_base),
-            base_fit_params=params,
-            orientation_cfg=orientation_cfg,
-        )
-        dataset_infos.append(current_dataset)
-        if joint_background_mode:
-            for bg_idx in selected_background_indices:
-                if int(bg_idx) == int(background_runtime_state.current_background_index):
-                    continue
-                theta_base = float(background_theta_values[int(bg_idx)])
-                dataset_infos.append(
-                    _build_geometry_manual_fit_dataset(
-                        int(bg_idx),
-                        theta_base=float(theta_base),
-                        base_fit_params=params,
-                        orientation_cfg=orientation_cfg,
-                    )
-                )
 
         _cmd_line(
             "start: "
@@ -10657,15 +10454,6 @@ def on_fit_geometry_click():
         root.update_idletasks()
 
         dataset_specs = [dict(info["spec"]) for info in dataset_infos]
-        geometry_runtime_cfg = _build_geometry_fit_runtime_config(
-            geometry_refine_cfg,
-            {
-                name: params.get(name)
-                for name in var_names
-            },
-            _current_geometry_fit_constraint_state(var_names),
-            _current_geometry_fit_parameter_domains(var_names),
-        )
         result = fit_geometry_parameters(
             miller,
             intensities,
@@ -10681,61 +10469,30 @@ def on_fit_geometry_click():
 
         _log_section(
             "Optimizer diagnostics:",
-            [
-                f"success={getattr(result, 'success', False)}",
-                f"status={getattr(result, 'status', '')}",
-                f"message={(getattr(result, 'message', '') or '').strip()}",
-                f"nfev={getattr(result, 'nfev', '<unknown>')}",
-                f"cost={float(getattr(result, 'cost', np.nan)):.6f}",
-                f"robust_cost={float(getattr(result, 'robust_cost', np.nan)):.6f}",
-                f"solver_loss={getattr(result, 'solver_loss', '<unknown>')}",
-                f"solver_f_scale={float(getattr(result, 'solver_f_scale', np.nan)):.6f}",
-                f"optimality={float(getattr(result, 'optimality', np.nan)):.6f}",
-                f"active_mask={list(getattr(result, 'active_mask', []))}",
-            ]
-            + [
-                "restart[{idx}] cost={cost:.6f} success={success} msg={msg}".format(
-                    idx=int(entry.get("restart", -1)),
-                    cost=float(entry.get("cost", np.nan)),
-                    success=bool(entry.get("success", False)),
-                    msg=str(entry.get("message", "")).strip(),
-                )
-                for entry in (getattr(result, "restart_history", []) or [])
-            ],
+            gui_geometry_fit.build_geometry_fit_optimizer_diagnostics_lines(result),
         )
 
         undo_state = _capture_geometry_fit_undo_state()
-        for name, value in zip(var_names, getattr(result, "x", [])):
-            val = float(value)
-            if name == "zb":
-                zb_var.set(val)
-            elif name == "zs":
-                zs_var.set(val)
-            elif name == "theta_initial":
-                theta_initial_var.set(val)
-            elif name == "theta_offset":
-                if geometry_theta_offset_var is not None:
-                    geometry_theta_offset_var.set(f"{val:.6g}")
-            elif name == "psi_z":
-                psi_z_var.set(val)
-            elif name == "chi":
-                chi_var.set(val)
-            elif name == "cor_angle":
-                cor_angle_var.set(val)
-            elif name == "gamma":
-                gamma_var.set(val)
-            elif name == "Gamma":
-                Gamma_var.set(val)
-            elif name == "corto_detector":
-                corto_detector_var.set(val)
-            elif name == "a":
-                a_var.set(val)
-            elif name == "c":
-                c_var.set(val)
-            elif name == "center_x":
-                center_x_var.set(val)
-            elif name == "center_y":
-                center_y_var.set(val)
+        gui_geometry_fit.apply_geometry_fit_result_values(
+            var_names,
+            getattr(result, "x", []),
+            var_map={
+                "zb": zb_var,
+                "zs": zs_var,
+                "theta_initial": theta_initial_var,
+                "psi_z": psi_z_var,
+                "chi": chi_var,
+                "cor_angle": cor_angle_var,
+                "gamma": gamma_var,
+                "Gamma": Gamma_var,
+                "corto_detector": corto_detector_var,
+                "a": a_var,
+                "c": c_var,
+                "center_x": center_x_var,
+                "center_y": center_y_var,
+            },
+            geometry_theta_offset_var=geometry_theta_offset_var,
+        )
 
         if joint_background_mode and not preserve_live_theta:
             theta_initial_var.set(
@@ -10769,47 +10526,44 @@ def on_fit_geometry_click():
         simulation_runtime_state.last_simulation_signature = None
         schedule_update()
 
-        rms = (
-            float(getattr(result, "rms_px"))
-            if np.isfinite(float(getattr(result, "rms_px", np.nan)))
-            else (
-                np.sqrt(np.mean(result.fun ** 2))
-                if getattr(result, "fun", None) is not None and result.fun.size
-                else 0.0
-            )
-        )
+        rms = gui_geometry_fit.geometry_fit_result_rms(result)
         _log_section(
             "Optimization result:",
-            [f"{name} = {float(val):.6f}" for name, val in zip(var_names, getattr(result, "x", []))]
-            + [f"RMS residual = {float(rms):.6f} px"],
+            gui_geometry_fit.build_geometry_fit_result_lines(
+                var_names,
+                getattr(result, "x", []),
+                rms=rms,
+            ),
         )
 
-        fitted_params = dict(params)
-        fitted_params.update(
-            {
-                "zb": zb_var.get(),
-                "zs": zs_var.get(),
-                "theta_initial": theta_initial_var.get(),
-                "theta_offset": _current_geometry_theta_offset(strict=False),
-                "chi": chi_var.get(),
-                "cor_angle": cor_angle_var.get(),
-                "psi_z": psi_z_var.get(),
-                "gamma": gamma_var.get(),
-                "Gamma": Gamma_var.get(),
-                "corto_detector": corto_detector_var.get(),
-                "a": a_var.get(),
-                "c": c_var.get(),
-                "center": [center_x_var.get(), center_y_var.get()],
-                "center_x": center_x_var.get(),
-                "center_y": center_y_var.get(),
-            }
+        fitted_params = gui_geometry_fit.build_geometry_fit_fitted_params(
+            params,
+            zb=zb_var.get(),
+            zs=zs_var.get(),
+            theta_initial=theta_initial_var.get(),
+            theta_offset=_current_geometry_theta_offset(strict=False),
+            chi=chi_var.get(),
+            cor_angle=cor_angle_var.get(),
+            psi_z=psi_z_var.get(),
+            gamma=gamma_var.get(),
+            Gamma=Gamma_var.get(),
+            corto_detector=corto_detector_var.get(),
+            a=a_var.get(),
+            c=c_var.get(),
+            center_x=center_x_var.get(),
+            center_y=center_y_var.get(),
         )
 
         point_match_summary = getattr(result, "point_match_summary", None)
-        if isinstance(point_match_summary, dict):
+        point_match_summary_lines = (
+            gui_geometry_fit.build_geometry_fit_point_match_summary_lines(
+                point_match_summary
+            )
+        )
+        if point_match_summary_lines:
             _log_section(
                 "Point-match summary:",
-                [f"{key}={value}" for key, value in sorted(point_match_summary.items())],
+                point_match_summary_lines,
             )
 
         (
@@ -10837,22 +10591,21 @@ def on_fit_geometry_click():
             meas_millers,
         )
 
-        pixel_offsets: list[tuple[tuple[int, int, int], float, float, float]] = []
-        for hkl_key, sim_center, meas_center in zip(
-            agg_millers, agg_sim_coords, agg_meas_coords
-        ):
-            dx = float(sim_center[0] - meas_center[0])
-            dy = float(sim_center[1] - meas_center[1])
-            pixel_offsets.append((hkl_key, dx, dy, float(math.hypot(dx, dy))))
+        pixel_offsets = gui_geometry_fit.build_geometry_fit_pixel_offsets(
+            agg_millers,
+            agg_sim_coords,
+            agg_meas_coords,
+        )
 
-        overlay_point_match_diagnostics = getattr(result, "point_match_diagnostics", None)
-        if joint_background_mode and isinstance(overlay_point_match_diagnostics, list):
-            overlay_point_match_diagnostics = [
-                dict(entry)
-                for entry in overlay_point_match_diagnostics
-                if isinstance(entry, dict)
-                and int(entry.get("dataset_index", -1)) == int(background_runtime_state.current_background_index)
-            ]
+        overlay_point_match_diagnostics = (
+            gui_geometry_fit.filter_geometry_fit_overlay_point_match_diagnostics(
+                getattr(result, "point_match_diagnostics", None),
+                joint_background_mode=joint_background_mode,
+                current_background_index=int(
+                    background_runtime_state.current_background_index
+                ),
+            )
+        )
         overlay_records = build_geometry_fit_overlay_records(
             current_dataset["initial_pairs_display"],
             overlay_point_match_diagnostics,
@@ -10864,15 +10617,10 @@ def on_fit_geometry_click():
         frame_diag, frame_warning = _geometry_overlay_frame_diagnostics(overlay_records)
         _log_section(
             "Overlay frame diagnostics:",
-            [
-                "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
-                f"overlay_records={len(overlay_records)}",
-                f"paired_records={int(frame_diag.get('paired_records', 0))}",
-                f"sim_display_med_px={float(frame_diag.get('sim_display_med_px', np.nan)):.3f}",
-                f"bg_display_med_px={float(frame_diag.get('bg_display_med_px', np.nan)):.3f}",
-                f"sim_display_p90_px={float(frame_diag.get('sim_display_p90_px', np.nan)):.3f}",
-                f"bg_display_p90_px={float(frame_diag.get('bg_display_p90_px', np.nan)):.3f}",
-            ],
+            gui_geometry_fit.build_geometry_fit_overlay_diagnostic_lines(
+                frame_diag,
+                overlay_record_count=len(overlay_records),
+            ),
         )
 
         if overlay_records:
@@ -10893,84 +10641,44 @@ def on_fit_geometry_click():
             "max_display_markers": int(max_display_markers),
         })
 
-        export_recs = []
-        for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_sim_coords, pixel_offsets):
-            export_recs.append(
-                {
-                    "source": "sim",
-                    "hkl": tuple(int(v) for v in hkl),
-                    "x": int(x),
-                    "y": int(y),
-                    "dist_px": float(dist),
-                }
-            )
-        for hkl, (x, y), (_, _, _, dist) in zip(agg_millers, agg_meas_coords, pixel_offsets):
-            export_recs.append(
-                {
-                    "source": "meas",
-                    "hkl": tuple(int(v) for v in hkl),
-                    "x": int(x),
-                    "y": int(y),
-                    "dist_px": float(dist),
-                }
-            )
+        export_recs = gui_geometry_fit.build_geometry_fit_export_records(
+            agg_millers,
+            agg_sim_coords,
+            agg_meas_coords,
+            pixel_offsets,
+        )
         save_path = get_dir("downloads") / f"matched_peaks_{stamp}.npy"
         np.save(save_path, np.array(export_recs, dtype=object), allow_pickle=True)
 
         _log_section(
             "Pixel offsets (native frame):",
-            [
-                f"HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px"
-                for hkl, dx, dy, dist in pixel_offsets
-            ]
-            or ["No matched peaks"],
+            gui_geometry_fit.build_geometry_fit_pixel_offset_lines(pixel_offsets),
         )
         _log_section(
             "Fit summary:",
-            [
-                f"manual_groups={current_dataset['group_count']}",
-                f"manual_points={current_dataset['pair_count']}",
-                f"overlay_records={len(overlay_records)}",
-                f"orientation={current_dataset['orientation_choice'].get('label', 'identity')}",
-                *[f"{name} = {float(val):.6f}" for name, val in zip(var_names, getattr(result, "x", []))],
-                f"RMS residual = {float(rms):.6f} px",
-                f"Matched peaks saved to: {save_path}",
-            ],
+            gui_geometry_fit.build_geometry_fit_summary_lines(
+                current_dataset=current_dataset,
+                overlay_record_count=len(overlay_records),
+                var_names=var_names,
+                values=getattr(result, "x", []),
+                rms=rms,
+                save_path=save_path,
+            ),
         )
 
-        base_summary = (
-            "Manual geometry fit complete:\n"
-            + "\n".join(f"{name} = {float(val):.4f}" for name, val in zip(var_names, getattr(result, "x", [])))
-            + f"\nRMS residual = {float(rms):.2f} px"
-            + f"\nOrientation = {current_dataset['orientation_choice'].get('label', 'identity')}"
-        )
-        overlay_hint = (
-            "Overlay: blue squares=selected simulated points, amber triangles=saved background points, "
-            "green circles=fitted simulated peaks, dashed arrows=initial->fitted sim shifts."
-        )
-        dist_report = (
-            "\n".join(
-                f"HKL={hkl}: |Δ|={dist:.2f}px (dx={dx:.2f}, dy={dy:.2f})"
-                for hkl, dx, dy, dist in pixel_offsets
-            )
-            if pixel_offsets
-            else "No matched peaks to report distances."
-        )
         progress_label_geometry.config(
-            text=(
-                f"{base_summary}\n"
-                f"Manual pairs: {current_dataset['pair_count']} points across {current_dataset['group_count']} groups"
-                + (
-                    f" | joint backgrounds={len(dataset_infos)}"
-                    if joint_background_mode
-                    else ""
-                )
-                + "\n"
-                + overlay_hint
-                + ("\n" + frame_warning if frame_warning else "")
-                + f"\nSaved {len(export_recs)} peak records → {save_path}"
-                + f"\nPixel offsets:\n{dist_report}"
-                + f"\nFit log → {log_path}"
+            text=gui_geometry_fit.build_geometry_fit_progress_text(
+                current_dataset=current_dataset,
+                dataset_count=len(dataset_infos),
+                joint_background_mode=joint_background_mode,
+                var_names=var_names,
+                values=getattr(result, "x", []),
+                rms=rms,
+                pixel_offsets=pixel_offsets,
+                export_record_count=len(export_recs),
+                save_path=save_path,
+                log_path=log_path,
+                frame_warning=frame_warning,
             )
         )
         _cmd_line(

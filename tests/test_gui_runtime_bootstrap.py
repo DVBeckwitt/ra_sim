@@ -99,3 +99,69 @@ def test_runtime_hkl_pick_constants_are_defined_before_binding_factory_use() -> 
         assert assignment_lines[name] < binding_use_lines[name], (
             f"{name} must be assigned before peak-selection bindings are built"
         )
+
+
+def test_runtime_canvas_preview_callbacks_are_late_bound() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    lambda_keywords: dict[str, bool] = {}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr != "build_runtime_canvas_interaction_bootstrap":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg in {
+                "set_geometry_preview_exclude_mode",
+                "toggle_live_geometry_preview_exclusion_at",
+            }:
+                lambda_keywords[keyword.arg] = isinstance(keyword.value, ast.Lambda)
+
+    assert lambda_keywords.get("set_geometry_preview_exclude_mode") is True
+    assert lambda_keywords.get("toggle_live_geometry_preview_exclusion_at") is True
+
+
+def test_runtime_schedule_update_factories_are_late_bound() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    lambda_keywords: dict[tuple[str, str], bool] = {}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr not in {
+            "build_runtime_background_bootstrap",
+            "build_runtime_geometry_q_group_bootstrap",
+        }:
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "schedule_update_factory":
+                lambda_keywords[(func.attr, keyword.arg)] = isinstance(
+                    keyword.value,
+                    ast.Lambda,
+                )
+
+    assert (
+        lambda_keywords.get(
+            ("build_runtime_background_bootstrap", "schedule_update_factory")
+        )
+        is True
+    )
+    assert (
+        lambda_keywords.get(
+            (
+                "build_runtime_geometry_q_group_bootstrap",
+                "schedule_update_factory",
+            )
+        )
+        is True
+    )

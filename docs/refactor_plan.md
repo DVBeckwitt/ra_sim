@@ -387,6 +387,16 @@ not `main.py` or `mosaic_profiles.py`.
     preview availability/fallback simulation orchestration, a narrowed
     update-cycle refresh call site, and thin geometry-tool button wiring
     around that workflow.
+- Geometry-fit manual-pair fitting workflow extraction has advanced.
+  - `ra_sim.gui.geometry_fit` now owns manual-pair dataset assembly, fit
+    preflight validation, fitted-value application, and matched-peak export
+    row helpers used by the live geometry-fit action.
+  - `ra_sim.gui.geometry_fit` now also owns optimizer diagnostic formatting,
+    RMS/result summary helpers, fitted-parameter merge helpers, overlay-
+    diagnostic formatting, pixel-offset analysis/formatting, and final
+    geometry-fit status-text assembly used after the live solver returns.
+  - `ra_sim.gui.runtime` now keeps the live optimizer call, fit logging,
+    overlay drawing, and Tk status/callback wiring around that workflow.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -626,6 +636,9 @@ What is left:
 - The remaining selected-peak runtime code is now mostly a few bound call
   sites plus thin value-source wiring around the extracted peak-selection and
   canvas-interaction helpers and shared config/bootstrap helpers.
+- The remaining geometry-fit manual-pair runtime code is now mostly the live
+  solver call, log-file writes, overlay drawing, and a few Tk/runtime state
+  updates around the extracted `ra_sim.gui.geometry_fit` helpers.
 - The remaining integration-range drag runtime code is now mostly thin
   integration-region visual call sites plus the remaining cross-feature event
   wiring around the extracted drag and canvas-interaction helpers.
