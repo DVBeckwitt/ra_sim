@@ -50,6 +50,15 @@ class GeometryQGroupRuntimeBindings:
     intensities: object | None = None
     image_size: object | None = None
     current_geometry_fit_params_factory: Callable[[], Mapping[str, object]] | None = None
+    filter_simulated_peaks: (
+        Callable[
+            [Sequence[dict[str, object]] | None],
+            tuple[list[dict[str, object]], int, int],
+        ]
+        | None
+    ) = None
+    collapse_simulated_peaks: Callable[..., tuple[list[dict[str, object]], int]] | None = None
+    excluded_q_group_count: Callable[[], int] | None = None
     axis: object | None = None
     geometry_preview_artists: list[object] | None = None
     draw_idle: Callable[[], None] | None = None
@@ -2246,6 +2255,102 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
     return None
 
 
+def resolve_runtime_live_geometry_preview_seed_state(
+    bindings: GeometryQGroupRuntimeBindings,
+    simulated_peaks: Sequence[dict[str, object]] | None,
+    *,
+    preview_auto_match_cfg: Mapping[str, object] | None,
+    min_matches: int,
+    signature: object,
+    update_status: bool = True,
+) -> tuple[list[dict[str, object]], int, int, int] | None:
+    """Filter/collapse runtime live-preview seeds and handle empty-state exits."""
+
+    filter_simulated_peaks = bindings.filter_simulated_peaks
+    if callable(filter_simulated_peaks):
+        filtered_peaks, excluded_q_peaks, q_group_total = filter_simulated_peaks(
+            simulated_peaks
+        )
+    else:
+        filtered_peaks = list(simulated_peaks or [])
+        excluded_q_peaks = 0
+        q_group_total = 0
+
+    if not filtered_peaks:
+        if callable(bindings.clear_geometry_preview_artists):
+            bindings.clear_geometry_preview_artists()
+        if update_status:
+            _set_status_text(
+                bindings.set_status_text,
+                "Live auto-match preview unavailable: no Qr/Qz groups are selected.",
+            )
+        excluded_q_group_count = (
+            _coerce_int(bindings.excluded_q_group_count(), 0)
+            if callable(bindings.excluded_q_group_count)
+            else 0
+        )
+        gui_controllers.replace_geometry_preview_overlay_state(
+            bindings.preview_state,
+            build_empty_live_geometry_preview_overlay_state(
+                signature=signature,
+                min_matches=int(min_matches),
+                max_display_markers=_coerce_int(
+                    (
+                        preview_auto_match_cfg.get("max_display_markers", 120)
+                        if isinstance(preview_auto_match_cfg, Mapping)
+                        else 120
+                    ),
+                    120,
+                ),
+                q_group_total=int(q_group_total),
+                q_group_excluded=int(excluded_q_group_count),
+                excluded_q_peaks=int(excluded_q_peaks),
+            ),
+        )
+        return None
+
+    preview_cfg = (
+        preview_auto_match_cfg if isinstance(preview_auto_match_cfg, Mapping) else {}
+    )
+    search_radius = _coerce_float(preview_cfg.get("search_radius_px", 24.0), 24.0)
+    merge_radius_px = _coerce_float(
+        preview_cfg.get(
+            "degenerate_merge_radius_px",
+            min(6.0, 0.33 * float(search_radius)),
+        ),
+        min(6.0, 0.33 * float(search_radius)),
+    )
+    collapse_simulated_peaks = bindings.collapse_simulated_peaks
+    if callable(collapse_simulated_peaks):
+        collapsed_peaks, collapsed_deg_preview = collapse_simulated_peaks(
+            filtered_peaks,
+            merge_radius_px=float(merge_radius_px),
+        )
+    else:
+        collapsed_peaks = list(filtered_peaks)
+        collapsed_deg_preview = 0
+
+    if not collapsed_peaks:
+        if callable(bindings.clear_geometry_preview_artists):
+            bindings.clear_geometry_preview_artists()
+        if update_status:
+            _set_status_text(
+                bindings.set_status_text,
+                (
+                    "Live auto-match preview unavailable: no geometry-fit seeds "
+                    "remain after Qr/Qz collapse."
+                ),
+            )
+        return None
+
+    return (
+        list(collapsed_peaks),
+        int(excluded_q_peaks),
+        int(q_group_total),
+        int(collapsed_deg_preview),
+    )
+
+
 def distance_point_to_segment_sq(
     px: float,
     py: float,
@@ -2417,6 +2522,15 @@ def make_runtime_geometry_q_group_bindings_factory(
     intensities_factory: object | None = None,
     image_size_value_factory: object | None = None,
     current_geometry_fit_params_factory: Callable[[], Mapping[str, object]] | None = None,
+    filter_simulated_peaks: (
+        Callable[
+            [Sequence[dict[str, object]] | None],
+            tuple[list[dict[str, object]], int, int],
+        ]
+        | None
+    ) = None,
+    collapse_simulated_peaks: Callable[..., tuple[list[dict[str, object]], int]] | None = None,
+    excluded_q_group_count: Callable[[], int] | None = None,
     axis: object | None = None,
     geometry_preview_artists: list[object] | None = None,
     draw_idle_factory: object | None = None,
@@ -2469,6 +2583,9 @@ def make_runtime_geometry_q_group_bindings_factory(
             intensities=_resolve_runtime_value(intensities_factory),
             image_size=_resolve_runtime_value(image_size_value_factory),
             current_geometry_fit_params_factory=current_geometry_fit_params_factory,
+            filter_simulated_peaks=filter_simulated_peaks,
+            collapse_simulated_peaks=collapse_simulated_peaks,
+            excluded_q_group_count=excluded_q_group_count,
             axis=axis,
             geometry_preview_artists=geometry_preview_artists,
             draw_idle=_resolve_runtime_value(draw_idle_factory),

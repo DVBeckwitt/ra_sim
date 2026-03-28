@@ -1176,6 +1176,116 @@ def test_geometry_q_group_manager_runtime_live_preview_simulated_peak_resolution
     ]
 
 
+def test_geometry_q_group_manager_runtime_live_preview_seed_state_resolution() -> None:
+    preview_state = state.GeometryPreviewState()
+    no_group_events = []
+    no_group_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=preview_state,
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        filter_simulated_peaks=lambda peaks: ([], 2, 5),
+        collapse_simulated_peaks=lambda peaks, *, merge_radius_px=6.0: (
+            list(peaks or []),
+            int(merge_radius_px),
+        ),
+        excluded_q_group_count=lambda: 3,
+        clear_geometry_preview_artists=lambda: no_group_events.append("clear"),
+        set_status_text=lambda text: no_group_events.append(text),
+    )
+
+    no_groups = geometry_q_group_manager.resolve_runtime_live_geometry_preview_seed_state(
+        no_group_bindings,
+        [{"seed": True}],
+        preview_auto_match_cfg={"max_display_markers": 11},
+        min_matches=4,
+        signature=("sig", 1),
+        update_status=True,
+    )
+
+    assert no_groups is None
+    assert no_group_events == [
+        "clear",
+        "Live auto-match preview unavailable: no Qr/Qz groups are selected.",
+    ]
+    assert preview_state.overlay.q_group_total == 5
+    assert preview_state.overlay.q_group_excluded == 3
+    assert preview_state.overlay.excluded_q_peaks == 2
+    assert preview_state.overlay.max_display_markers == 11
+
+    collapse_events = []
+    collapse_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        filter_simulated_peaks=lambda peaks: (list(peaks or []), 1, 4),
+        collapse_simulated_peaks=lambda peaks, *, merge_radius_px=6.0: (
+            collapse_events.append(("collapse", list(peaks), merge_radius_px)),
+            ([], 7),
+        )[-1],
+        clear_geometry_preview_artists=lambda: collapse_events.append("clear"),
+        set_status_text=lambda text: collapse_events.append(text),
+    )
+
+    collapsed = geometry_q_group_manager.resolve_runtime_live_geometry_preview_seed_state(
+        collapse_bindings,
+        [{"seed": 1}],
+        preview_auto_match_cfg={"search_radius_px": 30.0},
+        min_matches=4,
+        signature=("sig", 2),
+        update_status=True,
+    )
+
+    assert collapsed is None
+    assert collapse_events == [
+        ("collapse", [{"seed": 1}], 6.0),
+        "clear",
+        "Live auto-match preview unavailable: no geometry-fit seeds remain after Qr/Qz collapse.",
+    ]
+
+    success_events = []
+    success_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        filter_simulated_peaks=lambda peaks: (list(peaks or []), 2, 6),
+        collapse_simulated_peaks=lambda peaks, *, merge_radius_px=6.0: (
+            success_events.append(("collapse", merge_radius_px)),
+            ([{"collapsed": True}], 3),
+        )[-1],
+        set_status_text=lambda text: success_events.append(text),
+    )
+
+    success = geometry_q_group_manager.resolve_runtime_live_geometry_preview_seed_state(
+        success_bindings,
+        [{"seed": 2}],
+        preview_auto_match_cfg={"degenerate_merge_radius_px": 4.5},
+        min_matches=5,
+        signature=("sig", 3),
+        update_status=True,
+    )
+
+    assert success == ([{"collapsed": True}], 2, 6, 3)
+    assert success_events == [("collapse", 4.5)]
+
+
 def test_refresh_geometry_q_group_window_uses_cached_entries_and_view_helpers(
     monkeypatch,
 ) -> None:

@@ -7393,48 +7393,22 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     if not simulated_peaks:
         return False
 
-    simulated_peaks, excluded_q_peaks, q_group_total = _filter_geometry_fit_simulated_peaks(
-        simulated_peaks
-    )
-    if not simulated_peaks:
-        _clear_geometry_preview_artists()
-        if update_status:
-            progress_label_geometry.config(
-                text="Live auto-match preview unavailable: no Qr/Qz groups are selected."
-            )
-        gui_controllers.replace_geometry_preview_overlay_state(
-            geometry_preview_state,
-            gui_geometry_q_group_manager.build_empty_live_geometry_preview_overlay_state(
-                signature=_live_geometry_preview_signature(),
-                min_matches=int(min_matches),
-                max_display_markers=int(
-                    preview_auto_match_cfg.get("max_display_markers", 120)
-                ),
-                q_group_total=int(q_group_total),
-                q_group_excluded=int(_geometry_q_group_excluded_count()),
-                excluded_q_peaks=int(excluded_q_peaks),
-            ),
+    preview_signature = _live_geometry_preview_signature()
+    preview_seed_state = (
+        gui_geometry_q_group_manager.resolve_runtime_live_geometry_preview_seed_state(
+            geometry_q_group_runtime_bindings_factory(),
+            simulated_peaks,
+            preview_auto_match_cfg=preview_auto_match_cfg,
+            min_matches=int(min_matches),
+            signature=preview_signature,
+            update_status=update_status,
         )
-        return False
-    simulated_peaks, collapsed_deg_preview = _collapse_geometry_fit_simulated_peaks(
-        simulated_peaks,
-        merge_radius_px=float(
-            preview_auto_match_cfg.get(
-                "degenerate_merge_radius_px",
-                min(
-                    6.0,
-                    0.33 * float(preview_auto_match_cfg.get("search_radius_px", 24.0)),
-                ),
-            )
-        ),
     )
-    if not simulated_peaks:
-        _clear_geometry_preview_artists()
-        if update_status:
-            progress_label_geometry.config(
-                text="Live auto-match preview unavailable: no geometry-fit seeds remain after Qr/Qz collapse."
-            )
+    if not preview_seed_state:
         return False
+    simulated_peaks, excluded_q_peaks, q_group_total, collapsed_deg_preview = (
+        preview_seed_state
+    )
 
     matched_pairs, match_stats, _effective_auto_match_cfg, auto_match_attempts = (
         _auto_match_background_peaks_with_relaxation(
@@ -7447,7 +7421,7 @@ def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     gui_controllers.replace_geometry_preview_overlay_state(
         geometry_preview_state,
         gui_geometry_q_group_manager.build_live_geometry_preview_overlay_state(
-            signature=_live_geometry_preview_signature(),
+            signature=preview_signature,
             matched_pairs=matched_pairs,
             match_stats=match_stats,
             preview_auto_match_cfg=preview_auto_match_cfg,
@@ -7569,6 +7543,9 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     intensities_factory=lambda: intensities,
     image_size_value_factory=lambda: image_size,
     current_geometry_fit_params_factory=_current_geometry_fit_params,
+    filter_simulated_peaks=_filter_geometry_fit_simulated_peaks,
+    collapse_simulated_peaks=_collapse_geometry_fit_simulated_peaks,
+    excluded_q_group_count=_geometry_q_group_excluded_count,
     axis=ax,
     geometry_preview_artists=geometry_runtime_state.preview_artists,
     draw_idle_factory=lambda: canvas.draw_idle,
