@@ -436,6 +436,174 @@ def test_peak_selection_runtime_config_factory_bundle_delegates_to_helper_factor
     assert calls[2][1]["process_peaks_parallel"] == "process-peaks"
 
 
+def test_peak_selection_runtime_peak_overlay_data_callback_delegates_to_helper(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    monkeypatch.setattr(
+        peak_selection,
+        "ensure_runtime_peak_overlay_data",
+        lambda runtime_state, **kwargs: captured.update(
+            {
+                "runtime_state": runtime_state,
+                "kwargs": kwargs,
+            }
+        )
+        or True,
+    )
+
+    callback = peak_selection.make_runtime_peak_overlay_data_callback(
+        simulation_runtime_state="runtime-state",
+        primary_a_factory=lambda: 5.0,
+        primary_c_factory=lambda: 7.0,
+        native_sim_to_display_coords="coords",
+        reflection_q_group_metadata="q-group",
+        max_hits_per_reflection=lambda: 3,
+        min_separation_px=2.5,
+    )
+
+    assert callback(force=True) is True
+    assert captured["runtime_state"] == "runtime-state"
+    assert captured["kwargs"] == {
+        "primary_a": captured["kwargs"]["primary_a"],
+        "primary_c": captured["kwargs"]["primary_c"],
+        "native_sim_to_display_coords": "coords",
+        "reflection_q_group_metadata": "q-group",
+        "max_hits_per_reflection": captured["kwargs"]["max_hits_per_reflection"],
+        "min_separation_px": 2.5,
+        "force": True,
+    }
+    assert captured["kwargs"]["primary_a"]() == 5.0
+    assert captured["kwargs"]["primary_c"]() == 7.0
+    assert captured["kwargs"]["max_hits_per_reflection"]() == 3
+
+
+def test_peak_selection_runtime_peak_overlay_data_builds_records_and_reuses_cache() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        last_simulation_signature=("sig",),
+        stored_max_positions_local=[
+            np.asarray(
+                [
+                    [8.0, 10.0, 20.0, 0.125, 1.0, 0.0, 2.0],
+                    [5.0, 11.0, 21.0, 0.25, 2.0, 0.0, 3.0],
+                ],
+                dtype=float,
+            )
+        ],
+        stored_sim_image=np.zeros((64, 64), dtype=float),
+        stored_peak_table_lattice=None,
+    )
+    coord_calls = []
+    q_group_calls = []
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda col, row, image_shape: (
+            coord_calls.append((col, row, image_shape)) or (col + 100.0, row + 200.0)
+        ),
+        reflection_q_group_metadata=lambda hkl_raw, **kwargs: (
+            q_group_calls.append((tuple(hkl_raw), kwargs)) or ("group-key", None, 0.75)
+        ),
+        max_hits_per_reflection=1,
+        min_separation_px=0.0,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(110.0, 220.0)]
+    assert runtime_state.peak_millers == [(1, 0, 2)]
+    assert runtime_state.peak_intensities == [8.0]
+    assert runtime_state.peak_records == [
+        {
+            "display_col": 110.0,
+            "display_row": 220.0,
+            "native_col": 10.0,
+            "native_row": 20.0,
+            "hkl": (1, 0, 2),
+            "hkl_raw": (1.0, 0.0, 2.0),
+            "intensity": 8.0,
+            "qr": runtime_state.peak_records[0]["qr"],
+            "qz": 0.75,
+            "q_group_key": "group-key",
+            "phi": 0.125,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "source_label": "primary",
+            "av": 4.0,
+            "cv": 6.0,
+        }
+    ]
+    assert np.isclose(
+        runtime_state.peak_records[0]["qr"],
+        (2.0 * np.pi / 4.0) * np.sqrt(4.0 / 3.0),
+    )
+    assert coord_calls == [(10.0, 20.0, (64, 64))]
+    assert q_group_calls == [
+        (
+            (1.0, 0.0, 2.0),
+            {
+                "source_label": "primary",
+                "a_value": 4.0,
+                "c_value": 6.0,
+                "qr_value": runtime_state.peak_records[0]["qr"],
+            },
+        )
+    ]
+
+    runtime_state.peak_positions.clear()
+    runtime_state.peak_millers.clear()
+    runtime_state.peak_intensities.clear()
+    runtime_state.peak_records.clear()
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=99.0,
+        primary_c=101.0,
+        native_sim_to_display_coords=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache rebuild should not recalculate display coords")
+        ),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache rebuild should not recalculate q-group metadata")
+        ),
+        max_hits_per_reflection=1,
+        min_separation_px=0.0,
+    )
+
+    assert ok is True
+    assert runtime_state.peak_positions == [(110.0, 220.0)]
+    assert runtime_state.peak_millers == [(1, 0, 2)]
+    assert runtime_state.peak_intensities == [8.0]
+    assert runtime_state.peak_records[0]["source_label"] == "primary"
+    assert runtime_state.peak_overlay_cache["sig"] is not None
+
+
+def test_peak_selection_runtime_peak_overlay_data_clears_state_when_unavailable() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(1.0, 2.0)],
+        peak_millers=[(1, 0, 2)],
+        peak_intensities=[3.0],
+        peak_records=[{"hkl": (1, 0, 2)}],
+        stored_max_positions_local=None,
+        stored_sim_image=np.zeros((8, 8), dtype=float),
+    )
+
+    ok = peak_selection.ensure_runtime_peak_overlay_data(
+        runtime_state,
+        primary_a=4.0,
+        primary_c=6.0,
+        native_sim_to_display_coords=lambda *_args: (0.0, 0.0),
+        reflection_q_group_metadata=lambda *_args, **_kwargs: ("group", None, 0.0),
+    )
+
+    assert ok is False
+    assert runtime_state.peak_positions == []
+    assert runtime_state.peak_millers == []
+    assert runtime_state.peak_intensities == []
+    assert runtime_state.peak_records == []
+
+
 def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallback() -> None:
     assert peak_selection.brightest_hit_native_from_table([]) is None
     assert peak_selection.brightest_hit_native_from_table([[1.0, 5.0, 6.0]]) == (

@@ -1056,6 +1056,209 @@ def simulate_ideal_hkl_native_center(
     )
 
 
+def _clear_peak_overlay_lists(simulation_runtime_state) -> None:
+    simulation_runtime_state.peak_positions.clear()
+    simulation_runtime_state.peak_millers.clear()
+    simulation_runtime_state.peak_intensities.clear()
+    simulation_runtime_state.peak_records.clear()
+
+
+def ensure_runtime_peak_overlay_data(
+    simulation_runtime_state,
+    *,
+    primary_a: object,
+    primary_c: object,
+    native_sim_to_display_coords: Callable[..., tuple[float, float]],
+    reflection_q_group_metadata: Callable[..., tuple[object, object, object]],
+    max_hits_per_reflection: object = 0,
+    min_separation_px: object = 0.0,
+    force: bool = False,
+) -> bool:
+    """Ensure the live simulated-peak overlay cache is populated for one frame."""
+
+    if (
+        simulation_runtime_state.stored_max_positions_local is None
+        or simulation_runtime_state.stored_sim_image is None
+    ):
+        _clear_peak_overlay_lists(simulation_runtime_state)
+        return False
+
+    max_positions_local = simulation_runtime_state.stored_max_positions_local
+    updated_image = simulation_runtime_state.stored_sim_image
+    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
+
+    fallback_a = _runtime_float(primary_a, float("nan"))
+    fallback_c = _runtime_float(primary_c, float("nan"))
+    if (
+        not peak_table_lattice_local
+        or len(peak_table_lattice_local) != len(max_positions_local)
+    ):
+        peak_table_lattice_local = [
+            (fallback_a, fallback_c, "primary")
+            for _ in max_positions_local
+        ]
+
+    max_hits_raw = _runtime_int(max_hits_per_reflection, 0)
+    min_separation_value = _runtime_float(min_separation_px, 0.0)
+    peak_sig = (
+        simulation_runtime_state.last_simulation_signature,
+        id(max_positions_local),
+        len(max_positions_local),
+        tuple(updated_image.shape),
+        int(max_hits_raw),
+        float(min_separation_value),
+    )
+    peak_cached = (
+        not force
+        and simulation_runtime_state.peak_overlay_cache.get("sig") == peak_sig
+    )
+
+    _clear_peak_overlay_lists(simulation_runtime_state)
+
+    if peak_cached:
+        simulation_runtime_state.peak_positions.extend(
+            list(simulation_runtime_state.peak_overlay_cache.get("positions", ()))
+        )
+        simulation_runtime_state.peak_millers.extend(
+            list(simulation_runtime_state.peak_overlay_cache.get("millers", ()))
+        )
+        simulation_runtime_state.peak_intensities.extend(
+            list(simulation_runtime_state.peak_overlay_cache.get("intensities", ()))
+        )
+        simulation_runtime_state.peak_records.extend(
+            dict(rec)
+            for rec in simulation_runtime_state.peak_overlay_cache.get("records", ())
+        )
+        return True
+
+    max_hits_limit = max_hits_raw if max_hits_raw > 0 else None
+    min_sep_sq = float(min_separation_value) ** 2
+    image_shape = tuple(int(v) for v in updated_image.shape)
+
+    for table_idx, tbl in enumerate(max_positions_local):
+        tbl_arr = np.asarray(tbl, dtype=float)
+        if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0 or tbl_arr.shape[1] < 7:
+            continue
+
+        lattice_entry = peak_table_lattice_local[table_idx]
+        try:
+            av_used = float(lattice_entry[0])
+        except Exception:
+            av_used = float(fallback_a)
+        try:
+            cv_used = float(lattice_entry[1])
+        except Exception:
+            cv_used = float(fallback_c)
+        try:
+            source_label = str(lattice_entry[2])
+        except Exception:
+            source_label = "primary"
+
+        row_order = np.argsort(tbl_arr[:, 0])[::-1]
+        chosen_rows: list[tuple[int, np.ndarray, float, float, float, float]] = []
+
+        for row_idx in row_order:
+            row = tbl_arr[row_idx]
+            I, xpix, ypix, phi_val, H, K, L = row[:7]
+            if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
+                continue
+            cx = float(xpix)
+            cy = float(ypix)
+            disp_cx, disp_cy = native_sim_to_display_coords(cx, cy, image_shape)
+            too_close = False
+            for _, _, _, _, prev_col, prev_row in chosen_rows:
+                d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
+                if d2 < min_sep_sq:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
+            if max_hits_limit is not None and len(chosen_rows) >= max_hits_limit:
+                break
+
+        for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
+            I, _xpix, _ypix, phi_val, H, K, L = row[:7]
+            simulation_runtime_state.peak_positions.append((disp_cx, disp_cy))
+            simulation_runtime_state.peak_intensities.append(float(I))
+            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
+            hkl_raw = (float(H), float(K), float(L))
+            m_val = float(H * H + H * K + K * K)
+            qr_val = (
+                (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
+                if float(av_used) > 0.0
+                and np.isfinite(float(av_used))
+                and m_val >= 0.0
+                else float("nan")
+            )
+            q_group_key, _, qz_val = reflection_q_group_metadata(
+                hkl_raw,
+                source_label=source_label,
+                a_value=av_used,
+                c_value=cv_used,
+                qr_value=qr_val,
+            )
+            simulation_runtime_state.peak_millers.append(hkl)
+            simulation_runtime_state.peak_records.append(
+                {
+                    "display_col": float(disp_cx),
+                    "display_row": float(disp_cy),
+                    "native_col": float(cx),
+                    "native_row": float(cy),
+                    "hkl": hkl,
+                    "hkl_raw": hkl_raw,
+                    "intensity": float(I),
+                    "qr": float(qr_val),
+                    "qz": float(qz_val),
+                    "q_group_key": q_group_key,
+                    "phi": float(phi_val),
+                    "source_table_index": int(table_idx),
+                    "source_row_index": int(row_idx),
+                    "source_label": str(source_label),
+                    "av": float(av_used),
+                    "cv": float(cv_used),
+                }
+            )
+
+    simulation_runtime_state.peak_overlay_cache.update(
+        {
+            "sig": peak_sig,
+            "positions": list(simulation_runtime_state.peak_positions),
+            "millers": list(simulation_runtime_state.peak_millers),
+            "intensities": list(simulation_runtime_state.peak_intensities),
+            "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
+        }
+    )
+    return True
+
+
+def make_runtime_peak_overlay_data_callback(
+    *,
+    simulation_runtime_state,
+    primary_a_factory: object,
+    primary_c_factory: object,
+    native_sim_to_display_coords: Callable[..., tuple[float, float]],
+    reflection_q_group_metadata: Callable[..., tuple[object, object, object]],
+    max_hits_per_reflection: object = 0,
+    min_separation_px: object = 0.0,
+) -> Callable[..., bool]:
+    """Return the live simulated-peak overlay cache callback for runtime use."""
+
+    def _ensure(*, force: bool = False) -> bool:
+        return ensure_runtime_peak_overlay_data(
+            simulation_runtime_state,
+            primary_a=primary_a_factory,
+            primary_c=primary_c_factory,
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            reflection_q_group_metadata=reflection_q_group_metadata,
+            max_hits_per_reflection=max_hits_per_reflection,
+            min_separation_px=min_separation_px,
+            force=force,
+        )
+
+    return _ensure
+
+
 def _copy_selected_peak_record(
     simulation_runtime_state,
     idx: int,

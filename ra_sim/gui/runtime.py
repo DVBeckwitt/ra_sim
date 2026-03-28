@@ -3983,6 +3983,21 @@ selected_peak_runtime_config_factories = (
         process_peaks_parallel=process_peaks_parallel,
     )
 )
+ensure_peak_overlay_data = gui_peak_selection.make_runtime_peak_overlay_data_callback(
+    simulation_runtime_state=simulation_runtime_state,
+    primary_a_factory=lambda: (
+        float(a_var.get()) if "a_var" in globals() else float(av)
+    ),
+    primary_c_factory=lambda: (
+        float(c_var.get()) if "c_var" in globals() else float(cv)
+    ),
+    native_sim_to_display_coords=_native_sim_to_display_coords,
+    reflection_q_group_metadata=(
+        gui_geometry_q_group_manager.reflection_q_group_metadata
+    ),
+    max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
+    min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
+)
 peak_selection_runtime = gui_bootstrap.build_runtime_peak_selection_bootstrap(
     peak_selection_module=gui_peak_selection,
     simulation_runtime_state=simulation_runtime_state,
@@ -3997,7 +4012,7 @@ peak_selection_runtime = gui_bootstrap.build_runtime_peak_selection_bootstrap(
     ),
     current_canvas_pick_config_factory=selected_peak_runtime_config_factories.canvas_pick,
     current_intersection_config_factory=selected_peak_runtime_config_factories.intersection,
-    ensure_peak_overlay_data=lambda **kwargs: _ensure_peak_overlay_data(**kwargs),
+    ensure_peak_overlay_data=ensure_peak_overlay_data,
     sync_peak_selection_state=_sync_peak_selection_state,
     schedule_update_factory=lambda: (
         globals().get("schedule_update")
@@ -5358,145 +5373,6 @@ simulation_runtime_state.chi_square_state = {
     "last_text": "Chi-Squared: N/A",
 }
 
-
-def _ensure_peak_overlay_data(*, force: bool = False) -> bool:
-    """Ensure peak overlay lists are available for the current simulation cache."""
-
-
-    if simulation_runtime_state.stored_max_positions_local is None or simulation_runtime_state.stored_sim_image is None:
-        simulation_runtime_state.peak_positions.clear()
-        simulation_runtime_state.peak_millers.clear()
-        simulation_runtime_state.peak_intensities.clear()
-        simulation_runtime_state.peak_records.clear()
-        return False
-
-    max_positions_local = simulation_runtime_state.stored_max_positions_local
-    updated_image = simulation_runtime_state.stored_sim_image
-    peak_table_lattice_local = simulation_runtime_state.stored_peak_table_lattice
-
-    if (
-        not peak_table_lattice_local
-        or len(peak_table_lattice_local) != len(max_positions_local)
-    ):
-        peak_table_lattice_local = [
-            (float(a_var.get()), float(c_var.get()), "primary")
-            for _ in max_positions_local
-        ]
-
-    peak_sig = (
-        simulation_runtime_state.last_simulation_signature,
-        id(max_positions_local),
-        len(max_positions_local),
-        tuple(updated_image.shape),
-        int(HKL_PICK_MAX_HITS_PER_REFLECTION),
-        float(HKL_PICK_MIN_SEPARATION_PX),
-    )
-    peak_cached = (not force) and simulation_runtime_state.peak_overlay_cache.get("sig") == peak_sig
-
-    simulation_runtime_state.peak_positions.clear()
-    simulation_runtime_state.peak_millers.clear()
-    simulation_runtime_state.peak_intensities.clear()
-    simulation_runtime_state.peak_records.clear()
-
-    if peak_cached:
-        simulation_runtime_state.peak_positions.extend(list(simulation_runtime_state.peak_overlay_cache.get("positions", ())))
-        simulation_runtime_state.peak_millers.extend(list(simulation_runtime_state.peak_overlay_cache.get("millers", ())))
-        simulation_runtime_state.peak_intensities.extend(list(simulation_runtime_state.peak_overlay_cache.get("intensities", ())))
-        simulation_runtime_state.peak_records.extend(dict(rec) for rec in simulation_runtime_state.peak_overlay_cache.get("records", ()))
-        return True
-
-    try:
-        max_hits_raw = int(HKL_PICK_MAX_HITS_PER_REFLECTION)
-    except Exception:
-        max_hits_raw = 0
-    max_hits_per_reflection = max_hits_raw if max_hits_raw > 0 else None
-    min_sep_sq = float(HKL_PICK_MIN_SEPARATION_PX) ** 2
-
-    for table_idx, tbl in enumerate(max_positions_local):
-        tbl_arr = np.asarray(tbl, dtype=float)
-        if tbl_arr.ndim != 2 or tbl_arr.shape[0] == 0:
-            continue
-        av_used, cv_used, source_label = peak_table_lattice_local[table_idx]
-        row_order = np.argsort(tbl_arr[:, 0])[::-1]
-        chosen_rows: list[tuple[int, np.ndarray, float, float, float, float]] = []
-
-        for row_idx in row_order:
-            row = tbl_arr[row_idx]
-            I, xpix, ypix, _phi, H, K, L = row
-            if not (np.isfinite(I) and np.isfinite(xpix) and np.isfinite(ypix)):
-                continue
-            cx = float(xpix)
-            cy = float(ypix)
-            disp_cx, disp_cy = _native_sim_to_display_coords(cx, cy, updated_image.shape)
-            too_close = False
-            for _, _, _, _, prev_col, prev_row in chosen_rows:
-                d2 = (disp_cx - prev_col) ** 2 + (disp_cy - prev_row) ** 2
-                if d2 < min_sep_sq:
-                    too_close = True
-                    break
-            if too_close:
-                continue
-            chosen_rows.append((int(row_idx), row, cx, cy, disp_cx, disp_cy))
-            if (
-                max_hits_per_reflection is not None
-                and len(chosen_rows) >= max_hits_per_reflection
-            ):
-                break
-
-        for row_idx, row, cx, cy, disp_cx, disp_cy in chosen_rows:
-            I, _xpix, _ypix, _phi, H, K, L = row
-            simulation_runtime_state.peak_positions.append((disp_cx, disp_cy))
-            simulation_runtime_state.peak_intensities.append(float(I))
-            hkl = tuple(int(np.rint(val)) for val in (H, K, L))
-            hkl_raw = (float(H), float(K), float(L))
-            m_val = float(H * H + H * K + K * K)
-            qr_val = (
-                (2.0 * np.pi / float(av_used)) * np.sqrt((4.0 / 3.0) * m_val)
-                if float(av_used) > 0.0 and np.isfinite(float(av_used)) and m_val >= 0.0
-                else float("nan")
-            )
-            q_group_key, _, qz_val = (
-                gui_geometry_q_group_manager.reflection_q_group_metadata(
-                hkl_raw,
-                source_label=source_label,
-                a_value=av_used,
-                c_value=cv_used,
-                qr_value=qr_val,
-                )
-            )
-            simulation_runtime_state.peak_millers.append(hkl)
-            simulation_runtime_state.peak_records.append(
-                {
-                    "display_col": float(disp_cx),
-                    "display_row": float(disp_cy),
-                    "native_col": float(cx),
-                    "native_row": float(cy),
-                    "hkl": hkl,
-                    "hkl_raw": hkl_raw,
-                    "intensity": float(I),
-                    "qr": float(qr_val),
-                    "qz": float(qz_val),
-                    "q_group_key": q_group_key,
-                    "phi": float(_phi),
-                    "source_table_index": int(table_idx),
-                    "source_row_index": int(row_idx),
-                    "source_label": str(source_label),
-                    "av": float(av_used),
-                    "cv": float(cv_used),
-                }
-            )
-
-    simulation_runtime_state.peak_overlay_cache.update(
-        {
-            "sig": peak_sig,
-            "positions": list(simulation_runtime_state.peak_positions),
-            "millers": list(simulation_runtime_state.peak_millers),
-            "intensities": list(simulation_runtime_state.peak_intensities),
-            "records": [dict(rec) for rec in simulation_runtime_state.peak_records],
-        }
-    )
-    return True
-
 ###############################################################################
 #                              MAIN UPDATE
 ###############################################################################
@@ -5876,7 +5752,7 @@ def do_update():
         or _live_geometry_preview_enabled()
     )
     if need_peak_overlay:
-        _ensure_peak_overlay_data(force=False)
+        ensure_peak_overlay_data(force=False)
     else:
         simulation_runtime_state.peak_positions.clear()
         simulation_runtime_state.peak_millers.clear()
@@ -9790,7 +9666,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         except Exception:
             pass
 
-    if not _ensure_peak_overlay_data(force=False) or not simulation_runtime_state.peak_positions:
+    if not ensure_peak_overlay_data(force=False) or not simulation_runtime_state.peak_positions:
         progress_label_geometry.config(text="No simulated peaks available to pick.")
         return
 

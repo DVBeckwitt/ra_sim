@@ -391,8 +391,9 @@ not `main.py` or `mosaic_profiles.py`.
     used by the live GUI.
   - `ra_sim.gui.peak_selection` now also owns the selected-peak config
     builders, the ideal-center probe helper used by raw-image HKL picking,
-    the shared runtime config-factory bundle helper, and the runtime
-    config-factory helpers that resolve live GUI values for that workflow.
+    the shared runtime config-factory bundle helper, the simulated peak-
+    overlay cache builder/runtime callback, and the runtime config-factory
+    helpers that resolve live GUI values for that workflow.
   - `ra_sim.gui.peak_selection` now also owns the runtime binding/callback
     bundle used for HKL-pick button labels, mode toggles, selected-peak
     refresh, HKL-control selection, raw-image click selection, and the
@@ -591,8 +592,8 @@ What is left:
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly thin value-source
-  wiring plus a few call sites around the extracted peak-selection and
+- The remaining selected-peak runtime code is now mostly a few bound call
+  sites plus thin value-source wiring around the extracted peak-selection and
   canvas-interaction helpers and shared config/bootstrap helpers.
 - The remaining integration-range drag runtime code is now mostly thin
   integration-region visual call sites plus the remaining cross-feature event
