@@ -461,6 +461,82 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
     ]
 
 
+def test_build_runtime_hkl_lookup_controls_bootstrap_wires_peak_and_bragg_callbacks() -> None:
+    view_calls: list[dict[str, object]] = []
+    callback_calls: list[tuple[object, ...]] = []
+
+    def _select_hkl() -> None:
+        callback_calls.append(("select",))
+
+    def _toggle_hkl_pick() -> None:
+        callback_calls.append(("toggle",))
+
+    def _clear_selected_peak() -> None:
+        callback_calls.append(("clear",))
+
+    def _open_bragg_ewald() -> None:
+        callback_calls.append(("bragg-ewald",))
+
+    def _refresh_controls() -> None:
+        callback_calls.append(("refresh",))
+
+    def _set_hkl_pick_mode(enabled: bool, message: str | None = None) -> None:
+        callback_calls.append(("set", bool(enabled), message))
+
+    def _open_bragg_qr_groups() -> None:
+        callback_calls.append(("bragg-qr",))
+
+    bundle = bootstrap.build_runtime_hkl_lookup_controls_bootstrap(
+        views_module=SimpleNamespace(
+            create_hkl_lookup_controls=lambda **kwargs: view_calls.append(kwargs)
+        ),
+        view_state="lookup-view",
+        peak_selection_callbacks=SimpleNamespace(
+            select_peak_from_hkl_controls=_select_hkl,
+            toggle_hkl_pick_mode=_toggle_hkl_pick,
+            clear_selected_peak=_clear_selected_peak,
+            open_selected_peak_intersection_figure=_open_bragg_ewald,
+            update_hkl_pick_button_label=_refresh_controls,
+            set_hkl_pick_mode=_set_hkl_pick_mode,
+        ),
+        open_bragg_qr_groups=_open_bragg_qr_groups,
+    )
+
+    bundle.create_controls(parent="parent-frame")
+
+    assert view_calls == [
+        {
+            "parent": "parent-frame",
+            "view_state": "lookup-view",
+            "on_select_hkl": view_calls[0]["on_select_hkl"],
+            "on_toggle_hkl_pick": view_calls[0]["on_toggle_hkl_pick"],
+            "on_clear_selected_peak": view_calls[0]["on_clear_selected_peak"],
+            "on_show_bragg_ewald": view_calls[0]["on_show_bragg_ewald"],
+            "on_open_bragg_qr_groups": view_calls[0]["on_open_bragg_qr_groups"],
+        }
+    ]
+    assert callback_calls == [("refresh",)]
+
+    view_calls[0]["on_select_hkl"]()
+    view_calls[0]["on_toggle_hkl_pick"]()
+    view_calls[0]["on_clear_selected_peak"]()
+    view_calls[0]["on_show_bragg_ewald"]()
+    view_calls[0]["on_open_bragg_qr_groups"]()
+    bundle.refresh_controls()
+    bundle.set_hkl_pick_mode(True, "armed")
+
+    assert callback_calls == [
+        ("refresh",),
+        ("select",),
+        ("toggle",),
+        ("clear",),
+        ("bragg-ewald",),
+        ("bragg-qr",),
+        ("refresh",),
+        ("set", True, "armed"),
+    ]
+
+
 def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
     monkeypatch,
 ) -> None:

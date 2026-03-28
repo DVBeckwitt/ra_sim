@@ -165,3 +165,25 @@ def test_runtime_schedule_update_factories_are_late_bound() -> None:
         )
         is True
     )
+
+
+def test_runtime_hkl_lookup_controls_are_bootstrapped() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    has_bootstrap_call = False
+    direct_view_calls = 0
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr == "build_runtime_hkl_lookup_controls_bootstrap":
+            has_bootstrap_call = True
+        if func.attr == "create_hkl_lookup_controls":
+            direct_view_calls += 1
+
+    assert has_bootstrap_call is True
+    assert direct_view_calls == 0

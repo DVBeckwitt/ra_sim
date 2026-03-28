@@ -2928,7 +2928,7 @@ def _set_geometry_manual_pick_mode(enabled: bool, *, message: str | None = None)
         if not bool(analysis_view_controls_view_state.show_caked_2d_var.get()):
             analysis_view_controls_view_state.show_caked_2d_var.set(True)
             toggle_caked_2d()
-        peak_selection_runtime_callbacks.set_hkl_pick_mode(False)
+        hkl_lookup_controls_runtime.set_hkl_pick_mode(False)
         _set_geometry_preview_exclude_mode(False)
     else:
         _cancel_geometry_manual_pick_session(restore_view=True, redraw=True)
@@ -3570,7 +3570,6 @@ on_solve_q_steps_change = bragg_qr_workflow_runtime.on_solve_q_steps_change
 on_solve_q_rel_tol_change = bragg_qr_workflow_runtime.on_solve_q_rel_tol_change
 set_solve_q_control_states = bragg_qr_workflow_runtime.set_solve_q_control_states
 on_solve_q_mode_change = bragg_qr_workflow_runtime.on_solve_q_mode_change
-bragg_qr_runtime_open = bragg_qr_workflow_runtime.open_window
 apply_bragg_qr_filters(trigger_update=False)
 
 
@@ -3653,6 +3652,12 @@ peak_selection_runtime = gui_bootstrap.build_runtime_selected_peak_bootstrap(
 )
 ensure_peak_overlay_data = peak_selection_runtime.ensure_peak_overlay_data
 peak_selection_runtime_callbacks = peak_selection_runtime.callbacks
+hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bootstrap(
+    views_module=gui_views,
+    view_state=hkl_lookup_view_state,
+    peak_selection_callbacks=peak_selection_runtime_callbacks,
+    open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
+)
 
 
 integration_range_drag_runtime = (
@@ -6436,7 +6441,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     background_runtime_callbacks.refresh_status()
     _update_geometry_preview_exclude_button_label()
     geometry_q_group_runtime_callbacks.refresh_window()
-    peak_selection_runtime_callbacks.update_hkl_pick_button_label()
+    hkl_lookup_controls_runtime.refresh_controls()
     ensure_valid_resolution_choice()
     toggle_1d_plots()
     toggle_caked_2d()
@@ -7391,7 +7396,7 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     refresh_live_geometry_preview=(
         lambda: _refresh_live_geometry_preview(update_status=True)
     ),
-    set_hkl_pick_mode=peak_selection_runtime_callbacks.set_hkl_pick_mode,
+    set_hkl_pick_mode=hkl_lookup_controls_runtime.set_hkl_pick_mode,
     live_preview_match_key=_live_preview_match_key,
     live_preview_match_hkl=_live_preview_match_hkl,
     render_live_geometry_preview_state=(
@@ -10311,18 +10316,9 @@ _update_geometry_fit_undo_button_state()
 _update_geometry_manual_pick_button_label()
 _update_geometry_preview_exclude_button_label()
 
-gui_views.create_hkl_lookup_controls(
-    parent=app_shell_view_state.fit_actions_frame,
-    view_state=hkl_lookup_view_state,
-    on_select_hkl=peak_selection_runtime_callbacks.select_peak_from_hkl_controls,
-    on_toggle_hkl_pick=peak_selection_runtime_callbacks.toggle_hkl_pick_mode,
-    on_clear_selected_peak=peak_selection_runtime_callbacks.clear_selected_peak,
-    on_show_bragg_ewald=(
-        peak_selection_runtime_callbacks.open_selected_peak_intersection_figure
-    ),
-    on_open_bragg_qr_groups=bragg_qr_runtime_open,
+hkl_lookup_controls_runtime.create_controls(
+    parent=app_shell_view_state.fit_actions_frame
 )
-peak_selection_runtime_callbacks.update_hkl_pick_button_label()
 
 gui_views.create_geometry_overlay_action_controls(
     parent=app_shell_view_state.fit_actions_frame,
@@ -10344,7 +10340,7 @@ def toggle_caked_2d():
     else:
         # Entering caked view should start from auto-scaled simulation limits.
         display_controls_state.simulation_limits_user_override = False
-        peak_selection_runtime_callbacks.set_hkl_pick_mode(False)
+        hkl_lookup_controls_runtime.set_hkl_pick_mode(False)
     integration_range_drag_runtime_callbacks.reset()
     schedule_update()
 

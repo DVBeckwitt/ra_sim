@@ -29,8 +29,10 @@ also boot there instead of being assembled inline, the live structure-factor-
 pruning and Bragg-Qr manager workflow now also boots there through one shared
 helper instead of being manually threaded together in `runtime.py`, the
 geometry-fit manual-pair action binding assembly now also delegates through
-`ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, and
-the main remaining
+`ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, the
+HKL lookup control surface plus its shared Bragg-Qr open action now also boot
+through one shared helper in `ra_sim.gui.bootstrap` instead of being wired
+directly in `runtime.py`, and the main remaining
 cleanup target is now the
 residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
 not `main.py` or `mosaic_profiles.py`.
@@ -99,6 +101,12 @@ not `main.py` or `mosaic_profiles.py`.
     overlay callback wiring, and selected-peak runtime callback bundle now
     assemble through one shared helper in `ra_sim.gui.bootstrap`.
   - `runtime.py` no longer wires that selected-peak setup inline.
+- HKL lookup / Bragg-Qr open-control cleanup has advanced further.
+  - The HKL lookup control cluster, its initial HKL-pick button refresh, and
+    the shared Bragg-Qr manager open action now assemble through one shared
+    helper in `ra_sim.gui.bootstrap`.
+  - `runtime.py` no longer wires that control cluster directly or keeps a
+    standalone Bragg-Qr open-control alias.
 - Integration-range drag bootstrap cleanup has advanced further.
   - The drag-selection rectangle, integration-region rectangle, live
     integration-region refresh callback, and runtime drag callback bundle now
@@ -683,8 +691,8 @@ What is left:
 - The remaining Bragg-Qr runtime code is now mostly a few manager/overlay call
   sites around the extracted controller/view modules and shared bootstrap/
   config helpers.
-- The remaining Bragg-Qr manager runtime code is now mostly open-control and
-  HKL lookup call sites around the extracted manager helpers and shared
+- The remaining Bragg-Qr manager runtime code is now mostly a few manager
+  refresh/action call sites around the extracted manager helpers and shared
   bootstrap wiring.
 - The remaining geometry-fit Qr/Qz selector runtime code is now mostly thin
   fit-preview parameter/value sources plus a couple of delegated call sites
@@ -693,9 +701,9 @@ What is left:
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly control wiring and a
-  few refresh/action call sites around the extracted peak-selection helpers
-  and shared bootstrap helpers.
+- The remaining selected-peak runtime code is now mostly a few refresh/action
+  call sites around the extracted peak-selection helpers and shared bootstrap
+  helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
   top-level action callback shell plus the remaining Tk-side control wiring
   around the extracted `ra_sim.gui.geometry_fit` helper surface.
@@ -1105,12 +1113,11 @@ The next best step is:
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the selected-peak and integration-range bootstrap cleanup:
+Immediate checklist after the HKL lookup / Bragg-Qr open-control cleanup:
 
-- collapse the remaining selected-peak control wiring / refresh call
-  sites around the extracted helpers
-- then take the remaining Bragg-Qr manager open-control / HKL lookup call sites
-- then trim the remaining geometry-fit action callback shell / control wiring
+- trim the remaining geometry-fit action callback shell / control wiring
+- then trim the remaining selected-peak refresh / action call sites
+- then take the remaining Bragg-Qr manager refresh / action call sites
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving
 

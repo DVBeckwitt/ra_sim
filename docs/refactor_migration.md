@@ -112,6 +112,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     peak-overlay callback wiring, and selected-peak runtime callback bundle
     now assemble through one shared helper in `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` no longer wires that selected-peak setup inline
+- HKL lookup / Bragg-Qr open-control cleanup has also advanced:
+  - the HKL lookup control cluster, its initial HKL-pick button refresh, and
+    the shared Bragg-Qr manager open action now assemble through one shared
+    helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` no longer wires that control cluster directly or
+    keeps a standalone Bragg-Qr open-control alias
 - Integration-range drag bootstrap cleanup has also advanced:
   - the drag-selection rectangle, integration-region rectangle, live
     integration-region refresh callback, and runtime drag callback bundle now
@@ -514,15 +520,15 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   fit-preview parameter/value sources plus a couple of delegated call sites
   around the extracted manager/view helpers, the bound geometry-fit
   simulation/value callback bundles, and shared bootstrap wiring.
-- The remaining Bragg-Qr manager runtime code is now mostly open-control and
-  HKL lookup call sites around the extracted manager helpers and shared
+- The remaining Bragg-Qr manager runtime code is now mostly a few manager
+  refresh/action call sites around the extracted manager helpers and shared
   bootstrap wiring.
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly a few bound call
-  sites plus control wiring / refresh call sites around the extracted
-  peak-selection modules and shared bootstrap helpers.
+- The remaining selected-peak runtime code is now mostly a few refresh/action
+  call sites around the extracted peak-selection modules and shared bootstrap
+  helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the
   top-level action callback shell plus the remaining Tk-side control wiring
   around the extracted `ra_sim.gui.geometry_fit` helper surface.

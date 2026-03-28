@@ -65,6 +65,15 @@ class PeakSelectionRuntimeBootstrap:
 
 
 @dataclass(frozen=True)
+class HklLookupControlsRuntimeBootstrap:
+    """HKL lookup control wiring plus shared refresh/pick-mode callbacks."""
+
+    create_controls: Callable[[Any], None]
+    refresh_controls: Callable[[], None]
+    set_hkl_pick_mode: Callable[[bool, str | None], None]
+
+
+@dataclass(frozen=True)
 class IntegrationRangeDragRuntimeBootstrap:
     """Integration-range callbacks plus the shared visual-refresh callback."""
 
@@ -735,6 +744,53 @@ def build_runtime_selected_peak_bootstrap(
         bindings_factory=runtime_bootstrap.bindings_factory,
         callbacks=runtime_bootstrap.callbacks,
         ensure_peak_overlay_data=ensure_peak_overlay_data,
+    )
+
+
+def build_runtime_hkl_lookup_controls_bootstrap(
+    *,
+    views_module: Any,
+    view_state: Any,
+    peak_selection_callbacks: Any,
+    open_bragg_qr_groups: Callable[[], None],
+) -> HklLookupControlsRuntimeBootstrap:
+    """Build the HKL lookup control wiring shared by peak-selection and Bragg-Qr."""
+
+    def _refresh_controls() -> None:
+        refresh = getattr(
+            peak_selection_callbacks,
+            "update_hkl_pick_button_label",
+            None,
+        )
+        if callable(refresh):
+            refresh()
+
+    def _set_hkl_pick_mode(
+        enabled: bool,
+        message: str | None = None,
+    ) -> None:
+        set_pick_mode = getattr(peak_selection_callbacks, "set_hkl_pick_mode", None)
+        if callable(set_pick_mode):
+            set_pick_mode(bool(enabled), message=message)
+
+    def _create_controls(parent: Any) -> None:
+        views_module.create_hkl_lookup_controls(
+            parent=parent,
+            view_state=view_state,
+            on_select_hkl=peak_selection_callbacks.select_peak_from_hkl_controls,
+            on_toggle_hkl_pick=peak_selection_callbacks.toggle_hkl_pick_mode,
+            on_clear_selected_peak=peak_selection_callbacks.clear_selected_peak,
+            on_show_bragg_ewald=(
+                peak_selection_callbacks.open_selected_peak_intersection_figure
+            ),
+            on_open_bragg_qr_groups=open_bragg_qr_groups,
+        )
+        _refresh_controls()
+
+    return HklLookupControlsRuntimeBootstrap(
+        create_controls=_create_controls,
+        refresh_controls=_refresh_controls,
+        set_hkl_pick_mode=_set_hkl_pick_mode,
     )
 
 
