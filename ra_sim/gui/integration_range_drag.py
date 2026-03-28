@@ -351,6 +351,18 @@ def update_runtime_integration_region_visuals(
     bindings.integration_region_overlay.set_visible(True)
 
 
+def refresh_runtime_integration_region_visuals(
+    bindings: IntegrationRangeDragBindings,
+) -> None:
+    """Refresh integration visuals using the live AI and cached caked result."""
+
+    update_runtime_integration_region_visuals(
+        bindings,
+        _runtime_ai(bindings),
+        _runtime_last_sim_res2(bindings),
+    )
+
+
 def reset_runtime_integration_drag(
     bindings: IntegrationRangeDragBindings,
     *,
@@ -635,3 +647,11 @@ def make_runtime_integration_range_drag_callbacks(
         ),
         reset=lambda: reset_runtime_integration_drag(bindings_factory()),
     )
+
+
+def make_runtime_integration_region_visuals_callback(
+    bindings_factory: Callable[[], IntegrationRangeDragBindings],
+) -> Callable[[], None]:
+    """Return a zero-arg callback that refreshes live integration visuals."""
+
+    return lambda: refresh_runtime_integration_region_visuals(bindings_factory())

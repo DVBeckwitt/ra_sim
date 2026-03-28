@@ -14,7 +14,7 @@ high-level migration summary; this file is the working plan.
 
 ## Current Position
 
-As of 2026-03-27, the refactor has made real progress. The legacy root-script
+As of 2026-03-28, the refactor has made real progress. The legacy root-script
 problem is largely solved, the last broad GUI runtime-state extraction pass has
 landed, the structure-model / diffuse-HT rebuild workflow plus the primary-CIF
 reload state transition have moved into an extracted helper module, the shared
@@ -22,7 +22,11 @@ canvas click/drag arbitration now also lives in an extracted helper module, the
 live-preview overlay status/config plus preview-exclusion clear/toggle workflow
 now also lives in the extracted geometry Q-group manager module, the runtime
 binding/callback bootstrap for the extracted GUI workflows now also lives in
-`ra_sim.gui.bootstrap`, and the main remaining cleanup target is now the
+`ra_sim.gui.bootstrap`, the selected-peak / HKL-pick runtime setup now also
+boots through one shared helper there instead of being assembled inline, the
+integration-range drag rectangle setup plus live region-refresh callback now
+also boot there instead of being assembled inline, and the main remaining
+cleanup target is now the
 residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
 not `main.py` or `mosaic_profiles.py`.
 
@@ -85,6 +89,17 @@ not `main.py` or `mosaic_profiles.py`.
   - The live-preview enable/disable action flow now also lives in
     `ra_sim.gui.geometry_q_group_manager`.
   - `runtime.py` now delegates those paths through thin wrappers.
+- Selected-peak / HKL-pick bootstrap cleanup has advanced further.
+  - The live selected-peak canvas-pick/intersection config factories, peak-
+    overlay callback wiring, and selected-peak runtime callback bundle now
+    assemble through one shared helper in `ra_sim.gui.bootstrap`.
+  - `runtime.py` no longer wires that selected-peak setup inline.
+- Integration-range drag bootstrap cleanup has advanced further.
+  - The drag-selection rectangle, integration-region rectangle, live
+    integration-region refresh callback, and runtime drag callback bundle now
+    assemble through one shared helper in `ra_sim.gui.bootstrap`.
+  - `runtime.py` no longer creates those drag/region rectangles inline or owns
+    the thin integration-region refresh wrapper around that workflow.
 - Bragg Qr manager migration has started.
   - Bragg-Qr selection/index bookkeeping now lives in `ra_sim.gui.state`.
   - Controller helpers now own Bragg-Qr selection mapping and group/L-value
@@ -663,15 +678,15 @@ What is left:
 - The remaining background runtime code is now mostly one bound callback
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
-- The remaining selected-peak runtime code is now mostly a few bound call
-  sites plus thin value-source wiring around the extracted peak-selection and
-  canvas-interaction helpers and shared config/bootstrap helpers.
+- The remaining selected-peak runtime code is now mostly control wiring and a
+  few refresh/action call sites around the extracted peak-selection helpers
+  and shared bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the live
   action-bundle assembly around the extracted `ra_sim.gui.geometry_fit`
   runtime action helper and shared runtime value bundle.
-- The remaining integration-range drag runtime code is now mostly thin
-  integration-region visual call sites plus the remaining cross-feature event
-  wiring around the extracted drag and canvas-interaction helpers.
+- The remaining integration-range drag runtime code is now mostly the
+  remaining cross-feature canvas event handoff around the extracted drag and
+  canvas-interaction helpers.
 
 Why it matters:
 
@@ -1074,6 +1089,15 @@ The next best step is:
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
+
+Immediate checklist after the selected-peak and integration-range bootstrap cleanup:
+
+- take the Bragg-Qr manager live filter / HKL lookup call sites next
+- then collapse the remaining selected-peak control wiring / refresh call
+  sites around the extracted helpers
+- then take the geometry-fit manual-pair action-bundle assembly
+- defer config unification, compatibility cleanup, and repo-root cleanup until
+  after those runtime workflow slices stop moving
 
 That is the point where the refactor stops being "runtime state cleanup" and
 starts becoming a real application-structure finish.

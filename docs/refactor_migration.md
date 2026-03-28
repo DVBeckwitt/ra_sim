@@ -107,6 +107,17 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     `ra_sim.gui.geometry_q_group_manager`
   - `ra_sim.gui.runtime` now delegates those paths through bound callbacks and
     thin wrappers
+- Selected-peak / HKL-pick bootstrap cleanup has also advanced:
+  - the live selected-peak canvas-pick/intersection config factories,
+    peak-overlay callback wiring, and selected-peak runtime callback bundle
+    now assemble through one shared helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` no longer wires that selected-peak setup inline
+- Integration-range drag bootstrap cleanup has also advanced:
+  - the drag-selection rectangle, integration-region rectangle, live
+    integration-region refresh callback, and runtime drag callback bundle now
+    assemble through one shared helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` no longer creates those drag/region rectangles
+    inline or owns the thin integration-region refresh wrapper
 - Bragg Qr manager migration has also started:
   - Bragg-Qr selection/index bookkeeping now uses shared GUI state
   - Bragg-Qr selection mapping and group/L-value toggle mutations now flow
@@ -497,14 +508,14 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   surface plus thin status-refresh and control-wiring call sites around the
   extracted background manager and shared bootstrap helpers.
 - The remaining selected-peak runtime code is now mostly a few bound call
-  sites plus thin value-source wiring around the extracted peak-selection and
-  canvas-interaction modules and shared config/bootstrap helpers.
+  sites plus control wiring / refresh call sites around the extracted
+  peak-selection modules and shared bootstrap helpers.
 - The remaining geometry-fit manual-pair runtime code is now mostly the live
   action-bundle assembly around the extracted `ra_sim.gui.geometry_fit`
   runtime action helper and shared runtime value bundle.
-- The remaining integration-range drag runtime code is now mostly thin
-  integration-region visual call sites plus the remaining cross-feature event
-  wiring around the extracted drag and canvas-interaction modules.
+- The remaining integration-range drag runtime code is now mostly the
+  remaining cross-feature canvas event handoff around the extracted drag and
+  canvas-interaction modules.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need

@@ -55,6 +55,24 @@ class StructureFactorPruningRuntimeBootstrap:
     on_solve_q_mode_change: Callable[..., Any]
 
 
+@dataclass(frozen=True)
+class PeakSelectionRuntimeBootstrap:
+    """Selected-peak runtime callbacks plus the shared overlay-data callback."""
+
+    bindings_factory: Callable[[], Any]
+    callbacks: Any
+    ensure_peak_overlay_data: Callable[..., object]
+
+
+@dataclass(frozen=True)
+class IntegrationRangeDragRuntimeBootstrap:
+    """Integration-range callbacks plus the shared visual-refresh callback."""
+
+    bindings_factory: Callable[[], Any]
+    callbacks: Any
+    refresh_visuals: Callable[[], None]
+
+
 def extract_bundle_arg(argv: Sequence[str]) -> str | None:
     """Extract an optional ``--bundle`` value from CLI args."""
 
@@ -498,6 +516,137 @@ def build_runtime_peak_selection_bootstrap(
     )
 
 
+def build_runtime_selected_peak_bootstrap(
+    *,
+    peak_selection_module: Any,
+    simulation_runtime_state: Any,
+    peak_selection_state: Any,
+    hkl_lookup_view_state_factory: object,
+    selected_peak_marker_factory: object,
+    current_primary_a_factory: object,
+    caked_view_enabled_factory: object,
+    sync_peak_selection_state: Callable[[], None] | None,
+    image_size: int,
+    primary_a_factory: object,
+    primary_c_factory: object,
+    max_distance_px: object,
+    min_separation_px: object,
+    image_shape_factory: object,
+    center_col_factory: object,
+    center_row_factory: object,
+    distance_cor_to_detector_factory: object,
+    gamma_deg_factory: object,
+    Gamma_deg_factory: object,
+    chi_deg_factory: object,
+    psi_deg_factory: object,
+    psi_z_deg_factory: object,
+    zs_factory: object,
+    zb_factory: object,
+    theta_initial_deg_factory: object,
+    cor_angle_deg_factory: object,
+    sigma_mosaic_deg_factory: object,
+    gamma_mosaic_deg_factory: object,
+    eta_factory: object,
+    wavelength_factory: object,
+    debye_x_factory: object,
+    debye_y_factory: object,
+    detector_center_factory: object,
+    optics_mode_factory: object,
+    solve_q_values_factory: object,
+    overlay_primary_a_factory: object | None = None,
+    overlay_primary_c_factory: object | None = None,
+    native_sim_to_display_coords: Callable[..., tuple[float, float]] | None = None,
+    reflection_q_group_metadata: Callable[..., object] | None = None,
+    max_hits_per_reflection: object = None,
+    schedule_update_factory: object = None,
+    set_status_text_factory: object = None,
+    draw_idle_factory: object = None,
+    display_to_native_sim_coords: Callable[..., tuple[float, float]] | None = None,
+    deactivate_conflicting_modes_factory: object = None,
+    n2: Any = None,
+    process_peaks_parallel: Callable[..., object] | None = None,
+    tcl_error_types: tuple[type[BaseException], ...] = (),
+) -> PeakSelectionRuntimeBootstrap:
+    """Build the live selected-peak workflow bootstrap plus overlay callback."""
+
+    config_factories = peak_selection_module.make_runtime_selected_peak_config_factories(
+        simulation_runtime_state=simulation_runtime_state,
+        image_size=int(image_size),
+        primary_a_factory=primary_a_factory,
+        primary_c_factory=primary_c_factory,
+        max_distance_px=max_distance_px,
+        min_separation_px=min_separation_px,
+        image_shape_factory=image_shape_factory,
+        center_col_factory=center_col_factory,
+        center_row_factory=center_row_factory,
+        distance_cor_to_detector_factory=distance_cor_to_detector_factory,
+        gamma_deg_factory=gamma_deg_factory,
+        Gamma_deg_factory=Gamma_deg_factory,
+        chi_deg_factory=chi_deg_factory,
+        psi_deg_factory=psi_deg_factory,
+        psi_z_deg_factory=psi_z_deg_factory,
+        zs_factory=zs_factory,
+        zb_factory=zb_factory,
+        theta_initial_deg_factory=theta_initial_deg_factory,
+        cor_angle_deg_factory=cor_angle_deg_factory,
+        sigma_mosaic_deg_factory=sigma_mosaic_deg_factory,
+        gamma_mosaic_deg_factory=gamma_mosaic_deg_factory,
+        eta_factory=eta_factory,
+        wavelength_factory=wavelength_factory,
+        debye_x_factory=debye_x_factory,
+        debye_y_factory=debye_y_factory,
+        detector_center_factory=detector_center_factory,
+        optics_mode_factory=optics_mode_factory,
+        solve_q_values_factory=solve_q_values_factory,
+        n2=n2,
+        process_peaks_parallel=process_peaks_parallel,
+    )
+    ensure_peak_overlay_data = peak_selection_module.make_runtime_peak_overlay_data_callback(
+        simulation_runtime_state=simulation_runtime_state,
+        primary_a_factory=(
+            overlay_primary_a_factory
+            if overlay_primary_a_factory is not None
+            else primary_a_factory
+        ),
+        primary_c_factory=(
+            overlay_primary_c_factory
+            if overlay_primary_c_factory is not None
+            else primary_c_factory
+        ),
+        native_sim_to_display_coords=native_sim_to_display_coords,
+        reflection_q_group_metadata=reflection_q_group_metadata,
+        max_hits_per_reflection=max_hits_per_reflection,
+        min_separation_px=min_separation_px,
+    )
+    runtime_bootstrap = build_runtime_peak_selection_bootstrap(
+        peak_selection_module=peak_selection_module,
+        simulation_runtime_state=simulation_runtime_state,
+        peak_selection_state=peak_selection_state,
+        hkl_lookup_view_state_factory=hkl_lookup_view_state_factory,
+        selected_peak_marker_factory=selected_peak_marker_factory,
+        current_primary_a_factory=current_primary_a_factory,
+        caked_view_enabled_factory=caked_view_enabled_factory,
+        current_canvas_pick_config_factory=config_factories.canvas_pick,
+        current_intersection_config_factory=config_factories.intersection,
+        ensure_peak_overlay_data=ensure_peak_overlay_data,
+        sync_peak_selection_state=sync_peak_selection_state,
+        schedule_update_factory=schedule_update_factory,
+        set_status_text_factory=set_status_text_factory,
+        draw_idle_factory=draw_idle_factory,
+        display_to_native_sim_coords=display_to_native_sim_coords,
+        native_sim_to_display_coords=native_sim_to_display_coords,
+        simulate_ideal_hkl_native_center=config_factories.ideal_center,
+        deactivate_conflicting_modes_factory=deactivate_conflicting_modes_factory,
+        n2=n2,
+        tcl_error_types=tcl_error_types,
+    )
+    return PeakSelectionRuntimeBootstrap(
+        bindings_factory=runtime_bootstrap.bindings_factory,
+        callbacks=runtime_bootstrap.callbacks,
+        ensure_peak_overlay_data=ensure_peak_overlay_data,
+    )
+
+
 def build_runtime_integration_range_drag_bootstrap(
     *,
     integration_range_drag_module: Any,
@@ -514,6 +663,36 @@ def build_runtime_integration_range_drag_bootstrap(
         bindings_factory=bindings_factory,
         callbacks=integration_range_drag_module.make_runtime_integration_range_drag_callbacks(
             bindings_factory
+        ),
+    )
+
+
+def build_runtime_integration_range_workflow_bootstrap(
+    *,
+    integration_range_drag_module: Any,
+    ax: Any,
+    **bindings_kwargs: Any,
+) -> IntegrationRangeDragRuntimeBootstrap:
+    """Build the live integration-range drag workflow and visual refresh hooks."""
+
+    integration_region_rect = (
+        integration_range_drag_module.create_integration_region_rectangle(ax)
+    )
+    drag_select_rect = integration_range_drag_module.create_drag_select_rectangle(ax)
+    runtime_bootstrap = build_runtime_integration_range_drag_bootstrap(
+        integration_range_drag_module=integration_range_drag_module,
+        ax=ax,
+        drag_select_rect=drag_select_rect,
+        integration_region_rect=integration_region_rect,
+        **bindings_kwargs,
+    )
+    return IntegrationRangeDragRuntimeBootstrap(
+        bindings_factory=runtime_bootstrap.bindings_factory,
+        callbacks=runtime_bootstrap.callbacks,
+        refresh_visuals=(
+            integration_range_drag_module.make_runtime_integration_region_visuals_callback(
+                runtime_bootstrap.bindings_factory
+            )
         ),
     )
 

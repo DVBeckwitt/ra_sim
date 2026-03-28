@@ -56,7 +56,7 @@ def test_runtime_pruning_constants_are_defined_before_import_time_use() -> None:
         )
 
 
-def test_runtime_hkl_pick_constants_are_defined_before_binding_factory_use() -> None:
+def test_runtime_hkl_pick_constants_are_defined_before_selected_peak_bootstrap() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
 
@@ -79,7 +79,7 @@ def test_runtime_hkl_pick_constants_are_defined_before_binding_factory_use() -> 
         func = node.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr != "make_runtime_selected_peak_config_factories":
+        if func.attr != "build_runtime_selected_peak_bootstrap":
             continue
         for keyword in node.keywords:
             name_id = _name_id(keyword.value)

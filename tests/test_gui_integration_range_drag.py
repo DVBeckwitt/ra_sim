@@ -331,6 +331,26 @@ def test_update_runtime_integration_region_visuals_updates_raw_overlay() -> None
     assert int(np.sum(overlay.data)) == 6
 
 
+def test_runtime_integration_region_visuals_callback_uses_live_bindings(
+    monkeypatch,
+) -> None:
+    calls = []
+    bindings = object()
+
+    monkeypatch.setattr(
+        integration_range_drag,
+        "refresh_runtime_integration_region_visuals",
+        lambda bound: calls.append(bound),
+    )
+
+    callback = integration_range_drag.make_runtime_integration_region_visuals_callback(
+        lambda: bindings
+    )
+    callback()
+
+    assert calls == [bindings]
+
+
 def test_integration_range_drag_runtime_helpers_handle_suppress_and_caked_drag() -> None:
     axis = _FakeAxis()
     drag_state = state.IntegrationRangeDragState()

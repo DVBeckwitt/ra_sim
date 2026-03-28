@@ -1782,10 +1782,6 @@ integration_region_overlay = ax.imshow(
     interpolation='nearest'
 )
 integration_region_overlay.set_visible(False)
-
-integration_region_rect = (
-    gui_integration_range_drag.create_integration_region_rectangle(ax)
-)
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
@@ -3598,66 +3594,11 @@ bragg_qr_runtime_refresh = bragg_qr_runtime.refresh_window
 bragg_qr_runtime_open = bragg_qr_runtime.open_window
 
 
-selected_peak_runtime_config_factories = (
-    gui_peak_selection.make_runtime_selected_peak_config_factories(
-        simulation_runtime_state=simulation_runtime_state,
-        image_size=int(image_size),
-        primary_a_factory=lambda: float(av),
-        primary_c_factory=lambda: float(cv),
-        max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
-        min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
-        image_shape_factory=lambda: (
-            tuple(int(v) for v in global_image_buffer.shape)
-            if global_image_buffer.size
-            else None
-        ),
-        center_col_factory=lambda: float(center_y_var.get()),
-        center_row_factory=lambda: float(center_x_var.get()),
-        distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
-        gamma_deg_factory=lambda: float(gamma_var.get()),
-        Gamma_deg_factory=lambda: float(Gamma_var.get()),
-        chi_deg_factory=lambda: float(chi_var.get()),
-        psi_deg_factory=lambda: float(psi),
-        psi_z_deg_factory=lambda: float(psi_z_var.get()),
-        zs_factory=lambda: float(zs_var.get()),
-        zb_factory=lambda: float(zb_var.get()),
-        theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
-        cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
-        sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
-        gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
-        eta_factory=lambda: float(eta_var.get()),
-        wavelength_factory=lambda: float(lambda_),
-        debye_x_factory=lambda: float(debye_x_var.get()),
-        debye_y_factory=lambda: float(debye_y_var.get()),
-        detector_center_factory=lambda: (
-            float(center_x_var.get()),
-            float(center_y_var.get()),
-        ),
-        optics_mode_factory=_current_optics_mode_flag,
-        solve_q_values_factory=current_solve_q_values,
-        n2=n2,
-        process_peaks_parallel=process_peaks_parallel,
-    )
-)
-ensure_peak_overlay_data = gui_peak_selection.make_runtime_peak_overlay_data_callback(
-    simulation_runtime_state=simulation_runtime_state,
-    primary_a_factory=lambda: (
-        float(a_var.get()) if "a_var" in globals() else float(av)
-    ),
-    primary_c_factory=lambda: (
-        float(c_var.get()) if "c_var" in globals() else float(cv)
-    ),
-    native_sim_to_display_coords=_native_sim_to_display_coords,
-    reflection_q_group_metadata=(
-        gui_geometry_q_group_manager.reflection_q_group_metadata
-    ),
-    max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
-    min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
-)
-peak_selection_runtime = gui_bootstrap.build_runtime_peak_selection_bootstrap(
+peak_selection_runtime = gui_bootstrap.build_runtime_selected_peak_bootstrap(
     peak_selection_module=gui_peak_selection,
     simulation_runtime_state=simulation_runtime_state,
     peak_selection_state=peak_selection_state,
+    image_size=int(image_size),
     hkl_lookup_view_state_factory=lambda: globals().get("hkl_lookup_view_state"),
     selected_peak_marker_factory=lambda: selected_peak_marker,
     current_primary_a_factory=lambda: float(av),
@@ -3666,9 +3607,50 @@ peak_selection_runtime = gui_bootstrap.build_runtime_peak_selection_bootstrap(
         if analysis_view_controls_view_state.show_caked_2d_var is not None
         else False
     ),
-    current_canvas_pick_config_factory=selected_peak_runtime_config_factories.canvas_pick,
-    current_intersection_config_factory=selected_peak_runtime_config_factories.intersection,
-    ensure_peak_overlay_data=ensure_peak_overlay_data,
+    primary_a_factory=lambda: float(av),
+    primary_c_factory=lambda: float(cv),
+    max_distance_px=float(HKL_PICK_MAX_DISTANCE_PX),
+    min_separation_px=float(HKL_PICK_MIN_SEPARATION_PX),
+    image_shape_factory=lambda: (
+        tuple(int(v) for v in global_image_buffer.shape)
+        if global_image_buffer.size
+        else None
+    ),
+    center_col_factory=lambda: float(center_y_var.get()),
+    center_row_factory=lambda: float(center_x_var.get()),
+    distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
+    gamma_deg_factory=lambda: float(gamma_var.get()),
+    Gamma_deg_factory=lambda: float(Gamma_var.get()),
+    chi_deg_factory=lambda: float(chi_var.get()),
+    psi_deg_factory=lambda: float(psi),
+    psi_z_deg_factory=lambda: float(psi_z_var.get()),
+    zs_factory=lambda: float(zs_var.get()),
+    zb_factory=lambda: float(zb_var.get()),
+    theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
+    cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
+    sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
+    gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
+    eta_factory=lambda: float(eta_var.get()),
+    wavelength_factory=lambda: float(lambda_),
+    debye_x_factory=lambda: float(debye_x_var.get()),
+    debye_y_factory=lambda: float(debye_y_var.get()),
+    detector_center_factory=lambda: (
+        float(center_x_var.get()),
+        float(center_y_var.get()),
+    ),
+    optics_mode_factory=_current_optics_mode_flag,
+    solve_q_values_factory=current_solve_q_values,
+    overlay_primary_a_factory=lambda: (
+        float(a_var.get()) if "a_var" in globals() else float(av)
+    ),
+    overlay_primary_c_factory=lambda: (
+        float(c_var.get()) if "c_var" in globals() else float(cv)
+    ),
+    native_sim_to_display_coords=_native_sim_to_display_coords,
+    reflection_q_group_metadata=(
+        gui_geometry_q_group_manager.reflection_q_group_metadata
+    ),
+    max_hits_per_reflection=lambda: HKL_PICK_MAX_HITS_PER_REFLECTION,
     sync_peak_selection_state=_sync_peak_selection_state,
     schedule_update_factory=lambda: (
         globals().get("schedule_update")
@@ -3682,32 +3664,27 @@ peak_selection_runtime = gui_bootstrap.build_runtime_peak_selection_bootstrap(
     ),
     draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
     display_to_native_sim_coords=_display_to_native_sim_coords,
-    native_sim_to_display_coords=_native_sim_to_display_coords,
-    simulate_ideal_hkl_native_center=selected_peak_runtime_config_factories.ideal_center,
     deactivate_conflicting_modes_factory=lambda: (
         lambda: _set_geometry_preview_exclude_mode(False)
     ),
     n2=n2,
+    process_peaks_parallel=process_peaks_parallel,
     tcl_error_types=(tk.TclError,),
 )
-peak_selection_runtime_bindings_factory = peak_selection_runtime.bindings_factory
+ensure_peak_overlay_data = peak_selection_runtime.ensure_peak_overlay_data
 peak_selection_runtime_callbacks = peak_selection_runtime.callbacks
 
 
-drag_select_rect = gui_integration_range_drag.create_drag_select_rectangle(ax)
-
 integration_range_drag_runtime = (
-    gui_bootstrap.build_runtime_integration_range_drag_bootstrap(
+    gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
         integration_range_drag_module=gui_integration_range_drag,
+        ax=ax,
         drag_state=integration_range_drag_state,
         peak_selection_state=peak_selection_state,
         range_view_state_factory=lambda: globals().get(
             "integration_range_controls_view_state"
         ),
-        ax=ax,
-        drag_select_rect=drag_select_rect,
         integration_region_overlay=integration_region_overlay,
-        integration_region_rect=integration_region_rect,
         image_display=image_display,
         get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
         range_visible_factory=lambda: (
@@ -3743,6 +3720,7 @@ integration_range_drag_runtime_bindings_factory = (
     integration_range_drag_runtime.bindings_factory
 )
 integration_range_drag_runtime_callbacks = integration_range_drag_runtime.callbacks
+refresh_integration_region_visuals = integration_range_drag_runtime.refresh_visuals
 canvas_interaction_runtime = gui_bootstrap.build_runtime_canvas_interaction_bootstrap(
     canvas_interactions_module=gui_canvas_interactions,
     axis=ax,
@@ -4661,16 +4639,6 @@ def _get_detector_angular_maps(ai):
         return None, None
 
     return two_theta, _adjust_phi_zero(phi_vals)
-
-
-def update_integration_region_visuals(ai, sim_res2):
-    gui_integration_range_drag.update_runtime_integration_region_visuals(
-        integration_range_drag_runtime_bindings_factory(),
-        ai,
-        sim_res2,
-    )
-
-
 simulation_runtime_state.profile_cache = {}
 simulation_runtime_state.last_1d_integration_data = {
     "radials_sim": None,
@@ -4764,7 +4732,7 @@ def _refresh_integration_from_cached_results():
     ai = simulation_runtime_state.ai_cache.get("ai")
     if not analysis_view_controls_view_state.show_1d_var.get():
         _clear_1d_plot_cache_and_lines()
-        update_integration_region_visuals(ai, simulation_runtime_state.last_res2_sim)
+        refresh_integration_region_visuals()
         canvas.draw_idle()
         return True
 
@@ -4787,7 +4755,7 @@ def _refresh_integration_from_cached_results():
         simulation_runtime_state.last_res2_background = None
 
     _update_1d_plots_from_caked(simulation_runtime_state.last_res2_sim, bg_res2)
-    update_integration_region_visuals(ai, simulation_runtime_state.last_res2_sim)
+    refresh_integration_region_visuals()
     canvas.draw_idle()
     return True
 
@@ -5763,7 +5731,7 @@ def do_update():
     # Users can still change limits manually or reset defaults explicitly.
     apply_scale_factor_to_existing_results(update_limits=False)
 
-    update_integration_region_visuals(ai, sim_res2)
+    refresh_integration_region_visuals()
     qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
     if _live_geometry_preview_enabled():
         if gui_controllers.consume_geometry_preview_skip_once(geometry_preview_state):

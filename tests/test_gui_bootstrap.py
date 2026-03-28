@@ -302,6 +302,222 @@ def test_runtime_callback_bootstrap_helpers_delegate_to_feature_modules() -> Non
         ("callbacks", "background-bindings"),
     ]
 
+
+def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    peak_module = SimpleNamespace(
+        make_runtime_selected_peak_config_factories=(
+            lambda **kwargs: calls.append(("config", kwargs))
+            or SimpleNamespace(
+                canvas_pick="canvas-config",
+                intersection="intersection-config",
+                ideal_center="ideal-center",
+            )
+        ),
+        make_runtime_peak_overlay_data_callback=(
+            lambda **kwargs: calls.append(("overlay", kwargs)) or "overlay-callback"
+        ),
+    )
+
+    monkeypatch.setattr(
+        bootstrap,
+        "build_runtime_peak_selection_bootstrap",
+        lambda **kwargs: calls.append(("runtime", kwargs))
+        or SimpleNamespace(
+            bindings_factory="bindings-factory",
+            callbacks="callbacks",
+        ),
+    )
+
+    bundle = bootstrap.build_runtime_selected_peak_bootstrap(
+        peak_selection_module=peak_module,
+        simulation_runtime_state="runtime-state",
+        peak_selection_state="peak-state",
+        hkl_lookup_view_state_factory="view-factory",
+        selected_peak_marker_factory="marker-factory",
+        current_primary_a_factory="current-primary-a",
+        caked_view_enabled_factory="caked-flag",
+        sync_peak_selection_state="sync-state",
+        image_size=64,
+        primary_a_factory="primary-a",
+        primary_c_factory="primary-c",
+        max_distance_px=12.0,
+        min_separation_px=2.0,
+        image_shape_factory="image-shape",
+        center_col_factory="center-col",
+        center_row_factory="center-row",
+        distance_cor_to_detector_factory="distance",
+        gamma_deg_factory="gamma",
+        Gamma_deg_factory="Gamma",
+        chi_deg_factory="chi",
+        psi_deg_factory="psi",
+        psi_z_deg_factory="psi-z",
+        zs_factory="zs",
+        zb_factory="zb",
+        theta_initial_deg_factory="theta-initial",
+        cor_angle_deg_factory="cor-angle",
+        sigma_mosaic_deg_factory="sigma-mosaic",
+        gamma_mosaic_deg_factory="gamma-mosaic",
+        eta_factory="eta",
+        wavelength_factory="wavelength",
+        debye_x_factory="debye-x",
+        debye_y_factory="debye-y",
+        detector_center_factory="detector-center",
+        optics_mode_factory="optics-mode",
+        solve_q_values_factory="solve-q",
+        overlay_primary_a_factory="overlay-primary-a",
+        overlay_primary_c_factory="overlay-primary-c",
+        native_sim_to_display_coords="display-coords",
+        reflection_q_group_metadata="q-group",
+        max_hits_per_reflection="max-hits",
+        schedule_update_factory="schedule-update",
+        set_status_text_factory="status-text",
+        draw_idle_factory="draw-idle",
+        display_to_native_sim_coords="native-coords",
+        deactivate_conflicting_modes_factory="deactivate-modes",
+        n2="n2",
+        process_peaks_parallel="process-peaks",
+        tcl_error_types=(RuntimeError,),
+    )
+
+    assert bundle.bindings_factory == "bindings-factory"
+    assert bundle.callbacks == "callbacks"
+    assert bundle.ensure_peak_overlay_data == "overlay-callback"
+    assert calls == [
+        (
+            "config",
+            {
+                "simulation_runtime_state": "runtime-state",
+                "image_size": 64,
+                "primary_a_factory": "primary-a",
+                "primary_c_factory": "primary-c",
+                "max_distance_px": 12.0,
+                "min_separation_px": 2.0,
+                "image_shape_factory": "image-shape",
+                "center_col_factory": "center-col",
+                "center_row_factory": "center-row",
+                "distance_cor_to_detector_factory": "distance",
+                "gamma_deg_factory": "gamma",
+                "Gamma_deg_factory": "Gamma",
+                "chi_deg_factory": "chi",
+                "psi_deg_factory": "psi",
+                "psi_z_deg_factory": "psi-z",
+                "zs_factory": "zs",
+                "zb_factory": "zb",
+                "theta_initial_deg_factory": "theta-initial",
+                "cor_angle_deg_factory": "cor-angle",
+                "sigma_mosaic_deg_factory": "sigma-mosaic",
+                "gamma_mosaic_deg_factory": "gamma-mosaic",
+                "eta_factory": "eta",
+                "wavelength_factory": "wavelength",
+                "debye_x_factory": "debye-x",
+                "debye_y_factory": "debye-y",
+                "detector_center_factory": "detector-center",
+                "optics_mode_factory": "optics-mode",
+                "solve_q_values_factory": "solve-q",
+                "n2": "n2",
+                "process_peaks_parallel": "process-peaks",
+            },
+        ),
+        (
+            "overlay",
+            {
+                "simulation_runtime_state": "runtime-state",
+                "primary_a_factory": "overlay-primary-a",
+                "primary_c_factory": "overlay-primary-c",
+                "native_sim_to_display_coords": "display-coords",
+                "reflection_q_group_metadata": "q-group",
+                "max_hits_per_reflection": "max-hits",
+                "min_separation_px": 2.0,
+            },
+        ),
+        (
+            "runtime",
+            {
+                "peak_selection_module": peak_module,
+                "simulation_runtime_state": "runtime-state",
+                "peak_selection_state": "peak-state",
+                "hkl_lookup_view_state_factory": "view-factory",
+                "selected_peak_marker_factory": "marker-factory",
+                "current_primary_a_factory": "current-primary-a",
+                "caked_view_enabled_factory": "caked-flag",
+                "current_canvas_pick_config_factory": "canvas-config",
+                "current_intersection_config_factory": "intersection-config",
+                "ensure_peak_overlay_data": "overlay-callback",
+                "sync_peak_selection_state": "sync-state",
+                "schedule_update_factory": "schedule-update",
+                "set_status_text_factory": "status-text",
+                "draw_idle_factory": "draw-idle",
+                "display_to_native_sim_coords": "native-coords",
+                "native_sim_to_display_coords": "display-coords",
+                "simulate_ideal_hkl_native_center": "ideal-center",
+                "deactivate_conflicting_modes_factory": "deactivate-modes",
+                "n2": "n2",
+                "tcl_error_types": (RuntimeError,),
+            },
+        ),
+    ]
+
+
+def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    drag_module = SimpleNamespace(
+        create_integration_region_rectangle=(
+            lambda ax: calls.append(("region-rect", ax)) or "region-rect"
+        ),
+        create_drag_select_rectangle=(
+            lambda ax: calls.append(("drag-rect", ax)) or "drag-rect"
+        ),
+        make_runtime_integration_region_visuals_callback=(
+            lambda bindings_factory: (
+                calls.append(("refresh", bindings_factory)) or "refresh-callback"
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        bootstrap,
+        "build_runtime_integration_range_drag_bootstrap",
+        lambda **kwargs: calls.append(("runtime", kwargs))
+        or SimpleNamespace(
+            bindings_factory="bindings-factory",
+            callbacks="callbacks",
+        ),
+    )
+
+    bundle = bootstrap.build_runtime_integration_range_workflow_bootstrap(
+        integration_range_drag_module=drag_module,
+        ax="axis",
+        integration_region_overlay="overlay",
+        image_display="image-display",
+        range_visible_factory="range-visible",
+    )
+
+    assert bundle.bindings_factory == "bindings-factory"
+    assert bundle.callbacks == "callbacks"
+    assert bundle.refresh_visuals == "refresh-callback"
+    assert calls == [
+        ("region-rect", "axis"),
+        ("drag-rect", "axis"),
+        (
+            "runtime",
+            {
+                "integration_range_drag_module": drag_module,
+                "ax": "axis",
+                "drag_select_rect": "drag-rect",
+                "integration_region_rect": "region-rect",
+                "integration_region_overlay": "overlay",
+                "image_display": "image-display",
+                "range_visible_factory": "range-visible",
+            },
+        ),
+        ("refresh", "bindings-factory"),
+    ]
+
     geometry_calls: list[tuple[object, ...]] = []
     geometry_module = SimpleNamespace(
         make_runtime_geometry_q_group_bindings_factory=(
