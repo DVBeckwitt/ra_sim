@@ -351,6 +351,124 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
     assert preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
 
 
+def test_geometry_q_group_manager_runtime_simulation_callback_bundle_uses_live_values(
+    monkeypatch,
+) -> None:
+    calls = []
+    live = {
+        "peak_table_lattice": [(3.0, 5.0, "primary")],
+        "primary_a": 7.0,
+        "primary_c": 9.0,
+    }
+
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "simulate_geometry_fit_hit_tables",
+        lambda *args, **kwargs: calls.append(("hit_tables", args, kwargs)) or ["hit"],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "simulate_geometry_fit_peak_centers",
+        lambda *args, **kwargs: calls.append(("peak_centers", args, kwargs))
+        or [{"hkl": (1, 0, 0)}],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "simulate_geometry_fit_preview_style_peaks",
+        lambda *args, **kwargs: calls.append(("preview_style", args, kwargs))
+        or [{"hkl": (1, 0, 1)}],
+    )
+
+    bundle = geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
+        build_geometry_fit_central_mosaic_params="build-mosaic",
+        process_peaks_parallel="process-parallel",
+        hit_tables_to_max_positions="to-maxpos",
+        native_sim_to_display_coords="native-to-display",
+        peak_table_lattice_factory=lambda: live["peak_table_lattice"],
+        primary_a_factory=lambda: live["primary_a"],
+        primary_c_factory=lambda: live["primary_c"],
+        default_source_label=None,
+        round_pixel_centers=False,
+        default_solve_q_steps=123,
+        default_solve_q_rel_tol=2.5e-4,
+        default_solve_q_mode=1,
+    )
+
+    assert bundle.simulate_hit_tables("miller", "intensity", 32, {"a": 1.0}) == ["hit"]
+    assert bundle.simulate_peak_centers("miller", "intensity", 32, {"a": 1.0}) == [
+        {"hkl": (1, 0, 0)}
+    ]
+    assert bundle.simulate_preview_style_peaks(
+        "miller",
+        "intensity",
+        32,
+        {"a": 1.0},
+    ) == [{"hkl": (1, 0, 1)}]
+
+    assert calls[0] == (
+        "hit_tables",
+        ("miller", "intensity", 32, {"a": 1.0}),
+        {
+            "build_geometry_fit_central_mosaic_params": "build-mosaic",
+            "process_peaks_parallel": "process-parallel",
+            "default_solve_q_steps": 123,
+            "default_solve_q_rel_tol": 2.5e-4,
+            "default_solve_q_mode": 1,
+        },
+    )
+    assert calls[1] == (
+        "peak_centers",
+        ("miller", "intensity", 32, {"a": 1.0}),
+        {
+            "build_geometry_fit_central_mosaic_params": "build-mosaic",
+            "process_peaks_parallel": "process-parallel",
+            "hit_tables_to_max_positions": "to-maxpos",
+            "default_solve_q_steps": 123,
+            "default_solve_q_rel_tol": 2.5e-4,
+            "default_solve_q_mode": 1,
+        },
+    )
+    assert calls[2] == (
+        "preview_style",
+        ("miller", "intensity", 32, {"a": 1.0}),
+        {
+            "build_geometry_fit_central_mosaic_params": "build-mosaic",
+            "process_peaks_parallel": "process-parallel",
+            "native_sim_to_display_coords": "native-to-display",
+            "peak_table_lattice": [(3.0, 5.0, "primary")],
+            "primary_a": 7.0,
+            "primary_c": 9.0,
+            "default_source_label": None,
+            "round_pixel_centers": False,
+            "default_solve_q_steps": 123,
+            "default_solve_q_rel_tol": 2.5e-4,
+            "default_solve_q_mode": 1,
+        },
+    )
+
+    live["peak_table_lattice"] = None
+    live["primary_a"] = 11.0
+    live["primary_c"] = 13.0
+    bundle.simulate_preview_style_peaks("miller", "intensity", 64, {"c": 2.0})
+    assert calls[3] == (
+        "preview_style",
+        ("miller", "intensity", 64, {"c": 2.0}),
+        {
+            "build_geometry_fit_central_mosaic_params": "build-mosaic",
+            "process_peaks_parallel": "process-parallel",
+            "native_sim_to_display_coords": "native-to-display",
+            "peak_table_lattice": None,
+            "primary_a": 11.0,
+            "primary_c": 13.0,
+            "default_source_label": None,
+            "round_pixel_centers": False,
+            "default_solve_q_steps": 123,
+            "default_solve_q_rel_tol": 2.5e-4,
+            "default_solve_q_mode": 1,
+        },
+    )
+
+
 def test_geometry_q_group_manager_filters_simulated_peaks_by_listed_keys_and_exclusions() -> None:
     key1 = ("q_group", "primary", 1, 0)
     key2 = ("q_group", "primary", 1, 1)

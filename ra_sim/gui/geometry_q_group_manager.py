@@ -57,6 +57,15 @@ class GeometryQGroupRuntimeCallbacks:
     open_window: Callable[[], bool]
 
 
+@dataclass(frozen=True)
+class GeometryFitSimulationRuntimeCallbacks:
+    """Bound callbacks for live geometry-fit hit-table and peak simulation."""
+
+    simulate_hit_tables: Callable[..., list[object]]
+    simulate_peak_centers: Callable[..., list[dict[str, object]]]
+    simulate_preview_style_peaks: Callable[..., list[dict[str, object]]]
+
+
 def _resolve_runtime_value(value_or_callable: object) -> object:
     if callable(value_or_callable):
         try:
@@ -637,6 +646,113 @@ def simulate_geometry_fit_preview_style_peaks(
         primary_c=primary_c,
         default_source_label=default_source_label,
         round_pixel_centers=round_pixel_centers,
+    )
+
+
+def make_runtime_geometry_fit_simulation_callbacks(
+    *,
+    build_geometry_fit_central_mosaic_params: Callable[[dict[str, object]], object],
+    process_peaks_parallel: Callable[..., object],
+    hit_tables_to_max_positions: Callable[[Sequence[object]], Sequence[Sequence[float]]],
+    native_sim_to_display_coords: Callable[
+        [float, float, tuple[int, int]],
+        tuple[float, float],
+    ],
+    peak_table_lattice_factory: object | None = None,
+    primary_a_factory: object = np.nan,
+    primary_c_factory: object = np.nan,
+    default_source_label: str | None = None,
+    round_pixel_centers: bool = False,
+    default_solve_q_steps: int,
+    default_solve_q_rel_tol: float,
+    default_solve_q_mode: int,
+) -> GeometryFitSimulationRuntimeCallbacks:
+    """Return live geometry-fit simulation callbacks from runtime value sources."""
+
+    def _simulate_hit_tables(
+        miller_array: np.ndarray,
+        intensity_array: np.ndarray,
+        image_size: int,
+        param_set: Mapping[str, object] | dict[str, object],
+    ) -> list[object]:
+        return simulate_geometry_fit_hit_tables(
+            miller_array,
+            intensity_array,
+            image_size,
+            param_set,
+            build_geometry_fit_central_mosaic_params=(
+                build_geometry_fit_central_mosaic_params
+            ),
+            process_peaks_parallel=process_peaks_parallel,
+            default_solve_q_steps=default_solve_q_steps,
+            default_solve_q_rel_tol=default_solve_q_rel_tol,
+            default_solve_q_mode=default_solve_q_mode,
+        )
+
+    def _simulate_peak_centers(
+        miller_array: np.ndarray,
+        intensity_array: np.ndarray,
+        image_size: int,
+        param_set: Mapping[str, object] | dict[str, object],
+    ) -> list[dict[str, object]]:
+        return simulate_geometry_fit_peak_centers(
+            miller_array,
+            intensity_array,
+            image_size,
+            param_set,
+            build_geometry_fit_central_mosaic_params=(
+                build_geometry_fit_central_mosaic_params
+            ),
+            process_peaks_parallel=process_peaks_parallel,
+            hit_tables_to_max_positions=hit_tables_to_max_positions,
+            default_solve_q_steps=default_solve_q_steps,
+            default_solve_q_rel_tol=default_solve_q_rel_tol,
+            default_solve_q_mode=default_solve_q_mode,
+        )
+
+    def _simulate_preview_style_peaks(
+        miller_array: np.ndarray,
+        intensity_array: np.ndarray,
+        image_size: int,
+        param_set: Mapping[str, object] | dict[str, object],
+    ) -> list[dict[str, object]]:
+        peak_table_lattice = _resolve_runtime_value(peak_table_lattice_factory)
+        if not (
+            isinstance(peak_table_lattice, Sequence)
+            and not isinstance(peak_table_lattice, (str, bytes))
+        ):
+            peak_table_lattice = None
+
+        return simulate_geometry_fit_preview_style_peaks(
+            miller_array,
+            intensity_array,
+            image_size,
+            param_set,
+            build_geometry_fit_central_mosaic_params=(
+                build_geometry_fit_central_mosaic_params
+            ),
+            process_peaks_parallel=process_peaks_parallel,
+            native_sim_to_display_coords=native_sim_to_display_coords,
+            peak_table_lattice=peak_table_lattice,
+            primary_a=_coerce_float(
+                _resolve_runtime_value(primary_a_factory),
+                float("nan"),
+            ),
+            primary_c=_coerce_float(
+                _resolve_runtime_value(primary_c_factory),
+                float("nan"),
+            ),
+            default_source_label=default_source_label,
+            round_pixel_centers=round_pixel_centers,
+            default_solve_q_steps=default_solve_q_steps,
+            default_solve_q_rel_tol=default_solve_q_rel_tol,
+            default_solve_q_mode=default_solve_q_mode,
+        )
+
+    return GeometryFitSimulationRuntimeCallbacks(
+        simulate_hit_tables=_simulate_hit_tables,
+        simulate_peak_centers=_simulate_peak_centers,
+        simulate_preview_style_peaks=_simulate_preview_style_peaks,
     )
 
 

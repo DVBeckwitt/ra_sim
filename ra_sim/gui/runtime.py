@@ -7102,84 +7102,6 @@ if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
     )
 
 
-def _simulate_hit_tables_for_fit(
-    miller_array: np.ndarray,
-    intensity_array: np.ndarray,
-    image_size: int,
-    param_set: dict[str, object],
-) -> list[object]:
-    """Simulate once and return raw hit tables for geometry fitting."""
-    return gui_geometry_q_group_manager.simulate_geometry_fit_hit_tables(
-        miller_array,
-        intensity_array,
-        image_size,
-        param_set,
-        build_geometry_fit_central_mosaic_params=(
-            build_geometry_fit_central_mosaic_params
-        ),
-        process_peaks_parallel=process_peaks_parallel,
-        default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
-        default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
-        default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
-    )
-
-
-def _simulate_hkl_peak_centers_for_fit(
-    miller_array: np.ndarray,
-    intensity_array: np.ndarray,
-    image_size: int,
-    param_set: dict[str, object],
-) -> list[dict[str, object]]:
-    """Simulate once and return one aggregated peak center per integer HKL."""
-    return gui_geometry_q_group_manager.simulate_geometry_fit_peak_centers(
-        miller_array,
-        intensity_array,
-        image_size,
-        param_set,
-        build_geometry_fit_central_mosaic_params=(
-            build_geometry_fit_central_mosaic_params
-        ),
-        process_peaks_parallel=process_peaks_parallel,
-        hit_tables_to_max_positions=hit_tables_to_max_positions,
-        default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
-        default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
-        default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
-    )
-
-
-def _simulate_preview_style_peaks_for_fit(
-    miller_array: np.ndarray,
-    intensity_array: np.ndarray,
-    image_size: int,
-    param_set: dict[str, object],
-) -> list[dict[str, object]]:
-    """Simulate per-hit peaks using the same representation as the live preview."""
-    peak_table_lattice = (
-        simulation_runtime_state.stored_peak_table_lattice
-        if isinstance(simulation_runtime_state.stored_peak_table_lattice, list)
-        else None
-    )
-    return gui_geometry_q_group_manager.simulate_geometry_fit_preview_style_peaks(
-        miller_array,
-        intensity_array,
-        image_size,
-        param_set,
-        build_geometry_fit_central_mosaic_params=(
-            build_geometry_fit_central_mosaic_params
-        ),
-        process_peaks_parallel=process_peaks_parallel,
-        native_sim_to_display_coords=_native_sim_to_display_coords,
-        peak_table_lattice=peak_table_lattice,
-        primary_a=float(a_var.get()),
-        primary_c=float(c_var.get()),
-        default_source_label=None,
-        round_pixel_centers=False,
-        default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
-        default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
-        default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
-    )
-
-
 def _auto_match_console(cfg: dict[str, object] | None, text: str) -> None:
     """Emit one console progress line for geometry auto-match when enabled."""
 
@@ -7960,6 +7882,39 @@ geometry_q_group_runtime_bindings_factory = (
     geometry_q_group_runtime.bindings_factory
 )
 geometry_q_group_runtime_callbacks = geometry_q_group_runtime.callbacks
+geometry_fit_simulation_runtime_callbacks = (
+    gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
+        build_geometry_fit_central_mosaic_params=(
+            build_geometry_fit_central_mosaic_params
+        ),
+        process_peaks_parallel=process_peaks_parallel,
+        hit_tables_to_max_positions=hit_tables_to_max_positions,
+        native_sim_to_display_coords=_native_sim_to_display_coords,
+        peak_table_lattice_factory=lambda: (
+            simulation_runtime_state.stored_peak_table_lattice
+            if isinstance(simulation_runtime_state.stored_peak_table_lattice, list)
+            else None
+        ),
+        primary_a_factory=lambda: (
+            float(a_var.get()) if "a_var" in globals() else float(av)
+        ),
+        primary_c_factory=lambda: (
+            float(c_var.get()) if "c_var" in globals() else float(cv)
+        ),
+        default_source_label=None,
+        round_pixel_centers=False,
+        default_solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
+        default_solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
+        default_solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    )
+)
+_simulate_hit_tables_for_fit = geometry_fit_simulation_runtime_callbacks.simulate_hit_tables
+_simulate_hkl_peak_centers_for_fit = (
+    geometry_fit_simulation_runtime_callbacks.simulate_peak_centers
+)
+_simulate_preview_style_peaks_for_fit = (
+    geometry_fit_simulation_runtime_callbacks.simulate_preview_style_peaks
+)
 
 
 def _on_live_geometry_preview_toggle():
