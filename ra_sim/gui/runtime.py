@@ -3596,51 +3596,6 @@ def _update_geometry_preview_exclude_button_label():
     )
 
 
-def _set_geometry_preview_exclude_mode(enabled: bool, *, message: str | None = None):
-    """Arm or disarm live-preview exclusion editing."""
-
-    if gui_controllers.set_geometry_preview_exclude_mode(
-        geometry_preview_state,
-        enabled,
-    ):
-        peak_selection_runtime_callbacks.set_hkl_pick_mode(False)
-    _update_geometry_preview_exclude_button_label()
-    if message:
-        progress_label_geometry.config(text=message)
-
-def _clear_live_geometry_preview_exclusions():
-    """Clear all user-excluded live preview peaks and redraw the preview."""
-
-    gui_geometry_q_group_manager.clear_live_geometry_preview_exclusions_with_side_effects(
-        preview_state=geometry_preview_state,
-        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
-        update_geometry_preview_exclude_button_label=_update_geometry_preview_exclude_button_label,
-        refresh_geometry_q_group_window=geometry_q_group_runtime_callbacks.refresh_window,
-        live_geometry_preview_enabled=_live_geometry_preview_enabled,
-        refresh_live_geometry_preview=lambda: _refresh_live_geometry_preview(
-            update_status=True
-        ),
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-    )
-
-
-def _toggle_live_geometry_preview_exclusion_at(col: float, row: float) -> bool:
-    """Toggle exclusion for the nearest live preview pair near the click point."""
-
-    return gui_geometry_q_group_manager.toggle_live_geometry_preview_exclusion_at(
-        preview_state=geometry_preview_state,
-        col=col,
-        row=row,
-        live_preview_match_key=_live_preview_match_key,
-        live_preview_match_hkl=_live_preview_match_hkl,
-        render_live_geometry_preview_state=lambda: _render_live_geometry_preview_state(
-            update_status=True
-        ),
-        max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-    )
-
-
 bragg_qr_runtime = gui_bootstrap.build_runtime_bragg_qr_bootstrap(
     bragg_qr_manager_module=gui_bragg_qr_manager,
     root=root,
@@ -7637,6 +7592,18 @@ geometry_q_group_runtime = gui_bootstrap.build_runtime_geometry_q_group_bootstra
     refresh_live_geometry_preview=(
         lambda: _refresh_live_geometry_preview(update_status=True)
     ),
+    set_hkl_pick_mode=peak_selection_runtime_callbacks.set_hkl_pick_mode,
+    live_preview_match_key=_live_preview_match_key,
+    live_preview_match_hkl=_live_preview_match_hkl,
+    render_live_geometry_preview_state=(
+        lambda: _render_live_geometry_preview_state(update_status=True)
+    ),
+    clear_geometry_preview_artists=_clear_geometry_preview_artists,
+    preview_toggle_max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
+    update_running_factory=lambda: bool(simulation_runtime_state.update_running),
+    has_cached_hit_tables_factory=lambda: (
+        simulation_runtime_state.stored_max_positions_local is not None
+    ),
     refresh_live_geometry_preview_quiet=(
         lambda: _refresh_live_geometry_preview(update_status=False)
     ),
@@ -7661,6 +7628,16 @@ geometry_q_group_runtime_bindings_factory = (
     geometry_q_group_runtime.bindings_factory
 )
 geometry_q_group_runtime_callbacks = geometry_q_group_runtime.callbacks
+_set_geometry_preview_exclude_mode = (
+    geometry_q_group_runtime_callbacks.set_preview_exclude_mode
+)
+_clear_live_geometry_preview_exclusions = (
+    geometry_q_group_runtime_callbacks.clear_preview_exclusions
+)
+_toggle_live_geometry_preview_exclusion_at = (
+    geometry_q_group_runtime_callbacks.toggle_preview_exclusion_at
+)
+_on_live_geometry_preview_toggle = geometry_q_group_runtime_callbacks.toggle_live_preview
 geometry_fit_simulation_runtime_callbacks = (
     gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
         build_geometry_fit_central_mosaic_params=(
@@ -7694,24 +7671,6 @@ _simulate_hkl_peak_centers_for_fit = (
 _simulate_preview_style_peaks_for_fit = (
     geometry_fit_simulation_runtime_callbacks.simulate_preview_style_peaks
 )
-
-
-def _on_live_geometry_preview_toggle():
-    """Enable or disable the live geometry auto-match preview."""
-
-    gui_geometry_q_group_manager.toggle_live_geometry_preview_with_side_effects(
-        enabled=_live_geometry_preview_enabled(),
-        disable_preview_exclude_mode=lambda: _set_geometry_preview_exclude_mode(False),
-        clear_geometry_preview_artists=_clear_geometry_preview_artists,
-        open_geometry_q_group_window=geometry_q_group_runtime_callbacks.open_window,
-        update_running=bool(simulation_runtime_state.update_running),
-        has_cached_hit_tables=simulation_runtime_state.stored_max_positions_local is not None,
-        schedule_update=schedule_update,
-        refresh_live_geometry_preview=lambda: _refresh_live_geometry_preview(
-            update_status=True
-        ),
-        set_status_text=lambda text: progress_label_geometry.config(text=text),
-    )
 
 
 def _legacy_auto_match_on_fit_geometry_click():
@@ -11109,11 +11068,8 @@ gui_views.create_geometry_tool_action_controls(
     on_undo_manual_placement=_undo_last_geometry_manual_placement,
     on_export_manual_pairs=_export_geometry_manual_pairs,
     on_import_manual_pairs=_import_geometry_manual_pairs,
-    on_toggle_preview_exclude=lambda: (
-        gui_geometry_q_group_manager.open_runtime_geometry_q_group_preview_exclusion_window(
-            root=root,
-            bindings_factory=geometry_q_group_runtime_bindings_factory,
-        )
+    on_toggle_preview_exclude=(
+        geometry_q_group_runtime_callbacks.open_preview_exclusion_window
     ),
     on_clear_manual_pairs=_clear_current_geometry_manual_pairs,
 )

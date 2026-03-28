@@ -31,6 +31,18 @@ class GeometryQGroupRuntimeBindings:
     update_geometry_preview_exclude_button_label: Callable[[], None]
     live_geometry_preview_enabled: Callable[[], bool]
     refresh_live_geometry_preview: Callable[[], None]
+    set_hkl_pick_mode: Callable[[bool], None] | None = None
+    live_preview_match_key: (
+        Callable[[dict[str, object] | None], tuple[object, ...] | None] | None
+    ) = None
+    live_preview_match_hkl: (
+        Callable[[dict[str, object] | None], tuple[int, int, int] | None] | None
+    ) = None
+    render_live_geometry_preview_state: Callable[[], object] | None = None
+    clear_geometry_preview_artists: Callable[[], None] | None = None
+    preview_toggle_max_distance_px: float = 20.0
+    update_running: object | None = None
+    has_cached_hit_tables: object | None = None
     build_entries_snapshot: Callable[[], Sequence[dict[str, object]] | None] | None = None
     refresh_live_geometry_preview_quiet: Callable[[], None] | None = None
     clear_last_simulation_signature: Callable[[], None] | None = None
@@ -55,6 +67,11 @@ class GeometryQGroupRuntimeCallbacks:
     load_selection: Callable[[], bool]
     close_window: Callable[[], None]
     open_window: Callable[[], bool]
+    open_preview_exclusion_window: Callable[[], bool]
+    set_preview_exclude_mode: Callable[[bool], bool]
+    clear_preview_exclusions: Callable[[], None]
+    toggle_preview_exclusion_at: Callable[[float, float], bool]
+    toggle_live_preview: Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -2233,6 +2250,18 @@ def make_runtime_geometry_q_group_bindings_factory(
     update_geometry_preview_exclude_button_label: Callable[[], None],
     live_geometry_preview_enabled: Callable[[], bool],
     refresh_live_geometry_preview: Callable[[], None],
+    set_hkl_pick_mode: Callable[[bool], None] | None = None,
+    live_preview_match_key: (
+        Callable[[dict[str, object] | None], tuple[object, ...] | None] | None
+    ) = None,
+    live_preview_match_hkl: (
+        Callable[[dict[str, object] | None], tuple[int, int, int] | None] | None
+    ) = None,
+    render_live_geometry_preview_state: Callable[[], object] | None = None,
+    clear_geometry_preview_artists: Callable[[], None] | None = None,
+    preview_toggle_max_distance_px: float = 20.0,
+    update_running_factory: object | None = None,
+    has_cached_hit_tables_factory: object | None = None,
     refresh_live_geometry_preview_quiet: Callable[[], None] | None = None,
     clear_last_simulation_signature: Callable[[], None] | None = None,
     schedule_update_factory: object | None = None,
@@ -2255,6 +2284,17 @@ def make_runtime_geometry_q_group_bindings_factory(
             update_geometry_preview_exclude_button_label=update_geometry_preview_exclude_button_label,
             live_geometry_preview_enabled=live_geometry_preview_enabled,
             refresh_live_geometry_preview=refresh_live_geometry_preview,
+            set_hkl_pick_mode=set_hkl_pick_mode,
+            live_preview_match_key=live_preview_match_key,
+            live_preview_match_hkl=live_preview_match_hkl,
+            render_live_geometry_preview_state=render_live_geometry_preview_state,
+            clear_geometry_preview_artists=clear_geometry_preview_artists,
+            preview_toggle_max_distance_px=_coerce_float(
+                preview_toggle_max_distance_px,
+                20.0,
+            ),
+            update_running=_resolve_runtime_value(update_running_factory),
+            has_cached_hit_tables=_resolve_runtime_value(has_cached_hit_tables_factory),
             refresh_live_geometry_preview_quiet=refresh_live_geometry_preview_quiet,
             clear_last_simulation_signature=clear_last_simulation_signature,
             schedule_update=_resolve_runtime_value(schedule_update_factory),
@@ -2492,6 +2532,74 @@ def open_runtime_geometry_q_group_preview_exclusion_window(
     return opened
 
 
+def set_runtime_geometry_preview_exclude_mode(
+    bindings: GeometryQGroupRuntimeBindings,
+    enabled: bool,
+    *,
+    message: str | None = None,
+) -> bool:
+    """Apply one runtime preview-exclude mode toggle from live bindings."""
+
+    changed = gui_controllers.set_geometry_preview_exclude_mode(
+        bindings.preview_state,
+        enabled,
+    )
+    if changed and callable(bindings.set_hkl_pick_mode):
+        bindings.set_hkl_pick_mode(False)
+    bindings.update_geometry_preview_exclude_button_label()
+    if message:
+        _set_status_text(bindings.set_status_text, message)
+    return bool(changed)
+
+
+def clear_runtime_live_geometry_preview_exclusions(
+    bindings: GeometryQGroupRuntimeBindings,
+) -> None:
+    """Clear runtime live-preview exclusions through the bound workflow surface."""
+
+    clear_live_geometry_preview_exclusions_with_side_effects(
+        preview_state=bindings.preview_state,
+        invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
+        update_geometry_preview_exclude_button_label=bindings.update_geometry_preview_exclude_button_label,
+        refresh_geometry_q_group_window=lambda: refresh_runtime_geometry_q_group_window(
+            bindings
+        ),
+        live_geometry_preview_enabled=bindings.live_geometry_preview_enabled,
+        refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
+        set_status_text=bindings.set_status_text,
+    )
+
+
+def toggle_runtime_live_geometry_preview_exclusion_at(
+    bindings: GeometryQGroupRuntimeBindings,
+    col: float,
+    row: float,
+) -> bool:
+    """Toggle one runtime preview exclusion using the live binding surface."""
+
+    if not (
+        callable(bindings.live_preview_match_key)
+        and callable(bindings.live_preview_match_hkl)
+        and callable(bindings.render_live_geometry_preview_state)
+    ):
+        _set_status_text(
+            bindings.set_status_text,
+            "Live preview exclusion toggle unavailable.",
+        )
+        return False
+
+    return toggle_live_geometry_preview_exclusion_at(
+        preview_state=bindings.preview_state,
+        col=col,
+        row=row,
+        live_preview_match_key=bindings.live_preview_match_key,
+        live_preview_match_hkl=bindings.live_preview_match_hkl,
+        render_live_geometry_preview_state=bindings.render_live_geometry_preview_state,
+        max_distance_px=_coerce_float(bindings.preview_toggle_max_distance_px, 20.0),
+        set_status_text=bindings.set_status_text,
+    )
+
+
 def toggle_live_geometry_preview_with_side_effects(
     *,
     enabled: bool,
@@ -2524,6 +2632,37 @@ def toggle_live_geometry_preview_with_side_effects(
     if not refreshed:
         schedule_update()
     return refreshed
+
+
+def toggle_runtime_live_geometry_preview(
+    bindings: GeometryQGroupRuntimeBindings,
+    *,
+    root,
+    bindings_factory: Callable[[], GeometryQGroupRuntimeBindings],
+) -> bool:
+    """Apply one runtime live-preview checkbox action through live bindings."""
+
+    return toggle_live_geometry_preview_with_side_effects(
+        enabled=bool(_resolve_runtime_value(bindings.live_geometry_preview_enabled)),
+        disable_preview_exclude_mode=lambda: set_runtime_geometry_preview_exclude_mode(
+            bindings,
+            False,
+        ),
+        clear_geometry_preview_artists=(
+            bindings.clear_geometry_preview_artists or (lambda: None)
+        ),
+        open_geometry_q_group_window=lambda: open_runtime_geometry_q_group_window(
+            root=root,
+            bindings_factory=bindings_factory,
+        ),
+        update_running=bool(_resolve_runtime_value(bindings.update_running)),
+        has_cached_hit_tables=bool(
+            _resolve_runtime_value(bindings.has_cached_hit_tables)
+        ),
+        schedule_update=bindings.schedule_update or (lambda: None),
+        refresh_live_geometry_preview=bindings.refresh_live_geometry_preview,
+        set_status_text=bindings.set_status_text,
+    )
 
 
 def make_runtime_geometry_q_group_callbacks(
@@ -2565,6 +2704,27 @@ def make_runtime_geometry_q_group_callbacks(
         ),
         close_window=lambda: close_runtime_geometry_q_group_window(bindings_factory()),
         open_window=lambda: open_runtime_geometry_q_group_window(
+            root=root,
+            bindings_factory=bindings_factory,
+        ),
+        open_preview_exclusion_window=lambda: open_runtime_geometry_q_group_preview_exclusion_window(
+            root=root,
+            bindings_factory=bindings_factory,
+        ),
+        set_preview_exclude_mode=lambda enabled: set_runtime_geometry_preview_exclude_mode(
+            bindings_factory(),
+            enabled,
+        ),
+        clear_preview_exclusions=lambda: clear_runtime_live_geometry_preview_exclusions(
+            bindings_factory()
+        ),
+        toggle_preview_exclusion_at=lambda col, row: toggle_runtime_live_geometry_preview_exclusion_at(
+            bindings_factory(),
+            col,
+            row,
+        ),
+        toggle_live_preview=lambda: toggle_runtime_live_geometry_preview(
+            bindings_factory(),
             root=root,
             bindings_factory=bindings_factory,
         ),

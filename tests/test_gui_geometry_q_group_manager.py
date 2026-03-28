@@ -1385,6 +1385,49 @@ def test_geometry_q_group_manager_preview_exclusion_toggle_and_clear_helpers() -
     ]
 
 
+def test_geometry_q_group_manager_runtime_preview_exclude_mode_helper_updates_hkl_and_status(
+    monkeypatch,
+) -> None:
+    preview_state = state.GeometryPreviewState()
+    events = []
+
+    monkeypatch.setattr(
+        geometry_q_group_manager.gui_controllers,
+        "set_geometry_preview_exclude_mode",
+        lambda state_value, enabled: (
+            events.append(("mode", state_value, enabled)) or True
+        ),
+    )
+
+    bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=preview_state,
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: events.append("invalidate"),
+        update_geometry_preview_exclude_button_label=lambda: events.append("label"),
+        live_geometry_preview_enabled=lambda: False,
+        refresh_live_geometry_preview=lambda: events.append("refresh"),
+        set_hkl_pick_mode=lambda enabled: events.append(("hkl", enabled)),
+        set_status_text=lambda text: events.append(("status", text)),
+    )
+
+    changed = geometry_q_group_manager.set_runtime_geometry_preview_exclude_mode(
+        bindings,
+        True,
+        message="armed",
+    )
+
+    assert changed is True
+    assert events == [
+        ("mode", preview_state, True),
+        ("hkl", False),
+        "label",
+        ("status", "armed"),
+    ]
+
+
 def test_geometry_q_group_manager_runtime_snapshot_capture_refreshes_open_window(
     monkeypatch,
 ) -> None:
@@ -1752,6 +1795,43 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
             True,
         )[-1],
     )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "open_runtime_geometry_q_group_preview_exclusion_window",
+        lambda *, root, bindings_factory: (
+            calls.append(("open-preview", root, bindings_factory())),
+            False,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "set_runtime_geometry_preview_exclude_mode",
+        lambda bindings, enabled: (
+            calls.append(("mode", bindings, enabled)),
+            True,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "clear_runtime_live_geometry_preview_exclusions",
+        lambda bindings: calls.append(("clear-preview", bindings)),
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "toggle_runtime_live_geometry_preview_exclusion_at",
+        lambda bindings, col, row: (
+            calls.append(("toggle-preview", bindings, col, row)),
+            False,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        geometry_q_group_manager,
+        "toggle_runtime_live_geometry_preview",
+        lambda bindings, *, root, bindings_factory: (
+            calls.append(("live-toggle", bindings, root)),
+            True,
+        )[-1],
+    )
 
     def build_bindings():
         versions["count"] += 1
@@ -1776,6 +1856,11 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
     assert callbacks.load_selection() is False
     callbacks.close_window()
     assert callbacks.open_window() is True
+    assert callbacks.open_preview_exclusion_window() is False
+    assert callbacks.set_preview_exclude_mode(True) is True
+    callbacks.clear_preview_exclusions()
+    assert callbacks.toggle_preview_exclusion_at(1.5, 2.5) is False
+    assert callbacks.toggle_live_preview() is True
 
     assert calls == [
         ("status", "bindings-1", entries),
@@ -1788,4 +1873,9 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
         ("load", "bindings-8"),
         ("close", "bindings-9"),
         ("open", "root-window", "bindings-10"),
+        ("open-preview", "root-window", "bindings-11"),
+        ("mode", "bindings-12", True),
+        ("clear-preview", "bindings-13"),
+        ("toggle-preview", "bindings-14", 1.5, 2.5),
+        ("live-toggle", "bindings-15", "root-window"),
     ]

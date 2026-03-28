@@ -360,14 +360,18 @@ not `main.py` or `mosaic_profiles.py`.
     live preview workflow.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the live-preview
     enable/disable action flow used by the geometry tool controls.
+  - `ra_sim.gui.geometry_q_group_manager` now also owns the runtime callback
+    bundle entries for preview-exclusion window open, preview-exclude-mode
+    toggling, preview-exclusion point toggling, exclusion clearing, and the
+    live-preview checkbox action flow.
   - `ra_sim.gui.geometry_q_group_manager` now also owns the zero-arg runtime
     binding/callback bundle used for selector open/refresh/toggle/include/
     exclude/save/load/update actions.
   - `ra_sim.gui.runtime` now keeps only one bound geometry-selector factory/
     callback bundle plus thin fit-preview/cached-hit value sources, live-
     preview availability/fallback simulation orchestration, a narrowed
-    update-cycle refresh call site, and thin toolbar wiring around that
-    workflow.
+    update-cycle refresh call site, and thin geometry-tool button wiring
+    around that workflow.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
