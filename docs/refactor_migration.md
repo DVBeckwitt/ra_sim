@@ -88,6 +88,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   module `ra_sim.gui.runtime_geometry_preview`, and the matching regression
   coverage now uses direct helper tests instead of AST assertions against the
   internal runtime implementation.
+- The geometry-fit runtime value callback assembly, manual-dataset/config
+  factory assembly, and geometry-fit action runtime assembly now also flow
+  through the import-safe helper module `ra_sim.gui.runtime_geometry_fit`,
+  and the matching regression coverage now uses direct helper tests instead
+  of AST assertions against the internal runtime implementation.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into

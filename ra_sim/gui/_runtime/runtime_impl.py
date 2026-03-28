@@ -109,6 +109,7 @@ from ra_sim.gui import integration_range_drag as gui_integration_range_drag
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import runtime_background as gui_runtime_background
 from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
+from ra_sim.gui import runtime_geometry_fit as gui_runtime_geometry_fit
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
 from ra_sim.gui import views as gui_views
@@ -10118,9 +10119,12 @@ bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_per
 center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
 center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
 
-_geometry_fit_runtime_value_callbacks = (
-    gui_geometry_fit.build_runtime_geometry_fit_value_callbacks(
-        gui_geometry_fit.GeometryFitRuntimeValueBindings(
+geometry_fit_runtime_workflow = (
+    gui_runtime_geometry_fit.build_runtime_geometry_fit_workflow(
+        geometry_fit_module=gui_geometry_fit,
+        runtime_fit_analysis_module=gui_runtime_fit_analysis,
+        bootstrap_module=gui_bootstrap,
+        value_bindings=gui_geometry_fit.GeometryFitRuntimeValueBindings(
             fit_zb_var=fit_zb_var,
             fit_zs_var=fit_zs_var,
             fit_theta_var=fit_theta_var,
@@ -10161,53 +10165,42 @@ _geometry_fit_runtime_value_callbacks = (
             lambda_value=lambda_,
             psi=psi,
             n2=n2,
-        )
-    )
-)
-_geometry_fit_var_map = _geometry_fit_runtime_value_callbacks.var_map
-geometry_fit_manual_dataset_bindings_factory = (
-    gui_geometry_fit.make_runtime_geometry_fit_manual_dataset_bindings_factory(
-        osc_files_factory=lambda: tuple(background_runtime_state.osc_files),
-        current_background_index_factory=(
-            lambda: int(background_runtime_state.current_background_index)
         ),
-        image_size=image_size,
-        display_rotate_k=DISPLAY_ROTATE_K,
-        geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
-        load_background_by_index=_load_background_image_by_index,
-        apply_background_backend_orientation=(
-            _apply_background_backend_orientation
-        ),
-        geometry_manual_simulated_peaks_for_params=(
-            _geometry_manual_simulated_peaks_for_params
-        ),
-        geometry_manual_simulated_lookup=_geometry_manual_simulated_lookup,
-        geometry_manual_entry_display_coords=(
-            _geometry_manual_entry_display_coords
-        ),
-        unrotate_display_peaks=_unrotate_display_peaks,
-        display_to_native_sim_coords=_display_to_native_sim_coords,
-        select_fit_orientation=_select_fit_orientation,
-        apply_orientation_to_entries=_apply_orientation_to_entries,
-        orient_image_for_fit=_orient_image_for_fit,
-    )
-)
-geometry_fit_runtime_config_factory = (
-    gui_geometry_fit.build_runtime_geometry_fit_config_factory(
-        base_config=(
-            fit_config.get("geometry", {})
-            if isinstance(fit_config, dict)
-            else {}
-        ),
-        current_constraint_state=_current_geometry_fit_constraint_state,
-        current_parameter_domains=_current_geometry_fit_parameter_domains,
-    )
-)
-geometry_fit_action_workflow = (
-    gui_runtime_fit_analysis.build_runtime_geometry_fit_action_workflow(
-        bootstrap_module=gui_bootstrap,
-        geometry_fit_module=gui_geometry_fit,
-        geometry_fit_action_bootstrap_kwargs={
+        manual_dataset_bindings_factory_kwargs={
+            "osc_files_factory": (lambda: tuple(background_runtime_state.osc_files)),
+            "current_background_index_factory": (
+                lambda: int(background_runtime_state.current_background_index)
+            ),
+            "image_size": image_size,
+            "display_rotate_k": DISPLAY_ROTATE_K,
+            "geometry_manual_pairs_for_index": _geometry_manual_pairs_for_index,
+            "load_background_by_index": _load_background_image_by_index,
+            "apply_background_backend_orientation": (
+                _apply_background_backend_orientation
+            ),
+            "geometry_manual_simulated_peaks_for_params": (
+                _geometry_manual_simulated_peaks_for_params
+            ),
+            "geometry_manual_simulated_lookup": _geometry_manual_simulated_lookup,
+            "geometry_manual_entry_display_coords": (
+                _geometry_manual_entry_display_coords
+            ),
+            "unrotate_display_peaks": _unrotate_display_peaks,
+            "display_to_native_sim_coords": _display_to_native_sim_coords,
+            "select_fit_orientation": _select_fit_orientation,
+            "apply_orientation_to_entries": _apply_orientation_to_entries,
+            "orient_image_for_fit": _orient_image_for_fit,
+        },
+        runtime_config_factory_kwargs={
+            "base_config": (
+                fit_config.get("geometry", {})
+                if isinstance(fit_config, dict)
+                else {}
+            ),
+            "current_constraint_state": _current_geometry_fit_constraint_state,
+            "current_parameter_domains": _current_geometry_fit_parameter_domains,
+        },
+        action_bootstrap_kwargs={
             "value_callbacks_factory": _geometry_fit_runtime_values,
             "fit_config": fit_config,
             "theta_initial_factory": (lambda: theta_initial_var.get()),
@@ -10224,17 +10217,12 @@ geometry_fit_action_workflow = (
             "current_background_theta_values": _current_background_theta_values,
             "current_geometry_theta_offset": _current_geometry_theta_offset,
             "ensure_geometry_fit_caked_view": _ensure_geometry_fit_caked_view,
-            "manual_dataset_bindings_factory": (
-                geometry_fit_manual_dataset_bindings_factory
-            ),
-            "build_runtime_config_factory": geometry_fit_runtime_config_factory,
             "downloads_dir": get_dir("downloads"),
             "simulation_runtime_state": simulation_runtime_state,
             "background_runtime_state": background_runtime_state,
             "theta_initial_var": theta_initial_var,
             "geometry_theta_offset_var": geometry_theta_offset_var,
             "current_ui_params": _current_geometry_fit_ui_params,
-            "var_map": _geometry_fit_var_map,
             "background_theta_for_index": _background_theta_for_index,
             "refresh_status": _refresh_background_status,
             "update_manual_pick_button_label": (
@@ -10290,9 +10278,20 @@ geometry_fit_action_workflow = (
         },
     )
 )
-geometry_fit_action_runtime = geometry_fit_action_workflow.runtime
-geometry_fit_action_bindings_factory = geometry_fit_action_workflow.bindings_factory
-on_fit_geometry_click = geometry_fit_action_workflow.callback
+_geometry_fit_runtime_value_callbacks = geometry_fit_runtime_workflow.value_callbacks
+_geometry_fit_var_map = geometry_fit_runtime_workflow.var_map
+geometry_fit_manual_dataset_bindings_factory = (
+    geometry_fit_runtime_workflow.manual_dataset_bindings_factory
+)
+geometry_fit_runtime_config_factory = (
+    geometry_fit_runtime_workflow.runtime_config_factory
+)
+geometry_fit_action_workflow = geometry_fit_runtime_workflow.action_workflow
+geometry_fit_action_runtime = geometry_fit_runtime_workflow.action_runtime
+geometry_fit_action_bindings_factory = (
+    geometry_fit_runtime_workflow.action_bindings_factory
+)
+on_fit_geometry_click = geometry_fit_runtime_workflow.on_fit_geometry_click
 fit_button_geometry.config(command=on_fit_geometry_click)
 
 

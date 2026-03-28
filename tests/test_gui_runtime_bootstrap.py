@@ -91,37 +91,3 @@ def test_runtime_selected_peak_refresh_calls_use_maintenance_bundle() -> None:
     assert direct_reselect_calls == 0
     assert direct_hkl_refresh_calls == 0
 
-
-def test_runtime_geometry_fit_action_bootstrap_is_built_after_live_value_setup() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    assignment_lines: dict[str, int] = {}
-    bootstrap_use_line = 0
-
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id in {
-                "theta_initial_var",
-                "_geometry_fit_runtime_value_callbacks",
-                "_geometry_fit_var_map",
-            }:
-                assignment_lines[target.id] = int(node.lineno)
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr == "build_runtime_geometry_fit_action_workflow":
-            bootstrap_use_line = int(node.lineno)
-
-    assert bootstrap_use_line > 0
-    assert assignment_lines["theta_initial_var"] < bootstrap_use_line
-    assert assignment_lines["_geometry_fit_runtime_value_callbacks"] < bootstrap_use_line
-    assert assignment_lines["_geometry_fit_var_map"] < bootstrap_use_line
-
-
