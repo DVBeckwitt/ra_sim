@@ -1025,6 +1025,9 @@ What is done:
 - `tests/test_import_smoke.py` now covers `ra_sim.gui.runtime` directly.
 - The `ra_sim.gui.app` helper and sim-signature tests now import the live
   module directly instead of extracting functions from source text.
+- The hBN fitter bundle-export test now imports `hbn_fitter.fitter` directly
+  and exercises a shared bundle-payload helper instead of extracting
+  `save_bundle()` from source text.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.

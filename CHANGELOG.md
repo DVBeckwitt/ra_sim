@@ -21,6 +21,7 @@
 - **Fitting and optimization**
   - Expanded `hbn_fitter/fitter.py` with uncertainty-aware ellipse refinement and point-sigma handling.
   - Added projective tilt optimization path with fallback to legacy optimization.
+  - Extracted hBN fitter bundle-payload assembly into a shared helper used by `save_bundle()`.
   - Extended bundle save/load fields to include confidence, ring sigma, optimizer metadata, coordinate-frame metadata, and compatibility keys.
   - Updated `ra_sim/fitting/optimization.py` with robust solver config, restart support, one-to-one point matching, weighted residuals, and missing-pair penalties.
 
@@ -90,6 +91,7 @@
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
   - Added `tests/test_gui_runtime_import_safe.py` and removed the import-smoke skip for `ra_sim.gui.runtime`.
   - Replaced the `ra_sim.gui.app` AST/source-extraction helper tests with direct behavioral imports.
+  - Replaced the hBN fitter bundle-export AST/source-extraction regression with direct helper and save-path coverage.
   - Extended `tests/test_gui_geometry_fit_workflow.py` with direct coverage for the extracted geometry-fit history snapshot/restore and undo/redo runtime helpers in `ra_sim.gui.geometry_fit`.
   - Extended `tests/test_manual_geometry_selection_helpers.py` with direct coverage for placement export-row/snapshot apply helpers and the export/import dialog workflow in `ra_sim.gui.manual_geometry`.
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.

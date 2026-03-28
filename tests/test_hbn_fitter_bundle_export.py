@@ -1,73 +1,10 @@
 from __future__ import annotations
 
-import ast
-import textwrap
 from pathlib import Path
 
 import numpy as np
 
-
-def _load_fitter_save_bundle_symbols() -> dict[str, object]:
-    source = Path("hbn_fitter/fitter.py").read_text(encoding="utf-8")
-    module = ast.parse(source, filename="hbn_fitter/fitter.py")
-
-    wanted_constants = {
-        "SIM_BACKGROUND_ROTATE_K",
-        "SIM_GAMMA_SIGN_FROM_TILT_X",
-        "SIM_GAMMA_SIGN_FROM_TILT_Y",
-    }
-    wanted_functions = {
-        "pts_to_obj",
-        "scalars_to_obj",
-        "ellipses_to_array",
-        "ellipse_ring_indices",
-    }
-
-    extracted: list[str] = []
-    discovered_constants: set[str] = set()
-    discovered_functions: set[str] = set()
-    save_bundle_source: str | None = None
-
-    for node in module.body:
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id in wanted_constants:
-                    segment = ast.get_source_segment(source, node)
-                    if segment:
-                        extracted.append(segment)
-                        discovered_constants.add(target.id)
-        elif isinstance(node, ast.FunctionDef) and node.name in wanted_functions:
-            segment = ast.get_source_segment(source, node)
-            if segment:
-                extracted.append(segment)
-                discovered_functions.add(node.name)
-        elif isinstance(node, ast.ClassDef) and node.name == "HBNFitterGUI":
-            for child in node.body:
-                if isinstance(child, ast.FunctionDef) and child.name == "save_bundle":
-                    segment = ast.get_source_segment(source, child)
-                    if segment:
-                        save_bundle_source = textwrap.dedent(segment)
-
-    missing_constants = sorted(wanted_constants - discovered_constants)
-    missing_functions = sorted(wanted_functions - discovered_functions)
-    if missing_constants or missing_functions or save_bundle_source is None:
-        raise AssertionError(
-            "Failed to extract hBN fitter bundle save symbols: "
-            f"constants={missing_constants}, functions={missing_functions}, "
-            f"save_bundle_found={save_bundle_source is not None}"
-        )
-
-    namespace: dict[str, object] = {}
-    exec(
-        "import datetime as dt\n"
-        "from pathlib import Path\n"
-        "import numpy as np\n\n"
-        + "\n\n".join(extracted)
-        + "\n\n"
-        + save_bundle_source,
-        namespace,
-    )
-    return namespace
+from hbn_fitter import fitter as hbn_fitter
 
 
 class _DummyVar:
@@ -118,13 +55,47 @@ class _DummyFitter:
         return values
 
 
-def test_hbn_fitter_save_bundle_exports_opposite_sign_detector_tilts(tmp_path: Path) -> None:
-    namespace = _load_fitter_save_bundle_symbols()
-    save_bundle = namespace["save_bundle"]
+def test_build_hbn_fitter_bundle_payload_exports_opposite_sign_detector_tilts() -> None:
+    fitter = _DummyFitter()
+    center, center_src = fitter._get_center(strict=False)
 
+    bundle = hbn_fitter.build_hbn_fitter_bundle_payload(
+        img_bgsub=fitter.img_bgsub,
+        img_log_full=fitter._get_fullres_log_image(),
+        downsample_factor=fitter.down,
+        center=center,
+        center_source=center_src,
+        optim=fitter.optim,
+        fit_quality=fitter.fit_quality,
+        points_ds=fitter._points_for_fit(fitter.points_ds, downsample=fitter.down),
+        points_raw_ds=fitter._points_for_fit(fitter.points_raw_ds, downsample=fitter.down),
+        points_sigma_ds=fitter._sigma_for_fit(fitter.points_sigma_ds, downsample=fitter.down),
+        ellipses=fitter.ellipses,
+        input_hbn_path=fitter.hbn_path.get(),
+        input_dark_path=fitter.dark_path.get(),
+        created_utc="2026-03-28T12:00:00Z",
+    )
+
+    tilt_correction = bundle["tilt_correction"]
+    tilt_hint = bundle["tilt_hint"]
+
+    assert np.isclose(float(bundle["tilt_x_deg"]), -2.75)
+    assert np.isclose(float(bundle["tilt_y_deg"]), 1.5)
+    assert np.isclose(float(bundle["tilt_x_deg_internal"]), 2.75)
+    assert np.isclose(float(bundle["tilt_y_deg_internal"]), -1.5)
+
+    assert np.isclose(float(tilt_correction["tilt_x_deg"]), -2.75)
+    assert np.isclose(float(tilt_correction["tilt_y_deg"]), 1.5)
+    assert np.isclose(float(tilt_hint["rot1_rad"]), np.deg2rad(-2.75))
+    assert np.isclose(float(tilt_hint["rot2_rad"]), np.deg2rad(1.5))
+    assert str(np.asarray(bundle["created_utc"]).reshape(-1)[0]) == "2026-03-28T12:00:00Z"
+
+
+def test_hbn_fitter_save_bundle_writes_payload_with_expected_tilt_signs(tmp_path: Path) -> None:
     fitter = _DummyFitter()
     out_path = tmp_path / "bundle.npz"
-    save_bundle(fitter, out_path)
+
+    hbn_fitter.HBNFitterGUI.save_bundle(fitter, out_path)
 
     data = np.load(out_path, allow_pickle=True)
     tilt_correction = data["tilt_correction"].item()

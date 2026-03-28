@@ -66,6 +66,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - `tests/test_import_smoke.py` no longer skips `ra_sim.gui.runtime`.
 - The `ra_sim.gui.app` helper and sim-signature tests now import the live
   module directly instead of using AST/source extraction.
+- The hBN fitter bundle-export regression test now imports
+  `hbn_fitter.fitter` directly, and the NPZ payload assembly used by
+  `save_bundle()` now flows through one shared helper there.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into

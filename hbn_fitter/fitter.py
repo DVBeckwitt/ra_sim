@@ -180,6 +180,203 @@ def ellipse_ring_indices(ellipses):
     return np.asarray(out, dtype=np.int32)
 
 
+def build_hbn_fitter_bundle_payload(
+    *,
+    img_bgsub,
+    img_log_full,
+    downsample_factor,
+    center,
+    center_source,
+    optim,
+    fit_quality,
+    points_ds,
+    points_raw_ds,
+    points_sigma_ds,
+    ellipses,
+    input_hbn_path,
+    input_dark_path,
+    created_utc: str | None = None,
+):
+    """Build the saved NPZ payload for one hBN fitter bundle export."""
+
+    opt = optim or {}
+    fitq = fit_quality or {}
+
+    tilt_x_deg_internal = float(opt.get("tilt_x_deg", np.nan))
+    tilt_y_deg_internal = float(opt.get("tilt_y_deg", np.nan))
+    # NPZ exchange convention: exported detector tilts use the opposite sign
+    # from the fitter's internal optimization state. Preserve the raw values
+    # separately so the standalone GUI can round-trip its own bundles.
+    tilt_x_deg_npz = -float(tilt_x_deg_internal) if np.isfinite(tilt_x_deg_internal) else np.nan
+    tilt_y_deg_npz = -float(tilt_y_deg_internal) if np.isfinite(tilt_y_deg_internal) else np.nan
+
+    tilt_correction = None
+    tilt_hint = None
+    if np.isfinite(tilt_x_deg_npz) and np.isfinite(tilt_y_deg_npz):
+        tilt_correction = {
+            "tilt_x_deg": tilt_x_deg_npz,
+            "tilt_y_deg": tilt_y_deg_npz,
+            "source": "hbn_fitter",
+            "simulation_gamma_sign_from_tilt_x": int(SIM_GAMMA_SIGN_FROM_TILT_X),
+            "simulation_Gamma_sign_from_tilt_y": int(SIM_GAMMA_SIGN_FROM_TILT_Y),
+        }
+        rot1_rad = float(np.deg2rad(tilt_x_deg_npz))
+        rot2_rad = float(np.deg2rad(tilt_y_deg_npz))
+        tilt_hint = {
+            "rot1_rad": rot1_rad,
+            "rot2_rad": rot2_rad,
+            "tilt_rad": float(np.hypot(rot1_rad, rot2_rad)),
+            "simulation_gamma_sign_from_tilt_x": int(SIM_GAMMA_SIGN_FROM_TILT_X),
+            "simulation_Gamma_sign_from_tilt_y": int(SIM_GAMMA_SIGN_FROM_TILT_Y),
+        }
+
+    created_value = created_utc
+    if created_value is None:
+        created_value = (
+            dt.datetime.now(dt.UTC)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    return {
+        "npz_format_version": np.array(2, dtype=np.int32),
+        "created_utc": np.array(str(created_value)),
+        "sim_background_rotate_k": np.array(int(SIM_BACKGROUND_ROTATE_K), dtype=np.int32),
+        "tilt_correction_kind": np.array("to_flat"),
+        "tilt_model": np.array("RzRx"),
+        "tilt_frame": np.array("simulation_background_display"),
+        "simulation_gamma_sign_from_tilt_x": np.array(
+            int(SIM_GAMMA_SIGN_FROM_TILT_X), dtype=np.int32
+        ),
+        "simulation_Gamma_sign_from_tilt_y": np.array(
+            int(SIM_GAMMA_SIGN_FROM_TILT_Y), dtype=np.int32
+        ),
+        "img_bgsub": np.asarray(img_bgsub, dtype=np.float32),
+        "img_log": np.asarray(img_log_full, dtype=np.float32),
+        "downsample_factor": np.array(int(downsample_factor), dtype=np.int32),
+        "point_coord_frame": np.array("downsampled"),
+        "point_sigma_coord_frame": np.array("downsampled"),
+        "ell_points_ds": pts_to_obj(points_ds),
+        "ell_points_raw_ds": pts_to_obj(points_raw_ds),
+        "ell_points_sigma_px": scalars_to_obj(points_sigma_ds),
+        "ellipse_params": ellipses_to_array(ellipses),
+        "ellipse_ring_indices": ellipse_ring_indices(ellipses),
+        "fit_confidence_overall": np.array(
+            float(fitq.get("overall_confidence", np.nan)),
+            dtype=np.float64,
+        ),
+        "fit_confidence_per_ring": np.asarray(
+            fitq.get("per_ring_confidence", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "fit_confidence_ring_indices": np.asarray(
+            fitq.get("ring_indices", np.array([], dtype=np.int32)),
+            dtype=np.int32,
+        ),
+        "fit_residual_px": np.asarray(
+            fitq.get("residual_px", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "fit_signal_snr": np.asarray(
+            fitq.get("signal_snr", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "fit_angular_coverage": np.asarray(
+            fitq.get("angular_coverage", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "fit_points_used": np.asarray(
+            fitq.get("n_points", np.array([], dtype=np.int32)),
+            dtype=np.int32,
+        ),
+        "fit_downsample_factor": np.array(
+            float(fitq.get("downsample_factor", np.nan)),
+            dtype=np.float64,
+        ),
+        "fit_click_sigma_px": np.array(
+            float(fitq.get("click_sigma_px", np.nan)),
+            dtype=np.float64,
+        ),
+        "fit_downsample_score": np.array(
+            float(fitq.get("downsample_score", np.nan)),
+            dtype=np.float64,
+        ),
+        "detector_center": np.asarray(center, dtype=np.float64),
+        "center_fixed": np.asarray(center, dtype=np.float64),
+        "center_source": np.array(center_source),
+        "center_initial": np.asarray(
+            opt.get("center_initial", (np.nan, np.nan)),
+            dtype=np.float64,
+        ),
+        "center_prior": np.asarray(
+            opt.get("center_prior", (np.nan, np.nan)),
+            dtype=np.float64,
+        ),
+        "center_prior_sigma_px": np.array(
+            float(opt.get("center_prior_sigma_px", np.nan)),
+            dtype=np.float64,
+        ),
+        "center_drift_limit_px": np.array(
+            float(opt.get("center_drift_limit_px", np.nan)),
+            dtype=np.float64,
+        ),
+        "tilt_x_deg": np.array(tilt_x_deg_npz, dtype=np.float64),
+        "tilt_y_deg": np.array(tilt_y_deg_npz, dtype=np.float64),
+        "tilt_x_deg_internal": np.array(tilt_x_deg_internal, dtype=np.float64),
+        "tilt_y_deg_internal": np.array(tilt_y_deg_internal, dtype=np.float64),
+        "cost_zero": np.array(float(opt.get("cost_zero", np.nan)), dtype=np.float64),
+        "cost_final": np.array(float(opt.get("cost_final", np.nan)), dtype=np.float64),
+        "circ_before": np.asarray(
+            opt.get("circ_before", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "circ_after": np.asarray(
+            opt.get("circ_after", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "radii_before": np.asarray(
+            opt.get("radii_before", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "radii_after": np.asarray(
+            opt.get("radii_after", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "ring_weights": np.asarray(
+            opt.get("ring_weights", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "ring_snap_sigma_px": np.asarray(
+            opt.get("ring_snap_sigma_px", np.array([], dtype=float)),
+            dtype=np.float64,
+        ),
+        "optimizer_ring_ids": np.asarray(
+            opt.get("ring_ids", np.array([], dtype=np.int32)),
+            dtype=np.int32,
+        ),
+        "optimizer_kind": np.array(
+            str(opt.get("optimizer_kind", "legacy")),
+            dtype="<U32",
+        ),
+        "projective_distance_px": np.array(
+            float(opt.get("distance_px", np.nan)),
+            dtype=np.float64,
+        ),
+        "ell_points_corrected": pts_to_obj(opt.get("corrected_points", [])),
+        "ell_points_corr": pts_to_obj(opt.get("corrected_points", [])),
+        "input_hbn_path": np.array(str(input_hbn_path).strip()),
+        "input_dark_path": np.array(str(input_dark_path).strip()),
+        # Legacy RA-SIM bundle schema compatibility:
+        # downstream loaders expect these keys from ra_sim.hbn.save_bundle.
+        "center": np.asarray(center, dtype=np.float64),
+        "tilt_correction": tilt_correction,
+        "tilt_hint": tilt_hint,
+        "distance_estimate_m": opt.get("distance_estimate_m"),
+        "expected_peaks": opt.get("expected_peaks"),
+    }
+
+
 def apply_ellipse_ring_indices(ellipses, ring_indices):
     if ring_indices is None:
         for i, e in enumerate(ellipses, start=1):
@@ -4188,104 +4385,24 @@ class HBNFitterGUI:
         if img_log_full is None:
             raise RuntimeError("Full-resolution log image unavailable for save.")
         center, center_src = self._get_center(strict=False)
-        opt = self.optim or {}
-        fitq = self.fit_quality or {}
         points_ds_save = self._points_for_fit(self.points_ds, downsample=self.down)
         points_raw_save = self._points_for_fit(self.points_raw_ds, downsample=self.down)
         points_sigma_save = self._sigma_for_fit(self.points_sigma_ds, downsample=self.down)
-        tilt_x_deg_internal = float(opt.get("tilt_x_deg", np.nan))
-        tilt_y_deg_internal = float(opt.get("tilt_y_deg", np.nan))
-        # NPZ exchange convention: exported detector tilts use the opposite sign
-        # from the fitter's internal optimization state. Preserve the raw values
-        # separately so the standalone GUI can round-trip its own bundles.
-        tilt_x_deg_npz = -float(tilt_x_deg_internal) if np.isfinite(tilt_x_deg_internal) else np.nan
-        tilt_y_deg_npz = -float(tilt_y_deg_internal) if np.isfinite(tilt_y_deg_internal) else np.nan
-        tilt_correction = None
-        tilt_hint = None
-        if np.isfinite(tilt_x_deg_npz) and np.isfinite(tilt_y_deg_npz):
-            tilt_correction = {
-                "tilt_x_deg": tilt_x_deg_npz,
-                "tilt_y_deg": tilt_y_deg_npz,
-                "source": "hbn_fitter",
-                "simulation_gamma_sign_from_tilt_x": int(SIM_GAMMA_SIGN_FROM_TILT_X),
-                "simulation_Gamma_sign_from_tilt_y": int(SIM_GAMMA_SIGN_FROM_TILT_Y),
-            }
-            rot1_rad = float(np.deg2rad(tilt_x_deg_npz))
-            rot2_rad = float(np.deg2rad(tilt_y_deg_npz))
-            tilt_hint = {
-                "rot1_rad": rot1_rad,
-                "rot2_rad": rot2_rad,
-                "tilt_rad": float(np.hypot(rot1_rad, rot2_rad)),
-                "simulation_gamma_sign_from_tilt_x": int(SIM_GAMMA_SIGN_FROM_TILT_X),
-                "simulation_Gamma_sign_from_tilt_y": int(SIM_GAMMA_SIGN_FROM_TILT_Y),
-            }
-        bundle = {
-            "npz_format_version": np.array(2, dtype=np.int32),
-            "created_utc": np.array(dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"),
-            "sim_background_rotate_k": np.array(int(SIM_BACKGROUND_ROTATE_K), dtype=np.int32),
-            "tilt_correction_kind": np.array("to_flat"),
-            "tilt_model": np.array("RzRx"),
-            "tilt_frame": np.array("simulation_background_display"),
-            "simulation_gamma_sign_from_tilt_x": np.array(
-                int(SIM_GAMMA_SIGN_FROM_TILT_X), dtype=np.int32
-            ),
-            "simulation_Gamma_sign_from_tilt_y": np.array(
-                int(SIM_GAMMA_SIGN_FROM_TILT_Y), dtype=np.int32
-            ),
-            "img_bgsub": self.img_bgsub.astype(np.float32),
-            "img_log": img_log_full.astype(np.float32),
-            "downsample_factor": np.array(self.down, dtype=np.int32),
-            "point_coord_frame": np.array("downsampled"),
-            "point_sigma_coord_frame": np.array("downsampled"),
-            "ell_points_ds": pts_to_obj(points_ds_save),
-            "ell_points_raw_ds": pts_to_obj(points_raw_save),
-            "ell_points_sigma_px": scalars_to_obj(points_sigma_save),
-            "ellipse_params": ellipses_to_array(self.ellipses),
-            "ellipse_ring_indices": ellipse_ring_indices(self.ellipses),
-            "fit_confidence_overall": np.array(float(fitq.get("overall_confidence", np.nan)), dtype=np.float64),
-            "fit_confidence_per_ring": np.asarray(fitq.get("per_ring_confidence", np.array([], dtype=float)), dtype=np.float64),
-            "fit_confidence_ring_indices": np.asarray(fitq.get("ring_indices", np.array([], dtype=np.int32)), dtype=np.int32),
-            "fit_residual_px": np.asarray(fitq.get("residual_px", np.array([], dtype=float)), dtype=np.float64),
-            "fit_signal_snr": np.asarray(fitq.get("signal_snr", np.array([], dtype=float)), dtype=np.float64),
-            "fit_angular_coverage": np.asarray(fitq.get("angular_coverage", np.array([], dtype=float)), dtype=np.float64),
-            "fit_points_used": np.asarray(fitq.get("n_points", np.array([], dtype=np.int32)), dtype=np.int32),
-            "fit_downsample_factor": np.array(float(fitq.get("downsample_factor", np.nan)), dtype=np.float64),
-            "fit_click_sigma_px": np.array(float(fitq.get("click_sigma_px", np.nan)), dtype=np.float64),
-            "fit_downsample_score": np.array(float(fitq.get("downsample_score", np.nan)), dtype=np.float64),
-            "detector_center": np.asarray(center, dtype=np.float64),
-            "center_fixed": np.asarray(center, dtype=np.float64),
-            "center_source": np.array(center_src),
-            "center_initial": np.asarray(opt.get("center_initial", (np.nan, np.nan)), dtype=np.float64),
-            "center_prior": np.asarray(opt.get("center_prior", (np.nan, np.nan)), dtype=np.float64),
-            "center_prior_sigma_px": np.array(float(opt.get("center_prior_sigma_px", np.nan)), dtype=np.float64),
-            "center_drift_limit_px": np.array(float(opt.get("center_drift_limit_px", np.nan)), dtype=np.float64),
-            "tilt_x_deg": np.array(tilt_x_deg_npz, dtype=np.float64),
-            "tilt_y_deg": np.array(tilt_y_deg_npz, dtype=np.float64),
-            "tilt_x_deg_internal": np.array(tilt_x_deg_internal, dtype=np.float64),
-            "tilt_y_deg_internal": np.array(tilt_y_deg_internal, dtype=np.float64),
-            "cost_zero": np.array(float(opt.get("cost_zero", np.nan)), dtype=np.float64),
-            "cost_final": np.array(float(opt.get("cost_final", np.nan)), dtype=np.float64),
-            "circ_before": np.asarray(opt.get("circ_before", np.array([], dtype=float)), dtype=np.float64),
-            "circ_after": np.asarray(opt.get("circ_after", np.array([], dtype=float)), dtype=np.float64),
-            "radii_before": np.asarray(opt.get("radii_before", np.array([], dtype=float)), dtype=np.float64),
-            "radii_after": np.asarray(opt.get("radii_after", np.array([], dtype=float)), dtype=np.float64),
-            "ring_weights": np.asarray(opt.get("ring_weights", np.array([], dtype=float)), dtype=np.float64),
-            "ring_snap_sigma_px": np.asarray(opt.get("ring_snap_sigma_px", np.array([], dtype=float)), dtype=np.float64),
-            "optimizer_ring_ids": np.asarray(opt.get("ring_ids", np.array([], dtype=np.int32)), dtype=np.int32),
-            "optimizer_kind": np.array(str(opt.get("optimizer_kind", "legacy")), dtype="<U32"),
-            "projective_distance_px": np.array(float(opt.get("distance_px", np.nan)), dtype=np.float64),
-            "ell_points_corrected": pts_to_obj(opt.get("corrected_points", [])),
-            "ell_points_corr": pts_to_obj(opt.get("corrected_points", [])),
-            "input_hbn_path": np.array(self.hbn_path.get().strip()),
-            "input_dark_path": np.array(self.dark_path.get().strip()),
-            # Legacy RA-SIM bundle schema compatibility:
-            # downstream loaders expect these keys from ra_sim.hbn.save_bundle.
-            "center": np.asarray(center, dtype=np.float64),
-            "tilt_correction": tilt_correction,
-            "tilt_hint": tilt_hint,
-            "distance_estimate_m": opt.get("distance_estimate_m"),
-            "expected_peaks": opt.get("expected_peaks"),
-        }
+        bundle = build_hbn_fitter_bundle_payload(
+            img_bgsub=self.img_bgsub,
+            img_log_full=img_log_full,
+            downsample_factor=self.down,
+            center=center,
+            center_source=center_src,
+            optim=self.optim,
+            fit_quality=self.fit_quality,
+            points_ds=points_ds_save,
+            points_raw_ds=points_raw_save,
+            points_sigma_ds=points_sigma_save,
+            ellipses=self.ellipses,
+            input_hbn_path=self.hbn_path.get(),
+            input_dark_path=self.dark_path.get(),
+        )
         np.savez(path, **bundle)
 
     def load_bundle(self, path):
