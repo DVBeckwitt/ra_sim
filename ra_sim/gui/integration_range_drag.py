@@ -44,6 +44,33 @@ class IntegrationRangeDragCallbacks:
     reset: Callable[[], None]
 
 
+@dataclass
+class IntegrationRangeUpdateBindings:
+    """Runtime callbacks and state used by 1D integration-range updates."""
+
+    root: Any
+    simulation_runtime_state: Any
+    analysis_view_state: Any
+    range_view_state: Any
+    display_controls_state: Any
+    hkl_lookup_controls: Any = None
+    integration_range_drag_callbacks: Any = None
+    refresh_integration_from_cached_results: Callable[[], bool] | None = None
+    schedule_update: Callable[[], None] | None = None
+    range_update_debounce_ms: int = 120
+
+
+@dataclass(frozen=True)
+class IntegrationRangeUpdateCallbacks:
+    """Bound callbacks for integration-range update and analysis toggles."""
+
+    schedule_range_update: Callable[..., None]
+    toggle_1d_plots: Callable[[], None]
+    toggle_caked_2d: Callable[[], None]
+    toggle_log_radial: Callable[[], None]
+    toggle_log_azimuth: Callable[[], None]
+
+
 def _resolve_runtime_value(value_or_callable: object) -> object:
     if callable(value_or_callable):
         try:
@@ -51,6 +78,37 @@ def _resolve_runtime_value(value_or_callable: object) -> object:
         except Exception:
             return None
     return value_or_callable
+
+
+def _safe_var_get(var: object) -> object:
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter()
+    except Exception:
+        return None
+
+
+def _safe_var_set(var: object, value: object) -> None:
+    setter = getattr(var, "set", None)
+    if callable(setter):
+        setter(value)
+
+
+def _safe_var_trace_add(var: object, callback: Callable[..., object]) -> None:
+    trace_add = getattr(var, "trace_add", None)
+    if callable(trace_add):
+        trace_add("write", callback)
+
+
+def _runtime_range_update_debounce_ms(
+    bindings: IntegrationRangeUpdateBindings,
+) -> int:
+    try:
+        return max(1, int(bindings.range_update_debounce_ms))
+    except Exception:
+        return 120
 
 
 def _draw_idle(bindings: IntegrationRangeDragBindings) -> None:
@@ -655,3 +713,310 @@ def make_runtime_integration_region_visuals_callback(
     """Return a zero-arg callback that refreshes live integration visuals."""
 
     return lambda: refresh_runtime_integration_region_visuals(bindings_factory())
+
+
+def make_runtime_integration_range_update_bindings_factory(
+    *,
+    root: Any,
+    simulation_runtime_state: Any,
+    analysis_view_state_factory: object,
+    range_view_state_factory: object,
+    display_controls_state: Any,
+    hkl_lookup_controls_factory: object = None,
+    integration_range_drag_callbacks_factory: object = None,
+    refresh_integration_from_cached_results_factory: object = None,
+    schedule_update_factory: object = None,
+    range_update_debounce_ms_factory: object = 120,
+) -> Callable[[], IntegrationRangeUpdateBindings]:
+    """Build a factory that resolves the live integration-range update bindings."""
+
+    def _build() -> IntegrationRangeUpdateBindings:
+        debounce_ms = _resolve_runtime_value(range_update_debounce_ms_factory)
+        try:
+            normalized_debounce_ms = int(debounce_ms)
+        except Exception:
+            normalized_debounce_ms = 120
+        return IntegrationRangeUpdateBindings(
+            root=root,
+            simulation_runtime_state=simulation_runtime_state,
+            analysis_view_state=_resolve_runtime_value(analysis_view_state_factory),
+            range_view_state=_resolve_runtime_value(range_view_state_factory),
+            display_controls_state=display_controls_state,
+            hkl_lookup_controls=_resolve_runtime_value(hkl_lookup_controls_factory),
+            integration_range_drag_callbacks=_resolve_runtime_value(
+                integration_range_drag_callbacks_factory
+            ),
+            refresh_integration_from_cached_results=_resolve_runtime_value(
+                refresh_integration_from_cached_results_factory
+            ),
+            schedule_update=_resolve_runtime_value(schedule_update_factory),
+            range_update_debounce_ms=normalized_debounce_ms,
+        )
+
+    return _build
+
+
+def _run_runtime_scheduled_range_update(
+    bindings_factory: Callable[[], IntegrationRangeUpdateBindings],
+) -> None:
+    bindings = bindings_factory()
+    bindings.simulation_runtime_state.integration_update_pending = None
+
+    if bool(getattr(bindings.simulation_runtime_state, "update_running", False)):
+        _schedule_runtime_range_update(
+            bindings_factory,
+            delay_ms=_runtime_range_update_debounce_ms(bindings),
+        )
+        return
+
+    refresh = bindings.refresh_integration_from_cached_results
+    if callable(refresh) and refresh():
+        return
+
+    if callable(bindings.schedule_update):
+        bindings.schedule_update()
+
+
+def _schedule_runtime_range_update(
+    bindings_factory: Callable[[], IntegrationRangeUpdateBindings],
+    *,
+    delay_ms: object | None = None,
+) -> None:
+    bindings = bindings_factory()
+    pending = getattr(bindings.simulation_runtime_state, "integration_update_pending", None)
+    after_cancel = getattr(bindings.root, "after_cancel", None)
+    if pending is not None and callable(after_cancel):
+        after_cancel(pending)
+
+    base_delay = _runtime_range_update_debounce_ms(bindings)
+    try:
+        requested_delay = int(base_delay if delay_ms is None else delay_ms)
+    except Exception:
+        requested_delay = base_delay
+    delay = max(base_delay, requested_delay)
+
+    after = getattr(bindings.root, "after", None)
+    if not callable(after):
+        _run_runtime_scheduled_range_update(bindings_factory)
+        return
+
+    bindings.simulation_runtime_state.integration_update_pending = after(
+        delay,
+        lambda: _run_runtime_scheduled_range_update(bindings_factory),
+    )
+
+
+def _sync_runtime_range_text_vars(view_state: object) -> None:
+    specs = (
+        (
+            getattr(view_state, "tth_min_var", None),
+            getattr(view_state, "tth_min_label_var", None),
+            getattr(view_state, "tth_min_entry_var", None),
+        ),
+        (
+            getattr(view_state, "tth_max_var", None),
+            getattr(view_state, "tth_max_label_var", None),
+            getattr(view_state, "tth_max_entry_var", None),
+        ),
+        (
+            getattr(view_state, "phi_min_var", None),
+            getattr(view_state, "phi_min_label_var", None),
+            getattr(view_state, "phi_min_entry_var", None),
+        ),
+        (
+            getattr(view_state, "phi_max_var", None),
+            getattr(view_state, "phi_max_label_var", None),
+            getattr(view_state, "phi_max_entry_var", None),
+        ),
+    )
+    if any(
+        value_var is None or label_var is None or entry_var is None
+        for value_var, label_var, entry_var in specs
+    ):
+        return
+    for value_var, label_var, entry_var in specs:
+        value = _safe_var_get(value_var)
+        try:
+            numeric_value = float(value)
+        except Exception:
+            continue
+        _safe_var_set(label_var, f"{numeric_value:.1f}")
+        _safe_var_set(entry_var, f"{numeric_value:.4f}")
+
+
+def _apply_runtime_range_entry(
+    *,
+    view_state: object,
+    entry_var: object,
+    value_var: object,
+    slider: object,
+    schedule_range_update: Callable[..., object] | None,
+) -> None:
+    entry_value = _safe_var_get(entry_var)
+    try:
+        entered = float(str(entry_value).strip())
+    except Exception:
+        _sync_runtime_range_text_vars(view_state)
+        return
+
+    try:
+        lo = float(slider.cget("from"))
+        hi = float(slider.cget("to"))
+    except Exception:
+        _sync_runtime_range_text_vars(view_state)
+        return
+
+    clamped = min(max(entered, min(lo, hi)), max(lo, hi))
+    _safe_var_set(value_var, clamped)
+    _sync_runtime_range_text_vars(view_state)
+    if callable(schedule_range_update):
+        schedule_range_update()
+
+
+def _make_runtime_range_slider_callback(
+    *,
+    view_state: object,
+    value_var_name: str,
+    schedule_range_update: Callable[..., object] | None,
+) -> Callable[[object], None]:
+    def _on_changed(value: object) -> None:
+        value_var = getattr(view_state, value_var_name, None)
+        if value_var is None:
+            return
+        try:
+            numeric_value = float(value)
+        except Exception:
+            return
+        _safe_var_set(value_var, numeric_value)
+        _sync_runtime_range_text_vars(view_state)
+        if callable(schedule_range_update):
+            schedule_range_update()
+
+    return _on_changed
+
+
+def create_runtime_integration_range_controls(
+    *,
+    parent: Any,
+    views_module: Any,
+    view_state: Any,
+    tth_min: float,
+    tth_max: float,
+    phi_min: float,
+    phi_max: float,
+    schedule_range_update: Callable[..., object] | None,
+) -> None:
+    """Create the 1D integration-range controls and wire runtime callbacks."""
+
+    views_module.create_integration_range_controls(
+        parent=parent,
+        view_state=view_state,
+        tth_min=tth_min,
+        tth_max=tth_max,
+        phi_min=phi_min,
+        phi_max=phi_max,
+        on_tth_min_changed=_make_runtime_range_slider_callback(
+            view_state=view_state,
+            value_var_name="tth_min_var",
+            schedule_range_update=schedule_range_update,
+        ),
+        on_tth_max_changed=_make_runtime_range_slider_callback(
+            view_state=view_state,
+            value_var_name="tth_max_var",
+            schedule_range_update=schedule_range_update,
+        ),
+        on_phi_min_changed=_make_runtime_range_slider_callback(
+            view_state=view_state,
+            value_var_name="phi_min_var",
+            schedule_range_update=schedule_range_update,
+        ),
+        on_phi_max_changed=_make_runtime_range_slider_callback(
+            view_state=view_state,
+            value_var_name="phi_max_var",
+            schedule_range_update=schedule_range_update,
+        ),
+        on_apply_entry=lambda entry_var, value_var, slider: _apply_runtime_range_entry(
+            view_state=view_state,
+            entry_var=entry_var,
+            value_var=value_var,
+            slider=slider,
+            schedule_range_update=schedule_range_update,
+        ),
+    )
+
+    refs = (
+        getattr(view_state, "tth_min_var", None),
+        getattr(view_state, "tth_max_var", None),
+        getattr(view_state, "phi_min_var", None),
+        getattr(view_state, "phi_max_var", None),
+        getattr(view_state, "tth_min_slider", None),
+        getattr(view_state, "tth_max_slider", None),
+        getattr(view_state, "phi_min_slider", None),
+        getattr(view_state, "phi_max_slider", None),
+    )
+    if any(ref is None for ref in refs):
+        raise RuntimeError("Integration-range controls did not create the expected widgets.")
+
+    for value_var in refs[:4]:
+        _safe_var_trace_add(
+            value_var,
+            lambda *_args, _view_state=view_state: _sync_runtime_range_text_vars(
+                _view_state
+            ),
+        )
+    _sync_runtime_range_text_vars(view_state)
+
+
+def _toggle_runtime_1d_plots(
+    callbacks: IntegrationRangeUpdateCallbacks,
+) -> None:
+    callbacks.schedule_range_update()
+
+
+def _toggle_runtime_caked_2d(
+    bindings_factory: Callable[[], IntegrationRangeUpdateBindings],
+) -> None:
+    bindings = bindings_factory()
+    show_caked_2d_var = getattr(bindings.analysis_view_state, "show_caked_2d_var", None)
+    show_caked = bool(_safe_var_get(show_caked_2d_var))
+
+    if not show_caked:
+        bindings.simulation_runtime_state.caked_limits_user_override = False
+    else:
+        bindings.display_controls_state.simulation_limits_user_override = False
+        hkl_lookup_controls = bindings.hkl_lookup_controls
+        set_pick_mode = getattr(hkl_lookup_controls, "set_hkl_pick_mode", None)
+        if callable(set_pick_mode):
+            set_pick_mode(False)
+
+    drag_callbacks = bindings.integration_range_drag_callbacks
+    reset_drag = getattr(drag_callbacks, "reset", None)
+    if callable(reset_drag):
+        reset_drag()
+
+    if callable(bindings.schedule_update):
+        bindings.schedule_update()
+
+
+def make_runtime_integration_range_update_callbacks(
+    bindings_factory: Callable[[], IntegrationRangeUpdateBindings],
+) -> IntegrationRangeUpdateCallbacks:
+    """Build bound callbacks for integration-range update scheduling and toggles."""
+
+    def _schedule_range_update(*, delay_ms: object | None = None) -> None:
+        _schedule_runtime_range_update(bindings_factory, delay_ms=delay_ms)
+
+    callbacks = IntegrationRangeUpdateCallbacks(
+        schedule_range_update=_schedule_range_update,
+        toggle_1d_plots=lambda: None,
+        toggle_caked_2d=lambda: _toggle_runtime_caked_2d(bindings_factory),
+        toggle_log_radial=lambda: None,
+        toggle_log_azimuth=lambda: None,
+    )
+    return IntegrationRangeUpdateCallbacks(
+        schedule_range_update=callbacks.schedule_range_update,
+        toggle_1d_plots=lambda: _toggle_runtime_1d_plots(callbacks),
+        toggle_caked_2d=callbacks.toggle_caked_2d,
+        toggle_log_radial=lambda: _toggle_runtime_1d_plots(callbacks),
+        toggle_log_azimuth=lambda: _toggle_runtime_1d_plots(callbacks),
+    )

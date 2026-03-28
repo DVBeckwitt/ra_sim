@@ -32,6 +32,10 @@ integration-range drag rectangle setup plus live region-refresh callback now
 also boot there instead of being assembled inline, the live structure-factor-
 pruning and Bragg-Qr manager workflow now also boots there through one shared
 helper instead of being manually threaded together in `runtime.py`, the
+integration-range update/control workflow now also boots there through one
+shared helper instead of being wired inline in `runtime.py`, the debounced
+range-update scheduler plus analysis-toggle callbacks now also live in
+`ra_sim.gui.integration_range_drag`, the
 geometry-fit manual-pair action binding assembly now also delegates through
 `ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, the
 top-level geometry-fit action callback now also resolves through a shared live
@@ -708,6 +712,9 @@ What is done:
   - `ra_sim.gui.state` now owns their shared widget/Tk-var view state.
   - `ra_sim.gui.views` now owns that control-cluster construction and entry
     bindings.
+  - `ra_sim.gui.integration_range_drag` now owns the remaining runtime slider/
+    entry callbacks, debounced redraw scheduling, and analysis-toggle action
+    handlers used by that workflow.
 - The top-level GUI shell is no longer assembled directly in `runtime.py`.
   - `ra_sim.gui.state` now owns the notebook-shell/status-panel view state.
   - `ra_sim.gui.views` now owns the top-level pane/notebook/scrolled-frame
@@ -765,9 +772,9 @@ What is left:
   remaining value-source wiring and callback-bundle construction around the
   extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
   helper surfaces.
-- The remaining integration-range drag runtime code is now mostly the
-  remaining cross-feature canvas event handoff around the extracted drag and
-  canvas-interaction helpers.
+- The remaining integration-range runtime code is now mostly thin live
+  value-source wiring around the extracted drag/update helpers and shared
+  bootstrap surfaces.
 
 Why it matters:
 
@@ -1168,15 +1175,16 @@ The next best step is:
   cross-feature workflow/orchestration helpers out of `ra_sim/gui/runtime.py`
 - focus next on controller-owned user-action flows plus the remaining
   cross-feature runtime workflow glue that still lives inline in `runtime.py`
-- start with the remaining integration-range drag cross-feature handoff now
-  that the geometry-fit manual-pair preview/action callbacks are extracted
+- start with the remaining background/status refresh call-site glue now that
+  the integration-range drag/update workflow handoff is extracted
 - keep turning `state.py`, `controllers.py`, and `views.py` into the dominant
   application boundary rather than leaving them as helper scaffolding
 
-Immediate checklist after the geometry manual-preview callback cleanup:
+Immediate checklist after the integration-range update/control cleanup:
 
-- trim the remaining integration-range drag cross-feature handoff
-- then trim the remaining background/status refresh call-site glue
+- trim the remaining background/status refresh call-site glue
+- then trim the next cross-feature runtime workflow call sites that still
+  bypass the extracted helper modules
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving
 

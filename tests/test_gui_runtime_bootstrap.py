@@ -203,6 +203,46 @@ def test_runtime_structure_factor_pruning_controls_are_bootstrapped() -> None:
     assert direct_trace_calls == 0
 
 
+def test_runtime_integration_range_controls_are_bootstrapped() -> None:
+    source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="ra_sim/gui/runtime.py")
+
+    has_bootstrap_call = False
+    direct_view_calls = {
+        "create_integration_range_controls": 0,
+        "create_analysis_view_controls": 0,
+    }
+    inline_defs = {
+        "schedule_range_update": 0,
+        "toggle_1d_plots": 0,
+        "toggle_caked_2d": 0,
+        "toggle_log_radial": 0,
+        "toggle_log_azimuth": 0,
+    }
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                if func.attr == "build_runtime_integration_range_update_bootstrap":
+                    has_bootstrap_call = True
+                if func.attr in direct_view_calls:
+                    direct_view_calls[func.attr] += 1
+        if isinstance(node, ast.FunctionDef) and node.name in inline_defs:
+            inline_defs[node.name] += 1
+
+    assert has_bootstrap_call is True
+    assert direct_view_calls["create_integration_range_controls"] == 0
+    assert direct_view_calls["create_analysis_view_controls"] == 0
+    assert inline_defs == {
+        "schedule_range_update": 0,
+        "toggle_1d_plots": 0,
+        "toggle_caked_2d": 0,
+        "toggle_log_radial": 0,
+        "toggle_log_azimuth": 0,
+    }
+
+
 def test_runtime_manual_geometry_callbacks_use_shared_bundle() -> None:
     source = Path("ra_sim/gui/runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="ra_sim/gui/runtime.py")

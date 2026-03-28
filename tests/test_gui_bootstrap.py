@@ -809,6 +809,90 @@ def test_build_runtime_integration_range_workflow_bootstrap_composes_setup(
     ]
 
 
+def test_build_runtime_integration_range_update_bootstrap_composes_controls_and_callbacks(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    drag_module = SimpleNamespace(
+        make_runtime_integration_range_update_bindings_factory=(
+            lambda **kwargs: calls.append(("bindings", kwargs)) or "bindings-factory"
+        ),
+        make_runtime_integration_range_update_callbacks=(
+            lambda bindings_factory: calls.append(("callbacks", bindings_factory))
+            or SimpleNamespace(
+                schedule_range_update="schedule-range-update",
+                toggle_1d_plots="toggle-1d",
+                toggle_caked_2d="toggle-caked",
+                toggle_log_radial="toggle-log-radial",
+                toggle_log_azimuth="toggle-log-azimuth",
+            )
+        ),
+        create_runtime_integration_range_controls=(
+            lambda **kwargs: calls.append(("range-controls", kwargs))
+        ),
+    )
+    views_module = SimpleNamespace(
+        create_analysis_view_controls=lambda **kwargs: calls.append(
+            ("analysis-controls", kwargs)
+        )
+    )
+
+    bundle = bootstrap.build_runtime_integration_range_update_bootstrap(
+        views_module=views_module,
+        integration_range_drag_module=drag_module,
+        range_view_state="range-view-state",
+        analysis_view_state="analysis-view-state",
+        root="root",
+        simulation_runtime_state="sim-state",
+        display_controls_state="display-state",
+    )
+
+    assert bundle.bindings_factory == "bindings-factory"
+    assert bundle.callbacks.schedule_range_update == "schedule-range-update"
+    bundle.create_range_controls("range-parent")
+    bundle.create_analysis_controls("analysis-parent")
+
+    assert calls == [
+        (
+            "bindings",
+            {
+                "root": "root",
+                "simulation_runtime_state": "sim-state",
+                "display_controls_state": "display-state",
+            },
+        ),
+        ("callbacks", "bindings-factory"),
+        (
+            "range-controls",
+            {
+                "parent": "range-parent",
+                "views_module": views_module,
+                "view_state": "range-view-state",
+                "schedule_range_update": "schedule-range-update",
+                "tth_min": 0.0,
+                "tth_max": 60.0,
+                "phi_min": -15.0,
+                "phi_max": 15.0,
+            },
+        ),
+        (
+            "analysis-controls",
+            {
+                "parent": "analysis-parent",
+                "view_state": "analysis-view-state",
+                "on_toggle_1d_plots": "toggle-1d",
+                "on_toggle_caked_2d": "toggle-caked",
+                "on_toggle_log_radial": "toggle-log-radial",
+                "on_toggle_log_azimuth": "toggle-log-azimuth",
+                "show_1d": False,
+                "show_caked_2d": False,
+                "log_radial": False,
+                "log_azimuth": False,
+            },
+        ),
+    ]
+
+
 def test_build_runtime_bragg_qr_workflow_bootstrap_composes_pruning_and_manager(
     monkeypatch,
 ) -> None:

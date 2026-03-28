@@ -3426,6 +3426,45 @@ _cancel_geometry_manual_pick_session = (
     geometry_manual_runtime_callbacks.cancel_pick_session
 )
 
+integration_range_update_runtime = (
+    gui_bootstrap.build_runtime_integration_range_update_bootstrap(
+        views_module=gui_views,
+        integration_range_drag_module=gui_integration_range_drag,
+        range_view_state=integration_range_controls_view_state,
+        analysis_view_state=analysis_view_controls_view_state,
+        root=root,
+        simulation_runtime_state=simulation_runtime_state,
+        analysis_view_state_factory=lambda: analysis_view_controls_view_state,
+        range_view_state_factory=lambda: integration_range_controls_view_state,
+        display_controls_state=display_controls_state,
+        hkl_lookup_controls_factory=lambda: hkl_lookup_controls_runtime,
+        integration_range_drag_callbacks_factory=lambda: globals().get(
+            "integration_range_drag_runtime_callbacks"
+        ),
+        refresh_integration_from_cached_results_factory=lambda: (
+            globals().get("_refresh_integration_from_cached_results")
+            if callable(globals().get("_refresh_integration_from_cached_results"))
+            else None
+        ),
+        schedule_update_factory=lambda: (
+            globals().get("schedule_update")
+            if callable(globals().get("schedule_update"))
+            else None
+        ),
+        range_update_debounce_ms_factory=lambda: globals().get(
+            "RANGE_UPDATE_DEBOUNCE_MS",
+            120,
+        ),
+    )
+)
+integration_range_update_runtime_callbacks = integration_range_update_runtime.callbacks
+schedule_range_update = (
+    integration_range_update_runtime_callbacks.schedule_range_update
+)
+toggle_1d_plots = integration_range_update_runtime_callbacks.toggle_1d_plots
+toggle_caked_2d = integration_range_update_runtime_callbacks.toggle_caked_2d
+toggle_log_radial = integration_range_update_runtime_callbacks.toggle_log_radial
+toggle_log_azimuth = integration_range_update_runtime_callbacks.toggle_log_azimuth
 
 integration_range_drag_runtime = (
     gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
@@ -3455,9 +3494,7 @@ integration_range_drag_runtime = (
         ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
         sync_peak_selection_state=_sync_peak_selection_state,
         schedule_range_update_factory=lambda: (
-            globals().get("schedule_range_update")
-            if callable(globals().get("schedule_range_update"))
-            else None
+            integration_range_update_runtime_callbacks.schedule_range_update
         ),
         last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
         draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
@@ -4146,92 +4183,8 @@ ax_1d_azim.set_ylabel('Intensity')
 ax_1d_azim.set_title('Azimuthal Integration (φ)')
 
 canvas_1d.draw()
-
-def _sync_range_text_vars():
-    range_view = integration_range_controls_view_state
-    specs = (
-        (range_view.tth_min_var, range_view.tth_min_label_var, range_view.tth_min_entry_var),
-        (range_view.tth_max_var, range_view.tth_max_label_var, range_view.tth_max_entry_var),
-        (range_view.phi_min_var, range_view.phi_min_label_var, range_view.phi_min_entry_var),
-        (range_view.phi_max_var, range_view.phi_max_label_var, range_view.phi_max_entry_var),
-    )
-    if any(
-        value_var is None or label_var is None or entry_var is None
-        for value_var, label_var, entry_var in specs
-    ):
-        return
-    for value_var, label_var, entry_var in specs:
-        label_var.set(f"{value_var.get():.1f}")
-        entry_var.set(f"{value_var.get():.4f}")
-
-
-def _apply_range_entry(entry_var, value_var, slider):
-    try:
-        entered = float(entry_var.get().strip())
-    except (ValueError, tk.TclError, AttributeError):
-        _sync_range_text_vars()
-        return
-
-    lo = float(slider.cget("from"))
-    hi = float(slider.cget("to"))
-    clamped = min(max(entered, min(lo, hi)), max(lo, hi))
-    value_var.set(clamped)
-    _sync_range_text_vars()
-    schedule_range_update()
-
-
-def _on_range_var_write(*_args):
-    _sync_range_text_vars()
-
-
-def tth_min_slider_command(val):
-    value_var = integration_range_controls_view_state.tth_min_var
-    if value_var is None:
-        return
-    val_f = float(val)
-    value_var.set(val_f)
-    _sync_range_text_vars()
-    schedule_range_update()
-
-def tth_max_slider_command(val):
-    value_var = integration_range_controls_view_state.tth_max_var
-    if value_var is None:
-        return
-    val_f = float(val)
-    value_var.set(val_f)
-    _sync_range_text_vars()
-    schedule_range_update()
-
-def phi_min_slider_command(val):
-    value_var = integration_range_controls_view_state.phi_min_var
-    if value_var is None:
-        return
-    val_f = float(val)
-    value_var.set(val_f)
-    _sync_range_text_vars()
-    schedule_range_update()
-
-def phi_max_slider_command(val):
-    value_var = integration_range_controls_view_state.phi_max_var
-    if value_var is None:
-        return
-    val_f = float(val)
-    value_var.set(val_f)
-    _sync_range_text_vars()
-    schedule_range_update()
-
-gui_views.create_integration_range_controls(
-    parent=app_shell_view_state.plot_frame_1d,
-    view_state=integration_range_controls_view_state,
-    tth_min=0.0,
-    tth_max=60.0,
-    phi_min=-15.0,
-    phi_max=15.0,
-    on_tth_min_changed=tth_min_slider_command,
-    on_tth_max_changed=tth_max_slider_command,
-    on_phi_min_changed=phi_min_slider_command,
-    on_phi_max_changed=phi_max_slider_command,
-    on_apply_entry=_apply_range_entry,
+integration_range_update_runtime.create_range_controls(
+    parent=app_shell_view_state.plot_frame_1d
 )
 tth_min_var = integration_range_controls_view_state.tth_min_var
 tth_max_var = integration_range_controls_view_state.tth_max_var
@@ -4255,11 +4208,6 @@ if any(
     )
 ):
     raise RuntimeError("Integration-range controls did not create the expected widgets.")
-
-for _var in (tth_min_var, tth_max_var, phi_min_var, phi_max_var):
-    _var.trace_add("write", _on_range_var_write)
-
-_sync_range_text_vars()
 
 PHI_ZERO_OFFSET_DEGREES = -90.0
 
@@ -4686,25 +4634,6 @@ def schedule_update():
     if simulation_runtime_state.update_pending is not None:
         root.after_cancel(simulation_runtime_state.update_pending)
     simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
-
-
-def _run_scheduled_range_update():
-    simulation_runtime_state.integration_update_pending = None
-
-    if simulation_runtime_state.update_running:
-        schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS)
-        return
-
-    if not _refresh_integration_from_cached_results():
-        schedule_update()
-
-
-def schedule_range_update(delay_ms=RANGE_UPDATE_DEBOUNCE_MS):
-    """Queue throttled redraw-only integration updates."""
-    if simulation_runtime_state.integration_update_pending is not None:
-        root.after_cancel(simulation_runtime_state.integration_update_pending)
-    delay = max(RANGE_UPDATE_DEBOUNCE_MS, int(delay_ms))
-    simulation_runtime_state.integration_update_pending = root.after(delay, _run_scheduled_range_update)
 
 
 def _should_collect_hit_tables_for_update() -> bool:
@@ -9953,39 +9882,8 @@ gui_views.create_geometry_overlay_action_controls(
     on_clear_geometry_overlays=_clear_all_geometry_overlay_artists,
     on_fit_mosaic=on_fit_mosaic_click,
 )
-
-
-def toggle_1d_plots():
-    schedule_range_update()
-
-
-def toggle_caked_2d():
-    show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
-    if show_caked_2d_var is None or not show_caked_2d_var.get():
-        simulation_runtime_state.caked_limits_user_override = False
-    else:
-        # Entering caked view should start from auto-scaled simulation limits.
-        display_controls_state.simulation_limits_user_override = False
-        hkl_lookup_controls_runtime.set_hkl_pick_mode(False)
-    integration_range_drag_runtime_callbacks.reset()
-    schedule_update()
-
-
-def toggle_log_radial():
-    schedule_range_update()
-
-
-def toggle_log_azimuth():
-    schedule_range_update()
-
-
-gui_views.create_analysis_view_controls(
+integration_range_update_runtime.create_analysis_controls(
     parent=app_shell_view_state.analysis_views_frame,
-    view_state=analysis_view_controls_view_state,
-    on_toggle_1d_plots=toggle_1d_plots,
-    on_toggle_caked_2d=toggle_caked_2d,
-    on_toggle_log_radial=toggle_log_radial,
-    on_toggle_log_azimuth=toggle_log_azimuth,
 )
 
 # Option to add fractional rods between integer L values. This can be enabled via

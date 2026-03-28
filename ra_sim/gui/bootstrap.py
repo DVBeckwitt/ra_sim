@@ -106,6 +106,16 @@ class IntegrationRangeDragRuntimeBootstrap:
 
 
 @dataclass(frozen=True)
+class IntegrationRangeUpdateRuntimeBootstrap:
+    """Integration-range update callbacks plus control-cluster creation hooks."""
+
+    bindings_factory: Callable[[], Any]
+    callbacks: Any
+    create_range_controls: Callable[[Any], None]
+    create_analysis_controls: Callable[[Any], None]
+
+
+@dataclass(frozen=True)
 class BraggQrWorkflowRuntimeBootstrap:
     """Live pruning and Bragg-Qr manager callbacks wired as one workflow."""
 
@@ -997,6 +1007,71 @@ def build_runtime_integration_range_workflow_bootstrap(
                 runtime_bootstrap.bindings_factory
             )
         ),
+    )
+
+
+def build_runtime_integration_range_update_bootstrap(
+    *,
+    views_module: Any,
+    integration_range_drag_module: Any,
+    range_view_state: Any,
+    analysis_view_state: Any,
+    range_defaults: dict[str, float] | None = None,
+    analysis_defaults: dict[str, bool] | None = None,
+    **bindings_kwargs: Any,
+) -> IntegrationRangeUpdateRuntimeBootstrap:
+    """Build the integration-range update callbacks and control-cluster hooks."""
+
+    bindings_factory = (
+        integration_range_drag_module.make_runtime_integration_range_update_bindings_factory(
+            **bindings_kwargs
+        )
+    )
+    callbacks = integration_range_drag_module.make_runtime_integration_range_update_callbacks(
+        bindings_factory
+    )
+    normalized_range_defaults = {
+        "tth_min": 0.0,
+        "tth_max": 60.0,
+        "phi_min": -15.0,
+        "phi_max": 15.0,
+    }
+    if range_defaults:
+        normalized_range_defaults.update(range_defaults)
+    normalized_analysis_defaults = {
+        "show_1d": False,
+        "show_caked_2d": False,
+        "log_radial": False,
+        "log_azimuth": False,
+    }
+    if analysis_defaults:
+        normalized_analysis_defaults.update(analysis_defaults)
+
+    def _create_range_controls(parent: Any) -> None:
+        integration_range_drag_module.create_runtime_integration_range_controls(
+            parent=parent,
+            views_module=views_module,
+            view_state=range_view_state,
+            schedule_range_update=callbacks.schedule_range_update,
+            **normalized_range_defaults,
+        )
+
+    def _create_analysis_controls(parent: Any) -> None:
+        views_module.create_analysis_view_controls(
+            parent=parent,
+            view_state=analysis_view_state,
+            on_toggle_1d_plots=callbacks.toggle_1d_plots,
+            on_toggle_caked_2d=callbacks.toggle_caked_2d,
+            on_toggle_log_radial=callbacks.toggle_log_radial,
+            on_toggle_log_azimuth=callbacks.toggle_log_azimuth,
+            **normalized_analysis_defaults,
+        )
+
+    return IntegrationRangeUpdateRuntimeBootstrap(
+        bindings_factory=bindings_factory,
+        callbacks=callbacks,
+        create_range_controls=_create_range_controls,
+        create_analysis_controls=_create_analysis_controls,
     )
 
 

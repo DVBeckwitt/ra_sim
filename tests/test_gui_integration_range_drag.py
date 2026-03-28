@@ -1,4 +1,5 @@
 import numpy as np
+from types import SimpleNamespace
 
 from ra_sim.gui import integration_range_drag, state
 
@@ -6,12 +7,17 @@ from ra_sim.gui import integration_range_drag, state
 class _FakeVar:
     def __init__(self, value=0.0):
         self._value = value
+        self.trace_calls = []
 
     def get(self):
         return self._value
 
     def set(self, value):
         self._value = value
+
+    def trace_add(self, mode, callback):
+        self.trace_calls.append((mode, callback))
+        return f"trace-{len(self.trace_calls)}"
 
 
 class _FakeSlider:
@@ -97,6 +103,22 @@ class _FakeEvent:
         self.inaxes = inaxes
         self.xdata = xdata
         self.ydata = ydata
+
+
+class _FakeRoot:
+    def __init__(self):
+        self.next_token = 0
+        self.after_calls = []
+        self.after_cancel_calls = []
+
+    def after(self, delay, callback):
+        self.next_token += 1
+        token = f"after-{self.next_token}"
+        self.after_calls.append((delay, callback, token))
+        return token
+
+    def after_cancel(self, token):
+        self.after_cancel_calls.append(token)
 
 
 def _range_view_state() -> state.IntegrationRangeControlsViewState:
@@ -202,6 +224,205 @@ def test_integration_range_drag_binding_factory_builds_live_bindings(
     assert calls[0]["schedule_range_update"] is not calls[1]["schedule_range_update"]
     assert calls[0]["draw_idle"] is not calls[1]["draw_idle"]
     assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]
+
+
+def test_integration_range_update_binding_factory_builds_live_bindings(
+    monkeypatch,
+) -> None:
+    calls = []
+    counters = {
+        "analysis": 0,
+        "range": 0,
+        "drag": 0,
+        "lookup": 0,
+        "refresh": 0,
+        "schedule": 0,
+        "debounce": 0,
+    }
+
+    monkeypatch.setattr(
+        integration_range_drag,
+        "IntegrationRangeUpdateBindings",
+        lambda **kwargs: calls.append(kwargs) or kwargs,
+    )
+
+    def _bump(key: str, prefix: str) -> str:
+        counters[key] += 1
+        return f"{prefix}-{counters[key]}"
+
+    def _next_debounce() -> int:
+        counters["debounce"] += 1
+        return 90 + counters["debounce"]
+
+    factory = integration_range_drag.make_runtime_integration_range_update_bindings_factory(
+        root="root",
+        simulation_runtime_state="simulation-state",
+        analysis_view_state_factory=lambda: _bump("analysis", "analysis"),
+        range_view_state_factory=lambda: _bump("range", "range"),
+        display_controls_state="display-state",
+        hkl_lookup_controls_factory=lambda: _bump("lookup", "lookup"),
+        integration_range_drag_callbacks_factory=lambda: _bump("drag", "drag"),
+        refresh_integration_from_cached_results_factory=lambda: _bump(
+            "refresh",
+            "refresh",
+        ),
+        schedule_update_factory=lambda: _bump("schedule", "schedule"),
+        range_update_debounce_ms_factory=_next_debounce,
+    )
+
+    first = factory()
+    second = factory()
+
+    assert first["root"] == "root"
+    assert first["simulation_runtime_state"] == "simulation-state"
+    assert first["analysis_view_state"] == "analysis-1"
+    assert second["analysis_view_state"] == "analysis-2"
+    assert first["range_view_state"] == "range-1"
+    assert second["range_view_state"] == "range-2"
+    assert first["display_controls_state"] == "display-state"
+    assert first["hkl_lookup_controls"] == "lookup-1"
+    assert second["hkl_lookup_controls"] == "lookup-2"
+    assert first["integration_range_drag_callbacks"] == "drag-1"
+    assert second["integration_range_drag_callbacks"] == "drag-2"
+    assert first["refresh_integration_from_cached_results"] == "refresh-1"
+    assert second["schedule_update"] == "schedule-2"
+    assert first["range_update_debounce_ms"] == 91
+    assert second["range_update_debounce_ms"] == 92
+
+
+def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync() -> None:
+    schedule_calls = []
+    callback_refs = {}
+    view_state = state.IntegrationRangeControlsViewState()
+
+    def _create_controls(**kwargs):
+        callback_refs.update(kwargs)
+        kwargs["view_state"].tth_min_var = _FakeVar(kwargs["tth_min"])
+        kwargs["view_state"].tth_max_var = _FakeVar(kwargs["tth_max"])
+        kwargs["view_state"].phi_min_var = _FakeVar(kwargs["phi_min"])
+        kwargs["view_state"].phi_max_var = _FakeVar(kwargs["phi_max"])
+        kwargs["view_state"].tth_min_label_var = _FakeVar("")
+        kwargs["view_state"].tth_max_label_var = _FakeVar("")
+        kwargs["view_state"].phi_min_label_var = _FakeVar("")
+        kwargs["view_state"].phi_max_label_var = _FakeVar("")
+        kwargs["view_state"].tth_min_entry_var = _FakeVar("")
+        kwargs["view_state"].tth_max_entry_var = _FakeVar("")
+        kwargs["view_state"].phi_min_entry_var = _FakeVar("")
+        kwargs["view_state"].phi_max_entry_var = _FakeVar("")
+        kwargs["view_state"].tth_min_slider = _FakeSlider(0.0, 60.0)
+        kwargs["view_state"].tth_max_slider = _FakeSlider(0.0, 60.0)
+        kwargs["view_state"].phi_min_slider = _FakeSlider(-15.0, 15.0)
+        kwargs["view_state"].phi_max_slider = _FakeSlider(-15.0, 15.0)
+
+    integration_range_drag.create_runtime_integration_range_controls(
+        parent="parent",
+        views_module=SimpleNamespace(create_integration_range_controls=_create_controls),
+        view_state=view_state,
+        tth_min=0.0,
+        tth_max=60.0,
+        phi_min=-15.0,
+        phi_max=15.0,
+        schedule_range_update=lambda: schedule_calls.append("range"),
+    )
+
+    assert callback_refs["parent"] == "parent"
+    assert view_state.tth_min_label_var.get() == "0.0"
+    assert view_state.tth_max_entry_var.get() == "60.0000"
+    assert view_state.phi_min_entry_var.get() == "-15.0000"
+    assert len(view_state.tth_min_var.trace_calls) == 1
+    assert len(view_state.phi_max_var.trace_calls) == 1
+
+    callback_refs["on_tth_min_changed"]("12.5")
+    assert view_state.tth_min_var.get() == 12.5
+    assert view_state.tth_min_label_var.get() == "12.5"
+    assert view_state.tth_min_entry_var.get() == "12.5000"
+
+    view_state.phi_max_entry_var.set("45.0")
+    callback_refs["on_apply_entry"](
+        view_state.phi_max_entry_var,
+        view_state.phi_max_var,
+        view_state.phi_max_slider,
+    )
+    assert view_state.phi_max_var.get() == 15.0
+    assert view_state.phi_max_label_var.get() == "15.0"
+    assert view_state.phi_max_entry_var.get() == "15.0000"
+    assert schedule_calls == ["range", "range"]
+
+    view_state.phi_min_var.set(-7.25)
+    trace_callback = view_state.phi_min_var.trace_calls[0][1]
+    trace_callback()
+    assert view_state.phi_min_label_var.get() == "-7.2"
+    assert view_state.phi_min_entry_var.get() == "-7.2500"
+
+
+def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes() -> None:
+    root = _FakeRoot()
+    schedule_update_calls = []
+    hkl_pick_calls = []
+    drag_reset_calls = []
+    refresh_results = [False]
+    sim_state = SimpleNamespace(
+        integration_update_pending=None,
+        update_running=False,
+        caked_limits_user_override=True,
+    )
+    analysis_view_state = SimpleNamespace(show_caked_2d_var=_FakeVar(False))
+    display_controls_state = SimpleNamespace(simulation_limits_user_override=True)
+    bindings = integration_range_drag.IntegrationRangeUpdateBindings(
+        root=root,
+        simulation_runtime_state=sim_state,
+        analysis_view_state=analysis_view_state,
+        range_view_state=state.IntegrationRangeControlsViewState(),
+        display_controls_state=display_controls_state,
+        hkl_lookup_controls=SimpleNamespace(
+            set_hkl_pick_mode=lambda enabled: hkl_pick_calls.append(enabled)
+        ),
+        integration_range_drag_callbacks=SimpleNamespace(
+            reset=lambda: drag_reset_calls.append(True)
+        ),
+        refresh_integration_from_cached_results=lambda: refresh_results[-1],
+        schedule_update=lambda: schedule_update_calls.append(True),
+        range_update_debounce_ms=120,
+    )
+    callbacks = integration_range_drag.make_runtime_integration_range_update_callbacks(
+        lambda: bindings
+    )
+
+    callbacks.schedule_range_update(delay_ms=50)
+    assert root.after_calls[0][0] == 120
+    assert sim_state.integration_update_pending == "after-1"
+
+    sim_state.update_running = True
+    root.after_calls[0][1]()
+    assert sim_state.integration_update_pending == "after-2"
+    assert root.after_cancel_calls == []
+    assert root.after_calls[1][0] == 120
+    assert schedule_update_calls == []
+
+    sim_state.update_running = False
+    root.after_calls[1][1]()
+    assert sim_state.integration_update_pending is None
+    assert schedule_update_calls == [True]
+
+    callbacks.toggle_1d_plots()
+    callbacks.toggle_log_radial()
+    assert root.after_cancel_calls == ["after-3"]
+    assert root.after_calls[-1][0] == 120
+
+    analysis_view_state.show_caked_2d_var.set(True)
+    display_controls_state.simulation_limits_user_override = True
+    callbacks.toggle_caked_2d()
+    assert display_controls_state.simulation_limits_user_override is False
+    assert hkl_pick_calls == [False]
+    assert drag_reset_calls == [True]
+    assert schedule_update_calls == [True, True]
+
+    sim_state.caked_limits_user_override = True
+    analysis_view_state.show_caked_2d_var.set(False)
+    callbacks.toggle_caked_2d()
+    assert sim_state.caked_limits_user_override is False
+    assert drag_reset_calls == [True, True]
+    assert schedule_update_calls == [True, True, True]
 
 
 def test_update_runtime_integration_region_visuals_hides_when_range_hidden() -> None:

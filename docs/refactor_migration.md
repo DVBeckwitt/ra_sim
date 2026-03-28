@@ -481,6 +481,15 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.runtime` now keeps only the manual-geometry-specific canvas
     branches, top-level event dispatch, and thin live call sites around that
     workflow
+- Integration-range update/control workflow extraction has also advanced:
+  - debounced redraw-only range-update scheduling, analysis-view toggle
+    callbacks, and the runtime slider/entry callback wiring for the 1D
+    integration-range controls now live in
+    `ra_sim.gui.integration_range_drag`
+  - the runtime assembly of that update/control workflow now also boots
+    through one shared helper in `ra_sim.gui.bootstrap`
+  - `ra_sim.gui.runtime` no longer wires the range-control cluster,
+    `schedule_range_update`, or the analysis-view toggle handlers inline
 - HKL lookup / selected-peak workflow extraction has also advanced:
   - HKL lookup parsing, selected-peak summary text, degenerate-HKL lookup,
     selection-by-index/HKL, clear-selection state transitions, HKL-pick
@@ -567,9 +576,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   remaining value-source wiring and callback-bundle construction around the
   extracted `ra_sim.gui.geometry_fit` and `ra_sim.gui.manual_geometry`
   helper surfaces.
-- The remaining integration-range drag runtime code is now mostly the
-  remaining cross-feature canvas event handoff around the extracted drag and
-  canvas-interaction modules.
+- The remaining integration-range runtime code is now mostly thin live
+  value-source wiring around the extracted drag/update helpers and shared
+  bootstrap surfaces.
 - The next bounded GUI targets are the remaining cross-feature workflow/state
   transitions that still bypass the newer state/controller/view modules.
 - `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
