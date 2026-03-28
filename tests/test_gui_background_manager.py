@@ -399,6 +399,24 @@ def test_background_manager_chooses_background_dialog_initial_dir(tmp_path) -> N
     ) == "fallback"
 
 
+def test_background_manager_toggle_visibility_updates_alpha_and_schedules() -> None:
+    background_state = state.BackgroundRuntimeState(visible=True)
+    events = []
+
+    visible = background_manager.toggle_background_visibility_with_side_effects(
+        background_state,
+        sync_background_runtime_state=lambda: events.append("sync"),
+        set_background_alpha=lambda alpha: events.append(("alpha", alpha)),
+        schedule_update=lambda: events.append("schedule"),
+    )
+
+    assert visible is False
+    assert background_state.visible is False
+    assert background_manager.background_alpha_for_visibility(True) == 0.5
+    assert background_manager.background_alpha_for_visibility(False) == 1.0
+    assert events == ["sync", ("alpha", 1.0), "schedule"]
+
+
 def test_background_manager_runtime_binding_factory_builds_live_bindings(
     monkeypatch,
 ) -> None:
@@ -444,6 +462,7 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
         clear_geometry_fit_undo_stack=lambda: None,
         set_geometry_manual_pick_mode=lambda enabled: None,
         set_background_display_data=lambda image: None,
+        set_background_alpha=lambda alpha: None,
         update_background_slider_defaults=lambda image: None,
         sync_background_theta_controls=lambda: None,
         sync_geometry_fit_background_selection=lambda: None,
@@ -469,6 +488,7 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
     assert calls[0]["background_backend_debug_view_state"] == "backend-view-state"
     assert callable(calls[0]["mark_chi_square_dirty"])
     assert callable(calls[0]["refresh_chi_square_display"])
+    assert callable(calls[0]["set_background_alpha"])
     assert callable(calls[0]["set_status_text"])
     assert callable(calls[0]["schedule_update"])
     assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]
@@ -531,6 +551,7 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
         clear_geometry_fit_undo_stack=lambda: None,
         set_geometry_manual_pick_mode=lambda enabled: None,
         set_background_display_data=lambda image: None,
+        set_background_alpha=lambda alpha: calls.append(("alpha_set", alpha)),
         update_background_slider_defaults=lambda image: None,
         sync_background_theta_controls=lambda: None,
         sync_geometry_fit_background_selection=lambda: None,
@@ -593,6 +614,12 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
     )
     monkeypatch.setattr(
         background_manager,
+        "toggle_runtime_background_visibility",
+        lambda bindings_arg: calls.append(("toggle_visibility_cb", bindings_arg))
+        or True,
+    )
+    monkeypatch.setattr(
+        background_manager,
         "refresh_runtime_background_backend_status",
         lambda bindings_arg: calls.append(("backend_refresh_cb", bindings_arg))
         or "backend-refreshed",
@@ -627,6 +654,7 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
     callbacks = background_manager.make_runtime_background_callbacks(build_bindings)
 
     assert callbacks.refresh_status() == "refreshed"
+    assert callbacks.toggle_visibility() is True
     assert callbacks.load_files(["x.osc"], 3) == {"loaded_cb": True}
     assert callbacks.browse_files() is False
     assert callbacks.refresh_backend_status() == "backend-refreshed"
@@ -636,15 +664,16 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
     assert callbacks.flip_backend_y() == "flip-y"
     assert callbacks.reset_backend_orientation() == "reset"
     assert callbacks.switch_background() is True
-    assert calls[-10:] == [
+    assert calls[-11:] == [
         ("refresh_cb", "bindings-1"),
-        ("load_cb", "bindings-2", ("x.osc",), 3),
-        ("browse_cb", "bindings-3"),
-        ("backend_refresh_cb", "bindings-4"),
-        ("rotate_cb", "bindings-5", -1),
-        ("rotate_cb", "bindings-6", 1),
-        ("flip_cb", "bindings-7", "x"),
-        ("flip_cb", "bindings-8", "y"),
-        ("reset_cb", "bindings-9"),
-        ("switch_cb", "bindings-10"),
+        ("toggle_visibility_cb", "bindings-2"),
+        ("load_cb", "bindings-3", ("x.osc",), 3),
+        ("browse_cb", "bindings-4"),
+        ("backend_refresh_cb", "bindings-5"),
+        ("rotate_cb", "bindings-6", -1),
+        ("rotate_cb", "bindings-7", 1),
+        ("flip_cb", "bindings-8", "x"),
+        ("flip_cb", "bindings-9", "y"),
+        ("reset_cb", "bindings-10"),
+        ("switch_cb", "bindings-11"),
     ]

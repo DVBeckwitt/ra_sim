@@ -360,10 +360,12 @@ inline in `ra_sim/gui/runtime.py`, not `main.py` or `mosaic_profiles.py`.
   - `ra_sim.gui.background_manager` now also owns the backend-orientation
     debug status plus the rotate/flip/reset runtime helpers used by the live
     debug controls.
+  - `ra_sim.gui.background_manager` now also owns the background visibility
+    toggle workflow used by the workspace action controls.
   - `ra_sim.gui.background_manager` now also owns the zero-arg runtime
     binding/callback bundle for background status refresh, backend debug
-    status, browse/load/switch actions, and backend rotate/flip/reset
-    actions.
+    status, visibility/browse/load/switch actions, and backend rotate/flip/
+    reset actions.
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
     plus thin status-refresh and control-wiring call sites around that
     workflow.

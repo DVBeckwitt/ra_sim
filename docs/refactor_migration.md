@@ -333,10 +333,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - backend-orientation debug status plus the rotate/flip/reset runtime
     helpers used by the live debug controls now also live in
     `ra_sim.gui.background_manager`
+  - the background visibility toggle workflow used by the workspace action
+    controls now also lives in `ra_sim.gui.background_manager`
   - `ra_sim.gui.background_manager` now also owns the zero-arg runtime
     binding/callback bundle for background status refresh, backend debug
-    status, browse/load/switch actions, and backend rotate/flip/reset
-    actions
+    status, visibility/browse/load/switch actions, and backend rotate/flip/
+    reset actions
   - `ra_sim.gui.runtime` now keeps only one bound background callback bundle
     plus thin status-refresh and control-wiring call sites around that
     workflow

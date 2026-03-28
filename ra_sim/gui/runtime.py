@@ -6302,15 +6302,6 @@ def do_update():
     # mark update completion so future updates can run
     simulation_runtime_state.update_running = False
 
-# ── after you’ve updated background_runtime_state.visible in toggle_background() ──
-def toggle_background():
-    background_runtime_state.visible = not background_runtime_state.visible
-    _sync_background_runtime_state()
-    # ↓ force opaque if the background is hidden, 0.5 otherwise
-    image_display.set_alpha(0.5 if background_runtime_state.visible else 1.0)
-    schedule_update()
-
-
 background_runtime_bindings_factory = (
     gui_background_manager.make_runtime_background_bindings_factory(
         view_state=workspace_panels_view_state,
@@ -6337,6 +6328,7 @@ background_runtime_bindings_factory = (
         clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
         set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
         set_background_display_data=background_display.set_data,
+        set_background_alpha=image_display.set_alpha,
         update_background_slider_defaults=(
             lambda image: _update_background_slider_defaults(
                 image,
@@ -6518,7 +6510,7 @@ def reset_to_defaults():
 gui_views.populate_stacked_button_group(
     workspace_panels_view_state.workspace_actions_frame,
     [
-        ("Toggle Background", toggle_background),
+        ("Toggle Background", background_runtime_callbacks.toggle_visibility),
         ("Switch Background", background_runtime_callbacks.switch_background),
     ],
 )

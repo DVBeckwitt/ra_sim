@@ -38,6 +38,7 @@ class BackgroundRuntimeBindings:
     sync_background_theta_controls: Callable[[], None]
     sync_geometry_fit_background_selection: Callable[[], None]
     clear_geometry_pick_artists: Callable[[], None]
+    set_background_alpha: Callable[[float], None] | None = None
     sync_theta_initial_to_background: Callable[[int], None] | None = None
     render_current_geometry_manual_pairs: Callable[[], None] | None = None
     background_backend_debug_view_state: object | None = None
@@ -54,6 +55,7 @@ class BackgroundRuntimeCallbacks:
     """Bound callbacks for runtime background-file and backend debug workflows."""
 
     refresh_status: Callable[[], str]
+    toggle_visibility: Callable[[], bool]
     load_files: Callable[[Sequence[object], int], dict[str, object]]
     browse_files: Callable[[], bool]
     switch_background: Callable[[], bool]
@@ -257,6 +259,17 @@ def background_backend_status_text(background_state) -> str:
     )
 
 
+def background_alpha_for_visibility(
+    visible: bool,
+    *,
+    visible_alpha: float = 0.5,
+    hidden_alpha: float = 1.0,
+) -> float:
+    """Return the display alpha used for the current background visibility."""
+
+    return float(visible_alpha if bool(visible) else hidden_alpha)
+
+
 def set_background_backend_status_from_state(
     *,
     view_state,
@@ -348,6 +361,31 @@ def set_background_file_status_from_state(
     return status_text
 
 
+def toggle_background_visibility_with_side_effects(
+    background_state,
+    *,
+    sync_background_runtime_state: Callable[[], None],
+    set_background_alpha: Callable[[float], None] | None,
+    schedule_update: Callable[[], None],
+    visible_alpha: float = 0.5,
+    hidden_alpha: float = 1.0,
+) -> bool:
+    """Flip background visibility and apply the dependent redraw side effects."""
+
+    background_state.visible = not bool(getattr(background_state, "visible", True))
+    sync_background_runtime_state()
+    if callable(set_background_alpha):
+        set_background_alpha(
+            background_alpha_for_visibility(
+                background_state.visible,
+                visible_alpha=visible_alpha,
+                hidden_alpha=hidden_alpha,
+            )
+        )
+    schedule_update()
+    return bool(background_state.visible)
+
+
 def make_runtime_background_bindings_factory(
     *,
     view_state,
@@ -372,6 +410,7 @@ def make_runtime_background_bindings_factory(
     sync_background_theta_controls: Callable[[], None],
     sync_geometry_fit_background_selection: Callable[[], None],
     clear_geometry_pick_artists: Callable[[], None],
+    set_background_alpha: Callable[[float], None] | None = None,
     sync_theta_initial_to_background: Callable[[int], None] | None = None,
     render_current_geometry_manual_pairs: Callable[[], None] | None = None,
     background_backend_debug_view_state: object | None = None,
@@ -404,6 +443,7 @@ def make_runtime_background_bindings_factory(
             clear_geometry_fit_undo_stack=clear_geometry_fit_undo_stack,
             set_geometry_manual_pick_mode=set_geometry_manual_pick_mode,
             set_background_display_data=set_background_display_data,
+            set_background_alpha=set_background_alpha,
             update_background_slider_defaults=update_background_slider_defaults,
             sync_background_theta_controls=sync_background_theta_controls,
             sync_geometry_fit_background_selection=sync_geometry_fit_background_selection,
@@ -500,6 +540,24 @@ def load_background_files_with_side_effects(
     refresh_background_file_status()
     schedule_update()
     return updated
+
+
+def toggle_runtime_background_visibility(
+    bindings: BackgroundRuntimeBindings,
+    *,
+    visible_alpha: float = 0.5,
+    hidden_alpha: float = 1.0,
+) -> bool:
+    """Toggle the runtime background visibility from live bindings."""
+
+    return toggle_background_visibility_with_side_effects(
+        bindings.background_state,
+        sync_background_runtime_state=bindings.sync_background_runtime_state,
+        set_background_alpha=bindings.set_background_alpha,
+        schedule_update=bindings.schedule_update or (lambda: None),
+        visible_alpha=float(visible_alpha),
+        hidden_alpha=float(hidden_alpha),
+    )
 
 
 def rotate_background_backend_with_side_effects(
@@ -787,6 +845,9 @@ def make_runtime_background_callbacks(
 
     return BackgroundRuntimeCallbacks(
         refresh_status=lambda: refresh_runtime_background_file_status(
+            bindings_factory()
+        ),
+        toggle_visibility=lambda: toggle_runtime_background_visibility(
             bindings_factory()
         ),
         load_files=lambda file_paths, select_index=0: load_runtime_background_files(
