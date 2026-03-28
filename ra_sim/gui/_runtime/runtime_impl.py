@@ -108,6 +108,7 @@ from ra_sim.gui import geometry_overlay as gui_geometry_overlay
 from ra_sim.gui import integration_range_drag as gui_integration_range_drag
 from ra_sim.gui import manual_geometry as gui_manual_geometry
 from ra_sim.gui import runtime_background as gui_runtime_background
+from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import structure_model as gui_structure_model
@@ -2791,105 +2792,105 @@ def _update_geometry_preview_exclude_button_label():
     )
 
 
-bragg_qr_workflow_runtime = gui_bootstrap.build_runtime_bragg_qr_workflow_bootstrap(
+pruning_workflow = gui_runtime_fit_analysis.build_runtime_pruning_workflow(
+    bootstrap_module=gui_bootstrap,
+    views_module=gui_views,
     structure_factor_pruning_module=gui_structure_factor_pruning,
-    bragg_qr_manager_module=gui_bragg_qr_manager,
-    root=root,
-    uniform_flag=SOLVE_Q_MODE_UNIFORM,
-    adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
-    structure_factor_pruning_view_state_factory=lambda: globals().get(
-        "structure_factor_pruning_controls_view_state"
-    ),
-    bragg_qr_view_state=bragg_qr_manager_view_state,
-    simulation_runtime_state=simulation_runtime_state,
-    bragg_qr_manager_state=bragg_qr_manager_state,
-    clip_prune_bias=lambda value: (
-        gui_structure_factor_pruning.clip_runtime_sf_prune_bias(
-            value,
-            fallback=defaults.get("sf_prune_bias", 0.0),
-            minimum=SF_PRUNE_BIAS_MIN,
-            maximum=SF_PRUNE_BIAS_MAX,
-        )
-    ),
-    clip_solve_q_steps=lambda value: (
-        gui_structure_factor_pruning.clip_runtime_solve_q_steps(
-            value,
-            fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-            minimum=MIN_SOLVE_Q_STEPS,
-            maximum=MAX_SOLVE_Q_STEPS,
-        )
-    ),
-    clip_solve_q_rel_tol=lambda value: (
-        gui_structure_factor_pruning.clip_runtime_solve_q_rel_tol(
-            value,
-            fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-            minimum=MIN_SOLVE_Q_REL_TOL,
-            maximum=MAX_SOLVE_Q_REL_TOL,
-        )
-    ),
-    normalize_solve_q_mode_label=(
-        gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label
-    ),
-    schedule_update_factory=lambda: (
-        globals().get("schedule_update")
-        if callable(globals().get("schedule_update"))
-        else None
-    ),
-    primary_candidate=(lambda: a_var.get()),
-    primary_fallback=float(av),
-    secondary_candidate=(lambda: av2),
-    set_progress_text_factory=lambda: (
-        (lambda text: progress_label_positions.config(text=text))
-        if "progress_label_positions" in globals()
-        else None
-    ),
-    invalid_key=BRAGG_QR_L_INVALID_KEY,
-    tcl_error_types=(tk.TclError,),
-)
-current_sf_prune_bias = bragg_qr_workflow_runtime.current_sf_prune_bias
-current_solve_q_values = bragg_qr_workflow_runtime.current_solve_q_values
-update_sf_prune_status_label = bragg_qr_workflow_runtime.update_status_label
-apply_bragg_qr_filters = bragg_qr_workflow_runtime.apply_filters
-on_sf_prune_bias_change = bragg_qr_workflow_runtime.on_sf_prune_bias_change
-on_solve_q_steps_change = bragg_qr_workflow_runtime.on_solve_q_steps_change
-on_solve_q_rel_tol_change = bragg_qr_workflow_runtime.on_solve_q_rel_tol_change
-set_solve_q_control_states = bragg_qr_workflow_runtime.set_solve_q_control_states
-on_solve_q_mode_change = bragg_qr_workflow_runtime.on_solve_q_mode_change
-apply_bragg_qr_filters(trigger_update=False)
-structure_factor_pruning_controls_runtime = (
-    gui_bootstrap.build_runtime_structure_factor_pruning_controls_bootstrap(
-        views_module=gui_views,
-        structure_factor_pruning_module=gui_structure_factor_pruning,
-        view_state=structure_factor_pruning_controls_view_state,
-        raw_prune_bias=defaults.get("sf_prune_bias", 0.0),
-        raw_solve_q_steps=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-        raw_solve_q_rel_tol=defaults.get(
+    view_state=structure_factor_pruning_controls_view_state,
+    bragg_qr_bootstrap_kwargs={
+        "bragg_qr_manager_module": gui_bragg_qr_manager,
+        "root": root,
+        "uniform_flag": SOLVE_Q_MODE_UNIFORM,
+        "adaptive_flag": SOLVE_Q_MODE_ADAPTIVE,
+        "structure_factor_pruning_view_state_factory": (
+            lambda: globals().get("structure_factor_pruning_controls_view_state")
+        ),
+        "bragg_qr_view_state": bragg_qr_manager_view_state,
+        "simulation_runtime_state": simulation_runtime_state,
+        "bragg_qr_manager_state": bragg_qr_manager_state,
+        "clip_prune_bias": (
+            lambda value: gui_structure_factor_pruning.clip_runtime_sf_prune_bias(
+                value,
+                fallback=defaults.get("sf_prune_bias", 0.0),
+                minimum=SF_PRUNE_BIAS_MIN,
+                maximum=SF_PRUNE_BIAS_MAX,
+            )
+        ),
+        "clip_solve_q_steps": (
+            lambda value: gui_structure_factor_pruning.clip_runtime_solve_q_steps(
+                value,
+                fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+                minimum=MIN_SOLVE_Q_STEPS,
+                maximum=MAX_SOLVE_Q_STEPS,
+            )
+        ),
+        "clip_solve_q_rel_tol": (
+            lambda value: gui_structure_factor_pruning.clip_runtime_solve_q_rel_tol(
+                value,
+                fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+                minimum=MIN_SOLVE_Q_REL_TOL,
+                maximum=MAX_SOLVE_Q_REL_TOL,
+            )
+        ),
+        "normalize_solve_q_mode_label": (
+            gui_structure_factor_pruning.normalize_runtime_solve_q_mode_label
+        ),
+        "schedule_update_factory": (
+            lambda: (
+                globals().get("schedule_update")
+                if callable(globals().get("schedule_update"))
+                else None
+            )
+        ),
+        "primary_candidate": (lambda: a_var.get()),
+        "primary_fallback": float(av),
+        "secondary_candidate": (lambda: av2),
+        "set_progress_text_factory": (
+            lambda: (
+                (lambda text: progress_label_positions.config(text=text))
+                if "progress_label_positions" in globals()
+                else None
+            )
+        ),
+        "invalid_key": BRAGG_QR_L_INVALID_KEY,
+        "tcl_error_types": (tk.TclError,),
+    },
+    pruning_controls_bootstrap_kwargs={
+        "raw_prune_bias": defaults.get("sf_prune_bias", 0.0),
+        "raw_solve_q_steps": defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        "raw_solve_q_rel_tol": defaults.get(
             "solve_q_rel_tol",
             DEFAULT_SOLVE_Q_REL_TOL,
         ),
-        raw_solve_q_mode=defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
-        prune_bias_fallback=defaults.get("sf_prune_bias", 0.0),
-        prune_bias_minimum=SF_PRUNE_BIAS_MIN,
-        prune_bias_maximum=SF_PRUNE_BIAS_MAX,
-        steps_fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-        steps_minimum=MIN_SOLVE_Q_STEPS,
-        steps_maximum=MAX_SOLVE_Q_STEPS,
-        rel_tol_fallback=defaults.get(
+        "raw_solve_q_mode": defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
+        "prune_bias_fallback": defaults.get("sf_prune_bias", 0.0),
+        "prune_bias_minimum": SF_PRUNE_BIAS_MIN,
+        "prune_bias_maximum": SF_PRUNE_BIAS_MAX,
+        "steps_fallback": defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        "steps_minimum": MIN_SOLVE_Q_STEPS,
+        "steps_maximum": MAX_SOLVE_Q_STEPS,
+        "rel_tol_fallback": defaults.get(
             "solve_q_rel_tol",
             DEFAULT_SOLVE_Q_REL_TOL,
         ),
-        rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
-        rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
-        uniform_flag=SOLVE_Q_MODE_UNIFORM,
-        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
-        on_sf_prune_bias_change=on_sf_prune_bias_change,
-        update_status_label=update_sf_prune_status_label,
-        on_solve_q_steps_change=on_solve_q_steps_change,
-        on_solve_q_rel_tol_change=on_solve_q_rel_tol_change,
-        on_solve_q_mode_change=on_solve_q_mode_change,
-        set_solve_q_control_states=set_solve_q_control_states,
-    )
+        "rel_tol_minimum": MIN_SOLVE_Q_REL_TOL,
+        "rel_tol_maximum": MAX_SOLVE_Q_REL_TOL,
+        "uniform_flag": SOLVE_Q_MODE_UNIFORM,
+        "adaptive_flag": SOLVE_Q_MODE_ADAPTIVE,
+    },
+    initialize_filters=True,
 )
+bragg_qr_workflow_runtime = pruning_workflow.runtime
+current_sf_prune_bias = pruning_workflow.current_sf_prune_bias
+current_solve_q_values = pruning_workflow.current_solve_q_values
+update_sf_prune_status_label = pruning_workflow.update_status_label
+apply_bragg_qr_filters = pruning_workflow.apply_filters
+on_sf_prune_bias_change = pruning_workflow.on_sf_prune_bias_change
+on_solve_q_steps_change = pruning_workflow.on_solve_q_steps_change
+on_solve_q_rel_tol_change = pruning_workflow.on_solve_q_rel_tol_change
+set_solve_q_control_states = pruning_workflow.set_solve_q_control_states
+on_solve_q_mode_change = pruning_workflow.on_solve_q_mode_change
+structure_factor_pruning_controls_runtime = pruning_workflow.controls_runtime
 
 
 peak_selection_workflow = (
@@ -3123,45 +3124,57 @@ _update_geometry_manual_pick_preview = (
 )
 _cancel_geometry_manual_pick_session = geometry_manual_workflow.cancel_pick_session
 
-integration_range_update_runtime = (
-    gui_bootstrap.build_runtime_integration_range_update_bootstrap(
+integration_range_workflow = (
+    gui_runtime_fit_analysis.build_runtime_integration_range_workflow(
+        bootstrap_module=gui_bootstrap,
         views_module=gui_views,
         integration_range_drag_module=gui_integration_range_drag,
-        range_view_state=integration_range_controls_view_state,
-        analysis_view_state=analysis_view_controls_view_state,
-        root=root,
-        simulation_runtime_state=simulation_runtime_state,
-        analysis_view_state_factory=lambda: analysis_view_controls_view_state,
-        range_view_state_factory=lambda: integration_range_controls_view_state,
-        display_controls_state=display_controls_state,
-        hkl_lookup_controls_factory=lambda: hkl_lookup_controls_runtime,
-        integration_range_drag_callbacks_factory=lambda: globals().get(
-            "integration_range_drag_runtime_callbacks"
-        ),
-        refresh_integration_from_cached_results_factory=lambda: (
-            globals().get("_refresh_integration_from_cached_results")
-            if callable(globals().get("_refresh_integration_from_cached_results"))
-            else None
-        ),
-        schedule_update_factory=lambda: (
-            globals().get("schedule_update")
-            if callable(globals().get("schedule_update"))
-            else None
-        ),
-        range_update_debounce_ms_factory=lambda: globals().get(
-            "RANGE_UPDATE_DEBOUNCE_MS",
-            120,
-        ),
+        integration_range_update_bootstrap_kwargs={
+            "range_view_state": integration_range_controls_view_state,
+            "analysis_view_state": analysis_view_controls_view_state,
+            "root": root,
+            "simulation_runtime_state": simulation_runtime_state,
+            "analysis_view_state_factory": (
+                lambda: analysis_view_controls_view_state
+            ),
+            "range_view_state_factory": (
+                lambda: integration_range_controls_view_state
+            ),
+            "display_controls_state": display_controls_state,
+            "hkl_lookup_controls_factory": (lambda: hkl_lookup_controls_runtime),
+            "integration_range_drag_callbacks_factory": (
+                lambda: globals().get("integration_range_drag_runtime_callbacks")
+            ),
+            "refresh_integration_from_cached_results_factory": (
+                lambda: (
+                    globals().get("_refresh_integration_from_cached_results")
+                    if callable(globals().get("_refresh_integration_from_cached_results"))
+                    else None
+                )
+            ),
+            "schedule_update_factory": (
+                lambda: (
+                    globals().get("schedule_update")
+                    if callable(globals().get("schedule_update"))
+                    else None
+                )
+            ),
+            "range_update_debounce_ms_factory": (
+                lambda: globals().get(
+                    "RANGE_UPDATE_DEBOUNCE_MS",
+                    120,
+                )
+            ),
+        },
     )
 )
-integration_range_update_runtime_callbacks = integration_range_update_runtime.callbacks
-schedule_range_update = (
-    integration_range_update_runtime_callbacks.schedule_range_update
-)
-toggle_1d_plots = integration_range_update_runtime_callbacks.toggle_1d_plots
-toggle_caked_2d = integration_range_update_runtime_callbacks.toggle_caked_2d
-toggle_log_radial = integration_range_update_runtime_callbacks.toggle_log_radial
-toggle_log_azimuth = integration_range_update_runtime_callbacks.toggle_log_azimuth
+integration_range_update_runtime = integration_range_workflow.update_runtime
+integration_range_update_runtime_callbacks = integration_range_workflow.callbacks
+schedule_range_update = integration_range_workflow.schedule_range_update
+toggle_1d_plots = integration_range_workflow.toggle_1d_plots
+toggle_caked_2d = integration_range_workflow.toggle_caked_2d
+toggle_log_radial = integration_range_workflow.toggle_log_radial
+toggle_log_azimuth = integration_range_workflow.toggle_log_azimuth
 
 integration_range_drag_runtime = (
     gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
@@ -10199,84 +10212,96 @@ geometry_fit_runtime_config_factory = (
         current_parameter_domains=_current_geometry_fit_parameter_domains,
     )
 )
-geometry_fit_action_runtime = gui_bootstrap.build_runtime_geometry_fit_action_bootstrap(
-    geometry_fit_module=gui_geometry_fit,
-    value_callbacks_factory=_geometry_fit_runtime_values,
-    fit_config=fit_config,
-    theta_initial_factory=lambda: theta_initial_var.get(),
-    apply_geometry_fit_background_selection=(
-        _apply_geometry_fit_background_selection
-    ),
-    current_geometry_fit_background_indices=(
-        _current_geometry_fit_background_indices
-    ),
-    geometry_fit_uses_shared_theta_offset=(
-        _geometry_fit_uses_shared_theta_offset
-    ),
-    apply_background_theta_metadata=_apply_background_theta_metadata,
-    current_background_theta_values=_current_background_theta_values,
-    current_geometry_theta_offset=_current_geometry_theta_offset,
-    ensure_geometry_fit_caked_view=_ensure_geometry_fit_caked_view,
-    manual_dataset_bindings_factory=(
-        geometry_fit_manual_dataset_bindings_factory
-    ),
-    build_runtime_config_factory=geometry_fit_runtime_config_factory,
-    downloads_dir=get_dir("downloads"),
-    simulation_runtime_state=simulation_runtime_state,
-    background_runtime_state=background_runtime_state,
-    theta_initial_var=theta_initial_var,
-    geometry_theta_offset_var=geometry_theta_offset_var,
-    current_ui_params=_current_geometry_fit_ui_params,
-    var_map=_geometry_fit_var_map,
-    background_theta_for_index=_background_theta_for_index,
-    refresh_status=_refresh_background_status,
-    update_manual_pick_button_label=(
-        _update_geometry_manual_pick_button_label
-    ),
-    capture_undo_state=_capture_geometry_fit_undo_state,
-    push_undo_state=_push_geometry_fit_undo_state,
-    request_preview_skip_once=(
-        lambda: gui_controllers.request_geometry_preview_skip_once(
-            geometry_preview_state
-        )
-    ),
-    schedule_update=schedule_update,
-    draw_overlay_records=(
-        lambda records, marker_limit: _draw_geometry_fit_overlay(
-            records,
-            max_display_markers=marker_limit,
-        )
-    ),
-    draw_initial_pairs_overlay=(
-        lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
-            pairs,
-            max_display_markers=marker_limit,
-        )
-    ),
-    set_last_overlay_state=_set_geometry_fit_last_overlay_state,
-    set_progress_text=(lambda text: progress_label_geometry.config(text=text)),
-    cmd_line=_geometry_fit_cmd_line,
-    solver_inputs_factory=lambda: gui_geometry_fit.GeometryFitRuntimeSolverInputs(
-        miller=miller,
-        intensities=intensities,
-        image_size=image_size,
-    ),
-    sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-    background_display_rotate_k=DISPLAY_ROTATE_K,
-    simulate_and_compare_hkl=simulate_and_compare_hkl,
-    aggregate_match_centers=_aggregate_match_centers,
-    build_overlay_records=build_geometry_fit_overlay_records,
-    compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
-    solve_fit=fit_geometry_parameters,
-    stamp_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"),
-    flush_ui=root.update_idletasks,
-    before_run=lambda: (
-        _clear_geometry_preview_artists(),
-        _clear_geometry_pick_artists(),
-    ),
+geometry_fit_action_workflow = (
+    gui_runtime_fit_analysis.build_runtime_geometry_fit_action_workflow(
+        bootstrap_module=gui_bootstrap,
+        geometry_fit_module=gui_geometry_fit,
+        geometry_fit_action_bootstrap_kwargs={
+            "value_callbacks_factory": _geometry_fit_runtime_values,
+            "fit_config": fit_config,
+            "theta_initial_factory": (lambda: theta_initial_var.get()),
+            "apply_geometry_fit_background_selection": (
+                _apply_geometry_fit_background_selection
+            ),
+            "current_geometry_fit_background_indices": (
+                _current_geometry_fit_background_indices
+            ),
+            "geometry_fit_uses_shared_theta_offset": (
+                _geometry_fit_uses_shared_theta_offset
+            ),
+            "apply_background_theta_metadata": _apply_background_theta_metadata,
+            "current_background_theta_values": _current_background_theta_values,
+            "current_geometry_theta_offset": _current_geometry_theta_offset,
+            "ensure_geometry_fit_caked_view": _ensure_geometry_fit_caked_view,
+            "manual_dataset_bindings_factory": (
+                geometry_fit_manual_dataset_bindings_factory
+            ),
+            "build_runtime_config_factory": geometry_fit_runtime_config_factory,
+            "downloads_dir": get_dir("downloads"),
+            "simulation_runtime_state": simulation_runtime_state,
+            "background_runtime_state": background_runtime_state,
+            "theta_initial_var": theta_initial_var,
+            "geometry_theta_offset_var": geometry_theta_offset_var,
+            "current_ui_params": _current_geometry_fit_ui_params,
+            "var_map": _geometry_fit_var_map,
+            "background_theta_for_index": _background_theta_for_index,
+            "refresh_status": _refresh_background_status,
+            "update_manual_pick_button_label": (
+                _update_geometry_manual_pick_button_label
+            ),
+            "capture_undo_state": _capture_geometry_fit_undo_state,
+            "push_undo_state": _push_geometry_fit_undo_state,
+            "request_preview_skip_once": (
+                lambda: gui_controllers.request_geometry_preview_skip_once(
+                    geometry_preview_state
+                )
+            ),
+            "schedule_update": schedule_update,
+            "draw_overlay_records": (
+                lambda records, marker_limit: _draw_geometry_fit_overlay(
+                    records,
+                    max_display_markers=marker_limit,
+                )
+            ),
+            "draw_initial_pairs_overlay": (
+                lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
+                    pairs,
+                    max_display_markers=marker_limit,
+                )
+            ),
+            "set_last_overlay_state": _set_geometry_fit_last_overlay_state,
+            "set_progress_text": (
+                lambda text: progress_label_geometry.config(text=text)
+            ),
+            "cmd_line": _geometry_fit_cmd_line,
+            "solver_inputs_factory": (
+                lambda: gui_geometry_fit.GeometryFitRuntimeSolverInputs(
+                    miller=miller,
+                    intensities=intensities,
+                    image_size=image_size,
+                )
+            ),
+            "sim_display_rotate_k": SIM_DISPLAY_ROTATE_K,
+            "background_display_rotate_k": DISPLAY_ROTATE_K,
+            "simulate_and_compare_hkl": simulate_and_compare_hkl,
+            "aggregate_match_centers": _aggregate_match_centers,
+            "build_overlay_records": build_geometry_fit_overlay_records,
+            "compute_frame_diagnostics": _geometry_overlay_frame_diagnostics,
+            "solve_fit": fit_geometry_parameters,
+            "stamp_factory": (lambda: datetime.now().strftime("%Y%m%d_%H%M%S")),
+            "flush_ui": root.update_idletasks,
+            "before_run": (
+                lambda: (
+                    _clear_geometry_preview_artists(),
+                    _clear_geometry_pick_artists(),
+                )
+            ),
+        },
+    )
 )
-geometry_fit_action_bindings_factory = geometry_fit_action_runtime.bindings_factory
-on_fit_geometry_click = geometry_fit_action_runtime.callback
+geometry_fit_action_runtime = geometry_fit_action_workflow.runtime
+geometry_fit_action_bindings_factory = geometry_fit_action_workflow.bindings_factory
+on_fit_geometry_click = geometry_fit_action_workflow.callback
 fit_button_geometry.config(command=on_fit_geometry_click)
 
 

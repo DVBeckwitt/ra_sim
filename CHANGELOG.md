@@ -33,6 +33,7 @@
   - Made `ra_sim/gui/runtime.py` import-safe by turning it into a lazy compatibility wrapper around the heavy GUI implementation in `ra_sim/gui/_runtime/runtime_impl.py`.
   - Extracted runtime background/bootstrap assembly into `ra_sim/gui/runtime_background.py`, leaving the internal runtime implementation with thinner background workflow wiring.
   - Extracted selected-peak / HKL lookup / manual-geometry / geometry-tool action runtime assembly into `ra_sim/gui/runtime_geometry_interaction.py`, replacing the matching internal-runtime AST checks with direct helper tests.
+  - Extracted Bragg-Qr pruning/control wiring, integration-range update runtime assembly, and geometry-fit action runtime assembly into `ra_sim/gui/runtime_fit_analysis.py`, replacing the matching internal-runtime AST checks with direct helper tests.
   - Moved the primary-CIF / diffuse-HT control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
   - Moved the optional CIF-weight control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers and reused a controller helper for weighted intensity recompute.
   - Moved the fit-geometry parameter checklist out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.

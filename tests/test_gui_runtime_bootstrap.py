@@ -104,82 +104,6 @@ def test_runtime_geometry_q_group_schedule_update_factory_is_late_bound() -> Non
     assert has_late_bound_schedule_update is True
 
 
-def test_runtime_structure_factor_pruning_controls_are_bootstrapped() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    has_bootstrap_call = False
-    direct_view_calls = 0
-    direct_trace_calls = 0
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr == "build_runtime_structure_factor_pruning_controls_bootstrap":
-            has_bootstrap_call = True
-        if func.attr == "create_structure_factor_pruning_controls":
-            direct_view_calls += 1
-        if (
-            func.attr == "trace_add"
-            and isinstance(func.value, ast.Name)
-            and func.value.id
-            in {
-                "sf_prune_bias_var",
-                "solve_q_steps_var",
-                "solve_q_rel_tol_var",
-                "solve_q_mode_var",
-            }
-        ):
-            direct_trace_calls += 1
-
-    assert has_bootstrap_call is True
-    assert direct_view_calls == 0
-    assert direct_trace_calls == 0
-
-
-def test_runtime_integration_range_controls_are_bootstrapped() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    has_bootstrap_call = False
-    direct_view_calls = {
-        "create_integration_range_controls": 0,
-        "create_analysis_view_controls": 0,
-    }
-    inline_defs = {
-        "schedule_range_update": 0,
-        "toggle_1d_plots": 0,
-        "toggle_caked_2d": 0,
-        "toggle_log_radial": 0,
-        "toggle_log_azimuth": 0,
-    }
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Attribute):
-                if func.attr == "build_runtime_integration_range_update_bootstrap":
-                    has_bootstrap_call = True
-                if func.attr in direct_view_calls:
-                    direct_view_calls[func.attr] += 1
-        if isinstance(node, ast.FunctionDef) and node.name in inline_defs:
-            inline_defs[node.name] += 1
-
-    assert has_bootstrap_call is True
-    assert direct_view_calls["create_integration_range_controls"] == 0
-    assert direct_view_calls["create_analysis_view_controls"] == 0
-    assert inline_defs == {
-        "schedule_range_update": 0,
-        "toggle_1d_plots": 0,
-        "toggle_caked_2d": 0,
-        "toggle_log_radial": 0,
-        "toggle_log_azimuth": 0,
-    }
-
-
 def test_runtime_selected_peak_refresh_calls_use_maintenance_bundle() -> None:
     source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
@@ -214,34 +138,6 @@ def test_runtime_selected_peak_refresh_calls_use_maintenance_bundle() -> None:
     assert direct_hkl_refresh_calls == 0
 
 
-def test_runtime_geometry_fit_action_uses_factory_helpers() -> None:
-    source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
-
-    helper_calls: dict[str, int] = {
-        "build_runtime_geometry_fit_action_bootstrap": 0,
-        "make_runtime_geometry_fit_action_bindings_factory": 0,
-        "make_runtime_geometry_fit_action_callback": 0,
-        "build_runtime_geometry_fit_action_bindings": 0,
-        "run_runtime_geometry_fit_action": 0,
-    }
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr in helper_calls:
-            helper_calls[func.attr] += 1
-
-    assert helper_calls["build_runtime_geometry_fit_action_bootstrap"] == 1
-    assert helper_calls["make_runtime_geometry_fit_action_bindings_factory"] == 0
-    assert helper_calls["make_runtime_geometry_fit_action_callback"] == 0
-    assert helper_calls["build_runtime_geometry_fit_action_bindings"] == 0
-    assert helper_calls["run_runtime_geometry_fit_action"] == 0
-
-
 def test_runtime_geometry_fit_action_bootstrap_is_built_after_live_value_setup() -> None:
     source = RUNTIME_IMPL_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(RUNTIME_IMPL_PATH))
@@ -266,7 +162,7 @@ def test_runtime_geometry_fit_action_bootstrap_is_built_after_live_value_setup()
         func = node.func
         if not isinstance(func, ast.Attribute):
             continue
-        if func.attr == "build_runtime_geometry_fit_action_bootstrap":
+        if func.attr == "build_runtime_geometry_fit_action_workflow":
             bootstrap_use_line = int(node.lineno)
 
     assert bootstrap_use_line > 0
