@@ -1,4 +1,5 @@
 import numpy as np
+from types import SimpleNamespace
 
 from ra_sim.gui import geometry_fit
 
@@ -638,6 +639,215 @@ def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() 
     assert params["theta_initial"] == 8.75
     assert params["theta_offset"] == 0.0
     assert params["center_x"] == 100.0
+
+
+def test_make_runtime_geometry_fit_action_prepare_bindings_factory_builds_prepare_bundle() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    factory = geometry_fit.make_runtime_geometry_fit_action_prepare_bindings_factory(
+        fit_config={"geometry": {"mode": "test"}},
+        osc_files=["bg0.osc", "bg1.osc"],
+        current_background_index=1,
+        theta_initial=9.5,
+        image_size=256,
+        display_rotate_k=3,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [9.5, 10.5],
+        current_geometry_theta_offset=lambda **kwargs: 0.25,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        load_background_by_index=lambda idx: (
+            np.zeros((2, 2), dtype=np.float64),
+            np.zeros((2, 2), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda *args, **kwargs: [],
+        geometry_manual_simulated_lookup=lambda _peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: None,
+        unrotate_display_peaks=lambda entries, shape, *, k: [],
+        display_to_native_sim_coords=lambda col, row, shape: (col, row),
+        select_fit_orientation=lambda *args, **kwargs: ({}, {}),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [],
+        orient_image_for_fit=lambda image, **kwargs: image,
+        build_runtime_config_factory=lambda var_names, fit_params: (
+            calls.append((list(var_names), dict(fit_params)))
+            or {"vars": list(var_names), "fit_params": dict(fit_params)}
+        ),
+    )
+
+    bindings = factory(["gamma", "a"])
+
+    assert isinstance(
+        bindings,
+        geometry_fit.GeometryFitRuntimePreparationBindings,
+    )
+    assert bindings.fit_config == {"geometry": {"mode": "test"}}
+    assert list(bindings.osc_files) == ["bg0.osc", "bg1.osc"]
+    assert bindings.current_background_index == 1
+    assert bindings.theta_initial == 9.5
+    assert bindings.image_size == 256
+    assert bindings.display_rotate_k == 3
+    assert bindings.build_runtime_config({"gamma": 0.2, "a": 4.1}) == {
+        "vars": ["gamma", "a"],
+        "fit_params": {"gamma": 0.2, "a": 4.1},
+    }
+    assert calls == [(["gamma", "a"], {"gamma": 0.2, "a": 4.1})]
+
+
+def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "make_runtime_geometry_fit_action_prepare_bindings_factory",
+        lambda **kwargs: calls.append(("prepare", kwargs)) or "prepare-factory",
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "build_runtime_geometry_fit_action_execution_bindings",
+        lambda **kwargs: calls.append(("execution", kwargs)) or "execution-bindings",
+    )
+
+    value_callbacks = SimpleNamespace(current_var_names=lambda: [], current_params=lambda: {})
+    solver_inputs = geometry_fit.GeometryFitRuntimeSolverInputs(
+        miller="miller-data",
+        intensities="intensity-data",
+        image_size=512,
+    )
+
+    bindings = geometry_fit.build_runtime_geometry_fit_action_bindings(
+        value_callbacks=value_callbacks,
+        fit_config={"geometry": {}},
+        osc_files=["bg0.osc"],
+        current_background_index=0,
+        theta_initial=9.5,
+        image_size=256,
+        display_rotate_k=3,
+        apply_geometry_fit_background_selection="apply-selection",
+        current_geometry_fit_background_indices="current-bg-indices",
+        geometry_fit_uses_shared_theta_offset="uses-shared-theta",
+        apply_background_theta_metadata="apply-theta-meta",
+        current_background_theta_values="current-theta-values",
+        current_geometry_theta_offset="current-theta-offset",
+        geometry_manual_pairs_for_index="manual-pairs",
+        ensure_geometry_fit_caked_view="ensure-caked",
+        load_background_by_index="load-background",
+        apply_background_backend_orientation="apply-orientation",
+        geometry_manual_simulated_peaks_for_params="manual-sim-peaks",
+        geometry_manual_simulated_lookup="manual-sim-lookup",
+        geometry_manual_entry_display_coords="manual-entry-coords",
+        unrotate_display_peaks="unrotate",
+        display_to_native_sim_coords="display-to-native",
+        select_fit_orientation="select-orientation",
+        apply_orientation_to_entries="apply-entries",
+        orient_image_for_fit="orient-image",
+        build_runtime_config_factory="build-runtime-config",
+        downloads_dir="downloads-dir",
+        simulation_runtime_state="sim-state",
+        background_runtime_state="bg-state",
+        theta_initial_var="theta-var",
+        geometry_theta_offset_var="theta-offset-var",
+        current_ui_params="current-ui-params",
+        var_map={"gamma": "gamma-var"},
+        background_theta_for_index="bg-theta-for-index",
+        refresh_status="refresh-status",
+        update_manual_pick_button_label="update-manual-pick",
+        capture_undo_state="capture-undo",
+        push_undo_state="push-undo",
+        request_preview_skip_once="request-skip",
+        schedule_update="schedule-update",
+        draw_overlay_records="draw-overlay",
+        draw_initial_pairs_overlay="draw-initial",
+        set_last_overlay_state="set-overlay-state",
+        set_progress_text="set-progress",
+        cmd_line="cmd-line",
+        solver_inputs=solver_inputs,
+        sim_display_rotate_k=1,
+        background_display_rotate_k=3,
+        simulate_and_compare_hkl="simulate-and-compare",
+        aggregate_match_centers="aggregate-centers",
+        build_overlay_records="build-overlay-records",
+        compute_frame_diagnostics="frame-diagnostics",
+        solve_fit="solve-fit",
+        stamp_factory="stamp-factory",
+        flush_ui="flush-ui",
+    )
+
+    assert isinstance(bindings, geometry_fit.GeometryFitRuntimeActionBindings)
+    assert bindings.value_callbacks is value_callbacks
+    assert bindings.prepare_bindings_factory == "prepare-factory"
+    assert bindings.execution_bindings == "execution-bindings"
+    assert bindings.solve_fit == "solve-fit"
+    assert bindings.stamp_factory == "stamp-factory"
+    assert bindings.flush_ui == "flush-ui"
+    assert calls == [
+        (
+            "prepare",
+            {
+                "fit_config": {"geometry": {}},
+                "osc_files": ["bg0.osc"],
+                "current_background_index": 0,
+                "theta_initial": 9.5,
+                "image_size": 256,
+                "display_rotate_k": 3,
+                "apply_geometry_fit_background_selection": "apply-selection",
+                "current_geometry_fit_background_indices": "current-bg-indices",
+                "geometry_fit_uses_shared_theta_offset": "uses-shared-theta",
+                "apply_background_theta_metadata": "apply-theta-meta",
+                "current_background_theta_values": "current-theta-values",
+                "current_geometry_theta_offset": "current-theta-offset",
+                "geometry_manual_pairs_for_index": "manual-pairs",
+                "ensure_geometry_fit_caked_view": "ensure-caked",
+                "load_background_by_index": "load-background",
+                "apply_background_backend_orientation": "apply-orientation",
+                "geometry_manual_simulated_peaks_for_params": "manual-sim-peaks",
+                "geometry_manual_simulated_lookup": "manual-sim-lookup",
+                "geometry_manual_entry_display_coords": "manual-entry-coords",
+                "unrotate_display_peaks": "unrotate",
+                "display_to_native_sim_coords": "display-to-native",
+                "select_fit_orientation": "select-orientation",
+                "apply_orientation_to_entries": "apply-entries",
+                "orient_image_for_fit": "orient-image",
+                "build_runtime_config_factory": "build-runtime-config",
+            },
+        ),
+        (
+            "execution",
+            {
+                "downloads_dir": "downloads-dir",
+                "simulation_runtime_state": "sim-state",
+                "background_runtime_state": "bg-state",
+                "theta_initial_var": "theta-var",
+                "geometry_theta_offset_var": "theta-offset-var",
+                "current_ui_params": "current-ui-params",
+                "var_map": {"gamma": "gamma-var"},
+                "background_theta_for_index": "bg-theta-for-index",
+                "refresh_status": "refresh-status",
+                "update_manual_pick_button_label": "update-manual-pick",
+                "capture_undo_state": "capture-undo",
+                "push_undo_state": "push-undo",
+                "request_preview_skip_once": "request-skip",
+                "schedule_update": "schedule-update",
+                "draw_overlay_records": "draw-overlay",
+                "draw_initial_pairs_overlay": "draw-initial",
+                "set_last_overlay_state": "set-overlay-state",
+                "set_progress_text": "set-progress",
+                "cmd_line": "cmd-line",
+                "solver_inputs": solver_inputs,
+                "sim_display_rotate_k": 1,
+                "background_display_rotate_k": 3,
+                "simulate_and_compare_hkl": "simulate-and-compare",
+                "aggregate_match_centers": "aggregate-centers",
+                "build_overlay_records": "build-overlay-records",
+                "compute_frame_diagnostics": "frame-diagnostics",
+            },
+        ),
+    ]
 
 
 def test_apply_geometry_fit_result_values_updates_named_vars_and_offset_text() -> None:

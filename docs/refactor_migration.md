@@ -125,6 +125,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   - `ra_sim.gui.runtime` no longer manually threads the live Bragg-Qr manager
     refresh callback into the pruning workflow or re-wires the manager
     apply-filters callback inline
+- Geometry-fit manual-pair action-binding cleanup has also advanced:
+  - the shared prepare-bundle factory, execution-bundle builder, and top-level
+    action-binding builder for the live manual-pair geometry fit now live in
+    `ra_sim.gui.geometry_fit`
+  - `ra_sim.gui.runtime` no longer nests that geometry-fit action binding
+    assembly inline
 - Bragg Qr manager migration has also started:
   - Bragg-Qr selection/index bookkeeping now uses shared GUI state
   - Bragg-Qr selection mapping and group/L-value toggle mutations now flow
@@ -517,9 +523,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining selected-peak runtime code is now mostly a few bound call
   sites plus control wiring / refresh call sites around the extracted
   peak-selection modules and shared bootstrap helpers.
-- The remaining geometry-fit manual-pair runtime code is now mostly the live
-  action-bundle assembly around the extracted `ra_sim.gui.geometry_fit`
-  runtime action helper and shared runtime value bundle.
+- The remaining geometry-fit manual-pair runtime code is now mostly the
+  top-level action callback shell plus the remaining Tk-side control wiring
+  around the extracted `ra_sim.gui.geometry_fit` helper surface.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction modules.

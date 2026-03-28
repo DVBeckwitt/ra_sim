@@ -10181,112 +10181,102 @@ def on_fit_geometry_click():
             pass
 
     gui_geometry_fit.run_runtime_geometry_fit_action(
-        bindings=gui_geometry_fit.GeometryFitRuntimeActionBindings(
+        bindings=gui_geometry_fit.build_runtime_geometry_fit_action_bindings(
             value_callbacks=_geometry_fit_runtime_values(),
-            prepare_bindings_factory=(
-                lambda var_names: gui_geometry_fit.GeometryFitRuntimePreparationBindings(
-                    fit_config=fit_config,
-                    osc_files=background_runtime_state.osc_files,
-                    current_background_index=int(
-                        background_runtime_state.current_background_index
-                    ),
-                    theta_initial=theta_initial_var.get(),
-                    image_size=image_size,
-                    display_rotate_k=DISPLAY_ROTATE_K,
-                    apply_geometry_fit_background_selection=(
-                        _apply_geometry_fit_background_selection
-                    ),
-                    current_geometry_fit_background_indices=(
-                        _current_geometry_fit_background_indices
-                    ),
-                    geometry_fit_uses_shared_theta_offset=(
-                        _geometry_fit_uses_shared_theta_offset
-                    ),
-                    apply_background_theta_metadata=_apply_background_theta_metadata,
-                    current_background_theta_values=_current_background_theta_values,
-                    current_geometry_theta_offset=_current_geometry_theta_offset,
-                    geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
-                    ensure_geometry_fit_caked_view=_ensure_geometry_fit_caked_view,
-                    load_background_by_index=_load_background_image_by_index,
-                    apply_background_backend_orientation=(
-                        _apply_background_backend_orientation
-                    ),
-                    geometry_manual_simulated_peaks_for_params=(
-                        _geometry_manual_simulated_peaks_for_params
-                    ),
-                    geometry_manual_simulated_lookup=(
-                        _geometry_manual_simulated_lookup
-                    ),
-                    geometry_manual_entry_display_coords=(
-                        _geometry_manual_entry_display_coords
-                    ),
-                    unrotate_display_peaks=_unrotate_display_peaks,
-                    display_to_native_sim_coords=_display_to_native_sim_coords,
-                    select_fit_orientation=_select_fit_orientation,
-                    apply_orientation_to_entries=_apply_orientation_to_entries,
-                    orient_image_for_fit=_orient_image_for_fit,
-                    build_runtime_config=(
-                        lambda fit_params: _build_geometry_fit_runtime_config(
-                            fit_config.get("geometry", {})
-                            if isinstance(fit_config, dict)
-                            else {},
-                            {name: fit_params.get(name) for name in var_names},
-                            _current_geometry_fit_constraint_state(var_names),
-                            _current_geometry_fit_parameter_domains(var_names),
-                        )
-                    ),
+            fit_config=fit_config,
+            osc_files=background_runtime_state.osc_files,
+            current_background_index=int(
+                background_runtime_state.current_background_index
+            ),
+            theta_initial=theta_initial_var.get(),
+            image_size=image_size,
+            display_rotate_k=DISPLAY_ROTATE_K,
+            apply_geometry_fit_background_selection=(
+                _apply_geometry_fit_background_selection
+            ),
+            current_geometry_fit_background_indices=(
+                _current_geometry_fit_background_indices
+            ),
+            geometry_fit_uses_shared_theta_offset=(
+                _geometry_fit_uses_shared_theta_offset
+            ),
+            apply_background_theta_metadata=_apply_background_theta_metadata,
+            current_background_theta_values=_current_background_theta_values,
+            current_geometry_theta_offset=_current_geometry_theta_offset,
+            geometry_manual_pairs_for_index=_geometry_manual_pairs_for_index,
+            ensure_geometry_fit_caked_view=_ensure_geometry_fit_caked_view,
+            load_background_by_index=_load_background_image_by_index,
+            apply_background_backend_orientation=(
+                _apply_background_backend_orientation
+            ),
+            geometry_manual_simulated_peaks_for_params=(
+                _geometry_manual_simulated_peaks_for_params
+            ),
+            geometry_manual_simulated_lookup=_geometry_manual_simulated_lookup,
+            geometry_manual_entry_display_coords=(
+                _geometry_manual_entry_display_coords
+            ),
+            unrotate_display_peaks=_unrotate_display_peaks,
+            display_to_native_sim_coords=_display_to_native_sim_coords,
+            select_fit_orientation=_select_fit_orientation,
+            apply_orientation_to_entries=_apply_orientation_to_entries,
+            orient_image_for_fit=_orient_image_for_fit,
+            build_runtime_config_factory=(
+                lambda var_names, fit_params: _build_geometry_fit_runtime_config(
+                    fit_config.get("geometry", {})
+                    if isinstance(fit_config, dict)
+                    else {},
+                    {name: fit_params.get(name) for name in var_names},
+                    _current_geometry_fit_constraint_state(var_names),
+                    _current_geometry_fit_parameter_domains(var_names),
                 )
             ),
-            execution_bindings=gui_geometry_fit.GeometryFitRuntimeActionExecutionBindings(
-                downloads_dir=get_dir("downloads"),
-                simulation_runtime_state=simulation_runtime_state,
-                background_runtime_state=background_runtime_state,
-                theta_initial_var=theta_initial_var,
-                geometry_theta_offset_var=geometry_theta_offset_var,
-                current_ui_params=_current_geometry_fit_ui_params,
-                var_map=_geometry_fit_var_map,
-                background_theta_for_index=_background_theta_for_index,
-                refresh_status=background_runtime_callbacks.refresh_status,
-                update_manual_pick_button_label=(
-                    _update_geometry_manual_pick_button_label
-                ),
-                capture_undo_state=_capture_geometry_fit_undo_state,
-                push_undo_state=_push_geometry_fit_undo_state,
-                request_preview_skip_once=(
-                    lambda: gui_controllers.request_geometry_preview_skip_once(
-                        geometry_preview_state
-                    )
-                ),
-                schedule_update=schedule_update,
-                draw_overlay_records=(
-                    lambda records, marker_limit: _draw_geometry_fit_overlay(
-                        records,
-                        max_display_markers=marker_limit,
-                    )
-                ),
-                draw_initial_pairs_overlay=(
-                    lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
-                        pairs,
-                        max_display_markers=marker_limit,
-                    )
-                ),
-                set_last_overlay_state=_set_geometry_fit_last_overlay_state,
-                set_progress_text=(
-                    lambda text: progress_label_geometry.config(text=text)
-                ),
-                cmd_line=_cmd_line,
-                solver_inputs=gui_geometry_fit.GeometryFitRuntimeSolverInputs(
-                    miller=miller,
-                    intensities=intensities,
-                    image_size=image_size,
-                ),
-                sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-                background_display_rotate_k=DISPLAY_ROTATE_K,
-                simulate_and_compare_hkl=simulate_and_compare_hkl,
-                aggregate_match_centers=_aggregate_match_centers,
-                build_overlay_records=build_geometry_fit_overlay_records,
-                compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
+            downloads_dir=get_dir("downloads"),
+            simulation_runtime_state=simulation_runtime_state,
+            background_runtime_state=background_runtime_state,
+            theta_initial_var=theta_initial_var,
+            geometry_theta_offset_var=geometry_theta_offset_var,
+            current_ui_params=_current_geometry_fit_ui_params,
+            var_map=_geometry_fit_var_map,
+            background_theta_for_index=_background_theta_for_index,
+            refresh_status=background_runtime_callbacks.refresh_status,
+            update_manual_pick_button_label=(
+                _update_geometry_manual_pick_button_label
             ),
+            capture_undo_state=_capture_geometry_fit_undo_state,
+            push_undo_state=_push_geometry_fit_undo_state,
+            request_preview_skip_once=(
+                lambda: gui_controllers.request_geometry_preview_skip_once(
+                    geometry_preview_state
+                )
+            ),
+            schedule_update=schedule_update,
+            draw_overlay_records=(
+                lambda records, marker_limit: _draw_geometry_fit_overlay(
+                    records,
+                    max_display_markers=marker_limit,
+                )
+            ),
+            draw_initial_pairs_overlay=(
+                lambda pairs, marker_limit: _draw_initial_geometry_pairs_overlay(
+                    pairs,
+                    max_display_markers=marker_limit,
+                )
+            ),
+            set_last_overlay_state=_set_geometry_fit_last_overlay_state,
+            set_progress_text=(lambda text: progress_label_geometry.config(text=text)),
+            cmd_line=_cmd_line,
+            solver_inputs=gui_geometry_fit.GeometryFitRuntimeSolverInputs(
+                miller=miller,
+                intensities=intensities,
+                image_size=image_size,
+            ),
+            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+            background_display_rotate_k=DISPLAY_ROTATE_K,
+            simulate_and_compare_hkl=simulate_and_compare_hkl,
+            aggregate_match_centers=_aggregate_match_centers,
+            build_overlay_records=build_geometry_fit_overlay_records,
+            compute_frame_diagnostics=_geometry_overlay_frame_diagnostics,
             solve_fit=fit_geometry_parameters,
             stamp_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"),
             flush_ui=root.update_idletasks,

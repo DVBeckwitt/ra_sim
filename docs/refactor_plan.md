@@ -27,8 +27,10 @@ boots through one shared helper there instead of being assembled inline, the
 integration-range drag rectangle setup plus live region-refresh callback now
 also boot there instead of being assembled inline, the live structure-factor-
 pruning and Bragg-Qr manager workflow now also boots there through one shared
-helper instead of being manually threaded together in `runtime.py`, and the
-main remaining
+helper instead of being manually threaded together in `runtime.py`, the
+geometry-fit manual-pair action binding assembly now also delegates through
+`ra_sim.gui.geometry_fit` instead of being nested inline in `runtime.py`, and
+the main remaining
 cleanup target is now the
 residual workflow/orchestration logic still inline in `ra_sim/gui/runtime.py`,
 not `main.py` or `mosaic_profiles.py`.
@@ -450,8 +452,11 @@ not `main.py` or `mosaic_profiles.py`.
     that drives one live geometry fit from current values through prepare,
     execution-setup packaging, solver execution, and the top-level preflight
     failure/status path.
-  - `ra_sim.gui.runtime` now keeps the geometry-fit action callback shell and
-    the remaining Tk-side action-bundle assembly around the extracted helper.
+  - `ra_sim.gui.geometry_fit` now also owns the shared prepare-bundle factory,
+    execution-bundle builder, and top-level action-binding builder used by the
+    live geometry-fit action callback.
+  - `ra_sim.gui.runtime` now keeps the geometry-fit action callback shell plus
+    the remaining Tk-side control wiring around the extracted helper.
 - Background-file workflow extraction has advanced.
   - `ra_sim.gui.background_manager` now owns the background-file state
     transition, file-dialog initial-dir selection, background status refresh,
@@ -691,9 +696,9 @@ What is left:
 - The remaining selected-peak runtime code is now mostly control wiring and a
   few refresh/action call sites around the extracted peak-selection helpers
   and shared bootstrap helpers.
-- The remaining geometry-fit manual-pair runtime code is now mostly the live
-  action-bundle assembly around the extracted `ra_sim.gui.geometry_fit`
-  runtime action helper and shared runtime value bundle.
+- The remaining geometry-fit manual-pair runtime code is now mostly the
+  top-level action callback shell plus the remaining Tk-side control wiring
+  around the extracted `ra_sim.gui.geometry_fit` helper surface.
 - The remaining integration-range drag runtime code is now mostly the
   remaining cross-feature canvas event handoff around the extracted drag and
   canvas-interaction helpers.
@@ -1105,7 +1110,7 @@ Immediate checklist after the selected-peak and integration-range bootstrap clea
 - collapse the remaining selected-peak control wiring / refresh call
   sites around the extracted helpers
 - then take the remaining Bragg-Qr manager open-control / HKL lookup call sites
-- then take the geometry-fit manual-pair action-bundle assembly
+- then trim the remaining geometry-fit action callback shell / control wiring
 - defer config unification, compatibility cleanup, and repo-root cleanup until
   after those runtime workflow slices stop moving
 
