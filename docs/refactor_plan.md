@@ -1023,16 +1023,18 @@ What is done:
 - `ra_sim.gui.runtime` is now an import-safe public wrapper around the internal
   GUI implementation module.
 - `tests/test_import_smoke.py` now covers `ra_sim.gui.runtime` directly.
+- The `ra_sim.gui.app` helper and sim-signature tests now import the live
+  module directly instead of extracting functions from source text.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.
 
 What is left:
 
-- Some tests still use AST extraction against implementation files such as
-  `ra_sim/gui/app.py`.
 - Some implementation-shape tests still target the internal runtime module
   directly because they were written around the old import-heavy layout.
+- A few other narrow structural tests still use AST assertions where behavior
+  is harder to probe directly.
 
 Why it matters:
 

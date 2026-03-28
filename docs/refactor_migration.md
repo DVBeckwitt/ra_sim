@@ -64,6 +64,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   lazy-loads the heavy GUI implementation from
   `ra_sim/gui/_runtime/runtime_impl.py`.
 - `tests/test_import_smoke.py` no longer skips `ra_sim.gui.runtime`.
+- The `ra_sim.gui.app` helper and sim-signature tests now import the live
+  module directly instead of using AST/source extraction.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into
@@ -600,8 +602,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - Thin value-source rewiring, one-off callback extraction, and line-count
   reduction are no longer goals by themselves.
 - The public runtime import/startup boundary is now in much better shape.
-- The next high-ROI cleanup targets are test architecture cleanup and config
-  unification.
+- The next high-ROI cleanup targets are the remaining internal runtime-shape
+  tests and config unification.
 - Targeted runtime cleanup can still happen in structure-model, pruning,
   Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
   workflows, but only when it materially supports those goals or unblocks
