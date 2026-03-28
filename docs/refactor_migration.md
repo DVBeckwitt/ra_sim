@@ -93,6 +93,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   through the import-safe helper module `ra_sim.gui.runtime_geometry_fit`,
   and the matching regression coverage now uses direct helper tests instead
   of AST assertions against the internal runtime implementation.
+- The active Qr-cylinder overlay entry factory, overlay render-config
+  factory, and bound overlay runtime/toggle assembly now also flow through
+  the import-safe helper module
+  `ra_sim.gui.runtime_qr_cylinder_overlay`, and the matching regression
+  coverage now uses direct helper tests for that composition seam.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into

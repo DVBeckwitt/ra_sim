@@ -36,6 +36,7 @@
   - Extracted Bragg-Qr pruning/control wiring, integration-range update runtime assembly, and geometry-fit action runtime assembly into `ra_sim/gui/runtime_fit_analysis.py`, replacing the matching internal-runtime AST checks with direct helper tests.
   - Extracted geometry Q-group runtime assembly plus the cross-feature canvas interaction runtime assembly into `ra_sim/gui/runtime_geometry_preview.py`, replacing the matching internal-runtime AST checks with direct helper tests.
   - Extracted geometry-fit runtime value callback assembly, manual-dataset/config factory assembly, and geometry-fit action assembly into `ra_sim/gui/runtime_geometry_fit.py`, replacing the remaining geometry-fit runtime ordering check with direct helper tests.
+  - Extracted the Qr-cylinder overlay runtime assembly into `ra_sim/gui/runtime_qr_cylinder_overlay.py`, moving the active-entry factory, render-config factory, and bound overlay runtime/toggle surface behind one import-safe helper seam.
   - Moved the primary-CIF / diffuse-HT control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
   - Moved the optional CIF-weight control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers and reused a controller helper for weighted intensity recompute.
   - Moved the fit-geometry parameter checklist out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
@@ -98,6 +99,7 @@
   - Replaced the `ra_sim.gui.app` AST/source-extraction helper tests with direct behavioral imports.
   - Replaced the hBN fitter bundle-export AST/source-extraction regression with direct helper and save-path coverage.
   - Replaced the background portion of the internal runtime bootstrap AST checks with direct helper-module coverage.
+  - Added `tests/test_gui_runtime_qr_cylinder_overlay.py` for direct coverage of the extracted Qr-cylinder overlay runtime assembly helper.
   - Extended `tests/test_gui_geometry_fit_workflow.py` with direct coverage for the extracted geometry-fit history snapshot/restore and undo/redo runtime helpers in `ra_sim.gui.geometry_fit`.
   - Extended `tests/test_manual_geometry_selection_helpers.py` with direct coverage for placement export-row/snapshot apply helpers and the export/import dialog workflow in `ra_sim.gui.manual_geometry`.
   - Added `tests/test_gui_structure_model.py` for the extracted structure-model helpers and rebuild workflow.

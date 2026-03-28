@@ -112,6 +112,7 @@ from ra_sim.gui import runtime_fit_analysis as gui_runtime_fit_analysis
 from ra_sim.gui import runtime_geometry_fit as gui_runtime_geometry_fit
 from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_interaction
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
+from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
@@ -2661,67 +2662,83 @@ def _clear_geometry_preview_artists(*, redraw: bool = True):
         redraw=redraw,
     )
 
-active_qr_cylinder_overlay_entries_factory = (
-    gui_bragg_qr_manager.make_runtime_active_qr_cylinder_overlay_entries_factory(
-        simulation_runtime_state=simulation_runtime_state,
-        primary_candidate=(lambda: a_var.get()),
-        primary_fallback=float(av),
-        secondary_candidate=(lambda: av2),
-        primary_miller_all=(lambda: globals().get("SIM_MILLER1")),
-        secondary_miller_all=(lambda: globals().get("SIM_MILLER2")),
+qr_cylinder_overlay_workflow = (
+    gui_runtime_qr_cylinder_overlay.build_runtime_qr_cylinder_overlay_workflow(
+        bragg_qr_manager_module=gui_bragg_qr_manager,
+        qr_cylinder_overlay_module=gui_qr_cylinder_overlay,
+        bootstrap_module=gui_bootstrap,
+        active_entry_factory_kwargs={
+            "simulation_runtime_state": simulation_runtime_state,
+            "primary_candidate": (lambda: a_var.get()),
+            "primary_fallback": float(av),
+            "secondary_candidate": (lambda: av2),
+            "primary_miller_all": (lambda: globals().get("SIM_MILLER1")),
+            "secondary_miller_all": (lambda: globals().get("SIM_MILLER2")),
+        },
+        render_config_factory_kwargs={
+            "render_in_caked_space_factory": (
+                lambda: bool(analysis_view_controls_view_state.show_caked_2d_var.get())
+            ),
+            "image_size": int(image_size),
+            "display_rotate_k": int(SIM_DISPLAY_ROTATE_K),
+            "center_col_factory": (lambda: float(center_y_var.get())),
+            "center_row_factory": (lambda: float(center_x_var.get())),
+            "distance_cor_to_detector_factory": (
+                lambda: float(corto_detector_var.get())
+            ),
+            "gamma_deg_factory": (lambda: float(gamma_var.get())),
+            "Gamma_deg_factory": (lambda: float(Gamma_var.get())),
+            "chi_deg_factory": (lambda: float(chi_var.get())),
+            "psi_deg_factory": (lambda: float(psi)),
+            "psi_z_deg_factory": (lambda: float(psi_z_var.get())),
+            "zs_factory": (lambda: float(zs_var.get())),
+            "zb_factory": (lambda: float(zb_var.get())),
+            "theta_initial_deg_factory": (lambda: float(theta_initial_var.get())),
+            "cor_angle_deg_factory": (lambda: float(cor_angle_var.get())),
+            "pixel_size_m": float(pixel_size_m),
+            "wavelength": float(lambda_),
+            "n2": n2,
+        },
+        overlay_bootstrap_kwargs={
+            "ax": ax,
+            "overlay_artists": geometry_runtime_state.qr_cylinder_overlay_artists,
+            "overlay_cache": geometry_runtime_state.qr_cylinder_overlay_cache,
+            "overlay_enabled_factory": (
+                lambda: (
+                    bool(geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get())
+                    if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var
+                    is not None
+                    else False
+                )
+            ),
+            "ai_factory": (lambda: simulation_runtime_state.ai_cache.get("ai")),
+            "get_detector_angular_maps": (lambda ai: _get_detector_angular_maps(ai)),
+            "native_sim_to_display_coords": _native_sim_to_display_coords,
+            "draw_idle_factory": (
+                lambda: (canvas.draw_idle if "canvas" in globals() else None)
+            ),
+            "set_status_text_factory": (
+                lambda: (
+                    (lambda text: progress_label_positions.config(text=text))
+                    if "progress_label_positions" in globals()
+                    else None
+                )
+            ),
+        },
     )
+)
+active_qr_cylinder_overlay_entries_factory = (
+    qr_cylinder_overlay_workflow.active_entries_factory
 )
 qr_cylinder_overlay_render_config_factory = (
-    gui_qr_cylinder_overlay.make_runtime_qr_cylinder_overlay_render_config_factory(
-        render_in_caked_space_factory=lambda: (
-            bool(analysis_view_controls_view_state.show_caked_2d_var.get())
-        ),
-        image_size=int(image_size),
-        display_rotate_k=int(SIM_DISPLAY_ROTATE_K),
-        center_col_factory=lambda: float(center_y_var.get()),
-        center_row_factory=lambda: float(center_x_var.get()),
-        distance_cor_to_detector_factory=lambda: float(corto_detector_var.get()),
-        gamma_deg_factory=lambda: float(gamma_var.get()),
-        Gamma_deg_factory=lambda: float(Gamma_var.get()),
-        chi_deg_factory=lambda: float(chi_var.get()),
-        psi_deg_factory=lambda: float(psi),
-        psi_z_deg_factory=lambda: float(psi_z_var.get()),
-        zs_factory=lambda: float(zs_var.get()),
-        zb_factory=lambda: float(zb_var.get()),
-        theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
-        cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
-        pixel_size_m=float(pixel_size_m),
-        wavelength=float(lambda_),
-        n2=n2,
-    )
+    qr_cylinder_overlay_workflow.render_config_factory
 )
-qr_cylinder_overlay_runtime = gui_bootstrap.build_runtime_qr_cylinder_overlay_bootstrap(
-    qr_cylinder_overlay_module=gui_qr_cylinder_overlay,
-    ax=ax,
-    overlay_artists=geometry_runtime_state.qr_cylinder_overlay_artists,
-    overlay_cache=geometry_runtime_state.qr_cylinder_overlay_cache,
-    overlay_enabled_factory=lambda: (
-        bool(geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var.get())
-        if geometry_overlay_actions_view_state.show_qr_cylinder_overlay_var is not None
-        else False
-    ),
-    get_active_entries=active_qr_cylinder_overlay_entries_factory,
-    render_config_factory=qr_cylinder_overlay_render_config_factory,
-    ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
-    get_detector_angular_maps=lambda ai: _get_detector_angular_maps(ai),
-    native_sim_to_display_coords=_native_sim_to_display_coords,
-    draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
-    set_status_text_factory=lambda: (
-        (lambda text: progress_label_positions.config(text=text))
-        if "progress_label_positions" in globals()
-        else None
-    ),
-)
+qr_cylinder_overlay_runtime = qr_cylinder_overlay_workflow.runtime
 qr_cylinder_overlay_runtime_bindings_factory = (
-    qr_cylinder_overlay_runtime.bindings_factory
+    qr_cylinder_overlay_workflow.bindings_factory
 )
-qr_cylinder_overlay_runtime_refresh = qr_cylinder_overlay_runtime.refresh
-qr_cylinder_overlay_runtime_toggle = qr_cylinder_overlay_runtime.toggle
+qr_cylinder_overlay_runtime_refresh = qr_cylinder_overlay_workflow.refresh
+qr_cylinder_overlay_runtime_toggle = qr_cylinder_overlay_workflow.toggle
 
 def _clear_all_geometry_overlay_artists():
     """Clear fitted markers and live preview overlays together."""

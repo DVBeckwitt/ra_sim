@@ -59,9 +59,11 @@ fit-history button-state plus manual-pick label/mode/clear runtime callbacks
 now also assemble through one shared helper in `ra_sim.gui.geometry_fit`
 instead of being wired inline in `runtime.py`, the public
 `ra_sim.gui.runtime` module is now also an import-safe wrapper that lazy-loads
-the heavy GUI body from `ra_sim/gui/_runtime/runtime_impl.py`, and the project
-is now leaving open-ended runtime decomposition mode: the remaining inline code
-in that internal implementation module is mostly integration glue, so future
+the heavy GUI body from `ra_sim/gui/_runtime/runtime_impl.py`, the
+Qr-cylinder overlay runtime assembly now also flows through the import-safe
+helper module `ra_sim.gui.runtime_qr_cylinder_overlay`, and the project is now
+leaving open-ended runtime decomposition mode: the remaining inline code in
+that internal implementation module is mostly integration glue, so future
 refactors there should be driven by concrete wins rather than file-size
 reduction.
 
@@ -192,6 +194,13 @@ reduction.
     block directly.
   - Direct helper tests now cover that assembly instead of AST assertions
     against the internal runtime implementation.
+- Qr-cylinder overlay runtime/bootstrap cleanup has advanced further.
+  - The active-entry factory, render-config factory, and bound overlay
+    runtime/toggle assembly now also flow through the import-safe helper
+    module `ra_sim.gui.runtime_qr_cylinder_overlay`.
+  - `runtime_impl.py` no longer stages that overlay assembly block directly.
+  - Direct helper tests now cover that assembly through the extracted helper
+    seam.
 - Integration-range drag bootstrap cleanup has advanced further.
   - The drag-selection rectangle, integration-region rectangle, live
     integration-region refresh callback, and runtime drag callback bundle now
