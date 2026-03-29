@@ -11,9 +11,9 @@ from ra_sim.gui import bootstrap as gui_bootstrap
 
 
 def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
-    """Launch the packaged simulation GUI."""
+    """Launch the canonical packaged simulation GUI runtime."""
 
-    from ra_sim.gui.app import main as gui_main
+    from ra_sim.gui.runtime import main as gui_main
 
     gui_main(
         write_excel_flag=write_excel_flag,

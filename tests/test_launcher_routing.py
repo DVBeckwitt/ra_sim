@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from ra_sim import cli
-from ra_sim.gui import app as gui_app
+from ra_sim.gui import runtime as gui_runtime
 from ra_sim import launcher
 
 
@@ -56,7 +56,7 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
     ) -> None:
         calls.append((write_excel_flag, startup_mode, calibrant_bundle))
 
-    monkeypatch.setattr(gui_app, "main", _fake_gui_main)
+    monkeypatch.setattr(gui_runtime, "main", _fake_gui_main)
 
     launcher.launch_simulation_gui(write_excel_flag=False)
 

@@ -1,9 +1,8 @@
-"""Import-safe package entrypoint for the RA-SIM GUI.
+"""Import-safe compatibility wrapper for the packaged GUI runtime.
 
-The live single-window GUI lives in the packaged runtime module
-``ra_sim.gui.runtime``. This module keeps package imports safe by exposing a
-small compatibility surface and loading the runtime only when ``main()`` is
-called.
+The canonical simulation runtime entrypoint lives in ``ra_sim.gui.runtime``.
+This module keeps the historical ``ra_sim.gui.app.main(...)`` surface
+available for callers that still import it directly.
 """
 
 from __future__ import annotations
@@ -135,7 +134,7 @@ def do_update() -> None:
 
 
 def read_osc(_path):
-    raise RuntimeError("GUI runtime is not loaded; call ra_sim.gui.app.main().")
+    raise RuntimeError("GUI runtime is not loaded; call ra_sim.gui.runtime.main().")
 
 
 defaults = {"psi_z": 0.0}
@@ -493,16 +492,20 @@ def main(
     startup_mode: str = "prompt",
     calibrant_bundle: str | None = None,
 ) -> None:
-    """Launch the full GUI runtime lazily."""
+    """Compatibility wrapper that forwards to ``ra_sim.gui.runtime.main()``."""
 
     global write_excel
-    write_excel = gui_lazy_runtime.forward_lazy_main(
-        current_write_excel=write_excel,
-        load_runtime_module=_load_runtime_module,
+    runtime = _load_runtime_module()
+    next_write_excel = bool(write_excel)
+    if write_excel_flag is not None:
+        next_write_excel = bool(write_excel_flag)
+    runtime.write_excel = next_write_excel
+    runtime.main(
         write_excel_flag=write_excel_flag,
         startup_mode=startup_mode,
         calibrant_bundle=calibrant_bundle,
     )
+    write_excel = bool(getattr(runtime, "write_excel", next_write_excel))
 
 
 def __getattr__(name: str):
