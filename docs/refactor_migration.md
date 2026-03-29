@@ -681,6 +681,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   builder used by both `ra_sim.gui.app` and
   `ra_sim.gui._runtime.runtime_impl`, reducing duplicate runtime glue around
   that workflow.
+- The import-safe app shim now also routes geometry-fit UI/value reads through
+  the same shared geometry-fit value-callback bundle used by the main runtime
+  implementation instead of hand-building those readers separately.
 - The config compatibility migration and GUI entrypoint cleanup are now
   effectively closed out.
 - Repository-root cleanup has now landed: the tracked sqlite/session/log

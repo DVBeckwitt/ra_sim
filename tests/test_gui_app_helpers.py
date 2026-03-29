@@ -65,6 +65,38 @@ def test_app_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> N
     assert abs(runtime_cfg["priors"]["center_x"]["sigma"] - 0.5) < 1e-12
 
 
+def test_app_geometry_fit_value_helpers_delegate_to_shared_runtime_callbacks(
+    monkeypatch,
+) -> None:
+    class _FakeCallbacks:
+        var_map = {"gamma": "gamma-var"}
+
+        def current_ui_params(self):
+            return {"gamma": 1.5}
+
+        def current_var_names(self):
+            return ["gamma", "a"]
+
+    calls: list[object] = []
+    old_callbacks = gui_app._geometry_fit_runtime_value_callbacks
+    gui_app._geometry_fit_runtime_value_callbacks = None
+
+    monkeypatch.setattr(
+        gui_app.gui_geometry_fit,
+        "build_runtime_geometry_fit_value_callbacks",
+        lambda bindings: (calls.append(bindings) or _FakeCallbacks()),
+    )
+
+    try:
+        assert gui_app._current_geometry_fit_ui_params() == {"gamma": 1.5}
+        assert gui_app._current_geometry_fit_var_names() == ["gamma", "a"]
+        assert gui_app._geometry_fit_restore_var_map() == {"gamma": "gamma-var"}
+    finally:
+        gui_app._geometry_fit_runtime_value_callbacks = old_callbacks
+
+    assert len(calls) == 1
+
+
 def test_restore_geometry_fit_undo_state_uses_tk_after_cancel_helper(monkeypatch) -> None:
     """Undo restore should clear queued UI update callbacks through shared helper."""
 

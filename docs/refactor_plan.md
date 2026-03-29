@@ -80,6 +80,10 @@ builder in `ra_sim.gui.geometry_fit`, so both `ra_sim.gui.app` and
 restore delegate separately. Direct behavior tests now also cover the live
 diffraction Fresnel call paths and the packaged hBN conversion helper instead
 of reading source text to infer those contracts.
+The import-safe app shim now also resolves geometry-fit UI parameter reads,
+selected-fit variable-name reads, and undo-restore var-map lookup through the
+same shared geometry-fit value-callback bundle used by the primary runtime
+implementation instead of hand-building those value readers locally.
 
 ### What Is Already Done
 
@@ -1016,6 +1020,9 @@ What is done:
   builder used by both `ra_sim.gui.app` and `ra_sim.gui._runtime.runtime_impl`.
   - Geometry-fit undo restore no longer hand-assembles duplicate runtime glue
     across those two entry surfaces.
+- `ra_sim.gui.app` now also reads geometry-fit UI params, selected fit-variable
+  names, and undo-restore var-map state through the same shared geometry-fit
+  value-callback bundle used by the primary runtime implementation.
 
 What is left:
 

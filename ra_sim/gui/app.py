@@ -102,6 +102,19 @@ def _current_geometry_theta_offset(*, strict: bool = False) -> float:
     return 0.0
 
 
+def _background_theta_for_index(_index: int, *, strict_count: bool = False) -> float:
+    _ = strict_count
+    return float(theta_initial_var.get())
+
+
+def _build_mosaic_params() -> dict[str, object]:
+    return {}
+
+
+def _current_optics_mode_flag():
+    return None
+
+
 def _draw_geometry_fit_overlay(*_args, **_kwargs) -> None:
     return None
 
@@ -143,6 +156,7 @@ last_geometry_overlay_state = None
 last_simulation_signature = None
 update_pending = None
 geometry_theta_offset_var = None
+_geometry_fit_runtime_value_callbacks = None
 
 fit_zb_var = _PlaceholderVar(False)
 fit_zs_var = _PlaceholderVar(False)
@@ -170,6 +184,11 @@ a_var = _PlaceholderVar(0.0)
 c_var = _PlaceholderVar(0.0)
 center_x_var = _PlaceholderVar(0.0)
 center_y_var = _PlaceholderVar(0.0)
+debye_x_var = _PlaceholderVar(0.0)
+debye_y_var = _PlaceholderVar(0.0)
+lambda_ = 0.0
+psi = 0.0
+n2 = 0.0
 
 psi_z_var, psi_z_scale = make_slider(
     "Goniometer Axis Yaw (about z)",
@@ -239,69 +258,75 @@ def _copy_geometry_fit_state_value(value):
     return gui_geometry_fit.copy_geometry_fit_state_value(value)
 
 
+def _geometry_fit_runtime_values() -> gui_geometry_fit.GeometryFitRuntimeValueCallbacks:
+    """Return the bound live geometry-fit value readers for the app shim."""
+
+    global _geometry_fit_runtime_value_callbacks
+
+    callbacks = _geometry_fit_runtime_value_callbacks
+    if callbacks is None:
+        callbacks = gui_geometry_fit.build_runtime_geometry_fit_value_callbacks(
+            gui_geometry_fit.GeometryFitRuntimeValueBindings(
+                fit_zb_var=fit_zb_var,
+                fit_zs_var=fit_zs_var,
+                fit_theta_var=fit_theta_var,
+                fit_psi_z_var=fit_psi_z_var,
+                fit_chi_var=fit_chi_var,
+                fit_cor_var=fit_cor_var,
+                fit_gamma_var=fit_gamma_var,
+                fit_Gamma_var=fit_Gamma_var,
+                fit_dist_var=fit_dist_var,
+                fit_a_var=fit_a_var,
+                fit_c_var=fit_c_var,
+                fit_center_x_var=fit_center_x_var,
+                fit_center_y_var=fit_center_y_var,
+                zb_var=zb_var,
+                zs_var=zs_var,
+                theta_initial_var=theta_initial_var,
+                psi_z_var=psi_z_var,
+                chi_var=chi_var,
+                cor_angle_var=cor_angle_var,
+                gamma_var=gamma_var,
+                Gamma_var=Gamma_var,
+                corto_detector_var=corto_detector_var,
+                a_var=a_var,
+                c_var=c_var,
+                center_x_var=center_x_var,
+                center_y_var=center_y_var,
+                debye_x_var=debye_x_var,
+                debye_y_var=debye_y_var,
+                geometry_theta_offset_var=geometry_theta_offset_var,
+                current_background_index=lambda: current_background_index,
+                geometry_fit_uses_shared_theta_offset=_geometry_fit_uses_shared_theta_offset,
+                current_geometry_theta_offset=_current_geometry_theta_offset,
+                background_theta_for_index=_background_theta_for_index,
+                build_mosaic_params=_build_mosaic_params,
+                current_optics_mode_flag=_current_optics_mode_flag,
+                lambda_value=lambda_,
+                psi=psi,
+                n2=n2,
+            )
+        )
+        _geometry_fit_runtime_value_callbacks = callbacks
+    return callbacks
+
+
 def _current_geometry_fit_ui_params() -> dict[str, object]:
     """Capture the current geometry-fit UI parameter values."""
 
-    theta_offset = None
-    if geometry_theta_offset_var is not None:
-        theta_offset = float(_current_geometry_theta_offset(strict=False))
-    return gui_geometry_fit.current_geometry_fit_ui_params(
-        zb=float(zb_var.get()),
-        zs=float(zs_var.get()),
-        theta_initial=float(theta_initial_var.get()),
-        psi_z=float(psi_z_var.get()),
-        chi=float(chi_var.get()),
-        cor_angle=float(cor_angle_var.get()),
-        gamma=float(gamma_var.get()),
-        Gamma=float(Gamma_var.get()),
-        corto_detector=float(corto_detector_var.get()),
-        a=float(a_var.get()),
-        c=float(c_var.get()),
-        center_x=float(center_x_var.get()),
-        center_y=float(center_y_var.get()),
-        theta_offset=theta_offset,
-    )
+    return _geometry_fit_runtime_values().current_ui_params()
 
 
 def _current_geometry_fit_var_names() -> list[str]:
     """Return the currently selected geometry variables for LSQ fitting."""
 
-    return gui_geometry_fit.current_geometry_fit_var_names(
-        fit_zb=bool(fit_zb_var.get()),
-        fit_zs=bool(fit_zs_var.get()),
-        fit_theta=bool(fit_theta_var.get()),
-        fit_psi_z=bool(fit_psi_z_var.get()),
-        fit_chi=bool(fit_chi_var.get()),
-        fit_cor=bool(fit_cor_var.get()),
-        fit_gamma=bool(fit_gamma_var.get()),
-        fit_Gamma=bool(fit_Gamma_var.get()),
-        fit_dist=bool(fit_dist_var.get()),
-        fit_a=bool(fit_a_var.get()),
-        fit_c=bool(fit_c_var.get()),
-        fit_center_x=bool(fit_center_x_var.get()),
-        fit_center_y=bool(fit_center_y_var.get()),
-        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
-    )
+    return _geometry_fit_runtime_values().current_var_names()
 
 
 def _geometry_fit_restore_var_map() -> dict[str, object]:
     """Return the current geometry-fit runtime Tk variable mapping."""
 
-    return {
-        "zb": zb_var,
-        "zs": zs_var,
-        "theta_initial": theta_initial_var,
-        "psi_z": psi_z_var,
-        "chi": chi_var,
-        "cor_angle": cor_angle_var,
-        "gamma": gamma_var,
-        "Gamma": Gamma_var,
-        "corto_detector": corto_detector_var,
-        "a": a_var,
-        "c": c_var,
-        "center_x": center_x_var,
-        "center_y": center_y_var,
-    }
+    return dict(_geometry_fit_runtime_values().var_map)
 
 
 def _set_geometry_fit_profile_cache(cached_profile_state: Mapping[str, object]) -> None:
