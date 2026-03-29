@@ -1,5 +1,5 @@
 import numpy as np
-from ra_sim.utils.tools import miller_generator, intensities_for_hkls
+from ra_sim.utils.diffraction_tools import miller_generator, intensities_for_hkls
 
 
 def test_intensities_for_hkls_matches_miller_generator():

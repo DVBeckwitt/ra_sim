@@ -45,7 +45,7 @@ from ra_sim.utils.stacking_fault import (
     validate_phase_delta_expression,
 )
 from ra_sim.hbn import load_tilt_hint, run_hbn_fit
-from ra_sim.utils.tools import (
+from ra_sim.utils.diffraction_tools import (
     detector_two_theta_max,
     DEFAULT_PIXEL_SIZE_M,
 )
