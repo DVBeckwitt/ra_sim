@@ -654,6 +654,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - As of 2026-03-29, the refactor is leaving open-ended `runtime.py`
   decomposition mode.
 - `ra_sim.gui.runtime` is now an import-safe public wrapper.
+- `main.py` now has explicit root-entrypoint import-safety regression coverage to
+  verify launcher delegation stays the only module-level boundary during import.
 - `ra_sim.gui.app` now has explicit import-time and `main()` forwarding lazy-load
   coverage, plus explicit local attribute-surface handling (`main`, `write_excel`,
   guarded dunder behavior, and lazy `__dir__`).

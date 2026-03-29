@@ -79,6 +79,8 @@ when restoring geometry-fit state before redraw.
 
 - Root launch path is now packaged.
   - `main.py` is a thin compatibility wrapper around `ra_sim.launcher`.
+  - `main.py` has explicit import-safety coverage to keep launcher delegation
+    lazy and avoid unintended GUI-module loading during root entrypoint import.
   - `ra_sim.cli` launches the GUI via package code, not a root-script monolith.
 - Package import safety improved.
   - `ra_sim.gui.app` is now an import-safe entrypoint that lazy-loads
