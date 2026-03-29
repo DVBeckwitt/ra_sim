@@ -15,6 +15,7 @@ gui_bootstrap.early_main_bootstrap(__name__)
 import math
 import json
 import copy
+import concurrent.futures
 import re
 from collections import defaultdict, namedtuple
 from datetime import datetime
@@ -1435,6 +1436,26 @@ if (
 def _shutdown_gui():
     """Close all application windows and end the Tk event loop."""
 
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.worker_poll_token,
+    )
+    simulation_runtime_state.worker_poll_token = None
+
+    executor = simulation_runtime_state.worker_executor
+    simulation_runtime_state.worker_executor = None
+    simulation_runtime_state.worker_future = None
+    simulation_runtime_state.worker_active_job = None
+    simulation_runtime_state.worker_queued_job = None
+    simulation_runtime_state.worker_ready_result = None
+    if executor is not None:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=False)
+        except Exception:
+            pass
+
     try:
         if root.winfo_exists():
             root.destroy()
@@ -1855,7 +1876,7 @@ def _replace_runtime_geometry_fit_profile_cache(
 def _mark_runtime_geometry_fit_simulation_dirty() -> None:
     """Clear the cached runtime simulation signature after geometry-fit restore."""
 
-    simulation_runtime_state.last_simulation_signature = None
+    _invalidate_simulation_cache()
 
 
 def _cancel_runtime_geometry_fit_pending_update() -> None:
@@ -2365,7 +2386,11 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
             root=root,
             update_pending=simulation_runtime_state.update_pending,
             integration_update_pending=simulation_runtime_state.integration_update_pending,
-            update_running=bool(globals().get("update_running", False)),
+            update_running=bool(
+                simulation_runtime_state.update_running
+                or simulation_runtime_state.worker_active_job is not None
+                or simulation_runtime_state.worker_queued_job is not None
+            ),
             force_refresh=force_refresh,
         )
     )
@@ -4314,10 +4339,443 @@ line_amax, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
 UPDATE_DEBOUNCE_MS = 120
 RANGE_UPDATE_DEBOUNCE_MS = 120
 CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
+SIMULATION_WORKER_POLL_MS = 40
 
 simulation_runtime_state.update_pending = None
 simulation_runtime_state.integration_update_pending = None
 simulation_runtime_state.update_running = False
+
+
+def _worker_job_key(payload: object) -> tuple[object, int]:
+    if not isinstance(payload, dict):
+        return (None, -1)
+    return (
+        payload.get("signature"),
+        int(payload.get("epoch", -1)),
+    )
+
+
+def _truncate_run_status_piece(text: object, *, max_chars: int = 24) -> str:
+    summary = " ".join(str(text).split())
+    if len(summary) <= max_chars:
+        return summary
+    if max_chars <= 6:
+        return summary[:max_chars]
+    lead = max(2, (max_chars - 3) // 2)
+    tail = max(1, max_chars - 3 - lead)
+    return f"{summary[:lead]}...{summary[-tail:]}"
+
+
+def _refresh_run_status_bar() -> None:
+    phase_raw = str(simulation_runtime_state.update_phase or "ready").strip().lower()
+    phase_labels = {
+        "startup": "Starting",
+        "queued": "Queued",
+        "computing": "Computing",
+        "applying": "Applying",
+        "ready": "Ready",
+        "error": "Error",
+    }
+    phase_text = phase_labels.get(phase_raw, "Ready")
+    if simulation_runtime_state.worker_active_job is not None:
+        phase_text = "Computing"
+    elif simulation_runtime_state.worker_queued_job is not None and phase_text == "Ready":
+        phase_text = "Queued"
+
+    background_total = max(1, len(background_runtime_state.osc_files))
+    background_index = int(background_runtime_state.current_background_index) + 1
+
+    try:
+        cif_summary = Path(_current_primary_cif_path()).name
+    except Exception:
+        cif_summary = "n/a"
+    cif_summary = _truncate_run_status_piece(cif_summary, max_chars=26)
+
+    try:
+        optics_summary = _normalize_optics_mode_label(optics_mode_var.get())
+    except Exception:
+        optics_summary = "fast"
+
+    view_summary = "Caked" if bool(
+        getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
+    ) else "Detector"
+    if bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()):
+        view_summary = f"{view_summary}+1D"
+
+    parts = [
+        f"State: {phase_text}",
+        f"BG {background_index}/{background_total}",
+        f"CIF {cif_summary}",
+        f"Samples {int(max(1, simulation_runtime_state.num_samples))}",
+        f"Optics {optics_summary}",
+        f"View {view_summary}",
+    ]
+    last_total_ms = simulation_runtime_state.last_total_update_ms
+    if isinstance(last_total_ms, (int, float)) and np.isfinite(float(last_total_ms)):
+        parts.append(f"Last {float(last_total_ms):.0f} ms")
+    gui_views.set_app_shell_run_status_text(
+        app_shell_view_state,
+        " | ".join(parts),
+    )
+
+
+def _invalidate_simulation_cache() -> None:
+    simulation_runtime_state.last_simulation_signature = None
+    simulation_runtime_state.simulation_epoch = int(simulation_runtime_state.simulation_epoch) + 1
+
+    ready_result = simulation_runtime_state.worker_ready_result
+    if (
+        isinstance(ready_result, dict)
+        and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
+    ):
+        simulation_runtime_state.worker_ready_result = None
+
+    queued_job = simulation_runtime_state.worker_queued_job
+    if (
+        isinstance(queued_job, dict)
+        and int(queued_job.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
+    ):
+        simulation_runtime_state.worker_queued_job = None
+
+    if simulation_runtime_state.worker_active_job is None:
+        simulation_runtime_state.update_phase = "queued"
+    _refresh_run_status_bar()
+
+
+def _invalidate_and_schedule_update() -> None:
+    _invalidate_simulation_cache()
+    schedule_update()
+
+
+def _ensure_simulation_worker_executor():
+    executor = simulation_runtime_state.worker_executor
+    if executor is None:
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="ra-sim-sim",
+        )
+        simulation_runtime_state.worker_executor = executor
+    return executor
+
+
+def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
+    image_size = int(job["image_size"])
+    pixel_size_m_job = float(job["pixel_size_m"])
+    center = np.asarray(job["center"], dtype=np.float64)
+    request_unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    request_n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    mosaic_params_job = dict(job["mosaic_params"])
+    image_generation_start_time = perf_counter()
+
+    def build_request(
+        miller_arr,
+        intens_vals,
+        *,
+        a_val,
+        c_val,
+        image_buffer,
+    ) -> SimulationRequest:
+        return SimulationRequest(
+            miller=np.asarray(miller_arr, dtype=np.float64),
+            intensities=np.asarray(intens_vals, dtype=np.float64).reshape(-1),
+            geometry=DetectorGeometry(
+                image_size=image_size,
+                av=float(a_val),
+                cv=float(c_val),
+                lambda_angstrom=float(job["lambda_value"]),
+                distance_m=float(job["distance_m"]),
+                gamma_deg=float(job["gamma_deg"]),
+                Gamma_deg=float(job["Gamma_deg"]),
+                chi_deg=float(job["chi_deg"]),
+                psi_deg=float(job["psi_deg"]),
+                psi_z_deg=float(job["psi_z_deg"]),
+                zs=float(job["zs"]),
+                zb=float(job["zb"]),
+                center=center,
+                theta_initial_deg=float(job["theta_initial_deg"]),
+                cor_angle_deg=float(job["cor_angle_deg"]),
+                unit_x=request_unit_x,
+                n_detector=request_n_detector,
+                pixel_size_m=pixel_size_m_job,
+                sample_width_m=float(job["sample_width_m"]),
+                sample_length_m=float(job["sample_length_m"]),
+            ),
+            beam=BeamSamples(
+                beam_x_array=np.asarray(mosaic_params_job["beam_x_array"], dtype=np.float64),
+                beam_y_array=np.asarray(mosaic_params_job["beam_y_array"], dtype=np.float64),
+                theta_array=np.asarray(mosaic_params_job["theta_array"], dtype=np.float64),
+                phi_array=np.asarray(mosaic_params_job["phi_array"], dtype=np.float64),
+                wavelength_array=np.asarray(
+                    mosaic_params_job["wavelength_array"],
+                    dtype=np.float64,
+                ),
+                n2_sample_array=(
+                    None
+                    if mosaic_params_job.get("n2_sample_array") is None
+                    else np.asarray(
+                        mosaic_params_job["n2_sample_array"],
+                        dtype=np.complex128,
+                    )
+                ),
+            ),
+            mosaic=MosaicParams(
+                sigma_mosaic_deg=float(mosaic_params_job["sigma_mosaic_deg"]),
+                gamma_mosaic_deg=float(mosaic_params_job["gamma_mosaic_deg"]),
+                eta=float(mosaic_params_job["eta"]),
+                solve_q_steps=int(mosaic_params_job["solve_q_steps"]),
+                solve_q_rel_tol=float(mosaic_params_job["solve_q_rel_tol"]),
+                solve_q_mode=int(mosaic_params_job["solve_q_mode"]),
+            ),
+            debye_waller=DebyeWallerParams(
+                x=float(job["debye_x"]),
+                y=float(job["debye_y"]),
+            ),
+            n2=job["n2_value"],
+            image_buffer=image_buffer,
+            save_flag=0,
+            thickness=float(job["sample_depth_m"]),
+            optics_mode=int(job["optics_mode"]),
+            collect_hit_tables=bool(job["collect_hit_tables"]),
+        )
+
+    def run_one(data, intens_arr, a_val, c_val):
+        buf = np.zeros((image_size, image_size), dtype=np.float64)
+        if isinstance(data, dict):
+            if len(data) == 0:
+                return buf, []
+            result = simulate_qr_rods_request(
+                data,
+                build_request(
+                    np.empty((0, 3), dtype=np.float64),
+                    np.empty(0, dtype=np.float64),
+                    a_val=a_val,
+                    c_val=c_val,
+                    image_buffer=buf,
+                ),
+            )
+            return result.image, list(result.hit_tables)
+
+        miller_arr = np.asarray(data, dtype=np.float64)
+        intens_vals = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
+        if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
+            return buf, []
+        row_count = min(miller_arr.shape[0], intens_vals.shape[0])
+        if row_count <= 0:
+            return buf, []
+        result = simulate_request(
+            build_request(
+                miller_arr[:row_count, :],
+                intens_vals[:row_count],
+                a_val=a_val,
+                c_val=c_val,
+                image_buffer=buf,
+            )
+        )
+        return result.image, list(result.hit_tables)
+
+    primary_data = job["primary_data"]
+    primary_intensities = job["primary_intensities"]
+    secondary_data = job["secondary_data"]
+    secondary_intensities = job["secondary_intensities"]
+
+    img1 = np.zeros((image_size, image_size), dtype=np.float64)
+    img2 = np.zeros((image_size, image_size), dtype=np.float64)
+    maxpos1: list[object] = []
+    maxpos2: list[object] = []
+
+    if bool(job["run_primary"]):
+        img1, maxpos1 = run_one(
+            primary_data,
+            primary_intensities,
+            float(job["a_primary"]),
+            float(job["c_primary"]),
+        )
+
+    if bool(job["run_secondary"]):
+        img2, maxpos2 = run_one(
+            secondary_data,
+            secondary_intensities,
+            float(job["a_secondary"]),
+            float(job["c_secondary"]),
+        )
+
+    return {
+        "job_id": int(job["job_id"]),
+        "signature": job["signature"],
+        "epoch": int(job["epoch"]),
+        "primary_image": img1,
+        "secondary_image": img2,
+        "primary_max_positions": list(maxpos1),
+        "secondary_max_positions": list(maxpos2),
+        "primary_peak_table_lattice": [
+            (float(job["a_primary"]), float(job["c_primary"]), "primary")
+            for _ in maxpos1
+        ],
+        "secondary_peak_table_lattice": [
+            (float(job["a_secondary"]), float(job["c_secondary"]), "secondary")
+            for _ in maxpos2
+        ],
+        "image_generation_elapsed_ms": (
+            perf_counter() - image_generation_start_time
+        ) * 1e3,
+    }
+
+
+def _submit_async_simulation_job(job: dict[str, object]) -> None:
+    simulation_runtime_state.worker_active_job = job
+    simulation_runtime_state.worker_future = _ensure_simulation_worker_executor().submit(
+        _run_simulation_generation_job,
+        dict(job),
+    )
+    simulation_runtime_state.worker_error_text = None
+    simulation_runtime_state.update_phase = "computing"
+    _refresh_run_status_bar()
+    if simulation_runtime_state.worker_poll_token is None:
+        simulation_runtime_state.worker_poll_token = root.after(
+            SIMULATION_WORKER_POLL_MS,
+            _poll_async_simulation_job,
+        )
+
+
+def _poll_async_simulation_job() -> None:
+    simulation_runtime_state.worker_poll_token = None
+    future = simulation_runtime_state.worker_future
+    active_job = simulation_runtime_state.worker_active_job
+    if future is None or active_job is None:
+        queued_job = simulation_runtime_state.worker_queued_job
+        if isinstance(queued_job, dict):
+            simulation_runtime_state.worker_queued_job = None
+            _submit_async_simulation_job(queued_job)
+            return
+        _refresh_run_status_bar()
+        return
+
+    if not future.done():
+        simulation_runtime_state.worker_poll_token = root.after(
+            SIMULATION_WORKER_POLL_MS,
+            _poll_async_simulation_job,
+        )
+        return
+
+    simulation_runtime_state.worker_future = None
+    simulation_runtime_state.worker_active_job = None
+    queued_job = simulation_runtime_state.worker_queued_job
+    try:
+        result = future.result()
+    except Exception as exc:
+        simulation_runtime_state.worker_error_text = str(exc)
+        simulation_runtime_state.update_phase = "error"
+        if "progress_label" in globals() and progress_label is not None:
+            progress_label.config(text=f"Simulation update failed: {exc}")
+        _refresh_run_status_bar()
+        if isinstance(queued_job, dict):
+            simulation_runtime_state.worker_queued_job = None
+            _submit_async_simulation_job(queued_job)
+        return
+
+    latest_epoch = int(simulation_runtime_state.simulation_epoch)
+    result_epoch = int(result.get("epoch", -1))
+    superseded = isinstance(queued_job, dict) and int(queued_job.get("job_id", -1)) > int(
+        result.get("job_id", -1)
+    )
+    if result_epoch != latest_epoch or superseded:
+        if isinstance(queued_job, dict):
+            simulation_runtime_state.worker_queued_job = None
+            _submit_async_simulation_job(queued_job)
+        else:
+            simulation_runtime_state.update_phase = "queued"
+            _refresh_run_status_bar()
+        return
+
+    simulation_runtime_state.worker_ready_result = result
+    simulation_runtime_state.last_image_generation_ms = float(
+        result.get("image_generation_elapsed_ms", float("nan"))
+    )
+    simulation_runtime_state.update_phase = "applying"
+    _refresh_run_status_bar()
+    root.after_idle(do_update)
+
+
+def _request_async_simulation_job(job: dict[str, object]) -> str:
+    requested_key = _worker_job_key(job)
+    if _worker_job_key(simulation_runtime_state.worker_ready_result) == requested_key:
+        simulation_runtime_state.update_phase = "applying"
+        _refresh_run_status_bar()
+        return "ready"
+
+    if _worker_job_key(simulation_runtime_state.worker_active_job) == requested_key:
+        simulation_runtime_state.update_phase = "computing"
+        _refresh_run_status_bar()
+        return "running"
+
+    if _worker_job_key(simulation_runtime_state.worker_queued_job) == requested_key:
+        simulation_runtime_state.update_phase = "queued"
+        _refresh_run_status_bar()
+        return "queued"
+
+    simulation_runtime_state.worker_job_counter = int(simulation_runtime_state.worker_job_counter) + 1
+    queued_job = dict(job)
+    queued_job["job_id"] = int(simulation_runtime_state.worker_job_counter)
+    simulation_runtime_state.worker_error_text = None
+
+    if (
+        simulation_runtime_state.worker_active_job is None
+        and simulation_runtime_state.worker_future is None
+    ):
+        _submit_async_simulation_job(queued_job)
+        return "submitted"
+
+    simulation_runtime_state.worker_queued_job = queued_job
+    simulation_runtime_state.update_phase = "queued"
+    _refresh_run_status_bar()
+    return "queued"
+
+
+def _consume_ready_simulation_result(signature: object) -> dict[str, object] | None:
+    ready_result = simulation_runtime_state.worker_ready_result
+    if _worker_job_key(ready_result) != (
+        signature,
+        int(simulation_runtime_state.simulation_epoch),
+    ):
+        if (
+            isinstance(ready_result, dict)
+            and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.simulation_epoch)
+        ):
+            simulation_runtime_state.worker_ready_result = None
+        return None
+
+    simulation_runtime_state.worker_ready_result = None
+    return dict(ready_result)
+
+
+def _apply_ready_simulation_result(result: dict[str, object]) -> None:
+    simulation_runtime_state.stored_primary_sim_image = np.asarray(
+        result.get("primary_image"),
+        dtype=np.float64,
+    )
+    simulation_runtime_state.stored_secondary_sim_image = np.asarray(
+        result.get("secondary_image"),
+        dtype=np.float64,
+    )
+    simulation_runtime_state.stored_primary_max_positions = list(
+        result.get("primary_max_positions", [])
+    )
+    simulation_runtime_state.stored_secondary_max_positions = list(
+        result.get("secondary_max_positions", [])
+    )
+    simulation_runtime_state.stored_primary_peak_table_lattice = list(
+        result.get("primary_peak_table_lattice", [])
+    )
+    simulation_runtime_state.stored_secondary_peak_table_lattice = list(
+        result.get("secondary_peak_table_lattice", [])
+    )
+    simulation_runtime_state.stored_max_positions_local = None
+    simulation_runtime_state.stored_peak_table_lattice = None
+    simulation_runtime_state.stored_sim_image = None
+    simulation_runtime_state.last_image_generation_ms = float(
+        result.get("image_generation_elapsed_ms", float("nan"))
+    )
+
 
 def schedule_update():
     """Queue a throttled simulation/redraw update."""
@@ -4332,6 +4790,9 @@ def schedule_update():
         simulation_runtime_state.update_pending,
     )
     simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
+    if simulation_runtime_state.worker_active_job is None:
+        simulation_runtime_state.update_phase = "queued"
+    _refresh_run_status_bar()
 
 
 def _should_collect_hit_tables_for_update() -> bool:
@@ -4405,6 +4866,9 @@ def do_update():
 
     simulation_runtime_state.update_pending = None
     simulation_runtime_state.update_running = True
+    if simulation_runtime_state.worker_active_job is None:
+        simulation_runtime_state.update_phase = "applying"
+    _refresh_run_status_bar()
     update_start_time = perf_counter()
     image_generation_elapsed_ms = 0.0
     image_generation_cached = True
@@ -4527,261 +4991,183 @@ def do_update():
         )
 
     new_sim_sig = get_sim_signature()
-    if new_sim_sig != simulation_runtime_state.last_simulation_signature:
-        _invalidate_geometry_manual_pick_cache()
+    ready_simulation_result = _consume_ready_simulation_result(new_sim_sig)
+    if ready_simulation_result is not None:
+        _apply_ready_simulation_result(ready_simulation_result)
         simulation_runtime_state.last_simulation_signature = new_sim_sig
+        image_generation_cached = False
+        image_generation_elapsed_ms = float(
+            ready_simulation_result.get("image_generation_elapsed_ms", 0.0)
+        )
+        simulation_runtime_state.update_phase = "applying"
+        _refresh_run_status_bar()
+
+    if ready_simulation_result is None and new_sim_sig != simulation_runtime_state.last_simulation_signature:
+        _invalidate_geometry_manual_pick_cache()
         simulation_runtime_state.peak_positions.clear()
         simulation_runtime_state.peak_millers.clear()
         simulation_runtime_state.peak_intensities.clear()
         simulation_runtime_state.peak_records.clear()
         simulation_runtime_state.selected_peak_record = None
-        image_generation_cached = False
-        image_generation_start_time = perf_counter()
-        request_unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-        request_n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        request_center = np.array([center_x_up, center_y_up], dtype=np.float64)
-
-        def build_request(
-            miller_arr,
-            intens_vals,
-            *,
-            a_val,
-            c_val,
-            image_buffer,
-        ) -> SimulationRequest:
-            return SimulationRequest(
-                miller=np.asarray(miller_arr, dtype=np.float64),
-                intensities=np.asarray(intens_vals, dtype=np.float64).reshape(-1),
-                geometry=DetectorGeometry(
-                    image_size=image_size,
-                    av=float(a_val),
-                    cv=float(c_val),
-                    lambda_angstrom=float(lambda_),
-                    distance_m=float(corto_det_up),
-                    gamma_deg=float(gamma_updated),
-                    Gamma_deg=float(Gamma_updated),
-                    chi_deg=float(chi_updated),
-                    psi_deg=float(psi),
-                    psi_z_deg=float(psi_z_updated),
-                    zs=float(zs_updated),
-                    zb=float(zb_updated),
-                    center=request_center,
-                    theta_initial_deg=float(theta_init_up),
-                    cor_angle_deg=float(cor_angle_updated),
-                    unit_x=request_unit_x,
-                    n_detector=request_n_detector,
-                    pixel_size_m=float(pixel_size_m),
-                    sample_width_m=float(sample_width_updated),
-                    sample_length_m=float(sample_length_updated),
-                ),
-                beam=BeamSamples(
-                    beam_x_array=np.asarray(mosaic_params["beam_x_array"], dtype=np.float64),
-                    beam_y_array=np.asarray(mosaic_params["beam_y_array"], dtype=np.float64),
-                    theta_array=np.asarray(mosaic_params["theta_array"], dtype=np.float64),
-                    phi_array=np.asarray(mosaic_params["phi_array"], dtype=np.float64),
-                    wavelength_array=np.asarray(
-                        mosaic_params["wavelength_array"],
-                        dtype=np.float64,
-                    ),
-                    n2_sample_array=(
-                        None
-                        if mosaic_params.get("n2_sample_array") is None
-                        else np.asarray(
-                            mosaic_params["n2_sample_array"],
-                            dtype=np.complex128,
-                        )
-                    ),
-                ),
-                mosaic=MosaicParams(
-                    sigma_mosaic_deg=float(mosaic_params["sigma_mosaic_deg"]),
-                    gamma_mosaic_deg=float(mosaic_params["gamma_mosaic_deg"]),
-                    eta=float(mosaic_params["eta"]),
-                    solve_q_steps=int(mosaic_params["solve_q_steps"]),
-                    solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
-                    solve_q_mode=int(mosaic_params["solve_q_mode"]),
-                ),
-                debye_waller=DebyeWallerParams(
-                    x=float(debye_x_updated),
-                    y=float(debye_y_updated),
-                ),
-                n2=n2,
-                image_buffer=image_buffer,
-                save_flag=0,
-                thickness=float(sample_depth_updated),
-                optics_mode=int(optics_mode_flag),
-                collect_hit_tables=collect_hit_tables_requested,
+        primary_data = (
+            gui_controllers.copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr)
+            if isinstance(simulation_runtime_state.sim_primary_qr, dict)
+            and len(simulation_runtime_state.sim_primary_qr) > 0
+            else np.asarray(simulation_runtime_state.sim_miller1, dtype=np.float64).copy()
+        )
+        primary_intensities = np.asarray(
+            simulation_runtime_state.sim_intens1,
+            dtype=np.float64,
+        ).copy()
+        secondary_data = np.asarray(
+            simulation_runtime_state.sim_miller2,
+            dtype=np.float64,
+        ).copy()
+        secondary_intensities = np.asarray(
+            simulation_runtime_state.sim_intens2,
+            dtype=np.float64,
+        ).copy()
+        secondary_a = float(av2) if av2 is not None else float(a_updated)
+        secondary_c = float(cv2) if cv2 is not None else float(c_updated)
+        primary_available = (
+            len(primary_data) > 0
+            if isinstance(primary_data, dict)
+            else (
+                np.asarray(primary_data).ndim == 2
+                and np.asarray(primary_data).shape[0] > 0
+                and primary_intensities.size > 0
             )
-
-        def run_one(data, intens_arr, a_val, c_val):
-            buf = np.zeros((image_size, image_size), dtype=np.float64)
-            if isinstance(data, dict):
-                if len(data) == 0:
-                    return buf, [], None, None, None, None, None
-                if DEBUG_ENABLED:
-                    n_pts = sum(len(v["L"]) for v in data.values())
-                    debug_print("process_qr_rods_parallel with", n_pts, "points")
-                result = simulate_qr_rods_request(
-                    data,
-                    build_request(
-                        np.empty((0, 3), dtype=np.float64),
-                        np.empty(0, dtype=np.float64),
-                        a_val=a_val,
-                        c_val=c_val,
-                        image_buffer=buf,
-                    ),
-                )
-                return (
-                    result.image,
-                    result.hit_tables,
-                    result.q_data,
-                    result.q_count,
-                    result.all_status,
-                    result.miss_tables,
-                    result.degeneracy,
-                )
-            else:
-                miller_arr = np.asarray(data, dtype=np.float64)
-                intens_vals = np.asarray(intens_arr, dtype=np.float64).reshape(-1)
-                if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
-                    return buf, [], None, None, None, None, None
-                row_count = min(miller_arr.shape[0], intens_vals.shape[0])
-                if row_count <= 0:
-                    return buf, [], None, None, None, None, None
-                miller_arr = miller_arr[:row_count, :]
-                intens_vals = intens_vals[:row_count]
-                if DEBUG_ENABLED:
-                    debug_print("process_peaks_parallel with", miller_arr.shape[0], "reflections")
-                    if not np.all(np.isfinite(miller_arr)):
-                        debug_print("Non-finite miller indices detected")
-                    if not np.all(np.isfinite(intens_vals)):
-                        debug_print("Non-finite intensities detected")
-                result = simulate_request(
-                    build_request(
-                        miller_arr,
-                        intens_vals,
-                        a_val=a_val,
-                        c_val=c_val,
-                        image_buffer=buf,
-                    ),
-                )
-                return (
-                    result.image,
-                    result.hit_tables,
-                    result.q_data,
-                    result.q_count,
-                    result.all_status,
-                    result.miss_tables,
-                    None,
-                )
-
-        w1 = float(weight1_var.get())
-        w2 = float(weight2_var.get())
-        run_primary = abs(w1) > 1e-12
-        run_secondary = bool(simulation_runtime_state.sim_miller2.size > 0 and abs(w2) > 1e-12)
-
-        img1 = np.zeros((image_size, image_size), dtype=np.float64)
-        img2 = np.zeros((image_size, image_size), dtype=np.float64)
-        maxpos1 = []
-        maxpos2 = []
-
-        if run_primary:
-            primary_data = (
-                simulation_runtime_state.sim_primary_qr
-                if isinstance(simulation_runtime_state.sim_primary_qr, dict) and len(simulation_runtime_state.sim_primary_qr) > 0
-                else simulation_runtime_state.sim_miller1
+        )
+        secondary_available = (
+            secondary_data.ndim == 2
+            and secondary_data.shape[0] > 0
+            and secondary_intensities.size > 0
+        )
+        simulation_job = {
+            "signature": new_sim_sig,
+            "epoch": int(simulation_runtime_state.simulation_epoch),
+            "image_size": int(image_size),
+            "pixel_size_m": float(pixel_size_m),
+            "center": np.asarray([center_x_up, center_y_up], dtype=np.float64).copy(),
+            "mosaic_params": {
+                "beam_x_array": np.asarray(mosaic_params["beam_x_array"], dtype=np.float64).copy(),
+                "beam_y_array": np.asarray(mosaic_params["beam_y_array"], dtype=np.float64).copy(),
+                "theta_array": np.asarray(mosaic_params["theta_array"], dtype=np.float64).copy(),
+                "phi_array": np.asarray(mosaic_params["phi_array"], dtype=np.float64).copy(),
+                "wavelength_array": np.asarray(
+                    mosaic_params["wavelength_array"],
+                    dtype=np.float64,
+                ).copy(),
+                "n2_sample_array": (
+                    None
+                    if mosaic_params.get("n2_sample_array") is None
+                    else np.asarray(
+                        mosaic_params["n2_sample_array"],
+                        dtype=np.complex128,
+                    ).copy()
+                ),
+                "sigma_mosaic_deg": float(mosaic_params["sigma_mosaic_deg"]),
+                "gamma_mosaic_deg": float(mosaic_params["gamma_mosaic_deg"]),
+                "eta": float(mosaic_params["eta"]),
+                "solve_q_steps": int(mosaic_params["solve_q_steps"]),
+                "solve_q_rel_tol": float(mosaic_params["solve_q_rel_tol"]),
+                "solve_q_mode": int(mosaic_params["solve_q_mode"]),
+            },
+            "lambda_value": float(lambda_),
+            "distance_m": float(corto_det_up),
+            "gamma_deg": float(gamma_updated),
+            "Gamma_deg": float(Gamma_updated),
+            "chi_deg": float(chi_updated),
+            "psi_deg": float(psi),
+            "psi_z_deg": float(psi_z_updated),
+            "zs": float(zs_updated),
+            "zb": float(zb_updated),
+            "theta_initial_deg": float(theta_init_up),
+            "cor_angle_deg": float(cor_angle_updated),
+            "sample_width_m": float(sample_width_updated),
+            "sample_length_m": float(sample_length_updated),
+            "sample_depth_m": float(sample_depth_updated),
+            "debye_x": float(debye_x_updated),
+            "debye_y": float(debye_y_updated),
+            "optics_mode": int(optics_mode_flag),
+            "collect_hit_tables": bool(collect_hit_tables_requested),
+            "n2_value": n2,
+            "primary_data": primary_data,
+            "primary_intensities": primary_intensities,
+            "secondary_data": secondary_data,
+            "secondary_intensities": secondary_intensities,
+            "run_primary": bool(primary_available),
+            "run_secondary": bool(secondary_available),
+            "a_primary": float(a_updated),
+            "c_primary": float(c_updated),
+            "a_secondary": float(secondary_a),
+            "c_secondary": float(secondary_c),
+        }
+        has_cached_simulation = (
+            simulation_runtime_state.stored_primary_sim_image is not None
+            or simulation_runtime_state.stored_secondary_sim_image is not None
+        )
+        if not has_cached_simulation:
+            if "progress_label" in globals() and progress_label is not None:
+                progress_label.config(text="Computing initial simulation...")
+            sync_result = _run_simulation_generation_job(
+                {
+                    **simulation_job,
+                    "job_id": 0,
+                }
             )
-            img1, maxpos1, _, _, _, _, _ = run_one(
-                primary_data,
-                simulation_runtime_state.sim_intens1,
-                a_updated,
-                c_updated,
+            _apply_ready_simulation_result(sync_result)
+            simulation_runtime_state.last_simulation_signature = new_sim_sig
+            image_generation_cached = False
+            image_generation_elapsed_ms = float(
+                sync_result.get("image_generation_elapsed_ms", 0.0)
             )
+            simulation_runtime_state.update_phase = "applying"
+            _refresh_run_status_bar()
+        else:
+            _request_async_simulation_job(simulation_job)
+            if "progress_label" in globals() and progress_label is not None:
+                progress_label.config(text="Computing simulation in background...")
+            simulation_runtime_state.update_running = False
+            return
 
-        if run_secondary:
-            img2, maxpos2, _, _, _, _, _ = run_one(
-                simulation_runtime_state.sim_miller2,
-                simulation_runtime_state.sim_intens2,
-                av2,
-                cv2,
-            )
+    if simulation_runtime_state.stored_primary_sim_image is None and simulation_runtime_state.stored_secondary_sim_image is None:
+        simulation_runtime_state.update_phase = "queued"
+        _refresh_run_status_bar()
+        simulation_runtime_state.update_running = False
+        return
 
-        primary_max_positions_local = list(maxpos1)
-        secondary_max_positions_local = list(maxpos2)
-        primary_peak_table_lattice_local = [
-            (float(a_updated), float(c_updated), "primary")
-            for _ in maxpos1
-        ]
-        secondary_peak_table_lattice_local = []
-        if secondary_max_positions_local:
-            sec_a = float(av2) if av2 is not None else float(a_updated)
-            sec_c = float(cv2) if cv2 is not None else float(c_updated)
-            secondary_peak_table_lattice_local = [
-                (sec_a, sec_c, "secondary")
-                for _ in secondary_max_positions_local
-            ]
+    w1 = float(weight1_var.get())
+    w2 = float(weight2_var.get())
+    run_primary = bool(simulation_runtime_state.stored_primary_sim_image is not None and abs(w1) > 1e-12)
+    run_secondary = bool(simulation_runtime_state.stored_secondary_sim_image is not None and abs(w2) > 1e-12)
 
-        simulation_runtime_state.stored_primary_sim_image = img1
-        simulation_runtime_state.stored_secondary_sim_image = img2
-        simulation_runtime_state.stored_primary_max_positions = primary_max_positions_local
-        simulation_runtime_state.stored_secondary_max_positions = secondary_max_positions_local
-        simulation_runtime_state.stored_primary_peak_table_lattice = primary_peak_table_lattice_local
-        simulation_runtime_state.stored_secondary_peak_table_lattice = secondary_peak_table_lattice_local
+    img1 = (
+        simulation_runtime_state.stored_primary_sim_image
+        if simulation_runtime_state.stored_primary_sim_image is not None
+        else np.zeros((image_size, image_size), dtype=np.float64)
+    )
+    img2 = (
+        simulation_runtime_state.stored_secondary_sim_image
+        if simulation_runtime_state.stored_secondary_sim_image is not None
+        else np.zeros((image_size, image_size), dtype=np.float64)
+    )
 
-        updated_image = w1 * simulation_runtime_state.stored_primary_sim_image + w2 * simulation_runtime_state.stored_secondary_sim_image
-        max_positions_local = []
-        peak_table_lattice_local = []
-        if run_primary:
-            max_positions_local.extend(simulation_runtime_state.stored_primary_max_positions)
+    updated_image = w1 * img1 + w2 * img2
+    max_positions_local = []
+    peak_table_lattice_local = []
+    if run_primary and simulation_runtime_state.stored_primary_max_positions is not None:
+        max_positions_local.extend(simulation_runtime_state.stored_primary_max_positions)
+        if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
             peak_table_lattice_local.extend(simulation_runtime_state.stored_primary_peak_table_lattice)
-        if run_secondary:
-            max_positions_local.extend(simulation_runtime_state.stored_secondary_max_positions)
+    if run_secondary and simulation_runtime_state.stored_secondary_max_positions is not None:
+        max_positions_local.extend(simulation_runtime_state.stored_secondary_max_positions)
+        if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
             peak_table_lattice_local.extend(simulation_runtime_state.stored_secondary_peak_table_lattice)
 
-        simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
-        simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
-        simulation_runtime_state.stored_sim_image = updated_image
-        image_generation_elapsed_ms = (
-            perf_counter() - image_generation_start_time
-        ) * 1e3
-    else:
-        # fall back to the cached arrays
-        if simulation_runtime_state.stored_primary_sim_image is None and simulation_runtime_state.stored_secondary_sim_image is None:
-            # first run after programme start – force a simulation
-            simulation_runtime_state.last_simulation_signature = None
-            simulation_runtime_state.update_running = False
-            return do_update()          # re-enter with computation path
-
-        w1 = float(weight1_var.get())
-        w2 = float(weight2_var.get())
-        run_primary = bool(simulation_runtime_state.stored_primary_sim_image is not None and abs(w1) > 1e-12)
-        run_secondary = bool(simulation_runtime_state.stored_secondary_sim_image is not None and abs(w2) > 1e-12)
-
-        img1 = (
-            simulation_runtime_state.stored_primary_sim_image
-            if simulation_runtime_state.stored_primary_sim_image is not None
-            else np.zeros((image_size, image_size), dtype=np.float64)
-        )
-        img2 = (
-            simulation_runtime_state.stored_secondary_sim_image
-            if simulation_runtime_state.stored_secondary_sim_image is not None
-            else np.zeros((image_size, image_size), dtype=np.float64)
-        )
-
-        updated_image = w1 * img1 + w2 * img2
-        max_positions_local = []
-        peak_table_lattice_local = []
-        if run_primary and simulation_runtime_state.stored_primary_max_positions is not None:
-            max_positions_local.extend(simulation_runtime_state.stored_primary_max_positions)
-            if simulation_runtime_state.stored_primary_peak_table_lattice is not None:
-                peak_table_lattice_local.extend(simulation_runtime_state.stored_primary_peak_table_lattice)
-        if run_secondary and simulation_runtime_state.stored_secondary_max_positions is not None:
-            max_positions_local.extend(simulation_runtime_state.stored_secondary_max_positions)
-            if simulation_runtime_state.stored_secondary_peak_table_lattice is not None:
-                peak_table_lattice_local.extend(simulation_runtime_state.stored_secondary_peak_table_lattice)
-
-        simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
-        simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
-        simulation_runtime_state.stored_sim_image = updated_image
+    simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
+    simulation_runtime_state.stored_peak_table_lattice = list(peak_table_lattice_local)
+    simulation_runtime_state.stored_sim_image = updated_image
 
     if not peak_table_lattice_local or len(peak_table_lattice_local) != len(max_positions_local):
         peak_table_lattice_local = [
@@ -5166,7 +5552,21 @@ def do_update():
         )
 
     # mark update completion so future updates can run
+    simulation_runtime_state.last_total_update_ms = float(total_update_elapsed_ms)
+    simulation_runtime_state.update_phase = "ready"
     simulation_runtime_state.update_running = False
+    if "progress_label" in globals() and progress_label is not None:
+        try:
+            current_progress_text = str(progress_label.cget("text"))
+        except Exception:
+            current_progress_text = ""
+        if current_progress_text in {
+            "Computing initial simulation...",
+            "Computing simulation in background...",
+            "Simulation loading in background...",
+        }:
+            progress_label.config(text="Simulation ready.")
+    _refresh_run_status_bar()
 
 background_theta_workflow = gui_runtime_background.build_runtime_background_theta_workflow(
     bootstrap_module=gui_bootstrap,
@@ -5427,7 +5827,7 @@ def reset_to_defaults():
     _sync_finite_controls()
 
     update_mosaic_cache()
-    simulation_runtime_state.last_simulation_signature = None
+    _invalidate_simulation_cache()
     schedule_update()
 
 background_controls_runtime.create_workspace_controls()
@@ -6749,7 +7149,11 @@ geometry_q_group_workflow = (
         ),
         clear_geometry_preview_artists=_clear_geometry_preview_artists,
         preview_toggle_max_distance_px=float(GEOMETRY_PREVIEW_TOGGLE_MAX_DISTANCE_PX),
-        update_running_factory=lambda: bool(simulation_runtime_state.update_running),
+        update_running_factory=lambda: bool(
+            simulation_runtime_state.update_running
+            or simulation_runtime_state.worker_active_job is not None
+            or simulation_runtime_state.worker_queued_job is not None
+        ),
         has_cached_hit_tables_factory=lambda: (
             simulation_runtime_state.stored_max_positions_local is not None
         ),
@@ -8174,7 +8578,7 @@ def _legacy_auto_match_on_fit_geometry_click():
         )
 
         gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
-        simulation_runtime_state.last_simulation_signature = None
+        _invalidate_simulation_cache()
         schedule_update()
 
         rms = (
@@ -9092,7 +9496,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 gui_controllers.request_geometry_preview_skip_once(
                     geometry_preview_state
                 )
-                simulation_runtime_state.last_simulation_signature = None
+                _invalidate_simulation_cache()
                 schedule_update()
 
                 rms = (
@@ -9488,7 +9892,7 @@ def on_fit_mosaic_click():
             }
         )
 
-    simulation_runtime_state.last_simulation_signature = None
+    _invalidate_simulation_cache()
     schedule_update()
 
     residual_norm = 0.0
@@ -10003,7 +10407,7 @@ resolution_var.trace_add('write', on_resolution_option_change)
 
 
 def on_optics_mode_change(*_):
-    simulation_runtime_state.last_simulation_signature = None
+    _invalidate_simulation_cache()
     schedule_update()
 
 
@@ -10528,7 +10932,7 @@ def update_weights(*args):
         weight1=weight1_var.get(),
         weight2=weight2_var.get(),
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
-        schedule_update=schedule_update,
+        schedule_update=_invalidate_and_schedule_update,
     )
     _sync_structure_model_aliases()
 
@@ -10593,7 +10997,7 @@ def _rebuild_diffraction_inputs(
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
         build_intensity_dataframes=build_intensity_dataframes,
         apply_bragg_qr_filters=apply_bragg_qr_filters,
-        schedule_update=schedule_update,
+        schedule_update=_invalidate_and_schedule_update,
         weight1=weight1_var.get(),
         weight2=weight2_var.get(),
         tcl_error_types=(tk.TclError,),
@@ -10970,7 +11374,7 @@ def _apply_primary_cif_path(raw_path):
         c_var.set(cv)
         n2 = _current_nominal_n2(_current_primary_cif_path())
         simulation_runtime_state.profile_cache.pop("_optics_signature", None)
-        simulation_runtime_state.last_simulation_signature = None
+        _invalidate_simulation_cache()
         progress_label.config(text=f"Loaded CIF: {Path(_current_primary_cif_path()).name}")
     except Exception as exc:
         _reset_structure_model_control_vars(
@@ -11233,7 +11637,13 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             except Exception:
                 pass
         else:
-            progress_label.config(text="Simulation ready.")
+            if (
+                simulation_runtime_state.worker_active_job is not None
+                and simulation_runtime_state.stored_sim_image is None
+            ):
+                progress_label.config(text="Simulation loading in background...")
+            else:
+                progress_label.config(text="Simulation ready.")
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)

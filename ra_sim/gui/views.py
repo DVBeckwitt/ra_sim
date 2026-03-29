@@ -264,6 +264,18 @@ def create_app_shell(
     main_pane.add(controls_panel, weight=1)
     main_pane.add(figure_panel, weight=3)
 
+    run_status_frame = ttk.Frame(figure_panel, padding=(10, 8, 10, 4))
+    run_status_frame.pack(side=tk.TOP, fill=tk.X)
+    run_status_var = tk.StringVar(value="State: startup")
+    run_status_label = ttk.Label(
+        run_status_frame,
+        textvariable=run_status_var,
+        anchor=tk.W,
+        justify=tk.LEFT,
+    )
+    run_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    ttk.Separator(figure_panel, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10)
+
     controls_notebook = ttk.Notebook(controls_panel)
     controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
 
@@ -391,6 +403,9 @@ def create_app_shell(
     view_state.main_pane = main_pane
     view_state.controls_panel = controls_panel
     view_state.figure_panel = figure_panel
+    view_state.run_status_frame = run_status_frame
+    view_state.run_status_var = run_status_var
+    view_state.run_status_label = run_status_label
     view_state.controls_notebook = controls_notebook
     view_state.workspace_tab = workspace_tab
     view_state.fit_tab = fit_tab
@@ -419,6 +434,26 @@ def create_app_shell(
     view_state.left_col = left_col
     view_state.right_col = right_col
     view_state.plot_frame_1d = plot_frame_1d
+
+
+def set_app_shell_run_status_text(
+    view_state: AppShellViewState,
+    text: object,
+) -> None:
+    """Update the compact one-line runtime summary shown above the plot."""
+
+    summary = " ".join(str(text).split())
+    if view_state.run_status_var is not None:
+        try:
+            view_state.run_status_var.set(summary)
+            return
+        except tk.TclError:
+            pass
+    if view_state.run_status_label is not None:
+        try:
+            view_state.run_status_label.configure(text=summary)
+        except tk.TclError:
+            return
 
 
 def _compact_status_text(text: object, *, max_chars: int = 120) -> str:

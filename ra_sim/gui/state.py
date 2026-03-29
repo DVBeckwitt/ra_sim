@@ -510,6 +510,9 @@ class AppShellViewState:
     main_pane: Any = None
     controls_panel: Any = None
     figure_panel: Any = None
+    run_status_frame: Any = None
+    run_status_var: Any = None
+    run_status_label: Any = None
     controls_notebook: Any = None
     workspace_tab: Any = None
     fit_tab: Any = None
@@ -628,11 +631,23 @@ class SimulationRuntimeState:
     """Long-lived simulation/update caches that used to live in runtime globals."""
 
     num_samples: int = 1
+    simulation_epoch: int = 0
     caked_limits_user_override: bool = False
     profile_cache: dict[object, object] = field(default_factory=dict)
     update_pending: Any = None
     integration_update_pending: Any = None
     update_running: bool = False
+    update_phase: str = "startup"
+    last_total_update_ms: float | None = None
+    last_image_generation_ms: float | None = None
+    worker_executor: Any = None
+    worker_future: Any = None
+    worker_poll_token: Any = None
+    worker_job_counter: int = 0
+    worker_active_job: dict[str, object] | None = None
+    worker_queued_job: dict[str, object] | None = None
+    worker_ready_result: dict[str, object] | None = None
+    worker_error_text: str | None = None
     unscaled_image: np.ndarray | None = None
     last_1d_integration_data: dict[str, object] = field(
         default_factory=lambda: {
