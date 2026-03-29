@@ -901,6 +901,68 @@ def current_geometry_fit_var_names(
     return var_names
 
 
+def geometry_fit_constraint_source_name(name: str) -> str:
+    """Map fitted parameter names back to the UI constraint control names."""
+
+    if str(name) == "theta_offset":
+        return "theta_initial"
+    return str(name)
+
+
+def geometry_fit_constraint_parameter_name(
+    name: str,
+    *,
+    use_shared_theta_offset: bool = False,
+) -> str:
+    """Map UI constraint row names to the active fitted parameter names."""
+
+    if str(name) == "theta_initial" and bool(use_shared_theta_offset):
+        return "theta_offset"
+    return str(name)
+
+
+def read_runtime_geometry_fit_constraint_state(
+    *,
+    controls: Mapping[str, object],
+    names: Sequence[str] | None = None,
+    use_shared_theta_offset: bool = False,
+) -> dict[str, dict[str, float]]:
+    """Read the live geometry-fit constraint controls into normalized settings."""
+
+    selected_names = list(names) if names is not None else list(controls)
+    state: dict[str, dict[str, float]] = {}
+    for name in selected_names:
+        control = controls.get(
+            geometry_fit_constraint_source_name(
+                geometry_fit_constraint_parameter_name(
+                    str(name),
+                    use_shared_theta_offset=use_shared_theta_offset,
+                )
+            )
+        )
+        if not isinstance(control, dict):
+            continue
+        try:
+            window = float(control["window_var"].get())
+        except Exception:
+            window = float("nan")
+        try:
+            pull = float(control["pull_var"].get())
+        except Exception:
+            pull = 0.0
+        if not np.isfinite(window):
+            continue
+        window = max(0.0, float(window))
+        if not np.isfinite(pull):
+            pull = 0.0
+        pull = min(max(float(pull), 0.0), 1.0)
+        state[str(name)] = {
+            "window": float(window),
+            "pull": float(pull),
+        }
+    return state
+
+
 def build_runtime_geometry_fit_value_callbacks(
     bindings: GeometryFitRuntimeValueBindings,
 ) -> GeometryFitRuntimeValueCallbacks:

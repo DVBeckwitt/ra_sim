@@ -776,6 +776,53 @@ def test_build_runtime_geometry_fit_config_factory_reads_runtime_constraint_valu
     ]
 
 
+def test_geometry_fit_constraint_name_helpers_handle_shared_theta_offset() -> None:
+    assert geometry_fit.geometry_fit_constraint_source_name("theta_offset") == "theta_initial"
+    assert geometry_fit.geometry_fit_constraint_source_name("gamma") == "gamma"
+    assert (
+        geometry_fit.geometry_fit_constraint_parameter_name(
+            "theta_initial",
+            use_shared_theta_offset=True,
+        )
+        == "theta_offset"
+    )
+    assert (
+        geometry_fit.geometry_fit_constraint_parameter_name(
+            "theta_initial",
+            use_shared_theta_offset=False,
+        )
+        == "theta_initial"
+    )
+
+
+def test_read_runtime_geometry_fit_constraint_state_normalizes_live_control_values() -> None:
+    controls = {
+        "theta_initial": {
+            "window_var": _DummyVar("nan"),
+            "pull_var": _DummyVar("0.2"),
+        },
+        "gamma": {
+            "window_var": _DummyVar("-2.5"),
+            "pull_var": _DummyVar("3.0"),
+        },
+        "a": {
+            "window_var": _DummyVar("0.4"),
+            "pull_var": _DummyVar("bad"),
+        },
+    }
+
+    state = geometry_fit.read_runtime_geometry_fit_constraint_state(
+        controls=controls,
+        names=["theta_offset", "gamma", "a"],
+        use_shared_theta_offset=False,
+    )
+
+    assert state == {
+        "gamma": {"window": 0.0, "pull": 1.0},
+        "a": {"window": 0.4, "pull": 0.0},
+    }
+
+
 def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
     monkeypatch,
 ) -> None:

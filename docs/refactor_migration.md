@@ -688,6 +688,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   callback assembly through one shared history-callback builder in
   `ra_sim.gui.geometry_fit` instead of hand-building two near-identical
   transitions inline.
+- The main runtime implementation now also routes geometry-fit constraint
+  parameter/control name mapping and live constraint-state reads through shared
+  helpers in `ra_sim.gui.geometry_fit` instead of keeping those readers local
+  to `runtime_impl.py`.
 - The config compatibility migration and GUI entrypoint cleanup are now
   effectively closed out.
 - Repository-root cleanup has now landed: the tracked sqlite/session/log

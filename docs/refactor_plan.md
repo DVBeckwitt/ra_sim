@@ -88,6 +88,10 @@ The primary runtime implementation now also assembles its geometry-fit undo and
 redo callbacks through one shared history-callback builder in
 `ra_sim.gui.geometry_fit` instead of hand-wiring two near-identical history
 transitions inline.
+The primary runtime implementation now also resolves geometry-fit constraint
+parameter/control name mapping plus live constraint-state reads through shared
+helpers in `ra_sim.gui.geometry_fit` instead of keeping those readers inline in
+`runtime_impl.py`.
 
 ### What Is Already Done
 
@@ -1031,6 +1035,10 @@ What is done:
   builder for geometry-fit undo/redo transitions.
   - `ra_sim.gui._runtime.runtime_impl` no longer hand-assembles separate
     controller/history wiring for those two callbacks.
+- `ra_sim.gui.geometry_fit` now also owns shared helpers for geometry-fit
+  constraint parameter/control name mapping and live constraint-state reads.
+  - `ra_sim.gui._runtime.runtime_impl` no longer keeps those normalization
+    helpers inline.
 
 What is left:
 

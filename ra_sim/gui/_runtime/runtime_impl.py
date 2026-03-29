@@ -6497,56 +6497,14 @@ def _current_geometry_fit_params() -> dict[str, object]:
     return _geometry_fit_runtime_values().current_params()
 
 
-def _geometry_fit_constraint_source_name(name: str) -> str:
-    """Map fitted variable names back to the UI constraint control names."""
-
-    if name == "theta_offset":
-        return "theta_initial"
-    return str(name)
-
-
-def _geometry_fit_constraint_parameter_name(name: str) -> str:
-    """Map UI constraint rows to the active fitted parameter names."""
-
-    if name == "theta_initial" and _geometry_fit_uses_shared_theta_offset():
-        return "theta_offset"
-    return str(name)
-
-
 def _current_geometry_fit_constraint_state(
     names: Sequence[str] | None = None,
 ) -> dict[str, dict[str, float]]:
-    selected_names = (
-        list(names)
-        if names is not None
-        else list(geometry_fit_constraints_view_state.controls)
+    return gui_geometry_fit.read_runtime_geometry_fit_constraint_state(
+        controls=geometry_fit_constraints_view_state.controls,
+        names=names,
+        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
     )
-    state: dict[str, dict[str, float]] = {}
-    for name in selected_names:
-        control = geometry_fit_constraints_view_state.controls.get(
-            _geometry_fit_constraint_source_name(name)
-        )
-        if not isinstance(control, dict):
-            continue
-        try:
-            window = float(control["window_var"].get())
-        except Exception:
-            window = float("nan")
-        try:
-            pull = float(control["pull_var"].get())
-        except Exception:
-            pull = 0.0
-        if not np.isfinite(window):
-            continue
-        window = max(0.0, float(window))
-        if not np.isfinite(pull):
-            pull = 0.0
-        pull = min(max(float(pull), 0.0), 1.0)
-        state[str(name)] = {
-            "window": float(window),
-            "pull": float(pull),
-        }
-    return state
 
 
 def _current_geometry_fit_parameter_domains(
@@ -6564,8 +6522,13 @@ def _current_geometry_fit_parameter_domains(
         bounds_cfg = {}
 
     for name in selected_names:
-        parameter_name = _geometry_fit_constraint_parameter_name(str(name))
-        control_name = _geometry_fit_constraint_source_name(parameter_name)
+        parameter_name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
+            str(name),
+            use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
+        )
+        control_name = gui_geometry_fit.geometry_fit_constraint_source_name(
+            parameter_name
+        )
 
         if parameter_name == "center_x" or parameter_name == "center_y":
             domains[str(name)] = (0.0, max(float(image_size) - 1.0, 0.0))
@@ -10397,8 +10360,13 @@ geometry_fit_parameter_specs = {
 
 
 def _default_geometry_fit_window(name: str) -> float:
-    parameter_name = _geometry_fit_constraint_parameter_name(name)
-    control_name = _geometry_fit_constraint_source_name(parameter_name)
+    parameter_name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
+        name,
+        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
+    )
+    control_name = gui_geometry_fit.geometry_fit_constraint_source_name(
+        parameter_name
+    )
     spec = geometry_fit_parameter_specs.get(control_name, {})
     if parameter_name == "theta_offset":
         try:
@@ -10473,7 +10441,10 @@ def _default_geometry_fit_window(name: str) -> float:
 
 
 def _default_geometry_fit_pull(name: str, window: float) -> float:
-    parameter_name = _geometry_fit_constraint_parameter_name(name)
+    parameter_name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
+        name,
+        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
+    )
     fit_geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, dict) else {}
     if not isinstance(fit_geometry_cfg, dict):
         fit_geometry_cfg = {}
@@ -10523,7 +10494,10 @@ for name in GEOMETRY_FIT_PARAM_ORDER:
         step = 0.01
     step = max(step, 1.0e-6)
     default_window = _default_geometry_fit_window(name)
-    parameter_name = _geometry_fit_constraint_parameter_name(name)
+    parameter_name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
+        name,
+        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
+    )
     domain = _current_geometry_fit_parameter_domains([parameter_name]).get(parameter_name)
     domain_span = 0.0
     if isinstance(domain, tuple) and len(domain) >= 2:
