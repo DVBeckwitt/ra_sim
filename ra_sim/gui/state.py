@@ -658,8 +658,13 @@ class SimulationRuntimeState:
     analysis_ready_result: dict[str, object] | None = None
     analysis_error_text: str | None = None
     last_analysis_signature: object = None
+    analysis_preview_active: bool = False
+    analysis_preview_bins: tuple[int, int] | None = None
     preview_active: bool = False
     preview_sample_count: int | None = None
+    interaction_drag_active: bool = False
+    interaction_settle_token: Any = None
+    interaction_drag_requires_settled_update: bool = False
     unscaled_image: np.ndarray | None = None
     last_1d_integration_data: dict[str, object] = field(
         default_factory=lambda: {

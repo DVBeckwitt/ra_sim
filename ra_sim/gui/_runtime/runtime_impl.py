@@ -1446,6 +1446,11 @@ def _shutdown_gui():
         simulation_runtime_state.analysis_poll_token,
     )
     simulation_runtime_state.analysis_poll_token = None
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.interaction_settle_token,
+    )
+    simulation_runtime_state.interaction_settle_token = None
 
     executor = simulation_runtime_state.worker_executor
     simulation_runtime_state.worker_executor = None
@@ -3949,11 +3954,11 @@ def _wrap_phi_range(phi_values):
     return wrapped
 
 
-def caking(data, ai):
+def caking(data, ai, *, npt_rad=1000, npt_azim=720):
     return ai.integrate2d(
         data,
-        npt_rad=1000,
-        npt_azim=720,
+        npt_rad=int(max(1, npt_rad)),
+        npt_azim=int(max(1, npt_azim)),
         correctSolidAngle=True,
         method="lut",
         unit="2th_deg"
@@ -4365,6 +4370,10 @@ RANGE_UPDATE_DEBOUNCE_MS = 120
 CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
 SIMULATION_WORKER_POLL_MS = 40
 INITIAL_PREVIEW_MAX_SAMPLES = 24
+LIVE_DRAG_PREVIEW_MAX_SAMPLES = 8
+LIVE_DRAG_ANALYSIS_RADIAL_BINS = 240
+LIVE_DRAG_ANALYSIS_AZIMUTH_BINS = 180
+LIVE_DRAG_SETTLE_MS = 160
 
 simulation_runtime_state.update_pending = None
 simulation_runtime_state.integration_update_pending = None
@@ -4377,6 +4386,16 @@ def _worker_job_key(payload: object) -> tuple[object, int]:
     return (
         payload.get("signature"),
         int(payload.get("epoch", -1)),
+    )
+
+
+def _analysis_job_key(payload: object) -> tuple[object, int, bool]:
+    if not isinstance(payload, dict):
+        return (None, -1, False)
+    return (
+        payload.get("signature"),
+        int(payload.get("epoch", -1)),
+        bool(payload.get("is_preview", False)),
     )
 
 
@@ -4449,6 +4468,18 @@ def _refresh_run_status_bar() -> None:
             parts.append(f"Preview {preview_count}")
         else:
             parts.append("Preview")
+    if simulation_runtime_state.analysis_preview_active:
+        bins = simulation_runtime_state.analysis_preview_bins
+        if (
+            isinstance(bins, tuple)
+            and len(bins) == 2
+            and all(isinstance(value, int) and value > 0 for value in bins)
+        ):
+            parts.append(f"Caked {bins[0]}x{bins[1]}")
+        else:
+            parts.append("Caked Preview")
+    if simulation_runtime_state.interaction_drag_active:
+        parts.append("Dragging")
     last_total_ms = simulation_runtime_state.last_total_update_ms
     if isinstance(last_total_ms, (int, float)) and np.isfinite(float(last_total_ms)):
         parts.append(f"Last {float(last_total_ms):.0f} ms")
@@ -4460,6 +4491,8 @@ def _refresh_run_status_bar() -> None:
 
 def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     simulation_runtime_state.last_analysis_signature = None
+    simulation_runtime_state.analysis_preview_active = False
+    simulation_runtime_state.analysis_preview_bins = None
     simulation_runtime_state.last_res2_sim = None
     simulation_runtime_state.last_res2_background = None
     simulation_runtime_state.last_caked_image_unscaled = None
@@ -4561,6 +4594,87 @@ def _ensure_analysis_worker_executor():
         )
         simulation_runtime_state.analysis_executor = executor
     return executor
+
+
+def _live_interaction_active() -> bool:
+    return bool(simulation_runtime_state.interaction_drag_active)
+
+
+def _current_preview_sample_limit() -> int:
+    return (
+        LIVE_DRAG_PREVIEW_MAX_SAMPLES
+        if _live_interaction_active()
+        else INITIAL_PREVIEW_MAX_SAMPLES
+    )
+
+
+def _analysis_progress_text() -> str:
+    active_job = simulation_runtime_state.analysis_active_job
+    if not isinstance(active_job, dict):
+        active_job = simulation_runtime_state.analysis_queued_job
+    if isinstance(active_job, dict) and bool(active_job.get("is_preview", False)):
+        return "Updating low-res caked preview..."
+    return "Updating caked integration in background..."
+
+
+def _defer_nonessential_redraw() -> bool:
+    return bool(
+        _live_interaction_active()
+        or (
+            simulation_runtime_state.preview_active
+            and simulation_runtime_state.worker_active_job is not None
+        )
+        or (
+            simulation_runtime_state.analysis_preview_active
+            and simulation_runtime_state.analysis_active_job is not None
+        )
+    )
+
+
+def _finish_live_interaction() -> None:
+    simulation_runtime_state.interaction_settle_token = None
+    if not simulation_runtime_state.interaction_drag_active:
+        return
+    simulation_runtime_state.interaction_drag_active = False
+    should_schedule = bool(
+        simulation_runtime_state.interaction_drag_requires_settled_update
+    )
+    simulation_runtime_state.interaction_drag_requires_settled_update = False
+    _refresh_run_status_bar()
+    if should_schedule:
+        schedule_update()
+
+
+def _mark_live_interaction_start(_event=None) -> None:
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.interaction_settle_token,
+    )
+    simulation_runtime_state.interaction_settle_token = None
+    if simulation_runtime_state.interaction_drag_active:
+        return
+    simulation_runtime_state.interaction_drag_active = True
+    simulation_runtime_state.interaction_drag_requires_settled_update = False
+    _refresh_run_status_bar()
+
+
+def _mark_live_interaction_release(_event=None) -> None:
+    if not simulation_runtime_state.interaction_drag_active:
+        return
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.interaction_settle_token,
+    )
+    simulation_runtime_state.interaction_settle_token = root.after(
+        LIVE_DRAG_SETTLE_MS,
+        _finish_live_interaction,
+    )
+
+
+root.bind_class("TScale", "<ButtonPress-1>", _mark_live_interaction_start, add="+")
+root.bind_class("TScale", "<ButtonRelease-1>", _mark_live_interaction_release, add="+")
+root.bind_class("Scale", "<ButtonPress-1>", _mark_live_interaction_start, add="+")
+root.bind_class("Scale", "<ButtonRelease-1>", _mark_live_interaction_release, add="+")
 
 
 def _preview_sample_indices(sample_count: int, *, max_samples: int) -> np.ndarray:
@@ -5021,10 +5135,17 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     sim_image = np.asarray(job["image"], dtype=np.float64)
     bg_image = job.get("background_image")
     bg_array = None if bg_image is None else np.asarray(bg_image, dtype=np.float64)
+    npt_rad = int(job.get("npt_rad", 1000))
+    npt_azim = int(job.get("npt_azim", 720))
+    is_preview = bool(job.get("is_preview", False))
 
     analysis_start_time = perf_counter()
-    sim_res2 = caking(sim_image, ai)
-    bg_res2 = caking(bg_array, ai) if bg_array is not None else None
+    sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+    bg_res2 = (
+        caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+        if bg_array is not None
+        else None
+    )
     sim_caked = _prepare_caked_display_payload(sim_res2)
     bg_caked = _prepare_caked_display_payload(bg_res2)
 
@@ -5032,6 +5153,8 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         "job_id": int(job["job_id"]),
         "signature": job["signature"],
         "epoch": int(job["epoch"]),
+        "is_preview": is_preview,
+        "analysis_bins": (npt_rad, npt_azim),
         "sim_caking_sig": job.get("sim_caking_sig"),
         "bg_caking_sig": job.get("bg_caking_sig"),
         "sim_res2": sim_res2,
@@ -5119,20 +5242,20 @@ def _poll_async_analysis_job() -> None:
 
 
 def _request_async_analysis_job(job: dict[str, object]) -> str:
-    requested_key = _worker_job_key(job)
-    if _worker_job_key(simulation_runtime_state.analysis_ready_result) == requested_key:
+    requested_key = _analysis_job_key(job)
+    if _analysis_job_key(simulation_runtime_state.analysis_ready_result) == requested_key:
         if simulation_runtime_state.worker_active_job is None:
             simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
         return "ready"
 
-    if _worker_job_key(simulation_runtime_state.analysis_active_job) == requested_key:
+    if _analysis_job_key(simulation_runtime_state.analysis_active_job) == requested_key:
         if simulation_runtime_state.worker_active_job is None:
             simulation_runtime_state.update_phase = "analyzing"
         _refresh_run_status_bar()
         return "running"
 
-    if _worker_job_key(simulation_runtime_state.analysis_queued_job) == requested_key:
+    if _analysis_job_key(simulation_runtime_state.analysis_queued_job) == requested_key:
         if simulation_runtime_state.worker_active_job is None:
             simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
@@ -5157,11 +5280,16 @@ def _request_async_analysis_job(job: dict[str, object]) -> str:
     return "queued"
 
 
-def _consume_ready_analysis_result(signature: object) -> dict[str, object] | None:
+def _consume_ready_analysis_result(
+    signature: object,
+    *,
+    is_preview: bool,
+) -> dict[str, object] | None:
     ready_result = simulation_runtime_state.analysis_ready_result
-    if _worker_job_key(ready_result) != (
+    if _analysis_job_key(ready_result) != (
         signature,
         int(simulation_runtime_state.analysis_epoch),
+        bool(is_preview),
     ):
         if (
             isinstance(ready_result, dict)
@@ -5176,6 +5304,21 @@ def _consume_ready_analysis_result(signature: object) -> dict[str, object] | Non
 
 def _apply_ready_analysis_result(result: dict[str, object]) -> None:
     simulation_runtime_state.last_analysis_signature = result.get("signature")
+    simulation_runtime_state.analysis_preview_active = bool(
+        result.get("is_preview", False)
+    )
+    analysis_bins = result.get("analysis_bins")
+    if (
+        isinstance(analysis_bins, (tuple, list))
+        and len(analysis_bins) == 2
+        and all(isinstance(value, (int, np.integer)) for value in analysis_bins)
+    ):
+        simulation_runtime_state.analysis_preview_bins = (
+            int(analysis_bins[0]),
+            int(analysis_bins[1]),
+        )
+    else:
+        simulation_runtime_state.analysis_preview_bins = None
     simulation_runtime_state.last_res2_sim = result.get("sim_res2")
     simulation_runtime_state.last_res2_background = result.get("bg_res2")
 
@@ -5222,6 +5365,8 @@ def schedule_update():
         simulation_runtime_state.integration_update_pending,
     )
     simulation_runtime_state.integration_update_pending = None
+    if simulation_runtime_state.interaction_drag_active:
+        simulation_runtime_state.interaction_drag_requires_settled_update = True
 
     gui_controllers.clear_tk_after_token(
         root,
@@ -5235,6 +5380,8 @@ def schedule_update():
 
 def _should_collect_hit_tables_for_update() -> bool:
     """Return whether the next redraw needs per-hit detector tables."""
+    if _live_interaction_active():
+        return False
     return gui_manual_geometry.should_collect_hit_tables_for_update(
         background_visible=bool(background_runtime_state.visible),
         current_background_index=background_runtime_state.current_background_index,
@@ -5262,6 +5409,8 @@ simulation_runtime_state.last_sim_signature = None
 simulation_runtime_state.last_simulation_signature = None
 simulation_runtime_state.analysis_epoch = 0
 simulation_runtime_state.last_analysis_signature = None
+simulation_runtime_state.analysis_preview_active = False
+simulation_runtime_state.analysis_preview_bins = None
 simulation_runtime_state.stored_max_positions_local = None
 simulation_runtime_state.stored_sim_image = None
 simulation_runtime_state.stored_peak_table_lattice = None
@@ -5294,6 +5443,9 @@ simulation_runtime_state.analysis_active_job = None
 simulation_runtime_state.analysis_queued_job = None
 simulation_runtime_state.analysis_ready_result = None
 simulation_runtime_state.analysis_error_text = None
+simulation_runtime_state.interaction_drag_active = False
+simulation_runtime_state.interaction_settle_token = None
+simulation_runtime_state.interaction_drag_requires_settled_update = False
 simulation_runtime_state.chi_square_update_token = 0
 simulation_runtime_state.chi_square_state = {
     "last_ts": 0.0,
@@ -5556,7 +5708,10 @@ def do_update():
             or simulation_runtime_state.stored_secondary_sim_image is not None
         )
         if not has_cached_simulation:
-            preview_job = _build_preview_simulation_job(simulation_job)
+            preview_job = _build_preview_simulation_job(
+                simulation_job,
+                max_samples=_current_preview_sample_limit(),
+            )
             if preview_job is not None:
                 if "progress_label" in globals() and progress_label is not None:
                     progress_label.config(text="Computing preview simulation...")
@@ -5593,7 +5748,10 @@ def do_update():
                 simulation_runtime_state.update_phase = "applying"
                 _refresh_run_status_bar()
         else:
-            preview_job = _build_preview_simulation_job(simulation_job)
+            preview_job = _build_preview_simulation_job(
+                simulation_job,
+                max_samples=_current_preview_sample_limit(),
+            )
             if preview_job is not None:
                 if "progress_label" in globals() and progress_label is not None:
                     progress_label.config(text="Computing preview simulation...")
@@ -5802,9 +5960,24 @@ def do_update():
         )
     )
     analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
+    desired_analysis_preview = bool(
+        analysis_requested
+        and (
+            simulation_runtime_state.preview_active
+            or _live_interaction_active()
+        )
+    )
+    analysis_bins = (
+        (LIVE_DRAG_ANALYSIS_RADIAL_BINS, LIVE_DRAG_ANALYSIS_AZIMUTH_BINS)
+        if desired_analysis_preview
+        else (1000, 720)
+    )
     ready_analysis_result = None
     if analysis_sig is not None:
-        ready_analysis_result = _consume_ready_analysis_result(analysis_sig)
+        ready_analysis_result = _consume_ready_analysis_result(
+            analysis_sig,
+            is_preview=desired_analysis_preview,
+        )
         if ready_analysis_result is not None:
             _apply_ready_analysis_result(ready_analysis_result)
             if analysis_view_controls_view_state.show_1d_var.get():
@@ -5817,10 +5990,20 @@ def do_update():
         and simulation_runtime_state.last_analysis_signature == analysis_sig
         and simulation_runtime_state.last_res2_sim is not None
     )
+    analysis_result_matches_target = bool(
+        analysis_result_current
+        and bool(simulation_runtime_state.analysis_preview_active)
+        == desired_analysis_preview
+    )
     analysis_request_in_flight = bool(
         analysis_sig is not None
         and any(
-            isinstance(payload, dict) and payload.get("signature") == analysis_sig
+            _analysis_job_key(payload)
+            == (
+                analysis_sig,
+                int(simulation_runtime_state.analysis_epoch),
+                desired_analysis_preview,
+            )
             for payload in (
                 simulation_runtime_state.analysis_ready_result,
                 simulation_runtime_state.analysis_active_job,
@@ -5828,43 +6011,47 @@ def do_update():
             )
         )
     )
-    if analysis_sig is not None and not analysis_result_current and not analysis_request_in_flight:
-        _invalidate_analysis_cache(clear_visuals=True)
-        if not (
-            simulation_runtime_state.preview_active
-            and simulation_runtime_state.worker_active_job is not None
-        ):
-            _request_async_analysis_job(
-                {
-                    "signature": analysis_sig,
-                    "epoch": int(simulation_runtime_state.analysis_epoch),
-                    "image": np.asarray(
-                        simulation_runtime_state.unscaled_image,
-                        dtype=np.float64,
-                    ).copy(),
-                    "background_image": (
-                        None
-                        if not (
-                            background_runtime_state.visible
-                            and native_background is not None
-                        )
-                        else np.asarray(native_background, dtype=np.float64).copy()
-                    ),
-                    "distance_m": float(corto_det_up),
-                    "center": np.asarray(
-                        [center_x_up, center_y_up],
-                        dtype=np.float64,
-                    ).copy(),
-                    "pixel_size_m": float(pixel_size_m),
-                    "wavelength_m": float(wave_m),
-                    "sim_caking_sig": sim_caking_sig,
-                    "bg_caking_sig": bg_caking_sig,
-                }
-            )
-            if "progress_label" in globals() and progress_label is not None:
-                progress_label.config(text="Updating caked integration in background...")
-        elif "progress_label" in globals() and progress_label is not None:
-            progress_label.config(text="Preview ready, refining full simulation...")
+    if (
+        analysis_sig is not None
+        and (not analysis_result_matches_target)
+        and not analysis_request_in_flight
+    ):
+        _invalidate_analysis_cache(clear_visuals=not analysis_result_current)
+        _request_async_analysis_job(
+            {
+                "signature": analysis_sig,
+                "epoch": int(simulation_runtime_state.analysis_epoch),
+                "is_preview": desired_analysis_preview,
+                "npt_rad": int(analysis_bins[0]),
+                "npt_azim": int(analysis_bins[1]),
+                "image": np.asarray(
+                    simulation_runtime_state.unscaled_image,
+                    dtype=np.float64,
+                ).copy(),
+                "background_image": (
+                    None
+                    if not (
+                        background_runtime_state.visible
+                        and native_background is not None
+                    )
+                    else np.asarray(native_background, dtype=np.float64).copy()
+                ),
+                "distance_m": float(corto_det_up),
+                "center": np.asarray(
+                    [center_x_up, center_y_up],
+                    dtype=np.float64,
+                ).copy(),
+                "pixel_size_m": float(pixel_size_m),
+                "wavelength_m": float(wave_m),
+                "sim_caking_sig": sim_caking_sig,
+                "bg_caking_sig": bg_caking_sig,
+            }
+        )
+        if "progress_label" in globals() and progress_label is not None:
+            if desired_analysis_preview:
+                progress_label.config(text=_analysis_progress_text())
+            else:
+                progress_label.config(text=_analysis_progress_text())
 
     sim_res2 = simulation_runtime_state.last_res2_sim if analysis_result_current else None
     bg_res2 = (
@@ -5986,7 +6173,10 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
-        ax.set_title('2D Caked Integration')
+        if simulation_runtime_state.analysis_preview_active:
+            ax.set_title('2D Caked Preview')
+        else:
+            ax.set_title('2D Caked Integration')
     else:
         simulation_runtime_state.last_caked_image_unscaled = None
         simulation_runtime_state.last_caked_extent = None
@@ -5999,7 +6189,10 @@ def do_update():
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
         if analysis_view_controls_view_state.show_caked_2d_var.get() and analysis_requested:
-            ax.set_title('Detector Preview While Caked Integration Updates')
+            if desired_analysis_preview:
+                ax.set_title('Detector Preview While Caked Preview Loads')
+            else:
+                ax.set_title('Detector Preview While Caked Integration Updates')
         else:
             ax.set_title('Simulated Diffraction Pattern')
 
@@ -6030,16 +6223,29 @@ def do_update():
     apply_scale_factor_to_existing_results(update_limits=False)
 
     refresh_integration_region_visuals()
-    qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
-    if _live_geometry_preview_enabled():
+    defer_overlay_refresh = _defer_nonessential_redraw()
+    if defer_overlay_refresh:
+        try:
+            gui_qr_cylinder_overlay.clear_runtime_qr_cylinder_overlay_artists(
+                qr_cylinder_overlay_runtime_bindings_factory(),
+                redraw=False,
+            )
+        except Exception:
+            pass
+        _clear_geometry_preview_artists(redraw=False)
+    else:
+        qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
+    if not defer_overlay_refresh and _live_geometry_preview_enabled():
         if gui_controllers.consume_geometry_preview_skip_once(geometry_preview_state):
             _clear_geometry_preview_artists()
         else:
             _refresh_live_geometry_preview(update_status=True)
     else:
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
-        _clear_geometry_preview_artists()
-    _render_current_geometry_manual_pairs(update_status=False)
+        if not defer_overlay_refresh:
+            _clear_geometry_preview_artists()
+    if not defer_overlay_refresh:
+        _render_current_geometry_manual_pairs(update_status=False)
 
     redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
     total_update_elapsed_ms = (perf_counter() - update_start_time) * 1e3
@@ -6080,13 +6286,14 @@ def do_update():
         ):
             progress_label.config(text="Preview ready, refining full simulation...")
         elif simulation_runtime_state.analysis_active_job is not None:
-            progress_label.config(text="Updating caked integration in background...")
+            progress_label.config(text=_analysis_progress_text())
         elif current_progress_text in {
             "Computing initial simulation...",
             "Computing preview simulation...",
             "Computing simulation in background...",
             "Simulation loading in background...",
             "Preview ready, refining full simulation...",
+            "Updating low-res caked preview...",
             "Updating caked integration in background...",
         }:
             progress_label.config(text="Simulation ready.")
@@ -12172,7 +12379,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             ):
                 progress_label.config(text="Preview ready, refining full simulation...")
             elif simulation_runtime_state.analysis_active_job is not None:
-                progress_label.config(text="Updating caked integration in background...")
+                progress_label.config(text=_analysis_progress_text())
             else:
                 progress_label.config(text="Simulation ready.")
 
