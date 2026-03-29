@@ -3753,7 +3753,13 @@ def _update_chi_square_display(force=False):
     chi_square_label.config(text=text)
 
 
-def apply_scale_factor_to_existing_results(update_limits=False):
+def apply_scale_factor_to_existing_results(
+    update_limits=False,
+    *,
+    update_1d=True,
+    update_canvas=True,
+    update_chi_square=True,
+):
     chi_state = globals().setdefault(
         "chi_square_state",
         {
@@ -3786,8 +3792,10 @@ def apply_scale_factor_to_existing_results(update_limits=False):
                 background_display.set_visible(True)
             else:
                 background_display.set_visible(False)
-        canvas.draw_idle()
-        _update_chi_square_display()
+        if update_canvas:
+            canvas.draw_idle()
+        if update_chi_square:
+            _update_chi_square_display()
         return
 
     scale = _get_scale_factor_value(default=1.0)
@@ -3844,9 +3852,12 @@ def apply_scale_factor_to_existing_results(update_limits=False):
             vmax_caked_var.set(caked_max)
 
     if (
+        update_1d
+        and (
         analysis_view_controls_view_state.show_1d_var.get()
         and "line_1d_rad" in globals()
         and "line_1d_az" in globals()
+        )
     ):
         if (
             simulation_runtime_state.last_1d_integration_data["radials_sim"] is not None
@@ -3879,8 +3890,10 @@ def apply_scale_factor_to_existing_results(update_limits=False):
         else:
             background_display.set_visible(False)
 
-    canvas.draw_idle()
-    _update_chi_square_display()
+    if update_canvas:
+        canvas.draw_idle()
+    if update_chi_square:
+        _update_chi_square_display()
 _update_background_slider_defaults(background_runtime_state.current_background_display, reset_override=True)
 
 
@@ -4374,6 +4387,7 @@ LIVE_DRAG_PREVIEW_MAX_SAMPLES = 8
 LIVE_DRAG_ANALYSIS_RADIAL_BINS = 240
 LIVE_DRAG_ANALYSIS_AZIMUTH_BINS = 180
 LIVE_DRAG_SETTLE_MS = 160
+CAKING_CACHE_MAX_ENTRIES = 8
 
 simulation_runtime_state.update_pending = None
 simulation_runtime_state.integration_update_pending = None
@@ -4500,12 +4514,6 @@ def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
     simulation_runtime_state.last_caked_background_image_unscaled = None
     simulation_runtime_state.last_caked_radial_values = None
     simulation_runtime_state.last_caked_azimuth_values = None
-    simulation_runtime_state.caking_cache = {
-        "sim_sig": None,
-        "sim_res2": None,
-        "bg_sig": None,
-        "bg_res2": None,
-    }
     simulation_runtime_state.last_1d_integration_data.update(
         {
             "radials_sim": None,
@@ -4596,6 +4604,58 @@ def _ensure_analysis_worker_executor():
     return executor
 
 
+def _empty_caking_cache() -> dict[str, object]:
+    return {
+        "sim_results": {},
+        "bg_results": {},
+    }
+
+
+def _caking_cache_bucket(kind: str) -> dict[object, dict[str, object]]:
+    cache = simulation_runtime_state.caking_cache
+    if not isinstance(cache, dict):
+        cache = _empty_caking_cache()
+        simulation_runtime_state.caking_cache = cache
+    bucket_name = f"{kind}_results"
+    bucket = cache.get(bucket_name)
+    if not isinstance(bucket, dict):
+        bucket = {}
+        cache[bucket_name] = bucket
+    return bucket
+
+
+def _get_cached_caking_entry(kind: str, signature: object) -> dict[str, object] | None:
+    if signature is None:
+        return None
+    bucket = _caking_cache_bucket(kind)
+    entry = bucket.get(signature)
+    if not isinstance(entry, dict):
+        return None
+    bucket.pop(signature, None)
+    bucket[signature] = entry
+    return dict(entry)
+
+
+def _store_cached_caking_entry(
+    kind: str,
+    signature: object,
+    *,
+    res2,
+    payload: dict[str, object] | None,
+) -> None:
+    if signature is None or res2 is None:
+        return
+    bucket = _caking_cache_bucket(kind)
+    bucket.pop(signature, None)
+    bucket[signature] = {
+        "res2": res2,
+        "payload": None if payload is None else dict(payload),
+    }
+    while len(bucket) > CAKING_CACHE_MAX_ENTRIES:
+        oldest_key = next(iter(bucket))
+        bucket.pop(oldest_key, None)
+
+
 def _live_interaction_active() -> bool:
     return bool(simulation_runtime_state.interaction_drag_active)
 
@@ -4620,15 +4680,39 @@ def _analysis_progress_text() -> str:
 def _defer_nonessential_redraw() -> bool:
     return bool(
         _live_interaction_active()
-        or (
-            simulation_runtime_state.preview_active
-            and simulation_runtime_state.worker_active_job is not None
-        )
-        or (
-            simulation_runtime_state.analysis_preview_active
-            and simulation_runtime_state.analysis_active_job is not None
-        )
+        or simulation_runtime_state.preview_active
+        or simulation_runtime_state.analysis_preview_active
+        or simulation_runtime_state.worker_active_job is not None
+        or simulation_runtime_state.worker_queued_job is not None
+        or simulation_runtime_state.analysis_active_job is not None
+        or simulation_runtime_state.analysis_queued_job is not None
     )
+
+
+def _refresh_settled_overlays() -> None:
+    refresh_integration_region_visuals()
+    qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
+    if _live_geometry_preview_enabled():
+        if gui_controllers.consume_geometry_preview_skip_once(geometry_preview_state):
+            _clear_geometry_preview_artists()
+        else:
+            _refresh_live_geometry_preview(update_status=True)
+    else:
+        gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
+        _clear_geometry_preview_artists()
+    _render_current_geometry_manual_pairs(update_status=False)
+
+
+def _clear_deferred_overlays() -> None:
+    try:
+        gui_qr_cylinder_overlay.clear_runtime_qr_cylinder_overlay_artists(
+            qr_cylinder_overlay_runtime_bindings_factory(),
+            redraw=False,
+        )
+    except Exception:
+        pass
+    _clear_geometry_preview_artists(redraw=False)
+    gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
 
 
 def _finish_live_interaction() -> None:
@@ -5138,16 +5222,22 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
     npt_rad = int(job.get("npt_rad", 1000))
     npt_azim = int(job.get("npt_azim", 720))
     is_preview = bool(job.get("is_preview", False))
+    cached_bg_res2 = job.get("cached_bg_res2")
+    cached_bg_caked = job.get("cached_bg_caked")
 
     analysis_start_time = perf_counter()
     sim_res2 = caking(sim_image, ai, npt_rad=npt_rad, npt_azim=npt_azim)
-    bg_res2 = (
-        caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
-        if bg_array is not None
-        else None
-    )
+    if cached_bg_res2 is not None:
+        bg_res2 = cached_bg_res2
+    elif bg_array is not None:
+        bg_res2 = caking(bg_array, ai, npt_rad=npt_rad, npt_azim=npt_azim)
+    else:
+        bg_res2 = None
     sim_caked = _prepare_caked_display_payload(sim_res2)
-    bg_caked = _prepare_caked_display_payload(bg_res2)
+    if isinstance(cached_bg_caked, dict):
+        bg_caked = dict(cached_bg_caked)
+    else:
+        bg_caked = _prepare_caked_display_payload(bg_res2)
 
     return {
         "job_id": int(job["job_id"]),
@@ -5155,6 +5245,8 @@ def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
         "epoch": int(job["epoch"]),
         "is_preview": is_preview,
         "analysis_bins": (npt_rad, npt_azim),
+        "sim_cache_sig": job.get("sim_cache_sig"),
+        "bg_cache_sig": job.get("bg_cache_sig"),
         "sim_caking_sig": job.get("sim_caking_sig"),
         "bg_caking_sig": job.get("bg_caking_sig"),
         "sim_res2": sim_res2,
@@ -5352,10 +5444,18 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
     else:
         simulation_runtime_state.last_caked_background_image_unscaled = None
 
-    simulation_runtime_state.caking_cache["sim_sig"] = result.get("sim_caking_sig")
-    simulation_runtime_state.caking_cache["sim_res2"] = simulation_runtime_state.last_res2_sim
-    simulation_runtime_state.caking_cache["bg_sig"] = result.get("bg_caking_sig")
-    simulation_runtime_state.caking_cache["bg_res2"] = simulation_runtime_state.last_res2_background
+    _store_cached_caking_entry(
+        "sim",
+        result.get("sim_cache_sig"),
+        res2=simulation_runtime_state.last_res2_sim,
+        payload=sim_caked if isinstance(sim_caked, dict) else None,
+    )
+    _store_cached_caking_entry(
+        "bg",
+        result.get("bg_cache_sig"),
+        res2=simulation_runtime_state.last_res2_background,
+        payload=bg_caked if isinstance(bg_caked, dict) else None,
+    )
 
 
 def schedule_update():
@@ -5429,12 +5529,7 @@ simulation_runtime_state.peak_overlay_cache = {
     "intensities": [],
     "records": [],
 }
-simulation_runtime_state.caking_cache = {
-    "sim_sig": None,
-    "sim_res2": None,
-    "bg_sig": None,
-    "bg_res2": None,
-}
+simulation_runtime_state.caking_cache = _empty_caking_cache()
 simulation_runtime_state.analysis_executor = None
 simulation_runtime_state.analysis_future = None
 simulation_runtime_state.analysis_poll_token = None
@@ -5972,6 +6067,16 @@ def do_update():
         if desired_analysis_preview
         else (1000, 720)
     )
+    sim_cache_sig = (
+        (sim_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
+        if analysis_requested
+        else None
+    )
+    bg_cache_sig = (
+        (bg_caking_sig, int(analysis_bins[0]), int(analysis_bins[1]))
+        if bg_caking_sig is not None
+        else None
+    )
     ready_analysis_result = None
     if analysis_sig is not None:
         ready_analysis_result = _consume_ready_analysis_result(
@@ -5980,7 +6085,10 @@ def do_update():
         )
         if ready_analysis_result is not None:
             _apply_ready_analysis_result(ready_analysis_result)
-            if analysis_view_controls_view_state.show_1d_var.get():
+            if (
+                analysis_view_controls_view_state.show_1d_var.get()
+                and not bool(ready_analysis_result.get("is_preview", False))
+            ):
                 _refresh_integration_from_cached_results()
             simulation_runtime_state.update_phase = "applying"
             _refresh_run_status_bar()
@@ -6016,6 +6124,7 @@ def do_update():
         and (not analysis_result_matches_target)
         and not analysis_request_in_flight
     ):
+        cached_bg_entry = _get_cached_caking_entry("bg", bg_cache_sig)
         _invalidate_analysis_cache(clear_visuals=not analysis_result_current)
         _request_async_analysis_job(
             {
@@ -6024,6 +6133,8 @@ def do_update():
                 "is_preview": desired_analysis_preview,
                 "npt_rad": int(analysis_bins[0]),
                 "npt_azim": int(analysis_bins[1]),
+                "sim_cache_sig": sim_cache_sig,
+                "bg_cache_sig": bg_cache_sig,
                 "image": np.asarray(
                     simulation_runtime_state.unscaled_image,
                     dtype=np.float64,
@@ -6035,6 +6146,16 @@ def do_update():
                         and native_background is not None
                     )
                     else np.asarray(native_background, dtype=np.float64).copy()
+                ),
+                "cached_bg_res2": (
+                    None
+                    if not isinstance(cached_bg_entry, dict)
+                    else cached_bg_entry.get("res2")
+                ),
+                "cached_bg_caked": (
+                    None
+                    if not isinstance(cached_bg_entry, dict)
+                    else cached_bg_entry.get("payload")
                 ),
                 "distance_m": float(corto_det_up),
                 "center": np.asarray(
@@ -6059,6 +6180,7 @@ def do_update():
         if analysis_result_current
         else None
     )
+    defer_overlay_refresh = _defer_nonessential_redraw()
 
     if (
         analysis_view_controls_view_state.show_caked_2d_var.get()
@@ -6209,9 +6331,13 @@ def do_update():
             background_display.set_visible(False)
         
     # 1D integration
-    if analysis_view_controls_view_state.show_1d_var.get() and sim_res2 is not None:
+    if (
+        analysis_view_controls_view_state.show_1d_var.get()
+        and sim_res2 is not None
+        and not defer_overlay_refresh
+    ):
         _update_1d_plots_from_caked(sim_res2, bg_res2)
-    else:
+    elif not defer_overlay_refresh:
         _clear_1d_plot_cache_and_lines()
 
     if analysis_result_current:
@@ -6220,32 +6346,16 @@ def do_update():
 
     # Keep simulation display limits sticky across regenerated simulations.
     # Users can still change limits manually or reset defaults explicitly.
-    apply_scale_factor_to_existing_results(update_limits=False)
+    apply_scale_factor_to_existing_results(
+        update_limits=False,
+        update_1d=False,
+        update_chi_square=not defer_overlay_refresh,
+    )
 
-    refresh_integration_region_visuals()
-    defer_overlay_refresh = _defer_nonessential_redraw()
     if defer_overlay_refresh:
-        try:
-            gui_qr_cylinder_overlay.clear_runtime_qr_cylinder_overlay_artists(
-                qr_cylinder_overlay_runtime_bindings_factory(),
-                redraw=False,
-            )
-        except Exception:
-            pass
-        _clear_geometry_preview_artists(redraw=False)
+        _clear_deferred_overlays()
     else:
-        qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
-    if not defer_overlay_refresh and _live_geometry_preview_enabled():
-        if gui_controllers.consume_geometry_preview_skip_once(geometry_preview_state):
-            _clear_geometry_preview_artists()
-        else:
-            _refresh_live_geometry_preview(update_status=True)
-    else:
-        gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
-        if not defer_overlay_refresh:
-            _clear_geometry_preview_artists()
-    if not defer_overlay_refresh:
-        _render_current_geometry_manual_pairs(update_status=False)
+        _refresh_settled_overlays()
 
     redraw_update_elapsed_ms = (perf_counter() - redraw_update_start_time) * 1e3
     total_update_elapsed_ms = (perf_counter() - update_start_time) * 1e3

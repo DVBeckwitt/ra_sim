@@ -723,10 +723,8 @@ class SimulationRuntimeState:
     )
     caking_cache: dict[str, object] = field(
         default_factory=lambda: {
-            "sim_sig": None,
-            "sim_res2": None,
-            "bg_sig": None,
-            "bg_res2": None,
+            "sim_results": {},
+            "bg_results": {},
         }
     )
     chi_square_update_token: int = 0
