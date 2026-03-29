@@ -637,7 +637,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 
 ## Remaining Migration Focus
 
-- As of 2026-03-28, the refactor is leaving open-ended `runtime.py`
+- As of 2026-03-29, the refactor is leaving open-ended `runtime.py`
   decomposition mode.
 - `ra_sim.gui.runtime` is now an import-safe public wrapper.
 - The remaining large integration monolith now lives in
@@ -661,7 +661,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   by `tests/test_source_template_cache.py` has also been restored in
   `ra_sim.simulation.diffraction`, so that separate simulation regression is no
   longer open.
-- There is no new broad cleanup tranche queued ahead of feature-driven work.
+- There is no new broad cleanup tranche queued ahead of feature-driven work; new
+  changes must be justified by reliability, testability, or direct feature impact.
 - Targeted runtime cleanup can still happen in structure-model, pruning,
   Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
   workflows, but only when it materially supports those goals or unblocks

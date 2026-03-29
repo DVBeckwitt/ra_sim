@@ -848,6 +848,9 @@ What is left:
   feature work.
 - Thin value-source rewiring or callback extraction done only to shrink
   the internal runtime implementation is now out of scope by default.
+- As of 2026-03-29, the next refactor step is complete: no open-ended runtime
+  decomposition is planned, and new work is scoped to feature-blocking, duplicated,
+  or testability/reliability-driven runtime edits.
 
 Why it matters:
 
@@ -1333,7 +1336,7 @@ Current status:
 
 ## Suggested Next Concrete Step
 
-The next best step is:
+The next best step has shifted to an explicit execution rule:
 
 - keep the runtime/config/entrypoint/root-cleanup refactor closed out and stop
   expanding it by default
@@ -1343,6 +1346,11 @@ The next best step is:
   duplicated, or feature-blocking workflows that still justify the move
 - let future cleanup be driven by active product work rather than another
   open-ended structural sweep
+
+Operationally, the next step taken is:
+
+- add/maintain the doc-level gate: no runtime change lands without a concrete
+  reliability, testability, or feature-delivery reason.
 
 Immediate checklist after the strategy pivot:
 
