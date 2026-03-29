@@ -175,6 +175,10 @@ class DisplayControlsViewState:
     simulation_max_slider: Any = None
     scale_factor_slider: Any = None
     scale_factor_entry: Any = None
+    fast_viewer_var: Any = None
+    fast_viewer_checkbutton: Any = None
+    fast_viewer_status_var: Any = None
+    fast_viewer_status_label: Any = None
 
 
 @dataclass

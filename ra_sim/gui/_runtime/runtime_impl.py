@@ -143,6 +143,7 @@ from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import state as gui_state
 from ra_sim.gui import state_io as gui_state_io
 from ra_sim.gui import structure_factor_pruning as gui_structure_factor_pruning
+from ra_sim.gui import fast_plot_viewer as gui_fast_plot_viewer
 from ra_sim.gui.sliders import create_slider
 from ra_sim.gui.diffuse_cif_toggle import (
     open_diffuse_cif_toggle_algebraic,
@@ -1435,6 +1436,7 @@ if (
 
 def _shutdown_gui():
     """Close all application windows and end the Tk event loop."""
+    global canvas, fast_image_viewer, fast_canvas_proxy
 
     gui_controllers.clear_tk_after_token(
         root,
@@ -1478,6 +1480,14 @@ def _shutdown_gui():
             analysis_executor.shutdown(wait=False)
         except Exception:
             pass
+    if fast_image_viewer is not None:
+        try:
+            fast_image_viewer.close()
+        except Exception:
+            pass
+    fast_image_viewer = None
+    fast_canvas_proxy = None
+    canvas = matplotlib_canvas
 
     try:
         if root.winfo_exists():
@@ -1497,11 +1507,18 @@ root.protocol("WM_DELETE_WINDOW", _shutdown_gui)
 
 fig, ax = plt.subplots(figsize=(8, 8))
 ax.set_aspect("auto")
-canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
+matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
     fig,
     master=app_shell_view_state.canvas_frame,
 )
-canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+matplotlib_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+canvas = matplotlib_canvas
+FAST_VIEWER_DRAW_INTERVAL_S = 0.08
+FAST_VIEWER_STARTUP_ENABLED = str(
+    os.environ.get("RA_SIM_FAST_VIEWER", "0")
+).strip().lower() not in {"", "0", "false", "no", "off"}
+fast_image_viewer = None
+fast_canvas_proxy = None
 
 global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 simulation_runtime_state.unscaled_image = None
@@ -1539,6 +1556,114 @@ integration_region_overlay = ax.imshow(
     interpolation='nearest'
 )
 integration_region_overlay.set_visible(False)
+
+
+def _fast_viewer_active() -> bool:
+    return fast_canvas_proxy is not None and fast_image_viewer is not None
+
+
+def _set_fast_viewer_status_text(text: str) -> None:
+    status_var = getattr(display_controls_view_state, "fast_viewer_status_var", None)
+    if status_var is not None:
+        try:
+            status_var.set(str(text))
+        except Exception:
+            pass
+
+
+def _maybe_refresh_run_status_bar() -> None:
+    refresh_fn = globals().get("_refresh_run_status_bar")
+    if callable(refresh_fn):
+        try:
+            refresh_fn()
+        except Exception:
+            pass
+
+
+def _sync_fast_viewer_from_matplotlib() -> None:
+    if fast_canvas_proxy is None:
+        return
+    try:
+        fast_canvas_proxy.sync_from_matplotlib(
+            ax=ax,
+            image_artist=image_display,
+            background_artist=background_display,
+            overlay_artist=integration_region_overlay,
+            marker_artist=center_marker,
+        )
+    except Exception:
+        pass
+
+
+def _enable_fast_viewer(*, announce: bool = True) -> bool:
+    global canvas, fast_image_viewer, fast_canvas_proxy
+
+    if _fast_viewer_active():
+        canvas = fast_canvas_proxy
+        _sync_fast_viewer_from_matplotlib()
+        _set_fast_viewer_status_text("Fast viewer active.")
+        return True
+
+    viewer = gui_fast_plot_viewer.FastPlotViewer(title="RA-SIM Fast Viewer")
+    if not bool(getattr(viewer, "available", False)):
+        error_text = str(getattr(viewer, "error_message", "Unavailable"))
+        _set_fast_viewer_status_text(f"Fast viewer unavailable: {error_text}")
+        fast_var = getattr(display_controls_view_state, "fast_viewer_var", None)
+        if fast_var is not None:
+            try:
+                fast_var.set(False)
+            except Exception:
+                pass
+        if announce:
+            progress_label.config(text=f"Fast viewer unavailable: {error_text}")
+        return False
+
+    proxy = gui_fast_plot_viewer.MatplotlibCanvasProxy(
+        matplotlib_canvas,
+        viewer,
+        draw_interval_s=FAST_VIEWER_DRAW_INTERVAL_S,
+        render_matplotlib=True,
+        event_axes=ax,
+    )
+    proxy.set_sync_callback(_sync_fast_viewer_from_matplotlib)
+    fast_image_viewer = viewer
+    fast_canvas_proxy = proxy
+    canvas = proxy
+    _sync_fast_viewer_from_matplotlib()
+    proxy.process_fast_events()
+    _set_fast_viewer_status_text("Fast viewer active.")
+    if announce:
+        progress_label.config(text="Fast viewer enabled.")
+    _maybe_refresh_run_status_bar()
+    return True
+
+
+def _disable_fast_viewer(*, announce: bool = True) -> None:
+    global canvas, fast_image_viewer, fast_canvas_proxy
+
+    viewer = fast_image_viewer
+    fast_image_viewer = None
+    fast_canvas_proxy = None
+    canvas = matplotlib_canvas
+    if viewer is not None:
+        try:
+            viewer.close()
+        except Exception:
+            pass
+    _set_fast_viewer_status_text("Fast viewer off.")
+    if announce:
+        progress_label.config(text="Fast viewer disabled.")
+    _maybe_refresh_run_status_bar()
+
+
+def _toggle_fast_viewer() -> None:
+    fast_var = getattr(display_controls_view_state, "fast_viewer_var", None)
+    enabled = bool(fast_var.get()) if fast_var is not None else False
+    if enabled:
+        if not _enable_fast_viewer():
+            return
+    else:
+        _disable_fast_viewer()
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
@@ -3426,6 +3551,9 @@ gui_views.create_display_controls(
     scale_factor_step=scale_factor_step,
     on_apply_background_limits=_apply_background_limits,
     on_apply_simulation_limits=_apply_simulation_limits,
+    fast_viewer_enabled=FAST_VIEWER_STARTUP_ENABLED,
+    on_toggle_fast_viewer=_toggle_fast_viewer,
+    fast_viewer_status_text="Fast viewer off.",
 )
 
 background_display.set_clim(background_vmin_default, background_vmax_default)
@@ -3567,6 +3695,8 @@ def _install_scale_factor_entry_bindings():
 
 
 _install_scale_factor_entry_bindings()
+if FAST_VIEWER_STARTUP_ENABLED:
+    _enable_fast_viewer(announce=False)
 
 
 def _suggest_scale_factor(sim_image, bg_image):
@@ -4494,6 +4624,8 @@ def _refresh_run_status_bar() -> None:
             parts.append("Caked Preview")
     if simulation_runtime_state.interaction_drag_active:
         parts.append("Dragging")
+    if _fast_viewer_active():
+        parts.append("Fast Viewer")
     last_total_ms = simulation_runtime_state.last_total_update_ms
     if isinstance(last_total_ms, (int, float)) and np.isfinite(float(last_total_ms)):
         parts.append(f"Last {float(last_total_ms):.0f} ms")
@@ -12463,11 +12595,21 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         f"cif={cif_summary}"
     )
 
+    def _run_post_startup_work():
+        try:
+            export_initial_excel()
+        except Exception as exc:
+            progress_label.config(text=f"Startup post-processing failed: {exc}")
+            try:
+                import traceback
+
+                traceback.print_exc()
+            except Exception:
+                pass
+
     def _run_initial_startup_work():
         try:
             progress_label.config(text="Initializing simulation...")
-            export_initial_excel()
-            update_mosaic_cache()
             do_update()
         except Exception as exc:
             progress_label.config(text=f"Startup initialization failed: {exc}")
@@ -12492,6 +12634,8 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 progress_label.config(text=_analysis_progress_text())
             else:
                 progress_label.config(text="Simulation ready.")
+            if write_excel:
+                root.after(250, _run_post_startup_work)
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)
