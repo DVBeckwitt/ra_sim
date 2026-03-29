@@ -1365,7 +1365,7 @@ def _draw_geometry_fit_overlay(
         overlay_records,
         geometry_pick_artists=geometry_runtime_state.pick_artists,
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
-        draw_idle=canvas.draw_idle,
+        draw_idle=_request_overlay_canvas_redraw,
         max_display_markers=max_display_markers,
         show_caked_2d=bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
         native_detector_coords_to_caked_display_coords=(
@@ -1386,7 +1386,7 @@ def _draw_initial_geometry_pairs_overlay(
         initial_pairs_display,
         geometry_pick_artists=geometry_runtime_state.pick_artists,
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
-        draw_idle=canvas.draw_idle,
+        draw_idle=_request_overlay_canvas_redraw,
         max_display_markers=max_display_markers,
     )
 
@@ -1511,7 +1511,8 @@ matplotlib_canvas = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
     fig,
     master=app_shell_view_state.canvas_frame,
 )
-matplotlib_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+matplotlib_canvas_widget = matplotlib_canvas.get_tk_widget()
+matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 canvas = matplotlib_canvas
 FAST_VIEWER_DRAW_INTERVAL_S = 0.08
 FAST_VIEWER_STARTUP_ENABLED = str(
@@ -1519,6 +1520,23 @@ FAST_VIEWER_STARTUP_ENABLED = str(
 ).strip().lower() not in {"", "0", "false", "no", "off"}
 fast_image_viewer = None
 fast_canvas_proxy = None
+fast_viewer_requested_enabled = FAST_VIEWER_STARTUP_ENABLED
+fast_viewer_suspend_reason = None
+fast_canvas_placeholder_var = tk.StringVar(
+    value=(
+        "Fast viewer active in a separate window.\n"
+        "The embedded Matplotlib canvas is paused until fast-viewer mode is turned off."
+    )
+)
+fast_canvas_placeholder_label = ttk.Label(
+    app_shell_view_state.canvas_frame,
+    textvariable=fast_canvas_placeholder_var,
+    anchor=tk.CENTER,
+    justify=tk.CENTER,
+    wraplength=520,
+    padding=(24, 24),
+)
+canvas_interaction_bound_ids: set[int] = set()
 
 global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 simulation_runtime_state.unscaled_image = None
@@ -1571,6 +1589,123 @@ def _set_fast_viewer_status_text(text: str) -> None:
             pass
 
 
+def _set_fast_viewer_requested_enabled(enabled: bool) -> None:
+    global fast_viewer_requested_enabled
+
+    fast_viewer_requested_enabled = bool(enabled)
+    fast_var = getattr(display_controls_view_state, "fast_viewer_var", None)
+    if fast_var is not None:
+        try:
+            if bool(fast_var.get()) != bool(enabled):
+                fast_var.set(bool(enabled))
+        except Exception:
+            pass
+
+
+def _fast_viewer_suspend_reason_text() -> str | None:
+    try:
+        if bool(geometry_runtime_state.manual_pick_armed):
+            return "manual geometry picking is active"
+    except Exception:
+        pass
+    try:
+        manual_pick_session_active = globals().get("_geometry_manual_pick_session_active")
+        if callable(manual_pick_session_active) and bool(
+            manual_pick_session_active(require_current_background=False)
+        ):
+            return "manual geometry picking is active"
+    except Exception:
+        pass
+    try:
+        if bool(getattr(geometry_preview_state, "exclude_armed", False)):
+            return "geometry preview exclusion is active"
+    except Exception:
+        pass
+    try:
+        live_preview_enabled = globals().get("_live_geometry_preview_enabled")
+        if callable(live_preview_enabled) and bool(live_preview_enabled()):
+            return "live geometry preview is active"
+    except Exception:
+        pass
+    try:
+        qr_overlay_var = getattr(
+            geometry_overlay_actions_view_state,
+            "show_qr_cylinder_overlay_var",
+            None,
+        )
+        if qr_overlay_var is not None and bool(qr_overlay_var.get()):
+            return "QR-cylinder overlays are enabled"
+    except Exception:
+        pass
+
+    artist_groups = (
+        getattr(geometry_runtime_state, "pick_artists", ()),
+        getattr(geometry_runtime_state, "preview_artists", ()),
+        getattr(geometry_runtime_state, "manual_preview_artists", ()),
+        getattr(geometry_runtime_state, "qr_cylinder_overlay_artists", ()),
+    )
+    if any(bool(group) for group in artist_groups):
+        return "geometry overlays are visible"
+    return None
+
+
+def _refresh_fast_viewer_status() -> None:
+    if _fast_viewer_active():
+        _set_fast_viewer_status_text("Fast viewer active. Embedded canvas paused.")
+        return
+    if bool(fast_viewer_requested_enabled) and isinstance(fast_viewer_suspend_reason, str):
+        _set_fast_viewer_status_text(
+            f"Fast viewer paused: {fast_viewer_suspend_reason}. Using embedded canvas."
+        )
+        return
+    if bool(fast_viewer_requested_enabled):
+        _set_fast_viewer_status_text("Fast viewer requested.")
+        return
+    _set_fast_viewer_status_text("Fast viewer off.")
+
+
+def _show_fast_viewer_placeholder() -> None:
+    try:
+        matplotlib_canvas_widget.pack_forget()
+    except Exception:
+        pass
+    try:
+        if str(fast_canvas_placeholder_label.winfo_manager()) != "pack":
+            fast_canvas_placeholder_label.pack(
+                side=tk.TOP,
+                fill=tk.BOTH,
+                expand=True,
+            )
+    except Exception:
+        pass
+
+
+def _hide_fast_viewer_placeholder() -> None:
+    try:
+        fast_canvas_placeholder_label.pack_forget()
+    except Exception:
+        pass
+    try:
+        if str(matplotlib_canvas_widget.winfo_manager()) != "pack":
+            matplotlib_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    except Exception:
+        pass
+
+
+def _ensure_canvas_interaction_bindings(target_canvas) -> None:
+    callbacks = globals().get("canvas_interaction_runtime_callbacks")
+    if target_canvas is None or callbacks is None:
+        return
+    target_id = int(id(target_canvas))
+    if target_id in canvas_interaction_bound_ids:
+        return
+    gui_runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
+        canvas=target_canvas,
+        callbacks=callbacks,
+    )
+    canvas_interaction_bound_ids.add(target_id)
+
+
 def _maybe_refresh_run_status_bar() -> None:
     refresh_fn = globals().get("_refresh_run_status_bar")
     if callable(refresh_fn):
@@ -1595,13 +1730,70 @@ def _sync_fast_viewer_from_matplotlib() -> None:
         pass
 
 
+def _request_main_canvas_redraw(*, force_matplotlib: bool = False) -> None:
+    _refresh_fast_viewer_runtime_mode(announce=False)
+    if _fast_viewer_active():
+        _sync_fast_viewer_from_matplotlib()
+        try:
+            fast_canvas_proxy.process_fast_events()
+        except Exception:
+            pass
+        if not force_matplotlib:
+            return
+    if force_matplotlib:
+        matplotlib_canvas.draw()
+    else:
+        matplotlib_canvas.draw_idle()
+
+
+def _refresh_fast_viewer_runtime_mode(*, announce: bool = False) -> bool:
+    global fast_viewer_suspend_reason
+
+    requested = bool(fast_viewer_requested_enabled)
+    suspend_reason = _fast_viewer_suspend_reason_text() if requested else None
+    fast_viewer_suspend_reason = suspend_reason
+
+    if requested and suspend_reason is None:
+        if not _fast_viewer_active():
+            if not _enable_fast_viewer(announce=announce):
+                _set_fast_viewer_requested_enabled(False)
+                fast_viewer_suspend_reason = None
+                _refresh_fast_viewer_status()
+                _maybe_refresh_run_status_bar()
+                return False
+        _refresh_fast_viewer_status()
+        _maybe_refresh_run_status_bar()
+        return True
+
+    if _fast_viewer_active():
+        _disable_fast_viewer(announce=False)
+    else:
+        _hide_fast_viewer_placeholder()
+
+    _refresh_fast_viewer_status()
+    _maybe_refresh_run_status_bar()
+    if announce and requested and isinstance(suspend_reason, str):
+        try:
+            progress_label.config(text=f"Fast viewer paused while {suspend_reason}.")
+        except Exception:
+            pass
+    elif announce and not requested:
+        try:
+            progress_label.config(text="Fast viewer disabled.")
+        except Exception:
+            pass
+    return False
+
+
 def _enable_fast_viewer(*, announce: bool = True) -> bool:
     global canvas, fast_image_viewer, fast_canvas_proxy
 
     if _fast_viewer_active():
         canvas = fast_canvas_proxy
+        _show_fast_viewer_placeholder()
+        _ensure_canvas_interaction_bindings(fast_canvas_proxy)
         _sync_fast_viewer_from_matplotlib()
-        _set_fast_viewer_status_text("Fast viewer active.")
+        _set_fast_viewer_status_text("Fast viewer active. Embedded canvas paused.")
         return True
 
     viewer = gui_fast_plot_viewer.FastPlotViewer(title="RA-SIM Fast Viewer")
@@ -1622,18 +1814,20 @@ def _enable_fast_viewer(*, announce: bool = True) -> bool:
         matplotlib_canvas,
         viewer,
         draw_interval_s=FAST_VIEWER_DRAW_INTERVAL_S,
-        render_matplotlib=True,
+        render_matplotlib=False,
         event_axes=ax,
     )
     proxy.set_sync_callback(_sync_fast_viewer_from_matplotlib)
     fast_image_viewer = viewer
     fast_canvas_proxy = proxy
     canvas = proxy
+    _show_fast_viewer_placeholder()
+    _ensure_canvas_interaction_bindings(proxy)
     _sync_fast_viewer_from_matplotlib()
     proxy.process_fast_events()
-    _set_fast_viewer_status_text("Fast viewer active.")
+    _set_fast_viewer_status_text("Fast viewer active. Embedded canvas paused.")
     if announce:
-        progress_label.config(text="Fast viewer enabled.")
+        progress_label.config(text="Fast viewer enabled. Using external primary image renderer.")
     _maybe_refresh_run_status_bar()
     return True
 
@@ -1645,6 +1839,8 @@ def _disable_fast_viewer(*, announce: bool = True) -> None:
     fast_image_viewer = None
     fast_canvas_proxy = None
     canvas = matplotlib_canvas
+    _hide_fast_viewer_placeholder()
+    matplotlib_canvas.draw()
     if viewer is not None:
         try:
             viewer.close()
@@ -1659,11 +1855,8 @@ def _disable_fast_viewer(*, announce: bool = True) -> None:
 def _toggle_fast_viewer() -> None:
     fast_var = getattr(display_controls_view_state, "fast_viewer_var", None)
     enabled = bool(fast_var.get()) if fast_var is not None else False
-    if enabled:
-        if not _enable_fast_viewer():
-            return
-    else:
-        _disable_fast_viewer()
+    _set_fast_viewer_requested_enabled(enabled)
+    _refresh_fast_viewer_runtime_mode(announce=True)
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
@@ -1900,10 +2093,12 @@ def _set_geometry_manual_pick_session(
     pick_session: dict[str, object] | None,
 ) -> dict[str, object]:
     """Replace the active manual-geometry pick session in the shared state container."""
-    return gui_controllers.replace_manual_geometry_pick_session(
+    result = gui_controllers.replace_manual_geometry_pick_session(
         geometry_manual_state,
         pick_session,
     )
+    _refresh_fast_viewer_runtime_mode(announce=False)
+    return result
 
 
 def _clear_geometry_manual_undo_stack() -> None:
@@ -2345,7 +2540,7 @@ def _clear_geometry_manual_preview_artists(*, redraw: bool = True) -> None:
             pass
     geometry_runtime_state.manual_preview_artists.clear()
     if redraw:
-        canvas.draw_idle()
+        _request_overlay_canvas_redraw()
 
 
 def _show_geometry_manual_preview(
@@ -2399,7 +2594,7 @@ def _show_geometry_manual_preview(
         )
         geometry_runtime_state.manual_preview_artists.extend([refined_artist, link_artist])
 
-    canvas.draw_idle()
+    _request_overlay_canvas_redraw()
 
 
 def _geometry_manual_preview_due(col: float, row: float) -> bool:
@@ -2829,7 +3024,7 @@ def _clear_geometry_pick_artists(*, redraw: bool = True):
 
     gui_overlays.clear_artists(
         geometry_runtime_state.pick_artists,
-        draw_idle=canvas.draw_idle,
+        draw_idle=_request_overlay_canvas_redraw,
         redraw=redraw,
     )
 
@@ -2840,7 +3035,7 @@ def _clear_geometry_preview_artists(*, redraw: bool = True):
 
     gui_overlays.clear_artists(
         geometry_runtime_state.preview_artists,
-        draw_idle=canvas.draw_idle,
+        draw_idle=_request_overlay_canvas_redraw,
         redraw=redraw,
     )
 
@@ -2920,14 +3115,20 @@ qr_cylinder_overlay_runtime_bindings_factory = (
     qr_cylinder_overlay_workflow.bindings_factory
 )
 qr_cylinder_overlay_runtime_refresh = qr_cylinder_overlay_workflow.refresh
-qr_cylinder_overlay_runtime_toggle = qr_cylinder_overlay_workflow.toggle
+_qr_cylinder_overlay_runtime_toggle_impl = qr_cylinder_overlay_workflow.toggle
+
+
+def qr_cylinder_overlay_runtime_toggle(*args, **kwargs):
+    result = _qr_cylinder_overlay_runtime_toggle_impl(*args, **kwargs)
+    _refresh_fast_viewer_runtime_mode(announce=False)
+    return result
 
 def _clear_all_geometry_overlay_artists():
     """Clear fitted markers and live preview overlays together."""
 
     _clear_geometry_pick_artists(redraw=False)
     _clear_geometry_preview_artists(redraw=False)
-    canvas.draw_idle()
+    _request_overlay_canvas_redraw(force=True)
     try:
         progress_label_geometry.config(
             text="Geometry overlays cleared. Run Fit Geometry again to redraw them."
@@ -3167,7 +3368,11 @@ peak_selection_workflow = (
             if "progress_label_positions" in globals()
             else None
         ),
-        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+        draw_idle_factory=lambda: (
+            _request_overlay_canvas_redraw
+            if callable(globals().get("_request_overlay_canvas_redraw"))
+            else None
+        ),
         display_to_native_sim_coords=_display_to_native_sim_coords,
         deactivate_conflicting_modes_factory=lambda: (
             lambda: _set_geometry_preview_exclude_mode(False)
@@ -3408,7 +3613,11 @@ integration_range_drag_runtime = (
             integration_range_update_runtime_callbacks.schedule_range_update
         ),
         last_sim_res2_factory=lambda: simulation_runtime_state.last_res2_sim,
-        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+        draw_idle_factory=lambda: (
+            _request_overlay_canvas_redraw
+            if callable(globals().get("_request_overlay_canvas_redraw"))
+            else None
+        ),
         set_status_text_factory=lambda: (
             (lambda text: progress_label_positions.config(text=text))
             if "progress_label_positions" in globals()
@@ -3456,7 +3665,11 @@ canvas_interaction_workflow = (
             if "progress_label_geometry" in globals()
             else None
         ),
-        draw_idle_factory=lambda: (canvas.draw_idle if "canvas" in globals() else None),
+        draw_idle_factory=lambda: (
+            _request_overlay_canvas_redraw
+            if callable(globals().get("_request_overlay_canvas_redraw"))
+            else None
+        ),
     )
 )
 canvas_interaction_runtime = canvas_interaction_workflow.runtime
@@ -3466,10 +3679,7 @@ canvas_interaction_runtime_callbacks = canvas_interaction_workflow.callbacks
 # -----------------------------------------------------------
 # 3)  Bind the handler
 # -----------------------------------------------------------
-gui_runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
-    canvas=canvas,
-    callbacks=canvas_interaction_runtime_callbacks,
-)
+_ensure_canvas_interaction_bindings(canvas)
 
 
 # ---------------------------------------------------------------------------
@@ -3696,7 +3906,7 @@ def _install_scale_factor_entry_bindings():
 
 _install_scale_factor_entry_bindings()
 if FAST_VIEWER_STARTUP_ENABLED:
-    _enable_fast_viewer(announce=False)
+    _refresh_fast_viewer_runtime_mode(announce=False)
 
 
 def _suggest_scale_factor(sim_image, bg_image):
@@ -4305,7 +4515,7 @@ def _refresh_integration_from_cached_results():
     if not analysis_view_controls_view_state.show_1d_var.get():
         _clear_1d_plot_cache_and_lines()
         refresh_integration_region_visuals()
-        canvas.draw_idle()
+        _request_overlay_canvas_redraw()
         return True
 
     if simulation_runtime_state.unscaled_image is None:
@@ -4334,7 +4544,7 @@ def _refresh_integration_from_cached_results():
 
     _update_1d_plots_from_caked(simulation_runtime_state.last_res2_sim, bg_res2)
     refresh_integration_region_visuals()
-    canvas.draw_idle()
+    _request_overlay_canvas_redraw()
     return True
 
 
@@ -4626,6 +4836,8 @@ def _refresh_run_status_bar() -> None:
         parts.append("Dragging")
     if _fast_viewer_active():
         parts.append("Fast Viewer")
+    elif bool(fast_viewer_requested_enabled) and isinstance(fast_viewer_suspend_reason, str):
+        parts.append("Fast Viewer Paused")
     last_total_ms = simulation_runtime_state.last_total_update_ms
     if isinstance(last_total_ms, (int, float)) and np.isfinite(float(last_total_ms)):
         parts.append(f"Last {float(last_total_ms):.0f} ms")
@@ -4819,6 +5031,13 @@ def _defer_nonessential_redraw() -> bool:
         or simulation_runtime_state.analysis_active_job is not None
         or simulation_runtime_state.analysis_queued_job is not None
     )
+
+
+def _request_overlay_canvas_redraw(*, force: bool = False) -> None:
+    _refresh_fast_viewer_runtime_mode(announce=False)
+    if not force and _defer_nonessential_redraw():
+        return
+    _request_main_canvas_redraw(force_matplotlib=bool(force and not _fast_viewer_active()))
 
 
 def _refresh_settled_overlays() -> None:
@@ -6179,10 +6398,11 @@ def do_update():
             tuple(np.asarray(native_background).shape),
         )
 
+    show_caked_2d = bool(analysis_view_controls_view_state.show_caked_2d_var.get())
     analysis_requested = (
         simulation_runtime_state.unscaled_image is not None
         and (
-            analysis_view_controls_view_state.show_caked_2d_var.get()
+            show_caked_2d
             or analysis_view_controls_view_state.show_1d_var.get()
         )
     )
@@ -6257,7 +6477,12 @@ def do_update():
         and not analysis_request_in_flight
     ):
         cached_bg_entry = _get_cached_caking_entry("bg", bg_cache_sig)
-        _invalidate_analysis_cache(clear_visuals=not analysis_result_current)
+        preserve_caked_visuals = bool(
+            show_caked_2d
+            and simulation_runtime_state.last_caked_image_unscaled is not None
+            and simulation_runtime_state.last_caked_extent is not None
+        )
+        _invalidate_analysis_cache(clear_visuals=not preserve_caked_visuals)
         _request_async_analysis_job(
             {
                 "signature": analysis_sig,
@@ -6313,12 +6538,16 @@ def do_update():
         else None
     )
     defer_overlay_refresh = _defer_nonessential_redraw()
-
-    if (
-        analysis_view_controls_view_state.show_caked_2d_var.get()
-        and analysis_result_current
+    caked_display_available = bool(
+        show_caked_2d
         and simulation_runtime_state.last_caked_image_unscaled is not None
-    ):
+        and simulation_runtime_state.last_caked_extent is not None
+    )
+    showing_stale_caked_result = bool(
+        caked_display_available and not analysis_result_current
+    )
+
+    if caked_display_available:
         caked_img = np.asarray(
             simulation_runtime_state.last_caked_image_unscaled,
             dtype=float,
@@ -6427,7 +6656,12 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
-        if simulation_runtime_state.analysis_preview_active:
+        if showing_stale_caked_result and analysis_requested:
+            if desired_analysis_preview:
+                ax.set_title('2D Caked Preview (updating...)')
+            else:
+                ax.set_title('2D Caked Integration (updating...)')
+        elif simulation_runtime_state.analysis_preview_active:
             ax.set_title('2D Caked Preview')
         else:
             ax.set_title('2D Caked Integration')
@@ -6442,7 +6676,7 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
-        if analysis_view_controls_view_state.show_caked_2d_var.get() and analysis_requested:
+        if show_caked_2d and analysis_requested:
             if desired_analysis_preview:
                 ax.set_title('Detector Preview While Caked Preview Loads')
             else:
@@ -8189,16 +8423,34 @@ _live_geometry_preview_enabled = geometry_q_group_workflow.live_preview_enabled
 _render_live_geometry_preview_state = (
     geometry_q_group_workflow.render_live_preview_state
 )
-_set_geometry_preview_exclude_mode = (
+_set_geometry_preview_exclude_mode_impl = (
     geometry_q_group_workflow.set_preview_exclude_mode
 )
-_clear_live_geometry_preview_exclusions = (
+_clear_live_geometry_preview_exclusions_impl = (
     geometry_q_group_workflow.clear_preview_exclusions
 )
 _toggle_live_geometry_preview_exclusion_at = (
     geometry_q_group_workflow.toggle_preview_exclusion_at
 )
-_on_live_geometry_preview_toggle = geometry_q_group_workflow.toggle_live_preview
+_on_live_geometry_preview_toggle_impl = geometry_q_group_workflow.toggle_live_preview
+
+
+def _set_geometry_preview_exclude_mode(enabled: bool, message: str | None = None):
+    result = _set_geometry_preview_exclude_mode_impl(enabled, message=message)
+    _refresh_fast_viewer_runtime_mode(announce=False)
+    return result
+
+
+def _clear_live_geometry_preview_exclusions(*args, **kwargs):
+    result = _clear_live_geometry_preview_exclusions_impl(*args, **kwargs)
+    _refresh_fast_viewer_runtime_mode(announce=False)
+    return result
+
+
+def _on_live_geometry_preview_toggle(*args, **kwargs):
+    result = _on_live_geometry_preview_toggle_impl(*args, **kwargs)
+    _refresh_fast_viewer_runtime_mode(announce=False)
+    return result
 geometry_fit_simulation_runtime_callbacks = (
     gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
         build_geometry_fit_central_mosaic_params=(
@@ -9857,7 +10109,7 @@ def _legacy_auto_match_on_fit_geometry_click():
             bbox=dict(facecolor='white', alpha=0.75, edgecolor='none', pad=1.0),
         )
         geometry_runtime_state.pick_artists.extend([point, text])
-        canvas.draw_idle()
+        _request_overlay_canvas_redraw()
 
     picked_pairs = []  # list[(h,k,l), (x_real, y_real)]
     initial_manual_pairs_display: list[dict[str, object]] = []

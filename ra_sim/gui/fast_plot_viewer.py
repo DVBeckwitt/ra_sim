@@ -214,7 +214,7 @@ class FastPlotViewer:
         """Set callback for normalized mouse events.
 
         Callback signature:
-        ``callback(event_name, x_data, y_data, button, dblclick, in_plot)``
+        ``callback(event_name, x_data, y_data, x_pixel, y_pixel, button, dblclick, in_plot)``
         """
         self._mouse_event_callback = callback
 
@@ -267,6 +267,8 @@ class FastPlotViewer:
             event_name,
             float(view_pos.x()),
             float(view_pos.y()),
+            float(qpoint.x()),
+            float(qpoint.y()),
             button,
             bool(dblclick),
             in_plot,
@@ -471,6 +473,8 @@ class MatplotlibCanvasProxy:
         event_name: str,
         x_data: float,
         y_data: float,
+        x_pixel: float,
+        y_pixel: float,
         button: int | None,
         dblclick: bool,
         in_plot: bool,
@@ -481,6 +485,8 @@ class MatplotlibCanvasProxy:
         inaxes = self._event_axes if in_plot else None
         event = SimpleNamespace(
             name=event_name,
+            x=(float(x_pixel) if np.isfinite(float(x_pixel)) else None),
+            y=(float(y_pixel) if np.isfinite(float(y_pixel)) else None),
             xdata=(float(x_data) if inaxes is not None else None),
             ydata=(float(y_data) if inaxes is not None else None),
             button=button,
