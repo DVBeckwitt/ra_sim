@@ -179,6 +179,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   token cleanup before queuing range-update callbacks.
 - Geometry-fit undo restore in `ra_sim.gui.app` now uses that shared helper when
   clearing `update_pending` before redrawing restored geometry state.
+- The app restore path is now covered by `tests/test_gui_app_helpers.py` to
+  assert that `clear_tk_after_token` is invoked during undo restoration before
+  rerunning the redraw flow.
 - HKL lookup / Bragg-Qr open-control cleanup has also advanced:
   - the HKL lookup control cluster, its initial HKL-pick button refresh, and
     the shared Bragg-Qr manager open action now assemble through one shared

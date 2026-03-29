@@ -63,3 +63,41 @@ def test_app_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> N
     assert runtime_cfg["bounds"]["center_x"] == [88.0, 99.0]
     assert runtime_cfg["priors"]["center_x"]["center"] == 98.0
     assert abs(runtime_cfg["priors"]["center_x"]["sigma"] - 0.5) < 1e-12
+
+
+def test_restore_geometry_fit_undo_state_uses_tk_after_cancel_helper(monkeypatch) -> None:
+    """Undo restore should clear queued UI update callbacks through shared helper."""
+
+    clear_calls: list[tuple[object, object]] = []
+    run_calls: list[str] = []
+    pending = object()
+
+    def fake_clear(root: object, token: object) -> None:
+        clear_calls.append((root, token))
+
+    def fake_update() -> None:
+        run_calls.append("do_update")
+
+    old_clear = gui_app.gui_controllers.clear_tk_after_token
+    old_update = gui_app.do_update
+    old_update_pending = gui_app.update_pending
+    old_profile_cache = gui_app.profile_cache
+    old_overlay_state = gui_app.last_geometry_overlay_state
+    old_last_sim_signature = gui_app.last_simulation_signature
+
+    monkeypatch.setattr(gui_app.gui_controllers, "clear_tk_after_token", fake_clear)
+    monkeypatch.setattr(gui_app, "do_update", fake_update)
+    gui_app.update_pending = pending
+    try:
+        gui_app._restore_geometry_fit_undo_state({})
+    finally:
+        monkeypatch.setattr(gui_app.gui_controllers, "clear_tk_after_token", old_clear)
+        monkeypatch.setattr(gui_app, "do_update", old_update)
+        gui_app.update_pending = old_update_pending
+        gui_app.profile_cache = old_profile_cache
+        gui_app.last_geometry_overlay_state = old_overlay_state
+        gui_app.last_simulation_signature = old_last_sim_signature
+
+    assert clear_calls == [(gui_app.root, pending)]
+    assert gui_app.update_pending is None
+    assert run_calls == ["do_update"]
