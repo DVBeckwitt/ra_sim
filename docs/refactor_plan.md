@@ -14,7 +14,7 @@ high-level migration summary; this file is the working plan.
 
 ## Current Position
 
-As of 2026-03-28, the refactor has made real progress. The legacy root-script
+As of 2026-03-29, the refactor has made real progress. The legacy root-script
 problem is largely solved, the last broad GUI runtime-state extraction pass has
 landed, the structure-model / diffuse-HT rebuild workflow plus the primary-CIF
 reload state transition have moved into an extracted helper module, the shared
@@ -66,6 +66,10 @@ leaving open-ended runtime decomposition mode: the remaining inline code in
 that internal implementation module is mostly integration glue, so future
 refactors there should be driven by concrete wins rather than file-size
 reduction.
+
+As part of the next concrete step, `ra_sim.gui.controllers` now owns a shared
+Tk after-token cancellation helper used by runtime glue paths that previously
+duplicated cancellation logic across manual-geometry and geometry-update flows.
 
 ### What Is Already Done
 
@@ -929,6 +933,8 @@ What is done:
   updates for the custom-sample widgets and summary label.
 - `controllers.py` now also owns the sampling-count parsing,
   resolution-choice normalization, and summary formatting helpers.
+- `controllers.py` now also owns a shared Tk `after`-token cancellation helper,
+  which is now used by manual-geometry and runtime update-scheduling paths.
 - `state.py` now also owns finite-stack control view state.
 - `views.py` now also owns the finite-stack control construction and helper
   updates for the layer widgets and entry text.

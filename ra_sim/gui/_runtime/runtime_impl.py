@@ -1817,12 +1817,8 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
         return
 
     def _cancel_pending_update() -> None:
-        if simulation_runtime_state.update_pending is not None:
-            try:
-                root.after_cancel(simulation_runtime_state.update_pending)
-            except Exception:
-                pass
-            simulation_runtime_state.update_pending = None
+        gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
+        simulation_runtime_state.update_pending = None
 
     gui_geometry_fit.restore_runtime_geometry_fit_undo_state(
         state,
@@ -4346,11 +4342,16 @@ simulation_runtime_state.update_running = False
 
 def schedule_update():
     """Queue a throttled simulation/redraw update."""
-    if simulation_runtime_state.integration_update_pending is not None:
-        root.after_cancel(simulation_runtime_state.integration_update_pending)
-        simulation_runtime_state.integration_update_pending = None
-    if simulation_runtime_state.update_pending is not None:
-        root.after_cancel(simulation_runtime_state.update_pending)
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.integration_update_pending,
+    )
+    simulation_runtime_state.integration_update_pending = None
+
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.update_pending,
+    )
     simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
 
 

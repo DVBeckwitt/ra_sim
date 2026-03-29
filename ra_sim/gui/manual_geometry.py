@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
 
@@ -2943,18 +2944,10 @@ def ensure_geometry_fit_caked_view(
     if not needs_refresh:
         return update_pending, integration_update_pending
 
-    if integration_update_pending is not None:
-        try:
-            root.after_cancel(integration_update_pending)
-        except Exception:
-            pass
-        integration_update_pending = None
-    if update_pending is not None:
-        try:
-            root.after_cancel(update_pending)
-        except Exception:
-            pass
-        update_pending = None
+    gui_controllers.clear_tk_after_token(root, integration_update_pending)
+    integration_update_pending = None
+    gui_controllers.clear_tk_after_token(root, update_pending)
+    update_pending = None
 
     if bool(update_running):
         schedule_update()

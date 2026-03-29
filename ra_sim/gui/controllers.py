@@ -43,6 +43,18 @@ _SF_PRUNE_REL_FLOOR_MAX = 8.0e-2
 _SF_PRUNE_MIN_KEEP_BASE = 18
 
 
+def clear_tk_after_token(root: Any, token: Any) -> None:
+    """Cancel one Tk `after` token if it is still schedulable."""
+
+    cancel = getattr(root, "after_cancel", None)
+    if token is None or not callable(cancel):
+        return
+    try:
+        cancel(token)
+    except Exception:
+        pass
+
+
 def parse_sampling_count(
     raw_value: object,
     fallback: object,

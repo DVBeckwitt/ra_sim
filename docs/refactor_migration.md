@@ -171,6 +171,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
     peak-overlay callback wiring, and selected-peak runtime callback bundle
     now assemble through one shared helper in `ra_sim.gui.bootstrap`
   - `ra_sim.gui.runtime` no longer wires that selected-peak setup inline
+- A shared Tk after-token cancellation helper now lives in `ra_sim.gui.controllers`
+  and is used by runtime glue paths (manual-geometry caked-view switch and
+  geometry-update scheduling) to centralize duplicate timer cancellation and
+  harden cancellation error handling.
 - HKL lookup / Bragg-Qr open-control cleanup has also advanced:
   - the HKL lookup control cluster, its initial HKL-pick button refresh, and
     the shared Bragg-Qr manager open action now assemble through one shared
