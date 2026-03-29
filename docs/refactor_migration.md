@@ -666,6 +666,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   through one shared helper module, `ra_sim.gui.lazy_runtime`, so those two
   entry surfaces no longer keep duplicate lazy-forwarding logic or drift on
   failure cleanup for the path-loaded runtime implementation.
+- The main runtime implementation now also routes the in-place lazy background
+  cache update workflow for per-index load/current reads through
+  `ra_sim.gui.background_manager` instead of hand-applying those cache payloads
+  inline.
 - The remaining large integration monolith now lives in
   `ra_sim/gui/_runtime/runtime_impl.py`, and most of the remaining inline code
   there is glue rather than high-value extractable feature logic.

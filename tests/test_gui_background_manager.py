@@ -61,6 +61,115 @@ def test_background_manager_load_and_switch_update_state_in_place(tmp_path) -> N
     assert np.array_equal(switched["current_background_display"], np.rot90(np.ones((2, 2)), -1))
 
 
+def test_background_manager_load_background_image_by_index_updates_lazy_cache_in_place(
+    monkeypatch,
+) -> None:
+    background_state = state.BackgroundRuntimeState(
+        osc_files=["a.osc", "b.osc"],
+        background_images=[np.zeros((1, 1)), None],
+        background_images_native=[np.zeros((1, 1)), None],
+        background_images_display=[np.zeros((1, 1)), None],
+        current_background_image="existing-native",
+        current_background_display="existing-display",
+    )
+    image_alias = background_state.background_images
+    calls = []
+    payload = {
+        "background_images": [np.zeros((1, 1)), np.ones((1, 1))],
+        "background_images_native": [np.zeros((1, 1)), np.ones((1, 1))],
+        "background_images_display": [np.zeros((1, 1)), np.full((1, 1), 2.0)],
+        "background_image": np.ones((1, 1)),
+        "background_display": np.full((1, 1), 2.0),
+    }
+
+    monkeypatch.setattr(
+        background_manager.gui_background,
+        "load_background_image_by_index",
+        lambda index, **kwargs: calls.append((index, kwargs)) or payload,
+    )
+
+    updated = background_manager.load_background_image_by_index(
+        background_state,
+        1,
+        display_rotate_k=-1,
+        read_osc=lambda path: path,
+    )
+
+    assert updated is payload
+    assert background_state.background_images is image_alias
+    assert np.array_equal(background_state.background_images[1], np.ones((1, 1)))
+    assert np.array_equal(
+        background_state.background_images_display[1],
+        np.full((1, 1), 2.0),
+    )
+    assert background_state.current_background_image == "existing-native"
+    assert background_state.current_background_display == "existing-display"
+    assert calls[0][0] == 1
+    assert calls[0][1]["osc_files"] == ["a.osc", "b.osc"]
+
+
+def test_background_manager_current_background_helpers_update_lazy_cache_in_place(
+    monkeypatch,
+) -> None:
+    background_state = state.BackgroundRuntimeState(
+        osc_files=["a.osc"],
+        background_images=[np.zeros((1, 1))],
+        background_images_native=[np.zeros((1, 1))],
+        background_images_display=[np.zeros((1, 1))],
+        current_background_index=0,
+        current_background_image="existing-native",
+        current_background_display="existing-display",
+    )
+    calls = []
+    native_payload = {
+        "background_images": [np.full((1, 1), 3.0)],
+        "background_images_native": [np.full((1, 1), 3.0)],
+        "background_images_display": [np.full((1, 1), 4.0)],
+        "background_image": np.full((1, 1), 3.0),
+        "background_display": None,
+    }
+    display_payload = {
+        "background_images": [np.full((1, 1), 5.0)],
+        "background_images_native": [np.full((1, 1), 5.0)],
+        "background_images_display": [np.full((1, 1), 6.0)],
+        "background_image": None,
+        "background_display": np.full((1, 1), 6.0),
+    }
+
+    monkeypatch.setattr(
+        background_manager.gui_background,
+        "get_current_background_native",
+        lambda **kwargs: calls.append(("native", kwargs)) or native_payload,
+    )
+    monkeypatch.setattr(
+        background_manager.gui_background,
+        "get_current_background_display",
+        lambda **kwargs: calls.append(("display", kwargs)) or display_payload,
+    )
+
+    updated_native = background_manager.get_current_background_native(
+        background_state,
+        display_rotate_k=-1,
+        read_osc=lambda path: path,
+    )
+    updated_display = background_manager.get_current_background_display(
+        background_state,
+        display_rotate_k=-1,
+        read_osc=lambda path: path,
+    )
+
+    assert updated_native is native_payload
+    assert updated_display is display_payload
+    assert np.array_equal(background_state.background_images_native[0], np.full((1, 1), 5.0))
+    assert np.array_equal(background_state.background_images_display[0], np.full((1, 1), 6.0))
+    assert background_state.current_background_image == "existing-native"
+    assert background_state.current_background_display == "existing-display"
+    assert calls[0][0] == "native"
+    assert calls[0][1]["current_background_image"] == "existing-native"
+    assert calls[1][0] == "display"
+    assert calls[1][1]["current_background_display"] == "existing-display"
+
+
 def test_background_manager_builds_background_status_text() -> None:
     text = background_manager.build_background_file_status_text(
         osc_files=["C:/data/a.osc", "C:/data/b.osc"],

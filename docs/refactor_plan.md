@@ -70,6 +70,9 @@ The import-safe `ra_sim.gui.runtime` and `ra_sim.gui.app` wrappers now also
 share one lazy wrapper helper in `ra_sim.gui.lazy_runtime`, so their local
 `main`/`write_excel` forwarding, guarded dunder behavior, lazy `__dir__`
 surface, and failure-safe runtime loading no longer drift independently.
+The main runtime implementation now also routes lazy background cache
+load/current-read state application through `ra_sim.gui.background_manager`
+instead of hand-applying those cache payloads inline.
 
 As part of the next concrete step, `ra_sim.gui.controllers` now owns a shared
 Tk after-token cancellation helper used by runtime glue paths that previously
@@ -876,6 +879,10 @@ What is done:
   - `ra_sim.gui.lazy_runtime` now owns their shared `main` forwarding,
     `write_excel` attribute surface, guarded dunder handling, lazy `__dir__`,
     and failure-safe path loading for `runtime_impl.py`.
+- `ra_sim.gui.background_manager` now also owns the in-place lazy background
+  cache update wrappers used by the main runtime implementation.
+  - `ra_sim.gui._runtime.runtime_impl` no longer hand-applies the cache-list
+    payloads returned by per-index load/current background reads.
 
 What is left:
 

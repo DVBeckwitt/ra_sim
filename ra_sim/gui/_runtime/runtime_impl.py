@@ -287,12 +287,10 @@ _initial_background_state = gui_background.initialize_background_cache(
     display_rotate_k=DISPLAY_ROTATE_K,
     read_osc=read_osc,
 )
-background_runtime_state.background_images = list(_initial_background_state["background_images"])
-background_runtime_state.background_images_native = list(_initial_background_state["background_images_native"])
-background_runtime_state.background_images_display = list(_initial_background_state["background_images_display"])
-background_runtime_state.background_images = list(background_runtime_state.background_images)
-background_runtime_state.background_images_native = list(background_runtime_state.background_images_native)
-background_runtime_state.background_images_display = list(background_runtime_state.background_images_display)
+gui_background_manager.apply_background_state_update(
+    background_runtime_state,
+    _initial_background_state,
+)
 
 # Parse geometry
 poni_file_path = get_path("geometry_poni")
@@ -888,9 +886,6 @@ def export_initial_excel():
 
     print(f"Excel file saved at {excel_path}")
 
-background_runtime_state.current_background_image = _initial_background_state["current_background_image"]
-background_runtime_state.current_background_display = _initial_background_state["current_background_display"]
-background_runtime_state.current_background_index = int(_initial_background_state["current_background_index"])
 background_runtime_state.visible = True
 background_runtime_state.backend_rotation_k = 3
 background_runtime_state.backend_flip_x = False
@@ -1005,18 +1000,12 @@ def _load_background_image_by_index(index: int) -> tuple[np.ndarray, np.ndarray]
     """Return cached background arrays for *index*, loading from disk if needed."""
 
 
-    updated = gui_background.load_background_image_by_index(
+    updated = gui_background_manager.load_background_image_by_index(
+        background_runtime_state,
         int(index),
-        osc_files=background_runtime_state.osc_files,
-        background_images=background_runtime_state.background_images,
-        background_images_native=background_runtime_state.background_images_native,
-        background_images_display=background_runtime_state.background_images_display,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
     )
-    background_runtime_state.background_images = list(updated["background_images"])
-    background_runtime_state.background_images_native = list(updated["background_images_native"])
-    background_runtime_state.background_images_display = list(updated["background_images_display"])
     _sync_background_runtime_state()
     return (
         np.asarray(updated["background_image"]),
@@ -1028,19 +1017,11 @@ def _get_current_background_native() -> np.ndarray:
     """Return the unrotated background image corresponding to the current index."""
 
 
-    updated = gui_background.get_current_background_native(
-        osc_files=background_runtime_state.osc_files,
-        background_images=background_runtime_state.background_images,
-        background_images_native=background_runtime_state.background_images_native,
-        background_images_display=background_runtime_state.background_images_display,
-        current_background_index=background_runtime_state.current_background_index,
-        current_background_image=background_runtime_state.current_background_image,
+    updated = gui_background_manager.get_current_background_native(
+        background_runtime_state,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
     )
-    background_runtime_state.background_images = list(updated["background_images"])
-    background_runtime_state.background_images_native = list(updated["background_images_native"])
-    background_runtime_state.background_images_display = list(updated["background_images_display"])
     _sync_background_runtime_state()
     return np.asarray(updated["background_image"])
 
@@ -1049,20 +1030,11 @@ def _get_current_background_display() -> np.ndarray:
     """Return the rotated background image used for GUI display."""
 
 
-    updated = gui_background.get_current_background_display(
-        osc_files=background_runtime_state.osc_files,
-        background_images=background_runtime_state.background_images,
-        background_images_native=background_runtime_state.background_images_native,
-        background_images_display=background_runtime_state.background_images_display,
-        current_background_index=background_runtime_state.current_background_index,
-        current_background_image=background_runtime_state.current_background_image,
-        current_background_display=background_runtime_state.current_background_display,
+    updated = gui_background_manager.get_current_background_display(
+        background_runtime_state,
         display_rotate_k=DISPLAY_ROTATE_K,
         read_osc=read_osc,
     )
-    background_runtime_state.background_images = list(updated["background_images"])
-    background_runtime_state.background_images_native = list(updated["background_images_native"])
-    background_runtime_state.background_images_display = list(updated["background_images_display"])
     _sync_background_runtime_state()
     return np.asarray(updated["background_display"])
 

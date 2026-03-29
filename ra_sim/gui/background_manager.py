@@ -125,6 +125,27 @@ def apply_background_state_update(
     return background_state
 
 
+def _apply_background_cache_state_update(
+    background_state,
+    payload: dict[str, object],
+):
+    """Apply only background cache arrays from one lazy-read payload in place."""
+
+    apply_background_state_update(
+        background_state,
+        {
+            key: payload[key]
+            for key in (
+                "background_images",
+                "background_images_native",
+                "background_images_display",
+            )
+            if key in payload
+        },
+    )
+    return background_state
+
+
 def load_background_files(
     background_state,
     file_paths: Sequence[object],
@@ -144,6 +165,73 @@ def load_background_files(
         select_index=select_index,
     )
     apply_background_state_update(background_state, updated)
+    return updated
+
+
+def load_background_image_by_index(
+    background_state,
+    index: int,
+    *,
+    display_rotate_k: int,
+    read_osc: Callable[[str], object],
+) -> dict[str, object]:
+    """Load one background image lazily and apply cache updates in place."""
+
+    updated = gui_background.load_background_image_by_index(
+        int(index),
+        osc_files=background_state.osc_files,
+        background_images=background_state.background_images,
+        background_images_native=background_state.background_images_native,
+        background_images_display=background_state.background_images_display,
+        display_rotate_k=display_rotate_k,
+        read_osc=read_osc,
+    )
+    _apply_background_cache_state_update(background_state, updated)
+    return updated
+
+
+def get_current_background_native(
+    background_state,
+    *,
+    display_rotate_k: int,
+    read_osc: Callable[[str], object],
+) -> dict[str, object]:
+    """Resolve the current native background and apply cache updates in place."""
+
+    updated = gui_background.get_current_background_native(
+        osc_files=background_state.osc_files,
+        background_images=background_state.background_images,
+        background_images_native=background_state.background_images_native,
+        background_images_display=background_state.background_images_display,
+        current_background_index=background_state.current_background_index,
+        current_background_image=background_state.current_background_image,
+        display_rotate_k=display_rotate_k,
+        read_osc=read_osc,
+    )
+    _apply_background_cache_state_update(background_state, updated)
+    return updated
+
+
+def get_current_background_display(
+    background_state,
+    *,
+    display_rotate_k: int,
+    read_osc: Callable[[str], object],
+) -> dict[str, object]:
+    """Resolve the current display background and apply cache updates in place."""
+
+    updated = gui_background.get_current_background_display(
+        osc_files=background_state.osc_files,
+        background_images=background_state.background_images,
+        background_images_native=background_state.background_images_native,
+        background_images_display=background_state.background_images_display,
+        current_background_index=background_state.current_background_index,
+        current_background_image=background_state.current_background_image,
+        current_background_display=background_state.current_background_display,
+        display_rotate_k=display_rotate_k,
+        read_osc=read_osc,
+    )
+    _apply_background_cache_state_update(background_state, updated)
     return updated
 
 
