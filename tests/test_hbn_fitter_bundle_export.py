@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from hbn_fitter import fitter as hbn_fitter
+from ra_sim.hbn_fitter import fitter as hbn_fitter
 
 
 class _DummyVar:

@@ -395,10 +395,11 @@ def launch_calibrant_gui(*, bundle: str | None = None) -> None:
     import tkinter as tk
 
     try:
-        from hbn_fitter.fitter import HBNFitterGUI
+        from ra_sim.hbn_fitter.fitter import HBNFitterGUI
     except Exception as exc:
         raise RuntimeError(
-            "Unable to import hbn_fitter GUI. Ensure `hbn_fitter/fitter.py` exists."
+            "Unable to import the packaged calibrant fitter GUI from "
+            "`ra_sim.hbn_fitter.fitter`."
         ) from exc
 
     root = tk.Tk()

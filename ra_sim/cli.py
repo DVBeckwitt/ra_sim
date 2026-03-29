@@ -680,7 +680,7 @@ def _build_parser() -> argparse.ArgumentParser:
     calibrant_parser = subparsers.add_parser(
         "calibrant",
         aliases=["calibrant-fit"],
-        help="Launch the hBN calibrant fitter GUI from hbn_fitter/fitter.py.",
+        help="Launch the packaged hBN calibrant fitter GUI.",
     )
     calibrant_parser.add_argument(
         "--bundle",
