@@ -1653,6 +1653,89 @@ def test_redo_runtime_geometry_fit_reports_restore_failure() -> None:
     assert events == [("progress", "Failed to redo geometry fit: bad state")]
 
 
+def test_build_runtime_geometry_fit_history_callbacks_composes_undo_and_redo() -> None:
+    history_state = SimpleNamespace(undo_stack=[{"undo": True}], redo_stack=[{"redo": True}])
+    events: list[tuple[str, object]] = []
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_undo_runtime_geometry_fit(**kwargs: object) -> bool:
+        calls.append(("undo", dict(kwargs)))
+        return True
+
+    def fake_redo_runtime_geometry_fit(**kwargs: object) -> bool:
+        calls.append(("redo", dict(kwargs)))
+        return False
+
+    old_undo = geometry_fit.undo_runtime_geometry_fit
+    old_redo = geometry_fit.redo_runtime_geometry_fit
+    geometry_fit.undo_runtime_geometry_fit = fake_undo_runtime_geometry_fit
+    geometry_fit.redo_runtime_geometry_fit = fake_redo_runtime_geometry_fit
+    try:
+        callbacks = geometry_fit.build_runtime_geometry_fit_history_callbacks(
+            history_state=history_state,
+            capture_current_state=lambda: {"current": True},
+            restore_state=lambda state: events.append(("restore", dict(state))),
+            copy_state_value=lambda value: {"copied": value},
+            history_limit=lambda: 7,
+            peek_last_undo_state=(
+                lambda state, *, copy_state_value: (
+                    events.append(("peek_undo", state, copy_state_value("undo"))) or {"undo": True}
+                )
+            ),
+            peek_last_redo_state=(
+                lambda state, *, copy_state_value: (
+                    events.append(("peek_redo", state, copy_state_value("redo"))) or {"redo": True}
+                )
+            ),
+            commit_undo=(
+                lambda state, current_state, *, copy_state_value, limit: events.append(
+                    (
+                        "commit_undo",
+                        state,
+                        dict(current_state),
+                        copy_state_value("undo"),
+                        limit,
+                    )
+                )
+            ),
+            commit_redo=(
+                lambda state, current_state, *, copy_state_value, limit: events.append(
+                    (
+                        "commit_redo",
+                        state,
+                        dict(current_state),
+                        copy_state_value("redo"),
+                        limit,
+                    )
+                )
+            ),
+            update_button_state=lambda: events.append(("buttons", None)),
+            set_progress_text=lambda text: events.append(("progress", text)),
+        )
+
+        assert callbacks.undo() is True
+        assert callbacks.redo() is False
+    finally:
+        geometry_fit.undo_runtime_geometry_fit = old_undo
+        geometry_fit.redo_runtime_geometry_fit = old_redo
+
+    assert [name for name, _ in calls] == ["undo", "redo"]
+    undo_kwargs = calls[0][1]
+    redo_kwargs = calls[1][1]
+    assert undo_kwargs["has_history"]() is True
+    assert redo_kwargs["has_history"]() is True
+    assert undo_kwargs["read_undo_state"]() == {"undo": True}
+    assert redo_kwargs["read_redo_state"]() == {"redo": True}
+    undo_kwargs["commit_undo"]({"current": True})
+    redo_kwargs["commit_redo"]({"current": True})
+    assert events == [
+        ("peek_undo", history_state, {"copied": "undo"}),
+        ("peek_redo", history_state, {"copied": "redo"}),
+        ("commit_undo", history_state, {"current": True}, {"copied": "undo"}, 7),
+        ("commit_redo", history_state, {"current": True}, {"copied": "redo"}, 7),
+    ]
+
+
 def test_make_runtime_geometry_tool_action_callbacks_refreshes_button_state_and_label() -> None:
     events: list[object] = []
     label_calls: list[dict[str, object]] = []

@@ -84,6 +84,10 @@ The import-safe app shim now also resolves geometry-fit UI parameter reads,
 selected-fit variable-name reads, and undo-restore var-map lookup through the
 same shared geometry-fit value-callback bundle used by the primary runtime
 implementation instead of hand-building those value readers locally.
+The primary runtime implementation now also assembles its geometry-fit undo and
+redo callbacks through one shared history-callback builder in
+`ra_sim.gui.geometry_fit` instead of hand-wiring two near-identical history
+transitions inline.
 
 ### What Is Already Done
 
@@ -1023,6 +1027,10 @@ What is done:
 - `ra_sim.gui.app` now also reads geometry-fit UI params, selected fit-variable
   names, and undo-restore var-map state through the same shared geometry-fit
   value-callback bundle used by the primary runtime implementation.
+- `ra_sim.gui.geometry_fit` now also owns a shared runtime history-callback
+  builder for geometry-fit undo/redo transitions.
+  - `ra_sim.gui._runtime.runtime_impl` no longer hand-assembles separate
+    controller/history wiring for those two callbacks.
 
 What is left:
 

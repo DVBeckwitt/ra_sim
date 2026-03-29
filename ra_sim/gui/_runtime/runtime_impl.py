@@ -1871,57 +1871,21 @@ _restore_geometry_fit_undo_state = (
     )
 )
 
-
-def _undo_last_geometry_fit() -> None:
-    """Restore the most recent geometry-fit state."""
-
-    gui_geometry_fit.undo_runtime_geometry_fit(
-        has_history=lambda: bool(geometry_fit_history_state.undo_stack),
-        capture_current_state=_capture_geometry_fit_undo_state,
-        read_undo_state=(
-            lambda: gui_controllers.peek_last_geometry_fit_undo_state(
-                geometry_fit_history_state,
-                copy_state_value=_copy_geometry_fit_state_value,
-            )
-        ),
-        restore_state=_restore_geometry_fit_undo_state,
-        commit_undo=(
-            lambda current_state: gui_controllers.commit_geometry_fit_undo(
-                geometry_fit_history_state,
-                current_state,
-                copy_state_value=_copy_geometry_fit_state_value,
-                limit=int(GEOMETRY_FIT_UNDO_LIMIT),
-            )
-        ),
-        update_button_state=_update_geometry_fit_undo_button_state,
-        set_progress_text=lambda text: progress_label_geometry.config(text=text),
-    )
-
-
-def _redo_last_geometry_fit() -> None:
-    """Reapply the most recently undone geometry-fit state."""
-
-    gui_geometry_fit.redo_runtime_geometry_fit(
-        has_history=lambda: bool(geometry_fit_history_state.redo_stack),
-        capture_current_state=_capture_geometry_fit_undo_state,
-        read_redo_state=(
-            lambda: gui_controllers.peek_last_geometry_fit_redo_state(
-                geometry_fit_history_state,
-                copy_state_value=_copy_geometry_fit_state_value,
-            )
-        ),
-        restore_state=_restore_geometry_fit_undo_state,
-        commit_redo=(
-            lambda current_state: gui_controllers.commit_geometry_fit_redo(
-                geometry_fit_history_state,
-                current_state,
-                copy_state_value=_copy_geometry_fit_state_value,
-                limit=int(GEOMETRY_FIT_UNDO_LIMIT),
-            )
-        ),
-        update_button_state=_update_geometry_fit_undo_button_state,
-        set_progress_text=lambda text: progress_label_geometry.config(text=text),
-    )
+_geometry_fit_history_callbacks = gui_geometry_fit.build_runtime_geometry_fit_history_callbacks(
+    history_state=geometry_fit_history_state,
+    capture_current_state=_capture_geometry_fit_undo_state,
+    restore_state=_restore_geometry_fit_undo_state,
+    copy_state_value=_copy_geometry_fit_state_value,
+    history_limit=lambda: GEOMETRY_FIT_UNDO_LIMIT,
+    peek_last_undo_state=gui_controllers.peek_last_geometry_fit_undo_state,
+    peek_last_redo_state=gui_controllers.peek_last_geometry_fit_redo_state,
+    commit_undo=gui_controllers.commit_geometry_fit_undo,
+    commit_redo=gui_controllers.commit_geometry_fit_redo,
+    update_button_state=lambda: _update_geometry_fit_undo_button_state(),
+    set_progress_text=lambda text: progress_label_geometry.config(text=text),
+)
+_undo_last_geometry_fit = _geometry_fit_history_callbacks.undo
+_redo_last_geometry_fit = _geometry_fit_history_callbacks.redo
 
 
 def _geometry_manual_pair_entry_to_jsonable(

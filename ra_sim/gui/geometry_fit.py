@@ -354,6 +354,14 @@ class GeometryToolActionRuntimeCallbacks:
     clear_current_manual_pairs: Callable[[], None]
 
 
+@dataclass(frozen=True)
+class GeometryFitRuntimeHistoryCallbacks:
+    """Bound runtime callbacks for geometry-fit undo/redo history transitions."""
+
+    undo: Callable[[], bool]
+    redo: Callable[[], bool]
+
+
 def build_runtime_geometry_fit_manual_dataset_bindings(
     *,
     osc_files: Sequence[object],
@@ -1409,6 +1417,74 @@ def redo_runtime_geometry_fit(
         empty_text="No geometry fit history available to redo.",
         failure_prefix="Failed to redo geometry fit",
         success_text="Reapplied the next geometry-fit state.",
+    )
+
+
+def build_runtime_geometry_fit_history_callbacks(
+    *,
+    history_state: Any,
+    capture_current_state: Callable[[], dict[str, object]],
+    restore_state: Callable[[dict[str, object]], object],
+    copy_state_value: Callable[[object], object],
+    history_limit: Callable[[], object] | object,
+    peek_last_undo_state: Callable[..., dict[str, object] | None],
+    peek_last_redo_state: Callable[..., dict[str, object] | None],
+    commit_undo: Callable[..., None],
+    commit_redo: Callable[..., None],
+    update_button_state: Callable[[], None] | None = None,
+    set_progress_text: Callable[[str], None] | None = None,
+) -> GeometryFitRuntimeHistoryCallbacks:
+    """Build shared runtime undo/redo callbacks around one geometry-fit history store."""
+
+    def _undo() -> bool:
+        return undo_runtime_geometry_fit(
+            has_history=lambda: bool(getattr(history_state, "undo_stack", [])),
+            capture_current_state=capture_current_state,
+            read_undo_state=(
+                lambda: peek_last_undo_state(
+                    history_state,
+                    copy_state_value=copy_state_value,
+                )
+            ),
+            restore_state=restore_state,
+            commit_undo=(
+                lambda current_state: commit_undo(
+                    history_state,
+                    current_state,
+                    copy_state_value=copy_state_value,
+                    limit=int(_resolve_runtime_value(history_limit)),
+                )
+            ),
+            update_button_state=update_button_state,
+            set_progress_text=set_progress_text,
+        )
+
+    def _redo() -> bool:
+        return redo_runtime_geometry_fit(
+            has_history=lambda: bool(getattr(history_state, "redo_stack", [])),
+            capture_current_state=capture_current_state,
+            read_redo_state=(
+                lambda: peek_last_redo_state(
+                    history_state,
+                    copy_state_value=copy_state_value,
+                )
+            ),
+            restore_state=restore_state,
+            commit_redo=(
+                lambda current_state: commit_redo(
+                    history_state,
+                    current_state,
+                    copy_state_value=copy_state_value,
+                    limit=int(_resolve_runtime_value(history_limit)),
+                )
+            ),
+            update_button_state=update_button_state,
+            set_progress_text=set_progress_text,
+        )
+
+    return GeometryFitRuntimeHistoryCallbacks(
+        undo=_undo,
+        redo=_redo,
     )
 
 

@@ -684,6 +684,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The import-safe app shim now also routes geometry-fit UI/value reads through
   the same shared geometry-fit value-callback bundle used by the main runtime
   implementation instead of hand-building those readers separately.
+- The main runtime implementation now also routes geometry-fit undo/redo
+  callback assembly through one shared history-callback builder in
+  `ra_sim.gui.geometry_fit` instead of hand-building two near-identical
+  transitions inline.
 - The config compatibility migration and GUI entrypoint cleanup are now
   effectively closed out.
 - Repository-root cleanup has now landed: the tracked sqlite/session/log
