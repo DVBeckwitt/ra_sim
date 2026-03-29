@@ -13,11 +13,11 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - `python -m ra_sim gui|simulate|hbn-fit` is unchanged.
 - `ra-sim` console script now points to `ra_sim.cli:main`.
 - `ra_sim.gui.app.main` is the supported package GUI entrypoint.
-- Existing config access helpers remain:
-  - `ra_sim.path_config.get_path`
-  - `ra_sim.path_config.get_dir`
-  - `ra_sim.path_config.get_instrument_config`
-  - `ra_sim.path_config.get_temp_dir`
+- The canonical config access helpers now live under `ra_sim.config`:
+  - `ra_sim.config.get_path`
+  - `ra_sim.config.get_dir`
+  - `ra_sim.config.get_instrument_config`
+  - `ra_sim.config.get_temp_dir`
 - Top-level utility script names remain:
   - `plot_excel_scatter.py`
   - `compare_intensity.py`
@@ -107,12 +107,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   coverage now uses direct helper tests instead of parsing
   `runtime_impl.py`.
 - `ra_sim.config.loader` now also owns the canonical file-path, directory,
-  materials, and instrument-config helper surface, while `ra_sim.path_config`
-  delegates to it as a reloadable compatibility shim.
+  materials, and instrument-config helper surface.
 - Several packaged modules now import config helpers from `ra_sim.config`
-  directly instead of going through `ra_sim.path_config`.
+  directly instead of going through the old shim surface.
 - `ra_sim.config.loader` now also owns `get_temp_dir()`, and the remaining
-  non-compat imports were migrated off `ra_sim.path_config`.
+  non-compat imports were migrated off `ra_sim.path_config` before that shim
+  was removed.
 - `ra_sim.gui.main_app` was removed now that the package, launcher, tests, and
   docs all converge on `ra_sim.gui.app.main` as the canonical GUI entrypoint.
 - Manual geometry was split out of the runtime monolith in stages:
@@ -701,9 +701,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The newer `state` / `controllers` / `views` boundary should keep expanding
   where it simplifies shared workflows, but it does not need to absorb every
   thin adapter left in the internal runtime implementation.
-- `ra_sim.config` is now the canonical config helper surface, while
-  `ra_sim.path_config` remains only as a compatibility shim for older call
-  sites.
+- `ra_sim.config` is now the canonical and only documented config helper
+  surface.
 - `ra_sim.gui.main_app` is gone; `ra_sim.gui.app.main` is the canonical
   package GUI entrypoint.
 
@@ -728,4 +727,5 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 ### Future major release
 
 - Remove legacy internal wrappers that bypass typed simulation models.
-- Remove compatibility aliases that are no longer used by project tests or docs.
+- Remove any future compatibility aliases that are no longer used by project
+  tests or docs.

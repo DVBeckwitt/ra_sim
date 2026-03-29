@@ -1082,19 +1082,20 @@ What is done:
   path fallback and the active-config cache.
 - `ra_sim.config.loader` now also owns `get_temp_dir()`, so the full
   packaged config helper surface lives under `ra_sim.config`.
-- `ra_sim.path_config` now delegates those reads through `ra_sim.config` and
-  remains reloadable as a compatibility shim.
 - Several packaged call sites now import config helpers from `ra_sim.config`
-  directly instead of reaching through `ra_sim.path_config`.
-- The remaining non-compat imports were migrated off `ra_sim.path_config`.
+  directly instead of reaching through the old shim surface.
+- The remaining non-compat imports were migrated off `ra_sim.path_config`
+  before the shim was removed.
+- The obsolete `ra_sim.path_config` compatibility shim and its dedicated
+  compatibility-only test module are now gone.
+- The remaining useful regression coverage for config switching/missing-key
+  behavior now lives in `tests/test_config_loader.py`.
 
 What is left:
 
-- `ra_sim.path_config` still exists as a compatibility surface for older call
-  sites and compatibility-focused tests.
-- No packaged code or non-compat test modules still import it directly.
-- Removing that shim entirely is now optional follow-up rather than an active
-  architectural blocker.
+- No config-surface compatibility blocker remains.
+- Follow-up here is now limited to doc clarity and future config-surface
+  feature work on top of `ra_sim.config`.
 
 Why it matters:
 
@@ -1295,8 +1296,7 @@ Why third:
 Current status:
 
 - Landed for the packaged codebase.
-- `ra_sim.config` is now the canonical helper surface, and
-  `ra_sim.path_config` is now only a compatibility shim.
+- `ra_sim.config` is now the canonical and only supported helper surface.
 
 ### Phase D: Targeted Runtime / Boundary Cleanup Only Where It Pays Off
 
@@ -1401,8 +1401,7 @@ Immediate checklist after the strategy pivot:
 - keep import-smoke and direct helper coverage green as feature work lands
 - make targeted runtime or simulation changes only when they buy testability,
   reliability, or concrete workflow simplification
-- keep `ra_sim.path_config` only as a compatibility shim until the project is
-  ready to drop it explicitly
+- keep `ra_sim.config` as the only documented config helper surface
 - keep GUI refactor work focused on concrete reliability or feature-delivery
   wins
 - defer thin callback/value-source rewiring unless it directly advances one of

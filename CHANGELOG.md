@@ -13,6 +13,7 @@
   - Canonicalized config loading in `ra_sim.config.loader` for file paths, directories, materials, and instrument config, and kept `ra_sim/path_config.py` as a reloadable compatibility shim on top of it.
   - Migrated packaged config call sites in the CLI, GUI runtime/controllers, hBN workflow, diffraction debug helpers, and shared calculations to import from `ra_sim.config`.
   - Moved `get_temp_dir()` into `ra_sim.config`, migrated the remaining non-compat config imports off `ra_sim.path_config`, and added direct loader/shim coverage for temp-dir behavior.
+  - Removed the obsolete `ra_sim/path_config.py` shim and moved the remaining config compatibility coverage onto `tests/test_config_loader.py`.
 
 - **hBN bundle geometry mapping and metadata**
   - Added canonical hBN bundle metadata keys and strict validation in `ra_sim/hbn.py`.

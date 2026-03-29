@@ -104,6 +104,31 @@ def test_loader_cache_can_be_cleared_after_file_change(
     assert loader.get_path("cif_file") == "/tmp/second.cif"
 
 
+def test_loader_switches_config_dirs_when_env_override_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg_a = _make_config_dir(tmp_path / "a", file_paths={"cif_file": "/tmp/a.cif"})
+    cfg_b = _make_config_dir(tmp_path / "b", file_paths={"cif_file": "/tmp/b.cif"})
+
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg_a))
+    assert loader.get_path("cif_file") == "/tmp/a.cif"
+
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg_b))
+    assert loader.get_path("cif_file") == "/tmp/b.cif"
+
+
+def test_loader_get_path_missing_key_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path)
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    with pytest.raises(KeyError, match="does_not_exist"):
+        loader.get_path("does_not_exist")
+
+
 def test_loader_get_temp_dir_uses_temp_root_and_caches_per_config_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
