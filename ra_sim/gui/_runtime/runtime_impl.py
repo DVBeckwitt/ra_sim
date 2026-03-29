@@ -1810,52 +1810,66 @@ def _push_geometry_fit_redo_state(state: dict[str, object] | None) -> None:
     _update_geometry_fit_undo_button_state()
 
 
-def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
-    """Restore a previously captured geometry-fit state."""
+def _replace_runtime_geometry_fit_profile_cache(
+    profile_cache: dict[str, object],
+) -> None:
+    """Replace the cached runtime geometry-fit profile payload."""
 
-    if not isinstance(state, dict):
-        return
+    simulation_runtime_state.profile_cache = dict(profile_cache)
 
-    def _cancel_pending_update() -> None:
-        gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
-        simulation_runtime_state.update_pending = None
 
-    gui_geometry_fit.restore_runtime_geometry_fit_undo_state(
-        state,
-        var_map=_geometry_fit_var_map,
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        replace_profile_cache=(
-            lambda profile_cache: setattr(
-                simulation_runtime_state,
-                "profile_cache",
-                dict(profile_cache),
-            )
-        ),
-        set_last_overlay_state=_set_geometry_fit_last_overlay_state,
-        mark_last_simulation_dirty=(
-            lambda: setattr(
-                simulation_runtime_state,
-                "last_simulation_signature",
-                None,
-            )
-        ),
-        cancel_pending_update=_cancel_pending_update,
-        run_update=do_update,
-        draw_overlay_records=(
-            lambda overlay_records, marker_limit: _draw_geometry_fit_overlay(
-                overlay_records,
-                max_display_markers=marker_limit,
-            )
-        ),
-        draw_initial_pairs_overlay=(
-            lambda initial_pairs_display, marker_limit: _draw_initial_geometry_pairs_overlay(
-                initial_pairs_display,
-                max_display_markers=marker_limit,
-            )
-        ),
-        refresh_status=_refresh_background_status,
-        update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
+def _mark_runtime_geometry_fit_simulation_dirty() -> None:
+    """Clear the cached runtime simulation signature after geometry-fit restore."""
+
+    simulation_runtime_state.last_simulation_signature = None
+
+
+def _cancel_runtime_geometry_fit_pending_update() -> None:
+    """Cancel one queued runtime update before replaying geometry-fit state."""
+
+    gui_controllers.clear_tk_after_token(root, simulation_runtime_state.update_pending)
+    simulation_runtime_state.update_pending = None
+
+
+def _draw_runtime_geometry_fit_overlay_records(
+    overlay_records: list[dict[str, object]],
+    marker_limit: int,
+) -> None:
+    """Redraw the geometry-fit overlay records for one restored runtime state."""
+
+    _draw_geometry_fit_overlay(
+        overlay_records,
+        max_display_markers=marker_limit,
     )
+
+
+def _draw_runtime_geometry_fit_initial_pairs_overlay(
+    initial_pairs_display: list[dict[str, object]],
+    marker_limit: int,
+) -> None:
+    """Redraw the initial-pair overlay for one restored runtime state."""
+
+    _draw_initial_geometry_pairs_overlay(
+        initial_pairs_display,
+        max_display_markers=marker_limit,
+    )
+
+
+_restore_geometry_fit_undo_state = (
+    gui_geometry_fit.build_runtime_geometry_fit_undo_restore_callback(
+        var_map_factory=lambda: _geometry_fit_var_map,
+        geometry_theta_offset_var_factory=lambda: geometry_theta_offset_var,
+        replace_profile_cache=_replace_runtime_geometry_fit_profile_cache,
+        set_last_overlay_state=_set_geometry_fit_last_overlay_state,
+        mark_last_simulation_dirty=_mark_runtime_geometry_fit_simulation_dirty,
+        cancel_pending_update=_cancel_runtime_geometry_fit_pending_update,
+        run_update=lambda: do_update(),
+        draw_overlay_records=_draw_runtime_geometry_fit_overlay_records,
+        draw_initial_pairs_overlay=_draw_runtime_geometry_fit_initial_pairs_overlay,
+        refresh_status=lambda: _refresh_background_status(),
+        update_manual_pick_button_label=lambda: _update_geometry_manual_pick_button_label(),
+    )
+)
 
 
 def _undo_last_geometry_fit() -> None:

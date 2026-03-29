@@ -284,76 +284,97 @@ def _current_geometry_fit_var_names() -> list[str]:
     )
 
 
-def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
-    """Restore a previously captured geometry-fit state."""
+def _geometry_fit_restore_var_map() -> dict[str, object]:
+    """Return the current geometry-fit runtime Tk variable mapping."""
 
-    global profile_cache, last_geometry_overlay_state, last_simulation_signature
+    return {
+        "zb": zb_var,
+        "zs": zs_var,
+        "theta_initial": theta_initial_var,
+        "psi_z": psi_z_var,
+        "chi": chi_var,
+        "cor_angle": cor_angle_var,
+        "gamma": gamma_var,
+        "Gamma": Gamma_var,
+        "corto_detector": corto_detector_var,
+        "a": a_var,
+        "c": c_var,
+        "center_x": center_x_var,
+        "center_y": center_y_var,
+    }
+
+
+def _set_geometry_fit_profile_cache(cached_profile_state: Mapping[str, object]) -> None:
+    """Replace the cached geometry-fit profile payload."""
+
+    global profile_cache
+    profile_cache = cached_profile_state
+
+
+def _set_geometry_fit_last_overlay_state(
+    overlay_state: Mapping[str, object] | None,
+) -> None:
+    """Replace the cached geometry-fit overlay payload."""
+
+    global last_geometry_overlay_state
+    last_geometry_overlay_state = overlay_state
+
+
+def _mark_geometry_fit_last_simulation_dirty() -> None:
+    """Clear the cached simulation signature after geometry-fit state restore."""
+
+    global last_simulation_signature
+    last_simulation_signature = None
+
+
+def _cancel_geometry_fit_pending_update() -> None:
+    """Cancel one queued geometry-fit UI update if it exists."""
+
     global update_pending
+    if update_pending is not None:
+        gui_controllers.clear_tk_after_token(root, update_pending)
+        update_pending = None
 
-    if not isinstance(state, dict):
-        return
 
-    def _set_profile_cache(cached_profile_state: Mapping[str, object]) -> None:
-        global profile_cache
-        profile_cache = cached_profile_state
+def _draw_geometry_fit_overlay_records(
+    overlay_records: list[dict[str, object]],
+    marker_limit: int,
+) -> None:
+    """Redraw the fitted overlay records after restoring geometry-fit state."""
 
-    def _set_last_overlay_state(overlay_state: Mapping[str, object] | None) -> None:
-        global last_geometry_overlay_state
-        last_geometry_overlay_state = overlay_state
-
-    def _mark_last_simulation_dirty() -> None:
-        global last_simulation_signature
-        last_simulation_signature = None
-
-    def _cancel_pending_update() -> None:
-        global update_pending
-        if update_pending is not None:
-            gui_controllers.clear_tk_after_token(root, update_pending)
-            update_pending = None
-
-    def _draw_overlay_records(overlay_records: list[dict[str, object]], marker_limit: int) -> None:
-        _draw_geometry_fit_overlay(
-            overlay_records,
-            max_display_markers=marker_limit,
-        )
-
-    def _draw_initial_pairs_overlay(
-        initial_pairs_display: list[dict[str, object]],
-        marker_limit: int,
-    ) -> None:
-        _draw_initial_geometry_pairs_overlay(
-            initial_pairs_display,
-            max_display_markers=marker_limit,
-        )
-
-    gui_geometry_fit.restore_runtime_geometry_fit_undo_state(
-        state,
-        var_map={
-            "zb": zb_var,
-            "zs": zs_var,
-            "theta_initial": theta_initial_var,
-            "psi_z": psi_z_var,
-            "chi": chi_var,
-            "cor_angle": cor_angle_var,
-            "gamma": gamma_var,
-            "Gamma": Gamma_var,
-            "corto_detector": corto_detector_var,
-            "a": a_var,
-            "c": c_var,
-            "center_x": center_x_var,
-            "center_y": center_y_var,
-        },
-        geometry_theta_offset_var=geometry_theta_offset_var,
-        replace_profile_cache=_set_profile_cache,
-        set_last_overlay_state=_set_last_overlay_state,
-        mark_last_simulation_dirty=_mark_last_simulation_dirty,
-        cancel_pending_update=_cancel_pending_update,
-        run_update=do_update,
-        draw_overlay_records=_draw_overlay_records,
-        draw_initial_pairs_overlay=_draw_initial_pairs_overlay,
-        refresh_status=_set_background_file_status_text,
-        update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
+    _draw_geometry_fit_overlay(
+        overlay_records,
+        max_display_markers=marker_limit,
     )
+
+
+def _draw_initial_geometry_fit_pairs_overlay_records(
+    initial_pairs_display: list[dict[str, object]],
+    marker_limit: int,
+) -> None:
+    """Redraw the initial-pair overlay after restoring geometry-fit state."""
+
+    _draw_initial_geometry_pairs_overlay(
+        initial_pairs_display,
+        max_display_markers=marker_limit,
+    )
+
+
+_restore_geometry_fit_undo_state = (
+    gui_geometry_fit.build_runtime_geometry_fit_undo_restore_callback(
+        var_map_factory=_geometry_fit_restore_var_map,
+        geometry_theta_offset_var_factory=lambda: geometry_theta_offset_var,
+        replace_profile_cache=_set_geometry_fit_profile_cache,
+        set_last_overlay_state=_set_geometry_fit_last_overlay_state,
+        mark_last_simulation_dirty=_mark_geometry_fit_last_simulation_dirty,
+        cancel_pending_update=_cancel_geometry_fit_pending_update,
+        run_update=lambda: do_update(),
+        draw_overlay_records=_draw_geometry_fit_overlay_records,
+        draw_initial_pairs_overlay=_draw_initial_geometry_fit_pairs_overlay_records,
+        refresh_status=lambda: _set_background_file_status_text(),
+        update_manual_pick_button_label=lambda: _update_geometry_manual_pick_button_label(),
+    )
+)
 
 
 def _build_geometry_fit_runtime_config(

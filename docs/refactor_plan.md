@@ -74,6 +74,12 @@ The shared helper is now also used by integration-range scheduling flow to keep
 timer-cancel behavior consistent across another runtime workflow.
 Compatibility undo handling in the import-safe app shim now also uses this helper
 when restoring geometry-fit state before redraw.
+Geometry-fit undo restore now also assembles through one shared lazy callback
+builder in `ra_sim.gui.geometry_fit`, so both `ra_sim.gui.app` and
+`ra_sim/gui/_runtime/runtime_impl.py` no longer hand-build that runtime
+restore delegate separately. Direct behavior tests now also cover the live
+diffraction Fresnel call paths and the packaged hBN conversion helper instead
+of reading source text to infer those contracts.
 
 ### What Is Already Done
 
@@ -1006,6 +1012,10 @@ What is done:
   containers used by `runtime.py`.
 - `controllers.build_initial_state()` now returns the shared `AppState` used by
   `runtime.py` to initialize the extracted GUI state containers.
+- `ra_sim.gui.geometry_fit` now also owns a shared lazy undo-restore callback
+  builder used by both `ra_sim.gui.app` and `ra_sim.gui._runtime.runtime_impl`.
+  - Geometry-fit undo restore no longer hand-assembles duplicate runtime glue
+    across those two entry surfaces.
 
 What is left:
 
@@ -1100,7 +1110,7 @@ Definition of done:
 
 ### 5. Test Architecture Cleanup
 
-Status: In progress
+Status: Completed (narrow structural compile/import checks only)
 
 What is done:
 
@@ -1136,16 +1146,20 @@ What is done:
   selected-peak maintenance wiring were replaced with direct helper tests
   against `ra_sim.gui.runtime_fit_analysis` and
   `ra_sim.gui.runtime_geometry_interaction`.
+- `tests/test_fresnel_calls.py` now exercises the live diffraction helper call
+  paths through Python-callable `numba` entrypoints instead of parsing
+  `ra_sim/simulation/diffraction.py`.
+- `tests/test_hbn_geometry_mapping.py` now exercises the packaged GUI hBN
+  conversion helper directly instead of reading `ra_sim/gui/app.py` source.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.
 
 What is left:
 
-- No GUI-runtime AST assertions remain.
-- A few other narrow structural tests still use AST assertions where behavior
-  is harder to probe directly or the structural contract is still the point of
-  the test.
+- No AST-based tests remain in `tests/`.
+- The remaining structural test surface is limited to narrow compile/import
+  checks where the contract itself is still the point of the test.
 
 Why it matters:
 
@@ -1158,8 +1172,8 @@ Why it matters:
 Definition of done:
 
 - Tests primarily import stable modules and validate behavior directly.
-- AST-only tests are reserved for narrow structural assertions, not as a
-  workaround for import problems.
+- Remaining structural tests are narrow compile/import contracts, not
+  source-shape stand-ins for behavior.
 
 ### 6. Repository Cleanup
 

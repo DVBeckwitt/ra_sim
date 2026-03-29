@@ -214,12 +214,41 @@ def test_legacy_bundle_without_canonical_metadata_raises_keyerror(tmp_path: Path
         load_bundle_npz(bundle, verbose=False)
 
 
-def test_packaged_gui_uses_shared_conversion_helper() -> None:
-    app_text = Path("ra_sim/gui/app.py").read_text(encoding="utf-8")
-    assert "convert_hbn_bundle_geometry_to_simulation(" in app_text
-    assert "SIMULATION_GEOMETRY_ROTATE_K" in app_text
-    assert "HBN_FITTER_ROTATE_K" in app_text
-    assert "estimate_detector_tilt(" not in app_text
+def test_packaged_gui_routes_bundle_reference_conversion_through_shared_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ra_sim.gui import app as gui_app
+
+    calls: list[dict[str, object]] = []
+
+    def fake_convert_hbn_bundle_geometry_to_simulation(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        return {"converted": True}
+
+    monkeypatch.setattr(
+        hbn,
+        "convert_hbn_bundle_geometry_to_simulation",
+        fake_convert_hbn_bundle_geometry_to_simulation,
+    )
+
+    converted = gui_app._convert_hbn_bundle_geometry_reference(
+        tilt_x_deg=1.2,
+        tilt_y_deg=-0.7,
+        center_xy=(15.0, 14.0),
+        image_size=(32, 48),
+    )
+
+    assert converted == {"converted": True}
+    assert calls == [
+        {
+            "tilt_x_deg": 1.2,
+            "tilt_y_deg": -0.7,
+            "center_xy": (15.0, 14.0),
+            "source_rotate_k": gui_app.HBN_FITTER_ROTATE_K,
+            "target_rotate_k": gui_app.SIMULATION_GEOMETRY_ROTATE_K,
+            "image_size": (32, 48),
+        }
+    ]
 
 
 def test_explicit_sign_metadata_controls_detector_rotation_signs(tmp_path: Path) -> None:

@@ -1574,6 +1574,46 @@ def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overl
     ]
 
 
+def test_build_runtime_geometry_fit_undo_restore_callback_defers_live_bindings(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[dict[str, object], dict[str, object]]] = []
+    first_var = _DummyVar(0.0)
+    second_var = _DummyVar(1.0)
+    live_var_map = {"gamma": first_var}
+    live_theta_offset_var = _DummyVar("")
+
+    def fake_restore_runtime_state(state: dict[str, object], **kwargs: object) -> dict[str, object]:
+        calls.append((dict(state), dict(kwargs)))
+        return {"restored": True}
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "restore_runtime_geometry_fit_undo_state",
+        fake_restore_runtime_state,
+    )
+
+    callback = geometry_fit.build_runtime_geometry_fit_undo_restore_callback(
+        var_map_factory=lambda: live_var_map,
+        geometry_theta_offset_var_factory=lambda: live_theta_offset_var,
+        replace_profile_cache=lambda _cache: None,
+        set_last_overlay_state=lambda _state: None,
+        run_update=lambda: None,
+    )
+
+    live_var_map = {"gamma": second_var}
+    live_theta_offset_var = _DummyVar("0.25")
+
+    restored = callback({"saved": True})
+
+    assert restored == {"restored": True}
+    assert len(calls) == 1
+    passed_state, passed_kwargs = calls[0]
+    assert passed_state == {"saved": True}
+    assert passed_kwargs["var_map"] is live_var_map
+    assert passed_kwargs["geometry_theta_offset_var"] is live_theta_offset_var
+
+
 def test_undo_runtime_geometry_fit_restores_and_commits_history() -> None:
     events: list[object] = []
 

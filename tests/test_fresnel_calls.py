@@ -1,36 +1,102 @@
-"""Regression checks for Fresnel transmission call sites."""
+"""Regression checks for Fresnel transmission call behavior."""
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
+import numpy as np
+
+from ra_sim.simulation import diffraction
 
 
-def test_fresnel_calls_use_boolean_direction_flag() -> None:
-    source = Path("ra_sim/simulation/diffraction.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
+def test_fast_optics_lut_builder_uses_boolean_direction_flags(monkeypatch) -> None:
+    calls: list[tuple[bool, bool]] = []
 
-    string_direction_lines: list[int] = []
-    bool_flags: list[bool] = []
+    def fake_fresnel_transmission(
+        _theta: float,
+        _n2_samp: complex,
+        is_s_polarized: bool,
+        is_incoming: bool,
+    ) -> complex:
+        assert type(is_s_polarized) is bool
+        assert type(is_incoming) is bool
+        calls.append((is_s_polarized, is_incoming))
+        return 1.0 + 0.0j
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id != "fresnel_transmission":
-            continue
-        if len(node.args) < 4:
-            continue
+    monkeypatch.setattr(diffraction, "fresnel_transmission", fake_fresnel_transmission)
 
-        direction_arg = node.args[3]
-        if isinstance(direction_arg, ast.Constant) and isinstance(direction_arg.value, str):
-            string_direction_lines.append(node.lineno)
-        if isinstance(direction_arg, ast.Constant) and isinstance(direction_arg.value, bool):
-            bool_flags.append(direction_arg.value)
-
-    assert not string_direction_lines, (
-        "fresnel_transmission calls must pass a boolean direction flag "
-        f"(found string literals at lines {string_direction_lines})."
+    lut_row = np.zeros((3, diffraction._FAST_OPTICS_LUT_COLS), dtype=np.float64)
+    diffraction._build_fast_optics_lut_row.py_func(
+        lut_row,
+        1.0,
+        1.0 + 0.0j,
+        1.0,
+        0.0,
     )
-    assert True in bool_flags and False in bool_flags
+
+    assert set(calls) == {(True, False), (False, False)}
+
+
+def test_sample_term_precompute_uses_boolean_incident_flags(monkeypatch) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    def fake_fresnel_transmission(
+        _theta: float,
+        _n2_samp: complex,
+        is_s_polarized: bool,
+        is_incoming: bool,
+    ) -> complex:
+        assert type(is_s_polarized) is bool
+        assert type(is_incoming) is bool
+        calls.append((is_s_polarized, is_incoming))
+        return 1.0 + 0.0j
+
+    monkeypatch.setattr(diffraction, "fresnel_transmission", fake_fresnel_transmission)
+    monkeypatch.setattr(
+        diffraction,
+        "_build_sample_rotation",
+        lambda *_args: (
+            np.eye(3, dtype=np.float64),
+            np.array([0.0, 0.0, 1.0], dtype=np.float64),
+            np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        ),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "intersect_line_plane",
+        lambda *_args: (0.0, 0.0, 0.0, True),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "transmit_angle_grazing",
+        lambda theta, _n2_samp: float(theta),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "ktz_components",
+        lambda *_args: (1.0, 0.5),
+    )
+    monkeypatch.setattr(
+        diffraction,
+        "safe_path_length",
+        lambda thickness, _theta: float(thickness),
+    )
+
+    diffraction._precompute_sample_terms.py_func(
+        np.array([1.0], dtype=np.float64),
+        1.0 + 0.0j,
+        np.array([], dtype=np.complex128),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        0.0,
+        1.0,
+        diffraction.OPTICS_MODE_FAST,
+        0.0,
+        0.0,
+        0.0,
+        np.eye(3, dtype=np.float64),
+        np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        np.array([0.0, 0.0, 0.0], dtype=np.float64),
+    )
+
+    assert calls == [(True, True), (False, True)]

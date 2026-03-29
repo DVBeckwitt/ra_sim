@@ -674,6 +674,13 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   reduction are no longer goals by themselves.
 - The public runtime import/startup boundary is now in much better shape.
 - The remaining GUI-runtime shape tests are now gone.
+- The diffraction Fresnel regression and the packaged hBN conversion regression
+  now both exercise live module behavior instead of parsing or reading source
+  text.
+- `ra_sim.gui.geometry_fit` now also owns a shared lazy undo-restore callback
+  builder used by both `ra_sim.gui.app` and
+  `ra_sim.gui._runtime.runtime_impl`, reducing duplicate runtime glue around
+  that workflow.
 - The config compatibility migration and GUI entrypoint cleanup are now
   effectively closed out.
 - Repository-root cleanup has now landed: the tracked sqlite/session/log
@@ -685,6 +692,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   longer open.
 - There is no new broad cleanup tranche queued ahead of feature-driven work; new
   changes must be justified by reliability, testability, or direct feature impact.
+- The remaining structural test surface is now limited to narrow compile/import
+  contracts where the structure itself is the regression target.
 - Targeted runtime cleanup can still happen in structure-model, pruning,
   Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
   workflows, but only when it materially supports those goals or unblocks

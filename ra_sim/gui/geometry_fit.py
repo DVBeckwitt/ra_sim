@@ -1274,6 +1274,47 @@ def restore_runtime_geometry_fit_undo_state(
     return restored
 
 
+def build_runtime_geometry_fit_undo_restore_callback(
+    *,
+    var_map_factory: Mapping[str, object] | Callable[[], Mapping[str, object]],
+    geometry_theta_offset_var_factory: object | Callable[[], object] | None = None,
+    replace_profile_cache: Callable[[dict[str, object]], None],
+    set_last_overlay_state: Callable[[dict[str, object] | None], object],
+    mark_last_simulation_dirty: Callable[[], None] | None = None,
+    cancel_pending_update: Callable[[], None] | None = None,
+    run_update: Callable[[], None] | None = None,
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None] | None = None,
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None] | None = None,
+    refresh_status: Callable[[], None] | None = None,
+    update_manual_pick_button_label: Callable[[], None] | None = None,
+    apply_undo_state: Callable[..., Mapping[str, object]] = apply_geometry_fit_undo_state,
+) -> Callable[[dict[str, object]], Mapping[str, object] | None]:
+    """Build one undo-restore callback that resolves live runtime hooks lazily."""
+
+    def _restore(state: dict[str, object]) -> Mapping[str, object] | None:
+        if not isinstance(state, dict):
+            return None
+        return restore_runtime_geometry_fit_undo_state(
+            state,
+            var_map=_resolve_runtime_value(var_map_factory),
+            geometry_theta_offset_var=_resolve_runtime_value(
+                geometry_theta_offset_var_factory
+            ),
+            replace_profile_cache=replace_profile_cache,
+            set_last_overlay_state=set_last_overlay_state,
+            mark_last_simulation_dirty=mark_last_simulation_dirty,
+            cancel_pending_update=cancel_pending_update,
+            run_update=run_update,
+            draw_overlay_records=draw_overlay_records,
+            draw_initial_pairs_overlay=draw_initial_pairs_overlay,
+            refresh_status=refresh_status,
+            update_manual_pick_button_label=update_manual_pick_button_label,
+            apply_undo_state=apply_undo_state,
+        )
+
+    return _restore
+
+
 def _run_runtime_geometry_fit_history_transition(
     *,
     has_history: Callable[[], bool] | bool,
