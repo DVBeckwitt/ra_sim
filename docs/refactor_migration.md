@@ -670,6 +670,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   cache update workflow for per-index load/current reads through
   `ra_sim.gui.background_manager` instead of hand-applying those cache payloads
   inline.
+- The main runtime implementation now also routes the initial background-cache
+  boot path and shared background-runtime normalization through
+  `ra_sim.gui.background_manager` instead of keeping that synchronization logic
+  local to `runtime_impl.py`.
 - The remaining large integration monolith now lives in
   `ra_sim/gui/_runtime/runtime_impl.py`, and most of the remaining inline code
   there is glue rather than high-value extractable feature logic.

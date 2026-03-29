@@ -73,6 +73,9 @@ surface, and failure-safe runtime loading no longer drift independently.
 The main runtime implementation now also routes lazy background cache
 load/current-read state application through `ra_sim.gui.background_manager`
 instead of hand-applying those cache payloads inline.
+The main runtime implementation now also routes initial background-cache boot
+plus shared background-state normalization through `ra_sim.gui.background_manager`
+instead of keeping that synchronization logic inline.
 
 As part of the next concrete step, `ra_sim.gui.controllers` now owns a shared
 Tk after-token cancellation helper used by runtime glue paths that previously
@@ -883,6 +886,10 @@ What is done:
   cache update wrappers used by the main runtime implementation.
   - `ra_sim.gui._runtime.runtime_impl` no longer hand-applies the cache-list
     payloads returned by per-index load/current background reads.
+- `ra_sim.gui.background_manager` now also owns the initial background-cache
+  boot helper plus the shared background-runtime normalization helper.
+  - `ra_sim.gui._runtime.runtime_impl` no longer initializes that cache or
+    normalizes background runtime/file-path state inline.
 
 What is left:
 

@@ -281,15 +281,17 @@ SIMULATION_GEOMETRY_ROTATE_K = DISPLAY_ROTATE_K - SIM_DISPLAY_ROTATE_K
 
 # Preserve native-orientation copies for fitting/analysis. Load only the first
 # background at startup and lazy-load the rest on demand to improve first paint.
-_initial_background_state = gui_background.initialize_background_cache(
+_initial_background_state = gui_background_manager.initialize_background_runtime_state(
+    background_runtime_state,
     str(background_runtime_state.osc_files[0]),
     total_count=len(background_runtime_state.osc_files),
     display_rotate_k=DISPLAY_ROTATE_K,
     read_osc=read_osc,
-)
-gui_background_manager.apply_background_state_update(
-    background_runtime_state,
-    _initial_background_state,
+    file_paths_state=app_state.file_paths,
+    visible=True,
+    backend_rotation_k=3,
+    backend_flip_x=False,
+    backend_flip_y=False,
 )
 
 # Parse geometry
@@ -886,10 +888,6 @@ def export_initial_excel():
 
     print(f"Excel file saved at {excel_path}")
 
-background_runtime_state.visible = True
-background_runtime_state.backend_rotation_k = 3
-background_runtime_state.backend_flip_x = False
-background_runtime_state.backend_flip_y = False
 app_shell_view_state = app_state.app_shell_view
 status_panel_view_state = app_state.status_panel_view
 background_theta_controls_view_state = app_state.background_theta_controls_view
@@ -915,21 +913,10 @@ def _geometry_fit_runtime_values() -> gui_geometry_fit.GeometryFitRuntimeValueCa
 def _sync_background_runtime_state() -> None:
     """Normalize shared background-runtime state after one update path mutates it."""
 
-    background_runtime_state.background_images = list(
-        background_runtime_state.background_images
+    gui_background_manager.normalize_background_runtime_state(
+        background_runtime_state,
+        file_paths_state=app_state.file_paths,
     )
-    background_runtime_state.background_images_native = list(
-        background_runtime_state.background_images_native
-    )
-    background_runtime_state.background_images_display = list(
-        background_runtime_state.background_images_display
-    )
-    background_runtime_state.current_background_index = int(background_runtime_state.current_background_index)
-    background_runtime_state.visible = bool(background_runtime_state.visible)
-    background_runtime_state.backend_rotation_k = int(background_runtime_state.backend_rotation_k)
-    background_runtime_state.backend_flip_x = bool(background_runtime_state.backend_flip_x)
-    background_runtime_state.backend_flip_y = bool(background_runtime_state.backend_flip_y)
-    app_state.file_paths["simulation_background_osc_files"] = list(background_runtime_state.osc_files)
 
 
 _sync_background_runtime_state()

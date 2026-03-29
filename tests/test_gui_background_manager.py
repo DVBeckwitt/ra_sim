@@ -29,6 +29,90 @@ def test_background_manager_apply_update_preserves_list_aliases() -> None:
     assert background_state.current_background_index == 1
 
 
+def test_background_manager_normalize_runtime_state_coerces_values_and_updates_paths() -> None:
+    background_state = state.BackgroundRuntimeState(
+        osc_files=["a.osc"],
+        background_images=(np.zeros((1, 1)),),
+        background_images_native=(np.ones((1, 1)),),
+        background_images_display=(np.full((1, 1), 2.0),),
+        current_background_index="3",
+        visible=0,
+        backend_rotation_k="5",
+        backend_flip_x=1,
+        backend_flip_y="",
+    )
+    osc_alias = background_state.osc_files
+    file_paths_state = {}
+
+    updated = background_manager.normalize_background_runtime_state(
+        background_state,
+        file_paths_state=file_paths_state,
+    )
+
+    assert updated is background_state
+    assert background_state.osc_files is osc_alias
+    assert isinstance(background_state.background_images, list)
+    assert isinstance(background_state.background_images_native, list)
+    assert isinstance(background_state.background_images_display, list)
+    assert background_state.current_background_index == 3
+    assert background_state.visible is False
+    assert background_state.backend_rotation_k == 5
+    assert background_state.backend_flip_x is True
+    assert background_state.backend_flip_y is False
+    assert file_paths_state == {
+        "simulation_background_osc_files": ["a.osc"],
+    }
+
+
+def test_background_manager_initialize_runtime_state_boots_cache_and_defaults(
+    monkeypatch,
+) -> None:
+    background_state = state.BackgroundRuntimeState(osc_files=["a.osc", "b.osc"])
+    file_paths_state = {}
+    calls = []
+    payload = {
+        "background_images": [np.zeros((2, 2))],
+        "background_images_native": [np.ones((2, 2))],
+        "background_images_display": [np.full((2, 2), 2.0)],
+        "current_background_index": 0,
+        "current_background_image": "native-image",
+        "current_background_display": "display-image",
+    }
+
+    monkeypatch.setattr(
+        background_manager.gui_background,
+        "initialize_background_cache",
+        lambda first_path, **kwargs: calls.append((first_path, kwargs)) or payload,
+    )
+
+    updated = background_manager.initialize_background_runtime_state(
+        background_state,
+        "a.osc",
+        total_count=2,
+        display_rotate_k=-1,
+        read_osc=lambda path: path,
+        file_paths_state=file_paths_state,
+        visible=False,
+        backend_rotation_k=7,
+        backend_flip_x=True,
+        backend_flip_y=True,
+    )
+
+    assert updated is payload
+    assert background_state.current_background_image == "native-image"
+    assert background_state.current_background_display == "display-image"
+    assert background_state.visible is False
+    assert background_state.backend_rotation_k == 7
+    assert background_state.backend_flip_x is True
+    assert background_state.backend_flip_y is True
+    assert file_paths_state == {"simulation_background_osc_files": ["a.osc", "b.osc"]}
+    assert len(calls) == 1
+    assert calls[0][0] == "a.osc"
+    assert calls[0][1]["total_count"] == 2
+    assert calls[0][1]["display_rotate_k"] == -1
+    assert callable(calls[0][1]["read_osc"])
+
+
 def test_background_manager_load_and_switch_update_state_in_place(tmp_path) -> None:
     path_a = tmp_path / "a.osc"
     path_b = tmp_path / "b.osc"

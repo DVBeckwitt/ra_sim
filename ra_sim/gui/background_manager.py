@@ -87,6 +87,17 @@ def _replace_list(target: list, values: Sequence[object] | None) -> list:
     return target
 
 
+def _normalize_runtime_list_attr(background_state, attr_name: str) -> list:
+    values = list(getattr(background_state, attr_name, ()) or ())
+    target = getattr(background_state, attr_name, None)
+    if isinstance(target, list):
+        target.clear()
+        target.extend(values)
+        return target
+    setattr(background_state, attr_name, values)
+    return values
+
+
 def apply_background_state_update(
     background_state,
     payload: dict[str, object],
@@ -125,6 +136,37 @@ def apply_background_state_update(
     return background_state
 
 
+def normalize_background_runtime_state(
+    background_state,
+    *,
+    file_paths_state: dict[str, object] | None = None,
+):
+    """Normalize shared background-runtime state after one mutation path."""
+
+    _normalize_runtime_list_attr(background_state, "osc_files")
+    _normalize_runtime_list_attr(background_state, "background_images")
+    _normalize_runtime_list_attr(background_state, "background_images_native")
+    _normalize_runtime_list_attr(background_state, "background_images_display")
+    background_state.current_background_index = int(
+        getattr(background_state, "current_background_index", 0)
+    )
+    background_state.visible = bool(getattr(background_state, "visible", True))
+    background_state.backend_rotation_k = int(
+        getattr(background_state, "backend_rotation_k", 0)
+    )
+    background_state.backend_flip_x = bool(
+        getattr(background_state, "backend_flip_x", False)
+    )
+    background_state.backend_flip_y = bool(
+        getattr(background_state, "backend_flip_y", False)
+    )
+    if isinstance(file_paths_state, dict):
+        file_paths_state["simulation_background_osc_files"] = list(
+            background_state.osc_files
+        )
+    return background_state
+
+
 def _apply_background_cache_state_update(
     background_state,
     payload: dict[str, object],
@@ -144,6 +186,39 @@ def _apply_background_cache_state_update(
         },
     )
     return background_state
+
+
+def initialize_background_runtime_state(
+    background_state,
+    first_path: str,
+    *,
+    total_count: int,
+    display_rotate_k: int,
+    read_osc: Callable[[str], object],
+    file_paths_state: dict[str, object] | None = None,
+    visible: bool = True,
+    backend_rotation_k: int = 3,
+    backend_flip_x: bool = False,
+    backend_flip_y: bool = False,
+) -> dict[str, object]:
+    """Initialize lazy background cache state and apply default runtime flags."""
+
+    updated = gui_background.initialize_background_cache(
+        str(first_path),
+        total_count=int(total_count),
+        display_rotate_k=display_rotate_k,
+        read_osc=read_osc,
+    )
+    apply_background_state_update(background_state, updated)
+    background_state.visible = bool(visible)
+    background_state.backend_rotation_k = int(backend_rotation_k)
+    background_state.backend_flip_x = bool(backend_flip_x)
+    background_state.backend_flip_y = bool(backend_flip_y)
+    normalize_background_runtime_state(
+        background_state,
+        file_paths_state=file_paths_state,
+    )
+    return updated
 
 
 def load_background_files(
