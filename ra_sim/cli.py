@@ -24,6 +24,7 @@ instrument and file paths from `config/` via `ra_sim.config`.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import math
 import sys
 from typing import Dict
@@ -62,7 +63,46 @@ from ra_sim.simulation.types import (
     MosaicParams,
     SimulationRequest,
 )
-from ra_sim.utils.calculations import IndexofRefraction
+from ra_sim.utils.calculations import (
+    resolve_index_of_refraction,
+    resolve_index_of_refraction_array,
+)
+
+
+@dataclass(frozen=True)
+class HeadlessSimulationDefaults:
+    """Resolved defaults and typed parameter objects for headless simulation."""
+
+    out_path: str
+    image_size: int
+    samples: int
+    vmax: float
+    cif_file: str
+    geometry: DetectorGeometry
+    mosaic: MosaicParams
+    debye_waller: DebyeWallerParams
+    occ: tuple[float, ...]
+    p_values: tuple[float, ...]
+    weights: np.ndarray
+    two_theta_max: float
+    ht_max_miller_index: int
+    ht_phase_delta_expression: str
+    ht_phi_l_divisor: float
+    ht_finite_stack: bool
+    ht_stack_layers: int
+    divergence_sigma_rad: float
+    bandwidth_sigma: float
+    bandwidth_fraction: float
+    sample_depth_m: float
+
+
+@dataclass(frozen=True)
+class HeadlessSimulationPlan:
+    """Executable headless simulation inputs built from config and CLI overrides."""
+
+    defaults: HeadlessSimulationDefaults
+    qr_dict: Dict
+    request: SimulationRequest
 
 
 def _parse_cif_cell_a_c(cif_file: str) -> tuple[float, float]:
@@ -121,6 +161,72 @@ def _combine_qr_dicts(caches: list[Dict], weights: np.ndarray) -> Dict:
     return out
 
 
+def _coerce_finite_float(value: object) -> float | None:
+    """Return a finite float, or ``None`` when coercion fails."""
+
+    try:
+        value_float = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value_float):
+        return None
+    return value_float
+
+
+def _resolve_solve_q_mode(mode_raw: object) -> int:
+    """Normalize CLI/config solve-q mode values to engine constants."""
+
+    if isinstance(mode_raw, (int, np.integer, float, np.floating)):
+        return (
+            SOLVE_Q_MODE_UNIFORM
+            if int(round(float(mode_raw))) == 0
+            else SOLVE_Q_MODE_ADAPTIVE
+        )
+
+    mode_txt = str(mode_raw).strip().lower()
+    if mode_txt in {"uniform", "fast", "0"}:
+        return SOLVE_Q_MODE_UNIFORM
+    if mode_txt in {"adaptive", "robust", "1"}:
+        return SOLVE_Q_MODE_ADAPTIVE
+    return DEFAULT_SOLVE_Q_MODE
+
+
+def _apply_headless_tilt_hint(
+    *,
+    gamma_initial: float,
+    Gamma_initial: float,
+    distance_m: float,
+) -> tuple[float, float, float]:
+    """Apply optional hBN tilt-hint defaults to geometry values."""
+
+    tilt_hint = load_tilt_hint()
+    if not tilt_hint:
+        return gamma_initial, Gamma_initial, distance_m
+
+    hinted_gamma = _coerce_finite_float(tilt_hint.get("gamma_deg"))
+    hinted_Gamma = _coerce_finite_float(tilt_hint.get("Gamma_deg"))
+    hinted_distance = _coerce_finite_float(tilt_hint.get("distance_m"))
+
+    if hinted_gamma is not None:
+        gamma_initial = hinted_gamma
+    if hinted_Gamma is not None:
+        Gamma_initial = hinted_Gamma
+    if hinted_distance is not None:
+        distance_m = hinted_distance
+
+    print(
+        "Using detector tilt defaults from hBN fit profile: "
+        f"sim γ={gamma_initial:.4f} deg, sim Γ={Gamma_initial:.4f} deg"
+    )
+    if hinted_distance is not None:
+        print(
+            "Using detector distance default from hBN fit profile: "
+            f"Dist={hinted_distance:.4f} m"
+        )
+
+    return gamma_initial, Gamma_initial, distance_m
+
+
 def _cmd_gui(args: argparse.Namespace) -> None:
     """Launch the Tkinter GUI through the packaged launcher."""
 
@@ -157,18 +263,14 @@ def _prompt_startup_mode() -> str | None:
         print("Please enter 1 or 2.")
 
 
-def run_headless_simulation(
+def build_headless_simulation_defaults(
     out_path: str,
     image_size: int | None = None,
     samples: int | None = None,
     vmax: float | None = None,
-) -> str:
-    """Run a headless simulation using defaults from config and save an image.
+) -> HeadlessSimulationDefaults:
+    """Resolve config-driven defaults and typed parameter objects for the CLI."""
 
-    Returns the absolute path to the written image.
-    """
-
-    # Load instrument + file paths
     inst = get_instrument_config().get("instrument", {})
     det_cfg = inst.get("detector", {})
     geom_cfg = inst.get("geometry_defaults", {})
@@ -177,19 +279,26 @@ def run_headless_simulation(
     debye_cfg = inst.get("debye_waller", {})
     ht_cfg = inst.get("hendricks_teller", {})
 
-    if image_size is None:
-        image_size = int(det_cfg.get("image_size", 3000))
-    if samples is None:
-        samples = int(det_cfg.get("monte_carlo_samples", 1000))
-    if vmax is None:
-        vmax = float(det_cfg.get("vmax", 1000))
+    resolved_image_size = (
+        int(det_cfg.get("image_size", 3000))
+        if image_size is None
+        else int(image_size)
+    )
+    resolved_samples = (
+        int(det_cfg.get("monte_carlo_samples", 1000))
+        if samples is None
+        else int(samples)
+    )
+    resolved_vmax = (
+        float(det_cfg.get("vmax", 1000))
+        if vmax is None
+        else float(vmax)
+    )
 
     cif_file = get_path("cif_file")
-    poni_file = get_path("geometry_poni")
+    poni = parse_poni_file(get_path("geometry_poni"))
 
-    # Geometry/beam parameters (mirror main.py defaults)
-    poni = parse_poni_file(poni_file)
-    D = float(poni.get("Dist", geom_cfg.get("distance_m", 0.075)))
+    distance_m = float(poni.get("Dist", geom_cfg.get("distance_m", 0.075)))
     Gamma_initial = float(poni.get("Rot1", geom_cfg.get("rot1", 0.0)))
     gamma_initial = float(poni.get("Rot2", geom_cfg.get("rot2", 0.0)))
     poni1 = float(poni.get("Poni1", geom_cfg.get("poni1_m", 0.0)))
@@ -198,138 +307,77 @@ def run_headless_simulation(
     lambda_from_poni = wave_m * 1e10
 
     lambda_override = beam_cfg.get("wavelength_angstrom")
-    lambda_ang = float(lambda_override if lambda_override is not None else lambda_from_poni)
-
+    lambda_ang = float(
+        lambda_override if lambda_override is not None else lambda_from_poni
+    )
     pixel_size_m = float(det_cfg.get("pixel_size_m", DEFAULT_PIXEL_SIZE_M))
 
-    tilt_hint = load_tilt_hint()
-    if tilt_hint:
-        hinted_gamma = tilt_hint.get("gamma_deg")
-        hinted_Gamma = tilt_hint.get("Gamma_deg")
-        try:
-            hinted_gamma = float(hinted_gamma)
-            hinted_Gamma = float(hinted_Gamma)
-        except (TypeError, ValueError):
-            hinted_gamma = None
-            hinted_Gamma = None
-        if hinted_gamma is not None and np.isfinite(hinted_gamma):
-            gamma_initial = hinted_gamma
-        if hinted_Gamma is not None and np.isfinite(hinted_Gamma):
-            Gamma_initial = hinted_Gamma
-        hinted_distance = tilt_hint.get("distance_m")
-        try:
-            hinted_distance = float(hinted_distance)
-        except (TypeError, ValueError):
-            hinted_distance = None
-        if hinted_distance is not None and np.isfinite(hinted_distance):
-            D = hinted_distance
-        print(
-            "Using detector tilt defaults from hBN fit profile: "
-            f"sim γ={gamma_initial:.4f} deg, sim Γ={Gamma_initial:.4f} deg"
-        )
-        if hinted_distance is not None and np.isfinite(hinted_distance):
-            print(
-                "Using detector distance default from hBN fit profile: "
-                f"Dist={hinted_distance:.4f} m"
-            )
+    gamma_initial, Gamma_initial, distance_m = _apply_headless_tilt_hint(
+        gamma_initial=gamma_initial,
+        Gamma_initial=Gamma_initial,
+        distance_m=distance_m,
+    )
 
-    # Beam center: follow GUI default mapping from PONI to pixels
-    center = np.array([
-        (poni2 / pixel_size_m),
-        image_size - (poni1 / pixel_size_m),
-    ], dtype=np.float64)
-
+    center = np.array(
+        [
+            (poni2 / pixel_size_m),
+            resolved_image_size - (poni1 / pixel_size_m),
+        ],
+        dtype=np.float64,
+    )
     two_theta_max = detector_two_theta_max(
-        image_size,
+        resolved_image_size,
         center,
-        D,
+        distance_m,
         pixel_size=pixel_size_m,
     )
 
-    # HT inputs
-    mx = int(ht_cfg.get("max_miller_index", 19))
-    p_defaults = list(ht_cfg.get("default_p", [0.01, 0.99, 0.5]))
-    w_defaults = np.array(ht_cfg.get("default_w", [50.0, 50.0, 0.0]), dtype=float)
-    w_norm = w_defaults / (w_defaults.sum() if w_defaults.sum() else 1.0)
-
-    # Occupancies
-    occ = inst.get("occupancies", {}).get("default", [1.0, 1.0, 1.0])
-
-    # Lattice constants from CIF
+    occ = tuple(inst.get("occupancies", {}).get("default", [1.0, 1.0, 1.0]))
     av, cv = _parse_cif_cell_a_c(cif_file)
 
-    # Build HT curves and rods for the three p values
+    p_values = tuple(ht_cfg.get("default_p", [0.01, 0.99, 0.5]))
+    w_defaults = np.asarray(
+        ht_cfg.get("default_w", [50.0, 50.0, 0.0]),
+        dtype=np.float64,
+    )
+    weights = w_defaults / (w_defaults.sum() if w_defaults.sum() else 1.0)
+
     finite_stack_flag = bool(ht_cfg.get("finite_stack", True))
-    stack_layers_count = int(
-        max(1, float(ht_cfg.get("stack_layers", 50)))
+    stack_layers_count = int(max(1, float(ht_cfg.get("stack_layers", 50))))
+    phase_delta_expression = validate_phase_delta_expression(
+        normalize_phase_delta_expression(
+            ht_cfg.get(
+                "phase_delta_expression",
+                DEFAULT_PHASE_DELTA_EXPRESSION,
+            ),
+            fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
+        )
     )
-    phase_delta_expression = normalize_phase_delta_expression(
-        ht_cfg.get("phase_delta_expression", DEFAULT_PHASE_DELTA_EXPRESSION),
-        fallback=DEFAULT_PHASE_DELTA_EXPRESSION,
-    )
-    phase_delta_expression = validate_phase_delta_expression(phase_delta_expression)
     phi_l_divisor = normalize_phi_l_divisor(
         ht_cfg.get("phi_l_divisor", DEFAULT_PHI_L_DIVISOR),
         fallback=DEFAULT_PHI_L_DIVISOR,
     )
 
-    def build_ht_cache(p_val: float):
-        curves = ht_Iinf_dict(
-            cif_path=cif_file,
-            mx=mx,
-            occ=occ,
-            p=float(p_val),
-            L_step=0.01,
-            two_theta_max=float(two_theta_max),
-            lambda_=lambda_ang,
-            c_lattice=cv,
-            phase_z_divisor=phi_l_divisor,
-            phase_delta_expression=phase_delta_expression,
-            phi_l_divisor=phi_l_divisor,
-            finite_stack=finite_stack_flag,
-            stack_layers=stack_layers_count,
-        )
-        qr = ht_dict_to_qr_dict(curves)
-        return {"p": float(p_val), "qr": qr}
-
-    caches = [build_ht_cache(p) for p in p_defaults]
-    qr_combined = _combine_qr_dicts(caches, w_norm)
-
-    # Mosaic/beam sampling
     fwhm2sigma = 1 / (2 * math.sqrt(2 * math.log(2)))
     divergence_fwhm = float(beam_cfg.get("divergence_fwhm_deg", 0.05))
     divergence_sigma = math.radians(divergence_fwhm * fwhm2sigma)
-    bw_sigma = float(beam_cfg.get("bandwidth_sigma_fraction", 0.05e-3)) * fwhm2sigma
+    bw_sigma = (
+        float(beam_cfg.get("bandwidth_sigma_fraction", 0.05e-3)) * fwhm2sigma
+    )
     bandwidth = float(beam_cfg.get("bandwidth_percent", 0.7)) / 100.0
+
     try:
         solve_q_steps = int(round(float(beam_cfg.get("solve_q_steps", 1000))))
     except (TypeError, ValueError):
         solve_q_steps = 1000
     solve_q_steps = int(np.clip(solve_q_steps, 32, 8192))
+
     try:
         solve_q_rel_tol = float(beam_cfg.get("solve_q_rel_tol", 5.0e-4))
     except (TypeError, ValueError):
         solve_q_rel_tol = 5.0e-4
     solve_q_rel_tol = float(np.clip(solve_q_rel_tol, 1.0e-6, 5.0e-2))
-    mode_raw = beam_cfg.get("solve_q_mode", "uniform")
-    if isinstance(mode_raw, (int, np.integer, float, np.floating)):
-        solve_q_mode = SOLVE_Q_MODE_UNIFORM if int(round(float(mode_raw))) == 0 else SOLVE_Q_MODE_ADAPTIVE
-    else:
-        mode_txt = str(mode_raw).strip().lower()
-        if mode_txt in {"uniform", "fast", "0"}:
-            solve_q_mode = SOLVE_Q_MODE_UNIFORM
-        elif mode_txt in {"adaptive", "robust", "1"}:
-            solve_q_mode = SOLVE_Q_MODE_ADAPTIVE
-        else:
-            solve_q_mode = DEFAULT_SOLVE_Q_MODE
 
-    (beam_x_array,
-     beam_y_array,
-     theta_array,
-     phi_array,
-     wavelength_array) = generate_random_profiles(samples, divergence_sigma, bw_sigma, lambda_ang, bandwidth)
-
-    # Film/optical parameters
     theta_initial = float(sample_cfg.get("theta_initial_deg", 6.0))
     cor_angle = float(sample_cfg.get("cor_deg", 0.0))
     chi = float(sample_cfg.get("chi_deg", 0.0))
@@ -337,76 +385,233 @@ def run_headless_simulation(
     psi_z = float(sample_cfg.get("psi_z_deg", 0.0))
     zb = float(sample_cfg.get("zb", 0.0))
     zs = float(sample_cfg.get("zs", 0.0))
-    debye_x = float(inst.get("debye_waller", {}).get("x", 0.0))
-    debye_y = float(inst.get("debye_waller", {}).get("y", 0.0))
+    sample_width_m = float(sample_cfg.get("width_m", 0.0))
+    sample_length_m = float(sample_cfg.get("length_m", 0.0))
+    sample_depth_m = float(sample_cfg.get("depth_m", 0.0))
 
-    # Index of refraction for active material at the nominal beam wavelength.
-    n2 = IndexofRefraction(lambda_ang * 1.0e-10)
+    geometry = DetectorGeometry(
+        image_size=resolved_image_size,
+        av=av,
+        cv=cv,
+        lambda_angstrom=lambda_ang,
+        distance_m=distance_m,
+        gamma_deg=gamma_initial,
+        Gamma_deg=Gamma_initial,
+        chi_deg=chi,
+        psi_deg=psi,
+        psi_z_deg=psi_z,
+        zs=zs,
+        zb=zb,
+        center=np.asarray(center, dtype=np.float64),
+        theta_initial_deg=theta_initial,
+        cor_angle_deg=cor_angle,
+        unit_x=np.array([1.0, 0.0, 0.0]),
+        n_detector=np.array([0.0, 1.0, 0.0]),
+        pixel_size_m=pixel_size_m,
+        sample_width_m=sample_width_m,
+        sample_length_m=sample_length_m,
+    )
+    mosaic = MosaicParams(
+        sigma_mosaic_deg=float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8))
+        * fwhm2sigma,
+        gamma_mosaic_deg=float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7))
+        * fwhm2sigma,
+        eta=float(beam_cfg.get("eta", 0.0)),
+        solve_q_steps=solve_q_steps,
+        solve_q_rel_tol=solve_q_rel_tol,
+        solve_q_mode=_resolve_solve_q_mode(beam_cfg.get("solve_q_mode", "uniform")),
+    )
+    debye_waller = DebyeWallerParams(
+        x=float(debye_cfg.get("x", 0.0)),
+        y=float(debye_cfg.get("y", 0.0)),
+    )
 
-    # Fixed axes like GUI
-    unit_x = np.array([1.0, 0.0, 0.0])
-    n_detector = np.array([0.0, 1.0, 0.0])
+    return HeadlessSimulationDefaults(
+        out_path=str(out_path),
+        image_size=resolved_image_size,
+        samples=resolved_samples,
+        vmax=resolved_vmax,
+        cif_file=str(cif_file),
+        geometry=geometry,
+        mosaic=mosaic,
+        debye_waller=debye_waller,
+        occ=occ,
+        p_values=p_values,
+        weights=weights,
+        two_theta_max=float(two_theta_max),
+        ht_max_miller_index=int(ht_cfg.get("max_miller_index", 19)),
+        ht_phase_delta_expression=phase_delta_expression,
+        ht_phi_l_divisor=phi_l_divisor,
+        ht_finite_stack=finite_stack_flag,
+        ht_stack_layers=stack_layers_count,
+        divergence_sigma_rad=divergence_sigma,
+        bandwidth_sigma=bw_sigma,
+        bandwidth_fraction=bandwidth,
+        sample_depth_m=sample_depth_m,
+    )
 
-    # Mosaic pseudo-Voigt parameters (sigma, gamma are passed as sigma in degrees)
-    sigma_mosaic_deg = float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8)) * fwhm2sigma
-    gamma_mosaic_deg = float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7)) * fwhm2sigma
 
-    request = SimulationRequest(
+def build_headless_qr_dict(defaults: HeadlessSimulationDefaults) -> Dict:
+    """Build the combined HT rod dictionary used by the headless CLI."""
+
+    caches = []
+    for p_value in defaults.p_values:
+        curves = ht_Iinf_dict(
+            cif_path=defaults.cif_file,
+            mx=defaults.ht_max_miller_index,
+            occ=list(defaults.occ),
+            p=float(p_value),
+            L_step=0.01,
+            two_theta_max=float(defaults.two_theta_max),
+            lambda_=defaults.geometry.lambda_angstrom,
+            c_lattice=defaults.geometry.cv,
+            phase_z_divisor=defaults.ht_phi_l_divisor,
+            phase_delta_expression=defaults.ht_phase_delta_expression,
+            phi_l_divisor=defaults.ht_phi_l_divisor,
+            finite_stack=defaults.ht_finite_stack,
+            stack_layers=defaults.ht_stack_layers,
+        )
+        caches.append(
+            {
+                "p": float(p_value),
+                "qr": ht_dict_to_qr_dict(curves),
+            }
+        )
+
+    return _combine_qr_dicts(caches, defaults.weights)
+
+
+def build_headless_beam_samples(
+    defaults: HeadlessSimulationDefaults,
+) -> BeamSamples:
+    """Build Monte Carlo beam samples and wavelength-dependent optical constants."""
+
+    (
+        beam_x_array,
+        beam_y_array,
+        theta_array,
+        phi_array,
+        wavelength_array,
+    ) = generate_random_profiles(
+        defaults.samples,
+        defaults.divergence_sigma_rad,
+        defaults.bandwidth_sigma,
+        defaults.geometry.lambda_angstrom,
+        defaults.bandwidth_fraction,
+    )
+
+    n2_sample_array = resolve_index_of_refraction_array(
+        np.asarray(wavelength_array, dtype=np.float64) * 1.0e-10,
+        cif_path=defaults.cif_file,
+    )
+    return BeamSamples(
+        beam_x_array=np.asarray(beam_x_array, dtype=np.float64),
+        beam_y_array=np.asarray(beam_y_array, dtype=np.float64),
+        theta_array=np.asarray(theta_array, dtype=np.float64),
+        phi_array=np.asarray(phi_array, dtype=np.float64),
+        wavelength_array=np.asarray(wavelength_array, dtype=np.float64),
+        n2_sample_array=np.asarray(n2_sample_array, dtype=np.complex128),
+    )
+
+
+def build_headless_simulation_request(
+    defaults: HeadlessSimulationDefaults,
+    beam_samples: BeamSamples | None = None,
+) -> SimulationRequest:
+    """Build the typed simulation request consumed by the engine."""
+
+    beam = (
+        build_headless_beam_samples(defaults)
+        if beam_samples is None
+        else beam_samples
+    )
+    n2 = resolve_index_of_refraction(
+        defaults.geometry.lambda_angstrom * 1.0e-10,
+        cif_path=defaults.cif_file,
+    )
+    return SimulationRequest(
         miller=np.empty((0, 3), dtype=np.float64),
         intensities=np.empty(0, dtype=np.float64),
-        geometry=DetectorGeometry(
-            image_size=image_size,
-            av=av,
-            cv=cv,
-            lambda_angstrom=lambda_ang,
-            distance_m=D,
-            gamma_deg=gamma_initial,
-            Gamma_deg=Gamma_initial,
-            chi_deg=chi,
-            psi_deg=psi,
-            psi_z_deg=psi_z,
-            zs=zs,
-            zb=zb,
-            center=np.asarray(center, dtype=np.float64),
-            theta_initial_deg=theta_initial,
-            cor_angle_deg=cor_angle,
-            unit_x=unit_x,
-            n_detector=n_detector,
-        ),
-        beam=BeamSamples(
-            beam_x_array=np.asarray(beam_x_array, dtype=np.float64),
-            beam_y_array=np.asarray(beam_y_array, dtype=np.float64),
-            theta_array=np.asarray(theta_array, dtype=np.float64),
-            phi_array=np.asarray(phi_array, dtype=np.float64),
-            wavelength_array=np.asarray(wavelength_array, dtype=np.float64),
-        ),
-        mosaic=MosaicParams(
-            sigma_mosaic_deg=sigma_mosaic_deg,
-            gamma_mosaic_deg=gamma_mosaic_deg,
-            eta=float(beam_cfg.get("eta", 0.0)),
-            solve_q_steps=solve_q_steps,
-            solve_q_rel_tol=solve_q_rel_tol,
-            solve_q_mode=solve_q_mode,
-        ),
-        debye_waller=DebyeWallerParams(x=debye_x, y=debye_y),
+        geometry=defaults.geometry,
+        beam=beam,
+        mosaic=defaults.mosaic,
+        debye_waller=defaults.debye_waller,
         n2=n2,
-        image_buffer=np.zeros((image_size, image_size), dtype=np.float64),
+        image_buffer=np.zeros(
+            (defaults.image_size, defaults.image_size),
+            dtype=np.float64,
+        ),
         save_flag=0,
         record_status=False,
-        thickness=0.0,
+        thickness=defaults.sample_depth_m,
         collect_hit_tables=False,
     )
-    sim_image = simulate_qr_rods(qr_combined, request).image
 
-    # Save as 16-bit PNG scaled to `vmax` for reasonable visualization
-    vmax = float(vmax)
-    if vmax <= 0:
-        vmax = float(np.nanmax(sim_image) or 1.0)
-    sim_clip = np.clip(sim_image, 0, vmax)
-    sim_u16 = np.round((sim_clip / vmax) * 65535.0).astype(np.uint16)
-    img = Image.fromarray(sim_u16, mode="I;16")
-    img.save(out_path)
+
+def build_headless_simulation_plan(
+    out_path: str,
+    image_size: int | None = None,
+    samples: int | None = None,
+    vmax: float | None = None,
+) -> HeadlessSimulationPlan:
+    """Build the reusable config/request/render inputs for one CLI simulation."""
+
+    defaults = build_headless_simulation_defaults(
+        out_path=out_path,
+        image_size=image_size,
+        samples=samples,
+        vmax=vmax,
+    )
+    return HeadlessSimulationPlan(
+        defaults=defaults,
+        qr_dict=build_headless_qr_dict(defaults),
+        request=build_headless_simulation_request(defaults),
+    )
+
+
+def run_headless_simulation_plan(plan: HeadlessSimulationPlan) -> np.ndarray:
+    """Execute a prepared headless simulation plan and return the image array."""
+
+    return simulate_qr_rods(plan.qr_dict, plan.request).image
+
+
+def write_headless_simulation_image(
+    image: np.ndarray,
+    *,
+    out_path: str,
+    vmax: float,
+) -> str:
+    """Write a simulated image to disk as a scaled 16-bit PNG."""
+
+    render_vmax = float(vmax)
+    if render_vmax <= 0:
+        render_vmax = float(np.nanmax(image) or 1.0)
+    sim_clip = np.clip(image, 0, render_vmax)
+    sim_u16 = np.round((sim_clip / render_vmax) * 65535.0).astype(np.uint16)
+    Image.fromarray(sim_u16, mode="I;16").save(out_path)
     return str(out_path)
+
+
+def run_headless_simulation(
+    out_path: str,
+    image_size: int | None = None,
+    samples: int | None = None,
+    vmax: float | None = None,
+) -> str:
+    """Run the headless CLI simulation via the builder/run/render pipeline."""
+
+    plan = build_headless_simulation_plan(
+        out_path=out_path,
+        image_size=image_size,
+        samples=samples,
+        vmax=vmax,
+    )
+    sim_image = run_headless_simulation_plan(plan)
+    return write_headless_simulation_image(
+        sim_image,
+        out_path=plan.defaults.out_path,
+        vmax=plan.defaults.vmax,
+    )
 
 
 def _cmd_simulate(args: argparse.Namespace) -> None:

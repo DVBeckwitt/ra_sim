@@ -101,7 +101,19 @@ def test_run_headless_simulation_builds_typed_request(monkeypatch, tmp_path) -> 
             np.ones(2, dtype=np.float64),
         ),
     )
-    monkeypatch.setattr(cli, "IndexofRefraction", lambda _lambda_m: 1.0 + 0.0j)
+    monkeypatch.setattr(
+        cli,
+        "resolve_index_of_refraction",
+        lambda _lambda_m, **_kwargs: 1.0 + 0.0j,
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_index_of_refraction_array",
+        lambda lambda_m_array, **_kwargs: np.ones_like(
+            np.asarray(lambda_m_array, dtype=np.float64),
+            dtype=np.complex128,
+        ),
+    )
 
     seen: dict[str, object] = {}
 
@@ -136,5 +148,84 @@ def test_run_headless_simulation_builds_typed_request(monkeypatch, tmp_path) -> 
     assert request.collect_hit_tables is False
     assert request.geometry.image_size == 8
     assert request.geometry.distance_m == 0.1
+    assert request.geometry.pixel_size_m == 1.0e-4
     assert request.mosaic.solve_q_steps == 1000
     assert np.array_equal(request.beam.wavelength_array, np.ones(2, dtype=np.float64))
+    assert np.array_equal(request.beam.n2_sample_array, np.ones(2, dtype=np.complex128))
+
+
+def test_run_headless_simulation_uses_plan_pipeline(monkeypatch, tmp_path) -> None:
+    plan = cli.HeadlessSimulationPlan(
+        defaults=cli.HeadlessSimulationDefaults(
+            out_path=str(tmp_path / "delegated.png"),
+            image_size=4,
+            samples=3,
+            vmax=7.0,
+            cif_file="test.cif",
+            geometry=SimpleNamespace(),
+            mosaic=SimpleNamespace(),
+            debye_waller=SimpleNamespace(),
+            occ=(1.0,),
+            p_values=(0.5,),
+            weights=np.array([1.0], dtype=np.float64),
+            two_theta_max=1.0,
+            ht_max_miller_index=1,
+            ht_phase_delta_expression="0.0",
+            ht_phi_l_divisor=1.0,
+            ht_finite_stack=False,
+            ht_stack_layers=1,
+            divergence_sigma_rad=0.0,
+            bandwidth_sigma=0.0,
+            bandwidth_fraction=0.0,
+            sample_depth_m=0.0,
+        ),
+        qr_dict={"qr": "dict"},
+        request=SimpleNamespace(),
+    )
+
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "build_headless_simulation_plan",
+        lambda **kwargs: (calls.append(("build", kwargs)) or plan),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_headless_simulation_plan",
+        lambda plan_arg: (calls.append(("run", plan_arg)) or np.ones((4, 4), dtype=np.float64)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_headless_simulation_image",
+        lambda image, **kwargs: (
+            calls.append(("write", image.shape, kwargs)) or kwargs["out_path"]
+        ),
+    )
+
+    result = cli.run_headless_simulation(
+        out_path=str(tmp_path / "delegated.png"),
+        image_size=4,
+        samples=3,
+        vmax=7.0,
+    )
+
+    assert result == str(tmp_path / "delegated.png")
+    assert calls[0] == (
+        "build",
+        {
+            "out_path": str(tmp_path / "delegated.png"),
+            "image_size": 4,
+            "samples": 3,
+            "vmax": 7.0,
+        },
+    )
+    assert calls[1] == ("run", plan)
+    assert calls[2] == (
+        "write",
+        (4, 4),
+        {
+            "out_path": str(tmp_path / "delegated.png"),
+            "vmax": 7.0,
+        },
+    )
