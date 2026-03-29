@@ -33,7 +33,7 @@ from ra_sim.utils.tools                import (
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing            import parse_poni_file
-from ra_sim.path_config                import get_path, get_dir
+from ra_sim.config                     import get_path, get_dir
 
 # ════════════════════════════════════════════════════════════════
 # 1. Parsing helpers

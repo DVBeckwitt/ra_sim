@@ -18,9 +18,9 @@ except Exception:  # pragma: no cover - optional dependency may be absent
         pass
 from skimage import color, exposure, feature, io
 
+from ra_sim.config import get_temp_dir
 from ra_sim.StructureFactor.StructureFactor import calculate_structure_factor
 from ra_sim.utils.calculations import d_spacing, two_theta
-from ra_sim.path_config import get_temp_dir
 
 
 DEFAULT_PIXEL_SIZE_M = 100e-6

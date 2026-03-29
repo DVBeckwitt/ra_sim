@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import tempfile
 from pathlib import Path
 
 from ra_sim.config import (
@@ -16,6 +15,7 @@ from ra_sim.config import (
     get_material_config as _get_material_config,
     get_path as _get_path,
     get_path_first as _get_path_first,
+    get_temp_dir as _get_temp_dir,
     list_materials as _list_materials,
 )
 
@@ -26,7 +26,6 @@ _MATERIALS: dict = {}
 _DEFAULT_MATERIAL = None
 _instrument_raw: dict = {}
 _ACTIVE_CONFIG_DIR: Path | None = None
-_TEMP_DIR: Path | None = None
 
 
 def get_config_dir() -> Path:
@@ -39,7 +38,7 @@ def reload_config_cache() -> None:
     """Reload cached YAML configuration through the canonical loader."""
 
     global PATHS, DIRS, _MATERIAL_CONSTANTS, _MATERIALS, _DEFAULT_MATERIAL
-    global _instrument_raw, _ACTIVE_CONFIG_DIR, _TEMP_DIR
+    global _instrument_raw, _ACTIVE_CONFIG_DIR
 
     clear_config_cache()
     bundle = get_config_bundle()
@@ -52,7 +51,6 @@ def reload_config_cache() -> None:
     _DEFAULT_MATERIAL = copy.deepcopy(materials_raw.get("default_material"))
     _instrument_raw = copy.deepcopy(bundle.instrument)
     _ACTIVE_CONFIG_DIR = bundle.config_dir
-    _TEMP_DIR = None
 
 
 def _ensure_config_cache_current() -> None:
@@ -87,14 +85,8 @@ def get_dir(key: str) -> Path:
 def get_temp_dir() -> Path:
     """Return a dedicated temporary directory for the current session."""
 
-    global _TEMP_DIR
-
     _ensure_config_cache_current()
-    if _TEMP_DIR is None:
-        base_path = get_dir("temp_root")
-        base_path.mkdir(parents=True, exist_ok=True)
-        _TEMP_DIR = Path(tempfile.mkdtemp(prefix="ra_sim_", dir=str(base_path)))
-    return _TEMP_DIR
+    return _get_temp_dir()
 
 
 def get_material_config(material: str | None = None) -> dict:

@@ -12,6 +12,7 @@ from .loader import (
     get_material_config,
     get_path,
     get_path_first,
+    get_temp_dir,
     list_materials,
 )
 from .models import ConfigBundle
@@ -29,5 +30,6 @@ __all__ = [
     "get_material_config",
     "get_path",
     "get_path_first",
+    "get_temp_dir",
     "list_materials",
 ]

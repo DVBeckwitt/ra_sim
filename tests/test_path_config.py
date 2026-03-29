@@ -105,3 +105,18 @@ def test_instrument_config_returns_deep_copy(
     original["instrument"]["detector"]["image_size"] = 42
     fresh = path_config.get_instrument_config()
     assert fresh["instrument"]["detector"]["image_size"] == 1234
+
+
+def test_get_temp_dir_remains_backward_compatible(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config_dir(tmp_path, dir_paths={"temp_root": str(tmp_path / "scratch")})
+    monkeypatch.setenv("RA_SIM_CONFIG_DIR", str(cfg))
+    path_config.reload_config_cache()
+
+    temp_dir_a = path_config.get_temp_dir()
+    temp_dir_b = path_config.get_temp_dir()
+
+    assert temp_dir_a == temp_dir_b
+    assert temp_dir_a.parent == tmp_path / "scratch"
+    assert temp_dir_a.exists()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -108,12 +109,14 @@ def _load_from_dir(config_dir: Path) -> ConfigBundle:
 
 
 _BUNDLE_CACHE: dict[Path, ConfigBundle] = {}
+_TEMP_DIR_CACHE: dict[Path, Path] = {}
 
 
 def clear_config_cache() -> None:
     """Clear cached configuration bundles."""
 
     _BUNDLE_CACHE.clear()
+    _TEMP_DIR_CACHE.clear()
 
 
 def get_config_bundle(config_dir: Path | None = None) -> ConfigBundle:
@@ -159,6 +162,19 @@ def get_dir(key: str, *, config_dir: Path | None = None) -> Path:
     path = Path(os.path.expanduser(str(value)))
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def get_temp_dir(*, config_dir: Path | None = None) -> Path:
+    """Return a dedicated temporary directory for the active config context."""
+
+    resolved_dir = (config_dir or get_config_dir()).resolve()
+    temp_dir = _TEMP_DIR_CACHE.get(resolved_dir)
+    if temp_dir is None:
+        base_path = get_dir("temp_root", config_dir=resolved_dir)
+        base_path.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix="ra_sim_", dir=str(base_path)))
+        _TEMP_DIR_CACHE[resolved_dir] = temp_dir
+    return temp_dir
 
 
 def get_material_config(

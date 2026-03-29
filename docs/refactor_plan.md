@@ -1002,18 +1002,19 @@ Definition of done:
 
 ### 3. Compatibility Cleanup
 
-Status: Partially done
+Status: Completed
 
 What is done:
 
 - `main.py` is now a compatibility wrapper.
-- `ra_sim.gui.main_app.main` is a working compatibility alias.
-- Import smoke around stale `ra_sim.gui.main_app` behavior is fixed.
+- `ra_sim.gui.app.main` is the canonical package GUI entrypoint.
+- `ra_sim.gui.main_app` was removed once tests/docs no longer depended on it.
 
 What is left:
 
-- `ra_sim.gui.main_app` still exists only as a compatibility shim.
-- `docs/refactor_migration.md` still describes that alias as temporary.
+- No package-level GUI entrypoint compatibility blockers remain.
+- Follow-up here is now limited to documentation clarity and any future
+  external deprecation communication.
 
 Why it matters:
 
@@ -1028,7 +1029,7 @@ Definition of done:
 
 ### 4. Config Unification
 
-Status: In progress
+Status: Completed
 
 What is done:
 
@@ -1036,20 +1037,21 @@ What is done:
 - `ra_sim.config.loader` now also owns the canonical file-path, directory,
   materials, and instrument-config loading helpers, including the Windows YAML
   path fallback and the active-config cache.
+- `ra_sim.config.loader` now also owns `get_temp_dir()`, so the full
+  packaged config helper surface lives under `ra_sim.config`.
 - `ra_sim.path_config` now delegates those reads through `ra_sim.config` and
   remains reloadable as a compatibility shim.
 - Several packaged call sites now import config helpers from `ra_sim.config`
   directly instead of reaching through `ra_sim.path_config`.
+- The remaining non-compat imports were migrated off `ra_sim.path_config`.
 
 What is left:
 
-- `ra_sim.path_config` still exists as a compatibility surface.
-- A small number of remaining imports still reach through
-  `ra_sim.path_config` where the helper is either compatibility-facing or has
-  not yet been migrated.
-- The long-term home of `get_temp_dir()` still needs an explicit decision if
-  the project wants the full config helper surface to live under
-  `ra_sim.config`.
+- `ra_sim.path_config` still exists as a compatibility surface for older call
+  sites and compatibility-focused tests.
+- No packaged code or non-compat test modules still import it directly.
+- Removing that shim entirely is now optional follow-up rather than an active
+  architectural blocker.
 
 Why it matters:
 
@@ -1232,14 +1234,20 @@ Goal:
 
 Tasks:
 
-- Migrate call sites from `ra_sim.path_config` to `ra_sim.config`.
-- Keep a compatibility shim only as long as needed.
+- Migrate packaged call sites from `ra_sim.path_config` to `ra_sim.config`.
+- Keep `ra_sim.path_config` as a compatibility shim only as long as needed.
 - Remove duplicated config responsibilities.
 
 Why third:
 
 - This is repo-wide technical debt with a clear duplication cost.
 - It no longer needs to wait on more GUI rewiring.
+
+Current status:
+
+- Landed for the packaged codebase.
+- `ra_sim.config` is now the canonical helper surface, and
+  `ra_sim.path_config` is now only a compatibility shim.
 
 ### Phase D: Targeted Runtime / Boundary Cleanup Only Where It Pays Off
 
@@ -1272,14 +1280,20 @@ Goal:
 
 Tasks:
 
-- Decide whether `ra_sim.gui.main_app` stays as a permanent compatibility alias
-  or is removed later.
+- Remove obsolete package-level GUI compatibility aliases once the codebase no
+  longer depends on them.
 - Update docs/tests to reflect the canonical entrypoint.
 
 Why fifth:
 
 - This is easier to finalize after startup/testing/config boundaries are
   clearer.
+
+Current status:
+
+- Landed for the package GUI entrypoint.
+- `ra_sim.gui.app.main` is now canonical, and `ra_sim.gui.main_app` has been
+  removed.
 
 ### Phase F: Clean the Repository Root
 
@@ -1312,22 +1326,22 @@ Why last:
 
 The next best step is:
 
-- finish the remaining `ra_sim.path_config` compatibility migration now that
-  `ra_sim.config` is the canonical config surface
-- decide whether `get_temp_dir()` remains a compatibility helper in
-  `ra_sim.path_config` or moves under `ra_sim.config`
-- then move on to the remaining compatibility cleanup around
-  `ra_sim.gui.main_app`
+- keep the runtime/config/entrypoint refactor closed out and stop expanding it
+  by default
+- move next to repository-root cleanup so the project layout matches the
+  packaged structure
+- keep unrelated simulation test debt tracked separately from the GUI refactor
 - only return to the internal runtime implementation for specific bug-prone or
   duplicated workflows that still justify the move
 
 Immediate checklist after the strategy pivot:
 
-- migrate the remaining non-compat call sites from `ra_sim.path_config` to
-  `ra_sim.config`
-- decide and document the long-term home of `get_temp_dir()`
-- finish the GUI entrypoint compatibility cleanup once the config surface is
-  settled
+- remove or relocate stale root artifacts that do not belong in the long-term
+  repo layout
+- keep `ra_sim.path_config` only as a compatibility shim until the project is
+  ready to drop it explicitly
+- keep GUI refactor work focused on concrete reliability or feature-delivery
+  wins
 - defer thin callback/value-source rewiring unless it directly advances one of
   those items
 

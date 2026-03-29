@@ -12,10 +12,12 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - `python main.py` still launches the GUI.
 - `python -m ra_sim gui|simulate|hbn-fit` is unchanged.
 - `ra-sim` console script now points to `ra_sim.cli:main`.
+- `ra_sim.gui.app.main` is the supported package GUI entrypoint.
 - Existing config access helpers remain:
   - `ra_sim.path_config.get_path`
   - `ra_sim.path_config.get_dir`
   - `ra_sim.path_config.get_instrument_config`
+  - `ra_sim.path_config.get_temp_dir`
 - Top-level utility script names remain:
   - `plot_excel_scatter.py`
   - `compare_intensity.py`
@@ -109,6 +111,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   delegates to it as a reloadable compatibility shim.
 - Several packaged modules now import config helpers from `ra_sim.config`
   directly instead of going through `ra_sim.path_config`.
+- `ra_sim.config.loader` now also owns `get_temp_dir()`, and the remaining
+  non-compat imports were migrated off `ra_sim.path_config`.
+- `ra_sim.gui.main_app` was removed now that the package, launcher, tests, and
+  docs all converge on `ra_sim.gui.app.main` as the canonical GUI entrypoint.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into
@@ -646,8 +652,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   reduction are no longer goals by themselves.
 - The public runtime import/startup boundary is now in much better shape.
 - The remaining GUI-runtime shape tests are now gone.
-- The next high-ROI cleanup targets are the remaining config compatibility
-  migration and the final entrypoint/compatibility cleanup.
+- The config compatibility migration and GUI entrypoint cleanup are now
+  effectively closed out.
+- The next high-ROI cleanup target is repository-root cleanup rather than more
+  GUI runtime decomposition.
 - Targeted runtime cleanup can still happen in structure-model, pruning,
   Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
   workflows, but only when it materially supports those goals or unblocks
@@ -656,10 +664,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   where it simplifies shared workflows, but it does not need to absorb every
   thin adapter left in the internal runtime implementation.
 - `ra_sim.config` is now the canonical config helper surface, while
-  `ra_sim.path_config` remains as a compatibility shim pending the remaining
-  migration and any final decision about `get_temp_dir()`.
-- `ra_sim.gui.main_app.main` still exists as a compatibility alias pending
-  final entrypoint cleanup.
+  `ra_sim.path_config` remains only as a compatibility shim for older call
+  sites.
+- `ra_sim.gui.main_app` is gone; `ra_sim.gui.app.main` is the canonical
+  package GUI entrypoint.
 
 ## Configuration Changes
 
@@ -672,7 +680,6 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 ### Current release
 
 - Legacy positional simulation kernel calls remain available and are wrapped by typed APIs.
-- `ra_sim.gui.main_app.main` remains available as a compatibility alias.
 - Root utility scripts remain as wrappers around `ra_sim.tools`.
 
 ### Next release target

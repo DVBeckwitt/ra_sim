@@ -20,7 +20,7 @@ from ra_sim.utils.tools          import miller_generator, inject_fractional_refl
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
 from ra_sim.simulation.diffraction     import process_peaks_parallel
 from ra_sim.io.file_parsing      import parse_poni_file
-from ra_sim.path_config          import get_path
+from ra_sim.config               import get_path
 import io, contextlib
 from CifFile import ReadCif
 

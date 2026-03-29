@@ -102,3 +102,18 @@ def test_loader_cache_can_be_cleared_after_file_change(
 
     loader.clear_config_cache()
     assert loader.get_path("cif_file") == "/tmp/second.cif"
+
+
+def test_loader_get_temp_dir_uses_temp_root_and_caches_per_config_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _make_config_dir(tmp_path, dir_paths={"temp_root": str(tmp_path / "scratch")})
+    monkeypatch.setenv(loader.ENV_CONFIG_DIR, str(cfg))
+
+    temp_dir_a = loader.get_temp_dir()
+    temp_dir_b = loader.get_temp_dir()
+
+    assert temp_dir_a == temp_dir_b
+    assert temp_dir_a.parent == tmp_path / "scratch"
+    assert temp_dir_a.exists()

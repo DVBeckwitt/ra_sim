@@ -11,6 +11,7 @@
   - Added Windows YAML path fallback parsing and `get_path_first(...)` in `ra_sim/path_config.py`.
   - Canonicalized config loading in `ra_sim.config.loader` for file paths, directories, materials, and instrument config, and kept `ra_sim/path_config.py` as a reloadable compatibility shim on top of it.
   - Migrated packaged config call sites in the CLI, GUI runtime/controllers, hBN workflow, diffraction debug helpers, and shared calculations to import from `ra_sim.config`.
+  - Moved `get_temp_dir()` into `ra_sim.config`, migrated the remaining non-compat config imports off `ra_sim.path_config`, and added direct loader/shim coverage for temp-dir behavior.
 
 - **hBN bundle geometry mapping and metadata**
   - Added canonical hBN bundle metadata keys and strict validation in `ra_sim/hbn.py`.
@@ -32,6 +33,7 @@
   - Corrected center-axis mappings used in pyFAI/intersection geometry paths.
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.
+  - Removed the unused `ra_sim/gui/main_app.py` compatibility shim and standardized the package GUI entrypoint on `ra_sim.gui.app.main`.
   - Made `ra_sim/gui/runtime.py` import-safe by turning it into a lazy compatibility wrapper around the heavy GUI implementation in `ra_sim/gui/_runtime/runtime_impl.py`.
   - Extracted runtime background/bootstrap assembly into `ra_sim/gui/runtime_background.py`, leaving the internal runtime implementation with thinner background workflow wiring.
   - Extracted selected-peak / HKL lookup / manual-geometry / geometry-tool action runtime assembly into `ra_sim/gui/runtime_geometry_interaction.py`, replacing the matching internal-runtime AST checks with direct helper tests.
