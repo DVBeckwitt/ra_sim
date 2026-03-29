@@ -98,6 +98,17 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   the import-safe helper module
   `ra_sim.gui.runtime_qr_cylinder_overlay`, and the matching regression
   coverage now uses direct helper tests for that composition seam.
+- The remaining GUI-runtime AST checks around pruning defaults and
+  selected-peak maintenance wiring now also flow through import-safe helper
+  seams in `ra_sim.gui.runtime_fit_analysis` and
+  `ra_sim.gui.runtime_geometry_interaction`, and the matching regression
+  coverage now uses direct helper tests instead of parsing
+  `runtime_impl.py`.
+- `ra_sim.config.loader` now also owns the canonical file-path, directory,
+  materials, and instrument-config helper surface, while `ra_sim.path_config`
+  delegates to it as a reloadable compatibility shim.
+- Several packaged modules now import config helpers from `ra_sim.config`
+  directly instead of going through `ra_sim.path_config`.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into
@@ -634,8 +645,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - Thin value-source rewiring, one-off callback extraction, and line-count
   reduction are no longer goals by themselves.
 - The public runtime import/startup boundary is now in much better shape.
-- The next high-ROI cleanup targets are the remaining internal runtime-shape
-  tests and config unification.
+- The remaining GUI-runtime shape tests are now gone.
+- The next high-ROI cleanup targets are the remaining config compatibility
+  migration and the final entrypoint/compatibility cleanup.
 - Targeted runtime cleanup can still happen in structure-model, pruning,
   Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
   workflows, but only when it materially supports those goals or unblocks
@@ -643,8 +655,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The newer `state` / `controllers` / `views` boundary should keep expanding
   where it simplifies shared workflows, but it does not need to absorb every
   thin adapter left in the internal runtime implementation.
-- `ra_sim.path_config` and `ra_sim.config.loader` still overlap and need
-  eventual unification.
+- `ra_sim.config` is now the canonical config helper surface, while
+  `ra_sim.path_config` remains as a compatibility shim pending the remaining
+  migration and any final decision about `get_temp_dir()`.
 - `ra_sim.gui.main_app.main` still exists as a compatibility alias pending
   final entrypoint cleanup.
 

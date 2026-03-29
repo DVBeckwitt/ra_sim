@@ -18,7 +18,7 @@ Usage examples:
     python -m ra_sim calibrant --bundle /path/to/hbn_bundle.npz
 
 This CLI intentionally mirrors the defaults used by the GUI by reading
-instrument and file paths from `config/` via `ra_sim.path_config`.
+instrument and file paths from `config/` via `ra_sim.config`.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ import numpy as np
 from PIL import Image
 
 from ra_sim import launcher
-from ra_sim.path_config import get_instrument_config, get_path
+from ra_sim.config import get_instrument_config, get_path
 from ra_sim.io.file_parsing import parse_poni_file
 from ra_sim.utils.stacking_fault import (
     DEFAULT_PHASE_DELTA_EXPRESSION,

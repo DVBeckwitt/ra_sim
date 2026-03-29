@@ -15,7 +15,7 @@ if (
         pass
 
 try:
-    from ra_sim.path_config import get_dir
+    from ra_sim.config import get_dir
 except Exception:  # pragma: no cover
     get_dir = None
 

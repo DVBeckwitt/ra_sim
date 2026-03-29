@@ -299,3 +299,37 @@ def test_initialize_runtime_geometry_interaction_controls_creates_controls_and_r
         ("preview-exclude", None),
         ("hkl", "fit-actions-parent"),
     ]
+
+
+def test_refresh_runtime_peak_selection_after_update_uses_maintenance_bundle() -> None:
+    calls: list[bool] = []
+    maintenance_callbacks = SimpleNamespace(
+        refresh_after_simulation_update=lambda enabled: (
+            calls.append(bool(enabled)) or "overlay-ready"
+        )
+    )
+
+    result = runtime_geometry_interaction.refresh_runtime_peak_selection_after_update(
+        maintenance_callbacks=maintenance_callbacks,
+        live_geometry_preview_enabled=1,
+    )
+
+    assert result is True
+    assert calls == [True]
+
+
+def test_apply_restored_runtime_selected_hkl_target_uses_maintenance_bundle() -> None:
+    calls: list[object] = []
+    maintenance_callbacks = SimpleNamespace(
+        apply_restored_selected_hkl_target=lambda target: (
+            calls.append(target) or (1, 2, 3)
+        )
+    )
+
+    result = runtime_geometry_interaction.apply_restored_runtime_selected_hkl_target(
+        maintenance_callbacks=maintenance_callbacks,
+        selected_hkl_target=[1, 2, 3],
+    )
+
+    assert result == (1, 2, 3)
+    assert calls == [[1, 2, 3]]

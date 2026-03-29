@@ -1028,20 +1028,28 @@ Definition of done:
 
 ### 4. Config Unification
 
-Status: Partially done
+Status: In progress
 
 What is done:
 
 - `ra_sim.config.loader` exists as a newer cached config loader.
-- `ra_sim.path_config` was restored to compatibility-safe behavior, including
-  reloadability.
+- `ra_sim.config.loader` now also owns the canonical file-path, directory,
+  materials, and instrument-config loading helpers, including the Windows YAML
+  path fallback and the active-config cache.
+- `ra_sim.path_config` now delegates those reads through `ra_sim.config` and
+  remains reloadable as a compatibility shim.
+- Several packaged call sites now import config helpers from `ra_sim.config`
+  directly instead of reaching through `ra_sim.path_config`.
 
 What is left:
 
-- The project still has two config-loading systems:
-  - `ra_sim.path_config`
-  - `ra_sim.config.loader`
-- Both still resolve config directories and cache config state.
+- `ra_sim.path_config` still exists as a compatibility surface.
+- A small number of remaining imports still reach through
+  `ra_sim.path_config` where the helper is either compatibility-facing or has
+  not yet been migrated.
+- The long-term home of `get_temp_dir()` still needs an explicit decision if
+  the project wants the full config helper surface to live under
+  `ra_sim.config`.
 
 Why it matters:
 
@@ -1057,7 +1065,7 @@ Definition of done:
 
 ### 5. Test Architecture Cleanup
 
-Status: Partially done
+Status: In progress
 
 What is done:
 
@@ -1089,19 +1097,20 @@ What is done:
   through an import-safe helper module, and the matching regression coverage
   now uses direct helper tests instead of AST assertions against
   `runtime_impl.py`.
+- The remaining GUI-runtime AST checks around pruning-default wiring and
+  selected-peak maintenance wiring were replaced with direct helper tests
+  against `ra_sim.gui.runtime_fit_analysis` and
+  `ra_sim.gui.runtime_geometry_interaction`.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
 - The old `main.py` AST lock-in is no longer the primary issue it once was.
 
 What is left:
 
-- Some implementation-shape tests still target the internal runtime module
-  directly because they were written around the old import-heavy layout.
-- The remaining internal-runtime AST checks are now concentrated in narrower
-  constant-order and maintenance-bundle assertions around pruning defaults and
-  selected-peak refresh/restore wiring.
+- No GUI-runtime AST assertions remain.
 - A few other narrow structural tests still use AST assertions where behavior
-  is harder to probe directly.
+  is harder to probe directly or the structural contract is still the point of
+  the test.
 
 Why it matters:
 
@@ -1303,18 +1312,22 @@ Why last:
 
 The next best step is:
 
-- stop taking open-ended runtime-decomposition slices as the default next task
-- treat the public runtime import boundary as done for now and focus next on
-  replacing the remaining brittle AST-shape tests
-- after that, move on to config unification
+- finish the remaining `ra_sim.path_config` compatibility migration now that
+  `ra_sim.config` is the canonical config surface
+- decide whether `get_temp_dir()` remains a compatibility helper in
+  `ra_sim.path_config` or moves under `ra_sim.config`
+- then move on to the remaining compatibility cleanup around
+  `ra_sim.gui.main_app`
 - only return to the internal runtime implementation for specific bug-prone or
   duplicated workflows that still justify the move
 
 Immediate checklist after the strategy pivot:
 
-- convert the remaining tests that were compensating for unstable imports
-- replace AST-only checks with direct behavioral coverage where practical
-- start config unification now that the public import/test boundary is stable
+- migrate the remaining non-compat call sites from `ra_sim.path_config` to
+  `ra_sim.config`
+- decide and document the long-term home of `get_temp_dir()`
+- finish the GUI entrypoint compatibility cleanup once the config surface is
+  settled
 - defer thin callback/value-source rewiring unless it directly advances one of
   those items
 

@@ -2,7 +2,7 @@ import os
 import csv
 import datetime
 from pathlib import Path
-from ra_sim.path_config import get_dir
+from ra_sim.config import get_dir
 import numpy as np
 from math import sin, cos, sqrt, pi, exp, acos
 

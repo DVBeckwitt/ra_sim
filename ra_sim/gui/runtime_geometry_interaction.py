@@ -74,6 +74,36 @@ class RuntimeGeometryToolActionWorkflow:
     clear_current_manual_pairs: Callable[..., Any]
 
 
+def refresh_runtime_peak_selection_after_update(
+    *,
+    maintenance_callbacks,
+    live_geometry_preview_enabled: bool,
+) -> bool:
+    """Refresh selected-peak maintenance through the bound maintenance bundle."""
+
+    refresh = getattr(maintenance_callbacks, "refresh_after_simulation_update", None)
+    if callable(refresh):
+        return bool(refresh(bool(live_geometry_preview_enabled)))
+    return False
+
+
+def apply_restored_runtime_selected_hkl_target(
+    *,
+    maintenance_callbacks,
+    selected_hkl_target: object,
+):
+    """Reapply one restored selected-HKL target through the maintenance bundle."""
+
+    apply_target = getattr(
+        maintenance_callbacks,
+        "apply_restored_selected_hkl_target",
+        None,
+    )
+    if callable(apply_target):
+        return apply_target(selected_hkl_target)
+    return None
+
+
 def build_runtime_peak_selection_workflow(
     *,
     bootstrap_module,

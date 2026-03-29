@@ -14,9 +14,9 @@ from numba import njit
 import math
 import numba
 
-from ra_sim.path_config import get_material_config
+from ra_sim.config import get_material_config
 
-# ``materials.yaml`` is discovered through :mod:`ra_sim.path_config` so that the
+# ``materials.yaml`` is discovered through :mod:`ra_sim.config` so that the
 # same configuration mechanism can be used by both the GUI and command line
 # tooling.
 _MATERIAL_CFG = get_material_config()

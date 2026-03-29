@@ -46,6 +46,46 @@ class RuntimeGeometryFitActionWorkflow:
     callback: Callable[..., Any]
 
 
+def resolve_runtime_pruning_control_defaults(
+    *,
+    structure_factor_pruning_module,
+    raw_prune_bias: object,
+    raw_solve_q_steps: object,
+    raw_solve_q_rel_tol: object,
+    raw_solve_q_mode: object,
+    prune_bias_fallback: object,
+    prune_bias_minimum: float,
+    prune_bias_maximum: float,
+    steps_fallback: object,
+    steps_minimum: int,
+    steps_maximum: int,
+    rel_tol_fallback: object,
+    rel_tol_minimum: float,
+    rel_tol_maximum: float,
+    uniform_flag: int,
+    adaptive_flag: int,
+):
+    """Build normalized pruning defaults through the shared helper seam."""
+
+    return structure_factor_pruning_module.build_runtime_structure_factor_pruning_defaults(
+        raw_prune_bias,
+        raw_solve_q_steps,
+        raw_solve_q_rel_tol,
+        raw_solve_q_mode,
+        prune_bias_fallback=prune_bias_fallback,
+        prune_bias_minimum=float(prune_bias_minimum),
+        prune_bias_maximum=float(prune_bias_maximum),
+        steps_fallback=steps_fallback,
+        steps_minimum=int(steps_minimum),
+        steps_maximum=int(steps_maximum),
+        rel_tol_fallback=rel_tol_fallback,
+        rel_tol_minimum=float(rel_tol_minimum),
+        rel_tol_maximum=float(rel_tol_maximum),
+        uniform_flag=int(uniform_flag),
+        adaptive_flag=int(adaptive_flag),
+    )
+
+
 def build_runtime_pruning_workflow(
     *,
     bootstrap_module,

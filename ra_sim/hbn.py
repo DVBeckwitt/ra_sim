@@ -52,7 +52,7 @@ from skimage.measure import EllipseModel
 
 import OSC_Reader
 from OSC_Reader import OSC_Reader
-from ra_sim.path_config import get_instrument_config
+from ra_sim.config import get_instrument_config
 from ra_sim.utils import calculations
 
 

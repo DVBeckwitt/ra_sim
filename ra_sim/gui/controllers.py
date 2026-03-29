@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from ra_sim.path_config import get_instrument_config
+from ra_sim.config import get_instrument_config
 from ra_sim.utils.stacking_fault import (
     normalize_phi_l_divisor,
     normalize_phase_delta_expression,

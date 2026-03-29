@@ -1,10 +1,13 @@
 import importlib
+import py_compile
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 
 RUNTIME_MODULE_NAME = "ra_sim.gui.runtime"
 RUNTIME_IMPL_MODULE_NAME = "ra_sim.gui._runtime_impl"
+RUNTIME_IMPL_SOURCE_PATH = Path("ra_sim/gui/_runtime/runtime_impl.py")
 
 
 def test_runtime_import_is_lazy() -> None:
@@ -52,3 +55,7 @@ def test_runtime_main_loads_impl_and_forwards_arguments(monkeypatch) -> None:
             "calibrant_bundle": "bundle.npz",
         }
     ]
+
+
+def test_runtime_impl_source_compiles() -> None:
+    py_compile.compile(str(RUNTIME_IMPL_SOURCE_PATH), doraise=True)

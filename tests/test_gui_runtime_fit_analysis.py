@@ -160,3 +160,51 @@ def test_build_runtime_geometry_fit_action_workflow_exposes_runtime_aliases() ->
             },
         )
     ]
+
+
+def test_resolve_runtime_pruning_control_defaults_delegates_to_shared_module() -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    module = SimpleNamespace(
+        build_runtime_structure_factor_pruning_defaults=lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or "pruning-defaults"
+        )
+    )
+
+    defaults = runtime_fit_analysis.resolve_runtime_pruning_control_defaults(
+        structure_factor_pruning_module=module,
+        raw_prune_bias="0.25",
+        raw_solve_q_steps="33",
+        raw_solve_q_rel_tol="5e-4",
+        raw_solve_q_mode="adaptive",
+        prune_bias_fallback=0.0,
+        prune_bias_minimum=-2.0,
+        prune_bias_maximum=2.0,
+        steps_fallback=16,
+        steps_minimum=4,
+        steps_maximum=64,
+        rel_tol_fallback=1.0e-3,
+        rel_tol_minimum=1.0e-6,
+        rel_tol_maximum=1.0e-2,
+        uniform_flag=1,
+        adaptive_flag=2,
+    )
+
+    assert defaults == "pruning-defaults"
+    assert calls == [
+        (
+            ("0.25", "33", "5e-4", "adaptive"),
+            {
+                "prune_bias_fallback": 0.0,
+                "prune_bias_minimum": -2.0,
+                "prune_bias_maximum": 2.0,
+                "steps_fallback": 16,
+                "steps_minimum": 4,
+                "steps_maximum": 64,
+                "rel_tol_fallback": 1.0e-3,
+                "rel_tol_minimum": 1.0e-6,
+                "rel_tol_maximum": 1.0e-2,
+                "uniform_flag": 1,
+                "adaptive_flag": 2,
+            },
+        )
+    ]

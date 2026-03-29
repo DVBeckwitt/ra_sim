@@ -9,6 +9,8 @@
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.
   - Added geometry solver tuning block under `instrument.fit.geometry.solver`.
   - Added Windows YAML path fallback parsing and `get_path_first(...)` in `ra_sim/path_config.py`.
+  - Canonicalized config loading in `ra_sim.config.loader` for file paths, directories, materials, and instrument config, and kept `ra_sim/path_config.py` as a reloadable compatibility shim on top of it.
+  - Migrated packaged config call sites in the CLI, GUI runtime/controllers, hBN workflow, diffraction debug helpers, and shared calculations to import from `ra_sim.config`.
 
 - **hBN bundle geometry mapping and metadata**
   - Added canonical hBN bundle metadata keys and strict validation in `ra_sim/hbn.py`.
@@ -37,6 +39,7 @@
   - Extracted geometry Q-group runtime assembly plus the cross-feature canvas interaction runtime assembly into `ra_sim/gui/runtime_geometry_preview.py`, replacing the matching internal-runtime AST checks with direct helper tests.
   - Extracted geometry-fit runtime value callback assembly, manual-dataset/config factory assembly, and geometry-fit action assembly into `ra_sim/gui/runtime_geometry_fit.py`, replacing the remaining geometry-fit runtime ordering check with direct helper tests.
   - Extracted the Qr-cylinder overlay runtime assembly into `ra_sim/gui/runtime_qr_cylinder_overlay.py`, moving the active-entry factory, render-config factory, and bound overlay runtime/toggle surface behind one import-safe helper seam.
+  - Replaced the remaining GUI runtime AST checks around pruning-default wiring and selected-peak maintenance wiring with direct helper coverage in `tests/test_gui_runtime_fit_analysis.py` and `tests/test_gui_runtime_geometry_interaction.py`, and removed `tests/test_gui_runtime_bootstrap.py`.
   - Moved the primary-CIF / diffuse-HT control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.
   - Moved the optional CIF-weight control cluster out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers and reused a controller helper for weighted intensity recompute.
   - Moved the fit-geometry parameter checklist out of `ra_sim/gui/runtime.py` into shared GUI state/view helpers.

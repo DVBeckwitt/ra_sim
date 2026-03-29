@@ -171,14 +171,11 @@ HBN_GEOMETRY_DEBUG_ENABLED = False
 ###############################################################################
 #                          DATA & PARAMETER SETUP
 ###############################################################################
-from ra_sim.path_config import (
+from ra_sim.config import (
     get_path,
     get_path_first,
     get_dir,
 )
-
-SF_PRUNE_BIAS_MIN = gui_controllers.SF_PRUNE_BIAS_MIN
-SF_PRUNE_BIAS_MAX = gui_controllers.SF_PRUNE_BIAS_MAX
 HKL_PICK_MIN_SEPARATION_PX = 2.0
 HKL_PICK_MAX_DISTANCE_PX = 12.0
 
@@ -434,14 +431,18 @@ occupancy_default_values = occupancy_config.get("default", [1.0, 1.0, 1.0])
 # are injected between integer L values.
 include_rods_flag = hendricks_config.get("include_rods", False)
 instrument_pruning_control_defaults = (
-    gui_structure_factor_pruning.build_runtime_structure_factor_pruning_defaults(
-        hendricks_config.get("sf_prune_bias", 0.0),
-        beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-        beam_config.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-        beam_config.get("solve_q_mode", "uniform"),
+    gui_runtime_fit_analysis.resolve_runtime_pruning_control_defaults(
+        structure_factor_pruning_module=gui_structure_factor_pruning,
+        raw_prune_bias=hendricks_config.get("sf_prune_bias", 0.0),
+        raw_solve_q_steps=beam_config.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        raw_solve_q_rel_tol=beam_config.get(
+            "solve_q_rel_tol",
+            DEFAULT_SOLVE_Q_REL_TOL,
+        ),
+        raw_solve_q_mode=beam_config.get("solve_q_mode", "uniform"),
         prune_bias_fallback=0.0,
-        prune_bias_minimum=SF_PRUNE_BIAS_MIN,
-        prune_bias_maximum=SF_PRUNE_BIAS_MAX,
+        prune_bias_minimum=gui_controllers.SF_PRUNE_BIAS_MIN,
+        prune_bias_maximum=gui_controllers.SF_PRUNE_BIAS_MAX,
         steps_fallback=DEFAULT_SOLVE_Q_STEPS,
         steps_minimum=MIN_SOLVE_Q_STEPS,
         steps_maximum=MAX_SOLVE_Q_STEPS,
@@ -2831,8 +2832,8 @@ pruning_workflow = gui_runtime_fit_analysis.build_runtime_pruning_workflow(
             lambda value: gui_structure_factor_pruning.clip_runtime_sf_prune_bias(
                 value,
                 fallback=defaults.get("sf_prune_bias", 0.0),
-                minimum=SF_PRUNE_BIAS_MIN,
-                maximum=SF_PRUNE_BIAS_MAX,
+                minimum=gui_controllers.SF_PRUNE_BIAS_MIN,
+                maximum=gui_controllers.SF_PRUNE_BIAS_MAX,
             )
         ),
         "clip_solve_q_steps": (
@@ -2883,8 +2884,8 @@ pruning_workflow = gui_runtime_fit_analysis.build_runtime_pruning_workflow(
         ),
         "raw_solve_q_mode": defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
         "prune_bias_fallback": defaults.get("sf_prune_bias", 0.0),
-        "prune_bias_minimum": SF_PRUNE_BIAS_MIN,
-        "prune_bias_maximum": SF_PRUNE_BIAS_MAX,
+        "prune_bias_minimum": gui_controllers.SF_PRUNE_BIAS_MIN,
+        "prune_bias_maximum": gui_controllers.SF_PRUNE_BIAS_MAX,
         "steps_fallback": defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
         "steps_minimum": MIN_SOLVE_Q_STEPS,
         "steps_maximum": MAX_SOLVE_Q_STEPS,
@@ -4783,8 +4784,9 @@ def do_update():
 
     redraw_update_start_time = perf_counter()
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
-    peak_selection_runtime_maintenance.refresh_after_simulation_update(
-        _live_geometry_preview_enabled()
+    gui_runtime_geometry_interaction.refresh_runtime_peak_selection_after_update(
+        maintenance_callbacks=peak_selection_runtime_maintenance,
+        live_geometry_preview_enabled=_live_geometry_preview_enabled(),
     )
     normalization_scale = 1.0
     native_background = _get_current_background_backend()
@@ -5257,7 +5259,6 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     render_current_geometry_manual_pairs=(
         lambda: _render_current_geometry_manual_pairs(update_status=False)
     ),
-    background_backend_debug_view_state=background_backend_debug_view_state,
     mark_chi_square_dirty=_mark_chi_square_dirty,
     refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
     schedule_update_factory=lambda: schedule_update,
@@ -5310,24 +5311,26 @@ def reset_to_defaults():
             )
         )
     )
-    pruning_defaults = (
-        gui_structure_factor_pruning.build_runtime_structure_factor_pruning_defaults(
-            defaults.get("sf_prune_bias", 0.0),
-            defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-            defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-            defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
-            prune_bias_fallback=defaults.get("sf_prune_bias", 0.0),
-            prune_bias_minimum=SF_PRUNE_BIAS_MIN,
-            prune_bias_maximum=SF_PRUNE_BIAS_MAX,
-            steps_fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
-            steps_minimum=MIN_SOLVE_Q_STEPS,
-            steps_maximum=MAX_SOLVE_Q_STEPS,
-            rel_tol_fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
-            rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
-            rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
-            uniform_flag=SOLVE_Q_MODE_UNIFORM,
-            adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
-        )
+    pruning_defaults = gui_runtime_fit_analysis.resolve_runtime_pruning_control_defaults(
+        structure_factor_pruning_module=gui_structure_factor_pruning,
+        raw_prune_bias=defaults.get("sf_prune_bias", 0.0),
+        raw_solve_q_steps=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        raw_solve_q_rel_tol=defaults.get(
+            "solve_q_rel_tol",
+            DEFAULT_SOLVE_Q_REL_TOL,
+        ),
+        raw_solve_q_mode=defaults.get("solve_q_mode", SOLVE_Q_MODE_UNIFORM),
+        prune_bias_fallback=defaults.get("sf_prune_bias", 0.0),
+        prune_bias_minimum=gui_controllers.SF_PRUNE_BIAS_MIN,
+        prune_bias_maximum=gui_controllers.SF_PRUNE_BIAS_MAX,
+        steps_fallback=defaults.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS),
+        steps_minimum=MIN_SOLVE_Q_STEPS,
+        steps_maximum=MAX_SOLVE_Q_STEPS,
+        rel_tol_fallback=defaults.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL),
+        rel_tol_minimum=MIN_SOLVE_Q_REL_TOL,
+        rel_tol_maximum=MAX_SOLVE_Q_REL_TOL,
+        uniform_flag=SOLVE_Q_MODE_UNIFORM,
+        adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
     )
     optics_mode_var.set(_normalize_optics_mode_label(defaults.get('optics_mode', 'fast')))
     gui_structure_factor_pruning.apply_runtime_structure_factor_pruning_defaults(
@@ -5860,8 +5863,9 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         current_background_index=background_runtime_state.current_background_index,
         selected_hkl_target=peak_selection_state.selected_hkl_target,
     )
-    peak_selection_runtime_maintenance.apply_restored_selected_hkl_target(
-        geometry_state["selected_hkl_target"]
+    gui_runtime_geometry_interaction.apply_restored_runtime_selected_hkl_target(
+        maintenance_callbacks=peak_selection_runtime_maintenance,
+        selected_hkl_target=geometry_state["selected_hkl_target"],
     )
     warnings.extend(list(geometry_state["warnings"]))
 
