@@ -83,6 +83,8 @@ when restoring geometry-fit state before redraw.
 - Package import safety improved.
   - `ra_sim.gui.app` is now an import-safe entrypoint that lazy-loads
     `ra_sim.gui.runtime`.
+  - `ra_sim.gui.app` now has direct import-safety coverage ensuring runtime
+    bootstrap is lazy and `main()` argument forwarding stays centralized.
   - `ra_sim.gui.runtime` is now also an import-safe compatibility wrapper that
     lazy-loads `ra_sim/gui/_runtime/runtime_impl.py`.
   - `ra_sim.gui.runtime` now also exposes an explicit lazy attribute surface via
