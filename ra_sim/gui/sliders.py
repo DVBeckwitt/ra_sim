@@ -3,6 +3,10 @@
 import tkinter as tk
 from tkinter import ttk
 
+
+_SHIFT_MASK = 0x0001
+
+
 def create_slider(
     label,
     min_val,
@@ -149,28 +153,84 @@ def create_slider(
             return
         entry_var.set(_format_value(precise_value))
 
+    def _base_increment(multiplier=1.0):
+        if step > 0:
+            return step * float(multiplier)
+        lo, hi = _current_limits()
+        span = max(abs(hi - lo), 1.0)
+        return (span / 100.0) * float(multiplier)
+
+    def _apply_slider_value(value):
+        precise_value = _snap(value)
+        try:
+            slider.set(precise_value)
+        except (tk.TclError, ValueError, AttributeError):
+            slider_var.set(precise_value)
+            entry_var.set(_format_value(precise_value))
+            if update_callback is not None:
+                update_callback()
+        return precise_value
+
+    def _mousewheel_steps(event):
+        raw_delta = getattr(event, "delta", 0)
+        try:
+            raw_delta = float(raw_delta)
+        except (TypeError, ValueError):
+            raw_delta = 0.0
+        if raw_delta:
+            steps = max(1, int(abs(raw_delta) / 120.0)) if abs(raw_delta) >= 120.0 else 1
+            return steps if raw_delta > 0 else -steps
+        event_num = getattr(event, "num", None)
+        if event_num == 4:
+            return 1
+        if event_num == 5:
+            return -1
+        return 0
+
     entry.bind("<FocusOut>", apply_entry_value)
     entry.bind("<Return>", apply_entry_value)
 
     def on_key(event):
-        if event.keysym == 'Left':
-            new_val = _snap(slider_var.get() - (step if step > 0 else 1.0))
-            slider_var.set(new_val)
-            if update_callback is not None:
-                update_callback()
+        keysym = str(getattr(event, "keysym", ""))
+        multiplier = 10.0 if int(getattr(event, "state", 0) or 0) & _SHIFT_MASK else 1.0
+        if keysym in {"Left", "Down"}:
+            _apply_slider_value(slider_var.get() - _base_increment(multiplier))
             return "break"
-        elif event.keysym == 'Right':
-            new_val = _snap(slider_var.get() + (step if step > 0 else 1.0))
-            slider_var.set(new_val)
-            if update_callback is not None:
-                update_callback()
+        if keysym in {"Right", "Up"}:
+            _apply_slider_value(slider_var.get() + _base_increment(multiplier))
+            return "break"
+        if keysym == "Home":
+            _apply_slider_value(_current_limits()[0])
+            return "break"
+        if keysym == "End":
+            _apply_slider_value(_current_limits()[1])
+            return "break"
+        if keysym == "Prior":
+            _apply_slider_value(slider_var.get() + _base_increment(10.0 * multiplier))
+            return "break"
+        if keysym == "Next":
+            _apply_slider_value(slider_var.get() - _base_increment(10.0 * multiplier))
             return "break"
 
-    def on_click(event):
+    def on_mousewheel(event):
+        if not (int(getattr(event, "state", 0) or 0) & _SHIFT_MASK):
+            return None
+        steps = _mousewheel_steps(event)
+        if not steps:
+            return None
+        _apply_slider_value(slider_var.get() + (steps * _base_increment(1.0)))
+        return "break"
+
+    slider.bind("<KeyPress>", on_key)
+    slider.bind("<MouseWheel>", on_mousewheel)
+    slider.bind("<Button-4>", on_mousewheel)
+    slider.bind("<Button-5>", on_mousewheel)
+
+    def on_click(_event):
         slider.focus_set()
-        slider.bind('<KeyPress>', on_key)
+        return None
 
-    slider.bind('<Button-1>', on_click)
+    slider.bind("<Button-1>", on_click)
 
     # Ensure initial value is clamped/snapped and reflected in the entry.
     initial_precise = _snap(slider_var.get())

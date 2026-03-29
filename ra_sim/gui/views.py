@@ -60,6 +60,137 @@ def create_root_window(title: str = "RA Simulation") -> tk.Tk:
     return root
 
 
+def _pointer_inside_widget(
+    widget: object | None,
+    *,
+    pointer_x: int,
+    pointer_y: int,
+) -> bool:
+    """Return whether one root-coordinate pointer lies inside a widget."""
+
+    if widget is None:
+        return False
+    try:
+        widget_x = int(widget.winfo_rootx())
+        widget_y = int(widget.winfo_rooty())
+        widget_width = int(widget.winfo_width())
+        widget_height = int(widget.winfo_height())
+    except Exception:
+        return False
+    return (
+        widget_x <= int(pointer_x) <= widget_x + widget_width
+        and widget_y <= int(pointer_y) <= widget_y + widget_height
+    )
+
+
+def _mousewheel_scroll_units(event: object) -> int:
+    """Normalize mouse-wheel events into Tk canvas scroll units."""
+
+    raw_delta = getattr(event, "delta", 0)
+    try:
+        raw_delta = float(raw_delta)
+    except Exception:
+        raw_delta = 0.0
+    if raw_delta:
+        steps = max(1, int(abs(raw_delta) / 120.0)) if abs(raw_delta) >= 120.0 else 1
+        return -steps if raw_delta > 0 else steps
+    event_num = getattr(event, "num", None)
+    if event_num == 4:
+        return -1
+    if event_num == 5:
+        return 1
+    return 0
+
+
+def _scroll_canvas_if_pointer_inside(
+    canvas: object | None,
+    *,
+    pointer_x: int,
+    pointer_y: int,
+    event: object,
+) -> str | None:
+    """Scroll one canvas only when the pointer currently lies within it."""
+
+    if not _pointer_inside_widget(
+        canvas,
+        pointer_x=pointer_x,
+        pointer_y=pointer_y,
+    ):
+        return None
+    delta = _mousewheel_scroll_units(event)
+    if not delta:
+        return None
+    try:
+        canvas.yview_scroll(delta, "units")
+    except Exception:
+        return None
+    return "break"
+
+
+def _dispatch_pointer_mousewheel(root: object, event: object) -> str | None:
+    """Dispatch one wheel event to the most recently registered scroll target."""
+
+    pointer_x = getattr(event, "x_root", None)
+    pointer_y = getattr(event, "y_root", None)
+    if pointer_x is None or pointer_y is None:
+        pointer_x_fn = getattr(root, "winfo_pointerx", None)
+        pointer_y_fn = getattr(root, "winfo_pointery", None)
+        if not callable(pointer_x_fn) or not callable(pointer_y_fn):
+            return None
+        try:
+            pointer_x = int(pointer_x_fn())
+            pointer_y = int(pointer_y_fn())
+        except Exception:
+            return None
+
+    registry = getattr(root, "_ra_pointer_mousewheel_registry", ())
+    for _key, handler in reversed(tuple(registry)):
+        try:
+            result = handler(
+                pointer_x=int(pointer_x),
+                pointer_y=int(pointer_y),
+                event=event,
+            )
+        except tk.TclError:
+            continue
+        if result == "break":
+            return "break"
+    return None
+
+
+def _register_pointer_mousewheel_handler(
+    root: object,
+    *,
+    key: object,
+    handler: Callable[..., str | None],
+) -> None:
+    """Register one pointer-aware wheel handler on the shared Tk root."""
+
+    bind_all = getattr(root, "bind_all", None)
+    if not callable(bind_all):
+        return
+
+    registry = list(getattr(root, "_ra_pointer_mousewheel_registry", ()))
+    registry = [
+        (existing_key, existing_handler)
+        for existing_key, existing_handler in registry
+        if existing_key != key
+    ]
+    registry.append((key, handler))
+    setattr(root, "_ra_pointer_mousewheel_registry", registry)
+
+    if getattr(root, "_ra_pointer_mousewheel_bound", False):
+        return
+
+    def _dispatch(event: object) -> str | None:
+        return _dispatch_pointer_mousewheel(root, event)
+
+    bind_all("<MouseWheel>", _dispatch, add="+")
+    bind_all("<Button-4>", _dispatch, add="+")
+    bind_all("<Button-5>", _dispatch, add="+")
+    setattr(root, "_ra_pointer_mousewheel_bound", True)
+
+
 def _create_scrolled_frame(parent: tk.Misc) -> tuple[tk.Misc, tk.Misc, tk.Canvas]:
     """Return a vertically scrollable frame body for notebook/control panels."""
 
@@ -145,11 +276,11 @@ def create_app_shell(
     controls_notebook.add(parameters_tab, text="Parameters")
     controls_notebook.add(analysis_tab, text="Analysis")
 
-    workspace_scroll_frame, workspace_body, _workspace_canvas = _create_scrolled_frame(
+    workspace_scroll_frame, workspace_body, workspace_canvas = _create_scrolled_frame(
         workspace_tab
     )
     workspace_scroll_frame.pack(fill=tk.BOTH, expand=True)
-    fit_scroll_frame, fit_body, _fit_canvas = _create_scrolled_frame(fit_tab)
+    fit_scroll_frame, fit_body, fit_canvas = _create_scrolled_frame(fit_tab)
     fit_scroll_frame.pack(fill=tk.BOTH, expand=True)
 
     parameter_notebook = ttk.Notebook(parameters_tab)
@@ -158,14 +289,55 @@ def create_app_shell(
     parameter_structure_tab = ttk.Frame(parameter_notebook)
     parameter_notebook.add(parameter_geometry_tab, text="Geometry && Beam")
     parameter_notebook.add(parameter_structure_tab, text="Structure && CIF")
-    parameter_geometry_scroll, parameter_geometry_body, _parameter_geometry_canvas = (
+    parameter_geometry_scroll, parameter_geometry_body, parameter_geometry_canvas = (
         _create_scrolled_frame(parameter_geometry_tab)
     )
     parameter_geometry_scroll.pack(fill=tk.BOTH, expand=True)
-    parameter_structure_scroll, parameter_structure_body, _parameter_structure_canvas = (
+    parameter_structure_scroll, parameter_structure_body, parameter_structure_canvas = (
         _create_scrolled_frame(parameter_structure_tab)
     )
     parameter_structure_scroll.pack(fill=tk.BOTH, expand=True)
+
+    _register_pointer_mousewheel_handler(
+        root,
+        key=("app-shell-scroll", id(view_state), "workspace"),
+        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+            workspace_canvas,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
+            event=event,
+        ),
+    )
+    _register_pointer_mousewheel_handler(
+        root,
+        key=("app-shell-scroll", id(view_state), "fit"),
+        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+            fit_canvas,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
+            event=event,
+        ),
+    )
+    _register_pointer_mousewheel_handler(
+        root,
+        key=("app-shell-scroll", id(view_state), "parameter-geometry"),
+        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+            parameter_geometry_canvas,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
+            event=event,
+        ),
+    )
+    _register_pointer_mousewheel_handler(
+        root,
+        key=("app-shell-scroll", id(view_state), "parameter-structure"),
+        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+            parameter_structure_canvas,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
+            event=event,
+        ),
+    )
 
     control_tab_var = tk.StringVar(value="parameters")
     parameter_tab_var = tk.StringVar(value="geometry")
@@ -225,12 +397,16 @@ def create_app_shell(
     view_state.parameters_tab = parameters_tab
     view_state.analysis_tab = analysis_tab
     view_state.workspace_body = workspace_body
+    view_state.workspace_canvas = workspace_canvas
     view_state.fit_body = fit_body
+    view_state.fit_canvas = fit_canvas
     view_state.parameter_notebook = parameter_notebook
     view_state.parameter_geometry_tab = parameter_geometry_tab
     view_state.parameter_structure_tab = parameter_structure_tab
     view_state.parameter_geometry_body = parameter_geometry_body
+    view_state.parameter_geometry_canvas = parameter_geometry_canvas
     view_state.parameter_structure_body = parameter_structure_body
+    view_state.parameter_structure_canvas = parameter_structure_canvas
     view_state.control_tab_var = control_tab_var
     view_state.parameter_tab_var = parameter_tab_var
     view_state.fit_actions_frame = fit_actions_frame
@@ -2446,10 +2622,23 @@ def create_geometry_fit_constraints_panel(
         ),
     )
 
-    if on_mousewheel is not None:
-        root.bind_all("<MouseWheel>", on_mousewheel, add="+")
-        root.bind_all("<Button-4>", on_mousewheel, add="+")
-        root.bind_all("<Button-5>", on_mousewheel, add="+")
+    if on_mousewheel is None:
+        _register_pointer_mousewheel_handler(
+            root,
+            key=("geometry-fit-constraints-scroll", id(view_state)),
+            handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+                canvas,
+                pointer_x=pointer_x,
+                pointer_y=pointer_y,
+                event=event,
+            ),
+        )
+    else:
+        _register_pointer_mousewheel_handler(
+            root,
+            key=("geometry-fit-constraints-scroll", id(view_state)),
+            handler=lambda *, pointer_x, pointer_y, event: on_mousewheel(event),
+        )
 
 
 def refresh_geometry_fit_constraints_scrollregion(
@@ -2489,25 +2678,12 @@ def scroll_geometry_fit_constraints_canvas(
     if canvas is None:
         return None
 
-    canvas_x = canvas.winfo_rootx()
-    canvas_y = canvas.winfo_rooty()
-    if not (
-        canvas_x <= pointer_x <= canvas_x + canvas.winfo_width()
-        and canvas_y <= pointer_y <= canvas_y + canvas.winfo_height()
-    ):
-        return None
-
-    delta = 0
-    if getattr(event, "delta", 0):
-        delta = int(-event.delta / 120)
-    elif getattr(event, "num", None) == 4:
-        delta = -1
-    elif getattr(event, "num", None) == 5:
-        delta = 1
-    if delta:
-        canvas.yview_scroll(delta, "units")
-        return "break"
-    return None
+    return _scroll_canvas_if_pointer_inside(
+        canvas,
+        pointer_x=pointer_x,
+        pointer_y=pointer_y,
+        event=event,
+    )
 
 
 def set_geometry_fit_constraint_control(
@@ -2755,6 +2931,16 @@ def open_geometry_q_group_window(
     view_state.canvas = canvas
     view_state.body = body
     view_state.status_label = status_label
+    _register_pointer_mousewheel_handler(
+        root,
+        key=("geometry-q-group-scroll", id(view_state)),
+        handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
+            canvas,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
+            event=event,
+        ),
+    )
     return True
 
 

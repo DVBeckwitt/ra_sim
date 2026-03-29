@@ -20,6 +20,8 @@ class _FakeBody:
 
 
 class _FakeCanvas:
+    created = []
+
     def __init__(self, parent=None, **kwargs) -> None:
         self.parent = parent
         self.kwargs = kwargs
@@ -35,6 +37,7 @@ class _FakeCanvas:
         self.rooty = 20
         self.width = 300
         self.height = 200
+        _FakeCanvas.created.append(self)
 
     def yview(self):
         return (0.25, 1.0)
@@ -712,6 +715,7 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     monkeypatch,
 ) -> None:
     _FakeScrollbar.created = []
+    _FakeCanvas.created = []
     monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
@@ -743,6 +747,10 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.fit_body, _FakeFrame)
     assert isinstance(view_state.parameter_geometry_body, _FakeFrame)
     assert isinstance(view_state.parameter_structure_body, _FakeFrame)
+    assert isinstance(view_state.workspace_canvas, _FakeCanvas)
+    assert isinstance(view_state.fit_canvas, _FakeCanvas)
+    assert isinstance(view_state.parameter_geometry_canvas, _FakeCanvas)
+    assert isinstance(view_state.parameter_structure_canvas, _FakeCanvas)
     assert isinstance(view_state.fit_actions_frame, _FakeFrame)
     assert isinstance(view_state.analysis_views_frame, _FakeFrame)
     assert isinstance(view_state.analysis_exports_frame, _FakeFrame)
@@ -765,6 +773,60 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     view_state.parameter_notebook.select(view_state.parameter_structure_tab)
     callback(None)
     assert view_state.parameter_tab_var.get() == "structure"
+
+
+def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_all(
+    monkeypatch,
+) -> None:
+    _FakeScrollbar.created = []
+    _FakeCanvas.created = []
+    monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
+    monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    root = _FakeRoot()
+    view_state = state.AppShellViewState()
+    views.create_app_shell(root=root, view_state=view_state)
+
+    assert [call[0] for call in root.bind_all_calls] == [
+        "<MouseWheel>",
+        "<Button-4>",
+        "<Button-5>",
+    ]
+
+    view_state.workspace_canvas.rootx = 0
+    view_state.workspace_canvas.rooty = 0
+    view_state.workspace_canvas.width = 100
+    view_state.workspace_canvas.height = 100
+    view_state.fit_canvas.rootx = 150
+    view_state.fit_canvas.rooty = 0
+    view_state.fit_canvas.width = 100
+    view_state.fit_canvas.height = 100
+    view_state.parameter_geometry_canvas.rootx = 300
+    view_state.parameter_geometry_canvas.rooty = 0
+    view_state.parameter_geometry_canvas.width = 100
+    view_state.parameter_geometry_canvas.height = 100
+    view_state.parameter_structure_canvas.rootx = 450
+    view_state.parameter_structure_canvas.rooty = 0
+    view_state.parameter_structure_canvas.width = 100
+    view_state.parameter_structure_canvas.height = 100
+
+    dispatch = next(
+        callback
+        for sequence, callback, _add in root.bind_all_calls
+        if sequence == "<MouseWheel>"
+    )
+    event = type("Event", (), {"delta": 60, "num": None, "x_root": 175, "y_root": 25})()
+
+    assert dispatch(event) == "break"
+    assert view_state.workspace_canvas.scrolled == []
+    assert view_state.fit_canvas.scrolled == [(-1, "units")]
+    assert view_state.parameter_geometry_canvas.scrolled == []
+    assert view_state.parameter_structure_canvas.scrolled == []
 
 
 def test_console_status_label_compacts_text_and_logs_once(monkeypatch) -> None:
@@ -1315,6 +1377,9 @@ def test_beam_mosaic_parameter_sliders_store_refs_and_callbacks(monkeypatch) -> 
             "psi_z": 0.3,
             "zs": 1.0e-4,
             "zb": -1.0e-4,
+            "sample_width_m": 2.0e-3,
+            "sample_length_m": 3.0e-3,
+            "sample_depth_m": 4.0e-7,
             "debye_x": 0.1,
             "debye_y": 0.2,
             "corto_detector": 0.03,
@@ -1338,19 +1403,21 @@ def test_beam_mosaic_parameter_sliders_store_refs_and_callbacks(monkeypatch) -> 
     assert view_state.center_x_var.get() == 1200.0
     assert view_state.bandwidth_percent_var.get() == 0.75
     assert view_state.center_y_var.get() == 900.0
-    assert len(created) == 19
+    assert len(created) == 22
     assert created[0]["label"] == "θ sample tilt"
     assert created[-1]["label"] == "Beam Center Col"
     assert created[2]["kwargs"]["allow_range_expand"] is True
-    assert created[11]["kwargs"]["allow_range_expand"] is True
-    assert created[11]["kwargs"]["range_expand_pad"] == 0.1
-    assert created[12]["kwargs"]["range_expand_pad"] == 0.5
-    assert created[16]["max"] == 3000.0
-    assert created[18]["max"] == 3000.0
+    assert created[8]["kwargs"]["allow_range_expand"] is True
+    assert created[9]["kwargs"]["range_expand_pad"] == 1.0e-3
+    assert created[10]["kwargs"]["range_expand_pad"] == 1.0e-7
+    assert created[14]["kwargs"]["range_expand_pad"] == 0.1
+    assert created[15]["kwargs"]["range_expand_pad"] == 0.5
+    assert created[19]["max"] == 3000.0
+    assert created[21]["max"] == 3000.0
     assert created[0]["update_callback"] is not None
-    assert created[13]["update_callback"] is not None
+    assert created[16]["update_callback"] is not None
     created[0]["update_callback"]()
-    created[13]["update_callback"]()
+    created[16]["update_callback"]()
     assert standard_calls == ["standard"]
     assert mosaic_calls == ["mosaic"]
 
@@ -2082,6 +2149,7 @@ def test_create_geometry_fit_constraints_panel_stores_refs_and_binds_handlers(
 ) -> None:
     _FakeLabel.created = []
     _FakeScrollbar.created = []
+    _FakeCanvas.created = []
     monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
@@ -2143,6 +2211,70 @@ def test_create_geometry_fit_constraints_panel_stores_refs_and_binds_handlers(
     assert view_state.canvas.itemconfigure_calls[-1] == ("body-window", {"width": 321})
 
 
+def test_geometry_fit_constraints_scroll_registration_preempts_outer_fit_canvas(
+    monkeypatch,
+) -> None:
+    _FakeScrollbar.created = []
+    _FakeCanvas.created = []
+    monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
+    monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+
+    root = _FakeRoot()
+    shell_view_state = state.AppShellViewState()
+    views.create_app_shell(root=root, view_state=shell_view_state)
+
+    for canvas in (
+        shell_view_state.workspace_canvas,
+        shell_view_state.parameter_geometry_canvas,
+        shell_view_state.parameter_structure_canvas,
+    ):
+        canvas.rootx = 1000
+        canvas.rooty = 1000
+        canvas.width = 50
+        canvas.height = 50
+
+    shell_view_state.fit_canvas.rootx = 0
+    shell_view_state.fit_canvas.rooty = 0
+    shell_view_state.fit_canvas.width = 400
+    shell_view_state.fit_canvas.height = 300
+
+    constraints_view_state = state.GeometryFitConstraintsViewState()
+    views.create_geometry_fit_constraints_panel(
+        parent=object(),
+        root=root,
+        view_state=constraints_view_state,
+        on_mousewheel=lambda event: views.scroll_geometry_fit_constraints_canvas(
+            constraints_view_state,
+            pointer_x=event.x_root,
+            pointer_y=event.y_root,
+            event=event,
+        ),
+    )
+
+    constraints_view_state.canvas.rootx = 40
+    constraints_view_state.canvas.rooty = 30
+    constraints_view_state.canvas.width = 180
+    constraints_view_state.canvas.height = 120
+
+    dispatch = next(
+        callback
+        for sequence, callback, _add in root.bind_all_calls
+        if sequence == "<MouseWheel>"
+    )
+    event = type("Event", (), {"delta": 120, "num": None, "x_root": 80, "y_root": 60})()
+
+    assert dispatch(event) == "break"
+    assert constraints_view_state.canvas.scrolled == [(-1, "units")]
+    assert shell_view_state.fit_canvas.scrolled == []
+
+
 def test_scroll_geometry_fit_constraints_canvas_only_when_pointer_is_inside() -> None:
     canvas = _FakeCanvas()
     canvas.rootx = 50
@@ -2151,7 +2283,7 @@ def test_scroll_geometry_fit_constraints_canvas_only_when_pointer_is_inside() ->
     canvas.height = 120
     view_state = state.GeometryFitConstraintsViewState(canvas=canvas)
 
-    inside_event = type("Event", (), {"delta": 120, "num": None})()
+    inside_event = type("Event", (), {"delta": 60, "num": None})()
     assert (
         views.scroll_geometry_fit_constraints_canvas(
             view_state,

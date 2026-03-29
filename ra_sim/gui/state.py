@@ -516,12 +516,16 @@ class AppShellViewState:
     parameters_tab: Any = None
     analysis_tab: Any = None
     workspace_body: Any = None
+    workspace_canvas: Any = None
     fit_body: Any = None
+    fit_canvas: Any = None
     parameter_notebook: Any = None
     parameter_geometry_tab: Any = None
     parameter_structure_tab: Any = None
     parameter_geometry_body: Any = None
+    parameter_geometry_canvas: Any = None
     parameter_structure_body: Any = None
+    parameter_structure_canvas: Any = None
     control_tab_var: Any = None
     parameter_tab_var: Any = None
     fit_actions_frame: Any = None
