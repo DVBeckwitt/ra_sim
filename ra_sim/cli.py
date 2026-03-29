@@ -53,7 +53,14 @@ from ra_sim.simulation.diffraction import (
     DEFAULT_SOLVE_Q_MODE,
     SOLVE_Q_MODE_ADAPTIVE,
     SOLVE_Q_MODE_UNIFORM,
-    process_qr_rods_parallel,
+)
+from ra_sim.simulation.engine import simulate_qr_rods
+from ra_sim.simulation.types import (
+    BeamSamples,
+    DebyeWallerParams,
+    DetectorGeometry,
+    MosaicParams,
+    SimulationRequest,
 )
 from ra_sim.utils.calculations import IndexofRefraction
 
@@ -340,56 +347,56 @@ def run_headless_simulation(
     unit_x = np.array([1.0, 0.0, 0.0])
     n_detector = np.array([0.0, 1.0, 0.0])
 
-    # Run simulation on rods
-    image = np.zeros((image_size, image_size), dtype=np.float64)
     # Mosaic pseudo-Voigt parameters (sigma, gamma are passed as sigma in degrees)
     sigma_mosaic_deg = float(beam_cfg.get("sigma_mosaic_fwhm_deg", 0.8)) * fwhm2sigma
     gamma_mosaic_deg = float(beam_cfg.get("gamma_mosaic_fwhm_deg", 0.7)) * fwhm2sigma
 
-    (sim_image,
-     _hit_tables,
-     _q_data,
-     _q_count,
-     _all_status,
-     _miss_tables,
-     _deg) = process_qr_rods_parallel(
-        qr_combined,
-        image_size,
-        av,
-        cv,
-        lambda_ang,
-        image,
-        D,
-        gamma_initial,
-        Gamma_initial,
-        chi,
-        psi,
-        psi_z,
-        zs,
-        zb,
-        n2,
-        beam_x_array,
-        beam_y_array,
-        theta_array,
-        phi_array,
-        sigma_mosaic_deg,
-        gamma_mosaic_deg,
-        float(beam_cfg.get("eta", 0.0)),
-        wavelength_array,
-        debye_x,
-        debye_y,
-        center,
-        theta_initial,
-        cor_angle,
-        unit_x,
-        n_detector,
+    request = SimulationRequest(
+        miller=np.empty((0, 3), dtype=np.float64),
+        intensities=np.empty(0, dtype=np.float64),
+        geometry=DetectorGeometry(
+            image_size=image_size,
+            av=av,
+            cv=cv,
+            lambda_angstrom=lambda_ang,
+            distance_m=D,
+            gamma_deg=gamma_initial,
+            Gamma_deg=Gamma_initial,
+            chi_deg=chi,
+            psi_deg=psi,
+            psi_z_deg=psi_z,
+            zs=zs,
+            zb=zb,
+            center=np.asarray(center, dtype=np.float64),
+            theta_initial_deg=theta_initial,
+            cor_angle_deg=cor_angle,
+            unit_x=unit_x,
+            n_detector=n_detector,
+        ),
+        beam=BeamSamples(
+            beam_x_array=np.asarray(beam_x_array, dtype=np.float64),
+            beam_y_array=np.asarray(beam_y_array, dtype=np.float64),
+            theta_array=np.asarray(theta_array, dtype=np.float64),
+            phi_array=np.asarray(phi_array, dtype=np.float64),
+            wavelength_array=np.asarray(wavelength_array, dtype=np.float64),
+        ),
+        mosaic=MosaicParams(
+            sigma_mosaic_deg=sigma_mosaic_deg,
+            gamma_mosaic_deg=gamma_mosaic_deg,
+            eta=float(beam_cfg.get("eta", 0.0)),
+            solve_q_steps=solve_q_steps,
+            solve_q_rel_tol=solve_q_rel_tol,
+            solve_q_mode=solve_q_mode,
+        ),
+        debye_waller=DebyeWallerParams(x=debye_x, y=debye_y),
+        n2=n2,
+        image_buffer=np.zeros((image_size, image_size), dtype=np.float64),
         save_flag=0,
         record_status=False,
         thickness=0.0,
-        solve_q_steps=solve_q_steps,
-        solve_q_rel_tol=solve_q_rel_tol,
-        solve_q_mode=solve_q_mode,
+        collect_hit_tables=False,
     )
+    sim_image = simulate_qr_rods(qr_combined, request).image
 
     # Save as 16-bit PNG scaled to `vmax` for reasonable visualization
     vmax = float(vmax)

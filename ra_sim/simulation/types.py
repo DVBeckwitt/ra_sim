@@ -68,6 +68,10 @@ class SimulationRequest:
     save_flag: int = 0
     record_status: bool = False
     thickness: float = 0.0
+    optics_mode: int | None = None
+    collect_hit_tables: bool = True
+    single_sample_indices: np.ndarray | None = None
+    best_sample_indices_out: np.ndarray | None = None
 
 
 @dataclass

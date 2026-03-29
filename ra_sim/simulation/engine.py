@@ -37,9 +37,16 @@ def simulate(
         solve_q_steps=request.mosaic.solve_q_steps,
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
+        collect_hit_tables=request.collect_hit_tables,
     )
+    if request.optics_mode is not None:
+        peak_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
         peak_kwargs["sample_weights"] = request.beam.sample_weights
+    if request.single_sample_indices is not None:
+        peak_kwargs["single_sample_indices"] = request.single_sample_indices
+    if request.best_sample_indices_out is not None:
+        peak_kwargs["best_sample_indices_out"] = request.best_sample_indices_out
 
     image, hit_tables, q_data, q_count, all_status, miss_tables = peak_runner(
         request.miller,
@@ -104,7 +111,10 @@ def simulate_qr_rods(
         solve_q_steps=request.mosaic.solve_q_steps,
         solve_q_rel_tol=request.mosaic.solve_q_rel_tol,
         solve_q_mode=request.mosaic.solve_q_mode,
+        collect_hit_tables=request.collect_hit_tables,
     )
+    if request.optics_mode is not None:
+        rod_kwargs["optics_mode"] = request.optics_mode
     if request.beam.sample_weights is not None:
         rod_kwargs["sample_weights"] = request.beam.sample_weights
 

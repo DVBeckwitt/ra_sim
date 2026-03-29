@@ -97,7 +97,18 @@ from ra_sim.simulation.diffraction_debug import (
     process_qr_rods_parallel_debug,
     dump_debug_log,
 )
+from ra_sim.simulation.engine import (
+    simulate as simulate_request,
+    simulate_qr_rods as simulate_qr_rods_request,
+)
 from ra_sim.simulation.simulation import simulate_diffraction
+from ra_sim.simulation.types import (
+    BeamSamples,
+    DebyeWallerParams,
+    DetectorGeometry,
+    MosaicParams,
+    SimulationRequest,
+)
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
@@ -4444,6 +4455,69 @@ def do_update():
         simulation_runtime_state.selected_peak_record = None
         image_generation_cached = False
         image_generation_start_time = perf_counter()
+        request_unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        request_n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        request_center = np.array([center_x_up, center_y_up], dtype=np.float64)
+
+        def build_request(
+            miller_arr,
+            intens_vals,
+            *,
+            a_val,
+            c_val,
+            image_buffer,
+        ) -> SimulationRequest:
+            return SimulationRequest(
+                miller=np.asarray(miller_arr, dtype=np.float64),
+                intensities=np.asarray(intens_vals, dtype=np.float64).reshape(-1),
+                geometry=DetectorGeometry(
+                    image_size=image_size,
+                    av=float(a_val),
+                    cv=float(c_val),
+                    lambda_angstrom=float(lambda_),
+                    distance_m=float(corto_det_up),
+                    gamma_deg=float(gamma_updated),
+                    Gamma_deg=float(Gamma_updated),
+                    chi_deg=float(chi_updated),
+                    psi_deg=float(psi),
+                    psi_z_deg=float(psi_z_updated),
+                    zs=float(zs_updated),
+                    zb=float(zb_updated),
+                    center=request_center,
+                    theta_initial_deg=float(theta_init_up),
+                    cor_angle_deg=float(cor_angle_updated),
+                    unit_x=request_unit_x,
+                    n_detector=request_n_detector,
+                ),
+                beam=BeamSamples(
+                    beam_x_array=np.asarray(mosaic_params["beam_x_array"], dtype=np.float64),
+                    beam_y_array=np.asarray(mosaic_params["beam_y_array"], dtype=np.float64),
+                    theta_array=np.asarray(mosaic_params["theta_array"], dtype=np.float64),
+                    phi_array=np.asarray(mosaic_params["phi_array"], dtype=np.float64),
+                    wavelength_array=np.asarray(
+                        mosaic_params["wavelength_array"],
+                        dtype=np.float64,
+                    ),
+                ),
+                mosaic=MosaicParams(
+                    sigma_mosaic_deg=float(mosaic_params["sigma_mosaic_deg"]),
+                    gamma_mosaic_deg=float(mosaic_params["gamma_mosaic_deg"]),
+                    eta=float(mosaic_params["eta"]),
+                    solve_q_steps=int(mosaic_params["solve_q_steps"]),
+                    solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
+                    solve_q_mode=int(mosaic_params["solve_q_mode"]),
+                ),
+                debye_waller=DebyeWallerParams(
+                    x=float(debye_x_updated),
+                    y=float(debye_y_updated),
+                ),
+                n2=n2,
+                image_buffer=image_buffer,
+                save_flag=0,
+                thickness=0.0,
+                optics_mode=int(optics_mode_flag),
+                collect_hit_tables=collect_hit_tables_requested,
+            )
 
         def run_one(data, intens_arr, a_val, c_val):
             buf = np.zeros((image_size, image_size), dtype=np.float64)
@@ -4453,43 +4527,24 @@ def do_update():
                 if DEBUG_ENABLED:
                     n_pts = sum(len(v["L"]) for v in data.values())
                     debug_print("process_qr_rods_parallel with", n_pts, "points")
-                return process_qr_rods_parallel(
+                result = simulate_qr_rods_request(
                     data,
-                    image_size,
-                    a_val,
-                    c_val,
-                    lambda_,
-                    buf,
-                    corto_det_up,
-                    gamma_updated,
-                    Gamma_updated,
-                    chi_updated,
-                    psi,
-                    psi_z_updated,
-                    zs_updated,
-                    zb_updated,
-                    n2,
-                    mosaic_params["beam_x_array"],
-                    mosaic_params["beam_y_array"],
-                    mosaic_params["theta_array"],
-                    mosaic_params["phi_array"],
-                    mosaic_params["sigma_mosaic_deg"],
-                    mosaic_params["gamma_mosaic_deg"],
-                    mosaic_params["eta"],
-                    mosaic_params["wavelength_array"],
-                    debye_x_updated,
-                    debye_y_updated,
-                    [center_x_up, center_y_up],
-                    theta_init_up,
-                    cor_angle_updated,
-                    np.array([1.0, 0.0, 0.0]),
-                    np.array([0.0, 1.0, 0.0]),
-                    save_flag=0,
-                    optics_mode=optics_mode_flag,
-                    solve_q_steps=int(mosaic_params["solve_q_steps"]),
-                    solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
-                    solve_q_mode=int(mosaic_params["solve_q_mode"]),
-                    collect_hit_tables=collect_hit_tables_requested,
+                    build_request(
+                        np.empty((0, 3), dtype=np.float64),
+                        np.empty(0, dtype=np.float64),
+                        a_val=a_val,
+                        c_val=c_val,
+                        image_buffer=buf,
+                    ),
+                )
+                return (
+                    result.image,
+                    result.hit_tables,
+                    result.q_data,
+                    result.q_count,
+                    result.all_status,
+                    result.miss_tables,
+                    result.degeneracy,
                 )
             else:
                 miller_arr = np.asarray(data, dtype=np.float64)
@@ -4507,45 +4562,24 @@ def do_update():
                         debug_print("Non-finite miller indices detected")
                     if not np.all(np.isfinite(intens_vals)):
                         debug_print("Non-finite intensities detected")
-                return process_peaks_parallel(
-                    miller_arr,
-                    intens_vals,
-                    image_size,
-                    a_val,
-                    c_val,
-                    lambda_,
-                    buf,
-                    corto_det_up,
-                    gamma_updated,
-                    Gamma_updated,
-                    chi_updated,
-                    psi,
-                    psi_z_updated,
-                    zs_updated,
-                    zb_updated,
-                    n2,
-                    mosaic_params["beam_x_array"],
-                    mosaic_params["beam_y_array"],
-                    mosaic_params["theta_array"],
-                    mosaic_params["phi_array"],
-                    mosaic_params["sigma_mosaic_deg"],
-                    mosaic_params["gamma_mosaic_deg"],
-                    mosaic_params["eta"],
-                    mosaic_params["wavelength_array"],
-                    debye_x_updated,
-                    debye_y_updated,
-                    [center_x_up, center_y_up],
-                    theta_init_up,
-                    cor_angle_updated,
-                    np.array([1.0, 0.0, 0.0]),
-                    np.array([0.0, 1.0, 0.0]),
-                    save_flag=0,
-                    optics_mode=optics_mode_flag,
-                    solve_q_steps=int(mosaic_params["solve_q_steps"]),
-                    solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
-                    solve_q_mode=int(mosaic_params["solve_q_mode"]),
-                    collect_hit_tables=collect_hit_tables_requested,
-                ) + (None,)
+                result = simulate_request(
+                    build_request(
+                        miller_arr,
+                        intens_vals,
+                        a_val=a_val,
+                        c_val=c_val,
+                        image_buffer=buf,
+                    ),
+                )
+                return (
+                    result.image,
+                    result.hit_tables,
+                    result.q_data,
+                    result.q_count,
+                    result.all_status,
+                    result.miss_tables,
+                    None,
+                )
 
         w1 = float(weight1_var.get())
         w2 = float(weight2_var.get())

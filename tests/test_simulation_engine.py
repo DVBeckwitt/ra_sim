@@ -74,6 +74,34 @@ def test_simulate_respects_typed_request_with_custom_runner() -> None:
     assert result.q_data.shape == (1,)
 
 
+def test_simulate_forwards_extended_kernel_options() -> None:
+    request = _build_request()
+    request.optics_mode = 7
+    request.collect_hit_tables = False
+    request.single_sample_indices = np.array([0], dtype=np.int64)
+    request.best_sample_indices_out = np.array([-1], dtype=np.int64)
+    seen: dict[str, object] = {}
+
+    def fake_runner(*args, **kwargs):
+        seen.update(kwargs)
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [np.array([[1, 2, 3]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    simulate(request, peak_runner=fake_runner)
+
+    assert seen["optics_mode"] == 7
+    assert seen["collect_hit_tables"] is False
+    assert np.array_equal(seen["single_sample_indices"], request.single_sample_indices)
+    assert np.array_equal(seen["best_sample_indices_out"], request.best_sample_indices_out)
+
+
 def test_simulate_qr_rods_respects_typed_request_with_custom_runner() -> None:
     request = _build_request()
     qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
@@ -94,3 +122,29 @@ def test_simulate_qr_rods_respects_typed_request_with_custom_runner() -> None:
     result = simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
     assert np.allclose(result.image, 5.0)
     assert np.array_equal(result.degeneracy, np.array([1], dtype=np.int32))
+
+
+def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
+    request = _build_request()
+    request.optics_mode = 5
+    request.collect_hit_tables = False
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    seen: dict[str, object] = {}
+
+    def fake_runner(*args, **kwargs):
+        seen.update(kwargs)
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [np.array([[1, 2, 3]], dtype=np.float64)],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert seen["optics_mode"] == 5
+    assert seen["collect_hit_tables"] is False
