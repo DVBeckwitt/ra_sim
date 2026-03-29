@@ -182,6 +182,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The app restore path is now covered by `tests/test_gui_app_helpers.py` to
   assert that `clear_tk_after_token` is invoked during undo restoration before
   rerunning the redraw flow.
+- `app.py` now delegates undo restore to
+  `gui_geometry_fit.restore_runtime_geometry_fit_undo_state`, bringing it in line
+  with the runtime implementation’s shared restore orchestration.
 - HKL lookup / Bragg-Qr open-control cleanup has also advanced:
   - the HKL lookup control cluster, its initial HKL-pick button refresh, and
     the shared Bragg-Qr manager open action now assemble through one shared

@@ -101,3 +101,29 @@ def test_restore_geometry_fit_undo_state_uses_tk_after_cancel_helper(monkeypatch
     assert clear_calls == [(gui_app.root, pending)]
     assert gui_app.update_pending is None
     assert run_calls == ["do_update"]
+
+
+def test_restore_geometry_fit_undo_state_delegates_to_shared_runtime_helper(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[dict[str, object], dict[str, object]]] = []
+
+    def fake_restore_runtime_state(state: dict[str, object], **kwargs: object) -> dict[str, object]:
+        calls.append((state, dict(kwargs)))
+        return {}
+
+    monkeypatch.setattr(
+        gui_app.gui_geometry_fit,
+        "restore_runtime_geometry_fit_undo_state",
+        fake_restore_runtime_state,
+    )
+
+    restore_state = {"example": "value"}
+    gui_app._restore_geometry_fit_undo_state(restore_state)
+
+    assert len(calls) == 1
+    passed_state, passed_kwargs = calls[0]
+    assert passed_state is restore_state
+    assert "replace_profile_cache" in passed_kwargs
+    assert "set_last_overlay_state" in passed_kwargs
+    assert "run_update" in passed_kwargs

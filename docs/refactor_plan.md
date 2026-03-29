@@ -946,6 +946,9 @@ What is done:
   undo restore to clear pending update callbacks without inline try/except logic.
 - `test_gui_app_helpers` now also verifies the geometry-fit undo restore path uses
   the shared timer-cancel helper before rerunning geometry updates.
+- `app.py` now delegates geometry-fit undo restore orchestration through
+  `gui_geometry_fit.restore_runtime_geometry_fit_undo_state`, consolidating it with
+  the same shared orchestration path used by the primary runtime implementation.
 - `state.py` now also owns finite-stack control view state.
 - `views.py` now also owns the finite-stack control construction and helper
   updates for the layer widgets and entry text.

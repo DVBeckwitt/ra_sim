@@ -14,6 +14,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 from ra_sim.gui import geometry_fit as gui_geometry_fit
@@ -291,7 +292,40 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
     if not isinstance(state, dict):
         return
 
-    restored = gui_geometry_fit.apply_geometry_fit_undo_state(
+    def _set_profile_cache(cached_profile_state: Mapping[str, object]) -> None:
+        global profile_cache
+        profile_cache = cached_profile_state
+
+    def _set_last_overlay_state(overlay_state: Mapping[str, object] | None) -> None:
+        global last_geometry_overlay_state
+        last_geometry_overlay_state = overlay_state
+
+    def _mark_last_simulation_dirty() -> None:
+        global last_simulation_signature
+        last_simulation_signature = None
+
+    def _cancel_pending_update() -> None:
+        global update_pending
+        if update_pending is not None:
+            gui_controllers.clear_tk_after_token(root, update_pending)
+            update_pending = None
+
+    def _draw_overlay_records(overlay_records: list[dict[str, object]], marker_limit: int) -> None:
+        _draw_geometry_fit_overlay(
+            overlay_records,
+            max_display_markers=marker_limit,
+        )
+
+    def _draw_initial_pairs_overlay(
+        initial_pairs_display: list[dict[str, object]],
+        marker_limit: int,
+    ) -> None:
+        _draw_initial_geometry_pairs_overlay(
+            initial_pairs_display,
+            max_display_markers=marker_limit,
+        )
+
+    gui_geometry_fit.restore_runtime_geometry_fit_undo_state(
         state,
         var_map={
             "zb": zb_var,
@@ -309,35 +343,16 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
             "center_y": center_y_var,
         },
         geometry_theta_offset_var=geometry_theta_offset_var,
+        replace_profile_cache=_set_profile_cache,
+        set_last_overlay_state=_set_last_overlay_state,
+        mark_last_simulation_dirty=_mark_last_simulation_dirty,
+        cancel_pending_update=_cancel_pending_update,
+        run_update=do_update,
+        draw_overlay_records=_draw_overlay_records,
+        draw_initial_pairs_overlay=_draw_initial_pairs_overlay,
+        refresh_status=_set_background_file_status_text,
+        update_manual_pick_button_label=_update_geometry_manual_pick_button_label,
     )
-    profile_cache = restored["profile_cache"]
-    last_geometry_overlay_state = restored["overlay_state"]
-    last_simulation_signature = None
-
-    if update_pending is not None:
-        gui_controllers.clear_tk_after_token(root, update_pending)
-        update_pending = None
-
-    do_update()
-
-    overlay_state = last_geometry_overlay_state or {}
-    overlay_records = overlay_state.get("overlay_records", []) or []
-    initial_pairs_display = overlay_state.get("initial_pairs_display", []) or []
-    max_display_markers = int(overlay_state.get("max_display_markers", 120))
-    max_display_markers = max(1, max_display_markers)
-    if overlay_records:
-        _draw_geometry_fit_overlay(
-            overlay_records,
-            max_display_markers=max_display_markers,
-        )
-    elif initial_pairs_display:
-        _draw_initial_geometry_pairs_overlay(
-            initial_pairs_display,
-            max_display_markers=max_display_markers,
-        )
-
-    _set_background_file_status_text()
-    _update_geometry_manual_pick_button_label()
 
 
 def _build_geometry_fit_runtime_config(
