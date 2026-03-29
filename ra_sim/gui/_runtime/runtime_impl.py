@@ -3229,45 +3229,24 @@ gui_runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
 # ---------------------------------------------------------------------------
 
 
-def _finite_percentile(array, percentile, fallback):
-    if array is None:
-        return fallback
-    finite = np.asarray(array, dtype=float)
-    finite = finite[np.isfinite(finite)]
-    if finite.size == 0:
-        return fallback
-    return float(np.nanpercentile(finite, percentile))
-
-
 def _ensure_valid_range(min_val, max_val):
     return gui_controllers.ensure_display_intensity_range(min_val, max_val)
 
 
 def _apply_background_transparency():
-    background_transparency_var = display_controls_view_state.background_transparency_var
-    if background_transparency_var is None:
-        return
-    transparency = max(0.0, min(1.0, background_transparency_var.get()))
-    background_display.set_alpha(1.0 - transparency)
+    return gui_background_manager.apply_background_transparency(
+        display_controls_view_state,
+        background_display=background_display,
+    )
 
 
 def _apply_background_limits():
-    background_min_var = display_controls_view_state.background_min_var
-    background_max_var = display_controls_view_state.background_max_var
-    if background_min_var is None or background_max_var is None:
-        return
-    min_val = background_min_var.get()
-    max_val = background_max_var.get()
-    if min_val >= max_val:
-        adjustment = max(abs(max_val) * 1e-6, 1e-6)
-        display_controls_state.suppress_background_limit_callback = True
-        background_min_var.set(max_val - adjustment)
-        display_controls_state.suppress_background_limit_callback = False
-        return
-    display_controls_state.background_limits_user_override = True
-    background_display.set_clim(min_val, max_val)
-    _apply_background_transparency()
-    canvas.draw_idle()
+    return gui_background_manager.apply_background_limits(
+        display_controls_state,
+        display_controls_view_state,
+        background_display=background_display,
+        draw_idle=canvas.draw_idle,
+    )
 
 
 def _apply_simulation_limits():
@@ -3287,16 +3266,14 @@ def _apply_simulation_limits():
     apply_scale_factor_to_existing_results()
 
 
-background_min_candidate = _finite_percentile(background_runtime_state.current_background_display, 1, 0.0)
-background_vmin_default = 0.0
-_, background_vmax_default = _ensure_valid_range(
-    background_vmin_default,
-    _finite_percentile(background_runtime_state.current_background_display, 99, 1.0),
+background_display_defaults = gui_background_manager.resolve_background_display_defaults(
+    background_runtime_state.current_background_display
 )
-
-background_slider_min = min(background_min_candidate, 0.0)
-background_slider_max = max(background_vmax_default * 5.0, background_slider_min + 1.0)
-background_slider_step = max((background_slider_max - background_slider_min) / 500.0, 0.01)
+background_vmin_default = background_display_defaults.vmin_default
+background_vmax_default = background_display_defaults.vmax_default
+background_slider_min = background_display_defaults.slider_min
+background_slider_max = background_display_defaults.slider_max
+background_slider_step = background_display_defaults.slider_step
 
 
 simulation_slider_min = 0.0
@@ -3361,35 +3338,13 @@ if display_controls_view_state.simulation_scale_factor_var is not None:
 
 
 def _update_background_slider_defaults(image, reset_override=False):
-    background_max_var = display_controls_view_state.background_max_var
-    background_min_var = display_controls_view_state.background_min_var
-    background_min_slider = display_controls_view_state.background_min_slider
-    background_max_slider = display_controls_view_state.background_max_slider
-    if image is None:
-        return
-    min_candidate = _finite_percentile(image, 1, 0.0)
-    max_candidate = _finite_percentile(image, 99, background_max_var.get())
-    min_candidate, max_candidate = _ensure_valid_range(min_candidate, max_candidate)
-    slider_from = min(float(background_min_slider.cget("from")), min_candidate, 0.0)
-    slider_to = max(float(background_min_slider.cget("to")), max_candidate, 1.0)
-    background_min_slider.configure(from_=slider_from, to=slider_to)
-    background_max_slider.configure(from_=slider_from, to=slider_to)
-    display_controls_state.suppress_background_limit_callback = True
-    if reset_override or not display_controls_state.background_limits_user_override:
-        min_value = 0.0
-        max_value = max_candidate
-    else:
-        min_value = float(background_min_var.get())
-        max_value = float(background_max_var.get())
-        min_value = min(max(min_value, slider_from), slider_to)
-        max_value = min(max(max_value, slider_from), slider_to)
-    min_value, max_value = _ensure_valid_range(min_value, max_value)
-    background_min_var.set(min_value)
-    background_max_var.set(max_value)
-    display_controls_state.suppress_background_limit_callback = False
-    background_display.set_clim(min_value, max_value)
-    if reset_override:
-        display_controls_state.background_limits_user_override = False
+    return gui_background_manager.update_background_slider_defaults(
+        display_controls_state,
+        display_controls_view_state,
+        background_display=background_display,
+        image=image,
+        reset_override=reset_override,
+    )
 
 
 def _update_simulation_sliders_from_image(image, reset_override=False):

@@ -39,6 +39,7 @@
   - Shared the import-safe lazy wrapper behavior used by `ra_sim/gui/runtime.py` and `ra_sim/gui/app.py` through `ra_sim/gui/lazy_runtime.py`, including failure-safe cleanup when path-loading the heavy runtime implementation.
   - Routed the lazy background cache read/update workflow used by the main runtime through shared wrappers in `ra_sim/gui/background_manager.py`.
   - Routed initial background-cache boot and shared background-runtime normalization through `ra_sim/gui/background_manager.py`.
+  - Routed background display defaults, transparency, and range/default-refresh helpers through `ra_sim/gui/background_manager.py`.
   - Corrected center-axis mappings used in pyFAI/intersection geometry paths.
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.

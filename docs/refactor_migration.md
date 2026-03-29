@@ -674,6 +674,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   boot path and shared background-runtime normalization through
   `ra_sim.gui.background_manager` instead of keeping that synchronization logic
   local to `runtime_impl.py`.
+- The main runtime implementation now also routes background display defaults,
+  transparency application, range application, and slider-default refresh
+  through `ra_sim.gui.background_manager` instead of keeping that background
+  display workflow local to `runtime_impl.py`.
 - The remaining large integration monolith now lives in
   `ra_sim/gui/_runtime/runtime_impl.py`, and most of the remaining inline code
   there is glue rather than high-value extractable feature logic.

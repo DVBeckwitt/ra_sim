@@ -5,6 +5,44 @@ import numpy as np
 from ra_sim.gui import background_manager, state
 
 
+class _DummyVar:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self._value = value
+
+
+class _DummySlider:
+    def __init__(self, from_value, to_value):
+        self._values = {
+            "from": float(from_value),
+            "to": float(to_value),
+        }
+
+    def cget(self, key):
+        return self._values[key]
+
+    def configure(self, *, from_, to):
+        self._values["from"] = float(from_)
+        self._values["to"] = float(to)
+
+
+class _DummyDisplay:
+    def __init__(self):
+        self.alpha = None
+        self.clim = None
+
+    def set_alpha(self, value):
+        self.alpha = value
+
+    def set_clim(self, min_value, max_value):
+        self.clim = (min_value, max_value)
+
+
 def test_background_manager_apply_update_preserves_list_aliases() -> None:
     background_state = state.BackgroundRuntimeState()
     osc_alias = background_state.osc_files
@@ -111,6 +149,100 @@ def test_background_manager_initialize_runtime_state_boots_cache_and_defaults(
     assert calls[0][1]["total_count"] == 2
     assert calls[0][1]["display_rotate_k"] == -1
     assert callable(calls[0][1]["read_osc"])
+
+
+def test_background_manager_resolves_background_display_defaults_from_image() -> None:
+    defaults = background_manager.resolve_background_display_defaults(
+        np.array([-5.0, 10.0], dtype=float)
+    )
+
+    assert defaults.min_candidate < 0.0
+    assert defaults.vmin_default == 0.0
+    assert defaults.vmax_default > 0.0
+    assert defaults.slider_min == defaults.min_candidate
+    assert defaults.slider_max > defaults.vmax_default
+    assert defaults.slider_step >= 0.01
+
+
+def test_background_manager_applies_background_limits_and_transparency() -> None:
+    display_state = state.DisplayControlsState()
+    view_state = state.DisplayControlsViewState(
+        background_min_var=_DummyVar(1.0),
+        background_max_var=_DummyVar(4.0),
+        background_transparency_var=_DummyVar(0.25),
+    )
+    background_display = _DummyDisplay()
+    draw_calls = []
+
+    applied = background_manager.apply_background_limits(
+        display_state,
+        view_state,
+        background_display=background_display,
+        draw_idle=lambda: draw_calls.append("draw"),
+    )
+
+    assert applied is True
+    assert display_state.background_limits_user_override is True
+    assert background_display.clim == (1.0, 4.0)
+    assert background_display.alpha == 0.75
+    assert draw_calls == ["draw"]
+
+
+def test_background_manager_invalid_background_limits_adjust_min_in_place() -> None:
+    display_state = state.DisplayControlsState()
+    view_state = state.DisplayControlsViewState(
+        background_min_var=_DummyVar(5.0),
+        background_max_var=_DummyVar(5.0),
+        background_transparency_var=_DummyVar(0.0),
+    )
+    background_display = _DummyDisplay()
+
+    applied = background_manager.apply_background_limits(
+        display_state,
+        view_state,
+        background_display=background_display,
+    )
+
+    assert applied is False
+    assert display_state.suppress_background_limit_callback is False
+    assert view_state.background_min_var.get() < 5.0
+    assert background_display.clim is None
+
+
+def test_background_manager_updates_background_slider_defaults() -> None:
+    display_state = state.DisplayControlsState(background_limits_user_override=True)
+    view_state = state.DisplayControlsViewState(
+        background_min_var=_DummyVar(2.0),
+        background_max_var=_DummyVar(8.0),
+        background_min_slider=_DummySlider(0.0, 10.0),
+        background_max_slider=_DummySlider(0.0, 10.0),
+    )
+    background_display = _DummyDisplay()
+    image = np.array([0.0, 2.0, 4.0, 8.0, 10.0], dtype=float)
+
+    kept = background_manager.update_background_slider_defaults(
+        display_state,
+        view_state,
+        background_display=background_display,
+        image=image,
+        reset_override=False,
+    )
+    reset = background_manager.update_background_slider_defaults(
+        display_state,
+        view_state,
+        background_display=background_display,
+        image=image,
+        reset_override=True,
+    )
+
+    assert kept == (2.0, 8.0)
+    assert reset[0] == 0.0
+    assert reset[1] >= 8.0
+    assert display_state.background_limits_user_override is False
+    assert display_state.suppress_background_limit_callback is False
+    assert background_display.clim == reset
+    assert view_state.background_min_slider.cget("to") >= reset[1]
+    assert view_state.background_max_slider.cget("from") <= 0.0
 
 
 def test_background_manager_load_and_switch_update_state_in_place(tmp_path) -> None:

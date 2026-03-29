@@ -76,6 +76,10 @@ instead of hand-applying those cache payloads inline.
 The main runtime implementation now also routes initial background-cache boot
 plus shared background-state normalization through `ra_sim.gui.background_manager`
 instead of keeping that synchronization logic inline.
+The main runtime implementation now also routes background display-control
+defaults, transparency application, range application, and slider-default
+refresh through `ra_sim.gui.background_manager` instead of keeping that
+background display workflow inline.
 
 As part of the next concrete step, `ra_sim.gui.controllers` now owns a shared
 Tk after-token cancellation helper used by runtime glue paths that previously
@@ -890,6 +894,10 @@ What is done:
   boot helper plus the shared background-runtime normalization helper.
   - `ra_sim.gui._runtime.runtime_impl` no longer initializes that cache or
     normalizes background runtime/file-path state inline.
+- `ra_sim.gui.background_manager` now also owns the background display-control
+  defaults and live background range/transparency helpers.
+  - `ra_sim.gui._runtime.runtime_impl` no longer keeps that background display
+    limits/default-refresh workflow inline.
 
 What is left:
 
