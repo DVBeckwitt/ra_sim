@@ -692,6 +692,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   parameter/control name mapping and live constraint-state reads through shared
   helpers in `ra_sim.gui.geometry_fit` instead of keeping those readers local
   to `runtime_impl.py`.
+- The main runtime implementation now also routes geometry-fit constraint
+  parameter-domain lookup and default window/pull calculation through shared
+  helpers in `ra_sim.gui.geometry_fit` instead of keeping those calculations
+  local to `runtime_impl.py`.
 - The config compatibility migration and GUI entrypoint cleanup are now
   effectively closed out.
 - Repository-root cleanup has now landed: the tracked sqlite/session/log

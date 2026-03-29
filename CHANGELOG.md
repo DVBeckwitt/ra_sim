@@ -35,6 +35,7 @@
   - Routed the import-safe `ra_sim/gui/app.py` geometry-fit UI/value readers through the same shared value-callback bundle used by the main runtime.
   - Routed runtime geometry-fit undo/redo callback assembly through a shared history-callback builder in `ra_sim/gui/geometry_fit.py`.
   - Routed runtime geometry-fit constraint name/state normalization through shared helpers in `ra_sim/gui/geometry_fit.py`.
+  - Routed runtime geometry-fit constraint domain/default calculations through shared helpers in `ra_sim/gui/geometry_fit.py`.
   - Corrected center-axis mappings used in pyFAI/intersection geometry paths.
   - Improved sliders (`ra_sim/gui/sliders.py`) with entry sync, snapping, optional range expansion, and `min`/`max` typed values.
   - Added background file browser/status controls in `main.py`.

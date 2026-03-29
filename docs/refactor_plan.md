@@ -92,6 +92,10 @@ The primary runtime implementation now also resolves geometry-fit constraint
 parameter/control name mapping plus live constraint-state reads through shared
 helpers in `ra_sim.gui.geometry_fit` instead of keeping those readers inline in
 `runtime_impl.py`.
+The primary runtime implementation now also resolves geometry-fit constraint
+parameter domains plus default window/pull calculations through shared helpers
+in `ra_sim.gui.geometry_fit` instead of keeping those calculations inline in
+`runtime_impl.py`.
 
 ### What Is Already Done
 
@@ -1039,6 +1043,10 @@ What is done:
   constraint parameter/control name mapping and live constraint-state reads.
   - `ra_sim.gui._runtime.runtime_impl` no longer keeps those normalization
     helpers inline.
+- `ra_sim.gui.geometry_fit` now also owns shared helpers for geometry-fit
+  constraint parameter-domain lookup plus default window/pull calculation.
+  - `ra_sim.gui._runtime.runtime_impl` no longer keeps those defaulting
+    calculations inline.
 
 What is left:
 

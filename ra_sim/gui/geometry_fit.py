@@ -963,6 +963,229 @@ def read_runtime_geometry_fit_constraint_state(
     return state
 
 
+def _geometry_fit_config_section(
+    fit_config: Mapping[str, object] | None,
+    section: str,
+) -> Mapping[str, object]:
+    """Return one normalized geometry-fit config mapping section."""
+
+    fit_geometry_cfg = (
+        fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
+    )
+    if not isinstance(fit_geometry_cfg, Mapping):
+        return {}
+    section_cfg = fit_geometry_cfg.get(section, {}) or {}
+    if not isinstance(section_cfg, Mapping):
+        return {}
+    return section_cfg
+
+
+def read_runtime_geometry_fit_parameter_domains(
+    *,
+    parameter_specs: Mapping[str, object],
+    image_size: object,
+    fit_config: Mapping[str, object] | None,
+    names: Sequence[str] | None = None,
+    use_shared_theta_offset: bool = False,
+) -> dict[str, tuple[float, float]]:
+    """Read live parameter domains from bounds config and slider ranges."""
+
+    selected_names = list(names) if names is not None else list(parameter_specs)
+    domains: dict[str, tuple[float, float]] = {}
+    bounds_cfg = _geometry_fit_config_section(fit_config, "bounds")
+    try:
+        image_size_value = float(image_size)
+    except Exception:
+        image_size_value = 0.0
+
+    for name in selected_names:
+        parameter_name = geometry_fit_constraint_parameter_name(
+            str(name),
+            use_shared_theta_offset=use_shared_theta_offset,
+        )
+        control_name = geometry_fit_constraint_source_name(parameter_name)
+
+        if parameter_name == "center_x" or parameter_name == "center_y":
+            domains[str(name)] = (0.0, max(image_size_value - 1.0, 0.0))
+            continue
+
+        if parameter_name == "theta_offset":
+            entry = bounds_cfg.get("theta_offset")
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                try:
+                    lo = float(entry[0])
+                    hi = float(entry[1])
+                except Exception:
+                    lo = float("nan")
+                    hi = float("nan")
+                if np.isfinite(lo) and np.isfinite(hi):
+                    if lo > hi:
+                        lo, hi = hi, lo
+                    domains[str(name)] = (float(lo), float(hi))
+                    continue
+            elif isinstance(entry, Mapping):
+                try:
+                    lo = float(entry.get("min"))
+                    hi = float(entry.get("max"))
+                except Exception:
+                    lo = float("nan")
+                    hi = float("nan")
+                if np.isfinite(lo) and np.isfinite(hi):
+                    if lo > hi:
+                        lo, hi = hi, lo
+                    domains[str(name)] = (float(lo), float(hi))
+                    continue
+
+        spec = parameter_specs.get(control_name)
+        if not isinstance(spec, Mapping):
+            continue
+        slider_widget = spec.get("value_slider")
+        if slider_widget is None:
+            continue
+        try:
+            lo = float(slider_widget.cget("from"))
+            hi = float(slider_widget.cget("to"))
+        except Exception:
+            continue
+        if parameter_name == "theta_offset":
+            span = max(abs(lo), abs(hi), 1.0)
+            domains[str(name)] = (-float(span), float(span))
+            continue
+        if lo > hi:
+            lo, hi = hi, lo
+        domains[str(name)] = (float(lo), float(hi))
+    return domains
+
+
+def default_runtime_geometry_fit_constraint_window(
+    *,
+    name: str,
+    parameter_specs: Mapping[str, object],
+    fit_config: Mapping[str, object] | None,
+    parameter_domains: Mapping[str, tuple[float, float]] | None = None,
+    current_theta_offset: object = 0.0,
+    use_shared_theta_offset: bool = False,
+) -> float:
+    """Compute the default live constraint window for one geometry-fit row."""
+
+    parameter_name = geometry_fit_constraint_parameter_name(
+        name,
+        use_shared_theta_offset=use_shared_theta_offset,
+    )
+    control_name = geometry_fit_constraint_source_name(parameter_name)
+    spec = parameter_specs.get(control_name, {})
+    if parameter_name == "theta_offset":
+        try:
+            current_value = float(current_theta_offset)
+        except Exception:
+            current_value = 0.0
+    else:
+        try:
+            current_value = float(spec["value_var"].get())
+        except Exception:
+            current_value = 0.0
+    try:
+        step = abs(float(spec.get("step", 0.01)))
+    except Exception:
+        step = 0.01
+    step = max(step, 1.0e-6)
+    resolved_domains = parameter_domains or {}
+    domain = resolved_domains.get(parameter_name)
+    if domain is None:
+        domain = resolved_domains.get(str(name))
+    domain_span = 0.0
+    if isinstance(domain, tuple) and len(domain) >= 2:
+        domain_span = max(0.0, float(domain[1]) - float(domain[0]))
+
+    bounds_cfg = _geometry_fit_config_section(fit_config, "bounds")
+    entry = bounds_cfg.get(parameter_name)
+
+    default_window = float("nan")
+    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+        try:
+            lo = float(entry[0])
+            hi = float(entry[1])
+            default_window = max(abs(current_value - lo), abs(hi - current_value))
+        except Exception:
+            default_window = float("nan")
+    elif isinstance(entry, Mapping):
+        mode = str(entry.get("mode", "absolute")).strip().lower()
+        try:
+            min_raw = (
+                float(entry.get("min"))
+                if entry.get("min") is not None
+                else float("nan")
+            )
+        except Exception:
+            min_raw = float("nan")
+        try:
+            max_raw = (
+                float(entry.get("max"))
+                if entry.get("max") is not None
+                else float("nan")
+            )
+        except Exception:
+            max_raw = float("nan")
+        if mode in {"relative", "rel", "relative_min0", "rel_min0"}:
+            candidates = [abs(v) for v in (min_raw, max_raw) if np.isfinite(v)]
+            if candidates:
+                default_window = max(candidates)
+        else:
+            candidates = [
+                abs(current_value - v)
+                for v in (min_raw, max_raw)
+                if np.isfinite(v)
+            ]
+            if candidates:
+                default_window = max(candidates)
+
+    if not np.isfinite(default_window) or default_window <= 0.0:
+        default_window = max(
+            step * 10.0,
+            0.02 * domain_span,
+            0.1 * max(abs(current_value), 1.0),
+        )
+
+    if domain_span > 0.0:
+        default_window = min(default_window, domain_span)
+
+    return max(float(default_window), step)
+
+
+def default_runtime_geometry_fit_constraint_pull(
+    *,
+    name: str,
+    fit_config: Mapping[str, object] | None,
+    window: float,
+    use_shared_theta_offset: bool = False,
+) -> float:
+    """Compute the default live constraint pull for one geometry-fit row."""
+
+    parameter_name = geometry_fit_constraint_parameter_name(
+        name,
+        use_shared_theta_offset=use_shared_theta_offset,
+    )
+    priors_cfg = _geometry_fit_config_section(fit_config, "priors")
+    entry = priors_cfg.get(parameter_name)
+    if not isinstance(entry, Mapping):
+        return 0.0
+    try:
+        sigma = float(entry.get("sigma"))
+    except Exception:
+        sigma = float("nan")
+    if (
+        not np.isfinite(sigma)
+        or sigma <= 0.0
+        or not np.isfinite(window)
+        or window <= 0.0
+    ):
+        return 0.0
+    inferred = (1.0 - min(max(sigma / window, 0.05), 1.0)) / 0.95
+    if not np.isfinite(inferred):
+        return 0.0
+    return min(max(float(inferred), 0.0), 1.0)
+
+
 def build_runtime_geometry_fit_value_callbacks(
     bindings: GeometryFitRuntimeValueBindings,
 ) -> GeometryFitRuntimeValueCallbacks:

@@ -15,6 +15,17 @@ class _DummyVar:
         self._value = value
 
 
+class _DummySlider:
+    def __init__(self, from_value, to_value):
+        self._values = {
+            "from": from_value,
+            "to": to_value,
+        }
+
+    def cget(self, key):
+        return self._values[key]
+
+
 def _make_prepared_run(
     *,
     joint_background_mode: bool,
@@ -821,6 +832,120 @@ def test_read_runtime_geometry_fit_constraint_state_normalizes_live_control_valu
         "gamma": {"window": 0.0, "pull": 1.0},
         "a": {"window": 0.4, "pull": 0.0},
     }
+
+
+def test_read_runtime_geometry_fit_parameter_domains_uses_bounds_and_slider_ranges() -> None:
+    parameter_specs = {
+        "theta_initial": {
+            "value_slider": _DummySlider(-3.0, 4.0),
+            "value_var": _DummyVar(9.5),
+            "step": 0.1,
+        },
+        "gamma": {
+            "value_slider": _DummySlider(2.0, -1.0),
+            "value_var": _DummyVar(0.8),
+            "step": 0.05,
+        },
+        "center_x": {
+            "value_slider": _DummySlider(0.0, 255.0),
+            "value_var": _DummyVar(100.0),
+            "step": 1.0,
+        },
+    }
+
+    domains = geometry_fit.read_runtime_geometry_fit_parameter_domains(
+        parameter_specs=parameter_specs,
+        image_size=256,
+        fit_config={
+            "geometry": {
+                "bounds": {
+                    "theta_offset": {"min": 0.25, "max": -0.5},
+                }
+            }
+        },
+        names=["theta_initial", "gamma", "center_x"],
+        use_shared_theta_offset=True,
+    )
+
+    assert domains == {
+        "theta_initial": (-0.5, 0.25),
+        "gamma": (-1.0, 2.0),
+        "center_x": (0.0, 255.0),
+    }
+
+
+def test_runtime_geometry_fit_constraint_defaults_use_shared_helpers() -> None:
+    parameter_specs = {
+        "theta_initial": {
+            "value_slider": _DummySlider(-3.0, 4.0),
+            "value_var": _DummyVar(9.5),
+            "step": 0.1,
+        },
+        "gamma": {
+            "value_slider": _DummySlider(0.0, 2.0),
+            "value_var": _DummyVar(0.8),
+            "step": 0.05,
+        },
+    }
+
+    theta_window = geometry_fit.default_runtime_geometry_fit_constraint_window(
+        name="theta_initial",
+        parameter_specs=parameter_specs,
+        fit_config={
+            "geometry": {
+                "bounds": {
+                    "theta_offset": {
+                        "mode": "relative",
+                        "min": -0.3,
+                        "max": 0.1,
+                    }
+                },
+                "priors": {
+                    "theta_offset": {
+                        "sigma": 0.15,
+                    }
+                },
+            }
+        },
+        parameter_domains={"theta_offset": (-0.5, 0.5)},
+        current_theta_offset=0.2,
+        use_shared_theta_offset=True,
+    )
+    gamma_window = geometry_fit.default_runtime_geometry_fit_constraint_window(
+        name="gamma",
+        parameter_specs=parameter_specs,
+        fit_config={},
+        parameter_domains={"gamma": (0.0, 2.0)},
+        current_theta_offset=0.0,
+        use_shared_theta_offset=False,
+    )
+    theta_pull = geometry_fit.default_runtime_geometry_fit_constraint_pull(
+        name="theta_initial",
+        fit_config={
+            "geometry": {
+                "priors": {
+                    "theta_offset": {
+                        "sigma": 0.15,
+                    }
+                }
+            }
+        },
+        window=theta_window,
+        use_shared_theta_offset=True,
+    )
+
+    assert theta_window == 0.3
+    assert gamma_window == 0.5
+    assert np.isclose(theta_pull, (1.0 - 0.5) / 0.95)
+    assert (
+        geometry_fit.default_runtime_geometry_fit_constraint_pull(
+            name="gamma",
+            fit_config={"geometry": {"priors": {"gamma": {"sigma": "bad"}}}},
+            window=gamma_window,
+            use_shared_theta_offset=False,
+        )
+        == 0.0
+    )
 
 
 def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
