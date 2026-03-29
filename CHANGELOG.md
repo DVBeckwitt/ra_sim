@@ -4,6 +4,7 @@
 
 - **Simulation performance**
   - Optimized diffraction simulation with low-discrepancy antithetic beam sampling, weighted beam clustering, nominal detector culling, local-arc `solve_q`, sparse bilinear accumulation, and a fast-mode optics lookup table.
+  - Restored the Python cache/stat compatibility surface around `process_peaks_parallel_safe(...)` in `ra_sim.simulation.diffraction`, including `_PHASE_SPACE_CACHE`, `_SOURCE_TEMPLATE_CACHE`, `_Q_VECTOR_CACHE`, and `get_last_process_peaks_safe_stats()`, so the source-template cache regression coverage passes again.
 
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.
@@ -78,6 +79,10 @@
   - Expanded `ra_sim/gui/geometry_q_group_manager.py` with the runtime live-preview availability/background gate, leaving `ra_sim/gui/runtime.py` without the local disabled, caked-view, and hidden-background preview exits.
   - Expanded `ra_sim/gui/background_manager.py` with the background visibility toggle workflow used by the workspace action controls and wired it into the runtime callback bundle, leaving `ra_sim/gui/runtime.py` without a standalone background-toggle helper.
   - Expanded `ra_sim/gui/background_manager.py` with backend-orientation debug status plus rotate/flip/reset runtime helpers and callback wiring, leaving `ra_sim/gui/runtime.py` with thin background debug status-refresh and control-wiring call sites.
+
+- **Repository cleanup**
+  - Removed tracked root artifacts that did not belong in the long-term project layout: `ig_graph.sqlite`, `ig_graph.sqlite-shm`, `ig_graph.sqlite-wal`, `session.json`, `oneline`, `et --hard a485e65`, and the legacy root `hbn.py`.
+  - Added root-level ignore rules so those local artifacts stay out of version control.
   - Expanded `ra_sim/gui/manual_geometry.py` with background-path matching, placement export-row/snapshot assembly, placement snapshot apply, and placement export/import dialog workflow helpers, leaving `ra_sim/gui/runtime.py` with thin delegates plus file-dialog dir and caked-view callback wiring.
   - Expanded `ra_sim/gui/geometry_fit.py` with runtime fit-history button-state, undo snapshot capture, runtime restore/redraw, and undo/redo transition helpers, leaving `ra_sim/gui/runtime.py` with thin delegates plus live state/controller/view callback wiring for that workflow.
   - Added `ra_sim/gui/integration_range_drag.py` plus explicit `IntegrationRangeDragState` in `ra_sim/gui/state.py` for raw/caked canvas drag-selection of 1D integration ranges, and expanded that module with the drag/region rectangle helpers plus current integration-region visual refresh used by the live GUI, leaving `ra_sim/gui/runtime.py` with manual-geometry canvas branches, top-level event dispatch, and thin live call sites.

@@ -16,6 +16,12 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .tmp/
+/ig_graph.sqlite
+/ig_graph.sqlite-shm
+/ig_graph.sqlite-wal
+/session.json
+/oneline
+/et --hard a485e65
 
 # Windows Explorer metadata
 desktop.ini

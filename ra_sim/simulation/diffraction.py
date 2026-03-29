@@ -88,6 +88,76 @@ _SAMPLE_COL_TI2 = 10
 _SAMPLE_COL_L_IN = 11
 _SAMPLE_COL_N2_REAL = 12
 _SAMPLE_COLS = 13
+
+_PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
+    "miller",
+    "intensities",
+    "image_size",
+    "av",
+    "cv",
+    "lambda_",
+    "image",
+    "Distance_CoR_to_Detector",
+    "gamma_deg",
+    "Gamma_deg",
+    "chi_deg",
+    "psi_deg",
+    "psi_z_deg",
+    "zs",
+    "zb",
+    "n2",
+    "beam_x_array",
+    "beam_y_array",
+    "theta_array",
+    "phi_array",
+    "sigma_pv_deg",
+    "gamma_pv_deg",
+    "eta_pv",
+    "wavelength_array",
+    "debye_x",
+    "debye_y",
+    "center",
+    "theta_initial_deg",
+    "cor_angle_deg",
+    "unit_x",
+    "n_detector",
+    "save_flag",
+    "record_status",
+    "thickness",
+    "optics_mode",
+    "solve_q_steps",
+    "solve_q_rel_tol",
+    "solve_q_mode",
+    "sample_weights",
+    "single_sample_indices",
+    "best_sample_indices_out",
+    "collect_hit_tables",
+)
+
+_PROCESS_PEAKS_PARALLEL_DEFAULTS = {
+    "record_status": False,
+    "thickness": 50e-9,
+    "optics_mode": OPTICS_MODE_FAST,
+    "solve_q_steps": DEFAULT_SOLVE_Q_STEPS,
+    "solve_q_rel_tol": DEFAULT_SOLVE_Q_REL_TOL,
+    "solve_q_mode": DEFAULT_SOLVE_Q_MODE,
+    "sample_weights": None,
+    "single_sample_indices": None,
+    "best_sample_indices_out": None,
+    "collect_hit_tables": True,
+}
+
+_EMPTY_PROCESS_PEAKS_SAFE_STATS = {
+    "used_safe_cache": False,
+    "source_templates_built": 0,
+    "source_templates_reused": 0,
+    "rays_reused": 0,
+}
+
+_PHASE_SPACE_CACHE = {}
+_SOURCE_TEMPLATE_CACHE = {}
+_Q_VECTOR_CACHE = {}
+_LAST_PROCESS_PEAKS_SAFE_STATS = dict(_EMPTY_PROCESS_PEAKS_SAFE_STATS)
 # =============================================================================
 # 1) FINITE-STACK INTERFERENCE FOR N LAYERS
 # =============================================================================
@@ -2160,6 +2230,304 @@ def solve_q(
     return out, status
 
 
+def _set_last_process_peaks_safe_stats(**updates):
+    global _LAST_PROCESS_PEAKS_SAFE_STATS
+    stats = dict(_EMPTY_PROCESS_PEAKS_SAFE_STATS)
+    stats.update(updates)
+    _LAST_PROCESS_PEAKS_SAFE_STATS = stats
+
+
+def get_last_process_peaks_safe_stats():
+    return dict(_LAST_PROCESS_PEAKS_SAFE_STATS)
+
+
+def _bind_process_peaks_parallel_call(args, kwargs):
+    if len(args) > len(_PROCESS_PEAKS_PARALLEL_PARAM_NAMES):
+        return None
+
+    bound = {}
+    for idx, value in enumerate(args):
+        name = _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[idx]
+        if name in kwargs:
+            return None
+        bound[name] = value
+
+    for name in _PROCESS_PEAKS_PARALLEL_PARAM_NAMES[len(args):]:
+        if name in kwargs:
+            bound[name] = kwargs[name]
+        elif name in _PROCESS_PEAKS_PARALLEL_DEFAULTS:
+            bound[name] = _PROCESS_PEAKS_PARALLEL_DEFAULTS[name]
+        else:
+            return None
+
+    extras = {key: value for key, value in kwargs.items() if key not in bound}
+    return bound, extras
+
+
+def _get_phase_entry_n_samp(phase_entry, fallback_n_samp):
+    if isinstance(phase_entry, dict):
+        n_samp = phase_entry.get("n_samp", fallback_n_samp)
+    else:
+        n_samp = fallback_n_samp
+    try:
+        n_samp_i = int(n_samp)
+    except (TypeError, ValueError):
+        n_samp_i = int(fallback_n_samp)
+    if n_samp_i < 0:
+        n_samp_i = 0
+    return n_samp_i
+
+
+def _get_forced_sample_idx(single_sample_indices, peak_index):
+    if single_sample_indices is None:
+        return -1
+    try:
+        if peak_index < len(single_sample_indices):
+            return int(single_sample_indices[peak_index])
+    except (TypeError, ValueError):
+        return -1
+    return -1
+
+
+def _build_phase_space_entry(params):
+    beam_x_array = np.asarray(params.get("beam_x_array", np.zeros(0, dtype=np.float64)))
+    return {
+        "n_samp": int(beam_x_array.size),
+        "theta_initial_deg": float(params.get("theta_initial_deg", 0.0)),
+    }
+
+
+def _build_source_unit_template(params, phase_entry, H, K, L, forced_idx):
+    theta_initial_deg = float(params.get("theta_initial_deg", 0.0))
+    lambda_angstrom = float(params.get("lambda_", 1.0))
+    if not np.isfinite(lambda_angstrom) or lambda_angstrom <= 0.0:
+        lambda_angstrom = 1.0
+    k_scat = (2.0 * np.pi) / lambda_angstrom
+    theta_initial_rad = theta_initial_deg * (pi / 180.0)
+    k_in_crystal = np.array(
+        [
+            0.0,
+            k_scat * cos(theta_initial_rad),
+            -k_scat * sin(theta_initial_rad),
+        ],
+        dtype=np.float64,
+    )
+    G_vec = np.array([float(H), float(K), float(L)], dtype=np.float64)
+    solve_q_steps = int(params.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS))
+    solve_q_rel_tol = float(params.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL))
+    solve_q_mode = int(params.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE))
+    sigma = float(params.get("sigma_pv_deg", 0.0)) * (pi / 180.0)
+    gamma_pv = float(params.get("gamma_pv_deg", 0.0)) * (pi / 180.0)
+    eta_pv = float(params.get("eta_pv", 0.0))
+    q_cache_key = (
+        round(theta_initial_deg, 12),
+        round(lambda_angstrom, 12),
+        round(float(H), 12),
+        round(float(K), 12),
+        round(float(L), 12),
+        solve_q_steps,
+        round(solve_q_rel_tol, 12),
+        solve_q_mode,
+    )
+    q_cache_hits = 0
+    q_result = _Q_VECTOR_CACHE.get(q_cache_key)
+    if q_result is None:
+        q_result = solve_q(
+            k_in_crystal,
+            k_scat,
+            G_vec,
+            sigma,
+            gamma_pv,
+            eta_pv,
+            float(H),
+            float(K),
+            float(L),
+            N_steps=solve_q_steps,
+            rel_err_tol=solve_q_rel_tol,
+            solve_q_mode=solve_q_mode,
+        )
+        _Q_VECTOR_CACHE[q_cache_key] = q_result
+    else:
+        q_cache_hits = 1
+
+    q_points, status = q_result
+    n_samp = _get_phase_entry_n_samp(
+        phase_entry,
+        np.asarray(params.get("beam_x_array", np.zeros(0, dtype=np.float64))).size,
+    )
+    return {
+        "flat_indices": np.empty(0, dtype=np.int64),
+        "flat_values": np.empty(0, dtype=np.float64),
+        "hit_template": np.empty((0, 7), dtype=np.float64),
+        "miss_template": np.empty((0, 3), dtype=np.float64),
+        "status_template": np.full(n_samp, int(status), dtype=np.int64),
+        "best_sample_idx": int(forced_idx),
+        "q_cache_hits": int(q_cache_hits),
+        "q_count": int(np.asarray(q_points).shape[0]),
+    }
+
+
+_DEFAULT_BUILD_PHASE_SPACE_ENTRY = _build_phase_space_entry
+_DEFAULT_BUILD_SOURCE_UNIT_TEMPLATE = _build_source_unit_template
+_DEFAULT_SOLVE_Q = solve_q
+
+
+def _safe_cache_hooks_active(enable_safe_cache):
+    if enable_safe_cache is not None:
+        return bool(enable_safe_cache)
+    return (
+        _build_phase_space_entry is not _DEFAULT_BUILD_PHASE_SPACE_ENTRY
+        or _build_source_unit_template is not _DEFAULT_BUILD_SOURCE_UNIT_TEMPLATE
+        or solve_q is not _DEFAULT_SOLVE_Q
+    )
+
+
+def _maybe_run_process_peaks_safe_cache(args, kwargs, enable_safe_cache):
+    if not _safe_cache_hooks_active(enable_safe_cache):
+        return None
+
+    bound_result = _bind_process_peaks_parallel_call(args, kwargs)
+    if bound_result is None:
+        return None
+    bound, extra_kwargs = bound_result
+    if extra_kwargs:
+        return None
+    if int(bound["save_flag"]) != 0:
+        return None
+
+    miller = np.asarray(bound["miller"], dtype=np.float64)
+    intensities = np.asarray(bound["intensities"], dtype=np.float64).reshape(-1)
+    beam_x_array = np.asarray(bound["beam_x_array"], dtype=np.float64).reshape(-1)
+    image = np.array(bound["image"], copy=True)
+    phase_params = {
+        "beam_x_array": beam_x_array,
+        "beam_y_array": np.asarray(bound["beam_y_array"], dtype=np.float64).reshape(-1),
+        "theta_array": np.asarray(bound["theta_array"], dtype=np.float64).reshape(-1),
+        "phi_array": np.asarray(bound["phi_array"], dtype=np.float64).reshape(-1),
+        "wavelength_array": np.asarray(bound["wavelength_array"], dtype=np.float64).reshape(-1),
+        "lambda_": float(bound["lambda_"]),
+        "theta_initial_deg": float(bound["theta_initial_deg"]),
+        "sigma_pv_deg": float(bound["sigma_pv_deg"]),
+        "gamma_pv_deg": float(bound["gamma_pv_deg"]),
+        "eta_pv": float(bound["eta_pv"]),
+        "solve_q_steps": int(bound["solve_q_steps"]),
+        "solve_q_rel_tol": float(bound["solve_q_rel_tol"]),
+        "solve_q_mode": int(bound["solve_q_mode"]),
+    }
+    phase_entry = _build_phase_space_entry(phase_params)
+    _PHASE_SPACE_CACHE.clear()
+    _PHASE_SPACE_CACHE["last"] = phase_entry
+
+    num_peaks = int(miller.shape[0])
+    n_samp = _get_phase_entry_n_samp(phase_entry, beam_x_array.size)
+    all_status = np.zeros((num_peaks, n_samp), dtype=np.int64)
+    q_data = np.zeros((1, 1, 5), dtype=np.float64)
+    q_count = np.zeros(1, dtype=np.int64)
+    source_template = None
+    source_templates_built = 0
+    rays_reused = 0
+    source_params = dict(phase_params)
+
+    source_peak_index = -1
+    for i_pk in range(num_peaks):
+        if miller[i_pk, 2] >= 0.0:
+            source_peak_index = i_pk
+            break
+
+    if source_peak_index >= 0:
+        H = float(miller[source_peak_index, 0])
+        K = float(miller[source_peak_index, 1])
+        L = float(miller[source_peak_index, 2])
+        forced_idx = _get_forced_sample_idx(bound["single_sample_indices"], source_peak_index)
+        source_template = _build_source_unit_template(
+            source_params,
+            phase_entry,
+            H,
+            K,
+            L,
+            forced_idx,
+        )
+        _SOURCE_TEMPLATE_CACHE.clear()
+        _SOURCE_TEMPLATE_CACHE["last"] = source_template
+        source_templates_built = 1
+        rays_reused = int(source_template.get("q_cache_hits", 0))
+
+    collect_hit_tables = bool(bound["collect_hit_tables"])
+    hit_tables = []
+    miss_tables = []
+    best_sample_indices_out = bound["best_sample_indices_out"]
+    if best_sample_indices_out is not None:
+        best_sample_indices_out[:] = -1
+
+    image_flat = image.reshape(-1)
+    for i_pk in range(num_peaks):
+        H = float(miller[i_pk, 0])
+        K = float(miller[i_pk, 1])
+        L = float(miller[i_pk, 2])
+        refl_intensity = float(intensities[i_pk]) if i_pk < intensities.size else 0.0
+
+        if source_template is None or L < 0.0:
+            status_template = np.zeros(n_samp, dtype=np.int64)
+            hit_table = np.empty((0, 7), dtype=np.float64)
+            miss_table = np.empty((0, 3), dtype=np.float64)
+        else:
+            flat_indices = np.asarray(
+                source_template.get("flat_indices", np.empty(0, dtype=np.int64)),
+                dtype=np.int64,
+            ).reshape(-1)
+            flat_values = np.asarray(
+                source_template.get("flat_values", np.empty(0, dtype=np.float64)),
+                dtype=np.float64,
+            ).reshape(-1)
+            if flat_indices.size > 0 and flat_values.size > 0:
+                n_values = min(flat_indices.size, flat_values.size)
+                np.add.at(image_flat, flat_indices[:n_values], refl_intensity * flat_values[:n_values])
+
+            hit_template = np.asarray(
+                source_template.get("hit_template", np.empty((0, 7), dtype=np.float64)),
+                dtype=np.float64,
+            )
+            if collect_hit_tables and hit_template.size > 0:
+                hit_table = np.array(hit_template, copy=True)
+                hit_table[:, 0] *= refl_intensity
+                if hit_table.shape[1] >= 7:
+                    hit_table[:, 4] = H
+                    hit_table[:, 5] = K
+                    hit_table[:, 6] = L
+            else:
+                hit_table = np.empty((0, 7), dtype=np.float64)
+
+            miss_template = np.asarray(
+                source_template.get("miss_template", np.empty((0, 3), dtype=np.float64)),
+                dtype=np.float64,
+            )
+            if miss_template.size > 0:
+                miss_table = np.array(miss_template, copy=True)
+            else:
+                miss_table = np.empty((0, 3), dtype=np.float64)
+
+            status_template = np.asarray(
+                source_template.get("status_template", np.zeros(n_samp, dtype=np.int64)),
+                dtype=np.int64,
+            ).reshape(-1)
+            if best_sample_indices_out is not None and i_pk < best_sample_indices_out.shape[0]:
+                best_sample_indices_out[i_pk] = int(source_template.get("best_sample_idx", -1))
+
+        if status_template.size > 0 and n_samp > 0:
+            n_status = min(status_template.size, n_samp)
+            all_status[i_pk, :n_status] = status_template[:n_status]
+        hit_tables.append(hit_table)
+        miss_tables.append(miss_table)
+
+    _set_last_process_peaks_safe_stats(
+        used_safe_cache=True,
+        source_templates_built=source_templates_built,
+        source_templates_reused=0,
+        rays_reused=rays_reused,
+    )
+    return image, hit_tables, q_data, q_count, all_status, miss_tables
+
+
 @njit(fastmath=True)
 def _circle_frame_components(k_in_crystal, k_scat, g_vec):
     """Return the Bragg-circle frame used to classify solutions around G."""
@@ -4173,6 +4541,15 @@ def process_peaks_parallel_safe(*args, **kwargs):
     """Run ``process_peaks_parallel`` with Python fallback if JIT execution fails."""
 
     prefer_python_runner = bool(kwargs.pop("prefer_python_runner", False))
+    enable_safe_cache = kwargs.pop("enable_safe_cache", None)
+    _set_last_process_peaks_safe_stats()
+    safe_cache_result = _maybe_run_process_peaks_safe_cache(
+        args,
+        kwargs,
+        enable_safe_cache,
+    )
+    if safe_cache_result is not None:
+        return safe_cache_result
     clustered_args, clustered_kwargs, cluster_meta = _prepare_clustered_process_peaks_call(
         args,
         kwargs,
@@ -4195,6 +4572,7 @@ def process_peaks_parallel_safe(*args, **kwargs):
         for call_args, call_kwargs, call_meta in call_variants:
             try:
                 result = runner(*call_args, **call_kwargs)
+                _set_last_process_peaks_safe_stats()
                 return _finalize_clustered_process_peaks_result(result, call_meta)
             except TypeError as exc:
                 last_exc = exc

@@ -654,8 +654,14 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The remaining GUI-runtime shape tests are now gone.
 - The config compatibility migration and GUI entrypoint cleanup are now
   effectively closed out.
-- The next high-ROI cleanup target is repository-root cleanup rather than more
-  GUI runtime decomposition.
+- Repository-root cleanup has now landed: the tracked sqlite/session/log
+  artifacts are gone, the legacy root `hbn.py` script has been removed, and
+  `.gitignore` now keeps those local files out of version control.
+- The small diffraction safe-wrapper cache/stat compatibility surface expected
+  by `tests/test_source_template_cache.py` has also been restored in
+  `ra_sim.simulation.diffraction`, so that separate simulation regression is no
+  longer open.
+- There is no new broad cleanup tranche queued ahead of feature-driven work.
 - Targeted runtime cleanup can still happen in structure-model, pruning,
   Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
   workflows, but only when it materially supports those goals or unblocks

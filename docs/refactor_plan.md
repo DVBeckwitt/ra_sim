@@ -1130,13 +1130,12 @@ Definition of done:
 
 ### 6. Repository Cleanup
 
-Status: Not started
+Status: Completed (2026-03-28)
 
-What is left:
+What landed:
 
-- The repo root still contains stale or non-source artifacts that do not belong
-  in the long-term project layout.
-- Examples currently present at the repo root include:
+- Removed the tracked root artifacts that did not belong in the long-term
+  project layout:
   - `ig_graph.sqlite`
   - `ig_graph.sqlite-shm`
   - `ig_graph.sqlite-wal`
@@ -1144,6 +1143,7 @@ What is left:
   - `oneline`
   - `et --hard a485e65`
   - the legacy root `hbn.py`
+- Added root-level ignore rules so those local artifacts do not get recommitted.
 
 Why it matters:
 
@@ -1159,14 +1159,16 @@ Definition of done:
 
 ### 7. Unrelated Simulation Test Debt
 
-Status: Still open
+Status: Completed (2026-03-28)
 
-What is left:
+What landed:
 
-- `tests/test_source_template_cache.py` still fails against
-  `ra_sim.simulation.diffraction`.
-- The failure is due to tests expecting cache internals such as
-  `_PHASE_SPACE_CACHE` and `_Q_VECTOR_CACHE` that are not exposed by the module.
+- Restored the small Python cache/stat compatibility surface expected by
+  `tests/test_source_template_cache.py` in `ra_sim.simulation.diffraction`.
+- The module now again exposes `_PHASE_SPACE_CACHE`,
+  `_SOURCE_TEMPLATE_CACHE`, `_Q_VECTOR_CACHE`, and
+  `get_last_process_peaks_safe_stats()`.
+- The direct regression tests for that surface now pass again.
 
 Why it matters:
 
@@ -1311,6 +1313,13 @@ Why last:
 - This is important, but it is lower leverage than finishing the runtime and
   config migration.
 
+Current status:
+
+- Landed on 2026-03-28.
+- The tracked root artifacts were removed, the legacy root `hbn.py` was
+  deleted, and `.gitignore` now keeps those local files out of version
+  control.
+
 ## Refactor Guardrails
 
 - Do not take open-ended internal-runtime shrink tasks just to reduce line
@@ -1326,18 +1335,20 @@ Why last:
 
 The next best step is:
 
-- keep the runtime/config/entrypoint refactor closed out and stop expanding it
-  by default
-- move next to repository-root cleanup so the project layout matches the
-  packaged structure
-- keep unrelated simulation test debt tracked separately from the GUI refactor
-- only return to the internal runtime implementation for specific bug-prone or
-  duplicated workflows that still justify the move
+- keep the runtime/config/entrypoint/root-cleanup refactor closed out and stop
+  expanding it by default
+- treat the restored diffraction cache/stat surface as compatibility coverage,
+  not as a reason to reopen broad simulation-kernel reshaping
+- only return to `ra_sim/gui/_runtime/runtime_impl.py` for specific bug-prone,
+  duplicated, or feature-blocking workflows that still justify the move
+- let future cleanup be driven by active product work rather than another
+  open-ended structural sweep
 
 Immediate checklist after the strategy pivot:
 
-- remove or relocate stale root artifacts that do not belong in the long-term
-  repo layout
+- keep import-smoke and direct helper coverage green as feature work lands
+- make targeted runtime or simulation changes only when they buy testability,
+  reliability, or concrete workflow simplification
 - keep `ra_sim.path_config` only as a compatibility shim until the project is
   ready to drop it explicitly
 - keep GUI refactor work focused on concrete reliability or feature-delivery
