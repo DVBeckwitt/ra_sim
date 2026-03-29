@@ -1,7 +1,7 @@
 """Plot mosaic omega distribution and Bragg sphere for a given reflection.
 
 Usage:
-  python tests/plot_mosaic_omega_and_bragg_sphere.py --H 1 --K 0 --L 0
+  python scripts/debug/plot_mosaic_omega_and_bragg_sphere.py --H 1 --K 0 --L 0
 
 Notes:
 - sigma_deg and gamma_deg are the pseudo-Voigt widths in degrees.

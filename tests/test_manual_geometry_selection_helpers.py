@@ -820,7 +820,7 @@ def test_export_geometry_manual_pairs_runs_dialog_and_save_callback(tmp_path) ->
         (
             str(save_path),
             {"manual_pairs": [{"background_index": 0}]},
-            {"entrypoint": "main.py"},
+            {"entrypoint": "python -m ra_sim gui"},
         ),
     )
     assert statuses[-1] == f"Saved manual geometry placements to {save_path}"

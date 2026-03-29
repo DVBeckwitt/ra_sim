@@ -28,6 +28,7 @@ desktop.ini
 
 # Generated images
 ra_sim/simulation/output.png
+scripts/debug/simulation.npz
 
 # Accidental root-level probe files with random 8-char names
 /[0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_][0-9a-z_]

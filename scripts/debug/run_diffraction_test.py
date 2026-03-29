@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
 Headless one-shot diffraction simulation.
-Produces <YYYYMMDD_HHMMSS>_simulation.npy and shows the image.
-(No GUI, no background subtraction.)
+
+Writes ``scripts/debug/simulation.npz`` for downstream inspection helpers.
 """
 
 # ───────────── imports ─────────────
-import math, re, numpy as np
+import math, re, sys, numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
 from datetime import datetime
 from pathlib import Path
 import CifFile
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 # ra_sim internals
 from ra_sim.utils.calculations   import IndexofRefraction

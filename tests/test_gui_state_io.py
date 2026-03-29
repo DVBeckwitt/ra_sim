@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -28,7 +26,7 @@ def test_build_gui_state_payload_normalizes_numpy_and_path_values(tmp_path):
                 "items": {3, 1},
             },
         },
-        metadata={"entrypoint": Path("main.py")},
+        metadata={"entrypoint": "python -m ra_sim gui"},
     )
 
     assert payload["type"] == GUI_STATE_FILE_TYPE
@@ -39,7 +37,7 @@ def test_build_gui_state_payload_normalizes_numpy_and_path_values(tmp_path):
     assert payload["state"]["path"] == str(tmp_path / "state.json")
     assert payload["state"]["nested"]["coords"] == [1, 2, 3]
     assert payload["state"]["nested"]["items"] == [1, 3]
-    assert payload["metadata"]["entrypoint"] == "main.py"
+    assert payload["metadata"]["entrypoint"] == "python -m ra_sim gui"
 
 
 def test_save_and_load_gui_state_file_round_trip(tmp_path):
@@ -84,7 +82,7 @@ def test_build_geometry_placements_payload_normalizes_nested_values(tmp_path):
                 }
             ],
         },
-        metadata={"entrypoint": Path("main.py")},
+        metadata={"entrypoint": "python -m ra_sim gui"},
     )
 
     assert payload["type"] == GEOMETRY_PLACEMENTS_FILE_TYPE
@@ -97,7 +95,7 @@ def test_build_geometry_placements_payload_normalizes_nested_values(tmp_path):
         1.0,
         2,
     ]
-    assert payload["metadata"]["entrypoint"] == "main.py"
+    assert payload["metadata"]["entrypoint"] == "python -m ra_sim gui"
 
 
 def test_save_and_load_geometry_placements_file_round_trip(tmp_path):

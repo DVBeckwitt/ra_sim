@@ -1,4 +1,4 @@
-"""Import-safe compatibility wrapper for the packaged GUI runtime.
+"""Import-safe wrapper for the packaged GUI runtime.
 
 The heavy Tk/matplotlib implementation now lives in
 ``ra_sim/gui/_runtime/runtime_impl.py`` and is loaded only when callers invoke

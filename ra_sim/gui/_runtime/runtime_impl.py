@@ -5949,7 +5949,7 @@ def _export_full_gui_state() -> None:
         save_gui_state_file(
             file_path,
             _collect_full_gui_state_snapshot(),
-            metadata={"entrypoint": "main.py"},
+            metadata={"entrypoint": gui_manual_geometry.DEFAULT_GUI_ENTRYPOINT},
         )
     except Exception as exc:
         progress_label.config(text=f"Failed to export GUI state: {exc}")
@@ -6053,7 +6053,7 @@ def _export_geometry_manual_pairs() -> None:
         save_file=save_geometry_placements_file,
         set_status_text=lambda text: progress_label_geometry.config(text=text),
         stamp_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"),
-        entrypoint="main.py",
+        entrypoint=gui_manual_geometry.DEFAULT_GUI_ENTRYPOINT,
     )
 
 

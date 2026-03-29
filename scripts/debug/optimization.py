@@ -22,6 +22,10 @@ from scipy.signal   import find_peaks, savgol_filter
 from scipy.optimize import least_squares, differential_evolution
 from numpy.linalg   import inv
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 # ───────────────── third-party / project modules ────────────────
 from CifFile                           import ReadCif
 from ra_sim.utils.calculations         import IndexofRefraction

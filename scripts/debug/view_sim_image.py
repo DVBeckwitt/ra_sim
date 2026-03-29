@@ -15,7 +15,7 @@ with np.load(NPZ_PATH, allow_pickle=True) as data:
         raise SystemExit("image entry not found in npz file")
     image = data["image"]
 
-# setup same colormap as run_diffraction_test.py
+# setup same colormap as scripts/debug/run_diffraction_test.py
 cmap = cm.get_cmap("turbo", 256)
 rgba = cmap(np.linspace(0, 1, 256))
 rgba[0] = [1, 1, 1, 1]

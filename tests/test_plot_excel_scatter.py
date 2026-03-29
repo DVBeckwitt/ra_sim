@@ -1,11 +1,6 @@
 import pandas as pd
-from plot_excel_scatter import _find_intensity_columns, _normalize_columns
-from ra_sim.tools import plot_excel_scatter as packaged_plot_excel_scatter
+from ra_sim.tools.plot_excel_scatter import _find_intensity_columns, _normalize_columns
 
-
-def test_root_plot_excel_scatter_is_packaged_wrapper():
-    assert _find_intensity_columns is packaged_plot_excel_scatter._find_intensity_columns
-    assert _normalize_columns is packaged_plot_excel_scatter._normalize_columns
 
 def test_find_intensity_columns_single():
     df = pd.DataFrame({

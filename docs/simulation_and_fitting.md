@@ -17,7 +17,7 @@ paper derivation look like?".
 | Background peak auto-matching | [`ra_sim/fitting/background_peak_matching.py`](../ra_sim/fitting/background_peak_matching.py) | Finds local background peaks and assigns simulated seeds to measured summits. |
 | GUI geometry-fit preparation | [`ra_sim/gui/geometry_fit.py`](../ra_sim/gui/geometry_fit.py), [`ra_sim/gui/manual_geometry.py`](../ra_sim/gui/manual_geometry.py), [`ra_sim/gui/geometry_overlay.py`](../ra_sim/gui/geometry_overlay.py) | Builds fit datasets from manual pairs, chooses orientation transforms, and formats outputs. |
 | Stacking-fault / rod intensity preprocessing | [`ra_sim/utils/stacking_fault.py`](../ra_sim/utils/stacking_fault.py) | Generates analytical Hendricks-Teller rod intensities and groups them into Qr rods. |
-| hBN calibrant fitter | [`hbn_fitter/fitter.py`](../hbn_fitter/fitter.py), [`hbn_fitter/optimizer.py`](../hbn_fitter/optimizer.py) | Fits ring ellipses, estimates detector tilt/circularity, and exports geometry bundles. |
+| hBN calibrant fitter | [`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py), [`ra_sim/hbn_fitter/optimizer.py`](../ra_sim/hbn_fitter/optimizer.py) | Fits ring ellipses, estimates detector tilt/circularity, and exports geometry bundles. |
 | Legacy integrated-profile cost helper | [`ra_sim/fitting/objective.py`](../ra_sim/fitting/objective.py) | Simple MSE over reduced profiles; currently not used by the active fit workflows. |
 
 ## 1. Forward Physics Simulation
@@ -826,13 +826,13 @@ detection. It is a constrained, scored, one-to-one assignment.
 ## 6. hBN Calibrant Fitter
 
 The hBN calibrant tools live in
-[`hbn_fitter/fitter.py`](../hbn_fitter/fitter.py) and
-[`hbn_fitter/optimizer.py`](../hbn_fitter/optimizer.py).
+[`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py) and
+[`ra_sim/hbn_fitter/optimizer.py`](../ra_sim/hbn_fitter/optimizer.py).
 
 ### 6.1 Ellipse residual and robust seed fit
 
 The point-to-ellipse residual in
-[`ellipse_residuals_px`](../hbn_fitter/fitter.py) is:
+[`ellipse_residuals_px`](../ra_sim/hbn_fitter/fitter.py) is:
 
 ```text
 u = rotated x coordinate
@@ -843,13 +843,13 @@ residual_px = |q - 1| * 0.5*(a + b)
 
 So the code uses a radialized ellipse residual in pixel units.
 
-[`robust_fit_ellipse`](../hbn_fitter/fitter.py):
+[`robust_fit_ellipse`](../ra_sim/hbn_fitter/fitter.py):
 
 - runs RANSAC with `EllipseModel`,
 - then performs two sigma-clipping passes on the ellipse residuals,
 - refits the ellipse after each successful clip.
 
-[`weighted_refine_ellipse`](../hbn_fitter/fitter.py) then refines that seed
+[`weighted_refine_ellipse`](../ra_sim/hbn_fitter/fitter.py) then refines that seed
 with a Powell optimizer using:
 
 - per-point weights `1/sigma_px^2`,
@@ -858,7 +858,7 @@ with a Powell optimizer using:
 
 ### 6.2 Snapping clicks and iterative ellipse refinement
 
-[`snap_points_to_ring`](../hbn_fitter/fitter.py) searches around each clicked
+[`snap_points_to_ring`](../ra_sim/hbn_fitter/fitter.py) searches around each clicked
 point:
 
 - `u`: along the local radial direction,
@@ -873,7 +873,7 @@ subpixel centroid, and scores the candidate by:
 - tangent offset,
 - click distance from the user's original point.
 
-[`refine_ellipse`](../hbn_fitter/fitter.py) then iterates:
+[`refine_ellipse`](../ra_sim/hbn_fitter/fitter.py) then iterates:
 
 1. sample many radial profiles around the current ellipse,
 2. pick the best radial peak on each profile,
@@ -883,7 +883,7 @@ subpixel centroid, and scores the candidate by:
 
 ### 6.3 Confidence scoring
 
-[`compute_fit_confidence`](../hbn_fitter/fitter.py) combines:
+[`compute_fit_confidence`](../ra_sim/hbn_fitter/fitter.py) combines:
 
 - ellipse residual,
 - ring SNR measured along the fitted ellipse,
@@ -900,19 +900,19 @@ There are two tilt models.
 
 Legacy model:
 
-- [`apply_tilt_xy`](../hbn_fitter/fitter.py)
+- [`apply_tilt_xy`](../ra_sim/hbn_fitter/fitter.py)
 - scales `x` and `y` by `1/cos(tilt)` about a shared center,
-- optimized by [`optimize_tilts`](../hbn_fitter/fitter.py) using:
+- optimized by [`optimize_tilts`](../ra_sim/hbn_fitter/fitter.py) using:
   - coarse grid search,
   - local Nelder-Mead,
   - optional Powell joint refinement of center and tilts.
 
 Projective model:
 
-- [`apply_tilt_projective`](../hbn_fitter/fitter.py)
+- [`apply_tilt_projective`](../ra_sim/hbn_fitter/fitter.py)
 - rotates a detector-plane basis in 3D and reprojects through a finite
   detector distance,
-- optimized by [`optimize_tilts_projective`](../hbn_fitter/fitter.py) using:
+- optimized by [`optimize_tilts_projective`](../ra_sim/hbn_fitter/fitter.py) using:
   - coarse tilt grid search at nominal distance,
   - Powell refinement of `(tilt_x, tilt_y, log(distance))`,
   - optional Powell joint refinement of `(center_x, center_y, tilt_x, tilt_y,

@@ -114,8 +114,9 @@ in `ra_sim.gui.geometry_fit` instead of keeping those calculations inline in
 
 ### How We Know It Is Done
 
-- `main.py`, `ra_sim.gui.app`, and `ra_sim.gui.runtime` are now import-safe
-  entry boundaries instead of launch-time monoliths.
+- The supported launch paths are now package-owned instead of root-script based.
+- `ra_sim.gui.app` and `ra_sim.gui.runtime` are now import-safe entry
+  boundaries instead of launch-time monoliths.
 - `ra_sim.gui.runtime` is now a thin wrapper, and
   `ra_sim/gui/_runtime/runtime_impl.py` is now treated as an accepted
   integration shell rather than a target for open-ended line-count reduction.
@@ -131,11 +132,10 @@ in `ra_sim.gui.geometry_fit` instead of keeping those calculations inline in
 
 ### What Is Already Done
 
-- Root launch path is now packaged.
-  - `main.py` is a thin compatibility wrapper around `ra_sim.launcher`.
-  - `main.py` has explicit import-safety coverage to keep launcher delegation
-    lazy and avoid unintended GUI-module loading during root entrypoint import.
+- Root launch cleanup is now complete.
+  - `main.py` was removed after the package launch path stabilized.
   - `ra_sim.cli` launches the GUI via package code, not a root-script monolith.
+  - `run_ra_sim.bat` now shells through `python -m ra_sim`.
 - Package import safety improved.
   - `ra_sim.gui.app` is now an import-safe entrypoint that lazy-loads
     `ra_sim.gui.runtime`.
@@ -748,7 +748,7 @@ in `ra_sim.gui.geometry_fit` instead of keeping those calculations inline in
 
 ### What This Means
 
-- The original goal of turning `main.py` into a wrapper is effectively done.
+- The original goal of retiring root-script launch behavior is effectively done.
 - The broad GUI runtime-state extraction phase is effectively done.
 - The public `ra_sim.gui.runtime` import/startup boundary is now also
   stabilized.
@@ -1130,8 +1130,8 @@ Status: Completed
 
 What is done:
 
-- `main.py` is now a compatibility wrapper.
-- `ra_sim.gui.app.main` is the canonical package GUI entrypoint.
+- Legacy root wrappers have been removed.
+- `python -m ra_sim gui` is the canonical documented GUI launch path.
 - `ra_sim.gui.main_app` was removed once tests/docs no longer depended on it.
 
 What is left:
@@ -1144,7 +1144,7 @@ Why it matters:
 
 - Compatibility wrappers are useful during migration, but they create confusion
   once the real launch path has stabilized.
-- The codebase should eventually converge on one canonical GUI entrypoint.
+- The codebase should document one canonical GUI launch path.
 
 Definition of done:
 
@@ -1201,7 +1201,7 @@ What is done:
 - `tests/test_import_smoke.py` now covers `ra_sim.gui.runtime` directly.
 - The `ra_sim.gui.app` helper and sim-signature tests now import the live
   module directly instead of extracting functions from source text.
-- The hBN fitter bundle-export test now imports `hbn_fitter.fitter` directly
+- The hBN fitter bundle-export test now imports `ra_sim.hbn_fitter.fitter` directly
   and exercises a shared bundle-payload helper instead of extracting
   `save_bundle()` from source text.
 - The background runtime/bootstrap assembly now flows through an import-safe
@@ -1235,7 +1235,7 @@ What is done:
   conversion helper directly instead of reading `ra_sim/gui/app.py` source.
 - Several tests were moved away from runtime-heavy extraction and toward direct
   module coverage.
-- The old `main.py` AST lock-in is no longer the primary issue it once was.
+- The old root-script AST lock-in is no longer a relevant constraint.
 
 What is left:
 
@@ -1421,9 +1421,9 @@ Why fifth:
 
 Current status:
 
-- Landed for the package GUI entrypoint.
-- `ra_sim.gui.app.main` is now canonical, and `ra_sim.gui.main_app` has been
-  removed.
+- Landed for GUI entrypoint cleanup.
+- `python -m ra_sim gui` is now the canonical documented launch path, and
+  `ra_sim.gui.main_app` has been removed.
 
 ### Phase F: Clean the Repository Root
 

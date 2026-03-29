@@ -668,12 +668,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     gui_parser = subparsers.add_parser(
         "gui",
-        help="Launch the RA-SIM Tkinter GUI (same behavior as running main.py directly).",
+        help="Launch the RA-SIM Tkinter GUI.",
     )
     gui_parser.add_argument(
         "--no-excel",
         action="store_true",
-        help="Do not write the initial intensity Excel file on startup (matches main.py option).",
+        help="Do not write the initial intensity Excel file on startup.",
     )
     gui_parser.set_defaults(func=_cmd_gui)
 

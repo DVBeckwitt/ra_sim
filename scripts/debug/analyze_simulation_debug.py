@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analyze missed diffracted rays from ``simulation.npz``.
 
-``tests/run_diffraction_test.py`` stores outgoing wavevectors that failed
+``scripts/debug/run_diffraction_test.py`` stores outgoing wavevectors that failed
 to intersect the detector plane in ``debug_info``.  This script simply
 reports how many such vectors were recorded and plots their directions."""
 import numpy as np

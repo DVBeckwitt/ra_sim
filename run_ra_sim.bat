@@ -5,9 +5,9 @@ set "SCRIPT_DIR=%~dp0"
 
 where python >nul 2>nul
 if %ERRORLEVEL%==0 (
-    python "%SCRIPT_DIR%main.py" %*
+    python -m ra_sim %*
 ) else (
-    py "%SCRIPT_DIR%main.py" %*
+    py -m ra_sim %*
 )
 
 set "EXITCODE=%ERRORLEVEL%"

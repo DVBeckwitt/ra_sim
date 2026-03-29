@@ -8,20 +8,20 @@ rules going forward.
 
 This document summarizes the maintainability refactor delivered for RA-SIM while preserving user-facing behavior.
 
-## Compatibility Guarantees
+## Supported Entry Points
 
-- `python main.py` still launches the GUI.
 - `python -m ra_sim gui|simulate|hbn-fit` is unchanged.
-- `ra-sim` console script now points to `ra_sim.cli:main`.
-- `ra_sim.gui.app.main` is the supported package GUI entrypoint.
+- `python -m ra_sim` still opens the interactive launcher.
+- `ra-sim` console script points to `ra_sim.cli:main`.
+- The supported GUI launch path is `python -m ra_sim gui`.
 - The canonical config access helpers now live under `ra_sim.config`:
   - `ra_sim.config.get_path`
   - `ra_sim.config.get_dir`
   - `ra_sim.config.get_instrument_config`
   - `ra_sim.config.get_temp_dir`
-- Top-level utility script names remain:
-  - `plot_excel_scatter.py`
-  - `compare_intensity.py`
+- Utility entry points now live under the package namespace:
+  - `python -m ra_sim.tools.plot_excel_scatter`
+  - `python -m ra_sim.tools.compare_intensity`
 
 ## New Components
 
@@ -58,9 +58,9 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 
 ## Recent Progress
 
-- Root launch paths are now packaged:
-  - `main.py` is a compatibility wrapper.
-  - `ra_sim.cli` launches the GUI through package code.
+- Legacy root launch shims were removed:
+  - `ra_sim.cli` now owns the supported launch paths.
+  - `run_ra_sim.bat` now dispatches through `python -m ra_sim`.
 - `ra_sim.gui.app` is now an import-safe entrypoint that lazy-loads
   `ra_sim.gui.runtime`.
 - `ra_sim.gui.runtime` is now also an import-safe compatibility wrapper that
@@ -70,7 +70,7 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - The `ra_sim.gui.app` helper and sim-signature tests now import the live
   module directly instead of using AST/source extraction.
 - The hBN fitter bundle-export regression test now imports
-  `hbn_fitter.fitter` directly, and the NPZ payload assembly used by
+  `ra_sim.hbn_fitter.fitter` directly, and the NPZ payload assembly used by
   `save_bundle()` now flows through one shared helper there.
 - The background runtime/bootstrap assembly now also flows through a dedicated
   import-safe helper module, and the matching regression coverage now uses
@@ -114,8 +114,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - `ra_sim.config.loader` now also owns `get_temp_dir()`, and the remaining
   non-compat imports were migrated off `ra_sim.path_config` before that shim
   was removed.
-- `ra_sim.gui.main_app` was removed now that the package, launcher, tests, and
-  docs all converge on `ra_sim.gui.app.main` as the canonical GUI entrypoint.
+- `ra_sim.gui.main_app` was removed, and the supported GUI launch path is now
+  documented consistently as `python -m ra_sim gui`.
 - Manual geometry was split out of the runtime monolith in stages:
   - pure helpers, serialization, placement snapshot/apply helpers, and the
     placement export/import dialog workflow moved into
@@ -661,8 +661,6 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   feature-delivery wins.
 - Open-ended `runtime.py` decomposition is now closed out by default.
 - `ra_sim.gui.runtime` is now an import-safe public wrapper.
-- `main.py` now has explicit root-entrypoint import-safety regression coverage to
-  verify launcher delegation stays the only module-level boundary during import.
 - `ra_sim.gui.app` now has explicit import-time and `main()` forwarding lazy-load
   coverage, plus explicit local attribute-surface handling (`main`, `write_excel`,
   guarded dunder behavior, and lazy `__dir__`).
@@ -742,8 +740,8 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   the internal runtime implementation.
 - `ra_sim.config` is now the canonical and only documented config helper
   surface.
-- `ra_sim.gui.main_app` is gone; `ra_sim.gui.app.main` is the canonical
-  package GUI entrypoint.
+- `ra_sim.gui.main_app` is gone, and `python -m ra_sim gui` is the canonical
+  documented GUI launch path.
 - Remaining follow-up is now ordinary targeted maintenance, not an active
   open-ended refactor program.
 

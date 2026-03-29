@@ -1,8 +1,4 @@
-"""Package-owned launcher helpers for GUI entrypoints.
-
-This keeps ``ra_sim.cli`` and the repository-root ``main.py`` off the legacy
-root-level GUI module while preserving the historical launch flows.
-"""
+"""Package-owned launcher helpers for GUI entrypoints."""
 
 from __future__ import annotations
 
@@ -46,29 +42,8 @@ def launch_startup_mode(
     raise ValueError("startup_mode must resolve to one of: simulation, calibrant")
 
 
-def compatibility_main(
-    write_excel_flag: bool | None = None,
-    startup_mode: str = "prompt",
-    calibrant_bundle: str | None = None,
-) -> None:
-    """Compatibility entrypoint matching the legacy ``main.main`` signature."""
-
-    if startup_mode not in {"prompt", "simulation", "calibrant"}:
-        raise ValueError("startup_mode must be one of: prompt, simulation, calibrant")
-
-    resolved_mode = startup_mode
-    if resolved_mode == "prompt":
-        resolved_mode = gui_bootstrap.quick_startup_mode_dialog()
-
-    launch_startup_mode(
-        resolved_mode,
-        write_excel_flag=write_excel_flag,
-        calibrant_bundle=calibrant_bundle,
-    )
-
-
 def main(argv: list[str] | None = None) -> None:
-    """Run the lightweight launcher used by the repository-root wrapper."""
+    """Run the lightweight packaged GUI launcher."""
 
     cli_argv = list(sys.argv[1:] if argv is None else argv)
     if gui_bootstrap.should_forward_to_cli(cli_argv):
@@ -79,9 +54,11 @@ def main(argv: list[str] | None = None) -> None:
 
     args = gui_bootstrap.parse_launch_args(cli_argv)
     startup_mode = gui_bootstrap.resolve_startup_mode(args.command)
+    if startup_mode == "prompt":
+        startup_mode = gui_bootstrap.quick_startup_mode_dialog()
 
-    compatibility_main(
+    launch_startup_mode(
+        startup_mode,
         write_excel_flag=False if args.no_excel else None,
-        startup_mode=startup_mode,
         calibrant_bundle=args.bundle,
     )

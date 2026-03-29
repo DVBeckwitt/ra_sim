@@ -22,6 +22,7 @@ DEFAULT_CAKED_SEARCH_TTH_DEG = 1.5
 DEFAULT_CAKED_SEARCH_PHI_DEG = 10.0
 DEFAULT_PREVIEW_MIN_INTERVAL_S = 0.03
 DEFAULT_PREVIEW_MIN_MOVE_PX = 0.8
+DEFAULT_GUI_ENTRYPOINT = "python -m ra_sim gui"
 
 
 @dataclass(frozen=True)
@@ -3560,7 +3561,7 @@ def export_geometry_manual_pairs(
     save_file: Callable[..., None],
     set_status_text: Callable[[str], None] | None = None,
     stamp_factory: Callable[[], str] | None = None,
-    entrypoint: str = "main.py",
+    entrypoint: str = DEFAULT_GUI_ENTRYPOINT,
 ) -> str | None:
     """Run the manual-placement export dialog workflow."""
 

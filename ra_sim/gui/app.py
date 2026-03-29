@@ -1,8 +1,9 @@
-"""Import-safe compatibility wrapper for the packaged GUI runtime.
+"""Import-safe GUI shim around the packaged runtime.
 
-The canonical simulation runtime entrypoint lives in ``ra_sim.gui.runtime``.
-This module keeps the historical ``ra_sim.gui.app.main(...)`` surface
-available for callers that still import it directly.
+The supported user-facing launch path is ``python -m ra_sim gui``. This module
+remains as a lazy package-level helper for internal callers and tests that need
+access to lightweight runtime-adjacent helpers without importing the full Tk
+implementation.
 """
 
 from __future__ import annotations
@@ -492,7 +493,7 @@ def main(
     startup_mode: str = "prompt",
     calibrant_bundle: str | None = None,
 ) -> None:
-    """Compatibility wrapper that forwards to ``ra_sim.gui.runtime.main()``."""
+    """Forward to ``ra_sim.gui.runtime.main()`` lazily."""
 
     global write_excel
     runtime = _load_runtime_module()
