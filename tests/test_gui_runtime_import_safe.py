@@ -4,10 +4,14 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 RUNTIME_MODULE_NAME = "ra_sim.gui.runtime"
 RUNTIME_IMPL_MODULE_NAME = "ra_sim.gui._runtime_impl"
-RUNTIME_IMPL_SOURCE_PATH = Path("ra_sim/gui/_runtime/runtime_impl.py")
+RUNTIME_IMPL_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_impl.py"
+)
 
 
 def test_runtime_import_is_lazy() -> None:
@@ -55,6 +59,37 @@ def test_runtime_main_loads_impl_and_forwards_arguments(monkeypatch) -> None:
             "calibrant_bundle": "bundle.npz",
         }
     ]
+
+
+def test_runtime_dunder_attribute_raises_without_loading(monkeypatch) -> None:
+    runtime = importlib.import_module(RUNTIME_MODULE_NAME)
+
+    monkeypatch.setattr(
+        runtime,
+        "_load_runtime_module",
+        lambda: (_ for _ in ()).throw(AssertionError("impl should not be imported")),
+    )
+
+    with pytest.raises(AttributeError):
+        _ = runtime.__runtime_test_guard__
+
+
+def test_runtime_dir_is_lazy() -> None:
+    runtime = importlib.import_module(RUNTIME_MODULE_NAME)
+
+    available = dir(runtime)
+
+    assert "main" in available
+    assert "write_excel" in available
+
+
+def test_runtime_unknown_attr_forwards_to_impl(monkeypatch) -> None:
+    runtime = importlib.import_module(RUNTIME_MODULE_NAME)
+    fake_impl = SimpleNamespace(test_value=123)
+
+    monkeypatch.setattr(runtime, "_load_runtime_module", lambda: fake_impl)
+
+    assert runtime.test_value == 123
 
 
 def test_runtime_impl_source_compiles() -> None:

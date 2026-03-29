@@ -17,6 +17,7 @@ write_excel = False
 _RUNTIME_MODULE: ModuleType | None = None
 _RUNTIME_MODULE_NAME = "ra_sim.gui._runtime_impl"
 _RUNTIME_MODULE_PATH = Path(__file__).with_name("_runtime") / "runtime_impl.py"
+__all__ = ["main", "write_excel"]
 
 
 def _load_runtime_module() -> ModuleType:
@@ -70,6 +71,13 @@ def __getattr__(name: str):
     if name.startswith("__"):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     return getattr(_load_runtime_module(), name)
+
+
+def __dir__() -> list[str]:
+    module_names = set(globals().keys())
+    if _RUNTIME_MODULE is not None:
+        module_names.update(dir(_RUNTIME_MODULE))
+    return sorted(module_names)
 
 
 if __name__ == "__main__":
