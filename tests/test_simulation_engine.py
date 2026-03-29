@@ -80,6 +80,10 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     request.collect_hit_tables = False
     request.single_sample_indices = np.array([0], dtype=np.int64)
     request.best_sample_indices_out = np.array([-1], dtype=np.int64)
+    request.geometry.pixel_size_m = 172e-6
+    request.geometry.sample_width_m = 2.5e-3
+    request.geometry.sample_length_m = 4.0e-3
+    request.beam.n2_sample_array = np.array([1.0 + 0.1j], dtype=np.complex128)
     seen: dict[str, object] = {}
 
     def fake_runner(*args, **kwargs):
@@ -100,6 +104,10 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     assert seen["collect_hit_tables"] is False
     assert np.array_equal(seen["single_sample_indices"], request.single_sample_indices)
     assert np.array_equal(seen["best_sample_indices_out"], request.best_sample_indices_out)
+    assert seen["pixel_size_m"] == request.geometry.pixel_size_m
+    assert seen["sample_width_m"] == request.geometry.sample_width_m
+    assert seen["sample_length_m"] == request.geometry.sample_length_m
+    assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
 
 
 def test_simulate_qr_rods_respects_typed_request_with_custom_runner() -> None:
@@ -128,6 +136,10 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
     request = _build_request()
     request.optics_mode = 5
     request.collect_hit_tables = False
+    request.geometry.pixel_size_m = 90e-6
+    request.geometry.sample_width_m = 1.0e-3
+    request.geometry.sample_length_m = 3.0e-3
+    request.beam.n2_sample_array = np.array([1.0 + 0.05j], dtype=np.complex128)
     qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
     seen: dict[str, object] = {}
 
@@ -148,3 +160,7 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
 
     assert seen["optics_mode"] == 5
     assert seen["collect_hit_tables"] is False
+    assert seen["pixel_size_m"] == request.geometry.pixel_size_m
+    assert seen["sample_width_m"] == request.geometry.sample_width_m
+    assert seen["sample_length_m"] == request.geometry.sample_length_m
+    assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)

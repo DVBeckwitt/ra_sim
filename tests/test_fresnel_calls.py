@@ -90,6 +90,8 @@ def test_sample_term_precompute_uses_boolean_incident_flags(monkeypatch) -> None
         np.array([0.0], dtype=np.float64),
         0.0,
         1.0,
+        0.0,
+        0.0,
         diffraction.OPTICS_MODE_FAST,
         0.0,
         0.0,

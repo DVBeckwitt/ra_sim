@@ -193,6 +193,11 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                     "solve_q_steps" in call_kwargs
                     or "solve_q_rel_tol" in call_kwargs
                     or "solve_q_mode" in call_kwargs
+                    or "thickness" in call_kwargs
+                    or "pixel_size_m" in call_kwargs
+                    or "sample_width_m" in call_kwargs
+                    or "sample_length_m" in call_kwargs
+                    or "n2_sample_array_override" in call_kwargs
                 )
                 and "unexpected keyword" in str(exc)
             ):
@@ -200,6 +205,11 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 reduced_kwargs.pop("solve_q_steps", None)
                 reduced_kwargs.pop("solve_q_rel_tol", None)
                 reduced_kwargs.pop("solve_q_mode", None)
+                reduced_kwargs.pop("thickness", None)
+                reduced_kwargs.pop("pixel_size_m", None)
+                reduced_kwargs.pop("sample_width_m", None)
+                reduced_kwargs.pop("sample_length_m", None)
+                reduced_kwargs.pop("n2_sample_array_override", None)
                 return fn(*args, **reduced_kwargs)
             raise
 
@@ -1166,10 +1176,7 @@ def _evaluate_geometry_fit_dataset_point_matches(
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
-        optics_mode=int(local.get("optics_mode", 0)),
-        solve_q_steps=int(mosaic.get("solve_q_steps", 1000)),
-        solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", 5.0e-4)),
-        solve_q_mode=int(mosaic.get("solve_q_mode", 1)),
+        **_simulation_kernel_kwargs(local, mosaic),
         single_sample_indices=single_ray_indices,
     )
 
@@ -1685,10 +1692,7 @@ def _simulate_with_cache(
         params.get('uv1', np.array([1.0, 0.0, 0.0])),
         params.get('uv2', np.array([0.0, 1.0, 0.0])),
         save_flag=0,
-        optics_mode=int(params.get('optics_mode', 0)),
-        solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
-        solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
-        solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
+        **_simulation_kernel_kwargs(params, mosaic),
     )
 
     image = np.asarray(image, dtype=np.float64)
@@ -1919,9 +1923,21 @@ def fit_mosaic_widths_separable(
             unit_x,
             n_detector,
             0,
-            solve_q_steps=solve_q_steps,
-            solve_q_rel_tol=solve_q_rel_tol,
-            solve_q_mode=solve_q_mode,
+            **_simulation_kernel_kwargs(
+                {
+                    "optics_mode": params.get("optics_mode", 0),
+                    "sample_depth_m": params.get("sample_depth_m", params.get("thickness", 0.0)),
+                    "pixel_size_m": params.get("pixel_size_m", params.get("pixel_size", 100e-6)),
+                    "sample_width_m": params.get("sample_width_m", 0.0),
+                    "sample_length_m": params.get("sample_length_m", 0.0),
+                },
+                {
+                    "solve_q_steps": solve_q_steps,
+                    "solve_q_rel_tol": solve_q_rel_tol,
+                    "solve_q_mode": solve_q_mode,
+                    "n2_sample_array": params.get("mosaic_params", {}).get("n2_sample_array"),
+                },
+            ),
         )
         image = np.asarray(image, dtype=np.float64)
         if not record_hits:
@@ -2523,9 +2539,38 @@ def fit_mosaic_widths_separable(
 def _estimate_pixel_size(params: Dict[str, float]) -> float:
     pixel_size = params.get('pixel_size')
     if pixel_size is None:
+        pixel_size = params.get('pixel_size_m')
+    if pixel_size is None:
         # Fall back to detector distance divided by nominal pixels for 4k detector
         pixel_size = params.get('corto_detector', 1.0) / 4096.0
     return max(float(pixel_size), 1e-6)
+
+
+def _simulation_kernel_kwargs(
+    params: Dict[str, object],
+    mosaic: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    mosaic_params = params.get("mosaic_params", {}) if mosaic is None else mosaic
+    if not isinstance(mosaic_params, dict):
+        mosaic_params = {}
+
+    kwargs: Dict[str, object] = {
+        "optics_mode": int(params.get("optics_mode", 0)),
+        "solve_q_steps": int(mosaic_params.get("solve_q_steps", 1000)),
+        "solve_q_rel_tol": float(mosaic_params.get("solve_q_rel_tol", 5.0e-4)),
+        "solve_q_mode": int(mosaic_params.get("solve_q_mode", 1)),
+        "thickness": float(params.get("sample_depth_m", params.get("thickness", 0.0))),
+        "pixel_size_m": float(params.get("pixel_size_m", params.get("pixel_size", 100e-6))),
+        "sample_width_m": float(params.get("sample_width_m", 0.0)),
+        "sample_length_m": float(params.get("sample_length_m", 0.0)),
+    }
+    n2_sample_array = mosaic_params.get("n2_sample_array")
+    if n2_sample_array is not None:
+        kwargs["n2_sample_array_override"] = np.asarray(
+            n2_sample_array,
+            dtype=np.complex128,
+        )
+    return kwargs
 
 
 def _interpolate_line(points: List[Tuple[float, float]]) -> np.ndarray:
@@ -3748,10 +3793,7 @@ def simulate_and_compare_hkl(
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=0,
-        optics_mode=int(params.get('optics_mode', 0)),
-        solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
-        solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
-        solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
+        **_simulation_kernel_kwargs(params, mosaic),
     )
     maxpos = hit_tables_to_max_positions(hit_tables)
 
@@ -4596,10 +4638,7 @@ def fit_geometry_parameters(
             np.array([1.0, 0.0, 0.0]),
             np.array([0.0, 1.0, 0.0]),
             save_flag=0,
-            optics_mode=int(local.get('optics_mode', 0)),
-            solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
-            solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
-            solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
+            **_simulation_kernel_kwargs(local, mosaic),
             single_sample_indices=single_ray_indices,
         )
 
@@ -5271,10 +5310,7 @@ def fit_geometry_parameters(
                     np.array([1.0, 0.0, 0.0]),
                     np.array([0.0, 1.0, 0.0]),
                     save_flag=0,
-                    optics_mode=int(local.get('optics_mode', 0)),
-                    solve_q_steps=int(mosaic.get('solve_q_steps', 1000)),
-                    solve_q_rel_tol=float(mosaic.get('solve_q_rel_tol', 5.0e-4)),
-                    solve_q_mode=int(mosaic.get('solve_q_mode', 1)),
+                    **_simulation_kernel_kwargs(local, mosaic),
                     best_sample_indices_out=best_indices,
                 )
                 return dataset_ctx, best_indices

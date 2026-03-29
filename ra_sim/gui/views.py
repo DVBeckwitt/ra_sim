@@ -973,6 +973,39 @@ def create_beam_mosaic_parameter_sliders(
         geometry_parent,
     )
     _standard(
+        "sample_width",
+        "Sample Width (m)",
+        0.0,
+        20.0e-3,
+        float(values["sample_width_m"]),
+        0.1e-3,
+        geometry_parent,
+        allow_range_expand=True,
+        range_expand_pad=1.0e-3,
+    )
+    _standard(
+        "sample_length",
+        "Sample Length (m)",
+        0.0,
+        20.0e-3,
+        float(values["sample_length_m"]),
+        0.1e-3,
+        geometry_parent,
+        allow_range_expand=True,
+        range_expand_pad=1.0e-3,
+    )
+    _standard(
+        "sample_depth",
+        "Sample Depth (m)",
+        0.0,
+        1.0e-6,
+        float(values["sample_depth_m"]),
+        1.0e-9,
+        geometry_parent,
+        allow_range_expand=True,
+        range_expand_pad=1.0e-7,
+    )
+    _standard(
         "debye_x",
         "Debye Qz",
         0.0,

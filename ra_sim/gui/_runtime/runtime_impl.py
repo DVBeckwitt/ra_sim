@@ -44,7 +44,11 @@ from ra_sim.utils.stacking_fault import (
     validate_phase_delta_expression,
 )
 
-from ra_sim.utils.calculations import IndexofRefraction
+from ra_sim.utils.calculations import (
+    IndexofRefraction,
+    resolve_index_of_refraction,
+    resolve_index_of_refraction_array,
+)
 from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
 from ra_sim.utils.tools import (
     miller_generator,
@@ -424,6 +428,9 @@ psi_z = sample_config.get("psi_z_deg", 0.0)
 zb = sample_config.get("zb", 0.0)
 bw_sigma = beam_config.get("bandwidth_sigma_fraction", 0.05e-3) * fwhm2sigma
 zs = sample_config.get("zs", 0.0)
+sample_width_m = float(sample_config.get("width_m", 0.0))
+sample_length_m = float(sample_config.get("length_m", 0.0))
+sample_depth_m = float(sample_config.get("depth_m", 0.0))
 debye_x = debye_config.get("x", 0.0)
 debye_y = debye_config.get("y", 0.0)
 
@@ -574,8 +581,44 @@ def _active_primary_cif_path(atom_site_values=None):
     )
 
 
+def _resolve_optics_cif_path(atom_site_values=None):
+    """Return the CIF path used for optical constants."""
+
+    try:
+        active_path = _active_primary_cif_path(atom_site_values=atom_site_values)
+    except Exception:
+        active_path = None
+    if active_path:
+        return str(active_path)
+    return str(cif_file)
+
+
+def _current_nominal_n2(active_cif_path=None):
+    """Return the nominal complex index for the active beam wavelength."""
+
+    optics_path = _resolve_optics_cif_path() if active_cif_path is None else str(active_cif_path)
+    return resolve_index_of_refraction(
+        float(lambda_) * 1.0e-10,
+        cif_path=optics_path,
+    )
+
+
+def _current_sample_n2_array(wavelength_angstrom_array, active_cif_path=None):
+    """Return wavelength-specific complex indices for the active beam samples."""
+
+    optics_path = _resolve_optics_cif_path() if active_cif_path is None else str(active_cif_path)
+    wavelength_m = np.asarray(wavelength_angstrom_array, dtype=np.float64) * 1.0e-10
+    return resolve_index_of_refraction_array(
+        wavelength_m,
+        cif_path=optics_path,
+    )
+
+
 def _reset_atom_site_override_cache():
     gui_structure_model.reset_atom_site_override_cache(atom_site_override_state)
+
+
+n2 = _current_nominal_n2()
 
 # pull the raw text
 a_text = blk.get("_cell_length_a")
@@ -657,6 +700,9 @@ defaults = {
     'psi_z': psi_z,
     'zs': zs,
     'zb': zb,
+    'sample_width_m': sample_width_m,
+    'sample_length_m': sample_length_m,
+    'sample_depth_m': sample_depth_m,
     'debye_x': debye_x,
     'debye_y': debye_y,
     'corto_detector': Distance_CoR_to_Detector,
@@ -1461,6 +1507,7 @@ def build_mosaic_params():
         "theta_array":        simulation_runtime_state.profile_cache["theta_array"],
         "phi_array":          simulation_runtime_state.profile_cache["phi_array"],
         "wavelength_array":   simulation_runtime_state.profile_cache["wavelength_array"],   #  <<< name fixed
+        "n2_sample_array":    simulation_runtime_state.profile_cache.get("n2_sample_array"),
         "sigma_mosaic_deg":   sigma_mosaic_var.get(),
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
         "eta":                eta_var.get(),
@@ -4178,6 +4225,18 @@ def update_mosaic_cache():
             "_sampling_signature": sampling_signature,
         }
 
+    active_optics_cif_path = _resolve_optics_cif_path()
+    optics_signature = (
+        tuple(simulation_runtime_state.profile_cache.get("_sampling_signature", sampling_signature)),
+        os.path.abspath(str(active_optics_cif_path)),
+    )
+    if simulation_runtime_state.profile_cache.get("_optics_signature") != optics_signature:
+        simulation_runtime_state.profile_cache["n2_sample_array"] = _current_sample_n2_array(
+            simulation_runtime_state.profile_cache.get("wavelength_array", []),
+            active_cif_path=active_optics_cif_path,
+        )
+        simulation_runtime_state.profile_cache["_optics_signature"] = optics_signature
+
     simulation_runtime_state.profile_cache.update(
         {
             "sigma_mosaic_deg": sigma_mosaic_var.get(),
@@ -4356,6 +4415,9 @@ def do_update():
     psi_z_updated      = float(psi_z_var.get())
     zs_updated         = float(zs_var.get())
     zb_updated         = float(zb_var.get())
+    sample_width_updated = float(sample_width_var.get())
+    sample_length_updated = float(sample_length_var.get())
+    sample_depth_updated = float(sample_depth_var.get())
     cor_angle_updated  = float(cor_angle_var.get())
     a_updated          = float(a_var.get())
     c_updated          = float(c_var.get())
@@ -4436,6 +4498,9 @@ def do_update():
             round(psi_z_updated, 6),
             round(zs_updated, 9),
             round(zb_updated, 9),
+            round(sample_width_updated, 9),
+            round(sample_length_updated, 9),
+            round(sample_depth_updated, 12),
             round(debye_x_updated, 6),
             round(debye_y_updated, 6),
             round(a_updated, 6),
@@ -4505,6 +4570,9 @@ def do_update():
                     cor_angle_deg=float(cor_angle_updated),
                     unit_x=request_unit_x,
                     n_detector=request_n_detector,
+                    pixel_size_m=float(pixel_size_m),
+                    sample_width_m=float(sample_width_updated),
+                    sample_length_m=float(sample_length_updated),
                 ),
                 beam=BeamSamples(
                     beam_x_array=np.asarray(mosaic_params["beam_x_array"], dtype=np.float64),
@@ -4514,6 +4582,14 @@ def do_update():
                     wavelength_array=np.asarray(
                         mosaic_params["wavelength_array"],
                         dtype=np.float64,
+                    ),
+                    n2_sample_array=(
+                        None
+                        if mosaic_params.get("n2_sample_array") is None
+                        else np.asarray(
+                            mosaic_params["n2_sample_array"],
+                            dtype=np.complex128,
+                        )
                     ),
                 ),
                 mosaic=MosaicParams(
@@ -4531,7 +4607,7 @@ def do_update():
                 n2=n2,
                 image_buffer=image_buffer,
                 save_flag=0,
-                thickness=0.0,
+                thickness=float(sample_depth_updated),
                 optics_mode=int(optics_mode_flag),
                 collect_hit_tables=collect_hit_tables_requested,
             )
@@ -5232,6 +5308,9 @@ def reset_to_defaults():
     psi_z_var.set(defaults['psi_z'])
     zs_var.set(defaults['zs'])
     zb_var.set(defaults['zb'])
+    sample_width_var.set(defaults['sample_width_m'])
+    sample_length_var.set(defaults['sample_length_m'])
+    sample_depth_var.set(defaults['sample_depth_m'])
     debye_x_var.set(defaults['debye_x'])
     debye_y_var.set(defaults['debye_y'])
     corto_detector_var.set(defaults['corto_detector'])
@@ -5416,6 +5495,11 @@ gui_views.populate_stacked_button_group(
                     solve_q_steps=current_solve_q_values().steps,
                     solve_q_rel_tol=current_solve_q_values().rel_tol,
                     solve_q_mode=current_solve_q_values().mode_flag,
+                    pixel_size_m=float(pixel_size_m),
+                    sample_width_m=float(sample_width_var.get()),
+                    sample_length_m=float(sample_length_var.get()),
+                    thickness=float(sample_depth_var.get()),
+                    n2_sample_array=simulation_runtime_state.profile_cache.get("n2_sample_array"),
                 ),
                 [center_x_var.get(), center_y_var.get()],
                 {
@@ -5902,6 +5986,9 @@ def _import_full_gui_state() -> None:
             chi_var,
             zs_var,
             zb_var,
+            sample_width_var,
+            sample_length_var,
+            sample_depth_var,
             debye_x_var,
             debye_y_var,
             corto_detector_var,
@@ -8636,6 +8723,11 @@ def _legacy_auto_match_on_fit_geometry_click():
                             solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
                             solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
                             solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
+                            thickness=float(sample_depth_var.get()),
+                            pixel_size_m=float(pixel_size_m),
+                            sample_width_m=float(sample_width_var.get()),
+                            sample_length_m=float(sample_length_var.get()),
+                            n2_sample_array_override=mosaic.get("n2_sample_array"),
                         )
 
                         maxpos = hit_tables_to_max_positions(hit_tables)
@@ -8743,6 +8835,11 @@ def _legacy_auto_match_on_fit_geometry_click():
                         solve_q_steps=int(mosaic.get("solve_q_steps", DEFAULT_SOLVE_Q_STEPS)),
                         solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", DEFAULT_SOLVE_Q_REL_TOL)),
                         solve_q_mode=int(mosaic.get("solve_q_mode", DEFAULT_SOLVE_Q_MODE)),
+                        thickness=float(sample_depth_var.get()),
+                        pixel_size_m=float(pixel_size_m),
+                        sample_width_m=float(sample_width_var.get()),
+                        sample_length_m=float(sample_length_var.get()),
+                        n2_sample_array_override=mosaic.get("n2_sample_array"),
                     )
 
                     maxpos = hit_tables_to_max_positions(hit_tables)
@@ -9324,6 +9421,9 @@ def on_fit_mosaic_click():
         'psi_z':         psi_z_var.get(),
         'zs':            zs_var.get(),
         'zb':            zb_var.get(),
+        'sample_width_m': sample_width_var.get(),
+        'sample_length_m': sample_length_var.get(),
+        'sample_depth_m': sample_depth_var.get(),
         'chi':           chi_var.get(),
         'n2':            n2,
         'mosaic_params': mosaic_params,
@@ -9337,6 +9437,8 @@ def on_fit_mosaic_click():
         'gamma':          gamma_var.get(),
         'Gamma':          Gamma_var.get(),
         'optics_mode':    _current_optics_mode_flag(),
+        'pixel_size':     pixel_size_m,
+        'pixel_size_m':   pixel_size_m,
     }
 
     progress_label_mosaic.config(text="Running mosaic optimization…")
@@ -9538,6 +9640,9 @@ def save_q_space_representation():
         "psi_z": psi_z_var.get(),
         "zs": zs_var.get(),
         "zb": zb_var.get(),
+        "sample_width_m": sample_width_var.get(),
+        "sample_length_m": sample_length_var.get(),
+        "sample_depth_m": sample_depth_var.get(),
         "debye_x": debye_x_var.get(),
         "debye_y": debye_y_var.get(),
         "corto_detector": corto_detector_var.get(),
@@ -9561,6 +9666,7 @@ def save_q_space_representation():
         "theta_array":  simulation_runtime_state.profile_cache.get("theta_array", []),
         "phi_array":    simulation_runtime_state.profile_cache.get("phi_array", []),
         "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
+        "n2_sample_array": simulation_runtime_state.profile_cache.get("n2_sample_array"),
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
@@ -9611,10 +9717,15 @@ def save_q_space_representation():
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
         save_flag=1,
+        thickness=float(sample_depth_var.get()),
         optics_mode=_current_optics_mode_flag(),
         solve_q_steps=int(mosaic_params["solve_q_steps"]),
         solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
         solve_q_mode=int(mosaic_params["solve_q_mode"]),
+        pixel_size_m=float(pixel_size_m),
+        sample_width_m=float(sample_width_var.get()),
+        sample_length_m=float(sample_length_var.get()),
+        n2_sample_array_override=mosaic_params.get("n2_sample_array"),
     )
 
     max_positions_local = hit_tables_to_max_positions(hit_tables)
@@ -9931,6 +10042,9 @@ gui_views.create_beam_mosaic_parameter_sliders(
         "psi_z": defaults["psi_z"],
         "zs": defaults["zs"],
         "zb": defaults["zb"],
+        "sample_width_m": defaults["sample_width_m"],
+        "sample_length_m": defaults["sample_length_m"],
+        "sample_depth_m": defaults["sample_depth_m"],
         "debye_x": defaults["debye_x"],
         "debye_y": defaults["debye_y"],
         "corto_detector": defaults["corto_detector"],
@@ -9964,6 +10078,12 @@ zs_var = beam_mosaic_parameter_sliders_view_state.zs_var
 zs_scale = beam_mosaic_parameter_sliders_view_state.zs_scale
 zb_var = beam_mosaic_parameter_sliders_view_state.zb_var
 zb_scale = beam_mosaic_parameter_sliders_view_state.zb_scale
+sample_width_var = beam_mosaic_parameter_sliders_view_state.sample_width_var
+sample_width_scale = beam_mosaic_parameter_sliders_view_state.sample_width_scale
+sample_length_var = beam_mosaic_parameter_sliders_view_state.sample_length_var
+sample_length_scale = beam_mosaic_parameter_sliders_view_state.sample_length_scale
+sample_depth_var = beam_mosaic_parameter_sliders_view_state.sample_depth_var
+sample_depth_scale = beam_mosaic_parameter_sliders_view_state.sample_depth_scale
 debye_x_var = beam_mosaic_parameter_sliders_view_state.debye_x_var
 debye_x_scale = beam_mosaic_parameter_sliders_view_state.debye_x_scale
 debye_y_var = beam_mosaic_parameter_sliders_view_state.debye_y_var
@@ -10012,6 +10132,9 @@ geometry_fit_runtime_workflow = (
             psi_z_var=psi_z_var,
             chi_var=chi_var,
             cor_angle_var=cor_angle_var,
+            sample_width_var=sample_width_var,
+            sample_length_var=sample_length_var,
+            sample_depth_var=sample_depth_var,
             gamma_var=gamma_var,
             Gamma_var=Gamma_var,
             corto_detector_var=corto_detector_var,
@@ -10032,7 +10155,8 @@ geometry_fit_runtime_workflow = (
             current_optics_mode_flag=_current_optics_mode_flag,
             lambda_value=lambda_,
             psi=psi,
-            n2=n2,
+            n2=lambda: n2,
+            pixel_size_value=float(pixel_size_m),
         ),
         manual_dataset_bindings_factory_kwargs={
             "osc_files_factory": (lambda: tuple(background_runtime_state.osc_files)),
@@ -10775,6 +10899,8 @@ def _reset_structure_model_control_vars(
 def _apply_primary_cif_path(raw_path):
     """Load a new primary CIF file and rebuild diffraction inputs."""
 
+    global n2
+
     text_path = str(raw_path).strip().strip('"').strip("'")
     if not text_path:
         progress_label.config(text="No CIF file path provided.")
@@ -10842,6 +10968,8 @@ def _apply_primary_cif_path(raw_path):
         )
         a_var.set(av)
         c_var.set(cv)
+        n2 = _current_nominal_n2(_current_primary_cif_path())
+        simulation_runtime_state.profile_cache.pop("_optics_signature", None)
         simulation_runtime_state.last_simulation_signature = None
         progress_label.config(text=f"Loaded CIF: {Path(_current_primary_cif_path()).name}")
     except Exception as exc:
@@ -11032,6 +11160,9 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
             chi_var,
             zs_var,
             zb_var,
+            sample_width_var,
+            sample_length_var,
+            sample_depth_var,
             debye_x_var,
             debye_y_var,
             corto_detector_var,

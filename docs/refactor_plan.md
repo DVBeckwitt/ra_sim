@@ -5,7 +5,7 @@
 This document tracks the maintainability refactor work in the repository:
 
 - what has already been completed
-- what is still left
+- what targeted follow-up remains, if any
 - why the remaining work matters
 - the recommended order for finishing it
 
@@ -14,7 +14,8 @@ high-level migration summary; this file is the working plan.
 
 ## Current Position
 
-As of 2026-03-29, the refactor has made real progress. The legacy root-script
+As of 2026-03-29, the broad maintainability refactor is functionally complete.
+The legacy root-script
 problem is largely solved, the last broad GUI runtime-state extraction pass has
 landed, the structure-model / diffuse-HT rebuild workflow plus the primary-CIF
 reload state transition have moved into an extracted helper module, the shared
@@ -110,6 +111,23 @@ The primary runtime implementation now also resolves geometry-fit constraint
 parameter domains plus default window/pull calculations through shared helpers
 in `ra_sim.gui.geometry_fit` instead of keeping those calculations inline in
 `runtime_impl.py`.
+
+### How We Know It Is Done
+
+- `main.py`, `ra_sim.gui.app`, and `ra_sim.gui.runtime` are now import-safe
+  entry boundaries instead of launch-time monoliths.
+- `ra_sim.gui.runtime` is now a thin wrapper, and
+  `ra_sim/gui/_runtime/runtime_impl.py` is now treated as an accepted
+  integration shell rather than a target for open-ended line-count reduction.
+- `ra_sim.gui.state`, `ra_sim.gui.controllers`, and `ra_sim.gui.views` now own
+  meaningful shared state, workflow orchestration, and Tk construction
+  boundaries.
+- `ra_sim.config` is now the canonical and only documented config helper
+  surface.
+- New refactor edits now require a concrete reliability, testability,
+  duplicated-logic removal, bug-risk reduction, or feature-delivery reason.
+- Once those conditions hold, remaining changes are targeted maintenance, not
+  another broad refactor tranche.
 
 ### What Is Already Done
 
@@ -944,7 +962,7 @@ Definition of done:
 
 ### 2. Controllers / State / Views Migration
 
-Status: In progress
+Status: Completed (targeted follow-up only)
 
 What is done:
 
@@ -1081,14 +1099,13 @@ What is done:
 
 What is left:
 
-- The GUI still does not flow broadly through an explicit
-  state/controller/view boundary.
-- The new controller/state boundary is now real for a larger share of the GUI,
-  but turning it into the dominant app structure should now be driven by
-  concrete workflow simplification, not by forcing every remaining callback
-  through the new modules.
-- The next practical boundary targets are the shared workflow transitions that
-  still carry duplicated logic, import/startup coupling, or test friction.
+- No broad controller/state/view migration blockers remain.
+- The `state` / `controllers` / `views` boundary is now real enough to count as
+  the default shared app structure.
+- Future movement into those modules should be driven by duplicated workflow
+  simplification, import/startup safety, test-friction reduction, or direct
+  feature work rather than by forcing every remaining callback through the new
+  boundary.
 - Thin one-off Tk adapters can remain in the internal runtime implementation
   when moving them would be mostly mechanical.
 
@@ -1104,6 +1121,8 @@ Definition of done:
 - `state.py` owns meaningful GUI state structures.
 - `controllers.py` owns user-action orchestration and workflow transitions.
 - `views.py` owns actual Tk construction helpers beyond a minimal root factory.
+- Remaining thin adapters are accepted as integration glue when moving them
+  would be mostly mechanical.
 
 ### 3. Compatibility Cleanup
 
@@ -1442,7 +1461,8 @@ Current status:
 
 ## Suggested Next Concrete Step
 
-The next best step has shifted to an explicit execution rule:
+The broad refactor now meets its exit criteria. The next concrete step is to
+keep it closed out by default:
 
 - keep the runtime/config/entrypoint/root-cleanup refactor closed out and stop
   expanding it by default
@@ -1453,7 +1473,7 @@ The next best step has shifted to an explicit execution rule:
 - let future cleanup be driven by active product work rather than another
   open-ended structural sweep
 
-Operationally, the next step taken is:
+Operationally, the standing rule is:
 
 - add/maintain the doc-level gate: no runtime change lands without a concrete
   reliability, testability, or feature-delivery reason.

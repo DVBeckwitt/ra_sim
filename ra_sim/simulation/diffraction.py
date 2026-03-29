@@ -132,6 +132,10 @@ _PROCESS_PEAKS_PARALLEL_PARAM_NAMES = (
     "single_sample_indices",
     "best_sample_indices_out",
     "collect_hit_tables",
+    "pixel_size_m",
+    "sample_width_m",
+    "sample_length_m",
+    "n2_sample_array_override",
 )
 
 _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
@@ -145,6 +149,10 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "single_sample_indices": None,
     "best_sample_indices_out": None,
     "collect_hit_tables": True,
+    "pixel_size_m": 100e-6,
+    "sample_width_m": 0.0,
+    "sample_length_m": 0.0,
+    "n2_sample_array_override": None,
 }
 
 _EMPTY_PROCESS_PEAKS_SAFE_STATS = {
@@ -1078,9 +1086,7 @@ def _build_fast_optics_lut_row(lut_row, k0, n2_samp, n2_real, thickness):
 
         _, im_k_z_f = ktz_components(k0, n2_samp, theta)
         if thickness > 0.0:
-            L_out = safe_path_length(thickness, theta)
-            if L_out <= 0.0:
-                L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
+            L_out = thickness
         else:
             L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
 
@@ -2810,6 +2816,8 @@ def _precompute_sample_terms(
     phi_array,
     zb,
     thickness,
+    sample_width_m,
+    sample_length_m,
     optics_mode,
     theta_initial_deg,
     cor_angle_deg,
@@ -2849,6 +2857,16 @@ def _precompute_sample_terms(
                 best_idx = ii
 
     # Build local incidence basis around the sample normal.
+    sample_axis_x = np.array(
+        [R_sample[0, 0], R_sample[1, 0], R_sample[2, 0]],
+        dtype=np.float64,
+    )
+    sample_axis_y = np.array(
+        [R_sample[0, 1], R_sample[1, 1], R_sample[2, 1]],
+        dtype=np.float64,
+    )
+    half_width = 0.5 * sample_width_m if sample_width_m > 0.0 else 0.0
+    half_length = 0.5 * sample_length_m if sample_length_m > 0.0 else 0.0
     u_ref = np.array([0.0, 0.0, -1.0])
     e1_temp = np.cross(n_surf, u_ref)
     e1_norm = sqrt(
@@ -2907,6 +2925,26 @@ def _precompute_sample_terms(
         ix, iy, iz, valid_int = intersect_line_plane(beam_start, k_in, P0_rot, n_surf)
         if not valid_int:
             continue
+
+        rel_x = ix - P0_rot[0]
+        rel_y = iy - P0_rot[1]
+        rel_z = iz - P0_rot[2]
+        if half_width > 0.0:
+            x_local = (
+                rel_x * sample_axis_x[0]
+                + rel_y * sample_axis_x[1]
+                + rel_z * sample_axis_x[2]
+            )
+            if np.abs(x_local) > half_width:
+                continue
+        if half_length > 0.0:
+            y_local = (
+                rel_x * sample_axis_y[0]
+                + rel_y * sample_axis_y[1]
+                + rel_z * sample_axis_y[2]
+            )
+            if np.abs(y_local) > half_length:
+                continue
 
         sample_terms[i_samp, _SAMPLE_COL_VALID] = 1.0
         sample_terms[i_samp, _SAMPLE_COL_I_PLANE_X] = ix
@@ -2992,8 +3030,9 @@ def _precompute_sample_terms(
             )
             Ti2 = _sanitize_transmission_power(Ti2)
 
-            L_in = safe_path_length(thickness, th_t)
-            if L_in <= 0.0:
+            if thickness > 0.0:
+                L_in = thickness
+            else:
                 L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
 
         sample_terms[i_samp, _SAMPLE_COL_KX_SCAT] = k_x_scat
@@ -3249,6 +3288,7 @@ def _calculate_phi_from_precomputed(
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    pixel_size_m=100e-6,
     forced_sample_idx=-1,
     sample_weights=None,
 ):
@@ -3260,7 +3300,10 @@ def _calculate_phi_from_precomputed(
     n_samp = sample_terms.shape[0]
     debye_x_sq = debye_x * debye_x
     debye_y_sq = debye_y * debye_y
-    pixel_scale = 1.0 / 100e-6
+    pixel_size_eff = float(pixel_size_m)
+    if (not np.isfinite(pixel_size_eff)) or pixel_size_eff <= 0.0:
+        pixel_size_eff = 100e-6
+    pixel_scale = 1.0 / pixel_size_eff
     save_flag_eff = int(save_flag)
     capture_aux = True
     if save_flag_eff >= 2:
@@ -3690,6 +3733,9 @@ def calculate_phi(
     solve_q_steps=DEFAULT_SOLVE_Q_STEPS,
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
     forced_sample_idx=-1,
 ):
     """
@@ -3722,10 +3768,12 @@ def calculate_phi(
         phi_array,
         zb,
         thickness,
+        sample_width_m,
+        sample_length_m,
         optics_mode,
         theta_initial_deg,
         cor_angle_deg,
-        psi_z_deg,
+        0.0,
         R_z_R_y,
         R_ZY_n,
         P0,
@@ -3764,6 +3812,7 @@ def calculate_phi(
         solve_q_steps,
         solve_q_rel_tol,
         solve_q_mode,
+        pixel_size_m,
         forced_sample_idx,
     )
 
@@ -3798,6 +3847,10 @@ def process_peaks_parallel(
     single_sample_indices=None,
     best_sample_indices_out=None,
     collect_hit_tables=True,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
+    n2_sample_array_override=None,
 ):
     """
     High-level loop over multiple reflections from 'miller', each with an
@@ -3926,7 +3979,12 @@ def process_peaks_parallel(
         if sample_weight_array.shape[0] != n_samp:
             sample_weight_array = None
     n2_sample_array = np.empty(n_samp, dtype=np.complex128)
-    if wavelength_array.size == n_samp:
+    n2_override_array = n2_sample_array_override
+    if n2_override_array is not None:
+        n2_override_array = np.asarray(n2_override_array, dtype=np.complex128).reshape(-1)
+    if n2_override_array is not None and n2_override_array.size == n_samp:
+        n2_sample_array[:] = n2_override_array
+    elif wavelength_array.size == n_samp:
         for i_samp in range(n_samp):
             lam_angstrom = wavelength_array[i_samp]
             if np.isfinite(lam_angstrom) and lam_angstrom > 0.0:
@@ -3953,6 +4011,8 @@ def process_peaks_parallel(
         phi_array,
         zb,
         thickness,
+        sample_width_m,
+        sample_length_m,
         optics_mode,
         theta_initial_deg,
         cor_angle_deg,
@@ -4128,6 +4188,7 @@ def process_peaks_parallel(
                     solve_q_steps_i,
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
+                    pixel_size_m,
                     forced_idx,
                 )
             else:
@@ -4165,6 +4226,7 @@ def process_peaks_parallel(
                     solve_q_steps_i,
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
+                    pixel_size_m,
                     forced_idx,
                     sample_weight_array,
                 )
@@ -4491,6 +4553,13 @@ def _prepare_clustered_process_peaks_call(args, kwargs):
     clustered_args[23] = cluster_wavelength
     clustered_kwargs = dict(call_kwargs)
     clustered_kwargs["sample_weights"] = np.asarray(cluster_weights, dtype=np.float64)
+    cluster_rep_idx = np.asarray(cluster_to_rep, dtype=np.int64)
+    n2_override = clustered_kwargs.get("n2_sample_array_override")
+    if n2_override is not None:
+        n2_override = np.asarray(n2_override, dtype=np.complex128).reshape(-1)
+        if n2_override.size != raw_count:
+            return args, call_kwargs, None
+        clustered_kwargs["n2_sample_array_override"] = n2_override[cluster_rep_idx]
 
     original_best = clustered_kwargs.get("best_sample_indices_out")
     cluster_best = None
@@ -4502,7 +4571,7 @@ def _prepare_clustered_process_peaks_call(args, kwargs):
         "raw_count": raw_count,
         "cluster_count": cluster_count,
         "raw_to_cluster": np.asarray(raw_to_cluster, dtype=np.int64),
-        "cluster_to_rep": np.asarray(cluster_to_rep, dtype=np.int64),
+        "cluster_to_rep": cluster_rep_idx,
         "best_sample_indices_out": original_best,
         "cluster_best_indices_out": cluster_best,
     }
@@ -4898,6 +4967,10 @@ def process_qr_rods_parallel(
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     collect_hit_tables=True,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
+    n2_sample_array_override=None,
 ):
     """Wrapper to process Hendricks–Teller rods instead of individual reflections.
 
@@ -4953,6 +5026,10 @@ def process_qr_rods_parallel(
         solve_q_rel_tol,
         solve_q_mode,
         collect_hit_tables=collect_hit_tables,
+        pixel_size_m=pixel_size_m,
+        sample_width_m=sample_width_m,
+        sample_length_m=sample_length_m,
+        n2_sample_array_override=n2_sample_array_override,
     )
 
     return (*result, degeneracy)

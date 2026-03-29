@@ -109,6 +109,9 @@ class GeometryFitRuntimeValueBindings:
     psi_z_var: object
     chi_var: object
     cor_angle_var: object
+    sample_width_var: object
+    sample_length_var: object
+    sample_depth_var: object
     gamma_var: object
     Gamma_var: object
     corto_detector_var: object
@@ -128,6 +131,7 @@ class GeometryFitRuntimeValueBindings:
     lambda_value: object
     psi: object
     n2: object
+    pixel_size_value: object
 
 
 @dataclass(frozen=True)
@@ -1248,6 +1252,12 @@ def build_runtime_geometry_fit_value_callbacks(
             if use_theta_offset
             else bindings.theta_initial_var.get()
         )
+        n2_value = bindings.n2() if callable(bindings.n2) else bindings.n2
+        pixel_size_value = (
+            bindings.pixel_size_value()
+            if callable(bindings.pixel_size_value)
+            else bindings.pixel_size_value
+        )
         return {
             "a": bindings.a_var.get(),
             "c": bindings.c_var.get(),
@@ -1256,8 +1266,11 @@ def build_runtime_geometry_fit_value_callbacks(
             "psi_z": bindings.psi_z_var.get(),
             "zs": bindings.zs_var.get(),
             "zb": bindings.zb_var.get(),
+            "sample_width_m": bindings.sample_width_var.get(),
+            "sample_length_m": bindings.sample_length_var.get(),
+            "sample_depth_m": bindings.sample_depth_var.get(),
             "chi": bindings.chi_var.get(),
-            "n2": bindings.n2,
+            "n2": n2_value,
             "mosaic_params": dict(bindings.build_mosaic_params() or {}),
             "debye_x": bindings.debye_x_var.get(),
             "debye_y": bindings.debye_y_var.get(),
@@ -1273,6 +1286,8 @@ def build_runtime_geometry_fit_value_callbacks(
             "Gamma": bindings.Gamma_var.get(),
             "cor_angle": bindings.cor_angle_var.get(),
             "optics_mode": bindings.current_optics_mode_flag(),
+            "pixel_size": pixel_size_value,
+            "pixel_size_m": pixel_size_value,
         }
 
     def _current_ui_params() -> dict[str, object]:

@@ -93,6 +93,7 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_sf(monkeypatch):
         solve_q_steps=1000,
         solve_q_rel_tol=5e-4,
         solve_q_mode=0,
+        pixel_size_m=100e-6,
         forced_sample_idx=-1,
     ):
         nonlocal call_count
@@ -165,6 +166,7 @@ def test_process_peaks_parallel_cache_respects_forced_sample_index(monkeypatch):
         solve_q_steps=1000,
         solve_q_rel_tol=5e-4,
         solve_q_mode=0,
+        pixel_size_m=100e-6,
         forced_sample_idx=-1,
     ):
         nonlocal call_count
@@ -233,6 +235,7 @@ def test_process_peaks_parallel_reuses_duplicate_gr_gz_even_with_different_sf(mo
         solve_q_steps=1000,
         solve_q_rel_tol=5e-4,
         solve_q_mode=0,
+        pixel_size_m=100e-6,
         forced_sample_idx=-1,
     ):
         nonlocal call_count
@@ -305,6 +308,7 @@ def test_process_peaks_parallel_cache_matches_uncached_image(monkeypatch):
         solve_q_steps=1000,
         solve_q_rel_tol=5e-4,
         solve_q_mode=0,
+        pixel_size_m=100e-6,
         forced_sample_idx=-1,
     ):
         gr = 4.0 * np.pi / av * np.sqrt((H * H + H * K + K * K) / 3.0)

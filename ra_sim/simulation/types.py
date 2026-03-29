@@ -27,6 +27,9 @@ class DetectorGeometry:
     cor_angle_deg: float
     unit_x: np.ndarray
     n_detector: np.ndarray
+    pixel_size_m: float = 100e-6
+    sample_width_m: float = 0.0
+    sample_length_m: float = 0.0
 
 
 @dataclass
@@ -37,6 +40,7 @@ class BeamSamples:
     phi_array: np.ndarray
     wavelength_array: np.ndarray
     sample_weights: np.ndarray | None = None
+    n2_sample_array: np.ndarray | None = None
 
 
 @dataclass

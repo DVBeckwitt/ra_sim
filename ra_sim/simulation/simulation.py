@@ -98,6 +98,11 @@ def _build_legacy_request(
     solve_q_mode,
     profile_samples,
     profile_rng,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
+    thickness=0.0,
+    n2_sample_array=None,
 ) -> SimulationRequest:
     """Build one typed simulation request from the legacy positional inputs."""
 
@@ -137,6 +142,9 @@ def _build_legacy_request(
         cor_angle_deg=float(cor_angle),
         unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
         n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        pixel_size_m=float(pixel_size_m),
+        sample_width_m=float(sample_width_m),
+        sample_length_m=float(sample_length_m),
     )
     beam = BeamSamples(
         beam_x_array=np.asarray(beam_x_array, dtype=np.float64),
@@ -144,6 +152,11 @@ def _build_legacy_request(
         theta_array=np.asarray(theta_array, dtype=np.float64),
         phi_array=np.asarray(phi_array, dtype=np.float64),
         wavelength_array=np.asarray(wavelength_array, dtype=np.float64),
+        n2_sample_array=(
+            None
+            if n2_sample_array is None
+            else np.asarray(n2_sample_array, dtype=np.complex128)
+        ),
     )
     mosaic = MosaicParams(
         sigma_mosaic_deg=float(_read_runtime_value(sigma_mosaic_var)),
@@ -167,7 +180,7 @@ def _build_legacy_request(
         n2=n2,
         image_buffer=np.zeros((image_size_int, image_size_int), dtype=np.float64),
         save_flag=0,
-        thickness=0.0,
+        thickness=float(thickness),
         optics_mode=OPTICS_MODE_FAST if optics_mode is None else int(optics_mode),
         collect_hit_tables=True,
     )
@@ -207,6 +220,11 @@ def simulate_diffraction(
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,
     profile_samples=None,
     profile_rng=None,
+    pixel_size_m=100e-6,
+    sample_width_m=0.0,
+    sample_length_m=0.0,
+    thickness=0.0,
+    n2_sample_array=None,
 ):
     """Run one legacy positional simulation through the typed engine API."""
 
@@ -244,5 +262,10 @@ def simulate_diffraction(
         solve_q_mode=solve_q_mode,
         profile_samples=profile_samples,
         profile_rng=profile_rng,
+        pixel_size_m=pixel_size_m,
+        sample_width_m=sample_width_m,
+        sample_length_m=sample_length_m,
+        thickness=thickness,
+        n2_sample_array=n2_sample_array,
     )
     return simulate(request, peak_runner=process_peaks_parallel_safe).image

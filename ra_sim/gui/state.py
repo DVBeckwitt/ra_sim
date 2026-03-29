@@ -216,6 +216,12 @@ class BeamMosaicParameterSlidersViewState:
     zs_scale: Any = None
     zb_var: Any = None
     zb_scale: Any = None
+    sample_width_var: Any = None
+    sample_width_scale: Any = None
+    sample_length_var: Any = None
+    sample_length_scale: Any = None
+    sample_depth_var: Any = None
+    sample_depth_scale: Any = None
     debye_x_var: Any = None
     debye_x_scale: Any = None
     debye_y_var: Any = None

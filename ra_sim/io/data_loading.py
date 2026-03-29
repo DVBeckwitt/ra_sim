@@ -229,6 +229,9 @@ def load_parameters(
     chi_var,
     zs_var,
     zb_var,
+    sample_width_var,
+    sample_length_var,
+    sample_depth_var,
     debye_x_var,
     debye_y_var,
     corto_detector_var,
@@ -277,6 +280,9 @@ def load_parameters(
         chi_var.set(params.get('chi', chi_var.get()))
         zs_var.set(params.get('zs', zs_var.get()))
         zb_var.set(params.get('zb', zb_var.get()))
+        sample_width_var.set(params.get('sample_width_m', sample_width_var.get()))
+        sample_length_var.set(params.get('sample_length_m', sample_length_var.get()))
+        sample_depth_var.set(params.get('sample_depth_m', sample_depth_var.get()))
         debye_x_var.set(params.get('debye_x', debye_x_var.get()))
         debye_y_var.set(params.get('debye_y', debye_y_var.get()))
         corto_detector_var.set(params.get('corto_detector', corto_detector_var.get()))
@@ -394,6 +400,9 @@ def save_all_parameters(
     chi_var,
     zs_var,
     zb_var,
+    sample_width_var,
+    sample_length_var,
+    sample_depth_var,
     debye_x_var,
     debye_y_var,
     corto_detector_var,
@@ -439,6 +448,9 @@ def save_all_parameters(
         'chi':            chi_var.get(),
         'zs':             zs_var.get(),
         'zb':             zb_var.get(),
+        'sample_width_m': sample_width_var.get(),
+        'sample_length_m': sample_length_var.get(),
+        'sample_depth_m': sample_depth_var.get(),
         'debye_x':        debye_x_var.get(),
         'debye_y':        debye_y_var.get(),
         'corto_detector': corto_detector_var.get(),

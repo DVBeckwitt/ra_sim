@@ -1,7 +1,8 @@
 # Refactor Migration Notes
 
-See also: `docs/refactor_plan.md` for the active tracking plan covering what is
-done, what is left, and the recommended order for finishing the refactor.
+See also: `docs/refactor_plan.md` for the active tracking plan covering the
+refactor closeout criteria, targeted follow-up, and the recommended execution
+rules going forward.
 
 ## Scope
 
@@ -649,10 +650,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   HKL lookup / selected-peak workflow, selected-peak HKL-pick click
   workflow, and selected-peak Bragg/Ewald intersection workflow
 
-## Remaining Migration Focus
+## Refactor Closeout State
 
-- As of 2026-03-29, the refactor is leaving open-ended `runtime.py`
-  decomposition mode.
+- As of 2026-03-29, the broad maintainability refactor is functionally
+  complete.
+- There is no new broad runtime/controller/view migration tranche queued ahead
+  of feature work.
+- Going forward, refactor edits should be taken only when they buy concrete
+  reliability, testability, duplicated-logic removal, startup-safety, or
+  feature-delivery wins.
+- Open-ended `runtime.py` decomposition is now closed out by default.
 - `ra_sim.gui.runtime` is now an import-safe public wrapper.
 - `main.py` now has explicit root-entrypoint import-safety regression coverage to
   verify launcher delegation stays the only module-level boundary during import.
@@ -729,13 +736,16 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   Bragg-Qr, background, selected-peak, geometry-fit, and integration-range
   workflows, but only when it materially supports those goals or unblocks
   active work.
-- The newer `state` / `controllers` / `views` boundary should keep expanding
-  where it simplifies shared workflows, but it does not need to absorb every
-  thin adapter left in the internal runtime implementation.
+- The newer `state` / `controllers` / `views` boundary is now established as
+  the default shared app structure; it can still expand where that simplifies
+  shared workflows, but it does not need to absorb every thin adapter left in
+  the internal runtime implementation.
 - `ra_sim.config` is now the canonical and only documented config helper
   surface.
 - `ra_sim.gui.main_app` is gone; `ra_sim.gui.app.main` is the canonical
   package GUI entrypoint.
+- Remaining follow-up is now ordinary targeted maintenance, not an active
+  open-ended refactor program.
 
 ## Configuration Changes
 
