@@ -1441,6 +1441,11 @@ def _shutdown_gui():
         simulation_runtime_state.worker_poll_token,
     )
     simulation_runtime_state.worker_poll_token = None
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.analysis_poll_token,
+    )
+    simulation_runtime_state.analysis_poll_token = None
 
     executor = simulation_runtime_state.worker_executor
     simulation_runtime_state.worker_executor = None
@@ -1448,11 +1453,24 @@ def _shutdown_gui():
     simulation_runtime_state.worker_active_job = None
     simulation_runtime_state.worker_queued_job = None
     simulation_runtime_state.worker_ready_result = None
+    analysis_executor = simulation_runtime_state.analysis_executor
+    simulation_runtime_state.analysis_executor = None
+    simulation_runtime_state.analysis_future = None
+    simulation_runtime_state.analysis_active_job = None
+    simulation_runtime_state.analysis_queued_job = None
+    simulation_runtime_state.analysis_ready_result = None
     if executor is not None:
         try:
             executor.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             executor.shutdown(wait=False)
+        except Exception:
+            pass
+    if analysis_executor is not None:
+        try:
+            analysis_executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            analysis_executor.shutdown(wait=False)
         except Exception:
             pass
 
@@ -4148,6 +4166,12 @@ def _refresh_integration_from_cached_results():
     if ai is None:
         return False
 
+    if (
+        simulation_runtime_state.analysis_active_job is not None
+        or simulation_runtime_state.analysis_queued_job is not None
+    ):
+        return False
+
     if simulation_runtime_state.last_res2_sim is None:
         simulation_runtime_state.last_res2_sim = caking(simulation_runtime_state.unscaled_image, ai)
 
@@ -4373,6 +4397,7 @@ def _refresh_run_status_bar() -> None:
         "startup": "Starting",
         "queued": "Queued",
         "computing": "Computing",
+        "analyzing": "Analyzing",
         "applying": "Applying",
         "ready": "Ready",
         "error": "Error",
@@ -4381,6 +4406,13 @@ def _refresh_run_status_bar() -> None:
     if simulation_runtime_state.worker_active_job is not None:
         phase_text = "Computing"
     elif simulation_runtime_state.worker_queued_job is not None and phase_text == "Ready":
+        phase_text = "Queued"
+    elif simulation_runtime_state.analysis_active_job is not None:
+        phase_text = "Analyzing"
+    elif (
+        simulation_runtime_state.analysis_queued_job is not None
+        and phase_text == "Ready"
+    ):
         phase_text = "Queued"
 
     background_total = max(1, len(background_runtime_state.osc_files))
@@ -4426,11 +4458,64 @@ def _refresh_run_status_bar() -> None:
     )
 
 
+def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
+    simulation_runtime_state.last_analysis_signature = None
+    simulation_runtime_state.last_res2_sim = None
+    simulation_runtime_state.last_res2_background = None
+    simulation_runtime_state.last_caked_image_unscaled = None
+    simulation_runtime_state.last_caked_extent = None
+    simulation_runtime_state.last_caked_background_image_unscaled = None
+    simulation_runtime_state.last_caked_radial_values = None
+    simulation_runtime_state.last_caked_azimuth_values = None
+    simulation_runtime_state.caking_cache = {
+        "sim_sig": None,
+        "sim_res2": None,
+        "bg_sig": None,
+        "bg_res2": None,
+    }
+    simulation_runtime_state.last_1d_integration_data.update(
+        {
+            "radials_sim": None,
+            "intensities_2theta_sim": None,
+            "azimuths_sim": None,
+            "intensities_azimuth_sim": None,
+            "radials_bg": None,
+            "intensities_2theta_bg": None,
+            "azimuths_bg": None,
+            "intensities_azimuth_bg": None,
+        }
+    )
+    if clear_1d_lines:
+        _clear_1d_plot_cache_and_lines()
+
+
+def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
+    simulation_runtime_state.analysis_epoch = int(simulation_runtime_state.analysis_epoch) + 1
+
+    ready_result = simulation_runtime_state.analysis_ready_result
+    if (
+        isinstance(ready_result, dict)
+        and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
+    ):
+        simulation_runtime_state.analysis_ready_result = None
+
+    queued_job = simulation_runtime_state.analysis_queued_job
+    if (
+        isinstance(queued_job, dict)
+        and int(queued_job.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
+    ):
+        simulation_runtime_state.analysis_queued_job = None
+
+    if clear_visuals:
+        _clear_cached_analysis_results(clear_1d_lines=True)
+
+
 def _invalidate_simulation_cache() -> None:
     simulation_runtime_state.last_simulation_signature = None
     simulation_runtime_state.simulation_epoch = int(simulation_runtime_state.simulation_epoch) + 1
     simulation_runtime_state.preview_active = False
     simulation_runtime_state.preview_sample_count = None
+    _invalidate_analysis_cache(clear_visuals=True)
 
     ready_result = simulation_runtime_state.worker_ready_result
     if (
@@ -4464,6 +4549,17 @@ def _ensure_simulation_worker_executor():
             thread_name_prefix="ra-sim-sim",
         )
         simulation_runtime_state.worker_executor = executor
+    return executor
+
+
+def _ensure_analysis_worker_executor():
+    executor = simulation_runtime_state.analysis_executor
+    if executor is None:
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="ra-sim-analysis",
+        )
+        simulation_runtime_state.analysis_executor = executor
     return executor
 
 
@@ -4862,6 +4958,263 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
     )
 
 
+def _build_analysis_integrator(job: dict[str, object]) -> AzimuthalIntegrator:
+    center = np.asarray(job["center"], dtype=np.float64)
+    return AzimuthalIntegrator(
+        dist=float(job["distance_m"]),
+        poni1=float(center[0]) * float(job["pixel_size_m"]),
+        poni2=float(center[1]) * float(job["pixel_size_m"]),
+        rot1=0.0,
+        rot2=0.0,
+        rot3=0.0,
+        wavelength=float(job["wavelength_m"]),
+        pixel1=float(job["pixel_size_m"]),
+        pixel2=float(job["pixel_size_m"]),
+    )
+
+
+def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
+    if res2 is None:
+        return None
+
+    caked_img = np.asarray(res2.intensity, dtype=float)
+    radial_vals = np.asarray(res2.radial, dtype=float)
+    azimuth_vals = _wrap_phi_range(_adjust_phi_zero(res2.azimuthal))
+
+    if azimuth_vals.size:
+        azimuth_order = np.argsort(azimuth_vals)
+        azimuth_vals = azimuth_vals[azimuth_order]
+        caked_img = caked_img[azimuth_order, :]
+
+    radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
+    if np.any(radial_mask):
+        radial_vals = radial_vals[radial_mask]
+        caked_img = caked_img[:, radial_mask]
+
+    if radial_vals.size:
+        radial_min = float(np.min(radial_vals))
+        radial_max = float(np.max(radial_vals))
+    else:
+        radial_min, radial_max = 0.0, 90.0
+
+    if azimuth_vals.size:
+        azimuth_min = float(np.min(azimuth_vals))
+        azimuth_max = float(np.max(azimuth_vals))
+    else:
+        azimuth_min, azimuth_max = -180.0, 180.0
+
+    return {
+        "image": np.asarray(caked_img, dtype=float),
+        "radial": np.asarray(radial_vals, dtype=float),
+        "azimuth": np.asarray(azimuth_vals, dtype=float),
+        "extent": [
+            radial_min,
+            radial_max,
+            azimuth_min,
+            azimuth_max,
+        ],
+    }
+
+
+def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
+    ai = _build_analysis_integrator(job)
+    sim_image = np.asarray(job["image"], dtype=np.float64)
+    bg_image = job.get("background_image")
+    bg_array = None if bg_image is None else np.asarray(bg_image, dtype=np.float64)
+
+    analysis_start_time = perf_counter()
+    sim_res2 = caking(sim_image, ai)
+    bg_res2 = caking(bg_array, ai) if bg_array is not None else None
+    sim_caked = _prepare_caked_display_payload(sim_res2)
+    bg_caked = _prepare_caked_display_payload(bg_res2)
+
+    return {
+        "job_id": int(job["job_id"]),
+        "signature": job["signature"],
+        "epoch": int(job["epoch"]),
+        "sim_caking_sig": job.get("sim_caking_sig"),
+        "bg_caking_sig": job.get("bg_caking_sig"),
+        "sim_res2": sim_res2,
+        "bg_res2": bg_res2,
+        "sim_caked": sim_caked,
+        "bg_caked": bg_caked,
+        "analysis_elapsed_ms": (perf_counter() - analysis_start_time) * 1e3,
+    }
+
+
+def _submit_async_analysis_job(job: dict[str, object]) -> None:
+    simulation_runtime_state.analysis_active_job = job
+    simulation_runtime_state.analysis_future = _ensure_analysis_worker_executor().submit(
+        _run_analysis_job,
+        dict(job),
+    )
+    simulation_runtime_state.analysis_error_text = None
+    if simulation_runtime_state.worker_active_job is None:
+        simulation_runtime_state.update_phase = "analyzing"
+    _refresh_run_status_bar()
+    if simulation_runtime_state.analysis_poll_token is None:
+        simulation_runtime_state.analysis_poll_token = root.after(
+            SIMULATION_WORKER_POLL_MS,
+            _poll_async_analysis_job,
+        )
+
+
+def _poll_async_analysis_job() -> None:
+    simulation_runtime_state.analysis_poll_token = None
+    future = simulation_runtime_state.analysis_future
+    active_job = simulation_runtime_state.analysis_active_job
+    if future is None or active_job is None:
+        queued_job = simulation_runtime_state.analysis_queued_job
+        if isinstance(queued_job, dict):
+            simulation_runtime_state.analysis_queued_job = None
+            _submit_async_analysis_job(queued_job)
+            return
+        _refresh_run_status_bar()
+        return
+
+    if not future.done():
+        simulation_runtime_state.analysis_poll_token = root.after(
+            SIMULATION_WORKER_POLL_MS,
+            _poll_async_analysis_job,
+        )
+        return
+
+    simulation_runtime_state.analysis_future = None
+    simulation_runtime_state.analysis_active_job = None
+    queued_job = simulation_runtime_state.analysis_queued_job
+    try:
+        result = future.result()
+    except Exception as exc:
+        simulation_runtime_state.analysis_error_text = str(exc)
+        if simulation_runtime_state.worker_active_job is None:
+            simulation_runtime_state.update_phase = "error"
+        if "progress_label" in globals() and progress_label is not None:
+            progress_label.config(text=f"Analysis update failed: {exc}")
+        _refresh_run_status_bar()
+        if isinstance(queued_job, dict):
+            simulation_runtime_state.analysis_queued_job = None
+            _submit_async_analysis_job(queued_job)
+        return
+
+    latest_epoch = int(simulation_runtime_state.analysis_epoch)
+    result_epoch = int(result.get("epoch", -1))
+    superseded = isinstance(queued_job, dict) and int(queued_job.get("job_id", -1)) > int(
+        result.get("job_id", -1)
+    )
+    if result_epoch != latest_epoch or superseded:
+        if isinstance(queued_job, dict):
+            simulation_runtime_state.analysis_queued_job = None
+            _submit_async_analysis_job(queued_job)
+        else:
+            if simulation_runtime_state.worker_active_job is None:
+                simulation_runtime_state.update_phase = "ready"
+            _refresh_run_status_bar()
+        return
+
+    simulation_runtime_state.analysis_ready_result = result
+    if simulation_runtime_state.worker_active_job is None:
+        simulation_runtime_state.update_phase = "applying"
+    _refresh_run_status_bar()
+    root.after_idle(do_update)
+
+
+def _request_async_analysis_job(job: dict[str, object]) -> str:
+    requested_key = _worker_job_key(job)
+    if _worker_job_key(simulation_runtime_state.analysis_ready_result) == requested_key:
+        if simulation_runtime_state.worker_active_job is None:
+            simulation_runtime_state.update_phase = "applying"
+        _refresh_run_status_bar()
+        return "ready"
+
+    if _worker_job_key(simulation_runtime_state.analysis_active_job) == requested_key:
+        if simulation_runtime_state.worker_active_job is None:
+            simulation_runtime_state.update_phase = "analyzing"
+        _refresh_run_status_bar()
+        return "running"
+
+    if _worker_job_key(simulation_runtime_state.analysis_queued_job) == requested_key:
+        if simulation_runtime_state.worker_active_job is None:
+            simulation_runtime_state.update_phase = "queued"
+        _refresh_run_status_bar()
+        return "queued"
+
+    simulation_runtime_state.analysis_job_counter = int(simulation_runtime_state.analysis_job_counter) + 1
+    queued_job = dict(job)
+    queued_job["job_id"] = int(simulation_runtime_state.analysis_job_counter)
+    simulation_runtime_state.analysis_error_text = None
+
+    if (
+        simulation_runtime_state.analysis_active_job is None
+        and simulation_runtime_state.analysis_future is None
+    ):
+        _submit_async_analysis_job(queued_job)
+        return "submitted"
+
+    simulation_runtime_state.analysis_queued_job = queued_job
+    if simulation_runtime_state.worker_active_job is None:
+        simulation_runtime_state.update_phase = "queued"
+    _refresh_run_status_bar()
+    return "queued"
+
+
+def _consume_ready_analysis_result(signature: object) -> dict[str, object] | None:
+    ready_result = simulation_runtime_state.analysis_ready_result
+    if _worker_job_key(ready_result) != (
+        signature,
+        int(simulation_runtime_state.analysis_epoch),
+    ):
+        if (
+            isinstance(ready_result, dict)
+            and int(ready_result.get("epoch", -1)) < int(simulation_runtime_state.analysis_epoch)
+        ):
+            simulation_runtime_state.analysis_ready_result = None
+        return None
+
+    simulation_runtime_state.analysis_ready_result = None
+    return dict(ready_result)
+
+
+def _apply_ready_analysis_result(result: dict[str, object]) -> None:
+    simulation_runtime_state.last_analysis_signature = result.get("signature")
+    simulation_runtime_state.last_res2_sim = result.get("sim_res2")
+    simulation_runtime_state.last_res2_background = result.get("bg_res2")
+
+    sim_caked = result.get("sim_caked")
+    if isinstance(sim_caked, dict):
+        simulation_runtime_state.last_caked_image_unscaled = np.asarray(
+            sim_caked.get("image"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_caked_radial_values = np.asarray(
+            sim_caked.get("radial"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_caked_azimuth_values = np.asarray(
+            sim_caked.get("azimuth"),
+            dtype=float,
+        )
+        simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
+    else:
+        simulation_runtime_state.last_caked_image_unscaled = None
+        simulation_runtime_state.last_caked_radial_values = None
+        simulation_runtime_state.last_caked_azimuth_values = None
+        simulation_runtime_state.last_caked_extent = None
+
+    bg_caked = result.get("bg_caked")
+    if isinstance(bg_caked, dict):
+        simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(
+            bg_caked.get("image"),
+            dtype=float,
+        )
+    else:
+        simulation_runtime_state.last_caked_background_image_unscaled = None
+
+    simulation_runtime_state.caking_cache["sim_sig"] = result.get("sim_caking_sig")
+    simulation_runtime_state.caking_cache["sim_res2"] = simulation_runtime_state.last_res2_sim
+    simulation_runtime_state.caking_cache["bg_sig"] = result.get("bg_caking_sig")
+    simulation_runtime_state.caking_cache["bg_res2"] = simulation_runtime_state.last_res2_background
+
+
 def schedule_update():
     """Queue a throttled simulation/redraw update."""
     gui_controllers.clear_tk_after_token(
@@ -4907,6 +5260,8 @@ simulation_runtime_state.prev_background_visible = True
 simulation_runtime_state.last_bg_signature = None
 simulation_runtime_state.last_sim_signature = None
 simulation_runtime_state.last_simulation_signature = None
+simulation_runtime_state.analysis_epoch = 0
+simulation_runtime_state.last_analysis_signature = None
 simulation_runtime_state.stored_max_positions_local = None
 simulation_runtime_state.stored_sim_image = None
 simulation_runtime_state.stored_peak_table_lattice = None
@@ -4931,6 +5286,14 @@ simulation_runtime_state.caking_cache = {
     "bg_sig": None,
     "bg_res2": None,
 }
+simulation_runtime_state.analysis_executor = None
+simulation_runtime_state.analysis_future = None
+simulation_runtime_state.analysis_poll_token = None
+simulation_runtime_state.analysis_job_counter = 0
+simulation_runtime_state.analysis_active_job = None
+simulation_runtime_state.analysis_queued_job = None
+simulation_runtime_state.analysis_ready_result = None
+simulation_runtime_state.analysis_error_text = None
 simulation_runtime_state.chi_square_update_token = 0
 simulation_runtime_state.chi_square_state = {
     "last_ts": 0.0,
@@ -5230,11 +5593,31 @@ def do_update():
                 simulation_runtime_state.update_phase = "applying"
                 _refresh_run_status_bar()
         else:
-            _request_async_simulation_job(simulation_job)
-            if "progress_label" in globals() and progress_label is not None:
-                progress_label.config(text="Computing simulation in background...")
-            simulation_runtime_state.update_running = False
-            return
+            preview_job = _build_preview_simulation_job(simulation_job)
+            if preview_job is not None:
+                if "progress_label" in globals() and progress_label is not None:
+                    progress_label.config(text="Computing preview simulation...")
+                preview_result = _run_simulation_generation_job(
+                    {
+                        **preview_job,
+                        "job_id": 0,
+                    }
+                )
+                _apply_ready_simulation_result(preview_result)
+                simulation_runtime_state.last_simulation_signature = new_sim_sig
+                image_generation_cached = False
+                image_generation_elapsed_ms = float(
+                    preview_result.get("image_generation_elapsed_ms", 0.0)
+                )
+                simulation_runtime_state.update_phase = "applying"
+                _refresh_run_status_bar()
+                _request_async_simulation_job(simulation_job)
+            else:
+                _request_async_simulation_job(simulation_job)
+                if "progress_label" in globals() and progress_label is not None:
+                    progress_label.config(text="Computing simulation in background...")
+                simulation_runtime_state.update_running = False
+                return
 
     if simulation_runtime_state.stored_primary_sim_image is None and simulation_runtime_state.stored_secondary_sim_image is None:
         simulation_runtime_state.update_phase = "queued"
@@ -5411,36 +5794,102 @@ def do_update():
             tuple(np.asarray(native_background).shape),
         )
 
-    # Caked 2D or normal 2D?
-    sim_res2 = None
-    bg_res2 = None
-    if analysis_view_controls_view_state.show_caked_2d_var.get() and simulation_runtime_state.unscaled_image is not None:
-        if (
-            simulation_runtime_state.caking_cache.get("sim_sig") == sim_caking_sig
-            and simulation_runtime_state.caking_cache.get("sim_res2") is not None
+    analysis_requested = (
+        simulation_runtime_state.unscaled_image is not None
+        and (
+            analysis_view_controls_view_state.show_caked_2d_var.get()
+            or analysis_view_controls_view_state.show_1d_var.get()
+        )
+    )
+    analysis_sig = (sim_caking_sig, bg_caking_sig) if analysis_requested else None
+    ready_analysis_result = None
+    if analysis_sig is not None:
+        ready_analysis_result = _consume_ready_analysis_result(analysis_sig)
+        if ready_analysis_result is not None:
+            _apply_ready_analysis_result(ready_analysis_result)
+            if analysis_view_controls_view_state.show_1d_var.get():
+                _refresh_integration_from_cached_results()
+            simulation_runtime_state.update_phase = "applying"
+            _refresh_run_status_bar()
+
+    analysis_result_current = bool(
+        analysis_sig is not None
+        and simulation_runtime_state.last_analysis_signature == analysis_sig
+        and simulation_runtime_state.last_res2_sim is not None
+    )
+    analysis_request_in_flight = bool(
+        analysis_sig is not None
+        and any(
+            isinstance(payload, dict) and payload.get("signature") == analysis_sig
+            for payload in (
+                simulation_runtime_state.analysis_ready_result,
+                simulation_runtime_state.analysis_active_job,
+                simulation_runtime_state.analysis_queued_job,
+            )
+        )
+    )
+    if analysis_sig is not None and not analysis_result_current and not analysis_request_in_flight:
+        _invalidate_analysis_cache(clear_visuals=True)
+        if not (
+            simulation_runtime_state.preview_active
+            and simulation_runtime_state.worker_active_job is not None
         ):
-            sim_res2 = simulation_runtime_state.caking_cache["sim_res2"]
-        else:
-            sim_res2 = caking(simulation_runtime_state.unscaled_image, ai)
-            simulation_runtime_state.caking_cache["sim_sig"] = sim_caking_sig
-            simulation_runtime_state.caking_cache["sim_res2"] = sim_res2
-        caked_img = sim_res2.intensity
-        radial_vals = np.asarray(sim_res2.radial, dtype=float)
-        azimuth_vals = _wrap_phi_range(_adjust_phi_zero(sim_res2.azimuthal))
+            _request_async_analysis_job(
+                {
+                    "signature": analysis_sig,
+                    "epoch": int(simulation_runtime_state.analysis_epoch),
+                    "image": np.asarray(
+                        simulation_runtime_state.unscaled_image,
+                        dtype=np.float64,
+                    ).copy(),
+                    "background_image": (
+                        None
+                        if not (
+                            background_runtime_state.visible
+                            and native_background is not None
+                        )
+                        else np.asarray(native_background, dtype=np.float64).copy()
+                    ),
+                    "distance_m": float(corto_det_up),
+                    "center": np.asarray(
+                        [center_x_up, center_y_up],
+                        dtype=np.float64,
+                    ).copy(),
+                    "pixel_size_m": float(pixel_size_m),
+                    "wavelength_m": float(wave_m),
+                    "sim_caking_sig": sim_caking_sig,
+                    "bg_caking_sig": bg_caking_sig,
+                }
+            )
+            if "progress_label" in globals() and progress_label is not None:
+                progress_label.config(text="Updating caked integration in background...")
+        elif "progress_label" in globals() and progress_label is not None:
+            progress_label.config(text="Preview ready, refining full simulation...")
 
-        if azimuth_vals.size:
-            azimuth_order = np.argsort(azimuth_vals)
-            azimuth_vals = azimuth_vals[azimuth_order]
-            caked_img = caked_img[azimuth_order, :]
+    sim_res2 = simulation_runtime_state.last_res2_sim if analysis_result_current else None
+    bg_res2 = (
+        simulation_runtime_state.last_res2_background
+        if analysis_result_current
+        else None
+    )
 
-        radial_mask = (radial_vals >= 0.0) & (radial_vals <= 90.0)
-        if np.any(radial_mask):
-            radial_vals = radial_vals[radial_mask]
-            caked_img = caked_img[:, radial_mask]
-
-        simulation_runtime_state.last_caked_image_unscaled = caked_img
-        simulation_runtime_state.last_caked_radial_values = np.asarray(radial_vals, dtype=float)
-        simulation_runtime_state.last_caked_azimuth_values = np.asarray(azimuth_vals, dtype=float)
+    if (
+        analysis_view_controls_view_state.show_caked_2d_var.get()
+        and analysis_result_current
+        and simulation_runtime_state.last_caked_image_unscaled is not None
+    ):
+        caked_img = np.asarray(
+            simulation_runtime_state.last_caked_image_unscaled,
+            dtype=float,
+        )
+        radial_vals = np.asarray(
+            simulation_runtime_state.last_caked_radial_values,
+            dtype=float,
+        )
+        azimuth_vals = np.asarray(
+            simulation_runtime_state.last_caked_azimuth_values,
+            dtype=float,
+        )
 
         current_scale = _get_scale_factor_value(default=1.0)
         scaled_caked_for_limits = caked_img * current_scale
@@ -5478,32 +5927,11 @@ def do_update():
                 display_vmax = vmin_val + max(abs(vmin_val) * 1e-3, 1e-3)
 
         background_caked_available = False
-        simulation_runtime_state.last_caked_background_image_unscaled = None
-        if background_runtime_state.visible and native_background is not None:
-            if (
-                simulation_runtime_state.caking_cache.get("bg_sig") == bg_caking_sig
-                and simulation_runtime_state.caking_cache.get("bg_res2") is not None
-            ):
-                bg_res2 = simulation_runtime_state.caking_cache["bg_res2"]
-            else:
-                bg_res2 = caking(native_background, ai)
-                simulation_runtime_state.caking_cache["bg_sig"] = bg_caking_sig
-                simulation_runtime_state.caking_cache["bg_res2"] = bg_res2
-            bg_caked = bg_res2.intensity
-            bg_radial = np.asarray(bg_res2.radial, dtype=float)
-            bg_azimuth = _wrap_phi_range(_adjust_phi_zero(bg_res2.azimuthal))
-
-            if bg_azimuth.size:
-                bg_order = np.argsort(bg_azimuth)
-                bg_azimuth = bg_azimuth[bg_order]
-                bg_caked = bg_caked[bg_order, :]
-
-            bg_radial_mask = (bg_radial >= 0.0) & (bg_radial <= 90.0)
-            if np.any(bg_radial_mask):
-                bg_radial = bg_radial[bg_radial_mask]
-                bg_caked = bg_caked[:, bg_radial_mask]
-
-            simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(bg_caked, dtype=float)
+        if background_runtime_state.visible and simulation_runtime_state.last_caked_background_image_unscaled is not None:
+            bg_caked = np.asarray(
+                simulation_runtime_state.last_caked_background_image_unscaled,
+                dtype=float,
+            )
             _set_image_origin(background_display, 'lower')
             background_display.set_data(bg_caked)
             bg_display_vmax = vmax_val
@@ -5526,24 +5954,11 @@ def do_update():
         else:
             background_display.set_visible(False)
 
-        if radial_vals.size:
-            radial_min = float(np.min(radial_vals))
-            radial_max = float(np.max(radial_vals))
-        else:
-            radial_min, radial_max = 0.0, 90.0
-
-        if azimuth_vals.size:
-            azimuth_min = float(np.min(azimuth_vals))
-            azimuth_max = float(np.max(azimuth_vals))
-        else:
-            azimuth_min, azimuth_max = -180.0, 180.0
-
-        simulation_runtime_state.last_caked_extent = [
-            radial_min,
-            radial_max,
-            azimuth_min,
-            azimuth_max,
-        ]
+        radial_min, radial_max, azimuth_min, azimuth_max = (
+            list(simulation_runtime_state.last_caked_extent)
+            if simulation_runtime_state.last_caked_extent is not None
+            else [0.0, 90.0, -180.0, 180.0]
+        )
         if background_caked_available:
             background_display.set_extent([
                 radial_min,
@@ -5553,7 +5968,11 @@ def do_update():
             ])
         else:
             background_display.set_visible(False)
-        if not (math.isfinite(radial_min) and math.isfinite(radial_max) and radial_max > radial_min):
+        if not (
+            math.isfinite(radial_min)
+            and math.isfinite(radial_max)
+            and radial_max > radial_min
+        ):
             radial_min, radial_max = 0.0, 90.0
         if not (
             math.isfinite(azimuth_min)
@@ -5579,7 +5998,10 @@ def do_update():
         ax.set_aspect("auto")
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
-        ax.set_title('Simulated Diffraction Pattern')
+        if analysis_view_controls_view_state.show_caked_2d_var.get() and analysis_requested:
+            ax.set_title('Detector Preview While Caked Integration Updates')
+        else:
+            ax.set_title('Simulated Diffraction Pattern')
 
         _set_image_origin(background_display, 'upper')
         background_display.set_extent([0, image_size, image_size, 0])
@@ -5594,36 +6016,14 @@ def do_update():
             background_display.set_visible(False)
         
     # 1D integration
-    if analysis_view_controls_view_state.show_1d_var.get() and simulation_runtime_state.unscaled_image is not None:
-        if sim_res2 is None:
-            if (
-                simulation_runtime_state.caking_cache.get("sim_sig") == sim_caking_sig
-                and simulation_runtime_state.caking_cache.get("sim_res2") is not None
-            ):
-                sim_res2 = simulation_runtime_state.caking_cache["sim_res2"]
-            else:
-                sim_res2 = caking(simulation_runtime_state.unscaled_image, ai)
-                simulation_runtime_state.caking_cache["sim_sig"] = sim_caking_sig
-                simulation_runtime_state.caking_cache["sim_res2"] = sim_res2
-
-        if background_runtime_state.visible and native_background is not None:
-            if (
-                simulation_runtime_state.caking_cache.get("bg_sig") == bg_caking_sig
-                and simulation_runtime_state.caking_cache.get("bg_res2") is not None
-            ):
-                bg_res2 = simulation_runtime_state.caking_cache["bg_res2"]
-            else:
-                bg_res2 = caking(native_background, ai)
-                simulation_runtime_state.caking_cache["bg_sig"] = bg_caking_sig
-                simulation_runtime_state.caking_cache["bg_res2"] = bg_res2
-        else:
-            bg_res2 = None
+    if analysis_view_controls_view_state.show_1d_var.get() and sim_res2 is not None:
         _update_1d_plots_from_caked(sim_res2, bg_res2)
     else:
         _clear_1d_plot_cache_and_lines()
 
-    simulation_runtime_state.last_res2_sim = sim_res2
-    simulation_runtime_state.last_res2_background = bg_res2
+    if analysis_result_current:
+        simulation_runtime_state.last_res2_sim = sim_res2
+        simulation_runtime_state.last_res2_background = bg_res2
 
     # Keep simulation display limits sticky across regenerated simulations.
     # Users can still change limits manually or reset defaults explicitly.
@@ -5662,6 +6062,10 @@ def do_update():
         simulation_runtime_state.update_phase = "computing"
     elif simulation_runtime_state.worker_queued_job is not None:
         simulation_runtime_state.update_phase = "queued"
+    elif simulation_runtime_state.analysis_active_job is not None:
+        simulation_runtime_state.update_phase = "analyzing"
+    elif simulation_runtime_state.analysis_queued_job is not None:
+        simulation_runtime_state.update_phase = "queued"
     else:
         simulation_runtime_state.update_phase = "ready"
     simulation_runtime_state.update_running = False
@@ -5675,12 +6079,15 @@ def do_update():
             and simulation_runtime_state.worker_active_job is not None
         ):
             progress_label.config(text="Preview ready, refining full simulation...")
+        elif simulation_runtime_state.analysis_active_job is not None:
+            progress_label.config(text="Updating caked integration in background...")
         elif current_progress_text in {
             "Computing initial simulation...",
             "Computing preview simulation...",
             "Computing simulation in background...",
             "Simulation loading in background...",
             "Preview ready, refining full simulation...",
+            "Updating caked integration in background...",
         }:
             progress_label.config(text="Simulation ready.")
     _refresh_run_status_bar()
@@ -11764,6 +12171,8 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 and simulation_runtime_state.worker_active_job is not None
             ):
                 progress_label.config(text="Preview ready, refining full simulation...")
+            elif simulation_runtime_state.analysis_active_job is not None:
+                progress_label.config(text="Updating caked integration in background...")
             else:
                 progress_label.config(text="Simulation ready.")
 

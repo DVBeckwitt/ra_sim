@@ -648,6 +648,16 @@ class SimulationRuntimeState:
     worker_queued_job: dict[str, object] | None = None
     worker_ready_result: dict[str, object] | None = None
     worker_error_text: str | None = None
+    analysis_epoch: int = 0
+    analysis_executor: Any = None
+    analysis_future: Any = None
+    analysis_poll_token: Any = None
+    analysis_job_counter: int = 0
+    analysis_active_job: dict[str, object] | None = None
+    analysis_queued_job: dict[str, object] | None = None
+    analysis_ready_result: dict[str, object] | None = None
+    analysis_error_text: str | None = None
+    last_analysis_signature: object = None
     preview_active: bool = False
     preview_sample_count: int | None = None
     unscaled_image: np.ndarray | None = None
