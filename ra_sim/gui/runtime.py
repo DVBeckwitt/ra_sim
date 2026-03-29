@@ -7,10 +7,11 @@ The heavy Tk/matplotlib implementation now lives in
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+
+from ra_sim.gui import lazy_runtime as gui_lazy_runtime
 
 write_excel = False
 
@@ -25,22 +26,11 @@ def _load_runtime_module() -> ModuleType:
 
     global _RUNTIME_MODULE
 
-    module = _RUNTIME_MODULE
-    if module is not None:
-        return module
-
-    spec = importlib.util.spec_from_file_location(
-        _RUNTIME_MODULE_NAME,
-        _RUNTIME_MODULE_PATH,
+    module = gui_lazy_runtime.load_cached_module_from_path(
+        _RUNTIME_MODULE,
+        module_name=_RUNTIME_MODULE_NAME,
+        module_path=_RUNTIME_MODULE_PATH,
     )
-    if spec is None or spec.loader is None:
-        raise ImportError(
-            f"Unable to load GUI runtime implementation from {_RUNTIME_MODULE_PATH}"
-        )
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[_RUNTIME_MODULE_NAME] = module
-    spec.loader.exec_module(module)
     _RUNTIME_MODULE = module
     return module
 
@@ -53,12 +43,9 @@ def main(
     """Launch the full GUI runtime lazily."""
 
     global write_excel
-    if write_excel_flag is not None:
-        write_excel = bool(write_excel_flag)
-
-    runtime = _load_runtime_module()
-    runtime.write_excel = write_excel
-    runtime.main(
+    write_excel = gui_lazy_runtime.forward_lazy_main(
+        current_write_excel=write_excel,
+        load_runtime_module=_load_runtime_module,
         write_excel_flag=write_excel_flag,
         startup_mode=startup_mode,
         calibrant_bundle=calibrant_bundle,
@@ -66,18 +53,19 @@ def main(
 
 
 def __getattr__(name: str):
-    if name == "write_excel":
-        return write_excel
-    if name.startswith("__"):
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    return getattr(_load_runtime_module(), name)
+    return gui_lazy_runtime.lazy_module_getattr(
+        name=name,
+        module_name=__name__,
+        current_write_excel=write_excel,
+        load_runtime_module=_load_runtime_module,
+    )
 
 
 def __dir__() -> list[str]:
-    module_names = set(globals().keys())
-    if _RUNTIME_MODULE is not None:
-        module_names.update(dir(_RUNTIME_MODULE))
-    return sorted(module_names)
+    return gui_lazy_runtime.lazy_module_dir(
+        module_globals=globals(),
+        loaded_module=_RUNTIME_MODULE,
+    )
 
 
 if __name__ == "__main__":

@@ -66,6 +66,10 @@ leaving open-ended runtime decomposition mode: the remaining inline code in
 that internal implementation module is mostly integration glue, so future
 refactors there should be driven by concrete wins rather than file-size
 reduction.
+The import-safe `ra_sim.gui.runtime` and `ra_sim.gui.app` wrappers now also
+share one lazy wrapper helper in `ra_sim.gui.lazy_runtime`, so their local
+`main`/`write_excel` forwarding, guarded dunder behavior, lazy `__dir__`
+surface, and failure-safe runtime loading no longer drift independently.
 
 As part of the next concrete step, `ra_sim.gui.controllers` now owns a shared
 Tk after-token cancellation helper used by runtime glue paths that previously
@@ -867,6 +871,11 @@ What is done:
     count state, and the caked-view override flag.
   - The remaining runtime `global` lines are limited to structure-model /
     diffuse-HT rebuild state plus the legacy `write_excel` flag.
+- `ra_sim.gui.runtime` and `ra_sim.gui.app` no longer hand-maintain duplicate
+  lazy wrapper behavior.
+  - `ra_sim.gui.lazy_runtime` now owns their shared `main` forwarding,
+    `write_excel` attribute surface, guarded dunder handling, lazy `__dir__`,
+    and failure-safe path loading for `runtime_impl.py`.
 
 What is left:
 

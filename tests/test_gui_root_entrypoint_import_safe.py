@@ -45,15 +45,23 @@ def test_root_main_module_is_safe_import() -> None:
             sys.modules["ra_sim.gui._runtime_impl"] = previous_impl
 
 
-def test_root_main_delegates_to_launcher_without_importing_runtime(monkeypatch) -> None:
+def test_root_main_delegates_to_compatibility_launcher_without_importing_runtime(
+    monkeypatch,
+) -> None:
     module = _load_root_main()
-    calls: list[list[str]] = []
+    calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         module,
-        "_launcher_main",
-        lambda *args: calls.append(list(args)),
+        "_compatibility_main",
+        lambda **kwargs: calls.append(dict(kwargs)),
     )
 
     module.main()
-    assert calls == [[]]
+    assert calls == [
+        {
+            "write_excel_flag": None,
+            "startup_mode": "prompt",
+            "calibrant_bundle": None,
+        }
+    ]

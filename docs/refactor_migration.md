@@ -662,6 +662,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
 - `ra_sim.gui.runtime` now carries a small explicit lazy attribute contract
   (`main` and `write_excel` as stable local exports, dunder rejection, and lazy
   `__dir__`), with companion tests so startup safety stays enforced.
+- `ra_sim.gui.app` and `ra_sim.gui.runtime` now route that wrapper behavior
+  through one shared helper module, `ra_sim.gui.lazy_runtime`, so those two
+  entry surfaces no longer keep duplicate lazy-forwarding logic or drift on
+  failure cleanup for the path-loaded runtime implementation.
 - The remaining large integration monolith now lives in
   `ra_sim/gui/_runtime/runtime_impl.py`, and most of the remaining inline code
   there is glue rather than high-value extractable feature logic.

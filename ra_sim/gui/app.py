@@ -9,15 +9,14 @@ called.
 from __future__ import annotations
 
 import copy
-import importlib
 import math
 import os
 import sys
-from pathlib import Path
 from typing import Mapping
 
 import numpy as np
 from ra_sim.gui import geometry_fit as gui_geometry_fit
+from ra_sim.gui import lazy_runtime as gui_lazy_runtime
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import state_io as gui_state_io
 
@@ -481,10 +480,10 @@ def _convert_hbn_bundle_geometry_reference(
 def _load_runtime_module():
     global _RUNTIME_MODULE
 
-    if _RUNTIME_MODULE is not None:
-        return _RUNTIME_MODULE
-
-    module = importlib.import_module(_RUNTIME_MODULE_NAME)
+    module = gui_lazy_runtime.load_cached_imported_module(
+        _RUNTIME_MODULE,
+        module_name=_RUNTIME_MODULE_NAME,
+    )
     _RUNTIME_MODULE = module
     return module
 
@@ -497,12 +496,9 @@ def main(
     """Launch the full GUI runtime lazily."""
 
     global write_excel
-    if write_excel_flag is not None:
-        write_excel = bool(write_excel_flag)
-
-    runtime = _load_runtime_module()
-    runtime.write_excel = write_excel
-    runtime.main(
+    write_excel = gui_lazy_runtime.forward_lazy_main(
+        current_write_excel=write_excel,
+        load_runtime_module=_load_runtime_module,
         write_excel_flag=write_excel_flag,
         startup_mode=startup_mode,
         calibrant_bundle=calibrant_bundle,
@@ -510,19 +506,19 @@ def main(
 
 
 def __getattr__(name: str):
-    if name == "write_excel":
-        return write_excel
-    if name.startswith("__"):
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    return getattr(_load_runtime_module(), name)
+    return gui_lazy_runtime.lazy_module_getattr(
+        name=name,
+        module_name=__name__,
+        current_write_excel=write_excel,
+        load_runtime_module=_load_runtime_module,
+    )
 
 
 def __dir__() -> list[str]:
-    names = set(globals().keys())
-    runtime_module = _RUNTIME_MODULE
-    if runtime_module is not None:
-        names.update(dir(runtime_module))
-    return sorted(names)
+    return gui_lazy_runtime.lazy_module_dir(
+        module_globals=globals(),
+        loaded_module=_RUNTIME_MODULE,
+    )
 
 
 if __name__ == "__main__":
