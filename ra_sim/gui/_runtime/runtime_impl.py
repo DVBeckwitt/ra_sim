@@ -4340,6 +4340,7 @@ UPDATE_DEBOUNCE_MS = 120
 RANGE_UPDATE_DEBOUNCE_MS = 120
 CHI_SQUARE_UPDATE_INTERVAL_S = 0.5
 SIMULATION_WORKER_POLL_MS = 40
+INITIAL_PREVIEW_MAX_SAMPLES = 24
 
 simulation_runtime_state.update_pending = None
 simulation_runtime_state.integration_update_pending = None
@@ -4410,6 +4411,12 @@ def _refresh_run_status_bar() -> None:
         f"Optics {optics_summary}",
         f"View {view_summary}",
     ]
+    if simulation_runtime_state.preview_active:
+        preview_count = simulation_runtime_state.preview_sample_count
+        if isinstance(preview_count, int) and preview_count > 0:
+            parts.append(f"Preview {preview_count}")
+        else:
+            parts.append("Preview")
     last_total_ms = simulation_runtime_state.last_total_update_ms
     if isinstance(last_total_ms, (int, float)) and np.isfinite(float(last_total_ms)):
         parts.append(f"Last {float(last_total_ms):.0f} ms")
@@ -4422,6 +4429,8 @@ def _refresh_run_status_bar() -> None:
 def _invalidate_simulation_cache() -> None:
     simulation_runtime_state.last_simulation_signature = None
     simulation_runtime_state.simulation_epoch = int(simulation_runtime_state.simulation_epoch) + 1
+    simulation_runtime_state.preview_active = False
+    simulation_runtime_state.preview_sample_count = None
 
     ready_result = simulation_runtime_state.worker_ready_result
     if (
@@ -4456,6 +4465,69 @@ def _ensure_simulation_worker_executor():
         )
         simulation_runtime_state.worker_executor = executor
     return executor
+
+
+def _preview_sample_indices(sample_count: int, *, max_samples: int) -> np.ndarray:
+    total = max(0, int(sample_count))
+    target = max(1, int(max_samples))
+    if total <= target:
+        return np.arange(total, dtype=np.int64)
+    return np.unique(
+        np.rint(np.linspace(0, total - 1, target)).astype(np.int64, copy=False)
+    )
+
+
+def _build_preview_simulation_job(
+    job: dict[str, object],
+    *,
+    max_samples: int = INITIAL_PREVIEW_MAX_SAMPLES,
+) -> dict[str, object] | None:
+    if not isinstance(job, dict):
+        return None
+    mosaic_params = job.get("mosaic_params")
+    if not isinstance(mosaic_params, dict):
+        return None
+
+    beam_x = np.asarray(mosaic_params.get("beam_x_array", []), dtype=np.float64).reshape(-1)
+    beam_y = np.asarray(mosaic_params.get("beam_y_array", []), dtype=np.float64).reshape(-1)
+    theta = np.asarray(mosaic_params.get("theta_array", []), dtype=np.float64).reshape(-1)
+    phi = np.asarray(mosaic_params.get("phi_array", []), dtype=np.float64).reshape(-1)
+    wavelength = np.asarray(
+        mosaic_params.get("wavelength_array", []),
+        dtype=np.float64,
+    ).reshape(-1)
+    sample_count = min(
+        beam_x.size,
+        beam_y.size,
+        theta.size,
+        phi.size,
+        wavelength.size,
+    )
+    if sample_count <= 0 or sample_count <= int(max_samples):
+        return None
+
+    preview_indices = _preview_sample_indices(sample_count, max_samples=int(max_samples))
+    preview_job = dict(job)
+    preview_job["collect_hit_tables"] = False
+    preview_job["is_preview"] = True
+    preview_job["preview_sample_count"] = int(preview_indices.size)
+    preview_job["mosaic_params"] = {
+        **mosaic_params,
+        "beam_x_array": beam_x[preview_indices].copy(),
+        "beam_y_array": beam_y[preview_indices].copy(),
+        "theta_array": theta[preview_indices].copy(),
+        "phi_array": phi[preview_indices].copy(),
+        "wavelength_array": wavelength[preview_indices].copy(),
+        "n2_sample_array": (
+            None
+            if mosaic_params.get("n2_sample_array") is None
+            else np.asarray(
+                mosaic_params["n2_sample_array"],
+                dtype=np.complex128,
+            ).reshape(-1)[preview_indices].copy()
+        ),
+    }
+    return preview_job
 
 
 def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
@@ -4603,6 +4675,12 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
         "job_id": int(job["job_id"]),
         "signature": job["signature"],
         "epoch": int(job["epoch"]),
+        "is_preview": bool(job.get("is_preview", False)),
+        "preview_sample_count": (
+            int(job.get("preview_sample_count", 0))
+            if job.get("preview_sample_count") is not None
+            else None
+        ),
         "primary_image": img1,
         "secondary_image": img2,
         "primary_max_positions": list(maxpos1),
@@ -4774,6 +4852,13 @@ def _apply_ready_simulation_result(result: dict[str, object]) -> None:
     simulation_runtime_state.stored_sim_image = None
     simulation_runtime_state.last_image_generation_ms = float(
         result.get("image_generation_elapsed_ms", float("nan"))
+    )
+    simulation_runtime_state.preview_active = bool(result.get("is_preview", False))
+    preview_sample_count = result.get("preview_sample_count")
+    simulation_runtime_state.preview_sample_count = (
+        int(preview_sample_count)
+        if preview_sample_count is not None
+        else None
     )
 
 
@@ -5108,22 +5193,42 @@ def do_update():
             or simulation_runtime_state.stored_secondary_sim_image is not None
         )
         if not has_cached_simulation:
-            if "progress_label" in globals() and progress_label is not None:
-                progress_label.config(text="Computing initial simulation...")
-            sync_result = _run_simulation_generation_job(
-                {
-                    **simulation_job,
-                    "job_id": 0,
-                }
-            )
-            _apply_ready_simulation_result(sync_result)
-            simulation_runtime_state.last_simulation_signature = new_sim_sig
-            image_generation_cached = False
-            image_generation_elapsed_ms = float(
-                sync_result.get("image_generation_elapsed_ms", 0.0)
-            )
-            simulation_runtime_state.update_phase = "applying"
-            _refresh_run_status_bar()
+            preview_job = _build_preview_simulation_job(simulation_job)
+            if preview_job is not None:
+                if "progress_label" in globals() and progress_label is not None:
+                    progress_label.config(text="Computing preview simulation...")
+                preview_result = _run_simulation_generation_job(
+                    {
+                        **preview_job,
+                        "job_id": 0,
+                    }
+                )
+                _apply_ready_simulation_result(preview_result)
+                simulation_runtime_state.last_simulation_signature = new_sim_sig
+                image_generation_cached = False
+                image_generation_elapsed_ms = float(
+                    preview_result.get("image_generation_elapsed_ms", 0.0)
+                )
+                simulation_runtime_state.update_phase = "applying"
+                _refresh_run_status_bar()
+                _request_async_simulation_job(simulation_job)
+            else:
+                if "progress_label" in globals() and progress_label is not None:
+                    progress_label.config(text="Computing initial simulation...")
+                sync_result = _run_simulation_generation_job(
+                    {
+                        **simulation_job,
+                        "job_id": 0,
+                    }
+                )
+                _apply_ready_simulation_result(sync_result)
+                simulation_runtime_state.last_simulation_signature = new_sim_sig
+                image_generation_cached = False
+                image_generation_elapsed_ms = float(
+                    sync_result.get("image_generation_elapsed_ms", 0.0)
+                )
+                simulation_runtime_state.update_phase = "applying"
+                _refresh_run_status_bar()
         else:
             _request_async_simulation_job(simulation_job)
             if "progress_label" in globals() and progress_label is not None:
@@ -5553,17 +5658,29 @@ def do_update():
 
     # mark update completion so future updates can run
     simulation_runtime_state.last_total_update_ms = float(total_update_elapsed_ms)
-    simulation_runtime_state.update_phase = "ready"
+    if simulation_runtime_state.worker_active_job is not None:
+        simulation_runtime_state.update_phase = "computing"
+    elif simulation_runtime_state.worker_queued_job is not None:
+        simulation_runtime_state.update_phase = "queued"
+    else:
+        simulation_runtime_state.update_phase = "ready"
     simulation_runtime_state.update_running = False
     if "progress_label" in globals() and progress_label is not None:
         try:
             current_progress_text = str(progress_label.cget("text"))
         except Exception:
             current_progress_text = ""
-        if current_progress_text in {
+        if (
+            simulation_runtime_state.preview_active
+            and simulation_runtime_state.worker_active_job is not None
+        ):
+            progress_label.config(text="Preview ready, refining full simulation...")
+        elif current_progress_text in {
             "Computing initial simulation...",
+            "Computing preview simulation...",
             "Computing simulation in background...",
             "Simulation loading in background...",
+            "Preview ready, refining full simulation...",
         }:
             progress_label.config(text="Simulation ready.")
     _refresh_run_status_bar()
@@ -11642,6 +11759,11 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 and simulation_runtime_state.stored_sim_image is None
             ):
                 progress_label.config(text="Simulation loading in background...")
+            elif (
+                simulation_runtime_state.preview_active
+                and simulation_runtime_state.worker_active_job is not None
+            ):
+                progress_label.config(text="Preview ready, refining full simulation...")
             else:
                 progress_label.config(text="Simulation ready.")
 

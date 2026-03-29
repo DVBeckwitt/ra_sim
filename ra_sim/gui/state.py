@@ -648,6 +648,8 @@ class SimulationRuntimeState:
     worker_queued_job: dict[str, object] | None = None
     worker_ready_result: dict[str, object] | None = None
     worker_error_text: str | None = None
+    preview_active: bool = False
+    preview_sample_count: int | None = None
     unscaled_image: np.ndarray | None = None
     last_1d_integration_data: dict[str, object] = field(
         default_factory=lambda: {
