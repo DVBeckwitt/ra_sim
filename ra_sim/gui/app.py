@@ -22,6 +22,7 @@ from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import state_io as gui_state_io
 
 write_excel = False
+__all__ = ["main", "write_excel"]
 
 # Background and simulated overlays can use different display orientations.
 DISPLAY_ROTATE_K = -1
@@ -460,6 +461,22 @@ def main(
         startup_mode=startup_mode,
         calibrant_bundle=calibrant_bundle,
     )
+
+
+def __getattr__(name: str):
+    if name == "write_excel":
+        return write_excel
+    if name.startswith("__"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(_load_runtime_module(), name)
+
+
+def __dir__() -> list[str]:
+    names = set(globals().keys())
+    runtime_module = _RUNTIME_MODULE
+    if runtime_module is not None:
+        names.update(dir(runtime_module))
+    return sorted(names)
 
 
 if __name__ == "__main__":

@@ -85,6 +85,9 @@ when restoring geometry-fit state before redraw.
     `ra_sim.gui.runtime`.
   - `ra_sim.gui.app` now has direct import-safety coverage ensuring runtime
     bootstrap is lazy and `main()` argument forwarding stays centralized.
+  - `ra_sim.gui.app` now also exposes a guarded lazy attribute surface via
+    stable local exports, dunder rejection, and a lazy `__dir__` contract that
+    mirrors the runtime shim boundary.
   - `ra_sim.gui.runtime` is now also an import-safe compatibility wrapper that
     lazy-loads `ra_sim/gui/_runtime/runtime_impl.py`.
   - `ra_sim.gui.runtime` now also exposes an explicit lazy attribute surface via

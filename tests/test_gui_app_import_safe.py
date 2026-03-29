@@ -1,4 +1,5 @@
 import importlib
+import pytest
 import sys
 from types import SimpleNamespace
 
@@ -57,3 +58,34 @@ def test_app_main_loads_runtime_and_forwards_arguments(monkeypatch) -> None:
             "calibrant_bundle": "bundle.npz",
         }
     ]
+
+
+def test_app_dunder_attribute_raises_without_loading(monkeypatch) -> None:
+    app = importlib.import_module(APP_MODULE_NAME)
+
+    monkeypatch.setattr(
+        app,
+        "_load_runtime_module",
+        lambda: (_ for _ in ()).throw(AssertionError("impl should not be imported")),
+    )
+
+    with pytest.raises(AttributeError):
+        _ = app.__gui_app_test_guard__
+
+
+def test_app_dir_is_lazy() -> None:
+    app = importlib.import_module(APP_MODULE_NAME)
+
+    available = dir(app)
+
+    assert "main" in available
+    assert "write_excel" in available
+
+
+def test_app_unknown_attr_forwards_to_runtime(monkeypatch) -> None:
+    app = importlib.import_module(APP_MODULE_NAME)
+    fake_runtime = SimpleNamespace(test_value=321)
+
+    monkeypatch.setattr(app, "_load_runtime_module", lambda: fake_runtime)
+
+    assert app.test_value == 321
