@@ -43,7 +43,7 @@ def detect_blobs(
                 labels.append(label_str)
 
     if isinstance(source, str) and source.lower().endswith(".asc"):
-        with open(source, "r", encoding="utf-8") as file:
+        with open(source, encoding="utf-8") as file:
             lines = file.readlines()
         pixel_lines = lines[6:]
         pixels = [list(map(int, line.split())) for line in pixel_lines]

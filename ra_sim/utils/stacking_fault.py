@@ -339,7 +339,7 @@ def _infer_iodine_z_like_diffuse(cif_path: str, sites=None) -> float | None:
 
     # 1) Text scan for a tokenized 'I1' row.
     try:
-        with open(cif_path, "r", encoding="utf-8", errors="ignore") as fp:
+        with open(cif_path, encoding="utf-8", errors="ignore") as fp:
             for ln in fp:
                 s = ln.strip()
                 if s.startswith("I1"):

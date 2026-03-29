@@ -779,7 +779,7 @@ def hbn_expected_peaks():
 # Path helpers
 # ------------------------------------------------------------
 def _load_paths_from_file(paths_file):
-    with open(paths_file, "r", encoding="utf-8") as fh:
+    with open(paths_file, encoding="utf-8") as fh:
         text = fh.read()
         try:
             data = yaml.safe_load(text)
@@ -866,7 +866,7 @@ def save_click_profile(path, ell_points_ds, img_shape):
 
 
 def load_click_profile(path):
-    with open(path, "r") as f:
+    with open(path) as f:
         profile = json.load(f)
     points_raw = profile.get("points", [])
     ell_points_ds = []

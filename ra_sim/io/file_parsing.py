@@ -8,7 +8,7 @@ def parse_poni_file(file_path):
     # Dictionary to hold the values
     parameters = {}
     # Read the file and extract parameters
-    with open(file_path, 'r') as file:
+    with open(file_path) as file:
         for line in file:
             if line.strip() and not line.startswith('#'):
                 key, value = line.split(':', 1)  # Split only on the first colon
@@ -21,7 +21,7 @@ def parse_poni_file(file_path):
     return parameters
 
 def Open_ASC(file_path):
-    with open(file_path, 'r') as file:
+    with open(file_path) as file:
         lines = file.readlines()
         pixel_lines = lines[6:]
         pixels = [list(map(int, line.split())) for line in pixel_lines]

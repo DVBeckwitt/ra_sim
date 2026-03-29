@@ -8,13 +8,12 @@ version = "0.1.0"
 description = "DWBA forward simulation and refinement for 2D oriented powder diffraction"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "GPL-3.0-only" }
+license = "GPL-3.0-only"
 authors = [{ name = "RA-SIM Contributors" }]
 keywords = ["xrd", "diffraction", "dwba", "crystallography", "image-processing"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -62,8 +61,13 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-# Keep initial enforcement focused on parser/runtime-critical issues.
-select = ["E9", "F63", "F7", "F82"]
+# Keep enforcement incremental: parser/runtime-critical issues plus a small
+# pyupgrade ratchet for mechanical cleanup that the current tree can support.
+select = ["E9", "F63", "F7", "F82", "UP015", "UP018"]
+
+[tool.ruff.lint.per-file-ignores]
+# Keep this out of the UP015 ratchet until the active I/O refactor settles.
+"ra_sim/io/data_loading.py" = ["UP015"]
 
 [tool.mypy]
 python_version = "3.10"

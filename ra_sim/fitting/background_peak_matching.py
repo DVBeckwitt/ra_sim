@@ -891,7 +891,7 @@ def match_simulated_peaks_to_peak_context(
             float(np.median(match_conf)) if match_conf.size else float("nan")
         ),
         mean_walk_steps=(
-            float(np.mean(match_walk_steps)) if match_walk_steps.size else float(0.0)
+            float(np.mean(match_walk_steps)) if match_walk_steps.size else 0.0
         ),
         mean_net_ascent_sigma=(
             float(np.mean(finite_net_ascent)) if finite_net_ascent.size else float("nan")

@@ -3137,7 +3137,7 @@ def _save_json_payload(file_path: str, payload: Mapping[str, object]) -> None:
 
 
 def _load_json_payload(file_path: str) -> object:
-    with open(file_path, "r", encoding="utf-8") as handle:
+    with open(file_path, encoding="utf-8") as handle:
         return json.load(handle)
 
 

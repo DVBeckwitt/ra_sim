@@ -53,7 +53,7 @@ CIF_2H = BUNDLE / "PbI2_2H.cif"
 CIF_6H = BUNDLE / "PbI2_6H.cif"
 
 def c_from_cif(path: str) -> float:
-    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+    with open(path, encoding="utf-8", errors="ignore") as fp:
         for ln in fp:
             if m := re.match(r"_cell_length_c\s+([\d.]+)", ln):
                 return float(m.group(1))
@@ -62,7 +62,7 @@ def c_from_cif(path: str) -> float:
 C_2H, C_6H = map(c_from_cif, map(str, (CIF_2H, CIF_6H)))
 
 def iodine_z_from_cif(path: Path) -> float:
-    with open(path, "r", encoding="utf-8", errors="ignore") as fp:
+    with open(path, encoding="utf-8", errors="ignore") as fp:
         for ln in fp:
             if ln.strip().startswith("I1"):
                 parts = ln.split()

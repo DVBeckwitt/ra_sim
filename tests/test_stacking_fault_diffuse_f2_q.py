@@ -73,7 +73,7 @@ def test_f2_helper_matches_legacy_diffuse_shape_for_m1():
         )
 
     iodine_z = None
-    with open(cif, "r", encoding="utf-8", errors="ignore") as fp:
+    with open(cif, encoding="utf-8", errors="ignore") as fp:
         for ln in fp:
             if ln.strip().startswith("I1"):
                 parts = ln.split()
