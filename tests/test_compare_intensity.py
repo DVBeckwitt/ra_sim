@@ -1,6 +1,11 @@
 import pytest
 import pandas as pd
 from compare_intensity import compute_metrics
+from ra_sim.tools import compare_intensity as packaged_compare_intensity
+
+
+def test_root_compare_intensity_is_packaged_wrapper():
+    assert compute_metrics is packaged_compare_intensity.compute_metrics
 
 def test_compute_metrics_simple():
     df = pd.DataFrame({
