@@ -719,10 +719,9 @@ structure_model_state = gui_structure_model.build_initial_structure_model_state(
 
 
 def _sync_structure_model_aliases() -> None:
-    global cif_file, cf, blk, cf2, blk2
+    global cf, blk, cf2, blk2
     global occupancy_site_labels, occupancy_site_count, occupancy_site_expanded_map
-    global occ, occ_vars
-    global atom_site_fractional_metadata, atom_site_fract_vars
+    global occ
     global av, cv, av2, cv2
     global defaults
     global ht_cache_multi, ht_curves_cache
@@ -735,7 +734,6 @@ def _sync_structure_model_aliases() -> None:
     global _last_finite_stack, _last_stack_layers
     global _last_atom_site_fractional_signature
 
-    cif_file = structure_model_state.cif_file
     cf = structure_model_state.cf
     blk = structure_model_state.blk
     cf2 = structure_model_state.cf2
@@ -744,11 +742,6 @@ def _sync_structure_model_aliases() -> None:
     occupancy_site_count = int(structure_model_state.occupancy_site_count)
     occupancy_site_expanded_map = list(structure_model_state.occupancy_site_expanded_map)
     occ = list(structure_model_state.occ)
-    occ_vars = list(structure_model_state.occ_vars)
-    atom_site_fractional_metadata = [
-        dict(row) for row in structure_model_state.atom_site_fractional_metadata
-    ]
-    atom_site_fract_vars = list(structure_model_state.atom_site_fract_vars)
     av = float(structure_model_state.av)
     cv = float(structure_model_state.cv)
     av2 = structure_model_state.av2
@@ -777,6 +770,30 @@ def _sync_structure_model_aliases() -> None:
     _last_atom_site_fractional_signature = tuple(
         structure_model_state.last_atom_site_fractional_signature
     )
+
+
+def _current_primary_cif_path() -> str:
+    """Return the active primary CIF path from structure-model runtime state."""
+
+    return str(structure_model_state.cif_file)
+
+
+def _occupancy_control_vars() -> list[tk.DoubleVar]:
+    """Return the live occupancy Tk variables from structure-model runtime state."""
+
+    return structure_model_state.occ_vars
+
+
+def _atom_site_fractional_rows() -> list[dict[str, object]]:
+    """Return the active atom-site fractional coordinate metadata rows."""
+
+    return structure_model_state.atom_site_fractional_metadata
+
+
+def _atom_site_fractional_control_vars() -> list[dict[str, tk.DoubleVar]]:
+    """Return the live atom-site fractional Tk variables from runtime state."""
+
+    return structure_model_state.atom_site_fract_vars
 
 
 _sync_structure_model_aliases()
@@ -4386,7 +4403,7 @@ def do_update():
         need_rebuild = True
 
     if need_rebuild:
-        current_occ = [occ_var.get() for occ_var in occ_vars]
+        current_occ = [occ_var.get() for occ_var in _occupancy_control_vars()]
         current_p = [p0_var.get(), p1_var.get(), p2_var.get()]
         weight_values = [w0_var.get(), w1_var.get(), w2_var.get()]
         normalized_weights = gui_controllers.normalize_stacking_weight_values(
@@ -5294,13 +5311,16 @@ def reset_to_defaults():
     _set_scale_factor_value(1.0, adjust_range=False, reset_override=True)
 
     # ALSO reset occupancies to defaults for all configured unique atom sites.
-    for idx, occ_var in enumerate(occ_vars):
+    occupancy_vars = _occupancy_control_vars()
+    for idx, occ_var in enumerate(occupancy_vars):
         default_occ = occ[idx] if idx < len(occ) else occ[-1]
         occ_var.set(default_occ)
-    for idx, axis_vars in enumerate(atom_site_fract_vars):
-        if idx >= len(atom_site_fractional_metadata):
+    atom_site_vars = _atom_site_fractional_control_vars()
+    atom_site_rows = _atom_site_fractional_rows()
+    for idx, axis_vars in enumerate(atom_site_vars):
+        if idx >= len(atom_site_rows):
             break
-        row = atom_site_fractional_metadata[idx]
+        row = atom_site_rows[idx]
         axis_vars["x"].set(float(row["x"]))
         axis_vars["y"].set(float(row["y"]))
         axis_vars["z"].set(float(row["z"]))
@@ -5678,13 +5698,13 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
     return gui_state_io.collect_full_gui_state_snapshot(
         global_items=_gui_state_variable_items(),
         tk_variable_type=tk.Variable,
-        occ_vars=globals().get("occ_vars", []),
-        atom_site_fract_vars=globals().get("atom_site_fract_vars", []),
+        occ_vars=_occupancy_control_vars(),
+        atom_site_fract_vars=_atom_site_fractional_control_vars(),
         geometry_q_group_rows=_geometry_q_group_export_rows(),
         geometry_manual_pairs=_geometry_manual_pairs_export_rows(),
         selected_hkl_target=peak_selection_state.selected_hkl_target,
-        primary_cif_path=cif_file,
-        secondary_cif_path=cif_file2,
+        primary_cif_path=_current_primary_cif_path(),
+        secondary_cif_path=structure_model_state.cif_file2,
         osc_files=background_runtime_state.osc_files,
         current_background_index=background_runtime_state.current_background_index,
         background_visible=background_runtime_state.visible,
@@ -5743,8 +5763,8 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
 
     gui_state_io.apply_dynamic_gui_state_lists(
         snapshot.get("dynamic_lists", {}),
-        occ_vars=globals().get("occ_vars", []),
-        atom_site_fract_vars=globals().get("atom_site_fract_vars", []),
+        occ_vars=_occupancy_control_vars(),
+        atom_site_fract_vars=_atom_site_fractional_control_vars(),
     )
 
     flag_state = gui_state_io.apply_gui_state_flags(
@@ -10395,18 +10415,15 @@ if has_second_cif:
 # ---------------------------------------------------------------------------
 #  OCCUPANCY CONTROLS: one control per structure site in the loaded CIF.
 # ---------------------------------------------------------------------------
-occ_vars = [tk.DoubleVar(value=float(val)) for val in occ]
-atom_site_fract_vars = [
+structure_model_state.occ_vars = [tk.DoubleVar(value=float(val)) for val in occ]
+structure_model_state.atom_site_fract_vars = [
     {
         "x": tk.DoubleVar(value=float(row["x"])),
         "y": tk.DoubleVar(value=float(row["y"])),
         "z": tk.DoubleVar(value=float(row["z"])),
     }
-    for row in atom_site_fractional_metadata
+    for row in _atom_site_fractional_rows()
 ]
-structure_model_state.occ_vars = list(occ_vars)
-structure_model_state.atom_site_fract_vars = list(atom_site_fract_vars)
-_sync_structure_model_aliases()
 
 
 def _occupancy_label_text(site_idx: int, *, input_label: bool = False) -> str:
@@ -10466,7 +10483,7 @@ def update_occupancies(*args):
     """Recompute Hendricks–Teller curves when occupancies or p-values change."""
 
     try:
-        new_occ = [float(var.get()) for var in occ_vars]
+        new_occ = [float(var.get()) for var in _occupancy_control_vars()]
     except (tk.TclError, ValueError):
         return
 
@@ -10478,7 +10495,7 @@ def update_occupancies(*args):
         new_occ,
         fallback_values=occ,
     )
-    for var, val in zip(occ_vars, clamped_occ):
+    for var, val in zip(_occupancy_control_vars(), clamped_occ):
         try:
             current = float(var.get())
         except (tk.TclError, ValueError):
@@ -10686,11 +10703,11 @@ w2_var = stacking_parameter_controls_view_state.w2_var
 
 
 def _rebuild_occupancy_controls():
-    """Recreate occupancy sliders/entries for the current ``occ_vars`` list."""
+    """Recreate occupancy sliders/entries for the current structure-model vars."""
 
     gui_views.rebuild_occupancy_controls(
         view_state=stacking_parameter_controls_view_state,
-        occ_vars=occ_vars,
+        occ_vars=_occupancy_control_vars(),
         occupancy_label_text=lambda idx: _occupancy_label_text(idx),
         occupancy_input_label_text=lambda idx: _occupancy_label_text(
             idx,
@@ -10711,8 +10728,9 @@ def _current_occupancy_values():
 
 def _atom_site_fractional_label_text(site_idx: int) -> str:
     idx = int(site_idx)
-    if idx < len(atom_site_fractional_metadata):
-        return str(atom_site_fractional_metadata[idx].get("label", f"site_{idx + 1}"))
+    atom_site_rows = _atom_site_fractional_rows()
+    if idx < len(atom_site_rows):
+        return str(atom_site_rows[idx].get("label", f"site_{idx + 1}"))
     return f"site_{idx + 1}"
 
 
@@ -10721,7 +10739,7 @@ def _rebuild_atom_site_fractional_controls():
 
     gui_views.rebuild_atom_site_fractional_controls(
         view_state=stacking_parameter_controls_view_state,
-        atom_site_fract_vars=atom_site_fract_vars,
+        atom_site_fract_vars=_atom_site_fractional_control_vars(),
         atom_site_label_text=_atom_site_fractional_label_text,
         on_update=update_occupancies,
         empty_text="No _atom_site_fract_x/_y/_z loop found in the active CIF.",
@@ -10734,15 +10752,15 @@ def _reset_structure_model_control_vars(
 ):
     """Replace occupancy and atom-site Tk variables for the active structure model."""
 
-    global occ_vars, atom_site_fract_vars
-
-    if len(occ_vars) != len(occupancy_values):
-        occ_vars = [tk.DoubleVar(value=float(value)) for value in occupancy_values]
+    if len(structure_model_state.occ_vars) != len(occupancy_values):
+        structure_model_state.occ_vars = [
+            tk.DoubleVar(value=float(value)) for value in occupancy_values
+        ]
     else:
-        for occ_var, value in zip(occ_vars, occupancy_values):
+        for occ_var, value in zip(structure_model_state.occ_vars, occupancy_values):
             occ_var.set(float(value))
 
-    atom_site_fract_vars = [
+    structure_model_state.atom_site_fract_vars = [
         {
             "x": tk.DoubleVar(value=float(x_val)),
             "y": tk.DoubleVar(value=float(y_val)),
@@ -10756,8 +10774,6 @@ def _reset_structure_model_control_vars(
 
 def _apply_primary_cif_path(raw_path):
     """Load a new primary CIF file and rebuild diffraction inputs."""
-
-    global occ_vars, atom_site_fract_vars
 
     text_path = str(raw_path).strip().strip('"').strip("'")
     if not text_path:
@@ -10807,13 +10823,13 @@ def _apply_primary_cif_path(raw_path):
         gui_structure_model.apply_primary_cif_reload_plan(
             structure_model_state,
             reload_plan,
-            occ_vars=occ_vars,
-            atom_site_fract_vars=atom_site_fract_vars,
+            occ_vars=_occupancy_control_vars(),
+            atom_site_fract_vars=_atom_site_fractional_control_vars(),
             has_second_cif=has_second_cif,
         )
         _sync_structure_model_aliases()
 
-        cif_file_var.set(cif_file)
+        cif_file_var.set(_current_primary_cif_path())
         _reset_atom_site_override_cache()
         _rebuild_diffraction_inputs(
             reload_plan.occ,
@@ -10827,7 +10843,7 @@ def _apply_primary_cif_path(raw_path):
         a_var.set(av)
         c_var.set(cv)
         simulation_runtime_state.last_simulation_signature = None
-        progress_label.config(text=f"Loaded CIF: {Path(cif_file).name}")
+        progress_label.config(text=f"Loaded CIF: {Path(_current_primary_cif_path()).name}")
     except Exception as exc:
         _reset_structure_model_control_vars(
             snapshot.current_occ_values,
@@ -10836,8 +10852,8 @@ def _apply_primary_cif_path(raw_path):
         gui_structure_model.restore_primary_cif_reload_snapshot(
             structure_model_state,
             snapshot,
-            occ_vars=occ_vars,
-            atom_site_fract_vars=atom_site_fract_vars,
+            occ_vars=_occupancy_control_vars(),
+            atom_site_fract_vars=_atom_site_fractional_control_vars(),
         )
         _reset_atom_site_override_cache()
         _sync_structure_model_aliases()
@@ -10851,7 +10867,7 @@ def _apply_primary_cif_path(raw_path):
 def _browse_primary_cif():
     """Open a file picker and apply the selected primary CIF path."""
     gui_structure_model.browse_primary_cif_with_dialog(
-        current_cif_path=cif_file,
+        current_cif_path=_current_primary_cif_path(),
         file_dialog_dir=get_dir("file_dialog_dir"),
         askopenfilename=filedialog.askopenfilename,
         set_cif_path_text=cif_file_var.set,
@@ -10949,7 +10965,7 @@ _rebuild_atom_site_fractional_controls()
 gui_views.create_primary_cif_controls(
     parent=app_shell_view_state.right_col,
     view_state=primary_cif_controls_view_state,
-    cif_path_text=str(cif_file),
+    cif_path_text=_current_primary_cif_path(),
     on_apply_from_entry=_apply_primary_cif_from_entry,
     on_browse_primary_cif=_browse_primary_cif,
     on_open_diffuse_ht=_open_diffuse_cif_toggle,
@@ -11056,9 +11072,9 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
 
     sample_mode = resolution_var.get()
     sample_count = int(max(1, simulation_runtime_state.num_samples))
-    cif_summary = Path(cif_file).name
-    if cif_file2:
-        cif_summary = f"{cif_summary}, {Path(cif_file2).name}"
+    cif_summary = Path(_current_primary_cif_path()).name
+    if structure_model_state.cif_file2:
+        cif_summary = f"{cif_summary}, {Path(str(structure_model_state.cif_file2)).name}"
     print(
         "Startup ready: "
         f"profile={'loaded' if profile_loaded else 'defaults'}; "
