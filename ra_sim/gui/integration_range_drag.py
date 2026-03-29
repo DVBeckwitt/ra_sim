@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 from matplotlib.patches import Rectangle
+from ra_sim.gui import controllers as gui_controllers
 
 
 @dataclass
@@ -784,9 +785,8 @@ def _schedule_runtime_range_update(
 ) -> None:
     bindings = bindings_factory()
     pending = getattr(bindings.simulation_runtime_state, "integration_update_pending", None)
-    after_cancel = getattr(bindings.root, "after_cancel", None)
-    if pending is not None and callable(after_cancel):
-        after_cancel(pending)
+    if pending is not None:
+        gui_controllers.clear_tk_after_token(bindings.root, pending)
 
     base_delay = _runtime_range_update_debounce_ms(bindings)
     try:

@@ -175,6 +175,10 @@ This document summarizes the maintainability refactor delivered for RA-SIM while
   and is used by runtime glue paths (manual-geometry caked-view switch and
   geometry-update scheduling) to centralize duplicate timer cancellation and
   harden cancellation error handling.
+- Integration-range drag scheduling now also uses that shared helper for pending
+  token cleanup before queuing range-update callbacks.
+- Geometry-fit undo restore in `ra_sim.gui.app` now uses that shared helper when
+  clearing `update_pending` before redrawing restored geometry state.
 - HKL lookup / Bragg-Qr open-control cleanup has also advanced:
   - the HKL lookup control cluster, its initial HKL-pick button refresh, and
     the shared Bragg-Qr manager open action now assemble through one shared

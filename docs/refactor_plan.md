@@ -70,6 +70,10 @@ reduction.
 As part of the next concrete step, `ra_sim.gui.controllers` now owns a shared
 Tk after-token cancellation helper used by runtime glue paths that previously
 duplicated cancellation logic across manual-geometry and geometry-update flows.
+The shared helper is now also used by integration-range scheduling flow to keep
+timer-cancel behavior consistent across another runtime workflow.
+Compatibility undo handling in the import-safe app shim now also uses this helper
+when restoring geometry-fit state before redraw.
 
 ### What Is Already Done
 
@@ -935,6 +939,11 @@ What is done:
   resolution-choice normalization, and summary formatting helpers.
 - `controllers.py` now also owns a shared Tk `after`-token cancellation helper,
   which is now used by manual-geometry and runtime update-scheduling paths.
+- `controllers.py` now also owns shared timer-cancel coverage via
+  `test_gui_controllers` to guard behavior when Tk callbacks are missing or
+  failing.
+- `app.py` now also uses the shared Tk timer-cancel helper during geometry-fit
+  undo restore to clear pending update callbacks without inline try/except logic.
 - `state.py` now also owns finite-stack control view state.
 - `views.py` now also owns the finite-stack control construction and helper
   updates for the layer widgets and entry text.

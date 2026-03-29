@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 from ra_sim.gui import geometry_fit as gui_geometry_fit
+from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import state_io as gui_state_io
 
 write_excel = False
@@ -314,10 +315,7 @@ def _restore_geometry_fit_undo_state(state: dict[str, object]) -> None:
     last_simulation_signature = None
 
     if update_pending is not None:
-        try:
-            root.after_cancel(update_pending)
-        except Exception:
-            pass
+        gui_controllers.clear_tk_after_token(root, update_pending)
         update_pending = None
 
     do_update()

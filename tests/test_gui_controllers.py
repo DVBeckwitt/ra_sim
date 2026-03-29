@@ -235,6 +235,31 @@ def test_display_control_controller_helpers_normalize_scale_and_ranges() -> None
     assert controllers.normalize_display_scale_factor("bad", fallback="4.5") == 4.5
 
 
+def test_clear_tk_after_token_handles_missing_or_failing_cancel_callbacks() -> None:
+    cancelled: list[object] = []
+
+    class Root:
+        def after_cancel(self, token: object) -> None:
+            cancelled.append(token)
+
+    controllers.clear_tk_after_token(Root(), "token")
+    assert cancelled == ["token"]
+
+    class FailingRoot:
+        def after_cancel(self, _token: object) -> None:
+            raise RuntimeError("cancel failed")
+
+    controllers.clear_tk_after_token(FailingRoot(), "token")
+    assert cancelled == ["token"]
+
+    class EmptyRoot:
+        pass
+
+    # Should be a no-op when no after_cancel exists.
+    controllers.clear_tk_after_token(EmptyRoot(), "token")
+    assert cancelled == ["token"]
+
+
 def test_structure_factor_pruning_controller_helpers_clip_and_normalize_inputs() -> None:
     assert controllers.clip_structure_factor_prune_bias("1.5", fallback=0.0, minimum=-2.0, maximum=2.0) == 1.5
     assert controllers.clip_structure_factor_prune_bias("bad", fallback=0.25, minimum=-2.0, maximum=2.0) == 0.25
