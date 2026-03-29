@@ -12499,6 +12499,19 @@ def _rebuild_atom_site_fractional_controls():
     )
 
 
+structure_model_controls_built = False
+
+
+def _rebuild_structure_model_controls() -> None:
+    """Populate the deferred occupancy/atom-site structure controls."""
+
+    global structure_model_controls_built
+
+    _rebuild_occupancy_controls()
+    _rebuild_atom_site_fractional_controls()
+    structure_model_controls_built = True
+
+
 def _reset_structure_model_control_vars(
     occupancy_values,
     atom_site_values,
@@ -12521,8 +12534,7 @@ def _reset_structure_model_control_vars(
         }
         for (x_val, y_val, z_val) in atom_site_values
     ]
-    _rebuild_occupancy_controls()
-    _rebuild_atom_site_fractional_controls()
+    _rebuild_structure_model_controls()
 
 
 def _apply_primary_cif_path(raw_path):
@@ -12716,9 +12728,6 @@ def _export_diffuse_ht_txt():
     )
 
 
-_rebuild_occupancy_controls()
-_rebuild_atom_site_fractional_controls()
-
 gui_views.create_primary_cif_controls(
     parent=app_shell_view_state.right_col,
     view_state=primary_cif_controls_view_state,
@@ -12847,17 +12856,31 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         f"cif={cif_summary}"
     )
 
-    def _run_post_startup_work():
+    post_startup_tasks: list[tuple[str, Callable[[], None]]] = []
+    if not structure_model_controls_built:
+        post_startup_tasks.append(
+            ("structure controls", _rebuild_structure_model_controls)
+        )
+    if write_excel:
+        post_startup_tasks.append(("initial Excel export", export_initial_excel))
+
+    def _run_post_startup_work(index: int = 0):
+        if index >= len(post_startup_tasks):
+            return
+        task_name, task_fn = post_startup_tasks[index]
         try:
-            export_initial_excel()
+            task_fn()
         except Exception as exc:
-            progress_label.config(text=f"Startup post-processing failed: {exc}")
+            progress_label.config(text=f"Startup post-processing failed during {task_name}: {exc}")
             try:
                 import traceback
 
                 traceback.print_exc()
             except Exception:
                 pass
+            return
+        if (index + 1) < len(post_startup_tasks):
+            root.after(75, lambda: _run_post_startup_work(index + 1))
 
     def _run_initial_startup_work():
         try:
@@ -12886,8 +12909,8 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                 progress_label.config(text=_analysis_progress_text())
             else:
                 progress_label.config(text="Simulation ready.")
-            if write_excel:
-                root.after(250, _run_post_startup_work)
+            if post_startup_tasks:
+                root.after(200, _run_post_startup_work)
 
     # Let Tk paint the windows first, then run the expensive initial update.
     root.after_idle(_run_initial_startup_work)
