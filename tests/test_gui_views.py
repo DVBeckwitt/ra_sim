@@ -274,11 +274,15 @@ class _FakeCollapsibleFrame:
         self.parent = parent
         self.text = text
         self.expanded = expanded
+        self.summary_text = ""
         self.frame = _FakeFrame(self)
         self.pack_calls = []
 
     def pack(self, **kwargs) -> None:
         self.pack_calls.append(kwargs)
+
+    def set_header_summary(self, text: str = "") -> None:
+        self.summary_text = str(text)
 
 
 class _FakeLabel:
@@ -719,8 +723,11 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
     monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
     monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.ttk, "Separator", _FakeFrame)
     monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
@@ -732,26 +739,40 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
         (view_state.controls_panel, 1),
         (view_state.figure_panel, 3),
     ]
+    assert isinstance(view_state.session_summary_frame, _FakeFrame)
+    assert view_state.session_summary_var.get().startswith("Background: not loaded")
+    assert view_state.mode_banner_frame is None
+    assert view_state.mode_banner_title_var is None
     assert isinstance(view_state.controls_notebook, _FakeNotebook)
     assert [text for _, text in view_state.controls_notebook.tabs] == [
-        "Workspace",
-        "Fit",
-        "Parameters",
-        "Analysis",
+        "Setup",
+        "Match",
+        "Refine",
+        "Analyze",
+        "Help",
     ]
     assert [text for _, text in view_state.parameter_notebook.tabs] == [
-        "Geometry && Beam",
-        "Structure && CIF",
+        "Basic",
+        "Advanced",
     ]
+    assert isinstance(view_state.setup_body, _FakeFrame)
+    assert isinstance(view_state.match_body, _FakeFrame)
+    assert isinstance(view_state.refine_basic_body, _FakeFrame)
+    assert isinstance(view_state.refine_advanced_body, _FakeFrame)
     assert isinstance(view_state.workspace_body, _FakeFrame)
     assert isinstance(view_state.fit_body, _FakeFrame)
     assert isinstance(view_state.parameter_geometry_body, _FakeFrame)
     assert isinstance(view_state.parameter_structure_body, _FakeFrame)
-    assert isinstance(view_state.workspace_canvas, _FakeCanvas)
-    assert isinstance(view_state.fit_canvas, _FakeCanvas)
-    assert isinstance(view_state.parameter_geometry_canvas, _FakeCanvas)
-    assert isinstance(view_state.parameter_structure_canvas, _FakeCanvas)
+    assert isinstance(view_state.setup_canvas, _FakeCanvas)
+    assert isinstance(view_state.match_canvas, _FakeCanvas)
+    assert isinstance(view_state.refine_basic_canvas, _FakeCanvas)
+    assert isinstance(view_state.refine_advanced_canvas, _FakeCanvas)
     assert isinstance(view_state.fit_actions_frame, _FakeFrame)
+    assert isinstance(view_state.match_backgrounds_frame, _FakeFrame)
+    assert isinstance(view_state.match_parameter_frame, _FakeFrame)
+    assert isinstance(view_state.match_run_frame, _FakeFrame)
+    assert isinstance(view_state.match_results_frame, _FakeFrame)
+    assert "Fit results will appear here" in view_state.match_results_var.get()
     assert isinstance(view_state.analysis_views_frame, _FakeFrame)
     assert isinstance(view_state.analysis_exports_frame, _FakeFrame)
     assert isinstance(view_state.status_frame, _FakeFrame)
@@ -760,19 +781,19 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.left_col, _FakeFrame)
     assert isinstance(view_state.right_col, _FakeFrame)
     assert isinstance(view_state.plot_frame_1d, _FakeFrame)
-    assert view_state.control_tab_var.get() == "parameters"
-    assert view_state.parameter_tab_var.get() == "geometry"
-    assert view_state.controls_notebook.selected_tab is view_state.parameters_tab
-    assert view_state.parameter_notebook.selected_tab is view_state.parameter_geometry_tab
+    assert view_state.control_tab_var.get() == "setup"
+    assert view_state.parameter_tab_var.get() == "basic"
+    assert view_state.controls_notebook.selected_tab is view_state.setup_tab
+    assert view_state.parameter_notebook.selected_tab is view_state.refine_basic_tab
 
-    view_state.control_tab_var.set("fit")
-    assert view_state.controls_notebook.selected_tab is view_state.fit_tab
+    view_state.control_tab_var.set("match")
+    assert view_state.controls_notebook.selected_tab is view_state.match_tab
 
     callback, add = view_state.parameter_notebook.bindings["<<NotebookTabChanged>>"]
     assert add == "+"
-    view_state.parameter_notebook.select(view_state.parameter_structure_tab)
+    view_state.parameter_notebook.select(view_state.refine_advanced_tab)
     callback(None)
-    assert view_state.parameter_tab_var.get() == "structure"
+    assert view_state.parameter_tab_var.get() == "advanced"
 
 
 def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_all(
@@ -783,8 +804,11 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
     monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
     monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
     monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.ttk, "Separator", _FakeFrame)
     monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
@@ -798,22 +822,22 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
         "<Button-5>",
     ]
 
-    view_state.workspace_canvas.rootx = 0
-    view_state.workspace_canvas.rooty = 0
-    view_state.workspace_canvas.width = 100
-    view_state.workspace_canvas.height = 100
-    view_state.fit_canvas.rootx = 150
-    view_state.fit_canvas.rooty = 0
-    view_state.fit_canvas.width = 100
-    view_state.fit_canvas.height = 100
-    view_state.parameter_geometry_canvas.rootx = 300
-    view_state.parameter_geometry_canvas.rooty = 0
-    view_state.parameter_geometry_canvas.width = 100
-    view_state.parameter_geometry_canvas.height = 100
-    view_state.parameter_structure_canvas.rootx = 450
-    view_state.parameter_structure_canvas.rooty = 0
-    view_state.parameter_structure_canvas.width = 100
-    view_state.parameter_structure_canvas.height = 100
+    view_state.setup_canvas.rootx = 0
+    view_state.setup_canvas.rooty = 0
+    view_state.setup_canvas.width = 100
+    view_state.setup_canvas.height = 100
+    view_state.match_canvas.rootx = 150
+    view_state.match_canvas.rooty = 0
+    view_state.match_canvas.width = 100
+    view_state.match_canvas.height = 100
+    view_state.refine_basic_canvas.rootx = 300
+    view_state.refine_basic_canvas.rooty = 0
+    view_state.refine_basic_canvas.width = 100
+    view_state.refine_basic_canvas.height = 100
+    view_state.refine_advanced_canvas.rootx = 450
+    view_state.refine_advanced_canvas.rooty = 0
+    view_state.refine_advanced_canvas.width = 100
+    view_state.refine_advanced_canvas.height = 100
 
     dispatch = next(
         callback
@@ -823,10 +847,36 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
     event = type("Event", (), {"delta": 60, "num": None, "x_root": 175, "y_root": 25})()
 
     assert dispatch(event) == "break"
-    assert view_state.workspace_canvas.scrolled == []
-    assert view_state.fit_canvas.scrolled == [(-1, "units")]
-    assert view_state.parameter_geometry_canvas.scrolled == []
-    assert view_state.parameter_structure_canvas.scrolled == []
+    assert view_state.setup_canvas.scrolled == []
+    assert view_state.match_canvas.scrolled == [(-1, "units")]
+    assert view_state.refine_basic_canvas.scrolled == []
+    assert view_state.refine_advanced_canvas.scrolled == []
+
+
+def test_app_shell_summary_banner_and_match_result_setters_update_vars(monkeypatch) -> None:
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    view_state = state.AppShellViewState(
+        session_summary_var=_FakeStringVar(""),
+        mode_banner_title_var=_FakeStringVar(""),
+        mode_banner_detail_var=_FakeStringVar(""),
+        match_results_var=_FakeStringVar(""),
+    )
+
+    views.set_app_shell_session_summary_text(view_state, "Background: demo.osc")
+    views.set_app_shell_mode_banner_text(
+        view_state,
+        title="Manual geometry picking armed",
+        detail="Click a simulated Qr group on the image.",
+    )
+    views.set_match_results_text(view_state, "Chi-Squared: 1.23")
+
+    assert view_state.session_summary_var.get() == "Background: demo.osc"
+    assert view_state.mode_banner_title_var.get() == "Manual geometry picking armed"
+    assert view_state.mode_banner_detail_var.get() == "Click a simulated Qr group on the image."
+    assert view_state.match_results_var.get() == "Chi-Squared: 1.23"
 
 
 def test_console_status_label_compacts_text_and_logs_once(monkeypatch) -> None:
@@ -864,6 +914,8 @@ def test_create_status_panel_stores_console_labels_and_progressbar(monkeypatch) 
 
     assert isinstance(view_state.progress_label_positions, views.ConsoleStatusLabel)
     assert isinstance(view_state.progress_label_geometry, views.ConsoleStatusLabel)
+    assert isinstance(view_state.ordered_structure_progressbar, _FakeProgressbar)
+    assert isinstance(view_state.progress_label_ordered_structure, views.ConsoleStatusLabel)
     assert isinstance(view_state.mosaic_progressbar, _FakeProgressbar)
     assert isinstance(view_state.progress_label_mosaic, views.ConsoleStatusLabel)
     assert isinstance(view_state.progress_label, views.ConsoleStatusLabel)
@@ -874,6 +926,7 @@ def test_create_status_panel_stores_console_labels_and_progressbar(monkeypatch) 
 def test_create_workspace_panels_stores_panel_refs(monkeypatch) -> None:
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
 
     view_state = state.WorkspacePanelsViewState()
 
@@ -883,11 +936,15 @@ def test_create_workspace_panels_stores_panel_refs(monkeypatch) -> None:
     )
 
     assert isinstance(view_state.workspace_actions_frame, _FakeFrame)
-    assert view_state.workspace_actions_frame.kwargs["text"] == "Workspace Actions"
+    assert view_state.workspace_actions_frame.kwargs["text"] == "Setup Actions"
     assert isinstance(view_state.workspace_backgrounds_frame, _FakeFrame)
-    assert "text" not in view_state.workspace_backgrounds_frame.kwargs
+    assert view_state.workspace_backgrounds_frame.kwargs["text"] == "Backgrounds"
+    assert isinstance(view_state.workspace_inputs_frame, _FakeFrame)
+    assert view_state.workspace_inputs_frame.kwargs["text"] == "Input Model"
     assert isinstance(view_state.workspace_session_frame, _FakeFrame)
     assert view_state.workspace_session_frame.kwargs["text"] == "Session"
+    assert isinstance(view_state.workspace_debug_frame, _FakeCollapsibleFrame)
+    assert view_state.workspace_debug_frame.text == "Advanced / Debug"
 
 
 def test_populate_stacked_button_group_creates_buttons_in_order(monkeypatch) -> None:
@@ -908,6 +965,14 @@ def test_populate_stacked_button_group_creates_buttons_in_order(monkeypatch) -> 
     _FakeButton.created[0].command()
     _FakeButton.created[1].command()
     assert called == ["first", "second"]
+
+
+def test_set_collapsible_header_summary_calls_frame_setter() -> None:
+    frame = _FakeCollapsibleFrame(object(), text="Section")
+
+    views.set_collapsible_header_summary(frame, "a 4.2 A | c 12.3 A")
+
+    assert frame.summary_text == "a 4.2 A | c 12.3 A"
 
 
 def test_background_file_controls_store_status_var_and_update_text(monkeypatch) -> None:
@@ -1193,7 +1258,11 @@ def test_display_controls_store_refs_and_slider_vars(monkeypatch) -> None:
 
     monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
     monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
     monkeypatch.setattr(views, "create_slider", _fake_create_slider)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
 
     view_state = state.DisplayControlsViewState()
 
@@ -1730,6 +1799,119 @@ def test_stacking_parameter_rebuild_helpers_render_dynamic_controls(monkeypatch)
     ]
 
 
+def test_ordered_structure_fit_panel_helpers_build_and_rebuild_controls(monkeypatch) -> None:
+    class _GridCheckbutton:
+        created = []
+
+        def __init__(self, parent, **kwargs) -> None:
+            self.parent = parent
+            self.kwargs = kwargs
+            self.command = kwargs.get("command")
+            self.variable = kwargs.get("variable")
+            self.grid_kwargs = None
+            self.pack_kwargs = None
+            _GridCheckbutton.created.append(self)
+
+        def grid(self, **kwargs) -> None:
+            self.grid_kwargs = kwargs
+
+        def pack(self, **kwargs) -> None:
+            self.pack_kwargs = kwargs
+
+    class _TrackedFrame:
+        def __init__(self, _parent=None, **_kwargs) -> None:
+            self.children = []
+
+        def winfo_children(self):
+            return list(self.children)
+
+        def pack(self, **_kwargs) -> None:
+            pass
+
+    class _TrackedWidget:
+        def __init__(self, parent, **kwargs) -> None:
+            self.parent = parent
+            self.kwargs = kwargs
+            self.bindings = {}
+            self.destroyed = False
+            if hasattr(parent, "children"):
+                parent.children.append(self)
+
+        def pack(self, **_kwargs) -> None:
+            pass
+
+        def grid(self, **_kwargs) -> None:
+            pass
+
+        def bind(self, event: str, callback) -> None:
+            self.bindings[event] = callback
+
+        def destroy(self) -> None:
+            self.destroyed = True
+
+    class _TrackedLabel(_TrackedWidget):
+        pass
+
+    class _TrackedEntry(_TrackedWidget):
+        pass
+
+    _GridCheckbutton.created = []
+    monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)
+    monkeypatch.setattr(views.ttk, "Frame", _TrackedFrame)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Entry", _TrackedEntry)
+    monkeypatch.setattr(views.ttk, "Label", _TrackedLabel)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _GridCheckbutton)
+
+    result_var = _FakeStringVar("idle")
+    view_state = state.OrderedStructureFitControlsViewState()
+    views.create_ordered_structure_fit_panel(
+        parent=object(),
+        view_state=view_state,
+        ordered_scale_var=_FakeVar(1.0),
+        coord_window_var=_FakeVar(0.02),
+        fit_debye_x_var=_FakeVar(True),
+        fit_debye_y_var=_FakeVar(True),
+        result_var=result_var,
+        on_fit=lambda: None,
+        on_revert=lambda: None,
+        on_commit_ordered_scale=lambda *_args: None,
+        on_commit_coord_window=lambda *_args: None,
+    )
+
+    assert isinstance(view_state.frame, _FakeCollapsibleFrame)
+    assert isinstance(view_state.fit_button, _FakeButton)
+    assert isinstance(view_state.revert_button, _FakeButton)
+    assert view_state.revert_button.state == tk.DISABLED
+    assert isinstance(view_state.ordered_scale_entry, _TrackedEntry)
+    assert "<Return>" in view_state.ordered_scale_entry.bindings
+    assert "<FocusOut>" in view_state.coord_window_entry.bindings
+    assert view_state.result_var is result_var
+
+    old_occ_child = _FakeExistingChild()
+    old_atom_child = _FakeExistingChild()
+    view_state.occupancy_toggle_frame.children.append(old_occ_child)
+    view_state.atom_toggle_frame.children.append(old_atom_child)
+    occ_vars = [_FakeVar(True), _FakeVar(False)]
+    atom_vars = [{"x": _FakeVar(False), "y": _FakeVar(False), "z": _FakeVar(True)}]
+
+    views.rebuild_ordered_structure_fit_occupancy_controls(
+        view_state=view_state,
+        occupancy_vars=occ_vars,
+        occupancy_label_text=lambda idx: f"Occ {idx + 1}",
+    )
+    views.rebuild_ordered_structure_fit_atom_coordinate_controls(
+        view_state=view_state,
+        atom_toggle_vars=atom_vars,
+        atom_site_label_text=lambda idx: f"site_{idx + 1}",
+    )
+
+    assert old_occ_child.destroyed is True
+    assert old_atom_child.destroyed is True
+    assert len(view_state.occupancy_toggle_widgets) == 3
+    assert len(view_state.atom_toggle_widgets) == 4
+
+
 def test_geometry_tool_action_controls_store_refs_and_support_updates(
     monkeypatch,
 ) -> None:
@@ -1740,11 +1922,16 @@ def test_geometry_tool_action_controls_store_refs_and_support_updates(
     view_state = state.GeometryToolActionsViewState()
     calls = []
 
-    views.create_geometry_tool_action_controls(
+    views.create_geometry_fit_history_controls(
         parent=object(),
         view_state=view_state,
         on_undo_fit=lambda: calls.append("undo-fit"),
         on_redo_fit=lambda: calls.append("redo-fit"),
+    )
+
+    views.create_geometry_tool_action_controls(
+        parent=object(),
+        view_state=view_state,
         on_toggle_manual_pick=lambda: calls.append("toggle-pick"),
         on_undo_manual_placement=lambda: calls.append("undo-placement"),
         on_export_manual_pairs=lambda: calls.append("export"),
@@ -1899,7 +2086,7 @@ def test_geometry_overlay_action_controls_store_refs_and_commands(
     assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Qr Cylinder Lines"
     assert [button.kwargs["text"] for button in _FakeButton.created] == [
         "Clear Geometry Overlays",
-        "Fit Mosaic Widths",
+        "Fit Mosaic Shapes",
     ]
 
     _FakeCheckbutton.created[0].command()
@@ -2039,6 +2226,7 @@ def test_analysis_export_controls_store_refs_and_commands(monkeypatch) -> None:
         on_save_snapshot=lambda: calls.append("snapshot"),
         on_save_q_space=lambda: calls.append("q-space"),
         on_save_1d_grid=lambda: calls.append("grid"),
+        save_1d_grid_available=False,
     )
 
     assert view_state.snapshot_button is _FakeButton.created[0]
@@ -2047,12 +2235,14 @@ def test_analysis_export_controls_store_refs_and_commands(monkeypatch) -> None:
     assert [button.kwargs["text"] for button in _FakeButton.created] == [
         "Save 1D Snapshot",
         "Save Q-Space Snapshot",
-        "Save 1D Grid",
+        "Save 1D Grid (Unavailable)",
     ]
+    assert view_state.save_1d_grid_button.state == tk.DISABLED
 
     for button in _FakeButton.created:
-        button.command()
-    assert calls == ["snapshot", "q-space", "grid"]
+        if button.state != tk.DISABLED:
+            button.command()
+    assert calls == ["snapshot", "q-space"]
 
 
 def test_background_backend_debug_controls_store_status_label_and_commands(
@@ -2222,6 +2412,8 @@ def test_geometry_fit_constraints_scroll_registration_preempts_outer_fit_canvas(
     monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
     monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
     monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Separator", _FakeFrame)
     monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
     monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
     monkeypatch.setattr(views, "CollapsibleFrame", _FakeCollapsibleFrame)

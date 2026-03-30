@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import os
+import sys
+import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,6 +159,7 @@ class GeometryFitSolverRequest:
     experimental_image: object
     dataset_specs: list[dict[str, object]] | None
     refinement_config: dict[str, object]
+    runtime_safety_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +228,7 @@ class GeometryFitRuntimeUiBindings:
     refresh_status: Callable[[], None]
     update_manual_pick_button_label: Callable[[], None]
     replace_profile_cache: Callable[[dict[str, object]], None]
+    replace_dataset_cache: Callable[[dict[str, object] | None], None] | None
     push_undo_state: Callable[[dict[str, object] | None], None]
     request_preview_skip_once: Callable[[], None]
     mark_last_simulation_dirty: Callable[[], None]
@@ -287,6 +292,7 @@ class GeometryFitRuntimeActionExecutionBindings:
     update_manual_pick_button_label: Callable[[], None]
     capture_undo_state: Callable[[], dict[str, object]]
     push_undo_state: Callable[[dict[str, object] | None], None]
+    replace_dataset_cache: Callable[[dict[str, object] | None], None] | None
     request_preview_skip_once: Callable[[], None]
     schedule_update: Callable[[], None]
     draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None]
@@ -523,6 +529,7 @@ def build_runtime_geometry_fit_action_execution_bindings(
     update_manual_pick_button_label: Callable[[], None],
     capture_undo_state: Callable[[], dict[str, object]],
     push_undo_state: Callable[[dict[str, object] | None], None],
+    replace_dataset_cache: Callable[[dict[str, object] | None], None] | None,
     request_preview_skip_once: Callable[[], None],
     schedule_update: Callable[[], None],
     draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None],
@@ -553,6 +560,7 @@ def build_runtime_geometry_fit_action_execution_bindings(
         update_manual_pick_button_label=update_manual_pick_button_label,
         capture_undo_state=capture_undo_state,
         push_undo_state=push_undo_state,
+        replace_dataset_cache=replace_dataset_cache,
         request_preview_skip_once=request_preview_skip_once,
         schedule_update=schedule_update,
         draw_overlay_records=draw_overlay_records,
@@ -599,6 +607,7 @@ def build_runtime_geometry_fit_action_bindings(
     update_manual_pick_button_label: Callable[[], None],
     capture_undo_state: Callable[[], dict[str, object]],
     push_undo_state: Callable[[dict[str, object] | None], None],
+    replace_dataset_cache: Callable[[dict[str, object] | None], None] | None,
     request_preview_skip_once: Callable[[], None],
     schedule_update: Callable[[], None],
     draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None],
@@ -653,6 +662,7 @@ def build_runtime_geometry_fit_action_bindings(
             update_manual_pick_button_label=update_manual_pick_button_label,
             capture_undo_state=capture_undo_state,
             push_undo_state=push_undo_state,
+            replace_dataset_cache=replace_dataset_cache,
             request_preview_skip_once=request_preview_skip_once,
             schedule_update=schedule_update,
             draw_overlay_records=draw_overlay_records,
@@ -706,6 +716,7 @@ def make_runtime_geometry_fit_action_bindings_factory(
     update_manual_pick_button_label: Callable[[], None],
     capture_undo_state: Callable[[], dict[str, object]],
     push_undo_state: Callable[[dict[str, object] | None], None],
+    replace_dataset_cache: Callable[[dict[str, object] | None], None] | None,
     request_preview_skip_once: Callable[[], None],
     schedule_update: Callable[[], None],
     draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None],
@@ -758,6 +769,7 @@ def make_runtime_geometry_fit_action_bindings_factory(
             update_manual_pick_button_label=update_manual_pick_button_label,
             capture_undo_state=capture_undo_state,
             push_undo_state=push_undo_state,
+            replace_dataset_cache=replace_dataset_cache,
             request_preview_skip_once=request_preview_skip_once,
             schedule_update=schedule_update,
             draw_overlay_records=draw_overlay_records,
@@ -1356,6 +1368,35 @@ def build_geometry_fit_runtime_config(
     if not isinstance(runtime_cfg, dict):
         runtime_cfg = {}
 
+    # The live GUI fit should favor stability over throughput. Native/parallel
+    # fitting paths have triggered hard system failures on some machines, so the
+    # runtime config clamps geometry fits to a conservative execution profile by
+    # default. Advanced users can opt back in through gui_* overrides in config.
+    solver_cfg = runtime_cfg.get("solver", {}) or {}
+    if not isinstance(solver_cfg, dict):
+        solver_cfg = {}
+    runtime_cfg["solver"] = solver_cfg
+
+    gui_use_numba = runtime_cfg.pop("gui_use_numba", None)
+    runtime_cfg["use_numba"] = (
+        bool(gui_use_numba) if gui_use_numba is not None else False
+    )
+
+    gui_workers = solver_cfg.pop("gui_workers", None)
+    solver_cfg["workers"] = gui_workers if gui_workers is not None else 1
+
+    gui_parallel_mode = solver_cfg.pop("gui_parallel_mode", None)
+    solver_cfg["parallel_mode"] = (
+        str(gui_parallel_mode).strip()
+        if gui_parallel_mode is not None
+        else "off"
+    )
+
+    gui_worker_numba_threads = solver_cfg.pop("gui_worker_numba_threads", None)
+    solver_cfg["worker_numba_threads"] = (
+        gui_worker_numba_threads if gui_worker_numba_threads is not None else 1
+    )
+
     bounds_cfg = runtime_cfg.get("bounds", {}) or {}
     if not isinstance(bounds_cfg, dict):
         bounds_cfg = {}
@@ -1484,6 +1525,46 @@ def _resolve_runtime_value(value_or_factory):
     return value_or_factory
 
 
+def _geometry_fit_sequence_has_items(value: object) -> bool:
+    """Return whether one saved sequence-like payload contains any entries."""
+
+    if value is None:
+        return False
+    if isinstance(value, np.ndarray):
+        return int(np.asarray(value).size) > 0
+    try:
+        return len(value) > 0  # type: ignore[arg-type]
+    except Exception:
+        return True
+
+
+def _geometry_fit_sequence_list(value: object) -> list[object]:
+    """Normalize one saved sequence-like payload into a plain list."""
+
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, np.ndarray):
+        arr = np.asarray(value, dtype=object)
+        if arr.ndim == 0:
+            item = arr.item()
+            if item is None:
+                return []
+            if isinstance(item, list):
+                return list(item)
+            if isinstance(item, tuple):
+                return list(item)
+            return [item]
+        return list(arr.tolist())
+    try:
+        return list(value)  # type: ignore[arg-type]
+    except Exception:
+        return [value]
+
+
 def capture_runtime_geometry_fit_undo_state(
     *,
     current_ui_params: Callable[[], Mapping[str, object]] | Mapping[str, object],
@@ -1498,11 +1579,21 @@ def capture_runtime_geometry_fit_undo_state(
     """Capture the current geometry-fit UI/profile/overlay state for undo."""
 
     overlay_state = copy_state_value(_resolve_runtime_value(last_overlay_state))
+    overlay_records = (
+        overlay_state.get("overlay_records")
+        if isinstance(overlay_state, dict)
+        else None
+    )
+    initial_pairs_display = (
+        overlay_state.get("initial_pairs_display")
+        if isinstance(overlay_state, dict)
+        else None
+    )
     if not (
         isinstance(overlay_state, dict)
         and (
-            overlay_state.get("overlay_records")
-            or overlay_state.get("initial_pairs_display")
+            _geometry_fit_sequence_has_items(overlay_records)
+            or _geometry_fit_sequence_has_items(initial_pairs_display)
         )
     ):
         try:
@@ -1547,12 +1638,44 @@ def restore_runtime_geometry_fit_undo_state(
 ) -> Mapping[str, object]:
     """Apply one saved geometry-fit history state back onto the live runtime."""
 
+    ui_params_raw = state.get("ui_params", {}) if isinstance(state, dict) else {}
+    ui_params = dict(ui_params_raw) if isinstance(ui_params_raw, Mapping) else {}
+    overlay_state_raw = (
+        copy_geometry_fit_state_value(state.get("overlay_state"))
+        if isinstance(state, dict)
+        else None
+    )
+    overlay_state = (
+        dict(overlay_state_raw)
+        if isinstance(overlay_state_raw, Mapping)
+        else None
+    )
+    profile_cache_raw = (
+        copy_geometry_fit_state_value(state.get("profile_cache", {}))
+        if isinstance(state, dict)
+        else {}
+    )
+    profile_cache = (
+        dict(profile_cache_raw)
+        if isinstance(profile_cache_raw, Mapping)
+        else {}
+    )
     restored = apply_undo_state(
-        state,
+        {
+            **(dict(state) if isinstance(state, dict) else {}),
+            "ui_params": ui_params,
+            "overlay_state": overlay_state,
+            "profile_cache": profile_cache,
+        },
         var_map=var_map,
         geometry_theta_offset_var=geometry_theta_offset_var,
     )
-    replace_profile_cache(dict(restored.get("profile_cache", {}) or {}))
+    restored_profile_cache = restored.get("profile_cache", {})
+    replace_profile_cache(
+        dict(restored_profile_cache)
+        if isinstance(restored_profile_cache, Mapping)
+        else {}
+    )
     overlay_state = restored.get("overlay_state")
     set_last_overlay_state(
         dict(overlay_state) if isinstance(overlay_state, dict) else None
@@ -1566,8 +1689,12 @@ def restore_runtime_geometry_fit_undo_state(
         run_update()
 
     overlay_payload = overlay_state if isinstance(overlay_state, dict) else {}
-    overlay_records = overlay_payload.get("overlay_records", []) or []
-    initial_pairs_display = overlay_payload.get("initial_pairs_display", []) or []
+    overlay_records = _geometry_fit_sequence_list(
+        overlay_payload.get("overlay_records")
+    )
+    initial_pairs_display = _geometry_fit_sequence_list(
+        overlay_payload.get("initial_pairs_display")
+    )
     max_display_markers = int(overlay_payload.get("max_display_markers", 120))
     max_display_markers = max(1, max_display_markers)
     if overlay_records and callable(draw_overlay_records):
@@ -2219,10 +2346,7 @@ def prepare_geometry_fit_run(
             )
         joint_background_mode = len(selected_background_indices) > 1
         if background_theta_values:
-            fit_params["theta_initial"] = float(
-                background_theta_values[current_index]
-                + float(fit_params.get("theta_offset", 0.0))
-            )
+            fit_params["theta_initial"] = float(background_theta_values[current_index])
     else:
         fit_params["theta_offset"] = 0.0
         fit_params["theta_initial"] = float(
@@ -2315,7 +2439,10 @@ def prepare_geometry_fit_run(
                 current_dataset=current_dataset,
             ),
             max_display_markers=int(max_display_markers),
-            geometry_runtime_cfg=dict(build_runtime_config(fit_params) or {}),
+            geometry_runtime_cfg=apply_joint_geometry_fit_runtime_safety_overrides(
+                build_runtime_config(fit_params),
+                joint_background_mode=joint_background_mode,
+            ),
         )
     )
 
@@ -2388,6 +2515,144 @@ def build_geometry_fit_dataset_specs(
         if isinstance(spec, Mapping):
             dataset_specs.append(dict(spec))
     return dataset_specs
+
+
+def apply_joint_geometry_fit_runtime_safety_overrides(
+    runtime_cfg: Mapping[str, object] | None,
+    *,
+    joint_background_mode: bool,
+) -> dict[str, object]:
+    """Clamp interactive multi-background fits to a conservative solver profile."""
+
+    cfg = copy.deepcopy(dict(runtime_cfg or {}))
+    if not joint_background_mode:
+        return cfg
+
+    solver_cfg_raw = cfg.get("solver", {})
+    solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+    solver_cfg["workers"] = 1
+    solver_cfg["parallel_mode"] = "off"
+    solver_cfg["worker_numba_threads"] = 1
+    solver_cfg["stagnation_probe"] = False
+    solver_cfg["stagnation_probe_pairwise"] = False
+    solver_cfg["stagnation_probe_random_directions"] = 0
+    if "restarts" in solver_cfg:
+        try:
+            solver_cfg["restarts"] = min(max(int(solver_cfg["restarts"]), 0), 1)
+        except Exception:
+            solver_cfg["restarts"] = 1
+    cfg["solver"] = solver_cfg
+    cfg["use_numba"] = False
+
+    identifiability_cfg_raw = cfg.get("identifiability", {})
+    identifiability_cfg = (
+        dict(identifiability_cfg_raw)
+        if isinstance(identifiability_cfg_raw, Mapping)
+        else {}
+    )
+    identifiability_cfg["enabled"] = False
+    cfg["identifiability"] = identifiability_cfg
+    return cfg
+
+
+def build_geometry_fit_dataset_cache_payload(
+    prepared_run: GeometryFitPreparedRun,
+    *,
+    current_background_index: int | None = None,
+) -> dict[str, object]:
+    """Copy the reusable dataset bundle from a successful geometry fit."""
+
+    dataset_index = current_background_index
+    if dataset_index is None:
+        current_dataset = (
+            prepared_run.current_dataset
+            if isinstance(prepared_run.current_dataset, Mapping)
+            else {}
+        )
+        try:
+            dataset_index = int(current_dataset.get("dataset_index", 0))
+        except Exception:
+            dataset_index = 0
+
+    return {
+        "selected_background_indices": [
+            int(idx) for idx in prepared_run.selected_background_indices
+        ],
+        "current_background_index": int(dataset_index),
+        "joint_background_mode": bool(prepared_run.joint_background_mode),
+        "background_theta_values": [
+            float(value) for value in prepared_run.background_theta_values
+        ],
+        "dataset_specs": [
+            copy_geometry_fit_state_value(dict(spec))
+            for spec in (prepared_run.dataset_specs or [])
+            if isinstance(spec, Mapping)
+        ],
+    }
+
+
+def geometry_fit_dataset_cache_stale_reason(
+    cache_payload: Mapping[str, object] | None,
+    *,
+    selected_background_indices: Sequence[object],
+    current_background_index: int,
+    joint_background_mode: bool,
+    background_theta_values: Sequence[object],
+) -> str | None:
+    """Return a human-readable stale-cache reason, or ``None`` when valid."""
+
+    if not isinstance(cache_payload, Mapping):
+        return "Run geometry fit first."
+
+    raw_specs = cache_payload.get("dataset_specs")
+    if not isinstance(raw_specs, Sequence) or len(raw_specs) <= 0:
+        return "Run geometry fit first."
+
+    try:
+        cached_selected = [
+            int(idx) for idx in cache_payload.get("selected_background_indices", [])
+        ]
+    except Exception:
+        return "Run geometry fit first."
+    current_selected = [int(idx) for idx in selected_background_indices]
+    if cached_selected != current_selected:
+        return "Geometry-fit background selection changed. Rerun geometry fit."
+
+    try:
+        cached_index = int(cache_payload.get("current_background_index", -1))
+    except Exception:
+        return "Run geometry fit first."
+    if int(cached_index) != int(current_background_index):
+        return "Active background changed since geometry fit. Rerun geometry fit."
+
+    cached_joint = bool(cache_payload.get("joint_background_mode", False))
+    if cached_joint != bool(joint_background_mode):
+        return "Shared-theta mode changed since geometry fit. Rerun geometry fit."
+
+    try:
+        cached_theta_values = [
+            float(value) for value in cache_payload.get("background_theta_values", [])
+        ]
+        current_theta_values = [float(value) for value in background_theta_values]
+    except Exception:
+        return "Background theta values are unavailable. Rerun geometry fit."
+    if len(cached_theta_values) != len(current_theta_values):
+        return "Background theta values changed since geometry fit. Rerun geometry fit."
+    for cached_value, current_value in zip(
+        cached_theta_values,
+        current_theta_values,
+    ):
+        if not np.isfinite(cached_value) or not np.isfinite(current_value):
+            return "Background theta values changed since geometry fit. Rerun geometry fit."
+        if not np.isclose(
+            float(cached_value),
+            float(current_value),
+            rtol=0.0,
+            atol=1.0e-9,
+        ):
+            return "Background theta values changed since geometry fit. Rerun geometry fit."
+
+    return None
 
 
 def build_geometry_fit_start_cmd_line(
@@ -2473,6 +2738,89 @@ def write_geometry_fit_run_start_log(
         log_section(title, list(lines))
 
 
+def should_apply_geometry_fit_runtime_safety_overrides(
+    *,
+    platform_name: str | None = None,
+    version_info: Sequence[object] | None = None,
+    env: Mapping[str, object] | None = None,
+) -> bool:
+    """Return whether GUI geometry fitting should force the safe serial runtime."""
+
+    if platform_name is None:
+        platform_name = os.name
+    if version_info is None:
+        version_info = sys.version_info
+    if env is None:
+        env = os.environ
+
+    opt_out = str(
+        env.get("RA_SIM_ALLOW_UNSAFE_GEOMETRY_FIT_RUNTIME", "")
+    ).strip().lower()
+    if opt_out in {"1", "true", "yes", "on"}:
+        return False
+
+    if str(platform_name).strip().lower() != "nt":
+        return False
+
+    try:
+        major = int(version_info[0])
+        minor = int(version_info[1])
+    except Exception:
+        return False
+    return (major, minor) >= (3, 13)
+
+
+def apply_geometry_fit_runtime_safety_overrides(
+    refinement_config: Mapping[str, object] | None,
+    *,
+    platform_name: str | None = None,
+    version_info: Sequence[object] | None = None,
+    env: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], str | None]:
+    """Return one copied refinement config with GUI runtime safety overrides."""
+
+    if isinstance(refinement_config, Mapping):
+        resolved = copy.deepcopy(dict(refinement_config))
+    else:
+        resolved = {}
+
+    if not should_apply_geometry_fit_runtime_safety_overrides(
+        platform_name=platform_name,
+        version_info=version_info,
+        env=env,
+    ):
+        return resolved, None
+
+    solver_cfg_raw = resolved.get("solver", {})
+    solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+
+    changed = False
+    if bool(resolved.get("use_numba", True)):
+        resolved["use_numba"] = False
+        changed = True
+    if solver_cfg.get("parallel_mode") != "off":
+        solver_cfg["parallel_mode"] = "off"
+        changed = True
+    if solver_cfg.get("workers") != 1:
+        solver_cfg["workers"] = 1
+        changed = True
+    if solver_cfg.get("worker_numba_threads") != 1:
+        solver_cfg["worker_numba_threads"] = 1
+        changed = True
+
+    resolved["solver"] = solver_cfg
+    if not changed:
+        return resolved, None
+
+    return (
+        resolved,
+        (
+            "Windows/Python 3.13 runtime guard enabled: "
+            "geometry fit is running serially with Numba disabled."
+        ),
+    )
+
+
 def build_geometry_fit_solver_request(
     *,
     prepared_run: GeometryFitPreparedRun,
@@ -2480,6 +2828,12 @@ def build_geometry_fit_solver_request(
     solver_inputs: GeometryFitRuntimeSolverInputs,
 ) -> GeometryFitSolverRequest:
     """Build one concrete solver request from a prepared geometry-fit run."""
+
+    refinement_config, runtime_safety_note = (
+        apply_geometry_fit_runtime_safety_overrides(
+            prepared_run.geometry_runtime_cfg,
+        )
+    )
 
     return GeometryFitSolverRequest(
         miller=solver_inputs.miller,
@@ -2494,7 +2848,8 @@ def build_geometry_fit_solver_request(
             if prepared_run.joint_background_mode
             else None
         ),
-        refinement_config=dict(prepared_run.geometry_runtime_cfg),
+        refinement_config=refinement_config,
+        runtime_safety_note=runtime_safety_note,
     )
 
 
@@ -2502,8 +2857,31 @@ def solve_geometry_fit_request(
     request: GeometryFitSolverRequest,
     *,
     solve_fit: Callable[..., object],
+    status_callback: Callable[[str], None] | None = None,
 ) -> object:
     """Invoke the live geometry-fit solver for one prepared request."""
+
+    solve_kwargs: dict[str, object] = {
+        "pixel_tol": float("inf"),
+        "experimental_image": request.experimental_image,
+        "dataset_specs": request.dataset_specs,
+        "refinement_config": request.refinement_config,
+    }
+    if callable(status_callback):
+        try:
+            signature = inspect.signature(solve_fit)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None:
+            accepts_status_callback = (
+                "status_callback" in signature.parameters
+                or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                )
+            )
+            if accepts_status_callback:
+                solve_kwargs["status_callback"] = status_callback
 
     return solve_fit(
         request.miller,
@@ -2512,10 +2890,7 @@ def solve_geometry_fit_request(
         request.params,
         request.measured_peaks,
         request.var_names,
-        pixel_tol=float("inf"),
-        experimental_image=request.experimental_image,
-        dataset_specs=request.dataset_specs,
-        refinement_config=request.refinement_config,
+        **solve_kwargs,
     )
 
 
@@ -3011,6 +3386,16 @@ def postprocess_geometry_fit_result(
 ) -> GeometryFitPostprocessResult:
     """Build the post-fit analysis artifacts used by the live GUI."""
 
+    simulated_params = dict(fitted_params)
+    try:
+        theta_base = float(simulated_params.get("theta_initial", np.nan))
+        theta_offset = float(simulated_params.get("theta_offset", 0.0))
+    except Exception:
+        theta_base = float("nan")
+        theta_offset = 0.0
+    if np.isfinite(theta_base) and np.isfinite(theta_offset):
+        simulated_params["theta_initial"] = float(theta_base + theta_offset)
+
     (
         _,
         sim_coords,
@@ -3021,7 +3406,7 @@ def postprocess_geometry_fit_result(
         miller,
         intensities,
         int(image_size),
-        dict(fitted_params),
+        simulated_params,
         current_dataset["measured_for_fit"],
         pixel_tol=float("inf"),
     )
@@ -3128,7 +3513,8 @@ def apply_runtime_geometry_fit_result(
     )
 
     undo_state = bindings.capture_undo_state()
-    result_values = list(getattr(result, "x", []) or [])
+    result_vector = getattr(result, "x", None)
+    result_values = [] if result_vector is None else list(result_vector)
     bindings.apply_result_values(var_names, result_values)
 
     if joint_background_mode and not preserve_live_theta:
@@ -3365,6 +3751,7 @@ def build_runtime_geometry_fit_execution_setup(
     update_manual_pick_button_label: Callable[[], None],
     capture_undo_state: Callable[[], dict[str, object]],
     push_undo_state: Callable[[dict[str, object] | None], None],
+    replace_dataset_cache: Callable[[dict[str, object] | None], None] | None,
     request_preview_skip_once: Callable[[], None],
     schedule_update: Callable[[], None],
     draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None],
@@ -3382,6 +3769,22 @@ def build_runtime_geometry_fit_execution_setup(
 ) -> GeometryFitRuntimeExecutionSetup:
     """Build the runtime execution setup for one prepared geometry-fit run."""
 
+    def _sync_joint_background_theta() -> None:
+        background_index = int(
+            getattr(background_runtime_state, "current_background_index", 0)
+        )
+        if 0 <= background_index < len(prepared_run.background_theta_values):
+            theta_initial_var.set(
+                float(prepared_run.background_theta_values[background_index])
+            )
+            return
+        theta_initial_var.set(
+            background_theta_for_index(
+                background_index,
+                strict_count=False,
+            )
+        )
+
     ui_bindings = GeometryFitRuntimeUiBindings(
         fit_params=prepared_run.fit_params,
         base_profile_cache=getattr(simulation_runtime_state, "profile_cache", {}),
@@ -3390,14 +3793,7 @@ def build_runtime_geometry_fit_execution_setup(
         var_map=var_map,
         geometry_theta_offset_var=geometry_theta_offset_var,
         capture_undo_state=capture_undo_state,
-        sync_joint_background_theta=(
-            lambda: theta_initial_var.set(
-                background_theta_for_index(
-                    getattr(background_runtime_state, "current_background_index", 0),
-                    strict_count=False,
-                )
-            )
-        ),
+        sync_joint_background_theta=_sync_joint_background_theta,
         refresh_status=refresh_status,
         update_manual_pick_button_label=update_manual_pick_button_label,
         replace_profile_cache=(
@@ -3407,6 +3803,7 @@ def build_runtime_geometry_fit_execution_setup(
                 dict(profile_cache),
             )
         ),
+        replace_dataset_cache=replace_dataset_cache,
         push_undo_state=push_undo_state,
         request_preview_skip_once=request_preview_skip_once,
         mark_last_simulation_dirty=(
@@ -3478,6 +3875,7 @@ def build_runtime_geometry_fit_execution_setup_from_bindings(
         update_manual_pick_button_label=bindings.update_manual_pick_button_label,
         capture_undo_state=bindings.capture_undo_state,
         push_undo_state=bindings.push_undo_state,
+        replace_dataset_cache=bindings.replace_dataset_cache,
         request_preview_skip_once=bindings.request_preview_skip_once,
         schedule_update=bindings.schedule_update,
         draw_overlay_records=bindings.draw_overlay_records,
@@ -3604,6 +4002,15 @@ def execute_runtime_geometry_fit(
             _log_line(f"  {line}")
         _log_line()
 
+    def _solver_status_callback(text: str) -> None:
+        status_text = str(text).strip()
+        if not status_text:
+            return
+        _log_line(status_text)
+        ui_bindings.set_progress_text(status_text)
+        if callable(flush_ui):
+            flush_ui()
+
     try:
         log_file = log_path.open("w", encoding="utf-8")
         write_geometry_fit_run_start_log(
@@ -3623,9 +4030,13 @@ def execute_runtime_geometry_fit(
             var_names=var_names,
             solver_inputs=postprocess_config.solver_inputs,
         )
+        if solver_request.runtime_safety_note:
+            _log_line(f"Runtime safety: {solver_request.runtime_safety_note}")
+            _log_line()
         result = solve_geometry_fit_request(
             solver_request,
             solve_fit=solve_fit,
+            status_callback=_solver_status_callback,
         )
         apply_result = apply_runtime_geometry_fit_result(
             result=result,
@@ -3644,6 +4055,16 @@ def execute_runtime_geometry_fit(
                 log_section=_log_section,
             ),
         )
+        replace_dataset_cache = ui_bindings.replace_dataset_cache
+        if callable(replace_dataset_cache):
+            replace_dataset_cache(
+                build_geometry_fit_dataset_cache_payload(
+                    prepared_run,
+                    current_background_index=int(
+                        postprocess_config.current_background_index
+                    ),
+                )
+            )
         return GeometryFitRuntimeExecutionResult(
             log_path=log_path,
             solver_request=solver_request,

@@ -35,6 +35,13 @@ class GeometryFitHistoryState:
 
 
 @dataclass
+class GeometryFitDatasetCacheState:
+    """Cached dataset bundle from the last successful geometry fit."""
+
+    payload: dict[str, object] | None = None
+
+
+@dataclass
 class GeometryFitConstraintsViewState:
     """Widget references for the geometry-fit constraints panel."""
 
@@ -100,7 +107,9 @@ class WorkspacePanelsViewState:
 
     workspace_actions_frame: Any = None
     workspace_backgrounds_frame: Any = None
+    workspace_inputs_frame: Any = None
     workspace_session_frame: Any = None
+    workspace_debug_frame: Any = None
     background_file_status_var: Any = None
     background_file_status_label: Any = None
 
@@ -319,6 +328,44 @@ class StackingParameterControlsViewState:
 
 
 @dataclass
+class OrderedStructureFitSnapshot:
+    """Snapshot of ordered-structure parameters for one-step revert."""
+
+    occupancy_values: list[float] = field(default_factory=list)
+    atom_site_values: list[tuple[float, float, float]] = field(default_factory=list)
+    debye_x: float = 0.0
+    debye_y: float = 0.0
+    ordered_scale: float = 1.0
+
+
+@dataclass
+class OrderedStructureFitControlsViewState:
+    """Widget references and vars for the ordered-structure fit panel."""
+
+    frame: Any = None
+    actions_frame: Any = None
+    fit_button: Any = None
+    revert_button: Any = None
+    settings_frame: Any = None
+    ordered_scale_var: Any = None
+    ordered_scale_entry: Any = None
+    coord_window_var: Any = None
+    coord_window_entry: Any = None
+    fit_debye_x_var: Any = None
+    fit_debye_x_checkbutton: Any = None
+    fit_debye_y_var: Any = None
+    fit_debye_y_checkbutton: Any = None
+    occupancy_toggle_frame: Any = None
+    occupancy_toggle_vars: list[Any] = field(default_factory=list)
+    occupancy_toggle_widgets: list[Any] = field(default_factory=list)
+    atom_toggle_frame: Any = None
+    atom_toggle_vars: list[dict[str, Any]] = field(default_factory=list)
+    atom_toggle_widgets: list[Any] = field(default_factory=list)
+    result_var: Any = None
+    result_label: Any = None
+
+
+@dataclass
 class GeometryToolActionsViewState:
     """Widget references and vars for fit-history/manual-geometry action controls."""
 
@@ -514,14 +561,37 @@ class AppShellViewState:
     main_pane: Any = None
     controls_panel: Any = None
     figure_panel: Any = None
+    session_summary_frame: Any = None
+    session_summary_var: Any = None
+    session_summary_label: Any = None
+    mode_banner_frame: Any = None
+    mode_banner_title_var: Any = None
+    mode_banner_title_label: Any = None
+    mode_banner_detail_var: Any = None
+    mode_banner_detail_label: Any = None
     run_status_frame: Any = None
     run_status_var: Any = None
     run_status_label: Any = None
     controls_notebook: Any = None
+    setup_tab: Any = None
+    match_tab: Any = None
+    refine_tab: Any = None
+    analyze_tab: Any = None
     workspace_tab: Any = None
     fit_tab: Any = None
     parameters_tab: Any = None
     analysis_tab: Any = None
+    help_tab: Any = None
+    setup_body: Any = None
+    setup_canvas: Any = None
+    match_body: Any = None
+    match_canvas: Any = None
+    refine_basic_tab: Any = None
+    refine_advanced_tab: Any = None
+    refine_basic_body: Any = None
+    refine_basic_canvas: Any = None
+    refine_advanced_body: Any = None
+    refine_advanced_canvas: Any = None
     workspace_body: Any = None
     workspace_canvas: Any = None
     fit_body: Any = None
@@ -535,6 +605,13 @@ class AppShellViewState:
     parameter_structure_canvas: Any = None
     control_tab_var: Any = None
     parameter_tab_var: Any = None
+    match_backgrounds_frame: Any = None
+    match_peak_tools_frame: Any = None
+    match_parameter_frame: Any = None
+    match_run_frame: Any = None
+    match_results_frame: Any = None
+    match_results_var: Any = None
+    match_results_label: Any = None
     fit_actions_frame: Any = None
     analysis_controls_frame: Any = None
     analysis_views_frame: Any = None
@@ -553,6 +630,8 @@ class StatusPanelViewState:
 
     progress_label_positions: Any = None
     progress_label_geometry: Any = None
+    ordered_structure_progressbar: Any = None
+    progress_label_ordered_structure: Any = None
     mosaic_progressbar: Any = None
     progress_label_mosaic: Any = None
     progress_label: Any = None
@@ -802,6 +881,9 @@ class AppState:
     geometry_fit_history: GeometryFitHistoryState = field(
         default_factory=GeometryFitHistoryState
     )
+    geometry_fit_dataset_cache: GeometryFitDatasetCacheState = field(
+        default_factory=GeometryFitDatasetCacheState
+    )
     geometry_fit_parameter_controls_view: GeometryFitParameterControlsViewState = field(
         default_factory=GeometryFitParameterControlsViewState
     )
@@ -841,6 +923,10 @@ class AppState:
     finite_stack_controls_view: FiniteStackControlsViewState = field(
         default_factory=FiniteStackControlsViewState
     )
+    ordered_structure_fit_view: OrderedStructureFitControlsViewState = field(
+        default_factory=OrderedStructureFitControlsViewState
+    )
+    ordered_structure_fit_snapshot: OrderedStructureFitSnapshot | None = None
     stacking_parameter_controls_view: StackingParameterControlsViewState = field(
         default_factory=StackingParameterControlsViewState
     )

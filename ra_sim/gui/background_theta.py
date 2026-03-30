@@ -373,6 +373,36 @@ def current_background_theta_values(
     return [float(v) for v in values]
 
 
+def background_theta_base_for_index(
+    index: int,
+    *,
+    osc_files: Sequence[object],
+    theta_initial_var: object | None,
+    defaults: Mapping[str, object] | None,
+    theta_initial: object,
+    background_theta_list_var: object | None,
+    strict_count: bool = False,
+) -> float:
+    """Return the stored per-background theta_i value for one background index."""
+
+    theta_values = current_background_theta_values(
+        osc_files=osc_files,
+        theta_initial_var=theta_initial_var,
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        strict_count=strict_count,
+    )
+    if not theta_values:
+        return background_theta_default_value(
+            theta_initial_var=theta_initial_var,
+            defaults=defaults,
+            theta_initial=theta_initial,
+        )
+    idx = max(0, min(int(index), len(theta_values) - 1))
+    return float(theta_values[idx])
+
+
 def background_theta_for_index(
     index: int,
     *,
@@ -507,16 +537,13 @@ def sync_background_theta_controls(
         try:
             _write_var_value(
                 theta_initial_var,
-                background_theta_for_index(
+                background_theta_base_for_index(
                     current_background_index,
                     osc_files=osc_files,
                     theta_initial_var=theta_initial_var,
                     defaults=defaults,
                     theta_initial=theta_initial,
                     background_theta_list_var=background_theta_list_var,
-                    geometry_theta_offset_var=geometry_theta_offset_var,
-                    geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-                    current_background_index=current_background_index,
                     strict_count=False,
                 ),
             )
@@ -584,16 +611,13 @@ def apply_background_theta_metadata(
     if sync_live_theta and theta_initial_var is not None and theta_values:
         _write_var_value(
             theta_initial_var,
-            background_theta_for_index(
+            background_theta_base_for_index(
                 current_background_index,
                 osc_files=osc_files,
                 theta_initial_var=theta_initial_var,
                 defaults=defaults,
                 theta_initial=theta_initial,
                 background_theta_list_var=background_theta_list_var,
-                geometry_theta_offset_var=geometry_theta_offset_var,
-                geometry_fit_background_selection_var=geometry_fit_background_selection_var,
-                current_background_index=current_background_index,
                 strict_count=True,
             ),
         )
@@ -626,11 +650,29 @@ def apply_geometry_fit_background_selection(
         return True
 
     live_theta_before = None
+    effective_theta_before = None
     if sync_live_theta and theta_initial_var is not None:
         try:
             live_theta_before = float(_read_var_value(theta_initial_var))
         except Exception:
             live_theta_before = None
+        try:
+            effective_theta_before = float(
+                background_theta_for_index(
+                    current_background_index,
+                    osc_files=osc_files,
+                    theta_initial_var=theta_initial_var,
+                    defaults=defaults,
+                    theta_initial=theta_initial,
+                    background_theta_list_var=background_theta_list_var,
+                    geometry_theta_offset_var=geometry_theta_offset_var,
+                    geometry_fit_background_selection_var=geometry_fit_background_selection_var,
+                    current_background_index=current_background_index,
+                    strict_count=False,
+                )
+            )
+        except Exception:
+            effective_theta_before = live_theta_before
 
     try:
         selected_indices = current_geometry_fit_background_indices(
@@ -646,6 +688,10 @@ def apply_geometry_fit_background_selection(
         )
         return False
 
+    previous_shared_theta = None
+    if isinstance(theta_controls, dict):
+        previous_shared_theta = theta_controls.get("_shared_theta_active")
+
     total_count = len(osc_files)
     if total_count > 1 and len(selected_indices) == total_count:
         _write_var_value(geometry_fit_background_selection_var, "all")
@@ -660,11 +706,14 @@ def apply_geometry_fit_background_selection(
             format_geometry_fit_background_indices(selected_indices),
         )
 
+    shared_theta = geometry_fit_uses_shared_theta_offset(selected_indices)
     refresh_geometry_fit_theta_checkbox_label(
         fit_theta_checkbutton=fit_theta_checkbutton,
         theta_controls=theta_controls,
-        shared_theta=geometry_fit_uses_shared_theta_offset(selected_indices),
+        shared_theta=shared_theta,
     )
+    if isinstance(theta_controls, dict):
+        theta_controls["_shared_theta_active"] = bool(shared_theta)
     if set_background_file_status_text is not None:
         set_background_file_status_text()
 
@@ -672,6 +721,17 @@ def apply_geometry_fit_background_selection(
     if sync_live_theta and theta_initial_var is not None:
         try:
             live_theta_after = float(
+                background_theta_base_for_index(
+                    current_background_index,
+                    osc_files=osc_files,
+                    theta_initial_var=theta_initial_var,
+                    defaults=defaults,
+                    theta_initial=theta_initial,
+                    background_theta_list_var=background_theta_list_var,
+                    strict_count=False,
+                )
+            )
+            effective_theta_after = float(
                 background_theta_for_index(
                     current_background_index,
                     osc_files=osc_files,
@@ -690,6 +750,20 @@ def apply_geometry_fit_background_selection(
                 live_theta_before is None
                 or not np.isfinite(live_theta_before)
                 or abs(float(live_theta_after) - float(live_theta_before)) > 1.0e-12
+            ):
+                theta_changed = True
+            elif (
+                previous_shared_theta is not None
+                and bool(previous_shared_theta) != bool(shared_theta)
+            ):
+                theta_changed = True
+            elif (
+                effective_theta_before is None
+                or not np.isfinite(effective_theta_before)
+                or abs(
+                    float(effective_theta_after) - float(effective_theta_before)
+                )
+                > 1.0e-12
             ):
                 theta_changed = True
         except Exception:

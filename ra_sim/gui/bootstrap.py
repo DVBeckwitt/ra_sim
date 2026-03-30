@@ -1053,8 +1053,6 @@ def build_runtime_geometry_tool_action_controls_bootstrap(
     *,
     views_module: Any,
     view_state: Any,
-    on_undo_fit: Callable[[], None],
-    on_redo_fit: Callable[[], None],
     on_toggle_manual_pick: Callable[[], None],
     on_undo_manual_placement: Callable[[], None],
     on_export_manual_pairs: Callable[[], None],
@@ -1068,8 +1066,6 @@ def build_runtime_geometry_tool_action_controls_bootstrap(
         views_module.create_geometry_tool_action_controls(
             parent=parent,
             view_state=view_state,
-            on_undo_fit=on_undo_fit,
-            on_redo_fit=on_redo_fit,
             on_toggle_manual_pick=on_toggle_manual_pick,
             on_undo_manual_placement=on_undo_manual_placement,
             on_export_manual_pairs=on_export_manual_pairs,

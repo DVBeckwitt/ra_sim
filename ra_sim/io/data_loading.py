@@ -18,6 +18,9 @@ GUI_STATE_FILE_TYPE = "ra_sim.gui_state"
 GUI_STATE_FILE_VERSION = 1
 GEOMETRY_PLACEMENTS_FILE_TYPE = "ra_sim.geometry_placements"
 GEOMETRY_PLACEMENTS_FILE_VERSION = 1
+_GUI_STATE_SECTION_KEYS = frozenset(
+    {"variables", "dynamic_lists", "files", "flags", "geometry"}
+)
 
 
 def _json_safe_gui_state_value(value: Any) -> Any:
@@ -118,6 +121,46 @@ def save_geometry_placements_file(
     return payload
 
 
+def _looks_like_gui_state_snapshot(value: object) -> bool:
+    """Return whether *value* resembles a raw GUI-state snapshot dict."""
+
+    if not isinstance(value, dict):
+        return False
+    return bool(_GUI_STATE_SECTION_KEYS.intersection(value.keys()))
+
+
+def _legacy_gui_state_payload_from_object(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a normalized payload for older GUI-state JSON shapes."""
+
+    raw_state = None
+    saved_at = payload.get("saved_at")
+    metadata = payload.get("metadata")
+
+    wrapped_state = payload.get("state")
+    if _looks_like_gui_state_snapshot(wrapped_state):
+        raw_state = wrapped_state
+    elif _looks_like_gui_state_snapshot(payload):
+        raw_state = {
+            str(key): value
+            for key, value in payload.items()
+            if str(key) not in {"saved_at", "metadata"}
+        }
+
+    if not isinstance(raw_state, dict):
+        return None
+
+    normalized_payload: dict[str, Any] = {
+        "type": GUI_STATE_FILE_TYPE,
+        "version": 0,
+        "state": raw_state,
+    }
+    if isinstance(saved_at, str) and saved_at.strip():
+        normalized_payload["saved_at"] = saved_at
+    if isinstance(metadata, dict):
+        normalized_payload["metadata"] = metadata
+    return normalized_payload
+
+
 def load_gui_state_file(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Read and validate a JSON GUI-state snapshot."""
 
@@ -125,12 +168,22 @@ def load_gui_state_file(path: str | os.PathLike[str]) -> dict[str, Any]:
         payload = json.load(handle)
     if not isinstance(payload, dict):
         raise ValueError("GUI state file must contain a JSON object.")
-    if str(payload.get("type", "")) != GUI_STATE_FILE_TYPE:
+    payload_type = str(payload.get("type", "")).strip()
+    if payload_type:
+        if payload_type != GUI_STATE_FILE_TYPE:
+            raise ValueError("Unsupported GUI state file type.")
+        state = payload.get("state")
+        if not isinstance(state, dict):
+            raise ValueError("GUI state file is missing a valid 'state' object.")
+        return payload
+
+    normalized_payload = _legacy_gui_state_payload_from_object(payload)
+    if normalized_payload is None:
         raise ValueError("Unsupported GUI state file type.")
-    state = payload.get("state")
+    state = normalized_payload.get("state")
     if not isinstance(state, dict):
         raise ValueError("GUI state file is missing a valid 'state' object.")
-    return payload
+    return normalized_payload
 
 
 def load_geometry_placements_file(path: str | os.PathLike[str]) -> dict[str, Any]:

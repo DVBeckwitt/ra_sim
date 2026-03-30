@@ -30,9 +30,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-from OSC_Reader import read_osc
 import CifFile
 
+from ra_sim.io.osc_reader import read_osc
 from ra_sim.utils.stacking_fault import (
     DEFAULT_PHASE_DELTA_EXPRESSION,
     DEFAULT_PHI_L_DIVISOR,
@@ -73,6 +73,7 @@ from ra_sim.fitting.optimization import (
     build_geometry_fit_central_mosaic_params,
     build_measured_dict,
     fit_geometry_parameters,
+    fit_mosaic_shape_parameters,
     fit_mosaic_widths_separable,
     simulate_and_compare_hkl,
 )
@@ -132,6 +133,7 @@ from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
 from ra_sim.gui import views as gui_views
+from ra_sim.gui import ordered_structure_fit as gui_ordered_structure_fit
 from ra_sim.gui import structure_model as gui_structure_model
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
@@ -736,6 +738,7 @@ defaults = {
     'finite_stack': finite_stack_default,
     'stack_layers': stack_layers_default,
     'optics_mode': 'fast',
+    'ordered_structure_scale': 1.0,
 }
 
 # ---------------------------------------------------------------------------
@@ -1431,7 +1434,9 @@ gui_views.create_workspace_panels(
 if (
     workspace_panels_view_state.workspace_actions_frame is None
     or workspace_panels_view_state.workspace_backgrounds_frame is None
+    or workspace_panels_view_state.workspace_inputs_frame is None
     or workspace_panels_view_state.workspace_session_frame is None
+    or workspace_panels_view_state.workspace_debug_frame is None
 ):
     raise RuntimeError("Workspace panels were not created.")
 
@@ -1776,6 +1781,7 @@ geometry_runtime_state.manual_pick_armed = False
 geometry_runtime_state.manual_pick_cache_signature = None
 geometry_runtime_state.manual_pick_cache_data = {}
 geometry_fit_history_state = app_state.geometry_fit_history
+geometry_fit_dataset_cache_state = app_state.geometry_fit_dataset_cache
 geometry_fit_parameter_controls_view_state = (
     app_state.geometry_fit_parameter_controls_view
 )
@@ -1917,6 +1923,7 @@ def _undo_last_geometry_manual_placement() -> None:
         return
 
     gui_controllers.restore_last_manual_geometry_undo_state(geometry_manual_state)
+    _clear_geometry_fit_dataset_cache()
     _clear_geometry_manual_preview_artists(redraw=False)
     _render_current_geometry_manual_pairs(update_status=True)
     _update_geometry_manual_pick_button_label()
@@ -1934,6 +1941,30 @@ def _geometry_fit_last_overlay_state() -> dict[str, object] | None:
     """Return the remembered geometry-fit overlay state."""
 
     return geometry_fit_history_state.last_overlay_state
+
+
+def _geometry_fit_dataset_cache_payload() -> dict[str, object] | None:
+    """Return the cached successful geometry-fit dataset bundle."""
+
+    return geometry_fit_dataset_cache_state.payload
+
+
+def _set_geometry_fit_dataset_cache(
+    payload: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Replace the cached successful geometry-fit dataset bundle."""
+
+    return gui_controllers.replace_geometry_fit_dataset_cache(
+        geometry_fit_dataset_cache_state,
+        payload,
+        copy_state_value=_copy_geometry_fit_state_value,
+    )
+
+
+def _clear_geometry_fit_dataset_cache() -> None:
+    """Discard the cached successful geometry-fit dataset bundle."""
+
+    gui_controllers.clear_geometry_fit_dataset_cache(geometry_fit_dataset_cache_state)
 
 
 def _set_geometry_fit_last_overlay_state(
@@ -1958,6 +1989,7 @@ def _clear_geometry_fit_undo_stack() -> None:
     """Discard the geometry-fit undo/redo history."""
 
     gui_controllers.clear_geometry_fit_history(geometry_fit_history_state)
+    _clear_geometry_fit_dataset_cache()
     _update_geometry_fit_undo_button_state()
 
 
@@ -2072,8 +2104,30 @@ _geometry_fit_history_callbacks = gui_geometry_fit.build_runtime_geometry_fit_hi
     update_button_state=lambda: _update_geometry_fit_undo_button_state(),
     set_progress_text=lambda text: progress_label_geometry.config(text=text),
 )
-_undo_last_geometry_fit = _geometry_fit_history_callbacks.undo
-_redo_last_geometry_fit = _geometry_fit_history_callbacks.redo
+_undo_last_geometry_fit_base = _geometry_fit_history_callbacks.undo
+_redo_last_geometry_fit_base = _geometry_fit_history_callbacks.redo
+
+
+def _undo_last_geometry_fit_with_cache_invalidation() -> bool:
+    """Undo one geometry fit and clear the reusable dataset cache on success."""
+
+    restored = bool(_undo_last_geometry_fit_base())
+    if restored:
+        _clear_geometry_fit_dataset_cache()
+    return restored
+
+
+def _redo_last_geometry_fit_with_cache_invalidation() -> bool:
+    """Redo one geometry fit and clear the reusable dataset cache on success."""
+
+    restored = bool(_redo_last_geometry_fit_base())
+    if restored:
+        _clear_geometry_fit_dataset_cache()
+    return restored
+
+
+_undo_last_geometry_fit = _undo_last_geometry_fit_with_cache_invalidation
+_redo_last_geometry_fit = _redo_last_geometry_fit_with_cache_invalidation
 
 
 def _geometry_manual_pair_entry_to_jsonable(
@@ -2860,7 +2914,9 @@ qr_cylinder_overlay_workflow = (
             "psi_z_deg_factory": (lambda: float(psi_z_var.get())),
             "zs_factory": (lambda: float(zs_var.get())),
             "zb_factory": (lambda: float(zb_var.get())),
-            "theta_initial_deg_factory": (lambda: float(theta_initial_var.get())),
+            "theta_initial_deg_factory": (
+                lambda: float(_current_effective_theta_initial(strict_count=False))
+            ),
             "cor_angle_deg_factory": (lambda: float(cor_angle_var.get())),
             "pixel_size_m": float(pixel_size_m),
             "wavelength": float(lambda_),
@@ -2963,6 +3019,7 @@ beam_mosaic_parameter_sliders_view_state = (
 )
 sampling_optics_controls_view_state = app_state.sampling_optics_controls_view
 finite_stack_controls_view_state = app_state.finite_stack_controls_view
+ordered_structure_fit_view_state = app_state.ordered_structure_fit_view
 stacking_parameter_controls_view_state = app_state.stacking_parameter_controls_view
 
 
@@ -2982,6 +3039,9 @@ def _update_geometry_preview_exclude_button_label():
         geometry_tool_actions_view_state,
         preview_exclude_text=label,
     )
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
 
 
 pruning_workflow = gui_runtime_fit_analysis.build_runtime_pruning_workflow(
@@ -3122,7 +3182,9 @@ peak_selection_workflow = (
         psi_z_deg_factory=lambda: float(psi_z_var.get()),
         zs_factory=lambda: float(zs_var.get()),
         zb_factory=lambda: float(zb_var.get()),
-        theta_initial_deg_factory=lambda: float(theta_initial_var.get()),
+        theta_initial_deg_factory=(
+            lambda: float(_current_effective_theta_initial(strict_count=False))
+        ),
         cor_angle_deg_factory=lambda: float(cor_angle_var.get()),
         sigma_mosaic_deg_factory=lambda: float(sigma_mosaic_var.get()),
         gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
@@ -3177,6 +3239,55 @@ ensure_peak_overlay_data = peak_selection_workflow.ensure_peak_overlay_data
 peak_selection_runtime_callbacks = peak_selection_workflow.callbacks
 peak_selection_runtime_maintenance = peak_selection_workflow.maintenance_callbacks
 hkl_lookup_controls_runtime = peak_selection_workflow.hkl_lookup_controls_runtime
+
+_base_update_hkl_pick_button_label = (
+    peak_selection_runtime_callbacks.update_hkl_pick_button_label
+)
+_base_set_hkl_pick_mode = peak_selection_runtime_callbacks.set_hkl_pick_mode
+_base_toggle_hkl_pick_mode = peak_selection_runtime_callbacks.toggle_hkl_pick_mode
+
+
+def _update_hkl_pick_button_label_with_mode_banner() -> None:
+    _base_update_hkl_pick_button_label()
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
+
+
+def _set_hkl_pick_mode_with_mode_banner(
+    enabled: bool,
+    message: str | None = None,
+) -> None:
+    _base_set_hkl_pick_mode(bool(enabled), message=message)
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
+
+
+def _toggle_hkl_pick_mode_with_mode_banner() -> None:
+    _base_toggle_hkl_pick_mode()
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
+
+
+peak_selection_runtime_callbacks = gui_peak_selection.SelectedPeakRuntimeCallbacks(
+    update_hkl_pick_button_label=_update_hkl_pick_button_label_with_mode_banner,
+    set_hkl_pick_mode=_set_hkl_pick_mode_with_mode_banner,
+    toggle_hkl_pick_mode=_toggle_hkl_pick_mode_with_mode_banner,
+    reselect_current_peak=peak_selection_runtime_callbacks.reselect_current_peak,
+    select_peak_from_hkl_controls=(
+        peak_selection_runtime_callbacks.select_peak_from_hkl_controls
+    ),
+    clear_selected_peak=peak_selection_runtime_callbacks.clear_selected_peak,
+    open_selected_peak_intersection_figure=(
+        peak_selection_runtime_callbacks.open_selected_peak_intersection_figure
+    ),
+    select_peak_from_canvas_click=(
+        peak_selection_runtime_callbacks.select_peak_from_canvas_click
+    ),
+)
+
 geometry_manual_workflow = (
     gui_runtime_geometry_interaction.build_runtime_geometry_manual_workflow(
         bootstrap_module=gui_bootstrap,
@@ -3305,6 +3416,19 @@ _update_geometry_fit_undo_button_state = (
 _update_geometry_manual_pick_button_label = (
     geometry_tool_action_workflow.update_manual_pick_button_label
 )
+
+_base_update_geometry_manual_pick_button_label = (
+    _update_geometry_manual_pick_button_label
+)
+
+
+def _update_geometry_manual_pick_button_label() -> None:
+    _base_update_geometry_manual_pick_button_label()
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
+
+
 _set_geometry_manual_pick_mode = geometry_tool_action_workflow.set_manual_pick_mode
 _toggle_geometry_manual_pick_mode = (
     geometry_tool_action_workflow.toggle_manual_pick_mode
@@ -4506,6 +4630,38 @@ def _current_iodine_z(active_cif_path=None) -> float:
     )
 
 
+def _current_ordered_structure_scale() -> float:
+    """Return the current ordered-intensity scale as a finite non-negative float."""
+
+    var = globals().get("ordered_structure_scale_var")
+    fallback = defaults.get("ordered_structure_scale", 1.0)
+    if var is None:
+        return gui_ordered_structure_fit.normalize_ordered_structure_scale(
+            fallback,
+            fallback=1.0,
+        )
+    try:
+        raw_value = var.get()
+    except Exception:
+        raw_value = fallback
+    return gui_ordered_structure_fit.normalize_ordered_structure_scale(
+        raw_value,
+        fallback=float(fallback),
+    )
+
+
+def _scaled_bragg_qr_dict(qr_dict, scale: float):
+    """Return a copied Bragg-Qr dictionary with its intensity arrays scaled."""
+
+    copied = gui_controllers.copy_bragg_qr_dict(qr_dict)
+    scale_value = float(scale)
+    if not math.isfinite(scale_value):
+        scale_value = 0.0
+    for entry in copied.values():
+        entry["I"] = np.asarray(entry.get("I", []), dtype=np.float64) * scale_value
+    return copied
+
+
 line_rmin, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
 line_rmax, = ax.plot([], [], color='white', linestyle='-', linewidth=2, zorder=5)
 line_amin, = ax.plot([], [], color='cyan', linestyle='-', linewidth=2, zorder=5)
@@ -4555,6 +4711,152 @@ def _truncate_run_status_piece(text: object, *, max_chars: int = 24) -> str:
     lead = max(2, (max_chars - 3) // 2)
     tail = max(1, max_chars - 3 - lead)
     return f"{summary[:lead]}...{summary[-tail:]}"
+
+
+def _extract_fit_quality_text() -> str:
+    """Return the best available user-facing fit quality summary."""
+
+    ordered_view_state = globals().get("ordered_structure_fit_view_state")
+    ordered_result_var = getattr(ordered_view_state, "result_var", None)
+    if ordered_result_var is not None:
+        try:
+            ordered_text = " ".join(
+                str(ordered_result_var.get() or "").splitlines()[0].split()
+            )
+        except Exception:
+            ordered_text = ""
+        if ordered_text and ordered_text != "No ordered-structure fit run yet.":
+            return ordered_text
+
+    ordered_label = globals().get("progress_label_ordered_structure")
+    if ordered_label is not None:
+        try:
+            ordered_status = " ".join(str(ordered_label.cget("text") or "").split())
+        except Exception:
+            ordered_status = ""
+        if ordered_status and ordered_status != "Ordered structure fit: waiting.":
+            return ordered_status
+
+    mosaic_label = globals().get("progress_label_mosaic")
+    if mosaic_label is not None:
+        try:
+            mosaic_text = " ".join(str(mosaic_label.cget("text") or "").split())
+        except Exception:
+            mosaic_text = ""
+        if mosaic_text:
+            return mosaic_text
+
+    geometry_label = globals().get("progress_label_geometry")
+    if geometry_label is not None:
+        try:
+            geometry_text = " ".join(str(geometry_label.cget("text") or "").split())
+        except Exception:
+            geometry_text = ""
+        if geometry_text:
+            return geometry_text
+
+    chi_label = globals().get("chi_square_label")
+    if chi_label is not None:
+        try:
+            chi_text = " ".join(str(chi_label.cget("text") or "").split())
+        except Exception:
+            chi_text = ""
+        if chi_text and chi_text not in {"Chi-Squared:", "Chi-Squared: N/A"}:
+            return chi_text
+
+    return "Waiting for ordered-structure fit"
+
+
+def _refresh_session_summary_panel() -> None:
+    """Refresh the always-visible session summary shown above the tabs."""
+
+    osc_files = list(getattr(background_runtime_state, "osc_files", ()))
+    background_total = len(osc_files)
+    if background_total > 0:
+        bg_idx = max(0, min(int(background_runtime_state.current_background_index), background_total - 1))
+        background_text = f"{bg_idx + 1}/{background_total} - {Path(str(osc_files[bg_idx])).name}"
+    else:
+        background_text = "Not loaded"
+
+    try:
+        cif_path = str(_current_primary_cif_path()).strip()
+    except Exception:
+        cif_path = ""
+    cif_text = Path(cif_path).name if cif_path else "Not loaded"
+
+    fit_background_var = globals().get("geometry_fit_background_selection_var")
+    try:
+        fit_background_text = " ".join(str(fit_background_var.get()).split())
+    except Exception:
+        fit_background_text = "current"
+    if not fit_background_text:
+        fit_background_text = "current"
+
+    view_text = "Caked" if bool(
+        getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
+    ) else "Detector"
+    if bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()):
+        view_text = f"{view_text} + 1D"
+
+    fit_quality_text = _extract_fit_quality_text()
+
+    gui_views.set_app_shell_session_summary_text(
+        app_shell_view_state,
+        "\n".join(
+            [
+                f"Background: {background_text}",
+                f"CIF: {cif_text}",
+                f"Fit backgrounds: {fit_background_text}",
+                f"View: {view_text}",
+                f"Fit quality: {fit_quality_text}",
+            ]
+        ),
+    )
+
+    gui_views.set_match_results_text(
+        app_shell_view_state,
+        (
+            f"{fit_quality_text}. Review overlays on the detector image and the "
+            "status panel below after each fit."
+        ),
+    )
+
+
+def _refresh_interaction_mode_banner() -> None:
+    """Refresh the visible workflow mode banner from the current interaction state."""
+
+    title = "Ready to start"
+    detail = (
+        "Load backgrounds in Setup, then use Match to choose peaks and fit geometry."
+    )
+
+    if bool(getattr(geometry_runtime_state, "manual_pick_armed", False)):
+        title = "Manual geometry picking armed"
+        detail = "Click a simulated Qr group on the image to start pairing it to measured peaks."
+
+    if bool(_geometry_manual_pick_session_active(require_current_background=False)):
+        title = "Manual peak placement active"
+        detail = "Click the measured peak location for the selected simulated group."
+    elif bool(getattr(peak_selection_state, "hkl_pick_armed", False)):
+        title = "HKL image-pick active"
+        detail = "Click a simulated feature on the image to select the nearest HKL."
+    elif bool(getattr(geometry_preview_state, "exclude_armed", False)):
+        title = "Preview exclusion active"
+        detail = "Click peaks on the image to exclude or restore them from live geometry preview."
+    elif _fast_viewer_active():
+        title = "Fast viewer active"
+        detail = "Rendering is active in the separate fast-viewer window; the embedded canvas is paused."
+    else:
+        suspend_reason = _fast_viewer_suspend_reason()
+        if bool(_fast_viewer_requested_enabled()) and isinstance(suspend_reason, str):
+            title = "Fast viewer paused"
+            detail = f"Using the embedded canvas because {suspend_reason}."
+
+    gui_views.set_app_shell_mode_banner_text(
+        app_shell_view_state,
+        title=title,
+        detail=detail,
+    )
 
 
 def _refresh_run_status_bar() -> None:
@@ -4641,6 +4943,8 @@ def _refresh_run_status_bar() -> None:
         app_shell_view_state,
         " | ".join(parts),
     )
+    _refresh_session_summary_panel()
+    _refresh_interaction_mode_banner()
 
 
 def _clear_cached_analysis_results(*, clear_1d_lines: bool = False) -> None:
@@ -5624,6 +5928,7 @@ def _should_collect_hit_tables_for_update() -> bool:
     return gui_manual_geometry.should_collect_hit_tables_for_update(
         background_visible=bool(background_runtime_state.visible),
         current_background_index=background_runtime_state.current_background_index,
+        skip_preview_once=bool(getattr(geometry_preview_state, "skip_once", False)),
         hkl_pick_armed=bool(peak_selection_state.hkl_pick_armed),
         selected_hkl_target=peak_selection_state.selected_hkl_target,
         selected_peak_record=simulation_runtime_state.selected_peak_record,
@@ -5719,9 +6024,10 @@ def do_update():
     cor_angle_updated  = float(cor_angle_var.get())
     a_updated          = float(a_var.get())
     c_updated          = float(c_var.get())
-    theta_init_up      = float(theta_initial_var.get())
+    theta_init_up      = float(_current_effective_theta_initial(strict_count=False))
     debye_x_updated    = float(debye_x_var.get())
     debye_y_updated    = float(debye_y_var.get())
+    ordered_structure_scale = float(_current_ordered_structure_scale())
     corto_det_up       = float(corto_detector_var.get())
     center_x_up        = float(center_x_var.get())
     center_y_up        = float(center_y_var.get())
@@ -5817,6 +6123,7 @@ def do_update():
             round(current_sf_prune_bias(), 3),
             int(simulation_runtime_state.sf_prune_stats.get("qr_kept", 0)),
             int(simulation_runtime_state.sf_prune_stats.get("hkl_primary_kept", 0)),
+            round(ordered_structure_scale, 6),
             int(optics_mode_flag),
             int(simulation_runtime_state.num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
@@ -5853,6 +6160,10 @@ def do_update():
             simulation_runtime_state.sim_intens1,
             dtype=np.float64,
         ).copy()
+        if isinstance(primary_data, dict):
+            primary_data = _scaled_bragg_qr_dict(primary_data, ordered_structure_scale)
+        else:
+            primary_intensities *= float(ordered_structure_scale)
         secondary_data = np.asarray(
             simulation_runtime_state.sim_miller2,
             dtype=np.float64,
@@ -6603,13 +6914,74 @@ _current_background_theta_values = (
 )
 _background_theta_for_index = background_theta_workflow.background_theta_for_index
 _sync_background_theta_controls = background_theta_workflow.sync_background_theta_controls
-_apply_background_theta_metadata = background_theta_workflow.apply_background_theta_metadata
+_apply_background_theta_metadata_base = (
+    background_theta_workflow.apply_background_theta_metadata
+)
 _apply_geometry_fit_background_selection = (
     background_theta_workflow.apply_geometry_fit_background_selection
 )
 _sync_geometry_fit_background_selection = (
     background_theta_workflow.sync_geometry_fit_background_selection
 )
+
+
+def _apply_background_theta_metadata(*args, **kwargs):
+    """Apply theta metadata and invalidate geometry-fit shape anchors on change."""
+
+    result = _apply_background_theta_metadata_base(*args, **kwargs)
+    if bool(result):
+        _clear_geometry_fit_dataset_cache()
+    return result
+
+
+_apply_geometry_fit_background_selection_base = _apply_geometry_fit_background_selection
+
+
+def _apply_geometry_fit_background_selection(*args, **kwargs):
+    """Apply multi-background geometry selection and invalidate cached anchors."""
+
+    result = _apply_geometry_fit_background_selection_base(*args, **kwargs)
+    if bool(result):
+        _clear_geometry_fit_dataset_cache()
+    return result
+
+
+def _background_theta_base_for_index(
+    index: int,
+    *,
+    strict_count: bool = False,
+) -> float:
+    """Return the stored per-background theta_i value for one loaded image."""
+
+    try:
+        theta_values = list(_current_background_theta_values(strict_count=strict_count))
+    except Exception:
+        theta_values = []
+    if theta_values:
+        idx = max(0, min(int(index), len(theta_values) - 1))
+        return float(theta_values[idx])
+    try:
+        return float(theta_initial_var.get())
+    except Exception:
+        return float(theta_initial)
+
+
+def _current_effective_theta_initial(*, strict_count: bool = False) -> float:
+    """Return the current simulation theta including any shared fit offset."""
+
+    background_index = int(background_runtime_state.current_background_index)
+    try:
+        return float(
+            _background_theta_for_index(
+                background_index,
+                strict_count=strict_count,
+            )
+        )
+    except Exception:
+        return _background_theta_base_for_index(
+            background_index,
+            strict_count=strict_count,
+        )
 
 background_workflow = gui_runtime_background.build_runtime_background_workflow(
     bootstrap_module=gui_bootstrap,
@@ -6662,7 +7034,7 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     sync_theta_initial_to_background=(
         (
             lambda idx: theta_initial_var.set(
-                _background_theta_for_index(
+                _background_theta_base_for_index(
                     idx,
                     strict_count=False,
                 )
@@ -6708,6 +7080,7 @@ def reset_to_defaults():
     sample_depth_var.set(defaults['sample_depth_m'])
     debye_x_var.set(defaults['debye_x'])
     debye_y_var.set(defaults['debye_y'])
+    ordered_structure_scale_var.set(float(defaults.get('ordered_structure_scale', 1.0)))
     corto_detector_var.set(defaults['corto_detector'])
     sigma_mosaic_var.set(defaults['sigma_mosaic_deg'])
     gamma_mosaic_var.set(defaults['gamma_mosaic_deg'])
@@ -6809,6 +7182,13 @@ def reset_to_defaults():
     stack_layers_var.set(int(defaults['stack_layers']))
     phase_delta_expr_var.set(str(defaults['phase_delta_expression']))
     phi_l_divisor_var.set(float(defaults['phi_l_divisor']))
+    ordered_structure_fit_debye_x_var.set(True)
+    ordered_structure_fit_debye_y_var.set(True)
+    ordered_structure_coord_window_var.set(float(ordered_structure_coord_window_default))
+    app_state.ordered_structure_fit_snapshot = None
+    _set_ordered_structure_revert_enabled(False)
+    _set_ordered_structure_result_text("No ordered-structure fit run yet.")
+    progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
     if finite_stack_controls_view_state.phase_delta_entry_var is not None:
         gui_views.set_finite_stack_phase_delta_entry_text(
             finite_stack_controls_view_state,
@@ -6841,7 +7221,7 @@ geometry_theta_offset_var = background_theta_controls_view_state.geometry_theta_
 _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
 
 gui_views.create_geometry_fit_background_controls(
-    parent=app_shell_view_state.fit_body,
+    parent=app_shell_view_state.match_backgrounds_frame,
     view_state=background_theta_controls_view_state,
     selection_text=_default_geometry_fit_background_selection(),
     on_apply=lambda: _apply_geometry_fit_background_selection(trigger_update=True),
@@ -6850,16 +7230,29 @@ geometry_fit_background_selection_var = (
     background_theta_controls_view_state.geometry_fit_background_selection_var
 )
 _sync_geometry_fit_background_selection(preserve_existing=False)
+_maybe_refresh_run_status_bar()
 
 gui_views.populate_stacked_button_group(
     workspace_panels_view_state.workspace_actions_frame,
     [
         ("Reset to Defaults", reset_to_defaults),
+    ],
+)
+
+gui_views.populate_stacked_button_group(
+    (
+        workspace_panels_view_state.workspace_debug_frame.frame
+        if workspace_panels_view_state.workspace_debug_frame is not None
+        else workspace_panels_view_state.workspace_actions_frame
+    ),
+    [
         (
             "Azim vs Radial Plot Demo",
             lambda: view_azimuthal_radial(
                 simulate_diffraction(
-                    theta_initial=theta_initial_var.get(),
+                    theta_initial=_current_effective_theta_initial(
+                        strict_count=False
+                    ),
                     cor_angle=cor_angle_var.get(),
                     gamma=gamma_var.get(),
                     Gamma=Gamma_var.get(),
@@ -6918,6 +7311,8 @@ gui_views.create_status_panel(
 )
 progress_label_positions = status_panel_view_state.progress_label_positions
 progress_label_geometry = status_panel_view_state.progress_label_geometry
+ordered_structure_progressbar = status_panel_view_state.ordered_structure_progressbar
+progress_label_ordered_structure = status_panel_view_state.progress_label_ordered_structure
 mosaic_progressbar = status_panel_view_state.mosaic_progressbar
 progress_label_mosaic = status_panel_view_state.progress_label_mosaic
 progress_label = status_panel_view_state.progress_label
@@ -6926,6 +7321,8 @@ chi_square_label = status_panel_view_state.chi_square_label
 if (
     progress_label_positions is None
     or progress_label_geometry is None
+    or ordered_structure_progressbar is None
+    or progress_label_ordered_structure is None
     or mosaic_progressbar is None
     or progress_label_mosaic is None
     or progress_label is None
@@ -6933,6 +7330,7 @@ if (
     or chi_square_label is None
 ):
     raise RuntimeError("Status panel was not created.")
+progress_label_ordered_structure.config(text="Ordered structure fit: waiting.")
 
 hbn_geometry_debug_view_state.report_text = (
     "No hBN geometry debug report yet.\n"
@@ -7294,6 +7692,13 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         selected_hkl_target=geometry_state["selected_hkl_target"],
     )
     warnings.extend(list(geometry_state["warnings"]))
+    gui_state_io.apply_geometry_state_background_view_compatibility(
+        snapshot.get("geometry", {}),
+        geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
+        show_caked_2d_var=analysis_view_controls_view_state.show_caked_2d_var,
+        background_visible=bool(background_runtime_state.visible),
+        toggle_background=toggle_background,
+    )
 
     if finite_stack_controls_view_state.phase_delta_entry_var is not None:
         gui_views.set_finite_stack_phase_delta_entry_text(
@@ -7487,7 +7892,7 @@ gui_views.populate_stacked_button_group(
 
 # Frame for selecting which geometry params to fit
 gui_views.create_geometry_fit_parameter_controls(
-    parent=app_shell_view_state.fit_body,
+    parent=app_shell_view_state.match_parameter_frame,
     view_state=geometry_fit_parameter_controls_view_state,
     initial_values={
         "zb": True,
@@ -7552,12 +7957,12 @@ def _sync_geometry_fit_constraint_rows(*_args) -> None:
 
 if BACKGROUND_BACKEND_DEBUG_UI_ENABLED:
     background_controls_runtime.create_backend_debug_controls(
-        parent=app_shell_view_state.fit_body,
+        parent=workspace_panels_view_state.workspace_debug_frame.frame,
     )
 
 if DEBUG_ENABLED and BACKEND_ORIENTATION_UI_ENABLED:
     gui_views.create_backend_orientation_debug_controls(
-        parent=app_shell_view_state.fit_body,
+        parent=workspace_panels_view_state.workspace_debug_frame.frame,
         view_state=background_backend_debug_view_state,
     )
 
@@ -8362,7 +8767,9 @@ def _legacy_auto_match_on_fit_geometry_click():
         if background_theta_values:
             try:
                 params["theta_initial"] = float(
-                    background_theta_values[int(background_runtime_state.current_background_index)] + shared_theta_offset_seed
+                    background_theta_values[
+                        int(background_runtime_state.current_background_index)
+                    ]
                 )
             except Exception:
                 pass
@@ -9566,7 +9973,10 @@ def _legacy_auto_match_on_fit_geometry_click():
 
         if joint_background_mode and not preserve_live_theta:
             theta_initial_var.set(
-                _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
+                _background_theta_base_for_index(
+                    background_runtime_state.current_background_index,
+                    strict_count=False,
+                )
             )
             _refresh_background_status()
 
@@ -10478,7 +10888,10 @@ def _legacy_auto_match_on_fit_geometry_click():
 
                 if _geometry_fit_uses_shared_theta_offset() and not preserve_live_theta:
                     theta_initial_var.set(
-                        _background_theta_for_index(background_runtime_state.current_background_index, strict_count=False)
+                        _background_theta_base_for_index(
+                            background_runtime_state.current_background_index,
+                            strict_count=False,
+                        )
                     )
                     _refresh_background_status()
 
@@ -10788,20 +11201,19 @@ def _legacy_auto_match_on_fit_geometry_click():
 
 
 def on_fit_mosaic_click():
-    """Run the separable mosaic-width optimizer and apply the results."""
-
+    """Run the geometry-fit-cached detector-shape mosaic optimizer."""
 
     miller_array = np.asarray(miller, dtype=np.float64)
     if miller_array.ndim != 2 or miller_array.shape[1] != 3 or miller_array.size == 0:
         progress_label_mosaic.config(
-            text="Mosaic fit unavailable: no simulated reflections loaded."
+            text="Mosaic shape fit unavailable: no simulated reflections loaded."
         )
         return
 
     intensity_array = np.asarray(intensities, dtype=np.float64)
     if intensity_array.shape[0] != miller_array.shape[0]:
         progress_label_mosaic.config(
-            text="Mosaic fit unavailable: intensity array is not aligned with HKLs."
+            text="Mosaic shape fit unavailable: intensity array is not aligned with HKLs."
         )
         return
 
@@ -10816,17 +11228,40 @@ def on_fit_mosaic_click():
     missing = [key for key in required_keys if not np.asarray(mosaic_params.get(key)).size]
     if missing:
         progress_label_mosaic.config(
-            text="Mosaic fit unavailable: run a simulation to populate mosaic samples first."
+            text="Mosaic shape fit unavailable: run a simulation to populate mosaic samples first."
         )
         return
 
-    experimental_image = np.asarray(_get_current_background_backend(), dtype=np.float64)
-    if experimental_image.shape != (image_size, image_size):
+    cache_payload = _geometry_fit_dataset_cache_payload()
+    try:
+        selected_background_indices = list(_current_geometry_fit_background_indices())
+    except Exception:
+        selected_background_indices = [int(background_runtime_state.current_background_index)]
+    try:
+        background_theta_values = list(_current_background_theta_values(strict_count=True))
+    except Exception:
+        background_theta_values = list(_current_background_theta_values(strict_count=False))
+
+    stale_reason = gui_geometry_fit.geometry_fit_dataset_cache_stale_reason(
+        cache_payload,
+        selected_background_indices=selected_background_indices,
+        current_background_index=int(background_runtime_state.current_background_index),
+        joint_background_mode=bool(_geometry_fit_uses_shared_theta_offset()),
+        background_theta_values=background_theta_values,
+    )
+    if stale_reason:
         progress_label_mosaic.config(
-            text=(
-                "Mosaic fit unavailable: experimental image has shape "
-                f"{experimental_image.shape}, expected {(image_size, image_size)}."
-            )
+            text=f"Mosaic shape fit unavailable: {stale_reason}"
+        )
+        return
+
+    dataset_specs = []
+    for spec in cache_payload.get("dataset_specs", []) if isinstance(cache_payload, dict) else []:
+        if isinstance(spec, dict):
+            dataset_specs.append(gui_geometry_fit.copy_geometry_fit_state_value(dict(spec)))
+    if not dataset_specs:
+        progress_label_mosaic.config(
+            text="Mosaic shape fit unavailable: run geometry fit first."
         )
         return
 
@@ -10847,7 +11282,8 @@ def on_fit_mosaic_click():
         'debye_x':       debye_x_var.get(),
         'debye_y':       debye_y_var.get(),
         'center':        [center_x_var.get(), center_y_var.get()],
-        'theta_initial': theta_initial_var.get(),
+        'theta_initial': _current_effective_theta_initial(strict_count=False),
+        'theta_offset':  _current_geometry_theta_offset(),
         'uv1':           np.array([1.0, 0.0, 0.0]),
         'uv2':           np.array([0.0, 1.0, 0.0]),
         'corto_detector': corto_detector_var.get(),
@@ -10858,22 +11294,55 @@ def on_fit_mosaic_click():
         'pixel_size_m':   pixel_size_m,
     }
 
-    progress_label_mosaic.config(text="Running mosaic optimization…")
+    mosaic_shape_cfg = (
+        fit_config.get("mosaic_shape", {})
+        if isinstance(fit_config, dict)
+        else {}
+    )
+    solver_cfg = (
+        mosaic_shape_cfg.get("solver", {})
+        if isinstance(mosaic_shape_cfg, dict)
+        else {}
+    )
+    roi_cfg = (
+        mosaic_shape_cfg.get("roi", {})
+        if isinstance(mosaic_shape_cfg, dict)
+        else {}
+    )
+    preprocessing_cfg = (
+        mosaic_shape_cfg.get("preprocessing", {})
+        if isinstance(mosaic_shape_cfg, dict)
+        else {}
+    )
+
+    progress_label_mosaic.config(text="Running mosaic shape optimization…")
     mosaic_progressbar.start(10)
     root.update_idletasks()
 
     result = None
     try:
-        result = fit_mosaic_widths_separable(
-            experimental_image,
+        result = fit_mosaic_shape_parameters(
             miller_array,
             intensity_array,
             image_size,
             params,
-            stratify="twotheta",
+            dataset_specs=dataset_specs,
+            loss=str(solver_cfg.get("loss", "soft_l1")),
+            f_scale=float(solver_cfg.get("f_scale_px", 1.0)),
+            max_nfev=int(solver_cfg.get("max_nfev", 80)),
+            max_restarts=int(solver_cfg.get("restarts", 2)),
+            smooth_sigma_px=float(preprocessing_cfg.get("smooth_sigma_px", 1.0)),
+            ridge_percentile=float(preprocessing_cfg.get("ridge_percentile", 85.0)),
+            min_total_rois=int(roi_cfg.get("min_total_rois", 8)),
+            min_per_dataset_rois=int(roi_cfg.get("min_per_dataset_rois", 3)),
+            equal_dataset_weights=bool(roi_cfg.get("equal_dataset_weights", True)),
+            workers=solver_cfg.get("workers", "auto"),
+            parallel_mode=str(solver_cfg.get("parallel_mode", "auto")),
+            worker_numba_threads=solver_cfg.get("worker_numba_threads", 0),
+            restart_jitter=float(solver_cfg.get("restart_jitter", 0.15)),
         )
     except Exception as exc:  # pragma: no cover - GUI feedback path
-        progress_label_mosaic.config(text=f"Mosaic fit failed: {exc}")
+        progress_label_mosaic.config(text=f"Mosaic shape fit failed: {exc}")
         return
     finally:
         mosaic_progressbar.stop()
@@ -10882,7 +11351,7 @@ def on_fit_mosaic_click():
 
     if result.x is None or not np.all(np.isfinite(result.x)):
         progress_label_mosaic.config(
-            text="Mosaic fit failed: optimizer returned invalid parameters."
+            text="Mosaic shape fit failed: optimizer returned invalid parameters."
         )
         return
 
@@ -10908,42 +11377,717 @@ def on_fit_mosaic_click():
     _invalidate_simulation_cache()
     schedule_update()
 
-    residual_norm = 0.0
-    if getattr(result, "fun", None) is not None and result.fun.size:
-        residual_norm = float(np.linalg.norm(result.fun))
-    selected_rois = list(getattr(result, "selected_rois", []) or [])
-    roi_count = len(selected_rois)
-    status = "converged" if bool(getattr(result, "success", False)) else "finished"
+    dataset_diagnostics = list(getattr(result, "dataset_diagnostics", []) or [])
+    roi_count_by_dataset = dict(getattr(result, "roi_count_by_dataset", {}) or {})
+    roi_count = int(getattr(result, "total_roi_count", sum(roi_count_by_dataset.values())))
+    dataset_count = len(dataset_specs)
+    status = (
+        "accepted"
+        if bool(getattr(result, "acceptance_passed", False))
+        else ("converged" if bool(getattr(result, "success", False)) else "finished")
+    )
     message = (getattr(result, "message", "") or "").strip()
-    if message:
-        status_text = f"{status} ({message})"
-    else:
-        status_text = status.capitalize()
+    status_text = f"{status} ({message})" if message else status.capitalize()
 
-    peaks_summary = ""
-    if selected_rois:
-        formatted = []
-        for roi in selected_rois:
+    dataset_summary = ", ".join(
+        f"{diag.get('dataset_label', diag.get('dataset_index'))}={int(diag.get('roi_count', 0))}"
+        for diag in dataset_diagnostics
+        if isinstance(diag, dict)
+    )
+    worst_hkls: list[str] = []
+    for diag in dataset_diagnostics:
+        if not isinstance(diag, dict):
+            continue
+        label = str(diag.get("dataset_label", diag.get("dataset_index", "?")))
+        for hkl in list(diag.get("worst_hkls", []) or [])[:2]:
             try:
-                hkl = tuple(int(round(val)) for val in roi.hkl)
-            except Exception:  # pragma: no cover - defensive formatting
-                hkl = tuple(roi.hkl)
-            formatted.append(f"{hkl}")
-        max_display = 10
-        display = ", ".join(formatted[:max_display])
-        remaining = len(formatted) - max_display
-        if remaining > 0:
-            display += f", +{remaining} more"
-        peaks_summary = f"\nPeaks used: {display}"
+                worst_hkls.append(f"{label}:{tuple(int(v) for v in hkl)}")
+            except Exception:
+                continue
+    if len(worst_hkls) > 6:
+        worst_hkls = worst_hkls[:6]
+        worst_hkls.append("...")
+
+    cost_reduction = 100.0 * float(getattr(result, "cost_reduction", 0.0) or 0.0)
+    boundary_warning = str(getattr(result, "boundary_warning", "") or "").strip()
 
     progress_label_mosaic.config(
         text=(
-            f"Mosaic fit {status_text}\n"
+            f"Mosaic shape fit {status_text}\n"
             f"σ={sigma_deg:.3f}°, γ={gamma_deg:.3f}°, η={eta_val:.3f}\n"
-            f"Residual norm={residual_norm:.2f} using {roi_count} ROIs"
-            f"{peaks_summary}"
+            f"datasets={dataset_count}, ROIs={roi_count}, cost reduction={cost_reduction:.1f}%"
+            + (f"\nPer dataset: {dataset_summary}" if dataset_summary else "")
+            + (f"\nWorst HKLs: {', '.join(worst_hkls)}" if worst_hkls else "")
+            + (f"\n{boundary_warning}" if boundary_warning else "")
         )
     )
+
+
+def _clone_structure_model_state_for_ordered_fit():
+    """Return one detached copy of the live structure-model state."""
+
+    cloned = copy.copy(structure_model_state)
+    cloned.occupancy_site_labels = list(structure_model_state.occupancy_site_labels)
+    cloned.occupancy_site_expanded_map = list(structure_model_state.occupancy_site_expanded_map)
+    cloned.occ = list(structure_model_state.occ)
+    cloned.occ_vars = []
+    cloned.atom_site_fractional_metadata = [
+        dict(row) for row in structure_model_state.atom_site_fractional_metadata
+    ]
+    cloned.atom_site_fract_vars = []
+    cloned.defaults = dict(structure_model_state.defaults)
+    cloned.ht_cache_multi = copy.deepcopy(structure_model_state.ht_cache_multi)
+    cloned.ht_curves_cache = copy.deepcopy(structure_model_state.ht_curves_cache)
+    cloned.sim_miller1_all = np.asarray(
+        structure_model_state.sim_miller1_all,
+        dtype=np.float64,
+    ).copy()
+    cloned.sim_intens1_all = np.asarray(
+        structure_model_state.sim_intens1_all,
+        dtype=np.float64,
+    ).copy()
+    cloned.sim_miller2_all = np.asarray(
+        structure_model_state.sim_miller2_all,
+        dtype=np.float64,
+    ).copy()
+    cloned.sim_intens2_all = np.asarray(
+        structure_model_state.sim_intens2_all,
+        dtype=np.float64,
+    ).copy()
+    cloned.sim_primary_qr_all = gui_controllers.copy_bragg_qr_dict(
+        structure_model_state.sim_primary_qr_all
+    )
+    cloned.miller = np.asarray(structure_model_state.miller, dtype=np.float64).copy()
+    cloned.intensities = np.asarray(structure_model_state.intensities, dtype=np.float64).copy()
+    cloned.degeneracy = np.asarray(structure_model_state.degeneracy, dtype=np.int32).copy()
+    cloned.details = copy.deepcopy(structure_model_state.details)
+    cloned.intensities_cif1 = np.asarray(
+        structure_model_state.intensities_cif1,
+        dtype=np.float64,
+    ).copy()
+    cloned.intensities_cif2 = np.asarray(
+        structure_model_state.intensities_cif2,
+        dtype=np.float64,
+    ).copy()
+    cloned.last_occ_for_ht = list(structure_model_state.last_occ_for_ht)
+    cloned.last_p_triplet = list(structure_model_state.last_p_triplet)
+    cloned.last_weights = list(structure_model_state.last_weights)
+    cloned.last_atom_site_fractional_signature = tuple(
+        structure_model_state.last_atom_site_fractional_signature
+    )
+    return cloned
+
+
+def _format_ordered_structure_result_text(result, *, mask_roi_count: int) -> str:
+    """Return the read-only ordered-structure result summary for the GUI panel."""
+
+    status = (
+        "accepted"
+        if bool(getattr(result, "acceptance_passed", False))
+        else ("converged" if bool(getattr(result, "success", False)) else "finished")
+    )
+    message = str(getattr(result, "message", "") or "").strip()
+    header = f"Ordered structure fit {status}"
+    if message:
+        header += f" ({message})"
+    changed = list(getattr(result, "changed_parameter_names", []) or [])
+    if len(changed) > 8:
+        changed = changed[:8] + ["..."]
+    return "\n".join(
+        [
+            header,
+            (
+                f"scale={float(getattr(result, 'scale', 0.0)):.4f}, "
+                f"objective reduction={100.0 * float(getattr(result, 'objective_reduction', 0.0) or 0.0):.1f}%, "
+                f"ROIs={int(mask_roi_count)}"
+            ),
+            (
+                "changed parameters: " + ", ".join(changed)
+                if changed
+                else "changed parameters: none"
+            ),
+        ]
+    )
+
+
+def on_revert_last_ordered_fit():
+    """Restore the last accepted ordered-structure fit snapshot."""
+
+    snapshot = app_state.ordered_structure_fit_snapshot
+    restored = gui_ordered_structure_fit.restore_ordered_structure_snapshot(
+        snapshot,
+        occupancy_vars=_occupancy_control_vars(),
+        atom_site_vars=_atom_site_fractional_control_vars(),
+        debye_x_var=debye_x_var,
+        debye_y_var=debye_y_var,
+        ordered_scale_var=ordered_structure_scale_var,
+    )
+    if not restored:
+        progress_label_ordered_structure.config(text="Ordered structure fit revert unavailable.")
+        return
+
+    app_state.ordered_structure_fit_snapshot = None
+    _set_ordered_structure_revert_enabled(False)
+    _set_ordered_structure_result_text("Ordered structure fit reverted to the pre-fit snapshot.")
+    progress_label_ordered_structure.config(text="Ordered structure fit reverted.")
+    update_occupancies()
+
+
+def on_fit_ordered_structure_click():
+    """Run the ordered-structure detector-space intensity refinement."""
+
+    measured_image = _get_current_background_backend()
+    if measured_image is None:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: no current background image."
+        )
+        return
+
+    measured_arr = np.asarray(measured_image, dtype=np.float64)
+    if measured_arr.ndim != 2 or measured_arr.size == 0:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: background image is empty."
+        )
+        return
+
+    if simulation_runtime_state.stored_primary_sim_image is None:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: run a simulation first."
+        )
+        return
+
+    primary_hit_tables = simulation_runtime_state.stored_primary_max_positions
+
+    try:
+        weight1_value = float(weight1_var.get())
+        weight2_value = float(weight2_var.get())
+    except Exception:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: invalid CIF weights."
+        )
+        return
+
+    if abs(weight1_value) <= 1.0e-12:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: primary CIF weight is zero."
+        )
+        return
+
+    occupancy_values = list(_current_occupancy_values())
+    atom_site_values = list(_current_atom_site_fractional_values())
+    parameter_specs: list[gui_ordered_structure_fit.OrderedStructureParameterSpec] = []
+    occupancy_param_names: list[str] = []
+    atom_param_names: list[dict[str, str]] = []
+
+    coord_window = gui_ordered_structure_fit.normalize_coordinate_window(
+        ordered_structure_coord_window_var.get(),
+        fallback=ordered_structure_coord_window_default,
+    )
+    ordered_structure_coord_window_var.set(float(coord_window))
+
+    for idx, toggle_var in enumerate(ordered_structure_fit_occ_toggle_vars):
+        name = f"occ:{_occupancy_label_text(idx)}"
+        occupancy_param_names.append(name)
+        if idx >= len(occupancy_values) or not bool(toggle_var.get()):
+            continue
+        parameter_specs.append(
+            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+                name=name,
+                value=float(occupancy_values[idx]),
+                lower=0.0,
+                upper=1.0,
+            )
+        )
+
+    for idx, axis_vars in enumerate(ordered_structure_fit_atom_toggle_vars):
+        label = _atom_site_fractional_label_text(idx)
+        name_map: dict[str, str] = {}
+        base_values = (
+            atom_site_values[idx]
+            if idx < len(atom_site_values)
+            else (0.0, 0.0, 0.0)
+        )
+        for axis_index, axis in enumerate(("x", "y", "z")):
+            name = f"atom:{label}:{axis}"
+            name_map[axis] = name
+            if not bool(axis_vars.get(axis).get()):
+                continue
+            current_value = float(base_values[axis_index])
+            parameter_specs.append(
+                gui_ordered_structure_fit.OrderedStructureParameterSpec(
+                    name=name,
+                    value=current_value,
+                    lower=current_value - float(coord_window),
+                    upper=current_value + float(coord_window),
+                )
+            )
+        atom_param_names.append(name_map)
+
+    try:
+        debye_x_current = float(debye_x_var.get())
+        debye_y_current = float(debye_y_var.get())
+    except Exception:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: invalid Debye Q values."
+        )
+        return
+
+    if bool(ordered_structure_fit_debye_x_var.get()):
+        parameter_specs.append(
+            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+                name="debye_x",
+                value=debye_x_current,
+                lower=0.0,
+                upper=1.0,
+            )
+        )
+    if bool(ordered_structure_fit_debye_y_var.get()):
+        parameter_specs.append(
+            gui_ordered_structure_fit.OrderedStructureParameterSpec(
+                name="debye_y",
+                value=debye_y_current,
+                lower=0.0,
+                upper=1.0,
+            )
+        )
+
+    if not parameter_specs:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: no active parameters selected."
+        )
+        return
+
+    if not primary_hit_tables:
+        try:
+            mask_theta_initial = float(_current_effective_theta_initial(strict_count=False))
+            mask_mosaic_params = build_mosaic_params()
+            mask_optics_mode = int(_current_optics_mode_flag())
+            mask_distance = float(corto_detector_var.get())
+            mask_gamma = float(gamma_var.get())
+            mask_Gamma = float(Gamma_var.get())
+            mask_chi = float(chi_var.get())
+            mask_psi_z = float(psi_z_var.get())
+            mask_zs = float(zs_var.get())
+            mask_zb = float(zb_var.get())
+            mask_cor = float(cor_angle_var.get())
+            mask_width = float(sample_width_var.get())
+            mask_length = float(sample_length_var.get())
+            mask_depth = float(sample_depth_var.get())
+            mask_center = np.asarray(
+                [float(center_x_var.get()), float(center_y_var.get())],
+                dtype=np.float64,
+            )
+            mask_a = float(a_var.get())
+            mask_c = float(c_var.get())
+        except Exception as exc:
+            progress_label_ordered_structure.config(
+                text=f"Ordered structure fit failed: invalid mask inputs ({exc})."
+            )
+            return
+
+        current_primary_data = (
+            gui_controllers.copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr)
+            if isinstance(simulation_runtime_state.sim_primary_qr, dict)
+            and len(simulation_runtime_state.sim_primary_qr) > 0
+            else np.asarray(simulation_runtime_state.sim_miller1, dtype=np.float64).copy()
+        )
+        current_primary_intensities = np.asarray(
+            simulation_runtime_state.sim_intens1,
+            dtype=np.float64,
+        ).copy()
+        current_primary_available = (
+            len(current_primary_data) > 0
+            if isinstance(current_primary_data, dict)
+            else (
+                np.asarray(current_primary_data).ndim == 2
+                and np.asarray(current_primary_data).shape[0] > 0
+                and current_primary_intensities.size > 0
+            )
+        )
+        if not current_primary_available:
+            progress_label_ordered_structure.config(
+                text="Ordered structure fit unavailable: no primary reflections are active."
+            )
+            return
+        try:
+            mask_result = _run_simulation_generation_job(
+                {
+                    "job_id": 0,
+                    "signature": ("ordered-structure-mask",),
+                    "epoch": 0,
+                    "image_size": int(image_size),
+                    "pixel_size_m": float(pixel_size_m),
+                    "center": mask_center.copy(),
+                    "mosaic_params": {
+                        "beam_x_array": np.asarray(mask_mosaic_params["beam_x_array"], dtype=np.float64).copy(),
+                        "beam_y_array": np.asarray(mask_mosaic_params["beam_y_array"], dtype=np.float64).copy(),
+                        "theta_array": np.asarray(mask_mosaic_params["theta_array"], dtype=np.float64).copy(),
+                        "phi_array": np.asarray(mask_mosaic_params["phi_array"], dtype=np.float64).copy(),
+                        "wavelength_array": np.asarray(
+                            mask_mosaic_params["wavelength_array"],
+                            dtype=np.float64,
+                        ).copy(),
+                        "n2_sample_array": (
+                            None
+                            if mask_mosaic_params.get("n2_sample_array") is None
+                            else np.asarray(
+                                mask_mosaic_params["n2_sample_array"],
+                                dtype=np.complex128,
+                            ).copy()
+                        ),
+                        "sigma_mosaic_deg": float(mask_mosaic_params["sigma_mosaic_deg"]),
+                        "gamma_mosaic_deg": float(mask_mosaic_params["gamma_mosaic_deg"]),
+                        "eta": float(mask_mosaic_params["eta"]),
+                        "solve_q_steps": int(mask_mosaic_params["solve_q_steps"]),
+                        "solve_q_rel_tol": float(mask_mosaic_params["solve_q_rel_tol"]),
+                        "solve_q_mode": int(mask_mosaic_params["solve_q_mode"]),
+                    },
+                    "lambda_value": float(lambda_),
+                    "distance_m": float(mask_distance),
+                    "gamma_deg": float(mask_gamma),
+                    "Gamma_deg": float(mask_Gamma),
+                    "chi_deg": float(mask_chi),
+                    "psi_deg": float(psi),
+                    "psi_z_deg": float(mask_psi_z),
+                    "zs": float(mask_zs),
+                    "zb": float(mask_zb),
+                    "theta_initial_deg": float(mask_theta_initial),
+                    "cor_angle_deg": float(mask_cor),
+                    "sample_width_m": float(mask_width),
+                    "sample_length_m": float(mask_length),
+                    "sample_depth_m": float(mask_depth),
+                    "debye_x": float(debye_x_current),
+                    "debye_y": float(debye_y_current),
+                    "optics_mode": int(mask_optics_mode),
+                    "collect_hit_tables": True,
+                    "n2_value": n2,
+                    "primary_data": current_primary_data,
+                    "primary_intensities": current_primary_intensities,
+                    "secondary_data": np.empty((0, 3), dtype=np.float64),
+                    "secondary_intensities": np.empty((0,), dtype=np.float64),
+                    "run_primary": bool(current_primary_available),
+                    "run_secondary": False,
+                    "a_primary": float(mask_a),
+                    "c_primary": float(mask_c),
+                    "a_secondary": float(mask_a),
+                    "c_secondary": float(mask_c),
+                }
+            )
+            primary_hit_tables = list(mask_result.get("primary_max_positions", []))
+        except Exception as exc:
+            progress_label_ordered_structure.config(
+                text=f"Ordered structure fit failed while building the ROI mask: {exc}"
+            )
+            return
+        if not primary_hit_tables:
+            progress_label_ordered_structure.config(
+                text="Ordered structure fit unavailable: no primary hit tables are visible."
+            )
+            return
+
+    try:
+        mask = gui_ordered_structure_fit.build_hybrid_ordered_structure_mask(
+            image_shape=measured_arr.shape,
+            primary_hit_tables=primary_hit_tables,
+            max_reflections=int(ordered_structure_fit_mask_cfg.get("max_reflections", 24)),
+            tube_width_scale=float(ordered_structure_fit_mask_cfg.get("tube_width_scale", 1.0)),
+            specular_width_scale=float(
+                ordered_structure_fit_mask_cfg.get("specular_width_scale", 2.5)
+            ),
+            equal_peak_weights=bool(
+                ordered_structure_fit_mask_cfg.get("equal_peak_weights", True)
+            ),
+        )
+    except Exception as exc:
+        progress_label_ordered_structure.config(
+            text=f"Ordered structure fit failed: {exc}"
+        )
+        return
+
+    if int(mask.roi_count) <= 0 or int(np.count_nonzero(mask.pixel_mask)) <= 0:
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit unavailable: mask generation produced no ROIs."
+        )
+        return
+
+    snapshot = gui_ordered_structure_fit.capture_ordered_structure_snapshot(
+        occupancy_values=occupancy_values,
+        atom_site_values=atom_site_values,
+        debye_x=debye_x_current,
+        debye_y=debye_y_current,
+        ordered_scale=_current_ordered_structure_scale(),
+    )
+
+    current_p_vals = [float(p0_var.get()), float(p1_var.get()), float(p2_var.get())]
+    current_weights = gui_controllers.normalize_stacking_weight_values(
+        [float(w0_var.get()), float(w1_var.get()), float(w2_var.get())]
+    )
+    fixed_secondary_image = (
+        np.asarray(simulation_runtime_state.stored_secondary_sim_image, dtype=np.float64) * weight2_value
+        if simulation_runtime_state.stored_secondary_sim_image is not None and abs(weight2_value) > 1.0e-12
+        else np.zeros_like(measured_arr, dtype=np.float64)
+    )
+    local_structure_state = _clone_structure_model_state_for_ordered_fit()
+    local_atom_site_override_state = gui_state.AtomSiteOverrideState()
+    local_simulation_state = gui_state.SimulationRuntimeState()
+
+    try:
+        base_theta_initial = float(_current_effective_theta_initial(strict_count=False))
+        base_mosaic_params = build_mosaic_params()
+        base_optics_mode = int(_current_optics_mode_flag())
+        base_distance = float(corto_detector_var.get())
+        base_gamma = float(gamma_var.get())
+        base_Gamma = float(Gamma_var.get())
+        base_chi = float(chi_var.get())
+        base_psi_z = float(psi_z_var.get())
+        base_zs = float(zs_var.get())
+        base_zb = float(zb_var.get())
+        base_cor = float(cor_angle_var.get())
+        base_width = float(sample_width_var.get())
+        base_length = float(sample_length_var.get())
+        base_depth = float(sample_depth_var.get())
+        base_center = np.asarray(
+            [float(center_x_var.get()), float(center_y_var.get())],
+            dtype=np.float64,
+        )
+        base_a = float(a_var.get())
+        base_c = float(c_var.get())
+    except Exception as exc:
+        progress_label_ordered_structure.config(
+            text=f"Ordered structure fit failed: invalid frozen runtime values ({exc})."
+        )
+        return
+
+    def _render_trial_components(parameter_values: dict[str, float]):
+        local_occ = list(occupancy_values)
+        for idx, name in enumerate(occupancy_param_names):
+            if idx < len(local_occ) and name in parameter_values:
+                local_occ[idx] = float(parameter_values[name])
+
+        local_atom_values = [
+            [float(x_val), float(y_val), float(z_val)]
+            for (x_val, y_val, z_val) in atom_site_values
+        ]
+        for idx, name_map in enumerate(atom_param_names):
+            if idx >= len(local_atom_values):
+                break
+            for axis_index, axis in enumerate(("x", "y", "z")):
+                name = name_map.get(axis)
+                if name in parameter_values:
+                    local_atom_values[idx][axis_index] = float(parameter_values[name])
+
+        trial_debye_x = float(parameter_values.get("debye_x", debye_x_current))
+        trial_debye_y = float(parameter_values.get("debye_y", debye_y_current))
+        local_structure_state.two_theta_range = two_theta_range
+        local_iodine_z = gui_structure_model.current_iodine_z(
+            local_structure_state,
+            local_atom_site_override_state,
+            atom_site_values=[
+                tuple(values) for values in local_atom_values
+            ],
+            tcl_error_types=(tk.TclError,),
+        )
+        gui_structure_model.rebuild_diffraction_inputs(
+            local_structure_state,
+            new_occ=local_occ,
+            p_vals=current_p_vals,
+            weights=current_weights,
+            a_axis=base_a,
+            c_axis=base_c,
+            finite_stack_flag=bool(finite_stack_var.get()),
+            layers=int(max(1, stack_layers_var.get())),
+            phase_delta_expression_current=_current_phase_delta_expression(),
+            phi_l_divisor_current=_current_phi_l_divisor(),
+            atom_site_values=[tuple(values) for values in local_atom_values],
+            iodine_z_current=local_iodine_z,
+            atom_site_override_state=local_atom_site_override_state,
+            simulation_runtime_state=local_simulation_state,
+            combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
+            build_intensity_dataframes=build_intensity_dataframes,
+            apply_bragg_qr_filters=(
+                lambda **_kwargs: gui_controllers.apply_bragg_qr_filters(
+                    local_simulation_state,
+                    bragg_qr_manager_state,
+                    prune_bias=current_sf_prune_bias(),
+                )
+            ),
+            schedule_update=lambda: None,
+            weight1=weight1_var.get(),
+            weight2=weight2_var.get(),
+            tcl_error_types=(tk.TclError,),
+            force=True,
+            trigger_update=False,
+        )
+
+        primary_data = (
+            gui_controllers.copy_bragg_qr_dict(local_simulation_state.sim_primary_qr)
+            if isinstance(local_simulation_state.sim_primary_qr, dict)
+            and len(local_simulation_state.sim_primary_qr) > 0
+            else np.asarray(local_simulation_state.sim_miller1, dtype=np.float64).copy()
+        )
+        primary_intensities = np.asarray(
+            local_simulation_state.sim_intens1,
+            dtype=np.float64,
+        ).copy()
+        if isinstance(primary_data, dict):
+            primary_data = _scaled_bragg_qr_dict(primary_data, weight1_value)
+        else:
+            primary_intensities *= weight1_value
+
+        primary_available = (
+            len(primary_data) > 0
+            if isinstance(primary_data, dict)
+            else (
+                np.asarray(primary_data).ndim == 2
+                and np.asarray(primary_data).shape[0] > 0
+                and primary_intensities.size > 0
+            )
+        )
+        if not primary_available:
+            return np.zeros_like(measured_arr, dtype=np.float64), fixed_secondary_image
+
+        result = _run_simulation_generation_job(
+            {
+                "job_id": 0,
+                "signature": ("ordered-structure",),
+                "epoch": 0,
+                "image_size": int(image_size),
+                "pixel_size_m": float(pixel_size_m),
+                "center": base_center.copy(),
+                "mosaic_params": {
+                    "beam_x_array": np.asarray(base_mosaic_params["beam_x_array"], dtype=np.float64).copy(),
+                    "beam_y_array": np.asarray(base_mosaic_params["beam_y_array"], dtype=np.float64).copy(),
+                    "theta_array": np.asarray(base_mosaic_params["theta_array"], dtype=np.float64).copy(),
+                    "phi_array": np.asarray(base_mosaic_params["phi_array"], dtype=np.float64).copy(),
+                    "wavelength_array": np.asarray(
+                        base_mosaic_params["wavelength_array"],
+                        dtype=np.float64,
+                    ).copy(),
+                    "n2_sample_array": (
+                        None
+                        if base_mosaic_params.get("n2_sample_array") is None
+                        else np.asarray(
+                            base_mosaic_params["n2_sample_array"],
+                            dtype=np.complex128,
+                        ).copy()
+                    ),
+                    "sigma_mosaic_deg": float(base_mosaic_params["sigma_mosaic_deg"]),
+                    "gamma_mosaic_deg": float(base_mosaic_params["gamma_mosaic_deg"]),
+                    "eta": float(base_mosaic_params["eta"]),
+                    "solve_q_steps": int(base_mosaic_params["solve_q_steps"]),
+                    "solve_q_rel_tol": float(base_mosaic_params["solve_q_rel_tol"]),
+                    "solve_q_mode": int(base_mosaic_params["solve_q_mode"]),
+                },
+                "lambda_value": float(lambda_),
+                "distance_m": float(base_distance),
+                "gamma_deg": float(base_gamma),
+                "Gamma_deg": float(base_Gamma),
+                "chi_deg": float(base_chi),
+                "psi_deg": float(psi),
+                "psi_z_deg": float(base_psi_z),
+                "zs": float(base_zs),
+                "zb": float(base_zb),
+                "theta_initial_deg": float(base_theta_initial),
+                "cor_angle_deg": float(base_cor),
+                "sample_width_m": float(base_width),
+                "sample_length_m": float(base_length),
+                "sample_depth_m": float(base_depth),
+                "debye_x": float(trial_debye_x),
+                "debye_y": float(trial_debye_y),
+                "optics_mode": int(base_optics_mode),
+                "collect_hit_tables": False,
+                "n2_value": n2,
+                "primary_data": primary_data,
+                "primary_intensities": primary_intensities,
+                "secondary_data": np.empty((0, 3), dtype=np.float64),
+                "secondary_intensities": np.empty((0,), dtype=np.float64),
+                "run_primary": bool(primary_available),
+                "run_secondary": False,
+                "a_primary": float(base_a),
+                "c_primary": float(base_c),
+                "a_secondary": float(base_a),
+                "c_secondary": float(base_c),
+            }
+        )
+        return (
+            np.asarray(result.get("primary_image"), dtype=np.float64),
+            fixed_secondary_image,
+        )
+
+    progress_label_ordered_structure.config(text="Running ordered-structure fit...")
+    ordered_structure_progressbar.start(10)
+    root.update_idletasks()
+    try:
+        result = gui_ordered_structure_fit.fit_ordered_structure_parameters(
+            measured_image=measured_arr,
+            mask=mask,
+            parameter_specs=parameter_specs,
+            simulate_components=_render_trial_components,
+            coarse_downsample_factor=int(
+                ordered_structure_fit_solver_cfg.get("coarse_downsample_factor", 2)
+            ),
+            loss=str(ordered_structure_fit_solver_cfg.get("loss", "soft_l1")),
+            f_scale=float(ordered_structure_fit_solver_cfg.get("f_scale", 2.0)),
+            coarse_max_nfev=int(
+                ordered_structure_fit_solver_cfg.get("coarse_max_nfev", 15)
+            ),
+            polish_max_nfev=int(
+                ordered_structure_fit_solver_cfg.get("polish_max_nfev", 10)
+            ),
+            restarts=int(ordered_structure_fit_solver_cfg.get("restarts", 2)),
+        )
+    except Exception as exc:
+        progress_label_ordered_structure.config(
+            text=f"Ordered structure fit failed: {exc}"
+        )
+        return
+    finally:
+        ordered_structure_progressbar.stop()
+        try:
+            ordered_structure_progressbar["value"] = 0
+        except Exception:
+            pass
+        root.update_idletasks()
+
+    _set_ordered_structure_result_text(
+        _format_ordered_structure_result_text(result, mask_roi_count=int(mask.roi_count))
+    )
+    if not bool(getattr(result, "acceptance_passed", False)):
+        progress_label_ordered_structure.config(
+            text=(
+                "Ordered structure fit finished without acceptance: "
+                f"{getattr(result, 'message', 'objective did not improve')}"
+            )
+        )
+        return
+
+    if not np.isfinite(float(getattr(result, "scale", float("nan")))):
+        progress_label_ordered_structure.config(
+            text="Ordered structure fit failed: optimizer returned an invalid scale."
+        )
+        return
+
+    app_state.ordered_structure_fit_snapshot = snapshot
+    gui_ordered_structure_fit.apply_ordered_structure_values(
+        result.parameter_values,
+        occupancy_vars=_occupancy_control_vars(),
+        occupancy_param_names=occupancy_param_names,
+        atom_site_vars=_atom_site_fractional_control_vars(),
+        atom_param_names=atom_param_names,
+        debye_x_var=debye_x_var,
+        debye_y_var=debye_y_var,
+        ordered_scale_var=ordered_structure_scale_var,
+        scale_value=float(result.scale),
+    )
+    _set_ordered_structure_revert_enabled(True)
+    progress_label_ordered_structure.config(
+        text=(
+            f"Ordered structure fit accepted: scale={float(result.scale):.4f}, "
+            f"objective reduction={100.0 * float(result.objective_reduction):.1f}%, "
+            f"ROIs={int(mask.roi_count)}"
+        )
+    )
+    update_occupancies()
 
 
 def _geometry_fit_cmd_line(text: str) -> None:
@@ -10960,12 +12104,18 @@ on_fit_geometry_click = lambda: None
 
 
 fit_button_geometry = ttk.Button(
-    app_shell_view_state.fit_actions_frame,
+    app_shell_view_state.match_run_frame,
     text="Fit Positions & Geometry",
     command=on_fit_geometry_click
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
 fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
+gui_views.create_geometry_fit_history_controls(
+    parent=app_shell_view_state.match_run_frame,
+    view_state=geometry_tool_actions_view_state,
+    on_undo_fit=_undo_last_geometry_fit,
+    on_redo_fit=_redo_last_geometry_fit,
+)
 
 live_geometry_preview_var = tk.BooleanVar(value=False)
 geometry_tool_actions_runtime = (
@@ -10973,8 +12123,6 @@ geometry_tool_actions_runtime = (
         bootstrap_module=gui_bootstrap,
         views_module=gui_views,
         view_state=geometry_tool_actions_view_state,
-        on_undo_fit=_undo_last_geometry_fit,
-        on_redo_fit=_redo_last_geometry_fit,
         on_toggle_manual_pick=_toggle_geometry_manual_pick_mode,
         on_undo_manual_placement=_undo_last_geometry_manual_placement,
         on_export_manual_pairs=_export_geometry_manual_pairs,
@@ -10995,7 +12143,7 @@ gui_runtime_geometry_interaction.initialize_runtime_geometry_interaction_control
 )
 
 gui_views.create_geometry_overlay_action_controls(
-    parent=app_shell_view_state.fit_actions_frame,
+    parent=app_shell_view_state.match_results_frame,
     view_state=geometry_overlay_actions_view_state,
     on_toggle_qr_cylinder_overlay=qr_cylinder_overlay_runtime_toggle,
     on_clear_geometry_overlays=_clear_all_geometry_overlay_artists,
@@ -11049,7 +12197,7 @@ def save_q_space_representation():
         return
 
     param_dict = {
-        "theta_initial": theta_initial_var.get(),
+        "theta_initial": _current_effective_theta_initial(strict_count=False),
         "cor_angle": cor_angle_var.get(),
         "gamma": gamma_var.get(),
         "Gamma": Gamma_var.get(),
@@ -11129,7 +12277,7 @@ def save_q_space_representation():
         debye_x_var.get(),
         debye_y_var.get(),
         [center_x_var.get(), center_y_var.get()],
-        theta_initial_var.get(),
+        _current_effective_theta_initial(strict_count=False),
         cor_angle_var.get(),
         np.array([1.0, 0.0, 0.0]),
         np.array([0.0, 1.0, 0.0]),
@@ -11167,6 +12315,7 @@ gui_views.create_analysis_export_controls(
     on_save_snapshot=save_1d_snapshot,
     on_save_q_space=save_q_space_representation,
     on_save_1d_grid=save_1d_permutations,
+    save_1d_grid_available=False,
 )
 
 def run_debug_simulation():
@@ -11178,7 +12327,7 @@ def run_debug_simulation():
     zb_val    = float(zb_var.get())
     a_val     = float(a_var.get())
     c_val     = float(c_var.get())
-    theta_val = float(theta_initial_var.get())
+    theta_val = float(_current_effective_theta_initial(strict_count=False))
     dx_val    = float(debye_x_var.get())
     dy_val    = float(debye_y_var.get())
     corto_val = float(corto_detector_var.get())
@@ -11248,7 +12397,11 @@ def run_debug_simulation():
     progress_label.config(text="Debug simulation complete. Log saved.")
 
 gui_views.populate_stacked_button_group(
-    workspace_panels_view_state.workspace_actions_frame,
+    (
+        workspace_panels_view_state.workspace_debug_frame.frame
+        if workspace_panels_view_state.workspace_debug_frame is not None
+        else workspace_panels_view_state.workspace_actions_frame
+    ),
     [
         ("Run Debug Simulation", run_debug_simulation),
         ("Force Update", lambda: update_occupancies()),
@@ -11264,24 +12417,36 @@ geo_frame = CollapsibleFrame(
 )
 geo_frame.pack(fill=tk.X, padx=5, pady=5)
 
-debye_frame = CollapsibleFrame(app_shell_view_state.left_col, text='Debye Parameters')
+debye_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Debye Parameters')
 debye_frame.pack(fill=tk.X, padx=5, pady=5)
 
-detector_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Detector')
+detector_frame = CollapsibleFrame(app_shell_view_state.left_col, text='Detector')
 detector_frame.pack(fill=tk.X, padx=5, pady=5)
 
 lattice_frame = CollapsibleFrame(
-    app_shell_view_state.right_col,
+    app_shell_view_state.left_col,
     text='Lattice Parameters',
     expanded=True,
 )
 lattice_frame.pack(fill=tk.X, padx=5, pady=5)
 
 mosaic_frame = CollapsibleFrame(
-    app_shell_view_state.right_col,
+    app_shell_view_state.left_col,
     text='Mosaic Broadening',
 )
 mosaic_frame.pack(fill=tk.X, padx=5, pady=5)
+
+sampling_frame = CollapsibleFrame(
+    app_shell_view_state.right_col,
+    text='Sampling && Optics',
+)
+sampling_frame.pack(fill=tk.X, padx=5, pady=5)
+
+pruning_frame = CollapsibleFrame(
+    app_shell_view_state.right_col,
+    text='Arc Integration && Pruning',
+)
+pruning_frame.pack(fill=tk.X, padx=5, pady=5)
 
 initial_resolution = defaults.get('sampling_resolution', 'Low')
 resolution_options = [*resolution_sample_counts.keys(), CUSTOM_SAMPLING_OPTION]
@@ -11328,6 +12493,14 @@ def _refresh_resolution_display():
     gui_views.set_sampling_resolution_summary_text(
         sampling_optics_controls_view_state,
         summary_text,
+    )
+    try:
+        optics_summary = _normalize_optics_mode_label(optics_mode_var.get())
+    except Exception:
+        optics_summary = _normalize_optics_mode_label(defaults.get("optics_mode", "fast"))
+    gui_views.set_collapsible_header_summary(
+        sampling_frame,
+        f"{summary_text} | optics {optics_summary}",
     )
 
 
@@ -11397,7 +12570,7 @@ else:
     initial_custom_samples_text = str(int(max(1, simulation_runtime_state.num_samples)))
 
 gui_views.create_sampling_optics_controls(
-    parent=mosaic_frame.frame,
+    parent=sampling_frame.frame,
     view_state=sampling_optics_controls_view_state,
     resolution_options=resolution_options,
     initial_resolution=initial_resolution,
@@ -11420,13 +12593,14 @@ resolution_var.trace_add('write', on_resolution_option_change)
 
 
 def on_optics_mode_change(*_):
+    _refresh_resolution_display()
     _invalidate_simulation_cache()
     schedule_update()
 
 
 optics_mode_var.trace_add('write', on_optics_mode_change)
 
-structure_factor_pruning_controls_runtime.create_controls(parent=mosaic_frame.frame)
+structure_factor_pruning_controls_runtime.create_controls(parent=pruning_frame.frame)
 sf_prune_bias_var = structure_factor_pruning_controls_view_state.sf_prune_bias_var
 sf_prune_bias_scale = structure_factor_pruning_controls_view_state.sf_prune_bias_scale
 sf_prune_status_var = structure_factor_pruning_controls_view_state.sf_prune_status_var
@@ -11438,7 +12612,7 @@ solve_q_rel_tol_scale = (
     structure_factor_pruning_controls_view_state.solve_q_rel_tol_scale
 )
 
-center_frame = CollapsibleFrame(app_shell_view_state.right_col, text='Beam Controls')
+center_frame = CollapsibleFrame(app_shell_view_state.left_col, text='Beam Controls')
 center_frame.pack(fill=tk.X, padx=5, pady=5)
 
 gui_views.create_beam_mosaic_parameter_sliders(
@@ -11523,6 +12697,83 @@ bandwidth_percent_var = beam_mosaic_parameter_sliders_view_state.bandwidth_perce
 bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_scale
 center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
 center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
+
+
+def _refresh_refine_section_summaries(*_args) -> None:
+    """Refresh short summaries shown in collapsed refinement headers."""
+
+    try:
+        geo_summary = (
+            f"theta {float(theta_initial_var.get()):.2f} deg | "
+            f"chi {float(chi_var.get()):.3f} deg"
+        )
+    except Exception:
+        geo_summary = ""
+    gui_views.set_collapsible_header_summary(geo_frame, geo_summary)
+
+    try:
+        detector_summary = (
+            f"dist {float(corto_detector_var.get()) * 1e3:.2f} mm | "
+            f"gamma {float(gamma_var.get()):.3f} | Gamma {float(Gamma_var.get()):.3f}"
+        )
+    except Exception:
+        detector_summary = ""
+    gui_views.set_collapsible_header_summary(detector_frame, detector_summary)
+
+    try:
+        lattice_summary = f"a {float(a_var.get()):.3f} A | c {float(c_var.get()):.3f} A"
+    except Exception:
+        lattice_summary = ""
+    gui_views.set_collapsible_header_summary(lattice_frame, lattice_summary)
+
+    try:
+        beam_summary = (
+            f"row {float(center_x_var.get()):.0f} | col {float(center_y_var.get()):.0f}"
+        )
+    except Exception:
+        beam_summary = ""
+    gui_views.set_collapsible_header_summary(center_frame, beam_summary)
+
+    try:
+        mosaic_summary = (
+            f"sigma {float(sigma_mosaic_var.get()):.2f} deg | "
+            f"gamma {float(gamma_mosaic_var.get()):.2f} deg | "
+            f"eta {float(eta_var.get()):.3f}"
+        )
+    except Exception:
+        mosaic_summary = ""
+    gui_views.set_collapsible_header_summary(mosaic_frame, mosaic_summary)
+
+    try:
+        debye_summary = (
+            f"Qz {float(debye_x_var.get()):.3f} | Qr {float(debye_y_var.get()):.3f}"
+        )
+    except Exception:
+        debye_summary = ""
+    gui_views.set_collapsible_header_summary(debye_frame, debye_summary)
+
+
+for _summary_var in (
+    theta_initial_var,
+    chi_var,
+    gamma_var,
+    Gamma_var,
+    corto_detector_var,
+    a_var,
+    c_var,
+    center_x_var,
+    center_y_var,
+    sigma_mosaic_var,
+    gamma_mosaic_var,
+    eta_var,
+    debye_x_var,
+    debye_y_var,
+):
+    trace_add = getattr(_summary_var, "trace_add", None)
+    if callable(trace_add):
+        trace_add("write", _refresh_refine_section_summaries)
+
+_refresh_refine_section_summaries()
 
 geometry_fit_runtime_workflow = (
     gui_runtime_geometry_fit.build_runtime_geometry_fit_workflow(
@@ -11639,6 +12890,7 @@ geometry_fit_runtime_workflow = (
             ),
             "capture_undo_state": _capture_geometry_fit_undo_state,
             "push_undo_state": _push_geometry_fit_undo_state,
+            "replace_dataset_cache": _set_geometry_fit_dataset_cache,
             "request_preview_skip_once": (
                 lambda: gui_controllers.request_geometry_preview_skip_once(
                     geometry_preview_state
@@ -11834,7 +13086,7 @@ def _default_geometry_fit_pull(name: str, window: float) -> float:
 
 
 gui_views.create_geometry_fit_constraints_panel(
-    parent=app_shell_view_state.fit_body,
+    parent=app_shell_view_state.match_parameter_frame,
     root=root,
     view_state=geometry_fit_constraints_view_state,
     after=fit_frame,
@@ -12195,6 +13447,155 @@ def _on_layer_slider(val):
         update_occupancies()
 
 
+ordered_structure_fit_cfg = (
+    fit_config.get("ordered_structure", {})
+    if isinstance(fit_config, dict)
+    else {}
+)
+ordered_structure_fit_solver_cfg = (
+    ordered_structure_fit_cfg.get("solver", {})
+    if isinstance(ordered_structure_fit_cfg, dict)
+    else {}
+)
+ordered_structure_fit_mask_cfg = (
+    ordered_structure_fit_cfg.get("mask", {})
+    if isinstance(ordered_structure_fit_cfg, dict)
+    else {}
+)
+ordered_structure_fit_defaults_cfg = (
+    ordered_structure_fit_cfg.get("defaults", {})
+    if isinstance(ordered_structure_fit_cfg, dict)
+    else {}
+)
+ordered_structure_coord_window_default = gui_ordered_structure_fit.normalize_coordinate_window(
+    ordered_structure_fit_defaults_cfg.get("coord_window", 0.02),
+    fallback=0.02,
+)
+ordered_structure_scale_var = tk.DoubleVar(
+    value=float(defaults.get("ordered_structure_scale", 1.0))
+)
+ordered_structure_coord_window_var = tk.DoubleVar(
+    value=float(ordered_structure_coord_window_default)
+)
+ordered_structure_fit_debye_x_var = tk.BooleanVar(value=True)
+ordered_structure_fit_debye_y_var = tk.BooleanVar(value=True)
+ordered_structure_fit_result_var = tk.StringVar(
+    value="No ordered-structure fit run yet."
+)
+ordered_structure_fit_occ_toggle_vars: list[tk.BooleanVar] = []
+ordered_structure_fit_atom_toggle_vars: list[dict[str, tk.BooleanVar]] = []
+
+
+def _set_ordered_structure_result_text(text: object) -> None:
+    ordered_structure_fit_result_var.set(str(text))
+
+
+def _set_ordered_structure_revert_enabled(enabled: bool) -> None:
+    button = ordered_structure_fit_view_state.revert_button
+    if button is not None:
+        button.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
+
+
+def _commit_ordered_structure_scale_entry(_event=None) -> None:
+    try:
+        raw_value = ordered_structure_scale_var.get()
+    except Exception:
+        raw_value = _current_ordered_structure_scale()
+    normalized = gui_ordered_structure_fit.normalize_ordered_structure_scale(
+        raw_value,
+        fallback=_current_ordered_structure_scale(),
+    )
+    if not math.isclose(
+        normalized,
+        _current_ordered_structure_scale(),
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-12,
+    ):
+        ordered_structure_scale_var.set(float(normalized))
+        schedule_update()
+    else:
+        ordered_structure_scale_var.set(float(normalized))
+
+
+def _commit_ordered_structure_coord_window_entry(_event=None) -> None:
+    try:
+        raw_value = ordered_structure_coord_window_var.get()
+    except Exception:
+        raw_value = ordered_structure_coord_window_default
+    ordered_structure_coord_window_var.set(
+        float(
+            gui_ordered_structure_fit.normalize_coordinate_window(
+                raw_value,
+                fallback=ordered_structure_coord_window_default,
+            )
+        )
+    )
+
+
+def _rebuild_ordered_structure_fit_selection_controls() -> None:
+    """Rebuild the ordered-structure fit parameter-selection checkboxes."""
+
+    global ordered_structure_fit_occ_toggle_vars, ordered_structure_fit_atom_toggle_vars
+
+    previous_occ = {
+        _occupancy_label_text(idx): bool(var.get())
+        for idx, var in enumerate(ordered_structure_fit_occ_toggle_vars)
+    }
+    ordered_structure_fit_occ_toggle_vars = [
+        tk.BooleanVar(value=previous_occ.get(_occupancy_label_text(idx), True))
+        for idx in range(len(_occupancy_control_vars()))
+    ]
+    ordered_structure_fit_view_state.occupancy_toggle_vars = list(
+        ordered_structure_fit_occ_toggle_vars
+    )
+    gui_views.rebuild_ordered_structure_fit_occupancy_controls(
+        view_state=ordered_structure_fit_view_state,
+        occupancy_vars=ordered_structure_fit_occ_toggle_vars,
+        occupancy_label_text=lambda idx: _occupancy_label_text(idx),
+    )
+
+    previous_atom = {}
+    for idx, axis_vars in enumerate(ordered_structure_fit_atom_toggle_vars):
+        label = _atom_site_fractional_label_text(idx)
+        for axis in ("x", "y", "z"):
+            previous_atom[(label, axis)] = bool(axis_vars.get(axis).get())
+
+    ordered_structure_fit_atom_toggle_vars = []
+    for idx, _axis_vars in enumerate(_atom_site_fractional_control_vars()):
+        label = _atom_site_fractional_label_text(idx)
+        ordered_structure_fit_atom_toggle_vars.append(
+            {
+                "x": tk.BooleanVar(value=previous_atom.get((label, "x"), False)),
+                "y": tk.BooleanVar(value=previous_atom.get((label, "y"), False)),
+                "z": tk.BooleanVar(value=previous_atom.get((label, "z"), True)),
+            }
+        )
+    ordered_structure_fit_view_state.atom_toggle_vars = list(
+        ordered_structure_fit_atom_toggle_vars
+    )
+    gui_views.rebuild_ordered_structure_fit_atom_coordinate_controls(
+        view_state=ordered_structure_fit_view_state,
+        atom_toggle_vars=ordered_structure_fit_atom_toggle_vars,
+        atom_site_label_text=_atom_site_fractional_label_text,
+    )
+
+
+gui_views.create_ordered_structure_fit_panel(
+    parent=app_shell_view_state.right_col,
+    view_state=ordered_structure_fit_view_state,
+    ordered_scale_var=ordered_structure_scale_var,
+    coord_window_var=ordered_structure_coord_window_var,
+    fit_debye_x_var=ordered_structure_fit_debye_x_var,
+    fit_debye_y_var=ordered_structure_fit_debye_y_var,
+    result_var=ordered_structure_fit_result_var,
+    on_fit=lambda: on_fit_ordered_structure_click(),
+    on_revert=lambda: on_revert_last_ordered_fit(),
+    on_commit_ordered_scale=_commit_ordered_structure_scale_entry,
+    on_commit_coord_window=_commit_ordered_structure_coord_window_entry,
+)
+_set_ordered_structure_revert_enabled(False)
+
+
 # Sliders for three disorder probabilities and weights inside a collapsible frame
 gui_views.create_stacking_parameter_panels(
     parent=app_shell_view_state.right_col,
@@ -12295,6 +13696,7 @@ def _rebuild_structure_model_controls() -> None:
 
     global structure_model_controls_built
 
+    _rebuild_ordered_structure_fit_selection_controls()
     _rebuild_occupancy_controls()
     _rebuild_atom_site_fractional_controls()
     structure_model_controls_built = True
@@ -12401,6 +13803,7 @@ def _apply_primary_cif_path(raw_path):
         simulation_runtime_state.profile_cache.pop("_optics_signature", None)
         _invalidate_simulation_cache()
         progress_label.config(text=f"Loaded CIF: {Path(_current_primary_cif_path()).name}")
+        _refresh_session_summary_panel()
     except Exception as exc:
         _reset_structure_model_control_vars(
             snapshot.current_occ_values,
@@ -12419,6 +13822,7 @@ def _apply_primary_cif_path(raw_path):
 
         cif_file_var.set(snapshot.cif_file)
         progress_label.config(text=f"Failed to load CIF: {exc}")
+        _refresh_session_summary_panel()
 
 
 def _browse_primary_cif():
@@ -12517,7 +13921,7 @@ def _export_diffuse_ht_txt():
 
 
 gui_views.create_primary_cif_controls(
-    parent=app_shell_view_state.right_col,
+    parent=workspace_panels_view_state.workspace_inputs_frame,
     view_state=primary_cif_controls_view_state,
     cif_path_text=_current_primary_cif_path(),
     on_apply_from_entry=_apply_primary_cif_from_entry,
@@ -12528,6 +13932,7 @@ gui_views.create_primary_cif_controls(
 cif_file_var = primary_cif_controls_view_state.cif_file_var
 if cif_file_var is None:
     raise RuntimeError("Primary CIF controls did not create the path variable.")
+_maybe_refresh_run_status_bar()
 
 
 def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):

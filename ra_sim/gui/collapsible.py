@@ -7,6 +7,7 @@ class CollapsibleFrame(ttk.Frame):
     def __init__(self, parent, text="", expanded=False):
         super().__init__(parent)
         self._text = text
+        self._summary_text = ""
         self._variable = tk.IntVar(value=1 if expanded else 0)
         self._button = ttk.Checkbutton(
             self,
@@ -21,7 +22,14 @@ class CollapsibleFrame(ttk.Frame):
             self.frame.pack(fill=tk.X)
 
     def _label_text(self):
-        return ("\u25BC " if self._variable.get() else "\u25B6 ") + self._text
+        prefix = ("\u25BC " if self._variable.get() else "\u25B6 ") + self._text
+        if not self._variable.get() and self._summary_text:
+            return f"{prefix} | {self._summary_text}"
+        return prefix
+
+    def set_header_summary(self, text=""):
+        self._summary_text = " ".join(str(text or "").split())
+        self._button.configure(text=self._label_text())
 
     def _toggle(self):
         if self._variable.get():

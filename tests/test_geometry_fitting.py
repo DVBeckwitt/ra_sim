@@ -1723,6 +1723,75 @@ def test_fit_geometry_parameters_joint_backgrounds_share_theta_offset(monkeypatc
     } == {0, 1}
 
 
+def test_fit_geometry_parameters_accepts_numpy_dataset_specs(monkeypatch):
+    target_offset = 0.5
+
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        theta_initial = float(args[27])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, theta_initial, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    params["theta_offset"] = 0.0
+
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    dataset_specs = np.array(
+        [
+            {
+                "dataset_index": 0,
+                "label": "bg0",
+                "theta_initial": 3.0,
+                "measured_peaks": [
+                    {"label": "1,0,0", "x": 3.0 + target_offset, "y": 4.0}
+                ],
+                "experimental_image": experimental_image,
+            },
+            {
+                "dataset_index": 1,
+                "label": "bg1",
+                "theta_initial": 7.0,
+                "measured_peaks": [
+                    {"label": "1,0,0", "x": 7.0 + target_offset, "y": 4.0}
+                ],
+                "experimental_image": experimental_image,
+            },
+        ],
+        dtype=object,
+    )
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=dataset_specs[0]["measured_peaks"],
+        var_names=["theta_offset"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {"restarts": 0, "weighted_matching": False, "max_nfev": 40},
+            "single_ray": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert result.x.shape == (1,)
+    assert abs(float(result.x[0]) - target_offset) < 1e-6
+    assert int(result.point_match_summary["dataset_count"]) == 2
+
+
 def test_fit_geometry_parameters_parallelizes_multi_dataset_point_matching(monkeypatch):
     threaded_calls = []
 

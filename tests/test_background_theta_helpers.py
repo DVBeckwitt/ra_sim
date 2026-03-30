@@ -72,6 +72,23 @@ def test_background_theta_for_index_adds_shared_offset_for_multiple_backgrounds(
     )
 
 
+def test_background_theta_base_for_index_ignores_shared_offset() -> None:
+    theta_base_for_index = background_theta.background_theta_base_for_index
+
+    assert (
+        theta_base_for_index(
+            1,
+            osc_files=["bg0.osc", "bg1.osc"],
+            theta_initial_var=_Var(6.0),
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var("4.0, 7.5"),
+            strict_count=True,
+        )
+        == 7.5
+    )
+
+
 def test_parse_geometry_fit_background_indices_supports_current_all_and_ranges() -> None:
     parse_selection = background_theta.parse_geometry_fit_background_indices
 
@@ -175,6 +192,58 @@ def test_apply_geometry_fit_background_selection_redraws_when_live_theta_changes
     assert scheduled["count"] == 1
 
 
+def test_apply_geometry_fit_background_selection_redraws_when_shared_offset_changes_effective_theta() -> None:
+    scheduled = {"count": 0}
+
+    def _schedule_update() -> None:
+        scheduled["count"] += 1
+
+    theta_initial_var = _Var(4.0)
+    selection_var = _Var("current")
+    theta_controls = {}
+
+    assert (
+        background_theta.apply_geometry_fit_background_selection(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var("4.0, 7.5"),
+            geometry_theta_offset_var=_Var("0.25"),
+            geometry_fit_background_selection_var=selection_var,
+            fit_theta_checkbutton=None,
+            theta_controls=theta_controls,
+            set_background_file_status_text=lambda: None,
+            schedule_update=_schedule_update,
+            trigger_update=True,
+        )
+        is True
+    )
+    selection_var.set("all")
+    assert (
+        background_theta.apply_geometry_fit_background_selection(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var("4.0, 7.5"),
+            geometry_theta_offset_var=_Var("0.25"),
+            geometry_fit_background_selection_var=selection_var,
+            fit_theta_checkbutton=None,
+            theta_controls=theta_controls,
+            set_background_file_status_text=lambda: None,
+            schedule_update=_schedule_update,
+            trigger_update=True,
+        )
+        is True
+    )
+    assert theta_initial_var.get() == 4.0
+    assert selection_var.get() == "all"
+    assert scheduled["count"] == 1
+
+
 def test_apply_geometry_fit_background_selection_preserves_live_theta_when_theta_list_is_blank() -> None:
     scheduled = {"count": 0}
 
@@ -269,6 +338,31 @@ def test_apply_background_theta_metadata_can_skip_live_theta_sync() -> None:
     assert background_theta_list_var.get() == "4, 7.5"
     assert theta_initial_var.get() == 12.75
     assert scheduled["count"] == 0
+
+
+def test_apply_background_theta_metadata_syncs_live_theta_to_base_value() -> None:
+    theta_initial_var = _Var(0.0)
+
+    assert (
+        background_theta.apply_background_theta_metadata(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=_Var("4.0, 7.5"),
+            geometry_theta_offset_var=_Var("0.25"),
+            geometry_fit_background_selection_var=_Var("all"),
+            fit_theta_checkbutton=None,
+            theta_controls={},
+            set_background_file_status_text=lambda: None,
+            schedule_update=None,
+            trigger_update=False,
+            sync_live_theta=True,
+        )
+        is True
+    )
+    assert theta_initial_var.get() == 4.0
 
 
 def test_apply_gui_state_background_theta_compatibility_seeds_legacy_theta_list() -> None:

@@ -18,7 +18,7 @@ from matplotlib.backend_bases import MouseButton
 from scipy.optimize import minimize, curve_fit
 from skimage.measure import EllipseModel, ransac
 
-from OSC_Reader import OSC_Reader
+from ra_sim.io.osc_reader import read_osc
 
 
 DEFAULT_NUM_RINGS = 5
@@ -393,8 +393,8 @@ def apply_ellipse_ring_indices(ellipses, ring_indices):
 
 
 def load_and_bgsub(hbn_path, dark_path):
-    dark = OSC_Reader.read_osc(dark_path).astype(np.float32)
-    raw = OSC_Reader.read_osc(hbn_path).astype(np.float32)
+    dark = read_osc(dark_path).astype(np.float32)
+    raw = read_osc(hbn_path).astype(np.float32)
     main = np.clip(raw - dark, 0, None)
     bg = cv2.GaussianBlur(main, ksize=(0, 0), sigmaX=25, sigmaY=25)
     return np.clip(main - bg, 0, None).astype(np.float32)

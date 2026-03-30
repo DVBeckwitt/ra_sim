@@ -257,7 +257,7 @@ def test_build_runtime_geometry_tool_action_controls_runtime_delegates_to_bootst
             bootstrap_module=bootstrap_module,
             views_module="views-module",
             view_state="geometry-tool-view-state",
-            on_undo_fit="undo-fit",
+            on_toggle_manual_pick="toggle-pick",
         )
     )
 
@@ -268,7 +268,7 @@ def test_build_runtime_geometry_tool_action_controls_runtime_delegates_to_bootst
             {
                 "views_module": "views-module",
                 "view_state": "geometry-tool-view-state",
-                "on_undo_fit": "undo-fit",
+                "on_toggle_manual_pick": "toggle-pick",
             },
         )
     ]

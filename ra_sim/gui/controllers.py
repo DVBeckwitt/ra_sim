@@ -19,6 +19,7 @@ from ra_sim.utils.stacking_fault import (
 
 from .state import (
     AppState,
+    GeometryFitDatasetCacheState,
     BraggQrManagerState,
     GeometryFitHistoryState,
     GeometryPreviewOverlayState,
@@ -857,6 +858,27 @@ def clear_geometry_fit_history(state: GeometryFitHistoryState) -> None:
     state.undo_stack.clear()
     state.redo_stack.clear()
     state.last_overlay_state = None
+
+
+def clear_geometry_fit_dataset_cache(state: GeometryFitDatasetCacheState) -> None:
+    """Discard the cached successful geometry-fit dataset bundle."""
+
+    state.payload = None
+
+
+def replace_geometry_fit_dataset_cache(
+    state: GeometryFitDatasetCacheState,
+    payload: Mapping[str, object] | None,
+    *,
+    copy_state_value: Any = copy.deepcopy,
+) -> dict[str, object] | None:
+    """Replace the cached successful geometry-fit dataset bundle."""
+
+    if payload is None:
+        state.payload = None
+    else:
+        state.payload = copy_state_value(dict(payload))
+    return state.payload
 
 
 def replace_geometry_fit_last_overlay_state(

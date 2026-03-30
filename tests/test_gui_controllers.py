@@ -9,6 +9,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
 
     assert isinstance(app_state.manual_geometry, state.ManualGeometryState)
     assert isinstance(app_state.geometry_fit_history, state.GeometryFitHistoryState)
+    assert isinstance(
+        app_state.geometry_fit_dataset_cache,
+        state.GeometryFitDatasetCacheState,
+    )
     assert isinstance(app_state.background_runtime, state.BackgroundRuntimeState)
     assert isinstance(app_state.peak_selection, state.PeakSelectionState)
     assert isinstance(app_state.integration_range_drag, state.IntegrationRangeDragState)
@@ -109,6 +113,10 @@ def test_app_state_has_isolated_manual_geometry_state() -> None:
     assert isinstance(app_state.status_panel_view, state.StatusPanelViewState)
     assert app_state.manual_geometry is not other_state.manual_geometry
     assert app_state.geometry_fit_history is not other_state.geometry_fit_history
+    assert (
+        app_state.geometry_fit_dataset_cache
+        is not other_state.geometry_fit_dataset_cache
+    )
     assert app_state.background_runtime is not other_state.background_runtime
     assert app_state.peak_selection is not other_state.peak_selection
     assert app_state.integration_range_drag is not other_state.integration_range_drag
@@ -541,6 +549,26 @@ def test_geometry_fit_history_controller_tracks_overlay_and_undo_redo() -> None:
     assert fit_state.undo_stack == []
     assert fit_state.redo_stack == []
     assert fit_state.last_overlay_state is None
+
+
+def test_geometry_fit_dataset_cache_controller_replaces_and_clears_payload() -> None:
+    cache_state = state.GeometryFitDatasetCacheState()
+
+    payload = controllers.replace_geometry_fit_dataset_cache(
+        cache_state,
+        {
+            "selected_background_indices": [0, 2],
+            "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
+        },
+    )
+    assert payload == {
+        "selected_background_indices": [0, 2],
+        "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
+    }
+    assert cache_state.payload == payload
+
+    controllers.clear_geometry_fit_dataset_cache(cache_state)
+    assert cache_state.payload is None
 
 
 def test_geometry_preview_controller_tracks_exclusions_skip_flag_and_cache() -> None:

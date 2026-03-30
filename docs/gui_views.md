@@ -1,55 +1,61 @@
 # GUI Views Reference
 
-This page documents the main RA-SIM GUI views in practical order:
+These are the main RA-SIM work areas in the order they are usually used.
 
-1. Simulation
-2. Phi-vs-Theta and Integration
-3. Calibrant
-4. Parameters
+## 1. Simulation
 
-## 1) Simulation
+The simulation view is the main detector-space workspace. Use it to answer the
+first-order questions:
 
-The simulation view is the primary diffraction image workspace. It renders the simulated detector pattern so you can:
+- Are the main arcs, caps, and ring fragments in the right place?
+- Is the detector geometry roughly correct?
+- Are the broadening and intensity trends physically believable?
 
-- Visually compare modeled diffraction features to measured background data.
-- Check whether ring/cap intensity, arc positions, and peak structure are physically plausible.
-- Iterate quickly while tuning geometry, mosaic broadening, and structural inputs.
+This is the best place to establish global agreement before checking reduced
+coordinates.
 
-Use this view first to establish overall agreement before fitting fine details.
+## 2. Integration
 
-## 2) Phi-vs-Theta and Integration
+The integration views reduce the 2D detector image into easier diagnostics:
 
-After simulation, use integration views to compare model vs experiment in reduced coordinates:
+- radial intensity versus `2theta`
+- azimuthal intensity versus detector angle
+- caked maps for localized mismatch
 
-- **Radial integration (2theta)** shows intensity vs scattering angle.
-- **Azimuthal integration (phi)** shows intensity vs detector azimuth.
-- **2D caked/integration map** helps inspect selected angular regions and orientation-dependent mismatch.
+Use these views after the detector-space pattern is roughly aligned. They are
+the quickest way to see whether the model has the correct radial positions,
+azimuthal widths, and intensity balance.
 
-In practice, this view answers:
+## 3. Calibrant
 
-- Are simulated peak positions aligned in 2theta?
-- Are azimuthal widths/intensities correct?
-- Are there region-specific mismatches hidden in the full 2D detector image?
+The calibrant view is the hBN ellipse-fitting workflow used to estimate beam
+center, detector tilt, and related geometry terms from ring data.
 
-## 3) Calibrant
+Typical use:
 
-The calibrant view is the hBN fitter workflow used to establish detector geometry/tilt from ring data:
+1. Load a calibrant frame and any associated dark/background image.
+2. Mark or edit ring points.
+3. Fit ellipses and refine the geometry.
+4. Save the bundle and use it as the starting point for the main simulation.
 
-- Load calibrant + dark frames.
-- Pick center/points or use edit mode.
-- Fit rings/ellipses, refine, and optimize tilt.
-- Save/load NPZ bundles and overlay outputs.
+Use this view when detector geometry is uncertain or when you want a stronger
+initial geometry before refining diffraction parameters.
 
-Use calibrant mode when geometry is uncertain or when you need a reliable starting point for simulation refinement.
+## 4. Parameters
 
-## 4) Parameters
+The parameters panel is the control surface for geometry, lattice, mosaic,
+beam, stacking, occupancy, and fitting controls.
 
-The parameter/control panel is where you drive the model:
+In practice:
 
-- Geometry (`theta`, `Gamma`, detector rotation, `chi`, `zs`, `zb`, etc.).
-- Lattice parameters (`a`, `c`).
-- Mosaic broadening, beam center, and beam spectral bandwidth (`Bandwidth (%)`) controls.
-- Stacking probabilities and site occupancies.
-- Fit toggles and save/load parameter actions.
+1. Use the geometry controls until detector-space features land correctly.
+2. Check integrations to verify widths and intensity trends.
+3. Refine mosaic and structural terms only after the geometry is stable.
 
-Treat this panel as the control surface for all simulation and fitting passes. Save parameter snapshots regularly so iterations are reproducible.
+The `Fit Mosaic Shapes` action is geometry-locked. It reuses the exact
+multi-background dataset bundle from the last successful manual geometry fit,
+so any change to manual picks, selected backgrounds, or shared-theta metadata
+requires rerunning geometry fit before the mosaic-shape step.
+
+Saving parameter snapshots regularly is the easiest way to keep iterations
+reproducible.

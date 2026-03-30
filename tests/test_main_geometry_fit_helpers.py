@@ -30,6 +30,12 @@ def test_main_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_
         parameter_domains,
     )
 
+    assert runtime_cfg["solver"] == {
+        "workers": 1,
+        "parallel_mode": "off",
+        "worker_numba_threads": 1,
+    }
+    assert runtime_cfg["use_numba"] is False
     assert runtime_cfg["bounds"]["theta_initial"] == [5.6, 6.4]
     assert runtime_cfg["bounds"]["gamma"] == [-0.5, 3.5]
     assert runtime_cfg["priors"]["theta_initial"]["center"] == 6.0
@@ -50,6 +56,37 @@ def test_main_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> 
         {"center_x": (0.0, 99.0)},
     )
 
+    assert runtime_cfg["solver"] == {
+        "workers": 1,
+        "parallel_mode": "off",
+        "worker_numba_threads": 1,
+    }
+    assert runtime_cfg["use_numba"] is False
     assert runtime_cfg["bounds"]["center_x"] == [88.0, 99.0]
     assert runtime_cfg["priors"]["center_x"]["center"] == 98.0
     assert abs(runtime_cfg["priors"]["center_x"]["sigma"] - 0.5) < 1e-12
+
+
+def test_main_build_geometry_fit_runtime_config_accepts_explicit_gui_solver_overrides() -> None:
+    runtime_cfg = build_geometry_fit_runtime_config(
+        {
+            "solver": {
+                "loss": "soft_l1",
+                "gui_workers": 2,
+                "gui_parallel_mode": "datasets",
+                "gui_worker_numba_threads": 3,
+            },
+            "gui_use_numba": True,
+        },
+        {"gamma": 1.0},
+        {"gamma": {"window": 0.2, "pull": 0.0}},
+        {"gamma": (-5.0, 5.0)},
+    )
+
+    assert runtime_cfg["solver"] == {
+        "loss": "soft_l1",
+        "workers": 2,
+        "parallel_mode": "datasets",
+        "worker_numba_threads": 3,
+    }
+    assert runtime_cfg["use_numba"] is True

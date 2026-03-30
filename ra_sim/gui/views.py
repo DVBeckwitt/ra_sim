@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import math
+import re
+import webbrowser
+from importlib.metadata import PackageNotFoundError, version as get_package_version
+from pathlib import Path
 from collections.abc import Callable, Sequence
 from typing import Any
 import tkinter as tk
 from tkinter import ttk
+
+from ra_sim.config import get_config_dir
 
 from .collapsible import CollapsibleFrame
 from .sliders import create_slider
@@ -29,6 +35,7 @@ from .state import (
     GeometryQGroupViewState,
     HbnGeometryDebugViewState,
     IntegrationRangeControlsViewState,
+    OrderedStructureFitControlsViewState,
     PrimaryCifControlsViewState,
     SamplingOpticsControlsViewState,
     StackingParameterControlsViewState,
@@ -50,6 +57,7 @@ _BACKGROUND_THETA_HELP_TEXT = "Per-background theta_i values (deg, in load order
 _GEOMETRY_FIT_BACKGROUND_HELP_TEXT = (
     "Use 'current', 'all', or 1-based indices/ranges like 1,3-5"
 )
+_PROJECT_GITHUB_URL = "https://github.com/DVBeckwitt/ra_sim"
 
 
 def create_root_window(title: str = "RA Simulation") -> tk.Tk:
@@ -249,6 +257,40 @@ def _bind_notebook_state(
     _select_from_var()
 
 
+def _open_external_link(url: str) -> None:
+    """Open one external URL with the system browser when possible."""
+
+    try:
+        webbrowser.open_new_tab(url)
+    except Exception:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            return
+
+
+def _get_app_version_text() -> str:
+    """Return the best available RA-SIM version string."""
+
+    try:
+        return str(get_package_version("ra_sim"))
+    except PackageNotFoundError:
+        pass
+    except Exception:
+        return "unknown"
+
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        pyproject_text = pyproject_path.read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+
+    version_match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
+    if version_match is None:
+        return "unknown"
+    return str(version_match.group(1)).strip() or "unknown"
+
+
 def create_app_shell(
     *,
     root: tk.Misc,
@@ -263,6 +305,39 @@ def create_app_shell(
     figure_panel = ttk.Frame(main_pane)
     main_pane.add(controls_panel, weight=1)
     main_pane.add(figure_panel, weight=3)
+
+    session_summary_frame = ttk.LabelFrame(
+        controls_panel,
+        text="Current Session",
+        padding=(8, 6),
+    )
+    session_summary_frame.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 0))
+    session_summary_var = tk.StringVar(
+        value=(
+            "Background: not loaded\n"
+            "CIF: not loaded\n"
+            "Fit backgrounds: current\n"
+            "View: Detector\n"
+            "Fit quality: waiting for fit"
+        )
+    )
+    session_summary_label = ttk.Label(
+        session_summary_frame,
+        textvariable=session_summary_var,
+        justify=tk.LEFT,
+        anchor=tk.W,
+        wraplength=520,
+    )
+    session_summary_label.pack(fill=tk.X)
+
+    # The current-mode banner was removed from the visible shell layout, but the
+    # view-state fields remain available so existing runtime update hooks can
+    # call the shared setter helpers without additional branching.
+    mode_banner_frame = None
+    mode_banner_title_var = None
+    mode_banner_title_label = None
+    mode_banner_detail_var = None
+    mode_banner_detail_label = None
 
     run_status_frame = ttk.Frame(figure_panel, padding=(10, 8, 10, 4))
     run_status_frame.pack(side=tk.TOP, fill=tk.X)
@@ -279,42 +354,42 @@ def create_app_shell(
     controls_notebook = ttk.Notebook(controls_panel)
     controls_notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
 
-    workspace_tab = ttk.Frame(controls_notebook)
-    fit_tab = ttk.Frame(controls_notebook)
-    parameters_tab = ttk.Frame(controls_notebook)
-    analysis_tab = ttk.Frame(controls_notebook)
-    controls_notebook.add(workspace_tab, text="Workspace")
-    controls_notebook.add(fit_tab, text="Fit")
-    controls_notebook.add(parameters_tab, text="Parameters")
-    controls_notebook.add(analysis_tab, text="Analysis")
+    setup_tab = ttk.Frame(controls_notebook)
+    match_tab = ttk.Frame(controls_notebook)
+    refine_tab = ttk.Frame(controls_notebook)
+    analyze_tab = ttk.Frame(controls_notebook)
+    help_tab = ttk.Frame(controls_notebook)
+    controls_notebook.add(setup_tab, text="Setup")
+    controls_notebook.add(match_tab, text="Match")
+    controls_notebook.add(refine_tab, text="Refine")
+    controls_notebook.add(analyze_tab, text="Analyze")
+    controls_notebook.add(help_tab, text="Help")
 
-    workspace_scroll_frame, workspace_body, workspace_canvas = _create_scrolled_frame(
-        workspace_tab
-    )
-    workspace_scroll_frame.pack(fill=tk.BOTH, expand=True)
-    fit_scroll_frame, fit_body, fit_canvas = _create_scrolled_frame(fit_tab)
-    fit_scroll_frame.pack(fill=tk.BOTH, expand=True)
+    setup_scroll_frame, setup_body, setup_canvas = _create_scrolled_frame(setup_tab)
+    setup_scroll_frame.pack(fill=tk.BOTH, expand=True)
+    match_scroll_frame, match_body, match_canvas = _create_scrolled_frame(match_tab)
+    match_scroll_frame.pack(fill=tk.BOTH, expand=True)
 
-    parameter_notebook = ttk.Notebook(parameters_tab)
+    parameter_notebook = ttk.Notebook(refine_tab)
     parameter_notebook.pack(fill=tk.BOTH, expand=True)
-    parameter_geometry_tab = ttk.Frame(parameter_notebook)
-    parameter_structure_tab = ttk.Frame(parameter_notebook)
-    parameter_notebook.add(parameter_geometry_tab, text="Geometry && Beam")
-    parameter_notebook.add(parameter_structure_tab, text="Structure && CIF")
-    parameter_geometry_scroll, parameter_geometry_body, parameter_geometry_canvas = (
-        _create_scrolled_frame(parameter_geometry_tab)
+    refine_basic_tab = ttk.Frame(parameter_notebook)
+    refine_advanced_tab = ttk.Frame(parameter_notebook)
+    parameter_notebook.add(refine_basic_tab, text="Basic")
+    parameter_notebook.add(refine_advanced_tab, text="Advanced")
+    refine_basic_scroll, refine_basic_body, refine_basic_canvas = (
+        _create_scrolled_frame(refine_basic_tab)
     )
-    parameter_geometry_scroll.pack(fill=tk.BOTH, expand=True)
-    parameter_structure_scroll, parameter_structure_body, parameter_structure_canvas = (
-        _create_scrolled_frame(parameter_structure_tab)
+    refine_basic_scroll.pack(fill=tk.BOTH, expand=True)
+    refine_advanced_scroll, refine_advanced_body, refine_advanced_canvas = (
+        _create_scrolled_frame(refine_advanced_tab)
     )
-    parameter_structure_scroll.pack(fill=tk.BOTH, expand=True)
+    refine_advanced_scroll.pack(fill=tk.BOTH, expand=True)
 
     _register_pointer_mousewheel_handler(
         root,
-        key=("app-shell-scroll", id(view_state), "workspace"),
+        key=("app-shell-scroll", id(view_state), "setup"),
         handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
-            workspace_canvas,
+            setup_canvas,
             pointer_x=pointer_x,
             pointer_y=pointer_y,
             event=event,
@@ -322,9 +397,9 @@ def create_app_shell(
     )
     _register_pointer_mousewheel_handler(
         root,
-        key=("app-shell-scroll", id(view_state), "fit"),
+        key=("app-shell-scroll", id(view_state), "match"),
         handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
-            fit_canvas,
+            match_canvas,
             pointer_x=pointer_x,
             pointer_y=pointer_y,
             event=event,
@@ -332,9 +407,9 @@ def create_app_shell(
     )
     _register_pointer_mousewheel_handler(
         root,
-        key=("app-shell-scroll", id(view_state), "parameter-geometry"),
+        key=("app-shell-scroll", id(view_state), "refine-basic"),
         handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
-            parameter_geometry_canvas,
+            refine_basic_canvas,
             pointer_x=pointer_x,
             pointer_y=pointer_y,
             event=event,
@@ -342,45 +417,191 @@ def create_app_shell(
     )
     _register_pointer_mousewheel_handler(
         root,
-        key=("app-shell-scroll", id(view_state), "parameter-structure"),
+        key=("app-shell-scroll", id(view_state), "refine-advanced"),
         handler=lambda *, pointer_x, pointer_y, event: _scroll_canvas_if_pointer_inside(
-            parameter_structure_canvas,
+            refine_advanced_canvas,
             pointer_x=pointer_x,
             pointer_y=pointer_y,
             event=event,
         ),
     )
 
-    control_tab_var = tk.StringVar(value="parameters")
-    parameter_tab_var = tk.StringVar(value="geometry")
+    control_tab_var = tk.StringVar(value="setup")
+    parameter_tab_var = tk.StringVar(value="basic")
     _bind_notebook_state(
         controls_notebook,
         control_tab_var,
         {
-            "workspace": workspace_tab,
-            "fit": fit_tab,
-            "parameters": parameters_tab,
-            "analysis": analysis_tab,
+            "setup": setup_tab,
+            "match": match_tab,
+            "refine": refine_tab,
+            "analyze": analyze_tab,
+            "help": help_tab,
         },
     )
     _bind_notebook_state(
         parameter_notebook,
         parameter_tab_var,
         {
-            "geometry": parameter_geometry_tab,
-            "structure": parameter_structure_tab,
+            "basic": refine_basic_tab,
+            "advanced": refine_advanced_tab,
         },
     )
 
-    fit_actions_frame = ttk.LabelFrame(fit_body, text="Geometry Tools")
-    fit_actions_frame.pack(fill=tk.X, padx=5, pady=5)
+    def _add_match_guidance(parent: tk.Misc, text: str) -> None:
+        ttk.Label(
+            parent,
+            text=text,
+            justify=tk.LEFT,
+            wraplength=520,
+        ).pack(fill=tk.X, padx=6, pady=(4, 6))
 
-    analysis_controls_frame = ttk.Frame(analysis_tab, padding=(10, 10, 10, 0))
+    match_backgrounds_frame = ttk.LabelFrame(
+        match_body,
+        text="Step 1. Choose Fit Backgrounds",
+    )
+    match_backgrounds_frame.pack(fill=tk.X, padx=5, pady=5)
+    _add_match_guidance(
+        match_backgrounds_frame,
+        "Choose which loaded backgrounds participate in geometry fitting. "
+        "Confirm per-image theta values in Setup before running a fit.",
+    )
+
+    match_peak_tools_frame = ttk.LabelFrame(
+        match_body,
+        text="Step 2. Choose or Place Peaks",
+    )
+    match_peak_tools_frame.pack(fill=tk.X, padx=5, pady=5)
+    _add_match_guidance(
+        match_peak_tools_frame,
+        "Use image-pick, HKL lookup, and manual placement tools to define "
+        "peak correspondences before fitting geometry.",
+    )
+
+    match_parameter_frame = ttk.LabelFrame(
+        match_body,
+        text="Step 3. Choose What Can Move",
+    )
+    match_parameter_frame.pack(fill=tk.X, padx=5, pady=5)
+    _add_match_guidance(
+        match_parameter_frame,
+        "Enable only the geometry parameters that should move during fitting, "
+        "then tighten or relax the allowed deviation constraints.",
+    )
+
+    match_run_frame = ttk.LabelFrame(
+        match_body,
+        text="Step 4. Run Geometry Fit",
+    )
+    match_run_frame.pack(fill=tk.X, padx=5, pady=5)
+    _add_match_guidance(
+        match_run_frame,
+        "Run the least-squares geometry fit after backgrounds, peaks, and "
+        "movable parameters are set.",
+    )
+
+    match_results_frame = ttk.LabelFrame(
+        match_body,
+        text="Step 5. Review Results",
+    )
+    match_results_frame.pack(fill=tk.X, padx=5, pady=5)
+    match_results_var = tk.StringVar(
+        value="Fit results will appear here and in the status panel after a geometry fit."
+    )
+    match_results_label = ttk.Label(
+        match_results_frame,
+        textvariable=match_results_var,
+        justify=tk.LEFT,
+        anchor=tk.W,
+        wraplength=520,
+    )
+    match_results_label.pack(fill=tk.X, padx=6, pady=(4, 6))
+
+    analysis_controls_frame = ttk.Frame(analyze_tab, padding=(10, 10, 10, 0))
     analysis_controls_frame.pack(side=tk.TOP, fill=tk.X)
-    analysis_views_frame = ttk.LabelFrame(analysis_controls_frame, text="Views")
+    analysis_views_frame = ttk.LabelFrame(analysis_controls_frame, text="View Options")
     analysis_views_frame.pack(fill=tk.X, pady=(0, 5))
     analysis_exports_frame = ttk.LabelFrame(analysis_controls_frame, text="Exports")
     analysis_exports_frame.pack(fill=tk.X)
+
+    app_version_text = _get_app_version_text()
+    config_dir_text = str(get_config_dir())
+
+    help_body = ttk.Frame(help_tab, padding=10)
+    help_body.pack(fill=tk.BOTH, expand=True)
+    help_quickstart_frame = ttk.LabelFrame(help_body, text="Quick Start", padding=10)
+    help_quickstart_frame.pack(fill=tk.X)
+    ttk.Label(
+        help_quickstart_frame,
+        text="1. Setup: load backgrounds and choose the primary CIF.",
+        justify=tk.LEFT,
+        wraplength=420,
+    ).pack(anchor=tk.W)
+    ttk.Label(
+        help_quickstart_frame,
+        text="2. Match: choose backgrounds, pick peaks, and run geometry fitting.",
+        justify=tk.LEFT,
+        wraplength=420,
+    ).pack(anchor=tk.W, pady=(4, 0))
+    ttk.Label(
+        help_quickstart_frame,
+        text="3. Refine: adjust core geometry and lattice values first, then open advanced controls only as needed.",
+        justify=tk.LEFT,
+        wraplength=420,
+    ).pack(anchor=tk.W, pady=(4, 0))
+    ttk.Label(
+        help_quickstart_frame,
+        text="4. Analyze: compare detector, caked, and 1D views to verify the model.",
+        justify=tk.LEFT,
+        wraplength=420,
+    ).pack(anchor=tk.W, pady=(4, 0))
+    ttk.Label(
+        help_quickstart_frame,
+        text="Modes: manual placement and HKL image-pick show their next action in the Current Mode panel.",
+        justify=tk.LEFT,
+        wraplength=420,
+    ).pack(anchor=tk.W, pady=(8, 0))
+
+    help_project_frame = ttk.LabelFrame(help_body, text="Project", padding=10)
+    help_project_frame.pack(fill=tk.X, pady=(10, 0))
+    ttk.Label(
+        help_project_frame,
+        text=f"Version: {app_version_text}",
+    ).pack(anchor=tk.W, pady=(0, 8))
+    ttk.Label(
+        help_project_frame,
+        text="GitHub repository:",
+    ).pack(anchor=tk.W)
+    ttk.Button(
+        help_project_frame,
+        text="Open GitHub Page",
+        command=lambda: _open_external_link(_PROJECT_GITHUB_URL),
+    ).pack(anchor=tk.W, pady=(6, 4))
+    ttk.Label(
+        help_project_frame,
+        text=_PROJECT_GITHUB_URL,
+    ).pack(anchor=tk.W)
+
+    help_config_frame = ttk.LabelFrame(help_body, text="Configuration", padding=10)
+    help_config_frame.pack(fill=tk.X, pady=(10, 0))
+    ttk.Label(
+        help_config_frame,
+        text="Active config directory:",
+    ).pack(anchor=tk.W)
+    ttk.Label(
+        help_config_frame,
+        text=config_dir_text,
+        justify=tk.LEFT,
+        wraplength=420,
+    ).pack(anchor=tk.W, pady=(4, 0))
+
+    help_contact_frame = ttk.LabelFrame(help_body, text="Contact", padding=10)
+    help_contact_frame.pack(fill=tk.X, pady=(10, 0))
+    ttk.Label(help_contact_frame, text="David Beckwitt").pack(anchor=tk.W)
+    ttk.Label(help_contact_frame, text="David.Beckwitt@proton.me").pack(
+        anchor=tk.W,
+        pady=(4, 0),
+    )
 
     status_frame = ttk.LabelFrame(root, text="Status", padding=(6, 4))
     status_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=6)
@@ -391,40 +612,70 @@ def create_app_shell(
     canvas_frame = ttk.Frame(fig_frame)
     canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-    left_col = ttk.Frame(parameter_geometry_body, padding=10)
+    left_col = ttk.Frame(refine_basic_body, padding=10)
     left_col.pack(fill=tk.BOTH, expand=True)
 
-    right_col = ttk.Frame(parameter_structure_body, padding=10)
+    right_col = ttk.Frame(refine_advanced_body, padding=10)
     right_col.pack(fill=tk.BOTH, expand=True)
 
-    plot_frame_1d = ttk.Frame(analysis_tab, padding=(10, 8, 10, 10))
+    plot_frame_1d = ttk.Frame(analyze_tab, padding=(10, 8, 10, 10))
     plot_frame_1d.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     view_state.main_pane = main_pane
     view_state.controls_panel = controls_panel
     view_state.figure_panel = figure_panel
+    view_state.session_summary_frame = session_summary_frame
+    view_state.session_summary_var = session_summary_var
+    view_state.session_summary_label = session_summary_label
+    view_state.mode_banner_frame = mode_banner_frame
+    view_state.mode_banner_title_var = mode_banner_title_var
+    view_state.mode_banner_title_label = mode_banner_title_label
+    view_state.mode_banner_detail_var = mode_banner_detail_var
+    view_state.mode_banner_detail_label = mode_banner_detail_label
     view_state.run_status_frame = run_status_frame
     view_state.run_status_var = run_status_var
     view_state.run_status_label = run_status_label
     view_state.controls_notebook = controls_notebook
-    view_state.workspace_tab = workspace_tab
-    view_state.fit_tab = fit_tab
-    view_state.parameters_tab = parameters_tab
-    view_state.analysis_tab = analysis_tab
-    view_state.workspace_body = workspace_body
-    view_state.workspace_canvas = workspace_canvas
-    view_state.fit_body = fit_body
-    view_state.fit_canvas = fit_canvas
+    view_state.setup_tab = setup_tab
+    view_state.match_tab = match_tab
+    view_state.refine_tab = refine_tab
+    view_state.analyze_tab = analyze_tab
+    view_state.workspace_tab = setup_tab
+    view_state.fit_tab = match_tab
+    view_state.parameters_tab = refine_tab
+    view_state.analysis_tab = analyze_tab
+    view_state.help_tab = help_tab
+    view_state.setup_body = setup_body
+    view_state.setup_canvas = setup_canvas
+    view_state.match_body = match_body
+    view_state.match_canvas = match_canvas
+    view_state.refine_basic_tab = refine_basic_tab
+    view_state.refine_advanced_tab = refine_advanced_tab
+    view_state.refine_basic_body = refine_basic_body
+    view_state.refine_basic_canvas = refine_basic_canvas
+    view_state.refine_advanced_body = refine_advanced_body
+    view_state.refine_advanced_canvas = refine_advanced_canvas
+    view_state.workspace_body = setup_body
+    view_state.workspace_canvas = setup_canvas
+    view_state.fit_body = match_body
+    view_state.fit_canvas = match_canvas
     view_state.parameter_notebook = parameter_notebook
-    view_state.parameter_geometry_tab = parameter_geometry_tab
-    view_state.parameter_structure_tab = parameter_structure_tab
-    view_state.parameter_geometry_body = parameter_geometry_body
-    view_state.parameter_geometry_canvas = parameter_geometry_canvas
-    view_state.parameter_structure_body = parameter_structure_body
-    view_state.parameter_structure_canvas = parameter_structure_canvas
+    view_state.parameter_geometry_tab = refine_basic_tab
+    view_state.parameter_structure_tab = refine_advanced_tab
+    view_state.parameter_geometry_body = refine_basic_body
+    view_state.parameter_geometry_canvas = refine_basic_canvas
+    view_state.parameter_structure_body = refine_advanced_body
+    view_state.parameter_structure_canvas = refine_advanced_canvas
     view_state.control_tab_var = control_tab_var
     view_state.parameter_tab_var = parameter_tab_var
-    view_state.fit_actions_frame = fit_actions_frame
+    view_state.match_backgrounds_frame = match_backgrounds_frame
+    view_state.match_peak_tools_frame = match_peak_tools_frame
+    view_state.match_parameter_frame = match_parameter_frame
+    view_state.match_run_frame = match_run_frame
+    view_state.match_results_frame = match_results_frame
+    view_state.match_results_var = match_results_var
+    view_state.match_results_label = match_results_label
+    view_state.fit_actions_frame = match_peak_tools_frame
     view_state.analysis_controls_frame = analysis_controls_frame
     view_state.analysis_views_frame = analysis_views_frame
     view_state.analysis_exports_frame = analysis_exports_frame
@@ -454,6 +705,92 @@ def set_app_shell_run_status_text(
             view_state.run_status_label.configure(text=summary)
         except tk.TclError:
             return
+
+
+def set_app_shell_session_summary_text(
+    view_state: AppShellViewState,
+    text: object,
+) -> None:
+    """Update the always-visible workflow/session summary panel."""
+
+    summary = "\n".join(str(text).splitlines())
+    if view_state.session_summary_var is not None:
+        try:
+            view_state.session_summary_var.set(summary)
+            return
+        except tk.TclError:
+            pass
+    if view_state.session_summary_label is not None:
+        try:
+            view_state.session_summary_label.configure(text=summary)
+        except tk.TclError:
+            return
+
+
+def set_app_shell_mode_banner_text(
+    view_state: AppShellViewState,
+    *,
+    title: object,
+    detail: object,
+) -> None:
+    """Update the current-mode banner shown above the workflow tabs."""
+
+    title_text = " ".join(str(title).split())
+    detail_text = " ".join(str(detail).split())
+
+    if view_state.mode_banner_title_var is not None:
+        try:
+            view_state.mode_banner_title_var.set(title_text)
+        except tk.TclError:
+            pass
+    elif view_state.mode_banner_title_label is not None:
+        try:
+            view_state.mode_banner_title_label.configure(text=title_text)
+        except tk.TclError:
+            pass
+
+    if view_state.mode_banner_detail_var is not None:
+        try:
+            view_state.mode_banner_detail_var.set(detail_text)
+            return
+        except tk.TclError:
+            pass
+    if view_state.mode_banner_detail_label is not None:
+        try:
+            view_state.mode_banner_detail_label.configure(text=detail_text)
+        except tk.TclError:
+            return
+
+
+def set_match_results_text(
+    view_state: AppShellViewState,
+    text: object,
+) -> None:
+    """Update the guided-fit results summary shown in the Match tab."""
+
+    summary = " ".join(str(text).split())
+    if view_state.match_results_var is not None:
+        try:
+            view_state.match_results_var.set(summary)
+            return
+        except tk.TclError:
+            pass
+    if view_state.match_results_label is not None:
+        try:
+            view_state.match_results_label.configure(text=summary)
+        except tk.TclError:
+            return
+
+
+def set_collapsible_header_summary(
+    frame: object | None,
+    text: object,
+) -> None:
+    """Update one collapsible-frame header summary when supported."""
+
+    setter = getattr(frame, "set_header_summary", None)
+    if callable(setter):
+        setter("" if text is None else str(text))
 
 
 def _compact_status_text(text: object, *, max_chars: int = 120) -> str:
@@ -533,6 +870,20 @@ def create_status_panel(
     )
     progress_label_geometry.pack(side=tk.BOTTOM, padx=5)
 
+    ordered_structure_progressbar = ttk.Progressbar(
+        parent,
+        mode="indeterminate",
+        length=240,
+    )
+    ordered_structure_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
+
+    progress_label_ordered_structure = ConsoleStatusLabel(
+        parent,
+        name="ordered-structure",
+        max_gui_chars=110,
+    )
+    progress_label_ordered_structure.pack(side=tk.BOTTOM, padx=5)
+
     mosaic_progressbar = ttk.Progressbar(parent, mode="indeterminate", length=240)
     mosaic_progressbar.pack(side=tk.BOTTOM, padx=5, pady=(0, 2))
 
@@ -567,6 +918,8 @@ def create_status_panel(
 
     view_state.progress_label_positions = progress_label_positions
     view_state.progress_label_geometry = progress_label_geometry
+    view_state.ordered_structure_progressbar = ordered_structure_progressbar
+    view_state.progress_label_ordered_structure = progress_label_ordered_structure
     view_state.mosaic_progressbar = mosaic_progressbar
     view_state.progress_label_mosaic = progress_label_mosaic
     view_state.progress_label = progress_label
@@ -581,18 +934,30 @@ def create_workspace_panels(
 ) -> None:
     """Create and store the workspace action/background/session panel frames."""
 
-    workspace_actions_frame = ttk.LabelFrame(parent, text="Workspace Actions")
+    workspace_actions_frame = ttk.LabelFrame(parent, text="Setup Actions")
     workspace_actions_frame.pack(fill=tk.X, padx=5, pady=5)
 
-    workspace_backgrounds_frame = ttk.Frame(parent)
+    workspace_backgrounds_frame = ttk.LabelFrame(parent, text="Backgrounds")
     workspace_backgrounds_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+    workspace_inputs_frame = ttk.LabelFrame(parent, text="Input Model")
+    workspace_inputs_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
 
     workspace_session_frame = ttk.LabelFrame(parent, text="Session")
     workspace_session_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
 
+    workspace_debug_frame = CollapsibleFrame(
+        parent,
+        text="Advanced / Debug",
+        expanded=False,
+    )
+    workspace_debug_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
     view_state.workspace_actions_frame = workspace_actions_frame
     view_state.workspace_backgrounds_frame = workspace_backgrounds_frame
+    view_state.workspace_inputs_frame = workspace_inputs_frame
     view_state.workspace_session_frame = workspace_session_frame
+    view_state.workspace_debug_frame = workspace_debug_frame
 
 
 def populate_stacked_button_group(
@@ -1644,6 +2009,123 @@ def _destroy_children(parent: object | None) -> None:
             destroy()
 
 
+def create_ordered_structure_fit_panel(
+    *,
+    parent: tk.Misc,
+    view_state: OrderedStructureFitControlsViewState,
+    ordered_scale_var: Any,
+    coord_window_var: Any,
+    fit_debye_x_var: Any,
+    fit_debye_y_var: Any,
+    result_var: Any,
+    on_fit: Callable[[], None],
+    on_revert: Callable[[], None],
+    on_commit_ordered_scale: Callable[..., None],
+    on_commit_coord_window: Callable[..., None],
+) -> None:
+    """Create the ordered-structure fit panel and store widget references."""
+
+    frame = CollapsibleFrame(parent, text="Ordered Structure Fit", expanded=True)
+    frame.pack(fill=tk.X, padx=5, pady=5)
+
+    actions_frame = ttk.Frame(frame.frame)
+    actions_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+    fit_button = ttk.Button(
+        actions_frame,
+        text="Fit Ordered Structure",
+        command=on_fit,
+    )
+    fit_button.pack(side=tk.LEFT)
+    revert_button = ttk.Button(
+        actions_frame,
+        text="Revert Last Ordered Fit",
+        command=on_revert,
+        state=tk.DISABLED,
+    )
+    revert_button.pack(side=tk.LEFT, padx=(6, 0))
+
+    settings_frame = ttk.Frame(frame.frame)
+    settings_frame.pack(fill=tk.X, padx=5, pady=5)
+
+    ttk.Label(settings_frame, text="Ordered Intensity Scale").grid(
+        row=0,
+        column=0,
+        sticky=tk.W,
+        padx=(0, 6),
+        pady=(0, 4),
+    )
+    ordered_scale_entry = ttk.Entry(
+        settings_frame,
+        textvariable=ordered_scale_var,
+        width=10,
+    )
+    ordered_scale_entry.grid(row=0, column=1, sticky=tk.W, pady=(0, 4))
+    ordered_scale_entry.bind("<Return>", on_commit_ordered_scale)
+    ordered_scale_entry.bind("<FocusOut>", on_commit_ordered_scale)
+
+    ttk.Label(settings_frame, text="Coordinate Window").grid(
+        row=1,
+        column=0,
+        sticky=tk.W,
+        padx=(0, 6),
+        pady=(0, 4),
+    )
+    coord_window_entry = ttk.Entry(
+        settings_frame,
+        textvariable=coord_window_var,
+        width=10,
+    )
+    coord_window_entry.grid(row=1, column=1, sticky=tk.W, pady=(0, 4))
+    coord_window_entry.bind("<Return>", on_commit_coord_window)
+    coord_window_entry.bind("<FocusOut>", on_commit_coord_window)
+
+    fit_debye_x_checkbutton = ttk.Checkbutton(
+        settings_frame,
+        text="Fit Debye Qz",
+        variable=fit_debye_x_var,
+    )
+    fit_debye_x_checkbutton.grid(row=2, column=0, sticky=tk.W, pady=(0, 2))
+    fit_debye_y_checkbutton = ttk.Checkbutton(
+        settings_frame,
+        text="Fit Debye Qr",
+        variable=fit_debye_y_var,
+    )
+    fit_debye_y_checkbutton.grid(row=2, column=1, sticky=tk.W, pady=(0, 2))
+
+    occupancy_toggle_frame = ttk.Frame(frame.frame)
+    occupancy_toggle_frame.pack(fill=tk.X, padx=5, pady=(0, 4))
+
+    atom_toggle_frame = ttk.Frame(frame.frame)
+    atom_toggle_frame.pack(fill=tk.X, padx=5, pady=(0, 4))
+
+    result_label = ttk.Label(
+        frame.frame,
+        textvariable=result_var,
+        justify=tk.LEFT,
+        anchor=tk.W,
+        wraplength=420,
+    )
+    result_label.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+    view_state.frame = frame
+    view_state.actions_frame = actions_frame
+    view_state.fit_button = fit_button
+    view_state.revert_button = revert_button
+    view_state.settings_frame = settings_frame
+    view_state.ordered_scale_var = ordered_scale_var
+    view_state.ordered_scale_entry = ordered_scale_entry
+    view_state.coord_window_var = coord_window_var
+    view_state.coord_window_entry = coord_window_entry
+    view_state.fit_debye_x_var = fit_debye_x_var
+    view_state.fit_debye_x_checkbutton = fit_debye_x_checkbutton
+    view_state.fit_debye_y_var = fit_debye_y_var
+    view_state.fit_debye_y_checkbutton = fit_debye_y_checkbutton
+    view_state.occupancy_toggle_frame = occupancy_toggle_frame
+    view_state.atom_toggle_frame = atom_toggle_frame
+    view_state.result_var = result_var
+    view_state.result_label = result_label
+
+
 def create_stacking_parameter_panels(
     *,
     parent: tk.Misc,
@@ -1672,6 +2154,80 @@ def create_stacking_parameter_panels(
     view_state.occ_entry_frame = occ_entry_frame
     view_state.atom_site_frame = atom_site_frame
     view_state.atom_site_table_frame = atom_site_table_frame
+
+
+def rebuild_ordered_structure_fit_occupancy_controls(
+    *,
+    view_state: OrderedStructureFitControlsViewState,
+    occupancy_vars: Sequence[Any],
+    occupancy_label_text: Callable[[int], str],
+    empty_text: str = "No occupancy sites available in the active CIF.",
+) -> None:
+    """Rebuild the ordered-fit occupancy selection checkboxes."""
+
+    frame = view_state.occupancy_toggle_frame
+    _destroy_children(frame)
+    view_state.occupancy_toggle_widgets = []
+
+    if frame is None:
+        return
+
+    if not occupancy_vars:
+        label = ttk.Label(frame, text=empty_text, justify=tk.LEFT, anchor=tk.W)
+        label.pack(fill=tk.X)
+        view_state.occupancy_toggle_widgets = [label]
+        return
+
+    header = ttk.Label(frame, text="Fit Occupancies", justify=tk.LEFT, anchor=tk.W)
+    header.pack(fill=tk.X)
+    view_state.occupancy_toggle_widgets.append(header)
+    for idx, var in enumerate(occupancy_vars):
+        check = ttk.Checkbutton(
+            frame,
+            text=str(occupancy_label_text(idx)),
+            variable=var,
+        )
+        check.pack(anchor=tk.W)
+        view_state.occupancy_toggle_widgets.append(check)
+
+
+def rebuild_ordered_structure_fit_atom_coordinate_controls(
+    *,
+    view_state: OrderedStructureFitControlsViewState,
+    atom_toggle_vars: Sequence[dict[str, Any]],
+    atom_site_label_text: Callable[[int], str],
+    empty_text: str = "No atom-site fractional coordinates found in the active CIF.",
+) -> None:
+    """Rebuild the ordered-fit atom-coordinate selection checkboxes."""
+
+    frame = view_state.atom_toggle_frame
+    _destroy_children(frame)
+    view_state.atom_toggle_widgets = []
+
+    if frame is None:
+        return
+
+    if not atom_toggle_vars:
+        label = ttk.Label(frame, text=empty_text, justify=tk.LEFT, anchor=tk.W)
+        label.pack(fill=tk.X)
+        view_state.atom_toggle_widgets = [label]
+        return
+
+    header = ttk.Label(frame, text="Fit Atom Coordinates", justify=tk.LEFT, anchor=tk.W)
+    header.pack(fill=tk.X)
+    view_state.atom_toggle_widgets.append(header)
+    for idx, axis_vars in enumerate(atom_toggle_vars):
+        row = ttk.Frame(frame)
+        row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(row, text=str(atom_site_label_text(idx))).pack(side=tk.LEFT, padx=(0, 8))
+        for axis in ("x", "y", "z"):
+            check = ttk.Checkbutton(
+                row,
+                text=axis,
+                variable=axis_vars.get(axis),
+            )
+            check.pack(side=tk.LEFT, padx=(0, 6))
+            view_state.atom_toggle_widgets.append(check)
 
 
 def create_stacking_probability_sliders(
@@ -1902,8 +2458,6 @@ def create_geometry_tool_action_controls(
     *,
     parent: tk.Misc,
     view_state: GeometryToolActionsViewState,
-    on_undo_fit: Callable[[], None],
-    on_redo_fit: Callable[[], None],
     on_toggle_manual_pick: Callable[[], None],
     on_undo_manual_placement: Callable[[], None],
     on_export_manual_pairs: Callable[[], None],
@@ -1913,21 +2467,7 @@ def create_geometry_tool_action_controls(
     manual_pick_text: str = "Pick Qr Sets on Image",
     preview_exclude_text: str = "Select Qr/Qz Peaks",
 ) -> None:
-    """Create fit-history/manual-geometry action controls and store their refs."""
-
-    undo_geometry_fit_button = ttk.Button(
-        parent,
-        text="Undo Fit",
-        command=on_undo_fit,
-    )
-    undo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
-
-    redo_geometry_fit_button = ttk.Button(
-        parent,
-        text="Redo Fit",
-        command=on_redo_fit,
-    )
-    redo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+    """Create manual-geometry action controls and store their refs."""
 
     geometry_manual_pick_button_var = tk.StringVar(value=str(manual_pick_text))
     geometry_manual_pick_button = ttk.Button(
@@ -1973,8 +2513,6 @@ def create_geometry_tool_action_controls(
     )
     clear_geometry_preview_exclusions_button.pack(side=tk.TOP, padx=5, pady=2)
 
-    view_state.undo_geometry_fit_button = undo_geometry_fit_button
-    view_state.redo_geometry_fit_button = redo_geometry_fit_button
     view_state.geometry_manual_pick_button_var = geometry_manual_pick_button_var
     view_state.geometry_manual_pick_button = geometry_manual_pick_button
     view_state.geometry_manual_undo_button = geometry_manual_undo_button
@@ -1985,6 +2523,33 @@ def create_geometry_tool_action_controls(
     view_state.clear_geometry_preview_exclusions_button = (
         clear_geometry_preview_exclusions_button
     )
+
+
+def create_geometry_fit_history_controls(
+    *,
+    parent: tk.Misc,
+    view_state: GeometryToolActionsViewState,
+    on_undo_fit: Callable[[], None],
+    on_redo_fit: Callable[[], None],
+) -> None:
+    """Create geometry-fit history controls and store their refs."""
+
+    undo_geometry_fit_button = ttk.Button(
+        parent,
+        text="Undo Fit",
+        command=on_undo_fit,
+    )
+    undo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    redo_geometry_fit_button = ttk.Button(
+        parent,
+        text="Redo Fit",
+        command=on_redo_fit,
+    )
+    redo_geometry_fit_button.pack(side=tk.TOP, padx=5, pady=2)
+
+    view_state.undo_geometry_fit_button = undo_geometry_fit_button
+    view_state.redo_geometry_fit_button = redo_geometry_fit_button
 
 
 def set_geometry_tool_action_texts(
@@ -2224,7 +2789,7 @@ def create_geometry_overlay_action_controls(
 
     fit_button_mosaic = ttk.Button(
         parent,
-        text="Fit Mosaic Widths",
+        text="Fit Mosaic Shapes",
         command=on_fit_mosaic,
     )
     fit_button_mosaic.pack(side=tk.TOP, padx=5, pady=2)
@@ -2419,6 +2984,7 @@ def create_analysis_export_controls(
     on_save_snapshot: Callable[[], None],
     on_save_q_space: Callable[[], None],
     on_save_1d_grid: Callable[[], None],
+    save_1d_grid_available: bool = True,
 ) -> None:
     """Create the analysis export buttons and store their widget refs."""
 
@@ -2438,8 +3004,13 @@ def create_analysis_export_controls(
 
     save_1d_grid_button = ttk.Button(
         parent,
-        text="Save 1D Grid",
+        text=(
+            "Save 1D Grid"
+            if save_1d_grid_available
+            else "Save 1D Grid (Unavailable)"
+        ),
         command=on_save_1d_grid,
+        state=(tk.NORMAL if save_1d_grid_available else tk.DISABLED),
     )
     save_1d_grid_button.pack(side=tk.TOP, padx=5, pady=2)
 

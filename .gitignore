@@ -15,6 +15,7 @@ __pycache__/
 .pycache_check/
 .pytest_cache/
 .ruff_cache/
+.vscode/
 .tmp/
 /ig_graph.sqlite
 /ig_graph.sqlite-shm

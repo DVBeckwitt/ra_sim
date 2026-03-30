@@ -219,3 +219,37 @@ instrument:
       # Set to false to avoid numba JIT during fitting (useful if numba
       # compilation fails on your Python build).
       use_numba: true
+    mosaic_shape:
+      # Detector-shape mosaic refinement is geometry-locked and reuses the
+      # exact background bundle from the last successful geometry fit.
+      solver:
+        loss: soft_l1
+        f_scale_px: 1.0
+        max_nfev: 80
+        restarts: 2
+        restart_jitter: 0.15
+        workers: auto
+        parallel_mode: auto
+        worker_numba_threads: 0
+      roi:
+        min_total_rois: 8
+        min_per_dataset_rois: 3
+        equal_dataset_weights: true
+      preprocessing:
+        smooth_sigma_px: 1.0
+        ridge_percentile: 85.0
+    ordered_structure:
+      solver:
+        coarse_downsample_factor: 2
+        loss: soft_l1
+        f_scale: 2.0
+        coarse_max_nfev: 15
+        polish_max_nfev: 10
+        restarts: 2
+      mask:
+        max_reflections: 24
+        tube_width_scale: 1.0
+        specular_width_scale: 2.5
+        equal_peak_weights: true
+      defaults:
+        coord_window: 0.02

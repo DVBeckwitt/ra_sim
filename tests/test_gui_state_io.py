@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 
@@ -64,6 +66,52 @@ def test_load_gui_state_file_rejects_wrong_type(tmp_path):
 
     with pytest.raises(ValueError, match="Unsupported GUI state file type"):
         load_gui_state_file(file_path)
+
+
+def test_load_gui_state_file_accepts_legacy_raw_snapshot(tmp_path):
+    file_path = tmp_path / "legacy_state.json"
+    file_path.write_text(
+        json.dumps(
+            {
+                "variables": {"gamma_var": 1.25},
+                "files": {"background_files": ["a.osc"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_gui_state_file(file_path)
+
+    assert loaded["type"] == GUI_STATE_FILE_TYPE
+    assert loaded["version"] == 0
+    assert loaded["state"]["variables"]["gamma_var"] == 1.25
+    assert loaded["state"]["files"]["background_files"] == ["a.osc"]
+
+
+def test_load_gui_state_file_accepts_legacy_wrapper_without_type(tmp_path):
+    file_path = tmp_path / "legacy_wrapped_state.json"
+    file_path.write_text(
+        json.dumps(
+            {
+                "saved_at": "2025-01-01T00:00:00",
+                "metadata": {"entrypoint": "main.py"},
+                "state": {
+                    "variables": {"show_1d_var": True},
+                    "flags": {"background_visible": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_gui_state_file(file_path)
+
+    assert loaded["type"] == GUI_STATE_FILE_TYPE
+    assert loaded["version"] == 0
+    assert loaded["saved_at"] == "2025-01-01T00:00:00"
+    assert loaded["metadata"]["entrypoint"] == "main.py"
+    assert loaded["state"]["variables"]["show_1d_var"] is True
+    assert loaded["state"]["flags"]["background_visible"] is False
 
 
 def test_build_geometry_placements_payload_normalizes_nested_values(tmp_path):

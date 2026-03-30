@@ -25,6 +25,60 @@ def canonicalize_gui_state_background_path(path: object) -> str:
     return os.path.normcase(str(Path(str(path)).expanduser().resolve(strict=False)))
 
 
+def _coerce_gui_state_bool(value: object, *, fallback: bool) -> bool:
+    """Return a compatibility-safe boolean restored from saved GUI state."""
+
+    if value is None:
+        return bool(fallback)
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return bool(int(value))
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if not np.isfinite(numeric):
+            return bool(fallback)
+        return bool(int(round(numeric)))
+
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return bool(fallback)
+
+
+def _coerce_gui_state_rotation_k(value: object, *, fallback: int) -> int:
+    """Return one restored background rotation quarter-turn count."""
+
+    numeric_value: int | None = None
+    if value is None:
+        numeric_value = None
+    elif isinstance(value, (int, np.integer)):
+        numeric_value = int(value)
+    elif isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if np.isfinite(numeric):
+            numeric_value = int(round(numeric))
+    else:
+        text = str(value).strip()
+        if text:
+            try:
+                numeric_value = int(text)
+            except Exception:
+                try:
+                    parsed = float(text)
+                except Exception:
+                    numeric_value = None
+                else:
+                    if np.isfinite(parsed):
+                        numeric_value = int(round(parsed))
+
+    if numeric_value is None:
+        numeric_value = int(fallback)
+    return int(numeric_value) % 4
+
+
 def background_files_match_loaded_state(
     file_paths: list[str],
     *,
@@ -396,62 +450,78 @@ def apply_gui_state_flags(
     """Apply saved non-Tk GUI flags and return the updated flag state."""
 
     updated_flags = {
-        "background_visible": bool(current_flags.get("background_visible", False)),
-        "background_backend_rotation_k": int(
-            current_flags.get("background_backend_rotation_k", 0)
+        "background_visible": _coerce_gui_state_bool(
+            current_flags.get("background_visible", False),
+            fallback=False,
         ),
-        "background_backend_flip_x": bool(
-            current_flags.get("background_backend_flip_x", False)
+        "background_backend_rotation_k": _coerce_gui_state_rotation_k(
+            current_flags.get("background_backend_rotation_k", 0),
+            fallback=0,
         ),
-        "background_backend_flip_y": bool(
-            current_flags.get("background_backend_flip_y", False)
+        "background_backend_flip_x": _coerce_gui_state_bool(
+            current_flags.get("background_backend_flip_x", False),
+            fallback=False,
         ),
-        "background_limits_user_override": bool(
-            current_flags.get("background_limits_user_override", False)
+        "background_backend_flip_y": _coerce_gui_state_bool(
+            current_flags.get("background_backend_flip_y", False),
+            fallback=False,
         ),
-        "simulation_limits_user_override": bool(
-            current_flags.get("simulation_limits_user_override", False)
+        "background_limits_user_override": _coerce_gui_state_bool(
+            current_flags.get("background_limits_user_override", False),
+            fallback=False,
         ),
-        "scale_factor_user_override": bool(
-            current_flags.get("scale_factor_user_override", False)
+        "simulation_limits_user_override": _coerce_gui_state_bool(
+            current_flags.get("simulation_limits_user_override", False),
+            fallback=False,
+        ),
+        "scale_factor_user_override": _coerce_gui_state_bool(
+            current_flags.get("scale_factor_user_override", False),
+            fallback=False,
         ),
     }
     if not isinstance(flags, Mapping):
         return updated_flags
 
-    desired_background_visible = bool(
-        flags.get("background_visible", updated_flags["background_visible"])
+    desired_background_visible = _coerce_gui_state_bool(
+        flags.get("background_visible", updated_flags["background_visible"]),
+        fallback=bool(updated_flags["background_visible"]),
     )
     if desired_background_visible != bool(updated_flags["background_visible"]):
         toggle_background()
         updated_flags["background_visible"] = desired_background_visible
 
-    updated_flags["background_backend_rotation_k"] = int(
+    updated_flags["background_backend_rotation_k"] = _coerce_gui_state_rotation_k(
         flags.get(
             "background_backend_rotation_k",
             updated_flags["background_backend_rotation_k"],
-        )
-    ) % 4
-    updated_flags["background_backend_flip_x"] = bool(
-        flags.get("background_backend_flip_x", updated_flags["background_backend_flip_x"])
+        ),
+        fallback=int(updated_flags["background_backend_rotation_k"]),
     )
-    updated_flags["background_backend_flip_y"] = bool(
-        flags.get("background_backend_flip_y", updated_flags["background_backend_flip_y"])
+    updated_flags["background_backend_flip_x"] = _coerce_gui_state_bool(
+        flags.get("background_backend_flip_x", updated_flags["background_backend_flip_x"]),
+        fallback=bool(updated_flags["background_backend_flip_x"]),
     )
-    updated_flags["background_limits_user_override"] = bool(
+    updated_flags["background_backend_flip_y"] = _coerce_gui_state_bool(
+        flags.get("background_backend_flip_y", updated_flags["background_backend_flip_y"]),
+        fallback=bool(updated_flags["background_backend_flip_y"]),
+    )
+    updated_flags["background_limits_user_override"] = _coerce_gui_state_bool(
         flags.get(
             "background_limits_user_override",
             updated_flags["background_limits_user_override"],
-        )
+        ),
+        fallback=bool(updated_flags["background_limits_user_override"]),
     )
-    updated_flags["simulation_limits_user_override"] = bool(
+    updated_flags["simulation_limits_user_override"] = _coerce_gui_state_bool(
         flags.get(
             "simulation_limits_user_override",
             updated_flags["simulation_limits_user_override"],
-        )
+        ),
+        fallback=bool(updated_flags["simulation_limits_user_override"]),
     )
-    updated_flags["scale_factor_user_override"] = bool(
-        flags.get("scale_factor_user_override", updated_flags["scale_factor_user_override"])
+    updated_flags["scale_factor_user_override"] = _coerce_gui_state_bool(
+        flags.get("scale_factor_user_override", updated_flags["scale_factor_user_override"]),
+        fallback=bool(updated_flags["scale_factor_user_override"]),
     )
     return updated_flags
 
@@ -518,6 +588,61 @@ def apply_gui_state_geometry(
         "selected_hkl_target": updated_selected_hkl_target,
         "warnings": warnings,
     }
+
+
+def geometry_state_requires_visible_background(
+    geometry_state: Mapping[str, object] | None,
+    *,
+    geometry_q_group_key_from_jsonable: Callable[
+        [object], tuple[object, ...] | None
+    ],
+) -> bool:
+    """Return whether restored geometry state should force the background visible."""
+
+    if not isinstance(geometry_state, Mapping):
+        return False
+
+    saved_rows = geometry_state.get("q_group_rows", [])
+    if not isinstance(saved_rows, list):
+        return False
+
+    for row in saved_rows:
+        if not isinstance(row, Mapping):
+            continue
+        if not bool(row.get("included", True)):
+            continue
+        if geometry_q_group_key_from_jsonable(row.get("key")) is None:
+            continue
+        return True
+    return False
+
+
+def apply_geometry_state_background_view_compatibility(
+    geometry_state: Mapping[str, object] | None,
+    *,
+    geometry_q_group_key_from_jsonable: Callable[
+        [object], tuple[object, ...] | None
+    ],
+    show_caked_2d_var: object | None,
+    background_visible: bool,
+    toggle_background: Callable[[], None],
+) -> bool:
+    """Ensure imported Qr/Qz selections reopen the detector-background 2D view."""
+
+    if not geometry_state_requires_visible_background(
+        geometry_state,
+        geometry_q_group_key_from_jsonable=geometry_q_group_key_from_jsonable,
+    ):
+        return False
+
+    if show_caked_2d_var is not None:
+        try:
+            show_caked_2d_var.set(False)
+        except Exception:
+            pass
+    if not bool(background_visible):
+        toggle_background()
+    return True
 
 
 def build_gui_state_import_summary(warnings: Sequence[str]) -> str:

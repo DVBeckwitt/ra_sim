@@ -173,6 +173,9 @@ fit_center_y_var = _PlaceholderVar(False)
 
 zb_var = _PlaceholderVar(0.0)
 zs_var = _PlaceholderVar(0.0)
+sample_width_var = _PlaceholderVar(0.0)
+sample_length_var = _PlaceholderVar(0.0)
+sample_depth_var = _PlaceholderVar(0.0)
 theta_initial_var = _PlaceholderVar(0.0)
 chi_var = _PlaceholderVar(0.0)
 cor_angle_var = _PlaceholderVar(0.0)
@@ -188,6 +191,7 @@ debye_y_var = _PlaceholderVar(0.0)
 lambda_ = 0.0
 psi = 0.0
 n2 = 0.0
+pixel_size_m = 0.0
 
 psi_z_var, psi_z_scale = make_slider(
     "Goniometer Axis Yaw (about z)",
@@ -294,6 +298,9 @@ def _geometry_fit_runtime_values() -> gui_geometry_fit.GeometryFitRuntimeValueCa
                 center_y_var=center_y_var,
                 debye_x_var=debye_x_var,
                 debye_y_var=debye_y_var,
+                sample_width_var=sample_width_var,
+                sample_length_var=sample_length_var,
+                sample_depth_var=sample_depth_var,
                 geometry_theta_offset_var=geometry_theta_offset_var,
                 current_background_index=lambda: current_background_index,
                 geometry_fit_uses_shared_theta_offset=_geometry_fit_uses_shared_theta_offset,
@@ -301,6 +308,7 @@ def _geometry_fit_runtime_values() -> gui_geometry_fit.GeometryFitRuntimeValueCa
                 background_theta_for_index=_background_theta_for_index,
                 build_mosaic_params=_build_mosaic_params,
                 current_optics_mode_flag=_current_optics_mode_flag,
+                pixel_size_value=float(pixel_size_m),
                 lambda_value=lambda_,
                 psi=psi,
                 n2=n2,

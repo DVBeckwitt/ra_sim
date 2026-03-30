@@ -611,6 +611,7 @@ def test_should_collect_hit_tables_when_manual_geometry_overlay_is_visible() -> 
     assert mg.should_collect_hit_tables_for_update(
         background_visible=True,
         current_background_index=2,
+        skip_preview_once=False,
         hkl_pick_armed=False,
         selected_hkl_target=None,
         selected_peak_record=None,
@@ -626,6 +627,7 @@ def test_should_not_collect_hit_tables_for_hidden_manual_geometry_overlay() -> N
     assert not mg.should_collect_hit_tables_for_update(
         background_visible=False,
         current_background_index=0,
+        skip_preview_once=False,
         hkl_pick_armed=False,
         selected_hkl_target=None,
         selected_peak_record=None,
@@ -634,6 +636,22 @@ def test_should_not_collect_hit_tables_for_hidden_manual_geometry_overlay() -> N
         current_manual_pick_background_image=lambda: object(),
         geometry_manual_pairs_for_index=lambda _idx: [{"hkl": (1, 0, 2)}],
         geometry_manual_pick_session_active=lambda: False,
+    )
+
+
+def test_should_not_collect_hit_tables_when_preview_skip_once_is_requested() -> None:
+    assert not mg.should_collect_hit_tables_for_update(
+        background_visible=True,
+        current_background_index=2,
+        skip_preview_once=True,
+        hkl_pick_armed=False,
+        selected_hkl_target=None,
+        selected_peak_record=None,
+        geometry_q_group_refresh_requested=False,
+        live_geometry_preview_enabled=lambda: True,
+        current_manual_pick_background_image=lambda: object(),
+        geometry_manual_pairs_for_index=lambda idx: [{"hkl": (1, 0, 2)}] if int(idx) == 2 else [],
+        geometry_manual_pick_session_active=lambda: True,
     )
 
 

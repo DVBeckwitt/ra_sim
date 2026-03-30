@@ -151,6 +151,7 @@ def _make_runtime_action_execution_bindings(tmp_path, progress_texts, cmd_events
         update_manual_pick_button_label=lambda: None,
         capture_undo_state=lambda: {},
         push_undo_state=lambda state: None,
+        replace_dataset_cache=lambda payload: None,
         request_preview_skip_once=lambda: None,
         schedule_update=lambda: None,
         draw_overlay_records=lambda records, marker_limit: None,
@@ -244,7 +245,7 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
 
     prepared = result.prepared_run
     assert prepared.fit_params["theta_offset"] == 0.5
-    assert prepared.fit_params["theta_initial"] == 2.5
+    assert prepared.fit_params["theta_initial"] == 2.0
     assert prepared.selected_background_indices == [0, 1, 2]
     assert prepared.background_theta_values == [1.0, 2.0, 3.0]
     assert prepared.joint_background_mode is True
@@ -280,6 +281,19 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
         ),
     ]
     assert prepared.max_display_markers == 150
+    assert prepared.geometry_runtime_cfg == {
+        "bounds": {"gamma": [0.0, 1.0]},
+        "solver": {
+            "workers": 1,
+            "parallel_mode": "off",
+            "worker_numba_threads": 1,
+            "stagnation_probe": False,
+            "stagnation_probe_pairwise": False,
+            "stagnation_probe_random_directions": 0,
+        },
+        "use_numba": False,
+        "identifiability": {"enabled": False},
+    }
     assert [entry["dataset_index"] for entry in prepared.dataset_infos] == [1, 0, 2]
     assert prepared.current_dataset["dataset_index"] == 1
 
@@ -287,11 +301,11 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
     assert calls["theta"] == [{"trigger_update": False, "sync_live_theta": True}]
     assert calls["ensure_caked"] == 1
     assert calls["datasets"] == [
-        (1, 2.0, 2.5, 0.5, {"mode": "auto"}),
-        (0, 1.0, 2.5, 0.5, {"mode": "auto"}),
-        (2, 3.0, 2.5, 0.5, {"mode": "auto"}),
+        (1, 2.0, 2.0, 0.5, {"mode": "auto"}),
+        (0, 1.0, 2.0, 0.5, {"mode": "auto"}),
+        (2, 3.0, 2.0, 0.5, {"mode": "auto"}),
     ]
-    assert calls["runtime_cfg"] == [{"theta_initial": 2.5, "theta_offset": 0.5}]
+    assert calls["runtime_cfg"] == [{"theta_initial": 2.0, "theta_offset": 0.5}]
 
 
 def test_prepare_geometry_fit_run_rejects_selection_without_active_background() -> None:
@@ -596,6 +610,9 @@ def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() 
             psi_z_var=_DummyVar(0.7),
             chi_var=_DummyVar(0.5),
             cor_angle_var=_DummyVar(0.6),
+            sample_width_var=_DummyVar(0.01),
+            sample_length_var=_DummyVar(0.02),
+            sample_depth_var=_DummyVar(0.003),
             gamma_var=_DummyVar(0.8),
             Gamma_var=_DummyVar(0.9),
             corto_detector_var=_DummyVar(1.0),
@@ -619,6 +636,7 @@ def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() 
             lambda_value=1.54,
             psi=12.0,
             n2=1.7,
+            pixel_size_value=1.2e-4,
         )
     )
 
@@ -777,7 +795,13 @@ def test_build_runtime_geometry_fit_config_factory_reads_runtime_constraint_valu
     runtime_cfg = factory(["gamma"], {"gamma": 0.6, "a": 4.1})
 
     assert runtime_cfg == {
-        "solver": {"loss": "soft_l1"},
+        "solver": {
+            "loss": "soft_l1",
+            "workers": 1,
+            "parallel_mode": "off",
+            "worker_numba_threads": 1,
+        },
+        "use_numba": False,
         "bounds": {"gamma": [0.35, 0.85]},
         "priors": {"gamma": {"center": 0.6, "sigma": 0.13125}},
     }
@@ -1013,6 +1037,7 @@ def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
         update_manual_pick_button_label="update-manual-pick",
         capture_undo_state="capture-undo",
         push_undo_state="push-undo",
+        replace_dataset_cache="replace-dataset-cache",
         request_preview_skip_once="request-skip",
         schedule_update="schedule-update",
         draw_overlay_records="draw-overlay",
@@ -1071,6 +1096,7 @@ def test_build_runtime_geometry_fit_action_bindings_composes_helper_bundles(
                 "update_manual_pick_button_label": "update-manual-pick",
                 "capture_undo_state": "capture-undo",
                 "push_undo_state": "push-undo",
+                "replace_dataset_cache": "replace-dataset-cache",
                 "request_preview_skip_once": "request-skip",
                 "schedule_update": "schedule-update",
                 "draw_overlay_records": "draw-overlay",
@@ -1145,6 +1171,7 @@ def test_make_runtime_geometry_fit_action_bindings_factory_reads_live_values(
         update_manual_pick_button_label="update-manual-pick",
         capture_undo_state="capture-undo",
         push_undo_state="push-undo",
+        replace_dataset_cache="replace-dataset-cache",
         request_preview_skip_once="request-skip",
         schedule_update="schedule-update",
         draw_overlay_records="draw-overlay",
@@ -1263,8 +1290,15 @@ def test_write_geometry_fit_run_start_log_emits_prepared_prelude() -> None:
     ]
 
 
-def test_build_geometry_fit_solver_request_uses_prepared_run_payloads() -> None:
+def test_build_geometry_fit_solver_request_uses_prepared_run_payloads(
+    monkeypatch,
+) -> None:
     prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=True)
+    monkeypatch.setattr(
+        geometry_fit,
+        "apply_geometry_fit_runtime_safety_overrides",
+        lambda cfg, **kwargs: (dict(cfg), None),
+    )
 
     request = geometry_fit.build_geometry_fit_solver_request(
         prepared_run=prepared_run,
@@ -1284,6 +1318,225 @@ def test_build_geometry_fit_solver_request_uses_prepared_run_payloads() -> None:
         {"dataset_index": 1, "theta_initial": 4.0},
     ]
     assert request.refinement_config == {"bounds": {"gamma": [0.0, 1.0]}}
+    assert request.runtime_safety_note is None
+
+
+def test_apply_geometry_fit_runtime_safety_overrides_for_windows_python_313() -> None:
+    runtime_cfg, note = geometry_fit.apply_geometry_fit_runtime_safety_overrides(
+        {
+            "bounds": {"gamma": [0.0, 1.0]},
+            "solver": {
+                "workers": "auto",
+                "parallel_mode": "auto",
+                "worker_numba_threads": 0,
+            },
+            "use_numba": True,
+        },
+        platform_name="nt",
+        version_info=(3, 13, 0),
+        env={},
+    )
+
+    assert runtime_cfg == {
+        "bounds": {"gamma": [0.0, 1.0]},
+        "solver": {
+            "workers": 1,
+            "parallel_mode": "off",
+            "worker_numba_threads": 1,
+        },
+        "use_numba": False,
+    }
+    assert note is not None
+
+
+def test_apply_geometry_fit_runtime_safety_overrides_honors_opt_out_env() -> None:
+    runtime_cfg, note = geometry_fit.apply_geometry_fit_runtime_safety_overrides(
+        {
+            "solver": {
+                "workers": "auto",
+                "parallel_mode": "auto",
+            },
+            "use_numba": True,
+        },
+        platform_name="nt",
+        version_info=(3, 13, 0),
+        env={"RA_SIM_ALLOW_UNSAFE_GEOMETRY_FIT_RUNTIME": "1"},
+    )
+
+    assert runtime_cfg == {
+        "solver": {
+            "workers": "auto",
+            "parallel_mode": "auto",
+        },
+        "use_numba": True,
+    }
+    assert note is None
+
+
+def test_solve_geometry_fit_request_forwards_status_callback_when_supported() -> None:
+    prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=False)
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["gamma", "a"],
+        solver_inputs=postprocess_config.solver_inputs,
+    )
+    events: list[object] = []
+
+    def _solve_fit(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks,
+        var_names,
+        *,
+        pixel_tol,
+        experimental_image,
+        dataset_specs,
+        refinement_config,
+        status_callback,
+    ):
+        status_callback("solver-stage")
+        events.append(
+            {
+                "miller": miller,
+                "intensities": intensities,
+                "image_size": image_size,
+                "params": dict(params),
+                "measured_peaks": list(measured_peaks),
+                "var_names": list(var_names),
+                "pixel_tol": pixel_tol,
+                "experimental_image": experimental_image,
+                "dataset_specs": dataset_specs,
+                "refinement_config": dict(refinement_config),
+            }
+        )
+        return "solver-result"
+
+    result = geometry_fit.solve_geometry_fit_request(
+        request,
+        solve_fit=_solve_fit,
+        status_callback=lambda text: events.append(("status", text)),
+    )
+
+    assert result == "solver-result"
+    assert events == [
+        ("status", "solver-stage"),
+        {
+            "miller": "miller-data",
+            "intensities": "intensity-data",
+            "image_size": 512,
+            "params": {"theta_initial": 3.0, "theta_offset": 0.0},
+            "measured_peaks": [{"x": 1.0, "y": 2.0}],
+            "var_names": ["gamma", "a"],
+            "pixel_tol": float("inf"),
+            "experimental_image": "fit-image",
+            "dataset_specs": None,
+            "refinement_config": {
+                "bounds": {"gamma": [0.0, 1.0]},
+                "use_numba": False,
+                "solver": {
+                    "parallel_mode": "off",
+                    "workers": 1,
+                    "worker_numba_threads": 1,
+                },
+            },
+        },
+    ]
+
+
+def test_apply_joint_geometry_fit_runtime_safety_overrides_only_changes_joint_runs() -> None:
+    base_cfg = {
+        "solver": {
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
+            "restarts": 4,
+            "stagnation_probe": True,
+            "stagnation_probe_pairwise": True,
+            "stagnation_probe_random_directions": 2,
+        },
+        "identifiability": {"enabled": True},
+        "use_numba": True,
+        "bounds": {"gamma": [0.0, 1.0]},
+    }
+
+    unchanged = geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+        base_cfg,
+        joint_background_mode=False,
+    )
+    changed = geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+        base_cfg,
+        joint_background_mode=True,
+    )
+
+    assert unchanged == base_cfg
+    assert changed == {
+        "solver": {
+            "workers": 1,
+            "parallel_mode": "off",
+            "worker_numba_threads": 1,
+            "restarts": 1,
+            "stagnation_probe": False,
+            "stagnation_probe_pairwise": False,
+            "stagnation_probe_random_directions": 0,
+        },
+        "identifiability": {"enabled": False},
+        "use_numba": False,
+        "bounds": {"gamma": [0.0, 1.0]},
+    }
+    assert base_cfg["solver"]["workers"] == "auto"
+    assert base_cfg["identifiability"]["enabled"] is True
+
+
+def test_geometry_fit_dataset_cache_helpers_copy_and_validate_dataset_bundle() -> None:
+    prepared_run, _postprocess_config = _make_prepared_run(joint_background_mode=True)
+
+    payload = geometry_fit.build_geometry_fit_dataset_cache_payload(
+        prepared_run,
+        current_background_index=1,
+    )
+
+    assert payload == {
+        "selected_background_indices": [0, 1],
+        "current_background_index": 1,
+        "joint_background_mode": True,
+        "background_theta_values": [3.0, 4.0],
+        "dataset_specs": [
+            {"dataset_index": 0, "theta_initial": 3.0},
+            {"dataset_index": 1, "theta_initial": 4.0},
+        ],
+    }
+    assert (
+        geometry_fit.geometry_fit_dataset_cache_stale_reason(
+            payload,
+            selected_background_indices=[0, 1],
+            current_background_index=1,
+            joint_background_mode=True,
+            background_theta_values=[3.0, 4.0],
+        )
+        is None
+    )
+    assert (
+        geometry_fit.geometry_fit_dataset_cache_stale_reason(
+            payload,
+            selected_background_indices=[0],
+            current_background_index=1,
+            joint_background_mode=True,
+            background_theta_values=[3.0, 4.0],
+        )
+        == "Geometry-fit background selection changed. Rerun geometry fit."
+    )
+    assert (
+        geometry_fit.geometry_fit_dataset_cache_stale_reason(
+            payload,
+            selected_background_indices=[0, 1],
+            current_background_index=0,
+            joint_background_mode=True,
+            background_theta_values=[3.0, 4.0],
+        )
+        == "Active background changed since geometry fit. Rerun geometry fit."
+    )
 
 
 def test_build_geometry_fit_export_records_pairs_simulated_and_measured_rows() -> None:
@@ -1693,6 +1946,30 @@ def test_capture_runtime_geometry_fit_undo_state_builds_overlay_fallback_from_ma
     }
 
 
+def test_capture_runtime_geometry_fit_undo_state_accepts_numpy_overlay_payloads() -> None:
+    calls: list[object] = []
+
+    snapshot = geometry_fit.capture_runtime_geometry_fit_undo_state(
+        current_ui_params=lambda: {"gamma": 1.25},
+        current_profile_cache=lambda: {"profile": 1},
+        copy_state_value=geometry_fit.copy_geometry_fit_state_value,
+        last_overlay_state=lambda: {
+            "overlay_records": np.array([{"overlay": True}], dtype=object),
+        },
+        build_initial_pairs_display=(
+            lambda *args, **kwargs: calls.append(("build", args, kwargs)) or ([], [])
+        ),
+        current_background_index=lambda: 2,
+        current_fit_params=lambda: {"a": 4.2},
+        pending_pairs_display=lambda: [],
+    )
+
+    assert calls == []
+    overlay_records = snapshot["overlay_state"]["overlay_records"]
+    assert isinstance(overlay_records, np.ndarray)
+    assert overlay_records.tolist() == [{"overlay": True}]
+
+
 def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overlay() -> None:
     gamma_var = _DummyVar(0.0)
     a_var = _DummyVar(0.0)
@@ -1744,6 +2021,35 @@ def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overl
         "refresh",
         "button",
     ]
+
+
+def test_restore_runtime_geometry_fit_undo_state_normalizes_numpy_overlay_payloads() -> None:
+    events: list[object] = []
+
+    restored = geometry_fit.restore_runtime_geometry_fit_undo_state(
+        {
+            "ui_params": {},
+            "profile_cache": {"profile": 2},
+            "overlay_state": {
+                "overlay_records": np.array([{"overlay": True}], dtype=object),
+                "initial_pairs_display": np.array([{"pair": 1}], dtype=object),
+                "max_display_markers": 5,
+            },
+        },
+        var_map={},
+        geometry_theta_offset_var=None,
+        replace_profile_cache=lambda _profile_cache: None,
+        set_last_overlay_state=lambda _overlay_state: None,
+        draw_overlay_records=lambda records, marker_limit: events.append(
+            ("draw_overlay", list(records), marker_limit)
+        ),
+        draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+            ("draw_initial", list(pairs), marker_limit)
+        ),
+    )
+
+    assert restored["overlay_state"]["overlay_records"].tolist() == [{"overlay": True}]
+    assert events == [("draw_overlay", [{"overlay": True}], 5)]
 
 
 def test_build_runtime_geometry_fit_undo_restore_callback_defers_live_bindings(
@@ -2075,6 +2381,7 @@ def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callb
         update_manual_pick_button_label=lambda: progress_events.append("button"),
         capture_undo_state=lambda: {"undo": True},
         push_undo_state=lambda state: progress_events.append(("push", dict(state))),
+        replace_dataset_cache=lambda payload: progress_events.append(("cache", payload)),
         request_preview_skip_once=lambda: progress_events.append("skip"),
         schedule_update=lambda: progress_events.append("schedule"),
         draw_overlay_records=lambda records, marker_limit: progress_events.append(
@@ -2100,7 +2407,7 @@ def test_build_runtime_geometry_fit_execution_setup_wires_stateful_runtime_callb
     )
     assert setup.postprocess_config.current_background_index == 1
     setup.ui_bindings.sync_joint_background_theta()
-    assert theta_initial_var.get() == 7.5
+    assert theta_initial_var.get() == 4.0
     setup.ui_bindings.replace_profile_cache({"gamma": 1.25})
     assert simulation_state.profile_cache == {"gamma": 1.25}
     setup.ui_bindings.mark_last_simulation_dirty()
@@ -2387,7 +2694,7 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
         )
 
     postprocess = geometry_fit.postprocess_geometry_fit_result(
-        fitted_params={"theta_initial": 3.0, "a": 4.2},
+        fitted_params={"theta_initial": 3.0, "theta_offset": 0.4, "a": 4.2},
         result=_Result(),
         current_dataset={
             "measured_for_fit": [{"x": 1.0, "y": 2.0}],
@@ -2422,7 +2729,7 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
         "miller": "miller-data",
         "intensities": "intensity-data",
         "image_size": 512,
-        "fitted_params": {"theta_initial": 3.0, "a": 4.2},
+        "fitted_params": {"theta_initial": 3.4, "theta_offset": 0.4, "a": 4.2},
         "measured_for_fit": [{"x": 1.0, "y": 2.0}],
         "pixel_tol": float("inf"),
     }
@@ -2498,7 +2805,7 @@ def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(
     )
 
     class _Result:
-        x = [1.5, 2.5]
+        x = np.array([1.5, 2.5], dtype=float)
         rms_px = 0.75
         success = True
         status = 2
@@ -2635,7 +2942,7 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
     solver_calls: list[dict[str, object]] = []
 
     class _Result:
-        x = [1.5, 2.5]
+        x = np.array([1.5, 2.5], dtype=float)
         rms_px = 0.75
         success = True
         status = 2
@@ -2779,6 +3086,7 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
                 refresh_status=lambda: events.append("refresh_status"),
                 update_manual_pick_button_label=lambda: events.append("update_button"),
                 replace_profile_cache=lambda cache: stored_profile_cache.update(cache),
+                replace_dataset_cache=lambda payload: events.append(("cache", payload)),
                 push_undo_state=lambda state: events.append(("push_undo", dict(state))),
                 request_preview_skip_once=lambda: events.append("skip_once"),
                 mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
@@ -2816,7 +3124,15 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
             "pixel_tol": float("inf"),
             "experimental_image": "fit-image",
             "dataset_specs": None,
-            "refinement_config": {"bounds": {"gamma": [0.0, 1.0]}},
+            "refinement_config": {
+                "bounds": {"gamma": [0.0, 1.0]},
+                "use_numba": False,
+                "solver": {
+                    "parallel_mode": "off",
+                    "workers": 1,
+                    "worker_numba_threads": 1,
+                },
+            },
         }
     ]
     assert progress_texts[0] == "Running geometry fit from saved manual Qr/Qz pairs…"
@@ -2844,6 +3160,19 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
                     "dist_px": np.hypot(-1.5, 1.0),
                 },
             ],
+        )
+    ]
+    cache_events = [event for event in events if isinstance(event, tuple) and event[0] == "cache"]
+    assert cache_events == [
+        (
+            "cache",
+            {
+                "selected_background_indices": [0],
+                "current_background_index": 0,
+                "joint_background_mode": False,
+                "background_theta_values": [3.0],
+                "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
+            },
         )
     ]
     assert ("cmd", "start: vars=gamma,a datasets=1 current_groups=2 current_points=3") in events
@@ -2889,6 +3218,7 @@ def test_execute_runtime_geometry_fit_reports_solver_failure_and_closes_log(
                 refresh_status=lambda: None,
                 update_manual_pick_button_label=lambda: None,
                 replace_profile_cache=lambda _cache: None,
+                replace_dataset_cache=lambda _payload: None,
                 push_undo_state=lambda _state: None,
                 request_preview_skip_once=lambda: None,
                 mark_last_simulation_dirty=lambda: None,

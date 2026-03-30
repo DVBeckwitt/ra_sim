@@ -3085,6 +3085,7 @@ def should_collect_hit_tables_for_update(
     *,
     background_visible: bool,
     current_background_index: object,
+    skip_preview_once: bool = False,
     hkl_pick_armed: bool,
     selected_hkl_target: object,
     selected_peak_record: object,
@@ -3095,6 +3096,9 @@ def should_collect_hit_tables_for_update(
     geometry_manual_pick_session_active: Callable[[], bool],
 ) -> bool:
     """Return whether the next redraw needs per-hit detector tables."""
+
+    if bool(skip_preview_once):
+        return False
 
     manual_geometry_overlay_requested = False
     if background_visible and current_manual_pick_background_image() is not None:

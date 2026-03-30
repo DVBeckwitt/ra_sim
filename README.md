@@ -41,6 +41,9 @@
   geometry into simulation runs.
 - Refinement controls for mosaic orientation distributions, stacking disorder,
   lattice parameters, occupancies, and Debye-Waller terms.
+- Geometry-fit-cached detector-shape mosaic fitting in the main GUI so mosaic
+  broadening can be refined against the same anchored detector features used for
+  geometry fitting.
 - Desktop GUI for image-based analysis plus CLI entry points for headless
   simulation and calibrant fitting.
 
@@ -56,9 +59,19 @@ python -m pip install -e .
 
 If you prefer the installed console script, the package also exposes `ra-sim`.
 
+For local development and CI-equivalent tooling, install the `dev` extra:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
 > [!TIP]
 > The GUI uses Tkinter. Most Python distributions include it already, but some
 > Linux environments require installing the system `tk` package separately.
+
+> [!NOTE]
+> The optional fast-viewer acceleration path is not installed by default. It
+> still requires a separate Qt binding plus `pyqtgraph`.
 
 ## Configuration
 
@@ -105,6 +118,11 @@ A typical workflow looks like this:
    snapshots for reproducibility.
 
 Further GUI notes: [docs/gui_views.md](docs/gui_views.md)
+
+Technical notes:
+
+- [docs/simulation_and_fitting.md](docs/simulation_and_fitting.md)
+- [docs/cor_rotation_math.md](docs/cor_rotation_math.md)
 
 <details>
 <summary>Advanced CLI examples</summary>
@@ -167,7 +185,13 @@ python -m ra_sim hbn-fit --load-bundle --highres-refine
 
 ## Development
 
-The CI workflow runs on Python 3.10 through 3.13. Local checks:
+The CI workflow runs on Python 3.10 through 3.13. Install the dev extra, then run:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Local checks:
 
 ```bash
 ruff check .

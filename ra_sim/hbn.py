@@ -50,9 +50,8 @@ from scipy.optimize import minimize
 from matplotlib.patches import Rectangle
 from skimage.measure import EllipseModel
 
-import OSC_Reader
-from OSC_Reader import OSC_Reader
 from ra_sim.config import get_instrument_config
+from ra_sim.io.osc_reader import read_osc
 from ra_sim.utils import calculations
 
 
@@ -695,10 +694,10 @@ def parse_args(argv=None):
 # ------------------------------------------------------------
 def load_and_bgsub(file_path_hbn, dark_file):
     print("Loading dark image...")
-    dark = OSC_Reader.read_osc(dark_file).astype(np.float32)
+    dark = read_osc(dark_file).astype(np.float32)
 
     print("Loading hBN calibrant image...")
-    raw = OSC_Reader.read_osc(file_path_hbn).astype(np.float32)
+    raw = read_osc(file_path_hbn).astype(np.float32)
 
     k = int(SIM_BACKGROUND_ROTATE_K) % 4
     if k:

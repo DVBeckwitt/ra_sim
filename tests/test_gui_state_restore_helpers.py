@@ -175,3 +175,121 @@ def test_apply_gui_state_flags_toggles_visibility_and_updates_values() -> None:
         "simulation_limits_user_override": True,
         "scale_factor_user_override": False,
     }
+
+
+def test_apply_gui_state_flags_tolerates_legacy_string_values() -> None:
+    toggled = {"count": 0}
+
+    def _toggle_background() -> None:
+        toggled["count"] += 1
+
+    updated = state_io.apply_gui_state_flags(
+        {
+            "background_visible": "false",
+            "background_backend_rotation_k": "bad",
+            "background_backend_flip_x": "yes",
+            "background_backend_flip_y": "0",
+            "background_limits_user_override": "off",
+            "simulation_limits_user_override": "1",
+            "scale_factor_user_override": None,
+        },
+        current_flags={
+            "background_visible": True,
+            "background_backend_rotation_k": 3,
+            "background_backend_flip_x": False,
+            "background_backend_flip_y": True,
+            "background_limits_user_override": True,
+            "simulation_limits_user_override": False,
+            "scale_factor_user_override": True,
+        },
+        toggle_background=_toggle_background,
+    )
+
+    assert toggled["count"] == 1
+    assert updated == {
+        "background_visible": False,
+        "background_backend_rotation_k": 3,
+        "background_backend_flip_x": True,
+        "background_backend_flip_y": False,
+        "background_limits_user_override": False,
+        "simulation_limits_user_override": True,
+        "scale_factor_user_override": True,
+    }
+
+
+def test_geometry_state_requires_visible_background_when_q_group_is_included() -> None:
+    def _key_from_jsonable(value):
+        if value == ["q_group", "primary", 1.0, 2]:
+            return ("q_group", "primary", 1.0, 2)
+        return None
+
+    assert state_io.geometry_state_requires_visible_background(
+        {
+            "q_group_rows": [
+                {"key": ["q_group", "primary", 1.0, 2], "included": True},
+                {"key": ["q_group", "primary", 1.0, 3], "included": False},
+            ]
+        },
+        geometry_q_group_key_from_jsonable=_key_from_jsonable,
+    )
+
+
+def test_geometry_state_requires_visible_background_ignores_excluded_or_invalid_rows() -> None:
+    def _key_from_jsonable(_value):
+        return None
+
+    assert (
+        state_io.geometry_state_requires_visible_background(
+            {
+                "q_group_rows": [
+                    {"key": ["bad"], "included": True},
+                    {"key": ["also-bad"], "included": False},
+                ]
+            },
+            geometry_q_group_key_from_jsonable=_key_from_jsonable,
+        )
+        is False
+    )
+
+
+def test_apply_geometry_state_background_view_compatibility_forces_detector_view() -> None:
+    toggled = {"count": 0}
+    show_caked_2d_var = _Var(True)
+
+    def _key_from_jsonable(value):
+        if value == ["q_group", "primary", 1.0, 2]:
+            return ("q_group", "primary", 1.0, 2)
+        return None
+
+    updated = state_io.apply_geometry_state_background_view_compatibility(
+        {
+            "q_group_rows": [
+                {"key": ["q_group", "primary", 1.0, 2], "included": True},
+            ]
+        },
+        geometry_q_group_key_from_jsonable=_key_from_jsonable,
+        show_caked_2d_var=show_caked_2d_var,
+        background_visible=False,
+        toggle_background=lambda: toggled.__setitem__("count", toggled["count"] + 1),
+    )
+
+    assert updated is True
+    assert show_caked_2d_var.get() is False
+    assert toggled["count"] == 1
+
+
+def test_apply_geometry_state_background_view_compatibility_skips_when_no_q_groups() -> None:
+    toggled = {"count": 0}
+    show_caked_2d_var = _Var(True)
+
+    updated = state_io.apply_geometry_state_background_view_compatibility(
+        {"q_group_rows": [{"key": ["bad"], "included": True}]},
+        geometry_q_group_key_from_jsonable=lambda _value: None,
+        show_caked_2d_var=show_caked_2d_var,
+        background_visible=False,
+        toggle_background=lambda: toggled.__setitem__("count", toggled["count"] + 1),
+    )
+
+    assert updated is False
+    assert show_caked_2d_var.get() is True
+    assert toggled["count"] == 0

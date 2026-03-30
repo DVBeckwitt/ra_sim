@@ -48,6 +48,17 @@ def _available_parallel_thread_budget() -> int:
     return max(int(cpu_count), 1)
 
 
+def _coerce_sequence_items(values: Optional[Sequence[object]]) -> List[object]:
+    """Return sequence contents without relying on ambiguous truthiness."""
+
+    if values is None:
+        return []
+    try:
+        return list(values)
+    except TypeError:
+        return []
+
+
 def _resolve_parallel_worker_count(
     raw_value: object,
     *,
@@ -190,6 +201,8 @@ def _process_peaks_parallel_safe(*args, **kwargs):
             # Test doubles and older callsites may not accept the new keyword.
             if (
                 (
+                    "optics_mode" in call_kwargs
+                    or
                     "solve_q_steps" in call_kwargs
                     or "solve_q_rel_tol" in call_kwargs
                     or "solve_q_mode" in call_kwargs
@@ -198,10 +211,12 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                     or "sample_width_m" in call_kwargs
                     or "sample_length_m" in call_kwargs
                     or "n2_sample_array_override" in call_kwargs
+                    or "prefer_python_runner" in call_kwargs
                 )
                 and "unexpected keyword" in str(exc)
             ):
                 reduced_kwargs = dict(call_kwargs)
+                reduced_kwargs.pop("optics_mode", None)
                 reduced_kwargs.pop("solve_q_steps", None)
                 reduced_kwargs.pop("solve_q_rel_tol", None)
                 reduced_kwargs.pop("solve_q_mode", None)
@@ -210,6 +225,7 @@ def _process_peaks_parallel_safe(*args, **kwargs):
                 reduced_kwargs.pop("sample_width_m", None)
                 reduced_kwargs.pop("sample_length_m", None)
                 reduced_kwargs.pop("n2_sample_array_override", None)
+                reduced_kwargs.pop("prefer_python_runner", None)
                 return fn(*args, **reduced_kwargs)
             raise
 
@@ -260,6 +276,38 @@ class PeakROI:
     candidate_snr: float = float("nan")
     source: str = "auto"
     score: float = 0.0
+
+
+@dataclass
+class MosaicShapeROI:
+    """Fixed-size detector ROI used by the geometry-cached mosaic shape fit."""
+
+    dataset_index: int
+    dataset_label: str
+    reflection_index: int
+    hkl: Tuple[int, int, int]
+    center_row: float
+    center_col: float
+    row_bounds: Tuple[int, int]
+    col_bounds: Tuple[int, int]
+    measured_mask: np.ndarray
+    measured_distance: np.ndarray
+    measured_active_pixels: int
+    measured_two_theta: float
+
+
+@dataclass
+class MosaicShapeDatasetContext:
+    """Prepared per-dataset inputs for detector-shape mosaic fitting."""
+
+    dataset_index: int
+    label: str
+    theta_initial: float
+    experimental_image: np.ndarray
+    miller: np.ndarray
+    intensities: np.ndarray
+    rois: List[MosaicShapeROI]
+    measured_peak_count: int
 
 
 @dataclass
@@ -406,10 +454,11 @@ def _normalize_measured_peaks(
     """Normalize mixed measured-peak inputs into dicts with HKL + detector coords."""
 
     normalized: List[Dict[str, object]] = []
-    if not measured_peaks:
+    measured_entries = _coerce_sequence_items(measured_peaks)
+    if not measured_entries:
         return normalized
 
-    for entry in measured_peaks:
+    for entry in measured_entries:
         hkl: Optional[Tuple[int, int, int]] = None
         x_val = None
         y_val = None
@@ -976,9 +1025,10 @@ def _build_geometry_fit_dataset_contexts(
 
     default_theta = float(params.get("theta_initial", 0.0))
     raw_specs: List[Dict[str, object]] = []
+    dataset_spec_entries = _coerce_sequence_items(dataset_specs)
 
-    if dataset_specs:
-        for dataset_index, raw_entry in enumerate(dataset_specs):
+    if dataset_spec_entries:
+        for dataset_index, raw_entry in enumerate(dataset_spec_entries):
             if not isinstance(raw_entry, dict):
                 raise TypeError(
                     "geometry fit dataset_specs entries must be dictionaries"
@@ -1043,11 +1093,13 @@ def _build_global_point_matches(
 ) -> List[Tuple[np.ndarray, np.ndarray, float, int, int]]:
     """Globally optimal one-to-one matching with optional unmatched points."""
 
-    if not simulated_points or not measured_points:
+    simulated_entries = _coerce_sequence_items(simulated_points)
+    measured_entries = _coerce_sequence_items(measured_points)
+    if not simulated_entries or not measured_entries:
         return []
 
-    sim = np.asarray(simulated_points, dtype=float)
-    meas = np.asarray(measured_points, dtype=float)
+    sim = np.asarray(simulated_entries, dtype=float)
+    meas = np.asarray(measured_entries, dtype=float)
     if sim.ndim != 2 or meas.ndim != 2 or sim.shape[1] != 2 or meas.shape[1] != 2:
         return []
 
@@ -2534,6 +2586,825 @@ def fit_mosaic_widths_separable(
     result.peak_source = peak_source_key
     result.roi_normalization = roi_norm_key
     return result
+
+
+def _prepare_mosaic_shape_patch(
+    patch: np.ndarray,
+    *,
+    smooth_sigma_px: float,
+    ridge_percentile: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the centered/smoothed patch plus ridge mask and distance transform."""
+
+    patch_arr = np.asarray(patch, dtype=np.float64)
+    finite = patch_arr[np.isfinite(patch_arr)]
+    if finite.size:
+        centered = patch_arr - float(np.median(finite))
+    else:
+        centered = np.zeros_like(patch_arr, dtype=np.float64)
+    centered = np.nan_to_num(centered, nan=0.0, posinf=0.0, neginf=0.0)
+
+    smooth_sigma = max(float(smooth_sigma_px), 0.0)
+    if smooth_sigma > 0.0:
+        smoothed = gaussian_filter(centered, sigma=smooth_sigma, mode="reflect")
+    else:
+        smoothed = centered
+
+    ridge_mask = np.asarray(
+        _compute_ridge_map(smoothed, percentile=float(ridge_percentile)),
+        dtype=bool,
+    )
+    return smoothed, ridge_mask, distance_transform_edt(~ridge_mask)
+
+
+def _estimate_mosaic_shape_roi_half_width(
+    params: Dict[str, object],
+    upper_bounds: Sequence[float],
+    image_size: int,
+) -> int:
+    """Estimate one fixed ROI radius from detector geometry and width bounds."""
+
+    detector_distance = max(float(params.get("corto_detector", 0.0)), 1.0e-6)
+    pixel_size = _estimate_pixel_size(params)
+    width_upper = max(float(upper_bounds[0]), float(upper_bounds[1]), 0.03)
+    projected_half_width_px = (
+        detector_distance * math.radians(width_upper) / max(pixel_size, 1.0e-9)
+    )
+    half_width = int(
+        np.clip(
+            math.ceil(max(8.0, 2.0 * projected_half_width_px)),
+            8,
+            max(8, min(64, int(image_size) // 4)),
+        )
+    )
+    return max(int(half_width), 1)
+
+
+def _build_mosaic_shape_dataset_contexts(
+    miller: np.ndarray,
+    intensities: np.ndarray,
+    image_size: int,
+    params: Dict[str, object],
+    dataset_specs: Sequence[Dict[str, object]],
+    *,
+    roi_half_width: int,
+    smooth_sigma_px: float,
+    ridge_percentile: float,
+) -> Tuple[List[MosaicShapeDatasetContext], List[Dict[str, object]]]:
+    """Prepare multi-dataset ROI contexts for the geometry-cached shape fit."""
+
+    contexts = _build_geometry_fit_dataset_contexts(
+        miller,
+        intensities,
+        params,
+        measured_peaks=None,
+        experimental_image=None,
+        dataset_specs=dataset_specs,
+    )
+    a_lattice = float(params.get("a", 1.0))
+    c_lattice = float(params.get("c", 1.0))
+    mosaic_params = dict(params.get("mosaic_params", {}))
+    wavelength_array = mosaic_params.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic_params.get("wavelength_i_array")
+    if wavelength_array is None:
+        lambda_scalar = float(params.get("lambda", 1.0))
+    else:
+        wave_arr = np.asarray(wavelength_array, dtype=np.float64).ravel()
+        wave_arr = wave_arr[np.isfinite(wave_arr) & (wave_arr > 0.0)]
+        lambda_scalar = (
+            float(params.get("lambda", float(np.mean(wave_arr))))
+            if wave_arr.size
+            else float(params.get("lambda", 1.0))
+        )
+    lambda_scalar = max(float(lambda_scalar), 1.0e-6)
+
+    prepared: List[MosaicShapeDatasetContext] = []
+    rejected_rois: List[Dict[str, object]] = []
+
+    for dataset_ctx in contexts:
+        experimental_image = dataset_ctx.experimental_image
+        if experimental_image is None:
+            raise RuntimeError(
+                f"Mosaic shape fit requires experimental_image for dataset '{dataset_ctx.label}'."
+            )
+        experimental_image = np.asarray(experimental_image, dtype=np.float64)
+        if experimental_image.shape != (image_size, image_size):
+            raise RuntimeError(
+                f"Mosaic shape fit dataset '{dataset_ctx.label}' has image shape "
+                f"{experimental_image.shape}, expected {(image_size, image_size)}."
+            )
+
+        subset = dataset_ctx.subset
+        subset_miller = np.asarray(subset.miller, dtype=np.float64)
+        subset_intensities = np.asarray(subset.intensities, dtype=np.float64)
+        allowed_mask = _allowed_reflection_mask(subset_miller)
+        keep_rows: List[int] = []
+        reflection_lookup: Dict[Tuple[int, int, int], int] = {}
+        two_theta_lookup: Dict[Tuple[int, int, int], float] = {}
+        for local_idx, hkl_row in enumerate(subset_miller):
+            if not bool(allowed_mask[local_idx]):
+                continue
+            hkl = tuple(int(round(val)) for val in hkl_row)
+            if hkl == (0, 0, 0):
+                continue
+            try:
+                spacing = d_spacing(hkl[0], hkl[1], hkl[2], a_lattice, c_lattice)
+                two_theta_value = two_theta(spacing, lambda_scalar)
+            except Exception:
+                continue
+            if two_theta_value is None or not np.isfinite(two_theta_value):
+                continue
+            if (hkl[0] != 0 or hkl[1] != 0) and float(two_theta_value) > 65.0:
+                continue
+            keep_rows.append(int(local_idx))
+            reflection_lookup.setdefault(hkl, len(keep_rows) - 1)
+            two_theta_lookup[hkl] = float(two_theta_value)
+
+        if not keep_rows:
+            raise RuntimeError(
+                f"Mosaic shape fit found no usable reflections for dataset '{dataset_ctx.label}'."
+            )
+
+        usable_hkls = set(two_theta_lookup)
+        normalized_measured = _normalize_measured_peaks(subset.measured_entries)
+        rois: List[MosaicShapeROI] = []
+        seen_centers: Set[Tuple[Tuple[int, int, int], int, int]] = set()
+
+        for entry in normalized_measured:
+            hkl = entry["hkl"]  # type: ignore[assignment]
+            if hkl not in usable_hkls:
+                rejected_rois.append(
+                    {
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "stage": "candidate",
+                        "reason": "hkl_not_usable_for_mosaic_shape",
+                        "hkl": tuple(int(v) for v in hkl),
+                        "x": float(entry["x"]),
+                        "y": float(entry["y"]),
+                    }
+                )
+                continue
+
+            center_row = float(entry["y"])
+            center_col = float(entry["x"])
+            row_idx = int(round(center_row))
+            col_idx = int(round(center_col))
+            roi_key = (tuple(int(v) for v in hkl), row_idx, col_idx)
+            if roi_key in seen_centers:
+                continue
+            seen_centers.add(roi_key)
+
+            row0 = row_idx - int(roi_half_width)
+            row1 = row_idx + int(roi_half_width) + 1
+            col0 = col_idx - int(roi_half_width)
+            col1 = col_idx + int(roi_half_width) + 1
+            if row0 < 0 or col0 < 0 or row1 > image_size or col1 > image_size:
+                rejected_rois.append(
+                    {
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "stage": "roi",
+                        "reason": "out_of_bounds",
+                        "hkl": tuple(int(v) for v in hkl),
+                        "center": (float(center_col), float(center_row)),
+                    }
+                )
+                continue
+
+            patch = experimental_image[row0:row1, col0:col1]
+            _, measured_mask, measured_distance = _prepare_mosaic_shape_patch(
+                patch,
+                smooth_sigma_px=float(smooth_sigma_px),
+                ridge_percentile=float(ridge_percentile),
+            )
+            measured_active_pixels = int(np.count_nonzero(measured_mask))
+            if measured_active_pixels <= 0:
+                rejected_rois.append(
+                    {
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "stage": "roi",
+                        "reason": "empty_measured_ridge",
+                        "hkl": tuple(int(v) for v in hkl),
+                        "center": (float(center_col), float(center_row)),
+                    }
+                )
+                continue
+
+            rois.append(
+                MosaicShapeROI(
+                    dataset_index=int(dataset_ctx.dataset_index),
+                    dataset_label=str(dataset_ctx.label),
+                    reflection_index=int(reflection_lookup[hkl]),
+                    hkl=tuple(int(v) for v in hkl),
+                    center_row=float(center_row),
+                    center_col=float(center_col),
+                    row_bounds=(int(row0), int(row1)),
+                    col_bounds=(int(col0), int(col1)),
+                    measured_mask=measured_mask,
+                    measured_distance=np.asarray(measured_distance, dtype=np.float64),
+                    measured_active_pixels=int(measured_active_pixels),
+                    measured_two_theta=float(two_theta_lookup[hkl]),
+                )
+            )
+
+        prepared.append(
+            MosaicShapeDatasetContext(
+                dataset_index=int(dataset_ctx.dataset_index),
+                label=str(dataset_ctx.label),
+                theta_initial=float(dataset_ctx.theta_initial),
+                experimental_image=experimental_image,
+                miller=np.ascontiguousarray(subset_miller[keep_rows], dtype=np.float64),
+                intensities=np.ascontiguousarray(
+                    subset_intensities[keep_rows],
+                    dtype=np.float64,
+                ),
+                rois=rois,
+                measured_peak_count=int(len(normalized_measured)),
+            )
+        )
+
+    return prepared, rejected_rois
+
+
+def fit_mosaic_shape_parameters(
+    miller: np.ndarray,
+    intensities: np.ndarray,
+    image_size: int,
+    params: Dict[str, object],
+    *,
+    dataset_specs: Sequence[Dict[str, object]],
+    bounds: Optional[Tuple[Sequence[float], Sequence[float]]] = None,
+    loss: str = "soft_l1",
+    f_scale: float = 1.0,
+    max_nfev: int = 80,
+    max_restarts: int = 2,
+    smooth_sigma_px: float = 1.0,
+    ridge_percentile: float = 85.0,
+    roi_half_width: Optional[int] = None,
+    min_total_rois: int = 8,
+    min_per_dataset_rois: int = 3,
+    equal_dataset_weights: bool = True,
+    workers: object = "auto",
+    parallel_mode: str = "auto",
+    worker_numba_threads: object = 0,
+    restart_jitter: float = 0.15,
+) -> OptimizeResult:
+    """Fit geometry-cached detector ridge shapes by varying mosaic sigma/gamma/eta."""
+
+    dataset_spec_entries = _coerce_sequence_items(dataset_specs)
+    miller = np.asarray(miller, dtype=np.float64)
+    intensities = np.asarray(intensities, dtype=np.float64)
+    if miller.ndim != 2 or miller.shape[1] != 3:
+        raise ValueError("miller must be an array of shape (N, 3)")
+    if intensities.ndim != 1 or intensities.shape[0] != miller.shape[0]:
+        raise ValueError("intensities and miller must have matching lengths")
+    if int(image_size) <= 0:
+        raise ValueError("image_size must be positive")
+    if not dataset_spec_entries:
+        raise RuntimeError(
+            "Mosaic shape fit requires cached geometry-fit dataset_specs; run geometry fitting first."
+        )
+
+    mosaic_params = dict(params.get("mosaic_params", {}))
+    if not mosaic_params:
+        raise ValueError("params['mosaic_params'] is required")
+    required_keys = ("beam_x_array", "beam_y_array", "theta_array", "phi_array")
+    missing_keys = [
+        key for key in required_keys if not np.asarray(mosaic_params.get(key)).size
+    ]
+    if missing_keys:
+        raise ValueError(
+            "mosaic_params must include beam and divergence samples for shape fitting"
+        )
+
+    wavelength_array = mosaic_params.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic_params.get("wavelength_i_array")
+    if wavelength_array is None:
+        base_lambda = float(params.get("lambda", 1.0))
+        wavelength_array = np.full(
+            np.asarray(mosaic_params["beam_x_array"]).shape,
+            base_lambda,
+            dtype=np.float64,
+        )
+    else:
+        wavelength_array = np.asarray(wavelength_array, dtype=np.float64)
+
+    sigma0 = float(mosaic_params.get("sigma_mosaic_deg", 0.5))
+    gamma0 = float(mosaic_params.get("gamma_mosaic_deg", 0.5))
+    eta0 = float(mosaic_params.get("eta", 0.05))
+    if bounds is None:
+        bounds = (
+            np.array([0.03, 0.03, 0.0], dtype=np.float64),
+            np.array([3.0, 3.0, 1.0], dtype=np.float64),
+        )
+    lower = np.asarray(bounds[0], dtype=np.float64).reshape(-1)
+    upper = np.asarray(bounds[1], dtype=np.float64).reshape(-1)
+    if lower.size != 3 or upper.size != 3:
+        raise ValueError("bounds must contain exactly 3 lower/upper values")
+    if np.any(~np.isfinite(lower)) or np.any(~np.isfinite(upper)):
+        raise ValueError("bounds must be finite")
+    if np.any(lower >= upper):
+        raise ValueError("each lower bound must be strictly less than upper bound")
+
+    x0 = np.clip(np.array([sigma0, gamma0, eta0], dtype=np.float64), lower, upper)
+    min_total_rois = max(int(min_total_rois), 1)
+    min_per_dataset_rois = max(int(min_per_dataset_rois), 1)
+    max_restarts = max(int(max_restarts), 0)
+    smooth_sigma_px = max(float(smooth_sigma_px), 0.0)
+    ridge_percentile = float(np.clip(float(ridge_percentile), 1.0, 99.9))
+    restart_jitter = max(float(restart_jitter), 0.0)
+
+    if roi_half_width is None:
+        roi_half_width = _estimate_mosaic_shape_roi_half_width(
+            params,
+            upper,
+            int(image_size),
+        )
+    roi_half_width = int(roi_half_width)
+    if roi_half_width <= 0:
+        raise ValueError("roi_half_width must be a positive integer")
+
+    prepared_datasets, rejected_rois = _build_mosaic_shape_dataset_contexts(
+        miller,
+        intensities,
+        int(image_size),
+        dict(params),
+        list(dataset_spec_entries),
+        roi_half_width=int(roi_half_width),
+        smooth_sigma_px=float(smooth_sigma_px),
+        ridge_percentile=float(ridge_percentile),
+    )
+    if not prepared_datasets:
+        raise RuntimeError("Mosaic shape fit found no prepared datasets.")
+
+    dataset_failures = [
+        dataset_ctx
+        for dataset_ctx in prepared_datasets
+        if len(dataset_ctx.rois) < int(min_per_dataset_rois)
+    ]
+    if dataset_failures:
+        dataset_text = ", ".join(
+            f"{ctx.label}={len(ctx.rois)}" for ctx in dataset_failures
+        )
+        raise RuntimeError(
+            "Mosaic shape fit needs at least "
+            f"{int(min_per_dataset_rois)} usable ROIs per dataset; got {dataset_text}."
+        )
+
+    total_rois = int(sum(len(dataset_ctx.rois) for dataset_ctx in prepared_datasets))
+    if total_rois < int(min_total_rois):
+        raise RuntimeError(
+            f"Mosaic shape fit needs at least {int(min_total_rois)} usable ROIs; got {total_rois}."
+        )
+
+    multi_dataset_mode = len(prepared_datasets) > 1
+    parallel_mode_key = str(parallel_mode).strip().lower()
+    if parallel_mode_key not in {"auto", "datasets", "restarts", "off"}:
+        raise ValueError("parallel_mode must be one of {'auto', 'datasets', 'restarts', 'off'}")
+    configured_parallel_workers = _resolve_parallel_worker_count(
+        workers,
+        max_tasks=max(len(prepared_datasets), max_restarts, 1),
+    )
+    dataset_parallel_workers = 1
+    restart_parallel_workers = 1
+    if configured_parallel_workers > 1 and parallel_mode_key != "off":
+        if parallel_mode_key in {"auto", "datasets"} and len(prepared_datasets) > 1:
+            dataset_parallel_workers = min(
+                int(configured_parallel_workers),
+                len(prepared_datasets),
+            )
+        elif parallel_mode_key in {"auto", "restarts"} and max_restarts > 1:
+            restart_parallel_workers = min(
+                int(configured_parallel_workers),
+                int(max_restarts),
+            )
+    active_outer_workers = max(dataset_parallel_workers, restart_parallel_workers)
+    numba_threads = _resolve_numba_threads_per_worker(
+        active_outer_workers,
+        worker_numba_threads,
+    )
+    parallelization_summary = {
+        "mode": str(parallel_mode_key),
+        "configured_workers": int(configured_parallel_workers),
+        "dataset_workers": int(dataset_parallel_workers),
+        "restart_workers": int(restart_parallel_workers),
+        "worker_numba_threads": (
+            None if numba_threads is None else int(numba_threads)
+        ),
+        "numba_thread_budget": int(_available_parallel_thread_budget()),
+    }
+
+    base_params = dict(params)
+    beam_x = np.asarray(mosaic_params.get("beam_x_array"), dtype=np.float64)
+    beam_y = np.asarray(mosaic_params.get("beam_y_array"), dtype=np.float64)
+    theta_array = np.asarray(mosaic_params.get("theta_array"), dtype=np.float64)
+    phi_array = np.asarray(mosaic_params.get("phi_array"), dtype=np.float64)
+    uv1 = np.asarray(
+        base_params.get("uv1", np.array([1.0, 0.0, 0.0])),
+        dtype=np.float64,
+    )
+    uv2 = np.asarray(
+        base_params.get("uv2", np.array([0.0, 1.0, 0.0])),
+        dtype=np.float64,
+    )
+
+    def _safe_float(value: object, fallback: float) -> float:
+        try:
+            out = float(value)
+        except Exception:
+            return float(fallback)
+        if not np.isfinite(out):
+            return float(fallback)
+        return out
+
+    def _apply_trial_params(x: Sequence[float]) -> Dict[str, object]:
+        local = dict(base_params)
+        local_mosaic = dict(mosaic_params)
+        local_mosaic["sigma_mosaic_deg"] = float(x[0])
+        local_mosaic["gamma_mosaic_deg"] = float(x[1])
+        local_mosaic["eta"] = float(x[2])
+        local_mosaic["beam_x_array"] = beam_x
+        local_mosaic["beam_y_array"] = beam_y
+        local_mosaic["theta_array"] = theta_array
+        local_mosaic["phi_array"] = phi_array
+        local_mosaic["wavelength_array"] = wavelength_array
+        local["mosaic_params"] = local_mosaic
+        local.setdefault("theta_offset", 0.0)
+        return local
+
+    def _theta_initial_for_dataset(
+        local: Dict[str, object],
+        dataset_ctx: MosaicShapeDatasetContext,
+    ) -> float:
+        theta_base = _safe_float(dataset_ctx.theta_initial, 0.0)
+        if multi_dataset_mode:
+            return float(theta_base + _safe_float(local.get("theta_offset", 0.0), 0.0))
+        return _safe_float(local.get("theta_initial", theta_base), theta_base)
+
+    def _simulate_dataset_image(
+        local: Dict[str, object],
+        dataset_ctx: MosaicShapeDatasetContext,
+        *,
+        theta_value: float,
+    ) -> np.ndarray:
+        local_mosaic = dict(local["mosaic_params"])
+        wave_local = local_mosaic.get("wavelength_array")
+        if wave_local is None:
+            wave_local = local_mosaic.get("wavelength_i_array")
+        if wave_local is None:
+            wave_local = wavelength_array
+        buffer = np.zeros((image_size, image_size), dtype=np.float64)
+        image, *_ = _process_peaks_parallel_safe(
+            dataset_ctx.miller,
+            dataset_ctx.intensities,
+            image_size,
+            local["a"],
+            local["c"],
+            wave_local,
+            buffer,
+            local["corto_detector"],
+            local["gamma"],
+            local["Gamma"],
+            local["chi"],
+            local.get("psi", 0.0),
+            local.get("psi_z", 0.0),
+            local["zs"],
+            local["zb"],
+            local["n2"],
+            local_mosaic["beam_x_array"],
+            local_mosaic["beam_y_array"],
+            local_mosaic["theta_array"],
+            local_mosaic["phi_array"],
+            local_mosaic["sigma_mosaic_deg"],
+            local_mosaic["gamma_mosaic_deg"],
+            local_mosaic["eta"],
+            wave_local,
+            local["debye_x"],
+            local["debye_y"],
+            local["center"],
+            theta_value,
+            local.get("cor_angle", 0.0),
+            uv1,
+            uv2,
+            save_flag=0,
+            **_simulation_kernel_kwargs(local, local_mosaic),
+        )
+        return np.asarray(image, dtype=np.float64)
+
+    def _evaluate_one_dataset(
+        item: Tuple[Dict[str, object], MosaicShapeDatasetContext, bool],
+    ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+        local, dataset_ctx, collect_diagnostics = item
+        theta_value = _theta_initial_for_dataset(local, dataset_ctx)
+        sim_image = _simulate_dataset_image(
+            local,
+            dataset_ctx,
+            theta_value=float(theta_value),
+        )
+
+        roi_blocks: List[np.ndarray] = []
+        roi_diags: List[Dict[str, object]] = []
+        for roi in dataset_ctx.rois:
+            row0, row1 = roi.row_bounds
+            col0, col1 = roi.col_bounds
+            patch = sim_image[row0:row1, col0:col1]
+            _, sim_mask, sim_distance = _prepare_mosaic_shape_patch(
+                patch,
+                smooth_sigma_px=float(smooth_sigma_px),
+                ridge_percentile=float(ridge_percentile),
+            )
+            measured_term = roi.measured_mask.astype(np.float64) * sim_distance
+            sim_term = sim_mask.astype(np.float64) * roi.measured_distance
+            residual_raw = np.concatenate(
+                [measured_term.ravel(), sim_term.ravel()]
+            ).astype(np.float64, copy=False)
+            sim_active_pixels = int(np.count_nonzero(sim_mask))
+            active_pixels = int(roi.measured_active_pixels + sim_active_pixels)
+            residual_normed = residual_raw / math.sqrt(max(active_pixels, 1))
+            roi_blocks.append(np.asarray(residual_normed, dtype=np.float64))
+
+            if collect_diagnostics:
+                roi_diags.append(
+                    {
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "hkl": tuple(int(v) for v in roi.hkl),
+                        "center": (float(roi.center_col), float(roi.center_row)),
+                        "measured_active_pixels": int(roi.measured_active_pixels),
+                        "sim_active_pixels": int(sim_active_pixels),
+                        "active_mask_pixels": int(active_pixels),
+                        "two_theta_deg": float(roi.measured_two_theta),
+                        "rms": (
+                            float(np.sqrt(np.mean(residual_raw * residual_raw)))
+                            if residual_raw.size
+                            else 0.0
+                        ),
+                    }
+                )
+
+        dataset_residual = (
+            np.concatenate(roi_blocks)
+            if roi_blocks
+            else np.zeros(0, dtype=np.float64)
+        )
+        dataset_weight = (
+            1.0 / math.sqrt(max(len(dataset_ctx.rois), 1))
+            if bool(equal_dataset_weights)
+            else 1.0
+        )
+        dataset_residual = np.asarray(dataset_residual, dtype=np.float64) * dataset_weight
+
+        dataset_summary = {
+            "dataset_index": int(dataset_ctx.dataset_index),
+            "dataset_label": str(dataset_ctx.label),
+            "theta_initial_deg": float(theta_value),
+            "roi_count": int(len(dataset_ctx.rois)),
+            "measured_peak_count": int(dataset_ctx.measured_peak_count),
+            "simulated_reflection_count": int(dataset_ctx.miller.shape[0]),
+            "dataset_weight": float(dataset_weight),
+        }
+        if collect_diagnostics:
+            ordered_roi_diags = sorted(
+                roi_diags,
+                key=lambda item: float(item["rms"]),
+                reverse=True,
+            )
+            dataset_summary.update(
+                {
+                    "residual_norm": float(np.linalg.norm(dataset_residual)),
+                    "cost": float(
+                        _robust_cost(dataset_residual, loss=loss, f_scale=f_scale)
+                    ),
+                    "worst_hkls": [
+                        tuple(int(v) for v in diag["hkl"])
+                        for diag in ordered_roi_diags[:3]
+                    ],
+                    "max_roi_rms_px": (
+                        float(ordered_roi_diags[0]["rms"])
+                        if ordered_roi_diags
+                        else 0.0
+                    ),
+                }
+            )
+        return dataset_residual, roi_diags, dataset_summary
+
+    def _evaluate_residual(
+        theta: np.ndarray,
+        *,
+        collect_diagnostics: bool = False,
+    ) -> Tuple[
+        np.ndarray,
+        Optional[List[Dict[str, object]]],
+        Optional[List[Dict[str, object]]],
+        Optional[Dict[int, int]],
+    ]:
+        local = _apply_trial_params(theta)
+        dataset_items = [
+            (local, dataset_ctx, bool(collect_diagnostics))
+            for dataset_ctx in prepared_datasets
+        ]
+        if dataset_parallel_workers > 1 and len(dataset_items) > 1:
+            results = _threaded_map(
+                _evaluate_one_dataset,
+                dataset_items,
+                max_workers=dataset_parallel_workers,
+                numba_threads=numba_threads,
+            )
+        else:
+            results = [_evaluate_one_dataset(item) for item in dataset_items]
+
+        residual_blocks: List[np.ndarray] = []
+        roi_diags: List[Dict[str, object]] = []
+        dataset_diags: List[Dict[str, object]] = []
+        roi_counts: Dict[int, int] = {}
+        for residual_i, roi_diag_i, summary_i in results:
+            residual_i = np.asarray(residual_i, dtype=np.float64)
+            if residual_i.size:
+                residual_blocks.append(residual_i)
+            roi_diags.extend(list(roi_diag_i))
+            dataset_diags.append(dict(summary_i))
+            roi_counts[int(summary_i["dataset_index"])] = int(summary_i["roi_count"])
+        if not residual_blocks:
+            empty = np.zeros(1, dtype=np.float64)
+            if collect_diagnostics:
+                return empty, roi_diags, dataset_diags, roi_counts
+            return empty, None, None, None
+        merged = np.concatenate(residual_blocks)
+        if collect_diagnostics:
+            return merged, roi_diags, dataset_diags, roi_counts
+        return merged, None, None, None
+
+    def residual(theta: np.ndarray) -> np.ndarray:
+        residual_out, _, _, _ = _evaluate_residual(
+            np.asarray(theta, dtype=np.float64),
+            collect_diagnostics=False,
+        )
+        return residual_out
+
+    def _run_solver(x_start: np.ndarray) -> OptimizeResult:
+        return least_squares(
+            residual,
+            np.asarray(x_start, dtype=np.float64),
+            bounds=(lower, upper),
+            loss=loss,
+            f_scale=f_scale,
+            max_nfev=int(max_nfev),
+        )
+
+    initial_residual = residual(x0)
+    initial_cost = _robust_cost(initial_residual, loss=loss, f_scale=f_scale)
+    primary_result = _run_solver(x0)
+    primary_cost = _robust_cost(
+        np.asarray(primary_result.fun, dtype=np.float64),
+        loss=loss,
+        f_scale=f_scale,
+    )
+    restart_history: List[Dict[str, object]] = [
+        {
+            "restart": 0,
+            "start_x": np.asarray(x0, dtype=np.float64).tolist(),
+            "end_x": np.asarray(primary_result.x, dtype=np.float64).tolist(),
+            "cost": float(primary_cost),
+            "success": bool(primary_result.success),
+            "message": str(primary_result.message),
+        }
+    ]
+    best_result = primary_result
+    best_cost = float(primary_cost)
+
+    if max_restarts > 0:
+        restart_rng = np.random.default_rng(20260329)
+        anchor = np.asarray(primary_result.x, dtype=np.float64)
+        span = np.maximum(
+            np.array(
+                [
+                    restart_jitter * max(abs(float(anchor[0])), 0.03),
+                    restart_jitter * max(abs(float(anchor[1])), 0.03),
+                    restart_jitter * 0.5,
+                ],
+                dtype=np.float64,
+            ),
+            np.array([1.0e-3, 1.0e-3, 1.0e-3], dtype=np.float64),
+        )
+        restart_starts = [
+            np.clip(
+                anchor
+                + restart_rng.uniform(-1.0, 1.0, size=3).astype(np.float64) * span,
+                lower,
+                upper,
+            )
+            for _ in range(int(max_restarts))
+        ]
+
+        def _solve_restart(seed: np.ndarray) -> Tuple[np.ndarray, OptimizeResult, float]:
+            solved = _run_solver(seed)
+            solved_cost = _robust_cost(
+                np.asarray(solved.fun, dtype=np.float64),
+                loss=loss,
+                f_scale=f_scale,
+            )
+            return np.asarray(seed, dtype=np.float64), solved, float(solved_cost)
+
+        if restart_parallel_workers > 1 and len(restart_starts) > 1:
+            restart_results = _threaded_map(
+                _solve_restart,
+                restart_starts,
+                max_workers=restart_parallel_workers,
+                numba_threads=numba_threads,
+            )
+        else:
+            restart_results = [_solve_restart(seed) for seed in restart_starts]
+
+        for restart_idx, (seed, trial, trial_cost) in enumerate(restart_results, start=1):
+            restart_history.append(
+                {
+                    "restart": int(restart_idx),
+                    "start_x": np.asarray(seed, dtype=np.float64).tolist(),
+                    "end_x": np.asarray(trial.x, dtype=np.float64).tolist(),
+                    "cost": float(trial_cost),
+                    "success": bool(trial.success),
+                    "message": str(trial.message),
+                }
+            )
+            if float(trial_cost) < float(best_cost):
+                best_result = trial
+                best_cost = float(trial_cost)
+
+    final_residual, roi_diagnostics, dataset_diagnostics, roi_count_by_dataset = (
+        _evaluate_residual(
+            np.asarray(best_result.x, dtype=np.float64),
+            collect_diagnostics=True,
+        )
+    )
+    best_result.fun = np.asarray(final_residual, dtype=np.float64)
+    final_cost = _robust_cost(best_result.fun, loss=loss, f_scale=f_scale)
+
+    best_params = dict(base_params)
+    best_params["mosaic_params"] = dict(mosaic_params)
+    best_params["mosaic_params"].update(
+        {
+            "beam_x_array": beam_x,
+            "beam_y_array": beam_y,
+            "theta_array": theta_array,
+            "phi_array": phi_array,
+            "wavelength_array": wavelength_array,
+            "sigma_mosaic_deg": float(best_result.x[0]),
+            "gamma_mosaic_deg": float(best_result.x[1]),
+            "eta": float(best_result.x[2]),
+        }
+    )
+
+    cost_reduction = float(
+        (float(initial_cost) - float(final_cost)) / max(float(initial_cost), 1.0e-12)
+    )
+    param_names = ("sigma_mosaic_deg", "gamma_mosaic_deg", "eta")
+    bound_hits = [
+        name
+        for idx, name in enumerate(param_names)
+        if np.isclose(best_result.x[idx], lower[idx], rtol=0.0, atol=1.0e-6)
+        or np.isclose(best_result.x[idx], upper[idx], rtol=0.0, atol=1.0e-6)
+    ]
+    boundary_warning = None
+    if bound_hits:
+        boundary_warning = (
+            "Parameters finished on bounds: " + ", ".join(str(name) for name in bound_hits)
+        )
+
+    ordered_roi_diagnostics = sorted(
+        list(roi_diagnostics or []),
+        key=lambda item: float(item["rms"]),
+        reverse=True,
+    )
+    best_result.best_params = best_params
+    best_result.initial_cost = float(initial_cost)
+    best_result.final_cost = float(final_cost)
+    best_result.cost_reduction = float(cost_reduction)
+    best_result.restart_history = restart_history
+    best_result.boundary_warning = boundary_warning
+    best_result.bound_hits = list(bound_hits)
+    best_result.roi_diagnostics = ordered_roi_diagnostics
+    best_result.rejected_rois = list(rejected_rois)
+    best_result.dataset_diagnostics = list(dataset_diagnostics or [])
+    best_result.roi_count_by_dataset = dict(roi_count_by_dataset or {})
+    best_result.top_worst_rois = ordered_roi_diagnostics[:10]
+    best_result.parallelization_summary = parallelization_summary
+    best_result.roi_half_width = int(roi_half_width)
+    best_result.total_roi_count = int(total_rois)
+    best_result.solver_loss = str(loss)
+    best_result.solver_f_scale = float(f_scale)
+    best_result.acceptance_passed = bool(
+        float(cost_reduction) >= 0.20
+        and not bound_hits
+        and all(
+            int(count) >= int(min_per_dataset_rois)
+            for count in (roi_count_by_dataset or {}).values()
+        )
+    )
+    return best_result
 
 
 def _estimate_pixel_size(params: Dict[str, float]) -> float:
@@ -4028,7 +4899,8 @@ def fit_geometry_parameters(
         except Exception:
             pass
 
-    point_match_mode = experimental_image is not None or bool(dataset_specs)
+    dataset_spec_entries = _coerce_sequence_items(dataset_specs)
+    point_match_mode = experimental_image is not None or bool(dataset_spec_entries)
 
     # Geometry fitting compares peak positions against a deterministic
     # center-beam / zero-divergence ray rather than the sampled beam cloud.
@@ -4474,7 +5346,7 @@ def fit_geometry_parameters(
         params,
         measured_peaks,
         experimental_image,
-        dataset_specs=dataset_specs,
+        dataset_specs=dataset_spec_entries,
     )
     multi_dataset_mode = ("theta_offset" in var_names) and len(dataset_contexts) > 0
     dataset_parallel_workers = 1
