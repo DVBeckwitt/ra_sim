@@ -94,3 +94,15 @@ def test_runtime_unknown_attr_forwards_to_impl(monkeypatch) -> None:
 
 def test_runtime_impl_source_compiles() -> None:
     py_compile.compile(str(RUNTIME_IMPL_SOURCE_PATH), doraise=True)
+
+
+def test_runtime_impl_attaches_background_theta_trace_after_theta_var_assignment() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+    theta_assignment = (
+        "theta_initial_var = beam_mosaic_parameter_sliders_view_state.theta_initial_var"
+    )
+    trace_call = "_attach_live_theta_background_theta_trace(theta_initial_var)"
+
+    assert theta_assignment in source
+    assert trace_call in source
+    assert source.index(theta_assignment) < source.index(trace_call)

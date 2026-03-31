@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ra_sim import launcher
 from ra_sim.gui import bootstrap
 
 
@@ -16,6 +17,7 @@ def test_should_forward_to_cli_only_for_non_launcher_commands() -> None:
     assert bootstrap.should_forward_to_cli(["simulate", "--out", "output.png"])
     assert not bootstrap.should_forward_to_cli(["gui"])
     assert not bootstrap.should_forward_to_cli(["calibrant"])
+    assert not bootstrap.should_forward_to_cli(["mosaic"])
     assert not bootstrap.should_forward_to_cli(["--help"])
 
 
@@ -30,6 +32,7 @@ def test_parse_launch_args_round_trip() -> None:
 def test_resolve_startup_mode_prefers_explicit_command() -> None:
     assert bootstrap.resolve_startup_mode("gui") == "simulation"
     assert bootstrap.resolve_startup_mode("calibrant", early_mode="simulation") == "calibrant"
+    assert bootstrap.resolve_startup_mode("mosaic", early_mode="simulation") == "mosaic"
     assert bootstrap.resolve_startup_mode(None, early_mode="simulation") == "simulation"
     assert bootstrap.resolve_startup_mode(None) == "prompt"
 
@@ -59,6 +62,22 @@ def test_early_main_bootstrap_forwards_cli(monkeypatch) -> None:
 
     assert exc_info.value.code == 0
     assert calls == [["simulate", "--out", "output.png"]]
+
+
+def test_early_main_bootstrap_launches_mosaic_visualizer(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        launcher,
+        "launch_mosaic_visualizer",
+        lambda: calls.append("mosaic"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        bootstrap.early_main_bootstrap("__main__", ["mosaic"])
+
+    assert exc_info.value.code == 0
+    assert calls == ["mosaic"]
 
 
 def test_build_runtime_structure_factor_pruning_bootstrap_delegates_callbacks() -> None:

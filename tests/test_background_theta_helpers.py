@@ -89,6 +89,24 @@ def test_background_theta_base_for_index_ignores_shared_offset() -> None:
     )
 
 
+def test_sync_live_theta_to_background_theta_list_updates_current_background_only() -> None:
+    theta_initial_var = _Var(9.25)
+    background_theta_list_var = _Var("4.0, 7.5, 10.0")
+
+    assert (
+        background_theta.sync_live_theta_to_background_theta_list(
+            osc_files=["bg0.osc", "bg1.osc", "bg2.osc"],
+            current_background_index=1,
+            theta_initial_var=theta_initial_var,
+            defaults={"theta_initial": 6.0},
+            theta_initial=6.0,
+            background_theta_list_var=background_theta_list_var,
+        )
+        is True
+    )
+    assert background_theta_list_var.get() == "4, 9.25, 10"
+
+
 def test_parse_geometry_fit_background_indices_supports_current_all_and_ranges() -> None:
     parse_selection = background_theta.parse_geometry_fit_background_indices
 

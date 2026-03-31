@@ -1,3 +1,4 @@
+import sys
 from types import SimpleNamespace
 
 from ra_sim import cli
@@ -32,6 +33,19 @@ def test_cmd_calibrant_uses_package_launcher(monkeypatch) -> None:
     assert calls == ["bundle.npz"]
 
 
+def test_cmd_mosaic_uses_package_launcher(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _fake_launch() -> None:
+        calls.append("mosaic")
+
+    monkeypatch.setattr(launcher, "launch_mosaic_visualizer", _fake_launch)
+
+    cli._cmd_mosaic(SimpleNamespace())
+
+    assert calls == ["mosaic"]
+
+
 def test_root_launcher_forwards_non_launcher_commands_to_cli(monkeypatch) -> None:
     calls: list[list[str]] = []
 
@@ -43,6 +57,19 @@ def test_root_launcher_forwards_non_launcher_commands_to_cli(monkeypatch) -> Non
     launcher.main(["simulate", "--out", "output.png"])
 
     assert calls == [["simulate", "--out", "output.png"]]
+
+
+def test_launch_startup_mode_uses_mosaic_visualizer(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _fake_launch() -> None:
+        calls.append("mosaic")
+
+    monkeypatch.setattr(launcher, "launch_mosaic_visualizer", _fake_launch)
+
+    launcher.launch_startup_mode("mosaic")
+
+    assert calls == ["mosaic"]
 
 
 def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
@@ -61,3 +88,22 @@ def test_launch_simulation_gui_forces_simulation_mode(monkeypatch) -> None:
     launcher.launch_simulation_gui(write_excel_flag=False)
 
     assert calls == [(False, "simulation", None)]
+
+
+def test_launch_mosaic_visualizer_uses_env_override(monkeypatch, tmp_path) -> None:
+    repo_path = tmp_path / "custom-mosaic"
+    repo_path.mkdir()
+    script_path = repo_path / "mosaic_simulator.py"
+    script_path.write_text("print('ok')\n", encoding="utf-8")
+
+    calls: list[tuple[list[str], object, bool]] = []
+
+    def _fake_run(command: list[str], *, cwd=None, check=False) -> None:
+        calls.append((command, cwd, check))
+
+    monkeypatch.setenv("RA_SIM_MOSAIC_REPO", str(repo_path))
+    monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
+
+    launcher.launch_mosaic_visualizer()
+
+    assert calls == [([sys.executable, str(script_path)], repo_path.resolve(), True)]

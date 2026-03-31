@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import subprocess
 import sys
 from ra_sim.gui import bootstrap as gui_bootstrap
+
+_MOSAIC_REPO_ENV_VAR = "RA_SIM_MOSAIC_REPO"
+_MOSAIC_REPO_DIRNAME = "2D_Mosaic_Sim"
+_MOSAIC_SCRIPT_NAMES = (
+    "mosaic_simulator.py",
+    "simulate_mosaic.py",
+)
 
 
 def launch_simulation_gui(*, write_excel_flag: bool | None = None) -> None:
@@ -23,6 +33,60 @@ def launch_calibrant_gui(*, bundle: str | None = None) -> None:
     gui_bootstrap.launch_calibrant_gui(bundle=bundle)
 
 
+def resolve_mosaic_repo_path() -> Path:
+    """Return the configured local 2D_Mosaic_Sim repository path."""
+
+    repo_root = Path(__file__).resolve().parents[1]
+    candidates: list[Path] = []
+
+    override = os.environ.get(_MOSAIC_REPO_ENV_VAR, "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.append(repo_root.parent / _MOSAIC_REPO_DIRNAME)
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate.resolve()
+
+    searched = ", ".join(f"`{candidate}`" for candidate in candidates)
+    raise FileNotFoundError(
+        "Unable to locate the 2D_Mosaic_Sim repository. "
+        f"Checked {searched}. Set `{_MOSAIC_REPO_ENV_VAR}` to override the default location."
+    )
+
+
+def resolve_mosaic_launcher_script(repo_path: Path) -> Path:
+    """Return the preferred launcher script inside the mosaic-visualizer repo."""
+
+    for script_name in _MOSAIC_SCRIPT_NAMES:
+        script_path = repo_path / script_name
+        if script_path.is_file():
+            return script_path
+
+    expected = ", ".join(f"`{name}`" for name in _MOSAIC_SCRIPT_NAMES)
+    raise FileNotFoundError(
+        "Unable to locate a supported 2D_Mosaic_Sim launcher script in "
+        f"`{repo_path}`. Expected one of {expected}."
+    )
+
+
+def launch_mosaic_visualizer() -> None:
+    """Launch the sibling 2D_Mosaic_Sim visualization tool."""
+
+    repo_path = resolve_mosaic_repo_path()
+    script_path = resolve_mosaic_launcher_script(repo_path)
+    try:
+        subprocess.run(
+            [sys.executable, str(script_path)],
+            cwd=repo_path,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"2D_Mosaic_Sim exited with status {exc.returncode}."
+        ) from exc
+
+
 def launch_startup_mode(
     startup_mode: str | None,
     *,
@@ -39,7 +103,12 @@ def launch_startup_mode(
     if startup_mode == "calibrant":
         launch_calibrant_gui(bundle=calibrant_bundle)
         return
-    raise ValueError("startup_mode must resolve to one of: simulation, calibrant")
+    if startup_mode == "mosaic":
+        launch_mosaic_visualizer()
+        return
+    raise ValueError(
+        "startup_mode must resolve to one of: simulation, calibrant, mosaic"
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

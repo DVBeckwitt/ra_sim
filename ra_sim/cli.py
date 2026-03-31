@@ -17,6 +17,9 @@ Usage examples:
 - Launch the new calibrant fitter GUI:
     python -m ra_sim calibrant --bundle /path/to/hbn_bundle.npz
 
+- Launch the sibling 2D mosaic visualizer:
+    python -m ra_sim mosaic
+
 This CLI intentionally mirrors the defaults used by the GUI by reading
 instrument and file paths from `config/` via `ra_sim.config`.
 """
@@ -1214,6 +1217,12 @@ def _cmd_calibrant(args: argparse.Namespace) -> None:
     launcher.launch_calibrant_gui(bundle=args.bundle)
 
 
+def _cmd_mosaic(_args: argparse.Namespace) -> None:
+    """Launch the sibling 2D_Mosaic_Sim visualizer."""
+
+    launcher.launch_mosaic_visualizer()
+
+
 def _prompt_startup_mode() -> str | None:
     """Prompt for startup mode when launched with no CLI args."""
 
@@ -1223,6 +1232,7 @@ def _prompt_startup_mode() -> str | None:
     print("Select startup mode:")
     print("  1) Fit calibrant (hBN fitter)")
     print("  2) Run simulation GUI")
+    print("  3) Run 2D Mosaic visualizer")
     while True:
         try:
             choice = input("Enter choice [2]: ").strip().lower()
@@ -1234,7 +1244,9 @@ def _prompt_startup_mode() -> str | None:
             return "simulation"
         if choice in {"1", "cal", "calibrant", "fit", "f"}:
             return "calibrant"
-        print("Please enter 1 or 2.")
+        if choice in {"3", "mosaic", "visualizer", "viz", "m"}:
+            return "mosaic"
+        print("Please enter 1, 2, or 3.")
 
 
 def build_headless_simulation_defaults(
@@ -1738,6 +1750,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     calibrant_parser.set_defaults(func=_cmd_calibrant)
 
+    mosaic_parser = subparsers.add_parser(
+        "mosaic",
+        help="Launch the sibling 2D_Mosaic_Sim visualizer.",
+    )
+    mosaic_parser.set_defaults(func=_cmd_mosaic)
+
     sim_parser = subparsers.add_parser(
         "simulate",
         help="Run the diffraction simulation headlessly and save an image.",
@@ -1884,6 +1902,7 @@ def main(argv: list[str] | None = None) -> None:
         "hbn-fit",
         "calibrant",
         "calibrant-fit",
+        "mosaic",
         "-h",
         "--help",
     }
@@ -1892,6 +1911,8 @@ def main(argv: list[str] | None = None) -> None:
         startup_mode = _prompt_startup_mode()
         if startup_mode == "calibrant":
             argv = ["calibrant"]
+        elif startup_mode == "mosaic":
+            argv = ["mosaic"]
         elif startup_mode == "simulation":
             argv = ["gui"]
 

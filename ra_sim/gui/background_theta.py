@@ -373,6 +373,54 @@ def current_background_theta_values(
     return [float(v) for v in values]
 
 
+def sync_live_theta_to_background_theta_list(
+    *,
+    osc_files: Sequence[object],
+    current_background_index: int,
+    theta_initial_var: object | None,
+    defaults: Mapping[str, object] | None,
+    theta_initial: object,
+    background_theta_list_var: object | None,
+) -> bool:
+    """Mirror the live theta slider value into the current background entry."""
+
+    if theta_initial_var is None or background_theta_list_var is None:
+        return False
+
+    expected_count = int(len(osc_files))
+    if expected_count <= 0:
+        return False
+
+    try:
+        live_theta = float(_read_var_value(theta_initial_var))
+    except Exception:
+        return False
+    if not np.isfinite(live_theta):
+        return False
+
+    theta_values = current_background_theta_values(
+        osc_files=osc_files,
+        theta_initial_var=theta_initial_var,
+        defaults=defaults,
+        theta_initial=theta_initial,
+        background_theta_list_var=background_theta_list_var,
+        strict_count=False,
+    )
+    if not theta_values:
+        return False
+
+    idx = max(0, min(int(current_background_index), len(theta_values) - 1))
+    if abs(float(theta_values[idx]) - float(live_theta)) <= 1.0e-12:
+        return False
+
+    theta_values[idx] = float(live_theta)
+    _write_var_value(
+        background_theta_list_var,
+        format_background_theta_values(theta_values),
+    )
+    return True
+
+
 def background_theta_base_for_index(
     index: int,
     *,

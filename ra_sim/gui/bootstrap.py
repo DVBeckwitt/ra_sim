@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-LAUNCHER_COMMANDS = {"gui", "calibrant"}
+LAUNCHER_COMMANDS = {"gui", "calibrant", "mosaic"}
 
 
 @dataclass(frozen=True)
@@ -268,11 +268,35 @@ def quick_startup_mode_dialog() -> str | None:
         bg="#ffffff",
     ).pack(anchor="w", padx=20, pady=(0, 16))
 
+    mosaic_btn = tk.Button(
+        panel,
+        text="Run 2D Mosaic Visualizer",
+        font=("Segoe UI", 11, "bold"),
+        bg="#b45309",
+        fg="#ffffff",
+        activebackground="#92400e",
+        activeforeground="#ffffff",
+        relief="flat",
+        bd=0,
+        padx=14,
+        pady=10,
+        cursor="hand2",
+        command=lambda: _set_mode("mosaic"),
+    )
+    mosaic_btn.pack(fill="x", padx=18, pady=(0, 6))
+    tk.Label(
+        panel,
+        text="Open the sibling 2D_Mosaic_Sim geometry and refraction visualizer.",
+        font=("Segoe UI", 9),
+        fg="#64748b",
+        bg="#ffffff",
+    ).pack(anchor="w", padx=20, pady=(0, 16))
+
     footer = tk.Frame(panel, bg="#ffffff")
     footer.pack(fill="x", padx=18, pady=(0, 16))
     tk.Label(
         footer,
-        text="Keyboard: 1 = Simulation, 2 = Calibrant, Esc = Cancel",
+        text="Keyboard: 1 = Simulation, 2 = Calibrant, 3 = 2D Mosaic, Esc = Cancel",
         font=("Segoe UI", 8),
         fg="#64748b",
         bg="#ffffff",
@@ -297,11 +321,12 @@ def quick_startup_mode_dialog() -> str | None:
     launcher.bind("<Return>", lambda _event: _set_mode("simulation"))
     launcher.bind("1", lambda _event: _set_mode("simulation"))
     launcher.bind("2", lambda _event: _set_mode("calibrant"))
+    launcher.bind("3", lambda _event: _set_mode("mosaic"))
     launcher.protocol("WM_DELETE_WINDOW", lambda: _set_mode(None))
 
     launcher.update_idletasks()
     width = max(launcher.winfo_width(), 480)
-    height = max(launcher.winfo_height(), 330)
+    height = max(launcher.winfo_height(), 420)
     x = launcher.winfo_screenwidth() // 2 - width // 2
     y = launcher.winfo_screenheight() // 2 - height // 2
     launcher.geometry(f"{width}x{height}+{x}+{y}")
@@ -309,13 +334,13 @@ def quick_startup_mode_dialog() -> str | None:
     launcher.mainloop()
 
     mode = choice["mode"]
-    if mode in {"simulation", "calibrant"}:
+    if mode in {"simulation", "calibrant", "mosaic"}:
         return mode
     return None
 
 
 def choose_startup_mode_dialog(root: Any) -> str | None:
-    """Ask whether to start the simulation GUI or calibrant fitter."""
+    """Ask whether to start the simulation GUI, calibrant fitter, or mosaic viewer."""
 
     import tkinter as tk
     from tkinter import ttk
@@ -343,7 +368,7 @@ def choose_startup_mode_dialog(root: Any) -> str | None:
     ).pack(anchor="w")
     ttk.Label(
         frame,
-        text="Select calibrant fitting or full simulation GUI.",
+        text="Select the RA-SIM GUI, calibrant fitter, or 2D mosaic visualizer.",
     ).pack(anchor="w", pady=(4, 10))
 
     def _set_mode(mode_name: str | None) -> None:
@@ -369,6 +394,12 @@ def choose_startup_mode_dialog(root: Any) -> str | None:
 
     ttk.Button(
         frame,
+        text="Run 2D Mosaic Visualizer",
+        command=lambda: _set_mode("mosaic"),
+    ).pack(fill=tk.X, pady=2)
+
+    ttk.Button(
+        frame,
         text="Cancel",
         command=lambda: _set_mode(None),
     ).pack(fill=tk.X, pady=(8, 0))
@@ -376,6 +407,7 @@ def choose_startup_mode_dialog(root: Any) -> str | None:
     chooser.protocol("WM_DELETE_WINDOW", lambda: _set_mode(None))
     chooser.bind("<Escape>", lambda _event: _set_mode(None))
     chooser.bind("<Return>", lambda _event: _set_mode("simulation"))
+    chooser.bind("3", lambda _event: _set_mode("mosaic"))
 
     chooser.update_idletasks()
     width = chooser.winfo_width()
@@ -429,7 +461,8 @@ def build_launch_arg_parser() -> argparse.ArgumentParser:
         choices=sorted(LAUNCHER_COMMANDS),
         help=(
             "Optional startup mode: 'gui' runs simulation directly; "
-            "'calibrant' launches the hBN fitter directly."
+            "'calibrant' launches the hBN fitter directly; "
+            "'mosaic' launches the sibling 2D_Mosaic_Sim visualizer."
         ),
     )
     parser.add_argument(
@@ -462,7 +495,9 @@ def resolve_startup_mode(
         return "simulation"
     if command == "calibrant":
         return "calibrant"
-    if early_mode in {"simulation", "calibrant"}:
+    if command == "mosaic":
+        return "mosaic"
+    if early_mode in {"simulation", "calibrant", "mosaic"}:
         return early_mode
     return "prompt"
 
@@ -1315,6 +1350,12 @@ def early_main_bootstrap(
         launch_calibrant_gui(bundle=bundle_path)
         raise SystemExit(0)
 
+    if cli_argv and cli_argv[0] == "mosaic":
+        from ra_sim import launcher as package_launcher
+
+        package_launcher.launch_mosaic_visualizer()
+        raise SystemExit(0)
+
     if cli_argv and cli_argv[0] == "gui":
         os.environ["RA_SIM_EARLY_STARTUP_MODE"] = "simulation"
         return
@@ -1329,6 +1370,11 @@ def early_main_bootstrap(
     mode = quick_startup_mode_dialog()
     if mode == "calibrant":
         launch_calibrant_gui(bundle=bundle_path)
+        raise SystemExit(0)
+    if mode == "mosaic":
+        from ra_sim import launcher as package_launcher
+
+        package_launcher.launch_mosaic_visualizer()
         raise SystemExit(0)
     if mode == "simulation":
         os.environ["RA_SIM_EARLY_STARTUP_MODE"] = "simulation"
