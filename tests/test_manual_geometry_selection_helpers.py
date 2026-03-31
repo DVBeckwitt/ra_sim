@@ -163,6 +163,13 @@ def test_refine_caked_peak_center_finds_ridge_crest() -> None:
 
 
 def test_geometry_manual_candidate_source_key_prefers_source_indices() -> None:
+    assert mg.geometry_manual_candidate_source_key(
+        {
+            "source_table_index": "3",
+            "source_row_index": 9,
+            "source_peak_index": 5,
+        }
+    ) == ("source_peak", 3, 5)
     assert mg.geometry_manual_candidate_source_key({"source_table_index": "3", "source_row_index": 9}) == (
         "source",
         3,
@@ -281,10 +288,18 @@ def test_geometry_manual_nearest_candidate_to_point_selects_closest_simulated_pe
 
 def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> None:
     entry = mg.geometry_manual_pair_entry_from_candidate(
-        {"label": "1,0,2", "hkl": (1, 0, 2), "source_table_index": 3, "source_row_index": 8},
+        {
+            "label": "1,0,2",
+            "hkl": (1, 0, 2),
+            "source_table_index": 3,
+            "source_row_index": 8,
+            "source_peak_index": 2,
+        },
         120.0,
         240.0,
         group_key=("q_group", "primary", 1, 2),
+        detector_col=119.5,
+        detector_row=239.5,
         raw_col=118.5,
         raw_row=239.0,
         caked_col=13.2,
@@ -298,10 +313,13 @@ def test_geometry_manual_pair_entry_from_candidate_preserves_caked_coords() -> N
     assert entry is not None
     assert entry["x"] == 120.0
     assert entry["y"] == 240.0
+    assert entry["detector_x"] == 119.5
+    assert entry["detector_y"] == 239.5
     assert entry["caked_x"] == 13.2
     assert entry["caked_y"] == -7.4
     assert entry["raw_caked_x"] == 13.0
     assert entry["raw_caked_y"] == -7.0
+    assert entry["source_peak_index"] == 2
 
 
 def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_state() -> None:
@@ -693,9 +711,12 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
             "hkl": (1, 0, 2),
             "x": 10.5,
             "y": 12.25,
+            "detector_x": 10.0,
+            "detector_y": 12.0,
             "q_group_key": ("q_group", "primary", 1.0, 2),
             "source_table_index": 4,
             "source_row_index": 7,
+            "source_peak_index": 3,
             "raw_x": 9.0,
             "raw_y": 11.0,
             "placement_error_px": 1.25,
@@ -713,8 +734,11 @@ def test_geometry_manual_pair_json_round_trip_preserves_hkl_and_group_key() -> N
 
     assert restored["hkl"] == (1, 0, 2)
     assert restored["q_group_key"] == ("q_group", "primary", 1.0, 2)
+    assert restored["detector_x"] == 10.0
+    assert restored["detector_y"] == 12.0
     assert restored["source_table_index"] == 4
     assert restored["source_row_index"] == 7
+    assert restored["source_peak_index"] == 3
     assert restored["raw_x"] == 9.0
     assert restored["raw_y"] == 11.0
     assert restored["placement_error_px"] == 1.25

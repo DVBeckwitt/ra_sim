@@ -2953,6 +2953,9 @@ _geometry_manual_entry_display_coords = (
 _caked_angles_to_background_display_coords = (
     geometry_manual_projection_workflow.caked_angles_to_background_display_coords
 )
+_background_display_to_native_detector_coords = (
+    geometry_manual_projection_workflow.background_display_to_native_detector_coords
+)
 _native_detector_coords_to_caked_display_coords = (
     geometry_manual_projection_workflow.native_detector_coords_to_caked_display_coords
 )
@@ -3517,6 +3520,9 @@ geometry_manual_workflow = (
         position_sigma_px=_geometry_manual_position_sigma_px,
         caked_angles_to_background_display_coords=(
             _caked_angles_to_background_display_coords
+        ),
+        background_display_to_native_detector_coords=(
+            _background_display_to_native_detector_coords
         ),
         show_preview=_show_geometry_manual_preview,
     )
@@ -7520,6 +7526,39 @@ gui_views.create_background_theta_controls(
 background_theta_list_var = background_theta_controls_view_state.background_theta_list_var
 geometry_theta_offset_var = background_theta_controls_view_state.geometry_theta_offset_var
 _sync_background_theta_controls(preserve_existing=True, trigger_update=False)
+
+_theta_live_to_background_list_sync = {"active": False}
+_theta_initial_background_theta_trace = {"attached": False}
+
+
+def _sync_live_theta_into_background_theta_list(*_args) -> None:
+    if _theta_live_to_background_list_sync["active"]:
+        return
+    _theta_live_to_background_list_sync["active"] = True
+    try:
+        gui_background_theta.sync_live_theta_to_background_theta_list(
+            osc_files=background_runtime_state.osc_files,
+            current_background_index=int(background_runtime_state.current_background_index),
+            theta_initial_var=theta_initial_var,
+            defaults=defaults,
+            theta_initial=theta_initial,
+            background_theta_list_var=background_theta_list_var,
+        )
+    finally:
+        _theta_live_to_background_list_sync["active"] = False
+
+
+def _attach_live_theta_background_theta_trace(theta_var: object | None = None) -> None:
+    if _theta_initial_background_theta_trace["attached"]:
+        return
+
+    live_theta_var = globals().get("theta_initial_var") if theta_var is None else theta_var
+    trace_add = getattr(live_theta_var, "trace_add", None)
+    if not callable(trace_add):
+        return
+
+    trace_add("write", _sync_live_theta_into_background_theta_list)
+    _theta_initial_background_theta_trace["attached"] = True
 
 gui_views.create_geometry_fit_background_controls(
     parent=app_shell_view_state.match_backgrounds_frame,
@@ -12971,6 +13010,7 @@ gui_views.create_beam_mosaic_parameter_sliders(
     on_mosaic_update=on_mosaic_slider_change,
 )
 theta_initial_var = beam_mosaic_parameter_sliders_view_state.theta_initial_var
+_attach_live_theta_background_theta_trace(theta_initial_var)
 theta_initial_scale = beam_mosaic_parameter_sliders_view_state.theta_initial_scale
 cor_angle_var = beam_mosaic_parameter_sliders_view_state.cor_angle_var
 cor_angle_scale = beam_mosaic_parameter_sliders_view_state.cor_angle_scale
@@ -14262,10 +14302,11 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         When ``True`` the initial intensities are written to an Excel
         file in the configured downloads directory.  When ``None`` the
         value from the instrument configuration file is used.
-    startup_mode : {"prompt", "simulation", "calibrant"}, optional
+    startup_mode : {"prompt", "simulation", "calibrant", "mosaic"}, optional
         Startup behavior. ``prompt`` shows a launcher GUI asking which mode
         to run, ``simulation`` starts this GUI directly, and ``calibrant``
-        launches the hBN calibrant fitter.
+        launches the hBN calibrant fitter. ``mosaic`` launches the sibling
+        2D_Mosaic_Sim visualizer.
     calibrant_bundle : str or None, optional
         Optional NPZ bundle path to preload when launching calibrant mode.
     """
@@ -14274,9 +14315,9 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     if write_excel_flag is not None:
         write_excel = write_excel_flag
 
-    if startup_mode not in {"prompt", "simulation", "calibrant"}:
+    if startup_mode not in {"prompt", "simulation", "calibrant", "mosaic"}:
         raise ValueError(
-            "startup_mode must be one of: prompt, simulation, calibrant"
+            "startup_mode must be one of: prompt, simulation, calibrant, mosaic"
         )
 
     resolved_mode = startup_mode
@@ -14290,6 +14331,13 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
     if resolved_mode == "calibrant":
         _shutdown_gui()
         gui_bootstrap.launch_calibrant_gui(bundle=calibrant_bundle)
+        return
+
+    if resolved_mode == "mosaic":
+        _shutdown_gui()
+        from ra_sim import launcher as package_launcher
+
+        package_launcher.launch_mosaic_visualizer()
         return
 
     try:

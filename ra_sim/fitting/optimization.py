@@ -929,6 +929,11 @@ def _prepare_reflection_subset(
 
     selected_original_indices: List[int] = []
     selected_lookup: set[int] = set()
+    source_identity_only = bool(normalized_measured) and all(
+        bool(entry.get("fit_source_identity_only", False))
+        for entry in normalized_measured
+        if isinstance(entry, dict)
+    )
 
     for entry in normalized_measured:
         source_key = _measured_source_indices(entry)
@@ -956,24 +961,25 @@ def _prepare_reflection_subset(
     fixed_source_reflection_count = int(len(selected_original_indices))
 
     fallback_hkl_keys: set[Tuple[int, int, int]] = set()
-    for entry in normalized_measured:
-        # Always retain the HKL-based fallback path, even when source-table
-        # indices are present. Manual geometry picks can carry stale source
-        # indices after the user clears/readds points or after the underlying
-        # reflection ordering changes, and relying on indices alone can reduce
-        # the simulation subset to the wrong reflections.
-        raw_hkl = entry.get("hkl")
-        if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
-            continue
-        try:
-            hkl_key = (
-                int(raw_hkl[0]),
-                int(raw_hkl[1]),
-                int(raw_hkl[2]),
-            )
-        except Exception:
-            continue
-        fallback_hkl_keys.add(hkl_key)
+    if not source_identity_only:
+        for entry in normalized_measured:
+            # Always retain the HKL-based fallback path, even when source-table
+            # indices are present. Manual geometry picks can carry stale source
+            # indices after the user clears/readds points or after the underlying
+            # reflection ordering changes, and relying on indices alone can reduce
+            # the simulation subset to the wrong reflections.
+            raw_hkl = entry.get("hkl")
+            if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
+                continue
+            try:
+                hkl_key = (
+                    int(raw_hkl[0]),
+                    int(raw_hkl[1]),
+                    int(raw_hkl[2]),
+                )
+            except Exception:
+                continue
+            fallback_hkl_keys.add(hkl_key)
 
     if fallback_hkl_keys:
         for idx, row in enumerate(miller_arr):
@@ -1687,6 +1693,359 @@ def _evaluate_geometry_fit_dataset_point_matches(
         )
     else:
         summary["peak_weighting_mode"] = "uniform"
+    return residual_arr, diagnostics, summary
+
+
+def _evaluate_geometry_fit_dataset_dynamic_point_matches(
+    local: Dict[str, object],
+    dataset_ctx: GeometryFitDatasetContext,
+    *,
+    image_size: int,
+    missing_pair_penalty_deg: float,
+    theta_value: float,
+    collect_diagnostics: bool = False,
+) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+    """Evaluate one dataset with fixed source identities and angular residuals."""
+
+    simulation_subset = dataset_ctx.subset
+    fit_miller = simulation_subset.miller
+    fit_intensities = simulation_subset.intensities
+    normalized_measured = simulation_subset.measured_entries
+    single_ray_indices = dataset_ctx.single_ray_indices
+
+    if not normalized_measured:
+        return np.array([], dtype=float), [], {
+            "dataset_index": int(dataset_ctx.dataset_index),
+            "dataset_label": str(dataset_ctx.label),
+            "theta_initial_deg": float(theta_value),
+            "measured_count": 0,
+            "fixed_source_resolved_count": 0,
+            "fallback_entry_count": 0,
+            "missing_pair_count": 0,
+            "simulated_reflection_count": int(fit_miller.shape[0]),
+            "total_reflection_count": int(simulation_subset.total_reflection_count),
+            "subset_reduced": bool(simulation_subset.reduced),
+            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
+            "single_ray_enabled": False,
+            "single_ray_forced_count": 0,
+            "peak_weighting_mode": "uniform",
+        }
+
+    mosaic = local["mosaic_params"]
+    wavelength_array = mosaic.get("wavelength_array")
+    if wavelength_array is None:
+        wavelength_array = mosaic.get("wavelength_i_array")
+
+    sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
+    _, hit_tables, *_ = _process_peaks_parallel_safe(
+        fit_miller,
+        fit_intensities,
+        image_size,
+        local["a"],
+        local["c"],
+        wavelength_array,
+        sim_buffer,
+        local["corto_detector"],
+        local["gamma"],
+        local["Gamma"],
+        local["chi"],
+        local.get("psi", 0.0),
+        local.get("psi_z", 0.0),
+        local["zs"],
+        local["zb"],
+        local["n2"],
+        mosaic["beam_x_array"],
+        mosaic["beam_y_array"],
+        mosaic["theta_array"],
+        mosaic["phi_array"],
+        mosaic["sigma_mosaic_deg"],
+        mosaic["gamma_mosaic_deg"],
+        mosaic["eta"],
+        wavelength_array,
+        local["debye_x"],
+        local["debye_y"],
+        local["center"],
+        theta_value,
+        local.get("cor_angle", 0.0),
+        np.array([1.0, 0.0, 0.0]),
+        np.array([0.0, 1.0, 0.0]),
+        save_flag=0,
+        **_simulation_kernel_kwargs(local, mosaic),
+        single_sample_indices=single_ray_indices,
+    )
+
+    def _overlay_index(entry: Dict[str, object], fallback: int) -> int:
+        try:
+            out = int(entry.get("overlay_match_index", fallback))
+        except Exception:
+            out = int(fallback)
+        if out < 0:
+            return int(fallback)
+        return int(out)
+
+    maxpos = hit_tables_to_max_positions(hit_tables)
+    residual_components = np.zeros((len(normalized_measured), 2), dtype=np.float64)
+    diagnostics: List[Dict[str, object]] = []
+    pixel_distances: List[float] = []
+    angular_distances: List[float] = []
+    matched_pair_count = 0
+    missing_pairs = 0
+    fixed_source_resolved_count = 0
+    pixel_size = float(local.get("debye_x", np.nan))
+    detector_distance = float(local.get("corto_detector", np.nan))
+    gamma_deg = float(local.get("gamma", 0.0))
+    Gamma_deg = float(local.get("Gamma", 0.0))
+    fit_center = local.get("center", [])
+
+    def _entry_diag(entry: Dict[str, object], idx: int) -> Dict[str, object]:
+        return {
+            "match_input_index": int(idx),
+            "overlay_match_index": int(_overlay_index(entry, idx)),
+            "label": str(entry.get("label", "")),
+            "hkl": tuple(entry.get("hkl", ()))
+            if isinstance(entry.get("hkl"), tuple)
+            else entry.get("hkl"),
+            "source_table_index": entry.get("source_table_index"),
+            "source_row_index": entry.get("source_row_index"),
+            "source_peak_index": entry.get("source_peak_index"),
+        }
+
+    for idx, measured_entry in enumerate(normalized_measured):
+        diag = _entry_diag(measured_entry, idx)
+        measured_anchor, measured_reason = _measured_detector_anchor(measured_entry)
+        if measured_anchor is None:
+            residual_components[idx, 0] = float(missing_pair_penalty_deg)
+            residual_components[idx, 1] = 0.0
+            missing_pairs += 1
+            if collect_diagnostics:
+                diagnostics.append(
+                    {
+                        **diag,
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "theta_initial_deg": float(theta_value),
+                        "match_kind": "fixed_source",
+                        "match_status": "missing_pair",
+                        "resolution_kind": "measured_anchor",
+                        "resolution_reason": str(measured_reason),
+                        "measured_x": float("nan"),
+                        "measured_y": float("nan"),
+                        "simulated_x": float("nan"),
+                        "simulated_y": float("nan"),
+                        "dx_px": float("nan"),
+                        "dy_px": float("nan"),
+                        "distance_px": float("nan"),
+                        "delta_two_theta_deg": float("nan"),
+                        "delta_phi_deg": float("nan"),
+                        "angular_distance_deg": float("nan"),
+                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg),
+                    }
+                )
+            continue
+
+        measured_col, measured_row = measured_anchor
+        sim_point, sim_reason = _geometry_fit_correspondence_simulated_point(
+            measured_entry,
+            hit_tables=hit_tables,
+            max_positions=maxpos,
+        )
+        if sim_point is not None:
+            sim_col = float(sim_point[0])
+            sim_row = float(sim_point[1])
+            if (
+                not np.isfinite(sim_col)
+                or not np.isfinite(sim_row)
+                or sim_col < 0.0
+                or sim_row < 0.0
+                or sim_col > float(image_size - 1)
+                or sim_row > float(image_size - 1)
+            ):
+                sim_point = None
+                sim_reason = "off_detector"
+        if sim_point is None:
+            residual_components[idx, 0] = float(missing_pair_penalty_deg)
+            residual_components[idx, 1] = 0.0
+            missing_pairs += 1
+            if collect_diagnostics:
+                diagnostics.append(
+                    {
+                        **diag,
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "theta_initial_deg": float(theta_value),
+                        "match_kind": "fixed_source",
+                        "match_status": "missing_pair",
+                        "resolution_kind": "fixed_source",
+                        "resolution_reason": str(sim_reason),
+                        "measured_x": float(measured_col),
+                        "measured_y": float(measured_row),
+                        "simulated_x": float("nan"),
+                        "simulated_y": float("nan"),
+                        "dx_px": float("nan"),
+                        "dy_px": float("nan"),
+                        "distance_px": float("nan"),
+                        "delta_two_theta_deg": float("nan"),
+                        "delta_phi_deg": float("nan"),
+                        "angular_distance_deg": float("nan"),
+                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg),
+                    }
+                )
+            continue
+
+        fixed_source_resolved_count += 1
+        sim_col = float(sim_point[0])
+        sim_row = float(sim_point[1])
+        two_theta_arr, phi_arr = _detector_pixels_to_fit_space(
+            np.array([measured_col, sim_col], dtype=np.float64),
+            np.array([measured_row, sim_row], dtype=np.float64),
+            center=fit_center,
+            detector_distance=detector_distance,
+            pixel_size=pixel_size,
+            gamma_deg=gamma_deg,
+            Gamma_deg=Gamma_deg,
+        )
+        if (
+            two_theta_arr.size < 2
+            or phi_arr.size < 2
+            or not np.isfinite(two_theta_arr[:2]).all()
+            or not np.isfinite(phi_arr[:2]).all()
+        ):
+            residual_components[idx, 0] = float(missing_pair_penalty_deg)
+            residual_components[idx, 1] = 0.0
+            missing_pairs += 1
+            if collect_diagnostics:
+                diagnostics.append(
+                    {
+                        **diag,
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "theta_initial_deg": float(theta_value),
+                        "match_kind": "fixed_source",
+                        "match_status": "missing_pair",
+                        "resolution_kind": "fit_space",
+                        "resolution_reason": "invalid_fit_space",
+                        "measured_x": float(measured_col),
+                        "measured_y": float(measured_row),
+                        "simulated_x": float(sim_col),
+                        "simulated_y": float(sim_row),
+                        "dx_px": float(sim_col - measured_col),
+                        "dy_px": float(sim_row - measured_row),
+                        "distance_px": float(
+                            math.hypot(sim_col - measured_col, sim_row - measured_row)
+                        ),
+                        "delta_two_theta_deg": float("nan"),
+                        "delta_phi_deg": float("nan"),
+                        "angular_distance_deg": float("nan"),
+                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg),
+                    }
+                )
+            continue
+
+        meas_two_theta = float(two_theta_arr[0])
+        sim_two_theta = float(two_theta_arr[1])
+        meas_phi = float(phi_arr[0])
+        sim_phi = float(phi_arr[1])
+        delta_two_theta = float(sim_two_theta - meas_two_theta)
+        delta_phi = float(_angular_difference_deg(sim_phi, meas_phi))
+        residual_components[idx, 0] = delta_two_theta
+        residual_components[idx, 1] = delta_phi
+        matched_pair_count += 1
+        pixel_dx = float(sim_col - measured_col)
+        pixel_dy = float(sim_row - measured_row)
+        pixel_distance = float(math.hypot(pixel_dx, pixel_dy))
+        angular_distance = float(math.hypot(delta_two_theta, delta_phi))
+        pixel_distances.append(pixel_distance)
+        angular_distances.append(angular_distance)
+
+        if collect_diagnostics:
+            diagnostics.append(
+                {
+                    **diag,
+                    "dataset_index": int(dataset_ctx.dataset_index),
+                    "dataset_label": str(dataset_ctx.label),
+                    "theta_initial_deg": float(theta_value),
+                    "match_kind": "fixed_source",
+                    "match_status": "matched",
+                    "resolution_kind": "fixed_source",
+                    "resolution_reason": str(sim_reason),
+                    "measured_x": float(measured_col),
+                    "measured_y": float(measured_row),
+                    "simulated_x": float(sim_col),
+                    "simulated_y": float(sim_row),
+                    "dx_px": float(pixel_dx),
+                    "dy_px": float(pixel_dy),
+                    "distance_px": float(pixel_distance),
+                    "measured_two_theta_deg": float(meas_two_theta),
+                    "measured_phi_deg": float(meas_phi),
+                    "simulated_two_theta_deg": float(sim_two_theta),
+                    "simulated_phi_deg": float(sim_phi),
+                    "delta_two_theta_deg": float(delta_two_theta),
+                    "delta_phi_deg": float(delta_phi),
+                    "angular_distance_deg": float(angular_distance),
+                }
+            )
+
+    residual_arr = residual_components.reshape(-1)
+    summary: Dict[str, object] = {
+        "dataset_index": int(dataset_ctx.dataset_index),
+        "dataset_label": str(dataset_ctx.label),
+        "theta_initial_deg": float(theta_value),
+        "measured_count": int(len(normalized_measured)),
+        "fixed_source_resolved_count": int(fixed_source_resolved_count),
+        "fallback_entry_count": 0,
+        "fallback_hkl_count": 0,
+        "matched_pair_count": int(matched_pair_count),
+        "missing_pair_count": int(missing_pairs),
+        "simulated_reflection_count": int(fit_miller.shape[0]),
+        "total_reflection_count": int(simulation_subset.total_reflection_count),
+        "fixed_source_reflection_count": int(simulation_subset.fixed_source_reflection_count),
+        "subset_fallback_hkl_count": int(simulation_subset.fallback_hkl_count),
+        "subset_reduced": bool(simulation_subset.reduced),
+        "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
+        "single_ray_enabled": False,
+        "single_ray_forced_count": int(np.count_nonzero(single_ray_indices >= 0))
+        if isinstance(single_ray_indices, np.ndarray)
+        else 0,
+        "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
+        "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+        "peak_weighting_mode": "uniform",
+        "custom_sigma_count": 0,
+        "anisotropic_sigma_count": 0,
+    }
+    if pixel_distances:
+        pixel_dist_arr = np.asarray(pixel_distances, dtype=float)
+        pixel_dist_arr = pixel_dist_arr[np.isfinite(pixel_dist_arr)]
+        if pixel_dist_arr.size:
+            summary["unweighted_peak_rms_px"] = float(
+                np.sqrt(np.mean(pixel_dist_arr * pixel_dist_arr))
+            )
+            summary["unweighted_peak_mean_px"] = float(np.mean(pixel_dist_arr))
+            summary["unweighted_peak_max_px"] = float(np.max(pixel_dist_arr))
+        else:
+            summary["unweighted_peak_rms_px"] = float("nan")
+            summary["unweighted_peak_mean_px"] = float("nan")
+            summary["unweighted_peak_max_px"] = float("nan")
+    else:
+        summary["unweighted_peak_rms_px"] = float("nan")
+        summary["unweighted_peak_mean_px"] = float("nan")
+        summary["unweighted_peak_max_px"] = float("nan")
+    if angular_distances:
+        angular_dist_arr = np.asarray(angular_distances, dtype=float)
+        angular_dist_arr = angular_dist_arr[np.isfinite(angular_dist_arr)]
+        if angular_dist_arr.size:
+            summary["unweighted_peak_rms_deg"] = float(
+                np.sqrt(np.mean(angular_dist_arr * angular_dist_arr))
+            )
+            summary["unweighted_peak_mean_deg"] = float(np.mean(angular_dist_arr))
+            summary["unweighted_peak_max_deg"] = float(np.max(angular_dist_arr))
+        else:
+            summary["unweighted_peak_rms_deg"] = float("nan")
+            summary["unweighted_peak_mean_deg"] = float("nan")
+            summary["unweighted_peak_max_deg"] = float("nan")
+    else:
+        summary["unweighted_peak_rms_deg"] = float("nan")
+        summary["unweighted_peak_mean_deg"] = float("nan")
+        summary["unweighted_peak_max_deg"] = float("nan")
     return residual_arr, diagnostics, summary
 
 
@@ -5050,6 +5409,126 @@ def _geometry_fit_correspondence_simulated_point(
     return (float(sim_col), float(sim_row)), "resolved_source_peak"
 
 
+def _detector_pixels_to_fit_space(
+    cols: Sequence[float] | np.ndarray,
+    rows: Sequence[float] | np.ndarray,
+    *,
+    center: Sequence[float] | None,
+    detector_distance: float,
+    pixel_size: float,
+    gamma_deg: float = 0.0,
+    Gamma_deg: float = 0.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert detector pixels into `(2theta_deg, phi_deg)` using full detector tilt."""
+
+    cols_arr = np.asarray(cols, dtype=float).reshape(-1)
+    rows_arr = np.asarray(rows, dtype=float).reshape(-1)
+    two_theta = np.full(cols_arr.shape, np.nan, dtype=np.float64)
+    phi = np.full(cols_arr.shape, np.nan, dtype=np.float64)
+
+    if cols_arr.shape != rows_arr.shape:
+        return two_theta, phi
+    if center is None or len(center) < 2:
+        return two_theta, phi
+    if not np.isfinite(detector_distance) or detector_distance <= 0.0:
+        return two_theta, phi
+    if not np.isfinite(pixel_size) or pixel_size <= 0.0:
+        return two_theta, phi
+
+    try:
+        centre_row = float(center[0])
+        centre_col = float(center[1])
+    except (TypeError, ValueError, IndexError):
+        return two_theta, phi
+
+    cg = math.cos(math.radians(float(gamma_deg)))
+    sg = math.sin(math.radians(float(gamma_deg)))
+    cG = math.cos(math.radians(float(Gamma_deg)))
+    sG = math.sin(math.radians(float(Gamma_deg)))
+
+    R_x_det = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, cg, sg],
+            [0.0, -sg, cg],
+        ],
+        dtype=np.float64,
+    )
+    R_z_det = np.array(
+        [
+            [cG, sG, 0.0],
+            [-sG, cG, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+    n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    n_det_rot = R_z_det @ (R_x_det @ n_detector)
+    n_det_len = float(np.linalg.norm(n_det_rot))
+    if not np.isfinite(n_det_len) or n_det_len <= 1.0e-14:
+        return two_theta, phi
+    n_det_rot /= n_det_len
+
+    detector_pos = np.array(
+        [0.0, float(detector_distance), 0.0],
+        dtype=np.float64,
+    )
+
+    e1_det = unit_x - float(np.dot(unit_x, n_det_rot)) * n_det_rot
+    e1_len = float(np.linalg.norm(e1_det))
+    if not np.isfinite(e1_len) or e1_len <= 1.0e-14:
+        e1_det = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    else:
+        e1_det /= e1_len
+
+    e2_det = -np.cross(n_det_rot, e1_det)
+    e2_len = float(np.linalg.norm(e2_det))
+    if not np.isfinite(e2_len) or e2_len <= 1.0e-14:
+        e2_det = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    else:
+        e2_det /= e2_len
+
+    valid_mask = np.isfinite(cols_arr) & np.isfinite(rows_arr)
+    if not np.any(valid_mask):
+        return two_theta, phi
+
+    x_det = (cols_arr[valid_mask] - centre_col) * float(pixel_size)
+    y_det = (centre_row - rows_arr[valid_mask]) * float(pixel_size)
+    world_points = (
+        detector_pos[None, :]
+        + x_det[:, None] * e1_det[None, :]
+        + y_det[:, None] * e2_det[None, :]
+    )
+    radial = np.hypot(world_points[:, 0], world_points[:, 1])
+    two_theta_valid = np.degrees(np.arctan2(world_points[:, 2], radial))
+    phi_valid = np.degrees(np.arctan2(world_points[:, 0], world_points[:, 1]))
+
+    two_theta[valid_mask] = two_theta_valid
+    phi[valid_mask] = phi_valid
+    return two_theta, phi
+
+
+def _measured_detector_anchor(
+    entry: Mapping[str, object],
+) -> Tuple[Optional[Tuple[float, float]], str]:
+    """Return one measured detector anchor in native/oriented detector pixels."""
+
+    for x_key, y_key, reason in (
+        ("detector_x", "detector_y", "resolved_detector_anchor"),
+        ("x", "y", "resolved_display_anchor"),
+    ):
+        try:
+            col = float(entry.get(x_key, np.nan))
+            row = float(entry.get(y_key, np.nan))
+        except Exception:
+            continue
+        if np.isfinite(col) and np.isfinite(row):
+            return (float(col), float(row)), reason
+    return None, "missing_detector_anchor"
+
+
 def _pixel_to_angles(
     col: float,
     row: float,
@@ -5513,6 +5992,14 @@ def fit_geometry_parameters(
 
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
+    dynamic_point_geometry_fit = bool(
+        solver_cfg.get("dynamic_point_geometry_fit", False)
+    )
+    missing_pair_penalty_deg = float(
+        solver_cfg.get("missing_pair_penalty_deg", 5.0)
+    )
+    if not np.isfinite(missing_pair_penalty_deg) or missing_pair_penalty_deg < 0.0:
+        missing_pair_penalty_deg = 5.0
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", False))
     use_measurement_uncertainty = bool(
@@ -6674,6 +7161,179 @@ def fit_geometry_parameters(
             summary["unweighted_peak_max_px"] = float(matched_max)
         return residual_arr, diagnostics, summary
 
+    def _evaluate_dynamic_point_matches(
+        local: Dict[str, object],
+        *,
+        collect_diagnostics: bool = False,
+    ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+        if not dataset_contexts:
+            return np.array([], dtype=float), [], {
+                "dataset_count": 0,
+                "measured_count": 0,
+                "fixed_source_resolved_count": 0,
+                "fallback_entry_count": 0,
+                "matched_pair_count": 0,
+                "missing_pair_count": 0,
+                "simulated_reflection_count": 0,
+                "total_reflection_count": 0,
+                "fixed_source_reflection_count": 0,
+                "subset_fallback_hkl_count": 0,
+                "subset_reduced": False,
+                "central_ray_mode": False,
+                "single_ray_enabled": False,
+                "single_ray_forced_count": 0,
+                "peak_weighting_mode": "uniform",
+            }
+
+        residual_blocks: List[np.ndarray] = []
+        diagnostics: List[Dict[str, object]] = []
+        per_dataset_summaries: List[Dict[str, object]] = []
+        summary: Dict[str, object] = {
+            "dataset_count": int(len(dataset_contexts)),
+            "measured_count": 0,
+            "fixed_source_resolved_count": 0,
+            "fallback_entry_count": 0,
+            "matched_pair_count": 0,
+            "missing_pair_count": 0,
+            "simulated_reflection_count": 0,
+            "total_reflection_count": 0,
+            "fixed_source_reflection_count": 0,
+            "subset_fallback_hkl_count": 0,
+            "subset_reduced": False,
+            "central_ray_mode": bool(local.get("_geometry_central_ray_mode", False)),
+            "single_ray_enabled": False,
+            "single_ray_forced_count": 0,
+            "center_row": float(local["center"][0]) if len(local.get("center", [])) >= 2 else float("nan"),
+            "center_col": float(local["center"][1]) if len(local.get("center", [])) >= 2 else float("nan"),
+            "peak_weighting_mode": "uniform",
+            "custom_sigma_count": 0,
+            "anisotropic_sigma_count": 0,
+        }
+
+        def _evaluate_dynamic_matches_for_dataset(
+            item: Tuple[Dict[str, object], GeometryFitDatasetContext],
+        ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
+            local_item, dataset_ctx = item
+            theta_value = _theta_initial_for_dataset(local_item, dataset_ctx)
+            return _evaluate_geometry_fit_dataset_dynamic_point_matches(
+                local_item,
+                dataset_ctx,
+                image_size=image_size,
+                missing_pair_penalty_deg=float(missing_pair_penalty_deg),
+                theta_value=float(theta_value),
+                collect_diagnostics=collect_diagnostics,
+            )
+
+        dataset_items = [(local, dataset_ctx) for dataset_ctx in dataset_contexts]
+        if dataset_parallel_workers > 1 and len(dataset_items) > 1:
+            dataset_results = _threaded_map(
+                _evaluate_dynamic_matches_for_dataset,
+                dataset_items,
+                max_workers=dataset_parallel_workers,
+                numba_threads=worker_numba_threads,
+            )
+        else:
+            dataset_results = [
+                _evaluate_dynamic_matches_for_dataset(item)
+                for item in dataset_items
+            ]
+
+        for residual_i, diagnostics_i, summary_i in dataset_results:
+            residual_i = np.asarray(residual_i, dtype=float)
+            if residual_i.size:
+                residual_blocks.append(residual_i)
+            per_dataset_summaries.append(dict(summary_i))
+            for key in (
+                "measured_count",
+                "fixed_source_resolved_count",
+                "fallback_entry_count",
+                "matched_pair_count",
+                "missing_pair_count",
+                "simulated_reflection_count",
+                "total_reflection_count",
+                "fixed_source_reflection_count",
+                "subset_fallback_hkl_count",
+                "single_ray_forced_count",
+            ):
+                summary[key] = int(summary.get(key, 0)) + int(summary_i.get(key, 0))
+            summary["subset_reduced"] = bool(
+                summary.get("subset_reduced", False)
+                or bool(summary_i.get("subset_reduced", False))
+            )
+            if collect_diagnostics and diagnostics_i:
+                diagnostics.extend(diagnostics_i)
+
+        residual_arr = (
+            np.concatenate(residual_blocks)
+            if residual_blocks
+            else np.array([], dtype=float)
+        )
+        summary["per_dataset"] = per_dataset_summaries
+
+        for prefix, diag_key in (
+            ("px", "distance_px"),
+            ("deg", "angular_distance_deg"),
+        ):
+            rms_key = f"unweighted_peak_rms_{prefix}"
+            mean_key = f"unweighted_peak_mean_{prefix}"
+            max_key = f"unweighted_peak_max_{prefix}"
+            values = np.asarray(
+                [
+                    float(entry.get(diag_key, np.nan))
+                    for entry in diagnostics
+                    if str(entry.get("match_status", "")).lower() == "matched"
+                ],
+                dtype=float,
+            )
+            values = values[np.isfinite(values)]
+            if values.size:
+                summary[rms_key] = float(np.sqrt(np.mean(values * values)))
+                summary[mean_key] = float(np.mean(values))
+                summary[max_key] = float(np.max(values))
+                continue
+
+            matched_sq_sum = 0.0
+            matched_sum = 0.0
+            matched_max = float("nan")
+            matched_count = int(summary.get("matched_pair_count", 0))
+            has_sq_stat = False
+            has_mean_stat = False
+            for summary_i in per_dataset_summaries:
+                try:
+                    dataset_rms = float(summary_i.get(rms_key, np.nan))
+                except Exception:
+                    dataset_rms = float("nan")
+                try:
+                    dataset_mean = float(summary_i.get(mean_key, np.nan))
+                except Exception:
+                    dataset_mean = float("nan")
+                try:
+                    dataset_max = float(summary_i.get(max_key, np.nan))
+                except Exception:
+                    dataset_max = float("nan")
+                dataset_count = int(summary_i.get("matched_pair_count", 0))
+                if dataset_count <= 0:
+                    continue
+                if np.isfinite(dataset_rms):
+                    matched_sq_sum += float(dataset_count) * float(dataset_rms) * float(dataset_rms)
+                    has_sq_stat = True
+                if np.isfinite(dataset_mean):
+                    matched_sum += float(dataset_count) * float(dataset_mean)
+                    has_mean_stat = True
+                if np.isfinite(dataset_max):
+                    if not np.isfinite(matched_max) or dataset_max > matched_max:
+                        matched_max = float(dataset_max)
+            if matched_count > 0 and has_sq_stat:
+                summary[rms_key] = float(np.sqrt(matched_sq_sum / float(matched_count)))
+            else:
+                summary[rms_key] = float("nan")
+            if matched_count > 0 and has_mean_stat:
+                summary[mean_key] = float(matched_sum / float(matched_count))
+            else:
+                summary[mean_key] = float("nan")
+            summary[max_key] = float(matched_max)
+        return residual_arr, diagnostics, summary
+
     fixed_correspondence_groups: Dict[int, List[Dict[str, object]]] = {}
 
     def _evaluate_fixed_correspondence_matches(
@@ -6825,12 +7485,18 @@ def fit_geometry_parameters(
             summary["unweighted_peak_max_px"] = float("nan")
         return residual_arr, diagnostics, summary
 
+    point_match_evaluator = (
+        _evaluate_dynamic_point_matches
+        if dynamic_point_geometry_fit
+        else _evaluate_pixel_matches
+    )
+
     def _collect_seed_debug_summary(x_trial: Sequence[float]) -> Dict[str, object]:
         x_arr = np.asarray(x_trial, dtype=float).reshape(-1)
         local = _apply_trial_params(x_arr)
         point_match_summary_local: Optional[Dict[str, object]] = None
         if point_match_mode:
-            residual_arr, _, point_match_summary = _evaluate_pixel_matches(
+            residual_arr, _, point_match_summary = point_match_evaluator(
                 local,
                 collect_diagnostics=True,
             )
@@ -6865,7 +7531,10 @@ def fit_geometry_parameters(
 
     def pixel_cost_fn(x):
         local = _apply_trial_params(x)
-        residual_arr, _, _ = _evaluate_pixel_matches(local, collect_diagnostics=False)
+        residual_arr, _, _ = point_match_evaluator(
+            local,
+            collect_diagnostics=False,
+        )
         prior_residual = _parameter_prior_residuals(x)
         if prior_residual.size:
             if residual_arr.size:
@@ -7177,7 +7846,7 @@ def fit_geometry_parameters(
 
     residual_fn = pixel_cost_fn if point_match_mode else cost_fn
     final_metric_residual_fn = residual_fn
-    final_metric_point_match_evaluator = _evaluate_pixel_matches
+    final_metric_point_match_evaluator = point_match_evaluator
 
     parameter_debug_entries: List[Dict[str, object]] = []
     for idx, name in enumerate(var_names):
@@ -7215,6 +7884,7 @@ def fit_geometry_parameters(
 
     geometry_fit_debug_summary: Dict[str, object] = {
         "point_match_mode": bool(point_match_mode),
+        "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
         "dataset_count": int(len(dataset_contexts)),
         "var_names": [str(name) for name in var_names],
         "solver": {
@@ -7224,6 +7894,7 @@ def fit_geometry_parameters(
             "restarts": int(solver_restarts),
             "weighted_matching": bool(weighted_matching),
             "missing_pair_penalty_px": float(missing_pair_penalty),
+            "missing_pair_penalty_deg": float(missing_pair_penalty_deg),
             "use_measurement_uncertainty": bool(use_measurement_uncertainty),
             "anisotropic_measurement_uncertainty": bool(anisotropic_uncertainty_enabled),
             "full_beam_polish_enabled": bool(full_beam_polish_enabled),
@@ -7252,7 +7923,10 @@ def fit_geometry_parameters(
         return f"{numeric:.{int(digits)}f}"
 
     def _emit_geometry_fit_setup_status() -> None:
-        mode_label = "point-match" if point_match_mode else "angle"
+        if point_match_mode and dynamic_point_geometry_fit:
+            mode_label = "dynamic-angle"
+        else:
+            mode_label = "point-match" if point_match_mode else "angle"
         _emit_status(
             "Geometry fit: setup "
             f"mode={mode_label} "
@@ -9332,13 +10006,30 @@ def fit_geometry_parameters(
         selected_pm_diagnostics = list(start_pm_diagnostics)
         selected_pm_summary = dict(start_pm_summary)
         selected_cost = float(start_cost)
-        summary["matched_pair_count_before"] = int(start_pm_summary.get("matched_pair_count", 0))
-        summary["fixed_source_resolved_count"] = int(start_pm_summary.get("fixed_source_resolved_count", 0))
+        start_matched = int(start_pm_summary.get("matched_pair_count", 0))
+        summary["matched_pair_count_before"] = int(start_matched)
+        summary["fixed_source_resolved_count"] = int(
+            start_pm_summary.get("fixed_source_resolved_count", 0)
+        )
+        try:
+            start_point_rms = float(
+                start_pm_summary.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            start_point_rms = float("nan")
+        try:
+            start_peak_max = float(
+                start_pm_summary.get("unweighted_peak_max_px", np.nan)
+            )
+        except Exception:
+            start_peak_max = float("nan")
+        summary["start_rms_px"] = float(start_point_rms)
+        summary["start_peak_max_px"] = float(start_peak_max)
 
         final_metric_residual_fn = _full_beam_residual
         final_metric_point_match_evaluator = _full_beam_point_match_evaluator
 
-        if int(start_pm_summary.get("matched_pair_count", 0)) <= 0:
+        if int(start_matched) <= 0:
             summary.update(
                 {
                     "status": "rejected",
@@ -9397,7 +10088,46 @@ def fit_geometry_parameters(
             return summary
 
         improvement_tol = max(1.0e-9 * max(abs(float(start_cost)), 1.0), 1.0e-12)
-        accepted = bool(np.isfinite(trial_cost) and trial_cost <= float(start_cost) + improvement_tol)
+        trial_matched = int(trial_pm_summary.get("matched_pair_count", 0))
+        try:
+            trial_point_rms = float(
+                trial_pm_summary.get("unweighted_peak_rms_px", np.nan)
+            )
+        except Exception:
+            trial_point_rms = float("nan")
+        try:
+            trial_peak_max = float(
+                trial_pm_summary.get("unweighted_peak_max_px", np.nan)
+            )
+        except Exception:
+            trial_peak_max = float("nan")
+        point_rms_tol = max(
+            1.0e-9 * max(abs(float(start_point_rms)), 1.0),
+            1.0e-12,
+        )
+        peak_max_tol = max(
+            1.0e-9 * max(abs(float(start_peak_max)), 1.0),
+            1.0e-12,
+        )
+        cost_improved = bool(
+            np.isfinite(trial_cost) and trial_cost <= float(start_cost) + improvement_tol
+        )
+        matched_ok = bool(trial_matched >= start_matched)
+        point_rms_ok = bool(
+            not np.isfinite(start_point_rms)
+            or (
+                np.isfinite(trial_point_rms)
+                and trial_point_rms <= float(start_point_rms) + point_rms_tol
+            )
+        )
+        peak_max_ok = bool(
+            not np.isfinite(start_peak_max)
+            or (
+                np.isfinite(trial_peak_max)
+                and trial_peak_max <= float(start_peak_max) + peak_max_tol
+            )
+        )
+        accepted = bool(cost_improved and matched_ok and point_rms_ok and peak_max_ok)
         if accepted:
             selected_x = np.asarray(trial_x, dtype=float)
             selected_fun = np.asarray(trial_fun, dtype=float)
@@ -9407,15 +10137,39 @@ def fit_geometry_parameters(
         summary.update(
             {
                 "status": "accepted" if accepted else "rejected",
-                "reason": "accepted" if accepted else "cost_regressed",
+                "reason": (
+                    "accepted"
+                    if accepted
+                    else ", ".join(
+                        part
+                        for ok, part in (
+                            (cost_improved, "cost_regressed"),
+                            (matched_ok, "matched_pairs_decreased"),
+                            (point_rms_ok, "point_rms_regressed"),
+                            (peak_max_ok, "peak_offset_regressed"),
+                        )
+                        if not ok
+                    )
+                ),
                 "accepted": bool(accepted),
                 "start_cost": float(start_cost),
                 "final_cost": float(selected_cost),
                 "candidate_cost": float(trial_cost),
+                "start_rms_px": float(start_point_rms),
+                "final_rms_px": float(
+                    trial_point_rms if accepted else start_point_rms
+                ),
+                "start_peak_max_px": float(start_peak_max),
+                "final_peak_max_px": float(
+                    trial_peak_max if accepted else start_peak_max
+                ),
                 "nfev": int(getattr(polish_result, "nfev", 0)),
                 "success": bool(getattr(polish_result, "success", False)),
                 "message": str(getattr(polish_result, "message", "")),
                 "matched_pair_count_after": int(selected_pm_summary.get("matched_pair_count", 0)),
+                "candidate_matched_pair_count": int(trial_matched),
+                "candidate_rms_px": float(trial_point_rms),
+                "candidate_peak_max_px": float(trial_peak_max),
                 "point_match_diagnostics": selected_pm_diagnostics,
                 "point_match_summary": selected_pm_summary,
                 "fun": selected_fun,
@@ -11938,11 +12692,12 @@ def fit_geometry_parameters(
     result.solver_f_scale = float(solver_f_scale)
     result.parameter_prior_summary = parameter_prior_summary
     result.parallelization_summary = dict(parallelization_summary)
-    result.final_metric_name = (
-        "full_beam_fixed_correspondence"
-        if point_match_mode and final_metric_point_match_evaluator is not _evaluate_pixel_matches
-        else ("central_point_match" if point_match_mode else "angle")
-    )
+    if point_match_mode and bool(full_beam_polish_summary.get("accepted", False)):
+        result.final_metric_name = "full_beam_fixed_correspondence"
+    elif point_match_mode and dynamic_point_geometry_fit:
+        result.final_metric_name = "dynamic_angular_point_match"
+    else:
+        result.final_metric_name = "central_point_match" if point_match_mode else "angle"
 
     if getattr(result, "x", None) is not None:
         result.x = np.minimum(np.maximum(result.x, lower_bounds), upper_bounds)

@@ -29,6 +29,7 @@ class RuntimeGeometryManualProjectionWorkflow:
     current_background_image: Callable[..., Any]
     entry_display_coords: Callable[..., Any]
     caked_angles_to_background_display_coords: Callable[..., Any]
+    background_display_to_native_detector_coords: Callable[..., Any]
     native_detector_coords_to_caked_display_coords: Callable[..., Any]
     project_peaks_to_current_view: Callable[..., Any]
     simulated_peaks_for_params: Callable[..., Any]
@@ -158,6 +159,9 @@ def build_runtime_geometry_manual_projection_workflow(
         entry_display_coords=callbacks.entry_display_coords,
         caked_angles_to_background_display_coords=(
             callbacks.caked_angles_to_background_display_coords
+        ),
+        background_display_to_native_detector_coords=(
+            callbacks.background_display_to_native_detector_coords
         ),
         native_detector_coords_to_caked_display_coords=(
             callbacks.native_detector_coords_to_caked_display_coords

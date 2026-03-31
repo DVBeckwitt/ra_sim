@@ -2194,11 +2194,142 @@ def build_geometry_manual_fit_dataset(
         simulated_peaks
     )
 
+    def _source_row_key(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[int, int] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        try:
+            return (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            )
+        except Exception:
+            return None
+
+    def _source_peak_key(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[int, int] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        try:
+            return (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_peak_index")),
+            )
+        except Exception:
+            return None
+
+    def _normalized_hkl(
+        value: object,
+    ) -> tuple[int, int, int] | None:
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 3:
+            return None
+        try:
+            return (
+                int(value[0]),
+                int(value[1]),
+                int(value[2]),
+            )
+        except Exception:
+            return None
+
+    simulated_by_peak: dict[tuple[int, int], dict[str, object]] = {}
+    simulated_by_q_group: dict[object, list[dict[str, object]]] = {}
+    simulated_by_hkl: dict[tuple[int, int, int], list[dict[str, object]]] = {}
+    for raw_entry in simulated_peaks or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        peak_key = _source_peak_key(entry)
+        if peak_key is not None:
+            simulated_by_peak[peak_key] = entry
+        q_group_key = entry.get("q_group_key")
+        if q_group_key is not None:
+            simulated_by_q_group.setdefault(q_group_key, []).append(entry)
+        hkl_key = _normalized_hkl(entry.get("hkl"))
+        if hkl_key is not None:
+            simulated_by_hkl.setdefault(hkl_key, []).append(entry)
+
+    def _entry_display_point(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        coords = (
+            manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
+            if isinstance(entry, Mapping)
+            else None
+        )
+        if coords is None or len(coords) < 2:
+            return None
+        try:
+            col = float(coords[0])
+            row = float(coords[1])
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
+    def _resolve_source_entry(
+        entry: Mapping[str, object] | None,
+    ) -> dict[str, object] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        row_key = _source_row_key(entry)
+        if row_key is not None:
+            candidate = simulated_lookup.get(row_key)
+            if isinstance(candidate, Mapping):
+                return dict(candidate)
+        peak_key = _source_peak_key(entry)
+        if peak_key is not None:
+            candidate = simulated_by_peak.get(peak_key)
+            if candidate is not None:
+                return dict(candidate)
+
+        candidate_pool: list[dict[str, object]] = []
+        q_group_key = entry.get("q_group_key")
+        if q_group_key is not None:
+            candidate_pool = [dict(item) for item in simulated_by_q_group.get(q_group_key, ())]
+        if not candidate_pool:
+            hkl_key = _normalized_hkl(entry.get("hkl"))
+            if hkl_key is not None:
+                candidate_pool = [dict(item) for item in simulated_by_hkl.get(hkl_key, ())]
+        if not candidate_pool:
+            return None
+        if len(candidate_pool) == 1:
+            return dict(candidate_pool[0])
+
+        display_point = _entry_display_point(entry)
+        if display_point is None:
+            return dict(candidate_pool[0])
+
+        def _distance_sq(candidate: Mapping[str, object]) -> float:
+            try:
+                sim_col = float(candidate.get("sim_col"))
+                sim_row = float(candidate.get("sim_row"))
+            except Exception:
+                return float("inf")
+            if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+                return float("inf")
+            return float(
+                (sim_col - float(display_point[0])) ** 2
+                + (sim_row - float(display_point[1])) ** 2
+            )
+
+        candidate_pool.sort(key=_distance_sq)
+        return dict(candidate_pool[0]) if candidate_pool else None
+
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
     for pair_idx, entry in enumerate(selected_entries):
         measured_entry = dict(entry)
         measured_entry["overlay_match_index"] = int(pair_idx)
+        resolved_source_entry = _resolve_source_entry(measured_entry)
+        if isinstance(resolved_source_entry, Mapping):
+            for key in ("source_table_index", "source_row_index", "source_peak_index"):
+                if key in resolved_source_entry:
+                    measured_entry[key] = resolved_source_entry.get(key)
+        measured_entry["fit_source_identity_only"] = True
         measured_display.append(measured_entry)
 
         initial_entry: dict[str, object] = {
@@ -2208,52 +2339,46 @@ def build_geometry_manual_fit_dataset(
         bg_coords = manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
         if bg_coords is not None and len(bg_coords) >= 2:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
-        try:
-            source_key = (
-                int(entry.get("source_table_index")),
-                int(entry.get("source_row_index")),
-            )
-        except Exception:
-            source_key = None
-        if source_key is not None:
-            sim_entry = simulated_lookup.get(source_key)
-            if isinstance(sim_entry, Mapping):
+        if isinstance(resolved_source_entry, Mapping):
+            for key in ("source_table_index", "source_row_index", "source_peak_index"):
+                if key in resolved_source_entry:
+                    initial_entry[key] = resolved_source_entry.get(key)
+            try:
+                sim_col = float(resolved_source_entry.get("sim_col"))
+                sim_row = float(resolved_source_entry.get("sim_row"))
+            except Exception:
+                sim_col = float("nan")
+                sim_row = float("nan")
+            if np.isfinite(sim_col) and np.isfinite(sim_row):
+                initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+            try:
+                sim_col_raw = float(resolved_source_entry.get("sim_col_raw", sim_col))
+                sim_row_raw = float(resolved_source_entry.get("sim_row_raw", sim_row))
+            except Exception:
+                sim_col_raw = float("nan")
+                sim_row_raw = float("nan")
+            if np.isfinite(sim_col_raw) and np.isfinite(sim_row_raw):
                 try:
-                    sim_col = float(sim_entry.get("sim_col"))
-                    sim_row = float(sim_entry.get("sim_row"))
+                    sim_native = manual_dataset_bindings.display_to_native_sim_coords(
+                        float(sim_col_raw),
+                        float(sim_row_raw),
+                        (
+                            int(manual_dataset_bindings.image_size),
+                            int(manual_dataset_bindings.image_size),
+                        ),
+                    )
                 except Exception:
-                    sim_col = float("nan")
-                    sim_row = float("nan")
-                if np.isfinite(sim_col) and np.isfinite(sim_row):
-                    initial_entry["sim_display"] = (float(sim_col), float(sim_row))
-                try:
-                    sim_col_raw = float(sim_entry.get("sim_col_raw", sim_col))
-                    sim_row_raw = float(sim_entry.get("sim_row_raw", sim_row))
-                except Exception:
-                    sim_col_raw = float("nan")
-                    sim_row_raw = float("nan")
-                if np.isfinite(sim_col_raw) and np.isfinite(sim_row_raw):
-                    try:
-                        sim_native = manual_dataset_bindings.display_to_native_sim_coords(
-                            float(sim_col_raw),
-                            float(sim_row_raw),
-                            (
-                                int(manual_dataset_bindings.image_size),
-                                int(manual_dataset_bindings.image_size),
-                            ),
-                        )
-                    except Exception:
-                        sim_native = None
-                    if (
-                        isinstance(sim_native, tuple)
-                        and len(sim_native) >= 2
-                        and np.isfinite(float(sim_native[0]))
-                        and np.isfinite(float(sim_native[1]))
-                    ):
-                        initial_entry["sim_native"] = (
-                            float(sim_native[0]),
-                            float(sim_native[1]),
-                        )
+                    sim_native = None
+                if (
+                    isinstance(sim_native, tuple)
+                    and len(sim_native) >= 2
+                    and np.isfinite(float(sim_native[0]))
+                    and np.isfinite(float(sim_native[1]))
+                ):
+                    initial_entry["sim_native"] = (
+                        float(sim_native[0]),
+                        float(sim_native[1]),
+                    )
         initial_pairs_display.append(initial_entry)
 
     measured_native = manual_dataset_bindings.unrotate_display_peaks(
@@ -2261,15 +2386,37 @@ def build_geometry_manual_fit_dataset(
         display_background.shape,
         k=manual_dataset_bindings.display_rotate_k,
     )
-    for initial_entry, measured_entry in zip(initial_pairs_display, measured_native):
-        if not isinstance(measured_entry, Mapping):
+    for original_entry, initial_entry, measured_entry in zip(
+        measured_display,
+        initial_pairs_display,
+        measured_native,
+    ):
+        if not isinstance(measured_entry, dict):
             continue
+        detector_anchor = None
+        try:
+            detector_anchor = (
+                float(original_entry.get("detector_x")),
+                float(original_entry.get("detector_y")),
+            )
+        except Exception:
+            detector_anchor = None
+        if (
+            isinstance(detector_anchor, tuple)
+            and len(detector_anchor) >= 2
+            and np.isfinite(float(detector_anchor[0]))
+            and np.isfinite(float(detector_anchor[1]))
+        ):
+            measured_entry["x"] = float(detector_anchor[0])
+            measured_entry["y"] = float(detector_anchor[1])
         try:
             mx = float(measured_entry.get("x"))
             my = float(measured_entry.get("y"))
         except Exception:
             continue
         if np.isfinite(mx) and np.isfinite(my):
+            measured_entry["detector_x"] = float(mx)
+            measured_entry["detector_y"] = float(my)
             initial_entry["bg_native"] = (float(mx), float(my))
 
     sim_orientation_points: list[tuple[float, float]] = []
@@ -2334,6 +2481,18 @@ def build_geometry_manual_fit_dataset(
         flip_y=orientation_choice["flip_y"],
         flip_order=orientation_choice["flip_order"],
     )
+    for measured_entry in measured_for_fit:
+        if not isinstance(measured_entry, dict):
+            continue
+        try:
+            detector_x = float(measured_entry.get("x"))
+            detector_y = float(measured_entry.get("y"))
+        except Exception:
+            continue
+        if np.isfinite(detector_x) and np.isfinite(detector_y):
+            measured_entry["detector_x"] = float(detector_x)
+            measured_entry["detector_y"] = float(detector_y)
+        measured_entry["fit_source_identity_only"] = True
     experimental_image_for_fit = manual_dataset_bindings.orient_image_for_fit(
         backend_background,
         indexing_mode=orientation_choice["indexing_mode"],
@@ -2387,6 +2546,7 @@ def build_geometry_manual_fit_dataset(
             "dataset_index": int(background_idx),
             "label": label,
             "theta_initial": float(theta_base),
+            "dynamic_point_geometry_fit": True,
             "measured_peaks": measured_for_fit,
             "experimental_image": experimental_image_for_fit,
         },
@@ -2595,8 +2755,11 @@ def prepare_geometry_fit_run(
                 current_dataset=current_dataset,
             ),
             max_display_markers=int(max_display_markers),
-            geometry_runtime_cfg=apply_joint_geometry_fit_runtime_safety_overrides(
-                build_runtime_config(fit_params),
+            geometry_runtime_cfg=apply_dynamic_point_geometry_fit_runtime_overrides(
+                apply_joint_geometry_fit_runtime_safety_overrides(
+                    build_runtime_config(fit_params),
+                    joint_background_mode=joint_background_mode,
+                ),
                 joint_background_mode=joint_background_mode,
             ),
         )
@@ -2707,6 +2870,77 @@ def apply_joint_geometry_fit_runtime_safety_overrides(
         else {}
     )
     identifiability_cfg["enabled"] = False
+    cfg["identifiability"] = identifiability_cfg
+    return cfg
+
+
+def apply_dynamic_point_geometry_fit_runtime_overrides(
+    runtime_cfg: Mapping[str, object] | None,
+    *,
+    joint_background_mode: bool,
+) -> dict[str, object]:
+    """Force the GUI manual-pair fit onto the simplified dynamic angular objective."""
+
+    cfg = copy.deepcopy(dict(runtime_cfg or {}))
+
+    solver_cfg_raw = cfg.get("solver", {})
+    solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+    solver_cfg["dynamic_point_geometry_fit"] = True
+    solver_cfg["loss"] = "linear"
+    solver_cfg["f_scale_px"] = 1.0
+    solver_cfg["weighted_matching"] = False
+    solver_cfg["use_measurement_uncertainty"] = False
+    solver_cfg["anisotropic_measurement_uncertainty"] = False
+    solver_cfg["missing_pair_penalty_deg"] = float(
+        solver_cfg.get("missing_pair_penalty_deg", 5.0)
+    )
+    solver_cfg["restarts"] = 0
+    solver_cfg["restart_jitter"] = 0.0
+    solver_cfg["stagnation_probe"] = False
+    solver_cfg["stagnation_probe_pairwise"] = False
+    solver_cfg["stagnation_probe_random_directions"] = 0
+    solver_cfg["staged_release"] = {"enabled": False}
+    solver_cfg["reparameterize_pairs"] = {"enabled": False}
+    solver_cfg["parallel_mode"] = "datasets" if joint_background_mode else "auto"
+    cfg["solver"] = solver_cfg
+
+    full_beam_polish_cfg_raw = cfg.get("full_beam_polish", {})
+    full_beam_polish_cfg = (
+        dict(full_beam_polish_cfg_raw)
+        if isinstance(full_beam_polish_cfg_raw, Mapping)
+        else {}
+    )
+    full_beam_polish_cfg["enabled"] = False
+    cfg["full_beam_polish"] = full_beam_polish_cfg
+
+    ridge_refinement_cfg_raw = cfg.get("ridge_refinement", {})
+    ridge_refinement_cfg = (
+        dict(ridge_refinement_cfg_raw)
+        if isinstance(ridge_refinement_cfg_raw, Mapping)
+        else {}
+    )
+    ridge_refinement_cfg["enabled"] = False
+    cfg["ridge_refinement"] = ridge_refinement_cfg
+
+    image_refinement_cfg_raw = cfg.get("image_refinement", {})
+    image_refinement_cfg = (
+        dict(image_refinement_cfg_raw)
+        if isinstance(image_refinement_cfg_raw, Mapping)
+        else {}
+    )
+    image_refinement_cfg["enabled"] = False
+    cfg["image_refinement"] = image_refinement_cfg
+
+    identifiability_cfg_raw = cfg.get("identifiability", {})
+    identifiability_cfg = (
+        dict(identifiability_cfg_raw)
+        if isinstance(identifiability_cfg_raw, Mapping)
+        else {}
+    )
+    identifiability_cfg["enabled"] = True
+    identifiability_cfg["auto_freeze"] = False
+    identifiability_cfg["selective_thaw"] = {"enabled": False}
+    identifiability_cfg["adaptive_regularization"] = {"enabled": False}
     cfg["identifiability"] = identifiability_cfg
     return cfg
 
@@ -3548,15 +3782,16 @@ def build_geometry_fit_rejection_reason_lines(
         )
 
     identifiability_summary = getattr(result, "identifiability_summary", None)
-    if isinstance(identifiability_summary, Mapping) and bool(
+    underconstrained = isinstance(identifiability_summary, Mapping) and bool(
         identifiability_summary.get("underconstrained", False)
-    ):
+    )
+    if underconstrained:
         reasons.append(
             "Fit is underconstrained according to the final identifiability diagnostics."
         )
 
     bound_proximity_summary = getattr(result, "bound_proximity_summary", None)
-    if isinstance(bound_proximity_summary, Mapping):
+    if underconstrained and isinstance(bound_proximity_summary, Mapping):
         near_bound_entries = bound_proximity_summary.get("near_bound_parameters", [])
         if isinstance(near_bound_entries, Sequence) and near_bound_entries:
             joined = ", ".join(

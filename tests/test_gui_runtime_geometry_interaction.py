@@ -70,6 +70,7 @@ def test_build_runtime_geometry_manual_projection_workflow_exposes_callbacks() -
         current_background_image="current-background-image",
         entry_display_coords="entry-display-coords",
         caked_angles_to_background_display_coords="caked-angles",
+        background_display_to_native_detector_coords="display-to-native",
         native_detector_coords_to_caked_display_coords="native-to-caked",
         project_peaks_to_current_view="project-peaks",
         simulated_peaks_for_params="simulated-peaks",
@@ -98,6 +99,7 @@ def test_build_runtime_geometry_manual_projection_workflow_exposes_callbacks() -
     assert workflow.current_background_image == "current-background-image"
     assert workflow.entry_display_coords == "entry-display-coords"
     assert workflow.caked_angles_to_background_display_coords == "caked-angles"
+    assert workflow.background_display_to_native_detector_coords == "display-to-native"
     assert workflow.native_detector_coords_to_caked_display_coords == "native-to-caked"
     assert workflow.project_peaks_to_current_view == "project-peaks"
     assert workflow.simulated_peaks_for_params == "simulated-peaks"

@@ -283,19 +283,15 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
         ),
     ]
     assert prepared.max_display_markers == 150
-    assert prepared.geometry_runtime_cfg == {
-        "bounds": {"gamma": [0.0, 1.0]},
-        "solver": {
-            "workers": 1,
-            "parallel_mode": "off",
-            "worker_numba_threads": 1,
-            "stagnation_probe": False,
-            "stagnation_probe_pairwise": False,
-            "stagnation_probe_random_directions": 0,
-        },
-        "use_numba": False,
-        "identifiability": {"enabled": False},
-    }
+    assert prepared.geometry_runtime_cfg == (
+        geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+            geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+                {"bounds": {"gamma": [0.0, 1.0]}},
+                joint_background_mode=True,
+            ),
+            joint_background_mode=True,
+        )
+    )
     assert [entry["dataset_index"] for entry in prepared.dataset_infos] == [1, 0, 2]
     assert prepared.current_dataset["dataset_index"] == 1
 
@@ -513,12 +509,34 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     prepared = result.prepared_run
     assert prepared.current_dataset["label"] == "bg0.osc"
     assert prepared.current_dataset["experimental_image_for_fit"] == "fit-image"
-    assert prepared.dataset_specs == [{"dataset_index": 0, "label": "bg0.osc", "theta_initial": 9.0, "measured_peaks": [{"x": 31.0, "y": 41.0}], "experimental_image": "fit-image"}]
+    assert prepared.dataset_specs == [
+        {
+            "dataset_index": 0,
+            "label": "bg0.osc",
+            "theta_initial": 9.0,
+            "dynamic_point_geometry_fit": True,
+            "measured_peaks": [
+                {
+                    "x": 31.0,
+                    "y": 41.0,
+                    "detector_x": 31.0,
+                    "detector_y": 41.0,
+                    "fit_source_identity_only": True,
+                }
+            ],
+            "experimental_image": "fit-image",
+        }
+    ]
     assert prepared.max_display_markers == 90
-    assert prepared.geometry_runtime_cfg == {
-        "bounds": {"gamma": [0.0, 1.0]},
-        "seen_theta": 9.0,
-    }
+    assert prepared.geometry_runtime_cfg == (
+        geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+            geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+                {"bounds": {"gamma": [0.0, 1.0]}, "seen_theta": 9.0},
+                joint_background_mode=False,
+            ),
+            joint_background_mode=False,
+        )
+    )
     assert calls["ensure_caked"] == 1
 
 
@@ -633,9 +651,19 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         "dataset_index": 0,
         "label": "bg0.osc",
         "theta_initial": 1.5,
+        "dynamic_point_geometry_fit": True,
         "measured_peaks": measured_for_fit,
         "experimental_image": "fit-image",
     }
+    assert dataset["measured_for_fit"] == [
+        {
+            "x": 31.0,
+            "y": 41.0,
+            "detector_x": 31.0,
+            "detector_y": 41.0,
+            "fit_source_identity_only": True,
+        }
+    ]
     assert "orientation=rotate+flip" in dataset["summary_line"]
 
     sim_params, prefer_cache = calls["sim_params"]
@@ -1667,6 +1695,53 @@ def test_apply_joint_geometry_fit_runtime_safety_overrides_only_changes_joint_ru
     assert base_cfg["identifiability"]["enabled"] is True
 
 
+def test_apply_dynamic_point_geometry_fit_runtime_overrides_forces_single_model_path() -> None:
+    base_cfg = {
+        "solver": {
+            "workers": 1,
+            "parallel_mode": "off",
+            "worker_numba_threads": 1,
+            "weighted_matching": True,
+            "use_measurement_uncertainty": True,
+            "anisotropic_measurement_uncertainty": True,
+            "missing_pair_penalty_deg": 7.5,
+        },
+        "identifiability": {
+            "enabled": True,
+            "auto_freeze": True,
+            "selective_thaw": {"enabled": True},
+            "adaptive_regularization": {"enabled": True},
+        },
+        "full_beam_polish": {"enabled": True},
+        "ridge_refinement": {"enabled": True},
+        "image_refinement": {"enabled": True},
+    }
+
+    changed = geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+        base_cfg,
+        joint_background_mode=True,
+    )
+
+    assert changed["solver"]["dynamic_point_geometry_fit"] is True
+    assert changed["solver"]["loss"] == "linear"
+    assert changed["solver"]["weighted_matching"] is False
+    assert changed["solver"]["use_measurement_uncertainty"] is False
+    assert changed["solver"]["anisotropic_measurement_uncertainty"] is False
+    assert changed["solver"]["missing_pair_penalty_deg"] == 7.5
+    assert changed["solver"]["parallel_mode"] == "datasets"
+    assert changed["solver"]["staged_release"] == {"enabled": False}
+    assert changed["solver"]["reparameterize_pairs"] == {"enabled": False}
+    assert changed["identifiability"]["enabled"] is True
+    assert changed["identifiability"]["auto_freeze"] is False
+    assert changed["identifiability"]["selective_thaw"] == {"enabled": False}
+    assert changed["identifiability"]["adaptive_regularization"] == {
+        "enabled": False
+    }
+    assert changed["full_beam_polish"] == {"enabled": False}
+    assert changed["ridge_refinement"] == {"enabled": False}
+    assert changed["image_refinement"] == {"enabled": False}
+
+
 def test_geometry_fit_dataset_cache_helpers_copy_and_validate_dataset_bundle() -> None:
     prepared_run, _postprocess_config = _make_prepared_run(joint_background_mode=True)
 
@@ -2176,6 +2251,24 @@ def test_build_geometry_fit_rejection_reason_lines_flags_underconstraint_and_bou
         "Fit is underconstrained according to the final identifiability diagnostics.",
         "Parameters finished within 1% of a finite bound span from a bound: Gamma(upper).",
     ]
+
+
+def test_build_geometry_fit_rejection_reason_lines_ignores_bound_proximity_without_underconstraint() -> None:
+    result = SimpleNamespace(
+        success=True,
+        point_match_summary={
+            "matched_pair_count": 7,
+            "unweighted_peak_max_px": 23.14,
+        },
+        identifiability_summary={"underconstrained": False},
+        bound_proximity_summary={
+            "near_bound_parameters": [{"name": "theta_initial", "side": "lower"}]
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=9.65)
+
+    assert reasons == []
 
 
 def test_build_geometry_fit_profile_cache_merges_mosaic_and_current_fit_values() -> None:

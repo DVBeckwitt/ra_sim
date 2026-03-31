@@ -105,8 +105,13 @@ Common entry points:
 | Main GUI | `python -m ra_sim gui` |
 | Windows launcher | `run_ra_sim.bat` |
 | Calibrant GUI | `python -m ra_sim calibrant` |
+| 2D mosaic visualizer | `python -m ra_sim mosaic` |
 | Headless simulation | `python -m ra_sim simulate --out output.png` |
 | Headless hBN ellipse fit | `python -m ra_sim hbn-fit` |
+
+The launcher can also open the sibling `2D_Mosaic_Sim` repository directly.
+By default RA-SIM looks for it at `../2D_Mosaic_Sim` relative to this repo.
+Set `RA_SIM_MOSAIC_REPO` if your local clone lives elsewhere.
 
 A typical workflow looks like this:
 
@@ -116,6 +121,20 @@ A typical workflow looks like this:
    integrations.
 4. Refine mosaic, stacking, and structural parameters and save parameter
    snapshots for reproducibility.
+
+### Manual Geometry Fit
+
+The GUI manual geometry-fit path now uses one deterministic central-ray preview
+model and one objective throughout the solve.
+
+- Manual picks keep a detector-native background anchor plus the chosen
+  simulated source identity.
+- During refinement the solver recomputes both the observed and simulated points
+  in the same detector-derived angular space, using residuals in `(2theta, phi)`.
+- Detector-geometry variables move both sides of the comparison; shared
+  sample-rotation variables only move the simulated side.
+- The GUI disables rematching, robust weighting, and post-polish stages for
+  this path so the fit stays tied to the exact manual correspondences you chose.
 
 Further GUI notes: [docs/gui_views.md](docs/gui_views.md)
 

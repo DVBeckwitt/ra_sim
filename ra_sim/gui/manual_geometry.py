@@ -65,6 +65,10 @@ class GeometryManualRuntimeProjectionCallbacks:
         [float, float],
         tuple[float | None, float | None],
     ]
+    background_display_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
     native_detector_coords_to_caked_display_coords: Callable[
         [float, float],
         tuple[float, float] | None,
@@ -232,7 +236,7 @@ def normalize_geometry_manual_pair_entry(
     elif isinstance(raw_group_key, list):
         normalized["q_group_key"] = tuple(raw_group_key)
 
-    for key in ("source_table_index", "source_row_index"):
+    for key in ("source_table_index", "source_row_index", "source_peak_index"):
         if key not in entry:
             continue
         try:
@@ -256,6 +260,25 @@ def normalize_geometry_manual_pair_entry(
     if np.isfinite(raw_x_val) and np.isfinite(raw_y_val):
         normalized["raw_x"] = float(raw_x_val)
         normalized["raw_y"] = float(raw_y_val)
+
+    for x_key, y_key in (("detector_x", "detector_y"),):
+        raw_x_local = entry.get(x_key)
+        raw_y_local = entry.get(y_key)
+        try:
+            detector_x_val = (
+                float(raw_x_local) if raw_x_local is not None else float("nan")
+            )
+        except Exception:
+            detector_x_val = float("nan")
+        try:
+            detector_y_val = (
+                float(raw_y_local) if raw_y_local is not None else float("nan")
+            )
+        except Exception:
+            detector_y_val = float("nan")
+        if np.isfinite(detector_x_val) and np.isfinite(detector_y_val):
+            normalized[x_key] = float(detector_x_val)
+            normalized[y_key] = float(detector_y_val)
 
     for x_key, y_key in (("caked_x", "caked_y"), ("raw_caked_x", "raw_caked_y")):
         raw_x_local = entry.get(x_key)
@@ -603,6 +626,14 @@ def geometry_manual_candidate_source_key(
 
     if not isinstance(entry, dict):
         return None
+    try:
+        return (
+            "source_peak",
+            int(entry.get("source_table_index")),
+            int(entry.get("source_peak_index")),
+        )
+    except Exception:
+        pass
     try:
         return (
             "source",
@@ -1064,6 +1095,8 @@ def geometry_manual_pair_entry_from_candidate(
     peak_row: float,
     *,
     group_key: tuple[object, ...] | None,
+    detector_col: float | None = None,
+    detector_row: float | None = None,
     raw_col: float | None = None,
     raw_row: float | None = None,
     caked_col: float | None = None,
@@ -1085,9 +1118,13 @@ def geometry_manual_pair_entry_from_candidate(
         "y": float(peak_row),
         "source_table_index": candidate.get("source_table_index"),
         "source_row_index": candidate.get("source_row_index"),
+        "source_peak_index": candidate.get("source_peak_index"),
         "source_label": candidate.get("source_label"),
         "q_group_key": group_key,
     }
+    if detector_col is not None and detector_row is not None:
+        entry["detector_x"] = float(detector_col)
+        entry["detector_y"] = float(detector_row)
     if raw_col is not None and raw_row is not None:
         entry["raw_x"] = float(raw_col)
         entry["raw_y"] = float(raw_row)
@@ -1952,6 +1989,27 @@ def make_runtime_geometry_manual_projection_callbacks(
             return None
         return _native_to_caked_display_coords(float(native_col), float(native_row))
 
+    def _background_display_to_native_detector_coords(
+        col: float,
+        row: float,
+    ) -> tuple[float, float] | None:
+        native_background = _resolve_runtime_value(current_background_native)
+        if native_background is None:
+            return None
+        try:
+            shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+            native_col, native_row = rotate_point_for_display(
+                float(col),
+                float(row),
+                shape,
+                -int(display_rotate_k),
+            )
+        except Exception:
+            return None
+        if not (np.isfinite(native_col) and np.isfinite(native_row)):
+            return None
+        return float(native_col), float(native_row)
+
     def _entry_display_coords(
         entry: dict[str, object] | None,
     ) -> tuple[float, float] | None:
@@ -2175,6 +2233,9 @@ def make_runtime_geometry_manual_projection_callbacks(
         caked_angles_to_background_display_coords=(
             _caked_angles_to_background_display
         ),
+        background_display_to_native_detector_coords=(
+            _background_display_to_native_detector_coords
+        ),
         native_detector_coords_to_caked_display_coords=(
             _native_to_caked_display_coords
         ),
@@ -2319,6 +2380,11 @@ def make_runtime_geometry_manual_callbacks(
         tuple[float | None, float | None],
     ]
     | None = None,
+    background_display_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
     show_preview: Callable[..., None] | None = None,
 ) -> GeometryManualRuntimeCallbacks:
     """Build live manual-geometry callbacks around the shared helper surface."""
@@ -2405,6 +2471,9 @@ def make_runtime_geometry_manual_callbacks(
             use_caked_space=_use_caked_space(),
             caked_angles_to_background_display_coords=(
                 caked_angles_to_background_display_coords
+            ),
+            background_display_to_native_detector_coords=(
+                background_display_to_native_detector_coords
             ),
             nearest_candidate_to_point_fn=nearest_candidate_to_point,
             position_error_px=position_error_px,
@@ -2676,6 +2745,11 @@ def geometry_manual_place_selection_at(
         tuple[float | None, float | None],
     ]
     | None = None,
+    background_display_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float, float] | None,
+    ]
+    | None = None,
     candidate_source_key: Callable[
         [dict[str, object] | None],
         tuple[object, ...] | None,
@@ -2790,11 +2864,37 @@ def geometry_manual_place_selection_at(
         }
 
     sigma_px_value = position_sigma_px(float(placement_error_px_value))
+    detector_anchor = (
+        background_display_to_native_detector_coords(
+            float(pair_kwargs["peak_col"]),
+            float(pair_kwargs["peak_row"]),
+        )
+        if callable(background_display_to_native_detector_coords)
+        else None
+    )
+    detector_col = None
+    detector_row = None
+    if (
+        isinstance(detector_anchor, tuple)
+        and len(detector_anchor) >= 2
+        and np.isfinite(float(detector_anchor[0]))
+        and np.isfinite(float(detector_anchor[1]))
+    ):
+        detector_col = float(detector_anchor[0])
+        detector_row = float(detector_anchor[1])
+    elif (
+        np.isfinite(float(pair_kwargs["peak_col"]))
+        and np.isfinite(float(pair_kwargs["peak_row"]))
+    ):
+        detector_col = float(pair_kwargs["peak_col"])
+        detector_row = float(pair_kwargs["peak_row"])
     pair_entry = pair_entry_from_candidate_fn(
         candidate,
         float(pair_kwargs["peak_col"]),
         float(pair_kwargs["peak_row"]),
         group_key=pick_session.get("group_key") if isinstance(pick_session, dict) else None,
+        detector_col=detector_col,
+        detector_row=detector_row,
         raw_col=float(pair_kwargs["raw_col"]),
         raw_row=float(pair_kwargs["raw_row"]),
         caked_col=(
@@ -3297,6 +3397,8 @@ def geometry_manual_pair_entry_to_jsonable(
     for key in (
         "raw_x",
         "raw_y",
+        "detector_x",
+        "detector_y",
         "caked_x",
         "caked_y",
         "raw_caked_x",
@@ -3325,7 +3427,7 @@ def geometry_manual_pair_entry_to_jsonable(
     if serialized_group_key is not None:
         row["q_group_key"] = serialized_group_key
 
-    for key in ("source_table_index", "source_row_index"):
+    for key in ("source_table_index", "source_row_index", "source_peak_index"):
         if key in normalized:
             try:
                 row[key] = int(normalized[key])
