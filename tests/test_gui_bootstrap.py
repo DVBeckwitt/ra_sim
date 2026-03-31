@@ -347,6 +347,7 @@ def test_build_runtime_geometry_fit_action_bootstrap_delegates_callbacks() -> No
             {
                 "bindings_factory": "fit-bindings",
                 "before_run": before_run,
+                "after_run": None,
             },
         ),
     ]

@@ -812,17 +812,19 @@ def make_runtime_geometry_fit_action_callback(
     before_run: Callable[[], None] | None = None,
     run_action: Callable[..., GeometryFitRuntimeActionResult] | None = None,
     after_run: Callable[[GeometryFitRuntimeActionResult], None] | None = None,
-) -> Callable[[], GeometryFitRuntimeActionResult]:
-    """Build the zero-arg runtime callback for the top-level geometry-fit action."""
+) -> Callable[[], None]:
+    """Build the zero-arg Tk-safe runtime callback for the top-level geometry-fit action."""
 
-    def _run() -> GeometryFitRuntimeActionResult:
+    def _run() -> None:
         if callable(before_run):
             before_run()
         action = run_action if callable(run_action) else run_runtime_geometry_fit_action
         result = action(bindings=bindings_factory())
         if callable(after_run):
             after_run(result)
-        return result
+        # Tkinter stringifies callback return values. Returning the rich action
+        # result here can force a dataclass repr of SciPy OptimizeResult payloads.
+        return None
 
     return _run
 

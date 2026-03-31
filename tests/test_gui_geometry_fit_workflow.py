@@ -1287,7 +1287,7 @@ def test_make_runtime_geometry_fit_action_callback_runs_before_action() -> None:
         after_run=lambda result: events.append(("after", result)),
     )
 
-    assert callback() == "result"
+    assert callback() is None
     assert events == [
         "before",
         "bindings",
