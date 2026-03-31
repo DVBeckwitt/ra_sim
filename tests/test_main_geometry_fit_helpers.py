@@ -77,6 +77,7 @@ def test_main_build_geometry_fit_runtime_config_accepts_explicit_gui_solver_over
                 "gui_worker_numba_threads": 3,
             },
             "gui_use_numba": True,
+            "gui_allow_unsafe_runtime": True,
         },
         {"gamma": 1.0},
         {"gamma": {"window": 0.2, "pull": 0.0}},
@@ -90,3 +91,4 @@ def test_main_build_geometry_fit_runtime_config_accepts_explicit_gui_solver_over
         "worker_numba_threads": 3,
     }
     assert runtime_cfg["use_numba"] is True
+    assert runtime_cfg["allow_unsafe_runtime"] is True

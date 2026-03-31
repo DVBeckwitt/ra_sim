@@ -1443,6 +1443,9 @@ def build_geometry_fit_runtime_config(
         bool(gui_use_numba) if gui_use_numba is not None else False
     )
 
+    gui_allow_unsafe_runtime = runtime_cfg.pop("gui_allow_unsafe_runtime", None)
+    runtime_cfg["allow_unsafe_runtime"] = bool(gui_allow_unsafe_runtime)
+
     gui_workers = solver_cfg.pop("gui_workers", None)
     solver_cfg["workers"] = gui_workers if gui_workers is not None else 1
 
@@ -3173,6 +3176,9 @@ def apply_geometry_fit_runtime_safety_overrides(
         resolved = copy.deepcopy(dict(refinement_config))
     else:
         resolved = {}
+
+    if bool(resolved.get("allow_unsafe_runtime", False)):
+        return resolved, None
 
     if not should_apply_geometry_fit_runtime_safety_overrides(
         platform_name=platform_name,

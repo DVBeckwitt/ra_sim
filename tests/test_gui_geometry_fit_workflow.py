@@ -1579,6 +1579,32 @@ def test_apply_geometry_fit_runtime_safety_overrides_honors_opt_out_env() -> Non
     assert note is None
 
 
+def test_apply_geometry_fit_runtime_safety_overrides_honors_config_opt_out() -> None:
+    runtime_cfg, note = geometry_fit.apply_geometry_fit_runtime_safety_overrides(
+        {
+            "solver": {
+                "workers": "auto",
+                "parallel_mode": "auto",
+            },
+            "use_numba": True,
+            "allow_unsafe_runtime": True,
+        },
+        platform_name="nt",
+        version_info=(3, 13, 0),
+        env={},
+    )
+
+    assert runtime_cfg == {
+        "solver": {
+            "workers": "auto",
+            "parallel_mode": "auto",
+        },
+        "use_numba": True,
+        "allow_unsafe_runtime": True,
+    }
+    assert note is None
+
+
 def test_solve_geometry_fit_request_forwards_status_callback_when_supported() -> None:
     prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=False)
     request = geometry_fit.build_geometry_fit_solver_request(

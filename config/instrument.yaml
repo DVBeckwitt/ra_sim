@@ -220,6 +220,13 @@ instrument:
         fit_iterations: 3
         min_matches: 12
         max_display_markers: 120
+      # GUI-only overrides:
+      # - gui_use_numba: enable the numba-backed simulation kernel during the
+      #   live geometry fit.
+      # - gui_allow_unsafe_runtime: bypass the Windows/Python 3.13 safety
+      #   clamp that would otherwise force serial/no-numba execution.
+      gui_use_numba: true
+      gui_allow_unsafe_runtime: true
       # Geometry fitting always evaluates a deterministic center-beam,
       # zero-divergence ray rather than the full sampled beam cloud.
       # Set to false to avoid numba JIT during fitting (useful if numba
