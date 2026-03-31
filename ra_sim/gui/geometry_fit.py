@@ -13,6 +13,8 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.utils.notifications import play_completion_chime
+
 
 GEOMETRY_FIT_PARAM_ORDER = [
     "zb",
@@ -179,7 +181,7 @@ class GeometryFitPostprocessResult:
 
     fitted_params: dict[str, object]
     point_match_summary_lines: list[str]
-    pixel_offsets: list[tuple[tuple[int, int, int], float, float, float]]
+    pixel_offsets: list[dict[str, object]]
     overlay_records: list[dict[str, object]]
     overlay_state: dict[str, object]
     overlay_diagnostic_lines: list[str]
@@ -2425,6 +2427,22 @@ def prepare_geometry_fit_run(
     geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
     if not isinstance(geometry_refine_cfg, Mapping):
         geometry_refine_cfg = {}
+    lattice_refinement_cfg = geometry_refine_cfg.get("lattice_refinement", {}) or {}
+    if not isinstance(lattice_refinement_cfg, Mapping):
+        lattice_refinement_cfg = {}
+    lattice_refinement_enabled = bool(lattice_refinement_cfg.get("enabled", False))
+    selected_lattice_vars = [
+        name for name in selected_var_names if name in {"a", "c"}
+    ]
+    if selected_lattice_vars and not lattice_refinement_enabled:
+        joined = ", ".join(selected_lattice_vars)
+        return GeometryFitPreparationResult(
+            error_text=(
+                "Geometry fit unavailable: lattice parameters "
+                f"({joined}) are frozen by default. Enable "
+                "`fit.geometry.lattice_refinement.enabled` to refine them."
+            )
+        )
     orientation_cfg = geometry_refine_cfg.get("orientation", {}) or {}
     if not isinstance(orientation_cfg, Mapping):
         orientation_cfg = {}
@@ -3064,37 +3082,85 @@ def apply_geometry_fit_result_values(
             continue
 
 
+def _geometry_fit_normalize_hkl(raw_hkl: object) -> tuple[int, int, int] | object:
+    """Normalize one HKL triplet when possible."""
+
+    if (
+        isinstance(raw_hkl, Sequence)
+        and not isinstance(raw_hkl, (str, bytes))
+        and len(raw_hkl) == 3
+    ):
+        try:
+            return tuple(int(v) for v in raw_hkl)
+        except Exception:
+            return raw_hkl
+    return raw_hkl
+
+
 def build_geometry_fit_export_records(
-    agg_millers: Sequence[Sequence[object]],
-    agg_sim_coords: Sequence[Sequence[object]],
-    agg_meas_coords: Sequence[Sequence[object]],
-    pixel_offsets: Sequence[Sequence[object]],
+    point_match_diagnostics: Sequence[object] | None = None,
+    *,
+    agg_millers: Sequence[Sequence[object]] | None = None,
+    agg_sim_coords: Sequence[Sequence[object]] | None = None,
+    agg_meas_coords: Sequence[Sequence[object]] | None = None,
+    pixel_offsets: Sequence[Sequence[object]] | None = None,
 ) -> list[dict[str, object]]:
-    """Build the matched-peak export rows saved after one geometry fit."""
+    """Build one export row per manual point from final diagnostics."""
+
+    if agg_millers is not None and agg_sim_coords is not None and agg_meas_coords is not None and pixel_offsets is not None:
+        export_recs: list[dict[str, object]] = []
+        for source_label, coords in (("sim", agg_sim_coords), ("meas", agg_meas_coords)):
+            for hkl, (x, y), offset in zip(agg_millers, coords, pixel_offsets):
+                try:
+                    hkl_triplet = tuple(int(v) for v in hkl[:3])
+                except Exception:
+                    continue
+                try:
+                    dist = float(offset[3])
+                except Exception:
+                    dist = float("nan")
+                export_recs.append(
+                    {
+                        "source": str(source_label),
+                        "hkl": hkl_triplet,
+                        "x": int(x),
+                        "y": int(y),
+                        "dist_px": dist,
+                    }
+                )
+        return export_recs
 
     export_recs: list[dict[str, object]] = []
-    for source_label, coords in (
-        ("sim", agg_sim_coords),
-        ("meas", agg_meas_coords),
-    ):
-        for hkl, (x, y), offset in zip(agg_millers, coords, pixel_offsets):
-            try:
-                hkl_triplet = tuple(int(v) for v in hkl[:3])
-            except Exception:
-                continue
-            try:
-                dist = float(offset[3])
-            except Exception:
-                dist = float("nan")
-            export_recs.append(
-                {
-                    "source": str(source_label),
-                    "hkl": hkl_triplet,
-                    "x": int(x),
-                    "y": int(y),
-                    "dist_px": dist,
-                }
-            )
+    for raw_entry in point_match_diagnostics or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        resolution_reason = entry.get(
+            "correspondence_resolution_reason",
+            entry.get("resolution_reason"),
+        )
+        export_recs.append(
+            {
+                "dataset_index": int(entry.get("dataset_index", 0)),
+                "overlay_match_index": int(entry.get("overlay_match_index", -1)),
+                "match_status": str(entry.get("match_status", "")),
+                "hkl": _geometry_fit_normalize_hkl(entry.get("hkl")),
+                "measured_x": float(entry.get("measured_x", np.nan)),
+                "measured_y": float(entry.get("measured_y", np.nan)),
+                "simulated_x": float(entry.get("simulated_x", np.nan)),
+                "simulated_y": float(entry.get("simulated_y", np.nan)),
+                "dx_px": float(entry.get("dx_px", np.nan)),
+                "dy_px": float(entry.get("dy_px", np.nan)),
+                "distance_px": float(entry.get("distance_px", np.nan)),
+                "source_table_index": entry.get("source_table_index"),
+                "source_row_index": entry.get("source_row_index"),
+                "source_peak_index": entry.get("source_peak_index"),
+                "resolution_kind": str(entry.get("resolution_kind", "")),
+                "resolution_reason": (
+                    None if resolution_reason is None else str(resolution_reason)
+                ),
+            }
+        )
     return export_recs
 
 
@@ -3222,7 +3288,8 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
             "solver loss={loss} f_scale_px={f_scale} max_nfev={max_nfev} "
             "restarts={restarts} weighted_matching={weighted} "
             "missing_pair_penalty_px={missing} measurement_uncertainty={unc} "
-            "anisotropic_uncertainty={anisotropic}".format(
+            "anisotropic_uncertainty={anisotropic} full_beam_polish={full_beam} "
+            "full_beam_radius_px={full_beam_radius}".format(
                 loss=str(solver.get("loss", "<unknown>")),
                 f_scale=_geometry_fit_debug_value_text(solver.get("f_scale_px", np.nan)),
                 max_nfev=_geometry_fit_debug_value_text(solver.get("max_nfev", "<unknown>"), float_digits=0),
@@ -3233,6 +3300,13 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
                 anisotropic=_geometry_fit_debug_value_text(
                     solver.get("anisotropic_measurement_uncertainty", False),
                     float_digits=0,
+                ),
+                full_beam=_geometry_fit_debug_value_text(
+                    solver.get("full_beam_polish_enabled", False),
+                    float_digits=0,
+                ),
+                full_beam_radius=_geometry_fit_debug_value_text(
+                    solver.get("full_beam_polish_match_radius_px", np.nan),
                 ),
             )
         )
@@ -3264,7 +3338,7 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
         if isinstance(point_seed, Mapping):
             lines.append(
                 "main_seed_point_match matched={matched} missing={missing} "
-                "peak_rms_px={peak_rms} peak_max_px={peak_max}".format(
+                "seed_rms_px={peak_rms} peak_max_px={peak_max}".format(
                     matched=_geometry_fit_debug_value_text(point_seed.get("matched_pair_count", 0), float_digits=0),
                     missing=_geometry_fit_debug_value_text(point_seed.get("missing_pair_count", 0), float_digits=0),
                     peak_rms=_geometry_fit_debug_value_text(point_seed.get("unweighted_peak_rms_px", np.nan)),
@@ -3320,11 +3394,16 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
     if isinstance(final_summary, Mapping):
         lines.append(
             "final cost={cost} robust_cost={robust} weighted_rms_px={weighted_rms} "
-            "display_rms_px={display_rms}".format(
+            "final_full_beam_rms_px={display_rms}".format(
                 cost=_geometry_fit_debug_value_text(final_summary.get("cost", np.nan)),
                 robust=_geometry_fit_debug_value_text(final_summary.get("robust_cost", np.nan)),
                 weighted_rms=_geometry_fit_debug_value_text(final_summary.get("weighted_rms_px", np.nan)),
-                display_rms=_geometry_fit_debug_value_text(final_summary.get("display_rms_px", np.nan)),
+                display_rms=_geometry_fit_debug_value_text(
+                    final_summary.get(
+                        "final_full_beam_rms_px",
+                        final_summary.get("display_rms_px", np.nan),
+                    )
+                ),
             )
         )
 
@@ -3365,6 +3444,7 @@ def build_geometry_fit_stage_summary_lines(result: object) -> list[str]:
         ("reparameterization", getattr(result, "reparameterization_summary", None)),
         ("staged_release", getattr(result, "staged_release_summary", None)),
         ("adaptive_regularization", getattr(result, "adaptive_regularization_summary", None)),
+        ("full_beam_polish", getattr(result, "full_beam_polish_summary", None)),
         ("single_ray_polish", getattr(result, "single_ray_polish_summary", None)),
         ("ridge_refinement", getattr(result, "ridge_refinement_summary", None)),
         ("image_refinement", getattr(result, "image_refinement_summary", None)),
@@ -3380,8 +3460,12 @@ def build_geometry_fit_stage_summary_lines(result: object) -> list[str]:
         "final_cost",
         "regularized_cost",
         "release_cost",
+        "seed_correspondence_count",
         "matched_pair_count_before",
         "matched_pair_count_after",
+        "fixed_source_resolved_count",
+        "start_rms_px",
+        "final_rms_px",
         "accepted_stage_count",
         "release_accepted",
         "coarse_single_ray_enabled",
@@ -3462,6 +3546,33 @@ def build_geometry_fit_rejection_reason_lines(
                 limit=float(GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX),
             )
         )
+
+    identifiability_summary = getattr(result, "identifiability_summary", None)
+    if isinstance(identifiability_summary, Mapping) and bool(
+        identifiability_summary.get("underconstrained", False)
+    ):
+        reasons.append(
+            "Fit is underconstrained according to the final identifiability diagnostics."
+        )
+
+    bound_proximity_summary = getattr(result, "bound_proximity_summary", None)
+    if isinstance(bound_proximity_summary, Mapping):
+        near_bound_entries = bound_proximity_summary.get("near_bound_parameters", [])
+        if isinstance(near_bound_entries, Sequence) and near_bound_entries:
+            joined = ", ".join(
+                "{name}({side})".format(
+                    name=str(entry.get("name", "")),
+                    side=str(entry.get("side", "")),
+                )
+                for entry in near_bound_entries
+                if isinstance(entry, Mapping) and entry.get("name")
+            )
+            if joined:
+                reasons.append(
+                    "Parameters finished within 1% of a finite bound span from a bound: "
+                    + joined
+                    + "."
+                )
 
     return reasons
 
@@ -3623,25 +3734,56 @@ def build_geometry_fit_profile_cache_from_ui(
 
 
 def build_geometry_fit_pixel_offsets(
-    agg_millers: Sequence[Sequence[object]],
-    agg_sim_coords: Sequence[Sequence[object]],
-    agg_meas_coords: Sequence[Sequence[object]],
-) -> list[tuple[tuple[int, int, int], float, float, float]]:
-    """Build per-HKL pixel offset tuples from aggregated match centers."""
+    point_match_diagnostics: Sequence[object] | None = None,
+    agg_millers: Sequence[Sequence[object]] | None = None,
+    agg_sim_coords: Sequence[Sequence[object]] | None = None,
+    agg_meas_coords: Sequence[Sequence[object]] | None = None,
+) -> list[dict[str, object]] | list[tuple[tuple[int, int, int], float, float, float]]:
+    """Build one per-point native-frame offset record from final diagnostics."""
 
-    pixel_offsets: list[tuple[tuple[int, int, int], float, float, float]] = []
-    for hkl_key, sim_center, meas_center in zip(
-        agg_millers,
-        agg_sim_coords,
-        agg_meas_coords,
+    if (
+        agg_meas_coords is None
+        and point_match_diagnostics is not None
+        and agg_millers is not None
+        and agg_sim_coords is not None
     ):
-        try:
-            hkl = tuple(int(v) for v in hkl_key[:3])
-            dx = float(sim_center[0]) - float(meas_center[0])
-            dy = float(sim_center[1]) - float(meas_center[1])
-        except Exception:
+        agg_meas_coords = agg_sim_coords
+        agg_sim_coords = agg_millers
+        agg_millers = point_match_diagnostics  # type: ignore[assignment]
+        point_match_diagnostics = None
+
+    if agg_millers is not None and agg_sim_coords is not None and agg_meas_coords is not None:
+        legacy_offsets: list[tuple[tuple[int, int, int], float, float, float]] = []
+        for hkl_key, sim_center, meas_center in zip(
+            agg_millers,
+            agg_sim_coords,
+            agg_meas_coords,
+        ):
+            try:
+                hkl = tuple(int(v) for v in hkl_key[:3])
+                dx = float(sim_center[0]) - float(meas_center[0])
+                dy = float(sim_center[1]) - float(meas_center[1])
+            except Exception:
+                continue
+            legacy_offsets.append((hkl, dx, dy, float(np.hypot(dx, dy))))
+        return legacy_offsets
+
+    pixel_offsets: list[dict[str, object]] = []
+    for raw_entry in point_match_diagnostics or ():
+        if not isinstance(raw_entry, Mapping):
             continue
-        pixel_offsets.append((hkl, dx, dy, float(np.hypot(dx, dy))))
+        entry = dict(raw_entry)
+        pixel_offsets.append(
+            {
+                "dataset_index": int(entry.get("dataset_index", 0)),
+                "overlay_match_index": int(entry.get("overlay_match_index", -1)),
+                "match_status": str(entry.get("match_status", "")),
+                "hkl": _geometry_fit_normalize_hkl(entry.get("hkl")),
+                "dx_px": float(entry.get("dx_px", np.nan)),
+                "dy_px": float(entry.get("dy_px", np.nan)),
+                "distance_px": float(entry.get("distance_px", np.nan)),
+            }
+        )
     return pixel_offsets
 
 
@@ -3672,7 +3814,21 @@ def build_geometry_fit_point_match_summary_lines(
 
     if not isinstance(point_match_summary, Mapping):
         return []
-    return [f"{key}={value}" for key, value in sorted(point_match_summary.items())]
+    lines: list[str] = []
+    try:
+        fixed_source_count = int(point_match_summary.get("fixed_source_resolved_count", 0))
+    except Exception:
+        fixed_source_count = 0
+    try:
+        measured_count = int(point_match_summary.get("measured_count", 0))
+    except Exception:
+        measured_count = 0
+    if measured_count > 0 and fixed_source_count == 0:
+        lines.append(
+            "WARNING: fit used only HKL-fallback correspondences; no fixed source-row anchors resolved."
+        )
+    lines.extend(f"{key}={value}" for key, value in sorted(point_match_summary.items()))
+    return lines
 
 
 def build_geometry_fit_overlay_diagnostic_lines(
@@ -3701,14 +3857,29 @@ def build_geometry_fit_pixel_offset_lines(
 
     lines = []
     for entry in pixel_offsets:
-        try:
-            hkl = tuple(int(v) for v in entry[0][:3])
-            dx = float(entry[1])
-            dy = float(entry[2])
-            dist = float(entry[3])
-        except Exception:
+        if isinstance(entry, Mapping):
+            hkl = _geometry_fit_normalize_hkl(entry.get("hkl"))
+            dataset_index = int(entry.get("dataset_index", 0))
+            overlay_match_index = int(entry.get("overlay_match_index", -1))
+            match_status = str(entry.get("match_status", ""))
+            dx = float(entry.get("dx_px", np.nan))
+            dy = float(entry.get("dy_px", np.nan))
+            dist = float(entry.get("distance_px", np.nan))
+            prefix = f"dataset={dataset_index} idx={overlay_match_index} HKL={hkl}"
+            if match_status.lower() != "matched" or not np.isfinite(dist):
+                lines.append(f"{prefix}: status={match_status or 'unknown'}")
+                continue
+            lines.append(f"{prefix}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px")
             continue
-        lines.append(f"HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px")
+        if not isinstance(entry, Mapping):
+            try:
+                hkl = tuple(int(v) for v in entry[0][:3])
+                dx = float(entry[1])
+                dy = float(entry[2])
+                dist = float(entry[3])
+            except Exception:
+                continue
+            lines.append(f"HKL={hkl}: dx={dx:.4f}, dy={dy:.4f}, |Δ|={dist:.4f} px")
     return lines or ["No matched peaks"]
 
 
@@ -3788,15 +3959,8 @@ def build_geometry_fit_progress_text(
         "background points, green circles=fitted simulated peaks, dashed "
         "arrows=initial->fitted sim shifts."
     )
-    dist_report = (
-        "\n".join(
-            f"HKL={tuple(int(v) for v in entry[0][:3])}: |Δ|={float(entry[3]):.2f}px "
-            f"(dx={float(entry[1]):.2f}, dy={float(entry[2]):.2f})"
-            for entry in pixel_offsets
-        )
-        if pixel_offsets
-        else "No matched peaks to report distances."
-    )
+    dist_report_lines = build_geometry_fit_pixel_offset_lines(pixel_offsets)
+    dist_report = "\n".join(dist_report_lines)
     return (
         f"{base_summary}\n"
         "Manual pairs: {points} points across {groups} groups".format(
@@ -3868,44 +4032,13 @@ def postprocess_geometry_fit_result(
 ) -> GeometryFitPostprocessResult:
     """Build the post-fit analysis artifacts used by the live GUI."""
 
-    simulated_params = dict(fitted_params)
-    try:
-        theta_base = float(simulated_params.get("theta_initial", np.nan))
-        theta_offset = float(simulated_params.get("theta_offset", 0.0))
-    except Exception:
-        theta_base = float("nan")
-        theta_offset = 0.0
-    if np.isfinite(theta_base) and np.isfinite(theta_offset):
-        simulated_params["theta_initial"] = float(theta_base + theta_offset)
-
-    (
-        _,
-        sim_coords,
-        meas_coords,
-        sim_millers,
-        meas_millers,
-    ) = simulate_and_compare_hkl(
-        miller,
-        intensities,
-        int(image_size),
-        simulated_params,
-        current_dataset["measured_for_fit"],
-        pixel_tol=float("inf"),
-    )
-    agg_sim_coords, agg_meas_coords, agg_millers = aggregate_match_centers(
-        sim_coords,
-        meas_coords,
-        sim_millers,
-        meas_millers,
-    )
-    pixel_offsets = build_geometry_fit_pixel_offsets(
-        agg_millers,
-        agg_sim_coords,
-        agg_meas_coords,
-    )
+    point_match_diagnostics = getattr(result, "point_match_diagnostics", None)
+    if not isinstance(point_match_diagnostics, list):
+        point_match_diagnostics = []
+    pixel_offsets = build_geometry_fit_pixel_offsets(point_match_diagnostics)
 
     overlay_point_match_diagnostics = filter_geometry_fit_overlay_point_match_diagnostics(
-        getattr(result, "point_match_diagnostics", None),
+        point_match_diagnostics,
         joint_background_mode=joint_background_mode,
         current_background_index=int(current_background_index),
     )
@@ -3923,12 +4056,7 @@ def postprocess_geometry_fit_result(
         overlay_record_count=len(overlay_records),
     )
 
-    export_records = build_geometry_fit_export_records(
-        agg_millers,
-        agg_sim_coords,
-        agg_meas_coords,
-        pixel_offsets,
-    )
+    export_records = build_geometry_fit_export_records(point_match_diagnostics)
     save_path = Path(downloads_dir) / f"matched_peaks_{stamp}.npy"
     fit_summary_lines = build_geometry_fit_summary_lines(
         current_dataset=current_dataset,
@@ -4601,14 +4729,20 @@ def execute_runtime_geometry_fit(
             ),
         )
         replace_dataset_cache = ui_bindings.replace_dataset_cache
-        if apply_result.accepted and callable(replace_dataset_cache):
-            replace_dataset_cache(
-                build_geometry_fit_dataset_cache_payload(
-                    prepared_run,
-                    current_background_index=int(
-                        postprocess_config.current_background_index
-                    ),
+        if apply_result.accepted:
+            if callable(replace_dataset_cache):
+                replace_dataset_cache(
+                    build_geometry_fit_dataset_cache_payload(
+                        prepared_run,
+                        current_background_index=int(
+                            postprocess_config.current_background_index
+                        ),
+                    )
                 )
+            play_completion_chime(
+                prepared_run.geometry_runtime_cfg.get("completion_chime")
+                if isinstance(prepared_run.geometry_runtime_cfg, Mapping)
+                else None
             )
         return GeometryFitRuntimeExecutionResult(
             log_path=log_path,

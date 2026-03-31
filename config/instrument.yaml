@@ -122,7 +122,7 @@ instrument:
       # - stagnation_probe_random_directions: optional random probe count for
       #   broader basin search after stagnation.
       solver:
-        loss: linear
+        loss: soft_l1
         f_scale_px: 8.0
         max_nfev: 140
         restarts: 4
@@ -131,14 +131,20 @@ instrument:
         parallel_mode: auto
         worker_numba_threads: 0
         missing_pair_penalty_px: 20.0
-        weighted_matching: false
-        use_measurement_uncertainty: false
+        weighted_matching: true
+        use_measurement_uncertainty: true
         anisotropic_measurement_uncertainty: false
         radial_sigma_scale: 1.0
         tangential_sigma_scale: 1.0
         stagnation_probe_pairwise: true
         stagnation_probe_pair_limit: 6
         stagnation_probe_random_directions: 0
+      full_beam_polish:
+        enabled: true
+        max_nfev: 40
+        match_radius_px: 24.0
+      lattice_refinement:
+        enabled: false
       # Optional coarse ridge/Chamfer stage before ROI refinement.
       # This is geometry-only and is only accepted if it improves the coarse
       # ridge overlap without materially worsening the point residuals.
@@ -219,6 +225,19 @@ instrument:
       # Set to false to avoid numba JIT during fitting (useful if numba
       # compilation fails on your Python build).
       use_numba: true
+      # Optional completion chime after an accepted geometry fit.
+      # - mode: alias plays one Windows system sound alias asynchronously.
+      # - mode: tone plays the tone_sequence below in a short background thread.
+      # Common Windows aliases: SystemNotification, SystemAsterisk,
+      # SystemExclamation, SystemQuestion, SystemHand.
+      completion_chime:
+        enabled: true
+        mode: alias
+        alias: SystemNotification
+        tone_sequence:
+          - {frequency_hz: 784, duration_ms: 60}
+          - {frequency_hz: 988, duration_ms: 80}
+          - {frequency_hz: 1175, duration_ms: 120}
     mosaic_shape:
       # Detector-shape mosaic refinement is geometry-locked and reuses the
       # exact background bundle from the last successful geometry fit.

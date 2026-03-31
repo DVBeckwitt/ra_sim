@@ -1,3 +1,4 @@
+from dataclasses import replace
 import numpy as np
 from pathlib import Path
 from types import SimpleNamespace
@@ -360,6 +361,70 @@ def test_prepare_geometry_fit_run_reports_missing_manual_pairs_by_background_nam
     assert result.error_text == (
         "Geometry fit unavailable: save manual Qr/Qz pairs first for bg0.osc."
     )
+
+
+def test_prepare_geometry_fit_run_blocks_lattice_refinement_by_default() -> None:
+    blocked = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0, "a": 4.2},
+        var_names=["a"],
+        fit_config={"geometry": {"lattice_refinement": {"enabled": False}}},
+        osc_files=["C:/data/bg0.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [4.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda *_args, **_kwargs: {},
+        build_runtime_config=lambda fit_params: dict(fit_params),
+    )
+
+    assert blocked.prepared_run is None
+    assert blocked.error_text == (
+        "Geometry fit unavailable: lattice parameters (a) are frozen by default. "
+        "Enable `fit.geometry.lattice_refinement.enabled` to refine them."
+    )
+
+    allowed = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0, "a": 4.2},
+        var_names=["a"],
+        fit_config={"geometry": {"lattice_refinement": {"enabled": True}}},
+        osc_files=["C:/data/bg0.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [4.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda background_index, **kwargs: {
+            "dataset_index": int(background_index),
+            "pair_count": 1,
+            "group_count": 1,
+            "summary_line": "bg[0]",
+            "spec": {"dataset_index": int(background_index)},
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {"pairs": 1},
+            "measured_for_fit": [],
+            "experimental_image_for_fit": "image-0",
+            "initial_pairs_display": [],
+            "native_background": np.zeros((2, 2)),
+        },
+        build_runtime_config=lambda fit_params: dict(fit_params),
+    )
+
+    assert allowed.error_text is None
+    assert allowed.prepared_run is not None
+    assert allowed.prepared_run.start_log_sections[0][1][0] == "a=4.200000"
 
 
 def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindings() -> None:
@@ -1695,6 +1760,52 @@ def test_build_geometry_fit_export_records_pairs_simulated_and_measured_rows() -
     ]
 
 
+def test_build_geometry_fit_export_records_uses_authoritative_point_match_diagnostics() -> None:
+    rows = geometry_fit.build_geometry_fit_export_records(
+        [
+            {
+                "dataset_index": 1,
+                "overlay_match_index": 7,
+                "match_status": "matched",
+                "hkl": [1, 1, 0],
+                "measured_x": 11.5,
+                "measured_y": 19.0,
+                "simulated_x": 10.0,
+                "simulated_y": 20.0,
+                "dx_px": -1.5,
+                "dy_px": 1.0,
+                "distance_px": np.hypot(-1.5, 1.0),
+                "source_table_index": 2,
+                "source_row_index": 5,
+                "source_peak_index": 9,
+                "resolution_kind": "fixed_source_row",
+                "correspondence_resolution_reason": "matched source row",
+            }
+        ]
+    )
+
+    assert rows == [
+        {
+            "dataset_index": 1,
+            "overlay_match_index": 7,
+            "match_status": "matched",
+            "hkl": (1, 1, 0),
+            "measured_x": 11.5,
+            "measured_y": 19.0,
+            "simulated_x": 10.0,
+            "simulated_y": 20.0,
+            "dx_px": -1.5,
+            "dy_px": 1.0,
+            "distance_px": np.hypot(-1.5, 1.0),
+            "source_table_index": 2,
+            "source_row_index": 5,
+            "source_peak_index": 9,
+            "resolution_kind": "fixed_source_row",
+            "resolution_reason": "matched source row",
+        }
+    ]
+
+
 def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> None:
     class _Result:
         success = True
@@ -1725,6 +1836,8 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
                 "missing_pair_penalty_px": 12.0,
                 "use_measurement_uncertainty": True,
                 "anisotropic_measurement_uncertainty": False,
+                "full_beam_polish_enabled": True,
+                "full_beam_polish_match_radius_px": 24.0,
             },
             "parallelization": {
                 "mode": "datasets",
@@ -1776,7 +1889,7 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
                 "cost": 1.25,
                 "robust_cost": 1.0,
                 "weighted_rms_px": 0.5,
-                "display_rms_px": 0.75,
+                "final_full_beam_rms_px": 0.75,
             },
             "solve_progress": {
                 "label": "main solve",
@@ -1813,6 +1926,19 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
             "applied_parameters": ["Gamma"],
             "release_accepted": True,
         }
+        full_beam_polish_summary = {
+            "status": "accepted",
+            "reason": "accepted",
+            "accepted": True,
+            "seed_correspondence_count": 4,
+            "matched_pair_count_before": 4,
+            "matched_pair_count_after": 4,
+            "fixed_source_resolved_count": 3,
+            "start_rms_px": 1.5,
+            "final_rms_px": 0.75,
+            "nfev": 3,
+            "max_nfev": 40,
+        }
         single_ray_polish_summary = {"status": "skipped", "accepted": False}
         ridge_refinement_summary = {"status": "skipped", "accepted": False}
         image_refinement_summary = {"status": "skipped", "accepted": False}
@@ -1835,8 +1961,11 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
     debug_lines = geometry_fit.build_geometry_fit_debug_lines(_Result())
     assert debug_lines[0] == "point_match_mode=True datasets=1 vars=gamma,a"
     assert any("main_seed_point_match matched=4 missing=1" in line for line in debug_lines)
+    assert any("seed_rms_px=1.500000" in line for line in debug_lines)
     assert any("dataset[0] label=bg0" in line for line in debug_lines)
     assert any("param[gamma] group=tilt start=1.000000 final=1.500000 delta=0.500000" in line for line in debug_lines)
+    assert any("full_beam_polish=True full_beam_radius_px=24.000000" in line for line in debug_lines)
+    assert any("final_full_beam_rms_px=0.750000" in line for line in debug_lines)
     assert any("solve_progress label=main solve evaluations=12" in line for line in debug_lines)
     assert any("solve_progress[0] eval=1 reason=milestone" in line for line in debug_lines)
 
@@ -1850,6 +1979,12 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
     assert any(
         line.startswith("adaptive_regularization:")
         and "applied_parameters=[Gamma]" in line
+        for line in stage_lines
+    )
+    assert any(
+        line.startswith("full_beam_polish:")
+        and "seed_correspondence_count=4" in line
+        and "final_rms_px=0.750000" in line
         for line in stage_lines
     )
     assert any(
@@ -1991,7 +2126,24 @@ def test_geometry_fit_post_solver_helpers_build_runtime_params_offsets_and_statu
     assert "Manual pairs: 9 points across 4 groups | joint backgrounds=3" in progress_text
     assert "Saved 4 peak records → C:/tmp/matched.npy" in progress_text
     assert "frame warning" in progress_text
-    assert "HKL=(1, 1, 0): |Δ|=1.80px (dx=1.50, dy=1.00)" in progress_text
+    assert "HKL=(1, 1, 0): dx=1.5000, dy=1.0000, |Δ|=1.8028 px" in progress_text
+
+
+def test_build_geometry_fit_point_match_summary_lines_warns_for_fallback_only_matches() -> None:
+    lines = geometry_fit.build_geometry_fit_point_match_summary_lines(
+        {
+            "measured_count": 3,
+            "fixed_source_resolved_count": 0,
+            "fallback_entry_count": 3,
+        }
+    )
+
+    assert lines == [
+        "WARNING: fit used only HKL-fallback correspondences; no fixed source-row anchors resolved.",
+        "fallback_entry_count=3",
+        "fixed_source_resolved_count=0",
+        "measured_count=3",
+    ]
 
 
 def test_geometry_fit_result_rms_falls_back_to_residual_vector() -> None:
@@ -2003,6 +2155,27 @@ def test_geometry_fit_result_rms_falls_back_to_residual_vector() -> None:
         geometry_fit.geometry_fit_result_rms(_Result()),
         5.0 / np.sqrt(2.0),
     )
+
+
+def test_build_geometry_fit_rejection_reason_lines_flags_underconstraint_and_bounds() -> None:
+    result = SimpleNamespace(
+        success=True,
+        point_match_summary={
+            "matched_pair_count": 3,
+            "unweighted_peak_max_px": 2.5,
+        },
+        identifiability_summary={"underconstrained": True},
+        bound_proximity_summary={
+            "near_bound_parameters": [{"name": "Gamma", "side": "upper"}]
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=0.75)
+
+    assert reasons == [
+        "Fit is underconstrained according to the final identifiability diagnostics.",
+        "Parameters finished within 1% of a finite bound span from a bound: Gamma(upper).",
+    ]
 
 
 def test_build_geometry_fit_profile_cache_merges_mosaic_and_current_fit_values() -> None:
@@ -2946,10 +3119,49 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
     tmp_path,
 ) -> None:
     class _Result:
-        point_match_summary = {"claimed": 4, "qualified": 3}
+        point_match_summary = {
+            "claimed": 4,
+            "qualified": 3,
+            "measured_count": 2,
+            "fixed_source_resolved_count": 1,
+        }
         point_match_diagnostics = [
-            {"dataset_index": 0, "name": "drop"},
-            {"dataset_index": 1, "name": "keep"},
+            {
+                "dataset_index": 0,
+                "overlay_match_index": 0,
+                "match_status": "matched",
+                "hkl": (9, 9, 9),
+                "measured_x": 101.0,
+                "measured_y": 201.0,
+                "simulated_x": 100.0,
+                "simulated_y": 200.0,
+                "dx_px": -1.0,
+                "dy_px": -1.0,
+                "distance_px": np.hypot(-1.0, -1.0),
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "resolution_kind": "fixed_source_row",
+                "resolution_reason": "seed anchor",
+                "name": "drop",
+            },
+            {
+                "dataset_index": 1,
+                "overlay_match_index": 3,
+                "match_status": "matched",
+                "hkl": (1, 1, 0),
+                "measured_x": 11.5,
+                "measured_y": 19.0,
+                "simulated_x": 10.0,
+                "simulated_y": 20.0,
+                "dx_px": -1.5,
+                "dy_px": 1.0,
+                "distance_px": np.hypot(-1.5, 1.0),
+                "source_table_index": 2,
+                "source_row_index": 5,
+                "resolution_kind": "fixed_source_row",
+                "resolution_reason": "matched source row",
+                "name": "keep",
+            },
         ]
 
     calls: dict[str, object] = {}
@@ -2980,12 +3192,7 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
         )
 
     def _aggregate_match_centers(sim_coords, meas_coords, sim_millers, meas_millers):
-        calls["aggregate"] = (
-            list(sim_coords),
-            list(meas_coords),
-            list(sim_millers),
-            list(meas_millers),
-        )
+        calls["aggregate"] = True
         return sim_coords, meas_coords, sim_millers
 
     def _build_overlay_records(
@@ -3052,19 +3259,54 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
         compute_frame_diagnostics=_compute_frame_diagnostics,
     )
 
-    assert calls["simulate"] == {
-        "miller": "miller-data",
-        "intensities": "intensity-data",
-        "image_size": 512,
-        "fitted_params": {"theta_initial": 3.4, "theta_offset": 0.4, "a": 4.2},
-        "measured_for_fit": [{"x": 1.0, "y": 2.0}],
-        "pixel_tol": float("inf"),
-    }
+    assert "simulate" not in calls
+    assert "aggregate" not in calls
     assert calls["overlay"]["overlay_point_match_diagnostics"] == [
-        {"dataset_index": 1, "name": "keep"}
+        {
+            "dataset_index": 1,
+            "overlay_match_index": 3,
+            "match_status": "matched",
+            "hkl": (1, 1, 0),
+            "measured_x": 11.5,
+            "measured_y": 19.0,
+            "simulated_x": 10.0,
+            "simulated_y": 20.0,
+            "dx_px": -1.5,
+            "dy_px": 1.0,
+            "distance_px": np.hypot(-1.5, 1.0),
+            "source_table_index": 2,
+            "source_row_index": 5,
+            "resolution_kind": "fixed_source_row",
+            "resolution_reason": "matched source row",
+            "name": "keep",
+        }
     ]
-    assert postprocess.point_match_summary_lines == ["claimed=4", "qualified=3"]
-    assert postprocess.pixel_offsets == [((1, 1, 0), -1.5, 1.0, np.hypot(-1.5, 1.0))]
+    assert postprocess.point_match_summary_lines == [
+        "claimed=4",
+        "fixed_source_resolved_count=1",
+        "measured_count=2",
+        "qualified=3",
+    ]
+    assert postprocess.pixel_offsets == [
+        {
+            "dataset_index": 0,
+            "overlay_match_index": 0,
+            "match_status": "matched",
+            "hkl": (9, 9, 9),
+            "dx_px": -1.0,
+            "dy_px": -1.0,
+            "distance_px": np.hypot(-1.0, -1.0),
+        },
+        {
+            "dataset_index": 1,
+            "overlay_match_index": 3,
+            "match_status": "matched",
+            "hkl": (1, 1, 0),
+            "dx_px": -1.5,
+            "dy_px": 1.0,
+            "distance_px": np.hypot(-1.5, 1.0),
+        },
+    ]
     assert postprocess.overlay_records == [{"overlay": True}]
     assert postprocess.overlay_state == {
         "overlay_records": [{"overlay": True}],
@@ -3082,18 +3324,40 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
     ]
     assert postprocess.export_records == [
         {
-            "source": "sim",
-            "hkl": (1, 1, 0),
-            "x": 10,
-            "y": 20,
-            "dist_px": np.hypot(-1.5, 1.0),
+            "dataset_index": 0,
+            "overlay_match_index": 0,
+            "match_status": "matched",
+            "hkl": (9, 9, 9),
+            "measured_x": 101.0,
+            "measured_y": 201.0,
+            "simulated_x": 100.0,
+            "simulated_y": 200.0,
+            "dx_px": -1.0,
+            "dy_px": -1.0,
+            "distance_px": np.hypot(-1.0, -1.0),
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "source_peak_index": None,
+            "resolution_kind": "fixed_source_row",
+            "resolution_reason": "seed anchor",
         },
         {
-            "source": "meas",
+            "dataset_index": 1,
+            "overlay_match_index": 3,
+            "match_status": "matched",
             "hkl": (1, 1, 0),
-            "x": 11,
-            "y": 19,
-            "dist_px": np.hypot(-1.5, 1.0),
+            "measured_x": 11.5,
+            "measured_y": 19.0,
+            "simulated_x": 10.0,
+            "simulated_y": 20.0,
+            "dx_px": -1.5,
+            "dy_px": 1.0,
+            "distance_px": np.hypot(-1.5, 1.0),
+            "source_table_index": 2,
+            "source_row_index": 5,
+            "source_peak_index": None,
+            "resolution_kind": "fixed_source_row",
+            "resolution_reason": "matched source row",
         },
     ]
     assert postprocess.save_path == tmp_path / "matched_peaks_20260328_120000.npy"
@@ -3107,6 +3371,9 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
         "RMS residual = 0.750000 px",
         f"Matched peaks saved to: {postprocess.save_path}",
     ]
+    assert "dataset=1 idx=3 HKL=(1, 1, 0): dx=-1.5000, dy=1.0000, |Δ|=1.8028 px" in (
+        postprocess.progress_text
+    )
     assert "frame warning" in postprocess.progress_text
     assert "joint backgrounds=2" in postprocess.progress_text
     assert f"Saved 2 peak records → {postprocess.save_path}" in postprocess.progress_text
@@ -3387,10 +3654,41 @@ def test_apply_runtime_geometry_fit_result_rejects_absurd_manual_fit_before_upda
 
 def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
     tmp_path,
+    monkeypatch,
 ) -> None:
+    keep_diag = {
+        "dataset_index": 0,
+        "overlay_match_index": 0,
+        "match_status": "matched",
+        "hkl": (1, 1, 0),
+        "measured_x": 11.5,
+        "measured_y": 19.0,
+        "simulated_x": 10.0,
+        "simulated_y": 20.0,
+        "dx_px": -1.5,
+        "dy_px": 1.0,
+        "distance_px": np.hypot(-1.5, 1.0),
+        "source_table_index": None,
+        "source_row_index": None,
+        "source_peak_index": None,
+        "resolution_kind": "",
+        "resolution_reason": None,
+    }
+
     prepared_run, postprocess_config = _make_prepared_run(
         joint_background_mode=False,
         tmp_path=tmp_path,
+    )
+    prepared_run = replace(
+        prepared_run,
+        geometry_runtime_cfg={
+            "bounds": {"gamma": [0.0, 1.0]},
+            "completion_chime": {
+                "enabled": True,
+                "mode": "alias",
+                "alias": "SystemNotification",
+            },
+        },
     )
     gamma_var = _DummyVar(0.2)
     a_var = _DummyVar(4.1)
@@ -3402,6 +3700,15 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
     stored_profile_cache: dict[str, object] = {}
     stored_overlay_state: dict[str, object] = {}
     solver_calls: list[dict[str, object]] = []
+    completion_chime_calls: list[dict[str, object] | None] = []
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "play_completion_chime",
+        lambda config: completion_chime_calls.append(
+            dict(config) if isinstance(config, dict) else None
+        ),
+    )
 
     class _Result:
         x = np.array([1.5, 2.5], dtype=float)
@@ -3418,7 +3725,7 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         active_mask = [0]
         restart_history = []
         point_match_summary = {"claimed": 4, "qualified": 3}
-        point_match_diagnostics = [{"dataset_index": 0, "name": "keep"}]
+        point_match_diagnostics = [keep_diag]
         geometry_fit_debug_summary = {
             "point_match_mode": True,
             "dataset_count": 1,
@@ -3607,6 +3914,11 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
             "dataset_specs": None,
             "refinement_config": {
                 "bounds": {"gamma": [0.0, 1.0]},
+                "completion_chime": {
+                    "enabled": True,
+                    "mode": "alias",
+                    "alias": "SystemNotification",
+                },
                 "use_numba": False,
                 "solver": {
                     "parallel_mode": "off",
@@ -3629,18 +3941,22 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
             tmp_path / "matched_peaks_20260328_120000.npy",
             [
                 {
-                    "source": "sim",
+                    "dataset_index": 0,
+                    "overlay_match_index": 0,
+                    "match_status": "matched",
                     "hkl": (1, 1, 0),
-                    "x": 10,
-                    "y": 20,
-                    "dist_px": np.hypot(-1.5, 1.0),
-                },
-                {
-                    "source": "meas",
-                    "hkl": (1, 1, 0),
-                    "x": 11,
-                    "y": 19,
-                    "dist_px": np.hypot(-1.5, 1.0),
+                    "measured_x": 11.5,
+                    "measured_y": 19.0,
+                    "simulated_x": 10.0,
+                    "simulated_y": 20.0,
+                    "dx_px": -1.5,
+                    "dy_px": 1.0,
+                    "distance_px": np.hypot(-1.5, 1.0),
+                    "source_table_index": None,
+                    "source_row_index": None,
+                    "source_peak_index": None,
+                    "resolution_kind": "",
+                    "resolution_reason": None,
                 },
             ],
         )
@@ -3663,9 +3979,16 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
     assert ("cmd", "Geometry fit: running main solve") in events
     assert ("cmd", "Geometry fit: complete (cost=1.000000, rms=0.7500px)") in events
     assert ("cmd", "done: datasets=1 groups=2 points=3 rms=0.7500px") in events
+    assert completion_chime_calls == [
+        {
+            "enabled": True,
+            "mode": "alias",
+            "alias": "SystemNotification",
+        }
+    ]
     assert (
         "draw_overlay",
-        [{"initial_pairs_display": [{"pair": 1}], "diagnostics": [{"dataset_index": 0, "name": "keep"}]}],
+        [{"initial_pairs_display": [{"pair": 1}], "diagnostics": [keep_diag]}],
         120,
     ) in events
     assert "flush_ui" in events
