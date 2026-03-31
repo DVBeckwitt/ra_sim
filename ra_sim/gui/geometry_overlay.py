@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -835,6 +835,19 @@ def build_geometry_fit_overlay_records(
     """
 
     native_frame_shape = (int(native_shape[0]), int(native_shape[1]))
+
+    def _parse_point(value: object) -> tuple[float, float] | None:
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+            return None
+        try:
+            col = float(value[0])
+            row = float(value[1])
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return float(col), float(row)
+
     inverse_orientation = inverse_orientation_transform(
         native_frame_shape,
         orientation_choice,
@@ -896,8 +909,38 @@ def build_geometry_fit_overlay_records(
 
         record = dict(raw_entry)
         record["overlay_match_index"] = int(overlay_match_index)
-        record["initial_sim_display"] = initial_entry.get("sim_display")
-        record["initial_bg_display"] = initial_entry.get("bg_display")
+        initial_sim_native = _parse_point(initial_entry.get("sim_native"))
+        initial_bg_native = _parse_point(initial_entry.get("bg_native"))
+        initial_sim_display = _parse_point(initial_entry.get("sim_display"))
+        initial_bg_display = _parse_point(initial_entry.get("bg_display"))
+        if initial_sim_display is None and initial_sim_native is not None:
+            rotated = rotate_point_for_display(
+                float(initial_sim_native[0]),
+                float(initial_sim_native[1]),
+                native_frame_shape,
+                sim_display_rotate_k,
+            )
+            initial_sim_display = (float(rotated[0]), float(rotated[1]))
+        if initial_bg_display is None and initial_bg_native is not None:
+            rotated = rotate_point_for_display(
+                float(initial_bg_native[0]),
+                float(initial_bg_native[1]),
+                native_frame_shape,
+                background_display_rotate_k,
+            )
+            initial_bg_display = (float(rotated[0]), float(rotated[1]))
+        record["initial_sim_display"] = initial_sim_display
+        record["initial_bg_display"] = initial_bg_display
+        if initial_sim_native is not None:
+            record["initial_sim_native"] = (
+                float(initial_sim_native[0]),
+                float(initial_sim_native[1]),
+            )
+        if initial_bg_native is not None:
+            record["initial_bg_native"] = (
+                float(initial_bg_native[0]),
+                float(initial_bg_native[1]),
+            )
         record["final_sim_fit"] = (
             float(simulated_native[0]),
             float(simulated_native[1]),
@@ -947,6 +990,11 @@ def build_geometry_fit_overlay_records(
 
 def compute_geometry_overlay_frame_diagnostics(
     overlay_records: Sequence[dict[str, object]] | None,
+    *,
+    show_caked_2d: bool = False,
+    native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None,
 ) -> tuple[dict[str, float], str]:
     """Summarize per-match display-frame agreement for the final overlay."""
 
@@ -962,6 +1010,26 @@ def compute_geometry_overlay_frame_diagnostics(
             return None
         return float(col), float(row)
 
+    def _resolve_display_point(
+        entry: dict[str, object],
+        *,
+        display_key: str,
+        native_key: str,
+    ) -> tuple[float, float] | None:
+        if show_caked_2d and native_detector_coords_to_caked_display_coords is not None:
+            native_point = _parse_point(entry.get(native_key))
+            if native_point is not None:
+                try:
+                    projected = native_detector_coords_to_caked_display_coords(
+                        float(native_point[0]),
+                        float(native_point[1]),
+                    )
+                except Exception:
+                    projected = None
+                if projected is not None:
+                    return _parse_point(projected)
+        return _parse_point(entry.get(display_key))
+
     sim_frame_dists: list[float] = []
     bg_frame_dists: list[float] = []
     paired_records = 0
@@ -969,10 +1037,26 @@ def compute_geometry_overlay_frame_diagnostics(
     for raw_entry in overlay_records or []:
         if not isinstance(raw_entry, dict):
             continue
-        initial_sim = _parse_point(raw_entry.get("initial_sim_display"))
-        final_sim = _parse_point(raw_entry.get("final_sim_display"))
-        initial_bg = _parse_point(raw_entry.get("initial_bg_display"))
-        final_bg = _parse_point(raw_entry.get("final_bg_display"))
+        initial_sim = _resolve_display_point(
+            raw_entry,
+            display_key="initial_sim_display",
+            native_key="initial_sim_native",
+        )
+        final_sim = _resolve_display_point(
+            raw_entry,
+            display_key="final_sim_display",
+            native_key="final_sim_native",
+        )
+        initial_bg = _resolve_display_point(
+            raw_entry,
+            display_key="initial_bg_display",
+            native_key="initial_bg_native",
+        )
+        final_bg = _resolve_display_point(
+            raw_entry,
+            display_key="final_bg_display",
+            native_key="final_bg_native",
+        )
         if (
             initial_sim is not None
             and final_sim is not None

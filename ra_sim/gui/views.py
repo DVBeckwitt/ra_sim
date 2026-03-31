@@ -10,7 +10,7 @@ from pathlib import Path
 from collections.abc import Callable, Sequence
 from typing import Any
 import tkinter as tk
-from tkinter import ttk
+from tkinter import font as tkfont, ttk
 
 from ra_sim.config import get_config_dir
 
@@ -60,11 +60,53 @@ _GEOMETRY_FIT_BACKGROUND_HELP_TEXT = (
 _PROJECT_GITHUB_URL = "https://github.com/DVBeckwitt/ra_sim"
 
 
+def _configure_root_styles(root: tk.Misc) -> None:
+    """Apply shared ttk styling that makes major GUI sections easier to scan."""
+
+    try:
+        style = ttk.Style(root)
+    except Exception:
+        return
+
+    heading_font = None
+    try:
+        heading_font = tkfont.nametofont("TkDefaultFont").copy()
+        heading_font.configure(weight="bold")
+        setattr(root, "_ra_section_heading_font", heading_font)
+    except Exception:
+        heading_font = None
+
+    style.configure(
+        "TLabelframe",
+        borderwidth=2,
+        relief="groove",
+        padding=(10, 8),
+    )
+
+    title_style_kwargs: dict[str, object] = {
+        "padding": (4, 0, 4, 2),
+    }
+    if heading_font is not None:
+        title_style_kwargs["font"] = heading_font
+    style.configure("TLabelframe.Label", **title_style_kwargs)
+
+    collapsible_style_kwargs: dict[str, object] = {
+        "padding": (8, 6),
+        "anchor": "w",
+    }
+    if heading_font is not None:
+        collapsible_style_kwargs["font"] = heading_font
+    style.configure("SectionHeader.Toolbutton", **collapsible_style_kwargs)
+
+    style.configure("TNotebook.Tab", padding=(12, 8))
+
+
 def create_root_window(title: str = "RA Simulation") -> tk.Tk:
     """Create and return a Tk root window with the provided title."""
 
     root = tk.Tk()
     root.title(title)
+    _configure_root_styles(root)
     return root
 
 
@@ -2817,14 +2859,7 @@ def create_analysis_view_controls(
 ) -> None:
     """Create the analysis view toggle controls and store their vars."""
 
-    show_1d_var = tk.BooleanVar(value=bool(show_1d))
-    check_1d = ttk.Checkbutton(
-        parent,
-        text="Show 1D Integration",
-        variable=show_1d_var,
-        command=on_toggle_1d_plots,
-    )
-    check_1d.pack(side=tk.TOP, padx=5, pady=2)
+    show_1d_var = tk.BooleanVar(value=bool(show_1d or show_caked_2d))
 
     show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
     check_2d = ttk.Checkbutton(
@@ -2854,7 +2889,7 @@ def create_analysis_view_controls(
     check_log_azimuth.pack(side=tk.TOP, padx=5, pady=2)
 
     view_state.show_1d_var = show_1d_var
-    view_state.check_1d = check_1d
+    view_state.check_1d = None
     view_state.show_caked_2d_var = show_caked_2d_var
     view_state.check_2d = check_2d
     view_state.log_radial_var = log_radial_var

@@ -1,10 +1,11 @@
 """Optimization routines for fitting simulated data to experiments."""
 
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import math
 import os
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from scipy.optimize import (
@@ -2491,7 +2492,10 @@ def fit_mosaic_widths_separable(
         )
         trial_start = anchor + restart_rng.uniform(-1.0, 1.0, size=3) * span
         trial_start = np.clip(trial_start, lower, upper)
-        trial = _run_solver(trial_start)
+        trial = _run_solver(
+            trial_start,
+            status_label=f"restart {seed_kind} {seed_label}",
+        )
         trial_cost = _robust_cost(np.asarray(trial.fun, dtype=np.float64), loss=loss, f_scale=f_scale)
         restart_history.append(
             {
@@ -6087,6 +6091,44 @@ def fit_geometry_parameters(
             summary["unweighted_peak_max_px"] = float("nan")
         return residual_arr, diagnostics, summary
 
+    def _collect_seed_debug_summary(x_trial: Sequence[float]) -> Dict[str, object]:
+        x_arr = np.asarray(x_trial, dtype=float).reshape(-1)
+        local = _apply_trial_params(x_arr)
+        point_match_summary_local: Optional[Dict[str, object]] = None
+        if point_match_mode:
+            residual_arr, _, point_match_summary = _evaluate_pixel_matches(
+                local,
+                collect_diagnostics=False,
+            )
+            point_match_summary_local = dict(point_match_summary)
+        else:
+            residual_arr = np.asarray(cost_fn(x_arr), dtype=float)
+        prior_residual = _parameter_prior_residuals(x_arr)
+        if prior_residual.size:
+            if np.asarray(residual_arr, dtype=float).size:
+                residual_arr = np.concatenate(
+                    [
+                        np.asarray(residual_arr, dtype=float),
+                        np.asarray(prior_residual, dtype=float),
+                    ]
+                )
+            else:
+                residual_arr = np.asarray(prior_residual, dtype=float)
+
+        summary: Dict[str, object] = {
+            "cost": float(
+                _robust_cost(
+                    np.asarray(residual_arr, dtype=float),
+                    loss=solver_loss,
+                    f_scale=solver_f_scale,
+                )
+            ),
+            "weighted_rms_px": float(_weighted_rms_px(residual_arr)),
+        }
+        if point_match_summary_local is not None:
+            summary["point_match_summary"] = point_match_summary_local
+        return summary
+
     def pixel_cost_fn(x):
         local = _apply_trial_params(x)
         residual_arr, _, _ = _evaluate_pixel_matches(local, collect_diagnostics=False)
@@ -6144,6 +6186,7 @@ def fit_geometry_parameters(
         return np.asarray(values, dtype=float)
 
     x0 = [_initial_value(name) for name in var_names]
+    requested_x0_arr = np.asarray(x0, dtype=float).copy()
 
     if point_match_mode and use_single_ray and dataset_contexts:
         local = _apply_trial_params(np.asarray(x0, dtype=float))
@@ -6331,6 +6374,106 @@ def fit_geometry_parameters(
         x_scale = auto_scale
 
     residual_fn = pixel_cost_fn if point_match_mode else cost_fn
+
+    parameter_debug_entries: List[Dict[str, object]] = []
+    for idx, name in enumerate(var_names):
+        prior_enabled = bool(prior_active_mask[idx]) if idx < prior_active_mask.size else False
+        parameter_debug_entries.append(
+            {
+                "name": str(name),
+                "group": _parameter_group(str(name)),
+                "start": float(requested_x0_arr[idx]) if idx < requested_x0_arr.size else float("nan"),
+                "lower_bound": float(lower_bounds[idx]) if idx < lower_bounds.size else float("nan"),
+                "upper_bound": float(upper_bounds[idx]) if idx < upper_bounds.size else float("nan"),
+                "scale": float(x_scale[idx]) if idx < x_scale.size else float("nan"),
+                "prior_enabled": bool(prior_enabled),
+                "prior_center": float(prior_centers[idx]) if prior_enabled else float("nan"),
+                "prior_sigma": float(prior_sigmas[idx]) if prior_enabled else float("nan"),
+            }
+        )
+
+    dataset_debug_entries: List[Dict[str, object]] = []
+    for dataset_ctx in dataset_contexts:
+        subset = dataset_ctx.subset
+        dataset_debug_entries.append(
+            {
+                "dataset_index": int(dataset_ctx.dataset_index),
+                "label": str(dataset_ctx.label),
+                "theta_initial_deg": float(dataset_ctx.theta_initial),
+                "measured_count": int(len(subset.measured_entries)),
+                "subset_reflection_count": int(subset.miller.shape[0]),
+                "total_reflection_count": int(subset.total_reflection_count),
+                "fixed_source_reflection_count": int(subset.fixed_source_reflection_count),
+                "fallback_hkl_count": int(subset.fallback_hkl_count),
+                "subset_reduced": bool(subset.reduced),
+            }
+        )
+
+    geometry_fit_debug_summary: Dict[str, object] = {
+        "point_match_mode": bool(point_match_mode),
+        "dataset_count": int(len(dataset_contexts)),
+        "var_names": [str(name) for name in var_names],
+        "solver": {
+            "loss": str(solver_loss),
+            "f_scale_px": float(solver_f_scale),
+            "max_nfev": int(solver_max_nfev),
+            "restarts": int(solver_restarts),
+            "weighted_matching": bool(weighted_matching),
+            "missing_pair_penalty_px": float(missing_pair_penalty),
+            "use_measurement_uncertainty": bool(use_measurement_uncertainty),
+            "anisotropic_measurement_uncertainty": bool(anisotropic_uncertainty_enabled),
+        },
+        "parallelization": dict(parallelization_summary),
+        "parameter_entries": parameter_debug_entries,
+        "dataset_entries": dataset_debug_entries,
+    }
+
+    def _weighted_rms_px(residual_arr: Sequence[float]) -> float:
+        residual_np = np.asarray(residual_arr, dtype=float).reshape(-1)
+        finite_residual = residual_np[np.isfinite(residual_np)]
+        if finite_residual.size == 0:
+            return float("nan")
+        return float(np.sqrt(np.mean(finite_residual * finite_residual)))
+
+    def _status_float(value: object, digits: int = 4) -> str:
+        try:
+            numeric = float(value)
+        except Exception:
+            return "nan"
+        if not np.isfinite(numeric):
+            return "nan"
+        return f"{numeric:.{int(digits)}f}"
+
+    def _emit_geometry_fit_setup_status() -> None:
+        mode_label = "point-match" if point_match_mode else "angle"
+        _emit_status(
+            "Geometry fit: setup "
+            f"mode={mode_label} "
+            f"datasets={int(len(dataset_contexts))} "
+            f"vars={','.join(str(name) for name in var_names)} "
+            f"loss={solver_loss} "
+            f"f_scale={_status_float(solver_f_scale, 3)} "
+            f"max_nfev={int(solver_max_nfev)} "
+            f"restarts={int(solver_restarts)}"
+        )
+        for dataset_entry in dataset_debug_entries:
+            _emit_status(
+                "Geometry fit: dataset[{idx}] label={label} theta={theta}deg "
+                "measured={measured} subset={subset}/{total} "
+                "fixed_reflections={fixed} fallback_hkls={fallback} reduced={reduced}".format(
+                    idx=int(dataset_entry.get("dataset_index", -1)),
+                    label=str(dataset_entry.get("label", "")),
+                    theta=_status_float(dataset_entry.get("theta_initial_deg", np.nan), 4),
+                    measured=int(dataset_entry.get("measured_count", 0)),
+                    subset=int(dataset_entry.get("subset_reflection_count", 0)),
+                    total=int(dataset_entry.get("total_reflection_count", 0)),
+                    fixed=int(dataset_entry.get("fixed_source_reflection_count", 0)),
+                    fallback=int(dataset_entry.get("fallback_hkl_count", 0)),
+                    reduced=bool(dataset_entry.get("subset_reduced", False)),
+                )
+            )
+
+    _emit_geometry_fit_setup_status()
 
     def _build_single_dataset_refinement_context(
         local_params: Dict[str, object],
@@ -7328,10 +7471,52 @@ def fit_geometry_parameters(
         )
         return summary
 
-    def _run_solver(x_start: np.ndarray) -> OptimizeResult:
+    def _emit_seed_status(
+        status_label: str,
+        seed_summary: Mapping[str, object] | None,
+    ) -> None:
+        summary = seed_summary if isinstance(seed_summary, Mapping) else {}
+        if not summary:
+            return
+        point_summary = summary.get("point_match_summary", None)
+        if isinstance(point_summary, Mapping):
+            _emit_status(
+                "Geometry fit: {label} seed "
+                "cost={cost} weighted_rms={weighted_rms}px matched={matched} "
+                "missing={missing} peak_rms={peak_rms}px peak_max={peak_max}px".format(
+                    label=str(status_label),
+                    cost=_status_float(summary.get("cost", np.nan), 6),
+                    weighted_rms=_status_float(summary.get("weighted_rms_px", np.nan), 4),
+                    matched=int(point_summary.get("matched_pair_count", 0)),
+                    missing=int(point_summary.get("missing_pair_count", 0)),
+                    peak_rms=_status_float(
+                        point_summary.get("unweighted_peak_rms_px", np.nan),
+                        4,
+                    ),
+                    peak_max=_status_float(
+                        point_summary.get("unweighted_peak_max_px", np.nan),
+                        4,
+                    ),
+                )
+            )
+            return
+        _emit_status(
+            "Geometry fit: {label} seed cost={cost} weighted_rms={weighted_rms}px".format(
+                label=str(status_label),
+                cost=_status_float(summary.get("cost", np.nan), 6),
+                weighted_rms=_status_float(summary.get("weighted_rms_px", np.nan), 4),
+            )
+        )
+
+    def _run_solver(
+        x_start: np.ndarray,
+        *,
+        status_label: str | None = "main solve",
+    ) -> OptimizeResult:
         return _run_solver_with_max_nfev(
             x_start,
             max_nfev=solver_max_nfev,
+            status_label=status_label,
         )
 
     def _run_solver_with_max_nfev(
@@ -7339,10 +7524,94 @@ def fit_geometry_parameters(
         *,
         max_nfev: int,
         residual_callable: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+        status_label: str | None = None,
     ) -> OptimizeResult:
         solver_residual = residual_fn if residual_callable is None else residual_callable
-        return least_squares(
-            solver_residual,
+        trace_points: List[Dict[str, object]] = []
+        progress_state: Dict[str, object] = {
+            "label": (None if status_label is None else str(status_label)),
+            "evaluation_count": 0,
+            "status_emit_count": 0,
+            "best_cost_seen": float("inf"),
+            "best_weighted_rms_px": float("nan"),
+            "last_cost_seen": float("nan"),
+            "last_weighted_rms_px": float("nan"),
+            "trace": trace_points,
+        }
+
+        def _tracked_solver_residual(x_trial: np.ndarray) -> np.ndarray:
+            residual_arr = np.asarray(
+                solver_residual(np.asarray(x_trial, dtype=float)),
+                dtype=float,
+            )
+            progress_state["evaluation_count"] = int(progress_state["evaluation_count"]) + 1
+            eval_count = int(progress_state["evaluation_count"])
+            current_cost = float(
+                _robust_cost(
+                    residual_arr,
+                    loss=solver_loss,
+                    f_scale=solver_f_scale,
+                )
+            )
+            current_weighted_rms = float(_weighted_rms_px(residual_arr))
+            progress_state["last_cost_seen"] = float(current_cost)
+            progress_state["last_weighted_rms_px"] = float(current_weighted_rms)
+
+            best_cost_seen = float(progress_state.get("best_cost_seen", float("inf")))
+            improvement_tol = max(
+                1.0e-9 * max(abs(best_cost_seen), 1.0),
+                1.0e-12,
+            )
+            improved = bool(current_cost + improvement_tol < best_cost_seen)
+            if improved:
+                progress_state["best_cost_seen"] = float(current_cost)
+                progress_state["best_weighted_rms_px"] = float(current_weighted_rms)
+            elif not np.isfinite(best_cost_seen):
+                progress_state["best_cost_seen"] = float(current_cost)
+                progress_state["best_weighted_rms_px"] = float(current_weighted_rms)
+
+            last_emit_eval = int(progress_state.get("last_emit_eval", 0))
+            emit_reason = ""
+            if eval_count in {1, 2, 3, 5, 10}:
+                emit_reason = "milestone"
+            elif improved and (eval_count - last_emit_eval) >= 5:
+                emit_reason = "improved"
+            elif (eval_count - last_emit_eval) >= 25:
+                emit_reason = "periodic"
+
+            if not emit_reason:
+                return residual_arr
+
+            trace_event = {
+                "eval": int(eval_count),
+                "current_cost": float(current_cost),
+                "best_cost": float(progress_state.get("best_cost_seen", np.nan)),
+                "weighted_rms_px": float(current_weighted_rms),
+                "reason": str(emit_reason),
+            }
+            if len(trace_points) < 24:
+                trace_points.append(trace_event)
+
+            progress_state["last_emit_eval"] = int(eval_count)
+            progress_state["status_emit_count"] = int(progress_state["status_emit_count"]) + 1
+            if status_label:
+                _emit_status(
+                    "Geometry fit: {label} eval={eval} cost={cost} best_cost={best_cost} "
+                    "weighted_rms={weighted_rms}px".format(
+                        label=str(status_label),
+                        eval=int(eval_count),
+                        cost=_status_float(current_cost, 6),
+                        best_cost=_status_float(
+                            progress_state.get("best_cost_seen", np.nan),
+                            6,
+                        ),
+                        weighted_rms=_status_float(current_weighted_rms, 4),
+                    )
+                )
+            return residual_arr
+
+        result = least_squares(
+            _tracked_solver_residual,
             np.asarray(x_start, dtype=float),
             bounds=(lower_bounds, upper_bounds),
             x_scale=x_scale,
@@ -7350,6 +7619,13 @@ def fit_geometry_parameters(
             f_scale=solver_f_scale,
             max_nfev=int(max_nfev),
         )
+        progress_state["start_x"] = np.asarray(x_start, dtype=float).tolist()
+        try:
+            progress_state["end_x"] = np.asarray(result.x, dtype=float).tolist()
+        except Exception:
+            progress_state["end_x"] = []
+        result.geometry_fit_progress = progress_state
+        return result
 
     def _evaluate_cost_at(x_trial: np.ndarray) -> Tuple[np.ndarray, float]:
         residual = np.asarray(residual_fn(np.asarray(x_trial, dtype=float)), dtype=float)
@@ -8257,6 +8533,7 @@ def fit_geometry_parameters(
                 start_x,
                 max_nfev=adaptive_regularization_max_nfev,
                 residual_callable=_regularized_residual,
+                status_label="adaptive regularization",
             )
         except Exception as exc:
             summary["status"] = "failed"
@@ -8304,6 +8581,7 @@ def fit_geometry_parameters(
             release_result = _run_solver_with_max_nfev(
                 regularized_x,
                 max_nfev=adaptive_regularization_release_max_nfev,
+                status_label="adaptive regularization release",
             )
         except Exception as exc:
             summary["release_reason"] = f"release_failed: {exc}"
@@ -8599,7 +8877,11 @@ def fit_geometry_parameters(
         fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
 
     _emit_status("Geometry fit: running main solve")
-    result = _run_solver(x0_arr)
+    main_solve_seed_summary = _collect_seed_debug_summary(x0_arr)
+    geometry_fit_debug_summary["main_solve_seed"] = dict(main_solve_seed_summary)
+    _emit_seed_status("main solve", main_solve_seed_summary)
+
+    result = _run_solver(x0_arr, status_label="main solve")
     best_result = result
     initial_cost = _robust_cost(
         np.asarray(result.fun, dtype=float),
@@ -8852,7 +9134,10 @@ def fit_geometry_parameters(
             and best_probe_residual is not None
             and best_probe_cost + stagnation_tol < best_cost
         ):
-            trial = _run_solver(best_probe_x)
+            trial = _run_solver(
+                best_probe_x,
+                status_label=f"probe {best_probe_label}",
+            )
             trial_cost = _robust_cost(
                 np.asarray(trial.fun, dtype=float),
                 loss=solver_loss,
@@ -9898,6 +10183,39 @@ def fit_geometry_parameters(
                 "error": str(exc),
             }
             result.rms_px = float(weighted_residual_rms)
+
+    debug_summary_result = copy.deepcopy(geometry_fit_debug_summary)
+    final_x_arr = np.asarray(getattr(result, "x", []), dtype=float).reshape(-1)
+    if final_x_arr.size == len(debug_summary_result.get("parameter_entries", [])):
+        for idx, entry in enumerate(debug_summary_result.get("parameter_entries", [])):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                start_value = float(entry.get("start", np.nan))
+            except Exception:
+                start_value = float("nan")
+            final_value = float(final_x_arr[idx])
+            entry["final"] = float(final_value)
+            entry["delta"] = (
+                float(final_value - start_value)
+                if np.isfinite(start_value)
+                else float("nan")
+            )
+    debug_summary_result["final"] = {
+        "cost": float(getattr(result, "cost", np.nan)),
+        "robust_cost": float(getattr(result, "robust_cost", np.nan)),
+        "weighted_rms_px": float(weighted_residual_rms),
+        "display_rms_px": float(getattr(result, "rms_px", np.nan)),
+    }
+    if isinstance(getattr(result, "point_match_summary", None), Mapping):
+        debug_summary_result["final_point_match_summary"] = copy.deepcopy(
+            getattr(result, "point_match_summary")
+        )
+    if isinstance(getattr(result, "geometry_fit_progress", None), Mapping):
+        debug_summary_result["solve_progress"] = copy.deepcopy(
+            getattr(result, "geometry_fit_progress")
+        )
+    result.geometry_fit_debug_summary = debug_summary_result
 
     identifiability_summary = _build_identifiability_summary(
         result,

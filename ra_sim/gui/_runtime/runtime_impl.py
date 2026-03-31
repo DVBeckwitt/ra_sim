@@ -16,14 +16,16 @@ import math
 import json
 import copy
 import concurrent.futures
+import faulthandler
 import re
+import traceback
 from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Sequence
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 import matplotlib
@@ -132,6 +134,7 @@ from ra_sim.gui import runtime_geometry_interaction as gui_runtime_geometry_inte
 from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
+from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import ordered_structure_fit as gui_ordered_structure_fit
 from ra_sim.gui import structure_model as gui_structure_model
@@ -199,6 +202,111 @@ from ra_sim.config import (
 )
 HKL_PICK_MIN_SEPARATION_PX = 2.0
 HKL_PICK_MAX_DISTANCE_PX = 12.0
+
+_RUNTIME_UPDATE_TRACE_HANDLE = None
+_RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED = False
+
+
+def _runtime_update_trace_path() -> Path:
+    """Return the daily GUI runtime trace path."""
+
+    try:
+        downloads_dir = get_dir("downloads")
+    except Exception:
+        downloads_dir = Path.home() / "Downloads"
+    return gui_runtime_update_trace.resolve_runtime_update_trace_path(downloads_dir)
+
+
+def _append_runtime_update_trace(event: str, **fields: object) -> None:
+    """Append one GUI runtime trace line, ignoring logging failures."""
+
+    try:
+        gui_runtime_update_trace.append_runtime_update_trace_line(
+            _runtime_update_trace_path(),
+            event,
+            **fields,
+        )
+    except Exception:
+        pass
+
+
+def _append_runtime_update_exception_trace(
+    event: str,
+    exc_type: object,
+    exc_value: object,
+    exc_tb,
+    **fields: object,
+) -> None:
+    """Append one exception event plus traceback text to the runtime trace."""
+
+    header_fields = dict(fields)
+    header_fields.update(
+        {
+            "exc_type": getattr(exc_type, "__name__", str(exc_type)),
+            "error": str(exc_value),
+        }
+    )
+    _append_runtime_update_trace(event, **header_fields)
+    try:
+        trace_path = _runtime_update_trace_path()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        with trace_path.open("a", encoding="utf-8") as handle:
+            for line in traceback.format_exception(exc_type, exc_value, exc_tb):
+                handle.write(line)
+            handle.flush()
+    except Exception:
+        pass
+
+
+def _ensure_runtime_update_trace_hooks() -> None:
+    """Install persistent crash/exception hooks for GUI runtime tracing."""
+
+    global _RUNTIME_UPDATE_TRACE_HANDLE, _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED
+    if _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED:
+        return
+
+    try:
+        trace_path = _runtime_update_trace_path()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        _RUNTIME_UPDATE_TRACE_HANDLE = trace_path.open(
+            "a",
+            encoding="utf-8",
+            buffering=1,
+        )
+        try:
+            faulthandler.enable(_RUNTIME_UPDATE_TRACE_HANDLE, all_threads=True)
+        except Exception:
+            pass
+
+        previous_excepthook = sys.excepthook
+
+        def _runtime_trace_excepthook(exc_type, exc_value, exc_tb):
+            _append_runtime_update_exception_trace(
+                "uncaught_exception",
+                exc_type,
+                exc_value,
+                exc_tb,
+                update_id=getattr(simulation_runtime_state, "current_update_trace_id", None),
+                trace_stage=getattr(
+                    simulation_runtime_state,
+                    "current_update_trace_stage",
+                    None,
+                ),
+                update_phase=getattr(simulation_runtime_state, "update_phase", None),
+                update_running=getattr(simulation_runtime_state, "update_running", None),
+            )
+            if callable(previous_excepthook):
+                previous_excepthook(exc_type, exc_value, exc_tb)
+
+        sys.excepthook = _runtime_trace_excepthook
+        _RUNTIME_UPDATE_TRACE_HOOKS_INSTALLED = True
+        _append_runtime_update_trace(
+            "runtime_update_trace_hooks_installed",
+            trace_path=str(trace_path),
+            faulthandler_enabled=bool(faulthandler.is_enabled()),
+        )
+    except Exception:
+        pass
 
 background_status_refreshers = gui_runtime_background.build_runtime_background_status_refreshers(
     background_controls_runtime_factory=lambda: globals().get("background_controls_runtime"),
@@ -1401,7 +1509,13 @@ def _geometry_overlay_frame_diagnostics(
 ) -> tuple[dict[str, float], str]:
     """Compare per-match fitted overlay alignment in display space."""
 
-    return compute_geometry_overlay_frame_diagnostics(overlay_records)
+    return compute_geometry_overlay_frame_diagnostics(
+        overlay_records,
+        show_caked_2d=bool(analysis_view_controls_view_state.show_caked_2d_var.get()),
+        native_detector_coords_to_caked_display_coords=(
+            _native_detector_coords_to_caked_display_coords
+        ),
+    )
 
 # Measured peaks are collected interactively in the current GUI workflow.
 # Keep this list for compatibility, but avoid loading a large file at startup.
@@ -1412,6 +1526,41 @@ measured_peaks = []
 ###############################################################################
 root = gui_views.create_root_window("RA-SIM Simulation")
 root.minsize(1200, 760)
+
+
+def _runtime_report_callback_exception(exc_type, exc_value, exc_tb):
+    """Persist Tk callback failures before surfacing them to the user."""
+
+    _append_runtime_update_exception_trace(
+        "tk_callback_exception",
+        exc_type,
+        exc_value,
+        exc_tb,
+        update_id=getattr(simulation_runtime_state, "current_update_trace_id", None),
+        trace_stage=getattr(
+            simulation_runtime_state,
+            "current_update_trace_stage",
+            None,
+        ),
+        update_phase=getattr(simulation_runtime_state, "update_phase", None),
+        update_running=getattr(simulation_runtime_state, "update_running", None),
+    )
+    try:
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+    except Exception:
+        pass
+    try:
+        messagebox.showerror(
+            "RA-SIM Error",
+            "An unexpected GUI callback error occurred.\n"
+            f"Trace log: {_runtime_update_trace_path()}",
+        )
+    except Exception:
+        pass
+
+
+root.report_callback_exception = _runtime_report_callback_exception
+_ensure_runtime_update_trace_hooks()
 gui_views.create_app_shell(root=root, view_state=app_shell_view_state)
 if (
     app_shell_view_state.workspace_body is None
@@ -1444,6 +1593,11 @@ if (
 def _shutdown_gui():
     """Close all application windows and end the Tk event loop."""
 
+    _append_runtime_update_trace(
+        "shutdown_gui",
+        update_phase=getattr(simulation_runtime_state, "update_phase", None),
+        update_running=getattr(simulation_runtime_state, "update_running", None),
+    )
     gui_controllers.clear_tk_after_token(
         root,
         simulation_runtime_state.worker_poll_token,
@@ -2081,6 +2235,11 @@ _restore_geometry_fit_undo_state = (
         geometry_theta_offset_var_factory=lambda: geometry_theta_offset_var,
         replace_profile_cache=_replace_runtime_geometry_fit_profile_cache,
         set_last_overlay_state=_set_geometry_fit_last_overlay_state,
+        request_preview_skip_once=(
+            lambda: gui_controllers.request_geometry_preview_skip_once(
+                geometry_preview_state
+            )
+        ),
         mark_last_simulation_dirty=_mark_runtime_geometry_fit_simulation_dirty,
         cancel_pending_update=_cancel_runtime_geometry_fit_pending_update,
         run_update=lambda: do_update(),
@@ -2392,11 +2551,19 @@ def _show_geometry_manual_preview(
     raw_row: float,
     refined_col: float | None = None,
     refined_row: float | None = None,
+    *,
+    delta_px: float | None = None,
+    sigma_px: float | None = None,
+    preview_color: str | None = None,
 ) -> None:
     """Draw raw and refined manual-placement preview markers."""
 
 
     _clear_geometry_manual_preview_artists(redraw=False)
+    del delta_px, sigma_px
+    preview_edge = str(preview_color).strip() if preview_color is not None else ""
+    if not preview_edge:
+        preview_edge = "cyan"
     raw_artist, = ax.plot(
         [float(raw_col)],
         [float(raw_row)],
@@ -2420,18 +2587,19 @@ def _show_geometry_manual_preview(
             [float(refined_col)],
             [float(refined_row)],
             marker="o",
-            markerfacecolor="none",
-            markeredgecolor="cyan",
+            markerfacecolor=preview_edge,
+            markeredgecolor=preview_edge,
             markersize=9,
             markeredgewidth=1.8,
             linestyle="none",
+            alpha=0.92,
             zorder=12,
         )
         link_artist, = ax.plot(
             [float(raw_col), float(refined_col)],
             [float(raw_row), float(refined_row)],
             "-",
-            color="cyan",
+            color=preview_edge,
             linewidth=1.1,
             alpha=0.75,
             zorder=11,
@@ -2743,6 +2911,9 @@ geometry_manual_projection_workflow = (
                 *args,
                 **kwargs,
             )
+        ),
+        build_live_preview_simulated_peaks_from_cache=(
+            lambda: globals()["_build_live_preview_simulated_peaks_from_cache"]()
         ),
         miller=lambda: miller,
         intensities=lambda: intensities,
@@ -3390,6 +3561,9 @@ geometry_tool_action_workflow = (
         ),
         show_caked_2d_var=lambda: analysis_view_controls_view_state.show_caked_2d_var,
         toggle_caked_2d=lambda: toggle_caked_2d(),
+        ensure_geometry_fit_caked_view=(
+            lambda: _ensure_geometry_fit_caked_view(force_refresh=True)
+        ),
         set_hkl_pick_mode=hkl_lookup_controls_runtime.set_hkl_pick_mode,
         set_geometry_preview_exclude_mode=(
             lambda enabled, message=None: _set_geometry_preview_exclude_mode(
@@ -4681,6 +4855,7 @@ CAKING_CACHE_MAX_ENTRIES = 8
 simulation_runtime_state.update_pending = None
 simulation_runtime_state.integration_update_pending = None
 simulation_runtime_state.update_running = False
+simulation_runtime_state.update_trace_counter = 0
 
 
 def _worker_job_key(payload: object) -> tuple[object, int]:
@@ -5143,7 +5318,12 @@ def _refresh_settled_overlays() -> None:
     else:
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
         _clear_geometry_preview_artists()
-    _render_current_geometry_manual_pairs(update_status=False)
+    if not gui_geometry_fit.redraw_runtime_geometry_fit_overlay_state(
+        _geometry_fit_last_overlay_state(),
+        draw_overlay_records=_draw_runtime_geometry_fit_overlay_records,
+        draw_initial_pairs_overlay=_draw_runtime_geometry_fit_initial_pairs_overlay,
+    ):
+        _render_current_geometry_manual_pairs(update_status=False)
 
 
 def _clear_deferred_overlays() -> None:
@@ -5903,6 +6083,9 @@ def _apply_ready_analysis_result(result: dict[str, object]) -> None:
 
 def schedule_update():
     """Queue a throttled simulation/redraw update."""
+
+    _ensure_runtime_update_trace_hooks()
+    previous_pending = simulation_runtime_state.update_pending
     gui_controllers.clear_tk_after_token(
         root,
         simulation_runtime_state.integration_update_pending,
@@ -5918,6 +6101,19 @@ def schedule_update():
     simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
     if simulation_runtime_state.worker_active_job is None:
         simulation_runtime_state.update_phase = "queued"
+    _append_runtime_update_trace(
+        "schedule_update",
+        previous_pending=previous_pending,
+        queued_token=simulation_runtime_state.update_pending,
+        update_running=simulation_runtime_state.update_running,
+        update_phase=getattr(simulation_runtime_state, "update_phase", None),
+        worker_active=bool(simulation_runtime_state.worker_active_job is not None),
+        worker_queued=bool(simulation_runtime_state.worker_queued_job is not None),
+        analysis_active=bool(simulation_runtime_state.analysis_active_job is not None),
+        analysis_queued=bool(simulation_runtime_state.analysis_queued_job is not None),
+        background_index=int(background_runtime_state.current_background_index),
+        manual_pick_armed=bool(geometry_runtime_state.manual_pick_armed),
+    )
     _refresh_run_status_bar()
 
 
@@ -5929,6 +6125,7 @@ def _should_collect_hit_tables_for_update() -> bool:
         background_visible=bool(background_runtime_state.visible),
         current_background_index=background_runtime_state.current_background_index,
         skip_preview_once=bool(getattr(geometry_preview_state, "skip_once", False)),
+        manual_pick_armed=bool(geometry_runtime_state.manual_pick_armed),
         hkl_pick_armed=bool(peak_selection_state.hkl_pick_armed),
         selected_hkl_target=peak_selection_state.selected_hkl_target,
         selected_peak_record=simulation_runtime_state.selected_peak_record,
@@ -5998,9 +6195,48 @@ simulation_runtime_state.chi_square_state = {
 def do_update():
     global av2, cv2
 
+    _ensure_runtime_update_trace_hooks()
+    simulation_runtime_state.update_trace_counter = int(
+        getattr(simulation_runtime_state, "update_trace_counter", 0)
+    ) + 1
+    update_trace_id = int(simulation_runtime_state.update_trace_counter)
+    update_trace_stage = "enter"
+    simulation_runtime_state.current_update_trace_id = int(update_trace_id)
+    simulation_runtime_state.current_update_trace_stage = str(update_trace_stage)
+
+    def _set_update_trace_stage(stage: str) -> None:
+        nonlocal update_trace_stage
+        update_trace_stage = str(stage)
+        simulation_runtime_state.current_update_trace_stage = str(update_trace_stage)
+
+    def _trace_update(event: str, **fields: object) -> None:
+        simulation_runtime_state.current_update_trace_id = int(update_trace_id)
+        simulation_runtime_state.current_update_trace_stage = str(update_trace_stage)
+        _append_runtime_update_trace(
+            event,
+            update_id=update_trace_id,
+            stage=update_trace_stage,
+            update_phase=getattr(simulation_runtime_state, "update_phase", None),
+            update_running=getattr(simulation_runtime_state, "update_running", None),
+            **fields,
+        )
+
+    _trace_update(
+        "do_update_enter",
+        pending_token=simulation_runtime_state.update_pending,
+        worker_active=bool(simulation_runtime_state.worker_active_job is not None),
+        worker_queued=bool(simulation_runtime_state.worker_queued_job is not None),
+        analysis_active=bool(simulation_runtime_state.analysis_active_job is not None),
+        analysis_queued=bool(simulation_runtime_state.analysis_queued_job is not None),
+    )
+
     if simulation_runtime_state.update_running:
         # another update is in progress; try again shortly
         simulation_runtime_state.update_pending = root.after(UPDATE_DEBOUNCE_MS, do_update)
+        _trace_update(
+            "do_update_busy_rescheduled",
+            queued_token=simulation_runtime_state.update_pending,
+        )
         return
 
     simulation_runtime_state.update_pending = None
@@ -6011,6 +6247,7 @@ def do_update():
     update_start_time = perf_counter()
     image_generation_elapsed_ms = 0.0
     image_generation_cached = True
+    _set_update_trace_stage("params")
 
     gamma_updated      = float(gamma_var.get())
     Gamma_updated      = float(Gamma_var.get())
@@ -6031,6 +6268,17 @@ def do_update():
     corto_det_up       = float(corto_detector_var.get())
     center_x_up        = float(center_x_var.get())
     center_y_up        = float(center_y_var.get())
+    _trace_update(
+        "do_update_params",
+        background_index=int(background_runtime_state.current_background_index),
+        theta_initial_deg=float(theta_init_up),
+        center_x=float(center_x_up),
+        center_y=float(center_y_up),
+        show_caked_2d=bool(
+            analysis_view_controls_view_state.show_caked_2d_var.get()
+        ),
+        preview_active=bool(simulation_runtime_state.preview_active),
+    )
 
     new_two_theta_max = detector_two_theta_max(
         image_size,
@@ -6131,9 +6379,25 @@ def do_update():
             int(collect_hit_tables_requested),
         )
 
+    _set_update_trace_stage("simulation_signature")
     new_sim_sig = get_sim_signature()
+    _trace_update(
+        "do_update_signature",
+        optics_mode=int(optics_mode_flag),
+        collect_hit_tables=bool(collect_hit_tables_requested),
+        num_samples=int(simulation_runtime_state.num_samples),
+        signature_changed=bool(
+            new_sim_sig != simulation_runtime_state.last_simulation_signature
+        ),
+    )
     ready_simulation_result = _consume_ready_simulation_result(new_sim_sig)
     if ready_simulation_result is not None:
+        _trace_update(
+            "do_update_apply_ready_simulation",
+            image_generation_elapsed_ms=float(
+                ready_simulation_result.get("image_generation_elapsed_ms", 0.0)
+            ),
+        )
         _apply_ready_simulation_result(ready_simulation_result)
         simulation_runtime_state.last_simulation_signature = new_sim_sig
         image_generation_cached = False
@@ -6144,6 +6408,16 @@ def do_update():
         _refresh_run_status_bar()
 
     if ready_simulation_result is None and new_sim_sig != simulation_runtime_state.last_simulation_signature:
+        _set_update_trace_stage("simulation_generation")
+        _trace_update(
+            "do_update_regenerate_simulation",
+            had_cached_primary=bool(
+                simulation_runtime_state.stored_primary_sim_image is not None
+            ),
+            had_cached_secondary=bool(
+                simulation_runtime_state.stored_secondary_sim_image is not None
+            ),
+        )
         _invalidate_geometry_manual_pick_cache()
         simulation_runtime_state.peak_positions.clear()
         simulation_runtime_state.peak_millers.clear()
@@ -6319,10 +6593,20 @@ def do_update():
                 _request_async_simulation_job(simulation_job)
                 if "progress_label" in globals() and progress_label is not None:
                     progress_label.config(text="Computing simulation in background...")
+                _trace_update(
+                    "do_update_return_waiting_for_simulation",
+                    worker_active=bool(
+                        simulation_runtime_state.worker_active_job is not None
+                    ),
+                    worker_queued=bool(
+                        simulation_runtime_state.worker_queued_job is not None
+                    ),
+                )
                 simulation_runtime_state.update_running = False
                 return
 
     if simulation_runtime_state.stored_primary_sim_image is None and simulation_runtime_state.stored_secondary_sim_image is None:
+        _trace_update("do_update_return_no_simulation_image")
         simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
         simulation_runtime_state.update_running = False
@@ -6379,6 +6663,13 @@ def do_update():
             )
         )
 
+    _set_update_trace_stage("redraw")
+    _trace_update(
+        "do_update_redraw_start",
+        run_primary=bool(run_primary),
+        run_secondary=bool(run_secondary),
+        combined_peak_count=int(len(max_positions_local)),
+    )
     redraw_update_start_time = perf_counter()
     display_image = np.rot90(updated_image, SIM_DISPLAY_ROTATE_K)
     gui_runtime_geometry_interaction.refresh_runtime_peak_selection_after_update(
@@ -6849,6 +7140,16 @@ def do_update():
         simulation_runtime_state.update_phase = "queued"
     else:
         simulation_runtime_state.update_phase = "ready"
+    _set_update_trace_stage("complete")
+    _trace_update(
+        "do_update_complete",
+        image_generation_cached=bool(image_generation_cached),
+        image_generation_elapsed_ms=float(image_generation_elapsed_ms),
+        redraw_update_elapsed_ms=float(redraw_update_elapsed_ms),
+        total_update_elapsed_ms=float(total_update_elapsed_ms),
+        next_phase=str(simulation_runtime_state.update_phase),
+        analysis_result_current=bool(analysis_result_current),
+    )
     simulation_runtime_state.update_running = False
     if "progress_label" in globals() and progress_label is not None:
         try:
@@ -7696,6 +7997,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         snapshot.get("geometry", {}),
         geometry_q_group_key_from_jsonable=_geometry_q_group_key_from_jsonable,
         show_caked_2d_var=analysis_view_controls_view_state.show_caked_2d_var,
+        show_1d_var=analysis_view_controls_view_state.show_1d_var,
         background_visible=bool(background_runtime_state.visible),
         toggle_background=toggle_background,
     )
@@ -12099,6 +12401,21 @@ def _geometry_fit_cmd_line(text: str) -> None:
         pass
 
 
+def _show_geometry_fit_action_notice(action_result) -> None:
+    """Show a modal notice when a geometry fit fails or is rejected."""
+
+    notice = gui_geometry_fit.build_geometry_fit_action_notice(action_result)
+    if notice is None:
+        return
+    try:
+        if str(notice.level).lower() == "error":
+            messagebox.showerror(notice.title, notice.message, parent=root)
+        else:
+            messagebox.showwarning(notice.title, notice.message, parent=root)
+    except Exception:
+        pass
+
+
 geometry_fit_action_bindings_factory = None
 on_fit_geometry_click = lambda: None
 
@@ -12936,6 +13253,7 @@ geometry_fit_runtime_workflow = (
                     _clear_geometry_pick_artists(),
                 )
             ),
+            "after_run": _show_geometry_fit_action_notice,
         },
     )
 )

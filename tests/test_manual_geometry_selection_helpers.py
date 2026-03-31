@@ -339,7 +339,7 @@ def test_make_runtime_geometry_manual_callbacks_render_current_pairs_uses_live_s
         refine_preview_point=lambda *args, **kwargs: (0.0, 0.0),
         remaining_candidates=lambda: [],
         preview_due=lambda col, row: True,
-        show_preview=lambda *args: events.append(("show-preview", args)),
+        show_preview=lambda *args, **kwargs: events.append(("show-preview", args, kwargs)),
     )
 
     assert callbacks.render_current_pairs(update_status=True) is True
@@ -409,6 +409,9 @@ def test_make_runtime_geometry_manual_callbacks_delegate_toggle_preview_and_canc
             "raw_row": 6.0,
             "refined_col": 7.5,
             "refined_row": 8.5,
+            "delta": 1.25,
+            "sigma_px": 1.46,
+            "preview_color": "#2ecc71",
             "message": "preview ready",
         }
 
@@ -464,7 +467,7 @@ def test_make_runtime_geometry_manual_callbacks_delegate_toggle_preview_and_canc
             1.5,
         ),
         caked_angles_to_background_display_coords=lambda col, row: (col + 100.0, row + 200.0),
-        show_preview=lambda *args: events.append(("show-preview", args)),
+        show_preview=lambda *args, **kwargs: events.append(("show-preview", args, kwargs)),
     )
 
     assert callbacks.toggle_selection_at(10.0, 20.0) is True
@@ -482,7 +485,15 @@ def test_make_runtime_geometry_manual_callbacks_delegate_toggle_preview_and_canc
         ("place", 30.0, 40.0, 2, True, {"mode": "toggle"}),
         ("set-session", {"mode": "place"}),
         ("preview-state", 5.0, 6.0, 2, True, [{"label": "cand"}], True),
-        ("show-preview", (5.0, 6.0, 7.5, 8.5)),
+        (
+            "show-preview",
+            (5.0, 6.0, 7.5, 8.5),
+            {
+                "delta_px": 1.25,
+                "sigma_px": 1.46,
+                "preview_color": "#2ecc71",
+            },
+        ),
         ("cancel", {"mode": "place"}, 2, False, False, "bye"),
         ("set-session", {"mode": "cancel"}),
     ]
@@ -612,6 +623,7 @@ def test_should_collect_hit_tables_when_manual_geometry_overlay_is_visible() -> 
         background_visible=True,
         current_background_index=2,
         skip_preview_once=False,
+        manual_pick_armed=False,
         hkl_pick_armed=False,
         selected_hkl_target=None,
         selected_peak_record=None,
@@ -628,6 +640,7 @@ def test_should_not_collect_hit_tables_for_hidden_manual_geometry_overlay() -> N
         background_visible=False,
         current_background_index=0,
         skip_preview_once=False,
+        manual_pick_armed=False,
         hkl_pick_armed=False,
         selected_hkl_target=None,
         selected_peak_record=None,
@@ -644,6 +657,7 @@ def test_should_not_collect_hit_tables_when_preview_skip_once_is_requested() -> 
         background_visible=True,
         current_background_index=2,
         skip_preview_once=True,
+        manual_pick_armed=False,
         hkl_pick_armed=False,
         selected_hkl_target=None,
         selected_peak_record=None,
@@ -652,6 +666,23 @@ def test_should_not_collect_hit_tables_when_preview_skip_once_is_requested() -> 
         current_manual_pick_background_image=lambda: object(),
         geometry_manual_pairs_for_index=lambda idx: [{"hkl": (1, 0, 2)}] if int(idx) == 2 else [],
         geometry_manual_pick_session_active=lambda: True,
+    )
+
+
+def test_should_collect_hit_tables_when_manual_pick_is_armed() -> None:
+    assert mg.should_collect_hit_tables_for_update(
+        background_visible=True,
+        current_background_index=1,
+        skip_preview_once=False,
+        manual_pick_armed=True,
+        hkl_pick_armed=False,
+        selected_hkl_target=None,
+        selected_peak_record=None,
+        geometry_q_group_refresh_requested=False,
+        live_geometry_preview_enabled=lambda: False,
+        current_manual_pick_background_image=lambda: object(),
+        geometry_manual_pairs_for_index=lambda _idx: [],
+        geometry_manual_pick_session_active=lambda: False,
     )
 
 
@@ -999,8 +1030,27 @@ def test_geometry_manual_pick_preview_state_builds_status_message() -> None:
     assert preview["refined_row"] == 14.0
     assert preview["delta"] > 0.0
     assert preview["sigma_px"] > preview["delta"]
+    assert preview["preview_color"] == mg.geometry_manual_preview_color(
+        preview["sigma_px"]
+    )
+    assert preview["quality_label"] == mg.geometry_manual_preview_quality_label(
+        preview["sigma_px"]
+    )
     assert "test group" in preview["message"]
     assert "nearest sim [right]" in preview["message"]
+    assert f"quality={preview['quality_label']}" in preview["message"]
+
+
+def test_geometry_manual_preview_color_transitions_from_green_to_red() -> None:
+    assert mg.geometry_manual_preview_color(0.75) == "#2ecc71"
+    assert mg.geometry_manual_preview_color(12.0) == "#e74c3c"
+    assert mg.geometry_manual_preview_color(6.0) not in {"#2ecc71", "#e74c3c"}
+
+
+def test_geometry_manual_preview_quality_label_tracks_sigma() -> None:
+    assert mg.geometry_manual_preview_quality_label(0.75) == "good"
+    assert mg.geometry_manual_preview_quality_label(4.0) == "warning"
+    assert mg.geometry_manual_preview_quality_label(12.0) == "bad"
 
 
 def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_points() -> None:
@@ -1328,6 +1378,54 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view() 
 
     lookup = callbacks.simulated_lookup(projected)
     assert lookup[(1, 2)]["sim_row"] == 2.0
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_live_preview_peaks() -> None:
+    simulation_calls: list[dict[str, object]] = []
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: None,
+        last_caked_radial_values=lambda: np.array([], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([], dtype=float),
+        current_background_display=lambda: np.zeros((6, 6), dtype=float),
+        current_background_native=lambda: np.zeros((6, 6), dtype=float),
+        current_geometry_fit_params=lambda: {"gamma": 1.5},
+        simulate_preview_style_peaks_for_fit=lambda *_args, **_kwargs: (
+            simulation_calls.append({"called": True}) or []
+        ),
+        build_live_preview_simulated_peaks_from_cache=lambda: [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 3.0,
+                "sim_row": 4.0,
+            }
+        ],
+        miller=lambda: np.array([[1.0, 0.0, 0.0]], dtype=float),
+        intensities=lambda: np.array([2.0], dtype=float),
+        image_size=lambda: 6,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        detector_pixel_to_scattering_angles=lambda *_args: (None, None),
+    )
+
+    projected = callbacks.simulated_peaks_for_params(prefer_cache=True)
+
+    assert simulation_calls == []
+    assert projected == [
+        {
+            "label": "1,0,0",
+            "q_group_key": ("q_group", "primary", 1, 0),
+            "source_table_index": 1,
+            "source_row_index": 2,
+            "sim_col": 3.0,
+            "sim_row": 4.0,
+            "sim_col_raw": 3.0,
+            "sim_row_raw": 4.0,
+        }
+    ]
 
 
 def test_render_current_geometry_manual_pairs_updates_active_session_status() -> None:

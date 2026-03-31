@@ -132,7 +132,7 @@ instrument:
         worker_numba_threads: 0
         missing_pair_penalty_px: 20.0
         weighted_matching: false
-        use_measurement_uncertainty: true
+        use_measurement_uncertainty: false
         anisotropic_measurement_uncertainty: false
         radial_sigma_scale: 1.0
         tangential_sigma_scale: 1.0

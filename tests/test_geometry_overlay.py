@@ -177,3 +177,71 @@ def test_build_geometry_fit_overlay_records_matches_real_world_orientation_case(
     assert frame_diag["sim_display_med_px"] == pytest.approx(0.0)
     assert frame_diag["bg_display_med_px"] == pytest.approx(0.0)
     assert frame_warning == ""
+
+
+def test_build_geometry_fit_overlay_records_falls_back_to_initial_native_points():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "sim_native": (10.0, 20.0),
+                "bg_native": (12.0, 22.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": 10.0,
+                "simulated_y": 20.0,
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=(256, 256),
+        orientation_choice={"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx"},
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert records[0]["initial_sim_display"] == pytest.approx((10.0, 20.0))
+    assert records[0]["initial_bg_display"] == pytest.approx((12.0, 22.0))
+    assert records[0]["initial_sim_native"] == pytest.approx((10.0, 20.0))
+    assert records[0]["initial_bg_native"] == pytest.approx((12.0, 22.0))
+
+    frame_diag, frame_warning = compute_geometry_overlay_frame_diagnostics(records)
+    assert frame_diag["paired_records"] == pytest.approx(1.0)
+    assert frame_diag["sim_display_med_px"] == pytest.approx(0.0)
+    assert frame_diag["bg_display_med_px"] == pytest.approx(0.0)
+    assert frame_warning == ""
+
+
+def test_compute_geometry_overlay_frame_diagnostics_projects_native_points_in_caked_view():
+    records = [
+        {
+            "initial_sim_display": (999.0, 999.0),
+            "initial_bg_display": (777.0, 777.0),
+            "final_sim_display": (10.0, 20.0),
+            "final_bg_display": (12.0, 22.0),
+            "initial_sim_native": (1.0, 2.0),
+            "initial_bg_native": (3.0, 4.0),
+            "final_sim_native": (1.0, 2.0),
+            "final_bg_native": (3.0, 4.0),
+        }
+    ]
+
+    frame_diag, frame_warning = compute_geometry_overlay_frame_diagnostics(
+        records,
+        show_caked_2d=True,
+        native_detector_coords_to_caked_display_coords=(
+            lambda col, row: (100.0 + float(col), 200.0 + float(row))
+        ),
+    )
+
+    assert frame_diag["paired_records"] == pytest.approx(1.0)
+    assert frame_diag["sim_display_med_px"] == pytest.approx(0.0)
+    assert frame_diag["bg_display_med_px"] == pytest.approx(0.0)
+    assert frame_warning == ""

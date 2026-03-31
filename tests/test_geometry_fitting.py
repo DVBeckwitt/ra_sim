@@ -2781,7 +2781,18 @@ def test_fit_geometry_parameters_emits_status_updates(monkeypatch):
     )
 
     assert result.success
+    assert isinstance(result.geometry_fit_debug_summary, dict)
+    assert int(result.geometry_fit_debug_summary["dataset_count"]) == 1
+    assert list(result.geometry_fit_debug_summary["var_names"]) == [
+        "gamma",
+        "Gamma",
+        "corto_detector",
+    ]
+    assert isinstance(result.geometry_fit_debug_summary.get("solve_progress"), dict)
+    assert int(result.geometry_fit_debug_summary["solve_progress"]["evaluation_count"]) >= 1
     assert any("staged release enabled" in msg for msg in status_messages)
+    assert any("Geometry fit: setup mode=angle" in msg for msg in status_messages)
+    assert any("Geometry fit: main solve seed cost=" in msg for msg in status_messages)
     assert any("staged stage 1/1" in msg for msg in status_messages)
     assert any("running main solve" in msg for msg in status_messages)
     assert any("complete" in msg for msg in status_messages)

@@ -208,6 +208,10 @@ def handle_runtime_canvas_press(
 ) -> bool:
     """Handle one runtime canvas button-press."""
 
+    if bool(bindings.peak_selection_state.suppress_drag_press_once):
+        bindings.peak_selection_state.suppress_drag_press_once = False
+        return True
+
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
         bindings.manual_pick_session_active()
     ):

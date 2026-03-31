@@ -2254,8 +2254,8 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
     monkeypatch.setattr(
         geometry_q_group_manager,
         "set_runtime_geometry_preview_exclude_mode",
-        lambda bindings, enabled: (
-            calls.append(("mode", bindings, enabled)),
+        lambda bindings, enabled, *, message=None: (
+            calls.append(("mode", bindings, enabled, message)),
             True,
         )[-1],
     )
@@ -2318,7 +2318,7 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
     callbacks.close_window()
     assert callbacks.open_window() is True
     assert callbacks.open_preview_exclusion_window() is False
-    assert callbacks.set_preview_exclude_mode(True) is True
+    assert callbacks.set_preview_exclude_mode(True, message="armed") is True
     callbacks.clear_preview_exclusions()
     assert callbacks.toggle_preview_exclusion_at(1.5, 2.5) is False
     assert callbacks.toggle_live_preview() is True
@@ -2337,7 +2337,7 @@ def test_geometry_q_group_runtime_callback_bundle_delegates_live_bindings(
         ("close", "bindings-9"),
         ("open", "root-window", "bindings-10"),
         ("open-preview", "root-window", "bindings-11"),
-        ("mode", "bindings-12", True),
+        ("mode", "bindings-12", True, "armed"),
         ("clear-preview", "bindings-13"),
         ("toggle-preview", "bindings-14", 1.5, 2.5),
         ("live-toggle", "bindings-15", "root-window"),

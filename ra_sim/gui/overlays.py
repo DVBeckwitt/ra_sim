@@ -60,6 +60,27 @@ def draw_geometry_fit_overlay(
 
     clear_geometry_pick_artists(redraw=False)
 
+    def _resolve_display_point(
+        entry: dict[str, object],
+        *,
+        display_key: str,
+        native_key: str,
+    ) -> tuple[float, float] | None:
+        if show_caked_2d and native_detector_coords_to_caked_display_coords is not None:
+            native_point = _parse_point(entry.get(native_key))
+            if native_point is not None:
+                try:
+                    projected = native_detector_coords_to_caked_display_coords(
+                        float(native_point[0]),
+                        float(native_point[1]),
+                    )
+                except Exception:
+                    projected = None
+                projected_point = _parse_point(projected)
+                if projected_point is not None:
+                    return projected_point
+        return _parse_point(entry.get(display_key))
+
     def _plot_marker(
         col: float,
         row: float,
@@ -133,40 +154,26 @@ def draw_geometry_fit_overlay(
         if idx >= limit or not isinstance(entry, dict):
             break
 
-        initial_sim_display = _parse_point(entry.get("initial_sim_display"))
-        initial_bg_display = _parse_point(entry.get("initial_bg_display"))
-        final_sim_display = _parse_point(entry.get("final_sim_display"))
-        final_bg_display = _parse_point(entry.get("final_bg_display"))
-
-        if show_caked_2d and native_detector_coords_to_caked_display_coords is not None:
-            final_sim_native = _parse_point(entry.get("final_sim_native"))
-            final_bg_native = _parse_point(entry.get("final_bg_native"))
-            try:
-                projected_sim = (
-                    native_detector_coords_to_caked_display_coords(
-                        final_sim_native[0],
-                        final_sim_native[1],
-                    )
-                    if final_sim_native is not None
-                    else None
-                )
-            except Exception:
-                projected_sim = None
-            try:
-                projected_bg = (
-                    native_detector_coords_to_caked_display_coords(
-                        final_bg_native[0],
-                        final_bg_native[1],
-                    )
-                    if final_bg_native is not None
-                    else None
-                )
-            except Exception:
-                projected_bg = None
-            if projected_sim is not None:
-                final_sim_display = projected_sim
-            if projected_bg is not None:
-                final_bg_display = projected_bg
+        initial_sim_display = _resolve_display_point(
+            entry,
+            display_key="initial_sim_display",
+            native_key="initial_sim_native",
+        )
+        initial_bg_display = _resolve_display_point(
+            entry,
+            display_key="initial_bg_display",
+            native_key="initial_bg_native",
+        )
+        final_sim_display = _resolve_display_point(
+            entry,
+            display_key="final_sim_display",
+            native_key="final_sim_native",
+        )
+        final_bg_display = _resolve_display_point(
+            entry,
+            display_key="final_bg_display",
+            native_key="final_bg_native",
+        )
 
         if final_sim_display is None or final_bg_display is None:
             continue

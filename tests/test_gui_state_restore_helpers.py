@@ -234,6 +234,20 @@ def test_geometry_state_requires_visible_background_when_q_group_is_included() -
     )
 
 
+def test_geometry_state_requires_visible_background_when_manual_pairs_exist() -> None:
+    assert state_io.geometry_state_requires_visible_background(
+        {
+            "manual_pairs": [
+                {
+                    "background_index": 0,
+                    "entries": [{"q_group_key": ["q_group", "primary", 1.0, 2]}],
+                }
+            ]
+        },
+        geometry_q_group_key_from_jsonable=lambda _value: None,
+    )
+
+
 def test_geometry_state_requires_visible_background_ignores_excluded_or_invalid_rows() -> None:
     def _key_from_jsonable(_value):
         return None
@@ -252,8 +266,9 @@ def test_geometry_state_requires_visible_background_ignores_excluded_or_invalid_
     )
 
 
-def test_apply_geometry_state_background_view_compatibility_forces_detector_view() -> None:
+def test_apply_geometry_state_background_view_compatibility_forces_caked_view() -> None:
     toggled = {"count": 0}
+    show_1d_var = _Var(False)
     show_caked_2d_var = _Var(True)
 
     def _key_from_jsonable(value):
@@ -269,12 +284,14 @@ def test_apply_geometry_state_background_view_compatibility_forces_detector_view
         },
         geometry_q_group_key_from_jsonable=_key_from_jsonable,
         show_caked_2d_var=show_caked_2d_var,
+        show_1d_var=show_1d_var,
         background_visible=False,
         toggle_background=lambda: toggled.__setitem__("count", toggled["count"] + 1),
     )
 
     assert updated is True
-    assert show_caked_2d_var.get() is False
+    assert show_caked_2d_var.get() is True
+    assert show_1d_var.get() is True
     assert toggled["count"] == 1
 
 
@@ -293,3 +310,30 @@ def test_apply_geometry_state_background_view_compatibility_skips_when_no_q_grou
     assert updated is False
     assert show_caked_2d_var.get() is True
     assert toggled["count"] == 0
+
+
+def test_apply_geometry_state_background_view_compatibility_uses_manual_pairs() -> None:
+    toggled = {"count": 0}
+    show_1d_var = _Var(False)
+    show_caked_2d_var = _Var(False)
+
+    updated = state_io.apply_geometry_state_background_view_compatibility(
+        {
+            "manual_pairs": [
+                {
+                    "background_index": 0,
+                    "entries": [{"q_group_key": ["q_group", "primary", 1.0, 2]}],
+                }
+            ]
+        },
+        geometry_q_group_key_from_jsonable=lambda _value: None,
+        show_caked_2d_var=show_caked_2d_var,
+        show_1d_var=show_1d_var,
+        background_visible=False,
+        toggle_background=lambda: toggled.__setitem__("count", toggled["count"] + 1),
+    )
+
+    assert updated is True
+    assert show_caked_2d_var.get() is True
+    assert show_1d_var.get() is True
+    assert toggled["count"] == 1

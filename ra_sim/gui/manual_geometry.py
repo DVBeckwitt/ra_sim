@@ -18,6 +18,8 @@ from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rot
 
 
 DEFAULT_POSITION_SIGMA_FLOOR_PX = 0.75
+DEFAULT_PREVIEW_GOOD_SIGMA_PX = 1.5
+DEFAULT_PREVIEW_BAD_SIGMA_PX = 12.0
 DEFAULT_CAKED_SEARCH_TTH_DEG = 1.5
 DEFAULT_CAKED_SEARCH_PHI_DEG = 10.0
 DEFAULT_PREVIEW_MIN_INTERVAL_S = 0.03
@@ -129,6 +131,68 @@ def geometry_manual_position_sigma_px(
 
     floor_val = max(1.0e-3, float(floor_px))
     return float(np.hypot(float(error_px), floor_val))
+
+
+def geometry_manual_preview_color(
+    sigma_px: object,
+    *,
+    good_sigma_px: float = DEFAULT_PREVIEW_GOOD_SIGMA_PX,
+    bad_sigma_px: float = DEFAULT_PREVIEW_BAD_SIGMA_PX,
+) -> str:
+    """Return a green-to-red preview color for one manual-pick uncertainty."""
+
+    try:
+        sigma_val = float(sigma_px)
+    except Exception:
+        sigma_val = float("nan")
+    if not np.isfinite(sigma_val):
+        sigma_val = float(bad_sigma_px)
+
+    good_val = max(1.0e-3, float(good_sigma_px))
+    bad_val = max(good_val + 1.0e-3, float(bad_sigma_px))
+    ratio = (sigma_val - good_val) / (bad_val - good_val)
+    ratio = min(max(float(ratio), 0.0), 1.0)
+
+    if ratio <= 0.5:
+        local_ratio = ratio / 0.5
+        start_rgb = (0x2E, 0xCC, 0x71)
+        end_rgb = (0xF1, 0xC4, 0x0F)
+    else:
+        local_ratio = (ratio - 0.5) / 0.5
+        start_rgb = (0xF1, 0xC4, 0x0F)
+        end_rgb = (0xE7, 0x4C, 0x3C)
+
+    rgb = tuple(
+        int(round((1.0 - local_ratio) * start + local_ratio * end))
+        for start, end in zip(start_rgb, end_rgb)
+    )
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def geometry_manual_preview_quality_label(
+    sigma_px: object,
+    *,
+    good_sigma_px: float = DEFAULT_PREVIEW_GOOD_SIGMA_PX,
+    bad_sigma_px: float = DEFAULT_PREVIEW_BAD_SIGMA_PX,
+) -> str:
+    """Return a coarse quality label for one manual-pick uncertainty."""
+
+    try:
+        sigma_val = float(sigma_px)
+    except Exception:
+        sigma_val = float("nan")
+    if not np.isfinite(sigma_val):
+        return "bad"
+
+    good_val = max(1.0e-3, float(good_sigma_px))
+    bad_val = max(good_val + 1.0e-3, float(bad_sigma_px))
+    ratio = (sigma_val - good_val) / (bad_val - good_val)
+    ratio = min(max(float(ratio), 0.0), 1.0)
+    if ratio <= 0.2:
+        return "good"
+    if ratio >= 0.75:
+        return "bad"
+    return "warning"
 
 
 def normalize_geometry_manual_pair_entry(
@@ -1435,6 +1499,8 @@ def geometry_manual_pick_preview_state(
                 )
             )
     sigma_px = position_sigma_px(delta)
+    preview_color = geometry_manual_preview_color(float(sigma_px))
+    quality_label = geometry_manual_preview_quality_label(float(sigma_px))
     candidate_label = str(candidate.get("label", "")) if isinstance(candidate, dict) else ""
     q_label = str(
         pick_session.get(
@@ -1446,7 +1512,8 @@ def geometry_manual_pick_preview_state(
         f"Manual pick preview for {q_label}: "
         f"release=({float(raw_col):.1f},{float(raw_row):.1f}) -> "
         f"refined=({float(refined_col):.1f},{float(refined_row):.1f}), "
-        f"placement error={delta:.2f}px, sigma={float(sigma_px):.2f}px"
+        f"placement error={delta:.2f}px, sigma={float(sigma_px):.2f}px, "
+        f"quality={quality_label}"
     )
     if candidate_label:
         message += f" -> nearest sim [{candidate_label}]"
@@ -1461,6 +1528,8 @@ def geometry_manual_pick_preview_state(
         "sim_dist": float(sim_dist),
         "delta": float(delta),
         "sigma_px": float(sigma_px),
+        "preview_color": str(preview_color),
+        "quality_label": str(quality_label),
         "message": message,
     }
 
@@ -1774,6 +1843,10 @@ def make_runtime_geometry_manual_projection_callbacks(
     display_rotate_k: int = 0,
     current_geometry_fit_params: Callable[[], dict[str, object]] | None = None,
     simulate_preview_style_peaks_for_fit: Callable[..., Sequence[dict[str, object]]] | None = None,
+    build_live_preview_simulated_peaks_from_cache: (
+        Callable[[], Sequence[dict[str, object]]]
+        | None
+    ) = None,
     miller: Callable[[], object] | object = None,
     intensities: Callable[[], object] | object = None,
     image_size: Callable[[], object] | object = 0,
@@ -1993,7 +2066,17 @@ def make_runtime_geometry_manual_projection_callbacks(
         *,
         prefer_cache: bool = True,
     ) -> list[dict[str, object]]:
-        del prefer_cache
+        if prefer_cache and callable(build_live_preview_simulated_peaks_from_cache):
+            try:
+                cached_peaks = [
+                    dict(entry)
+                    for entry in (build_live_preview_simulated_peaks_from_cache() or ())
+                    if isinstance(entry, dict)
+                ]
+            except Exception:
+                cached_peaks = []
+            if cached_peaks:
+                return _project_peaks_to_current_view(cached_peaks)
         if not callable(simulate_preview_style_peaks_for_fit):
             return []
         try:
@@ -2236,7 +2319,7 @@ def make_runtime_geometry_manual_callbacks(
         tuple[float | None, float | None],
     ]
     | None = None,
-    show_preview: Callable[[float, float, float | None, float | None], None] | None = None,
+    show_preview: Callable[..., None] | None = None,
 ) -> GeometryManualRuntimeCallbacks:
     """Build live manual-geometry callbacks around the shared helper surface."""
 
@@ -2359,6 +2442,9 @@ def make_runtime_geometry_manual_callbacks(
                 float(preview_state["raw_row"]),
                 float(preview_state["refined_col"]),
                 float(preview_state["refined_row"]),
+                delta_px=float(preview_state["delta"]),
+                sigma_px=float(preview_state["sigma_px"]),
+                preview_color=str(preview_state["preview_color"]),
             )
         if callable(set_status_text):
             set_status_text(str(preview_state["message"]))
@@ -3086,6 +3172,7 @@ def should_collect_hit_tables_for_update(
     background_visible: bool,
     current_background_index: object,
     skip_preview_once: bool = False,
+    manual_pick_armed: bool = False,
     hkl_pick_armed: bool,
     selected_hkl_target: object,
     selected_peak_record: object,
@@ -3103,12 +3190,15 @@ def should_collect_hit_tables_for_update(
     manual_geometry_overlay_requested = False
     if background_visible and current_manual_pick_background_image() is not None:
         try:
-            manual_geometry_overlay_requested = bool(
+            has_manual_geometry_overlay = bool(
                 geometry_manual_pairs_for_index(int(current_background_index))
                 or geometry_manual_pick_session_active()
             )
         except Exception:
-            manual_geometry_overlay_requested = False
+            has_manual_geometry_overlay = False
+        manual_geometry_overlay_requested = bool(
+            manual_pick_armed or has_manual_geometry_overlay
+        )
 
     return bool(
         hkl_pick_armed

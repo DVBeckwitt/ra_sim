@@ -269,6 +269,54 @@ class _FakeRoot:
         self.bind_all_calls.append((sequence, callback, add))
 
 
+def test_create_root_window_sets_title_and_configures_section_styles(monkeypatch) -> None:
+    class _FakeTkRoot:
+        def __init__(self) -> None:
+            self.title_text = None
+
+        def title(self, text: str) -> None:
+            self.title_text = text
+
+    class _FakeFont:
+        def __init__(self) -> None:
+            self.configured = {}
+
+        def copy(self):
+            return self
+
+        def configure(self, **kwargs) -> None:
+            self.configured.update(kwargs)
+
+    class _FakeStyle:
+        def __init__(self, root) -> None:
+            self.root = root
+            self.configure_calls = []
+
+        def configure(self, name: str, **kwargs) -> None:
+            self.configure_calls.append((name, kwargs))
+
+    fake_root = _FakeTkRoot()
+    fake_style = _FakeStyle(fake_root)
+    fake_font = _FakeFont()
+
+    monkeypatch.setattr(views.tk, "Tk", lambda: fake_root)
+    monkeypatch.setattr(views.ttk, "Style", lambda root: fake_style)
+    monkeypatch.setattr(views.tkfont, "nametofont", lambda _name: fake_font)
+
+    root = views.create_root_window("Readable Sections")
+
+    assert root is fake_root
+    assert fake_root.title_text == "Readable Sections"
+    assert fake_font.configured == {"weight": "bold"}
+    assert (
+        "TLabelframe",
+        {"borderwidth": 2, "relief": "groove", "padding": (10, 8)},
+    ) in fake_style.configure_calls
+    assert any(name == "TLabelframe.Label" for name, _kwargs in fake_style.configure_calls)
+    assert any(name == "SectionHeader.Toolbutton" for name, _kwargs in fake_style.configure_calls)
+    assert ("TNotebook.Tab", {"padding": (12, 8)}) in fake_style.configure_calls
+
+
 class _FakeCollapsibleFrame:
     def __init__(self, parent, text: str = "", expanded: bool = False) -> None:
         self.parent = parent
@@ -2117,19 +2165,18 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
     assert view_state.log_radial_var.get() is False
     assert view_state.log_azimuth_var.get() is False
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
-        "Show 1D Integration",
         "Show 2D Caked Integration",
         "Log Radial",
         "Log Azimuth",
     ]
-    assert view_state.check_1d is _FakeCheckbutton.created[0]
-    assert view_state.check_2d is _FakeCheckbutton.created[1]
-    assert view_state.check_log_radial is _FakeCheckbutton.created[2]
-    assert view_state.check_log_azimuth is _FakeCheckbutton.created[3]
+    assert view_state.check_1d is None
+    assert view_state.check_2d is _FakeCheckbutton.created[0]
+    assert view_state.check_log_radial is _FakeCheckbutton.created[1]
+    assert view_state.check_log_azimuth is _FakeCheckbutton.created[2]
 
     for checkbutton in _FakeCheckbutton.created:
         checkbutton.command()
-    assert calls == ["toggle-1d", "toggle-2d", "toggle-radial", "toggle-azimuth"]
+    assert calls == ["toggle-2d", "toggle-radial", "toggle-azimuth"]
 
 
 def test_create_integration_range_controls_store_vars_bindings_and_commands(

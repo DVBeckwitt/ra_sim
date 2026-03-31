@@ -14,12 +14,14 @@ class CollapsibleFrame(ttk.Frame):
             text=self._label_text(),
             variable=self._variable,
             command=self._toggle,
-            style="Toolbutton",
+            style="SectionHeader.Toolbutton",
         )
-        self._button.pack(fill=tk.X)
-        self.frame = ttk.Frame(self)
+        self._button.pack(fill=tk.X, padx=2, pady=(2, 0))
+        self._separator = ttk.Separator(self, orient=tk.HORIZONTAL)
+        self.frame = ttk.Frame(self, padding=(8, 4, 8, 8))
         if expanded:
-            self.frame.pack(fill=tk.X)
+            self._separator.pack(fill=tk.X, padx=2, pady=(2, 0))
+            self.frame.pack(fill=tk.X, padx=2, pady=(0, 2))
 
     def _label_text(self):
         prefix = ("\u25BC " if self._variable.get() else "\u25B6 ") + self._text
@@ -33,7 +35,9 @@ class CollapsibleFrame(ttk.Frame):
 
     def _toggle(self):
         if self._variable.get():
-            self.frame.pack(fill=tk.X)
+            self._separator.pack(fill=tk.X, padx=2, pady=(2, 0))
+            self.frame.pack(fill=tk.X, padx=2, pady=(0, 2))
         else:
             self.frame.forget()
+            self._separator.forget()
         self._button.configure(text=self._label_text())

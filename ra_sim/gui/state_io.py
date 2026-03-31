@@ -603,17 +603,26 @@ def geometry_state_requires_visible_background(
         return False
 
     saved_rows = geometry_state.get("q_group_rows", [])
-    if not isinstance(saved_rows, list):
-        return False
+    if isinstance(saved_rows, list):
+        for row in saved_rows:
+            if not isinstance(row, Mapping):
+                continue
+            if not bool(row.get("included", True)):
+                continue
+            if geometry_q_group_key_from_jsonable(row.get("key")) is None:
+                continue
+            return True
 
-    for row in saved_rows:
-        if not isinstance(row, Mapping):
-            continue
-        if not bool(row.get("included", True)):
-            continue
-        if geometry_q_group_key_from_jsonable(row.get("key")) is None:
-            continue
-        return True
+    saved_manual_pairs = geometry_state.get("manual_pairs", [])
+    if isinstance(saved_manual_pairs, list):
+        for row in saved_manual_pairs:
+            if not isinstance(row, Mapping):
+                continue
+            entries = row.get("entries", [])
+            if not isinstance(entries, list):
+                continue
+            if any(isinstance(entry, Mapping) for entry in entries):
+                return True
     return False
 
 
@@ -626,8 +635,9 @@ def apply_geometry_state_background_view_compatibility(
     show_caked_2d_var: object | None,
     background_visible: bool,
     toggle_background: Callable[[], None],
+    show_1d_var: object | None = None,
 ) -> bool:
-    """Ensure imported Qr/Qz selections reopen the detector-background 2D view."""
+    """Ensure imported Qr/Qz selections reopen the background-backed 2D caked view."""
 
     if not geometry_state_requires_visible_background(
         geometry_state,
@@ -637,7 +647,12 @@ def apply_geometry_state_background_view_compatibility(
 
     if show_caked_2d_var is not None:
         try:
-            show_caked_2d_var.set(False)
+            show_caked_2d_var.set(True)
+        except Exception:
+            pass
+    if show_1d_var is not None:
+        try:
+            show_1d_var.set(True)
         except Exception:
             pass
     if not bool(background_visible):

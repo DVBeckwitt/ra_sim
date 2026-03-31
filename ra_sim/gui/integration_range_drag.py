@@ -978,7 +978,14 @@ def _toggle_runtime_caked_2d(
 ) -> None:
     bindings = bindings_factory()
     show_caked_2d_var = getattr(bindings.analysis_view_state, "show_caked_2d_var", None)
+    show_1d_var = getattr(bindings.analysis_view_state, "show_1d_var", None)
     show_caked = bool(_safe_var_get(show_caked_2d_var))
+
+    if show_1d_var is not None:
+        try:
+            show_1d_var.set(show_caked)
+        except Exception:
+            pass
 
     if not show_caked:
         bindings.simulation_runtime_state.caked_limits_user_override = False

@@ -30,6 +30,9 @@ GEOMETRY_FIT_PARAM_ORDER = [
     "center_y",
 ]
 
+GEOMETRY_FIT_ACCEPT_MAX_RMS_PX = 100.0
+GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX = 150.0
+
 
 @dataclass(frozen=True)
 class GeometryFitPreparedRun:
@@ -334,12 +337,23 @@ class GeometryFitRuntimeActionResult:
 
 
 @dataclass(frozen=True)
+class GeometryFitActionNotice:
+    """User-facing notice derived from one top-level geometry-fit action."""
+
+    level: str
+    title: str
+    message: str
+
+
+@dataclass(frozen=True)
 class GeometryFitRuntimeApplyResult:
     """Result metadata returned after applying one successful geometry fit."""
 
+    accepted: bool
+    rejection_reason: str | None
     rms: float
-    fitted_params: dict[str, object]
-    postprocess: GeometryFitPostprocessResult
+    fitted_params: dict[str, object] | None
+    postprocess: GeometryFitPostprocessResult | None
 
 
 @dataclass(frozen=True)
@@ -797,6 +811,7 @@ def make_runtime_geometry_fit_action_callback(
     *,
     before_run: Callable[[], None] | None = None,
     run_action: Callable[..., GeometryFitRuntimeActionResult] | None = None,
+    after_run: Callable[[GeometryFitRuntimeActionResult], None] | None = None,
 ) -> Callable[[], GeometryFitRuntimeActionResult]:
     """Build the zero-arg runtime callback for the top-level geometry-fit action."""
 
@@ -804,9 +819,51 @@ def make_runtime_geometry_fit_action_callback(
         if callable(before_run):
             before_run()
         action = run_action if callable(run_action) else run_runtime_geometry_fit_action
-        return action(bindings=bindings_factory())
+        result = action(bindings=bindings_factory())
+        if callable(after_run):
+            after_run(result)
+        return result
 
     return _run
+
+
+def build_geometry_fit_action_notice(
+    action_result: GeometryFitRuntimeActionResult | None,
+) -> GeometryFitActionNotice | None:
+    """Return a user-facing notice for one failed or rejected geometry fit."""
+
+    if action_result is None:
+        return None
+
+    error_text = str(action_result.error_text or "").strip()
+    if error_text:
+        return GeometryFitActionNotice(
+            level="error",
+            title="Geometry Fit Failed",
+            message=error_text,
+        )
+
+    execution_result = action_result.execution_result
+    if execution_result is None:
+        return None
+
+    apply_result = execution_result.apply_result
+    if apply_result is None or bool(apply_result.accepted):
+        return None
+
+    lines = ["Geometry fit finished but the solution was rejected."]
+    rejection_reason = str(apply_result.rejection_reason or "").strip()
+    if rejection_reason:
+        lines.append(rejection_reason)
+    lines.append("The live geometry state was left unchanged.")
+    log_path = getattr(execution_result, "log_path", None)
+    if log_path is not None:
+        lines.append(f"Fit log: {Path(log_path)}")
+    return GeometryFitActionNotice(
+        level="warning",
+        title="Geometry Fit Rejected",
+        message="\n".join(lines),
+    )
 
 
 def copy_geometry_fit_state_value(value):
@@ -1565,6 +1622,36 @@ def _geometry_fit_sequence_list(value: object) -> list[object]:
         return [value]
 
 
+def redraw_runtime_geometry_fit_overlay_state(
+    overlay_state: Mapping[str, object] | None,
+    *,
+    draw_overlay_records: Callable[[Sequence[dict[str, object]], int], None] | None = None,
+    draw_initial_pairs_overlay: Callable[[Sequence[dict[str, object]], int], None] | None = None,
+) -> bool:
+    """Redraw one saved geometry-fit overlay payload when it contains display data."""
+
+    overlay_payload = dict(overlay_state) if isinstance(overlay_state, Mapping) else {}
+    overlay_records = _geometry_fit_sequence_list(
+        overlay_payload.get("overlay_records")
+    )
+    initial_pairs_display = _geometry_fit_sequence_list(
+        overlay_payload.get("initial_pairs_display")
+    )
+    try:
+        max_display_markers = int(overlay_payload.get("max_display_markers", 120))
+    except Exception:
+        max_display_markers = 120
+    max_display_markers = max(1, max_display_markers)
+
+    if overlay_records and callable(draw_overlay_records):
+        draw_overlay_records(overlay_records, int(max_display_markers))
+        return True
+    if initial_pairs_display and callable(draw_initial_pairs_overlay):
+        draw_initial_pairs_overlay(initial_pairs_display, int(max_display_markers))
+        return True
+    return False
+
+
 def capture_runtime_geometry_fit_undo_state(
     *,
     current_ui_params: Callable[[], Mapping[str, object]] | Mapping[str, object],
@@ -1627,6 +1714,7 @@ def restore_runtime_geometry_fit_undo_state(
     geometry_theta_offset_var=None,
     replace_profile_cache: Callable[[dict[str, object]], None],
     set_last_overlay_state: Callable[[dict[str, object] | None], object],
+    request_preview_skip_once: Callable[[], None] | None = None,
     mark_last_simulation_dirty: Callable[[], None] | None = None,
     cancel_pending_update: Callable[[], None] | None = None,
     run_update: Callable[[], None] | None = None,
@@ -1681,6 +1769,8 @@ def restore_runtime_geometry_fit_undo_state(
         dict(overlay_state) if isinstance(overlay_state, dict) else None
     )
 
+    if callable(request_preview_skip_once):
+        request_preview_skip_once()
     if callable(mark_last_simulation_dirty):
         mark_last_simulation_dirty()
     if callable(cancel_pending_update):
@@ -1688,19 +1778,11 @@ def restore_runtime_geometry_fit_undo_state(
     if callable(run_update):
         run_update()
 
-    overlay_payload = overlay_state if isinstance(overlay_state, dict) else {}
-    overlay_records = _geometry_fit_sequence_list(
-        overlay_payload.get("overlay_records")
+    redraw_runtime_geometry_fit_overlay_state(
+        overlay_state if isinstance(overlay_state, Mapping) else None,
+        draw_overlay_records=draw_overlay_records,
+        draw_initial_pairs_overlay=draw_initial_pairs_overlay,
     )
-    initial_pairs_display = _geometry_fit_sequence_list(
-        overlay_payload.get("initial_pairs_display")
-    )
-    max_display_markers = int(overlay_payload.get("max_display_markers", 120))
-    max_display_markers = max(1, max_display_markers)
-    if overlay_records and callable(draw_overlay_records):
-        draw_overlay_records(overlay_records, int(max_display_markers))
-    elif initial_pairs_display and callable(draw_initial_pairs_overlay):
-        draw_initial_pairs_overlay(initial_pairs_display, int(max_display_markers))
 
     if callable(refresh_status):
         refresh_status()
@@ -1715,6 +1797,7 @@ def build_runtime_geometry_fit_undo_restore_callback(
     geometry_theta_offset_var_factory: object | Callable[[], object] | None = None,
     replace_profile_cache: Callable[[dict[str, object]], None],
     set_last_overlay_state: Callable[[dict[str, object] | None], object],
+    request_preview_skip_once: Callable[[], None] | None = None,
     mark_last_simulation_dirty: Callable[[], None] | None = None,
     cancel_pending_update: Callable[[], None] | None = None,
     run_update: Callable[[], None] | None = None,
@@ -1737,6 +1820,7 @@ def build_runtime_geometry_fit_undo_restore_callback(
             ),
             replace_profile_cache=replace_profile_cache,
             set_last_overlay_state=set_last_overlay_state,
+            request_preview_skip_once=request_preview_skip_once,
             mark_last_simulation_dirty=mark_last_simulation_dirty,
             cancel_pending_update=cancel_pending_update,
             run_update=run_update,
@@ -1930,6 +2014,7 @@ def make_runtime_geometry_tool_action_callbacks(
     set_history_button_state: Callable[[bool, bool], None] | None = None,
     show_caked_2d_var: Any = None,
     toggle_caked_2d: Callable[[], None] | None = None,
+    ensure_geometry_fit_caked_view: Callable[[], None] | None = None,
     set_hkl_pick_mode: Callable[..., None] | None = None,
     set_geometry_preview_exclude_mode: Callable[..., None] | None = None,
     cancel_manual_pick_session: Callable[..., None] | None = None,
@@ -1979,23 +2064,26 @@ def make_runtime_geometry_tool_action_callbacks(
         set_manual_pick_armed(armed)
 
         if armed:
-            show_caked_2d_var_local = _resolve_runtime_value(show_caked_2d_var)
-            show_caked_2d = False
-            getter = getattr(show_caked_2d_var_local, "get", None)
-            if callable(getter):
-                try:
-                    show_caked_2d = bool(getter())
-                except Exception:
-                    show_caked_2d = False
-            if not show_caked_2d:
-                setter = getattr(show_caked_2d_var_local, "set", None)
-                if callable(setter):
+            if callable(ensure_geometry_fit_caked_view):
+                ensure_geometry_fit_caked_view()
+            else:
+                show_caked_2d_var_local = _resolve_runtime_value(show_caked_2d_var)
+                show_caked_2d = False
+                getter = getattr(show_caked_2d_var_local, "get", None)
+                if callable(getter):
                     try:
-                        setter(True)
+                        show_caked_2d = bool(getter())
                     except Exception:
-                        pass
-                if callable(toggle_caked_2d):
-                    toggle_caked_2d()
+                        show_caked_2d = False
+                if not show_caked_2d:
+                    setter = getattr(show_caked_2d_var_local, "set", None)
+                    if callable(setter):
+                        try:
+                            setter(True)
+                        except Exception:
+                            pass
+                    if callable(toggle_caked_2d):
+                        toggle_caked_2d()
             if callable(set_hkl_pick_mode):
                 set_hkl_pick_mode(False)
             if callable(set_geometry_preview_exclude_mode):
@@ -2134,6 +2222,34 @@ def build_geometry_manual_fit_dataset(
                     sim_row = float("nan")
                 if np.isfinite(sim_col) and np.isfinite(sim_row):
                     initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+                try:
+                    sim_col_raw = float(sim_entry.get("sim_col_raw", sim_col))
+                    sim_row_raw = float(sim_entry.get("sim_row_raw", sim_row))
+                except Exception:
+                    sim_col_raw = float("nan")
+                    sim_row_raw = float("nan")
+                if np.isfinite(sim_col_raw) and np.isfinite(sim_row_raw):
+                    try:
+                        sim_native = manual_dataset_bindings.display_to_native_sim_coords(
+                            float(sim_col_raw),
+                            float(sim_row_raw),
+                            (
+                                int(manual_dataset_bindings.image_size),
+                                int(manual_dataset_bindings.image_size),
+                            ),
+                        )
+                    except Exception:
+                        sim_native = None
+                    if (
+                        isinstance(sim_native, tuple)
+                        and len(sim_native) >= 2
+                        and np.isfinite(float(sim_native[0]))
+                        and np.isfinite(float(sim_native[1]))
+                    ):
+                        initial_entry["sim_native"] = (
+                            float(sim_native[0]),
+                            float(sim_native[1]),
+                        )
         initial_pairs_display.append(initial_entry)
 
     measured_native = manual_dataset_bindings.unrotate_display_peaks(
@@ -2141,6 +2257,16 @@ def build_geometry_manual_fit_dataset(
         display_background.shape,
         k=manual_dataset_bindings.display_rotate_k,
     )
+    for initial_entry, measured_entry in zip(initial_pairs_display, measured_native):
+        if not isinstance(measured_entry, Mapping):
+            continue
+        try:
+            mx = float(measured_entry.get("x"))
+            my = float(measured_entry.get("y"))
+        except Exception:
+            continue
+        if np.isfinite(mx) and np.isfinite(my):
+            initial_entry["bg_native"] = (float(mx), float(my))
 
     sim_orientation_points: list[tuple[float, float]] = []
     meas_orientation_points: list[tuple[float, float]] = []
@@ -2158,11 +2284,21 @@ def build_geometry_manual_fit_dataset(
         ):
             continue
         try:
-            sim_native = manual_dataset_bindings.display_to_native_sim_coords(
-                float(sim_display[0]),
-                float(sim_display[1]),
-                sim_native_shape,
-            )
+            sim_native_raw = initial_entry.get("sim_native")
+            if (
+                isinstance(sim_native_raw, (list, tuple, np.ndarray))
+                and len(sim_native_raw) >= 2
+            ):
+                sim_native = (
+                    float(sim_native_raw[0]),
+                    float(sim_native_raw[1]),
+                )
+            else:
+                sim_native = manual_dataset_bindings.display_to_native_sim_coords(
+                    float(sim_display[0]),
+                    float(sim_display[1]),
+                    sim_native_shape,
+                )
             mx = float(measured_entry.get("x"))
             my = float(measured_entry.get("y"))
         except Exception:
@@ -3012,6 +3148,322 @@ def geometry_fit_result_rms(result: object) -> float:
     return float(np.sqrt(np.mean(finite_residuals**2)))
 
 
+def _geometry_fit_metric_float(value: object, *, default: float = np.nan) -> float:
+    """Return one finite float metric, or ``default`` when unavailable."""
+
+    try:
+        resolved = float(value)
+    except Exception:
+        return float(default)
+    if not np.isfinite(resolved):
+        return float(default)
+    return float(resolved)
+
+
+def _geometry_fit_debug_value_text(
+    value: object,
+    *,
+    float_digits: int = 6,
+) -> str:
+    """Format one geometry-fit debug value for log output."""
+
+    if isinstance(value, (bool, np.bool_)):
+        return "True" if bool(value) else "False"
+    if isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if np.isnan(numeric):
+            return "nan"
+        if np.isposinf(numeric):
+            return "inf"
+        if np.isneginf(numeric):
+            return "-inf"
+        return f"{numeric:.{int(float_digits)}f}"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return "{" + ", ".join(
+            f"{key}={_geometry_fit_debug_value_text(val, float_digits=float_digits)}"
+            for key, val in value.items()
+        ) + "}"
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        items = list(value)
+        preview = [
+            _geometry_fit_debug_value_text(item, float_digits=float_digits)
+            for item in items[:6]
+        ]
+        if len(items) > 6:
+            preview.append("...")
+        return "[" + ", ".join(preview) + "]"
+    return str(value)
+
+
+def build_geometry_fit_debug_lines(result: object) -> list[str]:
+    """Format solver setup/progress details for one geometry-fit result."""
+
+    debug_summary = getattr(result, "geometry_fit_debug_summary", None)
+    if not isinstance(debug_summary, Mapping):
+        return []
+
+    lines: list[str] = [
+        "point_match_mode={mode} datasets={datasets} vars={vars}".format(
+            mode=bool(debug_summary.get("point_match_mode", False)),
+            datasets=int(debug_summary.get("dataset_count", 0) or 0),
+            vars=",".join(str(name) for name in debug_summary.get("var_names", []) or ()),
+        )
+    ]
+
+    solver = debug_summary.get("solver", None)
+    if isinstance(solver, Mapping):
+        lines.append(
+            "solver loss={loss} f_scale_px={f_scale} max_nfev={max_nfev} "
+            "restarts={restarts} weighted_matching={weighted} "
+            "missing_pair_penalty_px={missing} measurement_uncertainty={unc} "
+            "anisotropic_uncertainty={anisotropic}".format(
+                loss=str(solver.get("loss", "<unknown>")),
+                f_scale=_geometry_fit_debug_value_text(solver.get("f_scale_px", np.nan)),
+                max_nfev=_geometry_fit_debug_value_text(solver.get("max_nfev", "<unknown>"), float_digits=0),
+                restarts=_geometry_fit_debug_value_text(solver.get("restarts", "<unknown>"), float_digits=0),
+                weighted=_geometry_fit_debug_value_text(solver.get("weighted_matching", False), float_digits=0),
+                missing=_geometry_fit_debug_value_text(solver.get("missing_pair_penalty_px", np.nan)),
+                unc=_geometry_fit_debug_value_text(solver.get("use_measurement_uncertainty", False), float_digits=0),
+                anisotropic=_geometry_fit_debug_value_text(
+                    solver.get("anisotropic_measurement_uncertainty", False),
+                    float_digits=0,
+                ),
+            )
+        )
+
+    parallel = debug_summary.get("parallelization", None)
+    if isinstance(parallel, Mapping):
+        lines.append(
+            "parallel mode={mode} configured_workers={configured} "
+            "dataset_workers={datasets} restart_workers={restarts} "
+            "worker_numba_threads={threads} thread_budget={budget}".format(
+                mode=str(parallel.get("mode", "<unknown>")),
+                configured=_geometry_fit_debug_value_text(parallel.get("configured_workers", "<unknown>"), float_digits=0),
+                datasets=_geometry_fit_debug_value_text(parallel.get("dataset_workers", "<unknown>"), float_digits=0),
+                restarts=_geometry_fit_debug_value_text(parallel.get("restart_workers", "<unknown>"), float_digits=0),
+                threads=_geometry_fit_debug_value_text(parallel.get("worker_numba_threads", "None"), float_digits=0),
+                budget=_geometry_fit_debug_value_text(parallel.get("numba_thread_budget", "<unknown>"), float_digits=0),
+            )
+        )
+
+    main_seed = debug_summary.get("main_solve_seed", None)
+    if isinstance(main_seed, Mapping):
+        lines.append(
+            "main_seed cost={cost} weighted_rms_px={rms}".format(
+                cost=_geometry_fit_debug_value_text(main_seed.get("cost", np.nan)),
+                rms=_geometry_fit_debug_value_text(main_seed.get("weighted_rms_px", np.nan)),
+            )
+        )
+        point_seed = main_seed.get("point_match_summary", None)
+        if isinstance(point_seed, Mapping):
+            lines.append(
+                "main_seed_point_match matched={matched} missing={missing} "
+                "peak_rms_px={peak_rms} peak_max_px={peak_max}".format(
+                    matched=_geometry_fit_debug_value_text(point_seed.get("matched_pair_count", 0), float_digits=0),
+                    missing=_geometry_fit_debug_value_text(point_seed.get("missing_pair_count", 0), float_digits=0),
+                    peak_rms=_geometry_fit_debug_value_text(point_seed.get("unweighted_peak_rms_px", np.nan)),
+                    peak_max=_geometry_fit_debug_value_text(point_seed.get("unweighted_peak_max_px", np.nan)),
+                )
+            )
+
+    for entry in debug_summary.get("dataset_entries", []) or []:
+        if not isinstance(entry, Mapping):
+            continue
+        lines.append(
+            "dataset[{idx}] label={label} theta_initial_deg={theta} measured={measured} "
+            "subset_reflections={subset}/{total} fixed_source_reflections={fixed} "
+            "fallback_hkls={fallback} reduced={reduced}".format(
+                idx=_geometry_fit_debug_value_text(entry.get("dataset_index", -1), float_digits=0),
+                label=str(entry.get("label", "")),
+                theta=_geometry_fit_debug_value_text(entry.get("theta_initial_deg", np.nan)),
+                measured=_geometry_fit_debug_value_text(entry.get("measured_count", 0), float_digits=0),
+                subset=_geometry_fit_debug_value_text(entry.get("subset_reflection_count", 0), float_digits=0),
+                total=_geometry_fit_debug_value_text(entry.get("total_reflection_count", 0), float_digits=0),
+                fixed=_geometry_fit_debug_value_text(entry.get("fixed_source_reflection_count", 0), float_digits=0),
+                fallback=_geometry_fit_debug_value_text(entry.get("fallback_hkl_count", 0), float_digits=0),
+                reduced=_geometry_fit_debug_value_text(entry.get("subset_reduced", False), float_digits=0),
+            )
+        )
+
+    for entry in debug_summary.get("parameter_entries", []) or []:
+        if not isinstance(entry, Mapping):
+            continue
+        line = (
+            "param[{name}] group={group} start={start} final={final} delta={delta} "
+            "bounds=[{lower}, {upper}] scale={scale}".format(
+                name=str(entry.get("name", "")),
+                group=str(entry.get("group", "other")),
+                start=_geometry_fit_debug_value_text(entry.get("start", np.nan)),
+                final=_geometry_fit_debug_value_text(entry.get("final", np.nan)),
+                delta=_geometry_fit_debug_value_text(entry.get("delta", np.nan)),
+                lower=_geometry_fit_debug_value_text(entry.get("lower_bound", np.nan)),
+                upper=_geometry_fit_debug_value_text(entry.get("upper_bound", np.nan)),
+                scale=_geometry_fit_debug_value_text(entry.get("scale", np.nan)),
+            )
+        )
+        if bool(entry.get("prior_enabled", False)):
+            line += (
+                " prior_center={center} prior_sigma={sigma}".format(
+                    center=_geometry_fit_debug_value_text(entry.get("prior_center", np.nan)),
+                    sigma=_geometry_fit_debug_value_text(entry.get("prior_sigma", np.nan)),
+                )
+            )
+        lines.append(line)
+
+    final_summary = debug_summary.get("final", None)
+    if isinstance(final_summary, Mapping):
+        lines.append(
+            "final cost={cost} robust_cost={robust} weighted_rms_px={weighted_rms} "
+            "display_rms_px={display_rms}".format(
+                cost=_geometry_fit_debug_value_text(final_summary.get("cost", np.nan)),
+                robust=_geometry_fit_debug_value_text(final_summary.get("robust_cost", np.nan)),
+                weighted_rms=_geometry_fit_debug_value_text(final_summary.get("weighted_rms_px", np.nan)),
+                display_rms=_geometry_fit_debug_value_text(final_summary.get("display_rms_px", np.nan)),
+            )
+        )
+
+    solve_progress = debug_summary.get("solve_progress", None)
+    if isinstance(solve_progress, Mapping):
+        lines.append(
+            "solve_progress label={label} evaluations={evals} best_cost={best_cost} "
+            "best_weighted_rms_px={best_rms} status_updates={updates}".format(
+                label=str(solve_progress.get("label", "")),
+                evals=_geometry_fit_debug_value_text(solve_progress.get("evaluation_count", 0), float_digits=0),
+                best_cost=_geometry_fit_debug_value_text(solve_progress.get("best_cost_seen", np.nan)),
+                best_rms=_geometry_fit_debug_value_text(solve_progress.get("best_weighted_rms_px", np.nan)),
+                updates=_geometry_fit_debug_value_text(solve_progress.get("status_emit_count", 0), float_digits=0),
+            )
+        )
+        for idx, event in enumerate(solve_progress.get("trace", []) or []):
+            if not isinstance(event, Mapping):
+                continue
+            lines.append(
+                "solve_progress[{idx}] eval={eval} reason={reason} cost={cost} "
+                "best_cost={best_cost} weighted_rms_px={rms}".format(
+                    idx=int(idx),
+                    eval=_geometry_fit_debug_value_text(event.get("eval", 0), float_digits=0),
+                    reason=str(event.get("reason", "")),
+                    cost=_geometry_fit_debug_value_text(event.get("current_cost", np.nan)),
+                    best_cost=_geometry_fit_debug_value_text(event.get("best_cost", np.nan)),
+                    rms=_geometry_fit_debug_value_text(event.get("weighted_rms_px", np.nan)),
+                )
+            )
+
+    return lines
+
+
+def build_geometry_fit_stage_summary_lines(result: object) -> list[str]:
+    """Format the stage-by-stage geometry-fit workflow summaries."""
+
+    stage_specs = [
+        ("reparameterization", getattr(result, "reparameterization_summary", None)),
+        ("staged_release", getattr(result, "staged_release_summary", None)),
+        ("adaptive_regularization", getattr(result, "adaptive_regularization_summary", None)),
+        ("single_ray_polish", getattr(result, "single_ray_polish_summary", None)),
+        ("ridge_refinement", getattr(result, "ridge_refinement_summary", None)),
+        ("image_refinement", getattr(result, "image_refinement_summary", None)),
+        ("auto_freeze", getattr(result, "auto_freeze_summary", None)),
+        ("selective_thaw", getattr(result, "selective_thaw_summary", None)),
+    ]
+    preferred_keys = (
+        "status",
+        "reason",
+        "accepted",
+        "success",
+        "start_cost",
+        "final_cost",
+        "regularized_cost",
+        "release_cost",
+        "matched_pair_count_before",
+        "matched_pair_count_after",
+        "accepted_stage_count",
+        "release_accepted",
+        "coarse_single_ray_enabled",
+        "coarse_single_ray_accepted",
+        "fixed_parameters",
+        "thawed_parameters",
+        "applied_parameters",
+        "remaining_fixed_parameters",
+        "nfev",
+        "max_nfev",
+    )
+
+    lines: list[str] = []
+    for stage_name, summary in stage_specs:
+        if not isinstance(summary, Mapping):
+            continue
+        parts = [f"{stage_name}:"]
+        for key in preferred_keys:
+            if key not in summary:
+                continue
+            value = summary.get(key)
+            if value in ("", None):
+                continue
+            parts.append(
+                f"{key}={_geometry_fit_debug_value_text(value)}"
+            )
+        if len(parts) == 1:
+            parts.append("summary=<empty>")
+        lines.append(" ".join(parts))
+    return lines
+
+
+def build_geometry_fit_rejection_reason_lines(
+    result: object,
+    *,
+    rms: float,
+) -> list[str]:
+    """Return human-readable rejection reasons for one geometry-fit result."""
+
+    reasons: list[str] = []
+
+    if not bool(getattr(result, "success", True)):
+        reasons.append("Optimizer did not report success.")
+
+    if not np.isfinite(rms):
+        reasons.append("RMS residual is not finite.")
+    elif float(rms) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX:
+        reasons.append(
+            "RMS residual {rms:.2f} px exceeds the acceptance limit of "
+            "{limit:.2f} px.".format(
+                rms=float(rms),
+                limit=float(GEOMETRY_FIT_ACCEPT_MAX_RMS_PX),
+            )
+        )
+
+    point_match_summary = getattr(result, "point_match_summary", None)
+    matched_pair_count = 0
+    has_matched_pair_count = False
+    max_offset = float("nan")
+    if isinstance(point_match_summary, Mapping):
+        if "matched_pair_count" in point_match_summary:
+            has_matched_pair_count = True
+            try:
+                matched_pair_count = int(point_match_summary.get("matched_pair_count", 0))
+            except Exception:
+                matched_pair_count = 0
+        max_offset = _geometry_fit_metric_float(
+            point_match_summary.get("unweighted_peak_max_px", np.nan)
+        )
+
+    if has_matched_pair_count and matched_pair_count <= 0:
+        reasons.append("No matched peak pairs were available for the fitted solution.")
+    if np.isfinite(max_offset) and float(max_offset) > GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX:
+        reasons.append(
+            "Largest matched-peak offset {offset:.2f} px exceeds the acceptance "
+            "limit of {limit:.2f} px.".format(
+                offset=float(max_offset),
+                limit=float(GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX),
+            )
+        )
+
+    return reasons
+
+
 def build_geometry_fit_result_lines(
     var_names: Sequence[object],
     values: Sequence[object],
@@ -3359,6 +3811,34 @@ def build_geometry_fit_progress_text(
     )
 
 
+def build_geometry_fit_rejected_progress_text(
+    *,
+    current_dataset: Mapping[str, object],
+    dataset_count: int,
+    joint_background_mode: bool,
+    rms: float,
+    rejection_reasons: Sequence[object],
+) -> str:
+    """Build the GUI status text for one rejected manual geometry fit."""
+
+    lines = ["Manual geometry fit rejected:"]
+    for reason in rejection_reasons:
+        text = str(reason).strip()
+        if text:
+            lines.append(text)
+    if np.isfinite(rms):
+        lines.append(f"RMS residual = {float(rms):.2f} px")
+    lines.append(
+        "Manual pairs: {points} points across {groups} groups".format(
+            points=int(current_dataset.get("pair_count", 0) or 0),
+            groups=int(current_dataset.get("group_count", 0) or 0),
+        )
+        + (f" | joint backgrounds={int(dataset_count)}" if joint_background_mode else "")
+    )
+    lines.append("Add more manual points or remove outliers before rerunning the fit.")
+    return "\n".join(lines)
+
+
 def postprocess_geometry_fit_result(
     *,
     fitted_params: Mapping[str, object],
@@ -3511,10 +3991,70 @@ def apply_runtime_geometry_fit_result(
         "Optimizer diagnostics:",
         build_geometry_fit_optimizer_diagnostics_lines(result),
     )
+    debug_lines = build_geometry_fit_debug_lines(result)
+    if debug_lines:
+        bindings.log_section(
+            "Fit mechanics:",
+            debug_lines,
+        )
+    stage_summary_lines = build_geometry_fit_stage_summary_lines(result)
+    if stage_summary_lines:
+        bindings.log_section(
+            "Solver stages:",
+            stage_summary_lines,
+        )
 
-    undo_state = bindings.capture_undo_state()
     result_vector = getattr(result, "x", None)
     result_values = [] if result_vector is None else list(result_vector)
+    rms = geometry_fit_result_rms(result)
+    rejection_reasons = build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=rms,
+    )
+    if rejection_reasons:
+        bindings.log_section(
+            "Optimization result:",
+            build_geometry_fit_result_lines(
+                var_names,
+                result_values,
+                rms=rms,
+            ),
+        )
+        point_match_summary_lines = build_geometry_fit_point_match_summary_lines(
+            getattr(result, "point_match_summary", None)
+        )
+        if point_match_summary_lines:
+            bindings.log_section(
+                "Point-match summary:",
+                point_match_summary_lines,
+            )
+        bindings.log_section("Fit rejected:", rejection_reasons)
+        bindings.set_progress_text(
+            build_geometry_fit_rejected_progress_text(
+                current_dataset=current_dataset,
+                dataset_count=dataset_count,
+                joint_background_mode=joint_background_mode,
+                rms=rms,
+                rejection_reasons=rejection_reasons,
+            )
+        )
+        bindings.cmd_line(
+            "rejected: "
+            f"datasets={int(dataset_count)} "
+            f"groups={int(current_dataset.get('group_count', 0) or 0)} "
+            f"points={int(current_dataset.get('pair_count', 0) or 0)} "
+            f"rms={float(rms):.4f}px "
+            f"reason={rejection_reasons[0]}"
+        )
+        return GeometryFitRuntimeApplyResult(
+            accepted=False,
+            rejection_reason=" ".join(str(reason) for reason in rejection_reasons),
+            rms=float(rms),
+            fitted_params=None,
+            postprocess=None,
+        )
+
+    undo_state = bindings.capture_undo_state()
     bindings.apply_result_values(var_names, result_values)
 
     if joint_background_mode and not preserve_live_theta:
@@ -3530,7 +4070,6 @@ def apply_runtime_geometry_fit_result(
     bindings.mark_last_simulation_dirty()
     bindings.schedule_update()
 
-    rms = geometry_fit_result_rms(result)
     bindings.log_section(
         "Optimization result:",
         build_geometry_fit_result_lines(
@@ -3585,6 +4124,8 @@ def apply_runtime_geometry_fit_result(
     )
 
     return GeometryFitRuntimeApplyResult(
+        accepted=True,
+        rejection_reason=None,
         rms=float(rms),
         fitted_params=fitted_params,
         postprocess=postprocess,
@@ -4007,6 +4548,7 @@ def execute_runtime_geometry_fit(
         if not status_text:
             return
         _log_line(status_text)
+        ui_bindings.cmd_line(status_text)
         ui_bindings.set_progress_text(status_text)
         if callable(flush_ui):
             flush_ui()
@@ -4020,6 +4562,7 @@ def execute_runtime_geometry_fit(
             log_line=_log_line,
             log_section=_log_section,
         )
+        ui_bindings.cmd_line(f"log: {log_path}")
 
         ui_bindings.set_progress_text(str(start_progress_text))
         if callable(flush_ui):
@@ -4056,7 +4599,7 @@ def execute_runtime_geometry_fit(
             ),
         )
         replace_dataset_cache = ui_bindings.replace_dataset_cache
-        if callable(replace_dataset_cache):
+        if apply_result.accepted and callable(replace_dataset_cache):
             replace_dataset_cache(
                 build_geometry_fit_dataset_cache_payload(
                     prepared_run,

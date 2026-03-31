@@ -108,6 +108,52 @@ def test_draw_initial_geometry_pairs_overlay_links_sim_and_background_points() -
         plt.close(fig)
 
 
+def test_draw_geometry_fit_overlay_projects_native_points_in_caked_view() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 0, 0),
+                    "initial_sim_display": (999.0, 999.0),
+                    "initial_bg_display": (888.0, 888.0),
+                    "final_sim_display": (11.0, 13.0),
+                    "final_bg_display": (15.0, 17.0),
+                    "initial_sim_native": (1.0, 2.0),
+                    "initial_bg_native": (3.0, 4.0),
+                    "final_sim_native": (5.0, 6.0),
+                    "final_bg_native": (7.0, 8.0),
+                    "overlay_distance_px": 2.5,
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+            show_caked_2d=True,
+            native_detector_coords_to_caked_display_coords=(
+                lambda col, row: (100.0 + float(col), 200.0 + float(row))
+            ),
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (101.0, 202.0) in marker_points
+        assert (103.0, 204.0) in marker_points
+        assert (105.0, 206.0) in marker_points
+    finally:
+        plt.close(fig)
+
+
 def test_draw_live_geometry_preview_overlay_marks_excluded_matches() -> None:
     fig, ax = plt.subplots()
     try:

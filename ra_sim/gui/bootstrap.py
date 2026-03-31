@@ -1081,6 +1081,7 @@ def build_runtime_geometry_fit_action_bootstrap(
     *,
     geometry_fit_module: Any,
     before_run: Callable[[], None] | None = None,
+    after_run: Callable[[Any], None] | None = None,
     **bindings_kwargs: Any,
 ) -> GeometryFitActionRuntimeBootstrap:
     """Build the live geometry-fit action bindings and fit-button callback."""
@@ -1095,6 +1096,7 @@ def build_runtime_geometry_fit_action_bootstrap(
         callback=geometry_fit_module.make_runtime_geometry_fit_action_callback(
             bindings_factory=bindings_factory,
             before_run=before_run,
+            after_run=after_run,
         ),
     )
 

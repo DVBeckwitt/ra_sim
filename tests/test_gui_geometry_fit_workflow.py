@@ -1,4 +1,5 @@
 import numpy as np
+from pathlib import Path
 from types import SimpleNamespace
 
 from ra_sim.gui import geometry_fit
@@ -554,6 +555,8 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
             "hkl": (1, 1, 0),
             "bg_display": (50.0, 60.0),
             "sim_display": (9.0, 8.0),
+            "bg_native": (30.0, 40.0),
+            "sim_native": (1.0, 2.0),
         }
     ]
     assert dataset["measured_native"] == measured_native
@@ -581,6 +584,66 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         (4, 5),
         {"mode": "auto"},
     )
+
+
+def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coords() -> None:
+    calls: dict[str, object] = {}
+
+    def _display_to_native_sim_coords(col, row, shape):
+        calls["display_to_native"] = (col, row, tuple(shape))
+        return (11.0, 12.0)
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [{"dummy": True}],
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {
+            (1, 2): {
+                "sim_col": 91.0,
+                "sim_row": 82.0,
+                "sim_col_raw": 9.0,
+                "sim_row_raw": 8.0,
+            }
+        },
+        geometry_manual_entry_display_coords=lambda entry: (150.0, 160.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=_display_to_native_sim_coords,
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx", "label": "identity"},
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
+    assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
+    assert calls["display_to_native"] == (9.0, 8.0, (64, 64))
 
 
 def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() -> None:
@@ -1221,6 +1284,7 @@ def test_make_runtime_geometry_fit_action_callback_runs_before_action() -> None:
         bindings_factory=lambda: events.append("bindings") or "live-bindings",
         before_run=lambda: events.append("before"),
         run_action=lambda **kwargs: events.append(("run", kwargs)) or "result",
+        after_run=lambda result: events.append(("after", result)),
     )
 
     assert callback() == "result"
@@ -1228,7 +1292,56 @@ def test_make_runtime_geometry_fit_action_callback_runs_before_action() -> None:
         "before",
         "bindings",
         ("run", {"bindings": "live-bindings"}),
+        ("after", "result"),
     ]
+
+
+def test_build_geometry_fit_action_notice_returns_rejection_warning() -> None:
+    notice = geometry_fit.build_geometry_fit_action_notice(
+        geometry_fit.GeometryFitRuntimeActionResult(
+            params={},
+            var_names=["gamma"],
+            preserve_live_theta=True,
+            execution_result=geometry_fit.GeometryFitRuntimeExecutionResult(
+                log_path=Path("C:/tmp/geometry_fit_log.txt"),
+                apply_result=geometry_fit.GeometryFitRuntimeApplyResult(
+                    accepted=False,
+                    rejection_reason="RMS residual 624.37 px exceeds the acceptance limit of 100.00 px.",
+                    rms=624.374847,
+                    fitted_params=None,
+                    postprocess=None,
+                ),
+            ),
+        )
+    )
+
+    assert notice == geometry_fit.GeometryFitActionNotice(
+        level="warning",
+        title="Geometry Fit Rejected",
+        message=(
+            "Geometry fit finished but the solution was rejected.\n"
+            "RMS residual 624.37 px exceeds the acceptance limit of 100.00 px.\n"
+            "The live geometry state was left unchanged.\n"
+            "Fit log: C:\\tmp\\geometry_fit_log.txt"
+        ),
+    )
+
+
+def test_build_geometry_fit_action_notice_returns_error_notice() -> None:
+    notice = geometry_fit.build_geometry_fit_action_notice(
+        geometry_fit.GeometryFitRuntimeActionResult(
+            params={},
+            var_names=["gamma"],
+            preserve_live_theta=True,
+            error_text="Geometry fit failed: boom",
+        )
+    )
+
+    assert notice == geometry_fit.GeometryFitActionNotice(
+        level="error",
+        title="Geometry Fit Failed",
+        message="Geometry fit failed: boom",
+    )
 
 
 def test_apply_geometry_fit_result_values_updates_named_vars_and_offset_text() -> None:
@@ -1599,6 +1712,116 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         ]
         rms_px = 0.75
         x = [1.5, 2.5]
+        geometry_fit_debug_summary = {
+            "point_match_mode": True,
+            "dataset_count": 1,
+            "var_names": ["gamma", "a"],
+            "solver": {
+                "loss": "soft_l1",
+                "f_scale_px": 2.0,
+                "max_nfev": 40,
+                "restarts": 2,
+                "weighted_matching": True,
+                "missing_pair_penalty_px": 12.0,
+                "use_measurement_uncertainty": True,
+                "anisotropic_measurement_uncertainty": False,
+            },
+            "parallelization": {
+                "mode": "datasets",
+                "configured_workers": 4,
+                "dataset_workers": 2,
+                "restart_workers": 1,
+                "worker_numba_threads": 1,
+                "numba_thread_budget": 8,
+            },
+            "main_solve_seed": {
+                "cost": 3.5,
+                "weighted_rms_px": 1.25,
+                "point_match_summary": {
+                    "matched_pair_count": 4,
+                    "missing_pair_count": 1,
+                    "unweighted_peak_rms_px": 1.5,
+                    "unweighted_peak_max_px": 2.0,
+                },
+            },
+            "dataset_entries": [
+                {
+                    "dataset_index": 0,
+                    "label": "bg0",
+                    "theta_initial_deg": 3.0,
+                    "measured_count": 4,
+                    "subset_reflection_count": 6,
+                    "total_reflection_count": 8,
+                    "fixed_source_reflection_count": 2,
+                    "fallback_hkl_count": 1,
+                    "subset_reduced": True,
+                }
+            ],
+            "parameter_entries": [
+                {
+                    "name": "gamma",
+                    "group": "tilt",
+                    "start": 1.0,
+                    "final": 1.5,
+                    "delta": 0.5,
+                    "lower_bound": -1.0,
+                    "upper_bound": 2.0,
+                    "scale": 0.25,
+                    "prior_enabled": True,
+                    "prior_center": 1.2,
+                    "prior_sigma": 0.1,
+                }
+            ],
+            "final": {
+                "cost": 1.25,
+                "robust_cost": 1.0,
+                "weighted_rms_px": 0.5,
+                "display_rms_px": 0.75,
+            },
+            "solve_progress": {
+                "label": "main solve",
+                "evaluation_count": 12,
+                "status_emit_count": 4,
+                "best_cost_seen": 1.0,
+                "best_weighted_rms_px": 0.5,
+                "trace": [
+                    {
+                        "eval": 1,
+                        "reason": "milestone",
+                        "current_cost": 3.5,
+                        "best_cost": 3.5,
+                        "weighted_rms_px": 1.25,
+                    }
+                ],
+            },
+        }
+        reparameterization_summary = {
+            "status": "accepted",
+            "reason": "accepted",
+            "accepted": True,
+            "final_cost": 0.9,
+            "nfev": 5,
+        }
+        staged_release_summary = {
+            "status": "skipped",
+            "reason": "disabled_by_config",
+            "accepted": False,
+        }
+        adaptive_regularization_summary = {
+            "status": "accepted",
+            "accepted": True,
+            "applied_parameters": ["Gamma"],
+            "release_accepted": True,
+        }
+        single_ray_polish_summary = {"status": "skipped", "accepted": False}
+        ridge_refinement_summary = {"status": "skipped", "accepted": False}
+        image_refinement_summary = {"status": "skipped", "accepted": False}
+        auto_freeze_summary = {"status": "accepted", "accepted": True, "fixed_parameters": ["a"]}
+        selective_thaw_summary = {
+            "status": "accepted",
+            "accepted": True,
+            "thawed_parameters": ["a"],
+        }
 
     diagnostics = geometry_fit.build_geometry_fit_optimizer_diagnostics_lines(_Result())
     assert diagnostics[:4] == [
@@ -1608,6 +1831,32 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         "nfev=17",
     ]
     assert diagnostics[-1] == "restart[0] cost=2.500000 success=False msg=retry"
+
+    debug_lines = geometry_fit.build_geometry_fit_debug_lines(_Result())
+    assert debug_lines[0] == "point_match_mode=True datasets=1 vars=gamma,a"
+    assert any("main_seed_point_match matched=4 missing=1" in line for line in debug_lines)
+    assert any("dataset[0] label=bg0" in line for line in debug_lines)
+    assert any("param[gamma] group=tilt start=1.000000 final=1.500000 delta=0.500000" in line for line in debug_lines)
+    assert any("solve_progress label=main solve evaluations=12" in line for line in debug_lines)
+    assert any("solve_progress[0] eval=1 reason=milestone" in line for line in debug_lines)
+
+    stage_lines = geometry_fit.build_geometry_fit_stage_summary_lines(_Result())
+    assert any(
+        line.startswith("reparameterization:")
+        and "status=accepted" in line
+        and "final_cost=0.900000" in line
+        for line in stage_lines
+    )
+    assert any(
+        line.startswith("adaptive_regularization:")
+        and "applied_parameters=[Gamma]" in line
+        for line in stage_lines
+    )
+    assert any(
+        line.startswith("auto_freeze:")
+        and "fixed_parameters=[a]" in line
+        for line in stage_lines
+    )
 
     result_lines = geometry_fit.build_geometry_fit_result_lines(
         ["gamma", "a"],
@@ -1970,6 +2219,47 @@ def test_capture_runtime_geometry_fit_undo_state_accepts_numpy_overlay_payloads(
     assert overlay_records.tolist() == [{"overlay": True}]
 
 
+def test_redraw_runtime_geometry_fit_overlay_state_prefers_overlay_records() -> None:
+    events: list[object] = []
+
+    rendered = geometry_fit.redraw_runtime_geometry_fit_overlay_state(
+        {
+            "overlay_records": [{"overlay": True}],
+            "initial_pairs_display": [{"pair": 1}],
+            "max_display_markers": 5,
+        },
+        draw_overlay_records=lambda records, marker_limit: events.append(
+            ("draw_overlay", list(records), marker_limit)
+        ),
+        draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+            ("draw_initial", list(pairs), marker_limit)
+        ),
+    )
+
+    assert rendered is True
+    assert events == [("draw_overlay", [{"overlay": True}], 5)]
+
+
+def test_redraw_runtime_geometry_fit_overlay_state_falls_back_to_initial_pairs() -> None:
+    events: list[object] = []
+
+    rendered = geometry_fit.redraw_runtime_geometry_fit_overlay_state(
+        {
+            "initial_pairs_display": np.array([{"pair": 1}], dtype=object),
+            "max_display_markers": 3,
+        },
+        draw_overlay_records=lambda records, marker_limit: events.append(
+            ("draw_overlay", list(records), marker_limit)
+        ),
+        draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+            ("draw_initial", list(pairs), marker_limit)
+        ),
+    )
+
+    assert rendered is True
+    assert events == [("draw_initial", [{"pair": 1}], 3)]
+
+
 def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overlay() -> None:
     gamma_var = _DummyVar(0.0)
     a_var = _DummyVar(0.0)
@@ -1991,6 +2281,7 @@ def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overl
         geometry_theta_offset_var=theta_offset_var,
         replace_profile_cache=lambda profile_cache: stored_profile_cache.update(profile_cache),
         set_last_overlay_state=lambda overlay_state: events.append(("overlay_state", overlay_state)),
+        request_preview_skip_once=lambda: events.append("skip_preview_once"),
         mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
         cancel_pending_update=lambda: events.append("cancel_pending"),
         run_update=lambda: events.append("run_update"),
@@ -2014,6 +2305,7 @@ def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overl
     }
     assert events == [
         ("overlay_state", {"overlay_records": [{"overlay": True}], "max_display_markers": 5}),
+        "skip_preview_once",
         "mark_dirty",
         "cancel_pending",
         "run_update",
@@ -2304,6 +2596,41 @@ def test_make_runtime_geometry_tool_action_callbacks_sets_manual_pick_mode() -> 
         ("cancel", {"restore_view": True, "redraw": True}),
         ("label", "Manual Pick Armed"),
         ("progress", "disarmed"),
+    ]
+
+
+def test_make_runtime_geometry_tool_action_callbacks_ensures_caked_view_when_arming() -> None:
+    events: list[object] = []
+    armed = {"value": False}
+
+    callbacks = geometry_fit.make_runtime_geometry_tool_action_callbacks(
+        geometry_fit_history_state=SimpleNamespace(undo_stack=[], redo_stack=[]),
+        manual_pick_armed=lambda: armed["value"],
+        set_manual_pick_armed=lambda enabled: armed.__setitem__("value", bool(enabled)),
+        current_background_index=lambda: 0,
+        current_pick_session=lambda: None,
+        manual_pick_session_active=lambda: False,
+        build_manual_pick_button_label=lambda **kwargs: "Manual Pick Armed",
+        pairs_for_index=lambda index: [],
+        pair_group_count=lambda index: 0,
+        show_caked_2d_var=_DummyVar(False),
+        toggle_caked_2d=lambda: events.append("toggle-caked"),
+        ensure_geometry_fit_caked_view=lambda: events.append("ensure-caked"),
+        set_hkl_pick_mode=lambda enabled, message=None: events.append(
+            ("hkl-pick", enabled, message)
+        ),
+        set_geometry_preview_exclude_mode=lambda enabled, message=None: events.append(
+            ("preview-exclude", enabled, message)
+        ),
+    )
+
+    callbacks.set_manual_pick_mode(True, "armed")
+
+    assert armed["value"] is True
+    assert events == [
+        "ensure-caked",
+        ("hkl-pick", False, None),
+        ("preview-exclude", False, None),
     ]
 
 
@@ -2876,6 +3203,8 @@ def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(
     assert stored_overlay_state == {"overlay_records": [{"overlay": True}]}
     assert stored_progress_text == ["fit complete"]
     assert saved_exports == [(tmp_path / "matched.npy", [{"source": "sim"}])]
+    assert outcome.accepted is True
+    assert outcome.rejection_reason is None
     assert outcome.rms == 0.75
     assert outcome.fitted_params == {"theta_initial": 3.0, "gamma": 1.5}
     assert outcome.postprocess is postprocess
@@ -2923,6 +3252,139 @@ def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(
     ]
 
 
+def test_apply_runtime_geometry_fit_result_rejects_absurd_manual_fit_before_update() -> None:
+    events: list[object] = []
+    applied_values: list[tuple[list[object], list[object]]] = []
+    progress_messages: list[str] = []
+
+    class _Result:
+        x = np.array([0.00034, 0.000502, -0.018376, 1.985904], dtype=float)
+        rms_px = 1195.373582
+        success = True
+        status = 2
+        message = "ftol satisfied"
+        nfev = 13
+        cost = 469781.260275
+        robust_cost = 469781.260275
+        solver_loss = "linear"
+        solver_f_scale = 8.0
+        optimality = 0.007503
+        active_mask = [0, 0, 0, 0]
+        restart_history = []
+        point_match_summary = {
+            "matched_pair_count": 3,
+            "unweighted_peak_max_px": 2070.4477776558383,
+        }
+
+    outcome = geometry_fit.apply_runtime_geometry_fit_result(
+        result=_Result(),
+        var_names=["zb", "zs", "psi_z", "cor_angle"],
+        current_dataset={
+            "initial_pairs_display": [{"pair": 1}],
+            "group_count": 2,
+            "pair_count": 3,
+        },
+        dataset_count=1,
+        joint_background_mode=False,
+        preserve_live_theta=False,
+        max_display_markers=120,
+        bindings=geometry_fit.GeometryFitRuntimeResultBindings(
+            log_section=lambda title, lines: events.append((title, list(lines))),
+            capture_undo_state=lambda: {"undo": True},
+            apply_result_values=lambda names, values: applied_values.append(
+                (list(names), list(values))
+            ),
+            sync_joint_background_theta=None,
+            refresh_status=lambda: events.append("refresh_status"),
+            update_manual_pick_button_label=lambda: events.append("update_button"),
+            build_profile_cache=lambda: {"profile": 1},
+            replace_profile_cache=lambda cache: events.append(("replace_profile", cache)),
+            push_undo_state=lambda state: events.append(("push_undo", dict(state))),
+            request_preview_skip_once=lambda: events.append("skip_once"),
+            mark_last_simulation_dirty=lambda: events.append("mark_dirty"),
+            schedule_update=lambda: events.append("schedule_update"),
+            build_fitted_params=lambda: {"theta_initial": 3.0},
+            postprocess_result=lambda fitted_params, rms: events.append(
+                ("postprocess", dict(fitted_params), rms)
+            ),
+            draw_overlay_records=lambda records, marker_limit: events.append(
+                ("draw_overlay", list(records), marker_limit)
+            ),
+            draw_initial_pairs_overlay=lambda pairs, marker_limit: events.append(
+                ("draw_initial", list(pairs), marker_limit)
+            ),
+            set_last_overlay_state=lambda state: events.append(("set_overlay_state", state)),
+            save_export_records=lambda save_path, export_records: events.append(
+                ("save_export", save_path, list(export_records))
+            ),
+            set_progress_text=lambda text: progress_messages.append(text),
+            cmd_line=lambda text: events.append(("cmd", text)),
+        ),
+    )
+
+    assert applied_values == []
+    assert outcome.accepted is False
+    assert outcome.rms == 1195.373582
+    assert outcome.fitted_params is None
+    assert outcome.postprocess is None
+    assert "RMS residual 1195.37 px exceeds the acceptance limit" in str(
+        outcome.rejection_reason
+    )
+    assert progress_messages == [
+        "Manual geometry fit rejected:\n"
+        "RMS residual 1195.37 px exceeds the acceptance limit of 100.00 px.\n"
+        "Largest matched-peak offset 2070.45 px exceeds the acceptance limit of 150.00 px.\n"
+        "RMS residual = 1195.37 px\n"
+        "Manual pairs: 3 points across 2 groups\n"
+        "Add more manual points or remove outliers before rerunning the fit."
+    ]
+    assert events == [
+        (
+            "Optimizer diagnostics:",
+            [
+                "success=True",
+                "status=2",
+                "message=ftol satisfied",
+                "nfev=13",
+                "cost=469781.260275",
+                "robust_cost=469781.260275",
+                "solver_loss=linear",
+                "solver_f_scale=8.000000",
+                "optimality=0.007503",
+                "active_mask=[0, 0, 0, 0]",
+            ],
+        ),
+        (
+            "Optimization result:",
+            [
+                "zb = 0.000340",
+                "zs = 0.000502",
+                "psi_z = -0.018376",
+                "cor_angle = 1.985904",
+                "RMS residual = 1195.373582 px",
+            ],
+        ),
+        (
+            "Point-match summary:",
+            [
+                "matched_pair_count=3",
+                "unweighted_peak_max_px=2070.4477776558383",
+            ],
+        ),
+        (
+            "Fit rejected:",
+            [
+                "RMS residual 1195.37 px exceeds the acceptance limit of 100.00 px.",
+                "Largest matched-peak offset 2070.45 px exceeds the acceptance limit of 150.00 px.",
+            ],
+        ),
+        (
+            "cmd",
+            "rejected: datasets=1 groups=2 points=3 rms=1195.3736px reason=RMS residual 1195.37 px exceeds the acceptance limit of 100.00 px.",
+        ),
+    ]
+
+
 def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
     tmp_path,
 ) -> None:
@@ -2957,6 +3419,22 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         restart_history = []
         point_match_summary = {"claimed": 4, "qualified": 3}
         point_match_diagnostics = [{"dataset_index": 0, "name": "keep"}]
+        geometry_fit_debug_summary = {
+            "point_match_mode": True,
+            "dataset_count": 1,
+            "var_names": ["gamma", "a"],
+            "parameter_entries": [],
+            "dataset_entries": [],
+            "solver": {"loss": "soft_l1"},
+        }
+        reparameterization_summary = {"status": "skipped", "accepted": False}
+        staged_release_summary = {"status": "skipped", "accepted": False}
+        adaptive_regularization_summary = {"status": "skipped", "accepted": False}
+        single_ray_polish_summary = {"status": "skipped", "accepted": False}
+        ridge_refinement_summary = {"status": "skipped", "accepted": False}
+        image_refinement_summary = {"status": "skipped", "accepted": False}
+        auto_freeze_summary = {"status": "skipped", "accepted": False}
+        selective_thaw_summary = {"status": "skipped", "accepted": False}
 
     def _solve_fit(
         miller,
@@ -2970,7 +3448,10 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         experimental_image,
         dataset_specs,
         refinement_config,
+        status_callback,
     ):
+        status_callback("Geometry fit: running main solve")
+        status_callback("Geometry fit: complete (cost=1.000000, rms=0.7500px)")
         solver_calls.append(
             {
                 "miller": miller,
@@ -3136,6 +3617,8 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         }
     ]
     assert progress_texts[0] == "Running geometry fit from saved manual Qr/Qz pairs…"
+    assert "Geometry fit: running main solve" in progress_texts
+    assert "Geometry fit: complete (cost=1.000000, rms=0.7500px)" in progress_texts
     assert "Manual geometry fit complete:" in progress_texts[-1]
     assert stored_profile_cache["existing"] == 1
     assert stored_profile_cache["gamma"] == 1.5
@@ -3176,6 +3659,9 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         )
     ]
     assert ("cmd", "start: vars=gamma,a datasets=1 current_groups=2 current_points=3") in events
+    assert ("cmd", f"log: {postprocess_config.log_path}") in events
+    assert ("cmd", "Geometry fit: running main solve") in events
+    assert ("cmd", "Geometry fit: complete (cost=1.000000, rms=0.7500px)") in events
     assert ("cmd", "done: datasets=1 groups=2 points=3 rms=0.7500px") in events
     assert (
         "draw_overlay",
@@ -3186,6 +3672,8 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
     log_text = execution.log_path.read_text(encoding="utf-8")
     assert "Geometry fit started: 20260328_120000" in log_text
     assert "Optimizer diagnostics:" in log_text
+    assert "Fit mechanics:" in log_text
+    assert "Solver stages:" in log_text
     assert "Fit summary:" in log_text
 
 
@@ -3241,6 +3729,7 @@ def test_execute_runtime_geometry_fit_reports_solver_failure_and_closes_log(
     ]
     assert events == [
         "start: vars=gamma,a datasets=1 current_groups=2 current_points=3",
+        f"log: {postprocess_config.log_path}",
         "failed: boom",
     ]
     assert "Geometry fit failed: boom" in execution.log_path.read_text(encoding="utf-8")

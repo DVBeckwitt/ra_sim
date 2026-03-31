@@ -98,7 +98,7 @@ class GeometryQGroupRuntimeCallbacks:
     close_window: Callable[[], None]
     open_window: Callable[[], bool]
     open_preview_exclusion_window: Callable[[], bool]
-    set_preview_exclude_mode: Callable[[bool], bool]
+    set_preview_exclude_mode: Callable[..., bool]
     clear_preview_exclusions: Callable[[], None]
     toggle_preview_exclusion_at: Callable[[float, float], bool]
     toggle_live_preview: Callable[[], bool]
@@ -3065,6 +3065,16 @@ def make_runtime_geometry_q_group_callbacks(
 ) -> GeometryQGroupRuntimeCallbacks:
     """Return bound zero-arg callbacks for the runtime Qr/Qz selector workflow."""
 
+    def _set_preview_exclude_mode(
+        enabled: bool,
+        message: str | None = None,
+    ) -> bool:
+        return set_runtime_geometry_preview_exclude_mode(
+            bindings_factory(),
+            enabled,
+            message=message,
+        )
+
     return GeometryQGroupRuntimeCallbacks(
         update_window_status=lambda entries=None: update_runtime_geometry_q_group_window_status(
             bindings_factory(),
@@ -3104,10 +3114,7 @@ def make_runtime_geometry_q_group_callbacks(
             root=root,
             bindings_factory=bindings_factory,
         ),
-        set_preview_exclude_mode=lambda enabled: set_runtime_geometry_preview_exclude_mode(
-            bindings_factory(),
-            enabled,
-        ),
+        set_preview_exclude_mode=_set_preview_exclude_mode,
         clear_preview_exclusions=lambda: clear_runtime_live_geometry_preview_exclusions(
             bindings_factory()
         ),

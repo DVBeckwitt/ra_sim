@@ -366,7 +366,10 @@ def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes
         update_running=False,
         caked_limits_user_override=True,
     )
-    analysis_view_state = SimpleNamespace(show_caked_2d_var=_FakeVar(False))
+    analysis_view_state = SimpleNamespace(
+        show_1d_var=_FakeVar(False),
+        show_caked_2d_var=_FakeVar(False),
+    )
     display_controls_state = SimpleNamespace(simulation_limits_user_override=True)
     bindings = integration_range_drag.IntegrationRangeUpdateBindings(
         root=root,
@@ -412,6 +415,7 @@ def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes
     analysis_view_state.show_caked_2d_var.set(True)
     display_controls_state.simulation_limits_user_override = True
     callbacks.toggle_caked_2d()
+    assert analysis_view_state.show_1d_var.get() is True
     assert display_controls_state.simulation_limits_user_override is False
     assert hkl_pick_calls == [False]
     assert drag_reset_calls == [True]
@@ -420,6 +424,7 @@ def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes
     sim_state.caked_limits_user_override = True
     analysis_view_state.show_caked_2d_var.set(False)
     callbacks.toggle_caked_2d()
+    assert analysis_view_state.show_1d_var.get() is False
     assert sim_state.caked_limits_user_override is False
     assert drag_reset_calls == [True, True]
     assert schedule_update_calls == [True, True, True]
