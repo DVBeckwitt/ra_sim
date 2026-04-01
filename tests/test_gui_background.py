@@ -155,3 +155,27 @@ def test_apply_background_backend_orientation_flips_then_rotates() -> None:
 
     expected = np.rot90(np.flip(np.flip(image, axis=0), axis=1), 1)
     assert np.array_equal(oriented, expected)
+
+
+def test_background_backend_point_to_native_coords_inverts_orientation() -> None:
+    marker = np.zeros((3, 4), dtype=int)
+    marker[0, 3] = 1
+
+    oriented = background.apply_background_backend_orientation(
+        marker,
+        flip_x=True,
+        flip_y=True,
+        rotation_k=1,
+    )
+    backend_row, backend_col = np.argwhere(oriented == 1)[0]
+
+    native_col, native_row = background.background_backend_point_to_native_coords(
+        float(backend_col),
+        float(backend_row),
+        native_shape=marker.shape,
+        flip_x=True,
+        flip_y=True,
+        rotation_k=1,
+    )
+
+    assert (native_col, native_row) == pytest.approx((3.0, 0.0))

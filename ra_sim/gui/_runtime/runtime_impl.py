@@ -1232,6 +1232,25 @@ def _get_current_background_backend() -> np.ndarray | None:
     return _apply_background_backend_orientation(_get_current_background_native())
 
 
+def _backend_background_to_native_detector_coords(
+    col: float,
+    row: float,
+) -> tuple[float | None, float | None]:
+    """Undo backend-only background orientation for one detector-space point."""
+
+    native_background = _get_current_background_native()
+    if native_background is None:
+        return None, None
+    return gui_background.background_backend_point_to_native_coords(
+        float(col),
+        float(row),
+        native_shape=np.asarray(native_background).shape[:2],
+        flip_x=background_runtime_state.backend_flip_x,
+        flip_y=background_runtime_state.backend_flip_y,
+        rotation_k=background_runtime_state.backend_rotation_k,
+    )
+
+
 def _rotate_point_for_display(col: float, row: float, shape: tuple[int, ...], k: int):
     """Rotate a single (col, row) pair by ``k`` using the same rule as ``np.rot90``.
 
@@ -2923,6 +2942,10 @@ geometry_manual_projection_workflow = (
             lambda ai_value: globals()["_get_detector_angular_maps"](ai_value)
         ),
         detector_pixel_to_scattering_angles=_detector_pixel_to_scattering_angles,
+        backend_detector_coords_to_native_detector_coords=(
+            _backend_background_to_native_detector_coords
+        ),
+        scattering_angles_to_detector_pixel=_scattering_angles_to_detector_pixel,
         filter_simulated_peaks=(
             lambda *args, **kwargs: globals()["_filter_geometry_fit_simulated_peaks"](
                 *args,
@@ -14505,7 +14528,6 @@ if __name__ == "__main__":
         print("Unhandled exception during startup:", exc)
         import traceback
         traceback.print_exc()
-
 
 
 

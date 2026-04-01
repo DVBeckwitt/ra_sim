@@ -6,6 +6,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 import numpy as np
 
+from ra_sim.gui.geometry_overlay import rotate_point_for_display as _rotate_point
+
 
 def _read_background_image(
     file_path: str,
@@ -235,6 +237,56 @@ def apply_background_backend_orientation(
     if k_mod:
         oriented = np.rot90(oriented, k_mod)
     return oriented
+
+
+def background_backend_point_to_native_coords(
+    col: float,
+    row: float,
+    *,
+    native_shape: Sequence[int] | None,
+    flip_x: bool,
+    flip_y: bool,
+    rotation_k: int,
+) -> tuple[float | None, float | None]:
+    """Map one backend-oriented detector point back into native detector space.
+
+    This helper is coordinate-only. If a future inverse path needs to move
+    caked intensities or a reconstructed detector image back through the same
+    backend orientation, restore detector-space intensity weighting first
+    (for example, undo solid-angle correction before reorienting the array).
+    """
+
+    if native_shape is None:
+        return None, None
+    try:
+        height = int(native_shape[0])
+        width = int(native_shape[1])
+    except Exception:
+        return None, None
+    if height <= 0 or width <= 0:
+        return None, None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None, None
+
+    k_mod = int(rotation_k) % 4
+    backend_shape = (width, height) if (k_mod % 2) else (height, width)
+    try:
+        native_col, native_row = _rotate_point(
+            float(col),
+            float(row),
+            backend_shape,
+            -k_mod,
+        )
+    except Exception:
+        return None, None
+
+    if bool(flip_x):
+        native_col = float(width - 1.0 - native_col)
+    if bool(flip_y):
+        native_row = float(height - 1.0 - native_row)
+    if not (np.isfinite(native_col) and np.isfinite(native_row)):
+        return None, None
+    return float(native_col), float(native_row)
 
 
 def load_background_files(

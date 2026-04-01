@@ -1894,6 +1894,16 @@ def make_runtime_geometry_manual_projection_callbacks(
         tuple[float | None, float | None],
     ]
     | None = None,
+    backend_detector_coords_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
+    scattering_angles_to_detector_pixel: Callable[
+        [float, float, Sequence[float] | None, float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
     filter_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object, object]] | None = None,
     collapse_simulated_peaks: Callable[..., tuple[Sequence[dict[str, object]], object]] | None = None,
     merge_radius_px: float = 6.0,
@@ -1962,10 +1972,13 @@ def make_runtime_geometry_manual_projection_callbacks(
             ai=_resolve_runtime_value(ai),
             native_background=_resolve_runtime_value(current_background_native),
             get_detector_angular_maps=get_detector_angular_maps,
-            scattering_angles_to_detector_pixel=detector_pixel_to_scattering_angles,
+            scattering_angles_to_detector_pixel=scattering_angles_to_detector_pixel,
             center=_detector_center(),
             detector_distance=float(_resolve_runtime_value(detector_distance) or 0.0),
             pixel_size=float(_resolve_runtime_value(pixel_size) or 0.0),
+            backend_detector_coords_to_native_detector_coords=(
+                backend_detector_coords_to_native_detector_coords
+            ),
             rotate_point_for_display=rotate_point_for_display,
             display_rotate_k=int(display_rotate_k),
         )
@@ -3154,14 +3167,27 @@ def caked_angles_to_background_display_coords(
     scattering_angles_to_detector_pixel: Callable[
         [float, float, Sequence[float] | None, float, float],
         tuple[float | None, float | None],
-    ],
+    ]
+    | None,
     center: Sequence[float] | None,
     detector_distance: float,
     pixel_size: float,
+    backend_detector_coords_to_native_detector_coords: Callable[
+        [float, float],
+        tuple[float | None, float | None],
+    ]
+    | None = None,
     rotate_point_for_display: Callable[[float, float, tuple[int, ...], int], tuple[float, float]] = _default_rotate_point,
     display_rotate_k: int = 0,
 ) -> tuple[float | None, float | None]:
-    """Back-project one caked-space point to the displayed detector background."""
+    """Back-project one caked-space point to the displayed detector background.
+
+    This path is intentionally position-only for manual QR/QZ picking. If a
+    future caller inverts caked intensities or a full caked image, remember
+    that the caked data may already be solid-angle corrected. Restore the
+    detector solid-angle weighting before undoing backend orientation so the
+    reconstructed detector intensities remain in detector-count space.
+    """
 
     try:
         two_theta_map, phi_map = get_detector_angular_maps(ai)
@@ -3174,6 +3200,8 @@ def caked_angles_to_background_display_coords(
         or not (np.isfinite(two_theta_deg) and np.isfinite(phi_deg))
     ):
         if native_background is None:
+            return None, None
+        if not callable(scattering_angles_to_detector_pixel):
             return None, None
         try:
             native_point = scattering_angles_to_detector_pixel(
@@ -3202,9 +3230,32 @@ def caked_angles_to_background_display_coords(
     if not np.isfinite(finite_metric.flat[best_idx]):
         return None, None
     row_idx, col_idx = np.unravel_index(best_idx, finite_metric.shape)
+    native_col = float(col_idx)
+    native_row = float(row_idx)
+    # QR/QZ selection only needs the detector position. If this inverse path is
+    # ever reused for intensity arrays, reapply detector-side weighting (such as
+    # the solid-angle map) before any backend->native image reorientation.
+    if callable(backend_detector_coords_to_native_detector_coords):
+        try:
+            native_point = backend_detector_coords_to_native_detector_coords(
+                float(col_idx),
+                float(row_idx),
+            )
+        except Exception:
+            native_point = None
+        if (
+            isinstance(native_point, tuple)
+            and len(native_point) >= 2
+            and native_point[0] is not None
+            and native_point[1] is not None
+            and np.isfinite(float(native_point[0]))
+            and np.isfinite(float(native_point[1]))
+        ):
+            native_col = float(native_point[0])
+            native_row = float(native_point[1])
     return rotate_point_for_display(
-        float(col_idx),
-        float(row_idx),
+        float(native_col),
+        float(native_row),
         tuple(int(v) for v in native_background.shape[:2]),
         display_rotate_k,
     )

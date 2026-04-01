@@ -1404,6 +1404,64 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view() 
     assert lookup[(1, 2)]["sim_row"] == 2.0
 
 
+def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_with_inverse_fallback() -> None:
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((6, 6), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 15.0, 6),
+        last_caked_azimuth_values=lambda: np.linspace(-2.0, 3.0, 6),
+        current_background_display=lambda: np.zeros((6, 6), dtype=float),
+        current_background_native=lambda: np.ones((6, 6), dtype=float),
+        center=lambda: (20.0, 30.0),
+        detector_distance=lambda: 100.0,
+        pixel_size=lambda: 0.25,
+        image_size=lambda: 6,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (None, None),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("forward detector->angle conversion should not be used")
+        ),
+        scattering_angles_to_detector_pixel=lambda two_theta, phi, *_args: (
+            phi + 100.0,
+            two_theta + 200.0,
+        ),
+    )
+
+    assert callbacks.caked_angles_to_background_display_coords(13.0, 2.0) == (102.0, 213.0)
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_through_backend_inverse() -> None:
+    inverse_calls: list[tuple[float, float]] = []
+    two_theta_map = np.full((4, 3), 999.0, dtype=float)
+    phi_map = np.full((4, 3), 999.0, dtype=float)
+    two_theta_map[1, 0] = 13.0
+    phi_map[1, 0] = 2.0
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((6, 6), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 15.0, 6),
+        last_caked_azimuth_values=lambda: np.linspace(-2.0, 3.0, 6),
+        current_background_display=lambda: np.zeros((3, 4), dtype=float),
+        current_background_native=lambda: np.ones((3, 4), dtype=float),
+        image_size=lambda: 6,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (two_theta_map, phi_map),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("forward detector->angle conversion should not be used")
+        ),
+        backend_detector_coords_to_native_detector_coords=lambda col, row: (
+            inverse_calls.append((float(col), float(row))) or (1.5, 2.5)
+        ),
+        scattering_angles_to_detector_pixel=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("analytic inverse fallback should not be used")
+        ),
+    )
+
+    assert callbacks.caked_angles_to_background_display_coords(13.0, 2.0) == (1.5, 2.5)
+    assert inverse_calls == [(0.0, 1.0)]
+
+
 def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_live_preview_peaks() -> None:
     simulation_calls: list[dict[str, object]] = []
 
