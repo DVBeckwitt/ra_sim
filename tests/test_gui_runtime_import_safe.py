@@ -112,3 +112,18 @@ def test_runtime_impl_uses_cached_caking_results_for_range_refreshes() -> None:
     source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert "range_refresh_requires_pending_analysis_result(" in source
+
+
+def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    show_caked_image_assignment = (
+        "show_caked_image = bool(show_caked_requested and caked_payload_available)"
+    )
+
+    assert "show_caked_requested = bool(" in source
+    assert "caked_payload_available = (" in source
+    assert show_caked_image_assignment in source
+    assert "if not show_caked_image:" in source
+    assert "image_display.set_data(global_image_buffer)" in source
+    assert "background_display.set_extent([0, image_size, image_size, 0])" in source

@@ -4235,6 +4235,18 @@ def apply_scale_factor_to_existing_results(
             "last_text": "Chi-Squared: N/A",
         },
     )
+    show_caked_requested = bool(
+        getattr(
+            analysis_view_controls_view_state.show_caked_2d_var,
+            "get",
+            lambda: False,
+        )()
+    )
+    caked_payload_available = (
+        simulation_runtime_state.last_caked_image_unscaled is not None
+        and simulation_runtime_state.last_caked_extent is not None
+    )
+    show_caked_image = bool(show_caked_requested and caked_payload_available)
     if simulation_runtime_state.unscaled_image is None:
         background_min_var = display_controls_view_state.background_min_var
         background_max_var = display_controls_view_state.background_max_var
@@ -4253,7 +4265,9 @@ def apply_scale_factor_to_existing_results(
             background_min_var.get(),
             background_max_var.get(),
         )
-        if not analysis_view_controls_view_state.show_caked_2d_var.get():
+        if not show_caked_image:
+            _set_image_origin(background_display, 'upper')
+            background_display.set_extent([0, image_size, image_size, 0])
             if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
                 background_display.set_data(background_runtime_state.current_background_display)
                 background_display.set_visible(True)
@@ -4292,7 +4306,7 @@ def apply_scale_factor_to_existing_results(
             scaled_image, reset_override=update_limits
         )
 
-    if not analysis_view_controls_view_state.show_caked_2d_var.get():
+    if not show_caked_image:
         _set_image_origin(image_display, 'upper')
         image_display.set_extent([0, image_size, image_size, 0])
         image_display.set_data(global_image_buffer)
@@ -4301,7 +4315,7 @@ def apply_scale_factor_to_existing_results(
             display_controls_view_state.simulation_max_var.get(),
         )
         colorbar_main.update_normal(image_display)
-    elif simulation_runtime_state.last_caked_image_unscaled is not None and simulation_runtime_state.last_caked_extent is not None:
+    else:
         _set_image_origin(image_display, 'lower')
         scaled_caked = simulation_runtime_state.last_caked_image_unscaled * scale
         if not display_controls_state.simulation_limits_user_override:
@@ -4309,7 +4323,7 @@ def apply_scale_factor_to_existing_results(
         image_display.set_data(scaled_caked)
         image_display.set_extent(simulation_runtime_state.last_caked_extent)
 
-    if analysis_view_controls_view_state.show_caked_2d_var.get():
+    if show_caked_image:
         caked_min = float(display_controls_view_state.simulation_min_var.get())
         caked_max = float(display_controls_view_state.simulation_max_var.get())
         caked_min, caked_max = _ensure_valid_range(caked_min, caked_max)
@@ -4350,7 +4364,9 @@ def apply_scale_factor_to_existing_results(
         display_controls_view_state.background_max_var.get(),
     )
 
-    if not analysis_view_controls_view_state.show_caked_2d_var.get():
+    if not show_caked_image:
+        _set_image_origin(background_display, 'upper')
+        background_display.set_extent([0, image_size, image_size, 0])
         if background_runtime_state.visible and background_runtime_state.current_background_display is not None:
             background_display.set_data(background_runtime_state.current_background_display)
             background_display.set_visible(True)
