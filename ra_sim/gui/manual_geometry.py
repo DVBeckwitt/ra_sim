@@ -12,6 +12,12 @@ from typing import Any
 
 import numpy as np
 
+from ra_sim.fitting.background_peak_matching import (
+    _candidate_summit_id_near_pixel as _background_candidate_summit_id_near_pixel,
+)
+from ra_sim.fitting.background_peak_matching import (
+    _refine_peak_center as _background_refine_peak_center,
+)
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui.geometry_overlay import normalize_hkl_key as _default_normalize_hkl_key
 from ra_sim.gui.geometry_overlay import rotate_point_for_display as _default_rotate_point
@@ -157,6 +163,13 @@ def geometry_manual_preview_color(
     ratio = (sigma_val - good_val) / (bad_val - good_val)
     ratio = min(max(float(ratio), 0.0), 1.0)
 
+    return _geometry_manual_preview_gradient_color(float(ratio))
+
+
+def _geometry_manual_preview_gradient_color(ratio: float) -> str:
+    """Return the shared green-yellow-red preview gradient for one normalized ratio."""
+
+    ratio = min(max(float(ratio), 0.0), 1.0)
     if ratio <= 0.5:
         local_ratio = ratio / 0.5
         start_rgb = (0x2E, 0xCC, 0x71)
@@ -171,6 +184,27 @@ def geometry_manual_preview_color(
         for start, end in zip(start_rgb, end_rgb)
     )
     return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def geometry_manual_preview_confidence_color(
+    confidence: object,
+    *,
+    good_confidence: float = 1.0,
+    bad_confidence: float = 0.25,
+) -> str:
+    """Return a red-to-green preview color for one predicted match confidence."""
+
+    try:
+        confidence_val = float(confidence)
+    except Exception:
+        confidence_val = float("nan")
+    if not np.isfinite(confidence_val):
+        confidence_val = float(bad_confidence)
+
+    bad_val = max(0.0, float(bad_confidence))
+    good_val = max(bad_val + 1.0e-6, float(good_confidence))
+    ratio = (good_val - confidence_val) / (good_val - bad_val)
+    return _geometry_manual_preview_gradient_color(float(ratio))
 
 
 def geometry_manual_preview_quality_label(
@@ -197,6 +231,198 @@ def geometry_manual_preview_quality_label(
     if ratio >= 0.75:
         return "bad"
     return "warning"
+
+
+def geometry_manual_preview_confidence_quality_label(
+    confidence: object,
+    *,
+    good_confidence: float = 1.0,
+    bad_confidence: float = 0.25,
+) -> str:
+    """Return a coarse quality label for one predicted match confidence."""
+
+    try:
+        confidence_val = float(confidence)
+    except Exception:
+        confidence_val = float("nan")
+    if not np.isfinite(confidence_val):
+        return "bad"
+
+    bad_val = max(0.0, float(bad_confidence))
+    good_val = max(bad_val + 1.0e-6, float(good_confidence))
+    ratio = (good_val - confidence_val) / (good_val - bad_val)
+    ratio = min(max(float(ratio), 0.0), 1.0)
+    if ratio <= 0.2:
+        return "good"
+    if ratio >= 0.75:
+        return "bad"
+    return "warning"
+
+
+def geometry_manual_preview_match_confidence(
+    candidate: dict[str, object] | None,
+    peak_col: float,
+    peak_row: float,
+    *,
+    cache_data: dict[str, object] | None = None,
+    build_cache_data: Callable[[], dict[str, object]] | None = None,
+    use_caked_space: bool,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float]
+    | None = None,
+) -> float:
+    """Return the predicted match confidence for one chosen manual-placement peak."""
+
+    if not isinstance(candidate, dict):
+        return float("nan")
+
+    state = cache_data if isinstance(cache_data, dict) else {}
+    if not state and callable(build_cache_data):
+        try:
+            built_state = build_cache_data()
+        except Exception:
+            built_state = {}
+        if isinstance(built_state, dict):
+            state = built_state
+
+    match_cfg = dict(state.get("match_config", {})) if isinstance(state, dict) else {}
+    background_context = state.get("background_context") if isinstance(state, dict) else None
+    if not isinstance(background_context, dict) or not bool(
+        background_context.get("img_valid", False)
+    ):
+        return float("nan")
+
+    axis_to_image_index = (
+        caked_axis_to_image_index
+        if caked_axis_to_image_index_fn is None
+        else caked_axis_to_image_index_fn
+    )
+
+    try:
+        sim_col_local = float(
+            candidate.get("sim_col_local", candidate.get("sim_col", np.nan))
+        )
+        sim_row_local = float(
+            candidate.get("sim_row_local", candidate.get("sim_row", np.nan))
+        )
+    except Exception:
+        return float("nan")
+
+    if use_caked_space:
+        radial_axis_arr = np.asarray(radial_axis, dtype=float)
+        azimuth_axis_arr = np.asarray(azimuth_axis, dtype=float)
+        peak_col_local = float(
+            axis_to_image_index(float(peak_col), radial_axis_arr)
+        )
+        peak_row_local = float(
+            axis_to_image_index(float(peak_row), azimuth_axis_arr)
+        )
+        if not np.isfinite(sim_col_local):
+            sim_col_local = float(
+                axis_to_image_index(
+                    float(candidate.get("sim_col", np.nan)),
+                    radial_axis_arr,
+                )
+            )
+        if not np.isfinite(sim_row_local):
+            sim_row_local = float(
+                axis_to_image_index(
+                    float(candidate.get("sim_row", np.nan)),
+                    azimuth_axis_arr,
+                )
+            )
+    else:
+        peak_col_local = float(peak_col)
+        peak_row_local = float(peak_row)
+
+    if not (
+        np.isfinite(sim_col_local)
+        and np.isfinite(sim_row_local)
+        and np.isfinite(peak_col_local)
+        and np.isfinite(peak_row_local)
+    ):
+        return float("nan")
+
+    candidate_labels = np.asarray(
+        background_context.get("candidate_labels", []),
+        dtype=np.int32,
+    )
+    peakness = np.asarray(background_context.get("peakness", []), dtype=float)
+    fine = np.asarray(background_context.get("fine", []), dtype=float)
+    height = int(
+        background_context.get(
+            "height",
+            candidate_labels.shape[0] if candidate_labels.ndim == 2 else 0,
+        )
+    )
+    width = int(
+        background_context.get(
+            "width",
+            candidate_labels.shape[1] if candidate_labels.ndim == 2 else 0,
+        )
+    )
+    if height <= 0 or width <= 0:
+        return float("nan")
+
+    peak_row_px = int(np.clip(round(peak_row_local), 0, max(height - 1, 0)))
+    peak_col_px = int(np.clip(round(peak_col_local), 0, max(width - 1, 0)))
+    summit_id = _background_candidate_summit_id_near_pixel(
+        candidate_labels,
+        peakness,
+        peak_row_px,
+        peak_col_px,
+        radius_px=max(
+            1,
+            int(round(0.5 * float(match_cfg.get("local_max_size_px", 5)))),
+        ),
+    )
+    if summit_id <= 0:
+        return float("nan")
+
+    summit_record = None
+    for record in background_context.get("summit_records", ()):
+        if int(record.get("summit_id", -1)) == summit_id:
+            summit_record = dict(record)
+            break
+    if summit_record is None:
+        return float("nan")
+
+    peak_row_seed = int(
+        np.clip(
+            round(float(summit_record.get("row", peak_row_local))),
+            0,
+            max(height - 1, 0),
+        )
+    )
+    peak_col_seed = int(
+        np.clip(
+            round(float(summit_record.get("col", peak_col_local))),
+            0,
+            max(width - 1, 0),
+        )
+    )
+    center_col_local, center_row_local = _background_refine_peak_center(
+        peakness,
+        fine,
+        peak_row_seed,
+        peak_col_seed,
+    )
+    prom_sigma = float(summit_record.get("prominence_sigma", np.nan))
+    if not (
+        np.isfinite(center_col_local)
+        and np.isfinite(center_row_local)
+        and np.isfinite(prom_sigma)
+    ):
+        return float("nan")
+
+    dist_px = float(
+        np.hypot(
+            float(center_col_local) - float(sim_col_local),
+            float(center_row_local) - float(sim_row_local),
+        )
+    )
+    return float(max(0.0, prom_sigma) / (1.0 + max(0.0, dist_px)))
 
 
 def normalize_geometry_manual_pair_entry(
@@ -651,6 +877,85 @@ def geometry_manual_candidate_source_key(
     return None
 
 
+def geometry_manual_candidate_distance_to_point(
+    col: float,
+    row: float,
+    candidate: dict[str, object] | None,
+) -> float:
+    """Return one display-space point-to-candidate distance."""
+
+    if not isinstance(candidate, dict):
+        return float("nan")
+    try:
+        sim_col = float(candidate.get("sim_col"))
+        sim_row = float(candidate.get("sim_row"))
+    except Exception:
+        return float("nan")
+    if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+        return float("nan")
+    return float(np.hypot(float(sim_col) - float(col), float(sim_row) - float(row)))
+
+
+def geometry_manual_prioritize_candidate_entries(
+    candidate_entries: Sequence[dict[str, object]] | None,
+    preferred_candidate: dict[str, object] | None,
+    *,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+) -> list[dict[str, object]]:
+    """Return candidate entries with the preferred entry, if any, moved to the front."""
+
+    entries = [dict(entry) for entry in candidate_entries or [] if isinstance(entry, dict)]
+    preferred_key = candidate_source_key(preferred_candidate)
+    if preferred_key is None or not entries:
+        return entries
+
+    reordered: list[dict[str, object]] = []
+    matched = False
+    for entry in entries:
+        if not matched and candidate_source_key(entry) == preferred_key:
+            reordered.insert(0, entry)
+            matched = True
+        else:
+            reordered.append(entry)
+    return reordered
+
+
+def geometry_manual_tagged_candidate_from_session(
+    pick_session: dict[str, object] | None,
+    candidate_entries: Sequence[dict[str, object]] | None,
+    *,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
+) -> dict[str, object] | None:
+    """Return the exact tagged candidate for the active session when it remains available."""
+
+    if not isinstance(pick_session, dict):
+        return None
+
+    tagged_key = pick_session.get("tagged_candidate_key")
+    if tagged_key is None:
+        tagged_candidate = pick_session.get("tagged_candidate")
+        tagged_key = (
+            candidate_source_key(tagged_candidate)
+            if isinstance(tagged_candidate, dict)
+            else None
+        )
+    if tagged_key is None:
+        return None
+
+    for raw_entry in candidate_entries or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        if candidate_source_key(raw_entry) == tagged_key:
+            return dict(raw_entry)
+    return None
+
+
 def current_geometry_manual_match_config(
     fit_config: dict[str, object] | None,
 ) -> dict[str, object]:
@@ -1056,6 +1361,13 @@ def geometry_manual_current_pending_candidate(
         require_current_background=require_current_background,
         candidate_source_key=candidate_source_key,
     )
+    tagged_candidate = geometry_manual_tagged_candidate_from_session(
+        pick_session,
+        remaining,
+        candidate_source_key=candidate_source_key,
+    )
+    if tagged_candidate is not None:
+        return tagged_candidate
     if not remaining:
         return None
     return dict(remaining[0])
@@ -1471,6 +1783,9 @@ def geometry_manual_pick_preview_state(
     position_sigma_px: Callable[[object], float] = geometry_manual_position_sigma_px,
     use_caked_space: bool,
     caked_angles_to_background_display_coords: Callable[[float, float], tuple[float | None, float | None]] | None = None,
+    radial_axis: Sequence[float] | None = None,
+    azimuth_axis: Sequence[float] | None = None,
+    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
 ) -> dict[str, object] | None:
     """Return preview state for one manual placement cursor position."""
 
@@ -1502,11 +1817,25 @@ def geometry_manual_pick_preview_state(
         display_background=display_background,
         cache_data=state,
     )
-    candidate, sim_dist = nearest_candidate_to_point(
-        float(refined_col),
-        float(refined_row),
+    tagged_candidate = geometry_manual_tagged_candidate_from_session(
+        pick_session,
         remaining_candidates,
     )
+    if tagged_candidate is not None:
+        candidate = dict(tagged_candidate)
+        sim_dist = geometry_manual_candidate_distance_to_point(
+            float(refined_col),
+            float(refined_row),
+            candidate,
+        )
+        candidate_relation = "tagged sim"
+    else:
+        candidate, sim_dist = nearest_candidate_to_point(
+            float(refined_col),
+            float(refined_row),
+            remaining_candidates,
+        )
+        candidate_relation = "nearest sim"
     delta = float(
         position_error_px(
             float(raw_col),
@@ -1536,8 +1865,26 @@ def geometry_manual_pick_preview_state(
                 )
             )
     sigma_px = position_sigma_px(delta)
-    preview_color = geometry_manual_preview_color(float(sigma_px))
-    quality_label = geometry_manual_preview_quality_label(float(sigma_px))
+    match_confidence = geometry_manual_preview_match_confidence(
+        candidate,
+        float(refined_col),
+        float(refined_row),
+        cache_data=state,
+        use_caked_space=use_caked_space,
+        radial_axis=radial_axis,
+        azimuth_axis=azimuth_axis,
+        caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
+    )
+    if np.isfinite(match_confidence):
+        preview_color = geometry_manual_preview_confidence_color(
+            float(match_confidence)
+        )
+        quality_label = geometry_manual_preview_confidence_quality_label(
+            float(match_confidence)
+        )
+    else:
+        preview_color = geometry_manual_preview_color(float(sigma_px))
+        quality_label = geometry_manual_preview_quality_label(float(sigma_px))
     candidate_label = str(candidate.get("label", "")) if isinstance(candidate, dict) else ""
     q_label = str(
         pick_session.get(
@@ -1550,10 +1897,14 @@ def geometry_manual_pick_preview_state(
         f"release=({float(raw_col):.1f},{float(raw_row):.1f}) -> "
         f"refined=({float(refined_col):.1f},{float(refined_row):.1f}), "
         f"placement error={delta:.2f}px, sigma={float(sigma_px):.2f}px, "
-        f"quality={quality_label}"
+        + (
+            f"confidence={float(match_confidence):.2f}, quality={quality_label}"
+            if np.isfinite(match_confidence)
+            else f"quality={quality_label}"
+        )
     )
     if candidate_label:
-        message += f" -> nearest sim [{candidate_label}]"
+        message += f" -> {candidate_relation} [{candidate_label}]"
         if np.isfinite(sim_dist):
             message += f" ({float(sim_dist):.2f}{' deg' if use_caked_space else 'px'})"
     return {
@@ -1565,6 +1916,7 @@ def geometry_manual_pick_preview_state(
         "sim_dist": float(sim_dist),
         "delta": float(delta),
         "sigma_px": float(sigma_px),
+        "match_confidence": float(match_confidence),
         "preview_color": str(preview_color),
         "quality_label": str(quality_label),
         "message": message,
@@ -2328,9 +2680,21 @@ def render_current_geometry_manual_pairs(
                     if isinstance(pick_session, dict)
                     else []
                 )
+            remaining_candidates = geometry_manual_unassigned_group_candidates(
+                pick_session,
+                current_background_index=current_background_index,
+            )
+            tagged_candidate = geometry_manual_tagged_candidate_from_session(
+                pick_session,
+                remaining_candidates,
+            )
             set_status_text(
                 f"Click background peak {next_index} of {max(1, total_count)} for {q_label}. "
-                "It will attach to the nearest remaining simulated peak."
+                + (
+                    "It will attach to the tagged central-beam seed."
+                    if tagged_candidate is not None
+                    else "It will attach to the nearest remaining simulated peak."
+                )
             )
         else:
             set_status_text(
@@ -2393,6 +2757,9 @@ def make_runtime_geometry_manual_callbacks(
         tuple[float | None, float | None],
     ]
     | None = None,
+    caked_axis_to_image_index_fn: Callable[[float, Sequence[float] | None], float] = caked_axis_to_image_index,
+    last_caked_radial_values: Callable[[], object] | object = (),
+    last_caked_azimuth_values: Callable[[], object] | object = (),
     background_display_to_native_detector_coords: Callable[
         [float, float],
         tuple[float, float] | None,
@@ -2515,6 +2882,15 @@ def make_runtime_geometry_manual_callbacks(
             caked_angles_to_background_display_coords=(
                 caked_angles_to_background_display_coords
             ),
+            radial_axis=np.asarray(
+                _resolve_runtime_value(last_caked_radial_values),
+                dtype=float,
+            ),
+            azimuth_axis=np.asarray(
+                _resolve_runtime_value(last_caked_azimuth_values),
+                dtype=float,
+            ),
+            caked_axis_to_image_index_fn=caked_axis_to_image_index_fn,
         )
         if preview_state is None:
             return
@@ -2622,6 +2998,14 @@ def geometry_manual_toggle_selection_at(
     listed_q_group_entries: Callable[[], Sequence[dict[str, object]]] | Sequence[dict[str, object]] = (),
     format_q_group_line: Callable[[dict[str, object]], str] | None = None,
     choose_group_at_fn: Callable[..., tuple[tuple[object, ...] | None, list[dict[str, object]], float]] = geometry_manual_choose_group_at,
+    nearest_candidate_to_point_fn: Callable[
+        [float, float, Sequence[dict[str, object]] | None],
+        tuple[dict[str, object] | None, float],
+    ] = geometry_manual_nearest_candidate_to_point,
+    candidate_source_key: Callable[
+        [dict[str, object] | None],
+        tuple[object, ...] | None,
+    ] = geometry_manual_candidate_source_key,
     group_target_count_fn: Callable[
         [tuple[object, ...] | None, Sequence[dict[str, object]] | None],
         int,
@@ -2706,10 +3090,26 @@ def geometry_manual_toggle_selection_at(
         best_group_key,
         best_group_entries,
     )
+    tagged_candidate, tagged_dist = nearest_candidate_to_point_fn(
+        float(col),
+        float(row),
+        best_group_entries,
+    )
+    tagged_group_entries = geometry_manual_prioritize_candidate_entries(
+        best_group_entries,
+        tagged_candidate,
+        candidate_source_key=candidate_source_key,
+    )
+    tagged_candidate_key = candidate_source_key(tagged_candidate)
+    tagged_label = (
+        str(tagged_candidate.get("label", ""))
+        if isinstance(tagged_candidate, dict)
+        else ""
+    )
     next_session = {
         "background_index": int(current_background_index),
         "group_key": best_group_key,
-        "group_entries": [dict(entry) for entry in best_group_entries],
+        "group_entries": [dict(entry) for entry in tagged_group_entries],
         "pending_entries": [],
         "target_count": int(target_count),
         "base_entries": [
@@ -2724,13 +3124,24 @@ def geometry_manual_toggle_selection_at(
         "preview_last_t": 0.0,
         "preview_last_xy": None,
     }
+    if tagged_candidate_key is not None:
+        next_session["tagged_candidate_key"] = tagged_candidate_key
+    if isinstance(tagged_candidate, dict):
+        next_session["tagged_candidate"] = dict(tagged_candidate)
     set_pick_session_fn(next_session)
     render_current_pairs_fn(update_status=False)
     update_button_label_fn()
     if callable(set_status_text):
+        seed_dist = tagged_dist if np.isfinite(tagged_dist) else best_dist
         set_status_text(
-            f"Selected {q_label} (nearest seed {best_dist:.1f}{' deg' if use_caked_space else 'px'}). "
-            f"Click background peak 1 of {max(1, int(target_count))}; it will be assigned to the nearest simulated peak."
+            f"Selected {q_label} (nearest seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
+            + (f"Tagged central-beam seed [{tagged_label}]. " if tagged_label else "")
+            + f"Click background peak 1 of {max(1, int(target_count))}; "
+            + (
+                "it will attach to that tagged simulated peak."
+                if tagged_label
+                else "it will be assigned to the nearest simulated peak."
+            )
         )
     return True, next_session, True
 
@@ -2813,11 +3224,24 @@ def geometry_manual_place_selection_at(
         display_background=display_background,
         cache_data=cache_data,
     )
-    candidate, candidate_dist = nearest_candidate_to_point_fn(
-        float(peak_col),
-        float(peak_row),
+    tagged_candidate = geometry_manual_tagged_candidate_from_session(
+        pick_session,
         remaining_candidates,
+        candidate_source_key=candidate_source_key,
     )
+    if tagged_candidate is not None:
+        candidate = tagged_candidate
+        candidate_dist = geometry_manual_candidate_distance_to_point(
+            float(peak_col),
+            float(peak_row),
+            candidate,
+        )
+    else:
+        candidate, candidate_dist = nearest_candidate_to_point_fn(
+            float(peak_col),
+            float(peak_row),
+            remaining_candidates,
+        )
     if candidate is None:
         if callable(set_status_text):
             set_status_text(

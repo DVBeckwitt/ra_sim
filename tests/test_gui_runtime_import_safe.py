@@ -106,3 +106,9 @@ def test_runtime_impl_attaches_background_theta_trace_after_theta_var_assignment
     assert theta_assignment in source
     assert trace_call in source
     assert source.index(theta_assignment) < source.index(trace_call)
+
+
+def test_runtime_impl_uses_cached_caking_results_for_range_refreshes() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "range_refresh_requires_pending_analysis_result(" in source

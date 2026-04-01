@@ -161,7 +161,6 @@ class GeometryFitSolverRequest:
     params: dict[str, object]
     measured_peaks: object
     var_names: list[str]
-    experimental_image: object
     dataset_specs: list[dict[str, object]] | None
     refinement_config: dict[str, object]
     runtime_safety_note: str | None = None
@@ -2176,13 +2175,6 @@ def build_geometry_manual_fit_dataset(
     native_background, display_background = (
         manual_dataset_bindings.load_background_by_index(background_idx)
     )
-    backend_background = (
-        manual_dataset_bindings.apply_background_backend_orientation(
-            native_background
-        )
-    )
-    if backend_background is None:
-        backend_background = native_background
 
     params_i = dict(base_fit_params or {})
     theta_offset = float(params_i.get("theta_offset", 0.0))
@@ -2322,12 +2314,74 @@ def build_geometry_manual_fit_dataset(
         candidate_pool.sort(key=_distance_sq)
         return dict(candidate_pool[0]) if candidate_pool else None
 
+    def _normalized_q_group_key(
+        value: object,
+    ) -> tuple[object, ...] | None:
+        if isinstance(value, tuple):
+            return value
+        if isinstance(value, list):
+            return tuple(value)
+        return None
+
+    def _resolved_source_distance_sq(
+        entry: Mapping[str, object],
+        resolved_source_entry: Mapping[str, object] | None,
+    ) -> float:
+        display_point = _entry_display_point(entry)
+        if display_point is None or not isinstance(resolved_source_entry, Mapping):
+            return float("inf")
+        try:
+            sim_col = float(resolved_source_entry.get("sim_col"))
+            sim_row = float(resolved_source_entry.get("sim_row"))
+        except Exception:
+            return float("inf")
+        if not (np.isfinite(sim_col) and np.isfinite(sim_row)):
+            return float("inf")
+        return float(
+            (sim_col - float(display_point[0])) ** 2
+            + (sim_row - float(display_point[1])) ** 2
+        )
+
+    selected_records: list[dict[str, object]] = []
+    for raw_entry in selected_entries:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        q_group_key = _normalized_q_group_key(entry.get("q_group_key"))
+        if q_group_key is not None:
+            entry["q_group_key"] = q_group_key
+        resolved_source_entry = _resolve_source_entry(entry)
+        selected_records.append(
+            {
+            "entry": entry,
+            "resolved_source_entry": dict(resolved_source_entry)
+            if isinstance(resolved_source_entry, Mapping)
+            else None,
+            }
+        )
+
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
-    for pair_idx, entry in enumerate(selected_entries):
+    selected_entries = [
+        dict(record["entry"])
+        for record in selected_records
+        if isinstance(record.get("entry"), Mapping)
+    ]
+    for pair_idx, record in enumerate(selected_records):
+        entry = (
+            dict(record.get("entry"))
+            if isinstance(record.get("entry"), Mapping)
+            else None
+        )
+        if entry is None:
+            continue
         measured_entry = dict(entry)
         measured_entry["overlay_match_index"] = int(pair_idx)
-        resolved_source_entry = _resolve_source_entry(measured_entry)
+        resolved_source_entry = (
+            dict(record.get("resolved_source_entry"))
+            if isinstance(record.get("resolved_source_entry"), Mapping)
+            else _resolve_source_entry(measured_entry)
+        )
         if isinstance(resolved_source_entry, Mapping):
             for key in ("source_table_index", "source_row_index", "source_peak_index"):
                 if key in resolved_source_entry:
@@ -2496,15 +2550,6 @@ def build_geometry_manual_fit_dataset(
             measured_entry["detector_x"] = float(detector_x)
             measured_entry["detector_y"] = float(detector_y)
         measured_entry["fit_source_identity_only"] = True
-    experimental_image_for_fit = manual_dataset_bindings.orient_image_for_fit(
-        backend_background,
-        indexing_mode=orientation_choice["indexing_mode"],
-        k=orientation_choice["k"],
-        flip_x=orientation_choice["flip_x"],
-        flip_y=orientation_choice["flip_y"],
-        flip_order=orientation_choice["flip_order"],
-    )
-
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
         if 0 <= background_idx < len(manual_dataset_bindings.osc_files)
@@ -2529,7 +2574,6 @@ def build_geometry_manual_fit_dataset(
         "measured_native": measured_native,
         "measured_for_fit": measured_for_fit,
         "initial_pairs_display": initial_pairs_display,
-        "experimental_image_for_fit": experimental_image_for_fit,
         "native_background": native_background,
         "orientation_choice": orientation_choice,
         "orientation_diag": orientation_diag,
@@ -2549,9 +2593,7 @@ def build_geometry_manual_fit_dataset(
             "dataset_index": int(background_idx),
             "label": label,
             "theta_initial": float(theta_base),
-            "dynamic_point_geometry_fit": True,
             "measured_peaks": measured_for_fit,
-            "experimental_image": experimental_image_for_fit,
         },
     }
 
@@ -2700,16 +2742,6 @@ def prepare_geometry_fit_run(
             )
         )
 
-    try:
-        ensure_geometry_fit_caked_view()
-    except Exception as exc:
-        return GeometryFitPreparationResult(
-            error_text=(
-                "Geometry fit unavailable: failed to prepare the 2D caked view "
-                f"({exc})."
-            )
-        )
-
     current_theta_base = (
         float(background_theta_values[current_index])
         if joint_background_mode
@@ -2758,7 +2790,7 @@ def prepare_geometry_fit_run(
                 current_dataset=current_dataset,
             ),
             max_display_markers=int(max_display_markers),
-            geometry_runtime_cfg=apply_dynamic_point_geometry_fit_runtime_overrides(
+            geometry_runtime_cfg=apply_manual_point_geometry_fit_runtime_overrides(
                 apply_joint_geometry_fit_runtime_safety_overrides(
                     build_runtime_config(fit_params),
                     joint_background_mode=joint_background_mode,
@@ -2877,62 +2909,46 @@ def apply_joint_geometry_fit_runtime_safety_overrides(
     return cfg
 
 
-def apply_dynamic_point_geometry_fit_runtime_overrides(
+def apply_manual_point_geometry_fit_runtime_overrides(
     runtime_cfg: Mapping[str, object] | None,
     *,
     joint_background_mode: bool,
 ) -> dict[str, object]:
-    """Force the GUI manual-pair fit onto the simplified dynamic angular objective."""
+    """Build the lean runtime profile for raw detector-pixel manual point fitting."""
 
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
 
     solver_cfg_raw = cfg.get("solver", {})
     solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
-    solver_cfg["dynamic_point_geometry_fit"] = True
-    solver_cfg["loss"] = "linear"
-    solver_cfg["f_scale_px"] = 1.0
-    solver_cfg["weighted_matching"] = False
-    solver_cfg["use_measurement_uncertainty"] = False
-    solver_cfg["anisotropic_measurement_uncertainty"] = False
+    for key in (
+        "dynamic_point_geometry_fit",
+        "loss",
+        "f_scale_px",
+        "weighted_matching",
+        "use_measurement_uncertainty",
+        "anisotropic_measurement_uncertainty",
+        "restarts",
+        "restart_jitter",
+        "stagnation_probe",
+        "stagnation_probe_pairwise",
+        "stagnation_probe_random_directions",
+        "staged_release",
+        "reparameterize_pairs",
+    ):
+        solver_cfg.pop(key, None)
+    solver_cfg["manual_point_fit_mode"] = True
+    solver_cfg["missing_pair_penalty_px"] = float(
+        solver_cfg.get("missing_pair_penalty_px", 20.0)
+    )
     solver_cfg["missing_pair_penalty_deg"] = float(
         solver_cfg.get("missing_pair_penalty_deg", 5.0)
     )
-    solver_cfg["restarts"] = 0
-    solver_cfg["restart_jitter"] = 0.0
-    solver_cfg["stagnation_probe"] = False
-    solver_cfg["stagnation_probe_pairwise"] = False
-    solver_cfg["stagnation_probe_random_directions"] = 0
-    solver_cfg["staged_release"] = {"enabled": False}
-    solver_cfg["reparameterize_pairs"] = {"enabled": False}
     solver_cfg["parallel_mode"] = "datasets" if joint_background_mode else "auto"
     cfg["solver"] = solver_cfg
 
-    full_beam_polish_cfg_raw = cfg.get("full_beam_polish", {})
-    full_beam_polish_cfg = (
-        dict(full_beam_polish_cfg_raw)
-        if isinstance(full_beam_polish_cfg_raw, Mapping)
-        else {}
-    )
-    full_beam_polish_cfg["enabled"] = False
-    cfg["full_beam_polish"] = full_beam_polish_cfg
-
-    ridge_refinement_cfg_raw = cfg.get("ridge_refinement", {})
-    ridge_refinement_cfg = (
-        dict(ridge_refinement_cfg_raw)
-        if isinstance(ridge_refinement_cfg_raw, Mapping)
-        else {}
-    )
-    ridge_refinement_cfg["enabled"] = False
-    cfg["ridge_refinement"] = ridge_refinement_cfg
-
-    image_refinement_cfg_raw = cfg.get("image_refinement", {})
-    image_refinement_cfg = (
-        dict(image_refinement_cfg_raw)
-        if isinstance(image_refinement_cfg_raw, Mapping)
-        else {}
-    )
-    image_refinement_cfg["enabled"] = False
-    cfg["image_refinement"] = image_refinement_cfg
+    cfg.pop("full_beam_polish", None)
+    cfg.pop("ridge_refinement", None)
+    cfg.pop("image_refinement", None)
 
     identifiability_cfg_raw = cfg.get("identifiability", {})
     identifiability_cfg = (
@@ -2941,11 +2957,24 @@ def apply_dynamic_point_geometry_fit_runtime_overrides(
         else {}
     )
     identifiability_cfg["enabled"] = True
-    identifiability_cfg["auto_freeze"] = False
-    identifiability_cfg["selective_thaw"] = {"enabled": False}
-    identifiability_cfg["adaptive_regularization"] = {"enabled": False}
+    identifiability_cfg.pop("auto_freeze", None)
+    identifiability_cfg.pop("selective_thaw", None)
+    identifiability_cfg.pop("adaptive_regularization", None)
     cfg["identifiability"] = identifiability_cfg
     return cfg
+
+
+def apply_dynamic_point_geometry_fit_runtime_overrides(
+    runtime_cfg: Mapping[str, object] | None,
+    *,
+    joint_background_mode: bool,
+) -> dict[str, object]:
+    """Backward-compatible alias for the raw manual point-fit runtime profile."""
+
+    return apply_manual_point_geometry_fit_runtime_overrides(
+        runtime_cfg,
+        joint_background_mode=joint_background_mode,
+    )
 
 
 def build_geometry_fit_dataset_cache_payload(
@@ -3238,12 +3267,7 @@ def build_geometry_fit_solver_request(
         params=dict(prepared_run.fit_params),
         measured_peaks=prepared_run.current_dataset["measured_for_fit"],
         var_names=[str(name) for name in var_names],
-        experimental_image=prepared_run.current_dataset["experimental_image_for_fit"],
-        dataset_specs=(
-            list(prepared_run.dataset_specs)
-            if prepared_run.joint_background_mode
-            else None
-        ),
+        dataset_specs=list(prepared_run.dataset_specs),
         refinement_config=refinement_config,
         runtime_safety_note=runtime_safety_note,
     )
@@ -3259,7 +3283,7 @@ def solve_geometry_fit_request(
 
     solve_kwargs: dict[str, object] = {
         "pixel_tol": float("inf"),
-        "experimental_image": request.experimental_image,
+        "experimental_image": None,
         "dataset_specs": request.dataset_specs,
         "refinement_config": request.refinement_config,
     }
@@ -3685,7 +3709,6 @@ def build_geometry_fit_stage_summary_lines(result: object) -> list[str]:
         ("staged_release", getattr(result, "staged_release_summary", None)),
         ("adaptive_regularization", getattr(result, "adaptive_regularization_summary", None)),
         ("full_beam_polish", getattr(result, "full_beam_polish_summary", None)),
-        ("single_ray_polish", getattr(result, "single_ray_polish_summary", None)),
         ("ridge_refinement", getattr(result, "ridge_refinement_summary", None)),
         ("image_refinement", getattr(result, "image_refinement_summary", None)),
         ("auto_freeze", getattr(result, "auto_freeze_summary", None)),
@@ -3708,8 +3731,6 @@ def build_geometry_fit_stage_summary_lines(result: object) -> list[str]:
         "final_rms_px",
         "accepted_stage_count",
         "release_accepted",
-        "coarse_single_ray_enabled",
-        "coarse_single_ray_accepted",
         "fixed_parameters",
         "thawed_parameters",
         "applied_parameters",
@@ -4091,6 +4112,24 @@ def build_geometry_fit_overlay_diagnostic_lines(
     ]
 
 
+def count_geometry_fit_matched_overlay_records(
+    overlay_records: Sequence[Mapping[str, object]] | None,
+) -> int:
+    """Return the number of overlay records that represent matched fitted points."""
+
+    matched_count = 0
+    for entry in overlay_records or ():
+        if not isinstance(entry, Mapping):
+            continue
+        status = str(entry.get("match_status", "")).strip().lower()
+        if status:
+            if status == "matched":
+                matched_count += 1
+            continue
+        matched_count += 1
+    return int(matched_count)
+
+
 def build_geometry_fit_pixel_offset_lines(
     pixel_offsets: Sequence[Sequence[object]],
 ) -> list[str]:
@@ -4291,17 +4330,20 @@ def postprocess_geometry_fit_result(
         sim_display_rotate_k=int(sim_display_rotate_k),
         background_display_rotate_k=int(background_display_rotate_k),
     )
+    matched_overlay_record_count = count_geometry_fit_matched_overlay_records(
+        overlay_records
+    )
     frame_diag, frame_warning = compute_frame_diagnostics(overlay_records)
     overlay_diagnostic_lines = build_geometry_fit_overlay_diagnostic_lines(
         frame_diag,
-        overlay_record_count=len(overlay_records),
+        overlay_record_count=int(matched_overlay_record_count),
     )
 
     export_records = build_geometry_fit_export_records(point_match_diagnostics)
     save_path = Path(downloads_dir) / f"matched_peaks_{stamp}.npy"
     fit_summary_lines = build_geometry_fit_summary_lines(
         current_dataset=current_dataset,
-        overlay_record_count=len(overlay_records),
+        overlay_record_count=int(matched_overlay_record_count),
         var_names=var_names,
         values=values,
         rms=rms,

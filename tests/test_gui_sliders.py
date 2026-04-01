@@ -198,3 +198,27 @@ def test_create_slider_handles_small_wheel_delta_and_home_end_keys(monkeypatch) 
         == "break"
     )
     assert slider_var.get() == 0.0
+
+
+def test_create_slider_triggers_final_update_on_mouse_release(monkeypatch) -> None:
+    _patch_slider_widgets(monkeypatch)
+
+    updates = []
+    parent = _FakeFrame(None)
+    slider_var, slider = gui_sliders.create_slider(
+        "Release Slider",
+        0.0,
+        10.0,
+        5.0,
+        0.5,
+        parent,
+        update_callback=lambda: updates.append("update"),
+    )
+
+    slider.bindings["<Button-1>"](type("Event", (), {})())
+    slider.command("6.5")
+    updates.clear()
+
+    assert slider.bindings["<ButtonRelease-1>"](type("Event", (), {})()) is None
+    assert slider_var.get() == 6.5
+    assert updates == ["update"]

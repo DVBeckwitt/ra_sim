@@ -16,6 +16,7 @@ from ra_sim.config import get_config_dir
 
 from .collapsible import CollapsibleFrame
 from .sliders import create_slider
+from . import window_affinity
 from .state import (
     AppShellViewState,
     AnalysisViewControlsViewState,
@@ -104,10 +105,45 @@ def _configure_root_styles(root: tk.Misc) -> None:
 def create_root_window(title: str = "RA Simulation") -> tk.Tk:
     """Create and return a Tk root window with the provided title."""
 
+    launch_context = window_affinity.capture_launch_window_context()
     root = tk.Tk()
+    try:
+        withdraw = getattr(root, "withdraw", None)
+        if callable(withdraw):
+            withdraw()
+    except tk.TclError:
+        pass
     root.title(title)
+    try:
+        setattr(root, "_ra_sim_launch_window_context", launch_context)
+    except Exception:
+        pass
     _configure_root_styles(root)
+    window_affinity.apply_window_launch_context(root, context=launch_context)
     return root
+
+
+def apply_launch_window_context(
+    window: object,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+) -> bool:
+    """Reapply the launcher's desktop/monitor context to a Tk top-level."""
+
+    context = getattr(window, "_ra_sim_launch_window_context", None)
+    if context is None:
+        context = window_affinity.capture_launch_window_context()
+        try:
+            setattr(window, "_ra_sim_launch_window_context", context)
+        except Exception:
+            pass
+    return window_affinity.apply_window_launch_context(
+        window,
+        context=context,
+        width=width,
+        height=height,
+    )
 
 
 def _pointer_inside_widget(
@@ -2387,6 +2423,10 @@ def rebuild_occupancy_controls(
             command=on_update,
         )
         occ_scale.pack(fill=tk.X, padx=5, pady=2)
+        occ_scale.bind(
+            "<ButtonRelease-1>",
+            lambda _event, occ_var=occ_var: on_update(occ_var.get()),
+        )
         view_state.occ_scale_widgets.append(occ_scale)
 
     for idx, occ_var in enumerate(occ_vars):
@@ -2948,6 +2988,12 @@ def create_integration_range_controls(
             command=slider_command,
         )
         slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        slider.bind(
+            "<ButtonRelease-1>",
+            lambda _event, value_var=value_var, slider_command=slider_command: slider_command(
+                value_var.get()
+            ),
+        )
 
         label = ttk.Label(container, textvariable=label_var, width=6)
         label.pack(side=tk.LEFT, padx=4)

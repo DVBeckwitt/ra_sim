@@ -896,6 +896,18 @@ def _miller_key_from_row(row: Sequence[float]) -> Optional[Tuple[int, int, int]]
         return None
 
 
+def _normalized_q_group_key(
+    value: object,
+) -> Optional[Tuple[object, ...]]:
+    """Return a hashable Qr/Qz group key when one is present."""
+
+    if isinstance(value, tuple):
+        return value
+    if isinstance(value, list):
+        return tuple(value)
+    return None
+
+
 def _prepare_reflection_subset(
     miller: np.ndarray,
     intensities: np.ndarray,
@@ -907,6 +919,23 @@ def _prepare_reflection_subset(
     intensities_arr = np.asarray(intensities, dtype=np.float64)
     total_reflections = int(miller_arr.shape[0]) if miller_arr.ndim >= 1 else 0
     normalized_measured = _normalize_measured_peaks(measured_peaks)
+    if normalized_measured:
+        normalized_measured = [
+            {
+                **dict(entry),
+                **(
+                    {"q_group_key": group_key}
+                    if (
+                        group_key := _normalized_q_group_key(
+                            dict(entry).get("q_group_key")
+                        )
+                    )
+                    is not None
+                    else {}
+                ),
+            }
+            for entry in normalized_measured
+        ]
 
     if (
         miller_arr.ndim != 2
@@ -929,12 +958,6 @@ def _prepare_reflection_subset(
 
     selected_original_indices: List[int] = []
     selected_lookup: set[int] = set()
-    source_identity_only = bool(normalized_measured) and all(
-        bool(entry.get("fit_source_identity_only", False))
-        for entry in normalized_measured
-        if isinstance(entry, dict)
-    )
-
     for entry in normalized_measured:
         source_key = _measured_source_indices(entry)
         if source_key is None:
@@ -961,25 +984,24 @@ def _prepare_reflection_subset(
     fixed_source_reflection_count = int(len(selected_original_indices))
 
     fallback_hkl_keys: set[Tuple[int, int, int]] = set()
-    if not source_identity_only:
-        for entry in normalized_measured:
-            # Always retain the HKL-based fallback path, even when source-table
-            # indices are present. Manual geometry picks can carry stale source
-            # indices after the user clears/readds points or after the underlying
-            # reflection ordering changes, and relying on indices alone can reduce
-            # the simulation subset to the wrong reflections.
-            raw_hkl = entry.get("hkl")
-            if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
-                continue
-            try:
-                hkl_key = (
-                    int(raw_hkl[0]),
-                    int(raw_hkl[1]),
-                    int(raw_hkl[2]),
-                )
-            except Exception:
-                continue
-            fallback_hkl_keys.add(hkl_key)
+    for entry in normalized_measured:
+        # Always retain the HKL-based fallback path, even when source-table
+        # indices are present. Manual geometry picks can carry stale source
+        # indices after the user clears/readds points or after the underlying
+        # reflection ordering changes, and relying on indices alone can reduce
+        # the simulation subset to the wrong reflections.
+        raw_hkl = entry.get("hkl")
+        if not isinstance(raw_hkl, tuple) or len(raw_hkl) != 3:
+            continue
+        try:
+            hkl_key = (
+                int(raw_hkl[0]),
+                int(raw_hkl[1]),
+                int(raw_hkl[2]),
+            )
+        except Exception:
+            continue
+        fallback_hkl_keys.add(hkl_key)
 
     if fallback_hkl_keys:
         for idx, row in enumerate(miller_arr):
@@ -5941,6 +5963,7 @@ def fit_geometry_parameters(
         identifiability_cfg = refinement_config.get("identifiability", {}) or {}
     if not isinstance(identifiability_cfg, dict):
         identifiability_cfg = {}
+    manual_point_fit_mode = bool(solver_cfg.get("manual_point_fit_mode", False))
 
     solver_loss = str(
         solver_cfg.get("loss", "linear")
@@ -5949,16 +5972,20 @@ def fit_geometry_parameters(
         solver_loss = "linear"
 
     solver_f_scale = float(
-        solver_cfg.get("f_scale_px", 6.0 if point_match_mode else 1.0)
+        solver_cfg.get(
+            "f_scale_px",
+            1.0 if manual_point_fit_mode else (6.0 if point_match_mode else 1.0),
+        )
     )
     solver_f_scale = max(solver_f_scale, 1e-6)
 
     solver_max_nfev = int(solver_cfg.get("max_nfev", 120 if point_match_mode else 60))
     solver_max_nfev = max(20, solver_max_nfev)
-    single_ray_polish_enabled = False
-    single_ray_polish_max_nfev = 0
     full_beam_polish_enabled = bool(
-        full_beam_polish_cfg.get("enabled", point_match_mode)
+        full_beam_polish_cfg.get(
+            "enabled",
+            point_match_mode and not manual_point_fit_mode,
+        )
     )
     full_beam_polish_max_nfev = int(full_beam_polish_cfg.get("max_nfev", 40))
     full_beam_polish_max_nfev = max(5, full_beam_polish_max_nfev)
@@ -5971,7 +5998,12 @@ def fit_geometry_parameters(
     ):
         full_beam_polish_match_radius_px = 24.0
 
-    solver_restarts = int(solver_cfg.get("restarts", 4 if point_match_mode else 0))
+    solver_restarts = int(
+        solver_cfg.get(
+            "restarts",
+            0 if manual_point_fit_mode else (4 if point_match_mode else 0),
+        )
+    )
     solver_restarts = max(0, solver_restarts)
 
     solver_parallel_mode = str(
@@ -5987,7 +6019,9 @@ def fit_geometry_parameters(
         0,
     )
 
-    solver_restart_jitter = float(solver_cfg.get("restart_jitter", 0.15))
+    solver_restart_jitter = float(
+        solver_cfg.get("restart_jitter", 0.0 if manual_point_fit_mode else 0.15)
+    )
     solver_restart_jitter = max(0.0, solver_restart_jitter)
 
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
@@ -5995,6 +6029,8 @@ def fit_geometry_parameters(
     dynamic_point_geometry_fit = bool(
         solver_cfg.get("dynamic_point_geometry_fit", False)
     )
+    if manual_point_fit_mode:
+        dynamic_point_geometry_fit = False
     missing_pair_penalty_deg = float(
         solver_cfg.get("missing_pair_penalty_deg", 5.0)
     )
@@ -6003,10 +6039,16 @@ def fit_geometry_parameters(
 
     weighted_matching = bool(solver_cfg.get("weighted_matching", False))
     use_measurement_uncertainty = bool(
-        solver_cfg.get("use_measurement_uncertainty", True)
+        solver_cfg.get(
+            "use_measurement_uncertainty",
+            not manual_point_fit_mode,
+        )
     )
     stagnation_probe_enabled = bool(
-        solver_cfg.get("stagnation_probe", point_match_mode)
+        solver_cfg.get(
+            "stagnation_probe",
+            point_match_mode and not manual_point_fit_mode,
+        )
     )
     stagnation_probe_fraction = float(solver_cfg.get("stagnation_probe_fraction", 0.35))
     if not np.isfinite(stagnation_probe_fraction) or stagnation_probe_fraction <= 0.0:
@@ -7615,66 +7657,6 @@ def fit_geometry_parameters(
     x0 = [_initial_value(name) for name in var_names]
     requested_x0_arr = np.asarray(x0, dtype=float).copy()
 
-    if point_match_mode and use_single_ray and dataset_contexts:
-        local = _apply_trial_params(np.asarray(x0, dtype=float))
-        mosaic = local['mosaic_params']
-        wavelength_array = mosaic.get('wavelength_array')
-        if wavelength_array is None:
-            wavelength_array = mosaic.get('wavelength_i_array')
-
-        def _compute_single_ray_indices(
-            dataset_ctx: GeometryFitDatasetContext,
-        ) -> Tuple[GeometryFitDatasetContext, Optional[np.ndarray]]:
-            fit_miller = dataset_ctx.subset.miller
-            fit_measured_peaks = dataset_ctx.subset.measured_entries
-            if fit_miller.shape[0] <= 0 or not fit_measured_peaks:
-                return dataset_ctx, None
-            try:
-                theta_value = _theta_initial_for_dataset(local, dataset_ctx)
-                best_indices = np.full(fit_miller.shape[0], -1, dtype=np.int64)
-                sim_buffer = np.zeros((image_size, image_size), dtype=np.float64)
-                _process_peaks_parallel_safe(
-                    fit_miller, dataset_ctx.subset.intensities, image_size,
-                    local['a'], local['c'], wavelength_array,
-                    sim_buffer, local['corto_detector'],
-                    local['gamma'], local['Gamma'], local['chi'], local.get('psi', 0.0), local.get('psi_z', 0.0),
-                    local['zs'], local['zb'], local['n2'],
-                    mosaic['beam_x_array'],
-                    mosaic['beam_y_array'],
-                    mosaic['theta_array'],
-                    mosaic['phi_array'],
-                    mosaic['sigma_mosaic_deg'],
-                    mosaic['gamma_mosaic_deg'],
-                    mosaic['eta'],
-                    wavelength_array,
-                    local['debye_x'], local['debye_y'],
-                    local['center'], theta_value, local.get('cor_angle', 0.0),
-                    np.array([1.0, 0.0, 0.0]),
-                    np.array([0.0, 1.0, 0.0]),
-                    save_flag=0,
-                    **_simulation_kernel_kwargs(local, mosaic),
-                    best_sample_indices_out=best_indices,
-                )
-                return dataset_ctx, best_indices
-            except Exception:
-                return dataset_ctx, None
-
-        if dataset_parallel_workers > 1 and len(dataset_contexts) > 1:
-            single_ray_results = _threaded_map(
-                _compute_single_ray_indices,
-                dataset_contexts,
-                max_workers=dataset_parallel_workers,
-                numba_threads=worker_numba_threads,
-            )
-        else:
-            single_ray_results = [
-                _compute_single_ray_indices(dataset_ctx)
-                for dataset_ctx in dataset_contexts
-            ]
-
-        for dataset_ctx, best_indices in single_ray_results:
-            dataset_ctx.single_ray_indices = best_indices
-
     lower_bounds = []
     upper_bounds = []
     bounds_cfg = {}
@@ -7888,6 +7870,7 @@ def fit_geometry_parameters(
         "dataset_count": int(len(dataset_contexts)),
         "var_names": [str(name) for name in var_names],
         "solver": {
+            "manual_point_fit_mode": bool(manual_point_fit_mode),
             "loss": str(solver_loss),
             "f_scale_px": float(solver_f_scale),
             "max_nfev": int(solver_max_nfev),
@@ -11720,24 +11703,6 @@ def fit_geometry_parameters(
             f"(best_cost={float(best_cost):.6f})"
         )
 
-    def _snapshot_single_ray_state() -> List[Optional[np.ndarray]]:
-        snapshot: List[Optional[np.ndarray]] = []
-        for dataset_ctx in dataset_contexts:
-            indices = dataset_ctx.single_ray_indices
-            if indices is None:
-                snapshot.append(None)
-            else:
-                snapshot.append(np.asarray(indices, dtype=np.int64).copy())
-        return snapshot
-
-    def _restore_single_ray_state(
-        snapshot: Sequence[Optional[np.ndarray]],
-    ) -> None:
-        for dataset_ctx, indices in zip(dataset_contexts, snapshot):
-            dataset_ctx.single_ray_indices = (
-                None if indices is None else np.asarray(indices, dtype=np.int64).copy()
-            )
-
     def _run_reduced_solver(
         reference_x: np.ndarray,
         active_indices: Sequence[int],
@@ -11807,114 +11772,6 @@ def fit_geometry_parameters(
         current_result: Optional[OptimizeResult] = None,
     ) -> Dict[str, object]:
         return _build_identifiability_summary_at_x(x_trial, current_result)
-
-    def _maybe_run_single_ray_polish(
-        current_result: OptimizeResult,
-    ) -> Dict[str, object]:
-        nonlocal use_single_ray
-
-        summary: Dict[str, object] = {
-            "enabled": bool(single_ray_polish_enabled),
-            "status": "skipped",
-            "reason": "",
-            "accepted": False,
-            "coarse_single_ray_enabled": bool(use_single_ray),
-        }
-        if not point_match_mode:
-            summary["reason"] = "point_match_mode_disabled"
-            return summary
-        if not use_single_ray:
-            summary["reason"] = "single_ray_disabled"
-            return summary
-        if not single_ray_polish_enabled:
-            summary["reason"] = "disabled_by_config"
-            return summary
-        if not dataset_contexts:
-            summary["reason"] = "no_datasets"
-            return summary
-        if getattr(current_result, "x", None) is None:
-            summary["reason"] = "missing_parameter_vector"
-            return summary
-
-        has_forced_indices = any(
-            isinstance(dataset_ctx.single_ray_indices, np.ndarray)
-            and dataset_ctx.single_ray_indices.size > 0
-            for dataset_ctx in dataset_contexts
-        )
-        if not has_forced_indices:
-            summary["reason"] = "single_ray_indices_unavailable"
-            return summary
-
-        snapshot = _snapshot_single_ray_state()
-        start_x = np.asarray(current_result.x, dtype=float)
-        _emit_status("Geometry fit: running full-ray polish")
-        try:
-            for dataset_ctx in dataset_contexts:
-                dataset_ctx.single_ray_indices = None
-            use_single_ray = False
-
-            start_residual = np.asarray(residual_fn(start_x), dtype=float)
-            if start_residual.ndim != 1 or start_residual.size == 0:
-                _restore_single_ray_state(snapshot)
-                use_single_ray = True
-                summary["reason"] = "empty_full_ray_residual"
-                return summary
-
-            start_cost = _robust_cost(
-                start_residual,
-                loss=solver_loss,
-                f_scale=solver_f_scale,
-            )
-            polish_result = least_squares(
-                residual_fn,
-                start_x,
-                bounds=(lower_bounds, upper_bounds),
-                x_scale=x_scale,
-                loss=solver_loss,
-                f_scale=solver_f_scale,
-                max_nfev=single_ray_polish_max_nfev,
-            )
-            polish_result.fun = np.asarray(polish_result.fun, dtype=float)
-            final_cost = _robust_cost(
-                polish_result.fun,
-                loss=solver_loss,
-                f_scale=solver_f_scale,
-            )
-        except Exception as exc:
-            _restore_single_ray_state(snapshot)
-            use_single_ray = True
-            summary["status"] = "failed"
-            summary["reason"] = f"unexpected_exception: {exc}"
-            return summary
-
-        improvement_tol = max(
-            1.0e-9 * max(abs(float(start_cost)), 1.0),
-            1.0e-12,
-        )
-        accepted = bool(
-            np.isfinite(final_cost)
-            and final_cost + improvement_tol < float(start_cost)
-        )
-        if not accepted:
-            _restore_single_ray_state(snapshot)
-            use_single_ray = True
-
-        summary.update(
-            {
-                "status": "accepted" if accepted else "rejected",
-                "reason": "accepted" if accepted else "full_ray_cost_not_improved",
-                "accepted": bool(accepted),
-                "start_cost": float(start_cost),
-                "final_cost": float(final_cost),
-                "nfev": int(getattr(polish_result, "nfev", 0)),
-                "success": bool(getattr(polish_result, "success", False)),
-                "message": str(getattr(polish_result, "message", "")),
-                "max_nfev": int(single_ray_polish_max_nfev),
-            }
-        )
-        if accepted:
-            summary["x"] = np.asarray(polish_result.x, dtype=float)
-        return summary
 
     def _append_result_message(current_result: OptimizeResult, note: str) -> None:
         message_text = str(getattr(current_result, "message", "") or "").strip()
@@ -12552,29 +12409,6 @@ def fit_geometry_parameters(
             _append_result_message(result, "Full-beam polish accepted")
     if point_match_mode:
         residual_fn = final_metric_residual_fn
-    single_ray_polish_summary: Dict[str, object] = {
-        "enabled": bool(single_ray_polish_enabled),
-        "status": "skipped",
-        "reason": "not_evaluated",
-        "accepted": False,
-        "coarse_single_ray_enabled": bool(use_single_ray),
-    }
-    if point_match_mode and getattr(result, "x", None) is not None:
-        try:
-            single_ray_polish_summary = _maybe_run_single_ray_polish(result)
-        except Exception as exc:
-            single_ray_polish_summary = {
-                "enabled": bool(single_ray_polish_enabled),
-                "status": "failed",
-                "reason": f"unexpected_exception: {exc}",
-                "accepted": False,
-                "coarse_single_ray_enabled": bool(use_single_ray),
-            }
-        refined_x = single_ray_polish_summary.get("x")
-        if single_ray_polish_summary.get("accepted") and refined_x is not None:
-            result.x = np.asarray(refined_x, dtype=float)
-            _append_result_message(result, "Full-ray single-ray polish accepted")
-
     ridge_refinement_summary: Dict[str, object] = {
         "enabled": bool(ridge_refinement_enabled),
         "status": "skipped",
@@ -12682,7 +12516,6 @@ def fit_geometry_parameters(
     result.reparameterization_summary = reparameterization_summary
     result.staged_release_summary = staged_release_summary
     result.adaptive_regularization_summary = adaptive_regularization_summary
-    result.single_ray_polish_summary = single_ray_polish_summary
     result.ridge_refinement_summary = ridge_refinement_summary
     result.image_refinement_summary = image_refinement_summary
     result.auto_freeze_summary = auto_freeze_summary
@@ -12747,15 +12580,7 @@ def fit_geometry_parameters(
                 collect_diagnostics=True,
             )
             point_match_summary["metric_name"] = str(result.final_metric_name)
-            point_match_summary["single_ray_coarse_enabled"] = bool(
-                single_ray_polish_summary.get("coarse_single_ray_enabled", False)
-            )
-            point_match_summary["single_ray_polish_enabled"] = bool(
-                single_ray_polish_summary.get("enabled", False)
-            )
-            point_match_summary["single_ray_polish_accepted"] = bool(
-                single_ray_polish_summary.get("accepted", False)
-            )
+            point_match_summary["single_ray_coarse_enabled"] = bool(use_single_ray)
             point_match_summary["full_beam_polish_enabled"] = bool(
                 full_beam_polish_summary.get("enabled", False)
             )

@@ -154,6 +154,49 @@ def test_draw_geometry_fit_overlay_projects_native_points_in_caked_view() -> Non
         plt.close(fig)
 
 
+def test_draw_geometry_fit_overlay_keeps_initial_only_unmatched_pairs_visible() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+        draws: list[str] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(
+                geometry_pick_artists,
+                draw_idle=lambda: draws.append("clear"),
+                redraw=redraw,
+            )
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (2, 0, 0),
+                    "match_status": "missing_pair",
+                    "initial_sim_display": (20.0, 22.0),
+                    "initial_bg_display": (24.0, 26.0),
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: draws.append("draw"),
+        )
+
+        labels = [artist.get_text() for artist in ax.texts]
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (20.0, 22.0) in marker_points
+        assert (24.0, 26.0) in marker_points
+        assert any("(2, 0, 0)" in label for label in labels)
+        assert draws == ["draw"]
+    finally:
+        plt.close(fig)
+
+
 def test_draw_live_geometry_preview_overlay_marks_excluded_matches() -> None:
     fig, ax = plt.subplots()
     try:

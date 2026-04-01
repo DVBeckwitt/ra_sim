@@ -273,9 +273,13 @@ def test_create_root_window_sets_title_and_configures_section_styles(monkeypatch
     class _FakeTkRoot:
         def __init__(self) -> None:
             self.title_text = None
+            self.withdrawn = False
 
         def title(self, text: str) -> None:
             self.title_text = text
+
+        def withdraw(self) -> None:
+            self.withdrawn = True
 
     class _FakeFont:
         def __init__(self) -> None:
@@ -298,15 +302,32 @@ def test_create_root_window_sets_title_and_configures_section_styles(monkeypatch
     fake_root = _FakeTkRoot()
     fake_style = _FakeStyle(fake_root)
     fake_font = _FakeFont()
+    launch_context = object()
+    affinity_calls = []
 
     monkeypatch.setattr(views.tk, "Tk", lambda: fake_root)
     monkeypatch.setattr(views.ttk, "Style", lambda root: fake_style)
     monkeypatch.setattr(views.tkfont, "nametofont", lambda _name: fake_font)
+    monkeypatch.setattr(
+        views.window_affinity,
+        "capture_launch_window_context",
+        lambda: launch_context,
+    )
+    monkeypatch.setattr(
+        views.window_affinity,
+        "apply_window_launch_context",
+        lambda window, *, context=None, width=None, height=None: affinity_calls.append(
+            (window, context, width, height)
+        )
+        or True,
+    )
 
     root = views.create_root_window("Readable Sections")
 
     assert root is fake_root
+    assert fake_root.withdrawn is True
     assert fake_root.title_text == "Readable Sections"
+    assert getattr(fake_root, "_ra_sim_launch_window_context") is launch_context
     assert fake_font.configured == {"weight": "bold"}
     assert (
         "TLabelframe",
@@ -315,6 +336,7 @@ def test_create_root_window_sets_title_and_configures_section_styles(monkeypatch
     assert any(name == "TLabelframe.Label" for name, _kwargs in fake_style.configure_calls)
     assert any(name == "SectionHeader.Toolbutton" for name, _kwargs in fake_style.configure_calls)
     assert ("TNotebook.Tab", {"padding": (12, 8)}) in fake_style.configure_calls
+    assert affinity_calls == [(fake_root, launch_context, None, None)]
 
 
 class _FakeCollapsibleFrame:
@@ -505,6 +527,7 @@ class _FakeScale:
             "from": kwargs.get("from_"),
             "to": kwargs.get("to"),
         }
+        self.bindings = {}
         self.pack_calls = []
         _FakeScale.created.append(self)
 
@@ -513,6 +536,9 @@ class _FakeScale:
 
     def pack(self, **kwargs) -> None:
         self.pack_calls.append(kwargs)
+
+    def bind(self, event: str, callback, add=None) -> None:
+        self.bindings[event] = (callback, add)
 
     def configure(self, **kwargs) -> None:
         if "state" in kwargs:
@@ -1809,13 +1835,14 @@ def test_stacking_parameter_rebuild_helpers_render_dynamic_controls(monkeypatch)
             "z": _FakeVar(0.3),
         }
     ]
+    occupancy_updates = []
 
     views.rebuild_occupancy_controls(
         view_state=view_state,
         occ_vars=occ_vars,
         occupancy_label_text=lambda idx: f"Occupancy {idx + 1}",
         occupancy_input_label_text=lambda idx: f"Input {idx + 1}",
-        on_update=lambda *_args: None,
+        on_update=lambda *args: occupancy_updates.append(args),
     )
     views.rebuild_atom_site_fractional_controls(
         view_state=view_state,
@@ -1834,11 +1861,15 @@ def test_stacking_parameter_rebuild_helpers_render_dynamic_controls(monkeypatch)
     assert len(view_state.occ_entry_widgets) == 2
     assert view_state.occ_label_widgets[0].kwargs["text"] == "Occupancy 1"
     assert view_state.occ_entry_label_widgets[0].kwargs["text"] == "Input 1:"
+    assert "<ButtonRelease-1>" in view_state.occ_scale_widgets[0].bindings
     assert "<Return>" in view_state.occ_entry_widgets[0].bindings
     assert "<FocusOut>" in view_state.occ_entry_widgets[0].bindings
     assert len(view_state.atom_site_coord_entry_widgets) == 3
     assert "<Return>" in view_state.atom_site_coord_entry_widgets[0].bindings
     assert "<FocusOut>" in view_state.atom_site_coord_entry_widgets[0].bindings
+    occ_vars[0].set(0.6)
+    view_state.occ_scale_widgets[0].bindings["<ButtonRelease-1>"](None)
+    assert occupancy_updates[-1] == (0.6,)
     assert view_state.atom_site_table_frame.columnconfigure_calls == [
         (0, 1),
         (1, 1),
@@ -2245,6 +2276,7 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.tth_min_slider.cget("to") == 90.0
     assert view_state.phi_min_slider.cget("from") == -90.0
     assert view_state.phi_max_slider.cget("to") == 90.0
+    assert "<ButtonRelease-1>" in view_state.tth_min_slider.bindings
     assert "<Return>" in view_state.tth_min_entry.bindings
     assert "<FocusOut>" in view_state.phi_max_entry.bindings
 
@@ -2258,6 +2290,10 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
         ("1.5000", 1.5, 0.0, 90.0),
         ("18.7000", 18.7, -90.0, 90.0),
     ]
+
+    view_state.tth_min_var.set(4.0)
+    view_state.tth_min_slider.bindings["<ButtonRelease-1>"][0](None)
+    assert slider_calls[-1] == ("tth-min", 4.0)
 
 
 def test_analysis_export_controls_store_refs_and_commands(monkeypatch) -> None:

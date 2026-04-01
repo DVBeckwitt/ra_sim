@@ -150,6 +150,19 @@ def _runtime_last_sim_res2(bindings: IntegrationRangeDragBindings):
     return _resolve_runtime_value(bindings.last_sim_res2_factory)
 
 
+def range_refresh_requires_pending_analysis_result(
+    *,
+    active_job: object,
+    queued_job: object,
+    cached_result: object,
+) -> bool:
+    """Return whether a range refresh must wait for a background caking result."""
+
+    if cached_result is not None:
+        return False
+    return active_job is not None or queued_job is not None
+
+
 def _clear_drag_coordinates(drag_state) -> None:
     drag_state.active = False
     drag_state.mode = None

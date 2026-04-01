@@ -219,6 +219,110 @@ def test_build_geometry_fit_overlay_records_falls_back_to_initial_native_points(
     assert frame_warning == ""
 
 
+def test_build_geometry_fit_overlay_records_prefers_native_initial_points_over_cached_view_coords():
+    native_shape = (256, 256)
+    expected_sim_display = rotate_point_for_display(
+        10.0,
+        20.0,
+        native_shape,
+        0,
+    )
+    expected_bg_display = rotate_point_for_display(
+        12.0,
+        22.0,
+        native_shape,
+        -1,
+    )
+
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                # These simulate view-specific cached coordinates captured in a
+                # different projection than the detector/simulator redraw.
+                "sim_display": (101.0, 202.0),
+                "bg_display": (303.0, 404.0),
+                "sim_native": (10.0, 20.0),
+                "bg_native": (12.0, 22.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": 10.0,
+                "simulated_y": 20.0,
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=native_shape,
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=-1,
+    )
+
+    assert records[0]["initial_sim_display"] == pytest.approx(expected_sim_display)
+    assert records[0]["initial_bg_display"] == pytest.approx(expected_bg_display)
+
+
+def test_build_geometry_fit_overlay_records_keeps_unmatched_initial_pairs_visible():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "sim_display": (10.0, 20.0),
+                "bg_display": (12.0, 22.0),
+            },
+            {
+                "overlay_match_index": 1,
+                "hkl": (2, 0, 0),
+                "sim_display": (30.0, 40.0),
+                "bg_display": (32.0, 42.0),
+            },
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": 10.0,
+                "simulated_y": 20.0,
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=(256, 256),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert [entry["overlay_match_index"] for entry in records] == [0, 1]
+    assert records[0]["match_status"] == "matched"
+    assert records[1]["match_status"] == "missing_pair"
+    assert records[1]["initial_sim_display"] == pytest.approx((30.0, 40.0))
+    assert records[1]["initial_bg_display"] == pytest.approx((32.0, 42.0))
+    assert "final_sim_display" not in records[1]
+
+
 def test_compute_geometry_overlay_frame_diagnostics_projects_native_points_in_caked_view():
     records = [
         {

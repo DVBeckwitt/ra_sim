@@ -9,6 +9,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from . import window_affinity
+
 
 LAUNCHER_COMMANDS = {"gui", "calibrant", "mosaic"}
 
@@ -179,6 +181,7 @@ def quick_startup_mode_dialog() -> str | None:
         return "simulation"
 
     choice = {"mode": None}
+    launch_context = window_affinity.capture_launch_window_context()
 
     launcher = tk.Tk()
     launcher.title("RA-SIM Launcher")
@@ -327,9 +330,15 @@ def quick_startup_mode_dialog() -> str | None:
     launcher.update_idletasks()
     width = max(launcher.winfo_width(), 480)
     height = max(launcher.winfo_height(), 420)
-    x = launcher.winfo_screenwidth() // 2 - width // 2
-    y = launcher.winfo_screenheight() // 2 - height // 2
-    launcher.geometry(f"{width}x{height}+{x}+{y}")
+    if not window_affinity.apply_window_launch_context(
+        launcher,
+        context=launch_context,
+        width=width,
+        height=height,
+    ):
+        x = launcher.winfo_screenwidth() // 2 - width // 2
+        y = launcher.winfo_screenheight() // 2 - height // 2
+        launcher.geometry(f"{width}x{height}+{x}+{y}")
     sim_btn.focus_set()
     launcher.mainloop()
 
@@ -346,6 +355,7 @@ def choose_startup_mode_dialog(root: Any) -> str | None:
     from tkinter import ttk
 
     selection = {"mode": None}
+    launch_context = getattr(root, "_ra_sim_launch_window_context", None)
 
     try:
         root.withdraw()
@@ -412,9 +422,15 @@ def choose_startup_mode_dialog(root: Any) -> str | None:
     chooser.update_idletasks()
     width = chooser.winfo_width()
     height = chooser.winfo_height()
-    x = chooser.winfo_screenwidth() // 2 - width // 2
-    y = chooser.winfo_screenheight() // 2 - height // 2
-    chooser.geometry(f"{width}x{height}+{x}+{y}")
+    if not window_affinity.apply_window_launch_context(
+        chooser,
+        context=launch_context,
+        width=width,
+        height=height,
+    ):
+        x = chooser.winfo_screenwidth() // 2 - width // 2
+        y = chooser.winfo_screenheight() // 2 - height // 2
+        chooser.geometry(f"{width}x{height}+{x}+{y}")
 
     simulation_btn.focus_set()
     root.wait_window(chooser)
@@ -434,8 +450,22 @@ def launch_calibrant_gui(*, bundle: str | None = None) -> None:
             "`ra_sim.hbn_fitter.fitter`."
         ) from exc
 
+    launch_context = window_affinity.capture_launch_window_context()
     root = tk.Tk()
+    try:
+        root.withdraw()
+    except tk.TclError:
+        pass
+    try:
+        setattr(root, "_ra_sim_launch_window_context", launch_context)
+    except Exception:
+        pass
     _ = HBNFitterGUI(root, startup_bundle=bundle)
+    window_affinity.apply_window_launch_context(root, context=launch_context)
+    try:
+        root.deiconify()
+    except tk.TclError:
+        pass
     root.mainloop()
 
 

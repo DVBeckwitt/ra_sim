@@ -1,5 +1,6 @@
 import os
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -78,6 +79,61 @@ def test_early_main_bootstrap_launches_mosaic_visualizer(monkeypatch) -> None:
 
     assert exc_info.value.code == 0
     assert calls == ["mosaic"]
+
+
+def test_launch_calibrant_gui_applies_launch_window_context(monkeypatch) -> None:
+    events: list[object] = []
+
+    class _FakeTkRoot:
+        def __init__(self) -> None:
+            self.withdrawn = False
+            self.deiconified = False
+            self.mainloop_called = False
+
+        def withdraw(self) -> None:
+            self.withdrawn = True
+
+        def deiconify(self) -> None:
+            self.deiconified = True
+
+        def mainloop(self) -> None:
+            self.mainloop_called = True
+
+    fake_root = _FakeTkRoot()
+    fake_tk = ModuleType("tkinter")
+    fake_tk.Tk = lambda: fake_root
+    fake_tk.TclError = RuntimeError
+    fake_fitter_module = ModuleType("ra_sim.hbn_fitter.fitter")
+    fake_fitter_module.HBNFitterGUI = (
+        lambda root, startup_bundle=None: events.append(("gui", root, startup_bundle))
+    )
+
+    monkeypatch.setitem(sys.modules, "tkinter", fake_tk)
+    monkeypatch.setitem(sys.modules, "ra_sim.hbn_fitter.fitter", fake_fitter_module)
+    monkeypatch.setattr(
+        bootstrap.window_affinity,
+        "capture_launch_window_context",
+        lambda: "launch-context",
+    )
+    monkeypatch.setattr(
+        bootstrap.window_affinity,
+        "apply_window_launch_context",
+        lambda window, *, context=None, width=None, height=None: events.append(
+            ("affinity", window, context, width, height)
+        )
+        or True,
+    )
+
+    bootstrap.launch_calibrant_gui(bundle="bundle.npz")
+
+    assert fake_root.withdrawn is True
+    assert fake_root.deiconified is True
+    assert fake_root.mainloop_called is True
+    assert getattr(fake_root, "_ra_sim_launch_window_context") == "launch-context"
+    assert events == [
+        ("gui", fake_root, "bundle.npz"),
+        ("affinity", fake_root, "launch-context", None, None),
+    ]
 
 
 def test_build_runtime_structure_factor_pruning_bootstrap_delegates_callbacks() -> None:

@@ -159,6 +159,41 @@ def test_create_runtime_drag_rectangles_attach_hidden_overlays() -> None:
     assert region_rect.visible is False
 
 
+def test_range_refresh_requires_pending_analysis_result_only_without_cache() -> None:
+    assert (
+        integration_range_drag.range_refresh_requires_pending_analysis_result(
+            active_job=object(),
+            queued_job=None,
+            cached_result=None,
+        )
+        is True
+    )
+    assert (
+        integration_range_drag.range_refresh_requires_pending_analysis_result(
+            active_job=None,
+            queued_job=object(),
+            cached_result=None,
+        )
+        is True
+    )
+    assert (
+        integration_range_drag.range_refresh_requires_pending_analysis_result(
+            active_job=object(),
+            queued_job=None,
+            cached_result=object(),
+        )
+        is False
+    )
+    assert (
+        integration_range_drag.range_refresh_requires_pending_analysis_result(
+            active_job=None,
+            queued_job=None,
+            cached_result=None,
+        )
+        is False
+    )
+
+
 def test_integration_range_drag_binding_factory_builds_live_bindings(
     monkeypatch,
 ) -> None:

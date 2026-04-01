@@ -1,5 +1,6 @@
 import numpy as np
 
+from ra_sim.fitting.background_peak_matching import build_background_peak_context
 from ra_sim.gui import manual_geometry as mg
 
 
@@ -178,6 +179,25 @@ def test_geometry_manual_candidate_source_key_prefers_source_indices() -> None:
     assert mg.geometry_manual_candidate_source_key({"hkl": (1, 2, 3)}) == ("hkl", 1, 2, 3)
     assert mg.geometry_manual_candidate_source_key({"label": "1,2,3"}) == ("hkl", 1, 2, 3)
     assert mg.geometry_manual_candidate_source_key({"label": "left peak"}) == ("label", "left peak")
+
+
+def test_geometry_manual_tagged_candidate_from_session_returns_matching_entry() -> None:
+    candidate_entries = [
+        {"label": "left", "source_table_index": 1, "source_row_index": 2},
+        {"label": "right", "source_table_index": 1, "source_row_index": 3},
+    ]
+
+    tagged = mg.geometry_manual_tagged_candidate_from_session(
+        {"tagged_candidate_key": ("source", 1, 3)},
+        candidate_entries,
+    )
+
+    assert tagged is not None
+    assert tagged["label"] == "right"
+    assert mg.geometry_manual_tagged_candidate_from_session(
+        {"tagged_candidate_key": ("source", 9, 9)},
+        candidate_entries,
+    ) is None
 
 
 def test_current_geometry_manual_match_config_reuses_auto_match_defaults() -> None:
@@ -1065,16 +1085,115 @@ def test_geometry_manual_pick_preview_state_builds_status_message() -> None:
     assert f"quality={preview['quality_label']}" in preview["message"]
 
 
+def test_geometry_manual_pick_preview_state_prefers_tagged_candidate() -> None:
+    session = {
+        "group_key": ("q_group", "primary", 1, 2),
+        "q_label": "test group",
+        "group_entries": [{"label": "left"}, {"label": "right"}],
+        "background_index": 0,
+        "tagged_candidate_key": ("source", 1, 2),
+    }
+
+    preview = mg.geometry_manual_pick_preview_state(
+        10.0,
+        20.0,
+        pick_session=session,
+        current_background_index=0,
+        force=True,
+        remaining_candidates=[
+            {
+                "label": "left",
+                "sim_col": 35.0,
+                "sim_row": 30.0,
+                "source_table_index": 1,
+                "source_row_index": 2,
+            },
+            {
+                "label": "right",
+                "sim_col": 12.5,
+                "sim_row": 14.5,
+                "source_table_index": 1,
+                "source_row_index": 3,
+            },
+        ],
+        display_background=np.zeros((8, 8), dtype=float),
+        refine_preview_point=lambda *_args, **_kwargs: (12.0, 14.0),
+        preview_due=lambda *_args, **_kwargs: True,
+        use_caked_space=False,
+    )
+
+    assert preview is not None
+    assert preview["candidate"]["label"] == "left"
+    assert "tagged sim [left]" in preview["message"]
+
+
+def test_geometry_manual_pick_preview_state_colors_from_match_confidence() -> None:
+    background = np.zeros((33, 33), dtype=float)
+    background[10, 10] = 1000.0
+    background[10, 11] = 600.0
+    background[11, 10] = 600.0
+    state = {
+        "match_config": {},
+        "background_context": build_background_peak_context(background),
+    }
+
+    preview = mg.geometry_manual_pick_preview_state(
+        24.0,
+        24.0,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "q_label": "test group",
+            "group_entries": [{"label": "1,0,0"}],
+            "background_index": 0,
+        },
+        current_background_index=0,
+        force=True,
+        remaining_candidates=[
+            {"label": "1,0,0", "sim_col": 10.0, "sim_row": 10.0},
+        ],
+        display_background=background,
+        cache_data=state,
+        refine_preview_point=lambda *_args, **_kwargs: (10.0, 10.0),
+        preview_due=lambda *_args, **_kwargs: True,
+        use_caked_space=False,
+    )
+
+    assert preview is not None
+    assert np.isfinite(preview["match_confidence"])
+    assert preview["preview_color"] == mg.geometry_manual_preview_confidence_color(
+        preview["match_confidence"]
+    )
+    assert preview["preview_color"] != mg.geometry_manual_preview_color(
+        preview["sigma_px"]
+    )
+    assert "confidence=" in preview["message"]
+
+
 def test_geometry_manual_preview_color_transitions_from_green_to_red() -> None:
     assert mg.geometry_manual_preview_color(0.75) == "#2ecc71"
     assert mg.geometry_manual_preview_color(12.0) == "#e74c3c"
     assert mg.geometry_manual_preview_color(6.0) not in {"#2ecc71", "#e74c3c"}
 
 
+def test_geometry_manual_preview_confidence_color_transitions_from_red_to_green() -> None:
+    assert mg.geometry_manual_preview_confidence_color(0.1) == "#e74c3c"
+    assert mg.geometry_manual_preview_confidence_color(1.0) == "#2ecc71"
+    assert mg.geometry_manual_preview_confidence_color(0.5) not in {
+        "#2ecc71",
+        "#e74c3c",
+    }
+
+
 def test_geometry_manual_preview_quality_label_tracks_sigma() -> None:
     assert mg.geometry_manual_preview_quality_label(0.75) == "good"
     assert mg.geometry_manual_preview_quality_label(4.0) == "warning"
     assert mg.geometry_manual_preview_quality_label(12.0) == "bad"
+
+
+def test_geometry_manual_preview_confidence_quality_label_tracks_confidence() -> None:
+    assert mg.geometry_manual_preview_confidence_quality_label(1.1) == "good"
+    assert mg.geometry_manual_preview_confidence_quality_label(0.5) == "warning"
+    assert mg.geometry_manual_preview_confidence_quality_label(0.1) == "bad"
 
 
 def test_geometry_manual_session_initial_pairs_display_includes_pending_bg_points() -> None:
@@ -1618,6 +1737,122 @@ def test_geometry_manual_toggle_selection_at_starts_session() -> None:
     assert "Selected selected group" in status_messages[-1]
 
 
+def test_geometry_manual_toggle_selection_at_starts_two_peak_session_for_non_00l_group() -> None:
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    calls: list[tuple[str, object]] = []
+    group_key = ("q_group", "primary", 1, 2)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "1,0,2",
+                        "hkl": (1, 0, 2),
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    },
+                    {
+                        "label": "-1,0,2",
+                        "hkl": (-1, 0, 2),
+                        "sim_col": 30.0,
+                        "sim_row": 40.0,
+                        "source_table_index": 1,
+                        "source_row_index": 3,
+                    },
+                ]
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
+        clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        update_button_label_fn=lambda: calls.append(("button", None)),
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert next_session["target_count"] == 2
+    assert set_sessions[-1]["target_count"] == 2
+    assert ("render", False) in calls
+    assert ("button", None) in calls
+    assert "Click background peak 1 of 2" in status_messages[-1]
+
+
+def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() -> None:
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    group_key = ("q_group", "primary", 1, 2)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        29.5,
+        39.5,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                group_key: [
+                    {
+                        "label": "1,0,2",
+                        "hkl": (1, 0, 2),
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    },
+                    {
+                        "label": "-1,0,2",
+                        "hkl": (-1, 0, 2),
+                        "sim_col": 30.0,
+                        "sim_row": 40.0,
+                        "source_table_index": 1,
+                        "source_row_index": 3,
+                    },
+                ]
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["tagged_candidate_key"] == ("source", 1, 3)
+    assert next_session["group_entries"][0]["source_row_index"] == 3
+    assert next_session["tagged_candidate"]["label"] == "-1,0,2"
+    assert "Tagged central-beam seed [-1,0,2]" in status_messages[-1]
+    assert set_sessions[-1]["tagged_candidate_key"] == ("source", 1, 3)
+
+
 def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
     set_sessions: list[dict[str, object]] = []
     saved_entry_sets: list[list[dict[str, object]]] = []
@@ -1676,4 +1911,135 @@ def test_geometry_manual_place_selection_at_saves_completed_group() -> None:
     assert saved_entry_sets[-1][1]["label"] == "1,0,0"
     assert saved_entry_sets[-1][1]["q_group_key"] == ("q_group", "primary", 1, 0)
     assert saved_entry_sets[-1][1]["placement_error_px"] > 0.0
+    assert "Saved 1 manual background points for selected group" in status_messages[-1]
+
+
+def test_geometry_manual_place_selection_at_uses_tagged_candidate_first() -> None:
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        11.8,
+        14.2,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 2),
+            "group_entries": [
+                {
+                    "label": "left",
+                    "hkl": (1, 0, 2),
+                    "sim_col": 35.0,
+                    "sim_row": 30.0,
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                },
+                {
+                    "label": "right",
+                    "hkl": (-1, 0, 2),
+                    "sim_col": 12.0,
+                    "sim_row": 14.0,
+                    "source_table_index": 1,
+                    "source_row_index": 3,
+                },
+            ],
+            "pending_entries": [],
+            "target_count": 2,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "tagged_candidate_key": ("source", 1, 2),
+            "zoom_active": True,
+            "zoom_center": (12.0, 14.0),
+            "saved_xlim": (0.0, 40.0),
+            "saved_ylim": (0.0, 40.0),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (12.0, 14.0),
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert next_session["pending_entries"][0]["label"] == "left"
+    assert next_session["pending_entries"][0]["source_row_index"] == 2
+    assert "Assigned to left" in status_messages[-1]
+    assert set_sessions[-1]["pending_entries"][0]["source_row_index"] == 2
+
+
+def test_geometry_manual_place_selection_at_back_projects_caked_pick_to_detector_space() -> None:
+    set_sessions: list[dict[str, object]] = []
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    status_messages: list[str] = []
+    calls: list[tuple[str, object]] = []
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        13.0,
+        2.0,
+        pick_session={
+            "group_key": ("q_group", "primary", 1, 0),
+            "group_entries": [
+                {
+                    "label": "1,0,0",
+                    "hkl": (1, 0, 0),
+                    "sim_col": 13.2,
+                    "sim_row": 2.5,
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                }
+            ],
+            "pending_entries": [],
+            "target_count": 1,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+            "zoom_active": True,
+            "zoom_center": (13.0, 2.0),
+            "saved_xlim": (10.0, 16.0),
+            "saved_ylim": (-4.0, 4.0),
+        },
+        current_background_index=0,
+        display_background=np.zeros((8, 8), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (13.2, 2.5),
+        set_pairs_for_index_fn=lambda _idx, entries: saved_entry_sets.append(list(entries or [])) or list(entries or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **kwargs: calls.append(("clear", kwargs.get("redraw"))),
+        restore_view_fn=lambda **kwargs: calls.append(("restore", kwargs.get("redraw"))),
+        render_current_pairs_fn=lambda **kwargs: calls.append(("render", kwargs.get("update_status"))),
+        update_button_label_fn=lambda: calls.append(("button", None)),
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: calls.append(("undo", None)),
+        use_caked_space=True,
+        caked_angles_to_background_display_coords=lambda two_theta, phi: (
+            phi + 100.0,
+            two_theta + 200.0,
+        ),
+        background_display_to_native_detector_coords=lambda col, row: (
+            float(col) - 1.0,
+            float(row) - 2.0,
+        ),
+    )
+
+    assert handled is True
+    assert next_session == {}
+    assert set_sessions[-1] == {}
+    assert ("undo", None) in calls
+    assert saved_entry_sets
+    assert saved_entry_sets[-1][0]["x"] == 102.5
+    assert saved_entry_sets[-1][0]["y"] == 213.2
+    assert saved_entry_sets[-1][0]["detector_x"] == 101.5
+    assert saved_entry_sets[-1][0]["detector_y"] == 211.2
+    assert saved_entry_sets[-1][0]["caked_x"] == 13.2
+    assert saved_entry_sets[-1][0]["caked_y"] == 2.5
+    assert saved_entry_sets[-1][0]["raw_caked_x"] == 13.0
+    assert saved_entry_sets[-1][0]["raw_caked_y"] == 2.0
+    assert saved_entry_sets[-1][0]["placement_error_px"] > 0.0
     assert "Saved 1 manual background points for selected group" in status_messages[-1]

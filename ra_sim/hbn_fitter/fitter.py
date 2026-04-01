@@ -18,6 +18,7 @@ from matplotlib.backend_bases import MouseButton
 from scipy.optimize import minimize, curve_fit
 from skimage.measure import EllipseModel, ransac
 
+from ra_sim.gui import window_affinity
 from ra_sim.io.osc_reader import read_osc
 
 
@@ -4859,9 +4860,19 @@ def parse_args():
 
 def main():
     args = parse_args()
+    launch_context = window_affinity.capture_launch_window_context()
     root = tk.Tk()
+    try:
+        root.withdraw()
+    except tk.TclError:
+        pass
     app = HBNFitterGUI(root, startup_bundle=args.bundle)
     _ = app
+    window_affinity.apply_window_launch_context(root, context=launch_context)
+    try:
+        root.deiconify()
+    except tk.TclError:
+        pass
     root.mainloop()
 
 

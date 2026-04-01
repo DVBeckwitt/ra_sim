@@ -341,14 +341,8 @@ def test_fit_geometry_parameters_pixel_path_runs_without_full_ray_polish(
 
     assert result.success
     assert solve_calls["count"] == 1
-    assert isinstance(result.single_ray_polish_summary, dict)
-    assert bool(result.single_ray_polish_summary["enabled"]) is False
-    assert bool(result.single_ray_polish_summary["accepted"]) is False
-    assert str(result.single_ray_polish_summary["status"]) == "skipped"
     assert isinstance(result.point_match_summary, dict)
     assert bool(result.point_match_summary["central_ray_mode"]) is True
-    assert bool(result.point_match_summary["single_ray_polish_enabled"]) is False
-    assert bool(result.point_match_summary["single_ray_polish_accepted"]) is False
     assert bool(result.point_match_summary["single_ray_enabled"]) is False
 
 
@@ -522,6 +516,103 @@ def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_ref
     assert bool(result.point_match_summary["central_ray_mode"]) is True
     assert bool(result.point_match_summary["single_ray_enabled"]) is False
     assert int(result.point_match_summary["single_ray_forced_count"]) == 0
+
+
+def test_prepare_reflection_subset_preserves_distinct_reflections_within_one_q_group() -> None:
+    miller = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (1, 0, 0),
+            "label": "1,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "q_group_key": ["q", 1],
+            "source_table_index": 0,
+            "source_row_index": 0,
+        },
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.2,
+            "y": 4.1,
+            "q_group_key": ("q", 1),
+            "source_table_index": 1,
+            "source_row_index": 0,
+        },
+        {
+            "hkl": (3, 0, 0),
+            "label": "3,0,0",
+            "x": 6.0,
+            "y": 5.0,
+            "q_group_key": ("q", 2),
+            "source_table_index": 2,
+            "source_row_index": 0,
+        },
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.reduced is False
+    assert np.allclose(
+        subset.miller,
+        np.array(
+            [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+            dtype=np.float64,
+        ),
+    )
+    assert np.array_equal(subset.original_indices, np.array([0, 1, 2], dtype=np.int64))
+    assert len(subset.measured_entries) == 3
+    assert [entry["q_group_key"] for entry in subset.measured_entries] == [
+        ("q", 1),
+        ("q", 1),
+        ("q", 2),
+    ]
+    assert [entry["source_table_index"] for entry in subset.measured_entries] == [
+        0,
+        1,
+        2,
+    ]
+
+
+def test_prepare_reflection_subset_keeps_hkl_fallback_for_stale_source_identity_only() -> None:
+    miller = np.array(
+        [
+            [5.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    intensities = np.array([5.0, 2.0, 7.0], dtype=np.float64)
+    measured = [
+        {
+            "hkl": (2, 0, 0),
+            "label": "2,0,0",
+            "x": 4.0,
+            "y": 4.0,
+            "source_table_index": 0,
+            "source_row_index": 0,
+            "fit_source_identity_only": True,
+        }
+    ]
+
+    subset = opt._prepare_reflection_subset(miller, intensities, measured)
+
+    assert subset.reduced is True
+    assert subset.fixed_source_reflection_count == 0
+    assert subset.fallback_hkl_count == 1
+    assert np.array_equal(subset.original_indices, np.array([1], dtype=np.int64))
+    assert np.allclose(subset.miller, np.array([[2.0, 0.0, 0.0]], dtype=np.float64))
+    assert "source_table_index" not in subset.measured_entries[0]
+    assert "source_row_index" not in subset.measured_entries[0]
 
 
 def test_fit_geometry_parameters_pixel_path_keeps_residual_size_when_pair_status_changes(
@@ -2593,6 +2684,57 @@ def test_fit_geometry_parameters_defaults_to_point_only_fit_without_image_stages
     assert isinstance(result.image_refinement_summary, dict)
     assert bool(result.image_refinement_summary["enabled"]) is False
     assert str(result.image_refinement_summary["reason"]) == "disabled_by_config"
+
+
+def test_fit_geometry_parameters_manual_point_fit_mode_uses_lean_defaults(
+    monkeypatch,
+):
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process_peaks)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([10.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        refinement_config={"solver": {"manual_point_fit_mode": True}},
+    )
+
+    assert result.success
+    assert isinstance(result.geometry_fit_debug_summary, dict)
+    assert isinstance(result.geometry_fit_debug_summary["solver"], dict)
+    solver_debug = result.geometry_fit_debug_summary["solver"]
+    assert bool(solver_debug["manual_point_fit_mode"]) is True
+    assert np.isclose(float(solver_debug["f_scale_px"]), 1.0)
+    assert int(solver_debug["restarts"]) == 0
+    assert bool(solver_debug["use_measurement_uncertainty"]) is False
+    assert bool(solver_debug["full_beam_polish_enabled"]) is False
+    assert isinstance(result.full_beam_polish_summary, dict)
+    assert bool(result.full_beam_polish_summary["enabled"]) is False
+    assert str(result.full_beam_polish_summary["reason"]) == "disabled_by_config"
 
 
 def test_fit_geometry_parameters_can_accept_ridge_refinement(monkeypatch):

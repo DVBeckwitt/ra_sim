@@ -230,7 +230,12 @@ def create_slider(
         slider.focus_set()
         return None
 
+    def on_release(_event):
+        slider_command(slider_var.get())
+        return None
+
     slider.bind("<Button-1>", on_click)
+    slider.bind("<ButtonRelease-1>", on_release)
 
     # Ensure initial value is clamped/snapped and reflected in the entry.
     initial_precise = _snap(slider_var.get())

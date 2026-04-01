@@ -149,6 +149,31 @@ def draw_geometry_fit_overlay(
         )
         geometry_pick_artists.append(arrow)
 
+    def _plot_initial_link(
+        start_xy: tuple[float, float],
+        end_xy: tuple[float, float],
+        *,
+        label: str,
+    ) -> None:
+        link = ax.annotate(
+            label,
+            xy=end_xy,
+            xytext=start_xy,
+            color="#636e72",
+            fontsize=8,
+            ha="center",
+            va="center",
+            arrowprops=dict(
+                arrowstyle="->",
+                color="#636e72",
+                lw=1.0,
+                linestyle=":",
+                alpha=0.8,
+            ),
+            zorder=6,
+        )
+        geometry_pick_artists.append(link)
+
     limit = max(1, int(max_display_markers))
     for idx, entry in enumerate(overlay_records or []):
         if idx >= limit or not isinstance(entry, dict):
@@ -175,9 +200,6 @@ def draw_geometry_fit_overlay(
             native_key="final_bg_native",
         )
 
-        if final_sim_display is None or final_bg_display is None:
-            continue
-
         label = str(entry.get("hkl", entry.get("label", "match")))
         if initial_sim_display is not None:
             _plot_marker(
@@ -188,19 +210,6 @@ def draw_geometry_fit_overlay(
                 "s",
                 zorder=7,
             )
-            sim_shift = math.hypot(
-                final_sim_display[0] - initial_sim_display[0],
-                final_sim_display[1] - initial_sim_display[1],
-            )
-            if sim_shift > 0.25:
-                _plot_arrow(
-                    initial_sim_display,
-                    final_sim_display,
-                    color="#0984e3",
-                    linestyle="--",
-                    lw=1.0,
-                    alpha=0.85,
-                )
 
         if initial_bg_display is not None:
             _plot_marker(
@@ -210,6 +219,35 @@ def draw_geometry_fit_overlay(
                 "#f39c12",
                 "^",
                 zorder=7,
+            )
+
+        status = str(entry.get("match_status", "matched")).strip().lower()
+        matched = (
+            status == "matched"
+            and final_sim_display is not None
+            and final_bg_display is not None
+        )
+        if not matched:
+            if initial_sim_display is not None and initial_bg_display is not None:
+                _plot_initial_link(
+                    initial_sim_display,
+                    initial_bg_display,
+                    label=label,
+                )
+            continue
+
+        sim_shift = math.hypot(
+            final_sim_display[0] - initial_sim_display[0],
+            final_sim_display[1] - initial_sim_display[1],
+        ) if initial_sim_display is not None else 0.0
+        if initial_sim_display is not None and sim_shift > 0.25:
+            _plot_arrow(
+                initial_sim_display,
+                final_sim_display,
+                color="#0984e3",
+                linestyle="--",
+                lw=1.0,
+                alpha=0.85,
             )
 
         _plot_marker(

@@ -857,63 +857,59 @@ def build_geometry_fit_overlay_records(
         for entry in normalize_initial_geometry_pairs_display(initial_pairs_display)
     }
 
-    records: list[dict[str, object]] = []
+    diagnostics_by_index: dict[int, dict[str, object]] = {}
+    diagnostic_order: list[int] = []
     for fallback_index, raw_entry in enumerate(point_match_diagnostics or []):
         if not isinstance(raw_entry, dict):
             continue
-        status = str(raw_entry.get("match_status", "matched")).strip().lower()
-        if status != "matched":
-            continue
-        try:
-            simulated_native = (
-                float(raw_entry.get("simulated_x", np.nan)),
-                float(raw_entry.get("simulated_y", np.nan)),
-            )
-            measured_fit_oriented = (
-                float(raw_entry.get("measured_x", np.nan)),
-                float(raw_entry.get("measured_y", np.nan)),
-            )
-        except Exception:
-            continue
-        if not all(np.isfinite(v) for v in (*simulated_native, *measured_fit_oriented)):
-            continue
-
         overlay_match_index = normalize_overlay_match_index(
             raw_entry.get("overlay_match_index", raw_entry.get("match_input_index")),
             fallback_index,
         )
-        initial_entry = initial_by_index.get(overlay_match_index, {})
+        status = str(raw_entry.get("match_status", "matched")).strip().lower()
+        existing = diagnostics_by_index.get(overlay_match_index)
+        if existing is None:
+            diagnostics_by_index[overlay_match_index] = dict(raw_entry)
+            diagnostic_order.append(int(overlay_match_index))
+            continue
+        existing_status = str(existing.get("match_status", "matched")).strip().lower()
+        if existing_status != "matched" and status == "matched":
+            diagnostics_by_index[overlay_match_index] = dict(raw_entry)
 
-        measured_native = transform_points_orientation(
-            [measured_fit_oriented],
-            native_frame_shape,
-            indexing_mode=str(inverse_orientation.get("indexing_mode", "xy")),
-            k=int(inverse_orientation.get("k", 0)),
-            flip_x=bool(inverse_orientation.get("flip_x", False)),
-            flip_y=bool(inverse_orientation.get("flip_y", False)),
-            flip_order=str(inverse_orientation.get("flip_order", "yx")),
-        )[0]
+    ordered_indices: list[int] = []
+    seen_indices: set[int] = set()
+    for entry in normalize_initial_geometry_pairs_display(initial_pairs_display):
+        index = int(entry["overlay_match_index"])
+        if index in seen_indices:
+            continue
+        seen_indices.add(index)
+        ordered_indices.append(index)
+    for index in diagnostic_order:
+        if index in seen_indices:
+            continue
+        seen_indices.add(index)
+        ordered_indices.append(int(index))
 
-        final_sim_display = rotate_point_for_display(
-            float(simulated_native[0]),
-            float(simulated_native[1]),
-            native_frame_shape,
-            sim_display_rotate_k,
-        )
-        final_bg_display = rotate_point_for_display(
-            float(measured_native[0]),
-            float(measured_native[1]),
-            native_frame_shape,
-            background_display_rotate_k,
-        )
+    records: list[dict[str, object]] = []
+    for fallback_index, overlay_match_index in enumerate(ordered_indices):
+        initial_entry = initial_by_index.get(int(overlay_match_index), {})
+        raw_entry = diagnostics_by_index.get(int(overlay_match_index), {})
+        status = str(raw_entry.get("match_status", "missing_pair")).strip().lower()
 
         record = dict(raw_entry)
         record["overlay_match_index"] = int(overlay_match_index)
+        if not status:
+            status = "missing_pair"
+        record["match_status"] = status
+
         initial_sim_native = _parse_point(initial_entry.get("sim_native"))
         initial_bg_native = _parse_point(initial_entry.get("bg_native"))
-        initial_sim_display = _parse_point(initial_entry.get("sim_display"))
-        initial_bg_display = _parse_point(initial_entry.get("bg_display"))
-        if initial_sim_display is None and initial_sim_native is not None:
+        initial_sim_display = None
+        initial_bg_display = None
+        # Saved fits can be redrawn in a different view than the one that
+        # produced the initial overlay snapshot, so prefer native coordinates
+        # when available and rebuild the detector-frame display positions.
+        if initial_sim_native is not None:
             rotated = rotate_point_for_display(
                 float(initial_sim_native[0]),
                 float(initial_sim_native[1]),
@@ -921,7 +917,9 @@ def build_geometry_fit_overlay_records(
                 sim_display_rotate_k,
             )
             initial_sim_display = (float(rotated[0]), float(rotated[1]))
-        if initial_bg_display is None and initial_bg_native is not None:
+        else:
+            initial_sim_display = _parse_point(initial_entry.get("sim_display"))
+        if initial_bg_native is not None:
             rotated = rotate_point_for_display(
                 float(initial_bg_native[0]),
                 float(initial_bg_native[1]),
@@ -929,6 +927,8 @@ def build_geometry_fit_overlay_records(
                 background_display_rotate_k,
             )
             initial_bg_display = (float(rotated[0]), float(rotated[1]))
+        else:
+            initial_bg_display = _parse_point(initial_entry.get("bg_display"))
         record["initial_sim_display"] = initial_sim_display
         record["initial_bg_display"] = initial_bg_display
         if initial_sim_native is not None:
@@ -941,48 +941,89 @@ def build_geometry_fit_overlay_records(
                 float(initial_bg_native[0]),
                 float(initial_bg_native[1]),
             )
-        record["final_sim_fit"] = (
-            float(simulated_native[0]),
-            float(simulated_native[1]),
-        )
-        record["final_bg_fit"] = (
-            float(measured_fit_oriented[0]),
-            float(measured_fit_oriented[1]),
-        )
-        record["final_sim_native"] = (
-            float(simulated_native[0]),
-            float(simulated_native[1]),
-        )
-        record["final_bg_native"] = (
-            float(measured_native[0]),
-            float(measured_native[1]),
-        )
-        record["final_sim_display"] = (
-            float(final_sim_display[0]),
-            float(final_sim_display[1]),
-        )
-        record["final_bg_display"] = (
-            float(final_bg_display[0]),
-            float(final_bg_display[1]),
-        )
-        record["simulated_frame"] = "sim_native"
-        record["measured_frame"] = "fit_oriented"
         if "hkl" not in record and initial_entry.get("hkl") is not None:
             record["hkl"] = initial_entry.get("hkl")
         if "label" not in record and initial_entry.get("hkl") is not None:
             record["label"] = str(initial_entry.get("hkl"))
-        try:
-            distance_px = float(record.get("distance_px", np.nan))
-        except Exception:
-            distance_px = float("nan")
-        if not np.isfinite(distance_px):
-            distance_px = float(
-                math.hypot(
-                    simulated_native[0] - measured_fit_oriented[0],
-                    simulated_native[1] - measured_fit_oriented[1],
+
+        if status == "matched":
+            try:
+                simulated_native = (
+                    float(raw_entry.get("simulated_x", np.nan)),
+                    float(raw_entry.get("simulated_y", np.nan)),
                 )
+                measured_fit_oriented = (
+                    float(raw_entry.get("measured_x", np.nan)),
+                    float(raw_entry.get("measured_y", np.nan)),
+                )
+            except Exception:
+                continue
+            if not all(
+                np.isfinite(v) for v in (*simulated_native, *measured_fit_oriented)
+            ):
+                continue
+
+            measured_native = transform_points_orientation(
+                [measured_fit_oriented],
+                native_frame_shape,
+                indexing_mode=str(inverse_orientation.get("indexing_mode", "xy")),
+                k=int(inverse_orientation.get("k", 0)),
+                flip_x=bool(inverse_orientation.get("flip_x", False)),
+                flip_y=bool(inverse_orientation.get("flip_y", False)),
+                flip_order=str(inverse_orientation.get("flip_order", "yx")),
+            )[0]
+
+            final_sim_display = rotate_point_for_display(
+                float(simulated_native[0]),
+                float(simulated_native[1]),
+                native_frame_shape,
+                sim_display_rotate_k,
             )
-        record["overlay_distance_px"] = float(distance_px)
+            final_bg_display = rotate_point_for_display(
+                float(measured_native[0]),
+                float(measured_native[1]),
+                native_frame_shape,
+                background_display_rotate_k,
+            )
+            record["final_sim_fit"] = (
+                float(simulated_native[0]),
+                float(simulated_native[1]),
+            )
+            record["final_bg_fit"] = (
+                float(measured_fit_oriented[0]),
+                float(measured_fit_oriented[1]),
+            )
+            record["final_sim_native"] = (
+                float(simulated_native[0]),
+                float(simulated_native[1]),
+            )
+            record["final_bg_native"] = (
+                float(measured_native[0]),
+                float(measured_native[1]),
+            )
+            record["final_sim_display"] = (
+                float(final_sim_display[0]),
+                float(final_sim_display[1]),
+            )
+            record["final_bg_display"] = (
+                float(final_bg_display[0]),
+                float(final_bg_display[1]),
+            )
+            record["simulated_frame"] = "sim_native"
+            record["measured_frame"] = "fit_oriented"
+            try:
+                distance_px = float(record.get("distance_px", np.nan))
+            except Exception:
+                distance_px = float("nan")
+            if not np.isfinite(distance_px):
+                distance_px = float(
+                    math.hypot(
+                        simulated_native[0] - measured_fit_oriented[0],
+                        simulated_native[1] - measured_fit_oriented[1],
+                    )
+                )
+            record["overlay_distance_px"] = float(distance_px)
+
         records.append(record)
 
     return records

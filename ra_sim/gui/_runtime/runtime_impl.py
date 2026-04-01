@@ -3544,6 +3544,13 @@ geometry_manual_workflow = (
         caked_angles_to_background_display_coords=(
             _caked_angles_to_background_display_coords
         ),
+        caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+        last_caked_radial_values=(
+            lambda: simulation_runtime_state.last_caked_radial_values
+        ),
+        last_caked_azimuth_values=(
+            lambda: simulation_runtime_state.last_caked_azimuth_values
+        ),
         background_display_to_native_detector_coords=(
             _background_display_to_native_detector_coords
         ),
@@ -4644,9 +4651,14 @@ def _refresh_integration_from_cached_results():
     if ai is None:
         return False
 
-    if (
+    analysis_pending = (
         simulation_runtime_state.analysis_active_job is not None
         or simulation_runtime_state.analysis_queued_job is not None
+    )
+    if gui_integration_range_drag.range_refresh_requires_pending_analysis_result(
+        active_job=simulation_runtime_state.analysis_active_job,
+        queued_job=simulation_runtime_state.analysis_queued_job,
+        cached_result=simulation_runtime_state.last_res2_sim,
     ):
         return False
 
@@ -4657,7 +4669,8 @@ def _refresh_integration_from_cached_results():
     native_background = _get_current_background_backend()
     if background_runtime_state.visible and native_background is not None:
         if simulation_runtime_state.last_res2_background is None:
-            simulation_runtime_state.last_res2_background = caking(native_background, ai)
+            if not analysis_pending:
+                simulation_runtime_state.last_res2_background = caking(native_background, ai)
         bg_res2 = simulation_runtime_state.last_res2_background
     else:
         simulation_runtime_state.last_res2_background = None
@@ -4878,7 +4891,7 @@ INITIAL_PREVIEW_MAX_SAMPLES = 24
 LIVE_DRAG_PREVIEW_MAX_SAMPLES = 8
 LIVE_DRAG_ANALYSIS_RADIAL_BINS = 240
 LIVE_DRAG_ANALYSIS_AZIMUTH_BINS = 180
-LIVE_DRAG_SETTLE_MS = 160
+LIVE_DRAG_SETTLE_MS = 0
 CAKING_CACHE_MAX_ENTRIES = 8
 
 simulation_runtime_state.update_pending = None
@@ -13312,6 +13325,11 @@ geometry_fit_runtime_workflow = (
             "flush_ui": root.update_idletasks,
             "before_run": (
                 lambda: (
+                    _set_geometry_manual_pick_mode(False)
+                    if bool(
+                        getattr(geometry_runtime_state, "manual_pick_armed", False)
+                    )
+                    else None,
                     _clear_geometry_preview_artists(),
                     _clear_geometry_pick_artists(),
                 )
@@ -14363,6 +14381,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
         package_launcher.launch_mosaic_visualizer()
         return
 
+    gui_views.apply_launch_window_context(root)
     try:
         root.deiconify()
     except tk.TclError:
@@ -14528,6 +14547,7 @@ if __name__ == "__main__":
         print("Unhandled exception during startup:", exc)
         import traceback
         traceback.print_exc()
+
 
 
 

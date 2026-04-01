@@ -284,7 +284,7 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
     ]
     assert prepared.max_display_markers == 150
     assert prepared.geometry_runtime_cfg == (
-        geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+        geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
             geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
                 {"bounds": {"gamma": [0.0, 1.0]}},
                 joint_background_mode=True,
@@ -297,7 +297,7 @@ def test_prepare_geometry_fit_run_builds_joint_background_datasets_with_current_
 
     assert calls["selection"] == [{"trigger_update": False, "sync_live_theta": True}]
     assert calls["theta"] == [{"trigger_update": False, "sync_live_theta": True}]
-    assert calls["ensure_caked"] == 1
+    assert calls["ensure_caked"] == 0
     assert calls["datasets"] == [
         (1, 2.0, 2.0, 0.5, {"mode": "auto"}),
         (0, 1.0, 2.0, 0.5, {"mode": "auto"}),
@@ -508,13 +508,12 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     assert result.prepared_run is not None
     prepared = result.prepared_run
     assert prepared.current_dataset["label"] == "bg0.osc"
-    assert prepared.current_dataset["experimental_image_for_fit"] == "fit-image"
+    assert "experimental_image_for_fit" not in prepared.current_dataset
     assert prepared.dataset_specs == [
         {
             "dataset_index": 0,
             "label": "bg0.osc",
             "theta_initial": 9.0,
-            "dynamic_point_geometry_fit": True,
             "measured_peaks": [
                 {
                     "x": 31.0,
@@ -524,12 +523,11 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
                     "fit_source_identity_only": True,
                 }
             ],
-            "experimental_image": "fit-image",
         }
     ]
     assert prepared.max_display_markers == 90
     assert prepared.geometry_runtime_cfg == (
-        geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+        geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
             geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
                 {"bounds": {"gamma": [0.0, 1.0]}, "seen_theta": 9.0},
                 joint_background_mode=False,
@@ -537,7 +535,7 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
             joint_background_mode=False,
         )
     )
-    assert calls["ensure_caked"] == 1
+    assert calls["ensure_caked"] == 0
 
 
 def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload() -> None:
@@ -644,16 +642,14 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     ]
     assert dataset["measured_native"] == measured_native
     assert dataset["measured_for_fit"] == measured_for_fit
-    assert dataset["experimental_image_for_fit"] == "fit-image"
+    assert "experimental_image_for_fit" not in dataset
     assert dataset["orientation_choice"] == orientation_choice
     assert dataset["orientation_diag"] == orientation_diag
     assert dataset["spec"] == {
         "dataset_index": 0,
         "label": "bg0.osc",
         "theta_initial": 1.5,
-        "dynamic_point_geometry_fit": True,
         "measured_peaks": measured_for_fit,
-        "experimental_image": "fit-image",
     }
     assert dataset["measured_for_fit"] == [
         {
@@ -674,6 +670,126 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert calls["select_orientation"] == (
         [(1.0, 2.0)],
         [(30.0, 40.0)],
+        (4, 5),
+        {"mode": "auto"},
+    )
+
+
+def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_group() -> None:
+    calls: dict[str, object] = {}
+    orientation_choice = {
+        "indexing_mode": "xy",
+        "k": 0,
+        "flip_x": False,
+        "flip_y": False,
+        "flip_order": "yx",
+        "label": "identity",
+    }
+
+    def _entry_display_coords(entry):
+        if tuple(entry.get("hkl", ())) == (1, 1, 0):
+            return (50.0, 60.0)
+        return (100.0, 100.0)
+
+    def _select_fit_orientation(sim_pts, meas_pts, shape, *, cfg):
+        calls["select_orientation"] = (
+            list(sim_pts),
+            list(meas_pts),
+            tuple(shape),
+            dict(cfg),
+        )
+        return orientation_choice, {"pairs": len(sim_pts)}
+
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=100,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            },
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 2,
+                "source_row_index": 4,
+                "hkl": (-1, 1, 0),
+                "x": 70.0,
+                "y": 80.0,
+            },
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [{"dummy": True}],
+        geometry_manual_simulated_lookup=lambda _peaks: {
+            (1, 2): {
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 50.0,
+                "sim_row": 60.0,
+            },
+            (2, 4): {
+                "source_table_index": 2,
+                "source_row_index": 4,
+                "sim_col": 10.0,
+                "sim_row": 15.0,
+            },
+        },
+        geometry_manual_entry_display_coords=_entry_display_coords,
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col) / 10.0, float(row) / 10.0),
+        select_fit_orientation=_select_fit_orientation,
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: [dict(entry) for entry in entries],
+        orient_image_for_fit=lambda image, **kwargs: image,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={"mode": "auto"},
+    )
+
+    assert dataset["group_count"] == 1
+    assert dataset["pair_count"] == 2
+    assert len(dataset["measured_display"]) == 2
+    assert len(dataset["initial_pairs_display"]) == 2
+    assert [entry["hkl"] for entry in dataset["initial_pairs_display"]] == [
+        (1, 1, 0),
+        (-1, 1, 0),
+    ]
+    assert [entry["sim_display"] for entry in dataset["initial_pairs_display"]] == [
+        (50.0, 60.0),
+        (10.0, 15.0),
+    ]
+    assert [entry["q_group_key"] for entry in dataset["measured_for_fit"]] == [
+        ("q", 1),
+        ("q", 1),
+    ]
+    assert [entry["source_table_index"] for entry in dataset["measured_for_fit"]] == [
+        1,
+        2,
+    ]
+    assert [entry["source_row_index"] for entry in dataset["measured_for_fit"]] == [
+        2,
+        4,
+    ]
+    assert all(
+        entry["fit_source_identity_only"] is True
+        for entry in dataset["measured_for_fit"]
+    )
+    assert calls["select_orientation"] == (
+        [(5.0, 6.0), (1.0, 1.5)],
+        [(30.0, 40.0), (70.0, 80.0)],
         (4, 5),
         {"mode": "auto"},
     )
@@ -951,6 +1067,7 @@ def test_build_runtime_geometry_fit_config_factory_reads_runtime_constraint_valu
     runtime_cfg = factory(["gamma"], {"gamma": 0.6, "a": 4.1})
 
     assert runtime_cfg == {
+        "allow_unsafe_runtime": False,
         "solver": {
             "loss": "soft_l1",
             "workers": 1,
@@ -1518,7 +1635,7 @@ def test_build_geometry_fit_solver_request_uses_prepared_run_payloads(
     assert request.params == {"theta_initial": 3.0, "theta_offset": 0.0}
     assert request.measured_peaks == [{"x": 1.0, "y": 2.0}]
     assert request.var_names == ["gamma", "a"]
-    assert request.experimental_image == "fit-image"
+    assert not hasattr(request, "experimental_image")
     assert request.dataset_specs == [
         {"dataset_index": 0, "theta_initial": 3.0},
         {"dataset_index": 1, "theta_initial": 4.0},
@@ -1662,8 +1779,8 @@ def test_solve_geometry_fit_request_forwards_status_callback_when_supported() ->
             "measured_peaks": [{"x": 1.0, "y": 2.0}],
             "var_names": ["gamma", "a"],
             "pixel_tol": float("inf"),
-            "experimental_image": "fit-image",
-            "dataset_specs": None,
+            "experimental_image": None,
+            "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
             "refinement_config": {
                 "bounds": {"gamma": [0.0, 1.0]},
                 "use_numba": False,
@@ -1721,15 +1838,25 @@ def test_apply_joint_geometry_fit_runtime_safety_overrides_only_changes_joint_ru
     assert base_cfg["identifiability"]["enabled"] is True
 
 
-def test_apply_dynamic_point_geometry_fit_runtime_overrides_forces_single_model_path() -> None:
+def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_path() -> None:
     base_cfg = {
         "solver": {
             "workers": 1,
             "parallel_mode": "off",
             "worker_numba_threads": 1,
+            "dynamic_point_geometry_fit": True,
+            "loss": "soft_l1",
+            "f_scale_px": 6.0,
             "weighted_matching": True,
             "use_measurement_uncertainty": True,
             "anisotropic_measurement_uncertainty": True,
+            "restarts": 3,
+            "restart_jitter": 0.25,
+            "stagnation_probe": True,
+            "stagnation_probe_pairwise": True,
+            "stagnation_probe_random_directions": 2,
+            "staged_release": {"enabled": True},
+            "reparameterize_pairs": {"enabled": True},
             "missing_pair_penalty_deg": 7.5,
         },
         "identifiability": {
@@ -1743,29 +1870,35 @@ def test_apply_dynamic_point_geometry_fit_runtime_overrides_forces_single_model_
         "image_refinement": {"enabled": True},
     }
 
-    changed = geometry_fit.apply_dynamic_point_geometry_fit_runtime_overrides(
+    changed = geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
         base_cfg,
         joint_background_mode=True,
     )
 
-    assert changed["solver"]["dynamic_point_geometry_fit"] is True
-    assert changed["solver"]["loss"] == "linear"
-    assert changed["solver"]["weighted_matching"] is False
-    assert changed["solver"]["use_measurement_uncertainty"] is False
-    assert changed["solver"]["anisotropic_measurement_uncertainty"] is False
+    assert changed["solver"]["manual_point_fit_mode"] is True
+    assert changed["solver"]["missing_pair_penalty_px"] == 20.0
     assert changed["solver"]["missing_pair_penalty_deg"] == 7.5
     assert changed["solver"]["parallel_mode"] == "datasets"
-    assert changed["solver"]["staged_release"] == {"enabled": False}
-    assert changed["solver"]["reparameterize_pairs"] == {"enabled": False}
+    assert "dynamic_point_geometry_fit" not in changed["solver"]
+    assert "loss" not in changed["solver"]
+    assert "f_scale_px" not in changed["solver"]
+    assert "weighted_matching" not in changed["solver"]
+    assert "use_measurement_uncertainty" not in changed["solver"]
+    assert "anisotropic_measurement_uncertainty" not in changed["solver"]
+    assert "restarts" not in changed["solver"]
+    assert "restart_jitter" not in changed["solver"]
+    assert "stagnation_probe" not in changed["solver"]
+    assert "stagnation_probe_pairwise" not in changed["solver"]
+    assert "stagnation_probe_random_directions" not in changed["solver"]
+    assert "staged_release" not in changed["solver"]
+    assert "reparameterize_pairs" not in changed["solver"]
     assert changed["identifiability"]["enabled"] is True
-    assert changed["identifiability"]["auto_freeze"] is False
-    assert changed["identifiability"]["selective_thaw"] == {"enabled": False}
-    assert changed["identifiability"]["adaptive_regularization"] == {
-        "enabled": False
-    }
-    assert changed["full_beam_polish"] == {"enabled": False}
-    assert changed["ridge_refinement"] == {"enabled": False}
-    assert changed["image_refinement"] == {"enabled": False}
+    assert "auto_freeze" not in changed["identifiability"]
+    assert "selective_thaw" not in changed["identifiability"]
+    assert "adaptive_regularization" not in changed["identifiability"]
+    assert "full_beam_polish" not in changed
+    assert "ridge_refinement" not in changed
+    assert "image_refinement" not in changed
 
 
 def test_geometry_fit_dataset_cache_helpers_copy_and_validate_dataset_bundle() -> None:
@@ -2040,7 +2173,6 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
             "nfev": 3,
             "max_nfev": 40,
         }
-        single_ray_polish_summary = {"status": "skipped", "accepted": False}
         ridge_refinement_summary = {"status": "skipped", "accepted": False}
         image_refinement_summary = {"status": "skipped", "accepted": False}
         auto_freeze_summary = {"status": "accepted", "accepted": True, "fixed_parameters": ["a"]}
@@ -3856,7 +3988,6 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
         reparameterization_summary = {"status": "skipped", "accepted": False}
         staged_release_summary = {"status": "skipped", "accepted": False}
         adaptive_regularization_summary = {"status": "skipped", "accepted": False}
-        single_ray_polish_summary = {"status": "skipped", "accepted": False}
         ridge_refinement_summary = {"status": "skipped", "accepted": False}
         image_refinement_summary = {"status": "skipped", "accepted": False}
         auto_freeze_summary = {"status": "skipped", "accepted": False}
@@ -4029,8 +4160,8 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
             "measured_peaks": [{"x": 1.0, "y": 2.0}],
             "var_names": ["gamma", "a"],
             "pixel_tol": float("inf"),
-            "experimental_image": "fit-image",
-            "dataset_specs": None,
+            "experimental_image": None,
+            "dataset_specs": [{"dataset_index": 0, "theta_initial": 3.0}],
             "refinement_config": {
                 "bounds": {"gamma": [0.0, 1.0]},
                 "completion_chime": {
