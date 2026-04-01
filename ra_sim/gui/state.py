@@ -609,6 +609,10 @@ class AppShellViewState:
     parameters_tab: Any = None
     analysis_tab: Any = None
     help_tab: Any = None
+    help_body: Any = None
+    help_preferences_frame: Any = None
+    fit2d_error_sound_var: Any = None
+    fit2d_error_sound_checkbutton: Any = None
     setup_body: Any = None
     setup_canvas: Any = None
     match_body: Any = None

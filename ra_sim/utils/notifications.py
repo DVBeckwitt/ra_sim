@@ -11,7 +11,7 @@ try:
 except Exception:  # pragma: no cover - non-Windows platforms
     _winsound = None
 
-_DEFAULT_ALIAS = "SystemNotification"
+_DEFAULT_ALIAS = "SystemAsterisk"
 _DEFAULT_TONE_SEQUENCE: tuple[tuple[int, int], ...] = (
     (784, 60),
     (988, 80),

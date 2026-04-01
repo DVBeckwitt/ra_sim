@@ -393,6 +393,7 @@ def create_app_shell(
     *,
     root: tk.Misc,
     view_state: AppShellViewState,
+    fit2d_error_sound_var: Any | None = None,
 ) -> None:
     """Create the shared top-level GUI shell and notebook layout."""
 
@@ -796,6 +797,32 @@ def create_app_shell(
         wraplength=420,
     ).pack(anchor=tk.W, pady=(4, 0))
 
+    help_preferences_frame = None
+    fit2d_error_sound_checkbutton = None
+    if fit2d_error_sound_var is not None:
+        help_preferences_frame = ttk.LabelFrame(
+            help_body,
+            text="Preferences",
+            padding=10,
+        )
+        help_preferences_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(
+            help_preferences_frame,
+            text=(
+                "Optional UI behavior toggles live here. "
+                "The Fit2D beep only plays when Backspace is pressed past the "
+                "start of an editable input."
+            ),
+            justify=tk.LEFT,
+            wraplength=420,
+        ).pack(anchor=tk.W)
+        fit2d_error_sound_checkbutton = ttk.Checkbutton(
+            help_preferences_frame,
+            text="Enable Fit2D backspace error noise",
+            variable=fit2d_error_sound_var,
+        )
+        fit2d_error_sound_checkbutton.pack(anchor=tk.W, pady=(8, 0))
+
     help_contact_frame = ttk.LabelFrame(help_body, text="Contact", padding=10)
     help_contact_frame.pack(fill=tk.X, pady=(10, 0))
     ttk.Label(help_contact_frame, text="David Beckwitt").pack(anchor=tk.W)
@@ -869,6 +896,10 @@ def create_app_shell(
     view_state.parameters_tab = refine_tab
     view_state.analysis_tab = analyze_tab
     view_state.help_tab = help_tab
+    view_state.help_body = help_body
+    view_state.help_preferences_frame = help_preferences_frame
+    view_state.fit2d_error_sound_var = fit2d_error_sound_var
+    view_state.fit2d_error_sound_checkbutton = fit2d_error_sound_checkbutton
     view_state.setup_body = setup_body
     view_state.setup_canvas = setup_canvas
     view_state.match_body = match_body

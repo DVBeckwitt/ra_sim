@@ -25,6 +25,29 @@ def test_play_completion_chime_plays_configured_alias(monkeypatch) -> None:
     assert calls == [("SystemAsterisk", 7)]
 
 
+def test_play_completion_chime_uses_gentle_default_alias_when_unspecified(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, int]] = []
+    fake_winsound = SimpleNamespace(
+        SND_ALIAS=1,
+        SND_ASYNC=2,
+        SND_NODEFAULT=4,
+        PlaySound=lambda sound, flags: calls.append((sound, flags)),
+    )
+    monkeypatch.setattr(notifications, "_winsound", fake_winsound)
+
+    played = notifications.play_completion_chime(
+        {
+            "enabled": True,
+            "mode": "alias",
+        }
+    )
+
+    assert played is True
+    assert calls == [("SystemAsterisk", 7)]
+
+
 def test_play_completion_chime_runs_tone_sequence_in_background(monkeypatch) -> None:
     beep_calls: list[tuple[int, int]] = []
     thread_calls: list[tuple[str, bool]] = []

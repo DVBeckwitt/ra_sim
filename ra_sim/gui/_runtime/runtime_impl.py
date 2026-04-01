@@ -135,6 +135,7 @@ from ra_sim.gui import runtime_geometry_preview as gui_runtime_geometry_preview
 from ra_sim.gui import runtime_qr_cylinder_overlay as gui_runtime_qr_cylinder_overlay
 from ra_sim.gui import runtime_startup as gui_runtime_startup
 from ra_sim.gui import runtime_update_trace as gui_runtime_update_trace
+from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
 from ra_sim.gui import ordered_structure_fit as gui_ordered_structure_fit
 from ra_sim.gui import structure_model as gui_structure_model
@@ -1545,6 +1546,7 @@ measured_peaks = []
 ###############################################################################
 root = gui_views.create_root_window("RA-SIM Simulation")
 root.minsize(1200, 760)
+fit2d_error_sound_var = tk.BooleanVar(value=False)
 
 
 def _runtime_report_callback_exception(exc_type, exc_value, exc_tb):
@@ -1580,7 +1582,16 @@ def _runtime_report_callback_exception(exc_type, exc_value, exc_tb):
 
 root.report_callback_exception = _runtime_report_callback_exception
 _ensure_runtime_update_trace_hooks()
-gui_views.create_app_shell(root=root, view_state=app_shell_view_state)
+gui_views.create_app_shell(
+    root=root,
+    view_state=app_shell_view_state,
+    fit2d_error_sound_var=fit2d_error_sound_var,
+)
+gui_fit2d_error_sound.bind_fit2d_backspace_error_sound(
+    root,
+    enabled_var=fit2d_error_sound_var,
+    bell_callback=getattr(root, "bell", None),
+)
 if (
     app_shell_view_state.workspace_body is None
     or app_shell_view_state.fit_body is None
