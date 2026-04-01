@@ -153,6 +153,9 @@ class _FakeFrame:
     def pack(self, **_kwargs) -> None:
         pass
 
+    def grid(self, **_kwargs) -> None:
+        pass
+
     def rowconfigure(self, index: int, weight: int) -> None:
         self.rowconfigure_calls.append((index, weight))
 
@@ -401,6 +404,9 @@ class _FakeCheckbutton:
         _FakeCheckbutton.created.append(self)
 
     def pack(self, **_kwargs) -> None:
+        pass
+
+    def grid(self, **_kwargs) -> None:
         pass
 
 
@@ -815,8 +821,29 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     ]
     assert isinstance(view_state.session_summary_frame, _FakeFrame)
     assert view_state.session_summary_var.get().startswith("Background: not loaded")
-    assert view_state.mode_banner_frame is None
-    assert view_state.mode_banner_title_var is None
+    assert isinstance(view_state.workflow_checklist_frame, _FakeFrame)
+    assert set(view_state.workflow_checklist_status_vars) == {
+        "backgrounds",
+        "cif",
+        "fit_set",
+        "manual_pairs",
+        "geometry_fit",
+        "analysis",
+    }
+    assert isinstance(view_state.mode_banner_frame, _FakeFrame)
+    assert view_state.mode_banner_title_var.get() == "Ready to start"
+    assert isinstance(view_state.view_switcher_frame, _FakeFrame)
+    assert view_state.view_mode_var.get() == "detector"
+    assert isinstance(view_state.canvas_context_frame, _FakeFrame)
+    assert isinstance(view_state.dataset_summary_frame, _FakeFrame)
+    assert isinstance(view_state.fit_health_frame, _FakeFrame)
+    assert set(view_state.dataset_value_labels) == {
+        "background",
+        "theta_i",
+        "theta",
+        "fit",
+        "model",
+    }
     assert isinstance(view_state.controls_notebook, _FakeNotebook)
     assert [text for _, text in view_state.controls_notebook.tabs] == [
         "Setup",
@@ -852,6 +879,8 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.status_frame, _FakeFrame)
     assert isinstance(view_state.fig_frame, _FakeFrame)
     assert isinstance(view_state.canvas_frame, _FakeFrame)
+    assert isinstance(view_state.quick_controls_frame, _FakeFrame)
+    assert isinstance(view_state.quick_controls_body, _FakeFrame)
     assert isinstance(view_state.left_col, _FakeFrame)
     assert isinstance(view_state.right_col, _FakeFrame)
     assert isinstance(view_state.plot_frame_1d, _FakeFrame)
@@ -951,6 +980,60 @@ def test_app_shell_summary_banner_and_match_result_setters_update_vars(monkeypat
     assert view_state.mode_banner_title_var.get() == "Manual geometry picking armed"
     assert view_state.mode_banner_detail_var.get() == "Click a simulated Qr group on the image."
     assert view_state.match_results_var.get() == "Chi-Squared: 1.23"
+
+
+def test_app_shell_context_helpers_update_status_labels(monkeypatch) -> None:
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    workflow_labels = {
+        "backgrounds": _FakeLabel(object(), text=""),
+        "geometry_fit": _FakeLabel(object(), text=""),
+    }
+    dataset_labels = {
+        "background": _FakeLabel(object(), text=""),
+        "theta_i": _FakeLabel(object(), text=""),
+    }
+    view_state = state.AppShellViewState(
+        workflow_checklist_status_vars={
+            "backgrounds": _FakeStringVar(""),
+            "geometry_fit": _FakeStringVar(""),
+        },
+        workflow_checklist_status_labels=workflow_labels,
+        dataset_value_labels=dataset_labels,
+        fit_health_status_label=_FakeLabel(object(), text=""),
+        fit_health_primary_label=_FakeLabel(object(), text=""),
+        fit_health_secondary_label=_FakeLabel(object(), text=""),
+        view_mode_var=_FakeStringVar("detector"),
+    )
+
+    views.set_app_shell_workflow_statuses(
+        view_state,
+        {"backgrounds": "ready", "geometry_fit": "not run"},
+    )
+    views.set_app_shell_dataset_values(
+        view_state,
+        {"background": "1/2 - bg.osc", "theta_i": "4.5000 deg"},
+    )
+    views.set_app_shell_fit_health_text(
+        view_state,
+        status="Stale",
+        primary="Chi-Squared: 1.23",
+        secondary="Peaks 10/12 | Gate 10/8",
+    )
+    views.set_app_shell_view_mode(view_state, "caked")
+
+    assert view_state.workflow_checklist_status_vars["backgrounds"].get() == "Ready"
+    assert view_state.workflow_checklist_status_vars["geometry_fit"].get() == "Not run"
+    assert workflow_labels["backgrounds"].text == "Ready"
+    assert workflow_labels["geometry_fit"].text == "Not run"
+    assert dataset_labels["background"].text == "1/2 - bg.osc"
+    assert dataset_labels["theta_i"].text == "4.5000 deg"
+    assert view_state.fit_health_status_label.text == "Stale"
+    assert view_state.fit_health_primary_label.text == "Chi-Squared: 1.23"
+    assert view_state.fit_health_secondary_label.text == "Peaks 10/12 | Gate 10/8"
+    assert view_state.view_mode_var.get() == "caked"
 
 
 def test_console_status_label_compacts_text_and_logs_once(monkeypatch) -> None:
@@ -2632,12 +2715,15 @@ def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(
 
     view_state = state.BackgroundThetaControlsViewState()
     applied = []
+    shortcut_events = []
 
     views.create_geometry_fit_background_controls(
         parent=object(),
         view_state=view_state,
         selection_text="all",
         on_apply=lambda: applied.append("apply"),
+        on_select_current=lambda: shortcut_events.append("current"),
+        on_select_all=lambda: shortcut_events.append("all"),
     )
 
     assert isinstance(view_state.geometry_fit_background_controls, _FakeFrame)
@@ -2646,9 +2732,125 @@ def test_create_geometry_fit_background_controls_stores_var_and_binds_apply(
         == "Geometry Fit Backgrounds"
     )
     assert isinstance(view_state.geometry_fit_background_entry, _FakeEntry)
+    assert isinstance(view_state.geometry_fit_background_shortcuts_frame, _FakeFrame)
+    assert isinstance(view_state.geometry_fit_background_rows_frame, _FakeFrame)
     assert view_state.geometry_fit_background_selection_var.get() == "all"
-    assert _FakeLabel.created[0].text == "Use 'current', 'all', or 1-based indices/ranges like 1,3-5"
+    assert (
+        _FakeLabel.created[0].text
+        == "Choose which loaded backgrounds participate in geometry fitting. The saved selection still uses the canonical current/all/index list format."
+    )
 
     view_state.geometry_fit_background_entry.bindings["<Return>"](None)
-    _FakeButton.created[-1].command()
-    assert applied == ["apply", "apply"]
+    _FakeButton.created[0].command()
+    _FakeButton.created[1].command()
+    assert applied == ["apply"]
+    assert shortcut_events == ["current", "all"]
+
+
+def test_populate_geometry_fit_background_table_updates_rows(monkeypatch) -> None:
+    _FakeLabel.created = []
+    _FakeCheckbutton.created = []
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
+
+    toggled = []
+    view_state = state.BackgroundThetaControlsViewState(
+        geometry_fit_background_rows_frame=_FakeFrame(object())
+    )
+    views.populate_geometry_fit_background_table(
+        view_state=view_state,
+        row_count=2,
+        on_toggle=lambda idx: toggled.append(idx),
+    )
+    views.update_geometry_fit_background_table(
+        view_state=view_state,
+        rows=[
+            {"background": "bg0.osc", "theta_i": "4.0000 deg", "pairs": "3"},
+            {"background": "bg1.osc", "theta_i": "7.5000 deg", "pairs": "0"},
+        ],
+        selected_indices=[1],
+        current_index=0,
+    )
+
+    assert len(view_state.geometry_fit_background_include_vars) == 2
+    assert view_state.geometry_fit_background_active_labels[0].text == ">"
+    assert view_state.geometry_fit_background_active_labels[1].text == ""
+    assert view_state.geometry_fit_background_include_vars[0].get() is False
+    assert view_state.geometry_fit_background_include_vars[1].get() is True
+    assert view_state.geometry_fit_background_name_labels[0].text == "bg0.osc"
+    assert view_state.geometry_fit_background_theta_labels[1].text == "7.5000 deg"
+    assert view_state.geometry_fit_background_pair_labels[0].text == "3"
+
+    view_state.geometry_fit_background_include_checks[1].command()
+    assert toggled == [1]
+
+
+def test_populate_app_shell_view_switcher_creates_radios(monkeypatch) -> None:
+    _FakeRadiobutton.created = []
+    monkeypatch.setattr(views.ttk, "Radiobutton", _FakeRadiobutton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    events = []
+    view_state = state.AppShellViewState(
+        view_switcher_frame=_FakeFrame(object()),
+        view_mode_var=_FakeStringVar("detector"),
+    )
+    views.populate_app_shell_view_switcher(
+        view_state=view_state,
+        on_select=lambda mode: events.append(mode),
+    )
+
+    assert [radio.value for radio in _FakeRadiobutton.created] == [
+        "detector",
+        "1d",
+        "caked",
+    ]
+    _FakeRadiobutton.created[2].command()
+    assert events == ["caked"]
+
+
+def test_populate_app_shell_quick_controls_builds_linked_inputs(monkeypatch) -> None:
+    _FakeLabel.created = []
+    _FakeButton.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Entry", _FakeEntry)
+    monkeypatch.setattr(views.ttk, "Scale", _FakeScale)
+    monkeypatch.setattr(views.ttk, "Separator", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    changed = []
+    variable = _FakeVar(4.0)
+    source_scale = _FakeScale(object(), from_=0.0, to=10.0)
+    view_state = state.AppShellViewState(
+        quick_controls_body=_FakeFrame(object()),
+    )
+
+    views.populate_app_shell_quick_controls(
+        view_state=view_state,
+        controls=[
+            {
+                "key": "theta_initial",
+                "label": "theta",
+                "variable": variable,
+                "scale": source_scale,
+                "command": lambda: changed.append(variable.get()),
+                "step": 0.01,
+            }
+        ],
+        on_more_controls=lambda: changed.append("more"),
+    )
+
+    assert "theta_initial" in view_state.quick_control_widgets
+    control = view_state.quick_control_widgets["theta_initial"]
+    assert isinstance(control["scale"], _FakeScale)
+    control["entry_var"].set("5.25")
+    control["entry"].bindings["<Return>"](None)
+    assert variable.get() == 5.25
+    assert changed == [5.25]
+    assert isinstance(view_state.quick_controls_more_button, _FakeButton)
+    view_state.quick_controls_more_button.command()
+    assert changed == [5.25, "more"]

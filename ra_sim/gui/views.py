@@ -7,7 +7,7 @@ import re
 import webbrowser
 from importlib.metadata import PackageNotFoundError, version as get_package_version
 from pathlib import Path
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 import tkinter as tk
 from tkinter import font as tkfont, ttk
@@ -59,6 +59,26 @@ _GEOMETRY_FIT_BACKGROUND_HELP_TEXT = (
     "Use 'current', 'all', or 1-based indices/ranges like 1,3-5"
 )
 _PROJECT_GITHUB_URL = "https://github.com/DVBeckwitt/ra_sim"
+_WORKFLOW_CHECKLIST_ITEMS = (
+    ("backgrounds", "Backgrounds"),
+    ("cif", "CIF"),
+    ("fit_set", "Fit Set"),
+    ("manual_pairs", "Manual Pairs"),
+    ("geometry_fit", "Geometry Fit"),
+    ("analysis", "Analysis"),
+)
+_DATASET_CONTEXT_FIELDS = (
+    ("background", "Background"),
+    ("theta_i", "theta_i"),
+    ("theta", "theta"),
+    ("fit", "Fit"),
+    ("model", "Model"),
+)
+_VIEW_MODE_CHOICES = (
+    ("detector", "Detector"),
+    ("1d", "1D"),
+    ("caked", "Caked"),
+)
 
 
 def _configure_root_styles(root: tk.Misc) -> None:
@@ -386,7 +406,7 @@ def create_app_shell(
 
     session_summary_frame = ttk.LabelFrame(
         controls_panel,
-        text="Current Session",
+        text="Workflow Checklist",
         padding=(8, 6),
     )
     session_summary_frame.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 0))
@@ -406,16 +426,37 @@ def create_app_shell(
         anchor=tk.W,
         wraplength=520,
     )
-    session_summary_label.pack(fill=tk.X)
-
-    # The current-mode banner was removed from the visible shell layout, but the
-    # view-state fields remain available so existing runtime update hooks can
-    # call the shared setter helpers without additional branching.
-    mode_banner_frame = None
-    mode_banner_title_var = None
-    mode_banner_title_label = None
-    mode_banner_detail_var = None
-    mode_banner_detail_label = None
+    workflow_checklist_frame = ttk.Frame(session_summary_frame)
+    workflow_checklist_frame.pack(fill=tk.X)
+    workflow_checklist_frame.columnconfigure(0, weight=1)
+    workflow_checklist_frame.columnconfigure(1, weight=1)
+    workflow_checklist_status_vars: dict[str, tk.StringVar] = {}
+    workflow_checklist_status_labels: dict[str, ttk.Label] = {}
+    for idx, (key, label_text) in enumerate(_WORKFLOW_CHECKLIST_ITEMS):
+        item_frame = ttk.Frame(workflow_checklist_frame, padding=(0, 2))
+        item_frame.grid(
+            row=int(idx // 2),
+            column=int(idx % 2),
+            sticky=tk.EW,
+            padx=(0, 8) if idx % 2 == 0 else 0,
+            pady=2,
+        )
+        ttk.Label(
+            item_frame,
+            text=f"{label_text}:",
+        ).pack(side=tk.LEFT)
+        status_var = tk.StringVar(
+            value="Not run" if key == "geometry_fit" else "Missing"
+        )
+        status_label = ttk.Label(
+            item_frame,
+            textvariable=status_var,
+            anchor=tk.W,
+            width=16,
+        )
+        status_label.pack(side=tk.LEFT, padx=(6, 0))
+        workflow_checklist_status_vars[key] = status_var
+        workflow_checklist_status_labels[key] = status_label
 
     run_status_frame = ttk.Frame(figure_panel, padding=(10, 8, 10, 4))
     run_status_frame.pack(side=tk.TOP, fill=tk.X)
@@ -427,6 +468,88 @@ def create_app_shell(
         justify=tk.LEFT,
     )
     run_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    view_switcher_frame = ttk.LabelFrame(run_status_frame, text="View", padding=(6, 2))
+    view_switcher_frame.pack(side=tk.RIGHT, padx=(8, 0))
+    view_mode_var = tk.StringVar(value="detector")
+
+    canvas_context_frame = ttk.Frame(figure_panel, padding=(10, 0, 10, 6))
+    canvas_context_frame.pack(side=tk.TOP, fill=tk.X)
+    canvas_context_left = ttk.Frame(canvas_context_frame)
+    canvas_context_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    canvas_context_right = ttk.Frame(canvas_context_frame)
+    canvas_context_right.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
+
+    mode_banner_frame = ttk.LabelFrame(
+        canvas_context_left,
+        text="Current Mode",
+        padding=(8, 6),
+    )
+    mode_banner_frame.pack(fill=tk.BOTH, expand=True)
+    mode_banner_title_var = tk.StringVar(value="Ready to start")
+    mode_banner_title_label = ttk.Label(
+        mode_banner_frame,
+        textvariable=mode_banner_title_var,
+        anchor=tk.W,
+        justify=tk.LEFT,
+    )
+    mode_banner_title_label.pack(fill=tk.X)
+    mode_banner_detail_var = tk.StringVar(
+        value="Load backgrounds in Setup, then use Match to choose peaks and fit geometry."
+    )
+    mode_banner_detail_label = ttk.Label(
+        mode_banner_frame,
+        textvariable=mode_banner_detail_var,
+        anchor=tk.W,
+        justify=tk.LEFT,
+        wraplength=540,
+    )
+    mode_banner_detail_label.pack(fill=tk.X, pady=(4, 0))
+
+    dataset_summary_frame = ttk.LabelFrame(
+        canvas_context_right,
+        text="Current Dataset",
+        padding=(8, 6),
+    )
+    dataset_summary_frame.pack(fill=tk.X)
+    dataset_value_labels: dict[str, ttk.Label] = {}
+    for key, label_text in _DATASET_CONTEXT_FIELDS:
+        row = ttk.Frame(dataset_summary_frame)
+        row.pack(fill=tk.X, pady=1)
+        ttk.Label(row, text=f"{label_text}:").pack(side=tk.LEFT)
+        value_label = ttk.Label(row, text="n/a", anchor=tk.W, justify=tk.LEFT)
+        value_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        dataset_value_labels[key] = value_label
+
+    fit_health_frame = ttk.LabelFrame(
+        canvas_context_right,
+        text="Fit Health",
+        padding=(8, 6),
+    )
+    fit_health_frame.pack(fill=tk.X, pady=(6, 0))
+    fit_health_status_label = ttk.Label(
+        fit_health_frame,
+        text="Not run",
+        anchor=tk.W,
+        justify=tk.LEFT,
+    )
+    fit_health_status_label.pack(fill=tk.X)
+    fit_health_primary_label = ttk.Label(
+        fit_health_frame,
+        text="Waiting for ordered-structure fit",
+        anchor=tk.W,
+        justify=tk.LEFT,
+        wraplength=520,
+    )
+    fit_health_primary_label.pack(fill=tk.X, pady=(4, 0))
+    fit_health_secondary_label = ttk.Label(
+        fit_health_frame,
+        text="",
+        anchor=tk.W,
+        justify=tk.LEFT,
+        wraplength=520,
+    )
+    fit_health_secondary_label.pack(fill=tk.X, pady=(4, 0))
     ttk.Separator(figure_panel, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10)
 
     controls_notebook = ttk.Notebook(controls_panel)
@@ -688,7 +811,16 @@ def create_app_shell(
     fig_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     canvas_frame = ttk.Frame(fig_frame)
-    canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    quick_controls_frame = ttk.LabelFrame(
+        fig_frame,
+        text="Quick Controls",
+        padding=(8, 6),
+    )
+    quick_controls_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(8, 0))
+    quick_controls_body = ttk.Frame(quick_controls_frame)
+    quick_controls_body.pack(fill=tk.BOTH, expand=True)
 
     left_col = ttk.Frame(refine_basic_body, padding=10)
     left_col.pack(fill=tk.BOTH, expand=True)
@@ -705,6 +837,9 @@ def create_app_shell(
     view_state.session_summary_frame = session_summary_frame
     view_state.session_summary_var = session_summary_var
     view_state.session_summary_label = session_summary_label
+    view_state.workflow_checklist_frame = workflow_checklist_frame
+    view_state.workflow_checklist_status_vars = workflow_checklist_status_vars
+    view_state.workflow_checklist_status_labels = workflow_checklist_status_labels
     view_state.mode_banner_frame = mode_banner_frame
     view_state.mode_banner_title_var = mode_banner_title_var
     view_state.mode_banner_title_label = mode_banner_title_label
@@ -713,6 +848,17 @@ def create_app_shell(
     view_state.run_status_frame = run_status_frame
     view_state.run_status_var = run_status_var
     view_state.run_status_label = run_status_label
+    view_state.view_switcher_frame = view_switcher_frame
+    view_state.view_mode_var = view_mode_var
+    view_state.canvas_context_frame = canvas_context_frame
+    view_state.canvas_context_left = canvas_context_left
+    view_state.canvas_context_right = canvas_context_right
+    view_state.dataset_summary_frame = dataset_summary_frame
+    view_state.dataset_value_labels = dataset_value_labels
+    view_state.fit_health_frame = fit_health_frame
+    view_state.fit_health_status_label = fit_health_status_label
+    view_state.fit_health_primary_label = fit_health_primary_label
+    view_state.fit_health_secondary_label = fit_health_secondary_label
     view_state.controls_notebook = controls_notebook
     view_state.setup_tab = setup_tab
     view_state.match_tab = match_tab
@@ -760,9 +906,318 @@ def create_app_shell(
     view_state.status_frame = status_frame
     view_state.fig_frame = fig_frame
     view_state.canvas_frame = canvas_frame
+    view_state.quick_controls_frame = quick_controls_frame
+    view_state.quick_controls_body = quick_controls_body
     view_state.left_col = left_col
     view_state.right_col = right_col
     view_state.plot_frame_1d = plot_frame_1d
+
+
+def _set_var_if_possible(var: object, value: object) -> None:
+    setter = getattr(var, "set", None)
+    if callable(setter):
+        try:
+            setter(value)
+        except tk.TclError:
+            return
+
+
+def _read_float_var(var: object) -> float | None:
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return None
+    try:
+        return float(getter())
+    except Exception:
+        return None
+
+
+def _format_status_text(value: object) -> str:
+    text = " ".join(str(value or "").split())
+    normalized = text.lower()
+    if normalized in {"ready", "missing", "stale", "fresh", "not run"}:
+        return normalized.title() if normalized != "not run" else "Not run"
+    return text
+
+
+def _set_label_text(widget: object, text: object) -> None:
+    if widget is None:
+        return
+    try:
+        widget.configure(text=" ".join(str(text).split()))
+    except tk.TclError:
+        return
+
+
+def set_app_shell_workflow_statuses(
+    view_state: AppShellViewState,
+    statuses: Mapping[str, object],
+) -> None:
+    """Update the workflow checklist badge texts shown in the left shell."""
+
+    status_vars = getattr(view_state, "workflow_checklist_status_vars", {}) or {}
+    status_labels = getattr(view_state, "workflow_checklist_status_labels", {}) or {}
+    for key, raw_value in statuses.items():
+        text = _format_status_text(raw_value)
+        _set_var_if_possible(status_vars.get(str(key)), text)
+        _set_label_text(status_labels.get(str(key)), text)
+
+
+def set_app_shell_dataset_values(
+    view_state: AppShellViewState,
+    values: Mapping[str, object],
+) -> None:
+    """Update the persistent dataset strip shown above the detector canvas."""
+
+    labels = getattr(view_state, "dataset_value_labels", {}) or {}
+    for key, raw_value in values.items():
+        _set_label_text(labels.get(str(key)), raw_value)
+
+
+def set_app_shell_fit_health_text(
+    view_state: AppShellViewState,
+    *,
+    status: object,
+    primary: object,
+    secondary: object = "",
+) -> None:
+    """Update the fit-health summary shown above the detector canvas."""
+
+    _set_label_text(view_state.fit_health_status_label, status)
+    _set_label_text(view_state.fit_health_primary_label, primary)
+    secondary_text = "\n".join(str(secondary or "").splitlines())
+    _set_label_text(view_state.fit_health_secondary_label, secondary_text)
+
+
+def set_app_shell_view_mode(
+    view_state: AppShellViewState,
+    mode: object,
+) -> None:
+    """Sync the persistent view-switcher selection to one logical mode."""
+
+    normalized = str(mode or "detector").strip().lower()
+    if normalized not in {"detector", "1d", "caked"}:
+        normalized = "detector"
+    _set_var_if_possible(view_state.view_mode_var, normalized)
+
+
+def populate_app_shell_view_switcher(
+    *,
+    view_state: AppShellViewState,
+    on_select: Callable[[str], None],
+) -> None:
+    """Populate the persistent detector/1D/caked view switcher."""
+
+    if view_state.view_switcher_frame is None:
+        return
+    _destroy_children(view_state.view_switcher_frame)
+    if view_state.view_mode_var is None:
+        view_state.view_mode_var = tk.StringVar(value="detector")
+    buttons: dict[str, Any] = {}
+    for key, label_text in _VIEW_MODE_CHOICES:
+        button = ttk.Radiobutton(
+            view_state.view_switcher_frame,
+            text=label_text,
+            value=key,
+            variable=view_state.view_mode_var,
+            command=lambda key=key: on_select(str(key)),
+        )
+        button.pack(side=tk.LEFT, padx=2)
+        buttons[str(key)] = button
+    view_state.view_mode_buttons = buttons
+
+
+def _quick_control_limits(
+    source_scale: object | None,
+    *,
+    fallback_value: float,
+    fallback_step: float,
+) -> tuple[float, float]:
+    try:
+        if source_scale is not None:
+            lower = float(source_scale.cget("from"))
+            upper = float(source_scale.cget("to"))
+            if lower > upper:
+                lower, upper = upper, lower
+            return lower, upper
+    except Exception:
+        pass
+    span = max(abs(float(fallback_value)), abs(float(fallback_step)), 1.0)
+    return float(fallback_value) - span, float(fallback_value) + span
+
+
+def _format_quick_control_value(value: float | None, step: float) -> str:
+    if value is None:
+        return ""
+    step_value = abs(float(step))
+    if step_value <= 0:
+        return f"{float(value):.6f}".rstrip("0").rstrip(".")
+    text = f"{step_value:.12f}".rstrip("0").rstrip(".")
+    decimals = len(text.split(".", 1)[1]) if "." in text else 0
+    return f"{float(value):.{decimals}f}"
+
+
+def _expand_scale_bounds(scale: object | None, value: float, step: float) -> None:
+    if scale is None:
+        return
+    try:
+        lower = float(scale.cget("from"))
+        upper = float(scale.cget("to"))
+    except Exception:
+        return
+    if lower > upper:
+        lower, upper = upper, lower
+    pad = max(abs(float(step)), 1.0)
+    new_lower = lower
+    new_upper = upper
+    if float(value) < lower:
+        new_lower = float(value) - pad
+    if float(value) > upper:
+        new_upper = float(value) + pad
+    if new_lower != lower or new_upper != upper:
+        try:
+            scale.configure(from_=new_lower, to=new_upper)
+        except tk.TclError:
+            return
+
+
+def populate_app_shell_quick_controls(
+    *,
+    view_state: AppShellViewState,
+    controls: Sequence[Mapping[str, object]],
+    on_more_controls: Callable[[], None] | None = None,
+) -> None:
+    """Populate the pinned quick-controls rail beside the detector canvas."""
+
+    parent = (
+        view_state.quick_controls_body
+        if view_state.quick_controls_body is not None
+        else view_state.quick_controls_frame
+    )
+    if parent is None:
+        return
+    _destroy_children(parent)
+    view_state.quick_control_widgets = {}
+    ttk.Label(
+        parent,
+        text="Pinned controls for fast geometry iteration near the detector view.",
+        justify=tk.LEFT,
+        wraplength=240,
+    ).pack(fill=tk.X, pady=(0, 8))
+    for control in controls:
+        key = str(control.get("key", "")).strip()
+        if not key:
+            continue
+        label_text = str(control.get("label", key))
+        variable = control.get("variable")
+        source_scale = control.get("scale")
+        on_change = control.get("command")
+        step = float(control.get("step", 1.0) or 1.0)
+        current_value = _read_float_var(variable)
+        if current_value is None:
+            current_value = 0.0
+        min_val, max_val = _quick_control_limits(
+            source_scale,
+            fallback_value=float(current_value),
+            fallback_step=float(step),
+        )
+
+        row = ttk.Frame(parent)
+        row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row, text=label_text).pack(anchor=tk.W)
+
+        slider_row = ttk.Frame(row)
+        slider_row.pack(fill=tk.X, pady=(2, 0))
+        scale = ttk.Scale(
+            slider_row,
+            from_=min_val,
+            to=max_val,
+            orient=tk.HORIZONTAL,
+            variable=variable,
+            command=(
+                (lambda _value, callback=on_change: callback())
+                if callable(on_change)
+                else None
+            ),
+        )
+        scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        entry_var = tk.StringVar(
+            value=_format_quick_control_value(current_value, step)
+        )
+        entry = ttk.Entry(
+            slider_row,
+            textvariable=entry_var,
+            width=10,
+        )
+        entry.pack(side=tk.LEFT, padx=(6, 0))
+
+        def _sync_entry(
+            *_args: object,
+            tracked_var: object = variable,
+            tracked_scale: object = scale,
+            tracked_entry_var: object = entry_var,
+            tracked_step: float = step,
+        ) -> None:
+            value = _read_float_var(tracked_var)
+            if value is None:
+                return
+            _expand_scale_bounds(tracked_scale, float(value), float(tracked_step))
+            _set_var_if_possible(
+                tracked_entry_var,
+                _format_quick_control_value(float(value), float(tracked_step)),
+            )
+
+        trace_add = getattr(variable, "trace_add", None)
+        if callable(trace_add):
+            trace_add("write", _sync_entry)
+
+        def _apply_entry(
+            _event: object | None = None,
+            tracked_var: object = variable,
+            tracked_scale: object = scale,
+            tracked_entry_var: object = entry_var,
+            tracked_step: float = step,
+            callback: object = on_change,
+        ) -> None:
+            raw_text = str(getattr(tracked_entry_var, "get", lambda: "")()).strip()
+            if not raw_text:
+                _sync_entry()
+                return
+            try:
+                new_value = float(raw_text)
+            except Exception:
+                _sync_entry()
+                return
+            setter = getattr(tracked_var, "set", None)
+            if not callable(setter):
+                return
+            _expand_scale_bounds(tracked_scale, float(new_value), float(tracked_step))
+            setter(float(new_value))
+            _sync_entry()
+            if callable(callback):
+                callback()
+
+        entry.bind("<Return>", _apply_entry)
+        entry.bind("<FocusOut>", _apply_entry)
+        _sync_entry()
+
+        view_state.quick_control_widgets[key] = {
+            "frame": row,
+            "scale": scale,
+            "entry": entry,
+            "entry_var": entry_var,
+        }
+
+    view_state.quick_controls_more_button = None
+    if callable(on_more_controls):
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(2, 6))
+        more_button = ttk.Button(
+            parent,
+            text="More Controls",
+            command=on_more_controls,
+        )
+        more_button.pack(fill=tk.X)
+        view_state.quick_controls_more_button = more_button
 
 
 def set_app_shell_run_status_text(
@@ -3470,6 +3925,8 @@ def create_geometry_fit_background_controls(
     view_state: BackgroundThetaControlsViewState,
     selection_text: str,
     on_apply: Callable[[], None],
+    on_select_current: Callable[[], None] | None = None,
+    on_select_all: Callable[[], None] | None = None,
 ) -> None:
     """Create the geometry-fit background selector controls and store refs."""
 
@@ -3477,27 +3934,166 @@ def create_geometry_fit_background_controls(
     controls.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
     ttk.Label(
         controls,
-        text=_GEOMETRY_FIT_BACKGROUND_HELP_TEXT,
+        text=(
+            "Choose which loaded backgrounds participate in geometry fitting. "
+            "The saved selection still uses the canonical current/all/index list format."
+        ),
     ).pack(anchor=tk.W, padx=5, pady=(4, 0))
 
     selection_var = tk.StringVar(value=str(selection_text))
     row = ttk.Frame(controls)
-    row.pack(fill=tk.X, padx=5, pady=(2, 4))
+    row.pack(fill=tk.X, padx=5, pady=(4, 4))
+    shortcuts_frame = ttk.Frame(row)
+    shortcuts_frame.pack(side=tk.LEFT)
+    current_button = ttk.Button(
+        shortcuts_frame,
+        text="Current",
+        command=on_select_current,
+    )
+    current_button.pack(side=tk.LEFT)
+    all_button = ttk.Button(
+        shortcuts_frame,
+        text="All",
+        command=on_select_all,
+    )
+    all_button.pack(side=tk.LEFT, padx=(6, 0))
+
     geometry_fit_background_entry = ttk.Entry(
         row,
         textvariable=selection_var,
     )
-    geometry_fit_background_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    ttk.Button(
-        row,
-        text="Apply",
-        command=on_apply,
-    ).pack(side=tk.LEFT, padx=(6, 0))
     geometry_fit_background_entry.bind("<Return>", lambda _event: on_apply())
+
+    header = ttk.Frame(controls)
+    header.pack(fill=tk.X, padx=5, pady=(0, 2))
+    header.columnconfigure(2, weight=1)
+    ttk.Label(header, text="Active").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+    ttk.Label(header, text="Include").grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+    ttk.Label(header, text="Background").grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+    ttk.Label(header, text="theta_i").grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+    ttk.Label(header, text="Pairs").grid(row=0, column=4, sticky=tk.W)
+
+    rows_frame = ttk.Frame(controls)
+    rows_frame.pack(fill=tk.X, padx=5, pady=(0, 4))
 
     view_state.geometry_fit_background_controls = controls
     view_state.geometry_fit_background_selection_var = selection_var
     view_state.geometry_fit_background_entry = geometry_fit_background_entry
+    view_state.geometry_fit_background_shortcuts_frame = shortcuts_frame
+    view_state.geometry_fit_background_current_button = current_button
+    view_state.geometry_fit_background_all_button = all_button
+    view_state.geometry_fit_background_rows_frame = rows_frame
+    view_state.geometry_fit_background_row_frames = []
+    view_state.geometry_fit_background_active_labels = []
+    view_state.geometry_fit_background_include_vars = []
+    view_state.geometry_fit_background_include_checks = []
+    view_state.geometry_fit_background_name_labels = []
+    view_state.geometry_fit_background_theta_labels = []
+    view_state.geometry_fit_background_pair_labels = []
+
+
+def populate_geometry_fit_background_table(
+    *,
+    view_state: BackgroundThetaControlsViewState,
+    row_count: int,
+    on_toggle: Callable[[int], None],
+) -> None:
+    """Create the row widgets used by the visual geometry-fit background selector."""
+
+    parent = view_state.geometry_fit_background_rows_frame
+    if parent is None:
+        return
+    _destroy_children(parent)
+
+    row_frames: list[Any] = []
+    active_labels: list[Any] = []
+    include_vars: list[Any] = []
+    include_checks: list[Any] = []
+    name_labels: list[Any] = []
+    theta_labels: list[Any] = []
+    pair_labels: list[Any] = []
+
+    for idx in range(max(0, int(row_count))):
+        row = ttk.Frame(parent)
+        row.pack(fill=tk.X, pady=1)
+        row.columnconfigure(2, weight=1)
+
+        active_label = ttk.Label(row, text="")
+        active_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        include_var = tk.BooleanVar(value=False)
+        include_check = ttk.Checkbutton(
+            row,
+            variable=include_var,
+            command=lambda idx=idx: on_toggle(int(idx)),
+        )
+        include_check.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+        name_label = ttk.Label(row, text="")
+        name_label.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+        theta_label = ttk.Label(row, text="")
+        theta_label.grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+        pair_label = ttk.Label(row, text="")
+        pair_label.grid(row=0, column=4, sticky=tk.W)
+
+        row_frames.append(row)
+        active_labels.append(active_label)
+        include_vars.append(include_var)
+        include_checks.append(include_check)
+        name_labels.append(name_label)
+        theta_labels.append(theta_label)
+        pair_labels.append(pair_label)
+
+    if row_count <= 0:
+        ttk.Label(
+            parent,
+            text="Load backgrounds in Setup to choose a geometry-fit set.",
+            justify=tk.LEFT,
+            wraplength=520,
+        ).pack(fill=tk.X)
+
+    view_state.geometry_fit_background_row_frames = row_frames
+    view_state.geometry_fit_background_active_labels = active_labels
+    view_state.geometry_fit_background_include_vars = include_vars
+    view_state.geometry_fit_background_include_checks = include_checks
+    view_state.geometry_fit_background_name_labels = name_labels
+    view_state.geometry_fit_background_theta_labels = theta_labels
+    view_state.geometry_fit_background_pair_labels = pair_labels
+
+
+def update_geometry_fit_background_table(
+    *,
+    view_state: BackgroundThetaControlsViewState,
+    rows: Sequence[Mapping[str, object]],
+    selected_indices: Sequence[int],
+    current_index: int,
+) -> None:
+    """Refresh the row texts and check states for the visual background selector."""
+
+    selected = {int(idx) for idx in selected_indices}
+    view_state.geometry_fit_background_sync_active = True
+    try:
+        for idx, row_data in enumerate(rows):
+            if idx >= len(view_state.geometry_fit_background_active_labels):
+                break
+            _set_label_text(
+                view_state.geometry_fit_background_active_labels[idx],
+                ">" if int(idx) == int(current_index) else "",
+            )
+            include_var = view_state.geometry_fit_background_include_vars[idx]
+            _set_var_if_possible(include_var, bool(int(idx) in selected))
+            _set_label_text(
+                view_state.geometry_fit_background_name_labels[idx],
+                row_data.get("background", ""),
+            )
+            _set_label_text(
+                view_state.geometry_fit_background_theta_labels[idx],
+                row_data.get("theta_i", ""),
+            )
+            _set_label_text(
+                view_state.geometry_fit_background_pair_labels[idx],
+                row_data.get("pairs", ""),
+            )
+    finally:
+        view_state.geometry_fit_background_sync_active = False
 
 
 def geometry_q_group_window_open(view_state: GeometryQGroupViewState) -> bool:

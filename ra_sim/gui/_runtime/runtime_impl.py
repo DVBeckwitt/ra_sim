@@ -3706,6 +3706,43 @@ toggle_caked_2d = integration_range_workflow.toggle_caked_2d
 toggle_log_radial = integration_range_workflow.toggle_log_radial
 toggle_log_azimuth = integration_range_workflow.toggle_log_azimuth
 
+
+def _set_persistent_view_mode(mode: str) -> None:
+    normalized = str(mode or "detector").strip().lower()
+    if normalized not in {"detector", "1d", "caked"}:
+        normalized = "detector"
+
+    show_1d_var = analysis_view_controls_view_state.show_1d_var
+    show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
+    if show_1d_var is None or show_caked_2d_var is None:
+        return
+
+    show_1d_now = bool(show_1d_var.get())
+    show_caked_now = bool(show_caked_2d_var.get())
+    if normalized == "detector":
+        if show_caked_now:
+            show_caked_2d_var.set(False)
+            toggle_caked_2d()
+        elif show_1d_now:
+            show_1d_var.set(False)
+            toggle_1d_plots()
+    elif normalized == "1d":
+        if show_caked_now:
+            show_caked_2d_var.set(False)
+            toggle_caked_2d()
+        if not bool(show_1d_var.get()):
+            show_1d_var.set(True)
+            toggle_1d_plots()
+    else:
+        if not show_caked_now:
+            show_caked_2d_var.set(True)
+            toggle_caked_2d()
+        elif not bool(show_1d_var.get()):
+            show_1d_var.set(True)
+            toggle_1d_plots()
+    _refresh_run_status_bar()
+
+
 integration_range_drag_runtime = (
     gui_bootstrap.build_runtime_integration_range_workflow_bootstrap(
         integration_range_drag_module=gui_integration_range_drag,
@@ -5000,13 +5037,100 @@ def _extract_fit_quality_text() -> str:
     return "Waiting for ordered-structure fit"
 
 
+def _current_app_shell_view_mode() -> str:
+    show_caked = bool(
+        getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
+    )
+    show_1d = bool(
+        getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()
+    )
+    if show_caked:
+        return "caked"
+    if show_1d:
+        return "1d"
+    return "detector"
+
+
+def _current_app_shell_view_text() -> str:
+    mode = _current_app_shell_view_mode()
+    if mode == "caked":
+        return "Caked + 1D"
+    if mode == "1d":
+        return "Detector + 1D"
+    return "Detector"
+
+
+def _current_geometry_preview_gate_summary() -> str:
+    overlay = getattr(geometry_preview_state, "overlay", None)
+    if overlay is None:
+        return ""
+    try:
+        matched = len(getattr(overlay, "pairs", ()) or ())
+    except Exception:
+        matched = 0
+    summary_parts: list[str] = []
+
+    try:
+        simulated_count = int(getattr(overlay, "simulated_count", 0) or 0)
+    except Exception:
+        simulated_count = 0
+    if simulated_count > 0:
+        summary_parts.append(f"Peaks {matched}/{simulated_count}")
+
+    try:
+        min_matches = int(getattr(overlay, "min_matches", 0) or 0)
+    except Exception:
+        min_matches = 0
+    if min_matches > 0:
+        summary_parts.append(f"Gate {matched}/{min_matches}")
+
+    try:
+        q_total = int(getattr(overlay, "q_group_total", 0) or 0)
+    except Exception:
+        q_total = 0
+    if q_total > 0:
+        try:
+            q_excluded = int(getattr(overlay, "q_group_excluded", 0) or 0)
+        except Exception:
+            q_excluded = 0
+        summary_parts.append(f"Qr/Qz {max(0, q_total - q_excluded)}/{q_total}")
+
+    return " | ".join(summary_parts)
+
+
+def _geometry_fit_cache_status(
+    *,
+    selected_indices: Sequence[int],
+    current_background_index: int,
+) -> tuple[str, str]:
+    try:
+        background_theta_values = list(_current_background_theta_values(strict_count=False))
+    except Exception:
+        background_theta_values = []
+    stale_reason = gui_geometry_fit.geometry_fit_dataset_cache_stale_reason(
+        geometry_fit_dataset_cache_state.payload,
+        selected_background_indices=selected_indices,
+        current_background_index=int(current_background_index),
+        joint_background_mode=_geometry_fit_uses_shared_theta_offset(selected_indices),
+        background_theta_values=background_theta_values,
+    )
+    if stale_reason is None:
+        return ("Fresh", "")
+    if str(stale_reason).strip() == "Run geometry fit first.":
+        return ("Not run", str(stale_reason))
+    return ("Stale", str(stale_reason))
+
+
 def _refresh_session_summary_panel() -> None:
     """Refresh the always-visible session summary shown above the tabs."""
 
     osc_files = list(getattr(background_runtime_state, "osc_files", ()))
     background_total = len(osc_files)
+    bg_idx = max(
+        0,
+        min(int(background_runtime_state.current_background_index), max(0, background_total - 1)),
+    )
     if background_total > 0:
-        bg_idx = max(0, min(int(background_runtime_state.current_background_index), background_total - 1))
         background_text = f"{bg_idx + 1}/{background_total} - {Path(str(osc_files[bg_idx])).name}"
     else:
         background_text = "Not loaded"
@@ -5025,13 +5149,71 @@ def _refresh_session_summary_panel() -> None:
     if not fit_background_text:
         fit_background_text = "current"
 
-    view_text = "Caked" if bool(
-        getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
-    ) else "Detector"
-    if bool(getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()):
-        view_text = f"{view_text} + 1D"
-
+    view_text = _current_app_shell_view_text()
     fit_quality_text = _extract_fit_quality_text()
+    try:
+        selected_indices = list(_current_geometry_fit_background_indices(strict=False))
+    except Exception:
+        selected_indices = []
+    fit_selection_ready = bool(selected_indices) if background_total > 0 else False
+
+    try:
+        theta_base_value = float(_background_theta_base_for_index(bg_idx, strict_count=False))
+    except Exception:
+        theta_base_value = float("nan")
+    try:
+        theta_effective_value = float(_background_theta_for_index(bg_idx, strict_count=False))
+    except Exception:
+        theta_effective_value = float("nan")
+    shared_theta = _geometry_fit_uses_shared_theta_offset(selected_indices)
+    theta_base_text = (
+        f"{theta_base_value:.4f} deg" if np.isfinite(theta_base_value) else "n/a"
+    )
+    theta_effective_text = (
+        f"{theta_effective_value:.4f} deg"
+        if shared_theta and np.isfinite(theta_effective_value)
+        else "n/a"
+    )
+    fit_inclusion_text = (
+        "Included" if int(bg_idx) in {int(idx) for idx in selected_indices} else "Excluded"
+    )
+
+    freshness_status, freshness_detail = _geometry_fit_cache_status(
+        selected_indices=selected_indices,
+        current_background_index=bg_idx,
+    )
+    preview_summary_text = _current_geometry_preview_gate_summary()
+    fit_health_secondary_parts = [
+        text
+        for text in (
+            preview_summary_text,
+            freshness_detail if freshness_status != "Fresh" else "",
+        )
+        if str(text).strip()
+    ]
+    fit_health_secondary_text = " | ".join(fit_health_secondary_parts)
+
+    manual_pair_total = 0
+    try:
+        manual_pairs_map = getattr(manual_geometry_state, "pairs_by_background", {}) or {}
+        for pair_list in manual_pairs_map.values():
+            manual_pair_total += len(pair_list or ())
+    except Exception:
+        manual_pair_total = 0
+    workflow_statuses = {
+        "backgrounds": "ready" if background_total > 0 else "missing",
+        "cif": "ready" if cif_path else "missing",
+        "fit_set": "ready" if fit_selection_ready else "missing",
+        "manual_pairs": "ready" if manual_pair_total > 0 else "missing",
+        "geometry_fit": freshness_status,
+        "analysis": (
+            "ready"
+            if background_total > 0 and cif_path and freshness_status == "Fresh"
+            else "stale"
+            if background_total > 0 and cif_path and freshness_status == "Stale"
+            else "missing"
+        ),
+    }
 
     gui_views.set_app_shell_session_summary_text(
         app_shell_view_state,
@@ -5045,6 +5227,30 @@ def _refresh_session_summary_panel() -> None:
             ]
         ),
     )
+    gui_views.set_app_shell_workflow_statuses(
+        app_shell_view_state,
+        workflow_statuses,
+    )
+    gui_views.set_app_shell_dataset_values(
+        app_shell_view_state,
+        {
+            "background": background_text,
+            "theta_i": theta_base_text,
+            "theta": theta_effective_text,
+            "fit": fit_inclusion_text,
+            "model": cif_text,
+        },
+    )
+    gui_views.set_app_shell_fit_health_text(
+        app_shell_view_state,
+        status=freshness_status,
+        primary=fit_quality_text,
+        secondary=fit_health_secondary_text,
+    )
+    gui_views.set_app_shell_view_mode(
+        app_shell_view_state,
+        _current_app_shell_view_mode(),
+    )
 
     gui_views.set_match_results_text(
         app_shell_view_state,
@@ -5053,6 +5259,9 @@ def _refresh_session_summary_panel() -> None:
             "status panel below after each fit."
         ),
     )
+    refresh_selector = globals().get("_refresh_geometry_fit_background_table")
+    if callable(refresh_selector):
+        refresh_selector(force_rebuild=False)
 
 
 def _refresh_interaction_mode_banner() -> None:
@@ -7290,6 +7499,9 @@ def _apply_background_theta_metadata(*args, **kwargs):
     result = _apply_background_theta_metadata_base(*args, **kwargs)
     if bool(result):
         _clear_geometry_fit_dataset_cache()
+    refresh_selector = globals().get("_refresh_geometry_fit_background_table")
+    if callable(refresh_selector):
+        refresh_selector(force_rebuild=False)
     return result
 
 
@@ -7302,7 +7514,22 @@ def _apply_geometry_fit_background_selection(*args, **kwargs):
     result = _apply_geometry_fit_background_selection_base(*args, **kwargs)
     if bool(result):
         _clear_geometry_fit_dataset_cache()
+    refresh_selector = globals().get("_refresh_geometry_fit_background_table")
+    if callable(refresh_selector):
+        refresh_selector(force_rebuild=False)
     return result
+
+
+_sync_geometry_fit_background_selection_base = _sync_geometry_fit_background_selection
+
+
+def _sync_geometry_fit_background_selection(*args, **kwargs):
+    """Keep the visual fit-background selector synced to the canonical text var."""
+
+    _sync_geometry_fit_background_selection_base(*args, **kwargs)
+    refresh_selector = globals().get("_refresh_geometry_fit_background_table")
+    if callable(refresh_selector):
+        refresh_selector(force_rebuild=False)
 
 
 def _background_theta_base_for_index(
@@ -7612,16 +7839,148 @@ def _attach_live_theta_background_theta_trace(theta_var: object | None = None) -
     trace_add("write", _sync_live_theta_into_background_theta_list)
     _theta_initial_background_theta_trace["attached"] = True
 
+
+_geometry_fit_background_table_trace = {"attached": False}
+
+
+def _geometry_fit_background_current_index() -> int:
+    total_count = max(0, len(background_runtime_state.osc_files))
+    if total_count <= 0:
+        return 0
+    return max(
+        0,
+        min(int(background_runtime_state.current_background_index), total_count - 1),
+    )
+
+
+def _build_geometry_fit_background_table_rows() -> list[dict[str, str]]:
+    try:
+        theta_values = list(_current_background_theta_values(strict_count=False))
+    except Exception:
+        theta_values = []
+    manual_pairs_map = getattr(manual_geometry_state, "pairs_by_background", {}) or {}
+    rows: list[dict[str, str]] = []
+    for idx, osc_path in enumerate(list(background_runtime_state.osc_files)):
+        theta_text = "n/a"
+        if idx < len(theta_values):
+            try:
+                theta_value = float(theta_values[idx])
+            except Exception:
+                theta_value = float("nan")
+            if np.isfinite(theta_value):
+                theta_text = f"{theta_value:.4f} deg"
+        pair_count = 0
+        try:
+            pair_count = len(manual_pairs_map.get(int(idx), ()) or ())
+        except Exception:
+            pair_count = 0
+        rows.append(
+            {
+                "background": Path(str(osc_path)).name,
+                "theta_i": theta_text,
+                "pairs": str(max(0, int(pair_count))),
+            }
+        )
+    return rows
+
+
+def _refresh_geometry_fit_background_table(*, force_rebuild: bool = False) -> None:
+    rows = _build_geometry_fit_background_table_rows()
+    if background_theta_controls_view_state.geometry_fit_background_rows_frame is None:
+        return
+    if force_rebuild or len(background_theta_controls_view_state.geometry_fit_background_row_frames) != len(rows):
+        gui_views.populate_geometry_fit_background_table(
+            view_state=background_theta_controls_view_state,
+            row_count=len(rows),
+            on_toggle=_handle_geometry_fit_background_toggle,
+        )
+    try:
+        selected_indices = list(_current_geometry_fit_background_indices(strict=False))
+    except Exception:
+        selected_indices = []
+    gui_views.update_geometry_fit_background_table(
+        view_state=background_theta_controls_view_state,
+        rows=rows,
+        selected_indices=selected_indices,
+        current_index=_geometry_fit_background_current_index(),
+    )
+
+
+def _set_geometry_fit_background_selection_text(
+    value: str,
+    *,
+    trigger_update: bool,
+) -> None:
+    if geometry_fit_background_selection_var is None:
+        return
+    geometry_fit_background_selection_var.set(str(value))
+    _apply_geometry_fit_background_selection(trigger_update=bool(trigger_update))
+
+
+def _handle_geometry_fit_background_toggle(index: int) -> None:
+    if bool(background_theta_controls_view_state.geometry_fit_background_sync_active):
+        return
+    if geometry_fit_background_selection_var is None:
+        return
+    total_count = max(0, len(background_runtime_state.osc_files))
+    if total_count <= 0:
+        return
+    selected_indices: list[int] = []
+    for idx, include_var in enumerate(
+        background_theta_controls_view_state.geometry_fit_background_include_vars
+    ):
+        getter = getattr(include_var, "get", None)
+        if callable(getter) and bool(getter()):
+            selected_indices.append(int(idx))
+    if not selected_indices:
+        selected_indices = [_geometry_fit_background_current_index()]
+    geometry_fit_background_selection_var.set(
+        gui_background_theta.serialize_geometry_fit_background_selection(
+            selected_indices=selected_indices,
+            total_count=total_count,
+            current_index=_geometry_fit_background_current_index(),
+        )
+    )
+    _apply_geometry_fit_background_selection(trigger_update=True)
+
+
+def _attach_geometry_fit_background_selection_trace() -> None:
+    if _geometry_fit_background_table_trace["attached"]:
+        return
+    trace_add = getattr(geometry_fit_background_selection_var, "trace_add", None)
+    if not callable(trace_add):
+        return
+    trace_add(
+        "write",
+        lambda *_args: _refresh_geometry_fit_background_table(force_rebuild=False),
+    )
+    _geometry_fit_background_table_trace["attached"] = True
+
+
 gui_views.create_geometry_fit_background_controls(
     parent=app_shell_view_state.match_backgrounds_frame,
     view_state=background_theta_controls_view_state,
     selection_text=_default_geometry_fit_background_selection(),
     on_apply=lambda: _apply_geometry_fit_background_selection(trigger_update=True),
+    on_select_current=lambda: _set_geometry_fit_background_selection_text(
+        "current",
+        trigger_update=True,
+    ),
+    on_select_all=lambda: _set_geometry_fit_background_selection_text(
+        (
+            "all"
+            if len(background_runtime_state.osc_files) > 1
+            else "current"
+        ),
+        trigger_update=True,
+    ),
 )
 geometry_fit_background_selection_var = (
     background_theta_controls_view_state.geometry_fit_background_selection_var
 )
+_attach_geometry_fit_background_selection_trace()
 _sync_geometry_fit_background_selection(preserve_existing=False)
+_refresh_geometry_fit_background_table(force_rebuild=True)
 _maybe_refresh_run_status_bar()
 
 gui_views.populate_stacked_button_group(
@@ -12560,6 +12919,14 @@ gui_views.create_geometry_overlay_action_controls(
 integration_range_update_runtime.create_analysis_controls(
     parent=app_shell_view_state.analysis_views_frame,
 )
+gui_views.populate_app_shell_view_switcher(
+    view_state=app_shell_view_state,
+    on_select=_set_persistent_view_mode,
+)
+gui_views.set_app_shell_view_mode(
+    app_shell_view_state,
+    _current_app_shell_view_mode(),
+)
 
 # Option to add fractional rods between integer L values. This can be enabled via
 # configuration; the GUI control has been removed to reduce interface clutter.
@@ -13106,6 +13473,85 @@ bandwidth_percent_var = beam_mosaic_parameter_sliders_view_state.bandwidth_perce
 bandwidth_percent_scale = beam_mosaic_parameter_sliders_view_state.bandwidth_percent_scale
 center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
 center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
+
+
+def _open_refine_controls_from_quick_rail() -> None:
+    try:
+        app_shell_view_state.controls_notebook.select(app_shell_view_state.refine_tab)
+    except Exception:
+        return
+
+
+gui_views.populate_app_shell_quick_controls(
+    view_state=app_shell_view_state,
+    controls=[
+        {
+            "key": "theta_initial",
+            "label": "theta",
+            "variable": theta_initial_var,
+            "scale": theta_initial_scale,
+            "command": schedule_update,
+            "step": 0.01,
+        },
+        {
+            "key": "center_x",
+            "label": "center x",
+            "variable": center_x_var,
+            "scale": center_x_scale,
+            "command": schedule_update,
+            "step": 1.0,
+        },
+        {
+            "key": "center_y",
+            "label": "center y",
+            "variable": center_y_var,
+            "scale": center_y_scale,
+            "command": schedule_update,
+            "step": 1.0,
+        },
+        {
+            "key": "gamma",
+            "label": "gamma",
+            "variable": gamma_var,
+            "scale": gamma_scale,
+            "command": schedule_update,
+            "step": 0.001,
+        },
+        {
+            "key": "Gamma",
+            "label": "Gamma",
+            "variable": Gamma_var,
+            "scale": Gamma_scale,
+            "command": schedule_update,
+            "step": 0.001,
+        },
+        {
+            "key": "corto_detector",
+            "label": "distance",
+            "variable": corto_detector_var,
+            "scale": corto_detector_scale,
+            "command": schedule_update,
+            "step": 0.0001,
+        },
+        {
+            "key": "a",
+            "label": "a",
+            "variable": a_var,
+            "scale": a_scale,
+            "command": schedule_update,
+            "step": 0.01,
+        },
+        {
+            "key": "c",
+            "label": "c",
+            "variable": c_var,
+            "scale": c_scale,
+            "command": schedule_update,
+            "step": 0.01,
+        },
+    ],
+    on_more_controls=_open_refine_controls_from_quick_rail,
+)
 
 
 def _refresh_refine_section_summaries(*_args) -> None:

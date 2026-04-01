@@ -168,7 +168,40 @@ def format_geometry_fit_background_indices(indices: Sequence[object]) -> str:
         if idx < 0:
             continue
         labels.append(str(idx + 1))
-    return ", ".join(labels)
+    return ",".join(labels)
+
+
+def serialize_geometry_fit_background_selection(
+    *,
+    selected_indices: Sequence[object],
+    total_count: int,
+    current_index: int = 0,
+) -> str:
+    """Serialize one validated fit-background selection into canonical GUI text."""
+
+    count = max(0, int(total_count))
+    if count <= 0:
+        return "current"
+    current_idx = max(0, min(int(current_index), count - 1))
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw_idx in selected_indices:
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        if idx < 0 or idx >= count or idx in seen:
+            continue
+        seen.add(idx)
+        normalized.append(idx)
+    normalized.sort()
+    if not normalized:
+        normalized = [current_idx]
+    if count > 1 and len(normalized) == count:
+        return "all"
+    if len(normalized) == 1 and int(normalized[0]) == int(current_idx):
+        return "current"
+    return format_geometry_fit_background_indices(normalized)
 
 
 def parse_geometry_fit_background_indices(
@@ -740,19 +773,14 @@ def apply_geometry_fit_background_selection(
     if isinstance(theta_controls, dict):
         previous_shared_theta = theta_controls.get("_shared_theta_active")
 
-    total_count = len(osc_files)
-    if total_count > 1 and len(selected_indices) == total_count:
-        _write_var_value(geometry_fit_background_selection_var, "all")
-    elif (
-        len(selected_indices) == 1
-        and int(selected_indices[0]) == int(current_background_index)
-    ):
-        _write_var_value(geometry_fit_background_selection_var, "current")
-    else:
-        _write_var_value(
-            geometry_fit_background_selection_var,
-            format_geometry_fit_background_indices(selected_indices),
-        )
+    _write_var_value(
+        geometry_fit_background_selection_var,
+        serialize_geometry_fit_background_selection(
+            selected_indices=selected_indices,
+            total_count=len(osc_files),
+            current_index=current_background_index,
+        ),
+    )
 
     shared_theta = geometry_fit_uses_shared_theta_offset(selected_indices)
     refresh_geometry_fit_theta_checkbox_label(

@@ -115,6 +115,41 @@ def test_parse_geometry_fit_background_indices_supports_current_all_and_ranges()
     assert parse_selection("1, 3-4", total_count=4, current_index=0) == [0, 2, 3]
 
 
+def test_serialize_geometry_fit_background_selection_canonicalizes_visual_selector_output() -> None:
+    assert (
+        background_theta.serialize_geometry_fit_background_selection(
+            selected_indices=[0, 1, 2],
+            total_count=3,
+            current_index=1,
+        )
+        == "all"
+    )
+    assert (
+        background_theta.serialize_geometry_fit_background_selection(
+            selected_indices=[2],
+            total_count=4,
+            current_index=2,
+        )
+        == "current"
+    )
+    assert (
+        background_theta.serialize_geometry_fit_background_selection(
+            selected_indices=[3, 0, 2],
+            total_count=4,
+            current_index=1,
+        )
+        == "1,3,4"
+    )
+    assert (
+        background_theta.serialize_geometry_fit_background_selection(
+            selected_indices=[],
+            total_count=4,
+            current_index=1,
+        )
+        == "current"
+    )
+
+
 def test_geometry_fit_shared_theta_offset_depends_on_selected_fit_backgrounds() -> None:
     selection_var = _Var("current")
 

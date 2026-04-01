@@ -99,6 +99,18 @@ class BackgroundThetaControlsViewState:
     geometry_fit_background_controls: Any = None
     geometry_fit_background_selection_var: Any = None
     geometry_fit_background_entry: Any = None
+    geometry_fit_background_shortcuts_frame: Any = None
+    geometry_fit_background_current_button: Any = None
+    geometry_fit_background_all_button: Any = None
+    geometry_fit_background_rows_frame: Any = None
+    geometry_fit_background_row_frames: list[Any] = field(default_factory=list)
+    geometry_fit_background_active_labels: list[Any] = field(default_factory=list)
+    geometry_fit_background_include_vars: list[Any] = field(default_factory=list)
+    geometry_fit_background_include_checks: list[Any] = field(default_factory=list)
+    geometry_fit_background_name_labels: list[Any] = field(default_factory=list)
+    geometry_fit_background_theta_labels: list[Any] = field(default_factory=list)
+    geometry_fit_background_pair_labels: list[Any] = field(default_factory=list)
+    geometry_fit_background_sync_active: bool = False
 
 
 @dataclass
@@ -569,9 +581,24 @@ class AppShellViewState:
     mode_banner_title_label: Any = None
     mode_banner_detail_var: Any = None
     mode_banner_detail_label: Any = None
+    workflow_checklist_frame: Any = None
+    workflow_checklist_status_vars: dict[str, Any] = field(default_factory=dict)
+    workflow_checklist_status_labels: dict[str, Any] = field(default_factory=dict)
     run_status_frame: Any = None
     run_status_var: Any = None
     run_status_label: Any = None
+    view_switcher_frame: Any = None
+    view_mode_var: Any = None
+    view_mode_buttons: dict[str, Any] = field(default_factory=dict)
+    canvas_context_frame: Any = None
+    canvas_context_left: Any = None
+    canvas_context_right: Any = None
+    dataset_summary_frame: Any = None
+    dataset_value_labels: dict[str, Any] = field(default_factory=dict)
+    fit_health_frame: Any = None
+    fit_health_status_label: Any = None
+    fit_health_primary_label: Any = None
+    fit_health_secondary_label: Any = None
     controls_notebook: Any = None
     setup_tab: Any = None
     match_tab: Any = None
@@ -619,6 +646,10 @@ class AppShellViewState:
     status_frame: Any = None
     fig_frame: Any = None
     canvas_frame: Any = None
+    quick_controls_frame: Any = None
+    quick_controls_body: Any = None
+    quick_control_widgets: dict[str, Any] = field(default_factory=dict)
+    quick_controls_more_button: Any = None
     left_col: Any = None
     right_col: Any = None
     plot_frame_1d: Any = None
