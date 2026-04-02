@@ -57,5 +57,12 @@ multi-background dataset bundle from the last successful manual geometry fit,
 so any change to manual picks, selected backgrounds, or shared-theta metadata
 requires rerunning geometry fit before the mosaic-shape step.
 
+Within that cached bundle, the mosaic fitter keeps the selected specular
+`(00l)` family, then reduces the off-specular side to the top three current
+HKL/Qr groups so paired reflections with identical `Qr` are not both simulated.
+Specular picks contribute both `2theta` line-shape terms and relative-intensity
+constraints across the selected specular family, while the retained
+off-specular groups contribute `phi` line-shape terms only.
+
 Saving parameter snapshots regularly is the easiest way to keep iterations
 reproducible.

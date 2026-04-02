@@ -23,6 +23,7 @@ from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
+from types import SimpleNamespace
 from typing import Mapping, Sequence
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -77,6 +78,7 @@ from ra_sim.fitting.optimization import (
     fit_geometry_parameters,
     fit_mosaic_shape_parameters,
     fit_mosaic_widths_separable,
+    focus_mosaic_profile_dataset_specs,
     simulate_and_compare_hkl,
 )
 from ra_sim.fitting.background_peak_matching import (
@@ -120,6 +122,7 @@ from ra_sim.simulation.types import (
 from ra_sim.gui import background as gui_background
 from ra_sim.gui import background_manager as gui_background_manager
 from ra_sim.gui import background_theta as gui_background_theta
+from ra_sim.gui import analysis_peak_tools as gui_analysis_peak_tools
 from ra_sim.gui import bragg_qr_manager as gui_bragg_qr_manager
 from ra_sim.gui import canvas_interactions as gui_canvas_interactions
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
@@ -499,6 +502,8 @@ resolution_sample_counts = {
     "Medium": 250,
     "High": 500,
 }
+MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT = 50000
+MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS = 3
 CUSTOM_SAMPLING_OPTION = "Custom"
 simulation_runtime_state.num_samples = resolution_sample_counts["Low"]
 write_excel = output_config.get("write_excel", write_excel)
@@ -1609,6 +1614,7 @@ if (
     or app_shell_view_state.fit_body is None
     or app_shell_view_state.analysis_views_frame is None
     or app_shell_view_state.analysis_exports_frame is None
+    or app_shell_view_state.analysis_popout_button is None
     or app_shell_view_state.status_frame is None
     or app_shell_view_state.fig_frame is None
     or app_shell_view_state.canvas_frame is None
@@ -1688,6 +1694,10 @@ def _shutdown_gui():
             fast_viewer_workflow.shutdown()
         except Exception:
             pass
+    try:
+        gui_views.close_analysis_popout_window(analysis_popout_view_state)
+    except Exception:
+        pass
 
     try:
         if root.winfo_exists():
@@ -1875,6 +1885,11 @@ fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewe
         "manual_pick_armed",
         False,
     ),
+    hkl_pick_armed_factory=lambda: getattr(
+        globals().get("peak_selection_state"),
+        "hkl_pick_armed",
+        False,
+    ),
     manual_pick_session_active_factory=lambda: (
         globals().get("_geometry_manual_pick_session_active")(require_current_background=False)
         if callable(globals().get("_geometry_manual_pick_session_active"))
@@ -1933,20 +1948,69 @@ _toggle_fast_viewer = fast_viewer_workflow.toggle
 # ---------------------------------------------------------------------------
 #  helper – returns a fully populated, *consistent* mosaic_params dict
 # ---------------------------------------------------------------------------
-def build_mosaic_params():
+def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None):
     update_mosaic_cache()
     solve_q = current_solve_q_values()
+    beam_x_array = simulation_runtime_state.profile_cache["beam_x_array"]
+    beam_y_array = simulation_runtime_state.profile_cache["beam_y_array"]
+    theta_array = simulation_runtime_state.profile_cache["theta_array"]
+    phi_array = simulation_runtime_state.profile_cache["phi_array"]
+    wavelength_array = simulation_runtime_state.profile_cache["wavelength_array"]
+    n2_sample_array = simulation_runtime_state.profile_cache.get("n2_sample_array")
+
+    target_sample_count = None
+    if sample_count is not None:
+        try:
+            target_sample_count = max(int(sample_count), 1)
+        except (TypeError, ValueError):
+            target_sample_count = None
+
+    current_sample_count = int(np.size(beam_x_array))
+    if (
+        target_sample_count is not None
+        and target_sample_count > 0
+        and target_sample_count != current_sample_count
+    ):
+        resolved_rng_seed = 0
+        if rng_seed is not None:
+            try:
+                resolved_rng_seed = int(rng_seed)
+            except (TypeError, ValueError):
+                resolved_rng_seed = 0
+        (
+            beam_x_array,
+            beam_y_array,
+            theta_array,
+            phi_array,
+            wavelength_array,
+        ) = generate_random_profiles(
+            num_samples=target_sample_count,
+            divergence_sigma=divergence_sigma,
+            bw_sigma=bw_sigma,
+            lambda0=lambda_,
+            bandwidth=_current_bandwidth_fraction(),
+            rng=resolved_rng_seed,
+        )
+        n2_sample_array = _current_sample_n2_array(wavelength_array)
+
+    resolved_solve_q_steps = solve_q.steps
+    if solve_q_steps is not None:
+        try:
+            resolved_solve_q_steps = max(int(solve_q_steps), 1)
+        except (TypeError, ValueError):
+            resolved_solve_q_steps = solve_q.steps
+
     return {
-        "beam_x_array":       simulation_runtime_state.profile_cache["beam_x_array"],
-        "beam_y_array":       simulation_runtime_state.profile_cache["beam_y_array"],
-        "theta_array":        simulation_runtime_state.profile_cache["theta_array"],
-        "phi_array":          simulation_runtime_state.profile_cache["phi_array"],
-        "wavelength_array":   simulation_runtime_state.profile_cache["wavelength_array"],   #  <<< name fixed
-        "n2_sample_array":    simulation_runtime_state.profile_cache.get("n2_sample_array"),
+        "beam_x_array":       beam_x_array,
+        "beam_y_array":       beam_y_array,
+        "theta_array":        theta_array,
+        "phi_array":          phi_array,
+        "wavelength_array":   wavelength_array,   #  <<< name fixed
+        "n2_sample_array":    n2_sample_array,
         "sigma_mosaic_deg":   sigma_mosaic_var.get(),
         "gamma_mosaic_deg":   gamma_mosaic_var.get(),
         "eta":                eta_var.get(),
-        "solve_q_steps":      solve_q.steps,
+        "solve_q_steps":      resolved_solve_q_steps,
         "solve_q_rel_tol":    solve_q.rel_tol,
         "solve_q_mode":       solve_q.mode_flag,
     }
@@ -3380,7 +3444,10 @@ hbn_geometry_debug_view_state = app_state.hbn_geometry_debug_view
 geometry_overlay_actions_view_state = app_state.geometry_overlay_actions_view
 analysis_view_controls_view_state = app_state.analysis_view_controls_view
 analysis_export_controls_view_state = app_state.analysis_export_controls_view
+analysis_peak_tools_view_state = app_state.analysis_peak_tools_view
+analysis_popout_view_state = app_state.analysis_popout_view
 integration_range_controls_view_state = app_state.integration_range_controls_view
+analysis_peak_selection_state = app_state.analysis_peak_selection
 display_controls_state = app_state.display_controls_state
 display_controls_view_state = app_state.display_controls_view
 primary_cif_controls_view_state = app_state.primary_cif_controls_view
@@ -3604,8 +3671,12 @@ peak_selection_workflow = (
         ),
         display_to_native_sim_coords=_display_to_native_sim_coords,
         deactivate_conflicting_modes_factory=lambda: (
-            lambda: _set_geometry_preview_exclude_mode(False)
+            lambda: (
+                _set_geometry_manual_pick_mode(False),
+                _set_geometry_preview_exclude_mode(False),
+            )
         ),
+        on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
         n2=n2,
         process_peaks_parallel=process_peaks_parallel,
         tcl_error_types=(tk.TclError,),
@@ -3622,6 +3693,15 @@ _base_update_hkl_pick_button_label = (
 )
 _base_set_hkl_pick_mode = peak_selection_runtime_callbacks.set_hkl_pick_mode
 _base_toggle_hkl_pick_mode = peak_selection_runtime_callbacks.toggle_hkl_pick_mode
+
+
+def _handle_hkl_pick_mode_changed(_armed: bool) -> None:
+    refresh_fast_viewer = globals().get("_refresh_fast_viewer_runtime_mode")
+    if callable(refresh_fast_viewer):
+        refresh_fast_viewer(announce=False)
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
 
 
 def _update_hkl_pick_button_label_with_mode_banner() -> None:
@@ -3662,6 +3742,20 @@ peak_selection_runtime_callbacks = gui_peak_selection.SelectedPeakRuntimeCallbac
     ),
     select_peak_from_canvas_click=(
         peak_selection_runtime_callbacks.select_peak_from_canvas_click
+    ),
+)
+analysis_peak_runtime_callbacks = SimpleNamespace(
+    set_pick_mode=(
+        lambda enabled, message=None: globals()["_set_analysis_peak_pick_mode"](
+            enabled,
+            message=message,
+        )
+    ),
+    select_peak_from_canvas_click=(
+        lambda col, row: globals()["_select_analysis_peak_from_canvas_click"](
+            col,
+            row,
+        )
     ),
 )
 hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bootstrap(
@@ -3908,8 +4002,49 @@ integration_range_workflow = (
 integration_range_update_runtime = integration_range_workflow.update_runtime
 integration_range_update_runtime_callbacks = integration_range_workflow.callbacks
 schedule_range_update = integration_range_workflow.schedule_range_update
-toggle_1d_plots = integration_range_workflow.toggle_1d_plots
-toggle_caked_2d = integration_range_workflow.toggle_caked_2d
+_toggle_1d_plots_impl = integration_range_workflow.toggle_1d_plots
+_toggle_caked_2d_impl = integration_range_workflow.toggle_caked_2d
+toggle_1d_plots = _toggle_1d_plots_impl
+
+
+def _invalidate_qr_cylinder_overlay_view_state(*, clear_artists: bool) -> None:
+    bindings_factory = globals().get("qr_cylinder_overlay_runtime_bindings_factory")
+    if not callable(bindings_factory):
+        return
+    try:
+        bindings = bindings_factory()
+    except Exception:
+        return
+    try:
+        gui_qr_cylinder_overlay.invalidate_runtime_qr_cylinder_overlay_cache(
+            bindings,
+            clear_artists=bool(clear_artists),
+            redraw=False,
+        )
+    except Exception:
+        return
+
+
+def toggle_caked_2d() -> None:
+    _invalidate_qr_cylinder_overlay_view_state(clear_artists=True)
+    _toggle_caked_2d_impl()
+    if bool(analysis_peak_selection_state.pick_armed):
+        show_caked_now = bool(
+            getattr(
+                analysis_view_controls_view_state.show_caked_2d_var,
+                "get",
+                lambda: False,
+            )()
+        )
+        if not show_caked_now:
+            _set_analysis_peak_pick_mode(
+                False,
+                message="Analysis peak picking requires the caked view.",
+            )
+            return
+    _render_analysis_peak_overlays(redraw=True)
+
+
 toggle_log_radial = integration_range_workflow.toggle_log_radial
 toggle_log_azimuth = integration_range_workflow.toggle_log_azimuth
 
@@ -3998,6 +4133,8 @@ canvas_interaction_workflow = (
         geometry_manual_state=geometry_manual_state,
         peak_selection_state=peak_selection_state,
         peak_selection_callbacks=peak_selection_runtime_callbacks,
+        analysis_peak_state=analysis_peak_selection_state,
+        analysis_peak_callbacks=analysis_peak_runtime_callbacks,
         integration_range_drag_callbacks=integration_range_drag_runtime_callbacks,
         manual_pick_session_active=_geometry_manual_pick_session_active,
         set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
@@ -4585,6 +4722,8 @@ def apply_scale_factor_to_existing_results(
                 simulation_runtime_state.last_1d_integration_data["azimuths_sim"],
                 simulation_runtime_state.last_1d_integration_data["intensities_azimuth_sim"] * scale,
             )
+        _clear_analysis_peak_fit_results(redraw=False, update_text=True)
+        _render_analysis_peak_overlays(redraw=False)
         if "canvas_1d" in globals():
             canvas_1d.draw_idle()
 
@@ -4833,6 +4972,8 @@ def _clear_1d_plot_cache_and_lines():
     line_1d_az.set_data([], [])
     line_1d_rad_bg.set_data([], [])
     line_1d_az_bg.set_data([], [])
+    _clear_analysis_peak_fit_results(redraw=False, update_text=True)
+    _render_analysis_peak_overlays(redraw=False)
     canvas_1d.draw_idle()
     simulation_runtime_state.last_1d_integration_data["radials_sim"] = None
     simulation_runtime_state.last_1d_integration_data["intensities_2theta_sim"] = None
@@ -4845,6 +4986,7 @@ def _clear_1d_plot_cache_and_lines():
 
 
 def _update_1d_plots_from_caked(sim_res2, bg_res2):
+    _clear_analysis_peak_fit_results(redraw=False, update_text=True)
     i2t_sim, i_phi_sim, az_sim, rad_sim = caked_up(
         sim_res2,
         tth_min_var.get(),
@@ -4889,6 +5031,7 @@ def _update_1d_plots_from_caked(sim_res2, bg_res2):
     ax_1d_radial.autoscale_view()
     ax_1d_azim.relim()
     ax_1d_azim.autoscale_view()
+    _render_analysis_peak_overlays(redraw=False)
     canvas_1d.draw_idle()
 
 
@@ -5277,13 +5420,21 @@ def _current_app_shell_view_text() -> str:
     return base
 
 
-def _default_primary_view_limits() -> tuple[float, float, float, float]:
+def _current_primary_figure_mode() -> str:
     current_x_label = " ".join(str(ax.get_xlabel() or "").split()).lower()
     current_y_label = " ".join(str(ax.get_ylabel() or "").split()).lower()
-    showing_caked_view = (
+    if (
         current_x_label == "2θ (degrees)".lower()
         and current_y_label == "φ (degrees)".lower()
-    )
+    ):
+        return "caked"
+    return "detector"
+
+
+def _default_primary_view_limits(
+    view_mode: str | None = None,
+) -> tuple[float, float, float, float]:
+    showing_caked_view = str(view_mode or _current_primary_figure_mode()) == "caked"
     if showing_caked_view:
         radial_min, radial_max, azimuth_min, azimuth_max = (
             list(simulation_runtime_state.last_caked_extent)
@@ -5515,6 +5666,64 @@ def _build_current_dataset_structure_text() -> str:
     return f"{phase_parts[0]} | phase weight {weight1_value:.2f}"
 
 
+def _refresh_match_workflow_control_states(
+    *,
+    peak_tools_ready: bool,
+    fit_controls_ready: bool,
+    manual_pairs_ready: bool,
+) -> None:
+    """Enable only the Match-step controls that make sense for the current state."""
+
+    enable_peak_tools = bool(peak_tools_ready)
+    enable_fit_controls = bool(fit_controls_ready)
+    enable_run_fit = bool(fit_controls_ready and manual_pairs_ready)
+
+    gui_views.set_widget_enabled(
+        getattr(geometry_tool_actions_view_state, "geometry_manual_pick_button", None),
+        enable_peak_tools,
+    )
+    gui_views.set_widget_enabled(
+        getattr(geometry_tool_actions_view_state, "geometry_preview_exclude_button", None),
+        enable_peak_tools,
+    )
+    gui_views.set_widget_enabled(
+        getattr(geometry_tool_actions_view_state, "geometry_manual_import_button", None),
+        enable_peak_tools,
+    )
+    gui_views.set_widget_enabled(
+        getattr(geometry_tool_actions_view_state, "geometry_manual_undo_button", None),
+        manual_pairs_ready,
+    )
+    gui_views.set_widget_enabled(
+        getattr(geometry_tool_actions_view_state, "geometry_manual_export_button", None),
+        manual_pairs_ready,
+    )
+    gui_views.set_widget_enabled(
+        getattr(
+            geometry_tool_actions_view_state,
+            "clear_geometry_preview_exclusions_button",
+            None,
+        ),
+        manual_pairs_ready,
+    )
+
+    for widget in (
+        getattr(hkl_lookup_view_state, "select_button", None),
+        getattr(hkl_lookup_view_state, "hkl_pick_button", None),
+        getattr(hkl_lookup_view_state, "clear_button", None),
+        getattr(hkl_lookup_view_state, "show_bragg_ewald_button", None),
+        getattr(hkl_lookup_view_state, "bragg_qr_groups_button", None),
+    ):
+        gui_views.set_widget_enabled(widget, enable_peak_tools)
+
+    for widget in (
+        getattr(geometry_fit_parameter_controls_view_state, "toggle_checkbuttons", {}) or {}
+    ).values():
+        gui_views.set_widget_enabled(widget, enable_fit_controls)
+
+    gui_views.set_widget_enabled(globals().get("fit_button_geometry"), enable_run_fit)
+
+
 def _refresh_session_summary_panel() -> None:
     """Refresh the always-visible session summary shown above the tabs."""
 
@@ -5610,6 +5819,14 @@ def _refresh_session_summary_panel() -> None:
             else "missing"
         ),
     }
+    peak_tools_ready = background_total > 0 and bool(cif_path)
+    fit_controls_ready = peak_tools_ready and fit_selection_ready
+    manual_pairs_ready = manual_pair_total > 0
+    _refresh_match_workflow_control_states(
+        peak_tools_ready=peak_tools_ready,
+        fit_controls_ready=fit_controls_ready,
+        manual_pairs_ready=manual_pairs_ready,
+    )
 
     gui_views.set_app_shell_session_summary_text(
         app_shell_view_state,
@@ -5648,12 +5865,33 @@ def _refresh_session_summary_panel() -> None:
         _current_app_shell_view_mode(),
     )
 
+    if background_total <= 0:
+        match_results_text = (
+            "Load at least one background in Setup before starting the Match workflow."
+        )
+    elif not cif_path:
+        match_results_text = (
+            "Load the primary CIF in Setup before selecting peaks and fitting geometry."
+        )
+    elif not fit_selection_ready:
+        match_results_text = (
+            "Choose the backgrounds used for geometry fitting in Step 1 before moving on."
+        )
+    elif manual_pair_total <= 0:
+        match_results_text = (
+            "Add at least one measured-to-simulated peak match in Step 2 to enable the geometry fit."
+        )
+    elif freshness_status == "Fresh":
+        match_results_text = (
+            f"{fit_quality_text}. Review detector overlays and the status strip after each fit."
+        )
+    else:
+        match_results_text = (
+            "Peak matches are ready. Run the geometry fit, then review the overlays and fit health."
+        )
     gui_views.set_match_results_text(
         app_shell_view_state,
-        (
-            f"{fit_quality_text}. Review overlays on the detector image and the "
-            "status panel below after each fit."
-        ),
+        match_results_text,
     )
     refresh_selector = globals().get("_refresh_geometry_fit_background_table")
     if callable(refresh_selector):
@@ -5675,6 +5913,9 @@ def _refresh_interaction_mode_banner() -> None:
     if bool(_geometry_manual_pick_session_active(require_current_background=False)):
         title = "Manual peak placement active"
         detail = "Click the measured peak location for the selected simulated group."
+    elif bool(getattr(analysis_peak_selection_state, "pick_armed", False)):
+        title = "Analysis peak picking active"
+        detail = "Click peaks inside the current caked integration region to mark and fit them."
     elif bool(getattr(peak_selection_state, "hkl_pick_armed", False)):
         title = "HKL image-pick active"
         detail = "Click a simulated feature on the image to select the nearest HKL."
@@ -7879,6 +8120,8 @@ def do_update():
         if analysis_result_current
         else None
     )
+    previous_primary_view_mode = _current_primary_figure_mode()
+    preserved_primary_limits = gui_canvas_interactions.capture_axis_limits(ax)
     defer_overlay_refresh = _defer_nonessential_redraw()
     caked_display_available = bool(
         show_caked_2d
@@ -7993,8 +8236,13 @@ def do_update():
         ):
             azimuth_min, azimuth_max = -180.0, 180.0
 
-        ax.set_xlim(radial_min, radial_max)
-        ax.set_ylim(azimuth_min, azimuth_max)
+        gui_canvas_interactions.restore_axis_view(
+            ax,
+            preserved_limits=preserved_primary_limits,
+            default_xlim=(radial_min, radial_max),
+            default_ylim=(azimuth_min, azimuth_max),
+            preserve=(previous_primary_view_mode == "caked"),
+        )
         ax.set_aspect("auto")
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('φ (degrees)')
@@ -8028,8 +8276,13 @@ def do_update():
         simulation_runtime_state.last_caked_background_image_unscaled = None
         simulation_runtime_state.last_caked_radial_values = None
         simulation_runtime_state.last_caked_azimuth_values = None
-        ax.set_xlim(0, image_size)
-        ax.set_ylim(image_size, 0)
+        gui_canvas_interactions.restore_axis_view(
+            ax,
+            preserved_limits=preserved_primary_limits,
+            default_xlim=(0.0, float(image_size)),
+            default_ylim=(float(image_size), 0.0),
+            preserve=(previous_primary_view_mode == "detector"),
+        )
         ax.set_aspect("auto")
         ax.set_xlabel('X (pixels)')
         ax.set_ylabel('Y (pixels)')
@@ -9104,10 +9357,10 @@ def _load_background_files_for_import_state(
         set_background_display_data=background_display.set_data,
         update_background_slider_defaults=_update_background_slider_defaults,
         sync_background_theta_controls=(
-            background_theta_runtime.sync_background_theta_controls
+            background_theta_workflow.sync_background_theta_controls
         ),
         sync_geometry_fit_background_selection=(
-            background_theta_runtime.sync_geometry_fit_background_selection
+            background_theta_workflow.sync_geometry_fit_background_selection
         ),
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
         refresh_background_file_status=_refresh_background_status,
@@ -12760,21 +13013,74 @@ def _legacy_auto_match_on_fit_geometry_click():
 def on_fit_mosaic_click():
     """Run the detector-shape mosaic optimizer from cached or live fit datasets."""
 
-    miller_array = np.asarray(miller, dtype=np.float64)
+    miller_array = np.asarray(structure_model_state.miller, dtype=np.float64)
     if miller_array.ndim != 2 or miller_array.shape[1] != 3 or miller_array.size == 0:
         progress_label_mosaic.config(
             text="Mosaic shape fit unavailable: no simulated reflections loaded."
         )
         return
 
-    intensity_array = np.asarray(intensities, dtype=np.float64)
+    intensity_array = np.asarray(structure_model_state.intensities, dtype=np.float64)
     if intensity_array.shape[0] != miller_array.shape[0]:
         progress_label_mosaic.config(
             text="Mosaic shape fit unavailable: intensity array is not aligned with HKLs."
         )
         return
 
-    mosaic_params = build_mosaic_params()
+    mosaic_shape_cfg = (
+        fit_config.get("mosaic_shape", {})
+        if isinstance(fit_config, dict)
+        else {}
+    )
+    solver_cfg = (
+        mosaic_shape_cfg.get("solver", {})
+        if isinstance(mosaic_shape_cfg, dict)
+        else {}
+    )
+    roi_cfg = (
+        mosaic_shape_cfg.get("roi", {})
+        if isinstance(mosaic_shape_cfg, dict)
+        else {}
+    )
+    preprocessing_cfg = (
+        mosaic_shape_cfg.get("preprocessing", {})
+        if isinstance(mosaic_shape_cfg, dict)
+        else {}
+    )
+    sampling_cfg = (
+        mosaic_shape_cfg.get("sampling", {})
+        if isinstance(mosaic_shape_cfg, dict)
+        else {}
+    )
+
+    try:
+        fit_sample_floor = int(
+            sampling_cfg.get(
+                "min_num_samples",
+                sampling_cfg.get(
+                    "target_num_samples",
+                    MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT,
+                ),
+            )
+        )
+    except (TypeError, ValueError):
+        fit_sample_floor = MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT
+    fit_sample_floor = max(
+        int(fit_sample_floor),
+        int(MOSAIC_SHAPE_FIT_MIN_SAMPLE_COUNT),
+    )
+    fit_sample_count = max(
+        int(simulation_runtime_state.num_samples),
+        max(int(fit_sample_floor), 1),
+    )
+    fit_solve_q_steps = sampling_cfg.get("solve_q_steps")
+    fit_sample_seed = sampling_cfg.get("seed", 0)
+
+    mosaic_params = build_mosaic_params(
+        sample_count=fit_sample_count,
+        solve_q_steps=fit_solve_q_steps,
+        rng_seed=fit_sample_seed,
+    )
     required_keys = (
         "beam_x_array",
         "beam_y_array",
@@ -12965,39 +13271,66 @@ def on_fit_mosaic_click():
         )
         return
 
+    dataset_specs, focused_peak_selection = focus_mosaic_profile_dataset_specs(
+        dataset_specs,
+        source_miller=miller_array,
+        source_intensities=intensity_array,
+        reference_dataset_index=int(background_runtime_state.current_background_index),
+        max_in_plane_groups=int(MOSAIC_SHAPE_FIT_MAX_IN_PLANE_GROUPS),
+    )
+    focused_dataset_peak_counts = [
+        int(len(spec.get("measured_peaks", [])))
+        for spec in dataset_specs
+        if isinstance(spec, Mapping)
+    ]
+    configured_min_total_rois = int(roi_cfg.get("min_total_rois", 8))
+    configured_min_per_dataset_rois = int(roi_cfg.get("min_per_dataset_rois", 3))
+    min_total_rois = max(
+        1,
+        min(
+            int(configured_min_total_rois),
+            int(sum(focused_dataset_peak_counts)) if focused_dataset_peak_counts else 1,
+        ),
+    )
+    min_per_dataset_rois = max(
+        1,
+        min(
+            int(configured_min_per_dataset_rois),
+            min(focused_dataset_peak_counts) if focused_dataset_peak_counts else 1,
+        ),
+    )
+
     theta_mode = "single"
     if len(dataset_specs) > 1:
         theta_mode = "shared_offset" if shared_theta_mode else "per_dataset"
-
-    mosaic_shape_cfg = (
-        fit_config.get("mosaic_shape", {})
-        if isinstance(fit_config, dict)
-        else {}
-    )
-    solver_cfg = (
-        mosaic_shape_cfg.get("solver", {})
-        if isinstance(mosaic_shape_cfg, dict)
-        else {}
-    )
-    roi_cfg = (
-        mosaic_shape_cfg.get("roi", {})
-        if isinstance(mosaic_shape_cfg, dict)
-        else {}
-    )
-    preprocessing_cfg = (
-        mosaic_shape_cfg.get("preprocessing", {})
-        if isinstance(mosaic_shape_cfg, dict)
-        else {}
-    )
     ridge_weight = float(solver_cfg.get("ridge_weight", 1.0))
-    point_match_weight = float(solver_cfg.get("point_match_weight", 1.0))
-    point_match_f_scale = float(solver_cfg.get("point_match_f_scale_px", 6.0))
-    point_match_weighted_matching = bool(
-        solver_cfg.get("point_match_weighted_matching", False)
+    specular_relative_intensity_weight = float(
+        solver_cfg.get(
+            "specular_relative_intensity_weight",
+            solver_cfg.get("point_match_weight", 1.0),
+        )
     )
-    point_match_missing_pair_penalty = float(
-        solver_cfg.get("point_match_missing_pair_penalty_px", 20.0)
+    fit_theta_i = bool(solver_cfg.get("fit_theta_i", solver_cfg.get("refine_theta", True)))
+    configured_theta_i_mode = str(
+        solver_cfg.get("theta_i_mode", solver_cfg.get("theta_mode", "auto"))
+    ).strip().lower()
+    theta_i_mode = theta_mode if configured_theta_i_mode == "auto" else configured_theta_i_mode
+
+    raw_theta_i_bounds = solver_cfg.get(
+        "theta_i_bounds_deg",
+        solver_cfg.get("theta_bounds", None),
     )
+
+    theta_i_bounds_deg = None
+    if isinstance(raw_theta_i_bounds, (list, tuple)) and len(raw_theta_i_bounds) == 2:
+        try:
+            theta_i_bounds_deg = (
+                float(raw_theta_i_bounds[0]),
+                float(raw_theta_i_bounds[1]),
+            )
+        except Exception:
+            theta_i_bounds_deg = None
+
     def _read_mosaic_toggle(toggle_var, fallback: bool) -> bool:
         getter = getattr(toggle_var, "get", None)
         if callable(getter):
@@ -13019,9 +13352,9 @@ def on_fit_mosaic_click():
         geometry_overlay_actions_view_state.fit_eta_var,
         bool(solver_cfg.get("fit_eta", True)),
     )
-    refine_theta = _read_mosaic_toggle(
-        geometry_overlay_actions_view_state.refine_theta_var,
-        bool(solver_cfg.get("refine_theta", True)),
+    fit_theta_i = _read_mosaic_toggle(
+        geometry_overlay_actions_view_state.fit_theta_i_var,
+        bool(solver_cfg.get("fit_theta_i", solver_cfg.get("refine_theta", True))),
     )
     active_fit_parameters = []
     if fit_sigma_mosaic:
@@ -13030,30 +13363,13 @@ def on_fit_mosaic_click():
         active_fit_parameters.append("gamma")
     if fit_eta:
         active_fit_parameters.append("eta")
-    if refine_theta:
+    if fit_theta_i:
         active_fit_parameters.append("theta_i")
     if not active_fit_parameters:
         progress_label_mosaic.config(
             text="Mosaic shape fit unavailable: enable at least one fit parameter."
         )
         return
-
-    theta_window_deg = max(abs(float(solver_cfg.get("theta_window_deg", 0.5))), 1.0e-6)
-    theta_bounds = None
-    if refine_theta:
-        if theta_mode == "shared_offset":
-            theta_bounds = (-theta_window_deg, theta_window_deg)
-        elif theta_mode == "single":
-            try:
-                theta_seed = float(dataset_specs[0].get("theta_initial"))
-            except Exception:
-                theta_seed = float(params["theta_initial"])
-            theta_bounds = (
-                float(theta_seed - theta_window_deg),
-                float(theta_seed + theta_window_deg),
-            )
-        else:
-            theta_bounds = (-theta_window_deg, theta_window_deg)
 
     def _mosaic_log_json_safe(value: object) -> object:
         if value is None or isinstance(value, (str, bool, int)):
@@ -13189,18 +13505,30 @@ def on_fit_mosaic_click():
         "selected_background_indices": [int(idx) for idx in selected_background_indices],
         "background_theta_values_deg": _mosaic_log_json_safe(background_theta_values),
         "shared_theta_mode": bool(shared_theta_mode),
-        "theta_mode": str(theta_mode),
-        "theta_bounds": _mosaic_log_json_safe(theta_bounds),
+        "fit_theta_i": bool(fit_theta_i),
+        "theta_i_mode": str(theta_i_mode),
+        "theta_i_bounds_deg": _mosaic_log_json_safe(theta_i_bounds_deg),
         "active_fit_parameters": list(active_fit_parameters),
         "fit_toggles": {
             "fit_sigma_mosaic": bool(fit_sigma_mosaic),
             "fit_gamma_mosaic": bool(fit_gamma_mosaic),
             "fit_eta": bool(fit_eta),
-            "refine_theta": bool(refine_theta),
+            "fit_theta_i": bool(fit_theta_i),
         },
         "solver_config": _mosaic_log_json_safe(solver_cfg),
         "roi_config": _mosaic_log_json_safe(roi_cfg),
         "preprocessing_config": _mosaic_log_json_safe(preprocessing_cfg),
+        "sampling_config": _mosaic_log_json_safe(sampling_cfg),
+        "fit_sample_count": int(fit_sample_count),
+        "live_sample_count": int(simulation_runtime_state.num_samples),
+        "fit_sample_seed": _mosaic_log_json_safe(fit_sample_seed),
+        "fit_solve_q_steps_override": _mosaic_log_json_safe(fit_solve_q_steps),
+        "reflection_source": "structure_model_state_unpruned",
+        "focused_peak_selection": _mosaic_log_json_safe(focused_peak_selection),
+        "resolved_roi_minimums": {
+            "min_total_rois": int(min_total_rois),
+            "min_per_dataset_rois": int(min_per_dataset_rois),
+        },
         "geometry_parameters": {
             "a": _mosaic_log_json_safe(params.get("a")),
             "c": _mosaic_log_json_safe(params.get("c")),
@@ -13275,10 +13603,22 @@ def on_fit_mosaic_click():
             _mosaic_log_line(f"  {line}")
         _mosaic_log_line()
 
+    def _mosaic_live_update(text: str) -> None:
+        message = str(text).strip()
+        if not message:
+            return
+        _mosaic_log_line(message)
+        _mosaic_fit_cmd_line(message)
+        try:
+            progress_label_mosaic.config(text=message)
+            root.update_idletasks()
+        except Exception:
+            pass
+
     progress_label_mosaic.config(
         text=(
             "Running mosaic shape optimization "
-            f"({', '.join(active_fit_parameters)})..."
+            f"({', '.join(active_fit_parameters)}; {fit_sample_count:,} samples)..."
         )
     )
     mosaic_progressbar.start(10)
@@ -13288,6 +13628,7 @@ def on_fit_mosaic_click():
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = log_path.open("w", encoding="utf-8")
+        _mosaic_fit_cmd_line(f"log: {log_path}")
         _mosaic_log_line(f"Mosaic shape fit started: {stamp}")
         _mosaic_log_line()
         _mosaic_log_section(
@@ -13297,9 +13638,14 @@ def on_fit_mosaic_click():
                 f"selected_background_indices={launch_context['selected_background_indices']}",
                 f"background_theta_values_deg={launch_context['background_theta_values_deg']}",
                 f"shared_theta_mode={launch_context['shared_theta_mode']}",
-                f"theta_mode={launch_context['theta_mode']}",
-                f"theta_bounds={launch_context['theta_bounds']}",
+                f"fit_theta_i={launch_context['fit_theta_i']}",
+                f"theta_i_mode={launch_context['theta_i_mode']}",
+                f"theta_i_bounds_deg={launch_context['theta_i_bounds_deg']}",
                 f"active_fit_parameters={launch_context['active_fit_parameters']}",
+                "focused_peak_selection="
+                f"{launch_context['focused_peak_selection']}",
+                "resolved_roi_minimums="
+                f"{launch_context['resolved_roi_minimums']}",
                 f"cache_stale_reason={launch_context['cache_stale_reason']}",
                 f"solver_loss={solver_cfg.get('loss', 'soft_l1')}",
                 f"solver_max_nfev={solver_cfg.get('max_nfev', 80)}",
@@ -13324,24 +13670,24 @@ def on_fit_mosaic_click():
             max_restarts=int(solver_cfg.get("restarts", 2)),
             smooth_sigma_px=float(preprocessing_cfg.get("smooth_sigma_px", 1.0)),
             ridge_percentile=float(preprocessing_cfg.get("ridge_percentile", 85.0)),
-            min_total_rois=int(roi_cfg.get("min_total_rois", 8)),
-            min_per_dataset_rois=int(roi_cfg.get("min_per_dataset_rois", 3)),
+            min_total_rois=int(min_total_rois),
+            min_per_dataset_rois=int(min_per_dataset_rois),
             equal_dataset_weights=bool(roi_cfg.get("equal_dataset_weights", True)),
             workers=solver_cfg.get("workers", "auto"),
             parallel_mode=str(solver_cfg.get("parallel_mode", "auto")),
             worker_numba_threads=solver_cfg.get("worker_numba_threads", 0),
             restart_jitter=float(solver_cfg.get("restart_jitter", 0.15)),
             ridge_weight=float(ridge_weight),
-            point_match_weight=float(point_match_weight),
-            point_match_f_scale=float(point_match_f_scale),
-            point_match_weighted_matching=bool(point_match_weighted_matching),
-            point_match_missing_pair_penalty=float(point_match_missing_pair_penalty),
-            refine_theta=bool(refine_theta),
-            theta_mode=str(theta_mode),
-            theta_bounds=theta_bounds,
+            specular_relative_intensity_weight=float(
+                specular_relative_intensity_weight
+            ),
+            fit_theta_i=bool(fit_theta_i),
+            theta_i_mode=str(theta_i_mode),
+            theta_i_bounds_deg=theta_i_bounds_deg,
             fit_sigma_mosaic=bool(fit_sigma_mosaic),
             fit_gamma_mosaic=bool(fit_gamma_mosaic),
             fit_eta=bool(fit_eta),
+            progress_callback=_mosaic_live_update,
         )
         result_summary_lines = [
             f"success={bool(getattr(result, 'success', False))}",
@@ -13356,9 +13702,6 @@ def on_fit_mosaic_click():
             f"boundary_warning={getattr(result, 'boundary_warning', None)}",
             f"active_parameters={getattr(result, 'active_parameters', None)}",
             f"fixed_parameters={getattr(result, 'fixed_parameters', None)}",
-            f"theta_refinement_mode={getattr(result, 'theta_refinement_mode', None)}",
-            f"refined_theta_offset={getattr(result, 'refined_theta_offset', None)}",
-            f"refined_theta_values_by_dataset={getattr(result, 'refined_theta_values_by_dataset', None)}",
         ]
         _mosaic_log_section("Optimizer summary:", result_summary_lines)
         _mosaic_log_line("Optimizer debug payload (JSON):")
@@ -13373,6 +13716,7 @@ def on_fit_mosaic_click():
         )
         _mosaic_log_line()
     except Exception as exc:  # pragma: no cover - GUI feedback path
+        _mosaic_fit_cmd_line(f"failed: {exc}")
         _mosaic_log_line(f"Mosaic shape fit failed: {exc}")
         _mosaic_log_line()
         _mosaic_log_line("Traceback:")
@@ -13407,63 +13751,7 @@ def on_fit_mosaic_click():
     sigma_mosaic_var.set(sigma_deg)
     gamma_mosaic_var.set(gamma_deg)
     eta_var.set(eta_val)
-
-    theta_refinement_mode = str(getattr(result, "theta_refinement_mode", "") or "")
     theta_status_text = ""
-    if theta_refinement_mode == "shared_offset":
-        try:
-            refined_theta_offset = float(getattr(result, "refined_theta_offset"))
-        except Exception:
-            refined_theta_offset = float("nan")
-        if np.isfinite(refined_theta_offset) and geometry_theta_offset_var is not None:
-            geometry_theta_offset_var.set(f"{refined_theta_offset:.6g}")
-            _apply_background_theta_metadata(trigger_update=False, sync_live_theta=True)
-            theta_status_text = f", θ offset={refined_theta_offset:.4f}°"
-    elif theta_refinement_mode == "single":
-        try:
-            refined_theta_value = float(getattr(result, "refined_theta_value"))
-        except Exception:
-            refined_theta_value = float("nan")
-        if np.isfinite(refined_theta_value):
-            theta_initial_var.set(refined_theta_value)
-            _apply_background_theta_metadata(trigger_update=False, sync_live_theta=True)
-            theta_status_text = f", θ={refined_theta_value:.4f}°"
-    elif theta_refinement_mode == "per_dataset":
-        refined_theta_values = dict(
-            getattr(result, "refined_theta_values_by_dataset", {}) or {}
-        )
-        if refined_theta_values:
-            try:
-                updated_theta_values = list(
-                    _current_background_theta_values(strict_count=False)
-                )
-            except Exception:
-                updated_theta_values = []
-            try:
-                theta_fill_value = float(theta_initial_var.get())
-            except Exception:
-                theta_fill_value = 0.0
-            target_count = max(
-                len(updated_theta_values),
-                len(getattr(background_runtime_state, "osc_files", []) or []),
-                max(int(idx) for idx in refined_theta_values) + 1,
-            )
-            if len(updated_theta_values) < target_count:
-                updated_theta_values.extend(
-                    [float(theta_fill_value)] * (target_count - len(updated_theta_values))
-                )
-            for dataset_index, theta_value in refined_theta_values.items():
-                dataset_idx = int(dataset_index)
-                if 0 <= dataset_idx < len(updated_theta_values):
-                    updated_theta_values[dataset_idx] = float(theta_value)
-            if background_theta_list_var is not None:
-                background_theta_list_var.set(
-                    _format_background_theta_values(updated_theta_values)
-                )
-            _apply_background_theta_metadata(trigger_update=False, sync_live_theta=True)
-            theta_status_text = (
-                f", θ_i refined for {len(refined_theta_values)} backgrounds"
-            )
 
     best_params = getattr(result, "best_params", None)
     if best_params and "mosaic_params" in best_params:
@@ -14204,6 +14492,15 @@ def _geometry_fit_cmd_line(text: str) -> None:
         pass
 
 
+def _mosaic_fit_cmd_line(text: str) -> None:
+    """Write one mosaic-fit status line to the console when available."""
+
+    try:
+        print(f"[mosaic-fit] {text}", flush=True)
+    except Exception:
+        pass
+
+
 def _show_geometry_fit_action_notice(action_result) -> None:
     """Show a modal notice when a geometry fit fails or is rejected."""
 
@@ -14225,11 +14522,12 @@ on_fit_geometry_click = lambda: None
 
 fit_button_geometry = ttk.Button(
     app_shell_view_state.match_run_frame,
-    text="Fit Positions & Geometry",
-    command=on_fit_geometry_click
+    text="Run Geometry Fit",
+    command=on_fit_geometry_click,
+    state=tk.DISABLED,
 )
 fit_button_geometry.pack(side=tk.TOP, padx=5, pady=2)
-fit_button_geometry.config(text="Fit Geometry (LSQ)", command=on_fit_geometry_click)
+fit_button_geometry.config(text="Run Geometry Fit", command=on_fit_geometry_click)
 gui_views.create_geometry_fit_history_controls(
     parent=app_shell_view_state.match_run_frame,
     view_state=geometry_tool_actions_view_state,
@@ -14291,7 +14589,12 @@ mosaic_fit_initial_values = {
     "fit_sigma_mosaic": bool(mosaic_shape_solver_cfg.get("fit_sigma_mosaic", True)),
     "fit_gamma_mosaic": bool(mosaic_shape_solver_cfg.get("fit_gamma_mosaic", True)),
     "fit_eta": bool(mosaic_shape_solver_cfg.get("fit_eta", True)),
-    "refine_theta": bool(mosaic_shape_solver_cfg.get("refine_theta", True)),
+    "fit_theta_i": bool(
+        mosaic_shape_solver_cfg.get(
+            "fit_theta_i",
+            mosaic_shape_solver_cfg.get("refine_theta", True),
+        )
+    ),
 }
 if geometry_overlay_actions_view_state.show_geometry_overlays_var is None:
     geometry_overlay_actions_view_state.show_geometry_overlays_var = tk.BooleanVar(
@@ -14486,14 +14789,1012 @@ def save_q_space_representation():
 def save_1d_permutations():
     pass
 
-gui_views.create_analysis_export_controls(
-    parent=app_shell_view_state.analysis_exports_frame,
-    view_state=analysis_export_controls_view_state,
-    on_save_snapshot=save_1d_snapshot,
-    on_save_q_space=save_q_space_representation,
-    on_save_1d_grid=save_1d_permutations,
-    save_1d_grid_available=False,
-)
+def _clear_widget_children(parent) -> None:
+    children_getter = getattr(parent, "winfo_children", None)
+    if not callable(children_getter):
+        return
+    try:
+        children = list(children_getter())
+    except Exception:
+        return
+    for child in children:
+        try:
+            child.destroy()
+        except Exception:
+            pass
+
+
+def _read_analysis_range_value(var, fallback: float) -> float:
+    getter = getattr(var, "get", None)
+    if not callable(getter):
+        return float(fallback)
+    try:
+        return float(getter())
+    except Exception:
+        return float(fallback)
+
+
+def _current_analysis_range_values() -> dict[str, float]:
+    return {
+        "tth_min": _read_analysis_range_value(globals().get("tth_min_var"), 0.0),
+        "tth_max": _read_analysis_range_value(globals().get("tth_max_var"), 80.0),
+        "phi_min": _read_analysis_range_value(globals().get("phi_min_var"), -15.0),
+        "phi_max": _read_analysis_range_value(globals().get("phi_max_var"), 15.0),
+    }
+
+
+_ANALYSIS_PEAK_EMPTY_RESULTS_TEXT = "Fit results will appear here."
+_ANALYSIS_PEAK_MODEL_COLORS = {
+    gui_analysis_peak_tools.PROFILE_GAUSSIAN: "#2a9d8f",
+    gui_analysis_peak_tools.PROFILE_LORENTZIAN: "#f4a261",
+    gui_analysis_peak_tools.PROFILE_PSEUDO_VOIGT: "#d62828",
+}
+
+
+def _set_analysis_peak_selection_status_text(text: object) -> None:
+    status_var = analysis_peak_tools_view_state.selection_status_var
+    if status_var is None:
+        return
+    setter = getattr(status_var, "set", None)
+    if callable(setter):
+        setter(str(text))
+
+
+def _set_analysis_peak_fit_results_text(text: object) -> None:
+    results_var = analysis_peak_tools_view_state.fit_results_var
+    if results_var is None:
+        return
+    setter = getattr(results_var, "set", None)
+    if callable(setter):
+        setter(str(text))
+
+
+def _analysis_peak_selection_status_text() -> str:
+    count = len(analysis_peak_selection_state.selected_peaks)
+    prefix = (
+        "Peak picking active."
+        if bool(analysis_peak_selection_state.pick_armed)
+        else "Peak picking idle."
+    )
+    if count <= 0:
+        detail = "No peaks selected."
+    else:
+        detail = f"{count} peak(s) selected."
+    if bool(analysis_peak_selection_state.pick_armed):
+        detail += " Click peaks in the caked integration region. Right-click to stop."
+    return f"{prefix} {detail}"
+
+
+def _update_analysis_peak_pick_button_label() -> None:
+    button = analysis_peak_tools_view_state.pick_button
+    if button is None:
+        return
+    try:
+        button.configure(
+            text=(
+                "Stop Picking Peaks"
+                if bool(analysis_peak_selection_state.pick_armed)
+                else "Pick Peaks in Region"
+            ),
+            command=_toggle_analysis_peak_pick_mode,
+        )
+    except Exception:
+        return
+
+
+def _analysis_peak_fit_results_text() -> str:
+    lines: list[str] = []
+
+    def _append_axis_lines(title: str, entries: Sequence[dict[str, object]]) -> None:
+        if not entries:
+            return
+        lines.append(title)
+        for entry in entries:
+            model_label = str(entry.get("label", entry.get("model", "Fit")))
+            peak_index = int(entry.get("peak_index", 0))
+            axis_value = float(entry.get("selected_axis_value", np.nan))
+            if not bool(entry.get("success", False)):
+                error_text = str(entry.get("error", "fit failed"))
+                lines.append(
+                    f"P{peak_index} @ {axis_value:.4f} deg {model_label}: {error_text}"
+                )
+                continue
+            detail = (
+                f"P{peak_index} @ {axis_value:.4f} deg {model_label}: "
+                f"center={float(entry.get('center', np.nan)):.4f} deg, "
+                f"FWHM={float(entry.get('fwhm', np.nan)):.4f} deg"
+            )
+            if "eta" in entry:
+                detail += f", eta={float(entry.get('eta', np.nan)):.3f}"
+            elif "sigma" in entry:
+                detail += f", sigma={float(entry.get('sigma', np.nan)):.4f} deg"
+            elif "gamma" in entry:
+                detail += f", gamma={float(entry.get('gamma', np.nan)):.4f} deg"
+            detail += f", rmse={float(entry.get('rmse', np.nan)):.4g}"
+            lines.append(detail)
+
+    _append_axis_lines("Radial fits:", analysis_peak_selection_state.radial_fit_results)
+    _append_axis_lines("Azimuth fits:", analysis_peak_selection_state.azimuth_fit_results)
+    if not lines:
+        return _ANALYSIS_PEAK_EMPTY_RESULTS_TEXT
+    return "\n".join(lines)
+
+
+def _remove_artist_refs(artists: list[object]) -> None:
+    while artists:
+        artist = artists.pop()
+        remover = getattr(artist, "remove", None)
+        if callable(remover):
+            try:
+                remover()
+            except Exception:
+                pass
+
+
+def _clear_analysis_peak_overlay_artists(*, redraw: bool) -> None:
+    _remove_artist_refs(analysis_peak_selection_state.caked_peak_artists)
+    _remove_artist_refs(analysis_peak_selection_state.radial_peak_artists)
+    _remove_artist_refs(analysis_peak_selection_state.azimuth_peak_artists)
+    _remove_artist_refs(analysis_peak_selection_state.radial_fit_artists)
+    _remove_artist_refs(analysis_peak_selection_state.azimuth_fit_artists)
+    if redraw:
+        try:
+            canvas_1d.draw_idle()
+        except Exception:
+            pass
+        if callable(globals().get("_request_overlay_canvas_redraw")):
+            _request_overlay_canvas_redraw(force=True)
+
+
+def _clear_analysis_peak_fit_results(*, redraw: bool, update_text: bool) -> None:
+    analysis_peak_selection_state.radial_fit_results.clear()
+    analysis_peak_selection_state.azimuth_fit_results.clear()
+    _remove_artist_refs(analysis_peak_selection_state.radial_fit_artists)
+    _remove_artist_refs(analysis_peak_selection_state.azimuth_fit_artists)
+    if update_text:
+        _set_analysis_peak_fit_results_text(_ANALYSIS_PEAK_EMPTY_RESULTS_TEXT)
+    if redraw:
+        try:
+            canvas_1d.draw_idle()
+        except Exception:
+            pass
+
+
+def _current_analysis_caked_peak_source() -> dict[str, object] | None:
+    radial_axis = simulation_runtime_state.last_caked_radial_values
+    azimuth_axis = simulation_runtime_state.last_caked_azimuth_values
+    if radial_axis is None or azimuth_axis is None:
+        return None
+    if (
+        bool(background_runtime_state.visible)
+        and simulation_runtime_state.last_caked_background_image_unscaled is not None
+    ):
+        return {
+            "source": "background",
+            "image": np.asarray(
+                simulation_runtime_state.last_caked_background_image_unscaled,
+                dtype=float,
+            ),
+            "radial_axis": np.asarray(radial_axis, dtype=float),
+            "azimuth_axis": np.asarray(azimuth_axis, dtype=float),
+        }
+    if simulation_runtime_state.last_caked_image_unscaled is None:
+        return None
+    return {
+        "source": "simulated",
+        "image": np.asarray(simulation_runtime_state.last_caked_image_unscaled, dtype=float),
+        "radial_axis": np.asarray(radial_axis, dtype=float),
+        "azimuth_axis": np.asarray(azimuth_axis, dtype=float),
+    }
+
+
+def _analysis_curve_data(
+    axis_kind: str,
+    source_preference: str,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    data = simulation_runtime_state.last_1d_integration_data
+    scale = _get_scale_factor_value(default=1.0)
+
+    def _extract(source_name: str) -> tuple[np.ndarray, np.ndarray]:
+        source_key = "bg" if str(source_name) == "background" else "sim"
+        if str(axis_kind) == "radial":
+            x_values = data.get(f"radials_{source_key}")
+            y_values = data.get(f"intensities_2theta_{source_key}")
+        else:
+            x_values = data.get(f"azimuths_{source_key}")
+            y_values = data.get(f"intensities_azimuth_{source_key}")
+        if x_values is None or y_values is None:
+            return np.empty((0,), dtype=float), np.empty((0,), dtype=float)
+        x_arr = np.asarray(x_values, dtype=float)
+        y_arr = np.asarray(y_values, dtype=float)
+        if str(source_name) != "background":
+            y_arr = y_arr * float(scale)
+        return x_arr, y_arr
+
+    preferred = str(source_preference or "simulated").strip().lower()
+    resolved = "background" if preferred == "background" else "simulated"
+    x_arr, y_arr = _extract(resolved)
+    if x_arr.size > 0 and y_arr.size > 0:
+        return x_arr, y_arr, resolved
+    fallback = "simulated" if resolved == "background" else "background"
+    x_arr, y_arr = _extract(fallback)
+    if x_arr.size > 0 and y_arr.size > 0:
+        return x_arr, y_arr, fallback
+    return np.empty((0,), dtype=float), np.empty((0,), dtype=float), resolved
+
+
+def _analysis_peak_duplicate_tolerances() -> tuple[float, float]:
+    radial_axis = np.asarray(simulation_runtime_state.last_caked_radial_values, dtype=float)
+    azimuth_axis = np.asarray(simulation_runtime_state.last_caked_azimuth_values, dtype=float)
+    if radial_axis.size >= 2:
+        radial_step = float(np.nanmedian(np.abs(np.diff(np.sort(radial_axis)))))
+    else:
+        radial_step = 0.0
+    if azimuth_axis.size >= 2:
+        azimuth_step = float(np.nanmedian(np.abs(np.diff(np.sort(azimuth_axis)))))
+    else:
+        azimuth_step = 0.0
+    return max(2.0 * radial_step, 0.05), max(2.0 * azimuth_step, 0.5)
+
+
+def _analysis_peak_axis_value(
+    peak_entry: Mapping[str, object],
+    *,
+    axis_kind: str,
+    axis_values: Sequence[float] | None,
+) -> float:
+    if str(axis_kind) == "radial":
+        return float(peak_entry.get("two_theta_deg", np.nan))
+    return gui_analysis_peak_tools.align_angle_to_axis(
+        float(peak_entry.get("phi_deg", np.nan)),
+        axis_values,
+    )
+
+
+def _render_analysis_peak_overlays(*, redraw: bool) -> None:
+    _clear_analysis_peak_overlay_artists(redraw=False)
+
+    selected_peaks = list(analysis_peak_selection_state.selected_peaks)
+    if not selected_peaks:
+        if redraw:
+            try:
+                canvas_1d.draw_idle()
+            except Exception:
+                pass
+            if callable(globals().get("_request_overlay_canvas_redraw")):
+                _request_overlay_canvas_redraw(force=True)
+        return
+
+    show_caked = bool(
+        getattr(
+            analysis_view_controls_view_state.show_caked_2d_var,
+            "get",
+            lambda: False,
+        )()
+    )
+    if show_caked:
+        for idx, peak_entry in enumerate(selected_peaks, start=1):
+            try:
+                peak_tth = float(peak_entry.get("two_theta_deg"))
+                peak_phi = float(peak_entry.get("phi_deg"))
+            except Exception:
+                continue
+            try:
+                marker_artist = ax.plot(
+                    [peak_tth],
+                    [peak_phi],
+                    linestyle="none",
+                    marker="o",
+                    markersize=7.0,
+                    markerfacecolor="none",
+                    markeredgecolor="#00c2ff",
+                    markeredgewidth=1.6,
+                    zorder=11,
+                )[0]
+                label_artist = ax.text(
+                    peak_tth,
+                    peak_phi,
+                    f"P{idx}",
+                    color="#00c2ff",
+                    fontsize=8,
+                    ha="left",
+                    va="bottom",
+                    zorder=12,
+                )
+                analysis_peak_selection_state.caked_peak_artists.extend(
+                    [marker_artist, label_artist]
+                )
+            except Exception:
+                continue
+
+    axis_specs = (
+        (
+            "radial",
+            ax_1d_radial,
+            analysis_peak_selection_state.radial_peak_artists,
+            analysis_peak_selection_state.radial_fit_artists,
+            analysis_peak_selection_state.radial_fit_results,
+        ),
+        (
+            "azimuth",
+            ax_1d_azim,
+            analysis_peak_selection_state.azimuth_peak_artists,
+            analysis_peak_selection_state.azimuth_fit_artists,
+            analysis_peak_selection_state.azimuth_fit_results,
+        ),
+    )
+    for axis_kind, axis_obj, marker_store, fit_store, fit_results in axis_specs:
+        for idx, peak_entry in enumerate(selected_peaks, start=1):
+            x_curve, y_curve, _resolved_source = _analysis_curve_data(
+                axis_kind,
+                str(peak_entry.get("source", "simulated")),
+            )
+            if x_curve.size <= 0 or y_curve.size <= 0:
+                continue
+            axis_value = _analysis_peak_axis_value(
+                peak_entry,
+                axis_kind=axis_kind,
+                axis_values=x_curve,
+            )
+            if not np.isfinite(axis_value):
+                continue
+            y_value = gui_analysis_peak_tools.sample_curve_value(x_curve, y_curve, axis_value)
+            try:
+                vline_artist = axis_obj.axvline(
+                    axis_value,
+                    color="#7b2cbf",
+                    linestyle=":",
+                    linewidth=1.0,
+                    alpha=0.65,
+                )
+                marker_store.append(vline_artist)
+                if np.isfinite(y_value):
+                    marker_artist = axis_obj.plot(
+                        [axis_value],
+                        [y_value],
+                        linestyle="none",
+                        marker="o",
+                        markersize=5.5,
+                        color="#7b2cbf",
+                        zorder=6,
+                    )[0]
+                    marker_store.append(marker_artist)
+                    label_artist = axis_obj.text(
+                        axis_value,
+                        y_value,
+                        f"P{idx}",
+                        color="#7b2cbf",
+                        fontsize=8,
+                        ha="left",
+                        va="bottom",
+                    )
+                    marker_store.append(label_artist)
+            except Exception:
+                continue
+
+        for fit_entry in fit_results:
+            if not bool(fit_entry.get("success", False)):
+                continue
+            x_window = np.asarray(fit_entry.get("x_window"), dtype=float)
+            y_fit = np.asarray(fit_entry.get("y_fit"), dtype=float)
+            if x_window.size <= 0 or y_fit.size <= 0 or x_window.size != y_fit.size:
+                continue
+            try:
+                fit_artist = axis_obj.plot(
+                    x_window,
+                    y_fit,
+                    color=_ANALYSIS_PEAK_MODEL_COLORS.get(
+                        str(fit_entry.get("model")),
+                        "#6d597a",
+                    ),
+                    linewidth=1.5,
+                    alpha=0.95,
+                    zorder=5,
+                )[0]
+                fit_store.append(fit_artist)
+            except Exception:
+                continue
+
+    if redraw:
+        try:
+            canvas_1d.draw_idle()
+        except Exception:
+            pass
+        if callable(globals().get("_request_overlay_canvas_redraw")):
+            _request_overlay_canvas_redraw(force=True)
+
+
+def _render_analysis_peak_tools_controls(parent) -> None:
+    _clear_widget_children(parent)
+    gui_views.create_analysis_peak_tools_controls(
+        parent=parent,
+        view_state=analysis_peak_tools_view_state,
+        on_toggle_pick_mode=_toggle_analysis_peak_pick_mode,
+        on_clear_selection=_clear_selected_analysis_peaks,
+        on_fit_selected_peaks=_fit_selected_analysis_peaks,
+        pick_enabled=bool(analysis_peak_selection_state.pick_armed),
+        fit_gaussian=bool(
+            getattr(
+                analysis_peak_tools_view_state.fit_gaussian_var,
+                "get",
+                lambda: False,
+            )()
+        ),
+        fit_lorentzian=bool(
+            getattr(
+                analysis_peak_tools_view_state.fit_lorentzian_var,
+                "get",
+                lambda: False,
+            )()
+        ),
+        fit_pseudo_voigt=bool(
+            getattr(
+                analysis_peak_tools_view_state.fit_pseudo_voigt_var,
+                "get",
+                lambda: True,
+            )()
+        ),
+        fit_radial=bool(
+            getattr(
+                analysis_peak_tools_view_state.fit_radial_var,
+                "get",
+                lambda: True,
+            )()
+        ),
+        fit_azimuth=bool(
+            getattr(
+                analysis_peak_tools_view_state.fit_azimuth_var,
+                "get",
+                lambda: True,
+            )()
+        ),
+        selection_status_text=_analysis_peak_selection_status_text(),
+        fit_results_text=_analysis_peak_fit_results_text(),
+    )
+
+def _render_analysis_export_controls(parent) -> None:
+    _clear_widget_children(parent)
+    gui_views.create_analysis_export_controls(
+        parent=parent,
+        view_state=analysis_export_controls_view_state,
+        on_save_snapshot=save_1d_snapshot,
+        on_save_q_space=save_q_space_representation,
+        on_save_1d_grid=save_1d_permutations,
+        save_1d_grid_available=False,
+    )
+
+
+def _render_analysis_plot_controls(
+    *,
+    parent,
+    range_values: Mapping[str, float] | None = None,
+) -> None:
+    global canvas_1d
+    global tth_min_var, tth_max_var, phi_min_var, phi_max_var
+    global tth_min_slider, tth_max_slider, phi_min_slider, phi_max_slider
+
+    values = dict(range_values or _current_analysis_range_values())
+    _clear_widget_children(parent)
+
+    canvas_1d = matplotlib.backends.backend_tkagg.FigureCanvasTkAgg(
+        fig_1d,
+        master=parent,
+    )
+    canvas_1d.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    gui_integration_range_drag.create_runtime_integration_range_controls(
+        parent=parent,
+        views_module=gui_views,
+        view_state=integration_range_controls_view_state,
+        show_1d_var=analysis_view_controls_view_state.show_1d_var,
+        tth_min=float(values.get("tth_min", 0.0)),
+        tth_max=float(values.get("tth_max", 80.0)),
+        phi_min=float(values.get("phi_min", -15.0)),
+        phi_max=float(values.get("phi_max", 15.0)),
+        schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
+    )
+
+    tth_min_var = integration_range_controls_view_state.tth_min_var
+    tth_max_var = integration_range_controls_view_state.tth_max_var
+    phi_min_var = integration_range_controls_view_state.phi_min_var
+    phi_max_var = integration_range_controls_view_state.phi_max_var
+    tth_min_slider = integration_range_controls_view_state.tth_min_slider
+    tth_max_slider = integration_range_controls_view_state.tth_max_slider
+    phi_min_slider = integration_range_controls_view_state.phi_min_slider
+    phi_max_slider = integration_range_controls_view_state.phi_max_slider
+
+    if any(
+        ref is None
+        for ref in (
+            tth_min_var,
+            tth_max_var,
+            phi_min_var,
+            phi_max_var,
+            tth_min_slider,
+            tth_max_slider,
+            phi_min_slider,
+            phi_max_slider,
+        )
+    ):
+        raise RuntimeError("Integration-range controls did not create the expected widgets.")
+
+    _render_analysis_peak_overlays(redraw=False)
+    canvas_1d.draw_idle()
+
+
+def _restore_analysis_peak_axis_view(*, redraw: bool) -> None:
+    preserved_limits = analysis_peak_selection_state.saved_axis_limits
+    analysis_peak_selection_state.saved_axis_limits = None
+    if preserved_limits is None:
+        return
+    try:
+        gui_canvas_interactions.restore_axis_view(
+            ax,
+            preserved_limits=preserved_limits,
+            default_xlim=ax.get_xlim(),
+            default_ylim=ax.get_ylim(),
+            preserve=True,
+        )
+    except Exception:
+        return
+    if redraw:
+        _request_overlay_canvas_redraw(force=True)
+
+
+def _zoom_to_current_analysis_region(*, redraw: bool) -> None:
+    range_values = _current_analysis_range_values()
+    tth_min = float(range_values["tth_min"])
+    tth_max = float(range_values["tth_max"])
+    phi_min = float(range_values["phi_min"])
+    phi_max = float(range_values["phi_max"])
+    tth_pad = max(0.15, 0.05 * abs(tth_max - tth_min))
+    x_lo = min(tth_min, tth_max) - tth_pad
+    x_hi = max(tth_min, tth_max) + tth_pad
+
+    azimuth_axis = simulation_runtime_state.last_caked_azimuth_values
+    phi_lo = gui_analysis_peak_tools.align_angle_to_axis(phi_min, azimuth_axis)
+    phi_hi = gui_analysis_peak_tools.align_angle_to_axis(phi_max, azimuth_axis)
+    if phi_hi < phi_lo:
+        phi_lo, phi_hi = phi_hi, phi_lo
+    phi_pad = max(0.6, 0.05 * abs(phi_hi - phi_lo))
+    y_lo = phi_lo - phi_pad
+    y_hi = phi_hi + phi_pad
+    try:
+        ax.set_xlim(x_lo, x_hi)
+        ax.set_ylim(y_lo, y_hi)
+    except Exception:
+        return
+    if redraw:
+        _request_overlay_canvas_redraw(force=True)
+
+
+def _set_analysis_peak_pick_mode(
+    enabled: bool,
+    message: str | None = None,
+) -> None:
+    enabled_flag = bool(enabled)
+    current_flag = bool(analysis_peak_selection_state.pick_armed)
+    if current_flag == enabled_flag and message is None:
+        return
+
+    if enabled_flag:
+        _set_geometry_manual_pick_mode(False, message="Manual geometry picking paused.")
+        _set_hkl_pick_mode_with_mode_banner(False, message="HKL image-pick paused.")
+        _set_geometry_preview_exclude_mode(
+            False,
+            message="Preview exclusion paused.",
+        )
+
+        show_1d_var = analysis_view_controls_view_state.show_1d_var
+        if show_1d_var is not None and not bool(show_1d_var.get()):
+            show_1d_var.set(True)
+            toggle_1d_plots()
+
+        show_caked_var = analysis_view_controls_view_state.show_caked_2d_var
+        if show_caked_var is not None and not bool(show_caked_var.get()):
+            show_caked_var.set(True)
+            toggle_caked_2d()
+
+        if analysis_peak_selection_state.saved_axis_limits is None:
+            analysis_peak_selection_state.saved_axis_limits = (
+                gui_canvas_interactions.capture_axis_limits(ax)
+            )
+        analysis_peak_selection_state.pick_armed = True
+        _zoom_to_current_analysis_region(redraw=False)
+        if callable(globals().get("_refresh_integration_from_cached_results")):
+            try:
+                _refresh_integration_from_cached_results()
+            except Exception:
+                pass
+        status_text = (
+            message
+            or "Analysis peak picking armed. Click peaks in the caked integration region."
+        )
+    else:
+        analysis_peak_selection_state.pick_armed = False
+        _restore_analysis_peak_axis_view(redraw=False)
+        status_text = message or "Analysis peak picking stopped."
+
+    _update_analysis_peak_pick_button_label()
+    _set_analysis_peak_selection_status_text(_analysis_peak_selection_status_text())
+    _set_analysis_peak_fit_results_text(_analysis_peak_fit_results_text())
+    refresh_mode_banner = globals().get("_refresh_interaction_mode_banner")
+    if callable(refresh_mode_banner):
+        refresh_mode_banner()
+    try:
+        progress_label_positions.config(text=status_text)
+    except Exception:
+        pass
+    _render_analysis_peak_overlays(redraw=True)
+
+
+def _toggle_analysis_peak_pick_mode() -> None:
+    _set_analysis_peak_pick_mode(
+        not bool(analysis_peak_selection_state.pick_armed),
+    )
+
+
+def _clear_selected_analysis_peaks() -> None:
+    analysis_peak_selection_state.selected_peaks.clear()
+    _clear_analysis_peak_fit_results(redraw=False, update_text=True)
+    _set_analysis_peak_selection_status_text(_analysis_peak_selection_status_text())
+    try:
+        progress_label_positions.config(text="Cleared analysis peak selections.")
+    except Exception:
+        pass
+    _render_analysis_peak_overlays(redraw=True)
+
+
+def _select_analysis_peak_from_canvas_click(
+    two_theta_deg: float,
+    phi_deg: float,
+) -> bool:
+    range_values = _current_analysis_range_values()
+    if not gui_analysis_peak_tools.integration_region_contains(
+        two_theta_deg,
+        phi_deg,
+        tth_min=float(range_values["tth_min"]),
+        tth_max=float(range_values["tth_max"]),
+        phi_min=float(range_values["phi_min"]),
+        phi_max=float(range_values["phi_max"]),
+    ):
+        try:
+            progress_label_positions.config(
+                text="Click inside the current integration region to pick a peak."
+            )
+        except Exception:
+            pass
+        return True
+
+    source_payload = _current_analysis_caked_peak_source()
+    if not isinstance(source_payload, dict):
+        try:
+            progress_label_positions.config(
+                text="No caked image is available for analysis peak picking."
+            )
+        except Exception:
+            pass
+        return True
+
+    source_image = np.asarray(source_payload.get("image"), dtype=float)
+    radial_axis = np.asarray(source_payload.get("radial_axis"), dtype=float)
+    azimuth_axis = np.asarray(source_payload.get("azimuth_axis"), dtype=float)
+    if source_image.ndim != 2 or radial_axis.size <= 0 or azimuth_axis.size <= 0:
+        try:
+            progress_label_positions.config(
+                text="The current caked image cannot be used for analysis peak picking."
+            )
+        except Exception:
+            pass
+        return True
+
+    match_cfg = {
+        "search_radius_px": 18.0,
+        "local_max_size_px": 5,
+        "smooth_sigma_px": 1.4,
+        "climb_sigma_px": 0.8,
+        "min_prominence_sigma": 1.5,
+        "min_match_prominence_sigma": 1.5,
+        "max_candidate_peaks": 10,
+    }
+    refined_tth = float(two_theta_deg)
+    refined_phi = float(phi_deg)
+    try:
+        match_cfg, background_context = _auto_match_background_context(
+            source_image,
+            match_cfg,
+        )
+        refined_tth, refined_phi = gui_manual_geometry.geometry_manual_refine_preview_point(
+            None,
+            float(two_theta_deg),
+            float(phi_deg),
+            display_background=source_image,
+            cache_data={
+                "match_config": dict(match_cfg),
+                "background_context": background_context,
+            },
+            use_caked_space=True,
+            radial_axis=radial_axis,
+            azimuth_axis=azimuth_axis,
+            match_simulated_peaks_to_peak_context=match_simulated_peaks_to_peak_context,
+            caked_axis_to_image_index_fn=_caked_axis_to_image_index,
+            caked_image_index_to_axis_fn=_caked_image_index_to_axis,
+            refine_caked_peak_center_fn=_refine_caked_peak_center,
+        )
+    except Exception:
+        refined_tth = float(two_theta_deg)
+        refined_phi = float(phi_deg)
+
+    if not (np.isfinite(refined_tth) and np.isfinite(refined_phi)):
+        try:
+            progress_label_positions.config(text="Peak picking failed for that click.")
+        except Exception:
+            pass
+        return True
+
+    radial_tol, azimuth_tol = _analysis_peak_duplicate_tolerances()
+    match_index = gui_analysis_peak_tools.match_selected_peak_index(
+        analysis_peak_selection_state.selected_peaks,
+        two_theta_deg=float(refined_tth),
+        phi_deg=float(refined_phi),
+        radial_tolerance_deg=float(radial_tol),
+        azimuth_tolerance_deg=float(azimuth_tol),
+    )
+
+    if match_index is not None:
+        analysis_peak_selection_state.selected_peaks.pop(int(match_index))
+        status_text = (
+            f"Removed peak near 2theta={float(refined_tth):.4f} deg, "
+            f"phi={float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)):.4f} deg."
+        )
+    else:
+        analysis_peak_selection_state.selected_peaks.append(
+            {
+                "two_theta_deg": float(refined_tth),
+                "phi_deg": float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)),
+                "source": str(source_payload.get("source", "simulated")),
+                "raw_two_theta_deg": float(two_theta_deg),
+                "raw_phi_deg": float(phi_deg),
+            }
+        )
+        status_text = (
+            f"Selected peak {len(analysis_peak_selection_state.selected_peaks)} at "
+            f"2theta={float(refined_tth):.4f} deg, "
+            f"phi={float(gui_analysis_peak_tools.wrap_angle_degrees(refined_phi)):.4f} deg."
+        )
+
+    _clear_analysis_peak_fit_results(redraw=False, update_text=True)
+    _set_analysis_peak_selection_status_text(_analysis_peak_selection_status_text())
+    try:
+        progress_label_positions.config(text=status_text)
+    except Exception:
+        pass
+    _render_analysis_peak_overlays(redraw=True)
+    return True
+
+
+def _fit_selected_analysis_peaks() -> None:
+    selected_peaks = list(analysis_peak_selection_state.selected_peaks)
+    if not selected_peaks:
+        try:
+            progress_label_positions.config(text="Select one or more peaks before fitting.")
+        except Exception:
+            pass
+        return
+
+    model_specs = (
+        (
+            getattr(analysis_peak_tools_view_state.fit_gaussian_var, "get", lambda: False)(),
+            gui_analysis_peak_tools.PROFILE_GAUSSIAN,
+        ),
+        (
+            getattr(analysis_peak_tools_view_state.fit_lorentzian_var, "get", lambda: False)(),
+            gui_analysis_peak_tools.PROFILE_LORENTZIAN,
+        ),
+        (
+            getattr(analysis_peak_tools_view_state.fit_pseudo_voigt_var, "get", lambda: True)(),
+            gui_analysis_peak_tools.PROFILE_PSEUDO_VOIGT,
+        ),
+    )
+    models = [model for enabled, model in model_specs if bool(enabled)]
+    if not models:
+        try:
+            progress_label_positions.config(text="Choose at least one peak-profile model to fit.")
+        except Exception:
+            pass
+        return
+
+    axes_to_fit = []
+    if bool(getattr(analysis_peak_tools_view_state.fit_radial_var, "get", lambda: True)()):
+        axes_to_fit.append("radial")
+    if bool(getattr(analysis_peak_tools_view_state.fit_azimuth_var, "get", lambda: True)()):
+        axes_to_fit.append("azimuth")
+    if not axes_to_fit:
+        try:
+            progress_label_positions.config(text="Choose the radial plot, azimuth plot, or both before fitting.")
+        except Exception:
+            pass
+        return
+
+    _clear_analysis_peak_fit_results(redraw=False, update_text=False)
+
+    total_success = 0
+    total_attempts = 0
+    for axis_kind in axes_to_fit:
+        axis_results: list[dict[str, object]] = []
+        for idx, peak_entry in enumerate(selected_peaks):
+            x_curve, y_curve, resolved_source = _analysis_curve_data(
+                axis_kind,
+                str(peak_entry.get("source", "simulated")),
+            )
+            if x_curve.size < 7 or y_curve.size < 7:
+                continue
+            axis_centers = np.asarray(
+                [
+                    _analysis_peak_axis_value(
+                        entry,
+                        axis_kind=axis_kind,
+                        axis_values=x_curve,
+                    )
+                    for entry in selected_peaks
+                ],
+                dtype=float,
+            )
+            center_guess = float(axis_centers[idx])
+            window_half_width = gui_analysis_peak_tools.recommended_peak_window_half_width(
+                axis_centers,
+                idx,
+                axis_values=x_curve,
+                axis_kind=axis_kind,
+                region_bounds=(float(x_curve[0]), float(x_curve[-1])),
+            )
+            for model in models:
+                fit_result = gui_analysis_peak_tools.fit_peak_profile(
+                    x_curve,
+                    y_curve,
+                    center_guess=center_guess,
+                    model=model,
+                    window_half_width=float(window_half_width),
+                )
+                fit_entry = dict(fit_result)
+                fit_entry.update(
+                    {
+                        "peak_index": int(idx) + 1,
+                        "axis_kind": axis_kind,
+                        "selected_axis_value": float(center_guess),
+                        "two_theta_deg": float(peak_entry.get("two_theta_deg", np.nan)),
+                        "phi_deg": float(peak_entry.get("phi_deg", np.nan)),
+                        "curve_source": resolved_source,
+                    }
+                )
+                axis_results.append(fit_entry)
+                total_attempts += 1
+                if bool(fit_entry.get("success", False)):
+                    total_success += 1
+
+        if axis_kind == "radial":
+            analysis_peak_selection_state.radial_fit_results = axis_results
+        else:
+            analysis_peak_selection_state.azimuth_fit_results = axis_results
+
+    _set_analysis_peak_fit_results_text(_analysis_peak_fit_results_text())
+    if total_attempts <= 0:
+        try:
+            progress_label_positions.config(text="No valid 1D data were available for the selected peak fits.")
+        except Exception:
+            pass
+    else:
+        try:
+            progress_label_positions.config(
+                text=f"Finished {total_success}/{total_attempts} analysis peak fits."
+            )
+        except Exception:
+            pass
+    _render_analysis_peak_overlays(redraw=True)
+
+
+def _show_analysis_tab_detached_placeholders() -> None:
+    _clear_widget_children(app_shell_view_state.analysis_exports_frame)
+    ttk.Label(
+        app_shell_view_state.analysis_exports_frame,
+        text="Exports moved to the detached Analyze window.",
+        justify=tk.LEFT,
+        wraplength=360,
+    ).pack(fill=tk.X, padx=6, pady=(4, 6))
+
+    _clear_widget_children(app_shell_view_state.analysis_peak_tools_frame)
+    ttk.Label(
+        app_shell_view_state.analysis_peak_tools_frame,
+        text="Peak picking and fitting controls moved to the detached Analyze window.",
+        justify=tk.LEFT,
+        wraplength=360,
+    ).pack(fill=tk.X, padx=6, pady=(4, 6))
+
+    _clear_widget_children(app_shell_view_state.plot_frame_1d)
+    ttk.Label(
+        app_shell_view_state.plot_frame_1d,
+        text=(
+            "Integration figures are open in a detached Analyze window.\n"
+            "Use the button above or close that window to dock them back here."
+        ),
+        justify=tk.CENTER,
+        anchor=tk.CENTER,
+        wraplength=420,
+    ).pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+
+def _set_analysis_popout_button_state(*, detached: bool) -> None:
+    button = app_shell_view_state.analysis_popout_button
+    if button is None:
+        return
+    try:
+        button.configure(
+            text=(
+                "Return Analyze to Tab"
+                if detached
+                else "Open Analyze in Separate Window"
+            ),
+            command=_toggle_analysis_popout,
+        )
+    except Exception:
+        pass
+
+
+def _dock_analysis_window(*, restore_tab: bool = True) -> None:
+    range_values = _current_analysis_range_values()
+    gui_views.close_analysis_popout_window(analysis_popout_view_state)
+    if restore_tab:
+        _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
+        _render_analysis_peak_tools_controls(app_shell_view_state.analysis_peak_tools_frame)
+        _render_analysis_plot_controls(
+            parent=app_shell_view_state.plot_frame_1d,
+            range_values=range_values,
+        )
+    _set_analysis_popout_button_state(detached=False)
+
+
+def _pop_out_analysis_window() -> None:
+    range_values = _current_analysis_range_values()
+    opened = gui_views.open_analysis_popout_window(
+        root=root,
+        view_state=analysis_popout_view_state,
+        on_close=_dock_analysis_window,
+    )
+    if not opened and gui_views.analysis_popout_window_open(analysis_popout_view_state):
+        return
+    try:
+        _show_analysis_tab_detached_placeholders()
+        _render_analysis_export_controls(analysis_popout_view_state.exports_frame)
+        _render_analysis_peak_tools_controls(
+            analysis_popout_view_state.peak_tools_frame
+        )
+        _render_analysis_plot_controls(
+            parent=analysis_popout_view_state.plot_frame,
+            range_values=range_values,
+        )
+    except Exception:
+        gui_views.close_analysis_popout_window(analysis_popout_view_state)
+        _render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
+        _render_analysis_peak_tools_controls(app_shell_view_state.analysis_peak_tools_frame)
+        _render_analysis_plot_controls(
+            parent=app_shell_view_state.plot_frame_1d,
+            range_values=range_values,
+        )
+        _set_analysis_popout_button_state(detached=False)
+        raise
+    _set_analysis_popout_button_state(detached=True)
+
+
+def _toggle_analysis_popout() -> None:
+    if gui_views.analysis_popout_window_open(analysis_popout_view_state):
+        _dock_analysis_window()
+        return
+    _pop_out_analysis_window()
+
+
+_render_analysis_export_controls(app_shell_view_state.analysis_exports_frame)
+_render_analysis_peak_tools_controls(app_shell_view_state.analysis_peak_tools_frame)
+_set_analysis_popout_button_state(detached=False)
 
 def run_debug_simulation():
 
@@ -14882,7 +16183,7 @@ gui_views.populate_app_shell_quick_controls(
     controls=[
         {
             "key": "theta_initial",
-            "label": "theta",
+            "label": "Theta",
             "variable": theta_initial_var,
             "scale": theta_initial_scale,
             "command": schedule_update,
@@ -14890,44 +16191,25 @@ gui_views.populate_app_shell_quick_controls(
         },
         {
             "key": "corto_detector",
-            "label": "distance",
+            "label": "Detector distance",
             "variable": corto_detector_var,
             "scale": corto_detector_scale,
             "command": schedule_update,
             "step": 0.0001,
         },
         {
-            "key": "sampling_resolution",
-            "label": "sampling resolution",
-            "control_type": "choice",
-            "variable": resolution_var,
-            "options": resolution_options,
-        },
-        {
-            "key": "qr_cylinder_mode",
-            "label": "Qr cylinder lines",
-            "control_type": "choice",
-            "variable": qr_cylinder_display_mode_var,
-            "options": QR_CYLINDER_DISPLAY_MODE_OPTIONS,
-        },
-        {
             "key": "show_geometry_overlays",
-            "label": "Show Geometry Overlays",
+            "label": "Show geometry overlays",
             "control_type": "check",
             "variable": geometry_overlay_actions_view_state.show_geometry_overlays_var,
             "command": _toggle_geometry_overlay_visibility,
         },
         {
             "key": "toggle_background",
-            "label": "Toggle Background",
+            "label": "Show or hide background",
             "control_type": "button",
+            "button_text": "Show/Hide Background",
             "command": toggle_background,
-        },
-        {
-            "key": "switch_background",
-            "label": "Switch Background",
-            "control_type": "button",
-            "command": switch_background,
         },
         {
             "key": "fast_viewer",
@@ -14938,38 +16220,13 @@ gui_views.populate_app_shell_quick_controls(
         },
         {
             "key": "reset_view",
-            "label": "Reset view",
+            "label": "Reset plot view",
             "control_type": "button",
+            "button_text": "Reset Plot View",
             "command": _reset_primary_figure_view,
         },
-        {
-            "key": "log_radial",
-            "label": "Log radial",
-            "control_type": "check",
-            "variable": analysis_view_controls_view_state.log_radial_var,
-            "command": toggle_log_radial,
-        },
-        {
-            "key": "log_azimuth",
-            "label": "Log azimuth",
-            "control_type": "check",
-            "variable": analysis_view_controls_view_state.log_azimuth_var,
-            "command": toggle_log_azimuth,
-        },
-        {
-            "key": "auto_match_scale",
-            "label": "Auto-Match Scale (Radial Peak)",
-            "control_type": "button",
-            "command": _auto_match_scale_factor_to_radial_peak,
-        },
-        {
-            "key": "sf_prune_bias",
-            "label": "SF prune bias",
-            "variable": sf_prune_bias_var,
-            "scale": sf_prune_bias_scale,
-            "step": 0.01,
-        },
     ],
+    on_more_controls=lambda: app_shell_view_state.control_tab_var.set("refine"),
 )
 geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
     app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get(
@@ -14985,6 +16242,7 @@ try:
     fast_viewer_workflow.refresh_status_text()
 except Exception:
     pass
+_refresh_session_summary_panel()
 
 
 def _refresh_refine_section_summaries(*_args) -> None:

@@ -238,15 +238,19 @@ instrument:
         restarts: 2
         restart_jitter: 0.15
         ridge_weight: 1.0
-        point_match_weight: 1.0
-        point_match_f_scale_px: 6.0
-        point_match_weighted_matching: false
-        point_match_missing_pair_penalty_px: 20.0
+        # Relative-weight term tying the specular 00L family together.
+        specular_relative_intensity_weight: 1.0
+        # Fit background-specific theta_i values from the cached geometry bundle.
+        fit_theta_i: true
+        # Auto follows the current background-selection mode:
+        # single, shared_offset, or per_dataset theta_i refinement.
+        theta_i_mode: auto
+        # Bounds are in degrees. For per-dataset mode they are applied relative
+        # to each cached background theta_i.
+        theta_i_bounds_deg: [-0.5, 0.5]
         fit_sigma_mosaic: true
         fit_gamma_mosaic: true
         fit_eta: true
-        refine_theta: true
-        theta_window_deg: 0.5
         workers: auto
         parallel_mode: auto
         worker_numba_threads: 0
@@ -257,6 +261,11 @@ instrument:
       preprocessing:
         smooth_sigma_px: 1.0
         ridge_percentile: 85.0
+      sampling:
+        # Mosaic-shape fitting intentionally oversamples the beam/mosaic cloud.
+        # The GUI enforces this as a floor and only evaluates 00L plus the top
+        # three current off-specular HKL/Qr groups to keep runtime manageable.
+        min_num_samples: 50000
     ordered_structure:
       solver:
         coarse_downsample_factor: 2
