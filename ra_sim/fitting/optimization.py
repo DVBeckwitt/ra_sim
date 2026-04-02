@@ -5111,7 +5111,7 @@ def fit_mosaic_shape_parameters(
     fit_gamma_mosaic: bool = True,
     fit_eta: bool = True,
 ) -> OptimizeResult:
-    """Fit geometry-cached mosaic shape parameters with optional point anchors."""
+    """Fit mosaic shape parameters from prepared experimental datasets."""
 
     dataset_spec_entries = _coerce_sequence_items(dataset_specs)
     miller = np.asarray(miller, dtype=np.float64)
@@ -5124,7 +5124,7 @@ def fit_mosaic_shape_parameters(
         raise ValueError("image_size must be positive")
     if not dataset_spec_entries:
         raise RuntimeError(
-            "Mosaic shape fit requires cached geometry-fit dataset_specs; run geometry fitting first."
+            "Mosaic shape fit requires at least one prepared dataset_spec."
         )
 
     mosaic_params = dict(params.get("mosaic_params", {}))
@@ -5233,6 +5233,173 @@ def fit_mosaic_shape_parameters(
     if total_rois < int(min_total_rois):
         raise RuntimeError(
             f"Mosaic shape fit needs at least {int(min_total_rois)} usable ROIs; got {total_rois}."
+        )
+
+    def _json_safe(value: object) -> object:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            return float(value) if np.isfinite(value) else None
+        if isinstance(value, complex):
+            return {
+                "real": _json_safe(value.real),
+                "imag": _json_safe(value.imag),
+            }
+        if isinstance(value, np.generic):
+            return _json_safe(value.item())
+        if isinstance(value, np.ndarray):
+            return [_json_safe(item) for item in value.tolist()]
+        if isinstance(value, Mapping):
+            return {str(key): _json_safe(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_json_safe(item) for item in value]
+        return str(value)
+
+    def _array_summary(values: object) -> Dict[str, object]:
+        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+        finite = arr[np.isfinite(arr)]
+        summary: Dict[str, object] = {
+            "count": int(arr.size),
+            "finite_count": int(finite.size),
+        }
+        if finite.size:
+            summary.update(
+                {
+                    "min": float(np.min(finite)),
+                    "max": float(np.max(finite)),
+                    "mean": float(np.mean(finite)),
+                    "std": float(np.std(finite)),
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "min": None,
+                    "max": None,
+                    "mean": None,
+                    "std": None,
+                }
+            )
+        return summary
+
+    def _image_summary(image: object) -> Dict[str, object]:
+        arr = np.asarray(image, dtype=np.float64)
+        finite = arr[np.isfinite(arr)]
+        summary: Dict[str, object] = {
+            "shape": [int(dim) for dim in arr.shape],
+            "finite_count": int(finite.size),
+        }
+        if finite.size:
+            summary.update(
+                {
+                    "min": float(np.min(finite)),
+                    "max": float(np.max(finite)),
+                    "mean": float(np.mean(finite)),
+                    "sum": float(np.sum(finite)),
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "min": None,
+                    "max": None,
+                    "mean": None,
+                    "sum": None,
+                }
+            )
+        return summary
+
+    def _measured_peak_summaries(entries: object) -> List[Dict[str, object]]:
+        out: List[Dict[str, object]] = []
+        for entry in entries if isinstance(entries, (list, tuple)) else []:
+            if not isinstance(entry, Mapping):
+                continue
+            peak_summary: Dict[str, object] = {
+                "hkl": _json_safe(entry.get("hkl")),
+                "x": _json_safe(entry.get("x")),
+                "y": _json_safe(entry.get("y")),
+            }
+            if "source_table_index" in entry:
+                peak_summary["source_table_index"] = _json_safe(
+                    entry.get("source_table_index")
+                )
+            if "source_row_index" in entry:
+                peak_summary["source_row_index"] = _json_safe(
+                    entry.get("source_row_index")
+                )
+            out.append(peak_summary)
+        return out
+
+    input_dataset_summaries: List[Dict[str, object]] = []
+    for spec in dataset_spec_entries:
+        if not isinstance(spec, Mapping):
+            continue
+        measured_peaks = spec.get("measured_peaks", [])
+        experimental_image = spec.get("experimental_image")
+        input_dataset_summaries.append(
+            {
+                "dataset_index": _json_safe(spec.get("dataset_index")),
+                "dataset_label": _json_safe(
+                    spec.get("label", spec.get("dataset_index", "?"))
+                ),
+                "theta_initial_deg": _json_safe(spec.get("theta_initial")),
+                "measured_peak_count": int(
+                    len(measured_peaks) if isinstance(measured_peaks, (list, tuple)) else 0
+                ),
+                "experimental_image": (
+                    _image_summary(experimental_image)
+                    if experimental_image is not None
+                    else None
+                ),
+                "measured_peaks": _measured_peak_summaries(measured_peaks),
+            }
+        )
+
+    prepared_dataset_summaries: List[Dict[str, object]] = []
+    for dataset_ctx in prepared_datasets:
+        roi_entries = [
+            {
+                "reflection_index": int(roi.reflection_index),
+                "hkl": [int(v) for v in roi.hkl],
+                "center_xy_px": [float(roi.center_col), float(roi.center_row)],
+                "row_bounds": [int(v) for v in roi.row_bounds],
+                "col_bounds": [int(v) for v in roi.col_bounds],
+                "measured_two_theta_deg": float(roi.measured_two_theta),
+                "measured_active_pixels": int(roi.measured_active_pixels),
+            }
+            for roi in dataset_ctx.rois
+        ]
+        prepared_dataset_summaries.append(
+            {
+                "dataset_index": int(dataset_ctx.dataset_index),
+                "dataset_label": str(dataset_ctx.label),
+                "theta_initial_deg": float(dataset_ctx.theta_initial),
+                "experimental_image": _image_summary(dataset_ctx.experimental_image),
+                "measured_peak_count": int(dataset_ctx.measured_peak_count),
+                "reflection_count": int(dataset_ctx.miller.shape[0]),
+                "intensity_count": int(dataset_ctx.intensities.shape[0]),
+                "roi_count": int(len(dataset_ctx.rois)),
+                "roi_hkls": [[int(v) for v in roi.hkl] for roi in dataset_ctx.rois],
+                "rois": roi_entries,
+            }
+        )
+
+    rejected_roi_reason_counts: Dict[str, int] = {}
+    rejected_roi_counts_by_dataset: Dict[str, int] = {}
+    for rejected in rejected_rois:
+        if not isinstance(rejected, Mapping):
+            continue
+        dataset_key = str(
+            rejected.get("dataset_label", rejected.get("dataset_index", "?"))
+        )
+        reason_key = str(rejected.get("reason", "unknown"))
+        stage_key = str(rejected.get("stage", "unknown"))
+        rejected_roi_reason_counts[f"{dataset_key}:{stage_key}:{reason_key}"] = (
+            rejected_roi_reason_counts.get(f"{dataset_key}:{stage_key}:{reason_key}", 0)
+            + 1
+        )
+        rejected_roi_counts_by_dataset[dataset_key] = (
+            rejected_roi_counts_by_dataset.get(dataset_key, 0) + 1
         )
 
     dataset_count = int(len(prepared_datasets))
@@ -5824,6 +5991,20 @@ def fit_mosaic_shape_parameters(
     best_result.x = np.asarray(best_full_x, dtype=np.float64)
     best_result.fun = np.asarray(final_residual, dtype=np.float64)
     final_cost = _robust_cost(best_result.fun, loss=loss, f_scale=f_scale)
+    initial_residual_count = int(np.asarray(initial_residual, dtype=np.float64).size)
+    final_residual_count = int(np.asarray(best_result.fun, dtype=np.float64).size)
+    initial_residual_norm = float(np.linalg.norm(initial_residual))
+    final_residual_norm = float(np.linalg.norm(best_result.fun))
+    initial_residual_rms = (
+        float(np.sqrt(np.mean(np.asarray(initial_residual, dtype=np.float64) ** 2)))
+        if initial_residual_count
+        else 0.0
+    )
+    final_residual_rms = (
+        float(np.sqrt(np.mean(np.asarray(best_result.fun, dtype=np.float64) ** 2)))
+        if final_residual_count
+        else 0.0
+    )
 
     best_params = dict(base_params)
     best_params["mosaic_params"] = dict(mosaic_params)
@@ -5940,6 +6121,164 @@ def fit_mosaic_shape_parameters(
             for count in (roi_count_by_dataset or {}).values()
         )
     )
+    parameter_debug: Dict[str, Dict[str, object]] = {}
+    for idx, name in enumerate(param_names):
+        parameter_debug[str(name)] = {
+            "index": int(idx),
+            "active": bool(active_mask[idx]),
+            "initial": float(full_x0[idx]),
+            "final": float(best_result.x[idx]),
+            "delta": float(best_result.x[idx] - full_x0[idx]),
+            "lower": float(full_lower[idx]),
+            "upper": float(full_upper[idx]),
+        }
+    geometry_parameter_summary = {
+        "a": _json_safe(base_params.get("a")),
+        "c": _json_safe(base_params.get("c")),
+        "lambda": _json_safe(base_params.get("lambda")),
+        "psi": _json_safe(base_params.get("psi")),
+        "psi_z": _json_safe(base_params.get("psi_z")),
+        "zs": _json_safe(base_params.get("zs")),
+        "zb": _json_safe(base_params.get("zb")),
+        "sample_width_m": _json_safe(base_params.get("sample_width_m")),
+        "sample_length_m": _json_safe(base_params.get("sample_length_m")),
+        "sample_depth_m": _json_safe(base_params.get("sample_depth_m")),
+        "chi": _json_safe(base_params.get("chi")),
+        "n2": _json_safe(base_params.get("n2")),
+        "center_xy_px": _json_safe(base_params.get("center")),
+        "theta_initial_deg": _json_safe(base_params.get("theta_initial")),
+        "theta_offset_deg": _json_safe(base_params.get("theta_offset")),
+        "corto_detector_m": _json_safe(base_params.get("corto_detector")),
+        "gamma_deg": _json_safe(base_params.get("gamma")),
+        "Gamma_deg": _json_safe(base_params.get("Gamma")),
+        "optics_mode": _json_safe(base_params.get("optics_mode")),
+        "pixel_size_m": _json_safe(base_params.get("pixel_size_m")),
+        "pixel_size": _json_safe(base_params.get("pixel_size")),
+        "uv1": _json_safe(uv1),
+        "uv2": _json_safe(uv2),
+    }
+    mosaic_sample_summary = {
+        "beam_x": _array_summary(beam_x),
+        "beam_y": _array_summary(beam_y),
+        "theta": _array_summary(theta_array),
+        "phi": _array_summary(phi_array),
+        "wavelength": _array_summary(wavelength_array),
+        "n2_sample_array": _array_summary(mosaic_params.get("n2_sample_array", [])),
+        "solve_q_steps": int(mosaic_params.get("solve_q_steps", 1000)),
+        "solve_q_rel_tol": float(mosaic_params.get("solve_q_rel_tol", 5.0e-4)),
+        "solve_q_mode": int(mosaic_params.get("solve_q_mode", 1)),
+    }
+    acceptance_summary = {
+        "passed": bool(best_result.acceptance_passed),
+        "cost_reduction_threshold": 0.20,
+        "cost_reduction": float(cost_reduction),
+        "bound_hits": list(bound_hits),
+        "boundary_warning": boundary_warning,
+        "point_match_pairs_ok": bool(point_match_pairs_ok),
+        "min_total_rois": int(min_total_rois),
+        "min_per_dataset_rois": int(min_per_dataset_rois),
+        "total_roi_count": int(total_rois),
+        "roi_count_by_dataset": {
+            str(key): int(val)
+            for key, val in dict(roi_count_by_dataset or {}).items()
+        },
+    }
+    mosaic_fit_debug_summary = {
+        "inputs": {
+            "image_size": int(image_size),
+            "dataset_count": int(dataset_count),
+            "miller_count": int(miller.shape[0]),
+            "intensity_count": int(intensities.shape[0]),
+            "roi_half_width": int(roi_half_width),
+            "input_datasets": input_dataset_summaries,
+            "prepared_datasets": prepared_dataset_summaries,
+            "rejected_rois": _json_safe(rejected_rois),
+            "rejected_roi_reason_counts": _json_safe(rejected_roi_reason_counts),
+            "rejected_roi_counts_by_dataset": _json_safe(
+                rejected_roi_counts_by_dataset
+            ),
+            "geometry_parameters": geometry_parameter_summary,
+            "mosaic_samples": mosaic_sample_summary,
+        },
+        "solver": {
+            "loss": str(loss),
+            "f_scale": float(f_scale),
+            "max_nfev": int(max_nfev),
+            "max_restarts": int(max_restarts),
+            "restart_jitter": float(restart_jitter),
+            "success": bool(best_result.success),
+            "status": _json_safe(getattr(best_result, "status", None)),
+            "message": str(best_result.message),
+            "nfev": _json_safe(getattr(best_result, "nfev", None)),
+            "njev": _json_safe(getattr(best_result, "njev", None)),
+            "optimality": _json_safe(getattr(best_result, "optimality", None)),
+            "active_parameters": list(active_parameter_names),
+            "fixed_parameters": list(fixed_parameter_names),
+            "parameter_bounds": parameter_debug,
+            "initial_cost": float(initial_cost),
+            "final_cost": float(final_cost),
+            "cost_reduction": float(cost_reduction),
+            "initial_residual_count": int(initial_residual_count),
+            "final_residual_count": int(final_residual_count),
+            "initial_residual_norm": float(initial_residual_norm),
+            "final_residual_norm": float(final_residual_norm),
+            "initial_residual_rms": float(initial_residual_rms),
+            "final_residual_rms": float(final_residual_rms),
+            "restart_history": _json_safe(restart_history),
+        },
+        "objective_terms": {
+            "ridge_enabled": bool(ridge_term_enabled),
+            "point_match_enabled": bool(point_match_term_enabled),
+            "ridge_weight": float(ridge_weight),
+            "point_match_weight": float(point_match_weight),
+            "point_match_f_scale": float(point_match_f_scale),
+            "point_match_weighted_matching": bool(point_match_weighted_matching),
+            "point_match_missing_pair_penalty_px": float(
+                point_match_missing_pair_penalty
+            ),
+            "equal_dataset_weights": bool(equal_dataset_weights),
+        },
+        "theta": {
+            "optimize_theta": bool(optimize_theta),
+            "requested_mode": str(theta_mode),
+            "resolved_mode": str(resolved_theta_mode),
+            "theta_bounds": _json_safe(theta_bounds),
+            "theta_parameter_names": list(theta_param_names),
+            "refined_theta_value": _json_safe(best_result.refined_theta_value),
+            "refined_theta_offset": _json_safe(best_result.refined_theta_offset),
+            "refined_theta_values_by_dataset": _json_safe(
+                refined_theta_values_by_dataset
+            ),
+        },
+        "diagnostics": {
+            "parallelization": _json_safe(parallelization_summary),
+            "dataset_diagnostics": _json_safe(dataset_diagnostics or []),
+            "roi_diagnostics": _json_safe(ordered_roi_diagnostics),
+            "top_worst_rois": _json_safe(ordered_roi_diagnostics[:10]),
+        },
+        "acceptance": acceptance_summary,
+    }
+    best_result.parameter_bounds = parameter_debug
+    best_result.initial_parameter_values = {
+        str(name): float(full_x0[idx]) for idx, name in enumerate(param_names)
+    }
+    best_result.final_parameter_values = {
+        str(name): float(best_result.x[idx]) for idx, name in enumerate(param_names)
+    }
+    best_result.initial_residual_count = int(initial_residual_count)
+    best_result.final_residual_count = int(final_residual_count)
+    best_result.initial_residual_norm = float(initial_residual_norm)
+    best_result.final_residual_norm = float(final_residual_norm)
+    best_result.initial_residual_rms = float(initial_residual_rms)
+    best_result.final_residual_rms = float(final_residual_rms)
+    best_result.input_dataset_summaries = list(input_dataset_summaries)
+    best_result.prepared_dataset_summaries = list(prepared_dataset_summaries)
+    best_result.rejected_roi_reason_counts = dict(rejected_roi_reason_counts)
+    best_result.rejected_roi_counts_by_dataset = dict(rejected_roi_counts_by_dataset)
+    best_result.geometry_parameter_summary = dict(geometry_parameter_summary)
+    best_result.mosaic_sample_summary = dict(mosaic_sample_summary)
+    best_result.acceptance_summary = dict(acceptance_summary)
+    best_result.mosaic_fit_debug_summary = dict(mosaic_fit_debug_summary)
     return best_result
 
 

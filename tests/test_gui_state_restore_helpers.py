@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from ra_sim.gui import state_io
 
@@ -59,6 +60,44 @@ def test_load_background_files_for_state_reuses_identical_files_without_reread(
     assert display.last_data is display_b
 
 
+def test_load_background_files_for_state_fills_missing_selected_cache_for_identical_files(
+    tmp_path,
+) -> None:
+    path_a = tmp_path / "a.osc"
+    path_b = tmp_path / "b.osc"
+    path_a.write_text("", encoding="utf-8")
+    path_b.write_text("", encoding="utf-8")
+
+    native_a = np.arange(4, dtype=float).reshape(2, 2)
+    display_a = np.rot90(native_a, -1)
+    calls: list[str] = []
+    display = _DisplayRecorder()
+
+    def _fake_read_osc(path: str):
+        calls.append(path)
+        return np.full((2, 2), 9.0)
+
+    updated = state_io.load_background_files_for_state(
+        [str(path_a), str(path_b)],
+        osc_files=[str(path_a), str(path_b)],
+        background_images=[native_a.copy(), None],
+        background_images_native=[native_a, None],
+        background_images_display=[display_a, None],
+        select_index=1,
+        display_rotate_k=-1,
+        read_osc=_fake_read_osc,
+        set_background_display=display.set_data,
+    )
+
+    assert updated is not None
+    assert calls == [str(path_b)]
+    assert np.array_equal(updated["current_background_image"], np.full((2, 2), 9.0))
+    assert updated["background_images"][1] is not None
+    assert updated["background_images_native"][1] is not None
+    assert updated["background_images_display"][1] is not None
+    assert display.last_data is updated["current_background_display"]
+
+
 def test_load_background_files_for_state_rereads_when_files_change(tmp_path) -> None:
     path_a = tmp_path / "a.osc"
     path_b = tmp_path / "b.osc"
@@ -96,6 +135,65 @@ def test_load_background_files_for_state_rereads_when_files_change(tmp_path) -> 
         np.full((2, 2), 3.0),
     )
     assert display.last_data is updated["current_background_display"]
+
+
+def test_load_background_files_for_state_loads_only_first_and_selected_image(
+    tmp_path,
+) -> None:
+    path_a = tmp_path / "a.osc"
+    path_b = tmp_path / "b.osc"
+    path_c = tmp_path / "c.osc"
+    for path in (path_a, path_b, path_c):
+        path.write_text("", encoding="utf-8")
+
+    calls: list[str] = []
+
+    def _fake_read_osc(path: str):
+        calls.append(path)
+        if path.endswith("a.osc"):
+            return np.zeros((2, 2))
+        if path.endswith("c.osc"):
+            return np.full((2, 2), 3.0)
+        return np.full((2, 2), 2.0)
+
+    display = _DisplayRecorder()
+    updated = state_io.load_background_files_for_state(
+        [str(path_a), str(path_b), str(path_c)],
+        osc_files=[],
+        background_images=[],
+        background_images_native=[],
+        background_images_display=[],
+        select_index=2,
+        display_rotate_k=-1,
+        read_osc=_fake_read_osc,
+        set_background_display=display.set_data,
+    )
+
+    assert updated is not None
+    assert calls == [str(path_a), str(path_c)]
+    assert updated["background_images"][0] is not None
+    assert updated["background_images"][1] is None
+    assert updated["background_images"][2] is not None
+    assert updated["current_background_index"] == 2
+    assert display.last_data is updated["current_background_display"]
+
+
+def test_load_background_files_for_state_validates_expected_shape(tmp_path) -> None:
+    path_a = tmp_path / "a.osc"
+    path_a.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="expected"):
+        state_io.load_background_files_for_state(
+            [str(path_a)],
+            osc_files=[],
+            background_images=[],
+            background_images_native=[],
+            background_images_display=[],
+            select_index=0,
+            display_rotate_k=-1,
+            read_osc=lambda _path: np.ones((3, 3)),
+            expected_shape=(4, 4),
+        )
 
 
 def test_collect_full_gui_state_snapshot_filters_runtime_only_vars(tmp_path) -> None:

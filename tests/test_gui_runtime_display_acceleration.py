@@ -20,9 +20,14 @@ class _FakeWidget:
         self.configure_calls = []
         self.bind_calls = []
         self._bindings = {}
+        self._after_callbacks = {}
+        self._next_after_token = 0
         self.width = 640
         self.height = 480
         self.widget_id = 1234
+        self.root_x = 100
+        self.root_y = 200
+        self.top_level = self
 
     def pack(self, **_kwargs) -> None:
         self.manager = "pack"
@@ -43,12 +48,29 @@ class _FakeWidget:
         self._bindings.setdefault(str(event_name), []).append(callback)
         return f"{event_name}-{len(self._bindings[str(event_name)])}"
 
-    def emit(self, event_name) -> None:
+    def emit(self, event_name, event=None) -> None:
+        if event is None:
+            event = SimpleNamespace()
         for callback in list(self._bindings.get(str(event_name), [])):
-            callback(None)
+            callback(event)
 
     def update_idletasks(self) -> None:
         return None
+
+    def after(self, _delay, callback):
+        self._next_after_token += 1
+        token = f"after-{self._next_after_token}"
+        self._after_callbacks[token] = callback
+        return token
+
+    def after_cancel(self, token) -> None:
+        self._after_callbacks.pop(token, None)
+
+    def run_after_callbacks(self) -> None:
+        callbacks = list(self._after_callbacks.items())
+        self._after_callbacks = {}
+        for _token, callback in callbacks:
+            callback()
 
     def winfo_width(self) -> int:
         return self.width
@@ -58,6 +80,77 @@ class _FakeWidget:
 
     def winfo_id(self) -> int:
         return self.widget_id
+
+    def winfo_rootx(self) -> int:
+        return self.root_x
+
+    def winfo_rooty(self) -> int:
+        return self.root_y
+
+    def winfo_toplevel(self):
+        return self.top_level
+
+    def lift(self) -> None:
+        return None
+
+
+class _FakeToplevel(_FakeWidget):
+    created = []
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        super().__init__()
+        self.geometry_calls = []
+        self.overrideredirect_calls = []
+        self.attributes_calls = []
+        self.transient_calls = []
+        self.withdraw_calls = 0
+        self.deiconify_calls = 0
+        self.destroyed = False
+        self.grabbed = False
+        self.current_alpha = None
+        _FakeToplevel.created.append(self)
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.created = []
+
+    def geometry(self, value: str) -> None:
+        self.geometry_calls.append(str(value))
+        geometry, position = str(value).split("+", 1)
+        width, height = geometry.split("x", 1)
+        x_pos, y_pos = position.split("+", 1)
+        self.width = int(width)
+        self.height = int(height)
+        self.root_x = int(x_pos)
+        self.root_y = int(y_pos)
+
+    def overrideredirect(self, value) -> None:
+        self.overrideredirect_calls.append(bool(value))
+
+    def attributes(self, *args) -> None:
+        self.attributes_calls.append(tuple(args))
+        if len(args) >= 2 and args[0] == "-alpha":
+            self.current_alpha = float(args[1])
+
+    wm_attributes = attributes
+
+    def transient(self, parent) -> None:
+        self.transient_calls.append(parent)
+
+    def withdraw(self) -> None:
+        self.withdraw_calls += 1
+
+    def deiconify(self) -> None:
+        self.deiconify_calls += 1
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+    def grab_set(self) -> None:
+        self.grabbed = True
+
+    def grab_release(self) -> None:
+        self.grabbed = False
 
 
 class _FakeCheckbutton(_FakeWidget):
@@ -79,6 +172,7 @@ class _FakeTkModule:
     CENTER = "center"
 
     StringVar = _FakeVar
+    Toplevel = _FakeToplevel
 
 
 class _FakeTtkModule:
@@ -125,6 +219,8 @@ class _AvailableFastPlotViewerModule:
             self.resize_calls = []
             self.show_window_calls = 0
             self.closed = False
+            self.viewport_geometry = (320, 240, 420, 260)
+            self.native_input_enabled_calls = []
             if module is not None:
                 module.created_viewers.append(self)
 
@@ -141,8 +237,14 @@ class _AvailableFastPlotViewerModule:
         def close(self) -> None:
             self.closed = True
 
+        def viewport_global_geometry(self):
+            return self.viewport_geometry
+
         def process_events(self) -> None:
             return None
+
+        def set_native_input_enabled(self, enabled) -> None:
+            self.native_input_enabled_calls.append(bool(enabled))
 
     class MatplotlibCanvasProxy:
         def __init__(self, canvas, fast_viewer, **_kwargs) -> None:
@@ -150,6 +252,8 @@ class _AvailableFastPlotViewerModule:
             self.fast_viewer = fast_viewer
             self.sync_callback = None
             self.sync_calls = []
+            self.dispatch_host_overlay_calls = []
+            self.dispatch_host_overlay_hook = None
 
         def set_sync_callback(self, callback) -> None:
             self.sync_callback = callback
@@ -161,20 +265,33 @@ class _AvailableFastPlotViewerModule:
             self.sync_calls.append(dict(kwargs))
             return None
 
+        def dispatch_host_overlay_event(self, event_name, **kwargs) -> None:
+            payload = dict(kwargs)
+            payload["event_name"] = str(event_name)
+            self.dispatch_host_overlay_calls.append(payload)
+            if callable(self.dispatch_host_overlay_hook):
+                self.dispatch_host_overlay_hook(str(event_name), payload)
+
 
 def _build_workflow(
     *,
     fast_plot_viewer_module=None,
     requested_enabled: bool = False,
     manual_pick_armed_factory=None,
+    overlay_model_factory=None,
+    layer_versions_factory=None,
     control_locked: bool = False,
+    integration_drag_active_factory=None,
 ) -> tuple[object, SimpleNamespace, SimpleNamespace]:
+    _FakeToplevel.reset()
     display_view_state = SimpleNamespace(
         fast_viewer_var=_FakeVar(bool(requested_enabled)),
         fast_viewer_checkbutton=_FakeCheckbutton(),
         fast_viewer_status_var=_FakeVar(""),
     )
+    root = _FakeWidget()
     canvas_frame = _FakeWidget()
+    canvas_frame.top_level = root
     matplotlib_canvas = _FakeMatplotlibCanvas()
     set_canvas_calls = []
     if isinstance(fast_plot_viewer_module, _AvailableFastPlotViewerModule):
@@ -204,6 +321,8 @@ def _build_workflow(
         image_artist=object(),
         background_artist=object(),
         overlay_artist=object(),
+        overlay_model_factory=overlay_model_factory,
+        layer_versions_factory=layer_versions_factory,
         display_controls_view_state_factory=lambda: display_view_state,
         fast_toggle_var_factory=lambda: display_view_state.fast_viewer_var,
         canvas_interaction_callbacks_factory=lambda: None,
@@ -214,14 +333,17 @@ def _build_workflow(
             if manual_pick_armed_factory is None
             else manual_pick_armed_factory
         ),
+        integration_drag_active_factory=integration_drag_active_factory,
         requested_enabled=bool(requested_enabled),
         control_locked=bool(control_locked),
     )
     return workflow, display_view_state, SimpleNamespace(
+        root=root,
         canvas_frame=canvas_frame,
         matplotlib_canvas=matplotlib_canvas,
         set_canvas_calls=set_canvas_calls,
         fast_plot_viewer_module=fast_plot_viewer_module,
+        overlay_windows=_FakeToplevel.created,
     )
 
 
@@ -279,6 +401,7 @@ def test_fast_viewer_replaces_plot_area_when_embedding_succeeds() -> None:
 
     viewer = viewer_module.created_viewers[0]
     assert viewer.mount_calls == [refs.canvas_frame]
+    assert viewer.native_input_enabled_calls == []
     assert refs.matplotlib_canvas.widget.winfo_manager() == ""
     assert display_view_state.fast_viewer_status_var.get() == (
         "Fast viewer active in plot area. Matplotlib canvas paused."
@@ -287,6 +410,7 @@ def test_fast_viewer_replaces_plot_area_when_embedding_succeeds() -> None:
     refs.canvas_frame.emit("<Configure>")
 
     assert viewer.resize_calls
+    assert refs.overlay_windows == []
 
 
 def test_fast_viewer_control_can_be_locked_while_viewer_is_active() -> None:
@@ -337,6 +461,37 @@ def test_reset_view_forces_fast_viewer_range_sync_when_active() -> None:
 
     assert proxy.sync_calls
     assert proxy.sync_calls[-1]["force_view_range"] is True
+
+
+def test_fast_viewer_sync_forwards_overlay_model_and_layer_versions() -> None:
+    viewer_module = _AvailableFastPlotViewerModule()
+    workflow, _display_view_state, refs = _build_workflow(
+        fast_plot_viewer_module=viewer_module,
+        requested_enabled=True,
+        overlay_model_factory=lambda: "explicit-overlay",
+        layer_versions_factory=lambda: {"simulation": 5},
+    )
+
+    assert workflow.refresh_runtime_mode(announce=False) is True
+
+    proxy = refs.set_canvas_calls[-1]
+    assert proxy.sync_calls[-1]["overlay_model"] == "explicit-overlay"
+    assert proxy.sync_calls[-1]["layer_versions"] == {"simulation": 5}
+
+
+def test_fast_viewer_embedded_mode_does_not_create_host_overlay_on_press() -> None:
+    viewer_module = _AvailableFastPlotViewerModule()
+    workflow, _display_view_state, refs = _build_workflow(
+        fast_plot_viewer_module=viewer_module,
+        requested_enabled=True,
+    )
+
+    assert workflow.refresh_runtime_mode(announce=False) is True
+
+    proxy = refs.set_canvas_calls[-1]
+    refs.root.emit("<ButtonPress-1>", SimpleNamespace(x_root=332.0, y_root=274.0))
+    assert refs.overlay_windows == []
+    assert proxy.dispatch_host_overlay_calls == []
 
 
 def test_reset_view_draws_matplotlib_when_fast_viewer_is_inactive() -> None:

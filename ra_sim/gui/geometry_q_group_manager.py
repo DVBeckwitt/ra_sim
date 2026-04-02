@@ -2199,6 +2199,14 @@ def draw_runtime_live_geometry_preview_overlay(
     live_preview_match_is_excluded = (
         bindings.live_preview_match_is_excluded or (lambda _entry: False)
     )
+    try:
+        show_pair_connectors = bool(
+            bindings.caked_view_enabled()
+            if callable(bindings.caked_view_enabled)
+            else False
+        )
+    except Exception:
+        show_pair_connectors = False
     gui_overlays.draw_live_geometry_preview_overlay(
         bindings.axis,
         matched_pairs,
@@ -2212,6 +2220,7 @@ def draw_runtime_live_geometry_preview_overlay(
         normalize_hkl_key=normalize_hkl_key,
         live_preview_match_is_excluded=live_preview_match_is_excluded,
         max_display_markers=max_display_markers,
+        show_pair_connectors=show_pair_connectors,
     )
 
 

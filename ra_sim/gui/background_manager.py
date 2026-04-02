@@ -836,6 +836,46 @@ def refresh_runtime_background_backend_status(
     )
 
 
+def apply_background_payload_with_side_effects(
+    background_state,
+    payload: dict[str, object],
+    *,
+    sync_background_runtime_state: Callable[[], None],
+    replace_geometry_manual_pairs_by_background: Callable[[dict], None],
+    invalidate_geometry_manual_pick_cache: Callable[[], None],
+    clear_geometry_manual_undo_stack: Callable[[], None],
+    clear_geometry_fit_undo_stack: Callable[[], None],
+    set_geometry_manual_pick_mode: Callable[[bool], None],
+    set_background_display_data: Callable[[object], None],
+    update_background_slider_defaults: Callable[[object], None],
+    sync_background_theta_controls: Callable[[], None],
+    sync_geometry_fit_background_selection: Callable[[], None],
+    clear_geometry_pick_artists: Callable[[], None],
+    refresh_background_file_status: Callable[[], None],
+    schedule_update: Callable[[], None] | None,
+) -> dict[str, object]:
+    """Apply a loaded background payload and run the dependent GUI side effects."""
+
+    apply_background_state_update(background_state, payload)
+    sync_background_runtime_state()
+    replace_geometry_manual_pairs_by_background({})
+    invalidate_geometry_manual_pick_cache()
+    clear_geometry_manual_undo_stack()
+    clear_geometry_fit_undo_stack()
+    set_geometry_manual_pick_mode(False)
+
+    current_display = background_state.current_background_display
+    set_background_display_data(current_display)
+    update_background_slider_defaults(current_display)
+    sync_background_theta_controls()
+    sync_geometry_fit_background_selection()
+    clear_geometry_pick_artists()
+    refresh_background_file_status()
+    if callable(schedule_update):
+        schedule_update()
+    return payload
+
+
 def load_background_files_with_side_effects(
     background_state,
     file_paths: Sequence[object],
@@ -868,22 +908,23 @@ def load_background_files_with_side_effects(
         read_osc=read_osc,
         select_index=select_index,
     )
-    sync_background_runtime_state()
-    replace_geometry_manual_pairs_by_background({})
-    invalidate_geometry_manual_pick_cache()
-    clear_geometry_manual_undo_stack()
-    clear_geometry_fit_undo_stack()
-    set_geometry_manual_pick_mode(False)
-
-    current_display = background_state.current_background_display
-    set_background_display_data(current_display)
-    update_background_slider_defaults(current_display)
-    sync_background_theta_controls()
-    sync_geometry_fit_background_selection()
-    clear_geometry_pick_artists()
-    refresh_background_file_status()
-    schedule_update()
-    return updated
+    return apply_background_payload_with_side_effects(
+        background_state,
+        updated,
+        sync_background_runtime_state=sync_background_runtime_state,
+        replace_geometry_manual_pairs_by_background=replace_geometry_manual_pairs_by_background,
+        invalidate_geometry_manual_pick_cache=invalidate_geometry_manual_pick_cache,
+        clear_geometry_manual_undo_stack=clear_geometry_manual_undo_stack,
+        clear_geometry_fit_undo_stack=clear_geometry_fit_undo_stack,
+        set_geometry_manual_pick_mode=set_geometry_manual_pick_mode,
+        set_background_display_data=set_background_display_data,
+        update_background_slider_defaults=update_background_slider_defaults,
+        sync_background_theta_controls=sync_background_theta_controls,
+        sync_geometry_fit_background_selection=sync_geometry_fit_background_selection,
+        clear_geometry_pick_artists=clear_geometry_pick_artists,
+        refresh_background_file_status=refresh_background_file_status,
+        schedule_update=schedule_update,
+    )
 
 
 def toggle_runtime_background_visibility(

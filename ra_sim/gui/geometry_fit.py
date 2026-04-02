@@ -1420,7 +1420,8 @@ def build_geometry_fit_runtime_config(
     # The live GUI fit should favor stability over throughput. Native/parallel
     # fitting paths have triggered hard system failures on some machines, so the
     # runtime config clamps geometry fits to a conservative execution profile by
-    # default. Advanced users can opt back in through gui_* overrides in config.
+    # default. When the GUI unsafe-runtime opt-in is enabled, reuse the solver's
+    # configured parallel settings unless explicit gui_* overrides were provided.
     optimizer_cfg_raw = runtime_cfg.get("optimizer", runtime_cfg.get("solver", {})) or {}
     optimizer_cfg = (
         dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
@@ -1434,12 +1435,17 @@ def build_geometry_fit_runtime_config(
     )
 
     gui_allow_unsafe_runtime = runtime_cfg.pop("gui_allow_unsafe_runtime", None)
-    runtime_cfg["allow_unsafe_runtime"] = bool(gui_allow_unsafe_runtime)
+    allow_unsafe_runtime = bool(gui_allow_unsafe_runtime)
+    runtime_cfg["allow_unsafe_runtime"] = allow_unsafe_runtime
 
     gui_workers = optimizer_cfg.pop("gui_workers", None)
+    if gui_workers is None and allow_unsafe_runtime:
+        gui_workers = optimizer_cfg.get("workers", "auto")
     optimizer_cfg["workers"] = gui_workers if gui_workers is not None else 1
 
     gui_parallel_mode = optimizer_cfg.pop("gui_parallel_mode", None)
+    if gui_parallel_mode is None and allow_unsafe_runtime:
+        gui_parallel_mode = optimizer_cfg.get("parallel_mode", "auto")
     optimizer_cfg["parallel_mode"] = (
         str(gui_parallel_mode).strip()
         if gui_parallel_mode is not None
@@ -1447,6 +1453,8 @@ def build_geometry_fit_runtime_config(
     )
 
     gui_worker_numba_threads = optimizer_cfg.pop("gui_worker_numba_threads", None)
+    if gui_worker_numba_threads is None and allow_unsafe_runtime:
+        gui_worker_numba_threads = optimizer_cfg.get("worker_numba_threads", 0)
     optimizer_cfg["worker_numba_threads"] = (
         gui_worker_numba_threads if gui_worker_numba_threads is not None else 1
     )
@@ -2686,11 +2694,14 @@ def prepare_geometry_fit_run(
     ensure_geometry_fit_caked_view: Callable[[], None],
     build_dataset: Callable[..., dict[str, object]],
     build_runtime_config: Callable[[Mapping[str, object]], dict[str, object]],
+    require_selected_var_names: bool = True,
+    require_active_background_in_selection: bool = True,
+    include_all_selected_backgrounds: bool | None = None,
 ) -> GeometryFitPreparationResult:
     """Validate and assemble the manual-pair geometry-fit runtime inputs."""
 
     selected_var_names = [str(name) for name in (var_names or ())]
-    if not selected_var_names:
+    if require_selected_var_names and not selected_var_names:
         return GeometryFitPreparationResult(
             error_text="No geometry parameters are selected for fitting."
         )
@@ -2745,14 +2756,23 @@ def prepare_geometry_fit_run(
                 f"({exc})."
             )
         )
+    selected_background_indices = [int(idx) for idx in selected_background_indices]
+    if not selected_background_indices:
+        return GeometryFitPreparationResult(
+            error_text="Geometry fit unavailable: no fit backgrounds are selected."
+        )
 
-    if current_index not in {int(idx) for idx in selected_background_indices}:
+    if current_index in set(selected_background_indices):
+        primary_index = int(current_index)
+    elif require_active_background_in_selection:
         return GeometryFitPreparationResult(
             error_text=(
                 "Geometry fit unavailable: the active background must be part of "
                 "the fit selection so the overlay can be drawn on the current image."
             )
         )
+    else:
+        primary_index = int(selected_background_indices[0])
 
     joint_background_mode = False
     background_theta_values: list[float] = []
@@ -2776,18 +2796,54 @@ def prepare_geometry_fit_run(
             )
         joint_background_mode = len(selected_background_indices) > 1
         if background_theta_values:
-            fit_params["theta_initial"] = float(background_theta_values[current_index])
+            fit_params["theta_initial"] = float(background_theta_values[primary_index])
     else:
         fit_params["theta_offset"] = 0.0
-        fit_params["theta_initial"] = float(
-            fit_params.get("theta_initial", theta_initial)
-        )
-        background_theta_values = [float(fit_params["theta_initial"])]
+        theta_default = float(fit_params.get("theta_initial", theta_initial))
+        build_all_selected_backgrounds = bool(include_all_selected_backgrounds)
+        if build_all_selected_backgrounds:
+            try:
+                background_theta_values = list(
+                    current_background_theta_values(strict_count=True)
+                )
+            except Exception:
+                try:
+                    background_theta_values = list(
+                        current_background_theta_values(strict_count=False)
+                    )
+                except Exception:
+                    background_theta_values = []
+            required_theta_count = max(selected_background_indices) + 1
+            if len(background_theta_values) < required_theta_count:
+                background_theta_values.extend(
+                    [float(theta_default)]
+                    * (required_theta_count - len(background_theta_values))
+                )
+            normalized_theta_values: list[float] = []
+            for raw_value in background_theta_values:
+                try:
+                    theta_value = float(raw_value)
+                except Exception:
+                    theta_value = float(theta_default)
+                if not np.isfinite(theta_value):
+                    theta_value = float(theta_default)
+                normalized_theta_values.append(float(theta_value))
+            background_theta_values = normalized_theta_values
+            fit_params["theta_initial"] = float(background_theta_values[primary_index])
+        else:
+            fit_params["theta_initial"] = float(theta_default)
+            background_theta_values = [float(fit_params["theta_initial"])]
+
+    build_all_selected_backgrounds = (
+        bool(joint_background_mode)
+        if include_all_selected_backgrounds is None
+        else bool(include_all_selected_backgrounds)
+    )
 
     required_indices = (
         list(selected_background_indices)
-        if joint_background_mode
-        else [int(current_index)]
+        if build_all_selected_backgrounds
+        else [int(primary_index)]
     )
     missing_indices = [
         idx
@@ -2811,27 +2867,32 @@ def prepare_geometry_fit_run(
             )
         )
 
+    def _theta_base_for_index(dataset_index: int) -> float:
+        if build_all_selected_backgrounds:
+            return float(background_theta_values[int(dataset_index)])
+        if joint_background_mode:
+            return float(background_theta_values[int(dataset_index)])
+        return float(fit_params.get("theta_initial", theta_initial))
+
     current_theta_base = (
-        float(background_theta_values[current_index])
-        if joint_background_mode
-        else float(fit_params.get("theta_initial", theta_initial))
+        _theta_base_for_index(primary_index)
     )
     current_dataset = build_dataset(
-        int(current_index),
+        int(primary_index),
         theta_base=float(current_theta_base),
         base_fit_params=fit_params,
         orientation_cfg=dict(orientation_cfg),
     )
     dataset_infos = [current_dataset]
-    if joint_background_mode:
+    if build_all_selected_backgrounds:
         for bg_idx in selected_background_indices:
             idx = int(bg_idx)
-            if idx == current_index:
+            if idx == primary_index:
                 continue
             dataset_infos.append(
                 build_dataset(
                     idx,
-                    theta_base=float(background_theta_values[idx]),
+                    theta_base=float(_theta_base_for_index(idx)),
                     base_fit_params=fit_params,
                     orientation_cfg=dict(orientation_cfg),
                 )
@@ -2954,6 +3015,8 @@ def apply_joint_geometry_fit_runtime_safety_overrides(
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
     if not joint_background_mode:
         return cfg
+    if bool(cfg.get("allow_unsafe_runtime", False)):
+        return cfg
 
     solver_cfg_raw = cfg.get("solver", {})
     solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
@@ -2990,6 +3053,7 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     """Build the lean runtime profile for raw detector-pixel manual point fitting."""
 
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
+    unsafe_runtime_enabled = bool(cfg.get("allow_unsafe_runtime", False))
 
     optimizer_cfg_raw = cfg.get("optimizer", cfg.get("solver", {}))
     optimizer_cfg = (
@@ -3029,9 +3093,21 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     optimizer_cfg["hk0_peak_priority_weight"] = float(
         optimizer_cfg.get("hk0_peak_priority_weight", 6.0)
     )
-    optimizer_cfg["workers"] = 1
-    optimizer_cfg["parallel_mode"] = "off"
-    optimizer_cfg["worker_numba_threads"] = 1
+    optimizer_cfg["workers"] = (
+        optimizer_cfg.get("workers", "auto")
+        if unsafe_runtime_enabled
+        else 1
+    )
+    optimizer_cfg["parallel_mode"] = (
+        str(optimizer_cfg.get("parallel_mode", "auto")).strip()
+        if unsafe_runtime_enabled
+        else "off"
+    )
+    optimizer_cfg["worker_numba_threads"] = (
+        optimizer_cfg.get("worker_numba_threads", 0)
+        if unsafe_runtime_enabled
+        else 1
+    )
     cfg["optimizer"] = optimizer_cfg
     cfg["solver"] = optimizer_cfg
 
@@ -3045,8 +3121,8 @@ def apply_manual_point_geometry_fit_runtime_overrides(
     seed_search_cfg["n_global"] = 0
     seed_search_cfg["n_jitter"] = 0
     cfg["seed_search"] = seed_search_cfg
-    cfg["use_numba"] = False
-    cfg["allow_unsafe_runtime"] = False
+    cfg["use_numba"] = bool(cfg.get("use_numba", True)) if unsafe_runtime_enabled else False
+    cfg["allow_unsafe_runtime"] = bool(unsafe_runtime_enabled)
 
     discrete_modes_cfg_raw = cfg.get("discrete_modes", {})
     discrete_modes_cfg = (

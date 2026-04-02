@@ -931,17 +931,10 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
         (view_state.controls_panel, 1),
         (view_state.figure_panel, 3),
     ]
-    assert isinstance(view_state.session_summary_frame, _FakeFrame)
-    assert view_state.session_summary_var.get().startswith("Background: not loaded")
-    assert isinstance(view_state.workflow_checklist_frame, _FakeFrame)
-    assert set(view_state.workflow_checklist_status_vars) == {
-        "backgrounds",
-        "cif",
-        "fit_set",
-        "manual_pairs",
-        "geometry_fit",
-        "analysis",
-    }
+    assert view_state.session_summary_frame is None
+    assert view_state.session_summary_var is None
+    assert view_state.workflow_checklist_frame is None
+    assert view_state.workflow_checklist_status_vars == {}
     assert view_state.mode_banner_frame is None
     assert view_state.mode_banner_title_var is None
     assert isinstance(view_state.view_switcher_frame, _FakeFrame)
@@ -3191,3 +3184,4 @@ def test_populate_app_shell_quick_controls_supports_check_and_button_controls(
     button_control["button"].command()
 
     assert events == [("log", True), "auto-match"]
+    assert view_state.quick_controls_more_button is None

@@ -359,6 +359,62 @@ def test_prepare_geometry_fit_run_reports_missing_manual_pairs_by_background_nam
     )
 
 
+def test_prepare_geometry_fit_run_can_prepare_multi_background_datasets_without_fit_vars() -> None:
+    built_indices: list[int] = []
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 6.0, "theta_offset": 0.0},
+        var_names=(),
+        fit_config={},
+        osc_files=["C:/data/bg0.osc", "C:/data/bg1.osc", "C:/data/bg2.osc"],
+        current_background_index=2,
+        theta_initial=6.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [3.0, 4.0, 5.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
+            built_indices.append(int(background_index))
+            or {
+                "dataset_index": int(background_index),
+                "pair_count": 1,
+                "group_count": 1,
+                "summary_line": f"bg[{int(background_index)}]",
+                "spec": {
+                    "dataset_index": int(background_index),
+                    "theta_initial": float(theta_base),
+                },
+                "orientation_choice": {"label": "identity"},
+                "orientation_diag": {"pairs": 1},
+                "measured_for_fit": [],
+                "experimental_image_for_fit": f"image-{int(background_index)}",
+                "initial_pairs_display": [],
+                "native_background": np.zeros((2, 2)),
+            }
+        ),
+        build_runtime_config=lambda fit_params: dict(fit_params),
+        require_selected_var_names=False,
+        require_active_background_in_selection=False,
+        include_all_selected_backgrounds=True,
+    )
+
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    assert result.prepared_run.selected_background_indices == [0, 1]
+    assert result.prepared_run.current_dataset["dataset_index"] == 0
+    assert result.prepared_run.dataset_specs == [
+        {"dataset_index": 0, "theta_initial": 3.0},
+        {"dataset_index": 1, "theta_initial": 4.0},
+    ]
+    assert result.prepared_run.joint_background_mode is False
+    assert built_indices == [0, 1]
+
+
 def test_prepare_geometry_fit_run_blocks_lattice_refinement_by_default() -> None:
     blocked = geometry_fit.prepare_geometry_fit_run(
         params={"theta_initial": 4.0, "a": 4.2},
@@ -1946,6 +2002,28 @@ def test_apply_joint_geometry_fit_runtime_safety_overrides_only_changes_joint_ru
     assert base_cfg["identifiability"]["enabled"] is True
 
 
+def test_apply_joint_geometry_fit_runtime_safety_overrides_honors_unsafe_runtime_opt_in() -> None:
+    base_cfg = {
+        "solver": {
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
+            "restarts": 4,
+        },
+        "identifiability": {"enabled": True},
+        "use_numba": True,
+        "allow_unsafe_runtime": True,
+        "bounds": {"gamma": [0.0, 1.0]},
+    }
+
+    changed = geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
+        base_cfg,
+        joint_background_mode=True,
+    )
+
+    assert changed == base_cfg
+
+
 def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_path() -> None:
     base_cfg = {
         "solver": {
@@ -2041,6 +2119,32 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert "full_beam_polish" not in changed
     assert "ridge_refinement" not in changed
     assert "image_refinement" not in changed
+
+
+def test_apply_manual_point_geometry_fit_runtime_overrides_preserves_unsafe_parallel_settings() -> None:
+    base_cfg = {
+        "solver": {
+            "workers": "auto",
+            "parallel_mode": "auto",
+            "worker_numba_threads": 0,
+            "loss": "soft_l1",
+        },
+        "use_numba": True,
+        "allow_unsafe_runtime": True,
+    }
+
+    changed = geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
+        base_cfg,
+        joint_background_mode=False,
+    )
+
+    assert changed["solver"]["manual_point_fit_mode"] is True
+    assert changed["solver"]["workers"] == "auto"
+    assert changed["solver"]["parallel_mode"] == "auto"
+    assert changed["solver"]["worker_numba_threads"] == 0
+    assert changed["solver"]["loss"] == "linear"
+    assert changed["use_numba"] is True
+    assert changed["allow_unsafe_runtime"] is True
 
 
 def test_prepare_geometry_fit_run_rejects_dataset_without_orientation_anchor_pairs() -> None:

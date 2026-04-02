@@ -69,10 +69,10 @@ _WORKFLOW_CHECKLIST_ITEMS = (
 )
 _DATASET_CONTEXT_FIELDS = (
     ("background", "Background"),
-    ("theta_i", "theta_i"),
-    ("theta", "theta"),
-    ("fit", "Fit"),
-    ("model", "Model"),
+    ("theta_i", "Acquisition"),
+    ("theta", "Geometry"),
+    ("fit", "Simulation"),
+    ("model", "Structure"),
 )
 _VIEW_MODE_CHOICES = (
     ("detector", "Detector"),
@@ -1036,59 +1036,12 @@ def create_app_shell(
     main_pane.add(controls_panel, weight=1)
     main_pane.add(figure_panel, weight=3)
 
-    session_summary_frame = ttk.LabelFrame(
-        controls_panel,
-        text="Workflow Checklist",
-        padding=(8, 6),
-    )
-    session_summary_frame.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(6, 0))
-    session_summary_var = tk.StringVar(
-        value=(
-            "Background: not loaded\n"
-            "CIF: not loaded\n"
-            "Fit backgrounds: current\n"
-            "View: Detector\n"
-            "Fit quality: waiting for fit"
-        )
-    )
-    session_summary_label = ttk.Label(
-        session_summary_frame,
-        textvariable=session_summary_var,
-        justify=tk.LEFT,
-        anchor=tk.W,
-        wraplength=520,
-    )
-    workflow_checklist_frame = ttk.Frame(session_summary_frame)
-    workflow_checklist_frame.pack(fill=tk.X)
-    workflow_checklist_frame.columnconfigure(0, weight=1)
-    workflow_checklist_frame.columnconfigure(1, weight=1)
+    session_summary_frame = None
+    session_summary_var = None
+    session_summary_label = None
+    workflow_checklist_frame = None
     workflow_checklist_status_vars: dict[str, tk.StringVar] = {}
     workflow_checklist_status_labels: dict[str, ttk.Label] = {}
-    for idx, (key, label_text) in enumerate(_WORKFLOW_CHECKLIST_ITEMS):
-        item_frame = ttk.Frame(workflow_checklist_frame, padding=(0, 2))
-        item_frame.grid(
-            row=int(idx // 2),
-            column=int(idx % 2),
-            sticky=tk.EW,
-            padx=(0, 8) if idx % 2 == 0 else 0,
-            pady=2,
-        )
-        ttk.Label(
-            item_frame,
-            text=f"{label_text}:",
-        ).pack(side=tk.LEFT)
-        status_var = tk.StringVar(
-            value="Not run" if key == "geometry_fit" else "Missing"
-        )
-        status_label = ttk.Label(
-            item_frame,
-            textvariable=status_var,
-            anchor=tk.W,
-            width=16,
-        )
-        status_label.pack(side=tk.LEFT, padx=(6, 0))
-        workflow_checklist_status_vars[key] = status_var
-        workflow_checklist_status_labels[key] = status_label
 
     run_status_frame = ttk.Frame(figure_panel, padding=(10, 8, 10, 4))
     run_status_frame.pack(side=tk.TOP, fill=tk.X)
@@ -1123,7 +1076,13 @@ def create_app_shell(
         row = ttk.Frame(dataset_summary_frame)
         row.pack(fill=tk.X, pady=1)
         ttk.Label(row, text=f"{label_text}:").pack(side=tk.LEFT)
-        value_label = ttk.Label(row, text="n/a", anchor=tk.W, justify=tk.LEFT)
+        value_label = ttk.Label(
+            row,
+            text="n/a",
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=420,
+        )
         value_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
         dataset_value_labels[key] = value_label
 

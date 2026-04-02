@@ -304,6 +304,19 @@ def test_fit_mosaic_shape_parameters_recovers_shape_parameters_and_uses_dataset_
     assert result.cost_reduction >= 0.20
     assert np.allclose(result.x, np.asarray(true_shape, dtype=np.float64), atol=1.0e-9)
     assert {round(value, 2) for value in recorded_theta_values} >= {3.0, 3.35}
+    assert result.final_residual_rms >= 0.0
+    assert result.parameter_bounds["sigma_mosaic_deg"]["final"] == pytest.approx(
+        true_shape[0]
+    )
+    debug_summary = result.mosaic_fit_debug_summary
+    assert debug_summary["inputs"]["dataset_count"] == 2
+    assert debug_summary["acceptance"]["passed"] is True
+    assert debug_summary["solver"]["active_parameters"] == [
+        "sigma_mosaic_deg",
+        "gamma_mosaic_deg",
+        "eta",
+    ]
+    assert debug_summary["inputs"]["prepared_datasets"][0]["roi_count"] == 4
 
 
 def test_fit_mosaic_shape_parameters_refines_dataset_theta_from_point_matches(

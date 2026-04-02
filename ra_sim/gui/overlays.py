@@ -166,6 +166,39 @@ def _draw_initial_q_group_lines(
             geometry_pick_artists.append(line)
 
 
+def _plot_pair_label_text(
+    ax: Any,
+    label: str,
+    *,
+    start_xy: tuple[float, float] | None,
+    end_xy: tuple[float, float] | None,
+    color: str,
+    zorder: int = 6,
+) -> object | None:
+    if start_xy is not None and end_xy is not None:
+        anchor = (
+            0.5 * float(start_xy[0] + end_xy[0]),
+            0.5 * float(start_xy[1] + end_xy[1]),
+        )
+    elif end_xy is not None:
+        anchor = (float(end_xy[0]), float(end_xy[1]))
+    elif start_xy is not None:
+        anchor = (float(start_xy[0]), float(start_xy[1]))
+    else:
+        return None
+    return ax.text(
+        float(anchor[0]),
+        float(anchor[1]),
+        label,
+        color=color,
+        fontsize=8,
+        ha="center",
+        va="center",
+        zorder=zorder,
+        bbox=dict(facecolor="white", alpha=0.82, edgecolor="none", pad=1.0),
+    )
+
+
 def draw_geometry_fit_overlay(
     ax: Any,
     overlay_records: Sequence[dict[str, object]] | None,
@@ -414,6 +447,7 @@ def draw_initial_geometry_pairs_overlay(
     clear_geometry_pick_artists: Callable[..., None],
     draw_idle: Callable[[], None],
     max_display_markers: int = 120,
+    show_pair_connectors: bool = True,
 ) -> None:
     """Draw only the initially selected simulation/background peak pairs."""
 
@@ -460,7 +494,7 @@ def draw_initial_geometry_pairs_overlay(
             )
             geometry_pick_artists.append(bg_pt)
 
-        if sim_display is not None and bg_display is not None:
+        if sim_display is not None and bg_display is not None and show_pair_connectors:
             link = ax.annotate(
                 hkl_label,
                 xy=(float(bg_display[0]), float(bg_display[1])),
@@ -479,6 +513,17 @@ def draw_initial_geometry_pairs_overlay(
                 zorder=6,
             )
             geometry_pick_artists.append(link)
+        else:
+            label = _plot_pair_label_text(
+                ax,
+                hkl_label,
+                start_xy=sim_display,
+                end_xy=bg_display,
+                color="#636e72",
+                zorder=6,
+            )
+            if label is not None:
+                geometry_pick_artists.append(label)
 
     draw_idle()
 
@@ -493,6 +538,7 @@ def draw_live_geometry_preview_overlay(
     normalize_hkl_key: Callable[[object], tuple[int, int, int] | None],
     live_preview_match_is_excluded: Callable[[dict[str, object]], bool],
     max_display_markers: int = 120,
+    show_pair_connectors: bool = True,
 ) -> None:
     """Draw the current live auto-match preview without disturbing fit markers."""
 
@@ -543,34 +589,44 @@ def draw_live_geometry_preview_overlay(
             zorder=5,
             alpha=line_alpha,
         )
-        link, = ax.plot(
-            [float(sim_col), float(bg_col)],
-            [float(sim_row), float(bg_row)],
-            color=line_color,
-            linestyle="--" if excluded else ":",
-            linewidth=1.0,
-            alpha=line_alpha,
-            zorder=4,
-        )
-        geometry_preview_artists.extend([sim_pt, bg_pt, link])
-
-        label = ax.annotate(
-            label_text,
-            xy=(float(bg_col), float(bg_row)),
-            xytext=(float(sim_col), float(sim_row)),
-            color=line_color,
-            fontsize=8,
-            ha="center",
-            va="center",
-            arrowprops=dict(
-                arrowstyle="->",
+        geometry_preview_artists.extend([sim_pt, bg_pt])
+        if show_pair_connectors:
+            link, = ax.plot(
+                [float(sim_col), float(bg_col)],
+                [float(sim_row), float(bg_row)],
                 color=line_color,
-                lw=1.0,
                 linestyle="--" if excluded else ":",
-                alpha=0.45 if excluded else 0.8,
-            ),
-            zorder=6,
-        )
+                linewidth=1.0,
+                alpha=line_alpha,
+                zorder=4,
+            )
+            geometry_preview_artists.append(link)
+            label = ax.annotate(
+                label_text,
+                xy=(float(bg_col), float(bg_row)),
+                xytext=(float(sim_col), float(sim_row)),
+                color=line_color,
+                fontsize=8,
+                ha="center",
+                va="center",
+                arrowprops=dict(
+                    arrowstyle="->",
+                    color=line_color,
+                    lw=1.0,
+                    linestyle="--" if excluded else ":",
+                    alpha=0.45 if excluded else 0.8,
+                ),
+                zorder=6,
+            )
+        else:
+            label = _plot_pair_label_text(
+                ax,
+                label_text,
+                start_xy=(float(sim_col), float(sim_row)),
+                end_xy=(float(bg_col), float(bg_row)),
+                color=line_color,
+                zorder=6,
+            )
         geometry_preview_artists.append(label)
 
     draw_idle()

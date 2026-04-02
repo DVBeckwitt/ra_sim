@@ -1530,6 +1530,9 @@ def _draw_initial_geometry_pairs_overlay(
         clear_geometry_pick_artists=_clear_geometry_pick_artists,
         draw_idle=_request_overlay_canvas_redraw,
         max_display_markers=max_display_markers,
+        show_pair_connectors=bool(
+            analysis_view_controls_view_state.show_caked_2d_var.get()
+        ),
     )
 
 
@@ -1715,6 +1718,7 @@ FAST_VIEWER_DRAW_INTERVAL_S = 0.08
 FAST_VIEWER_STARTUP_ENABLED = gui_runtime_display_acceleration.parse_fast_viewer_env_flag(
     os.environ.get("RA_SIM_FAST_VIEWER", "1")
 )
+FAST_VIEWER_EMBEDDED_SURFACE_ENABLED = False
 
 global_image_buffer = np.zeros((image_size, image_size), dtype=np.float64)
 simulation_runtime_state.unscaled_image = None
@@ -1736,11 +1740,8 @@ background_display = ax.imshow(
     origin='upper'
 )
 
-highlight_cmap = ListedColormap(
-    [
-        (0.0, 0.0, 0.0, 0.0),
-        (0.0, 1.0, 1.0, 0.35),
-    ]
+highlight_cmap = gui_integration_range_drag.create_integration_region_highlight_cmap(
+    listed_colormap_cls=ListedColormap,
 )
 integration_region_overlay = ax.imshow(
     np.zeros_like(global_image_buffer),
@@ -1768,6 +1769,76 @@ def _set_runtime_canvas(target_canvas) -> None:
     canvas = target_canvas
 
 
+def _fast_viewer_transient_artist_groups() -> tuple[object, ...]:
+    runtime_state = globals().get("geometry_runtime_state")
+    drag_bindings_factory = globals().get("integration_range_drag_runtime_bindings_factory")
+    drag_artists: tuple[object, ...] = ()
+    if callable(drag_bindings_factory):
+        try:
+            drag_bindings = drag_bindings_factory()
+        except Exception:
+            drag_bindings = None
+        if drag_bindings is not None:
+            drag_artists = (
+                getattr(drag_bindings, "drag_select_rect", None),
+                getattr(drag_bindings, "integration_region_rect", None),
+            )
+    return (
+        drag_artists,
+        getattr(runtime_state, "pick_artists", ()),
+        getattr(runtime_state, "preview_artists", ()),
+        getattr(runtime_state, "manual_preview_artists", ()),
+        getattr(runtime_state, "qr_cylinder_overlay_artists", ()),
+    )
+
+
+def _fast_viewer_overlay_model():
+    drag_state = globals().get("integration_range_drag_state")
+    return gui_fast_plot_viewer.build_artist_overlay_model(
+        transient_artists=_fast_viewer_transient_artist_groups(),
+        transient_curve_specs=getattr(
+            drag_state,
+            "_fast_viewer_curve_specs",
+            (),
+        ),
+        suppress_overlay_image=bool(
+            getattr(drag_state, "_fast_viewer_suppress_overlay_image", False)
+        ),
+    )
+
+
+def _fast_viewer_layer_versions() -> dict[str, object]:
+    analysis_controls = globals().get("analysis_view_controls_view_state")
+    show_caked_var = getattr(analysis_controls, "show_caked_2d_var", None)
+    try:
+        show_caked = bool(show_caked_var.get()) if show_caked_var is not None else False
+    except Exception:
+        show_caked = False
+
+    return {
+        "background": (
+            bool(getattr(background_runtime_state, "visible", False)),
+            int(getattr(background_runtime_state, "current_background_index", -1)),
+            int(getattr(background_runtime_state, "backend_rotation_k", 0)) % 4,
+            bool(getattr(background_runtime_state, "backend_flip_x", False)),
+            bool(getattr(background_runtime_state, "backend_flip_y", False)),
+            id(getattr(background_runtime_state, "current_background_display", None)),
+        ),
+        "simulation": (
+            "caked" if show_caked else "detector",
+            getattr(simulation_runtime_state, "last_unscaled_image_signature", None),
+            getattr(simulation_runtime_state, "last_analysis_signature", None),
+            getattr(simulation_runtime_state, "last_simulation_signature", None),
+            tuple(getattr(simulation_runtime_state, "last_caked_extent", ()) or ()),
+        ),
+        "overlay": getattr(
+            globals().get("integration_range_drag_state"),
+            "_fast_viewer_overlay_version",
+            None,
+        ),
+    }
+
+
 fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewer_workflow(
     fast_plot_viewer_module=gui_fast_plot_viewer,
     tk_module=tk,
@@ -1782,6 +1853,8 @@ fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewe
         globals().get("center_marker"),
         globals().get("selected_peak_marker"),
     ),
+    overlay_model_factory=_fast_viewer_overlay_model,
+    layer_versions_factory=_fast_viewer_layer_versions,
     display_controls_view_state_factory=lambda: globals().get("display_controls_view_state"),
     fast_toggle_var_factory=lambda: getattr(
         globals().get("display_controls_view_state"),
@@ -1837,8 +1910,15 @@ fast_viewer_workflow = gui_runtime_display_acceleration.build_runtime_fast_viewe
         if callable(globals().get("_defer_nonessential_redraw"))
         else False
     ),
+    integration_drag_active_factory=lambda: getattr(
+        globals().get("integration_range_drag_state"),
+        "active",
+        False,
+    ),
     draw_interval_s=FAST_VIEWER_DRAW_INTERVAL_S,
-    requested_enabled=FAST_VIEWER_STARTUP_ENABLED,
+    requested_enabled=bool(
+        FAST_VIEWER_STARTUP_ENABLED and FAST_VIEWER_EMBEDDED_SURFACE_ENABLED
+    ),
     control_locked=True,
 )
 _fast_viewer_active = fast_viewer_workflow.active
@@ -4042,7 +4122,9 @@ gui_views.create_display_controls(
     scale_factor_step=scale_factor_step,
     on_apply_background_limits=_apply_background_limits,
     on_apply_simulation_limits=_apply_simulation_limits,
-    fast_viewer_enabled=FAST_VIEWER_STARTUP_ENABLED,
+    fast_viewer_enabled=bool(
+        FAST_VIEWER_STARTUP_ENABLED and FAST_VIEWER_EMBEDDED_SURFACE_ENABLED
+    ),
     on_toggle_fast_viewer=_toggle_fast_viewer,
     fast_viewer_status_text="Replace the plot area with a faster viewer.",
 )
@@ -5301,6 +5383,138 @@ def _geometry_fit_cache_status(
     return ("Stale", str(stale_reason))
 
 
+def _build_current_dataset_acquisition_text(
+    *,
+    theta_base_value: float,
+    theta_effective_value: float,
+    shared_theta: bool,
+) -> str:
+    """Summarize the active acquisition angles for the selected background."""
+
+    parts: list[str] = []
+    if np.isfinite(theta_base_value):
+        parts.append(f"theta_i={theta_base_value:.4f} deg")
+    else:
+        parts.append("theta_i=n/a")
+
+    if np.isfinite(theta_effective_value):
+        delta = theta_effective_value - theta_base_value
+        if np.isfinite(theta_base_value) and abs(delta) > 1.0e-6:
+            mode = "shared offset" if shared_theta else "fit-adjusted"
+            parts.append(f"theta={theta_effective_value:.4f} deg ({delta:+.4f}, {mode})")
+        else:
+            parts.append(f"theta={theta_effective_value:.4f} deg")
+    else:
+        parts.append("theta=n/a")
+    return " | ".join(parts)
+
+
+def _build_current_dataset_geometry_text(
+    *,
+    background_index: int,
+    selected_indices: Sequence[int],
+    freshness_status: str,
+) -> str:
+    """Summarize how the selected background participates in geometry fitting."""
+
+    try:
+        selected_index_set = {int(idx) for idx in selected_indices}
+    except Exception:
+        selected_index_set = set()
+
+    if not selected_index_set:
+        inclusion_text = "geometry fit set not configured"
+    elif int(background_index) in selected_index_set:
+        inclusion_text = "included in geometry fit"
+    else:
+        inclusion_text = "excluded from geometry fit"
+
+    try:
+        pair_count = len(_geometry_manual_pairs_for_index(int(background_index)))
+    except Exception:
+        pair_count = 0
+    try:
+        group_count = int(_geometry_manual_pair_group_count(int(background_index)))
+    except Exception:
+        group_count = 0
+
+    pair_text = f"{pair_count} manual pairs"
+    if group_count > 0 and group_count != pair_count:
+        pair_text += f" ({group_count} groups)"
+
+    if str(freshness_status).strip().lower() == "not run":
+        cache_text = "geometry fit not run"
+    else:
+        cache_text = f"cache {str(freshness_status).strip().lower()}"
+    return " | ".join((inclusion_text, pair_text, cache_text))
+
+
+def _build_current_dataset_simulation_text(*, view_text: str) -> str:
+    """Summarize the live simulation controls that shape the current dataset."""
+
+    resolution_control = globals().get("resolution_var")
+    optics_control = globals().get("optics_mode_var")
+
+    try:
+        sample_mode = str(resolution_control.get()).strip()
+    except Exception:
+        sample_mode = ""
+    if not sample_mode:
+        sample_mode = "Custom"
+
+    try:
+        optics_text = _normalize_optics_mode_label(optics_control.get())
+    except Exception:
+        optics_text = "Unknown"
+
+    sample_count = int(max(1, getattr(simulation_runtime_state, "num_samples", 1)))
+    try:
+        sf_text = gui_controllers.format_structure_factor_pruning_status(
+            simulation_runtime_state.sf_prune_stats,
+            prune_bias=current_sf_prune_bias(),
+        )
+    except Exception:
+        sf_text = "SF pruning unavailable"
+    return (
+        f"{view_text} | optics {optics_text} | "
+        f"sampling {sample_mode} ({sample_count:,} samples) | {sf_text}"
+    )
+
+
+def _build_current_dataset_structure_text() -> str:
+    """Summarize the active CIF model and phase weights for the current dataset."""
+
+    try:
+        primary_path = str(_current_primary_cif_path()).strip()
+    except Exception:
+        primary_path = ""
+    if not primary_path:
+        return "No CIF loaded"
+
+    secondary_path = str(getattr(structure_model_state, "cif_file2", "") or "").strip()
+    phase_parts = [Path(primary_path).name]
+    if secondary_path:
+        phase_parts.append(Path(secondary_path).name)
+
+    weight1_control = globals().get("weight1_var")
+    weight2_control = globals().get("weight2_var")
+    try:
+        weight1_value = float(weight1_control.get())
+    except Exception:
+        weight1_value = 1.0
+    try:
+        weight2_value = float(weight2_control.get())
+    except Exception:
+        weight2_value = 0.0
+
+    if secondary_path:
+        return (
+            f"{' + '.join(phase_parts)} | "
+            f"phase weights {weight1_value:.2f}/{weight2_value:.2f}"
+        )
+    return f"{phase_parts[0]} | phase weight {weight1_value:.2f}"
+
+
 def _refresh_session_summary_panel() -> None:
     """Refresh the always-visible session summary shown above the tabs."""
 
@@ -5346,16 +5560,10 @@ def _refresh_session_summary_panel() -> None:
     except Exception:
         theta_effective_value = float("nan")
     shared_theta = _geometry_fit_uses_shared_theta_offset(selected_indices)
-    theta_base_text = (
-        f"{theta_base_value:.4f} deg" if np.isfinite(theta_base_value) else "n/a"
-    )
-    theta_effective_text = (
-        f"{theta_effective_value:.4f} deg"
-        if shared_theta and np.isfinite(theta_effective_value)
-        else "n/a"
-    )
-    fit_inclusion_text = (
-        "Included" if int(bg_idx) in {int(idx) for idx in selected_indices} else "Excluded"
+    acquisition_text = _build_current_dataset_acquisition_text(
+        theta_base_value=theta_base_value,
+        theta_effective_value=theta_effective_value,
+        shared_theta=shared_theta,
     )
 
     freshness_status, freshness_detail = _geometry_fit_cache_status(
@@ -5372,6 +5580,13 @@ def _refresh_session_summary_panel() -> None:
         if str(text).strip()
     ]
     fit_health_secondary_text = " | ".join(fit_health_secondary_parts)
+    geometry_text = _build_current_dataset_geometry_text(
+        background_index=bg_idx,
+        selected_indices=selected_indices,
+        freshness_status=freshness_status,
+    )
+    simulation_text = _build_current_dataset_simulation_text(view_text=view_text)
+    structure_text = _build_current_dataset_structure_text()
 
     manual_pair_total = 0
     try:
@@ -5416,10 +5631,10 @@ def _refresh_session_summary_panel() -> None:
         app_shell_view_state,
         {
             "background": background_text,
-            "theta_i": theta_base_text,
-            "theta": theta_effective_text,
-            "fit": fit_inclusion_text,
-            "model": cif_text,
+            "theta_i": acquisition_text,
+            "theta": geometry_text,
+            "fit": simulation_text,
+            "model": structure_text,
         },
     )
     gui_views.set_app_shell_fit_health_text(
@@ -8858,6 +9073,48 @@ def _collect_full_gui_state_snapshot() -> dict[str, object]:
     )
 
 
+def _load_background_files_for_import_state(
+    file_paths: list[str],
+    select_index: int = 0,
+) -> None:
+    updated_state = gui_state_io.load_background_files_for_state(
+        file_paths,
+        osc_files=background_runtime_state.osc_files,
+        background_images=background_runtime_state.background_images,
+        background_images_native=background_runtime_state.background_images_native,
+        background_images_display=background_runtime_state.background_images_display,
+        select_index=select_index,
+        display_rotate_k=DISPLAY_ROTATE_K,
+        read_osc=read_osc,
+        expected_shape=(int(image_size), int(image_size)),
+    )
+    if updated_state is None:
+        return
+    gui_background_manager.apply_background_payload_with_side_effects(
+        background_runtime_state,
+        updated_state,
+        sync_background_runtime_state=_sync_background_runtime_state,
+        replace_geometry_manual_pairs_by_background=(
+            _replace_geometry_manual_pairs_by_background
+        ),
+        invalidate_geometry_manual_pick_cache=_invalidate_geometry_manual_pick_cache,
+        clear_geometry_manual_undo_stack=_clear_geometry_manual_undo_stack,
+        clear_geometry_fit_undo_stack=_clear_geometry_fit_undo_stack,
+        set_geometry_manual_pick_mode=_set_geometry_manual_pick_mode,
+        set_background_display_data=background_display.set_data,
+        update_background_slider_defaults=_update_background_slider_defaults,
+        sync_background_theta_controls=(
+            background_theta_runtime.sync_background_theta_controls
+        ),
+        sync_geometry_fit_background_selection=(
+            background_theta_runtime.sync_geometry_fit_background_selection
+        ),
+        clear_geometry_pick_artists=_clear_geometry_pick_artists,
+        refresh_background_file_status=_refresh_background_status,
+        schedule_update=None,
+    )
+
+
 def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
 
     if not isinstance(snapshot, dict):
@@ -8869,12 +9126,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         gui_state_io.apply_gui_state_files(
             snapshot.get("files", {}),
             apply_primary_cif_path=_apply_primary_cif_path,
-            load_background_files=(
-                lambda file_paths, select_index: background_runtime_callbacks.load_files(
-                    file_paths,
-                    select_index,
-                )
-            ),
+            load_background_files=_load_background_files_for_import_state,
         )
     )
 
@@ -12506,7 +12758,7 @@ def _legacy_auto_match_on_fit_geometry_click():
 
 
 def on_fit_mosaic_click():
-    """Run the geometry-fit-cached detector-shape mosaic optimizer."""
+    """Run the detector-shape mosaic optimizer from cached or live fit datasets."""
 
     miller_array = np.asarray(miller, dtype=np.float64)
     if miller_array.ndim != 2 or miller_array.shape[1] != 3 or miller_array.size == 0:
@@ -12553,46 +12805,6 @@ def on_fit_mosaic_click():
     except Exception:
         shared_theta_mode = bool(_geometry_fit_uses_shared_theta_offset())
 
-    stale_reason = gui_geometry_fit.geometry_fit_dataset_cache_stale_reason(
-        cache_payload,
-        selected_background_indices=selected_background_indices,
-        current_background_index=int(background_runtime_state.current_background_index),
-        joint_background_mode=bool(shared_theta_mode),
-        background_theta_values=background_theta_values,
-    )
-    if stale_reason:
-        progress_label_mosaic.config(
-            text=f"Mosaic shape fit unavailable: {stale_reason}"
-        )
-        return
-
-    dataset_specs = []
-    for spec in cache_payload.get("dataset_specs", []) if isinstance(cache_payload, dict) else []:
-        if isinstance(spec, dict):
-            dataset_specs.append(gui_geometry_fit.copy_geometry_fit_state_value(dict(spec)))
-    if not dataset_specs:
-        progress_label_mosaic.config(
-            text="Mosaic shape fit unavailable: run geometry fit first."
-        )
-        return
-    missing_experimental_images = [
-        str(spec.get("label", spec.get("dataset_index", "?")))
-        for spec in dataset_specs
-        if not isinstance(spec.get("experimental_image"), np.ndarray)
-    ]
-    if missing_experimental_images:
-        progress_label_mosaic.config(
-            text=(
-                "Mosaic shape fit unavailable: cached experimental images are "
-                "missing. Rerun geometry fit first."
-            )
-        )
-        return
-
-    theta_mode = "single"
-    if len(dataset_specs) > 1:
-        theta_mode = "shared_offset" if shared_theta_mode else "per_dataset"
-
     params = {
         'a':             a_var.get(),
         'c':             c_var.get(),
@@ -12621,6 +12833,141 @@ def on_fit_mosaic_click():
         'pixel_size':     pixel_size_m,
         'pixel_size_m':   pixel_size_m,
     }
+
+    def _format_mosaic_unavailable(reason: object, *, fallback: str) -> str:
+        text = " ".join(str(reason).split())
+        if not text:
+            text = str(fallback)
+        prefix = "Geometry fit unavailable:"
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+        return f"Mosaic shape fit unavailable: {text}"
+
+    def _copy_dataset_specs(raw_specs: object) -> list[dict[str, object]]:
+        copied_specs: list[dict[str, object]] = []
+        for spec in raw_specs if isinstance(raw_specs, list) else []:
+            if isinstance(spec, dict):
+                copied_specs.append(
+                    gui_geometry_fit.copy_geometry_fit_state_value(dict(spec))
+                )
+        return copied_specs
+
+    stale_reason = gui_geometry_fit.geometry_fit_dataset_cache_stale_reason(
+        cache_payload,
+        selected_background_indices=selected_background_indices,
+        current_background_index=int(background_runtime_state.current_background_index),
+        joint_background_mode=bool(shared_theta_mode),
+        background_theta_values=background_theta_values,
+    )
+    dataset_specs = []
+    if stale_reason is None:
+        dataset_specs = _copy_dataset_specs(
+            cache_payload.get("dataset_specs", []) if isinstance(cache_payload, dict) else []
+        )
+        cached_dataset_indices = []
+        for spec in dataset_specs:
+            try:
+                cached_dataset_indices.append(int(spec.get("dataset_index")))
+            except Exception:
+                cached_dataset_indices.append(None)
+        expected_dataset_indices = [int(idx) for idx in selected_background_indices]
+        if cached_dataset_indices != expected_dataset_indices:
+            stale_reason = "cached datasets do not match the current fit-background selection."
+            dataset_specs = []
+        elif any(
+            not isinstance(spec.get("experimental_image"), np.ndarray)
+            for spec in dataset_specs
+        ):
+            stale_reason = "cached experimental images are missing."
+            dataset_specs = []
+
+    prepared_dataset_run = None
+    if not dataset_specs:
+        manual_dataset_bindings = geometry_fit_manual_dataset_bindings_factory()
+        prepared_result = gui_geometry_fit.prepare_geometry_fit_run(
+            params=params,
+            var_names=(),
+            fit_config=fit_config,
+            osc_files=manual_dataset_bindings.osc_files,
+            current_background_index=int(
+                manual_dataset_bindings.current_background_index
+            ),
+            theta_initial=theta_initial_var.get(),
+            preserve_live_theta=False,
+            apply_geometry_fit_background_selection=(
+                _apply_geometry_fit_background_selection
+            ),
+            current_geometry_fit_background_indices=(
+                _current_geometry_fit_background_indices
+            ),
+            geometry_fit_uses_shared_theta_offset=(
+                _geometry_fit_uses_shared_theta_offset
+            ),
+            apply_background_theta_metadata=_apply_background_theta_metadata,
+            current_background_theta_values=_current_background_theta_values,
+            current_geometry_theta_offset=_current_geometry_theta_offset,
+            geometry_manual_pairs_for_index=(
+                manual_dataset_bindings.geometry_manual_pairs_for_index
+            ),
+            ensure_geometry_fit_caked_view=lambda: None,
+            build_dataset=(
+                lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
+                    gui_geometry_fit.build_geometry_manual_fit_dataset(
+                        background_index,
+                        theta_base=theta_base,
+                        base_fit_params=base_fit_params,
+                        manual_dataset_bindings=manual_dataset_bindings,
+                        orientation_cfg=orientation_cfg,
+                    )
+                )
+            ),
+            build_runtime_config=(
+                lambda fit_params: geometry_fit_runtime_config_factory(
+                    (),
+                    fit_params,
+                )
+            ),
+            require_selected_var_names=False,
+            require_active_background_in_selection=False,
+            include_all_selected_backgrounds=True,
+        )
+        prepared_dataset_run = prepared_result.prepared_run
+        if prepared_dataset_run is None:
+            progress_label_mosaic.config(
+                text=_format_mosaic_unavailable(
+                    prepared_result.error_text or stale_reason,
+                    fallback="unable to prepare mosaic-fit datasets.",
+                )
+            )
+            return
+        dataset_specs = [
+            gui_geometry_fit.copy_geometry_fit_state_value(dict(spec))
+            for spec in prepared_dataset_run.dataset_specs
+            if isinstance(spec, dict)
+        ]
+        selected_background_indices = list(
+            prepared_dataset_run.selected_background_indices
+        )
+        background_theta_values = list(prepared_dataset_run.background_theta_values)
+        shared_theta_mode = bool(prepared_dataset_run.joint_background_mode)
+        params["theta_initial"] = prepared_dataset_run.fit_params.get(
+            "theta_initial",
+            params["theta_initial"],
+        )
+        params["theta_offset"] = prepared_dataset_run.fit_params.get(
+            "theta_offset",
+            params["theta_offset"],
+        )
+
+    if not dataset_specs:
+        progress_label_mosaic.config(
+            text="Mosaic shape fit unavailable: no prepared datasets are available."
+        )
+        return
+
+    theta_mode = "single"
+    if len(dataset_specs) > 1:
+        theta_mode = "shared_offset" if shared_theta_mode else "per_dataset"
 
     mosaic_shape_cfg = (
         fit_config.get("mosaic_shape", {})
@@ -12708,6 +13055,226 @@ def on_fit_mosaic_click():
         else:
             theta_bounds = (-theta_window_deg, theta_window_deg)
 
+    def _mosaic_log_json_safe(value: object) -> object:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            return float(value) if np.isfinite(value) else None
+        if isinstance(value, complex):
+            return {
+                "real": _mosaic_log_json_safe(value.real),
+                "imag": _mosaic_log_json_safe(value.imag),
+            }
+        if isinstance(value, np.generic):
+            return _mosaic_log_json_safe(value.item())
+        if isinstance(value, np.ndarray):
+            return [_mosaic_log_json_safe(item) for item in value.tolist()]
+        if isinstance(value, Mapping):
+            return {
+                str(key): _mosaic_log_json_safe(val)
+                for key, val in value.items()
+            }
+        if isinstance(value, (list, tuple, set)):
+            return [_mosaic_log_json_safe(item) for item in value]
+        return str(value)
+
+    def _mosaic_log_array_summary(values: object) -> dict[str, object]:
+        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+        finite = arr[np.isfinite(arr)]
+        summary: dict[str, object] = {
+            "count": int(arr.size),
+            "finite_count": int(finite.size),
+        }
+        if finite.size:
+            summary.update(
+                {
+                    "min": float(np.min(finite)),
+                    "max": float(np.max(finite)),
+                    "mean": float(np.mean(finite)),
+                    "std": float(np.std(finite)),
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "min": None,
+                    "max": None,
+                    "mean": None,
+                    "std": None,
+                }
+            )
+        return summary
+
+    def _mosaic_log_image_summary(image: object) -> dict[str, object] | None:
+        if image is None:
+            return None
+        arr = np.asarray(image, dtype=np.float64)
+        finite = arr[np.isfinite(arr)]
+        summary: dict[str, object] = {
+            "shape": [int(dim) for dim in arr.shape],
+            "finite_count": int(finite.size),
+        }
+        if finite.size:
+            summary.update(
+                {
+                    "min": float(np.min(finite)),
+                    "max": float(np.max(finite)),
+                    "mean": float(np.mean(finite)),
+                    "sum": float(np.sum(finite)),
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "min": None,
+                    "max": None,
+                    "mean": None,
+                    "sum": None,
+                }
+            )
+        return summary
+
+    def _mosaic_log_measured_peaks(entries: object) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for entry in entries if isinstance(entries, (list, tuple)) else []:
+            if not isinstance(entry, Mapping):
+                continue
+            row: dict[str, object] = {
+                "hkl": _mosaic_log_json_safe(entry.get("hkl")),
+                "x": _mosaic_log_json_safe(entry.get("x")),
+                "y": _mosaic_log_json_safe(entry.get("y")),
+            }
+            if "source_table_index" in entry:
+                row["source_table_index"] = _mosaic_log_json_safe(
+                    entry.get("source_table_index")
+                )
+            if "source_row_index" in entry:
+                row["source_row_index"] = _mosaic_log_json_safe(
+                    entry.get("source_row_index")
+                )
+            rows.append(row)
+        return rows
+
+    input_dataset_summaries = []
+    for spec in dataset_specs:
+        if not isinstance(spec, Mapping):
+            continue
+        measured_peaks = spec.get("measured_peaks", [])
+        input_dataset_summaries.append(
+            {
+                "dataset_index": _mosaic_log_json_safe(spec.get("dataset_index")),
+                "dataset_label": _mosaic_log_json_safe(
+                    spec.get("label", spec.get("dataset_index", "?"))
+                ),
+                "theta_initial_deg": _mosaic_log_json_safe(spec.get("theta_initial")),
+                "measured_peak_count": int(
+                    len(measured_peaks) if isinstance(measured_peaks, (list, tuple)) else 0
+                ),
+                "experimental_image": _mosaic_log_image_summary(
+                    spec.get("experimental_image")
+                ),
+                "measured_peaks": _mosaic_log_measured_peaks(measured_peaks),
+            }
+        )
+
+    launch_context = {
+        "dataset_source": (
+            "live_manual_dataset_preparation"
+            if prepared_dataset_run is not None
+            else "geometry_fit_dataset_cache"
+        ),
+        "cache_stale_reason": stale_reason,
+        "used_prepared_dataset_run": bool(prepared_dataset_run is not None),
+        "current_background_index": int(background_runtime_state.current_background_index),
+        "selected_background_indices": [int(idx) for idx in selected_background_indices],
+        "background_theta_values_deg": _mosaic_log_json_safe(background_theta_values),
+        "shared_theta_mode": bool(shared_theta_mode),
+        "theta_mode": str(theta_mode),
+        "theta_bounds": _mosaic_log_json_safe(theta_bounds),
+        "active_fit_parameters": list(active_fit_parameters),
+        "fit_toggles": {
+            "fit_sigma_mosaic": bool(fit_sigma_mosaic),
+            "fit_gamma_mosaic": bool(fit_gamma_mosaic),
+            "fit_eta": bool(fit_eta),
+            "refine_theta": bool(refine_theta),
+        },
+        "solver_config": _mosaic_log_json_safe(solver_cfg),
+        "roi_config": _mosaic_log_json_safe(roi_cfg),
+        "preprocessing_config": _mosaic_log_json_safe(preprocessing_cfg),
+        "geometry_parameters": {
+            "a": _mosaic_log_json_safe(params.get("a")),
+            "c": _mosaic_log_json_safe(params.get("c")),
+            "lambda": _mosaic_log_json_safe(params.get("lambda")),
+            "psi": _mosaic_log_json_safe(params.get("psi")),
+            "psi_z": _mosaic_log_json_safe(params.get("psi_z")),
+            "zs": _mosaic_log_json_safe(params.get("zs")),
+            "zb": _mosaic_log_json_safe(params.get("zb")),
+            "sample_width_m": _mosaic_log_json_safe(params.get("sample_width_m")),
+            "sample_length_m": _mosaic_log_json_safe(params.get("sample_length_m")),
+            "sample_depth_m": _mosaic_log_json_safe(params.get("sample_depth_m")),
+            "chi": _mosaic_log_json_safe(params.get("chi")),
+            "n2": _mosaic_log_json_safe(params.get("n2")),
+            "center_xy_px": _mosaic_log_json_safe(params.get("center")),
+            "theta_initial_deg": _mosaic_log_json_safe(params.get("theta_initial")),
+            "theta_offset_deg": _mosaic_log_json_safe(params.get("theta_offset")),
+            "corto_detector_m": _mosaic_log_json_safe(params.get("corto_detector")),
+            "gamma_deg": _mosaic_log_json_safe(params.get("gamma")),
+            "Gamma_deg": _mosaic_log_json_safe(params.get("Gamma")),
+            "optics_mode": _mosaic_log_json_safe(params.get("optics_mode")),
+            "pixel_size_m": _mosaic_log_json_safe(params.get("pixel_size_m")),
+        },
+        "mosaic_samples": {
+            "beam_x": _mosaic_log_array_summary(mosaic_params.get("beam_x_array", [])),
+            "beam_y": _mosaic_log_array_summary(mosaic_params.get("beam_y_array", [])),
+            "theta": _mosaic_log_array_summary(mosaic_params.get("theta_array", [])),
+            "phi": _mosaic_log_array_summary(mosaic_params.get("phi_array", [])),
+            "wavelength": _mosaic_log_array_summary(
+                mosaic_params.get("wavelength_array", [])
+            ),
+            "n2_sample_array": _mosaic_log_array_summary(
+                mosaic_params.get("n2_sample_array", [])
+            ),
+            "sigma_mosaic_deg": _mosaic_log_json_safe(
+                mosaic_params.get("sigma_mosaic_deg")
+            ),
+            "gamma_mosaic_deg": _mosaic_log_json_safe(
+                mosaic_params.get("gamma_mosaic_deg")
+            ),
+            "eta": _mosaic_log_json_safe(mosaic_params.get("eta")),
+            "solve_q_steps": _mosaic_log_json_safe(
+                mosaic_params.get("solve_q_steps")
+            ),
+            "solve_q_rel_tol": _mosaic_log_json_safe(
+                mosaic_params.get("solve_q_rel_tol")
+            ),
+            "solve_q_mode": _mosaic_log_json_safe(mosaic_params.get("solve_q_mode")),
+        },
+        "input_datasets": input_dataset_summaries,
+    }
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        downloads_dir = get_dir("downloads")
+    except Exception:
+        downloads_dir = Path.home() / "Downloads"
+    log_path = Path(downloads_dir) / f"mosaic_shape_fit_log_{stamp}.txt"
+    log_file = None
+
+    def _mosaic_log_line(text: str = "") -> None:
+        if log_file is None:
+            return
+        try:
+            log_file.write(text + "\n")
+            log_file.flush()
+        except Exception:
+            pass
+
+    def _mosaic_log_section(title: str, lines: Sequence[str]) -> None:
+        _mosaic_log_line(title)
+        for line in lines:
+            _mosaic_log_line(f"  {line}")
+        _mosaic_log_line()
+
     progress_label_mosaic.config(
         text=(
             "Running mosaic shape optimization "
@@ -12719,6 +13286,32 @@ def on_fit_mosaic_click():
 
     result = None
     try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = log_path.open("w", encoding="utf-8")
+        _mosaic_log_line(f"Mosaic shape fit started: {stamp}")
+        _mosaic_log_line()
+        _mosaic_log_section(
+            "Launch summary:",
+            [
+                f"dataset_source={launch_context['dataset_source']}",
+                f"selected_background_indices={launch_context['selected_background_indices']}",
+                f"background_theta_values_deg={launch_context['background_theta_values_deg']}",
+                f"shared_theta_mode={launch_context['shared_theta_mode']}",
+                f"theta_mode={launch_context['theta_mode']}",
+                f"theta_bounds={launch_context['theta_bounds']}",
+                f"active_fit_parameters={launch_context['active_fit_parameters']}",
+                f"cache_stale_reason={launch_context['cache_stale_reason']}",
+                f"solver_loss={solver_cfg.get('loss', 'soft_l1')}",
+                f"solver_max_nfev={solver_cfg.get('max_nfev', 80)}",
+                f"solver_restarts={solver_cfg.get('restarts', 2)}",
+                f"log_file={log_path}",
+            ],
+        )
+        _mosaic_log_line("Launch context (JSON):")
+        _mosaic_log_line(
+            json.dumps(_mosaic_log_json_safe(launch_context), indent=2, sort_keys=True)
+        )
+        _mosaic_log_line()
         result = fit_mosaic_shape_parameters(
             miller_array,
             intensity_array,
@@ -12750,17 +13343,62 @@ def on_fit_mosaic_click():
             fit_gamma_mosaic=bool(fit_gamma_mosaic),
             fit_eta=bool(fit_eta),
         )
+        result_summary_lines = [
+            f"success={bool(getattr(result, 'success', False))}",
+            f"acceptance_passed={bool(getattr(result, 'acceptance_passed', False))}",
+            f"message={str(getattr(result, 'message', '') or '').strip()}",
+            f"nfev={getattr(result, 'nfev', None)}",
+            f"initial_cost={getattr(result, 'initial_cost', None)}",
+            f"final_cost={getattr(result, 'final_cost', None)}",
+            f"cost_reduction={getattr(result, 'cost_reduction', None)}",
+            f"initial_residual_rms={getattr(result, 'initial_residual_rms', None)}",
+            f"final_residual_rms={getattr(result, 'final_residual_rms', None)}",
+            f"boundary_warning={getattr(result, 'boundary_warning', None)}",
+            f"active_parameters={getattr(result, 'active_parameters', None)}",
+            f"fixed_parameters={getattr(result, 'fixed_parameters', None)}",
+            f"theta_refinement_mode={getattr(result, 'theta_refinement_mode', None)}",
+            f"refined_theta_offset={getattr(result, 'refined_theta_offset', None)}",
+            f"refined_theta_values_by_dataset={getattr(result, 'refined_theta_values_by_dataset', None)}",
+        ]
+        _mosaic_log_section("Optimizer summary:", result_summary_lines)
+        _mosaic_log_line("Optimizer debug payload (JSON):")
+        _mosaic_log_line(
+            json.dumps(
+                _mosaic_log_json_safe(
+                    getattr(result, "mosaic_fit_debug_summary", {}) or {}
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        _mosaic_log_line()
     except Exception as exc:  # pragma: no cover - GUI feedback path
-        progress_label_mosaic.config(text=f"Mosaic shape fit failed: {exc}")
+        _mosaic_log_line(f"Mosaic shape fit failed: {exc}")
+        _mosaic_log_line()
+        _mosaic_log_line("Traceback:")
+        for trace_line in traceback.format_exception(type(exc), exc, exc.__traceback__):
+            for row in str(trace_line).rstrip().splitlines():
+                _mosaic_log_line(row)
+        progress_label_mosaic.config(
+            text=f"Mosaic shape fit failed: {exc}\nFit log → {log_path}"
+        )
         return
     finally:
+        if log_file is not None:
+            try:
+                log_file.close()
+            except Exception:
+                pass
         mosaic_progressbar.stop()
         mosaic_progressbar["value"] = 0
         root.update_idletasks()
 
     if result.x is None or not np.all(np.isfinite(result.x)):
         progress_label_mosaic.config(
-            text="Mosaic shape fit failed: optimizer returned invalid parameters."
+            text=(
+                "Mosaic shape fit failed: optimizer returned invalid parameters."
+                + f"\nFit log → {log_path}"
+            )
         )
         return
 
@@ -12885,6 +13523,7 @@ def on_fit_mosaic_click():
             + (f"\nPer dataset: {dataset_summary}" if dataset_summary else "")
             + (f"\nWorst HKLs: {', '.join(worst_hkls)}" if worst_hkls else "")
             + (f"\n{boundary_warning}" if boundary_warning else "")
+            + f"\nFit log → {log_path}"
         )
     )
 
@@ -13654,6 +14293,11 @@ mosaic_fit_initial_values = {
     "fit_eta": bool(mosaic_shape_solver_cfg.get("fit_eta", True)),
     "refine_theta": bool(mosaic_shape_solver_cfg.get("refine_theta", True)),
 }
+if geometry_overlay_actions_view_state.show_geometry_overlays_var is None:
+    geometry_overlay_actions_view_state.show_geometry_overlays_var = tk.BooleanVar(
+        value=True
+    )
+geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = None
 
 gui_views.create_geometry_overlay_action_controls(
     parent=app_shell_view_state.match_peak_tools_frame,
@@ -13661,6 +14305,7 @@ gui_views.create_geometry_overlay_action_controls(
     on_toggle_geometry_overlays=_toggle_geometry_overlay_visibility,
     on_fit_mosaic=on_fit_mosaic_click,
     mosaic_fit_initial_values=mosaic_fit_initial_values,
+    include_geometry_toggle=False,
     include_fit_button=False,
 )
 gui_views.create_geometry_overlay_action_controls(
@@ -14232,13 +14877,6 @@ center_y_var = beam_mosaic_parameter_sliders_view_state.center_y_var
 center_y_scale = beam_mosaic_parameter_sliders_view_state.center_y_scale
 
 
-def _open_refine_controls_from_quick_rail() -> None:
-    try:
-        app_shell_view_state.controls_notebook.select(app_shell_view_state.refine_tab)
-    except Exception:
-        return
-
-
 gui_views.populate_app_shell_quick_controls(
     view_state=app_shell_view_state,
     controls=[
@@ -14271,6 +14909,13 @@ gui_views.populate_app_shell_quick_controls(
             "control_type": "choice",
             "variable": qr_cylinder_display_mode_var,
             "options": QR_CYLINDER_DISPLAY_MODE_OPTIONS,
+        },
+        {
+            "key": "show_geometry_overlays",
+            "label": "Show Geometry Overlays",
+            "control_type": "check",
+            "variable": geometry_overlay_actions_view_state.show_geometry_overlays_var,
+            "command": _toggle_geometry_overlay_visibility,
         },
         {
             "key": "toggle_background",
@@ -14325,7 +14970,11 @@ gui_views.populate_app_shell_quick_controls(
             "step": 0.01,
         },
     ],
-    on_more_controls=_open_refine_controls_from_quick_rail,
+)
+geometry_overlay_actions_view_state.show_geometry_overlays_checkbutton = (
+    app_shell_view_state.quick_control_widgets.get("show_geometry_overlays", {}).get(
+        "checkbutton"
+    )
 )
 display_controls_view_state.fast_viewer_checkbutton = (
     app_shell_view_state.quick_control_widgets.get("fast_viewer", {}).get(

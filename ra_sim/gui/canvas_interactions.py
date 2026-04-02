@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -45,6 +46,7 @@ class CanvasInteractionCallbacks:
     on_press: Callable[[Any], bool]
     on_motion: Callable[[Any], bool]
     on_release: Callable[[Any], bool]
+    on_scroll: Callable[[Any], bool]
 
 
 def _resolve_runtime_value(value_or_callable: object) -> object:
@@ -81,6 +83,165 @@ def _set_mode(
         setter(bool(enabled), message=message)
     except TypeError:
         setter(bool(enabled), message)
+
+
+def _pan_session(bindings: CanvasInteractionBindings) -> dict[str, object] | None:
+    session = getattr(bindings.geometry_runtime_state, "_canvas_pan_session", None)
+    if isinstance(session, dict):
+        return session
+    return None
+
+
+def _clear_pan_session(bindings: CanvasInteractionBindings) -> None:
+    setattr(bindings.geometry_runtime_state, "_canvas_pan_session", None)
+
+
+def _axis_limits(axis: Any) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    get_xlim = getattr(axis, "get_xlim", None)
+    get_ylim = getattr(axis, "get_ylim", None)
+    if not callable(get_xlim) or not callable(get_ylim):
+        return None
+    try:
+        xlim = tuple(float(value) for value in get_xlim())
+        ylim = tuple(float(value) for value in get_ylim())
+    except Exception:
+        return None
+    if (
+        len(xlim) != 2
+        or len(ylim) != 2
+        or not all(np.isfinite(value) for value in (*xlim, *ylim))
+    ):
+        return None
+    return (xlim, ylim)
+
+
+def _set_axis_limits(
+    axis: Any,
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> bool:
+    set_xlim = getattr(axis, "set_xlim", None)
+    set_ylim = getattr(axis, "set_ylim", None)
+    if not callable(set_xlim) or not callable(set_ylim):
+        return False
+    try:
+        set_xlim(float(xlim[0]), float(xlim[1]))
+        set_ylim(float(ylim[0]), float(ylim[1]))
+    except Exception:
+        return False
+    return True
+
+
+def _event_has_axis_data(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    return bool(
+        getattr(event, "inaxes", None) is bindings.axis
+        and getattr(event, "xdata", None) is not None
+        and getattr(event, "ydata", None) is not None
+    )
+
+
+def _start_pan_session(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    if not _event_has_axis_data(bindings, event):
+        return False
+    limits = _axis_limits(bindings.axis)
+    if limits is None:
+        return False
+    x0, y0 = bindings.clamp_to_axis_view(
+        bindings.axis,
+        float(event.xdata),
+        float(event.ydata),
+    )
+    setattr(
+        bindings.geometry_runtime_state,
+        "_canvas_pan_session",
+        {
+            "x_anchor": float(x0),
+            "y_anchor": float(y0),
+            "xlim": limits[0],
+            "ylim": limits[1],
+        },
+    )
+    return True
+
+
+def _update_pan_session(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    session = _pan_session(bindings)
+    if session is None:
+        return False
+    if not _event_has_axis_data(bindings, event):
+        return True
+    x1, y1 = bindings.clamp_to_axis_view(
+        bindings.axis,
+        float(event.xdata),
+        float(event.ydata),
+    )
+    try:
+        x_anchor = float(session["x_anchor"])
+        y_anchor = float(session["y_anchor"])
+        xlim = tuple(float(value) for value in session["xlim"])
+        ylim = tuple(float(value) for value in session["ylim"])
+    except Exception:
+        _clear_pan_session(bindings)
+        return False
+
+    delta_x = float(x1) - x_anchor
+    delta_y = float(y1) - y_anchor
+    updated = _set_axis_limits(
+        bindings.axis,
+        xlim=(float(xlim[0]) - delta_x, float(xlim[1]) - delta_x),
+        ylim=(float(ylim[0]) - delta_y, float(ylim[1]) - delta_y),
+    )
+    if updated:
+        _draw_idle(bindings)
+    return bool(updated)
+
+
+def _finish_pan_session(bindings: CanvasInteractionBindings) -> bool:
+    if _pan_session(bindings) is None:
+        return False
+    _clear_pan_session(bindings)
+    return True
+
+
+def _scroll_step(event: Any) -> float:
+    try:
+        step = float(getattr(event, "step", 0.0))
+    except Exception:
+        step = 0.0
+    if np.isfinite(step) and abs(step) > 0.0:
+        return step
+
+    button = str(getattr(event, "button", "") or "").strip().lower()
+    if button == "up":
+        return 1.0
+    if button == "down":
+        return -1.0
+    return 0.0
+
+
+def _zoom_limits_about_anchor(
+    limits: tuple[float, float],
+    *,
+    anchor: float,
+    scale: float,
+) -> tuple[float, float]:
+    lo, hi = (float(limits[0]), float(limits[1]))
+    anchor_value = float(anchor)
+    scale_value = float(scale)
+    return (
+        anchor_value + ((lo - anchor_value) * scale_value),
+        anchor_value + ((hi - anchor_value) * scale_value),
+    )
 
 
 def manual_pick_zoom_anchor_fractions(
@@ -128,11 +289,13 @@ def handle_runtime_canvas_click(
 
     if getattr(event, "button", None) == 3:
         if bool(bindings.peak_selection_state.hkl_pick_armed):
+            setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
             setter = getattr(bindings.peak_selection_callbacks, "set_hkl_pick_mode", None)
             if callable(setter):
                 setter(False, "HKL image-pick canceled.")
             return True
         if bool(bindings.geometry_runtime_state.manual_pick_armed):
+            setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
             _set_mode(
                 bindings.set_geometry_manual_pick_mode,
                 False,
@@ -140,6 +303,7 @@ def handle_runtime_canvas_click(
             )
             return True
         if bool(bindings.geometry_preview_state.exclude_armed):
+            setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", True)
             _set_mode(
                 bindings.set_geometry_preview_exclude_mode,
                 False,
@@ -208,9 +372,17 @@ def handle_runtime_canvas_press(
 ) -> bool:
     """Handle one runtime canvas button-press."""
 
+    if bool(getattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", False)):
+        setattr(bindings.geometry_runtime_state, "_suppress_pan_press_once", False)
+        if getattr(event, "button", None) == 3:
+            return True
+
     if bool(bindings.peak_selection_state.suppress_drag_press_once):
         bindings.peak_selection_state.suppress_drag_press_once = False
         return True
+
+    if getattr(event, "button", None) == 3:
+        return _start_pan_session(bindings, event)
 
     if bool(bindings.geometry_runtime_state.manual_pick_armed) and bool(
         bindings.manual_pick_session_active()
@@ -267,6 +439,11 @@ def handle_runtime_canvas_motion(
 ) -> bool:
     """Handle one runtime canvas motion event."""
 
+    if _pan_session(bindings) is not None:
+        return _update_pan_session(bindings, event)
+    if getattr(event, "button", None) == 3:
+        return False
+
     if (
         bool(bindings.geometry_runtime_state.manual_pick_armed)
         and bool(bindings.manual_pick_session_active())
@@ -296,6 +473,9 @@ def handle_runtime_canvas_release(
     event: Any,
 ) -> bool:
     """Handle one runtime canvas button-release."""
+
+    if getattr(event, "button", None) == 3 or _pan_session(bindings) is not None:
+        return _finish_pan_session(bindings)
 
     if getattr(event, "button", None) != 1:
         return False
@@ -331,6 +511,61 @@ def handle_runtime_canvas_release(
     if not callable(on_release):
         return False
     return bool(on_release(event))
+
+
+def handle_runtime_canvas_scroll(
+    bindings: CanvasInteractionBindings,
+    event: Any,
+) -> bool:
+    """Handle one runtime canvas scroll-wheel zoom event."""
+
+    if _pan_session(bindings) is not None:
+        return False
+    limits = _axis_limits(bindings.axis)
+    if limits is None:
+        return False
+
+    step = _scroll_step(event)
+    if not np.isfinite(step) or abs(step) <= 0.0:
+        return False
+
+    xlim, ylim = limits
+    anchor_x = getattr(event, "xdata", None)
+    anchor_y = getattr(event, "ydata", None)
+    if anchor_x is None or not np.isfinite(float(anchor_x)):
+        anchor_x = float(xlim[0] + xlim[1]) / 2.0
+    else:
+        anchor_x = float(anchor_x)
+    if anchor_y is None or not np.isfinite(float(anchor_y)):
+        anchor_y = float(ylim[0] + ylim[1]) / 2.0
+    else:
+        anchor_y = float(anchor_y)
+
+    zoom_base = 1.2
+    if step > 0.0:
+        scale = 1.0 / (zoom_base**float(step))
+    else:
+        scale = zoom_base ** abs(float(step))
+
+    next_xlim = _zoom_limits_about_anchor(
+        xlim,
+        anchor=float(anchor_x),
+        scale=float(scale),
+    )
+    next_ylim = _zoom_limits_about_anchor(
+        ylim,
+        anchor=float(anchor_y),
+        scale=float(scale),
+    )
+    if (
+        abs(float(next_xlim[1]) - float(next_xlim[0])) <= 1e-9
+        or abs(float(next_ylim[1]) - float(next_ylim[0])) <= 1e-9
+    ):
+        return False
+    if not _set_axis_limits(bindings.axis, xlim=next_xlim, ylim=next_ylim):
+        return False
+    _draw_idle(bindings)
+    return True
 
 
 def make_runtime_canvas_interaction_bindings_factory(
@@ -396,9 +631,28 @@ def make_runtime_canvas_interaction_callbacks(
 ) -> CanvasInteractionCallbacks:
     """Return bound callbacks for runtime canvas event wiring."""
 
+    def _safe_runtime_callback(
+        handler: Callable[[CanvasInteractionBindings, Any], bool],
+    ) -> Callable[[Any], bool]:
+        def _wrapped(event: Any) -> bool:
+            bindings = bindings_factory()
+            try:
+                return bool(handler(bindings, event))
+            except Exception:
+                traceback.print_exc()
+                _set_status_text(
+                    bindings,
+                    "Canvas interaction canceled after an internal error.",
+                )
+                _draw_idle(bindings)
+                return False
+
+        return _wrapped
+
     return CanvasInteractionCallbacks(
-        on_click=lambda event: handle_runtime_canvas_click(bindings_factory(), event),
-        on_press=lambda event: handle_runtime_canvas_press(bindings_factory(), event),
-        on_motion=lambda event: handle_runtime_canvas_motion(bindings_factory(), event),
-        on_release=lambda event: handle_runtime_canvas_release(bindings_factory(), event),
+        on_click=_safe_runtime_callback(handle_runtime_canvas_click),
+        on_press=_safe_runtime_callback(handle_runtime_canvas_press),
+        on_motion=_safe_runtime_callback(handle_runtime_canvas_motion),
+        on_release=_safe_runtime_callback(handle_runtime_canvas_release),
+        on_scroll=_safe_runtime_callback(handle_runtime_canvas_scroll),
     )

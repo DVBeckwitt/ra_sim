@@ -116,6 +116,7 @@ def load_background_files_for_state(
     display_rotate_k: int,
     read_osc: Callable[[str], object],
     set_background_display: Callable[[object], None] | None = None,
+    expected_shape: tuple[int, int] | None = None,
 ) -> dict[str, object] | None:
     """Load or reuse background images and return the updated background state."""
 
@@ -134,32 +135,77 @@ def load_background_files_for_state(
         background_images_display=background_images_display,
     ):
         index = max(0, min(int(select_index), len(background_images_native) - 1))
-        current_background_image = background_images_native[index]
-        current_background_display = background_images_display[index]
+        reused_background_images = list(background_images)
+        reused_background_images_native = list(background_images_native)
+        reused_background_images_display = list(background_images_display)
+        current_background_image = reused_background_images_native[index]
+        current_background_display = reused_background_images_display[index]
+        if current_background_image is None or current_background_display is None:
+            selected_native = np.array(np.asarray(read_osc(normalized_paths[index])))
+            if expected_shape is not None:
+                resolved_shape = tuple(int(value) for value in selected_native.shape[:2])
+                if resolved_shape != tuple(int(value) for value in expected_shape):
+                    raise ValueError(
+                        f"Background '{Path(normalized_paths[index]).name}' has shape {resolved_shape}, "
+                        f"expected {tuple(int(value) for value in expected_shape)}."
+                    )
+            current_background_image = selected_native
+            current_background_display = np.rot90(selected_native, display_rotate_k)
+            reused_background_images[index] = current_background_image
+            reused_background_images_native[index] = current_background_image
+            reused_background_images_display[index] = current_background_display
         if set_background_display is not None:
             set_background_display(current_background_display)
         return {
             "osc_files": list(normalized_paths),
-            "background_images": list(background_images),
-            "background_images_native": list(background_images_native),
-            "background_images_display": list(background_images_display),
+            "background_images": reused_background_images,
+            "background_images_native": reused_background_images_native,
+            "background_images_display": reused_background_images_display,
             "current_background_index": index,
             "current_background_image": current_background_image,
             "current_background_display": current_background_display,
         }
 
-    loaded_native = [np.asarray(read_osc(path)) for path in normalized_paths]
-    if not loaded_native:
+    total_count = len(normalized_paths)
+    if total_count <= 0:
         return None
 
-    new_background_images = [np.array(img) for img in loaded_native]
-    new_background_images_native = [np.array(img) for img in loaded_native]
-    new_background_images_display = [
-        np.rot90(img, display_rotate_k) for img in new_background_images_native
-    ]
-    index = max(0, min(int(select_index), len(new_background_images_native) - 1))
-    current_background_image = new_background_images_native[index]
-    current_background_display = new_background_images_display[index]
+    index = max(0, min(int(select_index), total_count - 1))
+    first_native = np.array(np.asarray(read_osc(normalized_paths[0])))
+    if expected_shape is not None:
+        resolved_shape = tuple(int(value) for value in first_native.shape[:2])
+        if resolved_shape != tuple(int(value) for value in expected_shape):
+            raise ValueError(
+                f"Background '{Path(normalized_paths[0]).name}' has shape {resolved_shape}, "
+                f"expected {tuple(int(value) for value in expected_shape)}."
+            )
+
+    new_background_images: list[object | None] = [None] * total_count
+    new_background_images_native: list[object | None] = [None] * total_count
+    new_background_images_display: list[object | None] = [None] * total_count
+    first_display = np.rot90(first_native, display_rotate_k)
+    new_background_images[0] = first_native
+    new_background_images_native[0] = first_native
+    new_background_images_display[0] = first_display
+
+    current_background_image = first_native
+    current_background_display = first_display
+    if index != 0:
+        selected_native = np.array(np.asarray(read_osc(normalized_paths[index])))
+        selected_shape = tuple(int(value) for value in selected_native.shape[:2])
+        first_shape = tuple(int(value) for value in first_native.shape[:2])
+        if selected_shape != first_shape:
+            raise ValueError(
+                f"Background '{Path(normalized_paths[index]).name}' has shape {selected_shape}, "
+                f"expected {first_shape}."
+            )
+        selected_display = np.rot90(selected_native, display_rotate_k)
+        new_background_images[index] = selected_native
+        new_background_images_native[index] = selected_native
+        new_background_images_display[index] = selected_display
+        current_background_image = selected_native
+        current_background_display = selected_display
+
     if set_background_display is not None:
         set_background_display(current_background_display)
     return {

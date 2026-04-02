@@ -142,3 +142,4 @@ def initialize_runtime_canvas_interaction_bindings(
     canvas.mpl_connect("button_press_event", callbacks.on_press)
     canvas.mpl_connect("motion_notify_event", callbacks.on_motion)
     canvas.mpl_connect("button_release_event", callbacks.on_release)
+    canvas.mpl_connect("scroll_event", callbacks.on_scroll)

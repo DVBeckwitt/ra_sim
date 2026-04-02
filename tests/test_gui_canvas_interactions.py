@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from ra_sim.gui import canvas_interactions, state
 
 
@@ -12,8 +14,26 @@ class _FakeBbox:
 
 
 class _FakeAxis:
-    def __init__(self):
+    def __init__(self, *, xlim=(0.0, 100.0), ylim=(100.0, 0.0)):
         self.bbox = _FakeBbox()
+        self._xlim = tuple(float(value) for value in xlim)
+        self._ylim = tuple(float(value) for value in ylim)
+        self.set_xlim_calls = []
+        self.set_ylim_calls = []
+
+    def get_xlim(self):
+        return self._xlim
+
+    def get_ylim(self):
+        return self._ylim
+
+    def set_xlim(self, left, right):
+        self._xlim = (float(left), float(right))
+        self.set_xlim_calls.append(self._xlim)
+
+    def set_ylim(self, bottom, top):
+        self._ylim = (float(bottom), float(top))
+        self.set_ylim_calls.append(self._ylim)
 
 
 class _FakeEvent:
@@ -26,6 +46,7 @@ class _FakeEvent:
         ydata=None,
         x=0.0,
         y=0.0,
+        step=0.0,
     ):
         self.button = button
         self.inaxes = inaxes
@@ -33,6 +54,7 @@ class _FakeEvent:
         self.ydata = ydata
         self.x = x
         self.y = y
+        self.step = step
 
 
 class _PeakCallbacks:
@@ -468,6 +490,12 @@ def test_canvas_interaction_callback_bundle_delegates_live_bindings(monkeypatch)
         )
         or False,
     )
+    monkeypatch.setattr(
+        canvas_interactions,
+        "handle_runtime_canvas_scroll",
+        lambda bindings_arg, event: callback_calls.append(("scroll", bindings_arg, event))
+        or True,
+    )
 
     def build_bindings():
         versions["count"] += 1
@@ -480,18 +508,65 @@ def test_canvas_interaction_callback_bundle_delegates_live_bindings(monkeypatch)
     press_event = _FakeEvent(button=1)
     motion_event = _FakeEvent(button=1)
     release_event = _FakeEvent(button=1)
+    scroll_event = _FakeEvent(button="up", step=1.0)
 
     assert callbacks.on_click(click_event) is True
     assert callbacks.on_press(press_event) is False
     assert callbacks.on_motion(motion_event) is True
     assert callbacks.on_release(release_event) is False
+    assert callbacks.on_scroll(scroll_event) is True
 
     assert callback_calls == [
         ("click", "bindings-1", click_event),
         ("press", "bindings-2", press_event),
         ("motion", "bindings-3", motion_event),
         ("release", "bindings-4", release_event),
+        ("scroll", "bindings-5", scroll_event),
     ]
+
+
+def test_canvas_interaction_callback_bundle_catches_runtime_errors(monkeypatch) -> None:
+    status_messages = []
+    draw_calls = []
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=_FakeAxis(),
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=_DragCallbacks(),
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args, **_kwargs: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args, **_kwargs: None,
+        clamp_to_axis_view=lambda axis, x, y: (x, y),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args, **_kwargs: None,
+        clear_geometry_manual_preview_artists=lambda *_args, **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda *_args, **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda *_args, **_kwargs: None,
+        caked_view_enabled_factory=lambda: False,
+        set_geometry_status_text=lambda text: status_messages.append(str(text)),
+        draw_idle=lambda: draw_calls.append(True),
+    )
+
+    monkeypatch.setattr(
+        canvas_interactions,
+        "handle_runtime_canvas_release",
+        lambda _bindings_arg, _event: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(canvas_interactions.traceback, "print_exc", lambda: None)
+
+    callbacks = canvas_interactions.make_runtime_canvas_interaction_callbacks(
+        lambda: bindings
+    )
+
+    assert callbacks.on_release(_FakeEvent(button=1)) is False
+    assert status_messages == ["Canvas interaction canceled after an internal error."]
+    assert draw_calls == [True]
 
 
 def test_canvas_handlers_delegate_to_drag_callbacks_outside_manual_pick_session() -> None:
@@ -530,3 +605,97 @@ def test_canvas_handlers_delegate_to_drag_callbacks_outside_manual_pick_session(
         "motion",
         "release",
     ]
+
+
+def test_canvas_right_drag_pans_detector_view() -> None:
+    axis = _FakeAxis(xlim=(0.0, 10.0), ylim=(20.0, 0.0))
+    drag_callbacks = _DragCallbacks()
+    draw_calls = []
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=drag_callbacks,
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: False,
+        draw_idle=lambda: draw_calls.append(True),
+    )
+
+    press_event = _FakeEvent(button=3, inaxes=axis, xdata=4.0, ydata=5.0)
+    motion_event = _FakeEvent(button=3, inaxes=axis, xdata=6.0, ydata=9.0)
+    release_event = _FakeEvent(button=3, inaxes=axis, xdata=6.0, ydata=9.0)
+
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, press_event) is True
+    assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion_event) is True
+    assert axis.get_xlim() == (-2.0, 8.0)
+    assert axis.get_ylim() == (16.0, -4.0)
+    assert draw_calls == [True]
+    assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert canvas_interactions.handle_runtime_canvas_motion(bindings, motion_event) is False
+    assert drag_callbacks.calls == []
+
+
+def test_canvas_scroll_zooms_caked_view_about_cursor() -> None:
+    axis = _FakeAxis(xlim=(0.0, 100.0), ylim=(-180.0, 180.0))
+    bindings = canvas_interactions.CanvasInteractionBindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(),
+        geometry_preview_state=state.GeometryPreviewState(),
+        geometry_manual_state=state.ManualGeometryState(),
+        peak_selection_state=state.PeakSelectionState(),
+        peak_selection_callbacks=_PeakCallbacks(),
+        integration_range_drag_callbacks=_DragCallbacks(),
+        manual_pick_session_active=lambda: False,
+        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
+        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
+        toggle_geometry_manual_selection_at=lambda *_args: None,
+        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
+        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
+        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
+        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
+        place_geometry_manual_selection_at=lambda *_args: None,
+        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
+        restore_geometry_manual_pick_view=lambda **_kwargs: None,
+        render_current_geometry_manual_pairs=lambda **_kwargs: True,
+        caked_view_enabled_factory=lambda: True,
+        draw_idle=lambda: None,
+    )
+
+    zoom_in = _FakeEvent(
+        button="up",
+        step=1.0,
+        inaxes=axis,
+        xdata=25.0,
+        ydata=-30.0,
+    )
+    zoom_out = _FakeEvent(
+        button="down",
+        step=-1.0,
+        inaxes=axis,
+        xdata=25.0,
+        ydata=-30.0,
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_scroll(bindings, zoom_in) is True
+    xlim_after_zoom_in = axis.get_xlim()
+    ylim_after_zoom_in = axis.get_ylim()
+    assert xlim_after_zoom_in == pytest.approx((4.166666666666668, 87.5))
+    assert ylim_after_zoom_in == pytest.approx((-155.0, 145.0))
+
+    assert canvas_interactions.handle_runtime_canvas_scroll(bindings, zoom_out) is True
+    assert axis.get_xlim() == pytest.approx((0.0, 100.0))
+    assert axis.get_ylim() == pytest.approx((-180.0, 180.0))

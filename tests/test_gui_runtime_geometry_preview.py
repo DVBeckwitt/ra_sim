@@ -138,6 +138,7 @@ def test_initialize_runtime_canvas_interaction_bindings_connects_canvas_events()
         on_press="on-press",
         on_motion="on-motion",
         on_release="on-release",
+        on_scroll="on-scroll",
     )
 
     runtime_geometry_preview.initialize_runtime_canvas_interaction_bindings(
@@ -150,4 +151,5 @@ def test_initialize_runtime_canvas_interaction_bindings_connects_canvas_events()
         ("button_press_event", "on-press"),
         ("motion_notify_event", "on-motion"),
         ("button_release_event", "on-release"),
+        ("scroll_event", "on-scroll"),
     ]

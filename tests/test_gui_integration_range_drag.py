@@ -148,15 +148,48 @@ def test_create_runtime_drag_rectangles_attach_hidden_overlays() -> None:
     assert drag_rect.init_xy == (0.0, 0.0)
     assert drag_rect.init_width == 0.0
     assert drag_rect.init_height == 0.0
-    assert drag_rect.init_kwargs["edgecolor"] == "yellow"
-    assert drag_rect.init_kwargs["zorder"] == 6
+    assert (
+        drag_rect.init_kwargs["edgecolor"]
+        == integration_range_drag._ACTIVE_DRAG_EDGE_COLOR
+    )
+    assert (
+        drag_rect.init_kwargs["facecolor"]
+        == integration_range_drag._ACTIVE_DRAG_FACE_RGBA
+    )
+    assert (
+        drag_rect.init_kwargs["linewidth"]
+        == integration_range_drag._ACTIVE_DRAG_LINEWIDTH
+    )
+    assert drag_rect.init_kwargs["zorder"] == 8
     assert drag_rect.visible is False
     assert region_rect.init_xy == (0.0, 0.0)
     assert region_rect.init_width == 0.0
     assert region_rect.init_height == 0.0
-    assert region_rect.init_kwargs["edgecolor"] == "cyan"
-    assert region_rect.init_kwargs["linestyle"] == "--"
+    assert (
+        region_rect.init_kwargs["edgecolor"]
+        == integration_range_drag._SELECTED_REGION_EDGE_COLOR
+    )
+    assert (
+        region_rect.init_kwargs["facecolor"]
+        == integration_range_drag._SELECTED_REGION_FACE_RGBA
+    )
+    assert (
+        region_rect.init_kwargs["linewidth"]
+        == integration_range_drag._SELECTED_REGION_LINEWIDTH
+    )
+    assert region_rect.init_kwargs["linestyle"] == "-"
     assert region_rect.visible is False
+
+
+def test_create_integration_region_highlight_cmap_uses_bold_selection_color() -> None:
+    colors = integration_range_drag.create_integration_region_highlight_cmap(
+        listed_colormap_cls=lambda values: tuple(values),
+    )
+
+    assert colors == (
+        (0.0, 0.0, 0.0, 0.0),
+        integration_range_drag._SELECTED_REGION_OVERLAY_RGBA,
+    )
 
 
 def test_range_refresh_requires_pending_analysis_result_only_without_cache() -> None:
@@ -659,6 +692,9 @@ def test_update_runtime_raw_drag_preview_uses_detector_overlay_shape() -> None:
     assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
     assert int(np.sum(overlay.data)) > 0
     assert draw_calls == [True]
+    assert drag_state._fast_viewer_suppress_overlay_image is False
+    assert drag_state._fast_viewer_curve_specs == ()
+    assert drag_state._fast_viewer_overlay_version >= 1
 
 
 def test_runtime_integration_region_visuals_callback_uses_live_bindings(
@@ -864,6 +900,8 @@ def test_reset_runtime_integration_drag_hides_raw_preview_overlay() -> None:
     assert drag_state.mode is None
     assert drag_rect.visible is False
     assert overlay.visible is False
+    assert drag_state._fast_viewer_suppress_overlay_image is False
+    assert drag_state._fast_viewer_curve_specs == ()
 
 
 def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bundle(
@@ -1016,6 +1054,53 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
         ("release", "bindings-3", release_event),
         ("reset", "bindings-4", True),
     ]
+
+
+def test_integration_range_drag_callbacks_cancel_runtime_errors(monkeypatch) -> None:
+    status_messages = []
+    draw_calls = []
+    reset_calls = []
+    bindings = integration_range_drag.IntegrationRangeDragBindings(
+        drag_state=state.IntegrationRangeDragState(active=True, mode="raw"),
+        peak_selection_state=state.PeakSelectionState(),
+        range_view_state=_range_view_state(),
+        ax=_FakeAxis(),
+        drag_select_rect=_FakeRect(),
+        integration_region_overlay=_FakeOverlay(),
+        integration_region_rect=_FakeRect(),
+        image_display=_FakeImageDisplay(),
+        get_detector_angular_maps=lambda ai: (None, None),
+        range_visible_factory=lambda: True,
+        caked_view_enabled_factory=lambda: False,
+        unscaled_image_present_factory=lambda: True,
+        ai_factory=lambda: None,
+        draw_idle=lambda: draw_calls.append(True),
+        set_status_text=lambda text: status_messages.append(str(text)),
+    )
+
+    def _raise_runtime_error(_bindings_arg, _event):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        integration_range_drag,
+        "handle_runtime_integration_drag_motion",
+        _raise_runtime_error,
+    )
+    monkeypatch.setattr(
+        integration_range_drag,
+        "reset_runtime_integration_drag",
+        lambda bindings_arg, *, redraw=True: reset_calls.append((bindings_arg, redraw)),
+    )
+    monkeypatch.setattr(integration_range_drag.traceback, "print_exc", lambda: None)
+
+    callbacks = integration_range_drag.make_runtime_integration_range_drag_callbacks(
+        lambda: bindings
+    )
+
+    assert callbacks.on_motion(_FakeEvent(button=1)) is False
+    assert reset_calls == [(bindings, False)]
+    assert status_messages == ["Integration drag canceled after an internal error."]
+    assert draw_calls == [True]
 
 
 def test_detector_phi_mask_and_bounds_support_wrapped_short_arc() -> None:

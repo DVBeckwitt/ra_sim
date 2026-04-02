@@ -108,6 +108,42 @@ def test_draw_initial_geometry_pairs_overlay_links_sim_and_background_points() -
         plt.close(fig)
 
 
+def test_draw_initial_geometry_pairs_overlay_can_hide_pair_connectors() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 2, 3),
+                    "sim_display": np.array([8.0, 9.0]),
+                    "bg_display": np.array([10.0, 11.0]),
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+            show_pair_connectors=False,
+        )
+
+        line_segments = [
+            line
+            for line in ax.lines
+            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+        ]
+        labels = [artist.get_text() for artist in ax.texts]
+
+        assert line_segments == []
+        assert any("(1, 2, 3)" in label for label in labels)
+    finally:
+        plt.close(fig)
+
+
 def test_draw_initial_geometry_pairs_overlay_draws_q_group_line_segments() -> None:
     fig, ax = plt.subplots()
     try:
@@ -355,7 +391,9 @@ def test_draw_live_geometry_preview_overlay_marks_excluded_matches() -> None:
             geometry_preview_artists=geometry_preview_artists,
             clear_geometry_preview_artists=_clear,
             draw_idle=lambda: draws.append("draw"),
-            normalize_hkl_key=lambda value: tuple(value) if isinstance(value, tuple) else None,
+            normalize_hkl_key=(
+                lambda value: tuple(value) if isinstance(value, tuple) else None
+            ),
             live_preview_match_is_excluded=lambda entry: bool(entry.get("excluded")),
         )
 
@@ -367,6 +405,42 @@ def test_draw_live_geometry_preview_overlay_marks_excluded_matches() -> None:
         assert ":" in line_styles
         assert "--" in line_styles
         assert draws == ["draw"]
+    finally:
+        plt.close(fig)
+
+
+def test_draw_live_geometry_preview_overlay_can_hide_pair_connectors() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_preview_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_preview_artists, redraw=redraw)
+
+        overlays.draw_live_geometry_preview_overlay(
+            ax,
+            [
+                {"hkl": (1, 0, 0), "sim_x": 5.0, "sim_y": 6.0, "x": 7.0, "y": 8.0},
+            ],
+            geometry_preview_artists=geometry_preview_artists,
+            clear_geometry_preview_artists=_clear,
+            draw_idle=lambda: None,
+            normalize_hkl_key=(
+                lambda value: tuple(value) if isinstance(value, tuple) else None
+            ),
+            live_preview_match_is_excluded=lambda _entry: False,
+            show_pair_connectors=False,
+        )
+
+        line_segments = [
+            line
+            for line in ax.lines
+            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+        ]
+        labels = [artist.get_text() for artist in ax.texts]
+
+        assert line_segments == []
+        assert any("(1, 0, 0)" in label for label in labels)
     finally:
         plt.close(fig)
 

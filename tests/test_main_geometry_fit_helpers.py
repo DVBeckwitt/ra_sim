@@ -89,3 +89,30 @@ def test_main_build_geometry_fit_runtime_config_accepts_explicit_gui_solver_over
     }
     assert runtime_cfg["use_numba"] is True
     assert runtime_cfg["allow_unsafe_runtime"] is True
+
+
+def test_main_build_geometry_fit_runtime_config_reuses_solver_parallel_settings_when_unsafe_runtime_enabled() -> None:
+    runtime_cfg = build_geometry_fit_runtime_config(
+        {
+            "solver": {
+                "loss": "soft_l1",
+                "workers": "auto",
+                "parallel_mode": "auto",
+                "worker_numba_threads": 0,
+            },
+            "gui_use_numba": True,
+            "gui_allow_unsafe_runtime": True,
+        },
+        {"gamma": 1.0},
+        {"gamma": {"window": 0.2, "pull": 0.0}},
+        {"gamma": (-5.0, 5.0)},
+    )
+
+    assert runtime_cfg["solver"] == {
+        "loss": "soft_l1",
+        "workers": "auto",
+        "parallel_mode": "auto",
+        "worker_numba_threads": 0,
+    }
+    assert runtime_cfg["use_numba"] is True
+    assert runtime_cfg["allow_unsafe_runtime"] is True

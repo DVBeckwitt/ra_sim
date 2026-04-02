@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,19 @@ from typing import Any
 import numpy as np
 from matplotlib.patches import Rectangle
 from ra_sim.gui import controllers as gui_controllers
+
+_FAST_VIEWER_DRAG_CURVE_PREVIEW_ENABLED = False
+
+_ACTIVE_DRAG_EDGE_COLOR = "#ff7a00"
+_ACTIVE_DRAG_EDGE_RGBA = (255, 122, 0, 255)
+_ACTIVE_DRAG_FACE_RGBA = (1.0, 0.48, 0.0, 0.14)
+_ACTIVE_DRAG_LINEWIDTH = 2.8
+
+_SELECTED_REGION_EDGE_COLOR = "#ff00a8"
+_SELECTED_REGION_EDGE_RGBA = (255, 0, 168, 255)
+_SELECTED_REGION_FACE_RGBA = (1.0, 0.0, 0.66, 0.10)
+_SELECTED_REGION_OVERLAY_RGBA = (1.0, 0.0, 0.66, 0.46)
+_SELECTED_REGION_LINEWIDTH = 3.0
 
 
 @dataclass
@@ -160,6 +174,20 @@ def _runtime_last_sim_res2(bindings: IntegrationRangeDragBindings):
     return _resolve_runtime_value(bindings.last_sim_res2_factory)
 
 
+def create_integration_region_highlight_cmap(
+    *,
+    listed_colormap_cls: Callable[[list[tuple[float, float, float, float]]], Any],
+) -> Any:
+    """Return the live detector-overlay colormap for selected regions."""
+
+    return listed_colormap_cls(
+        [
+            (0.0, 0.0, 0.0, 0.0),
+            _SELECTED_REGION_OVERLAY_RGBA,
+        ]
+    )
+
+
 def range_refresh_requires_pending_analysis_result(
     *,
     active_job: object,
@@ -186,6 +214,37 @@ def _clear_drag_coordinates(drag_state) -> None:
     drag_state.phi1 = None
     setattr(drag_state, "_raw_drag_preview_center", None)
     setattr(drag_state, "_raw_drag_preview_data", None)
+    _set_fast_viewer_overlay_state(
+        drag_state,
+        curve_specs=(),
+        suppress_overlay_image=False,
+    )
+
+
+def _set_fast_viewer_overlay_state(
+    drag_state: object,
+    *,
+    curve_specs: object = (),
+    suppress_overlay_image: bool,
+) -> None:
+    if not _FAST_VIEWER_DRAG_CURVE_PREVIEW_ENABLED:
+        curve_specs = ()
+        suppress_overlay_image = False
+    setattr(
+        drag_state,
+        "_fast_viewer_curve_specs",
+        tuple(curve_specs or ()),
+    )
+    setattr(
+        drag_state,
+        "_fast_viewer_suppress_overlay_image",
+        bool(suppress_overlay_image),
+    )
+    try:
+        version = int(getattr(drag_state, "_fast_viewer_overlay_version", 0))
+    except Exception:
+        version = 0
+    setattr(drag_state, "_fast_viewer_overlay_version", version + 1)
 
 
 def _wrap_angle_degrees(value: float) -> float:
@@ -241,11 +300,11 @@ def create_drag_select_rectangle(
         (0.0, 0.0),
         0.0,
         0.0,
-        linewidth=1.8,
-        edgecolor="yellow",
-        facecolor="none",
+        linewidth=_ACTIVE_DRAG_LINEWIDTH,
+        edgecolor=_ACTIVE_DRAG_EDGE_COLOR,
+        facecolor=_ACTIVE_DRAG_FACE_RGBA,
         linestyle="-",
-        zorder=6,
+        zorder=8,
     )
     rect.set_visible(False)
     add_patch = getattr(ax, "add_patch", None)
@@ -265,11 +324,11 @@ def create_integration_region_rectangle(
         (0.0, 0.0),
         0.0,
         0.0,
-        linewidth=2.0,
-        edgecolor="cyan",
-        facecolor="none",
-        linestyle="--",
-        zorder=5,
+        linewidth=_SELECTED_REGION_LINEWIDTH,
+        edgecolor=_SELECTED_REGION_EDGE_COLOR,
+        facecolor=_SELECTED_REGION_FACE_RGBA,
+        linestyle="-",
+        zorder=7,
     )
     rect.set_visible(False)
     add_patch = getattr(ax, "add_patch", None)
@@ -287,6 +346,11 @@ def update_runtime_drag_rectangle(
 ) -> None:
     """Refresh the visible drag rectangle for one caked-view drag."""
 
+    _set_fast_viewer_overlay_state(
+        bindings.drag_state,
+        curve_specs=(),
+        suppress_overlay_image=False,
+    )
     x_min, x_max = sorted((float(x0), float(x1)))
     y_min, y_max = sorted((float(y0), float(y1)))
     bindings.integration_region_overlay.set_visible(False)
@@ -476,6 +540,56 @@ def _update_detector_drag_arc_preview(
 
     bindings.integration_region_rect.set_visible(False)
     bindings.drag_select_rect.set_visible(False)
+    _set_fast_viewer_overlay_state(
+        drag_state,
+        curve_specs=(
+            {
+                "x_values": tuple(float(value) for value in outer_x),
+                "y_values": tuple(float(value) for value in outer_y),
+                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
+                "linewidth": 2.0,
+                "linestyle": "-",
+                "zorder": 9.0,
+            },
+            {
+                "x_values": tuple(float(value) for value in inner_x),
+                "y_values": tuple(float(value) for value in inner_y),
+                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
+                "linewidth": 2.0,
+                "linestyle": "-",
+                "zorder": 9.0,
+            },
+            {
+                "x_values": tuple(
+                    float(value)
+                    for value in (float(center_x) + radial_values * np.cos(start_radians))
+                ),
+                "y_values": tuple(
+                    float(value)
+                    for value in (float(center_y) + radial_values * np.sin(start_radians))
+                ),
+                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
+                "linewidth": 1.6,
+                "linestyle": "-",
+                "zorder": 9.0,
+            },
+            {
+                "x_values": tuple(
+                    float(value)
+                    for value in (float(center_x) + radial_values * np.cos(end_radians))
+                ),
+                "y_values": tuple(
+                    float(value)
+                    for value in (float(center_y) + radial_values * np.sin(end_radians))
+                ),
+                "edge_rgba": _ACTIVE_DRAG_EDGE_RGBA,
+                "linewidth": 1.6,
+                "linestyle": "-",
+                "zorder": 9.0,
+            },
+        ),
+        suppress_overlay_image=True,
+    )
     bindings.integration_region_overlay.set_data(preview)
     bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
     bindings.integration_region_overlay.set_visible(True)
@@ -491,6 +605,11 @@ def _update_detector_integration_overlay(
     phi_min: float,
     phi_max: float,
 ) -> bool:
+    _set_fast_viewer_overlay_state(
+        bindings.drag_state,
+        curve_specs=(),
+        suppress_overlay_image=False,
+    )
     bindings.integration_region_rect.set_visible(False)
     if ai is None:
         bindings.integration_region_overlay.set_visible(False)
@@ -651,12 +770,22 @@ def update_runtime_integration_region_visuals(
         bindings
     )
     if not show_region:
+        _set_fast_viewer_overlay_state(
+            bindings.drag_state,
+            curve_specs=(),
+            suppress_overlay_image=False,
+        )
         bindings.integration_region_overlay.set_visible(False)
         bindings.integration_region_rect.set_visible(False)
         return
 
     view_state = bindings.range_view_state
     if view_state is None:
+        _set_fast_viewer_overlay_state(
+            bindings.drag_state,
+            curve_specs=(),
+            suppress_overlay_image=False,
+        )
         bindings.integration_region_overlay.set_visible(False)
         bindings.integration_region_rect.set_visible(False)
         return
@@ -668,6 +797,11 @@ def update_runtime_integration_region_visuals(
     phi_max = float(view_state.phi_max_var.get())
 
     if _runtime_caked_view_enabled(bindings) and sim_res2 is not None:
+        _set_fast_viewer_overlay_state(
+            bindings.drag_state,
+            curve_specs=(),
+            suppress_overlay_image=False,
+        )
         bindings.integration_region_overlay.set_visible(False)
         if phi_max >= phi_min:
             bindings.integration_region_rect.set_xy((tth_min, phi_min))
@@ -712,6 +846,7 @@ def reset_runtime_integration_drag(
 
     _clear_drag_coordinates(bindings.drag_state)
     bindings.drag_select_rect.set_visible(False)
+    bindings.integration_region_rect.set_visible(False)
     bindings.integration_region_overlay.set_visible(False)
     if redraw:
         _draw_idle(bindings)
@@ -984,18 +1119,37 @@ def make_runtime_integration_range_drag_callbacks(
 ) -> IntegrationRangeDragCallbacks:
     """Build bound callbacks for runtime integration-range dragging."""
 
+    def _safe_runtime_callback(
+        handler: Callable[[IntegrationRangeDragBindings, Any], bool],
+    ) -> Callable[[Any], bool]:
+        def _wrapped(event: Any) -> bool:
+            bindings = bindings_factory()
+            try:
+                return bool(handler(bindings, event))
+            except Exception:
+                traceback.print_exc()
+                try:
+                    reset_runtime_integration_drag(bindings, redraw=False)
+                except Exception:
+                    pass
+                _set_status_text(
+                    bindings,
+                    "Integration drag canceled after an internal error.",
+                )
+                _draw_idle(bindings)
+                return False
+
+        return _wrapped
+
     return IntegrationRangeDragCallbacks(
-        on_press=lambda event: handle_runtime_integration_drag_press(
-            bindings_factory(),
-            event,
+        on_press=_safe_runtime_callback(
+            handle_runtime_integration_drag_press,
         ),
-        on_motion=lambda event: handle_runtime_integration_drag_motion(
-            bindings_factory(),
-            event,
+        on_motion=_safe_runtime_callback(
+            handle_runtime_integration_drag_motion,
         ),
-        on_release=lambda event: handle_runtime_integration_drag_release(
-            bindings_factory(),
-            event,
+        on_release=_safe_runtime_callback(
+            handle_runtime_integration_drag_release,
         ),
         reset=lambda: reset_runtime_integration_drag(bindings_factory()),
     )
