@@ -154,6 +154,55 @@ def test_draw_geometry_fit_overlay_projects_native_points_in_caked_view() -> Non
         plt.close(fig)
 
 
+def test_draw_geometry_fit_overlay_prefers_locked_caked_manual_points() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 0, 0),
+                    "initial_sim_display": (999.0, 999.0),
+                    "initial_bg_display": (888.0, 888.0),
+                    "initial_sim_caked_display": (10.0, 20.0),
+                    "initial_bg_caked_display": (30.0, 40.0),
+                    "final_bg_caked_display": (30.0, 40.0),
+                    "initial_sim_native": (1.0, 2.0),
+                    "initial_bg_native": (3.0, 4.0),
+                    "final_sim_native": (5.0, 6.0),
+                    "final_bg_native": (7.0, 8.0),
+                    "overlay_distance_px": 2.5,
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+            show_caked_2d=True,
+            native_detector_coords_to_caked_display_coords=(
+                lambda col, row: (100.0 + float(col), 200.0 + float(row))
+            ),
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (10.0, 20.0) in marker_points
+        assert (30.0, 40.0) in marker_points
+        assert (105.0, 206.0) in marker_points
+        assert (101.0, 202.0) not in marker_points
+        assert (103.0, 204.0) not in marker_points
+    finally:
+        plt.close(fig)
+
+
 def test_draw_geometry_fit_overlay_keeps_initial_only_unmatched_pairs_visible() -> None:
     fig, ax = plt.subplots()
     try:

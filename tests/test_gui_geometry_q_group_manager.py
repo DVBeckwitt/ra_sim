@@ -474,6 +474,22 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
 ) -> None:
     calls = []
     runtime_state = state.SimulationRuntimeState(
+        peak_records=[
+            {
+                "display_col": 1.5,
+                "display_row": 2.5,
+                "hkl_raw": [1, 0, 0],
+                "intensity": 7.0,
+                "source_label": "primary",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 0),
+            },
+            {
+                "display_col": np.nan,
+                "display_row": 9.0,
+            },
+        ],
         stored_max_positions_local=["maxpos"],
         stored_sim_image=np.zeros((20, 30), dtype=float),
         stored_peak_table_lattice=[(3.0, 5.0, "primary")],
@@ -495,7 +511,18 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         geometry_q_group_manager,
         "build_geometry_fit_simulated_peaks",
         lambda *args, **kwargs: calls.append(("build_peaks", args, kwargs))
-        or [{"sim_col": 1.0}],
+        or [
+            {
+                "sim_col": 4.0,
+                "sim_row": 5.0,
+                "weight": 6.0,
+                "hkl": (1, 0, 0),
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 0,
+                "source_row_index": 1,
+            }
+        ],
     )
     monkeypatch.setattr(
         geometry_q_group_manager,
@@ -552,7 +579,14 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         native_sim_to_display_coords="native-to-display",
     )
 
-    assert bundle.build_live_preview_simulated_peaks_from_cache() == [{"sim_col": 1.0}]
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+    assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["sim_col"] == 4.0
+    assert cached_preview_peaks[0]["sim_row"] == 5.0
+    assert cached_preview_peaks[0]["weight"] == 6.0
+    assert cached_preview_peaks[0]["hkl"] == (1, 0, 0)
+    assert cached_preview_peaks[0]["label"] == "1,0,0"
+    assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
     assert bundle.filter_simulated_peaks([{"seed": True}]) == ([{"filtered": True}], 1, 2)
     assert bundle.collapse_simulated_peaks(
         [{"seed": True}],
@@ -608,7 +642,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
     assert preview_stats["excluded_count"] == 1
     assert excluded_total == 1
 
-    assert calls[0] == (
+    assert (
         "build_peaks",
         (["maxpos"],),
         {
@@ -620,21 +654,21 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "default_source_label": "primary",
             "round_pixel_centers": True,
         },
-    )
-    assert calls[1] == (
+    ) in calls
+    assert (
         "filter_peaks",
         ([{"seed": True}],),
         {
             "listed_keys": {("q_group", "primary", 1, 0)},
             "excluded_q_groups": {("q_group", "primary", 1, 0)},
         },
-    )
-    assert calls[2] == (
+    ) in calls
+    assert (
         "collapse_peaks",
         ([{"seed": True}],),
         {"merge_radius_px": 4.5},
-    )
-    assert calls[3] == (
+    ) in calls
+    assert (
         "build_entries",
         (["maxpos"],),
         {
@@ -642,7 +676,7 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
             "primary_a": 7.0,
             "primary_c": 9.0,
         },
-    )
+    ) in calls
     assert (
         "clone_entries",
         ([{"a": 1}],),
@@ -678,25 +712,20 @@ def test_geometry_q_group_manager_runtime_value_callback_bundle_uses_live_values
         },
     ) in calls
 
+    runtime_state.stored_max_positions_local = None
     runtime_state.stored_sim_image = None
     runtime_state.stored_peak_table_lattice = None
     live["primary_a"] = 11.0
     live["primary_c"] = 13.0
     live["image_size"] = 48
-    bundle.build_live_preview_simulated_peaks_from_cache()
-    assert calls[-1] == (
-        "build_peaks",
-        (["maxpos"],),
-        {
-            "image_shape": (48, 48),
-            "native_sim_to_display_coords": "native-to-display",
-            "peak_table_lattice": None,
-            "primary_a": 11.0,
-            "primary_c": 13.0,
-            "default_source_label": "primary",
-            "round_pixel_centers": True,
-        },
-    )
+    cached_preview_peaks = bundle.build_live_preview_simulated_peaks_from_cache()
+    assert len(cached_preview_peaks) == 1
+    assert cached_preview_peaks[0]["sim_col"] == 1.5
+    assert cached_preview_peaks[0]["sim_row"] == 2.5
+    assert cached_preview_peaks[0]["weight"] == 7.0
+    assert cached_preview_peaks[0]["hkl"] == (1, 0, 0)
+    assert cached_preview_peaks[0]["label"] == "1,0,0"
+    assert cached_preview_peaks[0]["q_group_key"] == ("q_group", "primary", 1, 0)
 
 
 def test_geometry_q_group_manager_live_preview_exclusion_helpers() -> None:
@@ -1072,6 +1101,44 @@ def test_geometry_q_group_manager_runtime_live_preview_render_helpers(
 
 
 def test_geometry_q_group_manager_runtime_live_preview_simulated_peak_resolution() -> None:
+    preferred_cache_calls: list[str] = []
+    preferred_sim_calls: list[tuple[tuple[int, ...], tuple[int, ...], int, dict[str, object]]] = []
+    preferred_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
+        view_state=state.GeometryQGroupViewState(),
+        preview_state=state.GeometryPreviewState(),
+        q_group_state=state.GeometryQGroupState(),
+        fit_config=None,
+        current_geometry_fit_var_names_factory=lambda: [],
+        invalidate_geometry_manual_pick_cache=lambda: None,
+        update_geometry_preview_exclude_button_label=lambda: None,
+        live_geometry_preview_enabled=lambda: True,
+        refresh_live_geometry_preview=lambda: None,
+        has_cached_hit_tables=True,
+        build_live_preview_simulated_peaks_from_cache=lambda: (
+            preferred_cache_calls.append("cache")
+            or [{"source": "cache"}]
+        ),
+        simulate_preview_style_peaks=lambda miller, intensities, image_size, params: (
+            preferred_sim_calls.append(
+                (tuple(miller.shape), tuple(intensities.shape), int(image_size), dict(params))
+            )
+            or [{"source": "central"}]
+        ),
+        miller=[[1.0, 0.0, 0.0]],
+        intensities=[2.0],
+        image_size=48,
+        current_geometry_fit_params_factory=lambda: {"omega": 0.5},
+    )
+
+    preferred = geometry_q_group_manager.resolve_runtime_live_geometry_preview_simulated_peaks(
+        preferred_bindings,
+        update_status=True,
+    )
+
+    assert preferred == [{"source": "central"}]
+    assert preferred_sim_calls == [((1, 3), (1,), 48, {"omega": 0.5})]
+    assert preferred_cache_calls == []
+
     success_bindings = geometry_q_group_manager.GeometryQGroupRuntimeBindings(
         view_state=state.GeometryQGroupViewState(),
         preview_state=state.GeometryPreviewState(),

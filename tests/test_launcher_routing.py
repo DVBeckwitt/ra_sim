@@ -107,3 +107,37 @@ def test_launch_mosaic_visualizer_uses_env_override(monkeypatch, tmp_path) -> No
     launcher.launch_mosaic_visualizer()
 
     assert calls == [([sys.executable, str(script_path)], repo_path.resolve(), True)]
+
+
+def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch, tmp_path) -> None:
+    repo_path = tmp_path / "custom-mosaic"
+    repo_path.mkdir()
+    script_path = repo_path / "mosaic_simulator.py"
+    script_path.write_text("print('ok')\n", encoding="utf-8")
+
+    calls: list[tuple[list[str], object]] = []
+
+    def _fake_popen(command: list[str], *, cwd=None):
+        calls.append((command, cwd))
+        return object()
+
+    monkeypatch.setenv("RA_SIM_MOSAIC_REPO", str(repo_path))
+    monkeypatch.setattr(launcher.subprocess, "Popen", _fake_popen)
+
+    launcher.launch_mosaic_specular_visualizer(
+        {"specular-view": {"H": 1, "K": 0, "L": 2, "theta_i": 8.5}}
+    )
+
+    assert calls == [
+        (
+            [
+                sys.executable,
+                str(script_path),
+                "--mode",
+                "specular-view",
+                "--state-json",
+                '{"specular-view": {"H": 1, "K": 0, "L": 2, "theta_i": 8.5}}',
+            ],
+            repo_path.resolve(),
+        )
+    ]

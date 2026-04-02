@@ -94,6 +94,7 @@ def build_runtime_fast_viewer_workflow(
     fast_canvas_proxy = None
     fast_requested = bool(requested_enabled)
     fast_suspend_reason = None
+    fast_unavailable_reason = None
     bound_canvas_ids: set[int] = set()
 
     def _display_controls_view_state() -> object | None:
@@ -115,6 +116,27 @@ def build_runtime_fast_viewer_workflow(
             status_var.set(str(text))
         except Exception:
             pass
+
+    def _set_fast_viewer_control_enabled(enabled: bool) -> None:
+        view_state = _display_controls_view_state()
+        checkbutton = getattr(view_state, "fast_viewer_checkbutton", None)
+        if checkbutton is None:
+            return
+        try:
+            state = getattr(checkbutton, "state", None)
+            if callable(state):
+                state(["!disabled"] if bool(enabled) else ["disabled"])
+                return
+        except Exception:
+            pass
+        for attr_name in ("configure", "config"):
+            try:
+                setter = getattr(checkbutton, attr_name, None)
+                if callable(setter):
+                    setter(state=("normal" if bool(enabled) else "disabled"))
+                    return
+            except Exception:
+                pass
 
     def _show_placeholder() -> None:
         try:
@@ -184,9 +206,30 @@ def build_runtime_fast_viewer_workflow(
         return fast_suspend_reason
 
     def _refresh_status_text() -> None:
+        control_suspend_reason = None if _active() else _suspend_reason_text()
+
         if _active():
+            _set_fast_viewer_control_enabled(True)
             _set_status_text("Fast viewer active. Embedded canvas paused.")
             return
+        if isinstance(fast_unavailable_reason, str):
+            _set_fast_viewer_control_enabled(False)
+            _set_status_text(f"Fast viewer unavailable: {fast_unavailable_reason}.")
+            return
+        if isinstance(control_suspend_reason, str):
+            _set_fast_viewer_control_enabled(False)
+            if bool(fast_requested):
+                _set_status_text(
+                    "Fast viewer unavailable while "
+                    f"{control_suspend_reason}. It will resume automatically "
+                    "when that mode ends."
+                )
+            else:
+                _set_status_text(
+                    f"Fast viewer unavailable while {control_suspend_reason}."
+                )
+            return
+        _set_fast_viewer_control_enabled(True)
         if bool(fast_requested) and isinstance(fast_suspend_reason, str):
             _set_status_text(
                 f"Fast viewer paused: {fast_suspend_reason}. Using embedded canvas."
@@ -195,7 +238,7 @@ def build_runtime_fast_viewer_workflow(
         if bool(fast_requested):
             _set_status_text("Fast viewer requested.")
             return
-        _set_status_text("Fast viewer off.")
+        _set_status_text("Open in a separate window for faster image interaction.")
 
     def _set_requested_enabled(enabled: bool) -> None:
         nonlocal fast_requested
@@ -248,7 +291,7 @@ def build_runtime_fast_viewer_workflow(
         return None
 
     def _enable(*, announce: bool = True) -> bool:
-        nonlocal fast_image_viewer, fast_canvas_proxy
+        nonlocal fast_image_viewer, fast_canvas_proxy, fast_unavailable_reason
 
         if _active():
             set_canvas(fast_canvas_proxy)
@@ -261,8 +304,8 @@ def build_runtime_fast_viewer_workflow(
         viewer = fast_plot_viewer_module.FastPlotViewer(title="RA-SIM Fast Viewer")
         if not bool(getattr(viewer, "available", False)):
             error_text = str(getattr(viewer, "error_message", "Unavailable"))
+            fast_unavailable_reason = error_text
             _set_requested_enabled(False)
-            _set_status_text(f"Fast viewer unavailable: {error_text}")
             if announce and callable(set_progress_text):
                 set_progress_text(f"Fast viewer unavailable: {error_text}")
             return False
@@ -277,6 +320,7 @@ def build_runtime_fast_viewer_workflow(
         proxy.set_sync_callback(_sync_from_matplotlib)
         fast_image_viewer = viewer
         fast_canvas_proxy = proxy
+        fast_unavailable_reason = None
         set_canvas(proxy)
         _show_placeholder()
         _ensure_canvas_interaction_bindings(proxy)

@@ -329,6 +329,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
     schedule_calls = []
     callback_refs = {}
     view_state = state.IntegrationRangeControlsViewState()
+    show_1d_var = _FakeVar(False)
 
     def _create_controls(**kwargs):
         callback_refs.update(kwargs)
@@ -353,6 +354,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         parent="parent",
         views_module=SimpleNamespace(create_integration_range_controls=_create_controls),
         view_state=view_state,
+        show_1d_var=show_1d_var,
         tth_min=0.0,
         tth_max=60.0,
         phi_min=-15.0,
@@ -369,9 +371,11 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
 
     callback_refs["on_tth_min_changed"]("12.5")
     assert view_state.tth_min_var.get() == 12.5
+    assert show_1d_var.get() is True
     assert view_state.tth_min_label_var.get() == "12.5"
     assert view_state.tth_min_entry_var.get() == "12.5000"
 
+    show_1d_var.set(False)
     view_state.phi_max_entry_var.set("45.0")
     callback_refs["on_apply_entry"](
         view_state.phi_max_entry_var,
@@ -379,6 +383,7 @@ def test_create_runtime_integration_range_controls_wires_callbacks_and_text_sync
         view_state.phi_max_slider,
     )
     assert view_state.phi_max_var.get() == 15.0
+    assert show_1d_var.get() is True
     assert view_state.phi_max_label_var.get() == "15.0"
     assert view_state.phi_max_entry_var.get() == "15.0000"
     assert schedule_calls == ["range", "range"]
@@ -450,7 +455,7 @@ def test_integration_range_update_callbacks_schedule_reschedule_and_toggle_modes
     analysis_view_state.show_caked_2d_var.set(True)
     display_controls_state.simulation_limits_user_override = True
     callbacks.toggle_caked_2d()
-    assert analysis_view_state.show_1d_var.get() is True
+    assert analysis_view_state.show_1d_var.get() is False
     assert display_controls_state.simulation_limits_user_override is False
     assert hkl_pick_calls == [False]
     assert drag_reset_calls == [True]
@@ -620,10 +625,13 @@ def test_integration_range_drag_runtime_helpers_handle_suppress_and_caked_drag()
     drag_rect = _FakeRect()
     overlay = _FakeOverlay()
     overlay_rect = _FakeRect()
+    overlay.visible = True
+    overlay_rect.visible = True
     status_messages = []
     sync_calls = []
     draw_calls = []
     schedule_calls = []
+    show_1d_var = _FakeVar(False)
 
     bindings = integration_range_drag.IntegrationRangeDragBindings(
         drag_state=drag_state,
@@ -639,6 +647,7 @@ def test_integration_range_drag_runtime_helpers_handle_suppress_and_caked_drag()
         caked_view_enabled_factory=lambda: True,
         unscaled_image_present_factory=lambda: True,
         ai_factory=lambda: None,
+        show_1d_var=show_1d_var,
         sync_peak_selection_state=lambda: sync_calls.append(True),
         schedule_range_update=lambda: schedule_calls.append(True),
         last_sim_res2_factory=lambda: None,
@@ -663,6 +672,8 @@ def test_integration_range_drag_runtime_helpers_handle_suppress_and_caked_drag()
     assert drag_state.mode == "caked"
     assert drag_rect.visible is True
     assert drag_rect.xy == (5.0, -10.0)
+    assert overlay.visible is False
+    assert overlay_rect.visible is False
 
     moved = integration_range_drag.handle_runtime_integration_drag_motion(
         bindings,
@@ -683,6 +694,7 @@ def test_integration_range_drag_runtime_helpers_handle_suppress_and_caked_drag()
     assert view_state.tth_max_var.get() == 8.0
     assert view_state.phi_min_var.get() == -10.0
     assert view_state.phi_max_var.get() == -4.0
+    assert show_1d_var.get() is True
     assert schedule_calls == [True]
     assert status_messages[-1] == "Integration region set: 2θ=[5.00, 8.00]°, φ=[-10.00, -4.00]°"
     assert drag_state.active is False
@@ -757,7 +769,7 @@ def test_raw_release_with_incomplete_drag_restores_current_region_visuals() -> N
     assert int(np.sum(overlay.data)) == 6
     assert drag_state.active is False
     assert drag_state.mode is None
-    assert len(draw_calls) >= 2
+    assert len(draw_calls) >= 1
 
 
 def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bundle(
@@ -824,9 +836,12 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
     assert drag_state.mode == "raw"
     assert np.isclose(drag_state.tth0, 20.0)
     assert np.isclose(drag_state.phi0, 0.0)
-    assert overlay.visible is True
+    assert overlay.visible is False
     assert overlay_rect.visible is False
-    assert drag_rect.visible is False
+    assert drag_rect.visible is True
+    assert drag_rect.xy == (0.2, 1.1)
+    assert drag_rect.width == 0.0
+    assert drag_rect.height == 0.0
 
     moved = integration_range_drag.handle_runtime_integration_drag_motion(
         bindings,
@@ -835,8 +850,10 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
     assert moved is True
     assert np.isclose(drag_state.tth1, 32.0)
     assert np.isclose(drag_state.phi1, 12.0)
-    assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
-    assert int(np.sum(overlay.data)) > 0
+    assert overlay.visible is False
+    assert drag_rect.xy == (0.2, 1.1)
+    assert np.isclose(drag_rect.width, 1.6)
+    assert np.isclose(drag_rect.height, 0.9)
 
     released = integration_range_drag.handle_runtime_integration_drag_release(
         bindings,
@@ -852,6 +869,9 @@ def test_integration_range_drag_runtime_helpers_handle_raw_drag_and_callback_bun
     assert drag_state.active is False
     assert drag_state.mode is None
     assert drag_rect.visible is False
+    assert overlay.visible is True
+    assert overlay.extent == (0.0, 2.0, 2.0, 0.0)
+    assert int(np.sum(overlay.data)) > 0
     assert len(draw_calls) >= 3
 
     callback_calls = []

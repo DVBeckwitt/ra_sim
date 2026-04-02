@@ -36,11 +36,9 @@ def test_main_build_geometry_fit_runtime_config_converts_ui_windows_to_absolute_
         "worker_numba_threads": 1,
     }
     assert runtime_cfg["use_numba"] is False
-    assert runtime_cfg["bounds"]["theta_initial"] == [5.6, 6.4]
-    assert runtime_cfg["bounds"]["gamma"] == [-0.5, 3.5]
-    assert runtime_cfg["priors"]["theta_initial"]["center"] == 6.0
-    assert abs(runtime_cfg["priors"]["theta_initial"]["sigma"] - 0.21) < 1e-9
-    assert "gamma" not in runtime_cfg["priors"]
+    assert runtime_cfg["bounds"]["theta_initial"] == [0.0, 30.0]
+    assert runtime_cfg["bounds"]["gamma"] == [-5.0, 5.0]
+    assert runtime_cfg["priors"] == {}
     assert base_config["bounds"]["theta_initial"] == {
         "mode": "relative",
         "min": -0.5,
@@ -62,9 +60,8 @@ def test_main_build_geometry_fit_runtime_config_clamps_to_parameter_domain() -> 
         "worker_numba_threads": 1,
     }
     assert runtime_cfg["use_numba"] is False
-    assert runtime_cfg["bounds"]["center_x"] == [88.0, 99.0]
-    assert runtime_cfg["priors"]["center_x"]["center"] == 98.0
-    assert abs(runtime_cfg["priors"]["center_x"]["sigma"] - 0.5) < 1e-12
+    assert runtime_cfg["bounds"]["center_x"] == [0.0, 99.0]
+    assert runtime_cfg["priors"] == {}
 
 
 def test_main_build_geometry_fit_runtime_config_accepts_explicit_gui_solver_overrides() -> None:

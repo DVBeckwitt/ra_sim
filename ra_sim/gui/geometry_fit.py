@@ -75,6 +75,7 @@ class GeometryFitRuntimeManualDatasetBindings:
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]]
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]]
     orient_image_for_fit: Callable[..., object]
+    pick_uses_caked_space: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,7 @@ class GeometryFitSolverRequest:
     params: dict[str, object]
     measured_peaks: object
     var_names: list[str]
+    candidate_param_names: list[str] | None
     dataset_specs: list[dict[str, object]] | None
     refinement_config: dict[str, object]
     runtime_safety_note: str | None = None
@@ -407,6 +409,7 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
+    pick_uses_caked_space: Callable[[], bool] | None = None,
 ) -> GeometryFitRuntimeManualDatasetBindings:
     """Build the live manual-pair dataset bundle used during geometry-fit prep."""
 
@@ -428,6 +431,7 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         select_fit_orientation=select_fit_orientation,
         apply_orientation_to_entries=apply_orientation_to_entries,
         orient_image_for_fit=orient_image_for_fit,
+        pick_uses_caked_space=pick_uses_caked_space,
     )
 
 
@@ -451,6 +455,7 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
     select_fit_orientation: Callable[..., tuple[dict[str, object], dict[str, object]]],
     apply_orientation_to_entries: Callable[..., list[dict[str, object]]],
     orient_image_for_fit: Callable[..., object],
+    pick_uses_caked_space: Callable[[], bool] | None = None,
 ) -> Callable[[], GeometryFitRuntimeManualDatasetBindings]:
     """Build a factory that resolves the live manual-pair dataset bundle on demand."""
 
@@ -477,6 +482,7 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             select_fit_orientation=select_fit_orientation,
             apply_orientation_to_entries=apply_orientation_to_entries,
             orient_image_for_fit=orient_image_for_fit,
+            pick_uses_caked_space=pick_uses_caked_space,
         )
 
     return _build
@@ -1064,11 +1070,10 @@ def read_runtime_geometry_fit_parameter_domains(
     names: Sequence[str] | None = None,
     use_shared_theta_offset: bool = False,
 ) -> dict[str, tuple[float, float]]:
-    """Read live parameter domains from bounds config and slider ranges."""
+    """Read live parameter domains from slider ranges and image geometry."""
 
     selected_names = list(names) if names is not None else list(parameter_specs)
     domains: dict[str, tuple[float, float]] = {}
-    bounds_cfg = _geometry_fit_config_section(fit_config, "bounds")
     try:
         image_size_value = float(image_size)
     except Exception:
@@ -1084,33 +1089,6 @@ def read_runtime_geometry_fit_parameter_domains(
         if parameter_name == "center_x" or parameter_name == "center_y":
             domains[str(name)] = (0.0, max(image_size_value - 1.0, 0.0))
             continue
-
-        if parameter_name == "theta_offset":
-            entry = bounds_cfg.get("theta_offset")
-            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                try:
-                    lo = float(entry[0])
-                    hi = float(entry[1])
-                except Exception:
-                    lo = float("nan")
-                    hi = float("nan")
-                if np.isfinite(lo) and np.isfinite(hi):
-                    if lo > hi:
-                        lo, hi = hi, lo
-                    domains[str(name)] = (float(lo), float(hi))
-                    continue
-            elif isinstance(entry, Mapping):
-                try:
-                    lo = float(entry.get("min"))
-                    hi = float(entry.get("max"))
-                except Exception:
-                    lo = float("nan")
-                    hi = float("nan")
-                if np.isfinite(lo) and np.isfinite(hi):
-                    if lo > hi:
-                        lo, hi = hi, lo
-                    domains[str(name)] = (float(lo), float(hi))
-                    continue
 
         spec = parameter_specs.get(control_name)
         if not isinstance(spec, Mapping):
@@ -1396,6 +1374,7 @@ def build_runtime_geometry_fit_config_factory(
     base_config: Mapping[str, object] | None,
     current_constraint_state: Callable[[Sequence[str] | None], Mapping[str, object]],
     current_parameter_domains: Callable[[Sequence[str] | None], Mapping[str, object]],
+    current_candidate_param_names: Callable[[], Sequence[str]] | None = None,
 ) -> Callable[[Sequence[str], Mapping[str, object]], dict[str, object]]:
     """Build the live geometry-fit refinement-config factory from runtime readers."""
 
@@ -1404,15 +1383,23 @@ def build_runtime_geometry_fit_config_factory(
         fit_params: Mapping[str, object],
     ) -> dict[str, object]:
         selected_names = [str(name) for name in var_names]
+        if callable(current_candidate_param_names):
+            candidate_names = [str(name) for name in current_candidate_param_names() or ()]
+        else:
+            candidate_names = []
+        if not candidate_names:
+            candidate_names = list(selected_names)
+        candidate_names = list(dict.fromkeys(candidate_names))
         current_params = {
             name: fit_params.get(name)
-            for name in selected_names
+            for name in candidate_names
         }
         return build_geometry_fit_runtime_config(
             base_config,
             current_params,
-            current_constraint_state(selected_names),
-            current_parameter_domains(selected_names),
+            {},
+            current_parameter_domains(candidate_names),
+            candidate_param_names=candidate_names,
         )
 
     return _build
@@ -1423,6 +1410,8 @@ def build_geometry_fit_runtime_config(
     current_params,
     control_settings,
     parameter_domains,
+    *,
+    candidate_param_names: Sequence[str] | None = None,
 ):
     runtime_cfg = copy.deepcopy(base_config) if isinstance(base_config, dict) else {}
     if not isinstance(runtime_cfg, dict):
@@ -1432,10 +1421,12 @@ def build_geometry_fit_runtime_config(
     # fitting paths have triggered hard system failures on some machines, so the
     # runtime config clamps geometry fits to a conservative execution profile by
     # default. Advanced users can opt back in through gui_* overrides in config.
-    solver_cfg = runtime_cfg.get("solver", {}) or {}
-    if not isinstance(solver_cfg, dict):
-        solver_cfg = {}
-    runtime_cfg["solver"] = solver_cfg
+    optimizer_cfg_raw = runtime_cfg.get("optimizer", runtime_cfg.get("solver", {})) or {}
+    optimizer_cfg = (
+        dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
+    )
+    runtime_cfg["optimizer"] = optimizer_cfg
+    runtime_cfg["solver"] = optimizer_cfg
 
     gui_use_numba = runtime_cfg.pop("gui_use_numba", None)
     runtime_cfg["use_numba"] = (
@@ -1445,18 +1436,18 @@ def build_geometry_fit_runtime_config(
     gui_allow_unsafe_runtime = runtime_cfg.pop("gui_allow_unsafe_runtime", None)
     runtime_cfg["allow_unsafe_runtime"] = bool(gui_allow_unsafe_runtime)
 
-    gui_workers = solver_cfg.pop("gui_workers", None)
-    solver_cfg["workers"] = gui_workers if gui_workers is not None else 1
+    gui_workers = optimizer_cfg.pop("gui_workers", None)
+    optimizer_cfg["workers"] = gui_workers if gui_workers is not None else 1
 
-    gui_parallel_mode = solver_cfg.pop("gui_parallel_mode", None)
-    solver_cfg["parallel_mode"] = (
+    gui_parallel_mode = optimizer_cfg.pop("gui_parallel_mode", None)
+    optimizer_cfg["parallel_mode"] = (
         str(gui_parallel_mode).strip()
         if gui_parallel_mode is not None
         else "off"
     )
 
-    gui_worker_numba_threads = solver_cfg.pop("gui_worker_numba_threads", None)
-    solver_cfg["worker_numba_threads"] = (
+    gui_worker_numba_threads = optimizer_cfg.pop("gui_worker_numba_threads", None)
+    optimizer_cfg["worker_numba_threads"] = (
         gui_worker_numba_threads if gui_worker_numba_threads is not None else 1
     )
 
@@ -1470,59 +1461,38 @@ def build_geometry_fit_runtime_config(
         priors_cfg = {}
     runtime_cfg["priors"] = priors_cfg
 
-    for name, current in (current_params or {}).items():
-        try:
-            current_value = float(current)
-        except Exception:
-            continue
-        if not np.isfinite(current_value):
-            continue
+    active_names = [
+        str(name)
+        for name in (
+            candidate_param_names
+            if candidate_param_names is not None
+            else list(current_params or {})
+        )
+    ]
+    active_names = list(dict.fromkeys(active_names))
 
-        control = (control_settings or {}).get(name, {}) or {}
-        try:
-            window = float(control.get("window", 0.0))
-        except Exception:
-            window = 0.0
-        if not np.isfinite(window):
-            window = 0.0
-        window = max(0.0, float(window))
-
-        lo = float(current_value - window)
-        hi = float(current_value + window)
-
+    # GUI geometry fits now expose the full live parameter domains instead of
+    # constraining each variable to a current-value window or soft prior.
+    for name in active_names:
+        priors_cfg.pop(str(name), None)
         domain = (parameter_domains or {}).get(name)
-        if isinstance(domain, (list, tuple)) and len(domain) >= 2:
-            try:
-                domain_lo = float(domain[0])
-                domain_hi = float(domain[1])
-            except Exception:
-                domain_lo = float("nan")
-                domain_hi = float("nan")
-            if np.isfinite(domain_lo):
-                lo = max(lo, float(domain_lo))
-            if np.isfinite(domain_hi):
-                hi = min(hi, float(domain_hi))
-
-        if hi < lo:
-            lo = hi = min(max(current_value, lo), hi)
-
+        if not isinstance(domain, (list, tuple)) or len(domain) < 2:
+            bounds_cfg.pop(str(name), None)
+            continue
+        try:
+            lo = float(domain[0])
+            hi = float(domain[1])
+        except Exception:
+            bounds_cfg.pop(str(name), None)
+            continue
+        if not np.isfinite(lo) or not np.isfinite(hi):
+            bounds_cfg.pop(str(name), None)
+            continue
+        if lo > hi:
+            lo, hi = hi, lo
         bounds_cfg[str(name)] = [float(lo), float(hi)]
 
-        try:
-            pull = float(control.get("pull", 0.0))
-        except Exception:
-            pull = 0.0
-        if not np.isfinite(pull):
-            pull = 0.0
-        pull = min(max(float(pull), 0.0), 1.0)
-        if pull > 0.0 and window > 0.0:
-            sigma_scale = max(0.05, 1.0 - 0.95 * pull)
-            priors_cfg[str(name)] = {
-                "center": float(current_value),
-                "sigma": float(max(window * sigma_scale, 1.0e-6)),
-            }
-        else:
-            priors_cfg.pop(str(name), None)
+    runtime_cfg["candidate_param_names"] = active_names
 
     return runtime_cfg
 
@@ -2164,6 +2134,12 @@ def build_geometry_manual_fit_dataset(
     """Build one saved-manual-pair geometry dataset for the optimizer."""
 
     background_idx = int(background_index)
+    use_caked_display = False
+    if callable(manual_dataset_bindings.pick_uses_caked_space):
+        try:
+            use_caked_display = bool(manual_dataset_bindings.pick_uses_caked_space())
+        except Exception:
+            use_caked_display = False
     selected_entries = list(
         manual_dataset_bindings.geometry_manual_pairs_for_index(background_idx) or ()
     )
@@ -2181,9 +2157,7 @@ def build_geometry_manual_fit_dataset(
     params_i["theta_initial"] = float(theta_base + theta_offset)
     simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
         params_i,
-        prefer_cache=(
-            background_idx == int(manual_dataset_bindings.current_background_index)
-        ),
+        prefer_cache=False,
     )
     simulated_lookup = manual_dataset_bindings.geometry_manual_simulated_lookup(
         simulated_peaks
@@ -2359,6 +2333,13 @@ def build_geometry_manual_fit_dataset(
             else None,
             }
         )
+    resolved_source_pair_count = int(
+        sum(
+            1
+            for record in selected_records
+            if isinstance(record.get("resolved_source_entry"), Mapping)
+        )
+    )
 
     measured_display: list[dict[str, object]] = []
     initial_pairs_display: list[dict[str, object]] = []
@@ -2396,6 +2377,11 @@ def build_geometry_manual_fit_dataset(
         bg_coords = manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
         if bg_coords is not None and len(bg_coords) >= 2:
             initial_entry["bg_display"] = (float(bg_coords[0]), float(bg_coords[1]))
+            if use_caked_display:
+                initial_entry["bg_caked_display"] = (
+                    float(bg_coords[0]),
+                    float(bg_coords[1]),
+                )
         if isinstance(resolved_source_entry, Mapping):
             for key in ("source_table_index", "source_row_index", "source_peak_index"):
                 if key in resolved_source_entry:
@@ -2408,6 +2394,11 @@ def build_geometry_manual_fit_dataset(
                 sim_row = float("nan")
             if np.isfinite(sim_col) and np.isfinite(sim_row):
                 initial_entry["sim_display"] = (float(sim_col), float(sim_row))
+                if use_caked_display:
+                    initial_entry["sim_caked_display"] = (
+                        float(sim_col),
+                        float(sim_row),
+                    )
             try:
                 sim_col_raw = float(resolved_source_entry.get("sim_col_raw", sim_col))
                 sim_row_raw = float(resolved_source_entry.get("sim_row_raw", sim_row))
@@ -2570,6 +2561,7 @@ def build_geometry_manual_fit_dataset(
         "theta_effective": float(theta_base + theta_offset),
         "group_count": int(group_count),
         "pair_count": int(len(measured_display)),
+        "resolved_source_pair_count": int(resolved_source_pair_count),
         "measured_display": measured_display,
         "measured_native": measured_native,
         "measured_for_fit": measured_for_fit,
@@ -2596,6 +2588,64 @@ def build_geometry_manual_fit_dataset(
             "measured_peaks": measured_for_fit,
         },
     }
+
+
+def _manual_geometry_fit_preflight_error(
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+) -> str | None:
+    """Return a preflight error when saved manual pairs are no longer trustworthy."""
+
+    if not dataset_infos:
+        return None
+
+    orientation_failures: list[str] = []
+    resolved_source_total = 0
+    resolved_source_known = False
+    total_pairs = 0
+    for idx, dataset in enumerate(dataset_infos):
+        if not isinstance(dataset, Mapping):
+            continue
+        label = str(dataset.get("label", f"background_{idx + 1}"))
+        try:
+            pair_count = max(0, int(dataset.get("pair_count", 0)))
+        except Exception:
+            pair_count = 0
+        total_pairs += int(pair_count)
+
+        orientation_diag = dataset.get("orientation_diag")
+        if isinstance(orientation_diag, Mapping) and pair_count > 0:
+            try:
+                orientation_pairs = int(orientation_diag.get("pairs", 0))
+            except Exception:
+                orientation_pairs = 0
+            if orientation_pairs <= 0:
+                orientation_failures.append(label)
+
+        if "resolved_source_pair_count" in dataset:
+            resolved_source_known = True
+            try:
+                resolved_source_total += max(
+                    0,
+                    int(dataset.get("resolved_source_pair_count", 0)),
+                )
+            except Exception:
+                pass
+
+    if orientation_failures:
+        joined = ", ".join(orientation_failures)
+        return (
+            "Geometry fit unavailable: orientation preflight produced no usable "
+            f"simulated/measured anchor pairs for {joined}. Refresh the picks "
+            "before fitting."
+        )
+
+    if resolved_source_known and total_pairs > 0 and resolved_source_total <= 0:
+        return (
+            "Geometry fit unavailable: saved manual pairs no longer resolve to "
+            "current simulated source rows on any selected background. Refresh "
+            "the picks before fitting."
+        )
+    return None
 
 
 def prepare_geometry_fit_run(
@@ -2768,6 +2818,10 @@ def prepare_geometry_fit_run(
                 )
             )
 
+    preflight_error = _manual_geometry_fit_preflight_error(dataset_infos)
+    if preflight_error:
+        return GeometryFitPreparationResult(error_text=preflight_error)
+
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
     return GeometryFitPreparationResult(
         prepared_run=GeometryFitPreparedRun(
@@ -2918,33 +2972,69 @@ def apply_manual_point_geometry_fit_runtime_overrides(
 
     cfg = copy.deepcopy(dict(runtime_cfg or {}))
 
-    solver_cfg_raw = cfg.get("solver", {})
-    solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+    optimizer_cfg_raw = cfg.get("optimizer", cfg.get("solver", {}))
+    optimizer_cfg = (
+        dict(optimizer_cfg_raw) if isinstance(optimizer_cfg_raw, Mapping) else {}
+    )
     for key in (
         "dynamic_point_geometry_fit",
-        "loss",
-        "f_scale_px",
-        "weighted_matching",
-        "use_measurement_uncertainty",
-        "anisotropic_measurement_uncertainty",
         "restarts",
         "restart_jitter",
         "stagnation_probe",
         "stagnation_probe_pairwise",
+        "stagnation_probe_pair_limit",
         "stagnation_probe_random_directions",
         "staged_release",
         "reparameterize_pairs",
     ):
-        solver_cfg.pop(key, None)
-    solver_cfg["manual_point_fit_mode"] = True
-    solver_cfg["missing_pair_penalty_px"] = float(
-        solver_cfg.get("missing_pair_penalty_px", 20.0)
+        optimizer_cfg.pop(key, None)
+    optimizer_cfg["manual_point_fit_mode"] = True
+    optimizer_cfg["missing_pair_penalty_px"] = float(
+        optimizer_cfg.get("missing_pair_penalty_px", 20.0)
     )
-    solver_cfg["missing_pair_penalty_deg"] = float(
-        solver_cfg.get("missing_pair_penalty_deg", 5.0)
+    optimizer_cfg["missing_pair_penalty_deg"] = float(
+        optimizer_cfg.get("missing_pair_penalty_deg", 5.0)
     )
-    solver_cfg["parallel_mode"] = "datasets" if joint_background_mode else "auto"
-    cfg["solver"] = solver_cfg
+    optimizer_cfg["workers"] = 1
+    optimizer_cfg["parallel_mode"] = "off"
+    optimizer_cfg["worker_numba_threads"] = 1
+    cfg["optimizer"] = optimizer_cfg
+    cfg["solver"] = optimizer_cfg
+
+    seed_search_cfg_raw = cfg.get("seed_search", {})
+    seed_search_cfg = (
+        dict(seed_search_cfg_raw) if isinstance(seed_search_cfg_raw, Mapping) else {}
+    )
+    # Manual point fits are interactive; keep the normalized-u solver on one
+    # trusted seed instead of inheriting the heavier global multistart budget.
+    seed_search_cfg["prescore_top_k"] = 1
+    seed_search_cfg["n_global"] = 0
+    seed_search_cfg["n_jitter"] = 0
+    cfg["seed_search"] = seed_search_cfg
+    cfg["use_numba"] = False
+    cfg["allow_unsafe_runtime"] = False
+
+    discrete_modes_cfg_raw = cfg.get("discrete_modes", {})
+    discrete_modes_cfg = (
+        dict(discrete_modes_cfg_raw)
+        if isinstance(discrete_modes_cfg_raw, Mapping)
+        else {}
+    )
+    # Manual GUI fits already resolve detector orientation from the saved
+    # point pairs before the solver runs. Repeating the full solver-side
+    # rot/flip sweep multiplies the work by up to 16x and has been able to
+    # stall or crash interactive runs on large datasets.
+    discrete_modes_cfg["enabled"] = False
+    cfg["discrete_modes"] = discrete_modes_cfg
+
+    # Manual detector-pixel fits should react to real peak offsets, not to a
+    # heavily downweighted residual that can remain small even when the
+    # geometry is still hundreds of pixels off.
+    optimizer_cfg["loss"] = "linear"
+    optimizer_cfg["f_scale_px"] = 1.0
+    optimizer_cfg["weighted_matching"] = False
+    optimizer_cfg["use_measurement_uncertainty"] = False
+    optimizer_cfg["anisotropic_measurement_uncertainty"] = False
 
     cfg.pop("full_beam_polish", None)
     cfg.pop("ridge_refinement", None)
@@ -3216,8 +3306,14 @@ def apply_geometry_fit_runtime_safety_overrides(
     ):
         return resolved, None
 
+    optimizer_cfg_raw = resolved.get("optimizer", None)
     solver_cfg_raw = resolved.get("solver", {})
-    solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+    if isinstance(optimizer_cfg_raw, Mapping):
+        solver_cfg = dict(optimizer_cfg_raw)
+    elif isinstance(solver_cfg_raw, Mapping):
+        solver_cfg = dict(solver_cfg_raw)
+    else:
+        solver_cfg = {}
 
     changed = False
     if bool(resolved.get("use_numba", True)):
@@ -3233,6 +3329,8 @@ def apply_geometry_fit_runtime_safety_overrides(
         solver_cfg["worker_numba_threads"] = 1
         changed = True
 
+    if isinstance(optimizer_cfg_raw, Mapping):
+        resolved["optimizer"] = solver_cfg
     resolved["solver"] = solver_cfg
     if not changed:
         return resolved, None
@@ -3267,6 +3365,17 @@ def build_geometry_fit_solver_request(
         params=dict(prepared_run.fit_params),
         measured_peaks=prepared_run.current_dataset["measured_for_fit"],
         var_names=[str(name) for name in var_names],
+        candidate_param_names=(
+            [
+                str(name)
+                for name in (
+                    refinement_config.get("candidate_param_names", [])
+                    if isinstance(refinement_config, Mapping)
+                    else []
+                )
+            ]
+            or None
+        ),
         dataset_specs=list(prepared_run.dataset_specs),
         refinement_config=refinement_config,
         runtime_safety_note=runtime_safety_note,
@@ -3287,18 +3396,26 @@ def solve_geometry_fit_request(
         "dataset_specs": request.dataset_specs,
         "refinement_config": request.refinement_config,
     }
+    signature = None
+    accepts_var_kwargs = False
+    try:
+        signature = inspect.signature(solve_fit)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        accepts_var_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        if request.candidate_param_names is not None and (
+            "candidate_param_names" in signature.parameters or accepts_var_kwargs
+        ):
+            solve_kwargs["candidate_param_names"] = request.candidate_param_names
     if callable(status_callback):
-        try:
-            signature = inspect.signature(solve_fit)
-        except (TypeError, ValueError):
-            signature = None
         if signature is not None:
             accepts_status_callback = (
                 "status_callback" in signature.parameters
-                or any(
-                    parameter.kind is inspect.Parameter.VAR_KEYWORD
-                    for parameter in signature.parameters.values()
-                )
+                or accepts_var_kwargs
             )
             if accepts_status_callback:
                 solve_kwargs["status_callback"] = status_callback
@@ -3759,6 +3876,215 @@ def build_geometry_fit_stage_summary_lines(result: object) -> list[str]:
     return lines
 
 
+def _geometry_fit_selected_discrete_mode_label(result: object) -> str | None:
+    """Return the selected solver-side discrete mode label, if any."""
+
+    discrete_summary = getattr(result, "discrete_mode_summary", None)
+    if isinstance(discrete_summary, Mapping):
+        label = str(discrete_summary.get("selected_label", "") or "").strip()
+        if label:
+            return label
+
+    chosen_mode = getattr(result, "chosen_discrete_mode", None)
+    if not isinstance(chosen_mode, Mapping):
+        return None
+
+    parts: list[str] = []
+    try:
+        rot90 = int(chosen_mode.get("rot90", chosen_mode.get("k", 0))) % 4
+    except Exception:
+        rot90 = 0
+    if rot90:
+        parts.append(f"rot90={rot90}")
+    if bool(chosen_mode.get("flip_x", False)):
+        parts.append("flip_x")
+    if bool(chosen_mode.get("flip_y", False)):
+        parts.append("flip_y")
+    return "+".join(parts) if parts else "identity"
+
+
+def _geometry_fit_combo_text(combo: object) -> str:
+    if not isinstance(combo, Mapping):
+        return "<none>"
+    pieces: list[str] = []
+    for name, raw_weight in combo.items():
+        try:
+            weight = float(raw_weight)
+        except Exception:
+            continue
+        pieces.append(f"{name}={weight:+.3f}")
+    return ", ".join(pieces) if pieces else "<none>"
+
+
+def _geometry_fit_effective_orientation_choice(
+    *,
+    native_shape: tuple[int, int],
+    orientation_choice: Mapping[str, object] | None,
+    result: object | None = None,
+) -> dict[str, object]:
+    """Compose the GUI-selected orientation with any solver-side discrete mode."""
+
+    base_choice = (
+        dict(orientation_choice)
+        if isinstance(orientation_choice, Mapping)
+        else {
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        }
+    )
+    chosen_mode = getattr(result, "chosen_discrete_mode", None)
+    if not isinstance(chosen_mode, Mapping):
+        return base_choice
+
+    solver_mode = {
+        "indexing_mode": str(chosen_mode.get("indexing_mode", "xy")),
+        "k": int(chosen_mode.get("k", 0)),
+        "flip_x": bool(chosen_mode.get("flip_x", False)),
+        "flip_y": bool(chosen_mode.get("flip_y", False)),
+        "flip_order": str(chosen_mode.get("flip_order", "yx")),
+    }
+    if (
+        solver_mode["indexing_mode"] == "xy"
+        and int(solver_mode["k"]) % 4 == 0
+        and not bool(solver_mode["flip_x"])
+        and not bool(solver_mode["flip_y"])
+    ):
+        return base_choice
+
+    from ra_sim.gui import geometry_overlay as gui_geometry_overlay
+
+    return gui_geometry_overlay.compose_orientation_transforms(
+        native_shape,
+        base_choice,
+        solver_mode,
+    )
+
+
+def _build_geometry_fit_identifiability_scope_lines(
+    label: str,
+    summary: Mapping[str, object],
+) -> list[str]:
+    status = str(summary.get("status", "unknown"))
+    lines = [
+        (
+            f"{label}: status={status} "
+            f"rank={_geometry_fit_debug_value_text(summary.get('rank', '?'), float_digits=0)}/"
+            f"{_geometry_fit_debug_value_text(summary.get('num_parameters', '?'), float_digits=0)} "
+            f"residuals={_geometry_fit_debug_value_text(summary.get('residual_count', '?'), float_digits=0)} "
+            f"underconstrained={_geometry_fit_debug_value_text(summary.get('underconstrained', False), float_digits=0)} "
+            f"priors={_geometry_fit_debug_value_text(summary.get('includes_priors', False), float_digits=0)}"
+        )
+    ]
+
+    singular_values = summary.get("singular_values", [])
+    if isinstance(singular_values, Sequence) and not isinstance(
+        singular_values, (str, bytes, bytearray)
+    ):
+        singular_array = np.asarray(list(singular_values), dtype=float).reshape(-1)
+        if singular_array.size:
+            preview = ", ".join(
+                f"{float(value):.3e}" for value in singular_array[: min(5, singular_array.size)]
+            )
+            if singular_array.size > 5:
+                preview += ", ..."
+            lines.append(f"{label}: singular_values=[{preview}]")
+
+    weak_parameters = summary.get("weak_parameters", [])
+    if isinstance(weak_parameters, Sequence) and not isinstance(
+        weak_parameters, (str, bytes, bytearray)
+    ):
+        names = [
+            str(entry.get("name", "")).strip()
+            for entry in weak_parameters
+            if isinstance(entry, Mapping) and str(entry.get("name", "")).strip()
+        ]
+        if names:
+            lines.append(f"{label}: weak_parameters={', '.join(names)}")
+
+    weak_combinations = summary.get("weak_combinations", [])
+    if isinstance(weak_combinations, Sequence) and not isinstance(
+        weak_combinations, (str, bytes, bytearray)
+    ):
+        for idx, entry in enumerate(list(weak_combinations)[:3]):
+            if not isinstance(entry, Mapping):
+                continue
+            lines.append(
+                f"{label}: weak_combo[{idx}] "
+                f"sv_rel={_geometry_fit_debug_value_text(entry.get('sv_rel', np.nan))} "
+                f"combo={_geometry_fit_combo_text(entry.get('combo', {}))}"
+            )
+
+    return lines
+
+
+def build_geometry_fit_identifiability_lines(result: object) -> list[str]:
+    """Format solver-conditioned and data-only identifiability diagnostics."""
+
+    lines: list[str] = []
+    solver_summary = getattr(result, "identifiability_summary", None)
+    if isinstance(solver_summary, Mapping):
+        lines.extend(
+            _build_geometry_fit_identifiability_scope_lines(
+                "solver_conditioned",
+                solver_summary,
+            )
+        )
+
+    data_summary = getattr(result, "data_only_identifiability_summary", None)
+    if isinstance(data_summary, Mapping):
+        lines.extend(
+            _build_geometry_fit_identifiability_scope_lines(
+                "data_only",
+                data_summary,
+            )
+        )
+
+    recommendations = getattr(result, "next_stage_recommendations", None)
+    if not isinstance(recommendations, Sequence) or isinstance(
+        recommendations, (str, bytes, bytearray)
+    ):
+        recommendations = []
+    if recommendations:
+        for idx, entry in enumerate(list(recommendations)[:3]):
+            if not isinstance(entry, Mapping):
+                continue
+            params = [
+                str(name)
+                for name in entry.get("params", [])
+                if str(name).strip()
+            ]
+            lines.append(
+                "next_stage[{idx}] params={params} rank_gain={rank_gain} "
+                "min_sv_gain={min_sv_gain} block_independence={indep} "
+                "use_soft_prior={use_soft_prior} reason={reason}".format(
+                    idx=int(idx),
+                    params=",".join(params) if params else "<none>",
+                    rank_gain=_geometry_fit_debug_value_text(
+                        entry.get("rank_gain", np.nan),
+                        float_digits=0,
+                    ),
+                    min_sv_gain=_geometry_fit_debug_value_text(
+                        entry.get("min_sv_gain", np.nan)
+                    ),
+                    indep=_geometry_fit_debug_value_text(
+                        entry.get("block_independence", np.nan)
+                    ),
+                    use_soft_prior=_geometry_fit_debug_value_text(
+                        entry.get("use_soft_prior", False),
+                        float_digits=0,
+                    ),
+                    reason=str(entry.get("reason", "")).strip(),
+                )
+            )
+    elif isinstance(data_summary, Mapping) and bool(data_summary.get("enabled", False)):
+        lines.append("next_stage: no thaw recommendation")
+
+    return lines
+
+
 def build_geometry_fit_rejection_reason_lines(
     result: object,
     *,
@@ -3767,6 +4093,14 @@ def build_geometry_fit_rejection_reason_lines(
     """Return human-readable rejection reasons for one geometry-fit result."""
 
     reasons: list[str] = []
+
+    early_stop_reason = getattr(result, "early_stop_reason", None)
+    if not early_stop_reason:
+        geometry_fit_progress = getattr(result, "geometry_fit_progress", None)
+        if isinstance(geometry_fit_progress, Mapping):
+            early_stop_reason = geometry_fit_progress.get("early_stop_reason")
+    if isinstance(early_stop_reason, str) and early_stop_reason.strip():
+        reasons.append(str(early_stop_reason).strip())
 
     if not bool(getattr(result, "success", True)):
         reasons.append("Optimizer did not report success.")
@@ -4097,11 +4431,12 @@ def build_geometry_fit_overlay_diagnostic_lines(
     frame_diag: Mapping[str, object] | None,
     *,
     overlay_record_count: int,
+    result: object | None = None,
 ) -> list[str]:
     """Format overlay frame diagnostics for the geometry-fit log."""
 
     diag = frame_diag if isinstance(frame_diag, Mapping) else {}
-    return [
+    lines = [
         "transform_rule=sim:direct_native_to_display; bg:inverse_orientation_then_display_rotation",
         f"overlay_records={int(overlay_record_count)}",
         f"paired_records={int(diag.get('paired_records', 0))}",
@@ -4110,6 +4445,10 @@ def build_geometry_fit_overlay_diagnostic_lines(
         f"sim_display_p90_px={float(diag.get('sim_display_p90_px', np.nan)):.3f}",
         f"bg_display_p90_px={float(diag.get('bg_display_p90_px', np.nan)):.3f}",
     ]
+    mode_label = _geometry_fit_selected_discrete_mode_label(result)
+    if mode_label:
+        lines.insert(1, f"solver_discrete_mode={mode_label}")
+    return lines
 
 
 def count_geometry_fit_matched_overlay_records(
@@ -4171,6 +4510,7 @@ def build_geometry_fit_summary_lines(
     values: Sequence[object],
     rms: float,
     save_path: object,
+    result: object | None = None,
 ) -> list[str]:
     """Format the fit-summary section written to the geometry-fit log."""
 
@@ -4187,6 +4527,9 @@ def build_geometry_fit_summary_lines(
             )
         ),
     ]
+    mode_label = _geometry_fit_selected_discrete_mode_label(result)
+    if mode_label:
+        lines.append(f"solver_discrete_mode={mode_label}")
     lines.extend(
         build_geometry_fit_result_lines(
             var_names,
@@ -4212,6 +4555,7 @@ def build_geometry_fit_progress_text(
     save_path: object,
     log_path: object,
     frame_warning: str | None,
+    result: object | None = None,
 ) -> str:
     """Build the final geometry-fit status text shown in the GUI."""
 
@@ -4233,6 +4577,9 @@ def build_geometry_fit_progress_text(
             )
         )
     )
+    mode_label = _geometry_fit_selected_discrete_mode_label(result)
+    if mode_label:
+        base_summary_lines.append(f"Solver discrete mode = {mode_label}")
     base_summary = "\n".join(base_summary_lines)
     overlay_hint = (
         "Overlay: blue squares=selected simulated points, amber triangles=saved "
@@ -4322,11 +4669,20 @@ def postprocess_geometry_fit_result(
         joint_background_mode=joint_background_mode,
         current_background_index=int(current_background_index),
     )
+    effective_orientation_choice = _geometry_fit_effective_orientation_choice(
+        native_shape=tuple(int(v) for v in current_dataset["native_background"].shape[:2]),
+        orientation_choice=(
+            current_dataset["orientation_choice"]
+            if isinstance(current_dataset, Mapping)
+            else None
+        ),
+        result=result,
+    )
     overlay_records = build_overlay_records(
         current_dataset["initial_pairs_display"],
         overlay_point_match_diagnostics,
         native_shape=tuple(int(v) for v in current_dataset["native_background"].shape[:2]),
-        orientation_choice=current_dataset["orientation_choice"],
+        orientation_choice=effective_orientation_choice,
         sim_display_rotate_k=int(sim_display_rotate_k),
         background_display_rotate_k=int(background_display_rotate_k),
     )
@@ -4337,6 +4693,7 @@ def postprocess_geometry_fit_result(
     overlay_diagnostic_lines = build_geometry_fit_overlay_diagnostic_lines(
         frame_diag,
         overlay_record_count=int(matched_overlay_record_count),
+        result=result,
     )
 
     export_records = build_geometry_fit_export_records(point_match_diagnostics)
@@ -4348,6 +4705,7 @@ def postprocess_geometry_fit_result(
         values=values,
         rms=rms,
         save_path=save_path,
+        result=result,
     )
     progress_text = build_geometry_fit_progress_text(
         current_dataset=current_dataset,
@@ -4361,6 +4719,7 @@ def postprocess_geometry_fit_result(
         save_path=save_path,
         log_path=log_path,
         frame_warning=frame_warning,
+        result=result,
     )
     overlay_state = {
         "overlay_records": copy_geometry_fit_state_value(overlay_records),
@@ -4415,6 +4774,12 @@ def apply_runtime_geometry_fit_result(
         bindings.log_section(
             "Solver stages:",
             stage_summary_lines,
+        )
+    identifiability_lines = build_geometry_fit_identifiability_lines(result)
+    if identifiability_lines:
+        bindings.log_section(
+            "Identifiability diagnostics:",
+            identifiability_lines,
         )
 
     result_vector = getattr(result, "x", None)

@@ -3,7 +3,7 @@ import numpy as np
 from pathlib import Path
 from types import SimpleNamespace
 
-from ra_sim.gui import geometry_fit
+from ra_sim.gui import geometry_fit, geometry_overlay
 
 
 class _DummyVar:
@@ -664,7 +664,7 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
 
     sim_params, prefer_cache = calls["sim_params"]
     assert sim_params["theta_initial"] == 1.75
-    assert prefer_cache is True
+    assert prefer_cache is False
     assert calls["unrotate"][1:] == ((6, 7), 3)
     assert calls["display_to_native"] == (9.0, 8.0, (100, 100))
     assert calls["select_orientation"] == (
@@ -853,6 +853,71 @@ def test_build_geometry_manual_fit_dataset_uses_raw_sim_display_for_native_coord
     assert dataset["initial_pairs_display"][0]["sim_display"] == (91.0, 82.0)
     assert dataset["initial_pairs_display"][0]["sim_native"] == (11.0, 12.0)
     assert calls["display_to_native"] == (9.0, 8.0, (64, 64))
+
+
+def test_build_geometry_manual_fit_dataset_preserves_caked_display_coords() -> None:
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+                "caked_x": 150.0,
+                "caked_y": 160.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((4, 5), dtype=np.float64),
+            np.zeros((4, 5), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [{"dummy": True}]
+        ),
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {
+            (1, 2): {
+                "sim_col": 91.0,
+                "sim_row": 82.0,
+                "sim_col_raw": 9.0,
+                "sim_row_raw": 8.0,
+            }
+        },
+        geometry_manual_entry_display_coords=lambda entry: (150.0, 160.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [{"x": 30.0, "y": 40.0}],
+        display_to_native_sim_coords=lambda col, row, shape: (11.0, 12.0),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    assert dataset["initial_pairs_display"][0]["sim_caked_display"] == (91.0, 82.0)
+    assert dataset["initial_pairs_display"][0]["bg_caked_display"] == (150.0, 160.0)
 
 
 def test_build_runtime_geometry_fit_value_callbacks_reads_live_runtime_values() -> None:
@@ -1066,20 +1131,19 @@ def test_build_runtime_geometry_fit_config_factory_reads_runtime_constraint_valu
 
     runtime_cfg = factory(["gamma"], {"gamma": 0.6, "a": 4.1})
 
-    assert runtime_cfg == {
-        "allow_unsafe_runtime": False,
-        "solver": {
-            "loss": "soft_l1",
-            "workers": 1,
-            "parallel_mode": "off",
-            "worker_numba_threads": 1,
-        },
-        "use_numba": False,
-        "bounds": {"gamma": [0.35, 0.85]},
-        "priors": {"gamma": {"center": 0.6, "sigma": 0.13125}},
+    assert runtime_cfg["allow_unsafe_runtime"] is False
+    assert runtime_cfg["use_numba"] is False
+    assert runtime_cfg["bounds"] == {"gamma": [0.0, 1.0]}
+    assert runtime_cfg["priors"] == {}
+    assert runtime_cfg["candidate_param_names"] == ["gamma"]
+    assert runtime_cfg["solver"] == {
+        "loss": "soft_l1",
+        "workers": 1,
+        "parallel_mode": "off",
+        "worker_numba_threads": 1,
     }
+    assert runtime_cfg["optimizer"] == runtime_cfg["solver"]
     assert calls == [
-        ("constraints", ["gamma"]),
         ("domains", ["gamma"]),
     ]
 
@@ -1165,7 +1229,7 @@ def test_read_runtime_geometry_fit_parameter_domains_uses_bounds_and_slider_rang
     )
 
     assert domains == {
-        "theta_initial": (-0.5, 0.25),
+        "theta_initial": (-4.0, 4.0),
         "gamma": (-1.0, 2.0),
         "center_x": (0.0, 255.0),
     }
@@ -1672,6 +1736,36 @@ def test_apply_geometry_fit_runtime_safety_overrides_for_windows_python_313() ->
     assert note is not None
 
 
+def test_apply_geometry_fit_runtime_safety_overrides_updates_optimizer_alias() -> None:
+    runtime_cfg, note = geometry_fit.apply_geometry_fit_runtime_safety_overrides(
+        {
+            "optimizer": {
+                "workers": "auto",
+                "parallel_mode": "auto",
+                "worker_numba_threads": 0,
+            },
+            "solver": {
+                "workers": "auto",
+                "parallel_mode": "auto",
+                "worker_numba_threads": 0,
+            },
+            "use_numba": True,
+        },
+        platform_name="nt",
+        version_info=(3, 13, 0),
+        env={},
+    )
+
+    assert runtime_cfg["use_numba"] is False
+    assert runtime_cfg["optimizer"] == {
+        "workers": 1,
+        "parallel_mode": "off",
+        "worker_numba_threads": 1,
+    }
+    assert runtime_cfg["solver"] == runtime_cfg["optimizer"]
+    assert note is not None
+
+
 def test_apply_geometry_fit_runtime_safety_overrides_honors_opt_out_env() -> None:
     runtime_cfg, note = geometry_fit.apply_geometry_fit_runtime_safety_overrides(
         {
@@ -1859,11 +1953,23 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
             "reparameterize_pairs": {"enabled": True},
             "missing_pair_penalty_deg": 7.5,
         },
+        "seed_search": {
+            "prescore_top_k": 8,
+            "n_global": 24,
+            "n_jitter": 12,
+            "jitter_sigma_u": 0.5,
+        },
         "identifiability": {
             "enabled": True,
             "auto_freeze": True,
             "selective_thaw": {"enabled": True},
             "adaptive_regularization": {"enabled": True},
+        },
+        "discrete_modes": {
+            "enabled": True,
+            "rot90": [0, 1, 2, 3],
+            "flip_x": [False, True],
+            "flip_y": [False, True],
         },
         "full_beam_polish": {"enabled": True},
         "ridge_refinement": {"enabled": True},
@@ -1878,13 +1984,15 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert changed["solver"]["manual_point_fit_mode"] is True
     assert changed["solver"]["missing_pair_penalty_px"] == 20.0
     assert changed["solver"]["missing_pair_penalty_deg"] == 7.5
-    assert changed["solver"]["parallel_mode"] == "datasets"
+    assert changed["solver"]["workers"] == 1
+    assert changed["solver"]["parallel_mode"] == "off"
+    assert changed["solver"]["worker_numba_threads"] == 1
     assert "dynamic_point_geometry_fit" not in changed["solver"]
-    assert "loss" not in changed["solver"]
-    assert "f_scale_px" not in changed["solver"]
-    assert "weighted_matching" not in changed["solver"]
-    assert "use_measurement_uncertainty" not in changed["solver"]
-    assert "anisotropic_measurement_uncertainty" not in changed["solver"]
+    assert changed["solver"]["loss"] == "linear"
+    assert changed["solver"]["f_scale_px"] == 1.0
+    assert changed["solver"]["weighted_matching"] is False
+    assert changed["solver"]["use_measurement_uncertainty"] is False
+    assert changed["solver"]["anisotropic_measurement_uncertainty"] is False
     assert "restarts" not in changed["solver"]
     assert "restart_jitter" not in changed["solver"]
     assert "stagnation_probe" not in changed["solver"]
@@ -1892,6 +2000,21 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert "stagnation_probe_random_directions" not in changed["solver"]
     assert "staged_release" not in changed["solver"]
     assert "reparameterize_pairs" not in changed["solver"]
+    assert changed["optimizer"] == changed["solver"]
+    assert changed["seed_search"] == {
+        "prescore_top_k": 1,
+        "n_global": 0,
+        "n_jitter": 0,
+        "jitter_sigma_u": 0.5,
+    }
+    assert changed["use_numba"] is False
+    assert changed["allow_unsafe_runtime"] is False
+    assert changed["discrete_modes"] == {
+        "enabled": False,
+        "rot90": [0, 1, 2, 3],
+        "flip_x": [False, True],
+        "flip_y": [False, True],
+    }
     assert changed["identifiability"]["enabled"] is True
     assert "auto_freeze" not in changed["identifiability"]
     assert "selective_thaw" not in changed["identifiability"]
@@ -1899,6 +2022,92 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert "full_beam_polish" not in changed
     assert "ridge_refinement" not in changed
     assert "image_refinement" not in changed
+
+
+def test_prepare_geometry_fit_run_rejects_dataset_without_orientation_anchor_pairs() -> None:
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0},
+        var_names=["gamma"],
+        fit_config={},
+        osc_files=["C:/data/bg0.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [4.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda background_index, **kwargs: {
+            "dataset_index": int(background_index),
+            "label": "bg0.osc",
+            "pair_count": 2,
+            "group_count": 1,
+            "summary_line": "bg[0]",
+            "spec": {"dataset_index": int(background_index)},
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {"pairs": 0, "reason": "insufficient_pairs"},
+            "resolved_source_pair_count": 1,
+            "measured_for_fit": [],
+            "experimental_image_for_fit": "image-0",
+            "initial_pairs_display": [],
+            "native_background": np.zeros((2, 2)),
+        },
+        build_runtime_config=lambda fit_params: dict(fit_params),
+    )
+
+    assert result.prepared_run is None
+    assert result.error_text == (
+        "Geometry fit unavailable: orientation preflight produced no usable "
+        "simulated/measured anchor pairs for bg0.osc. Refresh the picks before "
+        "fitting."
+    )
+
+
+def test_prepare_geometry_fit_run_rejects_fallback_only_manual_pairs() -> None:
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0},
+        var_names=["gamma"],
+        fit_config={},
+        osc_files=["C:/data/bg0.osc", "C:/data/bg1.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda indices: len(indices) > 1,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [4.0, 5.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda background_index, **kwargs: {
+            "dataset_index": int(background_index),
+            "label": f"bg{int(background_index)}.osc",
+            "pair_count": 2,
+            "group_count": 1,
+            "summary_line": f"bg[{int(background_index)}]",
+            "spec": {"dataset_index": int(background_index)},
+            "orientation_choice": {"label": "identity"},
+            "orientation_diag": {"pairs": 2, "reason": "ok"},
+            "resolved_source_pair_count": 0,
+            "measured_for_fit": [],
+            "experimental_image_for_fit": f"image-{int(background_index)}",
+            "initial_pairs_display": [],
+            "native_background": np.zeros((2, 2)),
+        },
+        build_runtime_config=lambda fit_params: dict(fit_params),
+    )
+
+    assert result.prepared_run is None
+    assert result.error_text == (
+        "Geometry fit unavailable: saved manual pairs no longer resolve to "
+        "current simulated source rows on any selected background. Refresh "
+        "the picks before fitting."
+    )
 
 
 def test_geometry_fit_dataset_cache_helpers_copy_and_validate_dataset_bundle() -> None:
@@ -3628,6 +3837,89 @@ def test_postprocess_geometry_fit_result_builds_overlay_export_and_status_payloa
     assert "frame warning" in postprocess.progress_text
     assert "joint backgrounds=2" in postprocess.progress_text
     assert f"Saved 2 peak records → {postprocess.save_path}" in postprocess.progress_text
+
+
+def test_postprocess_geometry_fit_result_composes_solver_discrete_mode_for_overlay(
+    tmp_path,
+) -> None:
+    native_shape = (9, 7)
+    base_orientation = {
+        "indexing_mode": "yx",
+        "k": 1,
+        "flip_x": True,
+        "flip_y": False,
+        "flip_order": "xy",
+        "label": "base",
+    }
+    solver_mode = {
+        "indexing_mode": "xy",
+        "k": 3,
+        "flip_x": False,
+        "flip_y": True,
+        "flip_order": "yx",
+    }
+    expected_orientation = geometry_overlay.compose_orientation_transforms(
+        native_shape,
+        base_orientation,
+        solver_mode,
+    )
+    calls: dict[str, object] = {}
+
+    class _Result:
+        point_match_summary = {"claimed": 1, "qualified": 1}
+        point_match_diagnostics = []
+        chosen_discrete_mode = solver_mode
+
+    def _build_overlay_records(
+        initial_pairs_display,
+        overlay_point_match_diagnostics,
+        *,
+        native_shape,
+        orientation_choice,
+        sim_display_rotate_k,
+        background_display_rotate_k,
+    ):
+        calls["orientation_choice"] = dict(orientation_choice)
+        return []
+
+    postprocess = geometry_fit.postprocess_geometry_fit_result(
+        fitted_params={"theta_initial": 3.0},
+        result=_Result(),
+        current_dataset={
+            "measured_for_fit": [{"x": 1.0, "y": 2.0}],
+            "initial_pairs_display": [{"pair": 1}],
+            "native_background": np.zeros(native_shape),
+            "orientation_choice": dict(base_orientation),
+            "pair_count": 1,
+            "group_count": 1,
+        },
+        joint_background_mode=False,
+        current_background_index=0,
+        dataset_count=1,
+        var_names=["gamma"],
+        values=[1.5],
+        rms=0.75,
+        miller="miller-data",
+        intensities="intensity-data",
+        image_size=512,
+        max_display_markers=120,
+        downloads_dir=tmp_path,
+        stamp="20260328_120000",
+        log_path=tmp_path / "geometry_fit_log.txt",
+        sim_display_rotate_k=1,
+        background_display_rotate_k=3,
+        simulate_and_compare_hkl=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("simulate_and_compare_hkl should not be called")
+        ),
+        aggregate_match_centers=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("aggregate_match_centers should not be called")
+        ),
+        build_overlay_records=_build_overlay_records,
+        compute_frame_diagnostics=lambda records: ({}, None),
+    )
+
+    assert calls["orientation_choice"] == expected_orientation
+    assert "solver_discrete_mode=rot90=3+flip_y" in postprocess.fit_summary_lines
 
 
 def test_apply_runtime_geometry_fit_result_orchestrates_runtime_side_effects(

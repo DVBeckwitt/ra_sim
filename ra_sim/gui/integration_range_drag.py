@@ -28,6 +28,7 @@ class IntegrationRangeDragBindings:
     caked_view_enabled_factory: object
     unscaled_image_present_factory: object
     ai_factory: object
+    show_1d_var: object = None
     sync_peak_selection_state: Callable[[], None] | None = None
     schedule_range_update: Callable[[], None] | None = None
     last_sim_res2_factory: object = None
@@ -101,6 +102,15 @@ def _safe_var_trace_add(var: object, callback: Callable[..., object]) -> None:
     trace_add = getattr(var, "trace_add", None)
     if callable(trace_add):
         trace_add("write", callback)
+
+
+def _activate_runtime_1d_analysis(show_1d_var: object) -> None:
+    setter = getattr(show_1d_var, "set", None)
+    if callable(setter):
+        try:
+            setter(True)
+        except Exception:
+            return
 
 
 def _runtime_range_update_debounce_ms(
@@ -245,6 +255,8 @@ def update_runtime_drag_rectangle(
 
     x_min, x_max = sorted((float(x0), float(x1)))
     y_min, y_max = sorted((float(y0), float(y1)))
+    bindings.integration_region_overlay.set_visible(False)
+    bindings.integration_region_rect.set_visible(False)
     bindings.drag_select_rect.set_xy((x_min, y_min))
     bindings.drag_select_rect.set_width(x_max - x_min)
     bindings.drag_select_rect.set_height(y_max - y_min)
@@ -281,34 +293,19 @@ def update_runtime_raw_drag_preview(
     bindings: IntegrationRangeDragBindings,
     ai: object,
 ) -> bool:
-    """Refresh the raw-detector integration overlay for the current drag."""
+    """Refresh the raw-detector drag box for the current drag."""
 
     drag_state = bindings.drag_state
-    if None in (drag_state.tth0, drag_state.phi0, drag_state.tth1, drag_state.phi1):
+    if None in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1):
         return False
 
-    two_theta, phi_vals = bindings.get_detector_angular_maps(ai)
-    if two_theta is None or phi_vals is None:
-        return False
-
-    tth_min, tth_max = sorted((float(drag_state.tth0), float(drag_state.tth1)))
-    phi_min, phi_max = sorted((float(drag_state.phi0), float(drag_state.phi1)))
-    mask = (
-        (two_theta >= tth_min)
-        & (two_theta <= tth_max)
-        & (phi_vals >= phi_min)
-        & (phi_vals <= phi_max)
+    update_runtime_drag_rectangle(
+        bindings,
+        drag_state.x0,
+        drag_state.y0,
+        drag_state.x1,
+        drag_state.y1,
     )
-
-    bindings.drag_select_rect.set_visible(False)
-    bindings.integration_region_rect.set_visible(False)
-    if np.any(mask):
-        bindings.integration_region_overlay.set_data(mask.astype(float))
-        bindings.integration_region_overlay.set_extent(bindings.image_display.get_extent())
-        bindings.integration_region_overlay.set_visible(True)
-    else:
-        bindings.integration_region_overlay.set_visible(False)
-    _draw_idle(bindings)
     return True
 
 
@@ -348,6 +345,7 @@ def set_runtime_integration_range_from_drag(
     view_state.tth_max_var.set(tth_max)
     view_state.phi_min_var.set(phi_min)
     view_state.phi_max_var.set(phi_max)
+    _activate_runtime_1d_analysis(bindings.show_1d_var)
 
     if callable(bindings.schedule_range_update):
         bindings.schedule_range_update()
@@ -368,6 +366,9 @@ def update_runtime_integration_region_visuals(
     sim_res2: object,
 ) -> None:
     """Refresh the current raw/caked integration-region visuals from live bindings."""
+
+    if bool(getattr(bindings.drag_state, "active", False)):
+        return
 
     show_region = _runtime_range_visible(bindings) and _runtime_unscaled_image_present(
         bindings
@@ -427,6 +428,9 @@ def refresh_runtime_integration_region_visuals(
     bindings: IntegrationRangeDragBindings,
 ) -> None:
     """Refresh integration visuals using the live AI and cached caked result."""
+
+    if bool(getattr(bindings.drag_state, "active", False)):
+        return
 
     update_runtime_integration_region_visuals(
         bindings,
@@ -589,6 +593,7 @@ def handle_runtime_integration_drag_release(
     drag_state.active = False
 
     if mode == "caked":
+        applied = False
         if (
             _runtime_caked_view_enabled(bindings)
             and getattr(event, "inaxes", None) is bindings.ax
@@ -600,18 +605,26 @@ def handle_runtime_integration_drag_release(
             drag_state.y1 = y1
 
         if None not in (drag_state.x0, drag_state.y0, drag_state.x1, drag_state.y1):
-            set_runtime_integration_range_from_drag(
+            applied = set_runtime_integration_range_from_drag(
                 bindings,
                 drag_state.x0,
                 drag_state.y0,
                 drag_state.x1,
                 drag_state.y1,
             )
-        reset_runtime_integration_drag(bindings)
+        reset_runtime_integration_drag(bindings, redraw=False)
+        if applied or _runtime_range_visible(bindings):
+            update_runtime_integration_region_visuals(
+                bindings,
+                _runtime_ai(bindings),
+                _runtime_last_sim_res2(bindings),
+            )
+        _draw_idle(bindings)
         return True
 
     if mode == "raw":
         ai = _runtime_ai(bindings)
+        applied = False
         if (
             not _runtime_caked_view_enabled(bindings)
             and ai is not None
@@ -629,22 +642,21 @@ def handle_runtime_integration_drag_release(
                 drag_state.phi1 = phi1
 
         if None not in (drag_state.tth0, drag_state.phi0, drag_state.tth1, drag_state.phi1):
-            set_runtime_integration_range_from_drag(
+            applied = set_runtime_integration_range_from_drag(
                 bindings,
                 drag_state.tth0,
                 drag_state.phi0,
                 drag_state.tth1,
                 drag_state.phi1,
             )
-        elif ai is not None:
+        reset_runtime_integration_drag(bindings, redraw=False)
+        if applied or ai is not None:
             update_runtime_integration_region_visuals(
                 bindings,
                 ai,
                 _runtime_last_sim_res2(bindings),
             )
             _draw_idle(bindings)
-
-        reset_runtime_integration_drag(bindings)
         return True
 
     reset_runtime_integration_drag(bindings)
@@ -666,6 +678,7 @@ def make_runtime_integration_range_drag_bindings_factory(
     caked_view_enabled_factory: object,
     unscaled_image_present_factory: object,
     ai_factory: object,
+    show_1d_var_factory: object = None,
     sync_peak_selection_state: Callable[[], None] | None = None,
     schedule_range_update_factory: object = None,
     last_sim_res2_factory: object = None,
@@ -689,6 +702,7 @@ def make_runtime_integration_range_drag_bindings_factory(
             caked_view_enabled_factory=caked_view_enabled_factory,
             unscaled_image_present_factory=unscaled_image_present_factory,
             ai_factory=ai_factory,
+            show_1d_var=_resolve_runtime_value(show_1d_var_factory),
             sync_peak_selection_state=sync_peak_selection_state,
             schedule_range_update=_resolve_runtime_value(schedule_range_update_factory),
             last_sim_res2_factory=last_sim_res2_factory,
@@ -863,6 +877,7 @@ def _apply_runtime_range_entry(
     entry_var: object,
     value_var: object,
     slider: object,
+    show_1d_var: object,
     schedule_range_update: Callable[..., object] | None,
 ) -> None:
     entry_value = _safe_var_get(entry_var)
@@ -881,6 +896,7 @@ def _apply_runtime_range_entry(
 
     clamped = min(max(entered, min(lo, hi)), max(lo, hi))
     _safe_var_set(value_var, clamped)
+    _activate_runtime_1d_analysis(show_1d_var)
     _sync_runtime_range_text_vars(view_state)
     if callable(schedule_range_update):
         schedule_range_update()
@@ -890,6 +906,7 @@ def _make_runtime_range_slider_callback(
     *,
     view_state: object,
     value_var_name: str,
+    show_1d_var: object,
     schedule_range_update: Callable[..., object] | None,
 ) -> Callable[[object], None]:
     def _on_changed(value: object) -> None:
@@ -901,6 +918,7 @@ def _make_runtime_range_slider_callback(
         except Exception:
             return
         _safe_var_set(value_var, numeric_value)
+        _activate_runtime_1d_analysis(show_1d_var)
         _sync_runtime_range_text_vars(view_state)
         if callable(schedule_range_update):
             schedule_range_update()
@@ -913,6 +931,7 @@ def create_runtime_integration_range_controls(
     parent: Any,
     views_module: Any,
     view_state: Any,
+    show_1d_var: object,
     tth_min: float,
     tth_max: float,
     phi_min: float,
@@ -931,21 +950,25 @@ def create_runtime_integration_range_controls(
         on_tth_min_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="tth_min_var",
+            show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
         ),
         on_tth_max_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="tth_max_var",
+            show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
         ),
         on_phi_min_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="phi_min_var",
+            show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
         ),
         on_phi_max_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="phi_max_var",
+            show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
         ),
         on_apply_entry=lambda entry_var, value_var, slider: _apply_runtime_range_entry(
@@ -953,6 +976,7 @@ def create_runtime_integration_range_controls(
             entry_var=entry_var,
             value_var=value_var,
             slider=slider,
+            show_1d_var=show_1d_var,
             schedule_range_update=schedule_range_update,
         ),
     )
@@ -991,14 +1015,7 @@ def _toggle_runtime_caked_2d(
 ) -> None:
     bindings = bindings_factory()
     show_caked_2d_var = getattr(bindings.analysis_view_state, "show_caked_2d_var", None)
-    show_1d_var = getattr(bindings.analysis_view_state, "show_1d_var", None)
     show_caked = bool(_safe_var_get(show_caked_2d_var))
-
-    if show_1d_var is not None:
-        try:
-            show_1d_var.set(show_caked)
-        except Exception:
-            pass
 
     if not show_caked:
         bindings.simulation_runtime_state.caked_limits_user_override = False

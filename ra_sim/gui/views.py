@@ -76,9 +76,650 @@ _DATASET_CONTEXT_FIELDS = (
 )
 _VIEW_MODE_CHOICES = (
     ("detector", "Detector"),
-    ("1d", "1D"),
     ("caked", "Caked"),
 )
+_FIT2D_THEME_PALETTE = {
+    "root_bg": "#f5b500",
+    "panel_bg": "#ffd11a",
+    "surface_bg": "#fff200",
+    "field_bg": "#fff78a",
+    "border": "#1626ff",
+    "accent": "#1626ff",
+    "accent_alt": "#ff00f5",
+    "text": "#1626ff",
+    "text_inverse": "#fffdf0",
+    "muted_text": "#7a5f00",
+}
+_FIT2D_THEME_TRACKED_OPTIONS = (
+    "background",
+    "foreground",
+    "activebackground",
+    "activeforeground",
+    "disabledbackground",
+    "disabledforeground",
+    "readonlybackground",
+    "insertbackground",
+    "selectbackground",
+    "selectforeground",
+    "highlightbackground",
+    "highlightcolor",
+    "selectcolor",
+    "troughcolor",
+)
+
+
+def _safe_setattr(target: object, name: str, value: object) -> bool:
+    """Best-effort ``setattr`` helper that tolerates fake/test widgets."""
+
+    try:
+        setattr(target, name, value)
+    except Exception:
+        return False
+    return True
+
+
+def _read_bool_var(var: object | None) -> bool:
+    """Return a best-effort boolean value from a Tk-style variable."""
+
+    getter = getattr(var, "get", None)
+    if callable(getter):
+        try:
+            return bool(getter())
+        except Exception:
+            return False
+    return bool(var)
+
+
+def _remember_theme_scope(root: object, widget: object) -> None:
+    """Track windows that should follow the Fit2D theme toggle."""
+
+    scopes = list(getattr(root, "_ra_fit2d_theme_scopes", ()))
+    scopes = [existing for existing in scopes if existing is not None]
+    if all(existing is not widget for existing in scopes):
+        scopes.append(widget)
+    _safe_setattr(root, "_ra_fit2d_theme_scopes", scopes)
+
+
+def _iter_theme_scopes(root: object) -> list[object]:
+    """Return the known themed windows, always including ``root``."""
+
+    scopes: list[object] = []
+    for candidate in [root, *list(getattr(root, "_ra_fit2d_theme_scopes", ()))]:
+        if candidate is None:
+            continue
+        if any(existing is candidate for existing in scopes):
+            continue
+        exists = getattr(candidate, "winfo_exists", None)
+        if callable(exists):
+            try:
+                if not bool(exists()):
+                    continue
+            except Exception:
+                continue
+        scopes.append(candidate)
+    return scopes
+
+
+def _style_theme_names(style: object) -> tuple[str, ...]:
+    """Return the ttk theme names exposed by ``style`` if available."""
+
+    getter = getattr(style, "theme_names", None)
+    if not callable(getter):
+        return ()
+    try:
+        names = getter()
+    except Exception:
+        return ()
+    return tuple(str(name) for name in names)
+
+
+def _get_active_style_theme(style: object) -> str | None:
+    """Return the active ttk theme name if it can be queried."""
+
+    theme_use = getattr(style, "theme_use", None)
+    if not callable(theme_use):
+        return None
+    try:
+        value = theme_use()
+    except TypeError:
+        return None
+    except Exception:
+        return None
+    return str(value) if value else None
+
+
+def _safe_style_theme_use(style: object, theme_name: str | None) -> None:
+    """Switch ttk themes when supported, ignoring unavailable themes."""
+
+    if not theme_name:
+        return
+    theme_use = getattr(style, "theme_use", None)
+    if not callable(theme_use):
+        return
+    try:
+        theme_use(theme_name)
+    except Exception:
+        return
+
+
+def _safe_style_configure(style: object, style_name: str, **kwargs: object) -> None:
+    """Best-effort ``ttk.Style.configure`` wrapper."""
+
+    configure = getattr(style, "configure", None)
+    if not callable(configure):
+        return
+    try:
+        configure(style_name, **kwargs)
+    except Exception:
+        return
+
+
+def _safe_style_map(style: object, style_name: str, **kwargs: object) -> None:
+    """Best-effort ``ttk.Style.map`` wrapper."""
+
+    mapper = getattr(style, "map", None)
+    if not callable(mapper):
+        return
+    try:
+        mapper(style_name, **kwargs)
+    except Exception:
+        return
+
+
+def _capture_widget_theme_defaults(widget: object) -> None:
+    """Store classic-Tk color options once so Fit2D mode can restore them."""
+
+    if getattr(widget, "_ra_fit2d_theme_defaults", None) is not None:
+        return
+    cget = getattr(widget, "cget", None)
+    if not callable(cget):
+        return
+    defaults: dict[str, object] = {}
+    for option in _FIT2D_THEME_TRACKED_OPTIONS:
+        try:
+            defaults[option] = cget(option)
+        except Exception:
+            continue
+    if defaults:
+        _safe_setattr(widget, "_ra_fit2d_theme_defaults", defaults)
+
+
+def _configure_widget_option(widget: object, option: str, value: object) -> None:
+    """Best-effort single-option configure helper."""
+
+    configure = getattr(widget, "configure", None)
+    if not callable(configure):
+        configure = getattr(widget, "config", None)
+    if not callable(configure):
+        return
+    try:
+        configure(**{option: value})
+    except Exception:
+        return
+
+
+def _restore_widget_theme_defaults(widget: object) -> None:
+    """Restore any classic-Tk colors that Fit2D mode previously replaced."""
+
+    defaults = getattr(widget, "_ra_fit2d_theme_defaults", None)
+    if not isinstance(defaults, Mapping):
+        return
+    for option, value in defaults.items():
+        _configure_widget_option(widget, str(option), value)
+
+
+def _widget_class_name(widget: object) -> str:
+    """Return the Tk widget class name when possible."""
+
+    winfo_class = getattr(widget, "winfo_class", None)
+    if callable(winfo_class):
+        try:
+            value = winfo_class()
+        except Exception:
+            value = None
+        if value:
+            return str(value)
+    return type(widget).__name__
+
+
+def _theme_classic_widget(widget: object, *, enabled: bool) -> None:
+    """Apply or restore Fit2D colors for classic Tk widgets only."""
+
+    class_name = _widget_class_name(widget)
+    if class_name.startswith("T") and class_name not in {"Text", "Tk", "Toplevel"}:
+        return
+    if not enabled:
+        _restore_widget_theme_defaults(widget)
+        return
+
+    _capture_widget_theme_defaults(widget)
+    palette = _FIT2D_THEME_PALETTE
+    if class_name in {"Tk", "Toplevel"}:
+        updates = {"background": palette["root_bg"]}
+    elif class_name in {"Frame", "Labelframe"}:
+        updates = {
+            "background": palette["panel_bg"],
+            "highlightbackground": palette["border"],
+            "highlightcolor": palette["accent_alt"],
+        }
+    elif class_name == "Canvas":
+        updates = {
+            "background": palette["panel_bg"],
+            "highlightbackground": palette["border"],
+            "highlightcolor": palette["accent_alt"],
+        }
+    elif class_name in {"Text", "Listbox"}:
+        updates = {
+            "background": palette["field_bg"],
+            "foreground": palette["text"],
+            "insertbackground": palette["accent"],
+            "selectbackground": palette["accent_alt"],
+            "selectforeground": palette["text_inverse"],
+            "highlightbackground": palette["border"],
+            "highlightcolor": palette["accent_alt"],
+        }
+    elif class_name in {"Entry", "Spinbox"}:
+        updates = {
+            "background": palette["field_bg"],
+            "foreground": palette["text"],
+            "readonlybackground": palette["field_bg"],
+            "disabledbackground": palette["panel_bg"],
+            "insertbackground": palette["accent"],
+            "selectbackground": palette["accent_alt"],
+            "selectforeground": palette["text_inverse"],
+            "highlightbackground": palette["border"],
+            "highlightcolor": palette["accent_alt"],
+        }
+    elif class_name in {"Button", "Checkbutton", "Radiobutton", "Menubutton"}:
+        updates = {
+            "background": palette["surface_bg"],
+            "foreground": palette["accent"],
+            "activebackground": palette["accent_alt"],
+            "activeforeground": palette["text_inverse"],
+            "disabledforeground": palette["muted_text"],
+            "selectcolor": palette["surface_bg"],
+            "highlightbackground": palette["border"],
+            "highlightcolor": palette["accent_alt"],
+        }
+    elif class_name == "Label":
+        updates = {
+            "background": palette["panel_bg"],
+            "foreground": palette["text"],
+        }
+    elif class_name == "Scrollbar":
+        updates = {
+            "background": palette["surface_bg"],
+            "activebackground": palette["accent_alt"],
+            "troughcolor": palette["panel_bg"],
+            "highlightbackground": palette["border"],
+            "highlightcolor": palette["accent_alt"],
+        }
+    else:
+        updates = {}
+    for option, value in updates.items():
+        _configure_widget_option(widget, option, value)
+
+
+def _theme_classic_widget_tree(widget: object, *, enabled: bool) -> None:
+    """Walk one widget subtree and update every classic-Tk widget."""
+
+    visited: set[int] = set()
+
+    def _walk(current: object) -> None:
+        identifier = id(current)
+        if identifier in visited:
+            return
+        visited.add(identifier)
+        _theme_classic_widget(current, enabled=enabled)
+        winfo_children = getattr(current, "winfo_children", None)
+        if not callable(winfo_children):
+            return
+        try:
+            children = list(winfo_children())
+        except Exception:
+            return
+        for child in children:
+            _walk(child)
+
+    _walk(widget)
+
+
+def _configure_section_styles(root: tk.Misc, style: object, *, themed: bool) -> None:
+    """Apply shared ttk structure styling, optionally with Fit2D colors."""
+
+    heading_font = getattr(root, "_ra_section_heading_font", None)
+    labelframe_kwargs: dict[str, object] = {
+        "borderwidth": 2,
+        "relief": "groove",
+        "padding": (10, 8),
+    }
+    title_style_kwargs: dict[str, object] = {
+        "padding": (4, 0, 4, 2),
+    }
+    collapsible_style_kwargs: dict[str, object] = {
+        "padding": (8, 6),
+        "anchor": "w",
+    }
+    notebook_tab_kwargs: dict[str, object] = {
+        "padding": (12, 8),
+    }
+    if heading_font is not None:
+        title_style_kwargs["font"] = heading_font
+        collapsible_style_kwargs["font"] = heading_font
+    if themed:
+        palette = _FIT2D_THEME_PALETTE
+        labelframe_kwargs.update(
+            background=palette["panel_bg"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+        )
+        title_style_kwargs.update(
+            background=palette["panel_bg"],
+            foreground=palette["accent"],
+        )
+        collapsible_style_kwargs.update(
+            background=palette["surface_bg"],
+            foreground=palette["accent"],
+        )
+        notebook_tab_kwargs.update(
+            background=palette["surface_bg"],
+            foreground=palette["accent"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+        )
+    _safe_style_configure(style, "TLabelframe", **labelframe_kwargs)
+    _safe_style_configure(style, "TLabelframe.Label", **title_style_kwargs)
+    _safe_style_configure(style, "SectionHeader.Toolbutton", **collapsible_style_kwargs)
+    _safe_style_configure(style, "TNotebook.Tab", **notebook_tab_kwargs)
+
+
+def _apply_fit2d_ttk_theme(root: tk.Misc, style: object, *, enabled: bool) -> None:
+    """Switch ttk styling between the normal UI and the Fit2D palette."""
+
+    current_theme = _get_active_style_theme(style)
+    if getattr(root, "_ra_default_ttk_theme", None) is None and current_theme:
+        _safe_setattr(root, "_ra_default_ttk_theme", current_theme)
+
+    if enabled:
+        if "clam" in _style_theme_names(style):
+            _safe_style_theme_use(style, "clam")
+        palette = _FIT2D_THEME_PALETTE
+        _safe_style_configure(
+            style,
+            ".",
+            background=palette["panel_bg"],
+            foreground=palette["text"],
+            fieldbackground=palette["field_bg"],
+            insertcolor=palette["accent"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            troughcolor=palette["panel_bg"],
+            focuscolor=palette["accent_alt"],
+        )
+        _safe_style_configure(style, "TFrame", background=palette["panel_bg"])
+        _safe_style_configure(style, "TPanedwindow", background=palette["root_bg"])
+        _safe_style_configure(
+            style,
+            "TLabel",
+            background=palette["panel_bg"],
+            foreground=palette["text"],
+        )
+        _safe_style_configure(
+            style,
+            "TButton",
+            background=palette["surface_bg"],
+            foreground=palette["accent"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            focuscolor=palette["accent_alt"],
+        )
+        _safe_style_map(
+            style,
+            "TButton",
+            background=[
+                ("pressed", palette["accent_alt"]),
+                ("active", palette["accent_alt"]),
+                ("disabled", palette["panel_bg"]),
+            ],
+            foreground=[
+                ("pressed", palette["text_inverse"]),
+                ("active", palette["text_inverse"]),
+                ("disabled", palette["muted_text"]),
+            ],
+        )
+        _safe_style_configure(
+            style,
+            "TCheckbutton",
+            background=palette["panel_bg"],
+            foreground=palette["text"],
+            indicatorcolor=palette["surface_bg"],
+            focuscolor=palette["accent_alt"],
+        )
+        _safe_style_map(
+            style,
+            "TCheckbutton",
+            background=[("active", palette["panel_bg"])],
+            foreground=[("disabled", palette["muted_text"])],
+            indicatorcolor=[
+                ("selected", palette["accent_alt"]),
+                ("!selected", palette["surface_bg"]),
+            ],
+        )
+        _safe_style_configure(
+            style,
+            "TRadiobutton",
+            background=palette["panel_bg"],
+            foreground=palette["text"],
+            indicatorcolor=palette["surface_bg"],
+            focuscolor=palette["accent_alt"],
+        )
+        _safe_style_map(
+            style,
+            "TRadiobutton",
+            background=[("active", palette["panel_bg"])],
+            foreground=[("disabled", palette["muted_text"])],
+            indicatorcolor=[
+                ("selected", palette["accent_alt"]),
+                ("!selected", palette["surface_bg"]),
+            ],
+        )
+        _safe_style_configure(
+            style,
+            "TEntry",
+            fieldbackground=palette["field_bg"],
+            foreground=palette["text"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            insertcolor=palette["accent"],
+        )
+        _safe_style_map(
+            style,
+            "TEntry",
+            fieldbackground=[
+                ("readonly", palette["field_bg"]),
+                ("disabled", palette["panel_bg"]),
+            ],
+            foreground=[("disabled", palette["muted_text"])],
+        )
+        _safe_style_configure(
+            style,
+            "TSpinbox",
+            fieldbackground=palette["field_bg"],
+            foreground=palette["text"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            insertcolor=palette["accent"],
+            arrowsize=14,
+        )
+        _safe_style_map(
+            style,
+            "TSpinbox",
+            fieldbackground=[
+                ("readonly", palette["field_bg"]),
+                ("disabled", palette["panel_bg"]),
+            ],
+            foreground=[("disabled", palette["muted_text"])],
+            arrowcolor=[
+                ("active", palette["accent_alt"]),
+                ("!active", palette["accent"]),
+            ],
+        )
+        _safe_style_configure(
+            style,
+            "TCombobox",
+            fieldbackground=palette["field_bg"],
+            foreground=palette["text"],
+            background=palette["surface_bg"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            arrowsize=14,
+        )
+        _safe_style_map(
+            style,
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", palette["field_bg"]),
+                ("disabled", palette["panel_bg"]),
+            ],
+            foreground=[("disabled", palette["muted_text"])],
+            arrowcolor=[
+                ("active", palette["accent_alt"]),
+                ("!active", palette["accent"]),
+            ],
+        )
+        _safe_style_configure(
+            style,
+            "TNotebook",
+            background=palette["root_bg"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            tabmargins=(6, 6, 6, 0),
+        )
+        _safe_style_map(
+            style,
+            "TNotebook.Tab",
+            background=[
+                ("selected", palette["accent_alt"]),
+                ("active", palette["surface_bg"]),
+            ],
+            foreground=[
+                ("selected", palette["text_inverse"]),
+                ("active", palette["accent"]),
+            ],
+        )
+        _safe_style_configure(
+            style,
+            "TScrollbar",
+            background=palette["surface_bg"],
+            troughcolor=palette["panel_bg"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            arrowcolor=palette["accent"],
+        )
+        _safe_style_map(
+            style,
+            "TScrollbar",
+            background=[
+                ("active", palette["accent_alt"]),
+                ("pressed", palette["accent_alt"]),
+            ],
+            arrowcolor=[
+                ("active", palette["text_inverse"]),
+                ("pressed", palette["text_inverse"]),
+            ],
+        )
+        _safe_style_configure(
+            style,
+            "Treeview",
+            background=palette["field_bg"],
+            foreground=palette["text"],
+            fieldbackground=palette["field_bg"],
+            bordercolor=palette["border"],
+        )
+        _safe_style_map(
+            style,
+            "Treeview",
+            background=[("selected", palette["accent_alt"])],
+            foreground=[("selected", palette["text_inverse"])],
+        )
+        _safe_style_configure(
+            style,
+            "TSeparator",
+            background=palette["border"],
+        )
+        _configure_section_styles(root, style, themed=True)
+        return
+
+    default_theme = getattr(root, "_ra_default_ttk_theme", None)
+    if default_theme:
+        _safe_style_theme_use(style, str(default_theme))
+    _configure_section_styles(root, style, themed=False)
+
+
+def _apply_fit2d_theme(root: object, *, enabled: bool) -> None:
+    """Apply or restore the global Fit2D easter-egg palette."""
+
+    _remember_theme_scope(root, root)
+    try:
+        style = ttk.Style(root)
+    except Exception:
+        style = None
+
+    if style is not None:
+        _apply_fit2d_ttk_theme(root, style, enabled=enabled)
+
+    for scope in _iter_theme_scopes(root):
+        _theme_classic_widget_tree(scope, enabled=enabled)
+
+    if enabled:
+        root_background = _FIT2D_THEME_PALETTE["root_bg"]
+    else:
+        root_background = getattr(root, "_ra_default_root_background", None)
+    if root_background is not None:
+        _configure_widget_option(root, "background", root_background)
+
+    _safe_setattr(root, "_ra_fit2d_theme_enabled", bool(enabled))
+
+
+def _sync_fit2d_theme_scope(root: object, widget: object) -> None:
+    """Register one window and immediately apply the current Fit2D state."""
+
+    _remember_theme_scope(root, widget)
+    if _read_bool_var(getattr(root, "_ra_fit2d_theme_var", None)):
+        _theme_classic_widget_tree(widget, enabled=True)
+
+
+def _bind_fit2d_theme(root: object, enabled_var: object | None) -> None:
+    """Bind the Fit2D variable so the whole UI rethemes live."""
+
+    if enabled_var is None:
+        return
+    _safe_setattr(root, "_ra_fit2d_theme_var", enabled_var)
+    _remember_theme_scope(root, root)
+
+    trace_add = getattr(enabled_var, "trace_add", None)
+    if callable(trace_add) and not getattr(root, "_ra_fit2d_theme_bound", False):
+        try:
+            trace_add(
+                "write",
+                lambda *_args: _apply_fit2d_theme(
+                    root,
+                    enabled=_read_bool_var(enabled_var),
+                ),
+            )
+            _safe_setattr(root, "_ra_fit2d_theme_bound", True)
+        except Exception:
+            pass
+    _apply_fit2d_theme(root, enabled=_read_bool_var(enabled_var))
 
 
 def _configure_root_styles(root: tk.Misc) -> None:
@@ -88,6 +729,13 @@ def _configure_root_styles(root: tk.Misc) -> None:
         style = ttk.Style(root)
     except Exception:
         return
+    if getattr(root, "_ra_default_root_background", None) is None:
+        cget = getattr(root, "cget", None)
+        if callable(cget):
+            try:
+                _safe_setattr(root, "_ra_default_root_background", cget("background"))
+            except Exception:
+                pass
 
     heading_font = None
     try:
@@ -97,29 +745,11 @@ def _configure_root_styles(root: tk.Misc) -> None:
     except Exception:
         heading_font = None
 
-    style.configure(
-        "TLabelframe",
-        borderwidth=2,
-        relief="groove",
-        padding=(10, 8),
-    )
+    current_theme = _get_active_style_theme(style)
+    if getattr(root, "_ra_default_ttk_theme", None) is None and current_theme:
+        _safe_setattr(root, "_ra_default_ttk_theme", current_theme)
 
-    title_style_kwargs: dict[str, object] = {
-        "padding": (4, 0, 4, 2),
-    }
-    if heading_font is not None:
-        title_style_kwargs["font"] = heading_font
-    style.configure("TLabelframe.Label", **title_style_kwargs)
-
-    collapsible_style_kwargs: dict[str, object] = {
-        "padding": (8, 6),
-        "anchor": "w",
-    }
-    if heading_font is not None:
-        collapsible_style_kwargs["font"] = heading_font
-    style.configure("SectionHeader.Toolbutton", **collapsible_style_kwargs)
-
-    style.configure("TNotebook.Tab", padding=(12, 8))
+    _configure_section_styles(root, style, themed=False)
 
 
 def create_root_window(title: str = "RA Simulation") -> tk.Tk:
@@ -397,6 +1027,7 @@ def create_app_shell(
 ) -> None:
     """Create the shared top-level GUI shell and notebook layout."""
 
+    _bind_fit2d_theme(root, fit2d_error_sound_var)
     main_pane = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
     main_pane.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(6, 0))
 
@@ -477,38 +1108,12 @@ def create_app_shell(
     canvas_context_frame = ttk.Frame(figure_panel, padding=(10, 0, 10, 6))
     canvas_context_frame.pack(side=tk.TOP, fill=tk.X)
     canvas_context_left = ttk.Frame(canvas_context_frame)
-    canvas_context_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    canvas_context_left.pack(side=tk.LEFT, fill=tk.X, expand=True)
     canvas_context_right = ttk.Frame(canvas_context_frame)
     canvas_context_right.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
 
-    mode_banner_frame = ttk.LabelFrame(
-        canvas_context_left,
-        text="Current Mode",
-        padding=(8, 6),
-    )
-    mode_banner_frame.pack(fill=tk.BOTH, expand=True)
-    mode_banner_title_var = tk.StringVar(value="Ready to start")
-    mode_banner_title_label = ttk.Label(
-        mode_banner_frame,
-        textvariable=mode_banner_title_var,
-        anchor=tk.W,
-        justify=tk.LEFT,
-    )
-    mode_banner_title_label.pack(fill=tk.X)
-    mode_banner_detail_var = tk.StringVar(
-        value="Load backgrounds in Setup, then use Match to choose peaks and fit geometry."
-    )
-    mode_banner_detail_label = ttk.Label(
-        mode_banner_frame,
-        textvariable=mode_banner_detail_var,
-        anchor=tk.W,
-        justify=tk.LEFT,
-        wraplength=540,
-    )
-    mode_banner_detail_label.pack(fill=tk.X, pady=(4, 0))
-
     dataset_summary_frame = ttk.LabelFrame(
-        canvas_context_right,
+        canvas_context_left,
         text="Current Dataset",
         padding=(8, 6),
     )
@@ -527,7 +1132,7 @@ def create_app_shell(
         text="Fit Health",
         padding=(8, 6),
     )
-    fit_health_frame.pack(fill=tk.X, pady=(6, 0))
+    fit_health_frame.pack(fill=tk.X)
     fit_health_status_label = ttk.Label(
         fit_health_frame,
         text="Not run",
@@ -576,8 +1181,8 @@ def create_app_shell(
     parameter_notebook.pack(fill=tk.BOTH, expand=True)
     refine_basic_tab = ttk.Frame(parameter_notebook)
     refine_advanced_tab = ttk.Frame(parameter_notebook)
-    parameter_notebook.add(refine_basic_tab, text="Basic")
-    parameter_notebook.add(refine_advanced_tab, text="Advanced")
+    parameter_notebook.add(refine_basic_tab, text="Setup")
+    parameter_notebook.add(refine_advanced_tab, text="Sample Structure")
     refine_basic_scroll, refine_basic_body, refine_basic_canvas = (
         _create_scrolled_frame(refine_basic_tab)
     )
@@ -687,8 +1292,7 @@ def create_app_shell(
     match_parameter_frame.pack(fill=tk.X, padx=5, pady=5)
     _add_match_guidance(
         match_parameter_frame,
-        "Enable only the geometry parameters that should move during fitting, "
-        "then tighten or relax the allowed deviation constraints.",
+        "Enable only the geometry parameters that should move during fitting.",
     )
 
     match_run_frame = ttk.LabelFrame(
@@ -759,7 +1363,7 @@ def create_app_shell(
     ).pack(anchor=tk.W, pady=(4, 0))
     ttk.Label(
         help_quickstart_frame,
-        text="Modes: manual placement and HKL image-pick show their next action in the Current Mode panel.",
+        text="Modes: manual placement and HKL image-pick change how clicks on the detector are interpreted while active.",
         justify=tk.LEFT,
         wraplength=420,
     ).pack(anchor=tk.W, pady=(8, 0))
@@ -810,15 +1414,16 @@ def create_app_shell(
             help_preferences_frame,
             text=(
                 "Optional UI behavior toggles live here. "
-                "The Fit2D beep only plays when Backspace is pressed past the "
-                "start of an editable input."
+                "Fit2D mode enables the retro yellow/blue/magenta palette and "
+                "plays the Fit2D beep when Backspace is pressed past the start "
+                "of an editable input."
             ),
             justify=tk.LEFT,
             wraplength=420,
         ).pack(anchor=tk.W)
         fit2d_error_sound_checkbutton = ttk.Checkbutton(
             help_preferences_frame,
-            text="Enable Fit2D backspace error noise",
+            text="Enable Fit2D mode (theme + error noise)",
             variable=fit2d_error_sound_var,
         )
         fit2d_error_sound_checkbutton.pack(anchor=tk.W, pady=(8, 0))
@@ -837,11 +1442,17 @@ def create_app_shell(
     fig_frame = ttk.Frame(figure_panel)
     fig_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    canvas_frame = ttk.Frame(fig_frame)
+    figure_controls_frame = ttk.Frame(fig_frame)
+    figure_controls_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+    figure_workspace_frame = ttk.Frame(fig_frame)
+    figure_workspace_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    canvas_frame = ttk.Frame(figure_workspace_frame)
     canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     quick_controls_frame = ttk.LabelFrame(
-        fig_frame,
+        figure_workspace_frame,
         text="Quick Controls",
         padding=(8, 6),
     )
@@ -867,11 +1478,11 @@ def create_app_shell(
     view_state.workflow_checklist_frame = workflow_checklist_frame
     view_state.workflow_checklist_status_vars = workflow_checklist_status_vars
     view_state.workflow_checklist_status_labels = workflow_checklist_status_labels
-    view_state.mode_banner_frame = mode_banner_frame
-    view_state.mode_banner_title_var = mode_banner_title_var
-    view_state.mode_banner_title_label = mode_banner_title_label
-    view_state.mode_banner_detail_var = mode_banner_detail_var
-    view_state.mode_banner_detail_label = mode_banner_detail_label
+    view_state.mode_banner_frame = None
+    view_state.mode_banner_title_var = None
+    view_state.mode_banner_title_label = None
+    view_state.mode_banner_detail_var = None
+    view_state.mode_banner_detail_label = None
     view_state.run_status_frame = run_status_frame
     view_state.run_status_var = run_status_var
     view_state.run_status_label = run_status_label
@@ -936,12 +1547,15 @@ def create_app_shell(
     view_state.analysis_exports_frame = analysis_exports_frame
     view_state.status_frame = status_frame
     view_state.fig_frame = fig_frame
+    view_state.figure_workspace_frame = figure_workspace_frame
     view_state.canvas_frame = canvas_frame
+    view_state.figure_controls_frame = figure_controls_frame
     view_state.quick_controls_frame = quick_controls_frame
     view_state.quick_controls_body = quick_controls_body
     view_state.left_col = left_col
     view_state.right_col = right_col
     view_state.plot_frame_1d = plot_frame_1d
+    _sync_fit2d_theme_scope(root, root)
 
 
 def _set_var_if_possible(var: object, value: object) -> None:
@@ -1027,9 +1641,32 @@ def set_app_shell_view_mode(
     """Sync the persistent view-switcher selection to one logical mode."""
 
     normalized = str(mode or "detector").strip().lower()
-    if normalized not in {"detector", "1d", "caked"}:
+    if normalized not in {"detector", "caked"}:
         normalized = "detector"
     _set_var_if_possible(view_state.view_mode_var, normalized)
+
+
+def bind_app_shell_view_mode_sync(
+    *,
+    view_state: AppShellViewState,
+    show_1d_var: object,
+    show_caked_2d_var: object,
+    resolve_mode: Callable[[], object],
+) -> None:
+    """Keep the persistent view switcher synced to the live analysis mode."""
+
+    def _sync(*_args: object) -> None:
+        try:
+            mode = resolve_mode()
+        except Exception:
+            mode = "detector"
+        set_app_shell_view_mode(view_state, mode)
+
+    for var in (show_1d_var, show_caked_2d_var):
+        trace_add = getattr(var, "trace_add", None)
+        if callable(trace_add):
+            trace_add("write", _sync)
+    _sync()
 
 
 def populate_app_shell_view_switcher(
@@ -1037,7 +1674,7 @@ def populate_app_shell_view_switcher(
     view_state: AppShellViewState,
     on_select: Callable[[str], None],
 ) -> None:
-    """Populate the persistent detector/1D/caked view switcher."""
+    """Populate the persistent detector/caked view switcher."""
 
     if view_state.view_switcher_frame is None:
         return
@@ -1118,7 +1755,7 @@ def populate_app_shell_quick_controls(
     controls: Sequence[Mapping[str, object]],
     on_more_controls: Callable[[], None] | None = None,
 ) -> None:
-    """Populate the pinned quick-controls rail beside the detector canvas."""
+    """Populate the pinned quick-controls block above the display controls."""
 
     parent = (
         view_state.quick_controls_body
@@ -1133,14 +1770,43 @@ def populate_app_shell_quick_controls(
         parent,
         text="Pinned controls for fast geometry iteration near the detector view.",
         justify=tk.LEFT,
-        wraplength=240,
+        wraplength=520,
     ).pack(fill=tk.X, pady=(0, 8))
     for control in controls:
         key = str(control.get("key", "")).strip()
         if not key:
             continue
+        control_type = str(control.get("control_type", "slider") or "slider").strip().lower()
         label_text = str(control.get("label", key))
         variable = control.get("variable")
+        if variable is None:
+            continue
+        if control_type in {"choice", "option", "select"}:
+            options = tuple(
+                str(option).strip()
+                for option in (control.get("options") or ())
+                if str(option).strip()
+            )
+            if not options:
+                continue
+            getter = getattr(variable, "get", None)
+            current_value = str(getter() if callable(getter) else "").strip()
+            default_value = str(control.get("default", current_value)).strip()
+            if default_value not in options:
+                default_value = current_value if current_value in options else options[0]
+
+            row = ttk.Frame(parent)
+            row.pack(fill=tk.X, pady=(0, 8))
+            ttk.Label(row, text=label_text).pack(anchor=tk.W)
+            menu = ttk.OptionMenu(row, variable, default_value, *options)
+            menu.pack(fill=tk.X, pady=(2, 0))
+            view_state.quick_control_widgets[key] = {
+                "frame": row,
+                "menu": menu,
+                "options": options,
+                "variable": variable,
+            }
+            continue
         source_scale = control.get("scale")
         on_change = control.get("command")
         step = float(control.get("step", 1.0) or 1.0)
@@ -1789,7 +2455,7 @@ def create_display_controls(
     """Create the background/simulation display-control panels."""
 
     frame = ttk.Frame(parent)
-    frame.pack(side=tk.BOTTOM, fill=tk.X)
+    frame.pack(side=tk.TOP, fill=tk.X)
 
     background_controls = ttk.LabelFrame(frame, text="Background Display")
     background_controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -3250,7 +3916,7 @@ def create_hkl_lookup_controls(
 
     show_bragg_ewald_button = ttk.Button(
         frame,
-        text="Show Bragg/Ewald",
+        text="Open Specular View",
         command=on_show_bragg_ewald,
     )
     show_bragg_ewald_button.grid(
@@ -3333,9 +3999,10 @@ def create_geometry_overlay_action_controls(
     parent: tk.Misc,
     view_state: GeometryOverlayActionsViewState,
     on_toggle_qr_cylinder_overlay: Callable[[], None],
-    on_clear_geometry_overlays: Callable[[], None],
+    on_toggle_geometry_overlays: Callable[[], None],
     on_fit_mosaic: Callable[[], None],
     show_qr_cylinder_overlay: bool = False,
+    show_geometry_overlays: bool = True,
 ) -> None:
     """Create the overlay/mosaic action controls for the fit-actions column."""
 
@@ -3348,12 +4015,14 @@ def create_geometry_overlay_action_controls(
     )
     show_qr_cylinder_overlay_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
 
-    clear_geometry_markers_button = ttk.Button(
+    show_geometry_overlays_var = tk.BooleanVar(value=bool(show_geometry_overlays))
+    show_geometry_overlays_checkbutton = ttk.Checkbutton(
         parent,
-        text="Clear Geometry Overlays",
-        command=on_clear_geometry_overlays,
+        text="Show Geometry Overlays",
+        variable=show_geometry_overlays_var,
+        command=on_toggle_geometry_overlays,
     )
-    clear_geometry_markers_button.pack(side=tk.TOP, padx=5, pady=2)
+    show_geometry_overlays_checkbutton.pack(side=tk.TOP, padx=5, pady=2)
 
     fit_button_mosaic = ttk.Button(
         parent,
@@ -3366,7 +4035,10 @@ def create_geometry_overlay_action_controls(
     view_state.show_qr_cylinder_overlay_checkbutton = (
         show_qr_cylinder_overlay_checkbutton
     )
-    view_state.clear_geometry_markers_button = clear_geometry_markers_button
+    view_state.show_geometry_overlays_var = show_geometry_overlays_var
+    view_state.show_geometry_overlays_checkbutton = (
+        show_geometry_overlays_checkbutton
+    )
     view_state.fit_button_mosaic = fit_button_mosaic
 
 
@@ -3386,15 +4058,7 @@ def create_analysis_view_controls(
     """Create the analysis view toggle controls and store their vars."""
 
     show_1d_var = tk.BooleanVar(value=bool(show_1d or show_caked_2d))
-
     show_caked_2d_var = tk.BooleanVar(value=bool(show_caked_2d))
-    check_2d = ttk.Checkbutton(
-        parent,
-        text="Show 2D Caked Integration",
-        variable=show_caked_2d_var,
-        command=on_toggle_caked_2d,
-    )
-    check_2d.pack(side=tk.TOP, padx=5, pady=2)
 
     log_radial_var = tk.BooleanVar(value=bool(log_radial))
     check_log_radial = ttk.Checkbutton(
@@ -3417,7 +4081,7 @@ def create_analysis_view_controls(
     view_state.show_1d_var = show_1d_var
     view_state.check_1d = None
     view_state.show_caked_2d_var = show_caked_2d_var
-    view_state.check_2d = check_2d
+    view_state.check_2d = None
     view_state.log_radial_var = log_radial_var
     view_state.check_log_radial = check_log_radial
     view_state.log_azimuth_var = log_azimuth_var
@@ -4278,6 +4942,7 @@ def open_geometry_q_group_window(
             event=event,
         ),
     )
+    _sync_fit2d_theme_scope(root, window)
     return True
 
 
@@ -4552,6 +5217,7 @@ def open_bragg_qr_manager_window(
     view_state.qr_status_label = qr_status_label
     view_state.l_listbox = l_listbox
     view_state.l_status_label = l_status_label
+    _sync_fit2d_theme_scope(root, window)
     return True
 
 
@@ -4712,4 +5378,5 @@ def open_hbn_geometry_debug_window(
     view_state.window = window
     view_state.text_widget = text_widget
     set_hbn_geometry_debug_text(view_state, text)
+    _sync_fit2d_theme_scope(root, window)
     return True

@@ -342,6 +342,118 @@ def test_create_root_window_sets_title_and_configures_section_styles(monkeypatch
     assert affinity_calls == [(fake_root, launch_context, None, None)]
 
 
+class _FakeThemeWidget:
+    def __init__(self, class_name: str, **options) -> None:
+        self._class_name = class_name
+        self._options = dict(options)
+        self._children = []
+
+    def add_child(self, child) -> None:
+        self._children.append(child)
+
+    def winfo_class(self) -> str:
+        return self._class_name
+
+    def winfo_children(self):
+        return list(self._children)
+
+    def winfo_exists(self) -> bool:
+        return True
+
+    def cget(self, option: str):
+        if option not in self._options:
+            raise tk.TclError(option)
+        return self._options[option]
+
+    def configure(self, **kwargs) -> None:
+        self._options.update(kwargs)
+
+    def config(self, **kwargs) -> None:
+        self.configure(**kwargs)
+
+
+def test_bind_fit2d_theme_restyles_and_restores_widgets(monkeypatch) -> None:
+    class _FakeStyle:
+        def __init__(self, _root) -> None:
+            self.configure_calls = []
+            self.map_calls = []
+            self.theme = "vista"
+
+        def configure(self, name: str, **kwargs) -> None:
+            self.configure_calls.append((name, kwargs))
+
+        def map(self, name: str, **kwargs) -> None:
+            self.map_calls.append((name, kwargs))
+
+        def theme_names(self):
+            return ("vista", "clam")
+
+        def theme_use(self, name: str | None = None):
+            if name is None:
+                return self.theme
+            self.theme = name
+            return self.theme
+
+    style = _FakeStyle(None)
+    root = _FakeThemeWidget("Tk", background="#f0f0f0")
+    root._ra_default_root_background = "#f0f0f0"
+    canvas = _FakeThemeWidget(
+        "Canvas",
+        background="#ffffff",
+        highlightbackground="#444444",
+        highlightcolor="#444444",
+    )
+    text_widget = _FakeThemeWidget(
+        "Text",
+        background="#ffffff",
+        foreground="#000000",
+        insertbackground="#000000",
+        selectbackground="#224488",
+        selectforeground="#ffffff",
+        highlightbackground="#444444",
+        highlightcolor="#444444",
+    )
+    root.add_child(canvas)
+    root.add_child(text_widget)
+
+    popup = _FakeThemeWidget("Toplevel", background="#f0f0f0")
+    listbox = _FakeThemeWidget(
+        "Listbox",
+        background="#ffffff",
+        foreground="#000000",
+        selectbackground="#224488",
+        selectforeground="#ffffff",
+        highlightbackground="#444444",
+        highlightcolor="#444444",
+    )
+    popup.add_child(listbox)
+
+    fit2d_var = _FakeStringVar(False)
+
+    monkeypatch.setattr(views.ttk, "Style", lambda _root: style)
+
+    views._bind_fit2d_theme(root, fit2d_var)
+    views._sync_fit2d_theme_scope(root, popup)
+    fit2d_var.set(True)
+
+    assert getattr(root, "_ra_fit2d_theme_enabled") is True
+    assert style.theme == "clam"
+    assert any(name == "." for name, _kwargs in style.configure_calls)
+    assert root._options["background"] == views._FIT2D_THEME_PALETTE["root_bg"]
+    assert canvas._options["background"] == views._FIT2D_THEME_PALETTE["panel_bg"]
+    assert text_widget._options["selectbackground"] == views._FIT2D_THEME_PALETTE["accent_alt"]
+    assert listbox._options["background"] == views._FIT2D_THEME_PALETTE["field_bg"]
+
+    fit2d_var.set(False)
+
+    assert getattr(root, "_ra_fit2d_theme_enabled") is False
+    assert style.theme == "vista"
+    assert root._options["background"] == "#f0f0f0"
+    assert canvas._options["background"] == "#ffffff"
+    assert text_widget._options["foreground"] == "#000000"
+    assert listbox._options["background"] == "#ffffff"
+
+
 class _FakeCollapsibleFrame:
     def __init__(self, parent, text: str = "", expanded: bool = False) -> None:
         self.parent = parent
@@ -830,13 +942,17 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
         "geometry_fit",
         "analysis",
     }
-    assert isinstance(view_state.mode_banner_frame, _FakeFrame)
-    assert view_state.mode_banner_title_var.get() == "Ready to start"
+    assert view_state.mode_banner_frame is None
+    assert view_state.mode_banner_title_var is None
     assert isinstance(view_state.view_switcher_frame, _FakeFrame)
     assert view_state.view_mode_var.get() == "detector"
     assert isinstance(view_state.canvas_context_frame, _FakeFrame)
+    assert isinstance(view_state.canvas_context_left, _FakeFrame)
+    assert isinstance(view_state.canvas_context_right, _FakeFrame)
     assert isinstance(view_state.dataset_summary_frame, _FakeFrame)
     assert isinstance(view_state.fit_health_frame, _FakeFrame)
+    assert view_state.dataset_summary_frame.parent is view_state.canvas_context_left
+    assert view_state.fit_health_frame.parent is view_state.canvas_context_right
     assert set(view_state.dataset_value_labels) == {
         "background",
         "theta_i",
@@ -853,8 +969,8 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
         "Help",
     ]
     assert [text for _, text in view_state.parameter_notebook.tabs] == [
-        "Basic",
-        "Advanced",
+        "Setup",
+        "Sample Structure",
     ]
     assert isinstance(view_state.setup_body, _FakeFrame)
     assert isinstance(view_state.match_body, _FakeFrame)
@@ -878,9 +994,15 @@ def test_create_app_shell_stores_shared_shell_refs_and_notebook_state(
     assert isinstance(view_state.analysis_exports_frame, _FakeFrame)
     assert isinstance(view_state.status_frame, _FakeFrame)
     assert isinstance(view_state.fig_frame, _FakeFrame)
+    assert isinstance(view_state.figure_workspace_frame, _FakeFrame)
     assert isinstance(view_state.canvas_frame, _FakeFrame)
+    assert isinstance(view_state.figure_controls_frame, _FakeFrame)
     assert isinstance(view_state.quick_controls_frame, _FakeFrame)
     assert isinstance(view_state.quick_controls_body, _FakeFrame)
+    assert view_state.figure_workspace_frame.parent is view_state.fig_frame
+    assert view_state.canvas_frame.parent is view_state.figure_workspace_frame
+    assert view_state.figure_controls_frame.parent is view_state.fig_frame
+    assert view_state.quick_controls_frame.parent is view_state.figure_workspace_frame
     assert isinstance(view_state.left_col, _FakeFrame)
     assert isinstance(view_state.right_col, _FakeFrame)
     assert isinstance(view_state.plot_frame_1d, _FakeFrame)
@@ -954,6 +1076,47 @@ def test_create_app_shell_binds_pointer_wheel_scrolling_when_root_supports_bind_
     assert view_state.match_canvas.scrolled == [(-1, "units")]
     assert view_state.refine_basic_canvas.scrolled == []
     assert view_state.refine_advanced_canvas.scrolled == []
+
+
+def test_create_app_shell_adds_fit2d_help_preference_when_var_is_supplied(
+    monkeypatch,
+) -> None:
+    _FakeScrollbar.created = []
+    _FakeCanvas.created = []
+    _FakeCheckbutton.created = []
+    _FakeLabel.created = []
+    monkeypatch.setattr(views.ttk, "Panedwindow", _FakePanedwindow)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "LabelFrame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(views.ttk, "Notebook", _FakeNotebook)
+    monkeypatch.setattr(views.ttk, "Scrollbar", _FakeScrollbar)
+    monkeypatch.setattr(views.ttk, "Separator", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
+    monkeypatch.setattr(views.tk, "Canvas", _FakeCanvas)
+    monkeypatch.setattr(views.tk, "StringVar", _FakeStringVar)
+
+    fit2d_var = _FakeVar(False)
+    view_state = state.AppShellViewState()
+
+    views.create_app_shell(
+        root=object(),
+        view_state=view_state,
+        fit2d_error_sound_var=fit2d_var,
+    )
+
+    assert isinstance(view_state.help_body, _FakeFrame)
+    assert isinstance(view_state.help_preferences_frame, _FakeFrame)
+    assert view_state.help_preferences_frame.kwargs["text"] == "Preferences"
+    assert view_state.fit2d_error_sound_var is fit2d_var
+    assert view_state.fit2d_error_sound_checkbutton is _FakeCheckbutton.created[0]
+    assert view_state.fit2d_error_sound_checkbutton.variable is fit2d_var
+    assert (
+        view_state.fit2d_error_sound_checkbutton.kwargs["text"]
+        == "Enable Fit2D mode (theme + error noise)"
+    )
+    assert any("Fit2D mode enables" in label.text for label in _FakeLabel.created)
 
 
 def test_app_shell_summary_banner_and_match_result_setters_update_vars(monkeypatch) -> None:
@@ -1034,6 +1197,35 @@ def test_app_shell_context_helpers_update_status_labels(monkeypatch) -> None:
     assert view_state.fit_health_primary_label.text == "Chi-Squared: 1.23"
     assert view_state.fit_health_secondary_label.text == "Peaks 10/12 | Gate 10/8"
     assert view_state.view_mode_var.get() == "caked"
+
+
+def test_bind_app_shell_view_mode_sync_tracks_analysis_view_changes() -> None:
+    view_state = state.AppShellViewState(view_mode_var=_FakeStringVar("detector"))
+    show_1d_var = _FakeStringVar(False)
+    show_caked_2d_var = _FakeStringVar(False)
+
+    def _resolve_mode() -> str:
+        if show_caked_2d_var.get():
+            return "caked"
+        return "detector"
+
+    views.bind_app_shell_view_mode_sync(
+        view_state=view_state,
+        show_1d_var=show_1d_var,
+        show_caked_2d_var=show_caked_2d_var,
+        resolve_mode=_resolve_mode,
+    )
+
+    assert view_state.view_mode_var.get() == "detector"
+
+    show_caked_2d_var.set(True)
+    assert view_state.view_mode_var.get() == "caked"
+
+    show_caked_2d_var.set(False)
+    assert view_state.view_mode_var.get() == "detector"
+
+    show_1d_var.set(True)
+    assert view_state.view_mode_var.get() == "detector"
 
 
 def test_console_status_label_compacts_text_and_logs_once(monkeypatch) -> None:
@@ -2183,7 +2375,7 @@ def test_hkl_lookup_controls_store_vars_bind_entries_and_support_updates(
         "Select HKL",
         None,
         "Clear",
-        "Show Bragg/Ewald",
+        "Open Specular View",
         "Bragg Qr Groups",
     ]
     assert _FakeButton.created[1].kwargs["textvariable"] is view_state.hkl_pick_button_var
@@ -2224,8 +2416,8 @@ def test_hkl_lookup_controls_store_vars_bind_entries_and_support_updates(
 def test_geometry_overlay_action_controls_store_refs_and_commands(
     monkeypatch,
 ) -> None:
-    _FakeButton.created = []
     _FakeCheckbutton.created = []
+    _FakeButton.created = []
     monkeypatch.setattr(views.ttk, "Checkbutton", _FakeCheckbutton)
     monkeypatch.setattr(views.ttk, "Button", _FakeButton)
     monkeypatch.setattr(views.tk, "BooleanVar", _FakeVar)
@@ -2237,24 +2429,25 @@ def test_geometry_overlay_action_controls_store_refs_and_commands(
         parent=object(),
         view_state=view_state,
         on_toggle_qr_cylinder_overlay=lambda: calls.append("toggle-overlay"),
-        on_clear_geometry_overlays=lambda: calls.append("clear-overlays"),
+        on_toggle_geometry_overlays=lambda: calls.append("toggle-geometry-overlays"),
         on_fit_mosaic=lambda: calls.append("fit-mosaic"),
     )
 
     assert view_state.show_qr_cylinder_overlay_var.get() is False
+    assert view_state.show_geometry_overlays_var.get() is True
     assert view_state.show_qr_cylinder_overlay_checkbutton is _FakeCheckbutton.created[0]
-    assert view_state.clear_geometry_markers_button is _FakeButton.created[0]
-    assert view_state.fit_button_mosaic is _FakeButton.created[1]
+    assert view_state.show_geometry_overlays_checkbutton is _FakeCheckbutton.created[1]
+    assert view_state.fit_button_mosaic is _FakeButton.created[0]
     assert _FakeCheckbutton.created[0].kwargs["text"] == "Show Qr Cylinder Lines"
+    assert _FakeCheckbutton.created[1].kwargs["text"] == "Show Geometry Overlays"
     assert [button.kwargs["text"] for button in _FakeButton.created] == [
-        "Clear Geometry Overlays",
         "Fit Mosaic Shapes",
     ]
 
     _FakeCheckbutton.created[0].command()
+    _FakeCheckbutton.created[1].command()
     _FakeButton.created[0].command()
-    _FakeButton.created[1].command()
-    assert calls == ["toggle-overlay", "clear-overlays", "fit-mosaic"]
+    assert calls == ["toggle-overlay", "toggle-geometry-overlays", "fit-mosaic"]
 
 
 def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
@@ -2279,18 +2472,17 @@ def test_analysis_view_controls_store_vars_and_commands(monkeypatch) -> None:
     assert view_state.log_radial_var.get() is False
     assert view_state.log_azimuth_var.get() is False
     assert [check.kwargs["text"] for check in _FakeCheckbutton.created] == [
-        "Show 2D Caked Integration",
         "Log Radial",
         "Log Azimuth",
     ]
     assert view_state.check_1d is None
-    assert view_state.check_2d is _FakeCheckbutton.created[0]
-    assert view_state.check_log_radial is _FakeCheckbutton.created[1]
-    assert view_state.check_log_azimuth is _FakeCheckbutton.created[2]
+    assert view_state.check_2d is None
+    assert view_state.check_log_radial is _FakeCheckbutton.created[0]
+    assert view_state.check_log_azimuth is _FakeCheckbutton.created[1]
 
     for checkbutton in _FakeCheckbutton.created:
         checkbutton.command()
-    assert calls == ["toggle-2d", "toggle-radial", "toggle-azimuth"]
+    assert calls == ["toggle-radial", "toggle-azimuth"]
 
 
 def test_create_integration_range_controls_store_vars_bindings_and_commands(
@@ -2804,10 +2996,9 @@ def test_populate_app_shell_view_switcher_creates_radios(monkeypatch) -> None:
 
     assert [radio.value for radio in _FakeRadiobutton.created] == [
         "detector",
-        "1d",
         "caked",
     ]
-    _FakeRadiobutton.created[2].command()
+    _FakeRadiobutton.created[1].command()
     assert events == ["caked"]
 
 
@@ -2854,3 +3045,40 @@ def test_populate_app_shell_quick_controls_builds_linked_inputs(monkeypatch) -> 
     assert isinstance(view_state.quick_controls_more_button, _FakeButton)
     view_state.quick_controls_more_button.command()
     assert changed == [5.25, "more"]
+
+
+def test_populate_app_shell_quick_controls_supports_choice_controls(
+    monkeypatch,
+) -> None:
+    _FakeLabel.created = []
+    _FakeOptionMenu.created = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(views.ttk, "OptionMenu", _FakeOptionMenu)
+
+    variable = _FakeStringVar("High")
+    view_state = state.AppShellViewState(
+        quick_controls_body=_FakeFrame(object()),
+    )
+
+    views.populate_app_shell_quick_controls(
+        view_state=view_state,
+        controls=[
+            {
+                "key": "sampling_resolution",
+                "label": "sampling resolution",
+                "control_type": "choice",
+                "variable": variable,
+                "options": ("Low", "High", "Custom"),
+            }
+        ],
+    )
+
+    assert "sampling_resolution" in view_state.quick_control_widgets
+    control = view_state.quick_control_widgets["sampling_resolution"]
+    assert isinstance(control["menu"], _FakeOptionMenu)
+    assert control["options"] == ("Low", "High", "Custom")
+    assert control["variable"] is variable
+    assert control["menu"].variable is variable
+    assert control["menu"].default == "High"
+    assert control["menu"].values == ("Low", "High", "Custom")

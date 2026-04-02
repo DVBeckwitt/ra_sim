@@ -340,7 +340,11 @@ def test_fit_geometry_parameters_pixel_path_runs_without_full_ray_polish(
     )
 
     assert result.success
-    assert solve_calls["count"] == 1
+    assert solve_calls["count"] >= 1
+    assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.5]))
+    assert np.isclose(float(result.cost), 0.0)
+    assert isinstance(result.geometry_fit_debug_summary, dict)
+    assert str(result.geometry_fit_debug_summary["main_solve_seed"]["seed_kind"]) == "u=0"
     assert isinstance(result.point_match_summary, dict)
     assert bool(result.point_match_summary["central_ray_mode"]) is True
     assert bool(result.point_match_summary["single_ray_enabled"]) is False
@@ -1392,81 +1396,76 @@ def test_fit_geometry_parameters_pixel_path_probes_out_of_flat_start_region(
     assert float(result.x[0]) >= 0.25
     assert np.allclose(np.asarray(result.fun, dtype=float), [0.0, 0.0])
     assert any(
-        "directional probe gamma+" in str(entry.get("message", ""))
+        str(entry.get("seed_kind", "")) in {"axis", "global"}
         for entry in getattr(result, "restart_history", [])
+        if str(entry.get("message", "")) == "prescore"
     )
 
 
-def test_fit_geometry_parameters_pixel_path_pairwise_probe_escapes_coupled_flat_region(
+def test_fit_geometry_parameters_multistart_keeps_trusted_parameters_fixed(
     monkeypatch,
 ):
-    def fake_process(*args, **kwargs):
-        image_size = int(args[2])
-        gamma = float(args[8])
-        Gamma = float(args[9])
-        sim_col = 6.0 if gamma >= 0.25 and Gamma >= 0.25 else 2.0
-        image = np.zeros((image_size, image_size), dtype=np.float64)
-        hit_tables = [
-            np.array(
-                [[1.0, sim_col, 4.0, 0.0, 1.0, 0.0, 0.0]],
-                dtype=np.float64,
-            )
-        ]
-        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+    solve_starts = []
+
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        Gamma = float(args[1])
+        return np.array([gamma - 0.2, Gamma - 0.8], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
+        x0_arr = np.asarray(x0, dtype=float)
+        solve_starts.append(x0_arr.copy())
         return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
+            x=x0_arr,
+            fun=np.asarray(residual_fn(x0_arr), dtype=float),
             success=True,
             status=1,
-            message="flat-local-solver",
+            message="ok",
             nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
+            active_mask=np.zeros_like(x0_arr, dtype=int),
             optimality=0.0,
         )
 
-    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
 
-    image_size = 12
+    image_size = 20
     miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
     intensities = np.array([1.0], dtype=np.float64)
-    params = _base_params(image_size, optics_mode=1)
-    measured = [{"label": "1,0,0", "x": 6.0, "y": 4.0}]
-    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    params = _base_params(image_size)
 
     result = opt.fit_geometry_parameters(
         miller,
         intensities,
         image_size,
         params,
-        measured_peaks=measured,
+        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
         var_names=["gamma", "Gamma"],
-        experimental_image=experimental_image,
+        experimental_image=None,
         refinement_config={
-            "solver": {
-                "restarts": 0,
-                "weighted_matching": False,
-                "stagnation_probe": True,
-                "stagnation_probe_fraction": 0.5,
-                "stagnation_probe_pairwise": True,
-                "stagnation_probe_random_directions": 0,
-            }
+            "bounds": {
+                "gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+                "Gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+            },
+            "priors": {"gamma": {"sigma": 0.05}},
+            "seed_search": {
+                "prescore_top_k": 6,
+                "n_global": 4,
+                "n_jitter": 2,
+                "jitter_sigma_u": 0.5,
+                "min_seed_separation_u": 0.1,
+                "trusted_prior_fraction_of_span": 0.15,
+            },
         },
     )
 
-    assert result.x.shape == (2,)
-    assert float(result.x[0]) >= 0.25
-    assert float(result.x[1]) >= 0.25
-    assert np.allclose(np.asarray(result.fun, dtype=float), [0.0, 0.0])
-    assert any(
-        "pairwise probe" in str(entry.get("message", ""))
-        and "gamma" in str(entry.get("message", ""))
-        and "Gamma" in str(entry.get("message", ""))
-        for entry in getattr(result, "restart_history", [])
-    )
+    assert result.success
+    assert solve_starts
+    assert all(np.isclose(float(start[0]), 0.0) for start in solve_starts)
+    assert any(abs(float(start[1])) > 1.0e-9 for start in solve_starts)
+    param_entries = result.geometry_fit_debug_summary["parameter_entries"]
+    assert str(param_entries[0]["seed_group"]) == "trusted"
+    assert str(param_entries[1]["seed_group"]) == "uncertain"
 
 
 def test_fit_geometry_parameters_pixel_path_broad_restart_seed_escapes_far_coupled_minimum(
@@ -1535,28 +1534,15 @@ def test_fit_geometry_parameters_pixel_path_broad_restart_seed_escapes_far_coupl
     assert float(result.x[0]) >= 0.75
     assert float(result.x[1]) >= 0.75
     assert np.allclose(np.asarray(result.fun, dtype=float), [0.0, 0.0])
-    assert "restart corner seed" in str(result.message)
     assert any(
-        "restart corner seed" in str(entry.get("message", ""))
-        and "opposite-corner" in str(entry.get("message", ""))
+        str(entry.get("seed_kind", "")) == "global"
+        and str(entry.get("message", "")) == "prescore"
+        and float(entry.get("cost", np.inf)) <= 1.0e-9
         for entry in getattr(result, "restart_history", [])
     )
 
 
-def test_fit_geometry_parameters_parallelizes_restart_seed_search(monkeypatch):
-    threaded_calls = []
-
-    def fake_threaded_map(fn, items, *, max_workers, numba_threads=None):
-        item_list = list(items)
-        threaded_calls.append(
-            {
-                "max_workers": int(max_workers),
-                "numba_threads": numba_threads,
-                "count": len(item_list),
-            }
-        )
-        return [fn(item) for item in item_list]
-
+def test_fit_geometry_parameters_records_prescore_and_local_seed_history(monkeypatch):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
         gamma = float(args[8])
@@ -1584,7 +1570,6 @@ def test_fit_geometry_parameters_parallelizes_restart_seed_search(monkeypatch):
             optimality=0.0,
         )
 
-    monkeypatch.setattr(opt, "_threaded_map", fake_threaded_map)
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
 
@@ -1623,11 +1608,14 @@ def test_fit_geometry_parameters_parallelizes_restart_seed_search(monkeypatch):
     assert result.x.shape == (2,)
     assert float(result.x[0]) >= 0.75
     assert float(result.x[1]) >= 0.75
-    assert threaded_calls
-    assert any(call["max_workers"] == 2 and call["count"] > 1 for call in threaded_calls)
-    assert any(call["numba_threads"] == 2 for call in threaded_calls)
-    assert result.parallelization_summary["dataset_workers"] == 1
-    assert result.parallelization_summary["restart_workers"] == 2
+    assert any(
+        str(entry.get("message", "")) == "prescore"
+        for entry in getattr(result, "restart_history", [])
+    )
+    assert any(
+        str(entry.get("message", "")) == "flat-local-solver"
+        for entry in getattr(result, "restart_history", [])
+    )
 
 
 def test_fit_geometry_parameters_reports_unweighted_peak_rms(monkeypatch):
@@ -1736,12 +1724,9 @@ def test_fit_geometry_parameters_seed_status_reports_missing_pair_counts(monkeyp
     )
 
     assert result.success
-    assert any(
-        "Geometry fit: main solve seed cost=" in msg
-        and "matched=0" in msg
-        and "missing=1" in msg
-        for msg in status_messages
-    )
+    assert any("running normalized-u multistart solve" in msg for msg in status_messages)
+    assert any("identity seed" in msg and "cost=" in msg for msg in status_messages)
+    assert str(result.geometry_fit_debug_summary["main_solve_seed"]["seed_kind"]) == "u=0"
     assert int(result.point_match_summary["missing_pair_count"]) == 1
 
 
@@ -1921,7 +1906,7 @@ def test_full_beam_polish_rejects_match_count_regression(monkeypatch):
     )
 
     assert result.success
-    assert len(solve_calls) == 2
+    assert len(solve_calls) >= 2
     assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.0]))
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
@@ -2044,7 +2029,7 @@ def test_full_beam_polish_rejects_unweighted_rms_regression(monkeypatch):
     )
 
     assert result.success
-    assert len(solve_calls) == 2
+    assert len(solve_calls) >= 2
     assert np.allclose(np.asarray(result.x, dtype=float), np.array([0.0]))
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["accepted"]) is False
@@ -2729,12 +2714,72 @@ def test_fit_geometry_parameters_manual_point_fit_mode_uses_lean_defaults(
     solver_debug = result.geometry_fit_debug_summary["solver"]
     assert bool(solver_debug["manual_point_fit_mode"]) is True
     assert np.isclose(float(solver_debug["f_scale_px"]), 1.0)
-    assert int(solver_debug["restarts"]) == 0
+    assert int(solver_debug["restarts"]) >= 1
     assert bool(solver_debug["use_measurement_uncertainty"]) is False
     assert bool(solver_debug["full_beam_polish_enabled"]) is False
     assert isinstance(result.full_beam_polish_summary, dict)
     assert bool(result.full_beam_polish_summary["enabled"]) is False
     assert str(result.full_beam_polish_summary["reason"]) == "disabled_by_config"
+
+
+def test_fit_geometry_parameters_manual_point_fit_guardrail_aborts_bound_hugging_bad_seed(
+    monkeypatch,
+):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[10.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x_bad = np.asarray(kwargs["bounds"][1], dtype=float)
+        for _ in range(40):
+            residual_fn(x_bad)
+        raise AssertionError("manual fail-fast guardrail did not abort the solve")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 1024
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=1)
+    measured = [{"label": "1,0,0", "x": 400.0, "y": 400.0}]
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=experimental_image,
+        refinement_config={
+            "bounds": {
+                "gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+                "Gamma": {"mode": "absolute", "min": 0.0, "max": 1.0},
+            },
+            "solver": {
+                "manual_point_fit_mode": True,
+            },
+        },
+    )
+
+    assert not result.success
+    assert "Manual point-fit guardrail stopped the solve" in str(result.message)
+    assert "gamma, Gamma" in str(result.message)
+    assert str(result.early_stop_reason).startswith(
+        "Manual point-fit guardrail stopped the solve"
+    )
+    assert bool(result.geometry_fit_progress["aborted_early"]) is True
+    assert float(result.point_match_summary["unweighted_peak_rms_px"]) > 250.0
+    assert sorted(result.bound_hits) == ["Gamma", "gamma"]
 
 
 def test_fit_geometry_parameters_can_accept_ridge_refinement(monkeypatch):
@@ -2892,7 +2937,9 @@ def test_fit_geometry_parameters_supports_anisotropic_measurement_weighting(monk
     assert float(result.weighted_residual_rms_px) < float(result.rms_px)
 
 
-def test_fit_geometry_parameters_reports_identifiability(monkeypatch):
+def test_fit_geometry_parameters_reports_solver_and_data_only_identifiability(
+    monkeypatch,
+):
     def fake_compute(*args, **kwargs):
         gamma = float(args[0])
         return np.array([gamma - 1.0], dtype=np.float64)
@@ -2934,240 +2981,37 @@ def test_fit_geometry_parameters_reports_identifiability(monkeypatch):
     )
 
     assert result.success
-    assert isinstance(result.identifiability_summary, dict)
-    assert str(result.identifiability_summary["status"]) == "ok"
-    assert int(result.identifiability_summary["num_parameters"]) == 2
-    assert int(result.identifiability_summary["rank"]) == 1
-    assert bool(result.identifiability_summary["underconstrained"]) is True
-    assert str(result.identifiability_summary["dominant_group"]) == "underconstrained"
-    parameter_entries = result.identifiability_summary["parameter_entries"]
-    assert [entry["name"] for entry in parameter_entries] == ["gamma", "Gamma"]
-    assert float(parameter_entries[0]["column_norm"]) > 0.0
-    assert np.isclose(float(parameter_entries[1]["column_norm"]), 0.0)
-    assert list(result.identifiability_summary["recommended_fixed_parameters"]) == [
-        "Gamma"
-    ]
-    weak_parameters = result.identifiability_summary["weak_parameters"]
+
+    solver_summary = result.identifiability_summary
+    assert isinstance(solver_summary, dict)
+    assert str(solver_summary["status"]) == "ok"
+    assert str(solver_summary["diagnostic_scope"]) == "solver_conditioned_active"
+    assert bool(solver_summary["includes_priors"]) is True
+    assert int(solver_summary["num_parameters"]) == 2
+    assert int(solver_summary["rank"]) == 1
+    assert bool(solver_summary["underconstrained"]) is True
+    solver_entries = solver_summary["parameter_entries"]
+    assert [entry["name"] for entry in solver_entries] == ["gamma", "Gamma"]
+    assert float(solver_entries[0]["column_norm"]) > 0.0
+    assert np.isclose(float(solver_entries[1]["column_norm"]), 0.0)
+
+    data_summary = result.data_only_identifiability_summary
+    assert isinstance(data_summary, dict)
+    assert str(data_summary["status"]) == "ok"
+    assert str(data_summary["diagnostic_scope"]) == "data_only_all_selectable"
+    assert bool(data_summary["includes_priors"]) is False
+    assert int(data_summary["rank"]) == 1
+    assert bool(data_summary["underconstrained"]) is True
+    weak_parameters = data_summary["weak_parameters"]
     assert len(weak_parameters) == 1
     assert str(weak_parameters[0]["name"]) == "Gamma"
+    assert list(result.next_stage_recommendations) == []
+    assert result.next_stage_recommendation is None
 
 
-def test_fit_geometry_parameters_can_auto_freeze_weak_parameter(monkeypatch):
-    solve_dims = []
-
-    def fake_compute(*args, **kwargs):
-        gamma = float(args[0])
-        return np.array([gamma - 1.0], dtype=np.float64)
-
-    def fake_least_squares(residual_fn, x0, **kwargs):
-        x0_arr = np.asarray(x0, dtype=float)
-        solve_dims.append(int(x0_arr.size))
-        if x0_arr.size == 2:
-            x = np.array([0.5, 2.0], dtype=float)
-        else:
-            x = np.array([1.0], dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
-
-    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
-    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
-
-    image_size = 20
-    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
-    intensities = np.array([1.0], dtype=np.float64)
-    params = _base_params(image_size)
-
-    result = opt.fit_geometry_parameters(
-        miller,
-        intensities,
-        image_size,
-        params,
-        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
-        var_names=["gamma", "Gamma"],
-        experimental_image=None,
-        refinement_config={
-            "solver": {"restarts": 0},
-            "identifiability": {"enabled": True, "auto_freeze": True},
-        },
-    )
-
-    assert result.success
-    assert solve_dims == [2, 1]
-    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0]))
-    assert isinstance(result.auto_freeze_summary, dict)
-    assert bool(result.auto_freeze_summary["accepted"]) is True
-    assert list(result.auto_freeze_summary["fixed_parameters"]) == ["Gamma"]
-
-
-def test_fit_geometry_parameters_can_seed_with_adaptive_regularization(monkeypatch):
-    solve_starts = []
-    status_messages = []
-
-    def fake_compute(*args, **kwargs):
-        gamma = float(args[0])
-        Gamma = float(args[1])
-        return np.array(
-            [gamma - 1.0, 0.1 * gamma * (Gamma - 2.0)],
-            dtype=np.float64,
-        )
-
-    def fake_least_squares(residual_fn, x0, **kwargs):
-        x0_arr = np.asarray(x0, dtype=float)
-        solve_starts.append(x0_arr.copy())
-        if len(solve_starts) == 1:
-            assert np.allclose(x0_arr, np.array([0.0, 0.0], dtype=float))
-            x = np.array([1.0, 0.25], dtype=float)
-        elif len(solve_starts) == 2:
-            assert np.allclose(x0_arr, np.array([1.0, 0.25], dtype=float))
-            x = np.array([1.0, 2.0], dtype=float)
-        elif len(solve_starts) == 3:
-            assert np.allclose(x0_arr, np.array([1.0, 2.0], dtype=float))
-            x = np.array([1.0, 2.0], dtype=float)
-        else:
-            raise AssertionError("unexpected least_squares call count")
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
-
-    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
-    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
-
-    image_size = 20
-    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
-    intensities = np.array([1.0], dtype=np.float64)
-    params = _base_params(image_size)
-
-    result = opt.fit_geometry_parameters(
-        miller,
-        intensities,
-        image_size,
-        params,
-        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
-        var_names=["gamma", "Gamma"],
-        experimental_image=None,
-        refinement_config={
-            "solver": {"restarts": 0},
-            "identifiability": {
-                "enabled": True,
-                "adaptive_regularization": {
-                    "enabled": True,
-                    "max_parameters": 1,
-                },
-            },
-        },
-        status_callback=status_messages.append,
-    )
-
-    assert result.success
-    assert len(solve_starts) == 3
-    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0]))
-    assert isinstance(result.adaptive_regularization_summary, dict)
-    assert bool(result.adaptive_regularization_summary["accepted"]) is True
-    assert bool(result.adaptive_regularization_summary["release_accepted"]) is True
-    assert list(result.adaptive_regularization_summary["applied_parameters"]) == [
-        "Gamma"
-    ]
-    assert any("adaptive regularization evaluating" in msg for msg in status_messages)
-    assert any("adaptive regularization releasing seed" in msg for msg in status_messages)
-    assert any("adaptive regularization accepted" in msg for msg in status_messages)
-
-
-def test_fit_geometry_parameters_can_selectively_thaw_after_auto_freeze(monkeypatch):
-    solve_starts = []
-    status_messages = []
-
-    def fake_compute(*args, **kwargs):
-        gamma = float(args[0])
-        Gamma = float(args[1])
-        return np.array(
-            [gamma - 1.0, 0.1 * gamma * (Gamma - 2.0)],
-            dtype=np.float64,
-        )
-
-    def fake_least_squares(residual_fn, x0, **kwargs):
-        x0_arr = np.asarray(x0, dtype=float)
-        solve_starts.append(x0_arr.copy())
-        if len(solve_starts) == 1:
-            x = np.array([0.0, 0.0], dtype=float)
-        elif len(solve_starts) == 2:
-            assert x0_arr.size == 1
-            x = np.array([1.0], dtype=float)
-        elif len(solve_starts) == 3:
-            assert np.allclose(x0_arr, np.array([1.0, 0.0], dtype=float))
-            x = np.array([1.0, 2.0], dtype=float)
-        else:
-            raise AssertionError("unexpected least_squares call count")
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
-
-    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
-    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
-
-    image_size = 20
-    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
-    intensities = np.array([1.0], dtype=np.float64)
-    params = _base_params(image_size)
-
-    result = opt.fit_geometry_parameters(
-        miller,
-        intensities,
-        image_size,
-        params,
-        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
-        var_names=["gamma", "Gamma"],
-        experimental_image=None,
-        refinement_config={
-            "solver": {"restarts": 0},
-            "identifiability": {
-                "enabled": True,
-                "auto_freeze": True,
-                "selective_thaw": {
-                    "enabled": True,
-                    "max_condition_number": 1.0e8,
-                },
-            },
-        },
-        status_callback=status_messages.append,
-    )
-
-    assert result.success
-    assert [arr.size for arr in solve_starts] == [2, 1, 2]
-    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0]))
-    assert isinstance(result.auto_freeze_summary, dict)
-    assert bool(result.auto_freeze_summary["accepted"]) is True
-    assert list(result.auto_freeze_summary["fixed_parameters"]) == ["Gamma"]
-    assert isinstance(result.selective_thaw_summary, dict)
-    assert bool(result.selective_thaw_summary["accepted"]) is True
-    assert list(result.selective_thaw_summary["thawed_parameters"]) == ["Gamma"]
-    assert list(result.selective_thaw_summary["remaining_fixed_parameters"]) == []
-    assert any("selective thaw step" in msg for msg in status_messages)
-    assert any("selective thaw accepted" in msg for msg in status_messages)
-
-
-def test_fit_geometry_parameters_reports_high_correlation_pairs(monkeypatch):
+def test_fit_geometry_parameters_correlated_inactive_block_is_recommended_together(
+    monkeypatch,
+):
     def fake_compute(*args, **kwargs):
         gamma = float(args[0])
         Gamma = float(args[1])
@@ -3201,7 +3045,8 @@ def test_fit_geometry_parameters_reports_high_correlation_pairs(monkeypatch):
         image_size,
         params,
         measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
-        var_names=["gamma", "Gamma"],
+        var_names=[],
+        candidate_param_names=["gamma", "Gamma"],
         experimental_image=None,
         refinement_config={
             "solver": {"restarts": 0},
@@ -3209,19 +3054,81 @@ def test_fit_geometry_parameters_reports_high_correlation_pairs(monkeypatch):
         },
     )
 
-    high_pairs = result.identifiability_summary["high_correlation_pairs"]
+    assert bool(result.success) is False
+    assert np.isclose(float(result.cost), 2.5)
+    assert str(result.message) == "fixed-parameter mode identity"
+    assert str(result.identifiability_summary["status"]) == "failed"
+    assert str(result.identifiability_summary["reason"]) == "empty_parameter_vector"
+
+    high_pairs = result.data_only_identifiability_summary["high_correlation_pairs"]
     assert len(high_pairs) == 1
     assert {
         str(high_pairs[0]["name_i"]),
         str(high_pairs[0]["name_j"]),
     } == {"gamma", "Gamma"}
     assert float(high_pairs[0]["abs_correlation"]) > 0.99
-    assert len(result.identifiability_summary["recommended_fixed_parameters"]) == 1
+
+    recommendations = result.next_stage_recommendations
+    assert len(recommendations) == 1
+    assert set(recommendations[0]["params"]) == {"gamma", "Gamma"}
+    assert "Correlated block" in str(recommendations[0]["reason"])
+    assert isinstance(result.next_stage_recommendation, dict)
+    assert set(result.next_stage_recommendation["params"]) == {"gamma", "Gamma"}
 
 
-def test_fit_geometry_parameters_can_stage_parameter_release(monkeypatch):
-    solve_starts = []
+def test_fit_geometry_parameters_weak_inactive_parameter_is_not_recommended(
+    monkeypatch,
+):
+    def fake_compute(*args, **kwargs):
+        gamma = float(args[0])
+        return np.array([gamma - 1.0], dtype=np.float64)
 
+    def fake_least_squares(residual_fn, x0, **kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 20
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size)
+    params["gamma"] = 1.0
+
+    result = opt.fit_geometry_parameters(
+        miller,
+        intensities,
+        image_size,
+        params,
+        measured_peaks=[[1.0, 0.0, 0.0, 4.0, 4.0]],
+        var_names=["gamma"],
+        candidate_param_names=["gamma", "Gamma"],
+        experimental_image=None,
+        refinement_config={
+            "solver": {"restarts": 0},
+            "identifiability": {"enabled": True},
+        },
+    )
+
+    assert result.success
+    weak_parameters = result.data_only_identifiability_summary["weak_parameters"]
+    assert len(weak_parameters) == 1
+    assert str(weak_parameters[0]["name"]) == "Gamma"
+    assert list(result.next_stage_recommendations) == []
+    assert result.next_stage_recommendation is None
+
+
+def test_fit_geometry_parameters_reports_retired_stage_placeholders(monkeypatch):
     def fake_compute(*args, **kwargs):
         gamma = float(args[0])
         Gamma = float(args[1])
@@ -3229,13 +3136,7 @@ def test_fit_geometry_parameters_can_stage_parameter_release(monkeypatch):
         return np.array([gamma - 1.0, Gamma - 2.0, dist - 3.0], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x0_arr = np.asarray(x0, dtype=float)
-        solve_starts.append(x0_arr.copy())
-        if x0_arr.size == 2:
-            x = np.array([1.0, 2.0], dtype=float)
-        else:
-            assert np.allclose(x0_arr, np.array([1.0, 2.0, 0.1], dtype=float))
-            x = np.array([1.0, 2.0, 3.0], dtype=float)
+        x = np.asarray(x0, dtype=float)
         return opt.OptimizeResult(
             x=x,
             fun=np.asarray(residual_fn(x), dtype=float),
@@ -3268,42 +3169,44 @@ def test_fit_geometry_parameters_can_stage_parameter_release(monkeypatch):
             "solver": {
                 "restarts": 0,
                 "staged_release": {"enabled": True},
+                "reparameterize_pairs": {"enabled": True},
             },
-            "identifiability": {"enabled": False},
+            "identifiability": {
+                "enabled": True,
+                "adaptive_regularization": {"enabled": True},
+                "auto_freeze": True,
+                "selective_thaw": {"enabled": True},
+            },
         },
     )
 
     assert result.success
-    assert len(solve_starts) == 2
-    assert solve_starts[0].size == 2
-    assert solve_starts[1].size == 3
-    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0, 3.0]))
-    assert isinstance(result.staged_release_summary, dict)
-    assert bool(result.staged_release_summary["accepted"]) is True
-    assert int(result.staged_release_summary["accepted_stage_count"]) == 1
-    stage_entries = result.staged_release_summary["stages"]
-    assert len(stage_entries) == 1
-    assert list(stage_entries[0]["active_parameters"]) == ["gamma", "Gamma"]
+    for summary in (
+        result.reparameterization_summary,
+        result.staged_release_summary,
+        result.adaptive_regularization_summary,
+        result.auto_freeze_summary,
+        result.selective_thaw_summary,
+    ):
+        assert isinstance(summary, dict)
+        assert str(summary["status"]) == "skipped"
+        assert bool(summary["accepted"]) is False
 
 
-def test_fit_geometry_parameters_can_seed_with_pair_reparameterization(monkeypatch):
-    solve_starts = []
-
-    def fake_compute(*args, **kwargs):
-        gamma = float(args[0])
-        Gamma = float(args[1])
-        dist = float(args[2])
-        return np.array([gamma - 1.0, Gamma - 2.0, dist - 3.0], dtype=np.float64)
+def test_fit_geometry_parameters_selects_best_discrete_mode(monkeypatch):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        image = np.zeros((image_size, image_size), dtype=np.float64)
+        hit_tables = [
+            np.array(
+                [[1.0, 2.0, 4.0, 0.0, 1.0, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+        ]
+        return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x0_arr = np.asarray(x0, dtype=float)
-        solve_starts.append(x0_arr.copy())
-        if len(solve_starts) == 1:
-            assert np.allclose(x0_arr, np.array([0.0, 0.0, 0.1], dtype=float))
-            x = np.array([1.5, -0.5, 0.1], dtype=float)
-        else:
-            assert np.allclose(x0_arr, np.array([1.0, 2.0, 0.1], dtype=float))
-            x = np.array([1.0, 2.0, 3.0], dtype=float)
+        x = np.asarray(x0, dtype=float)
         return opt.OptimizeResult(
             x=x,
             fun=np.asarray(residual_fn(x), dtype=float),
@@ -3315,41 +3218,57 @@ def test_fit_geometry_parameters_can_seed_with_pair_reparameterization(monkeypat
             optimality=0.0,
         )
 
-    monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
 
-    image_size = 20
+    image_size = 12
     miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
     intensities = np.array([1.0], dtype=np.float64)
-    params = _base_params(image_size)
-    params["corto_detector"] = 0.1
+    params = _base_params(image_size, optics_mode=1)
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    transformed = opt._transform_points_orientation_local(
+        [(2.0, 4.0)],
+        (image_size, image_size),
+        indexing_mode="xy",
+        k=1,
+        flip_x=False,
+        flip_y=False,
+        flip_order="yx",
+    )
+    measured = [{"label": "1,0,0", "x": transformed[0][0], "y": transformed[0][1]}]
 
     result = opt.fit_geometry_parameters(
         miller,
         intensities,
         image_size,
         params,
-        measured_peaks=[],
-        var_names=["gamma", "Gamma", "corto_detector"],
-        experimental_image=None,
+        measured_peaks=measured,
+        var_names=[],
+        candidate_param_names=["gamma"],
+        experimental_image=experimental_image,
         refinement_config={
-            "solver": {
-                "restarts": 0,
-                "reparameterize_pairs": {"enabled": True},
+            "discrete_modes": {
+                "enabled": True,
+                "rot90": [0, 1, 2, 3],
+                "flip_x": [False],
+                "flip_y": [False],
             },
             "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
         },
     )
 
-    assert result.success
-    assert len(solve_starts) == 2
-    assert np.allclose(np.asarray(result.x, dtype=float), np.array([1.0, 2.0, 3.0]))
-    assert isinstance(result.reparameterization_summary, dict)
-    assert bool(result.reparameterization_summary["accepted"]) is True
-    assert list(result.reparameterization_summary["pairs"]) == [["gamma", "Gamma"]]
+    assert bool(result.success) is False
+    assert np.isclose(float(result.cost), 0.0)
+    assert str(result.message) == "fixed-parameter mode rot270"
+    assert isinstance(result.chosen_discrete_mode, dict)
+    assert int(result.chosen_discrete_mode["k"]) == 3
+    assert str(result.discrete_mode_summary["selected_label"]) == "rot270"
 
 
-def test_fit_geometry_parameters_emits_status_updates(monkeypatch):
+def test_fit_geometry_parameters_emits_normalized_multistart_status_updates(
+    monkeypatch,
+):
     status_messages = []
 
     def fake_compute(*args, **kwargs):
@@ -3359,11 +3278,7 @@ def test_fit_geometry_parameters_emits_status_updates(monkeypatch):
         return np.array([gamma - 1.0, Gamma - 2.0, dist - 3.0], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x0_arr = np.asarray(x0, dtype=float)
-        if x0_arr.size == 2:
-            x = np.array([1.0, 2.0], dtype=float)
-        else:
-            x = np.array([1.0, 2.0, 3.0], dtype=float)
+        x = np.asarray(x0, dtype=float)
         return opt.OptimizeResult(
             x=x,
             fun=np.asarray(residual_fn(x), dtype=float),
@@ -3393,10 +3308,7 @@ def test_fit_geometry_parameters_emits_status_updates(monkeypatch):
         var_names=["gamma", "Gamma", "corto_detector"],
         experimental_image=None,
         refinement_config={
-            "solver": {
-                "restarts": 0,
-                "staged_release": {"enabled": True},
-            },
+            "solver": {"restarts": 0},
             "identifiability": {"enabled": False},
         },
         status_callback=status_messages.append,
@@ -3412,9 +3324,7 @@ def test_fit_geometry_parameters_emits_status_updates(monkeypatch):
     ]
     assert isinstance(result.geometry_fit_debug_summary.get("solve_progress"), dict)
     assert int(result.geometry_fit_debug_summary["solve_progress"]["evaluation_count"]) >= 1
-    assert any("staged release enabled" in msg for msg in status_messages)
     assert any("Geometry fit: setup mode=angle" in msg for msg in status_messages)
-    assert any("Geometry fit: main solve seed cost=" in msg for msg in status_messages)
-    assert any("staged stage 1/1" in msg for msg in status_messages)
-    assert any("running main solve" in msg for msg in status_messages)
+    assert any("running normalized-u multistart solve" in msg for msg in status_messages)
+    assert any("identity seed" in msg and "cost=" in msg for msg in status_messages)
     assert any("complete" in msg for msg in status_messages)

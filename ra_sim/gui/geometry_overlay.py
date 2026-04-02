@@ -156,6 +156,68 @@ def inverse_orientation_transform(
     return best
 
 
+def compose_orientation_transforms(
+    shape: tuple[int, int],
+    first: dict[str, object] | None,
+    second: dict[str, object] | None,
+) -> dict[str, object]:
+    """Return one discrete transform equivalent to applying ``first`` then ``second``."""
+
+    def _normalize(choice: dict[str, object] | None) -> dict[str, object]:
+        if not isinstance(choice, dict):
+            return {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+            }
+        return {
+            "indexing_mode": str(choice.get("indexing_mode", "xy")),
+            "k": int(choice.get("k", 0)),
+            "flip_x": bool(choice.get("flip_x", False)),
+            "flip_y": bool(choice.get("flip_y", False)),
+            "flip_order": str(choice.get("flip_order", "yx")),
+        }
+
+    first_norm = _normalize(first)
+    second_norm = _normalize(second)
+
+    height, width = int(shape[0]), int(shape[1])
+    refs = [
+        (0.0, 0.0),
+        (float(width - 1), 0.0),
+        (0.0, float(height - 1)),
+        (float(width - 1), float(height - 1)),
+        (0.5 * float(width - 1), 0.5 * float(height - 1)),
+    ]
+    mapped_once = transform_points_orientation(refs, shape, **first_norm)
+    mapped_twice = transform_points_orientation(mapped_once, shape, **second_norm)
+
+    best = None
+    best_err = float("inf")
+    for candidate in iter_orientation_transform_candidates():
+        remapped = transform_points_orientation(refs, shape, **candidate)
+        err = 0.0
+        for (x_ref, y_ref), (x_back, y_back) in zip(mapped_twice, remapped):
+            err = max(err, float(math.hypot(x_back - x_ref, y_back - y_ref)))
+        if err < best_err:
+            best_err = err
+            best = dict(candidate)
+        if err <= 1e-6:
+            break
+
+    if best is None:
+        return {
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        }
+    return best
+
+
 def rotate_measured_peaks_for_display(
     measured,
     rotated_shape,
@@ -807,6 +869,12 @@ def normalize_initial_geometry_pairs_display(
             normalized_entry["sim_display"] = sim_display
         if bg_display is not None:
             normalized_entry["bg_display"] = bg_display
+        sim_caked_display = _parse_point(raw_entry.get("sim_caked_display"))
+        bg_caked_display = _parse_point(raw_entry.get("bg_caked_display"))
+        if sim_caked_display is not None:
+            normalized_entry["sim_caked_display"] = sim_caked_display
+        if bg_caked_display is not None:
+            normalized_entry["bg_caked_display"] = bg_caked_display
         normalized.append(normalized_entry)
 
     return normalized
@@ -904,6 +972,12 @@ def build_geometry_fit_overlay_records(
 
         initial_sim_native = _parse_point(initial_entry.get("sim_native"))
         initial_bg_native = _parse_point(initial_entry.get("bg_native"))
+        initial_sim_caked_display = _parse_point(
+            initial_entry.get("sim_caked_display")
+        )
+        initial_bg_caked_display = _parse_point(
+            initial_entry.get("bg_caked_display")
+        )
         initial_sim_display = None
         initial_bg_display = None
         # Saved fits can be redrawn in a different view than the one that
@@ -931,6 +1005,16 @@ def build_geometry_fit_overlay_records(
             initial_bg_display = _parse_point(initial_entry.get("bg_display"))
         record["initial_sim_display"] = initial_sim_display
         record["initial_bg_display"] = initial_bg_display
+        if initial_sim_caked_display is not None:
+            record["initial_sim_caked_display"] = (
+                float(initial_sim_caked_display[0]),
+                float(initial_sim_caked_display[1]),
+            )
+        if initial_bg_caked_display is not None:
+            record["initial_bg_caked_display"] = (
+                float(initial_bg_caked_display[0]),
+                float(initial_bg_caked_display[1]),
+            )
         if initial_sim_native is not None:
             record["initial_sim_native"] = (
                 float(initial_sim_native[0]),
@@ -1009,6 +1093,11 @@ def build_geometry_fit_overlay_records(
                 float(final_bg_display[0]),
                 float(final_bg_display[1]),
             )
+            if initial_bg_caked_display is not None:
+                record["final_bg_caked_display"] = (
+                    float(initial_bg_caked_display[0]),
+                    float(initial_bg_caked_display[1]),
+                )
             record["simulated_frame"] = "sim_native"
             record["measured_frame"] = "fit_oriented"
             try:
@@ -1058,6 +1147,10 @@ def compute_geometry_overlay_frame_diagnostics(
         native_key: str,
     ) -> tuple[float, float] | None:
         if show_caked_2d and native_detector_coords_to_caked_display_coords is not None:
+            caked_display_key = display_key.replace("_display", "_caked_display")
+            caked_point = _parse_point(entry.get(caked_display_key))
+            if caked_point is not None:
+                return caked_point
             native_point = _parse_point(entry.get(native_key))
             if native_point is not None:
                 try:

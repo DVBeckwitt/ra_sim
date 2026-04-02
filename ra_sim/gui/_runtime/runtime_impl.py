@@ -23,7 +23,7 @@ from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Sequence
+from typing import Mapping, Sequence
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -1493,6 +1493,10 @@ def _draw_geometry_fit_overlay(
 ) -> None:
     """Draw one fixed-background/fitted-simulation overlay record per match."""
 
+    if not _geometry_overlays_enabled():
+        _clear_all_geometry_overlay_artists(redraw=True)
+        return
+
     gui_overlays.draw_geometry_fit_overlay(
         ax,
         overlay_records,
@@ -1513,6 +1517,10 @@ def _draw_initial_geometry_pairs_overlay(
     max_display_markers: int = 120,
 ) -> None:
     """Draw only the initially selected simulation/background peak pairs."""
+
+    if not _geometry_overlays_enabled():
+        _clear_all_geometry_overlay_artists(redraw=True)
+        return
 
     gui_overlays.draw_initial_geometry_pairs_overlay(
         ax,
@@ -3028,6 +3036,7 @@ geometry_manual_cache_workflow = (
         stored_peak_table_lattice=(
             lambda: simulation_runtime_state.stored_peak_table_lattice
         ),
+        peak_records=(lambda: simulation_runtime_state.peak_records),
         current_cache_signature=(
             lambda: geometry_runtime_state.manual_pick_cache_signature
         ),
@@ -3177,16 +3186,42 @@ def qr_cylinder_overlay_runtime_toggle(*args, **kwargs):
     _refresh_fast_viewer_runtime_mode(announce=False)
     return result
 
-def _clear_all_geometry_overlay_artists():
-    """Clear fitted markers and live preview overlays together."""
+def _geometry_overlays_enabled() -> bool:
+    """Return whether geometry overlays should currently be visible."""
+
+    overlay_var = geometry_overlay_actions_view_state.show_geometry_overlays_var
+    if overlay_var is None:
+        return True
+    try:
+        return bool(overlay_var.get())
+    except Exception:
+        return True
+
+
+def _clear_all_geometry_overlay_artists(*, redraw: bool = True):
+    """Clear fitted, live-preview, and manual-preview geometry overlays."""
 
     _clear_geometry_pick_artists(redraw=False)
     _clear_geometry_preview_artists(redraw=False)
-    _request_overlay_canvas_redraw(force=True)
-    try:
-        progress_label_geometry.config(
-            text="Geometry overlays cleared. Run Fit Geometry again to redraw them."
+    _clear_geometry_manual_preview_artists(redraw=False)
+    if redraw:
+        _request_overlay_canvas_redraw(force=True)
+
+
+def _toggle_geometry_overlay_visibility() -> None:
+    """Apply the persistent geometry-overlay visibility toggle."""
+
+    if _geometry_overlays_enabled():
+        _refresh_settled_overlays()
+        status_text = "Geometry overlays shown."
+    else:
+        _clear_all_geometry_overlay_artists(redraw=True)
+        gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
+        status_text = (
+            "Geometry overlays hidden. Turn on Show Geometry Overlays to redraw them."
         )
+    try:
+        progress_label_geometry.config(text=status_text)
     except Exception:
         pass
 
@@ -3398,6 +3433,8 @@ peak_selection_workflow = (
         gamma_mosaic_deg_factory=lambda: float(gamma_mosaic_var.get()),
         eta_factory=lambda: float(eta_var.get()),
         wavelength_factory=lambda: float(lambda_),
+        sample_width_m_factory=lambda: float(sample_width_var.get()),
+        sample_length_m_factory=lambda: float(sample_length_var.get()),
         debye_x_factory=lambda: float(debye_x_var.get()),
         debye_y_factory=lambda: float(debye_y_var.get()),
         detector_center_factory=lambda: (
@@ -3657,12 +3694,33 @@ _toggle_geometry_manual_pick_mode = (
 _clear_current_geometry_manual_pairs = (
     geometry_tool_action_workflow.clear_current_manual_pairs
 )
-_render_current_geometry_manual_pairs = geometry_manual_workflow.render_current_pairs
+_render_current_geometry_manual_pairs_base = geometry_manual_workflow.render_current_pairs
+
+
+def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> bool:
+    """Render saved manual geometry pairs when overlays are visible."""
+
+    if not _geometry_overlays_enabled():
+        del update_status
+        _clear_all_geometry_overlay_artists(redraw=True)
+        return False
+    return bool(_render_current_geometry_manual_pairs_base(update_status=update_status))
+
+
 _toggle_geometry_manual_selection_at = geometry_manual_workflow.toggle_selection_at
 _place_geometry_manual_selection_at = geometry_manual_workflow.place_selection_at
-_update_geometry_manual_pick_preview = (
-    geometry_manual_workflow.update_pick_preview
-)
+_update_geometry_manual_pick_preview_base = geometry_manual_workflow.update_pick_preview
+
+
+def _update_geometry_manual_pick_preview(*args, **kwargs) -> None:
+    """Suppress manual pick previews while overlays are hidden."""
+
+    if not _geometry_overlays_enabled():
+        _clear_geometry_manual_preview_artists(redraw=True)
+        return
+    _update_geometry_manual_pick_preview_base(*args, **kwargs)
+
+
 _cancel_geometry_manual_pick_session = geometry_manual_workflow.cancel_pick_session
 
 integration_range_workflow = (
@@ -3720,37 +3778,22 @@ toggle_log_azimuth = integration_range_workflow.toggle_log_azimuth
 
 def _set_persistent_view_mode(mode: str) -> None:
     normalized = str(mode or "detector").strip().lower()
-    if normalized not in {"detector", "1d", "caked"}:
+    if normalized not in {"detector", "caked"}:
         normalized = "detector"
 
-    show_1d_var = analysis_view_controls_view_state.show_1d_var
     show_caked_2d_var = analysis_view_controls_view_state.show_caked_2d_var
-    if show_1d_var is None or show_caked_2d_var is None:
+    if show_caked_2d_var is None:
         return
 
-    show_1d_now = bool(show_1d_var.get())
     show_caked_now = bool(show_caked_2d_var.get())
     if normalized == "detector":
         if show_caked_now:
             show_caked_2d_var.set(False)
             toggle_caked_2d()
-        elif show_1d_now:
-            show_1d_var.set(False)
-            toggle_1d_plots()
-    elif normalized == "1d":
-        if show_caked_now:
-            show_caked_2d_var.set(False)
-            toggle_caked_2d()
-        if not bool(show_1d_var.get()):
-            show_1d_var.set(True)
-            toggle_1d_plots()
     else:
         if not show_caked_now:
             show_caked_2d_var.set(True)
             toggle_caked_2d()
-        elif not bool(show_1d_var.get()):
-            show_1d_var.set(True)
-            toggle_1d_plots()
     _refresh_run_status_bar()
 
 
@@ -3780,6 +3823,7 @@ integration_range_drag_runtime = (
             simulation_runtime_state.unscaled_image is not None
         ),
         ai_factory=lambda: simulation_runtime_state.ai_cache.get("ai"),
+        show_1d_var_factory=lambda: analysis_view_controls_view_state.show_1d_var,
         sync_peak_selection_state=_sync_peak_selection_state,
         schedule_range_update_factory=lambda: (
             integration_range_update_runtime_callbacks.schedule_range_update
@@ -3922,7 +3966,11 @@ scale_factor_slider_max = 2.0
 scale_factor_step = 0.0001
 
 gui_views.create_display_controls(
-    parent=app_shell_view_state.fig_frame,
+    parent=(
+        app_shell_view_state.figure_controls_frame
+        if app_shell_view_state.figure_controls_frame is not None
+        else app_shell_view_state.fig_frame
+    ),
     view_state=display_controls_view_state,
     background_range=(background_slider_min, background_slider_max),
     background_defaults=(background_vmin_default, background_vmax_default),
@@ -3938,7 +3986,7 @@ gui_views.create_display_controls(
     on_apply_simulation_limits=_apply_simulation_limits,
     fast_viewer_enabled=FAST_VIEWER_STARTUP_ENABLED,
     on_toggle_fast_viewer=_toggle_fast_viewer,
-    fast_viewer_status_text="Fast viewer off.",
+    fast_viewer_status_text="Open in a separate window for faster image interaction.",
 )
 
 background_display.set_clim(background_vmin_default, background_vmax_default)
@@ -4080,8 +4128,7 @@ def _install_scale_factor_entry_bindings():
 
 
 _install_scale_factor_entry_bindings()
-if FAST_VIEWER_STARTUP_ENABLED:
-    _refresh_fast_viewer_runtime_mode(announce=False)
+_refresh_fast_viewer_runtime_mode(announce=False)
 
 
 def _suggest_scale_factor(sim_image, bg_image):
@@ -5052,23 +5099,19 @@ def _current_app_shell_view_mode() -> str:
     show_caked = bool(
         getattr(analysis_view_controls_view_state.show_caked_2d_var, "get", lambda: False)()
     )
-    show_1d = bool(
-        getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()
-    )
     if show_caked:
         return "caked"
-    if show_1d:
-        return "1d"
     return "detector"
 
 
 def _current_app_shell_view_text() -> str:
-    mode = _current_app_shell_view_mode()
-    if mode == "caked":
-        return "Caked + 1D"
-    if mode == "1d":
-        return "Detector + 1D"
-    return "Detector"
+    base = "Caked" if _current_app_shell_view_mode() == "caked" else "Detector"
+    show_1d = bool(
+        getattr(analysis_view_controls_view_state.show_1d_var, "get", lambda: False)()
+    )
+    if show_1d:
+        return f"{base} + 1D"
+    return base
 
 
 def _current_geometry_preview_gate_summary() -> str:
@@ -5206,7 +5249,8 @@ def _refresh_session_summary_panel() -> None:
 
     manual_pair_total = 0
     try:
-        manual_pairs_map = getattr(manual_geometry_state, "pairs_by_background", {}) or {}
+        manual_pairs_state = globals().get("geometry_manual_state")
+        manual_pairs_map = getattr(manual_pairs_state, "pairs_by_background", {}) or {}
         for pair_list in manual_pairs_map.values():
             manual_pair_total += len(pair_list or ())
     except Exception:
@@ -5449,6 +5493,7 @@ def _invalidate_analysis_cache(*, clear_visuals: bool = False) -> None:
 
 
 def _invalidate_simulation_cache() -> None:
+    simulation_runtime_state.last_sim_signature = None
     simulation_runtime_state.last_simulation_signature = None
     simulation_runtime_state.simulation_epoch = int(simulation_runtime_state.simulation_epoch) + 1
     simulation_runtime_state.preview_active = False
@@ -5586,6 +5631,10 @@ def _defer_nonessential_redraw() -> bool:
     )
 
 def _refresh_settled_overlays() -> None:
+    if not _geometry_overlays_enabled():
+        gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
+        _clear_all_geometry_overlay_artists(redraw=True)
+        return
     refresh_integration_region_visuals()
     qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
     if _live_geometry_preview_enabled():
@@ -5604,14 +5653,15 @@ def _refresh_settled_overlays() -> None:
         _render_current_geometry_manual_pairs(update_status=False)
 
 
-def _clear_deferred_overlays() -> None:
-    try:
-        gui_qr_cylinder_overlay.clear_runtime_qr_cylinder_overlay_artists(
-            qr_cylinder_overlay_runtime_bindings_factory(),
-            redraw=False,
-        )
-    except Exception:
-        pass
+def _clear_deferred_overlays(*, clear_qr_overlay: bool = True) -> None:
+    if clear_qr_overlay:
+        try:
+            gui_qr_cylinder_overlay.clear_runtime_qr_cylinder_overlay_artists(
+                qr_cylinder_overlay_runtime_bindings_factory(),
+                redraw=False,
+            )
+        except Exception:
+            pass
     _clear_geometry_preview_artists(redraw=False)
     gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
 
@@ -6113,6 +6163,45 @@ def _prepare_caked_display_payload(res2) -> dict[str, object] | None:
             azimuth_max,
         ],
     }
+
+
+def _restore_caked_display_payload_from_cached_results(
+    *,
+    background_visible: bool,
+) -> bool:
+    """Rebuild caked display arrays from the current cached analysis results."""
+
+    sim_caked = _prepare_caked_display_payload(simulation_runtime_state.last_res2_sim)
+    if not isinstance(sim_caked, dict):
+        return False
+
+    simulation_runtime_state.last_caked_image_unscaled = np.asarray(
+        sim_caked.get("image"),
+        dtype=float,
+    )
+    simulation_runtime_state.last_caked_radial_values = np.asarray(
+        sim_caked.get("radial"),
+        dtype=float,
+    )
+    simulation_runtime_state.last_caked_azimuth_values = np.asarray(
+        sim_caked.get("azimuth"),
+        dtype=float,
+    )
+    simulation_runtime_state.last_caked_extent = list(sim_caked.get("extent", []))
+
+    bg_caked = None
+    if background_visible and simulation_runtime_state.last_res2_background is not None:
+        bg_caked = _prepare_caked_display_payload(
+            simulation_runtime_state.last_res2_background
+        )
+    if isinstance(bg_caked, dict):
+        simulation_runtime_state.last_caked_background_image_unscaled = np.asarray(
+            bg_caked.get("image"),
+            dtype=float,
+        )
+    else:
+        simulation_runtime_state.last_caked_background_image_unscaled = None
+    return True
 
 
 def _run_analysis_job(job: dict[str, object]) -> dict[str, object]:
@@ -6620,8 +6709,8 @@ def do_update():
     collect_hit_tables_requested = _should_collect_hit_tables_for_update()
 
 
-    def get_sim_signature():
-        return (
+    def get_sim_signature(*, include_hit_tables: bool):
+        signature = (
             round(gamma_updated, 6),
             round(Gamma_updated, 6),
             round(chi_updated, 6),
@@ -6654,17 +6743,23 @@ def do_update():
             int(simulation_runtime_state.num_samples),
             int(np.size(mosaic_params["beam_x_array"])),
             int(np.size(mosaic_params["theta_array"])),
-            int(collect_hit_tables_requested),
         )
+        if include_hit_tables:
+            return signature + (int(collect_hit_tables_requested),)
+        return signature
 
     _set_update_trace_stage("simulation_signature")
-    new_sim_sig = get_sim_signature()
+    new_sim_image_sig = get_sim_signature(include_hit_tables=False)
+    new_sim_sig = get_sim_signature(include_hit_tables=True)
     _trace_update(
         "do_update_signature",
         optics_mode=int(optics_mode_flag),
         collect_hit_tables=bool(collect_hit_tables_requested),
         num_samples=int(simulation_runtime_state.num_samples),
-        signature_changed=bool(
+        image_signature_changed=bool(
+            new_sim_image_sig != simulation_runtime_state.last_sim_signature
+        ),
+        full_signature_changed=bool(
             new_sim_sig != simulation_runtime_state.last_simulation_signature
         ),
     )
@@ -6677,6 +6772,7 @@ def do_update():
             ),
         )
         _apply_ready_simulation_result(ready_simulation_result)
+        simulation_runtime_state.last_sim_signature = new_sim_image_sig
         simulation_runtime_state.last_simulation_signature = new_sim_sig
         image_generation_cached = False
         image_generation_elapsed_ms = float(
@@ -6685,23 +6781,15 @@ def do_update():
         simulation_runtime_state.update_phase = "applying"
         _refresh_run_status_bar()
 
-    if ready_simulation_result is None and new_sim_sig != simulation_runtime_state.last_simulation_signature:
-        _set_update_trace_stage("simulation_generation")
-        _trace_update(
-            "do_update_regenerate_simulation",
-            had_cached_primary=bool(
-                simulation_runtime_state.stored_primary_sim_image is not None
-            ),
-            had_cached_secondary=bool(
-                simulation_runtime_state.stored_secondary_sim_image is not None
-            ),
-        )
-        _invalidate_geometry_manual_pick_cache()
-        simulation_runtime_state.peak_positions.clear()
-        simulation_runtime_state.peak_millers.clear()
-        simulation_runtime_state.peak_intensities.clear()
-        simulation_runtime_state.peak_records.clear()
-        simulation_runtime_state.selected_peak_record = None
+    image_signature_changed = bool(
+        new_sim_image_sig != simulation_runtime_state.last_sim_signature
+    )
+    need_hit_table_refresh = bool(
+        collect_hit_tables_requested
+        and new_sim_sig != simulation_runtime_state.last_simulation_signature
+    )
+
+    def _build_simulation_job() -> dict[str, object]:
         primary_data = (
             gui_controllers.copy_bragg_qr_dict(simulation_runtime_state.sim_primary_qr)
             if isinstance(simulation_runtime_state.sim_primary_qr, dict)
@@ -6740,7 +6828,7 @@ def do_update():
             and secondary_data.shape[0] > 0
             and secondary_intensities.size > 0
         )
-        simulation_job = {
+        return {
             "signature": new_sim_sig,
             "epoch": int(simulation_runtime_state.simulation_epoch),
             "image_size": int(image_size),
@@ -6800,6 +6888,25 @@ def do_update():
             "a_secondary": float(secondary_a),
             "c_secondary": float(secondary_c),
         }
+
+    if ready_simulation_result is None and image_signature_changed:
+        _set_update_trace_stage("simulation_generation")
+        _trace_update(
+            "do_update_regenerate_simulation",
+            had_cached_primary=bool(
+                simulation_runtime_state.stored_primary_sim_image is not None
+            ),
+            had_cached_secondary=bool(
+                simulation_runtime_state.stored_secondary_sim_image is not None
+            ),
+        )
+        _invalidate_geometry_manual_pick_cache()
+        simulation_runtime_state.peak_positions.clear()
+        simulation_runtime_state.peak_millers.clear()
+        simulation_runtime_state.peak_intensities.clear()
+        simulation_runtime_state.peak_records.clear()
+        simulation_runtime_state.selected_peak_record = None
+        simulation_job = _build_simulation_job()
         has_cached_simulation = (
             simulation_runtime_state.stored_primary_sim_image is not None
             or simulation_runtime_state.stored_secondary_sim_image is not None
@@ -6819,6 +6926,7 @@ def do_update():
                     }
                 )
                 _apply_ready_simulation_result(preview_result)
+                simulation_runtime_state.last_sim_signature = new_sim_image_sig
                 simulation_runtime_state.last_simulation_signature = new_sim_sig
                 image_generation_cached = False
                 image_generation_elapsed_ms = float(
@@ -6837,6 +6945,7 @@ def do_update():
                     }
                 )
                 _apply_ready_simulation_result(sync_result)
+                simulation_runtime_state.last_sim_signature = new_sim_image_sig
                 simulation_runtime_state.last_simulation_signature = new_sim_sig
                 image_generation_cached = False
                 image_generation_elapsed_ms = float(
@@ -6859,6 +6968,7 @@ def do_update():
                     }
                 )
                 _apply_ready_simulation_result(preview_result)
+                simulation_runtime_state.last_sim_signature = new_sim_image_sig
                 simulation_runtime_state.last_simulation_signature = new_sim_sig
                 image_generation_cached = False
                 image_generation_elapsed_ms = float(
@@ -6882,6 +6992,25 @@ def do_update():
                 )
                 simulation_runtime_state.update_running = False
                 return
+    elif ready_simulation_result is None and need_hit_table_refresh:
+        _set_update_trace_stage("simulation_generation")
+        request_status = _request_async_simulation_job(_build_simulation_job())
+        if (
+            request_status in {"submitted", "queued", "running"}
+            and "progress_label" in globals()
+            and progress_label is not None
+        ):
+            progress_label.config(text="Refreshing peak tables in background...")
+        _trace_update(
+            "do_update_refresh_hit_tables_in_background",
+            request_status=str(request_status),
+            worker_active=bool(
+                simulation_runtime_state.worker_active_job is not None
+            ),
+            worker_queued=bool(
+                simulation_runtime_state.worker_queued_job is not None
+            ),
+        )
 
     if simulation_runtime_state.stored_primary_sim_image is None and simulation_runtime_state.stored_secondary_sim_image is None:
         _trace_update("do_update_return_no_simulation_image")
@@ -6928,7 +7057,12 @@ def do_update():
             for _ in max_positions_local
         ]
 
-    if gui_controllers.consume_geometry_q_group_refresh_request(geometry_q_group_state):
+    if (
+        not need_hit_table_refresh
+        and gui_controllers.consume_geometry_q_group_refresh_request(
+            geometry_q_group_state
+        )
+    ):
         listed_entries = (
             gui_geometry_q_group_manager.capture_runtime_geometry_q_group_entries_snapshot(
                 geometry_q_group_runtime_bindings_factory()
@@ -6958,7 +7092,7 @@ def do_update():
     native_background = _get_current_background_backend()
     if native_background is not None and display_image is not None:
         normalization_sig = (
-            new_sim_sig,
+            new_sim_image_sig,
             int(background_runtime_state.current_background_index),
             id(background_runtime_state.current_background_image),
             int(background_runtime_state.backend_rotation_k) % 4,
@@ -6986,7 +7120,7 @@ def do_update():
         else:
             simulation_runtime_state.unscaled_image = display_image * normalization_scale
         simulation_runtime_state.last_unscaled_image_signature = (
-            new_sim_sig,
+            new_sim_image_sig,
             round(float(normalization_scale), 9),
             tuple(display_image.shape),
             int(background_runtime_state.current_background_index),
@@ -7050,7 +7184,7 @@ def do_update():
         }
     ai = simulation_runtime_state.ai_cache["ai"]
     sim_caking_sig = (
-        new_sim_sig,
+        new_sim_image_sig,
         sig,
         round(float(normalization_scale), 9),
     )
@@ -7118,10 +7252,29 @@ def do_update():
         and simulation_runtime_state.last_analysis_signature == analysis_sig
         and simulation_runtime_state.last_res2_sim is not None
     )
+    missing_caked_payload = bool(
+        show_caked_2d
+        and analysis_result_current
+        and (
+            simulation_runtime_state.last_caked_image_unscaled is None
+            or simulation_runtime_state.last_caked_extent is None
+        )
+    )
+    if missing_caked_payload:
+        _restore_caked_display_payload_from_cached_results(
+            background_visible=bool(background_runtime_state.visible)
+        )
     analysis_result_matches_target = bool(
         analysis_result_current
         and bool(simulation_runtime_state.analysis_preview_active)
         == desired_analysis_preview
+        and (
+            not show_caked_2d
+            or (
+                simulation_runtime_state.last_caked_image_unscaled is not None
+                and simulation_runtime_state.last_caked_extent is not None
+            )
+        )
     )
     analysis_request_in_flight = bool(
         analysis_sig is not None
@@ -7387,7 +7540,11 @@ def do_update():
     )
 
     if defer_overlay_refresh:
-        _clear_deferred_overlays()
+        if _live_interaction_active():
+            _clear_deferred_overlays(clear_qr_overlay=True)
+        else:
+            qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
+            _clear_deferred_overlays(clear_qr_overlay=False)
     else:
         _refresh_settled_overlays()
 
@@ -7869,7 +8026,8 @@ def _build_geometry_fit_background_table_rows() -> list[dict[str, str]]:
         theta_values = list(_current_background_theta_values(strict_count=False))
     except Exception:
         theta_values = []
-    manual_pairs_map = getattr(manual_geometry_state, "pairs_by_background", {}) or {}
+    manual_pairs_state = globals().get("geometry_manual_state")
+    manual_pairs_map = getattr(manual_pairs_state, "pairs_by_background", {}) or {}
     rows: list[dict[str, str]] = []
     for idx, osc_path in enumerate(list(background_runtime_state.osc_files)):
         theta_text = "n/a"
@@ -9109,6 +9267,40 @@ def _current_geometry_fit_var_names() -> list[str]:
     return _geometry_fit_runtime_values().current_var_names()
 
 
+def _current_geometry_fit_candidate_param_names() -> list[str]:
+    """Return all currently fit-capable geometry parameters for diagnostics."""
+
+    candidate_names = list(
+        gui_geometry_fit.current_geometry_fit_var_names(
+            fit_zb=True,
+            fit_zs=True,
+            fit_theta=True,
+            fit_psi_z=True,
+            fit_chi=True,
+            fit_cor=True,
+            fit_gamma=True,
+            fit_Gamma=True,
+            fit_dist=True,
+            fit_a=True,
+            fit_c=True,
+            fit_center_x=True,
+            fit_center_y=True,
+            use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
+        )
+    )
+    geometry_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
+    if not isinstance(geometry_cfg, Mapping):
+        geometry_cfg = {}
+    lattice_cfg = geometry_cfg.get("lattice_refinement", {}) or {}
+    if not isinstance(lattice_cfg, Mapping):
+        lattice_cfg = {}
+    if not bool(lattice_cfg.get("enabled", False)):
+        candidate_names = [name for name in candidate_names if name not in {"a", "c"}]
+
+    available_domains = _current_geometry_fit_parameter_domains(candidate_names)
+    return [name for name in candidate_names if name in available_domains]
+
+
 def _current_geometry_fit_params() -> dict[str, object]:
     """Assemble the current geometry-fit parameter dictionary."""
 
@@ -9118,11 +9310,7 @@ def _current_geometry_fit_params() -> dict[str, object]:
 def _current_geometry_fit_constraint_state(
     names: Sequence[str] | None = None,
 ) -> dict[str, dict[str, float]]:
-    return gui_geometry_fit.read_runtime_geometry_fit_constraint_state(
-        controls=geometry_fit_constraints_view_state.controls,
-        names=names,
-        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
-    )
+    return {}
 
 
 def _current_geometry_fit_parameter_domains(
@@ -9142,16 +9330,24 @@ def _build_geometry_fit_runtime_config(
     current_params,
     control_settings,
     parameter_domains,
+    *,
+    candidate_param_names=None,
 ):
     return gui_geometry_fit.build_geometry_fit_runtime_config(
         base_config,
         current_params,
         control_settings,
         parameter_domains,
+        candidate_param_names=candidate_param_names,
     )
 
 def _refresh_live_geometry_preview(*, update_status: bool = True) -> bool:
     """Recompute and redraw the live auto-match overlay from the current state."""
+
+    if not _geometry_overlays_enabled():
+        del update_status
+        _clear_all_geometry_overlay_artists(redraw=True)
+        return False
 
     display_background = (
         gui_geometry_q_group_manager.resolve_runtime_live_geometry_preview_background(
@@ -10384,14 +10580,16 @@ def _legacy_auto_match_on_fit_geometry_click():
                 )
             )
             root.update_idletasks()
+            candidate_param_names = _current_geometry_fit_candidate_param_names()
             geometry_runtime_cfg = _build_geometry_fit_runtime_config(
                 geometry_refine_cfg,
                 {
                     name: current_fit_params.get(name)
-                    for name in var_names
+                    for name in candidate_param_names
                 },
-                _current_geometry_fit_constraint_state(var_names),
-                _current_geometry_fit_parameter_domains(var_names),
+                _current_geometry_fit_constraint_state(candidate_param_names),
+                _current_geometry_fit_parameter_domains(candidate_param_names),
+                candidate_param_names=candidate_param_names,
             )
 
             result = fit_geometry_parameters(
@@ -10405,6 +10603,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                 experimental_image=experimental_image_for_fit,
                 dataset_specs=current_dataset_specs if joint_background_mode else None,
                 refinement_config=geometry_runtime_cfg,
+                candidate_param_names=candidate_param_names,
             )
 
             if getattr(result, "x", None) is None or len(result.x) != len(var_names):
@@ -11583,14 +11782,16 @@ def _legacy_auto_match_on_fit_geometry_click():
                 _log_assignment_snapshot(
                     "Match assignments before fit (native frame):", params
                 )
+                candidate_param_names = _current_geometry_fit_candidate_param_names()
                 geometry_runtime_cfg = _build_geometry_fit_runtime_config(
                     geometry_refine_cfg,
                     {
                         name: params.get(name)
-                        for name in var_names
+                        for name in candidate_param_names
                     },
-                    _current_geometry_fit_constraint_state(var_names),
-                    _current_geometry_fit_parameter_domains(var_names),
+                    _current_geometry_fit_constraint_state(candidate_param_names),
+                    _current_geometry_fit_parameter_domains(candidate_param_names),
+                    candidate_param_names=candidate_param_names,
                 )
 
                 result = fit_geometry_parameters(
@@ -11603,6 +11804,7 @@ def _legacy_auto_match_on_fit_geometry_click():
                     pixel_tol=float('inf'),
                     experimental_image=experimental_image_for_fit,
                     refinement_config=geometry_runtime_cfg,
+                    candidate_param_names=candidate_param_names,
                 )
 
                 _log_section(
@@ -12924,7 +13126,7 @@ gui_views.create_geometry_overlay_action_controls(
     parent=app_shell_view_state.match_results_frame,
     view_state=geometry_overlay_actions_view_state,
     on_toggle_qr_cylinder_overlay=qr_cylinder_overlay_runtime_toggle,
-    on_clear_geometry_overlays=_clear_all_geometry_overlay_artists,
+    on_toggle_geometry_overlays=_toggle_geometry_overlay_visibility,
     on_fit_mosaic=on_fit_mosaic_click,
 )
 integration_range_update_runtime.create_analysis_controls(
@@ -12934,9 +13136,11 @@ gui_views.populate_app_shell_view_switcher(
     view_state=app_shell_view_state,
     on_select=_set_persistent_view_mode,
 )
-gui_views.set_app_shell_view_mode(
-    app_shell_view_state,
-    _current_app_shell_view_mode(),
+gui_views.bind_app_shell_view_mode_sync(
+    view_state=app_shell_view_state,
+    show_1d_var=analysis_view_controls_view_state.show_1d_var,
+    show_caked_2d_var=analysis_view_controls_view_state.show_caked_2d_var,
+    resolve_mode=_current_app_shell_view_mode,
 )
 
 # Option to add fractional rods between integer L values. This can be enabled via
@@ -13505,38 +13709,6 @@ gui_views.populate_app_shell_quick_controls(
             "step": 0.01,
         },
         {
-            "key": "center_x",
-            "label": "center x",
-            "variable": center_x_var,
-            "scale": center_x_scale,
-            "command": schedule_update,
-            "step": 1.0,
-        },
-        {
-            "key": "center_y",
-            "label": "center y",
-            "variable": center_y_var,
-            "scale": center_y_scale,
-            "command": schedule_update,
-            "step": 1.0,
-        },
-        {
-            "key": "gamma",
-            "label": "gamma",
-            "variable": gamma_var,
-            "scale": gamma_scale,
-            "command": schedule_update,
-            "step": 0.001,
-        },
-        {
-            "key": "Gamma",
-            "label": "Gamma",
-            "variable": Gamma_var,
-            "scale": Gamma_scale,
-            "command": schedule_update,
-            "step": 0.001,
-        },
-        {
             "key": "corto_detector",
             "label": "distance",
             "variable": corto_detector_var,
@@ -13545,19 +13717,17 @@ gui_views.populate_app_shell_quick_controls(
             "step": 0.0001,
         },
         {
-            "key": "a",
-            "label": "a",
-            "variable": a_var,
-            "scale": a_scale,
-            "command": schedule_update,
-            "step": 0.01,
+            "key": "sampling_resolution",
+            "label": "sampling resolution",
+            "control_type": "choice",
+            "variable": resolution_var,
+            "options": resolution_options,
         },
         {
-            "key": "c",
-            "label": "c",
-            "variable": c_var,
-            "scale": c_scale,
-            "command": schedule_update,
+            "key": "sf_prune_bias",
+            "label": "SF prune bias",
+            "variable": sf_prune_bias_var,
+            "scale": sf_prune_bias_scale,
             "step": 0.01,
         },
     ],
@@ -13711,6 +13881,7 @@ geometry_fit_runtime_workflow = (
             "geometry_manual_entry_display_coords": (
                 _geometry_manual_entry_display_coords
             ),
+            "pick_uses_caked_space": _geometry_manual_pick_uses_caked_space,
             "unrotate_display_peaks": _unrotate_display_peaks,
             "display_to_native_sim_coords": _display_to_native_sim_coords,
             "select_fit_orientation": _select_fit_orientation,
@@ -13725,6 +13896,7 @@ geometry_fit_runtime_workflow = (
             ),
             "current_constraint_state": _current_geometry_fit_constraint_state,
             "current_parameter_domains": _current_geometry_fit_parameter_domains,
+            "current_candidate_param_names": _current_geometry_fit_candidate_param_names,
         },
         action_bootstrap_kwargs={
             "value_callbacks_factory": _geometry_fit_runtime_values,
@@ -13927,125 +14099,6 @@ geometry_fit_parameter_specs = {
         "step": 1.0,
     },
 }
-
-
-def _default_geometry_fit_window(name: str) -> float:
-    parameter_name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
-        name,
-        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
-    )
-    try:
-        current_theta_offset = _current_geometry_theta_offset(strict=False)
-    except Exception:
-        current_theta_offset = 0.0
-    return gui_geometry_fit.default_runtime_geometry_fit_constraint_window(
-        name=name,
-        parameter_specs=geometry_fit_parameter_specs,
-        fit_config=fit_config,
-        parameter_domains=_current_geometry_fit_parameter_domains([parameter_name]),
-        current_theta_offset=current_theta_offset,
-        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
-    )
-
-
-def _default_geometry_fit_pull(name: str, window: float) -> float:
-    return gui_geometry_fit.default_runtime_geometry_fit_constraint_pull(
-        name=name,
-        fit_config=fit_config,
-        window=window,
-        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
-    )
-
-
-gui_views.create_geometry_fit_constraints_panel(
-    parent=app_shell_view_state.match_parameter_frame,
-    root=root,
-    view_state=geometry_fit_constraints_view_state,
-    after=fit_frame,
-    on_mousewheel=lambda event: _scroll_geometry_fit_constraints(event),
-)
-geometry_fit_constraints_body = geometry_fit_constraints_view_state.body
-if geometry_fit_constraints_body is None:
-    raise RuntimeError("Geometry-fit constraints body was not created.")
-
-
-def _scroll_geometry_fit_constraints(event):
-    return gui_views.scroll_geometry_fit_constraints_canvas(
-        geometry_fit_constraints_view_state,
-        pointer_x=root.winfo_pointerx(),
-        pointer_y=root.winfo_pointery(),
-        event=event,
-    )
-
-for name in GEOMETRY_FIT_PARAM_ORDER:
-    spec = geometry_fit_parameter_specs.get(name, {})
-    try:
-        step = abs(float(spec.get("step", 0.01)))
-    except Exception:
-        step = 0.01
-    step = max(step, 1.0e-6)
-    default_window = _default_geometry_fit_window(name)
-    parameter_name = gui_geometry_fit.geometry_fit_constraint_parameter_name(
-        name,
-        use_shared_theta_offset=_geometry_fit_uses_shared_theta_offset(),
-    )
-    domain = _current_geometry_fit_parameter_domains([parameter_name]).get(parameter_name)
-    domain_span = 0.0
-    if isinstance(domain, tuple) and len(domain) >= 2:
-        domain_span = max(0.0, float(domain[1]) - float(domain[0]))
-    window_slider_max = max(
-        default_window,
-        step * 20.0,
-        default_window * 4.0,
-        0.05 * domain_span,
-    )
-    if domain_span > 0.0:
-        window_slider_max = min(window_slider_max, domain_span)
-    window_slider_max = max(window_slider_max, default_window, step)
-
-    row_text = str(spec.get("label", name))
-    if name == "theta_initial" and _geometry_fit_uses_shared_theta_offset():
-        row_text = "Theta Shared Offset"
-    row = ttk.LabelFrame(
-        geometry_fit_constraints_body,
-        text=row_text,
-    )
-    window_var, _window_slider = create_slider(
-        "Allowed deviation (±)",
-        0.0,
-        window_slider_max,
-        default_window,
-        step,
-        row,
-        allow_range_expand=True,
-        range_expand_pad=max(step, default_window * 0.25),
-    )
-    pull_var, _pull_slider = create_slider(
-        "Stay-close pull",
-        0.0,
-        1.0,
-        _default_geometry_fit_pull(name, default_window),
-        0.01,
-        row,
-    )
-    ttk.Label(
-        row,
-        text="0 = free fit, 1 = strongest preference for the starting value.",
-        wraplength=360,
-        justify="left",
-    ).pack(fill=tk.X, padx=6, pady=(0, 4))
-    gui_views.set_geometry_fit_constraint_control(
-        geometry_fit_constraints_view_state,
-        name=name,
-        row=row,
-        window_var=window_var,
-        pull_var=pull_var,
-    )
-
-for _toggle_var in geometry_fit_toggle_vars.values():
-    _toggle_var.trace_add("write", _sync_geometry_fit_constraint_rows)
-_sync_geometry_fit_constraint_rows()
-_refresh_geometry_fit_theta_checkbox_label()
 
 # Slider controlling contribution of the first CIF file, only if a second CIF
 # was provided.

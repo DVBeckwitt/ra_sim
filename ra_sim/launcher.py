@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -85,6 +86,32 @@ def launch_mosaic_visualizer() -> None:
         raise RuntimeError(
             f"2D_Mosaic_Sim exited with status {exc.returncode}."
         ) from exc
+
+
+def launch_mosaic_specular_visualizer(initial_state: object) -> None:
+    """Launch the unified 2D_Mosaic_Sim app directly in seeded specular mode."""
+
+    repo_path = resolve_mosaic_repo_path()
+    script_path = resolve_mosaic_launcher_script(repo_path)
+    try:
+        state_json = json.dumps(initial_state)
+    except TypeError as exc:
+        raise RuntimeError(f"Unable to serialize 2D_Mosaic_Sim startup state: {exc}") from exc
+
+    try:
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(script_path),
+                "--mode",
+                "specular-view",
+                "--state-json",
+                state_json,
+            ],
+            cwd=repo_path,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"Unable to launch 2D_Mosaic_Sim: {exc}") from exc
 
 
 def launch_startup_mode(

@@ -8,20 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from ra_sim.simulation.intersection_analysis import (
-    BeamSamples as IntersectionBeamSamples,
-    IntersectionGeometry,
-    MosaicParams as IntersectionMosaicParams,
-    analyze_reflection_intersection,
-    plot_intersection_analysis,
-)
-
 from . import views as gui_views
 
 
 @dataclass(frozen=True)
 class SelectedPeakIntersectionConfig:
-    """Scalar GUI inputs needed to inspect one selected peak intersection."""
+    """Scalar GUI inputs needed to launch one selected peak in the external viewer."""
 
     image_size: int
     center_col: float
@@ -39,6 +31,9 @@ class SelectedPeakIntersectionConfig:
     sigma_mosaic_deg: float
     gamma_mosaic_deg: float
     eta: float
+    sample_width_m: float
+    sample_length_m: float
+    wavelength_angstrom: float
     solve_q_steps: int
     solve_q_rel_tol: float
     solve_q_mode: int
@@ -235,6 +230,9 @@ def build_selected_peak_intersection_config(
     sigma_mosaic_deg: float,
     gamma_mosaic_deg: float,
     eta: float,
+    sample_width_m: float,
+    sample_length_m: float,
+    wavelength_angstrom: float,
     solve_q_steps: int,
     solve_q_rel_tol: float,
     solve_q_mode: int,
@@ -259,6 +257,9 @@ def build_selected_peak_intersection_config(
         sigma_mosaic_deg=float(sigma_mosaic_deg),
         gamma_mosaic_deg=float(gamma_mosaic_deg),
         eta=float(eta),
+        sample_width_m=float(sample_width_m),
+        sample_length_m=float(sample_length_m),
+        wavelength_angstrom=float(wavelength_angstrom),
         solve_q_steps=int(solve_q_steps),
         solve_q_rel_tol=float(solve_q_rel_tol),
         solve_q_mode=int(solve_q_mode),
@@ -430,6 +431,9 @@ def build_runtime_selected_peak_intersection_config(
     sigma_mosaic_deg: object,
     gamma_mosaic_deg: object,
     eta: object,
+    sample_width_m: object,
+    sample_length_m: object,
+    wavelength_angstrom: object,
     solve_q_values: object,
 ) -> SelectedPeakIntersectionConfig:
     """Build one live selected-peak intersection config from runtime sources."""
@@ -457,6 +461,9 @@ def build_runtime_selected_peak_intersection_config(
         sigma_mosaic_deg=_runtime_float(sigma_mosaic_deg, float("nan")),
         gamma_mosaic_deg=_runtime_float(gamma_mosaic_deg, float("nan")),
         eta=_runtime_float(eta, float("nan")),
+        sample_width_m=_runtime_float(sample_width_m, float("nan")),
+        sample_length_m=_runtime_float(sample_length_m, float("nan")),
+        wavelength_angstrom=_runtime_float(wavelength_angstrom, float("nan")),
         solve_q_steps=solve_q_steps,
         solve_q_rel_tol=solve_q_rel_tol,
         solve_q_mode=solve_q_mode,
@@ -557,6 +564,9 @@ def make_runtime_selected_peak_intersection_config_factory(
     sigma_mosaic_deg_factory: object,
     gamma_mosaic_deg_factory: object,
     eta_factory: object,
+    sample_width_m_factory: object,
+    sample_length_m_factory: object,
+    wavelength_angstrom_factory: object,
     solve_q_values_factory: object,
 ) -> Callable[[], SelectedPeakIntersectionConfig]:
     """Return a zero-arg factory for the live intersection-analysis config."""
@@ -578,6 +588,9 @@ def make_runtime_selected_peak_intersection_config_factory(
         sigma_mosaic_deg=sigma_mosaic_deg_factory,
         gamma_mosaic_deg=gamma_mosaic_deg_factory,
         eta=eta_factory,
+        sample_width_m=sample_width_m_factory,
+        sample_length_m=sample_length_m_factory,
+        wavelength_angstrom=wavelength_angstrom_factory,
         solve_q_values=solve_q_values_factory,
     )
 
@@ -672,6 +685,8 @@ def make_runtime_selected_peak_config_factories(
     gamma_mosaic_deg_factory: object,
     eta_factory: object,
     wavelength_factory: object,
+    sample_width_m_factory: object,
+    sample_length_m_factory: object,
     debye_x_factory: object,
     debye_y_factory: object,
     detector_center_factory: object,
@@ -708,6 +723,9 @@ def make_runtime_selected_peak_config_factories(
             sigma_mosaic_deg_factory=sigma_mosaic_deg_factory,
             gamma_mosaic_deg_factory=gamma_mosaic_deg_factory,
             eta_factory=eta_factory,
+            sample_width_m_factory=sample_width_m_factory,
+            sample_length_m_factory=sample_length_m_factory,
+            wavelength_angstrom_factory=wavelength_factory,
             solve_q_values_factory=solve_q_values_factory,
         ),
         ideal_center=make_runtime_selected_peak_ideal_center_factory(
@@ -1819,20 +1837,238 @@ def select_peak_from_canvas_click(
     return picked
 
 
+def _meters_to_millimeters(value: float) -> float:
+    return float(value) * 1000.0
+
+
+def _angstrom_to_meters(value: float) -> float:
+    return float(value) * 1.0e-10
+
+
+def _finite_float(value: object, default: float) -> float:
+    try:
+        numeric = float(value)
+    except Exception:
+        return float(default)
+    if not np.isfinite(numeric):
+        return float(default)
+    return numeric
+
+
+def _profile_values(profile_cache: Mapping[object, object], key: str) -> np.ndarray:
+    try:
+        values = profile_cache.get(key)
+    except Exception:
+        return np.empty((0,), dtype=np.float64)
+    if values is None:
+        return np.empty((0,), dtype=np.float64)
+    try:
+        array = np.asarray(values, dtype=np.float64).reshape(-1)
+    except Exception:
+        return np.empty((0,), dtype=np.float64)
+    if array.size == 0:
+        return array
+    return array[np.isfinite(array)]
+
+
+def _profile_std(profile_cache: Mapping[object, object], key: str) -> float:
+    values = _profile_values(profile_cache, key)
+    if values.size == 0:
+        return 0.0
+    std = float(np.std(values))
+    if not np.isfinite(std):
+        return 0.0
+    return std
+
+
+def _rotation_x_matrix(angle_rad: float) -> np.ndarray:
+    c = float(np.cos(angle_rad))
+    s = float(np.sin(angle_rad))
+    return np.array(
+        [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
+        dtype=np.float64,
+    )
+
+
+def _nearest_rotation_matrix(matrix: np.ndarray) -> np.ndarray:
+    u, _, vh = np.linalg.svd(np.asarray(matrix, dtype=np.float64))
+    rotation = u @ vh
+    if np.linalg.det(rotation) < 0.0:
+        u[:, -1] *= -1.0
+        rotation = u @ vh
+    return rotation
+
+
+def _ra_sample_rotation_matrix(config: SelectedPeakIntersectionConfig) -> np.ndarray:
+    chi_rad = np.deg2rad(float(config.chi_deg))
+    psi_rad = np.deg2rad(float(config.psi_deg))
+    psi_z_rad = np.deg2rad(float(config.psi_z_deg))
+    theta_initial_rad = np.deg2rad(float(config.theta_initial_deg))
+    cor_angle_rad = np.deg2rad(float(config.cor_angle_deg))
+
+    c_chi = float(np.cos(chi_rad))
+    s_chi = float(np.sin(chi_rad))
+    r_y = np.array(
+        [
+            [c_chi, 0.0, s_chi],
+            [0.0, 1.0, 0.0],
+            [-s_chi, 0.0, c_chi],
+        ],
+        dtype=np.float64,
+    )
+
+    c_psi = float(np.cos(psi_rad))
+    s_psi = float(np.sin(psi_rad))
+    r_z = np.array(
+        [
+            [c_psi, s_psi, 0.0],
+            [-s_psi, c_psi, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    r_z_r_y = r_z @ r_y
+
+    ct = float(np.cos(theta_initial_rad))
+    st = float(np.sin(theta_initial_rad))
+    ax = float(np.cos(cor_angle_rad))
+    ay = 0.0
+    az = float(np.sin(cor_angle_rad))
+    c_psi_z = float(np.cos(psi_z_rad))
+    s_psi_z = float(np.sin(psi_z_rad))
+    ax_yawed = c_psi_z * ax + s_psi_z * ay
+    ay_yawed = -s_psi_z * ax + c_psi_z * ay
+    axis = np.array([ax_yawed, ay_yawed, az], dtype=np.float64)
+    axis /= np.linalg.norm(axis)
+    ax = float(axis[0])
+    ay = float(axis[1])
+    az = float(axis[2])
+    one_ct = 1.0 - ct
+    r_cor = np.array(
+        [
+            [ct + ax * ax * one_ct, ax * ay * one_ct - az * st, ax * az * one_ct + ay * st],
+            [ay * ax * one_ct + az * st, ct + ay * ay * one_ct, ay * az * one_ct - ax * st],
+            [az * ax * one_ct - ay * st, az * ay * one_ct + ax * st, ct + az * az * one_ct],
+        ],
+        dtype=np.float64,
+    )
+    return _nearest_rotation_matrix(r_cor @ r_z_r_y)
+
+
+def _decompose_specular_sample_pose(
+    config: SelectedPeakIntersectionConfig,
+) -> tuple[float, float, float, float]:
+    theta_i_deg = float(np.clip(_finite_float(config.theta_initial_deg, 0.0), 0.0, 90.0))
+    residual = _nearest_rotation_matrix(
+        _ra_sample_rotation_matrix(config)
+        @ _rotation_x_matrix(-np.deg2rad(theta_i_deg))
+    )
+    alpha_rad = float(np.arcsin(np.clip(residual[1, 0], -1.0, 1.0)))
+    cos_alpha = float(np.cos(alpha_rad))
+    if abs(cos_alpha) > 1.0e-8:
+        psi_rad = float(np.arctan2(-residual[2, 0], residual[0, 0]))
+        delta_rad = float(np.arctan2(-residual[1, 2], residual[1, 1]))
+    else:
+        psi_rad = 0.0
+        delta_rad = float(np.arctan2(residual[0, 2], residual[2, 2]))
+    return (
+        theta_i_deg,
+        float(np.rad2deg(delta_rad)),
+        float(np.rad2deg(alpha_rad)),
+        float(np.rad2deg(psi_rad)),
+    )
+
+
+def _specular_ray_count(simulation_runtime_state) -> int:
+    profile_cache = getattr(simulation_runtime_state, "profile_cache", {})
+    if not isinstance(profile_cache, Mapping):
+        profile_cache = {}
+    for key in (
+        "wavelength_array",
+        "beam_x_array",
+        "beam_y_array",
+        "theta_array",
+        "phi_array",
+    ):
+        values = _profile_values(profile_cache, key)
+        if values.size:
+            return int(values.size)
+    return max(int(getattr(simulation_runtime_state, "num_samples", 0) or 0), 1)
+
+
+def _build_selected_peak_specular_initial_state(
+    simulation_runtime_state,
+    *,
+    config: SelectedPeakIntersectionConfig,
+    selected_peak: Mapping[object, object],
+) -> dict[str, dict[str, float | int]]:
+    profile_cache = getattr(simulation_runtime_state, "profile_cache", {})
+    if not isinstance(profile_cache, Mapping):
+        profile_cache = {}
+
+    ray_count = _specular_ray_count(simulation_runtime_state)
+    theta_i_deg, delta_deg, alpha_deg, psi_deg = _decompose_specular_sample_pose(config)
+    pixel_size_mm = _meters_to_millimeters(_finite_float(config.pixel_size_m, 100e-6))
+    detector_span_mm = max(float(config.image_size), 1.0) * pixel_size_mm
+    wavelength_angstrom = _finite_float(config.wavelength_angstrom, 1.5406)
+    lattice_a_angstrom = _finite_float(selected_peak.get("av"), 4.143)
+    lattice_c_angstrom = _finite_float(selected_peak.get("cv"), 28.636)
+    h, k, l = tuple(int(v) for v in selected_peak["hkl"])
+
+    return {
+        "specular-view": {
+            "rays": int(ray_count),
+            "seed": 7,
+            "display_rays": int(max(1, min(ray_count, 80))),
+            "source_y": -20.0,
+            "beam_width_x": _meters_to_millimeters(_profile_std(profile_cache, "beam_x_array")),
+            "beam_width_z": _meters_to_millimeters(_profile_std(profile_cache, "beam_y_array")),
+            "divergence_x": float(np.rad2deg(_profile_std(profile_cache, "phi_array"))),
+            "divergence_z": float(np.rad2deg(_profile_std(profile_cache, "theta_array"))),
+            "z_beam": _meters_to_millimeters(-_finite_float(config.zb, 0.0)),
+            "sample_width": _meters_to_millimeters(_finite_float(config.sample_width_m, 0.02)),
+            "sample_height": _meters_to_millimeters(_finite_float(config.sample_length_m, 0.08)),
+            "theta_i": theta_i_deg,
+            "delta": delta_deg,
+            "alpha": alpha_deg,
+            "psi": psi_deg,
+            "z_sample": _meters_to_millimeters(-_finite_float(config.zs, 0.0)),
+            "distance": _meters_to_millimeters(
+                _finite_float(config.distance_cor_to_detector, 0.2)
+            ),
+            "detector_width": detector_span_mm,
+            "detector_height": detector_span_mm,
+            "beta": -_finite_float(config.gamma_deg, 0.0),
+            "gamma": -_finite_float(config.Gamma_deg, 0.0),
+            "chi": 0.0,
+            "pixel_u": pixel_size_mm,
+            "pixel_v": pixel_size_mm,
+            "i0": _finite_float(config.center_col, 0.0),
+            "j0": _finite_float(config.center_row, 0.0),
+            "H": int(h),
+            "K": int(k),
+            "L": int(l),
+            "sigma_deg": _finite_float(config.sigma_mosaic_deg, 0.8),
+            "mosaic_gamma_deg": _finite_float(config.gamma_mosaic_deg, 5.0),
+            "eta": _finite_float(config.eta, 0.5),
+            "wavelength_m": _angstrom_to_meters(wavelength_angstrom),
+            "lattice_a_m": _angstrom_to_meters(lattice_a_angstrom),
+            "lattice_c_m": _angstrom_to_meters(lattice_c_angstrom),
+        }
+    }
+
+
 def open_selected_peak_intersection_figure(
     simulation_runtime_state,
     *,
     config: SelectedPeakIntersectionConfig,
     n2: Any,
     set_status_text: Any,
-    geometry_factory: Any = IntersectionGeometry,
-    beam_factory: Any = IntersectionBeamSamples,
-    mosaic_factory: Any = IntersectionMosaicParams,
-    analyze_intersection: Any = analyze_reflection_intersection,
-    plot_intersection: Any = plot_intersection_analysis,
+    launch_specular_visualizer: Any = None,
 ) -> bool:
-    """Open a Bragg/Ewald intersection analysis plot for the selected peak."""
+    """Open the external 2D Mosaic specular view for the selected peak."""
 
+    del n2
     selected_peak = simulation_runtime_state.selected_peak_record
     if not isinstance(selected_peak, Mapping):
         set_status_text(
@@ -1840,90 +2076,26 @@ def open_selected_peak_intersection_figure(
         )
         return False
 
+    if launch_specular_visualizer is None:
+        from ra_sim import launcher as app_launcher
+
+        launch_specular_visualizer = app_launcher.launch_mosaic_specular_visualizer
+
     try:
         h, k, l = tuple(int(v) for v in selected_peak["hkl"])
-        native_col = float(
-            selected_peak.get(
-                "selected_native_col",
-                selected_peak.get("native_col"),
-            )
+        initial_state = _build_selected_peak_specular_initial_state(
+            simulation_runtime_state,
+            config=config,
+            selected_peak=selected_peak,
         )
-        native_row = float(
-            selected_peak.get(
-                "selected_native_row",
-                selected_peak.get("native_row"),
-            )
-        )
-        lattice_a = float(selected_peak["av"])
-        lattice_c = float(selected_peak["cv"])
-
-        geometry = geometry_factory(
-            image_size=int(config.image_size),
-            center_col=float(config.center_col),
-            center_row=float(config.center_row),
-            distance_cor_to_detector=float(config.distance_cor_to_detector),
-            gamma_deg=float(config.gamma_deg),
-            Gamma_deg=float(config.Gamma_deg),
-            chi_deg=float(config.chi_deg),
-            psi_deg=float(config.psi_deg),
-            psi_z_deg=float(config.psi_z_deg),
-            zs=float(config.zs),
-            zb=float(config.zb),
-            theta_initial_deg=float(config.theta_initial_deg),
-            cor_angle_deg=float(config.cor_angle_deg),
-            n_detector=np.array([0.0, 1.0, 0.0], dtype=np.float64),
-            unit_x=np.array([1.0, 0.0, 0.0], dtype=np.float64),
-            pixel_size_m=float(config.pixel_size_m),
-        )
-
-        profile_cache = simulation_runtime_state.profile_cache
-        beam = beam_factory(
-            beam_x_array=np.asarray(profile_cache["beam_x_array"], dtype=np.float64),
-            beam_y_array=np.asarray(profile_cache["beam_y_array"], dtype=np.float64),
-            theta_array=np.asarray(profile_cache["theta_array"], dtype=np.float64),
-            phi_array=np.asarray(profile_cache["phi_array"], dtype=np.float64),
-            wavelength_array=np.asarray(
-                profile_cache["wavelength_array"],
-                dtype=np.float64,
-            ),
-        )
-        mosaic = mosaic_factory(
-            sigma_mosaic_deg=float(config.sigma_mosaic_deg),
-            gamma_mosaic_deg=float(config.gamma_mosaic_deg),
-            eta=float(config.eta),
-            solve_q_steps=int(config.solve_q_steps),
-            solve_q_rel_tol=float(config.solve_q_rel_tol),
-            solve_q_mode=int(config.solve_q_mode),
-        )
-
-        analysis = analyze_intersection(
-            h=h,
-            k=k,
-            l=l,
-            lattice_a=lattice_a,
-            lattice_c=lattice_c,
-            selected_native_col=native_col,
-            selected_native_row=native_row,
-            geometry=geometry,
-            beam=beam,
-            mosaic=mosaic,
-            n2=n2,
-        )
-        fig_analysis = plot_intersection(analysis)
-        manager = getattr(getattr(fig_analysis, "canvas", None), "manager", None)
-        if manager is not None:
-            manager.set_window_title(f"Bragg/Ewald HKL=({h},{k},{l})")
-            manager.show()
-        else:
-            fig_analysis.show()
-
+        launch_specular_visualizer(initial_state)
         set_status_text(
-            f"Opened Bragg/Ewald analysis for HKL=({h} {k} {l}) "
+            f"Opened 2D Mosaic specular view for HKL=({h} {k} {l}) "
             f"from source={selected_peak.get('source_label', 'unknown')}."
         )
         return True
     except Exception as exc:
-        set_status_text(f"Intersection analysis failed for selected peak: {exc}")
+        set_status_text(f"Specular visualizer launch failed for selected peak: {exc}")
         return False
 
 

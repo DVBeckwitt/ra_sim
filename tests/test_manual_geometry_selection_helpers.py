@@ -585,6 +585,29 @@ def test_native_detector_coords_to_caked_display_coords_prefers_angular_maps() -
     assert result == (12.5, 170.0)
 
 
+def test_native_detector_coords_to_caked_display_coords_snaps_to_live_caked_bins() -> None:
+    result = mg.native_detector_coords_to_caked_display_coords(
+        0.9,
+        0.1,
+        ai=object(),
+        get_detector_angular_maps=lambda _ai: (
+            np.array([[11.0, 12.6], [13.0, 14.0]], dtype=float),
+            np.array([[181.0, -189.0], [35.0, 40.0]], dtype=float),
+        ),
+        detector_pixel_to_scattering_angles=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fallback should not be used")
+        ),
+        center=[0.0, 0.0],
+        detector_distance=1.0,
+        pixel_size=1.0,
+        wrap_phi_range=_wrap_phi_range,
+        caked_radial_values=np.array([10.0, 12.5, 15.0], dtype=float),
+        caked_azimuth_values=np.array([-170.0, -10.0, 20.0, 170.0], dtype=float),
+    )
+
+    assert result == (12.5, 170.0)
+
+
 def test_native_detector_coords_to_caked_display_coords_falls_back_when_map_lookup_raises() -> None:
     result = mg.native_detector_coords_to_caked_display_coords(
         5.0,
@@ -1289,6 +1312,7 @@ def test_geometry_manual_pick_cache_signature_tracks_background_state() -> None:
         geometry_q_group_cached_entries=[{"key": ("q_group", "primary", 1, 0)}],
         stored_max_positions_local=[{"x": 1.0}],
         stored_peak_table_lattice=[{"hkl": (1, 0, 0)}, {"hkl": (0, 0, 2)}],
+        peak_records=[{"display_col": 1.0}],
     )
 
     assert signature[0] == ("sim", 7)
@@ -1297,11 +1321,16 @@ def test_geometry_manual_pick_cache_signature_tracks_background_state() -> None:
     assert signature[4] == 1
     assert signature[5] == 2
     assert signature[6] == 1
-    assert signature[7] == ("('q_group', 'primary', 1, 0)",)
+    assert signature[7] == 1
+    assert signature[8] == ("('q_group', 'primary', 1, 0)",)
 
 
 def test_build_geometry_manual_pick_cache_reuses_existing_current_background_state() -> None:
-    existing_cache = {"signature": ("cached",), "value": 9}
+    existing_cache = {
+        "signature": ("cached",),
+        "value": 9,
+        "grouped_candidates": {("q_group", "primary", 1, 0): [{"sim_col": 1.0}]},
+    }
 
     cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
         background_index=0,
@@ -1321,6 +1350,146 @@ def test_build_geometry_manual_pick_cache_reuses_existing_current_background_sta
     assert cache_data is existing_cache
     assert next_sig == ("cached",)
     assert next_state is existing_cache
+
+
+def test_build_geometry_manual_pick_cache_rebuilds_when_cached_groups_are_empty() -> None:
+    simulation_calls: list[bool] = []
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((3, 3), dtype=float),
+        existing_cache_signature=("cached",),
+        existing_cache_data={
+            "grouped_candidates": {},
+            "simulated_lookup": {},
+        },
+        cache_signature_fn=lambda **_kwargs: ("cached",),
+        simulated_peaks_for_params=lambda *_args, prefer_cache=False, **_kwargs: (
+            simulation_calls.append(bool(prefer_cache))
+            or [
+                {
+                    "q_group_key": ("q_group", "primary", 1, 0),
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "sim_col": 3.0,
+                    "sim_row": 4.0,
+                }
+            ]
+        ),
+        build_grouped_candidates=lambda entries: {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert simulation_calls == [False]
+    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
+    assert next_sig == ("cached",)
+    assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
+
+
+def test_build_geometry_manual_pick_cache_uses_central_simulation_even_when_cache_is_preferred() -> None:
+    forwarded_prefer_cache: list[bool] = []
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((3, 3), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        simulated_peaks_for_params=lambda _params, *, prefer_cache: (
+            forwarded_prefer_cache.append(bool(prefer_cache))
+            or [
+                {
+                    "source_table_index": 1,
+                    "source_row_index": 2,
+                    "sim_col": 3.0,
+                    "sim_row": 4.0,
+                }
+            ]
+        ),
+        build_grouped_candidates=lambda entries: {
+            ("q_group", "primary", 1, 0): [dict(entry) for entry in entries or ()]
+        },
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert forwarded_prefer_cache == [False]
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 3.0
+    assert next_sig == ("sig",)
+    assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
+
+
+def test_build_geometry_manual_pick_cache_falls_back_to_cached_preview_peaks_when_central_groups_are_empty() -> None:
+    forwarded_prefer_cache: list[bool] = []
+
+    def _simulated_peaks_for_params(_params, *, prefer_cache):
+        forwarded_prefer_cache.append(bool(prefer_cache))
+        if not prefer_cache:
+            return []
+        return [
+            {
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 3.0,
+                "sim_row": 4.0,
+            }
+        ]
+
+    def _build_grouped_candidates(entries):
+        return {
+            entry["q_group_key"]: [dict(entry)]
+            for entry in entries or ()
+            if isinstance(entry.get("q_group_key"), tuple)
+        }
+
+    cache_data, next_sig, next_state = mg.build_geometry_manual_pick_cache(
+        param_set={"gamma": 1.5},
+        prefer_cache=True,
+        background_index=0,
+        current_background_index=0,
+        background_image=np.zeros((3, 3), dtype=float),
+        existing_cache_signature=None,
+        existing_cache_data=None,
+        cache_signature_fn=lambda **_kwargs: ("sig",),
+        simulated_peaks_for_params=_simulated_peaks_for_params,
+        build_grouped_candidates=_build_grouped_candidates,
+        build_simulated_lookup=lambda entries: {
+            (
+                int(entry.get("source_table_index")),
+                int(entry.get("source_row_index")),
+            ): dict(entry)
+            for entry in entries or ()
+        },
+        current_match_config=lambda: {"search_radius_px": 24.0},
+    )
+
+    assert forwarded_prefer_cache == [False, True]
+    assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
+    assert cache_data["simulated_lookup"][(1, 2)]["sim_col"] == 3.0
+    assert next_sig == ("sig",)
+    assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None:
@@ -1503,6 +1672,14 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view() 
     assert callbacks.pick_uses_caked_space() is True
     assert callbacks.current_background_image() is caked_image
     assert callbacks.entry_display_coords({"x": 2.0, "y": 3.0}) == (12.0, 1.0)
+    assert callbacks.entry_display_coords(
+        {
+            "x": 2.0,
+            "y": 3.0,
+            "detector_x": 4.0,
+            "detector_y": 1.0,
+        }
+    ) == (14.0, -1.0)
     assert callbacks.caked_angles_to_background_display_coords(13.0, 2.0) == (3.0, 4.0)
 
     projected = callbacks.simulated_peaks_for_params()
@@ -1521,6 +1698,46 @@ def test_make_runtime_geometry_manual_projection_callbacks_project_caked_view() 
 
     lookup = callbacks.simulated_lookup(projected)
     assert lookup[(1, 2)]["sim_row"] == 2.0
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_pick_candidates_fall_back_when_filter_removes_every_group() -> None:
+    filter_calls: list[int] = []
+    collapse_calls: list[int] = []
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((6, 6), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 15.0, 6),
+        last_caked_azimuth_values=lambda: np.linspace(-2.0, 3.0, 6),
+        current_background_display=lambda: np.zeros((6, 6), dtype=float),
+        current_background_native=lambda: np.zeros((6, 6), dtype=float),
+        image_size=lambda: 6,
+        filter_simulated_peaks=lambda entries: (
+            filter_calls.append(len(entries or ())) or ([], 1, 0)
+        ),
+        collapse_simulated_peaks=lambda entries, *, merge_radius_px: (
+            collapse_calls.append(len(entries or ()))
+            or (list(entries or ()), int(round(float(merge_radius_px))))
+        ),
+    )
+
+    grouped = callbacks.pick_candidates(
+        [
+            {
+                "label": "1,0,0",
+                "q_group_key": ("q_group", "primary", 1, 0),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "sim_col": 3.0,
+                "sim_row": 4.0,
+            }
+        ]
+    )
+
+    assert filter_calls == [1]
+    assert collapse_calls == [1]
+    assert list(grouped) == [("q_group", "primary", 1, 0)]
+    assert grouped[("q_group", "primary", 1, 0)][0]["sim_row"] == 4.0
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_with_inverse_fallback() -> None:
@@ -1579,6 +1796,74 @@ def test_make_runtime_geometry_manual_projection_callbacks_back_projects_caked_t
 
     assert callbacks.caked_angles_to_background_display_coords(13.0, 2.0) == (1.5, 2.5)
     assert inverse_calls == [(0.0, 1.0)]
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_projects_detector_points_in_native_coords() -> None:
+    two_theta_map = np.full((4, 4), 999.0, dtype=float)
+    phi_map = np.full((4, 4), 999.0, dtype=float)
+    two_theta_map[2, 2] = 13.0
+    phi_map[2, 2] = 2.0
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((6, 6), dtype=float),
+        last_caked_radial_values=lambda: np.linspace(10.0, 15.0, 6),
+        last_caked_azimuth_values=lambda: np.linspace(-2.0, 3.0, 6),
+        current_background_display=lambda: np.zeros((4, 4), dtype=float),
+        current_background_native=lambda: np.ones((4, 4), dtype=float),
+        image_size=lambda: 6,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (two_theta_map, phi_map),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("native detector-map lookup should be used")
+        ),
+        backend_detector_coords_to_native_detector_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("backend inverse should not be used for detector->caked projection")
+        ),
+    )
+
+    assert callbacks.native_detector_coords_to_caked_display_coords(2.0, 2.0) == (
+        13.0,
+        2.0,
+    )
+    assert callbacks.entry_display_coords(
+        {
+            "x": 99.0,
+            "y": 99.0,
+            "detector_x": 2.0,
+            "detector_y": 2.0,
+        }
+    ) == (13.0, 2.0)
+
+
+def test_make_runtime_geometry_manual_projection_callbacks_snap_detector_points_to_caked_bins() -> None:
+    two_theta_map = np.full((4, 4), 999.0, dtype=float)
+    phi_map = np.full((4, 4), 999.0, dtype=float)
+    two_theta_map[2, 2] = 13.2
+    phi_map[2, 2] = 1.8
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: True,
+        last_caked_background_image_unscaled=lambda: np.zeros((6, 6), dtype=float),
+        last_caked_radial_values=lambda: np.array([10.0, 13.0, 15.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([-2.0, 2.0, 5.0], dtype=float),
+        current_background_display=lambda: np.zeros((4, 4), dtype=float),
+        current_background_native=lambda: np.ones((4, 4), dtype=float),
+        image_size=lambda: 6,
+        display_to_native_sim_coords=lambda col, row, _shape: (float(col), float(row)),
+        get_detector_angular_maps=lambda _ai: (two_theta_map, phi_map),
+        detector_pixel_to_scattering_angles=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("native detector-map lookup should be used")
+        ),
+        backend_detector_coords_to_native_detector_coords=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("backend inverse should not be used for detector->caked projection")
+        ),
+    )
+
+    assert callbacks.native_detector_coords_to_caked_display_coords(2.0, 2.0) == (
+        13.0,
+        2.0,
+    )
 
 
 def test_make_runtime_geometry_manual_projection_callbacks_prefer_cache_uses_live_preview_peaks() -> None:

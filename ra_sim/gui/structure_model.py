@@ -1383,6 +1383,7 @@ def rebuild_diffraction_inputs(
         and (not finite_stack_flag or state.last_stack_layers == int(layers))
         and atom_site_signature == state.last_atom_site_fractional_signature
     ):
+        simulation_runtime_state.last_sim_signature = None
         simulation_runtime_state.last_simulation_signature = None
         if trigger_update:
             schedule_update()
@@ -1540,6 +1541,7 @@ def rebuild_diffraction_inputs(
         state.details,
     )
 
+    simulation_runtime_state.last_sim_signature = None
     simulation_runtime_state.last_simulation_signature = None
     if trigger_update:
         schedule_update()

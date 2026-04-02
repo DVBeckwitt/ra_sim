@@ -418,7 +418,8 @@ class GeometryOverlayActionsViewState:
 
     show_qr_cylinder_overlay_var: Any = None
     show_qr_cylinder_overlay_checkbutton: Any = None
-    clear_geometry_markers_button: Any = None
+    show_geometry_overlays_var: Any = None
+    show_geometry_overlays_checkbutton: Any = None
     fit_button_mosaic: Any = None
 
 
@@ -649,7 +650,9 @@ class AppShellViewState:
     analysis_exports_frame: Any = None
     status_frame: Any = None
     fig_frame: Any = None
+    figure_workspace_frame: Any = None
     canvas_frame: Any = None
+    figure_controls_frame: Any = None
     quick_controls_frame: Any = None
     quick_controls_body: Any = None
     quick_control_widgets: dict[str, Any] = field(default_factory=dict)

@@ -377,6 +377,7 @@ def test_apply_runtime_bragg_qr_filters_updates_status_invalidates_and_refreshes
     }
     assert applied[0][0] is simulation_runtime_state
     assert applied[0][2] == 0.5
+    assert simulation_runtime_state.last_sim_signature is None
     assert simulation_runtime_state.last_simulation_signature is None
     assert simulation_runtime_state.stored_max_positions_local is None
     assert simulation_runtime_state.stored_sim_image is None
@@ -630,6 +631,7 @@ def test_structure_factor_pruning_runtime_steps_and_rel_tol_changes_clip_and_sch
     view_state.solve_q_steps_var.set("32")
     changed = structure_factor_pruning.on_runtime_solve_q_steps_change(bindings)
     assert changed is True
+    assert simulation_runtime_state.last_sim_signature is None
     assert simulation_runtime_state.last_simulation_signature is None
     assert simulation_runtime_state.stored_max_positions_local is None
     assert simulation_runtime_state.stored_sim_image is None
@@ -652,6 +654,7 @@ def test_structure_factor_pruning_runtime_steps_and_rel_tol_changes_clip_and_sch
     view_state.solve_q_rel_tol_var.set("1e-4")
     changed = structure_factor_pruning.on_runtime_solve_q_rel_tol_change(bindings)
     assert changed is True
+    assert simulation_runtime_state.last_sim_signature is None
     assert simulation_runtime_state.last_simulation_signature is None
     assert simulation_runtime_state.stored_max_positions_local is None
     assert simulation_runtime_state.stored_sim_image is None
@@ -696,6 +699,7 @@ def test_structure_factor_pruning_runtime_mode_change_normalizes_and_syncs_view(
     changed = structure_factor_pruning.on_runtime_solve_q_mode_change(bindings)
     assert changed is True
     assert enabled_calls == [True]
+    assert simulation_runtime_state.last_sim_signature is None
     assert simulation_runtime_state.last_simulation_signature is None
     assert simulation_runtime_state.stored_max_positions_local is None
     assert simulation_runtime_state.stored_sim_image is None

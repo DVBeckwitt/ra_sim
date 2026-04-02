@@ -71,6 +71,9 @@ def _intersection_config() -> peak_selection.SelectedPeakIntersectionConfig:
         sigma_mosaic_deg=0.25,
         gamma_mosaic_deg=0.5,
         eta=0.75,
+        sample_width_m=0.012,
+        sample_length_m=0.018,
+        wavelength_angstrom=1.5406,
         solve_q_steps=321,
         solve_q_rel_tol=1.0e-4,
         solve_q_mode=2,
@@ -155,6 +158,9 @@ def test_peak_selection_config_builders_normalize_values() -> None:
         sigma_mosaic_deg="0.25",
         gamma_mosaic_deg=0.5,
         eta="0.75",
+        sample_width_m="0.012",
+        sample_length_m=0.018,
+        wavelength_angstrom="1.5406",
         solve_q_steps="321",
         solve_q_rel_tol="1.0e-4",
         solve_q_mode="2",
@@ -165,6 +171,9 @@ def test_peak_selection_config_builders_normalize_values() -> None:
     assert intersection_cfg.solve_q_steps == 321
     assert intersection_cfg.solve_q_rel_tol == 1.0e-4
     assert intersection_cfg.solve_q_mode == 2
+    assert intersection_cfg.sample_width_m == 0.012
+    assert intersection_cfg.sample_length_m == 0.018
+    assert intersection_cfg.wavelength_angstrom == 1.5406
 
     probe_cfg = peak_selection.build_selected_peak_ideal_center_probe_config(
         image_size="64",
@@ -220,6 +229,9 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
         "sigma_mosaic": 0.25,
         "gamma_mosaic": 0.5,
         "eta": 0.75,
+        "sample_width": 0.012,
+        "sample_length": 0.018,
+        "wavelength_angstrom": 1.5406,
         "solve_q": SimpleNamespace(steps=321, rel_tol=1.0e-4, mode_flag=2),
     }
 
@@ -249,6 +261,9 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
             sigma_mosaic_deg_factory=lambda: live["sigma_mosaic"],
             gamma_mosaic_deg_factory=lambda: live["gamma_mosaic"],
             eta_factory=lambda: live["eta"],
+            sample_width_m_factory=lambda: live["sample_width"],
+            sample_length_m_factory=lambda: live["sample_length"],
+            wavelength_angstrom_factory=lambda: live["wavelength_angstrom"],
             solve_q_values_factory=lambda: live["solve_q"],
         )
     )
@@ -264,6 +279,9 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
     assert intersection_cfg.solve_q_steps == 321
     assert intersection_cfg.solve_q_rel_tol == 1.0e-4
     assert intersection_cfg.solve_q_mode == 2
+    assert intersection_cfg.sample_width_m == 0.012
+    assert intersection_cfg.sample_length_m == 0.018
+    assert intersection_cfg.wavelength_angstrom == 1.5406
 
     live["primary_a"] = 6.0
     live["image_shape"] = (80, 96)
@@ -406,6 +424,8 @@ def test_peak_selection_runtime_config_factory_bundle_delegates_to_helper_factor
         gamma_mosaic_deg_factory="gamma-mosaic",
         eta_factory="eta",
         wavelength_factory="wavelength",
+        sample_width_m_factory="sample-width",
+        sample_length_m_factory="sample-length",
         debye_x_factory="debye-x",
         debye_y_factory="debye-y",
         detector_center_factory="detector-center",
@@ -914,19 +934,17 @@ def test_open_selected_peak_intersection_figure_requires_selection() -> None:
     ]
 
 
-def test_open_selected_peak_intersection_figure_builds_analysis_and_opens_window() -> None:
+def test_open_selected_peak_intersection_figure_launches_seeded_specular_visualizer() -> None:
     runtime_state = state.SimulationRuntimeState(
         profile_cache={
-            "beam_x_array": [1.0, 2.0],
-            "beam_y_array": [3.0, 4.0],
-            "theta_array": [5.0, 6.0],
-            "phi_array": [7.0, 8.0],
-            "wavelength_array": [9.0, 10.0],
+            "beam_x_array": [1.0e-4, 2.0e-4],
+            "beam_y_array": [3.0e-4, 4.0e-4],
+            "theta_array": [1.0e-3, 2.0e-3],
+            "phi_array": [3.0e-3, 4.0e-3],
+            "wavelength_array": [1.5406, 1.5410],
         },
         selected_peak_record={
             "hkl": (1, 0, 2),
-            "selected_native_col": 11.5,
-            "selected_native_row": 12.5,
             "av": 4.1,
             "cv": 6.2,
             "source_label": "primary",
@@ -934,92 +952,79 @@ def test_open_selected_peak_intersection_figure_builds_analysis_and_opens_window
     )
     status_messages = []
     captured = {}
-    manager = _FakeManager()
-    fig = _FakeFigure(manager=manager)
-    n2 = object()
+    config = _intersection_config()
 
-    def fake_geometry_factory(**kwargs):
-        captured["geometry"] = kwargs
-        return ("geometry", kwargs)
-
-    def fake_beam_factory(**kwargs):
-        captured["beam"] = kwargs
-        return ("beam", kwargs)
-
-    def fake_mosaic_factory(**kwargs):
-        captured["mosaic"] = kwargs
-        return ("mosaic", kwargs)
-
-    def fake_analyze_intersection(**kwargs):
-        captured["analyze"] = kwargs
-        return {"analysis": "ok"}
-
-    def fake_plot_intersection(analysis):
-        captured["plot"] = analysis
-        return fig
+    def fake_launch_specular_visualizer(initial_state):
+        captured["state"] = initial_state
 
     ok = peak_selection.open_selected_peak_intersection_figure(
         runtime_state,
-        config=_intersection_config(),
-        n2=n2,
+        config=config,
+        n2=object(),
         set_status_text=status_messages.append,
-        geometry_factory=fake_geometry_factory,
-        beam_factory=fake_beam_factory,
-        mosaic_factory=fake_mosaic_factory,
-        analyze_intersection=fake_analyze_intersection,
-        plot_intersection=fake_plot_intersection,
+        launch_specular_visualizer=fake_launch_specular_visualizer,
     )
 
     assert ok is True
-    assert captured["analyze"]["h"] == 1
-    assert captured["analyze"]["k"] == 0
-    assert captured["analyze"]["l"] == 2
-    assert captured["analyze"]["lattice_a"] == 4.1
-    assert captured["analyze"]["lattice_c"] == 6.2
-    assert captured["analyze"]["selected_native_col"] == 11.5
-    assert captured["analyze"]["selected_native_row"] == 12.5
-    assert captured["analyze"]["n2"] is n2
-    np.testing.assert_allclose(captured["geometry"]["n_detector"], [0.0, 1.0, 0.0])
-    np.testing.assert_allclose(captured["geometry"]["unit_x"], [1.0, 0.0, 0.0])
-    assert captured["geometry"]["image_size"] == 512
-    assert captured["geometry"]["pixel_size_m"] == 100e-6
-    np.testing.assert_allclose(captured["beam"]["beam_x_array"], [1.0, 2.0])
-    np.testing.assert_allclose(captured["beam"]["wavelength_array"], [9.0, 10.0])
-    assert captured["mosaic"]["sigma_mosaic_deg"] == 0.25
-    assert captured["mosaic"]["gamma_mosaic_deg"] == 0.5
-    assert captured["mosaic"]["eta"] == 0.75
-    assert captured["mosaic"]["solve_q_steps"] == 321
-    assert captured["mosaic"]["solve_q_rel_tol"] == 1.0e-4
-    assert captured["mosaic"]["solve_q_mode"] == 2
-    assert captured["plot"] == {"analysis": "ok"}
-    assert manager.title == "Bragg/Ewald HKL=(1,0,2)"
-    assert manager.shown is True
-    assert fig.shown is False
+    specular = captured["state"]["specular-view"]
+    assert specular["H"] == 1
+    assert specular["K"] == 0
+    assert specular["L"] == 2
+    assert specular["sigma_deg"] == 0.25
+    assert specular["mosaic_gamma_deg"] == 0.5
+    assert specular["eta"] == 0.75
+    assert specular["rays"] == 2
+    assert specular["display_rays"] == 2
+    assert specular["source_y"] == -20.0
+    assert specular["sample_width"] == 12.0
+    assert specular["sample_height"] == 18.0
+    assert specular["distance"] == config.distance_cor_to_detector * 1000.0
+    assert specular["beta"] == -config.gamma_deg
+    assert specular["gamma"] == -config.Gamma_deg
+    assert specular["chi"] == 0.0
+    assert specular["pixel_u"] == config.pixel_size_m * 1000.0
+    assert specular["pixel_v"] == config.pixel_size_m * 1000.0
+    assert specular["i0"] == config.center_col
+    assert specular["j0"] == config.center_row
+    np.testing.assert_allclose(
+        specular["beam_width_x"],
+        np.std([1.0e-4, 2.0e-4]) * 1000.0,
+    )
+    np.testing.assert_allclose(
+        specular["beam_width_z"],
+        np.std([3.0e-4, 4.0e-4]) * 1000.0,
+    )
+    np.testing.assert_allclose(
+        specular["divergence_x"],
+        np.rad2deg(np.std([3.0e-3, 4.0e-3])),
+    )
+    np.testing.assert_allclose(
+        specular["divergence_z"],
+        np.rad2deg(np.std([1.0e-3, 2.0e-3])),
+    )
+    assert specular["theta_i"] == config.theta_initial_deg
+    assert np.isfinite(specular["delta"])
+    assert np.isfinite(specular["alpha"])
+    assert np.isfinite(specular["psi"])
+    np.testing.assert_allclose(specular["wavelength_m"], 1.5406e-10)
+    np.testing.assert_allclose(specular["lattice_a_m"], 4.1e-10)
+    np.testing.assert_allclose(specular["lattice_c_m"], 6.2e-10)
     assert status_messages[-1] == (
-        "Opened Bragg/Ewald analysis for HKL=(1 0 2) from source=primary."
+        "Opened 2D Mosaic specular view for HKL=(1 0 2) from source=primary."
     )
 
 
 def test_open_selected_peak_intersection_figure_reports_failures() -> None:
     runtime_state = state.SimulationRuntimeState(
-        profile_cache={
-            "beam_x_array": [1.0],
-            "beam_y_array": [2.0],
-            "theta_array": [3.0],
-            "phi_array": [4.0],
-            "wavelength_array": [5.0],
-        },
         selected_peak_record={
             "hkl": (1, 0, 2),
-            "native_col": 10.0,
-            "native_row": 11.0,
             "av": 4.1,
             "cv": 6.2,
         },
     )
     status_messages = []
 
-    def raise_boom(**_kwargs):
+    def raise_boom(_initial_state):
         raise ValueError("boom")
 
     ok = peak_selection.open_selected_peak_intersection_figure(
@@ -1027,14 +1032,11 @@ def test_open_selected_peak_intersection_figure_reports_failures() -> None:
         config=_intersection_config(),
         n2=object(),
         set_status_text=status_messages.append,
-        geometry_factory=lambda **kwargs: kwargs,
-        beam_factory=lambda **kwargs: kwargs,
-        mosaic_factory=lambda **kwargs: kwargs,
-        analyze_intersection=raise_boom,
+        launch_specular_visualizer=raise_boom,
     )
 
     assert ok is False
-    assert status_messages[-1] == "Intersection analysis failed for selected peak: boom"
+    assert status_messages[-1] == "Specular visualizer launch failed for selected peak: boom"
 
 
 def test_toggle_hkl_pick_mode_handles_ready_and_unready_paths() -> None:

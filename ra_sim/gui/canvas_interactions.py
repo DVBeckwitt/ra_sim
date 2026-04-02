@@ -241,6 +241,20 @@ def handle_runtime_canvas_press(
         bindings.update_geometry_manual_pick_preview(x0, y0, force=True)
         return True
 
+    if bool(bindings.geometry_runtime_state.manual_pick_armed):
+        if getattr(event, "button", None) != 1:
+            return False
+        if (
+            getattr(event, "inaxes", None) is not bindings.axis
+            or getattr(event, "xdata", None) is None
+            or getattr(event, "ydata", None) is None
+        ):
+            return False
+        # The paired click handler owns Qr/Qz-set selection while armed. Consuming
+        # the press here prevents integration-range dragging from stealing the same
+        # left click in detector or caked views.
+        return True
+
     on_press = getattr(bindings.integration_range_drag_callbacks, "on_press", None)
     if not callable(on_press):
         return False

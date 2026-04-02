@@ -67,6 +67,10 @@ def draw_geometry_fit_overlay(
         native_key: str,
     ) -> tuple[float, float] | None:
         if show_caked_2d and native_detector_coords_to_caked_display_coords is not None:
+            caked_display_key = display_key.replace("_display", "_caked_display")
+            caked_point = _parse_point(entry.get(caked_display_key))
+            if caked_point is not None:
+                return caked_point
             native_point = _parse_point(entry.get(native_key))
             if native_point is not None:
                 try:

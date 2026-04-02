@@ -513,6 +513,7 @@ def invalidate_runtime_bragg_qr_filter_results(
 ) -> None:
     """Clear cached simulation artifacts invalidated by Bragg-Qr filter changes."""
 
+    bindings.simulation_runtime_state.last_sim_signature = None
     bindings.simulation_runtime_state.last_simulation_signature = None
     bindings.simulation_runtime_state.stored_max_positions_local = None
     bindings.simulation_runtime_state.stored_sim_image = None

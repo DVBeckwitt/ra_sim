@@ -847,6 +847,845 @@ class GeometryFitDatasetContext:
     single_ray_indices: Optional[np.ndarray] = None
 
 
+@dataclass(frozen=True)
+class ParamSpec:
+    """Normalized local parameter specification for one fit variable."""
+
+    name: str
+    ref_value: float
+    lower: float
+    upper: float
+    scale: float
+    prior_mean: float | None = None
+    prior_sigma: float | None = None
+    seed_group: str = "auto"
+
+
+def _default_scale(
+    value: float,
+    lower: float,
+    upper: float,
+    *,
+    prior_sigma: float | None = None,
+    nominal_scale: float | None = None,
+) -> float:
+    """Choose one local normalized-variable scale."""
+
+    if (
+        prior_sigma is not None
+        and np.isfinite(float(prior_sigma))
+        and float(prior_sigma) > 0.0
+    ):
+        return float(prior_sigma)
+    span = float(upper) - float(lower)
+    if np.isfinite(span) and span > 0.0:
+        return max(0.25 * float(span), 1.0e-12)
+    if nominal_scale is not None and np.isfinite(float(nominal_scale)):
+        if float(nominal_scale) > 0.0:
+            return float(nominal_scale)
+    return max(abs(float(value)), 1.0, 1.0e-12)
+
+
+def _build_u_bounds(specs: Sequence[ParamSpec]) -> tuple[np.ndarray, np.ndarray]:
+    """Convert physical bounds into normalized ``u`` bounds."""
+
+    lb = np.array(
+        [(float(spec.lower) - float(spec.ref_value)) / float(spec.scale) for spec in specs],
+        dtype=float,
+    )
+    ub = np.array(
+        [(float(spec.upper) - float(spec.ref_value)) / float(spec.scale) for spec in specs],
+        dtype=float,
+    )
+    return lb, ub
+
+
+def _physical_from_u(specs: Sequence[ParamSpec], u: Sequence[float]) -> np.ndarray:
+    """Map normalized local coordinates back into physical parameter values."""
+
+    u_arr = np.asarray(u, dtype=float).reshape(-1)
+    values = np.empty(len(specs), dtype=float)
+    for idx, spec in enumerate(specs):
+        uj = float(u_arr[idx]) if idx < u_arr.size else 0.0
+        values[idx] = float(spec.ref_value + spec.scale * uj)
+    return values
+
+
+def _u_from_physical(
+    specs: Sequence[ParamSpec],
+    theta: Sequence[float],
+) -> np.ndarray:
+    """Map physical parameter values into normalized local coordinates."""
+
+    theta_arr = np.asarray(theta, dtype=float).reshape(-1)
+    values = np.empty(len(specs), dtype=float)
+    for idx, spec in enumerate(specs):
+        theta_j = float(theta_arr[idx]) if idx < theta_arr.size else float(spec.ref_value)
+        values[idx] = float((theta_j - float(spec.ref_value)) / float(spec.scale))
+    return values
+
+
+def _matrix_rank_from_singular_values(
+    singular_values: Sequence[float],
+    *,
+    rcond: float,
+) -> int:
+    """Return the numerical rank implied by one singular spectrum."""
+
+    s = np.asarray(singular_values, dtype=float).reshape(-1)
+    if s.size == 0 or not np.isfinite(s[0]) or s[0] <= 0.0:
+        return 0
+    threshold = max(float(rcond), 0.0) * float(s[0])
+    return int(np.count_nonzero(s > threshold))
+
+
+def _min_nonzero_singular_value(
+    singular_values: Sequence[float],
+    *,
+    rcond: float,
+) -> float:
+    """Return the smallest non-negligible singular value or zero."""
+
+    s = np.asarray(singular_values, dtype=float).reshape(-1)
+    if s.size == 0 or not np.isfinite(s[0]) or s[0] <= 0.0:
+        return 0.0
+    threshold = max(float(rcond), 0.0) * float(s[0])
+    usable = s[np.isfinite(s) & (s > threshold)]
+    if usable.size == 0:
+        return 0.0
+    return float(np.min(usable))
+
+
+def _finite_diff_jacobian_abs(
+    fun: Callable[[np.ndarray], np.ndarray],
+    x: np.ndarray,
+    abs_step: np.ndarray,
+    *,
+    lower: np.ndarray | None = None,
+    upper: np.ndarray | None = None,
+) -> np.ndarray:
+    """Central finite-difference Jacobian with absolute steps and bound guards."""
+
+    x_ref = np.asarray(x, dtype=float).reshape(-1)
+    step_arr = np.asarray(abs_step, dtype=float).reshape(-1)
+    f0 = np.asarray(fun(np.asarray(x_ref, dtype=float)), dtype=float).reshape(-1)
+    J = np.empty((f0.size, x_ref.size), dtype=float)
+    lower_arr = None if lower is None else np.asarray(lower, dtype=float).reshape(-1)
+    upper_arr = None if upper is None else np.asarray(upper, dtype=float).reshape(-1)
+
+    for j in range(x_ref.size):
+        h = float(step_arr[j]) if j < step_arr.size else 0.0
+        if not np.isfinite(h) or h <= 0.0:
+            h = 1.0e-6
+        xp = np.asarray(x_ref, dtype=float).copy()
+        xm = np.asarray(x_ref, dtype=float).copy()
+        if lower_arr is not None and j < lower_arr.size:
+            xm[j] = max(float(lower_arr[j]), float(xm[j] - h))
+        else:
+            xm[j] = float(xm[j] - h)
+        if upper_arr is not None and j < upper_arr.size:
+            xp[j] = min(float(upper_arr[j]), float(xp[j] + h))
+        else:
+            xp[j] = float(xp[j] + h)
+
+        delta_plus = float(xp[j] - x_ref[j])
+        delta_minus = float(x_ref[j] - xm[j])
+        if delta_plus > 0.0 and delta_minus > 0.0:
+            fp = np.asarray(fun(xp), dtype=float).reshape(-1)
+            fm = np.asarray(fun(xm), dtype=float).reshape(-1)
+            J[:, j] = (fp - fm) / float(delta_plus + delta_minus)
+        elif delta_plus > 0.0:
+            fp = np.asarray(fun(xp), dtype=float).reshape(-1)
+            J[:, j] = (fp - f0) / float(delta_plus)
+        elif delta_minus > 0.0:
+            fm = np.asarray(fun(xm), dtype=float).reshape(-1)
+            J[:, j] = (f0 - fm) / float(delta_minus)
+        else:
+            J[:, j] = 0.0
+    return J
+
+
+def _soft_l1_row_scale(f: np.ndarray, f_scale: float) -> np.ndarray:
+    """Return the row multiplier that matches SciPy's scalar ``soft_l1`` loss."""
+
+    f_arr = np.asarray(f, dtype=float)
+    scale = max(float(f_scale), 1.0e-12)
+    z = (f_arr / scale) ** 2
+    return np.power(1.0 + z, -0.25)
+
+
+def _low_discrepancy_points(count: int, ndim: int) -> np.ndarray:
+    """Generate a simple deterministic low-discrepancy point set on ``[0, 1]^d``."""
+
+    n = max(int(count), 0)
+    d = max(int(ndim), 0)
+    if n <= 0 or d <= 0:
+        return np.empty((0, d), dtype=float)
+    irrational = np.modf(np.sqrt(np.arange(2, d + 2, dtype=float)))[0]
+    irrational = np.where(np.abs(irrational) > 1.0e-12, irrational, 0.5)
+    pts = np.empty((n, d), dtype=float)
+    for idx in range(n):
+        pts[idx, :] = np.mod(0.5 + (idx + 1) * irrational, 1.0)
+    return pts
+
+
+def _map_box_points(
+    points: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> np.ndarray:
+    """Affine-map unit-box samples into arbitrary axis-aligned bounds."""
+
+    pts = np.asarray(points, dtype=float)
+    lb = np.asarray(lower, dtype=float).reshape(-1)
+    ub = np.asarray(upper, dtype=float).reshape(-1)
+    if pts.size == 0 or lb.size == 0:
+        return np.empty((0, lb.size), dtype=float)
+    return lb[None, :] + pts * (ub - lb)[None, :]
+
+
+def _deduplicate_seed_vectors(
+    seeds: Sequence[Sequence[float]],
+    *,
+    lower: np.ndarray,
+    upper: np.ndarray,
+    min_dist: float,
+) -> List[np.ndarray]:
+    """Drop near-duplicate seed vectors in normalized space."""
+
+    lb = np.asarray(lower, dtype=float).reshape(-1)
+    ub = np.asarray(upper, dtype=float).reshape(-1)
+    threshold = max(float(min_dist), 0.0)
+    unique: List[np.ndarray] = []
+    seen_exact: Set[Tuple[float, ...]] = set()
+    for raw_seed in seeds:
+        seed = np.asarray(raw_seed, dtype=float).reshape(-1)
+        if seed.shape != lb.shape:
+            continue
+        seed = np.minimum(np.maximum(seed, lb), ub)
+        if not np.all(np.isfinite(seed)):
+            continue
+        key = tuple(np.round(seed, 12).tolist())
+        if key in seen_exact:
+            continue
+        if threshold > 0.0 and any(
+            float(np.linalg.norm(seed - existing)) < threshold for existing in unique
+        ):
+            continue
+        seen_exact.add(key)
+        unique.append(seed)
+    return unique
+
+
+def _format_discrete_mode_label(mode: Mapping[str, object] | None) -> str:
+    """Return one compact user-facing label for a solver-side discrete mode."""
+
+    mode_dict = dict(mode or {})
+    if not mode_dict:
+        return "identity"
+    label = str(mode_dict.get("label", "") or "").strip()
+    if label:
+        return label
+    pieces: List[str] = []
+    k = int(mode_dict.get("k", 0)) % 4
+    if k:
+        pieces.append(f"rot{90 * k}")
+    if bool(mode_dict.get("flip_x", False)):
+        pieces.append("flip_x")
+    if bool(mode_dict.get("flip_y", False)):
+        pieces.append("flip_y")
+    return " + ".join(pieces) if pieces else "identity"
+
+
+def _iter_discrete_mode_specs(
+    config: Mapping[str, object] | None,
+) -> List[Dict[str, object]]:
+    """Enumerate solver-side discrete symmetry modes."""
+
+    cfg = dict(config or {})
+    if not bool(cfg.get("enabled", False)):
+        return [
+            {
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "indexing_mode": "xy",
+                "label": "identity",
+            }
+        ]
+
+    rot90_values = cfg.get("rot90", [0])
+    flip_x_values = cfg.get("flip_x", [False])
+    flip_y_values = cfg.get("flip_y", [False])
+    try:
+        rot90_list = [int(v) % 4 for v in list(rot90_values)]
+    except Exception:
+        rot90_list = [0]
+    try:
+        flip_x_list = [bool(v) for v in list(flip_x_values)]
+    except Exception:
+        flip_x_list = [False]
+    try:
+        flip_y_list = [bool(v) for v in list(flip_y_values)]
+    except Exception:
+        flip_y_list = [False]
+    if not rot90_list:
+        rot90_list = [0]
+    if not flip_x_list:
+        flip_x_list = [False]
+    if not flip_y_list:
+        flip_y_list = [False]
+
+    seen: Set[Tuple[int, bool, bool]] = set()
+    modes: List[Dict[str, object]] = []
+    for k in rot90_list:
+        for flip_x in flip_x_list:
+            for flip_y in flip_y_list:
+                key = (int(k) % 4, bool(flip_x), bool(flip_y))
+                if key in seen:
+                    continue
+                seen.add(key)
+                mode = {
+                    "k": int(k) % 4,
+                    "flip_x": bool(flip_x),
+                    "flip_y": bool(flip_y),
+                    "flip_order": "yx",
+                    "indexing_mode": "xy",
+                }
+                mode["label"] = _format_discrete_mode_label(mode)
+                modes.append(mode)
+    if not modes:
+        modes.append(
+            {
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "indexing_mode": "xy",
+                "label": "identity",
+            }
+        )
+    return modes
+
+
+def _rotate_point_orientation(
+    col: float,
+    row: float,
+    shape: tuple[int, int],
+    k: int,
+) -> tuple[float, float]:
+    """Rotate one point using the same convention as ``np.rot90``."""
+
+    height, width = int(shape[0]), int(shape[1])
+    col_new = float(col)
+    row_new = float(row)
+    for _ in range(int(k) % 4):
+        row_new, col_new, height, width = (
+            width - 1.0 - col_new,
+            row_new,
+            width,
+            height,
+        )
+    return float(col_new), float(row_new)
+
+
+def _transform_points_orientation_local(
+    points: Sequence[tuple[float, float]],
+    shape: tuple[int, int],
+    *,
+    indexing_mode: str = "xy",
+    k: int = 0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+    flip_order: str = "yx",
+) -> list[tuple[float, float]]:
+    """Apply the discrete orientation transform to point coordinates."""
+
+    base_height, base_width = int(shape[0]), int(shape[1])
+    mode = str(indexing_mode or "xy").lower()
+    if mode == "yx":
+        height, width = base_width, base_height
+    else:
+        height, width = base_height, base_width
+
+    order = str(flip_order or "yx").lower()
+    transformed: list[tuple[float, float]] = []
+
+    def _flip_xy(col_t: float, row_t: float) -> tuple[float, float]:
+        if flip_x:
+            col_t = width - 1.0 - col_t
+        if flip_y:
+            row_t = height - 1.0 - row_t
+        return float(col_t), float(row_t)
+
+    def _flip_yx(col_t: float, row_t: float) -> tuple[float, float]:
+        if flip_y:
+            row_t = height - 1.0 - row_t
+        if flip_x:
+            col_t = width - 1.0 - col_t
+        return float(col_t), float(row_t)
+
+    flipper = _flip_xy if order == "xy" else _flip_yx
+    for col, row in points:
+        col_t = float(col)
+        row_t = float(row)
+        if mode == "yx":
+            col_t, row_t = row_t, col_t
+        col_t, row_t = flipper(col_t, row_t)
+        transformed.append(
+            _rotate_point_orientation(col_t, row_t, (height, width), int(k))
+        )
+    return transformed
+
+
+def _apply_discrete_mode_to_entries(
+    entries: Sequence[object],
+    shape: tuple[int, int],
+    *,
+    mode: Mapping[str, object] | None,
+) -> List[Dict[str, object]]:
+    """Apply one solver-side discrete mode to measured-peak entry coordinates."""
+
+    mode_dict = dict(mode or {})
+    k = int(mode_dict.get("k", 0)) % 4
+    flip_x = bool(mode_dict.get("flip_x", False))
+    flip_y = bool(mode_dict.get("flip_y", False))
+    flip_order = str(mode_dict.get("flip_order", "yx"))
+    indexing_mode = str(mode_dict.get("indexing_mode", "xy"))
+    if k == 0 and not flip_x and not flip_y and indexing_mode == "xy":
+        return [
+            dict(entry) if isinstance(entry, Mapping) else dict(entry)  # type: ignore[arg-type]
+            for entry in entries
+            if isinstance(entry, Mapping)
+        ]
+
+    def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
+        return _transform_points_orientation_local(
+            [(float(x_val), float(y_val))],
+            shape,
+            indexing_mode=indexing_mode,
+            k=k,
+            flip_x=flip_x,
+            flip_y=flip_y,
+            flip_order=flip_order,
+        )[0]
+
+    transformed: List[Dict[str, object]] = []
+    for raw_entry in entries:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        for x_key, y_key in (
+            ("x", "y"),
+            ("detector_x", "detector_y"),
+            ("x_pix", "y_pix"),
+            ("raw_x", "raw_y"),
+        ):
+            if x_key not in entry or y_key not in entry:
+                continue
+            try:
+                x_val = float(entry.get(x_key))
+                y_val = float(entry.get(y_key))
+            except Exception:
+                continue
+            if not (np.isfinite(x_val) and np.isfinite(y_val)):
+                continue
+            entry[x_key], entry[y_key] = _apply_pair(x_val, y_val)
+        transformed.append(entry)
+    return transformed
+
+
+def _apply_discrete_mode_to_image(
+    image: np.ndarray | None,
+    *,
+    mode: Mapping[str, object] | None,
+) -> np.ndarray | None:
+    """Apply one solver-side discrete mode to an experimental image."""
+
+    if image is None:
+        return None
+    mode_dict = dict(mode or {})
+    oriented = np.asarray(image)
+    if str(mode_dict.get("indexing_mode", "xy")).lower() == "yx":
+        oriented = np.swapaxes(oriented, 0, 1)
+    order = str(mode_dict.get("flip_order", "yx")).lower()
+    if order == "xy":
+        if bool(mode_dict.get("flip_x", False)):
+            oriented = np.flip(oriented, axis=1)
+        if bool(mode_dict.get("flip_y", False)):
+            oriented = np.flip(oriented, axis=0)
+    else:
+        if bool(mode_dict.get("flip_y", False)):
+            oriented = np.flip(oriented, axis=0)
+        if bool(mode_dict.get("flip_x", False)):
+            oriented = np.flip(oriented, axis=1)
+    k = int(mode_dict.get("k", 0)) % 4
+    if k:
+        oriented = np.rot90(oriented, k)
+    return np.asarray(oriented, dtype=np.float64)
+
+
+def _apply_discrete_mode_to_dataset_contexts(
+    dataset_contexts: Sequence[GeometryFitDatasetContext],
+    *,
+    image_size: int,
+    mode: Mapping[str, object] | None,
+) -> List[GeometryFitDatasetContext]:
+    """Copy dataset contexts with one solver-side discrete orientation applied."""
+
+    shape = (int(image_size), int(image_size))
+    out: List[GeometryFitDatasetContext] = []
+    for dataset_ctx in dataset_contexts:
+        subset = dataset_ctx.subset
+        transformed_entries = _apply_discrete_mode_to_entries(
+            subset.measured_entries,
+            shape,
+            mode=mode,
+        )
+        transformed_subset = ReflectionSimulationSubset(
+            miller=np.asarray(subset.miller, dtype=np.float64),
+            intensities=np.asarray(subset.intensities, dtype=np.float64),
+            measured_entries=transformed_entries,
+            original_indices=np.asarray(subset.original_indices, dtype=np.int64),
+            total_reflection_count=int(subset.total_reflection_count),
+            fixed_source_reflection_count=int(subset.fixed_source_reflection_count),
+            fallback_hkl_count=int(subset.fallback_hkl_count),
+            reduced=bool(subset.reduced),
+        )
+        out.append(
+            GeometryFitDatasetContext(
+                dataset_index=int(dataset_ctx.dataset_index),
+                label=str(dataset_ctx.label),
+                theta_initial=float(dataset_ctx.theta_initial),
+                subset=transformed_subset,
+                experimental_image=_apply_discrete_mode_to_image(
+                    dataset_ctx.experimental_image,
+                    mode=mode,
+                ),
+                single_ray_indices=(
+                    None
+                    if dataset_ctx.single_ray_indices is None
+                    else np.asarray(dataset_ctx.single_ray_indices, dtype=np.int64)
+                ),
+            )
+        )
+    return out
+
+
+def _svd_summary(
+    J: np.ndarray,
+    param_names: Sequence[str],
+    *,
+    scales: Sequence[float] | None = None,
+    rcond: float = 1.0e-8,
+    weak_singular_rel: float = 1.0e-3,
+    combo_thresh: float = 0.2,
+) -> Dict[str, object]:
+    """Summarize one Jacobian with singular values and weak parameter combinations."""
+
+    jacobian = np.asarray(J, dtype=float)
+    names = [str(name) for name in param_names]
+    scale_arr = None if scales is None else np.asarray(scales, dtype=float).reshape(-1)
+    if jacobian.ndim != 2:
+        jacobian = np.empty((0, len(names)), dtype=float)
+    if jacobian.shape[1] != len(names):
+        jacobian = np.empty((jacobian.shape[0], len(names)), dtype=float)
+    summary: Dict[str, object] = {
+        "status": "ok",
+        "num_parameters": int(len(names)),
+        "num_residuals": int(jacobian.shape[0]),
+        "rank": 0,
+        "condition_number": float("inf"),
+        "singular_values": [],
+        "relative_singular_values": [],
+        "parameter_entries": [],
+        "covariance_u": [],
+        "correlation_u": [],
+        "covariance_theta": [],
+        "weak_combinations": [],
+        "underconstrained": False,
+        "warning_flags": [],
+    }
+    if jacobian.size == 0 or jacobian.shape[1] == 0:
+        summary["status"] = "failed"
+        summary["reason"] = "empty_jacobian"
+        return summary
+
+    try:
+        _U, s, Vt = np.linalg.svd(jacobian, full_matrices=False)
+    except np.linalg.LinAlgError as exc:
+        summary["status"] = "failed"
+        summary["reason"] = f"svd_failed: {exc}"
+        return summary
+
+    s = np.asarray(s, dtype=float).reshape(-1)
+    rel_s = (
+        (s / float(s[0])).tolist()
+        if s.size and np.isfinite(s[0]) and s[0] > 0.0
+        else [0.0 for _ in s]
+    )
+    rank = _matrix_rank_from_singular_values(s, rcond=rcond)
+    min_nonzero_sv = _min_nonzero_singular_value(s, rcond=rcond)
+    max_sv = float(s[0]) if s.size else 0.0
+    if max_sv > 0.0 and min_nonzero_sv > 0.0:
+        condition_number = float(max_sv / min_nonzero_sv)
+    else:
+        condition_number = float("inf")
+
+    JTJ = jacobian.T @ jacobian
+    try:
+        covariance_u = np.linalg.pinv(JTJ, rcond=rcond)
+    except TypeError:
+        covariance_u = np.linalg.pinv(JTJ)
+    diag_u = np.sqrt(np.clip(np.diag(covariance_u), 0.0, None))
+    denom = np.outer(diag_u, diag_u)
+    correlation_u = np.divide(
+        covariance_u,
+        denom,
+        out=np.zeros_like(covariance_u),
+        where=denom > 0.0,
+    )
+    correlation_u[~np.isfinite(correlation_u)] = 0.0
+
+    covariance_theta = np.asarray(covariance_u, dtype=float)
+    if scale_arr is not None and scale_arr.size == len(names):
+        D = np.diag(scale_arr)
+        covariance_theta = D @ covariance_u @ D
+
+    column_norms = np.linalg.norm(jacobian, axis=0)
+    total_norm = float(np.sum(column_norms))
+    parameter_entries: List[Dict[str, object]] = []
+    for idx, name in enumerate(names):
+        column_norm = float(column_norms[idx]) if idx < column_norms.size else 0.0
+        parameter_entries.append(
+            {
+                "name": str(name),
+                "index": int(idx),
+                "valid": bool(np.all(np.isfinite(jacobian[:, idx]))),
+                "column_norm": float(column_norm),
+                "relative_sensitivity": (
+                    float(column_norm / total_norm) if total_norm > 1.0e-12 else 0.0
+                ),
+                "std_u": float(diag_u[idx]) if idx < diag_u.size else float("nan"),
+                "std_theta": (
+                    float(math.sqrt(max(float(covariance_theta[idx, idx]), 0.0)))
+                    if idx < covariance_theta.shape[0]
+                    else float("nan")
+                ),
+            }
+        )
+
+    weak_combinations: List[Dict[str, object]] = []
+    if s.size and np.isfinite(max_sv) and max_sv > 0.0:
+        threshold_rel = max(float(weak_singular_rel), 0.0)
+        for idx, sv in enumerate(s.tolist()):
+            rel = float(sv / max_sv) if max_sv > 0.0 else 0.0
+            if rel >= threshold_rel:
+                continue
+            combo = {
+                name: float(weight)
+                for name, weight in zip(names, Vt[idx].tolist())
+                if abs(float(weight)) >= float(combo_thresh)
+            }
+            weak_combinations.append(
+                {
+                    "sv": float(sv),
+                    "sv_rel": float(rel),
+                    "combo": combo,
+                }
+            )
+
+    warning_flags: List[str] = []
+    underconstrained = bool(
+        rank < len(names)
+        or not np.isfinite(condition_number)
+        or jacobian.shape[0] < len(names)
+    )
+    if underconstrained:
+        warning_flags.append("underconstrained")
+    if weak_combinations:
+        warning_flags.append("weak_combinations")
+
+    summary.update(
+        {
+            "rank": int(rank),
+            "condition_number": float(condition_number),
+            "singular_values": s.tolist(),
+            "relative_singular_values": rel_s,
+            "parameter_entries": parameter_entries,
+            "covariance_u": covariance_u.tolist(),
+            "correlation_u": correlation_u.tolist(),
+            "covariance_theta": covariance_theta.tolist(),
+            "weak_combinations": weak_combinations,
+            "underconstrained": bool(underconstrained),
+            "warning_flags": warning_flags,
+        }
+    )
+    return summary
+
+
+def recommend_next_stage(
+    J_all: np.ndarray,
+    *,
+    param_names: Sequence[str],
+    active_names: Sequence[str],
+    rcond: float = 1.0e-8,
+    block_corr_abs: float = 0.90,
+    weak_column_rel: float = 0.10,
+    single_release_min_indep: float = 0.35,
+    block_release_min_indep: float = 0.20,
+) -> List[Dict[str, object]]:
+    """Recommend the next inactive parameter block to thaw from one data-only Jacobian."""
+
+    jacobian = np.asarray(J_all, dtype=float)
+    names = [str(name) for name in param_names]
+    active_name_set = {str(name) for name in active_names}
+    if jacobian.ndim != 2 or jacobian.shape[1] != len(names) or not names:
+        return []
+
+    active_indices = [idx for idx, name in enumerate(names) if name in active_name_set]
+    inactive_indices = [idx for idx, name in enumerate(names) if name not in active_name_set]
+    if not inactive_indices:
+        return []
+
+    J_A = jacobian[:, active_indices] if active_indices else np.empty((jacobian.shape[0], 0))
+    J_I = jacobian[:, inactive_indices]
+    if J_A.size:
+        P_A = J_A @ np.linalg.pinv(J_A, rcond=rcond)
+    else:
+        P_A = np.zeros((jacobian.shape[0], jacobian.shape[0]), dtype=float)
+    identity = np.eye(jacobian.shape[0], dtype=float)
+    residual_projector = identity - P_A
+
+    inactive_norms = np.linalg.norm(J_I, axis=0)
+    nonzero_norms = inactive_norms[inactive_norms > 0.0]
+    median_norm = float(np.median(nonzero_norms)) if nonzero_norms.size else 0.0
+    weak_threshold = float(max(float(weak_column_rel), 0.0) * median_norm)
+
+    inactive_corr = np.eye(len(inactive_indices), dtype=float)
+    for i_local in range(len(inactive_indices)):
+        col_i = J_I[:, i_local]
+        norm_i = float(np.linalg.norm(col_i))
+        if norm_i <= 1.0e-12:
+            continue
+        for j_local in range(i_local + 1, len(inactive_indices)):
+            col_j = J_I[:, j_local]
+            norm_j = float(np.linalg.norm(col_j))
+            if norm_j <= 1.0e-12:
+                continue
+            corr = float(np.dot(col_i, col_j) / (norm_i * norm_j))
+            if np.isfinite(corr):
+                inactive_corr[i_local, j_local] = corr
+                inactive_corr[j_local, i_local] = corr
+
+    adjacency: Dict[int, Set[int]] = {
+        local_idx: {local_idx} for local_idx in range(len(inactive_indices))
+    }
+    for i_local in range(len(inactive_indices)):
+        for j_local in range(i_local + 1, len(inactive_indices)):
+            if abs(float(inactive_corr[i_local, j_local])) >= float(block_corr_abs):
+                adjacency[i_local].add(j_local)
+                adjacency[j_local].add(i_local)
+
+    blocks: List[List[int]] = []
+    visited: Set[int] = set()
+    for start in range(len(inactive_indices)):
+        if start in visited:
+            continue
+        stack = [start]
+        block: List[int] = []
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            block.append(current)
+            stack.extend(sorted(adjacency.get(current, set()) - visited))
+        blocks.append(sorted(block))
+
+    base_singular_values = (
+        np.linalg.svd(J_A, full_matrices=False, compute_uv=False)
+        if J_A.size
+        else np.array([], dtype=float)
+    )
+    base_rank = _matrix_rank_from_singular_values(base_singular_values, rcond=rcond)
+    base_min_sv = _min_nonzero_singular_value(base_singular_values, rcond=rcond)
+    eps = 1.0e-12
+
+    recommendations: List[Dict[str, object]] = []
+    for block_local in blocks:
+        block_global = [inactive_indices[idx] for idx in block_local]
+        block_names = [names[idx] for idx in block_global]
+        J_block = jacobian[:, block_global]
+        block_norm = float(np.linalg.norm(J_block))
+        if block_norm <= 1.0e-12:
+            continue
+        block_independence = float(
+            np.linalg.norm(residual_projector @ J_block) / (block_norm + eps)
+        )
+        block_singular_values = np.linalg.svd(
+            np.hstack([J_A, J_block]) if J_A.size else J_block,
+            full_matrices=False,
+            compute_uv=False,
+        )
+        rank_gain = int(
+            _matrix_rank_from_singular_values(block_singular_values, rcond=rcond)
+            - base_rank
+        )
+        min_sv_gain = float(
+            _min_nonzero_singular_value(block_singular_values, rcond=rcond)
+            / (base_min_sv + eps)
+        )
+        weak_block = bool(
+            all(
+                float(inactive_norms[idx_local]) <= weak_threshold + eps
+                for idx_local in block_local
+            )
+        )
+        if len(block_global) == 1:
+            idx_local = block_local[0]
+            indep_j = block_independence
+            if weak_block or indep_j < float(single_release_min_indep):
+                continue
+            recommendations.append(
+                {
+                    "params": block_names,
+                    "reason": "Adds an independent data direction beyond the current active set.",
+                    "rank_gain": int(rank_gain),
+                    "min_sv_gain": float(min_sv_gain),
+                    "block_independence": float(block_independence),
+                    "use_soft_prior": True,
+                    "weak": bool(weak_block),
+                }
+            )
+            continue
+
+        if weak_block or block_independence < float(block_release_min_indep):
+            continue
+        recommendations.append(
+            {
+                "params": block_names,
+                "reason": "Correlated block. Good incremental information only when thawed together.",
+                "rank_gain": int(rank_gain),
+                "min_sv_gain": float(min_sv_gain),
+                "block_independence": float(block_independence),
+                "use_soft_prior": True,
+                "weak": bool(weak_block),
+            }
+        )
+
+    recommendations.sort(
+        key=lambda item: (
+            -int(item.get("rank_gain", 0)),
+            -float(item.get("min_sv_gain", 0.0)),
+            -float(item.get("block_independence", 0.0)),
+            tuple(str(name) for name in item.get("params", [])),
+        )
+    )
+    return recommendations
+
+
 def build_geometry_fit_central_mosaic_params(
     params: Dict[str, object],
 ) -> Dict[str, object]:
@@ -5897,6 +6736,7 @@ def fit_geometry_parameters(
     params, measured_peaks, var_names, pixel_tol=np.inf,
     *, experimental_image: Optional[np.ndarray] = None,
     dataset_specs: Optional[Sequence[Dict[str, object]]] = None,
+    candidate_param_names: Optional[Sequence[str]] = None,
     refinement_config: Optional[Dict[str, Dict[str, float]]] = None,
     status_callback: Optional[Callable[[str], None]] = None,
 ):
@@ -5928,11 +6768,16 @@ def fit_geometry_parameters(
     # center-beam / zero-divergence ray rather than the sampled beam cloud.
     use_single_ray = False
 
-    solver_cfg: Dict[str, float] = {}
+    optimizer_cfg: Dict[str, float] = {}
     if isinstance(refinement_config, dict):
-        solver_cfg = refinement_config.get("solver", {}) or {}
-    if not isinstance(solver_cfg, dict):
-        solver_cfg = {}
+        optimizer_cfg = (
+            refinement_config.get("optimizer")
+            or refinement_config.get("solver", {})
+            or {}
+        )
+    if not isinstance(optimizer_cfg, dict):
+        optimizer_cfg = {}
+    solver_cfg = optimizer_cfg
 
     prior_cfg: Dict[str, float] = {}
     if isinstance(refinement_config, dict):
@@ -5963,6 +6808,16 @@ def fit_geometry_parameters(
         identifiability_cfg = refinement_config.get("identifiability", {}) or {}
     if not isinstance(identifiability_cfg, dict):
         identifiability_cfg = {}
+    seed_search_cfg: Dict[str, object] = {}
+    if isinstance(refinement_config, dict):
+        seed_search_cfg = refinement_config.get("seed_search", {}) or {}
+    if not isinstance(seed_search_cfg, dict):
+        seed_search_cfg = {}
+    discrete_modes_cfg: Dict[str, object] = {}
+    if isinstance(refinement_config, dict):
+        discrete_modes_cfg = refinement_config.get("discrete_modes", {}) or {}
+    if not isinstance(discrete_modes_cfg, dict):
+        discrete_modes_cfg = {}
     manual_point_fit_mode = bool(solver_cfg.get("manual_point_fit_mode", False))
 
     solver_loss = str(
@@ -5978,6 +6833,10 @@ def fit_geometry_parameters(
         )
     )
     solver_f_scale = max(solver_f_scale, 1e-6)
+
+    solver_method = str(solver_cfg.get("method", "trf")).strip().lower()
+    if solver_method != "trf":
+        solver_method = "trf"
 
     solver_max_nfev = int(solver_cfg.get("max_nfev", 120 if point_match_mode else 60))
     solver_max_nfev = max(20, solver_max_nfev)
@@ -5998,14 +6857,6 @@ def fit_geometry_parameters(
     ):
         full_beam_polish_match_radius_px = 24.0
 
-    solver_restarts = int(
-        solver_cfg.get(
-            "restarts",
-            0 if manual_point_fit_mode else (4 if point_match_mode else 0),
-        )
-    )
-    solver_restarts = max(0, solver_restarts)
-
     solver_parallel_mode = str(
         solver_cfg.get("parallel_mode", "auto")
     ).strip().lower()
@@ -6019,10 +6870,27 @@ def fit_geometry_parameters(
         0,
     )
 
-    solver_restart_jitter = float(
-        solver_cfg.get("restart_jitter", 0.0 if manual_point_fit_mode else 0.15)
+    seed_prescore_top_k = int(seed_search_cfg.get("prescore_top_k", 8))
+    seed_prescore_top_k = max(seed_prescore_top_k, 1)
+    seed_n_global = int(seed_search_cfg.get("n_global", 24))
+    seed_n_global = max(seed_n_global, 0)
+    seed_n_jitter = int(seed_search_cfg.get("n_jitter", 12))
+    seed_n_jitter = max(seed_n_jitter, 0)
+    seed_jitter_sigma_u = float(seed_search_cfg.get("jitter_sigma_u", 0.5))
+    if not np.isfinite(seed_jitter_sigma_u) or seed_jitter_sigma_u < 0.0:
+        seed_jitter_sigma_u = 0.5
+    seed_min_separation_u = float(seed_search_cfg.get("min_seed_separation_u", 0.5))
+    if not np.isfinite(seed_min_separation_u) or seed_min_separation_u < 0.0:
+        seed_min_separation_u = 0.5
+    trusted_prior_fraction_of_span = float(
+        seed_search_cfg.get("trusted_prior_fraction_of_span", 0.15)
     )
-    solver_restart_jitter = max(0.0, solver_restart_jitter)
+    if (
+        not np.isfinite(trusted_prior_fraction_of_span)
+        or trusted_prior_fraction_of_span < 0.0
+    ):
+        trusted_prior_fraction_of_span = 0.15
+    solver_restarts = max(seed_prescore_top_k, 1) if point_match_mode else seed_prescore_top_k
 
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
@@ -6066,6 +6934,34 @@ def fit_geometry_parameters(
         solver_cfg.get("stagnation_probe_random_directions", 0)
     )
     stagnation_probe_random_directions = max(0, stagnation_probe_random_directions)
+    manual_fail_fast_enabled = bool(
+        solver_cfg.get("manual_fail_fast", manual_point_fit_mode and point_match_mode)
+    )
+    if not point_match_mode:
+        manual_fail_fast_enabled = False
+    manual_fail_fast_eval_window = int(
+        solver_cfg.get("manual_fail_fast_eval_window", 30)
+    )
+    manual_fail_fast_eval_window = max(5, manual_fail_fast_eval_window)
+    manual_fail_fast_probe_period = int(
+        solver_cfg.get("manual_fail_fast_probe_period", 10)
+    )
+    manual_fail_fast_probe_period = max(1, manual_fail_fast_probe_period)
+    manual_fail_fast_peak_rms_px = float(
+        solver_cfg.get("manual_fail_fast_peak_rms_px", 250.0)
+    )
+    if (
+        not np.isfinite(manual_fail_fast_peak_rms_px)
+        or manual_fail_fast_peak_rms_px <= 0.0
+    ):
+        manual_fail_fast_peak_rms_px = 250.0
+    manual_fail_fast_min_bound_parameters = int(
+        solver_cfg.get("manual_fail_fast_min_bound_parameters", 2)
+    )
+    manual_fail_fast_min_bound_parameters = max(
+        1,
+        manual_fail_fast_min_bound_parameters,
+    )
     staged_release_cfg_raw = solver_cfg.get("staged_release", {})
     if isinstance(staged_release_cfg_raw, bool):
         staged_release_cfg: Dict[str, object] = {
@@ -6206,6 +7102,57 @@ def fit_geometry_parameters(
         or identifiability_weak_norm_ratio < 0.0
     ):
         identifiability_weak_norm_ratio = 1.0e-6
+    identifiability_fd_abs_step_u = float(
+        identifiability_cfg.get("fd_abs_step_u", 1.0e-3)
+    )
+    if (
+        not np.isfinite(identifiability_fd_abs_step_u)
+        or identifiability_fd_abs_step_u <= 0.0
+    ):
+        identifiability_fd_abs_step_u = 1.0e-3
+    identifiability_sv_rcond = float(identifiability_cfg.get("sv_rcond", 1.0e-8))
+    if not np.isfinite(identifiability_sv_rcond) or identifiability_sv_rcond <= 0.0:
+        identifiability_sv_rcond = 1.0e-8
+    identifiability_weak_singular_rel = float(
+        identifiability_cfg.get("weak_singular_rel", 1.0e-3)
+    )
+    if (
+        not np.isfinite(identifiability_weak_singular_rel)
+        or identifiability_weak_singular_rel <= 0.0
+    ):
+        identifiability_weak_singular_rel = 1.0e-3
+    identifiability_combo_thresh = float(
+        identifiability_cfg.get("combo_thresh", 0.2)
+    )
+    if not np.isfinite(identifiability_combo_thresh) or identifiability_combo_thresh <= 0.0:
+        identifiability_combo_thresh = 0.2
+    identifiability_block_corr_abs = float(
+        identifiability_cfg.get("block_corr_abs", 0.90)
+    )
+    if not np.isfinite(identifiability_block_corr_abs) or identifiability_block_corr_abs < 0.0:
+        identifiability_block_corr_abs = 0.90
+    identifiability_block_corr_abs = min(max(identifiability_block_corr_abs, 0.0), 0.999999)
+    identifiability_weak_column_rel = float(
+        identifiability_cfg.get("weak_column_rel", 0.10)
+    )
+    if not np.isfinite(identifiability_weak_column_rel) or identifiability_weak_column_rel < 0.0:
+        identifiability_weak_column_rel = 0.10
+    identifiability_single_release_min_indep = float(
+        identifiability_cfg.get("single_release_min_indep", 0.35)
+    )
+    if (
+        not np.isfinite(identifiability_single_release_min_indep)
+        or identifiability_single_release_min_indep < 0.0
+    ):
+        identifiability_single_release_min_indep = 0.35
+    identifiability_block_release_min_indep = float(
+        identifiability_cfg.get("block_release_min_indep", 0.20)
+    )
+    if (
+        not np.isfinite(identifiability_block_release_min_indep)
+        or identifiability_block_release_min_indep < 0.0
+    ):
+        identifiability_block_release_min_indep = 0.20
     auto_freeze_enabled = bool(identifiability_cfg.get("auto_freeze", False))
     auto_freeze_condition_number = float(
         identifiability_cfg.get(
@@ -6470,8 +7417,15 @@ def fit_geometry_parameters(
             return float(fallback)
         return out
 
-    def _apply_trial_params(x: Sequence[float]) -> Dict[str, object]:
+    def _apply_trial_params(
+        x: Sequence[float],
+        *,
+        names: Optional[Sequence[str]] = None,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> Dict[str, object]:
         local = params.copy()
+        if isinstance(base_params, Mapping):
+            local.update(dict(base_params))
         center_pair = local.get("center", [center_row_default, center_col_default])
         try:
             center_row = _safe_float(center_pair[0], center_row_default)
@@ -6483,7 +7437,8 @@ def fit_geometry_parameters(
         center_row = _safe_float(local.get("center_x", center_row), center_row)
         center_col = _safe_float(local.get("center_y", center_col), center_col)
 
-        for name, v in zip(var_names, x):
+        active_names = [str(name) for name in (names if names is not None else var_names)]
+        for name, v in zip(active_names, x):
             val = float(v)
             if name == "center_x":
                 center_row = val
@@ -7626,9 +8581,14 @@ def fit_geometry_parameters(
             )
         return _safe_float(params.get(name, 0.0), 0.0)
 
-    def _vector_from_params(local_params: Dict[str, object]) -> np.ndarray:
+    def _vector_from_params(
+        local_params: Mapping[str, object],
+        *,
+        names: Optional[Sequence[str]] = None,
+    ) -> np.ndarray:
         values: List[float] = []
-        for name in var_names:
+        active_names = [str(name) for name in (names if names is not None else var_names)]
+        for name in active_names:
             if name == "center_x":
                 values.append(
                     _safe_float(
@@ -7830,6 +8790,30 @@ def fit_geometry_parameters(
     final_metric_residual_fn = residual_fn
     final_metric_point_match_evaluator = point_match_evaluator
 
+    class _ManualPointFitEarlyStop(RuntimeError):
+        def __init__(
+            self,
+            message: str,
+            *,
+            x_trial: Sequence[float],
+            residual_arr: Sequence[float],
+            point_match_summary: Mapping[str, object] | None,
+            bound_proximity_summary: Mapping[str, object] | None,
+        ) -> None:
+            super().__init__(message)
+            self.x_trial = np.asarray(x_trial, dtype=float)
+            self.residual_arr = np.asarray(residual_arr, dtype=float)
+            self.point_match_summary = (
+                dict(point_match_summary)
+                if isinstance(point_match_summary, Mapping)
+                else {}
+            )
+            self.bound_proximity_summary = (
+                dict(bound_proximity_summary)
+                if isinstance(bound_proximity_summary, Mapping)
+                else {}
+            )
+
     parameter_debug_entries: List[Dict[str, object]] = []
     for idx, name in enumerate(var_names):
         prior_enabled = bool(prior_active_mask[idx]) if idx < prior_active_mask.size else False
@@ -7883,11 +8867,178 @@ def fit_geometry_parameters(
             "full_beam_polish_enabled": bool(full_beam_polish_enabled),
             "full_beam_polish_max_nfev": int(full_beam_polish_max_nfev),
             "full_beam_polish_match_radius_px": float(full_beam_polish_match_radius_px),
+            "manual_fail_fast": bool(manual_fail_fast_enabled),
+            "manual_fail_fast_eval_window": int(manual_fail_fast_eval_window),
+            "manual_fail_fast_probe_period": int(manual_fail_fast_probe_period),
+            "manual_fail_fast_peak_rms_px": float(manual_fail_fast_peak_rms_px),
+            "manual_fail_fast_min_bound_parameters": int(
+                manual_fail_fast_min_bound_parameters
+            ),
         },
         "parallelization": dict(parallelization_summary),
         "parameter_entries": parameter_debug_entries,
         "dataset_entries": dataset_debug_entries,
     }
+
+    all_candidate_param_names = [
+        str(name)
+        for name in (
+            candidate_param_names
+            if candidate_param_names is not None
+            else var_names
+        )
+    ]
+    if not all_candidate_param_names:
+        all_candidate_param_names = [str(name) for name in var_names]
+    active_name_set = {str(name) for name in var_names}
+
+    nominal_scale_by_group = {
+        "center": max(float(image_size) * 0.05, 1.0),
+        "tilt": 0.5,
+        "distance": 0.01,
+        "lattice": 0.01,
+        "other": 1.0,
+    }
+    nominal_scale_by_name = {
+        "zb": 5.0e-4,
+        "zs": 5.0e-4,
+        "theta_initial": 0.25,
+        "theta_offset": 0.25,
+        "psi_z": 0.5,
+        "chi": 0.5,
+        "cor_angle": 0.5,
+        "gamma": 0.5,
+        "Gamma": 0.5,
+        "corto_detector": 0.01,
+        "a": 0.01,
+        "c": 0.01,
+        "center_x": max(float(image_size) * 0.05, 1.0),
+        "center_y": max(float(image_size) * 0.05, 1.0),
+    }
+
+    def _nominal_scale_for_name(name: str) -> float:
+        if str(name) in nominal_scale_by_name:
+            return float(nominal_scale_by_name[str(name)])
+        return float(nominal_scale_by_group.get(_parameter_group(str(name)), 1.0))
+
+    def _coerce_prior_entry(name: str, ref_value: float) -> tuple[float | None, float | None]:
+        entry = prior_cfg.get(str(name))
+        if entry is None:
+            return None, None
+        prior_mean: float | None = float(ref_value)
+        prior_sigma: float | None = None
+        enabled = True
+        if isinstance(entry, (int, float)):
+            try:
+                prior_sigma = float(entry)
+            except Exception:
+                prior_sigma = None
+        elif isinstance(entry, Mapping):
+            enabled = bool(entry.get("enabled", True))
+            try:
+                prior_mean = float(entry.get("center", ref_value))
+            except Exception:
+                prior_mean = float(ref_value)
+            sigma_value = entry.get("sigma", entry.get("stdev", entry.get("std")))
+            try:
+                prior_sigma = float(sigma_value)
+            except Exception:
+                prior_sigma = None
+        if not enabled:
+            return None, None
+        if prior_mean is None or not np.isfinite(float(prior_mean)):
+            prior_mean = float(ref_value)
+        if (
+            prior_sigma is None
+            or not np.isfinite(float(prior_sigma))
+            or float(prior_sigma) <= 0.0
+        ):
+            return float(prior_mean), None
+        return float(prior_mean), float(prior_sigma)
+
+    def _build_param_spec_for_name(
+        name: str,
+        *,
+        ref_value: float,
+    ) -> ParamSpec:
+        lower, upper = _cfg_bounds(str(name), float(ref_value))
+        prior_mean, prior_sigma = _coerce_prior_entry(str(name), float(ref_value))
+        scale = _default_scale(
+            float(ref_value),
+            float(lower),
+            float(upper),
+            prior_sigma=prior_sigma,
+            nominal_scale=_nominal_scale_for_name(str(name)),
+        )
+        seed_group = "auto"
+        prior_entry = prior_cfg.get(str(name))
+        if isinstance(prior_entry, Mapping):
+            explicit_group = str(prior_entry.get("seed_group", "") or "").strip().lower()
+            if explicit_group in {"trusted", "uncertain"}:
+                seed_group = explicit_group
+        if seed_group not in {"trusted", "uncertain"}:
+            span_value = float(upper - lower) if np.isfinite(lower) and np.isfinite(upper) else float("nan")
+            if (
+                prior_sigma is not None
+                and np.isfinite(float(prior_sigma))
+                and np.isfinite(span_value)
+                and span_value > 0.0
+                and float(prior_sigma) <= float(trusted_prior_fraction_of_span) * span_value
+            ):
+                seed_group = "trusted"
+            else:
+                seed_group = "uncertain"
+        return ParamSpec(
+            name=str(name),
+            ref_value=float(ref_value),
+            lower=float(lower),
+            upper=float(upper),
+            scale=float(scale),
+            prior_mean=(None if prior_mean is None else float(prior_mean)),
+            prior_sigma=(None if prior_sigma is None else float(prior_sigma)),
+            seed_group=str(seed_group),
+        )
+
+    def _state_from_theta(
+        theta_values: Sequence[float],
+        *,
+        names: Sequence[str],
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> Dict[str, object]:
+        return _apply_trial_params(theta_values, names=names, base_params=base_params)
+
+    def _state_from_u(
+        specs: Sequence[ParamSpec],
+        u_values: Sequence[float],
+        *,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> Dict[str, object]:
+        return _state_from_theta(
+            _physical_from_u(specs, u_values),
+            names=[spec.name for spec in specs],
+            base_params=base_params,
+        )
+
+    def _theta_vector_for_names(
+        names: Sequence[str],
+        *,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> np.ndarray:
+        return _vector_from_params(
+            params if base_params is None else dict(base_params),
+            names=names,
+        )
+
+    def _build_specs_from_params(
+        names: Sequence[str],
+        *,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> List[ParamSpec]:
+        theta_values = _theta_vector_for_names(names, base_params=base_params)
+        return [
+            _build_param_spec_for_name(str(name), ref_value=float(theta_values[idx]))
+            for idx, name in enumerate(names)
+        ]
 
     def _weighted_rms_px(residual_arr: Sequence[float]) -> float:
         residual_np = np.asarray(residual_arr, dtype=float).reshape(-1)
@@ -9000,8 +10151,114 @@ def fit_geometry_parameters(
             "best_weighted_rms_px": float("nan"),
             "last_cost_seen": float("nan"),
             "last_weighted_rms_px": float("nan"),
+            "best_unweighted_peak_rms_px": float("inf"),
+            "last_unweighted_peak_rms_px": float("nan"),
+            "aborted_early": False,
             "trace": trace_points,
         }
+
+        def _maybe_abort_manual_point_fit(
+            x_trial: np.ndarray,
+            residual_arr: np.ndarray,
+            *,
+            eval_count: int,
+        ) -> None:
+            if not manual_fail_fast_enabled or residual_callable is not None:
+                return
+            if eval_count < manual_fail_fast_eval_window:
+                return
+            last_probe_eval = int(
+                progress_state.get("manual_fail_fast_last_probe_eval", 0)
+            )
+            if last_probe_eval > 0 and (
+                eval_count - last_probe_eval
+            ) < manual_fail_fast_probe_period:
+                return
+            progress_state["manual_fail_fast_last_probe_eval"] = int(eval_count)
+
+            local_trial = _apply_trial_params(np.asarray(x_trial, dtype=float))
+            _, _, point_match_summary = point_match_evaluator(
+                local_trial,
+                collect_diagnostics=False,
+            )
+            probe_summary = (
+                dict(point_match_summary)
+                if isinstance(point_match_summary, Mapping)
+                else {}
+            )
+            try:
+                matched_pair_count = int(probe_summary.get("matched_pair_count", 0))
+            except Exception:
+                matched_pair_count = 0
+            try:
+                current_peak_rms = float(
+                    probe_summary.get("unweighted_peak_rms_px", np.nan)
+                )
+            except Exception:
+                current_peak_rms = float("nan")
+            if matched_pair_count > 0 and np.isfinite(current_peak_rms):
+                best_peak_rms = float(
+                    progress_state.get(
+                        "best_unweighted_peak_rms_px",
+                        float("inf"),
+                    )
+                )
+                if not np.isfinite(best_peak_rms) or current_peak_rms < best_peak_rms:
+                    progress_state["best_unweighted_peak_rms_px"] = float(
+                        current_peak_rms
+                    )
+                progress_state["last_unweighted_peak_rms_px"] = float(
+                    current_peak_rms
+                )
+
+            if matched_pair_count <= 0 or not np.isfinite(current_peak_rms):
+                return
+            best_peak_rms = float(
+                progress_state.get(
+                    "best_unweighted_peak_rms_px",
+                    current_peak_rms,
+                )
+            )
+            if (
+                current_peak_rms < manual_fail_fast_peak_rms_px
+                or (
+                    np.isfinite(best_peak_rms)
+                    and best_peak_rms < manual_fail_fast_peak_rms_px
+                )
+            ):
+                return
+
+            bound_summary = _build_bound_proximity_summary(
+                np.asarray(x_trial, dtype=float)
+            )
+            hugging_parameters = list(bound_summary.get("hugging_parameters", []))
+            progress_state["last_bound_hugging_parameters"] = list(hugging_parameters)
+            if len(hugging_parameters) < manual_fail_fast_min_bound_parameters:
+                return
+
+            reason = (
+                "Manual point-fit guardrail stopped the solve after {evals} "
+                "evaluations: unweighted peak RMS {rms:.2f} px remained above "
+                "{limit:.2f} px with parameters near bounds ({params})."
+            ).format(
+                evals=int(eval_count),
+                rms=float(current_peak_rms),
+                limit=float(manual_fail_fast_peak_rms_px),
+                params=", ".join(str(name) for name in hugging_parameters),
+            )
+            progress_state["aborted_early"] = True
+            progress_state["early_stop_reason"] = str(reason)
+            progress_state["early_stop_point_match_summary"] = dict(probe_summary)
+            progress_state["early_stop_bound_proximity"] = dict(bound_summary)
+            if status_label:
+                _emit_status(str(reason))
+            raise _ManualPointFitEarlyStop(
+                str(reason),
+                x_trial=np.asarray(x_trial, dtype=float),
+                residual_arr=np.asarray(residual_arr, dtype=float),
+                point_match_summary=probe_summary,
+                bound_proximity_summary=bound_summary,
+            )
 
         def _tracked_solver_residual(x_trial: np.ndarray) -> np.ndarray:
             residual_arr = np.asarray(
@@ -9033,6 +10290,12 @@ def fit_geometry_parameters(
             elif not np.isfinite(best_cost_seen):
                 progress_state["best_cost_seen"] = float(current_cost)
                 progress_state["best_weighted_rms_px"] = float(current_weighted_rms)
+
+            _maybe_abort_manual_point_fit(
+                np.asarray(x_trial, dtype=float),
+                residual_arr,
+                eval_count=eval_count,
+            )
 
             last_emit_eval = int(progress_state.get("last_emit_eval", 0))
             emit_reason = ""
@@ -9074,15 +10337,31 @@ def fit_geometry_parameters(
                 )
             return residual_arr
 
-        result = least_squares(
-            _tracked_solver_residual,
-            np.asarray(x_start, dtype=float),
-            bounds=(lower_bounds, upper_bounds),
-            x_scale=x_scale,
-            loss=solver_loss,
-            f_scale=solver_f_scale,
-            max_nfev=int(max_nfev),
-        )
+        try:
+            result = least_squares(
+                _tracked_solver_residual,
+                np.asarray(x_start, dtype=float),
+                bounds=(lower_bounds, upper_bounds),
+                x_scale=x_scale,
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+                max_nfev=int(max_nfev),
+            )
+        except _ManualPointFitEarlyStop as exc:
+            x_abort = np.asarray(exc.x_trial, dtype=float)
+            result = OptimizeResult(
+                x=x_abort,
+                fun=np.asarray(exc.residual_arr, dtype=float),
+                success=False,
+                status=0,
+                message=str(exc),
+                nfev=int(progress_state.get("evaluation_count", 0)),
+                active_mask=np.zeros(x_abort.shape, dtype=int),
+                optimality=float("nan"),
+            )
+            result.early_stop_reason = str(exc)
+            result.point_match_summary = dict(exc.point_match_summary)
+            result.bound_proximity_summary = dict(exc.bound_proximity_summary)
         progress_state["start_x"] = np.asarray(x_start, dtype=float).tolist()
         try:
             progress_state["end_x"] = np.asarray(result.x, dtype=float).tolist()
@@ -9098,6 +10377,372 @@ def fit_geometry_parameters(
             loss=solver_loss,
             f_scale=solver_f_scale,
         )
+
+    active_specs: List[ParamSpec] = []
+
+    def _data_residual_theta(
+        theta_trial: Sequence[float],
+        *,
+        names: Optional[Sequence[str]] = None,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> np.ndarray:
+        local = _apply_trial_params(
+            theta_trial,
+            names=names,
+            base_params=base_params,
+        )
+        if point_match_mode:
+            residual_arr, _, _ = point_match_evaluator(
+                local,
+                collect_diagnostics=False,
+            )
+            return np.asarray(residual_arr, dtype=float)
+
+        residual_blocks: List[np.ndarray] = []
+        dataset_items = [(local, dataset_ctx) for dataset_ctx in dataset_contexts]
+        if dataset_parallel_workers > 1 and len(dataset_items) > 1:
+            residual_results = _threaded_map(
+                _cost_fn_for_dataset,
+                dataset_items,
+                max_workers=dataset_parallel_workers,
+                numba_threads=worker_numba_threads,
+            )
+        else:
+            residual_results = [_cost_fn_for_dataset(item) for item in dataset_items]
+        for residual_arr in residual_results:
+            residual_np = np.asarray(residual_arr, dtype=float)
+            if residual_np.size:
+                residual_blocks.append(residual_np)
+        if residual_blocks:
+            return np.concatenate(residual_blocks)
+        return np.array([], dtype=float)
+
+    def _prior_residual_u(
+        specs: Sequence[ParamSpec],
+        u_trial: Sequence[float],
+    ) -> np.ndarray:
+        theta_values = _physical_from_u(specs, u_trial)
+        terms: List[float] = []
+        for idx, spec in enumerate(specs):
+            prior_sigma = spec.prior_sigma
+            if (
+                prior_sigma is None
+                or not np.isfinite(float(prior_sigma))
+                or float(prior_sigma) <= 0.0
+            ):
+                continue
+            prior_mean = spec.prior_mean
+            if prior_mean is None or not np.isfinite(float(prior_mean)):
+                prior_mean = float(spec.ref_value)
+            terms.append(
+                float((theta_values[idx] - float(prior_mean)) / float(prior_sigma))
+            )
+        return np.asarray(terms, dtype=float)
+
+    def _residual_u(
+        u_trial: Sequence[float],
+        *,
+        specs: Sequence[ParamSpec],
+        include_priors: bool,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> np.ndarray:
+        theta_values = _physical_from_u(specs, u_trial)
+        pieces = [
+            _data_residual_theta(
+                theta_values,
+                names=[spec.name for spec in specs],
+                base_params=base_params,
+            )
+        ]
+        if include_priors:
+            prior_residual = _prior_residual_u(specs, u_trial)
+            if prior_residual.size:
+                pieces.append(prior_residual)
+        pieces = [piece.reshape(-1) for piece in pieces if np.asarray(piece).size]
+        if pieces:
+            return np.concatenate(pieces)
+        return np.array([], dtype=float)
+
+    def _evaluate_cost_at_u(
+        u_trial: Sequence[float],
+        *,
+        specs: Sequence[ParamSpec],
+        include_priors: bool,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> Tuple[np.ndarray, float]:
+        residual = _residual_u(
+            u_trial,
+            specs=specs,
+            include_priors=include_priors,
+            base_params=base_params,
+        )
+        return residual, _robust_cost(
+            residual,
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+
+    def _run_solver_u(
+        u_start: np.ndarray,
+        *,
+        specs: Sequence[ParamSpec],
+        lower: np.ndarray,
+        upper: np.ndarray,
+        include_priors: bool,
+        max_nfev: int,
+        status_label: str | None = None,
+        base_params: Optional[Mapping[str, object]] = None,
+    ) -> OptimizeResult:
+        trace_points: List[Dict[str, object]] = []
+        progress_state: Dict[str, object] = {
+            "label": (None if status_label is None else str(status_label)),
+            "evaluation_count": 0,
+            "status_emit_count": 0,
+            "best_cost_seen": float("inf"),
+            "best_weighted_rms_px": float("nan"),
+            "last_cost_seen": float("nan"),
+            "last_weighted_rms_px": float("nan"),
+            "best_unweighted_peak_rms_px": float("inf"),
+            "last_unweighted_peak_rms_px": float("nan"),
+            "aborted_early": False,
+            "trace": trace_points,
+        }
+
+        def _maybe_abort_manual_point_fit_u(
+            u_trial: np.ndarray,
+            residual_arr: np.ndarray,
+            *,
+            eval_count: int,
+        ) -> None:
+            if not manual_fail_fast_enabled:
+                return
+            if eval_count < manual_fail_fast_eval_window:
+                return
+            last_probe_eval = int(
+                progress_state.get("manual_fail_fast_last_probe_eval", 0)
+            )
+            if last_probe_eval > 0 and (
+                eval_count - last_probe_eval
+            ) < manual_fail_fast_probe_period:
+                return
+            progress_state["manual_fail_fast_last_probe_eval"] = int(eval_count)
+
+            x_trial = _physical_from_u(specs, np.asarray(u_trial, dtype=float))
+            local_trial = _apply_trial_params(x_trial)
+            _, _, point_match_summary = point_match_evaluator(
+                local_trial,
+                collect_diagnostics=False,
+            )
+            probe_summary = (
+                dict(point_match_summary)
+                if isinstance(point_match_summary, Mapping)
+                else {}
+            )
+            try:
+                matched_pair_count = int(probe_summary.get("matched_pair_count", 0))
+            except Exception:
+                matched_pair_count = 0
+            try:
+                current_peak_rms = float(
+                    probe_summary.get("unweighted_peak_rms_px", np.nan)
+                )
+            except Exception:
+                current_peak_rms = float("nan")
+            if matched_pair_count > 0 and np.isfinite(current_peak_rms):
+                best_peak_rms = float(
+                    progress_state.get(
+                        "best_unweighted_peak_rms_px",
+                        float("inf"),
+                    )
+                )
+                if not np.isfinite(best_peak_rms) or current_peak_rms < best_peak_rms:
+                    progress_state["best_unweighted_peak_rms_px"] = float(
+                        current_peak_rms
+                    )
+                progress_state["last_unweighted_peak_rms_px"] = float(
+                    current_peak_rms
+                )
+
+            if matched_pair_count <= 0 or not np.isfinite(current_peak_rms):
+                return
+            best_peak_rms = float(
+                progress_state.get(
+                    "best_unweighted_peak_rms_px",
+                    current_peak_rms,
+                )
+            )
+            if (
+                current_peak_rms < manual_fail_fast_peak_rms_px
+                or (
+                    np.isfinite(best_peak_rms)
+                    and best_peak_rms < manual_fail_fast_peak_rms_px
+                )
+            ):
+                return
+
+            bound_summary = _build_bound_proximity_summary(np.asarray(x_trial, dtype=float))
+            hugging_parameters = list(bound_summary.get("hugging_parameters", []))
+            progress_state["last_bound_hugging_parameters"] = list(hugging_parameters)
+            if len(hugging_parameters) < manual_fail_fast_min_bound_parameters:
+                return
+
+            reason = (
+                "Manual point-fit guardrail stopped the solve after {evals} "
+                "evaluations: unweighted peak RMS {rms:.2f} px remained above "
+                "{limit:.2f} px with parameters near bounds ({params})."
+            ).format(
+                evals=int(eval_count),
+                rms=float(current_peak_rms),
+                limit=float(manual_fail_fast_peak_rms_px),
+                params=", ".join(str(name) for name in hugging_parameters),
+            )
+            progress_state["aborted_early"] = True
+            progress_state["early_stop_reason"] = str(reason)
+            progress_state["early_stop_point_match_summary"] = dict(probe_summary)
+            progress_state["early_stop_bound_proximity"] = dict(bound_summary)
+            if status_label:
+                _emit_status(str(reason))
+            raise _ManualPointFitEarlyStop(
+                str(reason),
+                x_trial=np.asarray(x_trial, dtype=float),
+                residual_arr=np.asarray(residual_arr, dtype=float),
+                point_match_summary=probe_summary,
+                bound_proximity_summary=bound_summary,
+            )
+
+        def _tracked_solver_residual(u_trial: np.ndarray) -> np.ndarray:
+            residual_arr = _residual_u(
+                np.asarray(u_trial, dtype=float),
+                specs=specs,
+                include_priors=include_priors,
+                base_params=base_params,
+            )
+            progress_state["evaluation_count"] = int(progress_state["evaluation_count"]) + 1
+            eval_count = int(progress_state["evaluation_count"])
+            current_cost = float(
+                _robust_cost(
+                    residual_arr,
+                    loss=solver_loss,
+                    f_scale=solver_f_scale,
+                )
+            )
+            current_weighted_rms = float(_weighted_rms_px(residual_arr))
+            progress_state["last_cost_seen"] = float(current_cost)
+            progress_state["last_weighted_rms_px"] = float(current_weighted_rms)
+
+            best_cost_seen = float(progress_state.get("best_cost_seen", float("inf")))
+            improvement_tol = max(1.0e-9 * max(abs(best_cost_seen), 1.0), 1.0e-12)
+            improved = bool(current_cost + improvement_tol < best_cost_seen)
+            if improved or not np.isfinite(best_cost_seen):
+                progress_state["best_cost_seen"] = float(current_cost)
+                progress_state["best_weighted_rms_px"] = float(current_weighted_rms)
+
+            _maybe_abort_manual_point_fit_u(
+                np.asarray(u_trial, dtype=float),
+                residual_arr,
+                eval_count=eval_count,
+            )
+
+            last_emit_eval = int(progress_state.get("last_emit_eval", 0))
+            emit_reason = ""
+            if eval_count in {1, 2, 3, 5, 10}:
+                emit_reason = "milestone"
+            elif improved and (eval_count - last_emit_eval) >= 5:
+                emit_reason = "improved"
+            elif (eval_count - last_emit_eval) >= 25:
+                emit_reason = "periodic"
+            if not emit_reason:
+                return residual_arr
+
+            trace_event = {
+                "eval": int(eval_count),
+                "current_cost": float(current_cost),
+                "best_cost": float(progress_state.get("best_cost_seen", np.nan)),
+                "weighted_rms_px": float(current_weighted_rms),
+                "reason": str(emit_reason),
+            }
+            if len(trace_points) < 24:
+                trace_points.append(trace_event)
+            progress_state["last_emit_eval"] = int(eval_count)
+            progress_state["status_emit_count"] = int(progress_state["status_emit_count"]) + 1
+            if status_label:
+                _emit_status(
+                    "Geometry fit: {label} eval={eval} cost={cost} best_cost={best_cost} "
+                    "weighted_rms={weighted_rms}px".format(
+                        label=str(status_label),
+                        eval=int(eval_count),
+                        cost=_status_float(current_cost, 6),
+                        best_cost=_status_float(
+                            progress_state.get("best_cost_seen", np.nan),
+                            6,
+                        ),
+                        weighted_rms=_status_float(current_weighted_rms, 4),
+                    )
+                )
+            return residual_arr
+
+        try:
+            result_u = least_squares(
+                _tracked_solver_residual,
+                np.asarray(u_start, dtype=float),
+                bounds=(np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)),
+                method=solver_method,
+                x_scale=1.0,
+                loss=solver_loss,
+                f_scale=solver_f_scale,
+                diff_step=None,
+                max_nfev=int(max_nfev),
+            )
+        except _ManualPointFitEarlyStop as exc:
+            result_u = OptimizeResult(
+                x=np.asarray(u_start, dtype=float),
+                fun=np.asarray(exc.residual_arr, dtype=float),
+                success=False,
+                status=0,
+                message=str(exc),
+                nfev=int(progress_state.get("evaluation_count", 0)),
+                active_mask=np.zeros(np.asarray(u_start, dtype=float).shape, dtype=int),
+                optimality=float("nan"),
+            )
+            result_u.early_stop_reason = str(exc)
+            result_u.point_match_summary = dict(exc.point_match_summary)
+            result_u.bound_proximity_summary = dict(exc.bound_proximity_summary)
+            try:
+                result_u.x = _u_from_physical(specs, np.asarray(exc.x_trial, dtype=float))
+            except Exception:
+                result_u.x = np.asarray(u_start, dtype=float)
+        progress_state["start_u"] = np.asarray(u_start, dtype=float).tolist()
+        try:
+            progress_state["end_u"] = np.asarray(result_u.x, dtype=float).tolist()
+        except Exception:
+            progress_state["end_u"] = []
+        result_u.geometry_fit_progress = progress_state
+        return result_u
+
+    def _wrap_solver_result_from_u(
+        result_u: OptimizeResult,
+        *,
+        specs: Sequence[ParamSpec],
+    ) -> OptimizeResult:
+        result = OptimizeResult(dict(result_u))
+        result.x_u = np.asarray(getattr(result_u, "x", []), dtype=float)
+        result.x = _physical_from_u(specs, result.x_u)
+        if getattr(result, "geometry_fit_progress", None):
+            try:
+                result.geometry_fit_progress["start_x"] = _physical_from_u(
+                    specs,
+                    np.asarray(
+                        result.geometry_fit_progress.get("start_u", result.x_u),
+                        dtype=float,
+                    ),
+                ).tolist()
+                result.geometry_fit_progress["end_x"] = np.asarray(
+                    result.x,
+                    dtype=float,
+                ).tolist()
+            except Exception:
+                pass
+        return result
 
     def _build_full_beam_seed_correspondence_map(
         seed_diagnostics: Sequence[Dict[str, object]],
@@ -11382,326 +13027,356 @@ def fit_geometry_parameters(
             str(seed_label),
         )
 
-    reparameterization_summary = _maybe_run_reparameterization_seed(x0_arr)
-    reparameterized_x = reparameterization_summary.get("x")
-    if reparameterization_summary.get("accepted") and reparameterized_x is not None:
-        x0_arr = np.asarray(reparameterized_x, dtype=float)
-        fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
-
-    staged_release_summary = _maybe_run_staged_release(x0_arr)
-    staged_release_x = staged_release_summary.get("x")
-    if staged_release_summary.get("accepted") and staged_release_x is not None:
-        x0_arr = np.asarray(staged_release_x, dtype=float)
-        fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
-
-    adaptive_regularization_summary = _maybe_run_adaptive_regularization_seed(x0_arr)
-    adaptive_regularization_x = adaptive_regularization_summary.get("x")
-    if (
-        adaptive_regularization_summary.get("accepted")
-        and adaptive_regularization_x is not None
-    ):
-        x0_arr = np.asarray(adaptive_regularization_x, dtype=float)
-        fallback_scale = np.maximum(np.abs(x0_arr), 1.0)
-
-    _emit_status("Geometry fit: running main solve")
-    main_solve_seed_summary = _collect_seed_debug_summary(x0_arr)
-    geometry_fit_debug_summary["main_solve_seed"] = dict(main_solve_seed_summary)
-    _emit_seed_status("main solve", main_solve_seed_summary)
-
-    result = _run_solver(x0_arr, status_label="main solve")
-    best_result = result
-    initial_cost = _robust_cost(
-        np.asarray(result.fun, dtype=float),
-        loss=solver_loss,
-        f_scale=solver_f_scale,
-    )
-    best_cost = float(initial_cost)
-    restart_history: List[Dict[str, object]] = [
-        {
-            "restart": 0,
-            "start_x": x0_arr.tolist(),
-            "end_x": np.asarray(result.x, dtype=float).tolist(),
-            "cost": float(best_cost),
-            "success": bool(result.success),
-            "message": str(result.message),
+    def _inactive_stage_summary(
+        *,
+        enabled: bool,
+        stage_name: str,
+    ) -> Dict[str, object]:
+        return {
+            "enabled": bool(enabled),
+            "status": "skipped",
+            "reason": f"{stage_name}_retired_by_normalized_u_solver",
+            "accepted": False,
         }
+
+    reparameterization_summary = _inactive_stage_summary(
+        enabled=bool(reparameterize_enabled),
+        stage_name="reparameterization",
+    )
+    staged_release_summary = _inactive_stage_summary(
+        enabled=bool(staged_release_enabled),
+        stage_name="staged_release",
+    )
+    adaptive_regularization_summary = _inactive_stage_summary(
+        enabled=bool(adaptive_regularization_enabled),
+        stage_name="adaptive_regularization",
+    )
+
+    active_specs = _build_specs_from_params([str(name) for name in var_names])
+    for idx, spec in enumerate(active_specs):
+        if idx >= len(parameter_debug_entries):
+            continue
+        parameter_debug_entries[idx]["scale"] = float(spec.scale)
+        parameter_debug_entries[idx]["prior_enabled"] = bool(
+            spec.prior_sigma is not None
+            and np.isfinite(float(spec.prior_sigma))
+            and float(spec.prior_sigma) > 0.0
+        )
+        parameter_debug_entries[idx]["prior_center"] = (
+            float(spec.prior_mean)
+            if spec.prior_mean is not None and np.isfinite(float(spec.prior_mean))
+            else float("nan")
+        )
+        parameter_debug_entries[idx]["prior_sigma"] = (
+            float(spec.prior_sigma)
+            if spec.prior_sigma is not None and np.isfinite(float(spec.prior_sigma))
+            else float("nan")
+        )
+        parameter_debug_entries[idx]["seed_group"] = str(spec.seed_group)
+
+    u0_arr = np.zeros(len(active_specs), dtype=float)
+    u_lower_bounds, u_upper_bounds = _build_u_bounds(active_specs)
+    base_dataset_contexts = list(dataset_contexts)
+    discrete_modes = _iter_discrete_mode_specs(discrete_modes_cfg)
+    geometry_fit_debug_summary["seed_search"] = {
+        "prescore_top_k": int(seed_prescore_top_k),
+        "n_global": int(seed_n_global),
+        "n_jitter": int(seed_n_jitter),
+        "jitter_sigma_u": float(seed_jitter_sigma_u),
+        "min_seed_separation_u": float(seed_min_separation_u),
+        "trusted_prior_fraction_of_span": float(trusted_prior_fraction_of_span),
+    }
+    geometry_fit_debug_summary["discrete_modes"] = [
+        dict(mode) for mode in discrete_modes
     ]
 
-    if solver_restarts > 0 and x0_arr.size > 0:
-        _emit_status(
-            f"Geometry fit: evaluating {solver_restarts} restart seed(s)"
-        )
-        restart_selection_tol = max(
-            1e-9 * max(abs(float(initial_cost)), 1.0),
-            1e-12,
-        )
-        ranked_restart_candidates: List[
-            Tuple[float, int, np.ndarray, np.ndarray, str, str]
-        ] = []
-        restart_seed_items = [
-            (
-                int(candidate_idx),
-                np.asarray(trial_start, dtype=float),
-                str(seed_kind),
-                str(seed_label),
+    def _seed_entry_distance(
+        first: np.ndarray,
+        second: np.ndarray,
+    ) -> float:
+        return float(np.linalg.norm(np.asarray(first, dtype=float) - np.asarray(second, dtype=float)))
+
+    def _build_mode_seeds(
+        specs: Sequence[ParamSpec],
+        lb_u: np.ndarray,
+        ub_u: np.ndarray,
+        *,
+        rng: np.random.Generator,
+    ) -> List[Dict[str, object]]:
+        seed_entries: List[Dict[str, object]] = []
+        seen_exact: Set[Tuple[float, ...]] = set()
+
+        def _append_seed(u_seed: Sequence[float], seed_kind: str, seed_label: str) -> None:
+            seed = np.asarray(u_seed, dtype=float).reshape(-1)
+            if seed.shape != lb_u.shape:
+                return
+            seed = np.minimum(np.maximum(seed, lb_u), ub_u)
+            if not np.all(np.isfinite(seed)):
+                return
+            key = tuple(np.round(seed, 12).tolist())
+            if key in seen_exact:
+                return
+            if any(
+                _seed_entry_distance(seed, np.asarray(entry["u"], dtype=float))
+                < float(seed_min_separation_u)
+                for entry in seed_entries
+            ):
+                return
+            seen_exact.add(key)
+            seed_entries.append(
+                {
+                    "u": np.asarray(seed, dtype=float),
+                    "seed_kind": str(seed_kind),
+                    "seed_label": str(seed_label),
+                }
             )
-            for candidate_idx, (trial_start, seed_kind, seed_label) in enumerate(
-                _build_restart_candidates()
-            )
+
+        _append_seed(np.zeros(len(specs), dtype=float), "zero", "u=0")
+        uncertain_indices = [
+            idx for idx, spec in enumerate(specs) if str(spec.seed_group) == "uncertain"
         ]
-        if restart_parallel_workers > 1 and len(restart_seed_items) > 1:
-            seed_results = _threaded_map(
-                _evaluate_restart_seed,
-                restart_seed_items,
-                max_workers=restart_parallel_workers,
-                numba_threads=worker_numba_threads,
-            )
-        else:
-            seed_results = [
-                _evaluate_restart_seed(item) for item in restart_seed_items
-            ]
-
-        for (
-            seed_cost,
-            _candidate_idx,
-            trial_start,
-            seed_residual,
-            seed_kind,
-            seed_label,
-        ) in seed_results:
-            ranked_restart_candidates.append(
-                (
-                    float(seed_cost),
-                    int(_candidate_idx),
-                    np.asarray(trial_start, dtype=float),
-                    np.asarray(seed_residual, dtype=float),
-                    str(seed_kind),
-                    str(seed_label),
+        for idx in uncertain_indices:
+            for amplitude, suffix in ((-1.0, "-1"), (1.0, "+1")):
+                seed = np.zeros(len(specs), dtype=float)
+                seed[idx] = float(np.clip(amplitude, lb_u[idx], ub_u[idx]))
+                _append_seed(seed, "axis", f"{specs[idx].name}{suffix}")
+        for jitter_idx in range(seed_n_jitter):
+            seed = np.zeros(len(specs), dtype=float)
+            if uncertain_indices:
+                seed[uncertain_indices] = rng.normal(
+                    0.0,
+                    float(seed_jitter_sigma_u),
+                    size=len(uncertain_indices),
                 )
+            _append_seed(seed, "jitter", f"jitter#{jitter_idx + 1}")
+        finite_global_indices = [
+            idx
+            for idx in uncertain_indices
+            if np.isfinite(lb_u[idx]) and np.isfinite(ub_u[idx]) and ub_u[idx] > lb_u[idx]
+        ]
+        if finite_global_indices:
+            box_points = _low_discrepancy_points(seed_n_global, len(finite_global_indices))
+            mapped = _map_box_points(
+                box_points,
+                lb_u[finite_global_indices],
+                ub_u[finite_global_indices],
             )
-            restart_history.append(
-                {
-                    "restart": len(restart_history),
-                    "start_x": np.asarray(trial_start, dtype=float).tolist(),
-                    "end_x": np.asarray(trial_start, dtype=float).tolist(),
-                    "cost": float(seed_cost),
-                    "success": False,
-                    "seed_kind": str(seed_kind),
-                    "seed_label": str(seed_label),
-                    "message": (
-                        f"{seed_kind} {seed_label} "
-                        "(cost-only seed evaluation)"
-                    ),
-                }
+            for global_idx, values in enumerate(mapped, start=1):
+                seed = np.zeros(len(specs), dtype=float)
+                seed[finite_global_indices] = np.asarray(values, dtype=float)
+                _append_seed(seed, "global", f"global#{global_idx}")
+        return seed_entries
+
+    rng = np.random.default_rng(20260401)
+    restart_history: List[Dict[str, object]] = []
+    best_result: OptimizeResult | None = None
+    best_cost = float("inf")
+    best_mode: Dict[str, object] = dict(discrete_modes[0]) if discrete_modes else {
+        "label": "identity"
+    }
+    best_mode_contexts = list(base_dataset_contexts)
+    solve_record_count = 0
+    prescore_record_count = 0
+
+    if not active_specs:
+        mode_results: List[Tuple[Dict[str, object], OptimizeResult, float, List[GeometryFitDatasetContext]]] = []
+        for mode in discrete_modes:
+            dataset_contexts = _apply_discrete_mode_to_dataset_contexts(
+                base_dataset_contexts,
+                image_size=int(image_size),
+                mode=mode,
             )
-
-        ranked_restart_candidates.sort(key=lambda item: (item[0], item[1]))
-        selected_restart_candidates = ranked_restart_candidates[:solver_restarts]
-        if restart_parallel_workers > 1 and len(selected_restart_candidates) > 1:
-            solved_restarts = _threaded_map(
-                _solve_restart_seed,
-                selected_restart_candidates,
-                max_workers=restart_parallel_workers,
-                numba_threads=worker_numba_threads,
+            residual = _data_residual_theta([], names=[], base_params=params)
+            trial = _build_probe_result(
+                np.array([], dtype=float),
+                residual,
+                message=f"fixed-parameter mode {_format_discrete_mode_label(mode)}",
             )
-        else:
-            solved_restarts = [
-                _solve_restart_seed(item) for item in selected_restart_candidates
-            ]
-
-        for (
-            trial_start,
-            trial,
-            trial_cost,
-            seed_cost,
-            seed_kind,
-            seed_label,
-        ) in solved_restarts:
-            restart_history.append(
-                {
-                    "restart": len(restart_history),
-                    "start_x": np.asarray(trial_start, dtype=float).tolist(),
-                    "end_x": np.asarray(trial.x, dtype=float).tolist(),
-                    "cost": float(trial_cost),
-                    "seed_cost": float(seed_cost),
-                    "success": bool(trial.success),
-                    "seed_kind": str(seed_kind),
-                    "seed_label": str(seed_label),
-                    "message": str(getattr(trial, "message", "")),
-                }
-            )
-            if trial_cost < best_cost:
-                best_result = trial
-                best_cost = trial_cost
-        _emit_status(
-            "Geometry fit: restart search complete "
-            f"(best_cost={float(best_cost):.6f})"
-        )
-
-    stagnation_tol = max(
-        stagnation_probe_min_improvement,
-        1e-9 * max(abs(float(initial_cost)), 1.0),
-    )
-    best_x = np.asarray(getattr(best_result, "x", x0_arr), dtype=float)
-    best_is_initial = (
-        best_x.shape == x0_arr.shape
-        and np.allclose(best_x, x0_arr, atol=1e-12, rtol=0.0)
-    )
-    best_improvement = float(initial_cost - best_cost)
-    if (
-        stagnation_probe_enabled
-        and stagnation_probe_fraction > 0.0
-        and x0_arr.size > 0
-        and (best_is_initial or best_improvement <= stagnation_tol)
-    ):
-        _emit_status("Geometry fit: probing stagnation directions")
-        probe_anchor = np.asarray(best_x, dtype=float)
-        probe_scale = np.where(
-            finite_span,
-            span,
-            np.maximum(fallback_scale, x_scale),
-        )
-        probe_scale = np.maximum(probe_scale, 1e-6)
-        visited = {
-            _vector_key(probe_anchor),
-        }
-        best_probe_x: Optional[np.ndarray] = None
-        best_probe_residual: Optional[np.ndarray] = None
-        best_probe_cost = float("inf")
-        best_probe_label = ""
-        probe_candidates: List[Tuple[np.ndarray, str, str]] = []
-        for idx, name in enumerate(var_names):
-            step = float(stagnation_probe_fraction * probe_scale[idx])
-            if not np.isfinite(step) or step <= 0.0:
-                continue
-            for direction, direction_label in ((-1.0, "-"), (1.0, "+")):
-                direction_vec = np.zeros_like(probe_anchor, dtype=float)
-                direction_vec[idx] = float(direction)
-                probe_candidates.append(
-                    (direction_vec, "directional probe", f"{name}{direction_label}")
-                )
-
-        if (
-            stagnation_probe_pairwise
-            and probe_anchor.size > 1
-            and stagnation_probe_pair_limit > 1
-        ):
-            ranked_indices = np.argsort(probe_scale)[::-1]
-            ranked_indices = ranked_indices[: min(stagnation_probe_pair_limit, ranked_indices.size)]
-            for first_pos, first_idx in enumerate(ranked_indices):
-                idx_i = int(first_idx)
-                for second_idx in ranked_indices[first_pos + 1 :]:
-                    idx_j = int(second_idx)
-                    for dir_i, label_i in ((-1.0, "-"), (1.0, "+")):
-                        for dir_j, label_j in ((-1.0, "-"), (1.0, "+")):
-                            direction_vec = np.zeros_like(probe_anchor, dtype=float)
-                            direction_vec[idx_i] = float(dir_i)
-                            direction_vec[idx_j] = float(dir_j)
-                            probe_candidates.append(
-                                (
-                                    direction_vec / math.sqrt(2.0),
-                                    "pairwise probe",
-                                    (
-                                        f"{var_names[idx_i]}{label_i},"
-                                        f"{var_names[idx_j]}{label_j}"
-                                    ),
-                                )
-                            )
-
-        if stagnation_probe_random_directions > 0 and probe_anchor.size > 1:
-            probe_rng = np.random.default_rng(20260310)
-            for probe_idx in range(stagnation_probe_random_directions):
-                direction_vec = probe_rng.normal(size=probe_anchor.shape[0])
-                if not np.all(np.isfinite(direction_vec)):
-                    continue
-                norm = float(np.linalg.norm(direction_vec))
-                if norm <= 1.0e-12:
-                    continue
-                probe_candidates.append(
-                    (
-                        direction_vec / norm,
-                        "random probe",
-                        f"rand#{probe_idx + 1}",
-                    )
-                )
-
-        for direction_vec, probe_kind, probe_label in probe_candidates:
-            trial_x = np.asarray(probe_anchor, dtype=float) + (
-                stagnation_probe_fraction * probe_scale * np.asarray(direction_vec, dtype=float)
-            )
-            trial_x = np.minimum(np.maximum(trial_x, lower_bounds), upper_bounds)
-            if np.allclose(trial_x, probe_anchor, atol=1e-12, rtol=0.0):
-                continue
-            trial_key = tuple(np.round(np.asarray(trial_x, dtype=float), 12).tolist())
-            if trial_key in visited:
-                continue
-            visited.add(trial_key)
-            trial_residual, trial_cost = _evaluate_cost_at(trial_x)
-            restart_history.append(
-                {
-                    "restart": len(restart_history),
-                    "start_x": np.asarray(trial_x, dtype=float).tolist(),
-                    "end_x": np.asarray(trial_x, dtype=float).tolist(),
-                    "cost": float(trial_cost),
-                    "success": False,
-                    "message": (
-                        f"{probe_kind} {probe_label} "
-                        "(cost-only seed evaluation)"
-                    ),
-                }
-            )
-            if trial_cost + stagnation_tol < best_probe_cost:
-                best_probe_x = np.asarray(trial_x, dtype=float)
-                best_probe_residual = np.asarray(trial_residual, dtype=float)
-                best_probe_cost = float(trial_cost)
-                best_probe_label = f"{probe_kind} {probe_label}"
-
-        if (
-            best_probe_x is not None
-            and best_probe_residual is not None
-            and best_probe_cost + stagnation_tol < best_cost
-        ):
-            trial = _run_solver(
-                best_probe_x,
-                status_label=f"probe {best_probe_label}",
-            )
+            trial.x_u = np.array([], dtype=float)
             trial_cost = _robust_cost(
                 np.asarray(trial.fun, dtype=float),
                 loss=solver_loss,
                 f_scale=solver_f_scale,
             )
-            restart_history.append(
+            mode_results.append((dict(mode), trial, float(trial_cost), list(dataset_contexts)))
+        best_mode, best_result, best_cost, best_mode_contexts = min(
+            mode_results,
+            key=lambda item: float(item[2]),
+        )
+    else:
+        _emit_status("Geometry fit: running normalized-u multistart solve")
+        for mode_index, mode in enumerate(discrete_modes):
+            mode_label = _format_discrete_mode_label(mode)
+            dataset_contexts = _apply_discrete_mode_to_dataset_contexts(
+                base_dataset_contexts,
+                image_size=int(image_size),
+                mode=mode,
+            )
+            mode_seeds = _build_mode_seeds(
+                active_specs,
+                u_lower_bounds,
+                u_upper_bounds,
+                rng=rng,
+            )
+            scored_seeds: List[Dict[str, object]] = []
+            for seed_entry in mode_seeds:
+                seed_u = np.asarray(seed_entry["u"], dtype=float)
+                seed_residual, seed_cost = _evaluate_cost_at_u(
+                    seed_u,
+                    specs=active_specs,
+                    include_priors=True,
+                )
+                scored_seeds.append(
+                    {
+                        "u": seed_u,
+                        "seed_kind": str(seed_entry.get("seed_kind", "")),
+                        "seed_label": str(seed_entry.get("seed_label", "")),
+                        "residual": np.asarray(seed_residual, dtype=float),
+                        "cost": float(seed_cost),
+                    }
+                )
+            scored_seeds.sort(
+                key=lambda item: (
+                    float(item.get("cost", np.inf)),
+                    str(item.get("seed_kind", "")),
+                    str(item.get("seed_label", "")),
+                )
+            )
+            selected_seeds: List[Dict[str, object]] = []
+            for seed_entry in scored_seeds:
+                if len(selected_seeds) >= seed_prescore_top_k:
+                    break
+                seed_u = np.asarray(seed_entry["u"], dtype=float)
+                if any(
+                    _seed_entry_distance(seed_u, np.asarray(existing["u"], dtype=float))
+                    < float(seed_min_separation_u)
+                    for existing in selected_seeds
+                ):
+                    continue
+                selected_seeds.append(dict(seed_entry))
+
+            geometry_fit_debug_summary.setdefault("mode_seed_summary", []).append(
                 {
-                    "restart": len(restart_history),
-                    "start_x": np.asarray(best_probe_x, dtype=float).tolist(),
-                    "end_x": np.asarray(trial.x, dtype=float).tolist(),
-                    "cost": float(trial_cost),
-                    "success": bool(trial.success),
-                    "message": (
-                        f"{best_probe_label} refine: "
-                        f"{str(trial.message).strip()}"
-                    ),
+                    "mode": dict(mode),
+                    "seed_count": int(len(mode_seeds)),
+                    "selected_seed_count": int(len(selected_seeds)),
+                    "selected_seeds": [
+                        {
+                            "seed_kind": str(entry.get("seed_kind", "")),
+                            "seed_label": str(entry.get("seed_label", "")),
+                            "cost": float(entry.get("cost", np.nan)),
+                            "u": np.asarray(entry.get("u", []), dtype=float).tolist(),
+                        }
+                        for entry in selected_seeds
+                    ],
                 }
             )
 
-            if best_probe_cost + stagnation_tol < trial_cost:
-                trial = _build_probe_result(
-                    best_probe_x,
-                    best_probe_residual,
-                    message=(
-                        f"{best_probe_label} improved the fit; "
-                        "local least-squares did not improve further."
-                    ),
+            for seed_entry in selected_seeds:
+                prescore_record_count += 1
+                seed_u = np.asarray(seed_entry["u"], dtype=float)
+                seed_x = _physical_from_u(active_specs, seed_u)
+                restart_history.append(
+                    {
+                        "restart": len(restart_history),
+                        "mode_index": int(mode_index),
+                        "mode_label": str(mode_label),
+                        "start_u": seed_u.tolist(),
+                        "start_x": seed_x.tolist(),
+                        "end_u": seed_u.tolist(),
+                        "end_x": seed_x.tolist(),
+                        "cost": float(seed_entry.get("cost", np.nan)),
+                        "success": False,
+                        "seed_kind": str(seed_entry.get("seed_kind", "")),
+                        "seed_label": str(seed_entry.get("seed_label", "")),
+                        "message": "prescore",
+                    }
                 )
-                trial_cost = float(best_probe_cost)
 
-            if trial_cost < best_cost:
-                best_result = trial
-                best_cost = trial_cost
-        _emit_status(
-            "Geometry fit: stagnation probing complete "
-            f"(best_cost={float(best_cost):.6f})"
+            for solve_idx, seed_entry in enumerate(selected_seeds, start=1):
+                solve_record_count += 1
+                seed_u = np.asarray(seed_entry["u"], dtype=float)
+                trial_u_result = _run_solver_u(
+                    seed_u,
+                    specs=active_specs,
+                    lower=u_lower_bounds,
+                    upper=u_upper_bounds,
+                    include_priors=True,
+                    max_nfev=solver_max_nfev,
+                    status_label=f"{mode_label} seed {solve_idx}",
+                )
+                trial_result = _wrap_solver_result_from_u(
+                    trial_u_result,
+                    specs=active_specs,
+                )
+                trial_cost = _robust_cost(
+                    np.asarray(trial_result.fun, dtype=float),
+                    loss=solver_loss,
+                    f_scale=solver_f_scale,
+                )
+                seed_cost = float(seed_entry.get("cost", np.inf))
+                selection_tol = max(1.0e-9 * max(abs(seed_cost), 1.0), 1.0e-12)
+                if seed_cost + selection_tol < trial_cost:
+                    trial_result = _build_probe_result(
+                        _physical_from_u(active_specs, seed_u),
+                        np.asarray(seed_entry.get("residual", []), dtype=float),
+                        message=(
+                            f"{seed_entry.get('seed_kind', 'seed')} "
+                            f"{seed_entry.get('seed_label', '')} prescore preferred"
+                        ),
+                    )
+                    trial_result.x_u = np.asarray(seed_u, dtype=float)
+                    trial_cost = seed_cost
+                restart_history.append(
+                    {
+                        "restart": len(restart_history),
+                        "mode_index": int(mode_index),
+                        "mode_label": str(mode_label),
+                        "start_u": seed_u.tolist(),
+                        "start_x": _physical_from_u(active_specs, seed_u).tolist(),
+                        "end_u": np.asarray(getattr(trial_result, "x_u", []), dtype=float).tolist(),
+                        "end_x": np.asarray(trial_result.x, dtype=float).tolist(),
+                        "cost": float(trial_cost),
+                        "seed_cost": float(seed_cost),
+                        "success": bool(getattr(trial_result, "success", False)),
+                        "seed_kind": str(seed_entry.get("seed_kind", "")),
+                        "seed_label": str(seed_entry.get("seed_label", "")),
+                        "message": str(getattr(trial_result, "message", "")),
+                    }
+                )
+                if best_result is None or float(trial_cost) < float(best_cost):
+                    best_result = trial_result
+                    best_cost = float(trial_cost)
+                    best_mode = dict(mode)
+                    best_mode_contexts = list(dataset_contexts)
+
+    if best_result is None:
+        best_result = _build_probe_result(
+            np.asarray(x0_arr, dtype=float),
+            np.asarray(residual_fn(np.asarray(x0_arr, dtype=float)), dtype=float),
+            message="normalized_u_solver_failed_to_generate_result",
         )
+        best_result.x_u = np.asarray(u0_arr, dtype=float)
+        best_cost = _robust_cost(
+            np.asarray(best_result.fun, dtype=float),
+            loss=solver_loss,
+            f_scale=solver_f_scale,
+        )
+
+    dataset_contexts = list(best_mode_contexts)
+    result = best_result
+    geometry_fit_debug_summary["main_solve_seed"] = {
+        "seed_kind": "u=0",
+        "seed_label": "normalized-zero",
+        "u": np.asarray(u0_arr, dtype=float).tolist(),
+        "x": np.asarray(x0_arr, dtype=float).tolist(),
+    }
+    geometry_fit_debug_summary["chosen_discrete_mode"] = dict(best_mode)
+    geometry_fit_debug_summary["selected_mode_label"] = _format_discrete_mode_label(best_mode)
+    geometry_fit_debug_summary["solve_counts"] = {
+        "prescored": int(prescore_record_count),
+        "solved": int(solve_record_count),
+    }
 
     def _run_reduced_solver(
         reference_x: np.ndarray,
@@ -12451,66 +14126,14 @@ def fit_geometry_parameters(
             result.x = np.asarray(refined_x, dtype=float)
             _append_result_message(result, "ROI/image refinement accepted")
 
-    auto_freeze_summary: Dict[str, object] = {
-        "enabled": bool(auto_freeze_enabled),
-        "status": "skipped",
-        "reason": "not_evaluated",
-        "accepted": False,
-    }
-    if getattr(result, "x", None) is not None:
-        try:
-            auto_freeze_summary = _maybe_run_auto_freeze(result)
-        except Exception as exc:
-            auto_freeze_summary = {
-                "enabled": bool(auto_freeze_enabled),
-                "status": "failed",
-                "reason": f"unexpected_exception: {exc}",
-                "accepted": False,
-            }
-        refined_x = auto_freeze_summary.get("x")
-        if auto_freeze_summary.get("accepted") and refined_x is not None:
-            result.x = np.asarray(refined_x, dtype=float)
-            fixed_names = auto_freeze_summary.get("fixed_parameters", [])
-            if fixed_names:
-                joined = ", ".join(str(name) for name in fixed_names)
-                _append_result_message(
-                    result,
-                    f"Auto-freeze accepted ({joined})",
-                )
-            else:
-                _append_result_message(result, "Auto-freeze accepted")
-
-    selective_thaw_summary: Dict[str, object] = {
-        "enabled": bool(selective_thaw_enabled),
-        "status": "skipped",
-        "reason": "not_evaluated",
-        "accepted": False,
-    }
-    if getattr(result, "x", None) is not None:
-        try:
-            selective_thaw_summary = _maybe_run_selective_thaw(
-                result,
-                auto_freeze_summary,
-            )
-        except Exception as exc:
-            selective_thaw_summary = {
-                "enabled": bool(selective_thaw_enabled),
-                "status": "failed",
-                "reason": f"unexpected_exception: {exc}",
-                "accepted": False,
-            }
-        refined_x = selective_thaw_summary.get("x")
-        if selective_thaw_summary.get("accepted") and refined_x is not None:
-            result.x = np.asarray(refined_x, dtype=float)
-            thawed_names = selective_thaw_summary.get("thawed_parameters", [])
-            if thawed_names:
-                joined = ", ".join(str(name) for name in thawed_names)
-                _append_result_message(
-                    result,
-                    f"Selective thaw accepted ({joined})",
-                )
-            else:
-                _append_result_message(result, "Selective thaw accepted")
+    auto_freeze_summary = _inactive_stage_summary(
+        enabled=bool(auto_freeze_enabled),
+        stage_name="auto_freeze",
+    )
+    selective_thaw_summary = _inactive_stage_summary(
+        enabled=bool(selective_thaw_enabled),
+        stage_name="selective_thaw",
+    )
 
     result.restart_history = restart_history
     result.reparameterization_summary = reparameterization_summary
@@ -12521,10 +14144,18 @@ def fit_geometry_parameters(
     result.auto_freeze_summary = auto_freeze_summary
     result.selective_thaw_summary = selective_thaw_summary
     result.full_beam_polish_summary = full_beam_polish_summary
+    result.optimizer_method = str(solver_method)
     result.solver_loss = solver_loss
     result.solver_f_scale = float(solver_f_scale)
     result.parameter_prior_summary = parameter_prior_summary
     result.parallelization_summary = dict(parallelization_summary)
+    result.chosen_discrete_mode = dict(best_mode)
+    result.discrete_mode_summary = {
+        "enabled": bool(discrete_modes_cfg.get("enabled", False)),
+        "mode_count": int(len(discrete_modes)),
+        "selected_mode": dict(best_mode),
+        "selected_label": _format_discrete_mode_label(best_mode),
+    }
     if point_match_mode and bool(full_beam_polish_summary.get("accepted", False)):
         result.final_metric_name = "full_beam_fixed_correspondence"
     elif point_match_mode and dynamic_point_geometry_fit:
@@ -12675,6 +14306,227 @@ def fit_geometry_parameters(
         else None
     )
 
+    def _augment_identifiability_summary(
+        summary: Dict[str, object],
+        *,
+        names: Sequence[str],
+        weak_column_rel: float,
+        correlation_warn: float,
+    ) -> Dict[str, object]:
+        if str(summary.get("status", "")) != "ok":
+            return summary
+        param_entries = list(summary.get("parameter_entries", []))
+        column_norms = np.array(
+            [
+                float(entry.get("column_norm", np.nan))
+                if isinstance(entry, Mapping)
+                else float("nan")
+                for entry in param_entries
+            ],
+            dtype=float,
+        )
+        finite_norms = column_norms[np.isfinite(column_norms) & (column_norms > 0.0)]
+        median_norm = float(np.median(finite_norms)) if finite_norms.size else 0.0
+        weak_threshold = max(float(weak_column_rel) * median_norm, 0.0)
+        weak_parameters: List[Dict[str, object]] = []
+        for idx, name in enumerate(names):
+            column_norm = float(column_norms[idx]) if idx < column_norms.size else float("nan")
+            if not np.isfinite(column_norm) or column_norm > weak_threshold + 1.0e-12:
+                continue
+            weak_parameters.append(
+                {
+                    "name": str(name),
+                    "index": int(idx),
+                    "column_norm": float(column_norm),
+                    "reason": "weak_sensitivity",
+                }
+            )
+
+        high_correlation_pairs: List[Dict[str, object]] = []
+        corr_u = np.asarray(summary.get("correlation_u", []), dtype=float)
+        if corr_u.ndim == 2 and corr_u.shape[0] == len(names):
+            for i in range(len(names)):
+                for j in range(i + 1, len(names)):
+                    corr_val = float(corr_u[i, j])
+                    if not np.isfinite(corr_val):
+                        continue
+                    if abs(corr_val) < float(correlation_warn):
+                        continue
+                    high_correlation_pairs.append(
+                        {
+                            "name_i": str(names[i]),
+                            "index_i": int(i),
+                            "name_j": str(names[j]),
+                            "index_j": int(j),
+                            "correlation": float(corr_val),
+                            "abs_correlation": float(abs(corr_val)),
+                        }
+                    )
+        high_correlation_pairs.sort(
+            key=lambda item: (
+                -float(item.get("abs_correlation", 0.0)),
+                str(item.get("name_i", "")),
+                str(item.get("name_j", "")),
+            )
+        )
+
+        warning_flags = [str(flag) for flag in summary.get("warning_flags", [])]
+        if weak_parameters and "weak_sensitivity" not in warning_flags:
+            warning_flags.append("weak_sensitivity")
+        if high_correlation_pairs and "high_correlation" not in warning_flags:
+            warning_flags.append("high_correlation")
+        summary["weak_column_norm_threshold"] = float(weak_threshold)
+        summary["weak_parameters"] = weak_parameters
+        summary["high_correlation_pairs"] = high_correlation_pairs
+        summary["recommended_fixed_parameters"] = []
+        summary["recommended_fixed_indices"] = []
+        summary["warning_flags"] = warning_flags
+        return summary
+
+    def _build_jacobian_for_specs(
+        specs: Sequence[ParamSpec],
+        *,
+        u_ref: np.ndarray,
+        include_priors: bool,
+        base_params: Optional[Mapping[str, object]] = None,
+        robust_weight: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if not specs:
+            return np.empty((0, 0), dtype=float), np.array([], dtype=float)
+        lb_u_local, ub_u_local = _build_u_bounds(specs)
+        fun = lambda u: _residual_u(
+            u,
+            specs=specs,
+            include_priors=include_priors,
+            base_params=base_params,
+        )
+        residual_ref = np.asarray(fun(np.asarray(u_ref, dtype=float)), dtype=float)
+        jacobian = _finite_diff_jacobian_abs(
+            fun,
+            np.asarray(u_ref, dtype=float),
+            np.full_like(np.asarray(u_ref, dtype=float), identifiability_fd_abs_step_u),
+            lower=lb_u_local,
+            upper=ub_u_local,
+        )
+        if robust_weight and solver_loss == "soft_l1" and residual_ref.size:
+            row_scale = _soft_l1_row_scale(residual_ref, solver_f_scale)
+            jacobian = row_scale[:, None] * jacobian
+        return jacobian, residual_ref
+
+    def _build_solver_conditioned_identifiability_summary() -> Dict[str, object]:
+        if not identifiability_enabled:
+            return {
+                "enabled": False,
+                "status": "skipped",
+                "reason": "disabled_by_config",
+                "underconstrained": False,
+            }
+        if getattr(result, "x", None) is None:
+            return {
+                "enabled": True,
+                "status": "failed",
+                "reason": "missing_parameter_vector",
+                "underconstrained": False,
+            }
+        specs = list(active_specs)
+        if not specs:
+            return {
+                "enabled": True,
+                "status": "failed",
+                "reason": "empty_parameter_vector",
+                "underconstrained": False,
+            }
+        u_ref = _u_from_physical(specs, np.asarray(result.x, dtype=float))
+        J_u, residual_ref = _build_jacobian_for_specs(
+            specs,
+            u_ref=np.asarray(u_ref, dtype=float),
+            include_priors=True,
+            robust_weight=True,
+        )
+        summary = _svd_summary(
+            J_u,
+            [spec.name for spec in specs],
+            scales=[spec.scale for spec in specs],
+            rcond=identifiability_sv_rcond,
+            weak_singular_rel=identifiability_weak_singular_rel,
+            combo_thresh=identifiability_combo_thresh,
+        )
+        summary["enabled"] = True
+        summary["diagnostic_scope"] = "solver_conditioned_active"
+        summary["includes_priors"] = True
+        summary["residual_count"] = int(residual_ref.size)
+        return _augment_identifiability_summary(
+            summary,
+            names=[spec.name for spec in specs],
+            weak_column_rel=identifiability_weak_column_rel,
+            correlation_warn=identifiability_block_corr_abs,
+        )
+
+    def _build_data_only_identifiability_summary() -> Dict[str, object]:
+        if not identifiability_enabled:
+            return {
+                "enabled": False,
+                "status": "skipped",
+                "reason": "disabled_by_config",
+                "underconstrained": False,
+            }
+        if getattr(result, "x", None) is None:
+            return {
+                "enabled": True,
+                "status": "failed",
+                "reason": "missing_parameter_vector",
+                "underconstrained": False,
+            }
+        final_local = _apply_trial_params(np.asarray(result.x, dtype=float))
+        candidate_specs = _build_specs_from_params(
+            all_candidate_param_names,
+            base_params=final_local,
+        )
+        if not candidate_specs:
+            return {
+                "enabled": True,
+                "status": "failed",
+                "reason": "no_candidate_parameters",
+                "underconstrained": False,
+            }
+        u_ref = np.zeros(len(candidate_specs), dtype=float)
+        J_u, residual_ref = _build_jacobian_for_specs(
+            candidate_specs,
+            u_ref=u_ref,
+            include_priors=False,
+            base_params=final_local,
+            robust_weight=True,
+        )
+        summary = _svd_summary(
+            J_u,
+            [spec.name for spec in candidate_specs],
+            scales=[spec.scale for spec in candidate_specs],
+            rcond=identifiability_sv_rcond,
+            weak_singular_rel=identifiability_weak_singular_rel,
+            combo_thresh=identifiability_combo_thresh,
+        )
+        summary["enabled"] = True
+        summary["diagnostic_scope"] = "data_only_all_selectable"
+        summary["includes_priors"] = False
+        summary["residual_count"] = int(residual_ref.size)
+        summary = _augment_identifiability_summary(
+            summary,
+            names=[spec.name for spec in candidate_specs],
+            weak_column_rel=identifiability_weak_column_rel,
+            correlation_warn=identifiability_block_corr_abs,
+        )
+        summary["next_stage_recommendations"] = recommend_next_stage(
+            J_u,
+            param_names=[spec.name for spec in candidate_specs],
+            active_names=[str(name) for name in var_names],
+            rcond=identifiability_sv_rcond,
+            block_corr_abs=identifiability_block_corr_abs,
+            weak_column_rel=identifiability_weak_column_rel,
+            single_release_min_indep=identifiability_single_release_min_indep,
+            block_release_min_indep=identifiability_block_release_min_indep,
+        )
+        return summary
+
     debug_summary_result = copy.deepcopy(geometry_fit_debug_summary)
     final_x_arr = np.asarray(getattr(result, "x", []), dtype=float).reshape(-1)
     if final_x_arr.size == len(debug_summary_result.get("parameter_entries", [])):
@@ -12711,17 +14563,20 @@ def fit_geometry_parameters(
         )
     result.geometry_fit_debug_summary = debug_summary_result
 
-    if point_match_mode and getattr(result, "x", None) is not None:
-        identifiability_summary = _build_identifiability_summary_at_x(
-            np.asarray(result.x, dtype=float),
-            result,
-        )
-    else:
-        identifiability_summary = _build_identifiability_summary(
-            result,
-            getattr(result, "point_match_diagnostics", None),
-        )
+    identifiability_summary = _build_solver_conditioned_identifiability_summary()
+    data_only_identifiability_summary = _build_data_only_identifiability_summary()
     result.identifiability_summary = identifiability_summary
+    result.data_only_identifiability_summary = data_only_identifiability_summary
+    result.next_stage_recommendations = list(
+        data_only_identifiability_summary.get("next_stage_recommendations", [])
+        if isinstance(data_only_identifiability_summary, Mapping)
+        else []
+    )
+    result.next_stage_recommendation = (
+        dict(result.next_stage_recommendations[0])
+        if result.next_stage_recommendations
+        else None
+    )
     _emit_status(
         "Geometry fit: complete "
         f"(cost={float(getattr(result, 'cost', np.nan)):.6f}, "

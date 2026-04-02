@@ -881,26 +881,67 @@ def make_runtime_geometry_q_group_value_callbacks(
 
     def _build_live_preview_simulated_peaks_from_cache() -> list[dict[str, object]]:
         max_positions_local = simulation_runtime_state.stored_max_positions_local
-        if max_positions_local is None:
+        if isinstance(max_positions_local, Sequence) and not isinstance(
+            max_positions_local,
+            (str, bytes),
+        ):
+            stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
+            if stored_sim_image is not None:
+                image_shape = tuple(int(v) for v in stored_sim_image.shape[:2])
+            else:
+                image_size = max(
+                    0,
+                    _coerce_int(_resolve_runtime_value(image_size_factory), 0),
+                )
+                image_shape = (image_size, image_size)
+
+            simulated_peaks = build_geometry_fit_simulated_peaks(
+                max_positions_local,
+                image_shape=image_shape,
+                native_sim_to_display_coords=native_sim_to_display_coords,
+                peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
+                primary_a=_primary_a(),
+                primary_c=_primary_c(),
+                default_source_label="primary",
+                round_pixel_centers=True,
+            )
+            if simulated_peaks:
+                return simulated_peaks
+
+        cached_records = getattr(simulation_runtime_state, "peak_records", None)
+        if not isinstance(cached_records, Sequence) or isinstance(
+            cached_records,
+            (str, bytes),
+        ):
             return []
 
-        stored_sim_image = getattr(simulation_runtime_state, "stored_sim_image", None)
-        if stored_sim_image is not None:
-            image_shape = tuple(int(v) for v in stored_sim_image.shape[:2])
-        else:
-            image_size = max(0, _coerce_int(_resolve_runtime_value(image_size_factory), 0))
-            image_shape = (image_size, image_size)
-
-        return build_geometry_fit_simulated_peaks(
-            max_positions_local,
-            image_shape=image_shape,
-            native_sim_to_display_coords=native_sim_to_display_coords,
-            peak_table_lattice=simulation_runtime_state.stored_peak_table_lattice,
-            primary_a=_primary_a(),
-            primary_c=_primary_c(),
-            default_source_label="primary",
-            round_pixel_centers=True,
-        )
+        cached_peaks: list[dict[str, object]] = []
+        for raw_entry in cached_records:
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            try:
+                display_col = float(entry.get("display_col", np.nan))
+                display_row = float(entry.get("display_row", np.nan))
+            except Exception:
+                continue
+            if not (np.isfinite(display_col) and np.isfinite(display_row)):
+                continue
+            entry["sim_col"] = float(display_col)
+            entry["sim_row"] = float(display_row)
+            if entry.get("weight") is None:
+                try:
+                    entry["weight"] = max(0.0, float(entry.get("intensity", 0.0)))
+                except Exception:
+                    pass
+            hkl = gui_geometry_overlay.normalize_hkl_key(
+                entry.get("hkl_raw", entry.get("hkl"))
+            )
+            if hkl is not None:
+                entry["hkl"] = hkl
+                entry.setdefault("label", f"{hkl[0]},{hkl[1]},{hkl[2]}")
+            cached_peaks.append(entry)
+        return cached_peaks
 
     def _filter_simulated_peaks(
         simulated_peaks: Sequence[dict[str, object]] | None,
@@ -2204,15 +2245,6 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
 ) -> list[dict[str, object]] | None:
     """Return runtime live-preview peaks from cache or fallback simulation."""
 
-    build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
-    simulated_peaks = (
-        list(build_cached_peaks() or [])
-        if callable(build_cached_peaks)
-        else []
-    )
-    if simulated_peaks:
-        return simulated_peaks
-
     if bool(_resolve_runtime_value(bindings.has_cached_hit_tables)) and callable(
         bindings.simulate_preview_style_peaks
     ):
@@ -2234,6 +2266,14 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
                 or []
             )
         except Exception as exc:
+            build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
+            cached_peaks = (
+                list(build_cached_peaks() or [])
+                if callable(build_cached_peaks)
+                else []
+            )
+            if cached_peaks:
+                return cached_peaks
             if callable(bindings.clear_geometry_preview_artists):
                 bindings.clear_geometry_preview_artists()
             if update_status:
@@ -2247,6 +2287,15 @@ def resolve_runtime_live_geometry_preview_simulated_peaks(
             return None
         if simulated_peaks:
             return simulated_peaks
+
+    build_cached_peaks = bindings.build_live_preview_simulated_peaks_from_cache
+    simulated_peaks = (
+        list(build_cached_peaks() or [])
+        if callable(build_cached_peaks)
+        else []
+    )
+    if simulated_peaks:
+        return simulated_peaks
 
     if callable(bindings.clear_geometry_preview_artists):
         bindings.clear_geometry_preview_artists()

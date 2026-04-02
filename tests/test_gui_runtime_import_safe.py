@@ -127,3 +127,40 @@ def test_runtime_impl_falls_back_to_detector_image_when_caked_cache_is_missing()
     assert "if not show_caked_image:" in source
     assert "image_display.set_data(global_image_buffer)" in source
     assert "background_display.set_extent([0, image_size, image_size, 0])" in source
+
+
+def test_runtime_impl_restores_caked_payload_when_view_returns_to_caked() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "def _restore_caked_display_payload_from_cached_results(" in source
+    assert "missing_caked_payload = bool(" in source
+    assert "_restore_caked_display_payload_from_cached_results(" in source
+    assert "simulation_runtime_state.last_caked_image_unscaled is None" in source
+    assert "simulation_runtime_state.last_caked_extent is None" in source
+
+
+def test_runtime_impl_reuses_detector_image_when_only_hit_table_collection_changes() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "new_sim_image_sig = get_sim_signature(include_hit_tables=False)" in source
+    assert "new_sim_sig = get_sim_signature(include_hit_tables=True)" in source
+    assert "simulation_runtime_state.last_sim_signature = new_sim_image_sig" in source
+    assert "need_hit_table_refresh = bool(" in source
+    assert "do_update_refresh_hit_tables_in_background" in source
+    assert 'progress_label.config(text="Refreshing peak tables in background...")' in source
+
+
+def test_runtime_impl_uses_geometry_manual_state_name_for_manual_pairs() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "manual_geometry_state" not in source
+    assert 'globals().get("geometry_manual_state")' in source
+
+
+def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
+    source = RUNTIME_IMPL_SOURCE_PATH.read_text(encoding="utf-8")
+
+    assert "def _clear_deferred_overlays(*, clear_qr_overlay: bool = True) -> None:" in source
+    assert "if _live_interaction_active():" in source
+    assert "qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)" in source
+    assert "_clear_deferred_overlays(clear_qr_overlay=False)" in source

@@ -989,6 +989,7 @@ def geometry_manual_pick_cache_signature(
     geometry_q_group_cached_entries: Sequence[object] | None,
     stored_max_positions_local: Sequence[object] | None,
     stored_peak_table_lattice: Sequence[object] | None,
+    peak_records: Sequence[object] | None = None,
 ) -> tuple[object, ...]:
     """Return a stable cache signature for reusable manual-pick state."""
 
@@ -1021,6 +1022,10 @@ def geometry_manual_pick_cache_signature(
         peak_table_count = len(stored_peak_table_lattice or ())
     except Exception:
         peak_table_count = 0
+    try:
+        peak_record_count = len(peak_records or ())
+    except Exception:
+        peak_record_count = 0
 
     return (
         last_simulation_signature,
@@ -1029,6 +1034,7 @@ def geometry_manual_pick_cache_signature(
         bg_token,
         int(maxpos_count),
         int(peak_table_count),
+        int(peak_record_count),
         int(listed_group_count),
         excluded_keys,
     )
@@ -1073,19 +1079,36 @@ def build_geometry_manual_pick_cache(
         and bg_index == current_bg_index
         and existing_cache_signature == cache_sig
         and isinstance(existing_cache_data, dict)
+        and dict(existing_cache_data.get("grouped_candidates", {}))
     ):
         return existing_cache_data, existing_cache_signature, existing_cache_data
 
+    # Manual Qr/Qz picking must stay tied to the deterministic central-ray
+    # geometry-fit simulation rather than the live full-beam preview cache.
     simulated_peaks = [
         dict(entry)
         for entry in simulated_peaks_for_params(
             param_set,
-            prefer_cache=prefer_cache and bg_index == current_bg_index,
+            prefer_cache=False,
         )
         if isinstance(entry, dict)
     ]
     grouped_candidates = build_grouped_candidates(simulated_peaks)
     simulated_lookup = build_simulated_lookup(simulated_peaks)
+    if prefer_cache and not grouped_candidates:
+        cached_simulated_peaks = [
+            dict(entry)
+            for entry in simulated_peaks_for_params(
+                param_set,
+                prefer_cache=True,
+            )
+            if isinstance(entry, dict)
+        ]
+        cached_grouped_candidates = build_grouped_candidates(cached_simulated_peaks)
+        if cached_grouped_candidates:
+            simulated_peaks = cached_simulated_peaks
+            grouped_candidates = cached_grouped_candidates
+            simulated_lookup = build_simulated_lookup(simulated_peaks)
     match_cfg = dict(current_match_config())
     resolved_match_cfg = dict(match_cfg)
     background_context = None
@@ -2098,6 +2121,7 @@ def make_runtime_geometry_manual_cache_callbacks(
     geometry_q_group_cached_entries: Callable[[], object] | object = (),
     stored_max_positions_local: Callable[[], object] | object = (),
     stored_peak_table_lattice: Callable[[], object] | object = (),
+    peak_records: Callable[[], object] | object = (),
     current_cache_signature: Callable[[], object] | object = None,
     current_cache_data: Callable[[], dict[str, object] | None] | dict[str, object] | None = None,
     auto_match_background_context: Callable[
@@ -2152,6 +2176,7 @@ def make_runtime_geometry_manual_cache_callbacks(
             stored_peak_table_lattice=_resolve_runtime_value(
                 stored_peak_table_lattice
             ),
+            peak_records=_resolve_runtime_value(peak_records),
         )
 
     def _get_pick_cache(
@@ -2312,6 +2337,8 @@ def make_runtime_geometry_manual_projection_callbacks(
             detector_distance=float(_resolve_runtime_value(detector_distance) or 0.0),
             pixel_size=float(_resolve_runtime_value(pixel_size) or 0.0),
             wrap_phi_range=wrap_phi_range,
+            caked_radial_values=_resolve_runtime_value(last_caked_radial_values),
+            caked_azimuth_values=_resolve_runtime_value(last_caked_azimuth_values),
         )
 
     def _caked_angles_to_background_display(
@@ -2339,20 +2366,13 @@ def make_runtime_geometry_manual_projection_callbacks(
         col: float,
         row: float,
     ) -> tuple[float, float] | None:
-        native_background = _resolve_runtime_value(current_background_native)
-        if native_background is None:
+        native_point = _background_display_to_native_detector_coords(float(col), float(row))
+        if native_point is None:
             return None
-        try:
-            shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
-            native_col, native_row = rotate_point_for_display(
-                float(col),
-                float(row),
-                shape,
-                -int(display_rotate_k),
-            )
-        except Exception:
-            return None
-        return _native_to_caked_display_coords(float(native_col), float(native_row))
+        return _native_to_caked_display_coords(
+            float(native_point[0]),
+            float(native_point[1]),
+        )
 
     def _background_display_to_native_detector_coords(
         col: float,
@@ -2389,6 +2409,21 @@ def make_runtime_geometry_manual_projection_callbacks(
         except Exception:
             col = float("nan")
             row = float("nan")
+        if use_caked and not (np.isfinite(col) and np.isfinite(row)):
+            try:
+                detector_col = float(entry.get("detector_x", np.nan))
+                detector_row = float(entry.get("detector_y", np.nan))
+            except Exception:
+                detector_col = float("nan")
+                detector_row = float("nan")
+            if np.isfinite(detector_col) and np.isfinite(detector_row):
+                converted = _native_to_caked_display_coords(
+                    float(detector_col),
+                    float(detector_row),
+                )
+                if converted is not None:
+                    col = float(converted[0])
+                    row = float(converted[1])
         if use_caked and not (np.isfinite(col) and np.isfinite(row)):
             try:
                 raw_col = float(entry.get("x", np.nan))
@@ -2539,11 +2574,40 @@ def make_runtime_geometry_manual_projection_callbacks(
     def _pick_candidates(
         simulated_peaks: Sequence[dict[str, object]] | None,
     ) -> dict[tuple[object, ...], list[dict[str, object]]]:
+        def _group_entries(
+            candidate_entries: Sequence[dict[str, object]] | None,
+        ) -> dict[tuple[object, ...], list[dict[str, object]]]:
+            grouped: dict[tuple[object, ...], list[dict[str, object]]] = defaultdict(list)
+            for raw_entry in candidate_entries or []:
+                if not isinstance(raw_entry, dict):
+                    continue
+                group_key = raw_entry.get("q_group_key")
+                if not isinstance(group_key, tuple):
+                    continue
+                grouped[group_key].append(dict(raw_entry))
+            for entry_list in grouped.values():
+                entry_list.sort(
+                    key=lambda entry: (
+                        float(entry.get("sim_col", np.nan))
+                        if np.isfinite(float(entry.get("sim_col", np.nan)))
+                        else float("inf"),
+                        float(entry.get("sim_row", np.nan))
+                        if np.isfinite(float(entry.get("sim_row", np.nan)))
+                        else float("inf"),
+                    )
+                )
+            return dict(grouped)
+
         filtered_entries = list(simulated_peaks or [])
         if callable(filter_simulated_peaks):
             filtered_result = filter_simulated_peaks(simulated_peaks)
             if isinstance(filtered_result, tuple) and filtered_result:
-                filtered_entries = list(filtered_result[0] or [])
+                filtered_candidate_entries = list(filtered_result[0] or [])
+                # Manual picking should still be able to target the nearest
+                # central-beam Qr/Qz group when the selector filter is stale
+                # or currently excludes every available group.
+                if _group_entries(filtered_candidate_entries):
+                    filtered_entries = filtered_candidate_entries
         collapsed_entries = list(filtered_entries)
         if callable(collapse_simulated_peaks):
             collapsed_result = collapse_simulated_peaks(
@@ -2551,28 +2615,11 @@ def make_runtime_geometry_manual_projection_callbacks(
                 merge_radius_px=float(merge_radius_px),
             )
             if isinstance(collapsed_result, tuple) and collapsed_result:
-                collapsed_entries = list(collapsed_result[0] or [])
+                collapsed_candidate_entries = list(collapsed_result[0] or [])
+                if _group_entries(collapsed_candidate_entries):
+                    collapsed_entries = collapsed_candidate_entries
 
-        grouped: dict[tuple[object, ...], list[dict[str, object]]] = defaultdict(list)
-        for raw_entry in collapsed_entries:
-            if not isinstance(raw_entry, dict):
-                continue
-            group_key = raw_entry.get("q_group_key")
-            if not isinstance(group_key, tuple):
-                continue
-            grouped[group_key].append(dict(raw_entry))
-        for entry_list in grouped.values():
-            entry_list.sort(
-                key=lambda entry: (
-                    float(entry.get("sim_col", np.nan))
-                    if np.isfinite(float(entry.get("sim_col", np.nan)))
-                    else float("inf"),
-                    float(entry.get("sim_row", np.nan))
-                    if np.isfinite(float(entry.get("sim_row", np.nan)))
-                    else float("inf"),
-                )
-            )
-        return dict(grouped)
+        return _group_entries(collapsed_entries)
 
     def _simulated_lookup(
         simulated_peaks: Sequence[dict[str, object]] | None,
@@ -3699,8 +3746,28 @@ def native_detector_coords_to_caked_display_coords(
     detector_distance: float,
     pixel_size: float,
     wrap_phi_range: Callable[[object], object],
+    caked_radial_values: Sequence[float] | None = None,
+    caked_azimuth_values: Sequence[float] | None = None,
 ) -> tuple[float, float] | None:
     """Project one native detector pixel into the active caked display axes."""
+
+    def _snap_axis_value(
+        axis_values: Sequence[float] | None,
+        value: float,
+    ) -> float:
+        if axis_values is None:
+            return float(value)
+        try:
+            axis = np.asarray(axis_values, dtype=float).reshape(-1)
+        except Exception:
+            return float(value)
+        if axis.size <= 0:
+            return float(value)
+        finite_axis = axis[np.isfinite(axis)]
+        if finite_axis.size <= 0 or not np.isfinite(value):
+            return float(value)
+        best_idx = int(np.argmin(np.abs(finite_axis - float(value))))
+        return float(finite_axis[best_idx])
 
     try:
         col_val = float(col)
@@ -3723,7 +3790,11 @@ def native_detector_coords_to_caked_display_coords(
                 two_theta = float(two_theta_map[row_idx, col_idx])
                 phi = float(phi_map[row_idx, col_idx])
                 if np.isfinite(two_theta) and np.isfinite(phi):
-                    return float(two_theta), float(wrap_phi_range(phi))
+                    wrapped_phi = float(wrap_phi_range(phi))
+                    return (
+                        _snap_axis_value(caked_radial_values, float(two_theta)),
+                        _snap_axis_value(caked_azimuth_values, wrapped_phi),
+                    )
         except Exception:
             pass
 
@@ -3739,7 +3810,11 @@ def native_detector_coords_to_caked_display_coords(
         return None
     if two_theta is None or phi is None:
         return None
-    return float(two_theta), float(wrap_phi_range(phi))
+    wrapped_phi = float(wrap_phi_range(phi))
+    return (
+        _snap_axis_value(caked_radial_values, float(two_theta)),
+        _snap_axis_value(caked_azimuth_values, wrapped_phi),
+    )
 
 
 def should_collect_hit_tables_for_update(

@@ -3979,10 +3979,16 @@ def process_peaks_parallel(
         if sample_weight_array.shape[0] != n_samp:
             sample_weight_array = None
     n2_sample_array = np.empty(n_samp, dtype=np.complex128)
-    n2_override_array = n2_sample_array_override
-    if n2_override_array is not None:
-        n2_override_array = np.asarray(n2_override_array, dtype=np.complex128).reshape(-1)
-    if n2_override_array is not None and n2_override_array.size == n_samp:
+    # Keep the local override as a concrete ndarray so Numba does not need to
+    # reason about an optional array type before accessing `.size`.
+    n2_override_array = np.empty(0, dtype=np.complex128)
+    has_n2_override = n2_sample_array_override is not None
+    if has_n2_override:
+        n2_override_array = np.asarray(
+            n2_sample_array_override,
+            dtype=np.complex128,
+        ).reshape(-1)
+    if has_n2_override and n2_override_array.size == n_samp:
         n2_sample_array[:] = n2_override_array
     elif wavelength_array.size == n_samp:
         for i_samp in range(n_samp):
@@ -4349,6 +4355,7 @@ def process_peaks_parallel(
                     solve_q_steps_i,
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
+                    pixel_size_m,
                     forced_idx,
                 )
             else:
@@ -4386,6 +4393,7 @@ def process_peaks_parallel(
                     solve_q_steps_i,
                     solve_q_rel_tol_i,
                     solve_q_mode_i,
+                    pixel_size_m,
                     forced_idx,
                     sample_weight_array,
                 )

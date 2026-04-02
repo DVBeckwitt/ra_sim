@@ -325,6 +325,53 @@ def test_process_peaks_parallel_prefers_explicit_n2_override(monkeypatch):
     np.testing.assert_allclose(captured_n2[0], override, rtol=0.0, atol=0.0)
 
 
+def test_process_peaks_parallel_compiled_allows_missing_n2_override():
+    miller = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    image_size = 16
+    image = np.zeros((image_size, image_size), dtype=np.float64)
+
+    result = diffraction.process_peaks_parallel(
+        miller,
+        intensities,
+        image_size,
+        1.0,
+        1.0,
+        1.0,
+        image,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 + 0.0j,
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        np.array([0.0], dtype=np.float64),
+        0.5,
+        0.5,
+        0.0,
+        np.array([1.0], dtype=np.float64),
+        0.0,
+        0.0,
+        [8.0, 8.0],
+        6.0,
+        0.0,
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        save_flag=0,
+        collect_hit_tables=False,
+    )
+
+    assert isinstance(result, tuple)
+    assert len(result) == 6
+    assert result[0].shape == (image_size, image_size)
+
+
 def test_precompute_sample_terms_rejects_hits_outside_finite_sample_bounds(monkeypatch):
     monkeypatch.setattr(
         diffraction,

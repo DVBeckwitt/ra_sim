@@ -226,6 +226,7 @@ def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> No
         has_second_cif=False,
     )
     runtime_state = SimpleNamespace(
+        last_sim_signature="old-image",
         last_simulation_signature="old",
         sim_miller1_all=None,
         sim_intens1_all=None,
@@ -263,6 +264,7 @@ def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> No
 
     assert np.array_equal(state.miller, np.array([[1.0, 0.0, 1.0]]))
     assert state.df_summary == "summary"
+    assert runtime_state.last_sim_signature is None
     assert runtime_state.last_simulation_signature is None
     assert np.array_equal(runtime_state.sim_miller1_all, np.array([[1.0, 0.0, 1.0]]))
     assert calls == [("filters", {"trigger_update": False}), ("schedule", None)]
