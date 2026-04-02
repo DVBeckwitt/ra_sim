@@ -600,6 +600,10 @@ def test_background_manager_switch_workflow_runs_follow_on_side_effects(
         invalidate_geometry_manual_pick_cache=lambda: events.append(("invalidate",)),
         clear_geometry_manual_undo_stack=lambda: events.append(("clear_manual_undo",)),
         clear_geometry_fit_undo_stack=lambda: events.append(("clear_fit_undo",)),
+        sync_background_theta_controls=lambda: events.append(("sync_theta_controls",)),
+        sync_geometry_fit_background_selection=lambda: events.append(
+            ("sync_fit_selection",)
+        ),
         sync_theta_initial_to_background=lambda idx: events.append(
             ("sync_theta_initial", idx)
         ),
@@ -612,20 +616,23 @@ def test_background_manager_switch_workflow_runs_follow_on_side_effects(
             ("render_manual_pairs",)
         ),
         schedule_update=lambda: events.append(("schedule_update",)),
+        preempt_simulation_update=lambda: events.append(("preempt",)),
     )
 
     assert updated == {"current_background_display": "switched-display"}
     assert events == [
+        ("preempt",),
         ("switch", -1),
         ("sync",),
         ("invalidate",),
         ("clear_manual_undo",),
         ("clear_fit_undo",),
-        ("sync_theta_initial", 1),
         ("display", "switched-display"),
         ("slider_defaults", "switched-display"),
-        ("refresh_status",),
+        ("sync_theta_controls",),
+        ("sync_fit_selection",),
         ("render_manual_pairs",),
+        ("refresh_status",),
         ("schedule_update",),
     ]
 
@@ -746,7 +753,7 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
     monkeypatch,
 ) -> None:
     calls = []
-    counters = {"status": 0, "schedule": 0, "dir": 0}
+    counters = {"status": 0, "schedule": 0, "preempt": 0, "dir": 0}
 
     monkeypatch.setattr(
         background_manager,
@@ -763,6 +770,11 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
         counters["schedule"] += 1
         idx = counters["schedule"]
         return lambda: f"schedule-{idx}"
+
+    def build_preempt():
+        counters["preempt"] += 1
+        idx = counters["preempt"]
+        return lambda: f"preempt-{idx}"
 
     def build_dialog_dir():
         counters["dir"] += 1
@@ -798,6 +810,7 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
         mark_chi_square_dirty=lambda: None,
         refresh_chi_square_display=lambda: None,
         schedule_update_factory=build_schedule,
+        preempt_simulation_update_factory=build_preempt,
         set_status_text_factory=build_status,
         file_dialog_dir_factory=build_dialog_dir,
         askopenfilenames=lambda **kwargs: ("a.osc",),
@@ -816,8 +829,10 @@ def test_background_manager_runtime_binding_factory_builds_live_bindings(
     assert callable(calls[0]["set_background_alpha"])
     assert callable(calls[0]["set_status_text"])
     assert callable(calls[0]["schedule_update"])
+    assert callable(calls[0]["preempt_simulation_update"])
     assert calls[0]["set_status_text"] is not calls[1]["set_status_text"]
     assert calls[0]["schedule_update"] is not calls[1]["schedule_update"]
+    assert calls[0]["preempt_simulation_update"] is not calls[1]["preempt_simulation_update"]
 
 
 def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bindings(
@@ -887,6 +902,7 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
         mark_chi_square_dirty=lambda: None,
         refresh_chi_square_display=lambda: None,
         schedule_update=lambda: None,
+        preempt_simulation_update=lambda: None,
         set_status_text=lambda text: messages.append(text),
         file_dialog_dir="C:/dialogs",
         askopenfilenames=lambda **kwargs: calls.append(("dialog", kwargs))
@@ -911,6 +927,17 @@ def test_background_manager_runtime_helpers_and_callback_bundle_delegate_live_bi
     )
     assert background_manager.browse_runtime_background_files(bindings) is True
     assert background_manager.switch_runtime_background(bindings) is True
+    switch_call = calls[-1]
+    assert switch_call[0] == "switch"
+    assert switch_call[2]["preempt_simulation_update"] is bindings.preempt_simulation_update
+    assert (
+        switch_call[2]["sync_background_theta_controls"]
+        is bindings.sync_background_theta_controls
+    )
+    assert (
+        switch_call[2]["sync_geometry_fit_background_selection"]
+        is bindings.sync_geometry_fit_background_selection
+    )
     assert messages == ["Loaded 1 background file(s)."]
 
     versions = {"count": 0}

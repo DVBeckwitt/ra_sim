@@ -1,0 +1,189 @@
+{
+  "state_path": "C:\\Users\\Kenpo\\.local\\share\\ra_sim\\init.json",
+  "timestamp": "2026-04-01T21:34:02-05:00",
+  "active_cif_path": "C:\\Users\\Kenpo\\OneDrive\\Research\\Rigaku XRD\\ORNL.07.25.2024\\Analysis\\Bi2Se3\\Bi2Se3.cif",
+  "image_size": 3000,
+  "theta_mode": "theta_offset",
+  "use_shared_theta_offset": true,
+  "candidate_param_names": [
+    "zb",
+    "zs",
+    "theta_offset",
+    "psi_z",
+    "chi",
+    "cor_angle",
+    "gamma",
+    "Gamma",
+    "corto_detector",
+    "center_x",
+    "center_y"
+  ],
+  "baseline_params": {
+    "zb": 0.0,
+    "zs": 0.0,
+    "theta_offset": 0.0,
+    "psi_z": 0.0,
+    "chi": 0.0,
+    "cor_angle": 0.0,
+    "gamma": 0.9989999999999997,
+    "Gamma": -3.579,
+    "corto_detector": 0.075,
+    "center_x": 1596.422,
+    "center_y": 1453.12
+  },
+  "baseline_metrics": {
+    "visible_peak_count": 425.0,
+    "total_peak_weight": 6.534412477876013e+19,
+    "centroid_x_px": 1212.5040694349639,
+    "centroid_y_px": 870.1817245323001,
+    "radius_gyration_px": 796.9130243878135,
+    "x_span_px": 2053.662151035417,
+    "y_span_px": 1656.5835348136625,
+    "anisotropy_ratio": 1.9993004252705102
+  },
+  "sweeps": [
+    {
+      "name": "zb",
+      "baseline": 0.0,
+      "min_value": -0.002,
+      "max_value": 0.002,
+      "points": 3,
+      "source": "bounds:absolute",
+      "values": [
+        -0.002,
+        0.0,
+        0.002
+      ]
+    },
+    {
+      "name": "zs",
+      "baseline": 0.0,
+      "min_value": -0.002,
+      "max_value": 0.002,
+      "points": 3,
+      "source": "bounds:absolute",
+      "values": [
+        -0.002,
+        0.0,
+        0.002
+      ]
+    },
+    {
+      "name": "theta_offset",
+      "baseline": 0.0,
+      "min_value": -0.5,
+      "max_value": 0.5,
+      "points": 3,
+      "source": "bounds:absolute",
+      "values": [
+        -0.5,
+        0.0,
+        0.5
+      ]
+    },
+    {
+      "name": "psi_z",
+      "baseline": 0.0,
+      "min_value": -2.0,
+      "max_value": 2.0,
+      "points": 3,
+      "source": "bounds:relative",
+      "values": [
+        -2.0,
+        0.0,
+        2.0
+      ]
+    },
+    {
+      "name": "chi",
+      "baseline": 0.0,
+      "min_value": -1.0,
+      "max_value": 1.0,
+      "points": 3,
+      "source": "bounds:absolute",
+      "values": [
+        -1.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "cor_angle",
+      "baseline": 0.0,
+      "min_value": -2.0,
+      "max_value": 2.0,
+      "points": 3,
+      "source": "bounds:absolute",
+      "values": [
+        -2.0,
+        0.0,
+        2.0
+      ]
+    },
+    {
+      "name": "gamma",
+      "baseline": 0.9989999999999997,
+      "min_value": -1.0010000000000003,
+      "max_value": 2.9989999999999997,
+      "points": 3,
+      "source": "bounds:relative",
+      "values": [
+        -1.0010000000000003,
+        0.9989999999999997,
+        2.9989999999999997
+      ]
+    },
+    {
+      "name": "Gamma",
+      "baseline": -3.579,
+      "min_value": -5.579000000000001,
+      "max_value": -1.5790000000000002,
+      "points": 3,
+      "source": "bounds:relative",
+      "values": [
+        -5.579000000000001,
+        -3.5790000000000006,
+        -1.5790000000000002
+      ]
+    },
+    {
+      "name": "corto_detector",
+      "baseline": 0.075,
+      "min_value": 0.024999999999999994,
+      "max_value": 0.125,
+      "points": 3,
+      "source": "bounds:relative_min0",
+      "values": [
+        0.024999999999999994,
+        0.075,
+        0.125
+      ]
+    },
+    {
+      "name": "center_x",
+      "baseline": 1596.422,
+      "min_value": 1536.422,
+      "max_value": 1656.422,
+      "points": 3,
+      "source": "center_prior_pm3sigma",
+      "values": [
+        1536.422,
+        1596.422,
+        1656.422
+      ]
+    },
+    {
+      "name": "center_y",
+      "baseline": 1453.12,
+      "min_value": 1393.12,
+      "max_value": 1513.12,
+      "points": 3,
+      "source": "center_prior_pm3sigma",
+      "values": [
+        1393.12,
+        1453.12,
+        1513.12
+      ]
+    }
+  ]
+}

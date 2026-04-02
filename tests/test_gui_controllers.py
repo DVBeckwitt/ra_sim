@@ -281,6 +281,21 @@ def test_structure_factor_pruning_controller_helpers_clip_and_normalize_inputs()
     assert controllers.solve_q_mode_flag_from_label("adaptive", uniform_flag=7, adaptive_flag=9) == 9
 
 
+def test_structure_factor_pruning_profile_supports_more_aggressive_slider_ceiling() -> None:
+    retain_mid, rel_floor_mid, min_keep_mid, neighbor_span_mid = (
+        controllers.structure_factor_prune_profile_from_bias(2.0)
+    )
+    retain_max, rel_floor_max, min_keep_max, neighbor_span_max = (
+        controllers.structure_factor_prune_profile_from_bias(controllers.SF_PRUNE_BIAS_MAX)
+    )
+
+    assert controllers.SF_PRUNE_BIAS_MAX == 3.0
+    assert retain_max < retain_mid
+    assert rel_floor_max >= rel_floor_mid
+    assert min_keep_max <= min_keep_mid
+    assert neighbor_span_max <= neighbor_span_mid
+
+
 def test_beam_mosaic_slider_controller_helper_clamps_to_bounds() -> None:
     assert controllers.clamp_slider_value_to_bounds(2.5, lower_bound=0.0, upper_bound=2.0, fallback=1.0) == 2.0
     assert controllers.clamp_slider_value_to_bounds(-1.0, lower_bound=0.0, upper_bound=2.0, fallback=1.0) == 0.0

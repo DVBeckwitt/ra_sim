@@ -46,6 +46,7 @@ class BackgroundRuntimeBindings:
     mark_chi_square_dirty: Callable[[], None] | None = None
     refresh_chi_square_display: Callable[[], None] | None = None
     schedule_update: Callable[[], None] | None = None
+    preempt_simulation_update: Callable[[], None] | None = None
     set_status_text: Callable[[str], None] | None = None
     file_dialog_dir: object | None = None
     askopenfilenames: Callable[..., object] | None = None
@@ -739,6 +740,7 @@ def make_runtime_background_bindings_factory(
     mark_chi_square_dirty: Callable[[], None] | None = None,
     refresh_chi_square_display: Callable[[], None] | None = None,
     schedule_update_factory: object | None = None,
+    preempt_simulation_update_factory: object | None = None,
     set_status_text_factory: object | None = None,
     file_dialog_dir_factory: object | None = None,
     askopenfilenames: Callable[..., object] | None = None,
@@ -776,6 +778,9 @@ def make_runtime_background_bindings_factory(
             mark_chi_square_dirty=mark_chi_square_dirty,
             refresh_chi_square_display=refresh_chi_square_display,
             schedule_update=_resolve_runtime_value(schedule_update_factory),
+            preempt_simulation_update=_resolve_runtime_value(
+                preempt_simulation_update_factory
+            ),
             set_status_text=_resolve_runtime_value(set_status_text_factory),
             file_dialog_dir=_resolve_runtime_value(file_dialog_dir_factory),
             askopenfilenames=askopenfilenames,
@@ -998,15 +1003,20 @@ def switch_background_with_side_effects(
     invalidate_geometry_manual_pick_cache: Callable[[], None],
     clear_geometry_manual_undo_stack: Callable[[], None],
     clear_geometry_fit_undo_stack: Callable[[], None],
+    sync_background_theta_controls: Callable[[], None],
+    sync_geometry_fit_background_selection: Callable[[], None],
     sync_theta_initial_to_background: Callable[[int], None] | None,
     set_background_display_data: Callable[[object], None],
     update_background_slider_defaults: Callable[[object], None],
     refresh_background_file_status: Callable[[], None],
     render_current_geometry_manual_pairs: Callable[[], None],
     schedule_update: Callable[[], None],
+    preempt_simulation_update: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Switch backgrounds and apply the dependent GUI side effects."""
 
+    if callable(preempt_simulation_update):
+        preempt_simulation_update()
     updated = switch_background(
         background_state,
         display_rotate_k=display_rotate_k,
@@ -1016,14 +1026,18 @@ def switch_background_with_side_effects(
     invalidate_geometry_manual_pick_cache()
     clear_geometry_manual_undo_stack()
     clear_geometry_fit_undo_stack()
-    if sync_theta_initial_to_background is not None:
-        sync_theta_initial_to_background(int(background_state.current_background_index))
 
     current_display = background_state.current_background_display
     set_background_display_data(current_display)
     update_background_slider_defaults(current_display)
-    refresh_background_file_status()
+    if callable(sync_background_theta_controls):
+        sync_background_theta_controls()
+    elif sync_theta_initial_to_background is not None:
+        sync_theta_initial_to_background(int(background_state.current_background_index))
+    if callable(sync_geometry_fit_background_selection):
+        sync_geometry_fit_background_selection()
     render_current_geometry_manual_pairs()
+    refresh_background_file_status()
     schedule_update()
     return updated
 
@@ -1046,6 +1060,10 @@ def switch_runtime_background(
             invalidate_geometry_manual_pick_cache=bindings.invalidate_geometry_manual_pick_cache,
             clear_geometry_manual_undo_stack=bindings.clear_geometry_manual_undo_stack,
             clear_geometry_fit_undo_stack=bindings.clear_geometry_fit_undo_stack,
+            sync_background_theta_controls=bindings.sync_background_theta_controls,
+            sync_geometry_fit_background_selection=(
+                bindings.sync_geometry_fit_background_selection
+            ),
             sync_theta_initial_to_background=bindings.sync_theta_initial_to_background,
             set_background_display_data=bindings.set_background_display_data,
             update_background_slider_defaults=bindings.update_background_slider_defaults,
@@ -1056,6 +1074,7 @@ def switch_runtime_background(
                 bindings.render_current_geometry_manual_pairs or (lambda: None)
             ),
             schedule_update=bindings.schedule_update or (lambda: None),
+            preempt_simulation_update=bindings.preempt_simulation_update,
         )
     except Exception as exc:
         _set_status_text(

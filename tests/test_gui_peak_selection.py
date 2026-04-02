@@ -231,6 +231,7 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
         "eta": 0.75,
         "sample_width": 0.012,
         "sample_length": 0.018,
+        "pixel_size_m": 172.0e-6,
         "wavelength_angstrom": 1.5406,
         "solve_q": SimpleNamespace(steps=321, rel_tol=1.0e-4, mode_flag=2),
     }
@@ -263,6 +264,7 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
             eta_factory=lambda: live["eta"],
             sample_width_m_factory=lambda: live["sample_width"],
             sample_length_m_factory=lambda: live["sample_length"],
+            pixel_size_m_factory=lambda: live["pixel_size_m"],
             wavelength_angstrom_factory=lambda: live["wavelength_angstrom"],
             solve_q_values_factory=lambda: live["solve_q"],
         )
@@ -281,10 +283,12 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
     assert intersection_cfg.solve_q_mode == 2
     assert intersection_cfg.sample_width_m == 0.012
     assert intersection_cfg.sample_length_m == 0.018
+    assert intersection_cfg.pixel_size_m == 172.0e-6
     assert intersection_cfg.wavelength_angstrom == 1.5406
 
     live["primary_a"] = 6.0
     live["image_shape"] = (80, 96)
+    live["pixel_size_m"] = 90.0e-6
     live["solve_q"] = SimpleNamespace(steps=123, rel_tol=2.5e-4, mode_flag=1)
 
     canvas_cfg = canvas_factory()
@@ -292,6 +296,7 @@ def test_peak_selection_runtime_config_factories_read_live_values() -> None:
 
     assert canvas_cfg.primary_a == 6.0
     assert canvas_cfg.image_shape == (80, 96)
+    assert intersection_cfg.pixel_size_m == 90.0e-6
     assert intersection_cfg.solve_q_steps == 123
     assert intersection_cfg.solve_q_rel_tol == 2.5e-4
     assert intersection_cfg.solve_q_mode == 1
@@ -426,6 +431,7 @@ def test_peak_selection_runtime_config_factory_bundle_delegates_to_helper_factor
         wavelength_factory="wavelength",
         sample_width_m_factory="sample-width",
         sample_length_m_factory="sample-length",
+        pixel_size_m_factory="pixel-size",
         debye_x_factory="debye-x",
         debye_y_factory="debye-y",
         detector_center_factory="detector-center",
@@ -451,6 +457,7 @@ def test_peak_selection_runtime_config_factory_bundle_delegates_to_helper_factor
     )
     assert calls[1][0] == "intersection"
     assert calls[1][1]["solve_q_values_factory"] == "solve-q"
+    assert calls[1][1]["pixel_size_m_factory"] == "pixel-size"
     assert calls[2][0] == "ideal_center"
     assert calls[2][1]["simulation_runtime_state"] == "runtime-state"
     assert calls[2][1]["process_peaks_parallel"] == "process-peaks"
@@ -1012,6 +1019,55 @@ def test_open_selected_peak_intersection_figure_launches_seeded_specular_visuali
     assert status_messages[-1] == (
         "Opened 2D Mosaic specular view for HKL=(1 0 2) from source=primary."
     )
+
+
+def test_build_selected_peak_specular_initial_state_uses_realistic_fallbacks() -> None:
+    runtime_state = state.SimulationRuntimeState(
+        selected_peak_record={
+            "hkl": (1, 0, 2),
+            "av": 4.1,
+            "cv": 6.2,
+        },
+    )
+    config = peak_selection.build_selected_peak_intersection_config(
+        image_size=3000,
+        center_col=1500.0,
+        center_row=1500.0,
+        distance_cor_to_detector=float("nan"),
+        gamma_deg=0.0,
+        Gamma_deg=0.0,
+        chi_deg=0.0,
+        psi_deg=0.0,
+        psi_z_deg=0.0,
+        zs=0.0,
+        zb=0.0,
+        theta_initial_deg=6.0,
+        cor_angle_deg=0.0,
+        sigma_mosaic_deg=0.8,
+        gamma_mosaic_deg=0.7,
+        eta=0.0,
+        sample_width_m=0.0,
+        sample_length_m=0.0,
+        wavelength_angstrom=1.54,
+        solve_q_steps=1000,
+        solve_q_rel_tol=5.0e-4,
+        solve_q_mode=1,
+        pixel_size_m=0.0,
+    )
+
+    specular = peak_selection._build_selected_peak_specular_initial_state(
+        runtime_state,
+        config=config,
+        selected_peak=runtime_state.selected_peak_record,
+    )["specular-view"]
+
+    assert specular["distance"] == 75.0
+    assert specular["sample_width"] == 20.0
+    assert specular["sample_height"] == 80.0
+    assert specular["pixel_u"] == 0.1
+    assert specular["pixel_v"] == 0.1
+    assert specular["detector_width"] == 300.0
+    assert specular["detector_height"] == 300.0
 
 
 def test_open_selected_peak_intersection_figure_reports_failures() -> None:

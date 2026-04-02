@@ -3435,6 +3435,7 @@ peak_selection_workflow = (
         wavelength_factory=lambda: float(lambda_),
         sample_width_m_factory=lambda: float(sample_width_var.get()),
         sample_length_m_factory=lambda: float(sample_length_var.get()),
+        pixel_size_m_factory=lambda: float(pixel_size_m),
         debye_x_factory=lambda: float(debye_x_var.get()),
         debye_y_factory=lambda: float(debye_y_var.get()),
         detector_center_factory=lambda: (
@@ -3531,6 +3532,12 @@ peak_selection_runtime_callbacks = gui_peak_selection.SelectedPeakRuntimeCallbac
     select_peak_from_canvas_click=(
         peak_selection_runtime_callbacks.select_peak_from_canvas_click
     ),
+)
+hkl_lookup_controls_runtime = gui_bootstrap.build_runtime_hkl_lookup_controls_bootstrap(
+    views_module=gui_views,
+    view_state=hkl_lookup_view_state,
+    peak_selection_callbacks=lambda: peak_selection_runtime_callbacks,
+    open_bragg_qr_groups=bragg_qr_workflow_runtime.open_window,
 )
 
 geometry_manual_workflow = (
@@ -5522,6 +5529,74 @@ def _invalidate_simulation_cache() -> None:
 def _invalidate_and_schedule_update() -> None:
     _invalidate_simulation_cache()
     schedule_update()
+
+
+def _preempt_simulation_update_for_background_switch() -> None:
+    """Drop pending simulation work so a background switch can requeue immediately."""
+
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.integration_update_pending,
+    )
+    simulation_runtime_state.integration_update_pending = None
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.update_pending,
+    )
+    simulation_runtime_state.update_pending = None
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.worker_poll_token,
+    )
+    simulation_runtime_state.worker_poll_token = None
+    gui_controllers.clear_tk_after_token(
+        root,
+        simulation_runtime_state.analysis_poll_token,
+    )
+    simulation_runtime_state.analysis_poll_token = None
+
+    worker_future = simulation_runtime_state.worker_future
+    if worker_future is not None:
+        try:
+            worker_future.cancel()
+        except Exception:
+            pass
+    analysis_future = simulation_runtime_state.analysis_future
+    if analysis_future is not None:
+        try:
+            analysis_future.cancel()
+        except Exception:
+            pass
+
+    worker_executor = simulation_runtime_state.worker_executor
+    analysis_executor = simulation_runtime_state.analysis_executor
+    simulation_runtime_state.worker_executor = None
+    simulation_runtime_state.worker_future = None
+    simulation_runtime_state.worker_active_job = None
+    simulation_runtime_state.worker_queued_job = None
+    simulation_runtime_state.worker_ready_result = None
+    simulation_runtime_state.analysis_executor = None
+    simulation_runtime_state.analysis_future = None
+    simulation_runtime_state.analysis_active_job = None
+    simulation_runtime_state.analysis_queued_job = None
+    simulation_runtime_state.analysis_ready_result = None
+
+    if worker_executor is not None:
+        try:
+            worker_executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            worker_executor.shutdown(wait=False)
+        except Exception:
+            pass
+    if analysis_executor is not None:
+        try:
+            analysis_executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            analysis_executor.shutdown(wait=False)
+        except Exception:
+            pass
+
+    _invalidate_simulation_cache()
 
 
 def _ensure_simulation_worker_executor():
@@ -7803,6 +7878,9 @@ background_workflow = gui_runtime_background.build_runtime_background_workflow(
     mark_chi_square_dirty=_mark_chi_square_dirty,
     refresh_chi_square_display=lambda: _update_chi_square_display(force=True),
     schedule_update_factory=lambda: schedule_update,
+    preempt_simulation_update_factory=(
+        lambda: _preempt_simulation_update_for_background_switch
+    ),
     set_status_text_factory=lambda: (
         (lambda text: progress_label.config(text=text))
         if "progress_label" in globals()

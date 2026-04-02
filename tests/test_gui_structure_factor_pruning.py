@@ -40,8 +40,8 @@ def _bindings(
         clip_prune_bias=lambda value: controllers.clip_structure_factor_prune_bias(
             value,
             fallback=0.0,
-            minimum=-2.0,
-            maximum=2.0,
+            minimum=controllers.SF_PRUNE_BIAS_MIN,
+            maximum=controllers.SF_PRUNE_BIAS_MAX,
         ),
         clip_solve_q_steps=lambda value: controllers.clip_solve_q_steps(
             value,
@@ -290,8 +290,8 @@ def test_structure_factor_pruning_runtime_helpers_tolerate_missing_view_state(
         clip_prune_bias=lambda value: controllers.clip_structure_factor_prune_bias(
             value,
             fallback=0.0,
-            minimum=-2.0,
-            maximum=2.0,
+            minimum=controllers.SF_PRUNE_BIAS_MIN,
+            maximum=controllers.SF_PRUNE_BIAS_MAX,
         ),
         clip_solve_q_steps=lambda value: controllers.clip_solve_q_steps(
             value,
@@ -595,7 +595,7 @@ def test_structure_factor_pruning_runtime_bias_change_clips_then_applies(monkeyp
 
     changed = structure_factor_pruning.on_runtime_sf_prune_bias_change(bindings)
     assert changed is False
-    assert view_state.sf_prune_bias_var.get() == 2.0
+    assert view_state.sf_prune_bias_var.get() == controllers.SF_PRUNE_BIAS_MAX
     assert calls == []
 
     view_state.sf_prune_bias_var.set("0.25")

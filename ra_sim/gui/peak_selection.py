@@ -40,6 +40,12 @@ class SelectedPeakIntersectionConfig:
     pixel_size_m: float = 100e-6
 
 
+_SPECULAR_VIEW_DEFAULT_SAMPLE_WIDTH_M = 0.02
+_SPECULAR_VIEW_DEFAULT_SAMPLE_HEIGHT_M = 0.08
+_SPECULAR_VIEW_DEFAULT_DETECTOR_DISTANCE_M = 0.075
+_SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M = 100e-6
+
+
 @dataclass(frozen=True)
 class SelectedPeakCanvasPickConfig:
     """Inputs needed to resolve one HKL image-pick click."""
@@ -435,6 +441,7 @@ def build_runtime_selected_peak_intersection_config(
     sample_length_m: object,
     wavelength_angstrom: object,
     solve_q_values: object,
+    pixel_size_m: object = _SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M,
 ) -> SelectedPeakIntersectionConfig:
     """Build one live selected-peak intersection config from runtime sources."""
 
@@ -467,6 +474,10 @@ def build_runtime_selected_peak_intersection_config(
         solve_q_steps=solve_q_steps,
         solve_q_rel_tol=solve_q_rel_tol,
         solve_q_mode=solve_q_mode,
+        pixel_size_m=_runtime_float(
+            pixel_size_m,
+            _SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M,
+        ),
     )
 
 
@@ -568,6 +579,7 @@ def make_runtime_selected_peak_intersection_config_factory(
     sample_length_m_factory: object,
     wavelength_angstrom_factory: object,
     solve_q_values_factory: object,
+    pixel_size_m_factory: object = _SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M,
 ) -> Callable[[], SelectedPeakIntersectionConfig]:
     """Return a zero-arg factory for the live intersection-analysis config."""
 
@@ -592,6 +604,7 @@ def make_runtime_selected_peak_intersection_config_factory(
         sample_length_m=sample_length_m_factory,
         wavelength_angstrom=wavelength_angstrom_factory,
         solve_q_values=solve_q_values_factory,
+        pixel_size_m=pixel_size_m_factory,
     )
 
 
@@ -687,6 +700,7 @@ def make_runtime_selected_peak_config_factories(
     wavelength_factory: object,
     sample_width_m_factory: object,
     sample_length_m_factory: object,
+    pixel_size_m_factory: object,
     debye_x_factory: object,
     debye_y_factory: object,
     detector_center_factory: object,
@@ -727,6 +741,7 @@ def make_runtime_selected_peak_config_factories(
             sample_length_m_factory=sample_length_m_factory,
             wavelength_angstrom_factory=wavelength_factory,
             solve_q_values_factory=solve_q_values_factory,
+            pixel_size_m_factory=pixel_size_m_factory,
         ),
         ideal_center=make_runtime_selected_peak_ideal_center_factory(
             simulation_runtime_state=simulation_runtime_state,
@@ -1855,6 +1870,13 @@ def _finite_float(value: object, default: float) -> float:
     return numeric
 
 
+def _positive_finite_float(value: object, default: float) -> float:
+    numeric = _finite_float(value, default)
+    if numeric <= 0.0:
+        return float(default)
+    return numeric
+
+
 def _profile_values(profile_cache: Mapping[object, object], key: str) -> np.ndarray:
     try:
         values = profile_cache.get(key)
@@ -2008,7 +2030,12 @@ def _build_selected_peak_specular_initial_state(
 
     ray_count = _specular_ray_count(simulation_runtime_state)
     theta_i_deg, delta_deg, alpha_deg, psi_deg = _decompose_specular_sample_pose(config)
-    pixel_size_mm = _meters_to_millimeters(_finite_float(config.pixel_size_m, 100e-6))
+    pixel_size_mm = _meters_to_millimeters(
+        _positive_finite_float(
+            config.pixel_size_m,
+            _SPECULAR_VIEW_DEFAULT_PIXEL_SIZE_M,
+        )
+    )
     detector_span_mm = max(float(config.image_size), 1.0) * pixel_size_mm
     wavelength_angstrom = _finite_float(config.wavelength_angstrom, 1.5406)
     lattice_a_angstrom = _finite_float(selected_peak.get("av"), 4.143)
@@ -2026,15 +2053,28 @@ def _build_selected_peak_specular_initial_state(
             "divergence_x": float(np.rad2deg(_profile_std(profile_cache, "phi_array"))),
             "divergence_z": float(np.rad2deg(_profile_std(profile_cache, "theta_array"))),
             "z_beam": _meters_to_millimeters(-_finite_float(config.zb, 0.0)),
-            "sample_width": _meters_to_millimeters(_finite_float(config.sample_width_m, 0.02)),
-            "sample_height": _meters_to_millimeters(_finite_float(config.sample_length_m, 0.08)),
+            "sample_width": _meters_to_millimeters(
+                _positive_finite_float(
+                    config.sample_width_m,
+                    _SPECULAR_VIEW_DEFAULT_SAMPLE_WIDTH_M,
+                )
+            ),
+            "sample_height": _meters_to_millimeters(
+                _positive_finite_float(
+                    config.sample_length_m,
+                    _SPECULAR_VIEW_DEFAULT_SAMPLE_HEIGHT_M,
+                )
+            ),
             "theta_i": theta_i_deg,
             "delta": delta_deg,
             "alpha": alpha_deg,
             "psi": psi_deg,
             "z_sample": _meters_to_millimeters(-_finite_float(config.zs, 0.0)),
             "distance": _meters_to_millimeters(
-                _finite_float(config.distance_cor_to_detector, 0.2)
+                _positive_finite_float(
+                    config.distance_cor_to_detector,
+                    _SPECULAR_VIEW_DEFAULT_DETECTOR_DISTANCE_M,
+                )
             ),
             "detector_width": detector_span_mm,
             "detector_height": detector_span_mm,

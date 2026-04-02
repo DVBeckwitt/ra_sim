@@ -701,6 +701,7 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
         wavelength_factory="wavelength",
         sample_width_m_factory="sample-width",
         sample_length_m_factory="sample-length",
+        pixel_size_m_factory="pixel-size",
         debye_x_factory="debye-x",
         debye_y_factory="debye-y",
         detector_center_factory="detector-center",
@@ -754,6 +755,7 @@ def test_build_runtime_selected_peak_bootstrap_composes_feature_setup(
                 "wavelength_factory": "wavelength",
                 "sample_width_m_factory": "sample-width",
                 "sample_length_m_factory": "sample-length",
+                "pixel_size_m_factory": "pixel-size",
                 "debye_x_factory": "debye-x",
                 "debye_y_factory": "debye-y",
                 "detector_center_factory": "detector-center",
@@ -981,6 +983,61 @@ def test_build_runtime_hkl_lookup_controls_bootstrap_wires_peak_and_bragg_callba
         ("bragg-qr",),
         ("refresh",),
         ("set", True, "armed"),
+    ]
+
+
+def test_build_runtime_hkl_lookup_controls_bootstrap_resolves_latest_callback_bundle() -> None:
+    view_calls: list[dict[str, object]] = []
+    callback_calls: list[tuple[object, ...]] = []
+
+    def _bundle(prefix: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            select_peak_from_hkl_controls=lambda: callback_calls.append((prefix, "select")),
+            toggle_hkl_pick_mode=lambda: callback_calls.append((prefix, "toggle")),
+            clear_selected_peak=lambda: callback_calls.append((prefix, "clear")),
+            open_selected_peak_intersection_figure=lambda: callback_calls.append(
+                (prefix, "bragg-ewald")
+            ),
+            update_hkl_pick_button_label=lambda: callback_calls.append(
+                (prefix, "refresh")
+            ),
+            set_hkl_pick_mode=lambda enabled, message=None: callback_calls.append(
+                (prefix, "set", bool(enabled), message)
+            ),
+        )
+
+    active_bundle = {"value": _bundle("first")}
+
+    bundle = bootstrap.build_runtime_hkl_lookup_controls_bootstrap(
+        views_module=SimpleNamespace(
+            create_hkl_lookup_controls=lambda **kwargs: view_calls.append(kwargs)
+        ),
+        view_state="lookup-view",
+        peak_selection_callbacks=lambda: active_bundle["value"],
+        open_bragg_qr_groups=lambda: callback_calls.append(("bragg-qr",)),
+    )
+
+    bundle.create_controls(parent="parent-frame")
+    assert callback_calls == [("first", "refresh")]
+
+    active_bundle["value"] = _bundle("second")
+    view_calls[0]["on_select_hkl"]()
+    view_calls[0]["on_toggle_hkl_pick"]()
+    view_calls[0]["on_clear_selected_peak"]()
+    view_calls[0]["on_show_bragg_ewald"]()
+    view_calls[0]["on_open_bragg_qr_groups"]()
+    bundle.refresh_controls()
+    bundle.set_hkl_pick_mode(True, "armed")
+
+    assert callback_calls == [
+        ("first", "refresh"),
+        ("second", "select"),
+        ("second", "toggle"),
+        ("second", "clear"),
+        ("second", "bragg-ewald"),
+        ("bragg-qr",),
+        ("second", "refresh"),
+        ("second", "set", True, "armed"),
     ]
 
 

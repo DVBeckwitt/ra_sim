@@ -897,6 +897,7 @@ def build_runtime_selected_peak_bootstrap(
     wavelength_factory: object,
     sample_width_m_factory: object,
     sample_length_m_factory: object,
+    pixel_size_m_factory: object,
     debye_x_factory: object,
     debye_y_factory: object,
     detector_center_factory: object,
@@ -944,6 +945,7 @@ def build_runtime_selected_peak_bootstrap(
         wavelength_factory=wavelength_factory,
         sample_width_m_factory=sample_width_m_factory,
         sample_length_m_factory=sample_length_m_factory,
+        pixel_size_m_factory=pixel_size_m_factory,
         debye_x_factory=debye_x_factory,
         debye_y_factory=debye_y_factory,
         detector_center_factory=detector_center_factory,
@@ -1012,32 +1014,54 @@ def build_runtime_hkl_lookup_controls_bootstrap(
 ) -> HklLookupControlsRuntimeBootstrap:
     """Build the HKL lookup control wiring shared by peak-selection and Bragg-Qr."""
 
+    def _resolve_peak_selection_callbacks() -> Any:
+        callbacks = peak_selection_callbacks
+        if callable(callbacks):
+            try:
+                callbacks = callbacks()
+            except Exception:
+                callbacks = None
+        return callbacks
+
+    def _invoke_peak_selection_callback(
+        callback_name: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        callbacks = _resolve_peak_selection_callbacks()
+        callback = getattr(callbacks, callback_name, None)
+        if callable(callback):
+            return callback(*args, **kwargs)
+        return None
+
     def _refresh_controls() -> None:
-        refresh = getattr(
-            peak_selection_callbacks,
-            "update_hkl_pick_button_label",
-            None,
-        )
-        if callable(refresh):
-            refresh()
+        _invoke_peak_selection_callback("update_hkl_pick_button_label")
 
     def _set_hkl_pick_mode(
         enabled: bool,
         message: str | None = None,
     ) -> None:
-        set_pick_mode = getattr(peak_selection_callbacks, "set_hkl_pick_mode", None)
-        if callable(set_pick_mode):
-            set_pick_mode(bool(enabled), message=message)
+        _invoke_peak_selection_callback(
+            "set_hkl_pick_mode",
+            bool(enabled),
+            message=message,
+        )
 
     def _create_controls(parent: Any) -> None:
         views_module.create_hkl_lookup_controls(
             parent=parent,
             view_state=view_state,
-            on_select_hkl=peak_selection_callbacks.select_peak_from_hkl_controls,
-            on_toggle_hkl_pick=peak_selection_callbacks.toggle_hkl_pick_mode,
-            on_clear_selected_peak=peak_selection_callbacks.clear_selected_peak,
-            on_show_bragg_ewald=(
-                peak_selection_callbacks.open_selected_peak_intersection_figure
+            on_select_hkl=lambda: _invoke_peak_selection_callback(
+                "select_peak_from_hkl_controls"
+            ),
+            on_toggle_hkl_pick=lambda: _invoke_peak_selection_callback(
+                "toggle_hkl_pick_mode"
+            ),
+            on_clear_selected_peak=lambda: _invoke_peak_selection_callback(
+                "clear_selected_peak"
+            ),
+            on_show_bragg_ewald=lambda: _invoke_peak_selection_callback(
+                "open_selected_peak_intersection_figure"
             ),
             on_open_bragg_qr_groups=open_bragg_qr_groups,
         )

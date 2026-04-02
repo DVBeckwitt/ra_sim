@@ -2576,7 +2576,7 @@ def create_structure_factor_pruning_controls(
     ttk.Label(frame, text="Structure-Factor Pruning").pack(anchor=tk.W, padx=5)
     ttk.Label(
         frame,
-        text="Bias: -2.0 keeps more, 0.0 recommended default, +2.0 prunes much harder.",
+        text="Bias: -2.0 keeps more, 0.0 recommended default, +3.0 prunes much harder.",
     ).pack(anchor=tk.W, padx=5)
 
     sf_prune_bias_var, sf_prune_bias_scale = create_slider(
